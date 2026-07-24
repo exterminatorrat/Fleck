@@ -248,7 +248,7 @@
         return
       }
       if continuation.isEmptyItem {
-        textStorage?.replaceCharacters(in: continuation.paragraphRange, with: "")
+        textStorage?.replaceCharacters(in: continuation.paragraphRange, with: "\n")
         didChangeText()
       } else {
         insertText("\n\(continuation.nextPrefix)", replacementRange: selectedRange())
