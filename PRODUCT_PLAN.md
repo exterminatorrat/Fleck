@@ -18,13 +18,13 @@ The app should feel immediate: open it, type, switch notes, and dismiss it. Note
 
 GitHub is the source of truth for the project. Product documentation, application code, tests, assets, build configuration, and other project files should be version controlled there rather than kept only on a developer's computer.
 
-Every project update should follow this workflow, with the detailed policy maintained in [`CONTRIBUTING.md`](CONTRIBUTING.md):
+Every project update should follow this workflow:
 
-1. Create or update a focused feature branch from `main` for the work.
+1. Create or update a focused branch for the work.
 2. Commit all intentional project-file changes with a descriptive commit message.
 3. Push the branch to the GitHub repository.
 4. Open or update a pull request that explains the change and lists the checks performed.
-5. Merge the completed branch into `main` through GitHub after its planned scope is finished, review is complete, and required checks pass.
+5. Merge through GitHub after review and required checks pass.
 
 Before committing, review `git status` and the diff so generated files, credentials, signing material, local editor settings, build output, and other machine-specific files are not accidentally published. Secrets must never be committed to Git; use documented environment variables or GitHub's encrypted secrets instead.
 
@@ -40,7 +40,7 @@ The initial release targets macOS and should be built with Swift and native Appl
 - A menu-bar popover that can optionally become a pinned floating panel.
 - Lightweight local files for persistence; no account or network connection is required.
 
-The application should aim for an **installed release size near or below 15 MB** and remain **below 75 MB of memory while idle with ordinary notes**, measured during development and treated as a performance target rather than an absolute guarantee across every macOS version and workload.
+The application should aim for approximately **50 MB of memory while idle with ordinary notes**, measured during development and treated as a performance target rather than an absolute guarantee across every macOS version and workload.
 
 ## Core experience
 
@@ -194,8 +194,7 @@ Performance is a product feature and should be tested throughout development.
 
 Initial goals:
 
-- Installed release size near or below 15 MB where practical.
-- Below 75 MB idle memory for a normal set of short notes.
+- Approximately 50 MB idle memory for a normal set of short notes.
 - No embedded web view or Electron-style runtime.
 - No continuous polling or unnecessary background activity.
 - Near-instant display after the application is running.
