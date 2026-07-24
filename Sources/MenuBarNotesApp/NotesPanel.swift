@@ -1,0 +1,392 @@
+#if os(macOS)
+  import AppKit
+  import SwiftUI
+  import MenuBarNotesCore
+  import UniformTypeIdentifiers
+
+  struct NotesPanel: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
+    @StateObject private var editorCommands = EditorCommands()
+    @State private var isImporting = false
+    @State private var isExporting = false
+    @State private var exportDocument: NoteFileDocument?
+    @State private var exportType: UTType = .markdownText
+    @State private var exportFilename = "Untitled.md"
+    @State private var showsTransferOptions = false
+
+    var body: some View {
+      VStack(spacing: 0) {
+        header
+        tabStrip
+        Divider().opacity(0.35)
+        editor
+        if let error = appState.saveError {
+          Text("Could not save: \(error)")
+            .font(.caption)
+            .foregroundStyle(.red)
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+      .frame(
+        width: appState.preferences.panelWidth,
+        height: appState.preferences.panelHeight
+      )
+      .background {
+        Rectangle()
+          .fill(.ultraThinMaterial)
+          .opacity(appState.preferences.panelOpacity)
+      }
+      .tint(Color(hex: appState.preferences.accentHex))
+      .background(
+        ShortcutMonitor(shortcuts: appState.preferences.shortcuts, action: performShortcut)
+          .frame(width: 0, height: 0)
+      )
+      .fileImporter(
+        isPresented: $isImporting,
+        allowedContentTypes: [.plainText, .markdownText],
+        allowsMultipleSelection: true,
+        onCompletion: importFiles
+      )
+      .fileExporter(
+        isPresented: $isExporting,
+        document: exportDocument,
+        contentType: exportType,
+        defaultFilename: exportFilename
+      ) { result in
+        if case .failure(let error) = result {
+          appState.saveError = "Export failed: \(error.localizedDescription)"
+        }
+      }
+    }
+
+    private var header: some View {
+      HStack(spacing: 10) {
+        Label("Notes", systemImage: "note.text")
+          .font(.headline)
+        Spacer()
+        Button {
+          appState.addNote()
+        } label: {
+          Image(systemName: "plus")
+        }
+        .keyboardShortcut("t", modifiers: .command)
+        .help("New note")
+
+        Button {
+          openWindow(id: "pinned-notes")
+        } label: {
+          Image(systemName: "pin")
+        }
+        .help("Open as a floating window")
+
+        Button {
+          showsTransferOptions.toggle()
+        } label: {
+          Image(systemName: "ellipsis.circle")
+        }
+        .help("Import or export")
+        .popover(isPresented: $showsTransferOptions, arrowEdge: .top) {
+          transferOptions
+        }
+
+        Button {
+          openSettings()
+        } label: {
+          Image(systemName: "slider.horizontal.3")
+        }
+        .help("Customize")
+      }
+      .buttonStyle(.plain)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 11)
+    }
+
+    private var tabStrip: some View {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 6) {
+          ForEach(appState.workspace.notes) { note in
+            Button {
+              appState.select(note.id)
+            } label: {
+              HStack(spacing: 4) {
+                if note.isPinned {
+                  Image(systemName: "pin.fill")
+                    .font(.caption2)
+                }
+                Text(note.displayTitle).lineLimit(1)
+              }
+              .padding(.horizontal, 10)
+              .padding(.vertical, 6)
+              .background(
+                note.id == appState.workspace.selectedNoteID
+                  ? Color.accentColor.opacity(0.18)
+                  : Color.clear,
+                in: Capsule()
+              )
+            }
+            .buttonStyle(.plain)
+            .draggable(note.id.uuidString)
+            .dropDestination(for: String.self) { identifiers, _ in
+              guard let identifier = identifiers.first,
+                let id = UUID(uuidString: identifier),
+                let destination = appState.workspace.notes.firstIndex(where: { $0.id == note.id })
+              else { return false }
+              appState.moveNote(id, to: destination)
+              return true
+            }
+            .contextMenu {
+              Button(
+                note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin"
+              ) {
+                appState.togglePinned(note.id)
+              }
+              Button("Move Left", systemImage: "arrow.left") {
+                move(note, offset: -1)
+              }
+              Button("Move Right", systemImage: "arrow.right") {
+                move(note, offset: 1)
+              }
+              Divider()
+              Button("Close Note", systemImage: "xmark", role: .destructive) {
+                appState.select(note.id)
+                appState.deleteSelectedNote()
+              }
+            }
+          }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 9)
+      }
+      .animation(.snappy(duration: 0.22), value: appState.workspace.notes.map(\.id))
+    }
+
+    private var transferOptions: some View {
+      VStack(alignment: .leading, spacing: 4) {
+        transferButton("Import…", systemImage: "square.and.arrow.down") {
+          presentImporter()
+        }
+        Divider().padding(.vertical, 3)
+        transferButton("Export Markdown…", systemImage: "doc.text") {
+          presentExport(.markdown)
+        }
+        transferButton("Export Plain Text…", systemImage: "doc.plaintext") {
+          presentExport(.plainText)
+        }
+        transferButton("Export Rich Text…", systemImage: "doc.richtext") {
+          presentExport(.richText)
+        }
+      }
+      .buttonStyle(.plain)
+      .padding(8)
+      .frame(width: 210)
+    }
+
+    private func transferButton(
+      _ title: String,
+      systemImage: String,
+      action: @escaping () -> Void
+    ) -> some View {
+      Button(action: action) {
+        Label(title, systemImage: systemImage)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 6)
+          .contentShape(Rectangle())
+      }
+    }
+
+    private func presentImporter() {
+      showsTransferOptions = false
+      DispatchQueue.main.async { isImporting = true }
+    }
+
+    private func presentExport(_ format: NoteExportFormat) {
+      showsTransferOptions = false
+      DispatchQueue.main.async { startExport(format) }
+    }
+
+    private func performShortcut(_ action: Shortcut.Action) {
+      switch action {
+      case .togglePanel:
+        NSApp.keyWindow?.orderOut(nil)
+      case .newNote:
+        appState.addNote()
+      case .closeNote:
+        appState.deleteSelectedNote()
+      case .nextNote:
+        appState.selectAdjacentNote(forward: true)
+      case .previousNote:
+        appState.selectAdjacentNote(forward: false)
+      }
+    }
+
+    private func move(_ note: Note, offset: Int) {
+      guard let index = appState.workspace.notes.firstIndex(where: { $0.id == note.id }) else {
+        return
+      }
+      appState.moveNote(note.id, to: index + offset)
+    }
+
+    private func startExport(_ format: NoteExportFormat) {
+      guard let note = appState.selectedNote else { return }
+      let export = NoteExport(note: note, format: format)
+      exportDocument = NoteFileDocument(data: export.data)
+      exportFilename = export.suggestedFilename
+      switch format {
+      case .plainText: exportType = .plainText
+      case .markdown: exportType = .markdownText
+      case .richText: exportType = .rtf
+      }
+      isExporting = true
+    }
+
+    private func importFiles(_ result: Result<[URL], Error>) {
+      do {
+        for url in try result.get() {
+          let accessing = url.startAccessingSecurityScopedResource()
+          defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+          let note = try NoteImport.note(
+            from: Data(contentsOf: url),
+            filename: url.lastPathComponent
+          )
+          appState.importNote(note)
+        }
+        appState.saveError = nil
+      } catch {
+        appState.saveError = "Import failed: \(error.localizedDescription)"
+      }
+    }
+
+    @ViewBuilder
+    private var editor: some View {
+      if let note = appState.selectedNote {
+        VStack(spacing: 0) {
+          if appState.preferences.showFormattingBar {
+            FormattingBar(commands: editorCommands)
+          }
+          TextField(
+            "Note title",
+            text: Binding(
+              get: { note.title },
+              set: { appState.updateSelected(title: $0) }
+            )
+          )
+          .textFieldStyle(.plain)
+          .font(.title3.weight(.semibold))
+          .padding(.horizontal, 16)
+          .padding(.top, 12)
+
+          NativeRichTextEditor(
+            text: Binding(
+              get: { note.body },
+              set: { appState.updateSelected(body: $0) }
+            ),
+            richTextRTF: Binding(
+              get: { note.richTextRTF },
+              set: { appState.updateSelectedRichTextRTF($0) }
+            ),
+            fontFamily: appState.preferences.fontFamily,
+            fontSize: appState.preferences.fontSize,
+            textColorHex: appState.preferences.editorTextHex,
+            backgroundColorHex: appState.preferences.editorBackgroundHex,
+            automaticLists: appState.preferences.automaticLists,
+            commands: editorCommands
+          )
+          .id(note.id)
+          .padding(.vertical, 10)
+        }
+      }
+    }
+  }
+
+  private struct FormattingBar: View {
+    @EnvironmentObject private var appState: AppState
+    @ObservedObject var commands: EditorCommands
+
+    var body: some View {
+      HStack(spacing: 13) {
+        Button("Undo", systemImage: "arrow.uturn.backward") { commands.undo() }
+          .keyboardShortcut("z", modifiers: .command)
+        Button("Redo", systemImage: "arrow.uturn.forward") { commands.redo() }
+          .keyboardShortcut("z", modifiers: [.command, .shift])
+        Divider().frame(height: 15)
+        formatButton("Bold", systemImage: "bold", isActive: commands.isBold) {
+          commands.toggleBold()
+        }
+        .keyboardShortcut("b", modifiers: .command)
+        formatButton("Italic", systemImage: "italic", isActive: commands.isItalic) {
+          commands.toggleItalic()
+        }
+        .keyboardShortcut("i", modifiers: .command)
+        formatButton("Underline", systemImage: "underline", isActive: commands.isUnderlined) {
+          commands.toggleUnderline()
+        }
+        .keyboardShortcut("u", modifiers: .command)
+        formatButton(
+          "Strikethrough",
+          systemImage: "strikethrough",
+          isActive: commands.isStrikethrough
+        ) {
+          commands.toggleStrikethrough()
+        }
+        Menu {
+          ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
+            Button(family) { commands.applyFontFamily(family) }
+          }
+        } label: {
+          Image(systemName: "textformat")
+        }
+        .help("Font")
+        Button("Bullets", systemImage: "list.bullet") {
+          commands.applyList(.bullets)
+        }
+        Button("Numbers", systemImage: "list.number") {
+          commands.applyList(.numbers)
+        }
+        Spacer()
+        Button("Delete", systemImage: "trash", role: .destructive) {
+          withAnimation(.snappy(duration: 0.22)) {
+            appState.deleteSelectedNote()
+          }
+        }
+        .keyboardShortcut("w", modifiers: .command)
+      }
+      .labelStyle(.iconOnly)
+      .buttonStyle(.plain)
+      .padding(.horizontal, 16)
+      .padding(.vertical, 9)
+      .background(.thinMaterial)
+    }
+
+    private func formatButton(
+      _ title: String,
+      systemImage: String,
+      isActive: Bool,
+      action: @escaping () -> Void
+    ) -> some View {
+      Button(title, systemImage: systemImage, action: action)
+        .padding(5)
+        .background(
+          isActive ? Color.accentColor.opacity(0.24) : Color.clear,
+          in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+        )
+        .animation(.easeOut(duration: 0.12), value: isActive)
+        .accessibilityValue(isActive ? "On" : "Off")
+    }
+  }
+
+  extension Color {
+    fileprivate init(hex: String) {
+      let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+      let value = UInt64(cleaned, radix: 16) ?? 0x7C6CF2
+      self.init(
+        red: Double((value >> 16) & 0xFF) / 255,
+        green: Double((value >> 8) & 0xFF) / 255,
+        blue: Double(value & 0xFF) / 255
+      )
+    }
+  }
+#endif
