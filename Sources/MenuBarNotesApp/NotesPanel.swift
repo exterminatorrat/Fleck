@@ -12,7 +12,7 @@
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var exportDocument: NoteFileDocument?
-    @State private var exportType: UTType = .markdown
+    @State private var exportType: UTType = .markdownText
     @State private var exportFilename = "Untitled.md"
 
     var body: some View {
@@ -45,7 +45,7 @@
       )
       .fileImporter(
         isPresented: $isImporting,
-        allowedContentTypes: [.plainText, .markdown],
+        allowedContentTypes: [.plainText, .markdownText],
         allowsMultipleSelection: true,
         onCompletion: importFiles
       )
@@ -193,7 +193,7 @@
       exportFilename = export.suggestedFilename
       switch format {
       case .plainText: exportType = .plainText
-      case .markdown: exportType = .markdown
+      case .markdown: exportType = .markdownText
       case .richText: exportType = .rtf
       }
       isExporting = true

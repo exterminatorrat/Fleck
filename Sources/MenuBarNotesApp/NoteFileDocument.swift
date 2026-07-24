@@ -2,8 +2,13 @@
   import SwiftUI
   import UniformTypeIdentifiers
 
+  extension UTType {
+    /// Markdown does not have a built-in `UTType.markdown` member on every supported SDK.
+    static let markdownText = UTType(importedAs: "net.daringfireball.markdown")
+  }
+
   struct NoteFileDocument: FileDocument {
-    static let readableContentTypes: [UTType] = [.plainText, .markdown, .rtf]
+    static let readableContentTypes: [UTType] = [.plainText, .markdownText, .rtf]
 
     var data: Data
 

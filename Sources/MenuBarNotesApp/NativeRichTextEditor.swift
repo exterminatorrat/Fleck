@@ -7,7 +7,11 @@
   /// state through SwiftUI on every keystroke.
   @MainActor
   final class EditorCommands: ObservableObject {
-    weak var textView: NSTextView?
+    private weak var textView: ListAwareTextView?
+
+    private func connect(to textView: ListAwareTextView) {
+      self.textView = textView
+    }
 
     func toggleBold() { toggleFontTrait(.boldFontMask) }
     func toggleItalic() { toggleFontTrait(.italicFontMask) }
@@ -120,28 +124,31 @@
       textView.isVerticallyResizable = true
       textView.isHorizontallyResizable = false
       textView.minSize = NSSize(width: 0, height: scrollView.contentView.bounds.height)
-      textView.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+      textView.maxSize = NSSize(
+        width: CGFloat.greatestFiniteMagnitude,
+        height: CGFloat.greatestFiniteMagnitude
+      )
       textView.autoresizingMask = [.width]
       textView.textContainer?.widthTracksTextView = true
       textView.textContainer?.containerSize = NSSize(
         width: scrollView.contentView.bounds.width,
-        height: .greatestFiniteMagnitude
+        height: CGFloat.greatestFiniteMagnitude
       )
       textView.setAccessibilityLabel("Note body")
       loadContent(into: textView)
+      applyColors(to: textView)
       textView.automaticLists = automaticLists
       applyColors(to: textView)
       scrollView.documentView = textView
-      commands.textView = textView
+      commands.connect(to: textView)
       return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
       guard let textView = scrollView.documentView as? ListAwareTextView else { return }
       context.coordinator.parent = self
-      commands.textView = textView
+      commands.connect(to: textView)
       textView.automaticLists = automaticLists
-      applyColors(to: textView)
       if context.coordinator.richTextRTF != richTextRTF || textView.string != text {
         let selection = textView.selectedRange()
         loadContent(into: textView)
@@ -201,6 +208,7 @@
       storage.addAttribute(.font, value: font, range: NSRange(location: 0, length: storage.length))
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
       var parent: NativeRichTextEditor
       var fontFamily: String
@@ -249,7 +257,7 @@
         return
       }
       if continuation.isEmptyItem {
-        textStorage?.replaceCharacters(in: continuation.paragraphRange, with: "\n")
+        textStorage?.replaceCharacters(in: continuation.paragraphRange, with: "")
         didChangeText()
       } else {
         insertText("\n\(continuation.nextPrefix)", replacementRange: selectedRange())
