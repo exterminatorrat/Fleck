@@ -129,7 +129,6 @@
       )
       textView.setAccessibilityLabel("Note body")
       loadContent(into: textView)
-      applyColors(to: textView)
       textView.automaticLists = automaticLists
       applyColors(to: textView)
       scrollView.documentView = textView
