@@ -141,6 +141,7 @@
       context.coordinator.parent = self
       commands.textView = textView
       textView.automaticLists = automaticLists
+      applyColors(to: textView)
       if context.coordinator.richTextRTF != richTextRTF || textView.string != text {
         let selection = textView.selectedRange()
         loadContent(into: textView)
