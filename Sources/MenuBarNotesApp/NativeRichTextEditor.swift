@@ -9,7 +9,7 @@
   final class EditorCommands: ObservableObject {
     private weak var textView: ListAwareTextView?
 
-    private func connect(to textView: ListAwareTextView) {
+    fileprivate func connect(to textView: ListAwareTextView) {
       self.textView = textView
     }
 
@@ -248,7 +248,7 @@
     }
   }
 
-  private final class ListAwareTextView: NSTextView {
+  fileprivate final class ListAwareTextView: NSTextView {
     var automaticLists = true
 
     override func insertNewline(_ sender: Any?) {
