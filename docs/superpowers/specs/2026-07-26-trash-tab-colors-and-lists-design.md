@@ -6,11 +6,12 @@ Make Trash return reliably to the notes editor, let each note carry a persistent
 
 ## Scope
 
-This change contains three bounded pieces:
+This change contains four bounded pieces:
 
 1. Correct Trash dismissal inside both the transient menu-bar panel and pinned notes window.
 2. Add optional per-note tab colors that persist through saving, deletion, and restoration.
 3. Expand the existing plain-text list engine with selectable markers, automatic nested styles, and clickable checklist items.
+4. Refine Settings navigation with a clean, animated section selector.
 
 It does not introduce a custom block editor, collaborative editing, tables, images, or cloud synchronization.
 
@@ -26,6 +27,24 @@ Success criteria:
 - Reopening the menu-bar panel opens on the notes editor.
 - The same behavior works from the pinned notes window.
 - Restore remains optimistic and keeps the Trash sheet open.
+
+## Settings Section Selector
+
+The visible “Settings section” label is removed. Appearance, Editing, and Shortcuts remain the only three section names.
+
+The stock segmented Picker is replaced by a compact SwiftUI selector built from three equal-width buttons. A single accent-colored rounded selection capsule uses `matchedGeometryEffect` to move between the buttons, so the blue background visibly travels from the previous section to the next instead of disappearing and reappearing.
+
+The selector uses the existing crisp native motion policy:
+
+- 160 ms ease-out movement;
+- no bounce or overshoot;
+- interruptible state-driven animation that retargets during rapid clicks;
+- movement disabled when Reduce Motion is enabled, while color and opacity feedback remain;
+- no animation on keyboard focus changes.
+
+The form below retains its existing short opacity transition. Panel dimensions and form layout are not animated. Every segment uses its full visual area as the hit target and exposes its section name and selected state to accessibility.
+
+The custom selector is preferred over hiding the stock Picker label because the stock control does not provide control over the requested sliding highlight. An AppKit `NSSegmentedControl` wrapper is unnecessary for this three-item SwiftUI state change.
 
 ## Per-Note Tab Colors
 
@@ -200,6 +219,9 @@ App tests will verify:
 Manual macOS checks will verify:
 
 - Done returns from Trash with one click in both window types;
+- the Settings selector has no visible “Settings section” label;
+- the blue Settings selection capsule moves fluidly between all three sections;
+- Reduce Motion removes the capsule movement without hiding the selected state;
 - menu and toolbar hit targets;
 - matched tab-color animation and readable contrast;
 - clicking checklist markers toggles only the intended item;
