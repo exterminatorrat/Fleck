@@ -7,13 +7,25 @@
   /// state through SwiftUI on every keystroke.
   @MainActor
   final class EditorCommands: ObservableObject {
+    @Published private(set) var isBold = false
+    @Published private(set) var isItalic = false
+    @Published private(set) var isUnderlined = false
+
     weak var textView: NSTextView?
 
-    func toggleBold() { toggleFontTrait(.boldFontMask) }
-    func toggleItalic() { toggleFontTrait(.italicFontMask) }
+    func toggleBold() {
+      toggleFontTrait(.boldFontMask)
+      refreshFormattingState()
+    }
+
+    func toggleItalic() {
+      toggleFontTrait(.italicFontMask)
+      refreshFormattingState()
+    }
 
     func toggleUnderline() {
       toggleAttribute(.underlineStyle, enabledValue: NSUnderlineStyle.single.rawValue)
+      refreshFormattingState()
     }
 
     func toggleStrikethrough() {
@@ -26,14 +38,41 @@
         font, _ in
         NSFontManager.shared.convert(font, toFamily: family)
       }
+      refreshFormattingState()
     }
 
     func applyList(_ style: EditorListStyle) {
-      textView?.toggleList(style)
+      (textView as? ListAwareTextView)?.toggleList(style)
     }
 
     func undo() { textView?.undoManager?.undo() }
     func redo() { textView?.undoManager?.redo() }
+
+    func refreshFormattingState() {
+      guard let textView else {
+        isBold = false
+        isItalic = false
+        isUnderlined = false
+        return
+      }
+
+      let range = textView.selectedRange()
+      let attributes: [NSAttributedString.Key: Any]
+      if range.length > 0, let storage = textView.textStorage, storage.length > 0 {
+        attributes = storage.attributes(
+          at: min(range.location, storage.length - 1),
+          effectiveRange: nil
+        )
+      } else {
+        attributes = textView.typingAttributes
+      }
+
+      let font = attributes[.font] as? NSFont
+      let traits = font.map { NSFontManager.shared.traits(of: $0) } ?? []
+      isBold = traits.contains(.boldFontMask)
+      isItalic = traits.contains(.italicFontMask)
+      isUnderlined = (attributes[.underlineStyle] as? Int ?? 0) != 0
+    }
 
     private func toggleFontTrait(_ trait: NSFontTraitMask) {
       guard let textView else { return }
@@ -116,11 +155,15 @@
       textView.isAutomaticSpellingCorrectionEnabled = true
       textView.isContinuousSpellCheckingEnabled = true
       textView.drawsBackground = false
-      textView.textContainerInset = NSSize(width: 7, height: 10)
+      textView.textContainerInset = NSSize(width: 16, height: 10)
+      textView.textContainer?.lineFragmentPadding = 0
       textView.isVerticallyResizable = true
       textView.isHorizontallyResizable = false
       textView.minSize = NSSize(width: 0, height: scrollView.contentView.bounds.height)
-      textView.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+      textView.maxSize = NSSize(
+        width: CGFloat.greatestFiniteMagnitude,
+        height: CGFloat.greatestFiniteMagnitude
+      )
       textView.autoresizingMask = [.width]
       textView.textContainer?.widthTracksTextView = true
       textView.textContainer?.containerSize = NSSize(
@@ -133,6 +176,7 @@
       applyColors(to: textView)
       scrollView.documentView = textView
       commands.textView = textView
+      commands.refreshFormattingState()
       return scrollView
     }
 
@@ -206,6 +250,7 @@
       var fontFamily: String
       var fontSize: Double
       var richTextRTF: Data?
+      @MainActor
       init(parent: NativeRichTextEditor) {
         self.parent = parent
         fontFamily = parent.fontFamily
@@ -215,13 +260,19 @@
 
       func textDidChange(_ notification: Notification) {
         guard let textView = notification.object as? NSTextView else { return }
-        parent.text = textView.string
         guard let storage = textView.textStorage else { return }
-        parent.richTextRTF = try? storage.data(
+        let updatedRTF = try? storage.data(
           from: NSRange(location: 0, length: storage.length),
           documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
         )
-        richTextRTF = parent.richTextRTF
+        richTextRTF = updatedRTF
+        parent.text = textView.string
+        parent.richTextRTF = updatedRTF
+        parent.commands.refreshFormattingState()
+      }
+
+      func textViewDidChangeSelection(_ notification: Notification) {
+        parent.commands.refreshFormattingState()
       }
     }
   }

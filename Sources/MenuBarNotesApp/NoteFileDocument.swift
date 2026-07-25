@@ -3,7 +3,8 @@
   import UniformTypeIdentifiers
 
   struct NoteFileDocument: FileDocument {
-    static let readableContentTypes: [UTType] = [.plainText, .markdown, .rtf]
+    static let markdownContentType = UTType(filenameExtension: "md") ?? .plainText
+    static let readableContentTypes: [UTType] = [.plainText, markdownContentType, .rtf]
 
     var data: Data
 

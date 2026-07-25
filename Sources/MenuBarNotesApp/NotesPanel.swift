@@ -6,13 +6,14 @@
 
   struct NotesPanel: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @StateObject private var editorCommands = EditorCommands()
     @State private var isImporting = false
     @State private var isExporting = false
+    @State private var isShowingTrash = false
+    @State private var notePendingDeletion: Note?
     @State private var exportDocument: NoteFileDocument?
-    @State private var exportType: UTType = .markdown
+    @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
 
     var body: some View {
@@ -45,7 +46,7 @@
       )
       .fileImporter(
         isPresented: $isImporting,
-        allowedContentTypes: [.plainText, .markdown],
+        allowedContentTypes: [.plainText, NoteFileDocument.markdownContentType],
         allowsMultipleSelection: true,
         onCompletion: importFiles
       )
@@ -58,6 +59,22 @@
         if case .failure(let error) = result {
           appState.saveError = "Export failed: \(error.localizedDescription)"
         }
+      }
+      .sheet(isPresented: $isShowingTrash) {
+        TrashView()
+          .environmentObject(appState)
+      }
+      .alert(
+        "Move “\(notePendingDeletion?.displayTitle ?? "Untitled")” to Trash?",
+        isPresented: deletionAlertBinding,
+        presenting: notePendingDeletion
+      ) { note in
+        Button("Cancel", role: .cancel) {}
+        Button("Confirm", role: .destructive) {
+          appState.moveToTrash(note.id)
+        }
+      } message: { _ in
+        Text("This note can be restored from Trash for 30 days.")
       }
     }
 
@@ -89,16 +106,20 @@
           Button("Export Markdown…") { startExport(.markdown) }
           Button("Export Plain Text…") { startExport(.plainText) }
           Button("Export Rich Text…") { startExport(.richText) }
+          Divider()
+          Button("Trash…", systemImage: "trash") {
+            isShowingTrash = true
+          }
         } label: {
           Image(systemName: "ellipsis.circle")
         }
-        .help("Import or export")
+        .accessibilityLabel("Options")
+        .help("Options")
 
-        Button {
-          openSettings()
-        } label: {
+        SettingsLink {
           Image(systemName: "slider.horizontal.3")
         }
+        .accessibilityLabel("Customize")
         .help("Customize")
       }
       .buttonStyle(.plain)
@@ -152,9 +173,8 @@
                 move(note, offset: 1)
               }
               Divider()
-              Button("Close Note", systemImage: "xmark", role: .destructive) {
-                appState.select(note.id)
-                appState.deleteSelectedNote()
+              Button("Move to Trash", systemImage: "trash", role: .destructive) {
+                requestDeletion(note)
               }
             }
           }
@@ -171,12 +191,29 @@
       case .newNote:
         appState.addNote()
       case .closeNote:
-        appState.deleteSelectedNote()
+        if let note = appState.selectedNote {
+          requestDeletion(note)
+        }
       case .nextNote:
         appState.selectAdjacentNote(forward: true)
       case .previousNote:
         appState.selectAdjacentNote(forward: false)
       }
+    }
+
+    private var deletionAlertBinding: Binding<Bool> {
+      Binding(
+        get: { notePendingDeletion != nil },
+        set: { isPresented in
+          if !isPresented {
+            notePendingDeletion = nil
+          }
+        }
+      )
+    }
+
+    private func requestDeletion(_ note: Note) {
+      notePendingDeletion = note
     }
 
     private func move(_ note: Note, offset: Int) {
@@ -193,7 +230,7 @@
       exportFilename = export.suggestedFilename
       switch format {
       case .plainText: exportType = .plainText
-      case .markdown: exportType = .markdown
+      case .markdown: exportType = NoteFileDocument.markdownContentType
       case .richText: exportType = .rtf
       }
       isExporting = true
@@ -221,7 +258,14 @@
       if let note = appState.selectedNote {
         VStack(spacing: 0) {
           if appState.preferences.showFormattingBar {
-            FormattingBar(commands: editorCommands)
+            FormattingBar(
+              commands: editorCommands,
+              onDelete: {
+                if let note = appState.selectedNote {
+                  requestDeletion(note)
+                }
+              }
+            )
           }
           TextField(
             "Note title",
@@ -252,51 +296,93 @@
             commands: editorCommands
           )
           .id(note.id)
-          .padding(10)
+          .padding(.vertical, 10)
         }
       }
     }
   }
 
   private struct FormattingBar: View {
-    @EnvironmentObject private var appState: AppState
     @ObservedObject var commands: EditorCommands
+    let onDelete: () -> Void
 
     var body: some View {
-      HStack(spacing: 13) {
-        Button("Undo", systemImage: "arrow.uturn.backward") { commands.undo() }
+      HStack(spacing: 8) {
+        Button {
+          commands.undo()
+        } label: {
+          ToolbarIconLabel(systemImage: "arrow.uturn.backward")
+        }
+        .accessibilityLabel("Undo")
           .keyboardShortcut("z", modifiers: .command)
-        Button("Redo", systemImage: "arrow.uturn.forward") { commands.redo() }
+        Button {
+          commands.redo()
+        } label: {
+          ToolbarIconLabel(systemImage: "arrow.uturn.forward")
+        }
+        .accessibilityLabel("Redo")
           .keyboardShortcut("z", modifiers: [.command, .shift])
         Divider().frame(height: 15)
-        Button("Bold", systemImage: "bold") { commands.toggleBold() }
+        Button {
+          commands.toggleBold()
+        } label: {
+          ToolbarIconLabel(systemImage: "bold", isActive: commands.isBold)
+        }
+        .accessibilityLabel("Bold")
           .keyboardShortcut("b", modifiers: .command)
-        Button("Italic", systemImage: "italic") { commands.toggleItalic() }
+          .accessibilityValue(commands.isBold ? "On" : "Off")
+        Button {
+          commands.toggleItalic()
+        } label: {
+          ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
+        }
+        .accessibilityLabel("Italic")
           .keyboardShortcut("i", modifiers: .command)
-        Button("Underline", systemImage: "underline") { commands.toggleUnderline() }
+          .accessibilityValue(commands.isItalic ? "On" : "Off")
+        Button {
+          commands.toggleUnderline()
+        } label: {
+          ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
+        }
+        .accessibilityLabel("Underline")
           .keyboardShortcut("u", modifiers: .command)
-        Button("Strikethrough", systemImage: "strikethrough") { commands.toggleStrikethrough() }
+          .accessibilityValue(commands.isUnderlined ? "On" : "Off")
+        Button {
+          commands.toggleStrikethrough()
+        } label: {
+          ToolbarIconLabel(systemImage: "strikethrough")
+        }
+        .accessibilityLabel("Strikethrough")
         Menu {
           ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
             Button(family) { commands.applyFontFamily(family) }
           }
         } label: {
-          Image(systemName: "textformat")
+          ToolbarIconLabel(systemImage: "textformat")
         }
         .help("Font")
-        Button("Bullets", systemImage: "list.bullet") {
+        .accessibilityLabel("Font")
+        Button {
           commands.applyList(.bullets)
+        } label: {
+          ToolbarIconLabel(systemImage: "list.bullet")
         }
-        Button("Numbers", systemImage: "list.number") {
+        .accessibilityLabel("Bullets")
+        Button {
           commands.applyList(.numbers)
+        } label: {
+          ToolbarIconLabel(systemImage: "list.number")
         }
+        .accessibilityLabel("Numbers")
         Spacer()
-        Button("Delete", systemImage: "trash", role: .destructive) {
-          appState.deleteSelectedNote()
+        Button(role: .destructive) {
+          onDelete()
+        } label: {
+          ToolbarIconLabel(systemImage: "trash")
         }
+        .accessibilityLabel("Delete")
         .keyboardShortcut("w", modifiers: .command)
       }
-      .labelStyle(.iconOnly)
       .buttonStyle(.plain)
       .padding(.horizontal, 16)
       .padding(.vertical, 9)
@@ -304,14 +390,39 @@
     }
   }
 
+  private struct ToolbarIconLabel: View {
+    let systemImage: String
+    var isActive = false
+
+    var body: some View {
+      Image(systemName: systemImage)
+        .frame(width: 28, height: 26)
+        .background(
+          isActive ? Color.accentColor.opacity(0.24) : .clear,
+          in: RoundedRectangle(cornerRadius: 5)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 5))
+    }
+  }
+
   extension Color {
-    fileprivate init(hex: String) {
+    init(hex: String) {
       let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
       let value = UInt64(cleaned, radix: 16) ?? 0x7C6CF2
       self.init(
         red: Double((value >> 16) & 0xFF) / 255,
         green: Double((value >> 8) & 0xFF) / 255,
         blue: Double(value & 0xFF) / 255
+      )
+    }
+
+    var hexString: String? {
+      guard let color = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+      return String(
+        format: "#%02X%02X%02X",
+        Int((color.redComponent * 255).rounded()),
+        Int((color.greenComponent * 255).rounded()),
+        Int((color.blueComponent * 255).rounded())
       )
     }
   }

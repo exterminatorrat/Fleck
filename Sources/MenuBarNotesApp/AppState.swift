@@ -9,9 +9,11 @@
     @Published var workspace = Workspace()
     @Published var preferences = AppPreferences()
     @Published var saveError: String?
+    @Published private(set) var trashedNotes: [TrashedNote] = []
 
     private let store: LocalStore
     private var saveTask: Task<Void, Never>?
+    private var pendingTrashNotes: [UUID: Note] = [:]
 
     init(store: LocalStore? = nil) {
       let appSupport = FileManager.default.urls(
@@ -43,10 +45,11 @@
       scheduleSave()
     }
 
-    func deleteSelectedNote() {
-      guard let id = workspace.selectedNoteID else { return }
+    func moveToTrash(_ id: UUID) {
+      guard let note = workspace.notes.first(where: { $0.id == id }) else { return }
+      pendingTrashNotes[id] = note
       workspace.deleteNote(id: id)
-      scheduleSave()
+      saveNow()
     }
 
     func selectAdjacentNote(forward: Bool) {
@@ -107,14 +110,56 @@
       saveTask?.cancel()
       let workspace = workspace
       let preferences = preferences
+      let trashedNotes = Array(pendingTrashNotes.values)
       let store = store
       saveTask = Task {
         do {
-          try await store.save(workspace: workspace, preferences: preferences)
+          try await store.save(
+            workspace: workspace,
+            preferences: preferences,
+            trashedNotes: trashedNotes
+          )
           guard !Task.isCancelled else { return }
+          for note in trashedNotes {
+            pendingTrashNotes.removeValue(forKey: note.id)
+          }
+          if !trashedNotes.isEmpty {
+            self.trashedNotes = try await store.loadTrash()
+          }
           saveError = nil
         } catch {
           guard !Task.isCancelled else { return }
+          saveError = error.localizedDescription
+        }
+      }
+    }
+
+    func refreshTrash() async {
+      do {
+        trashedNotes = try await store.loadTrash()
+        saveError = nil
+      } catch {
+        saveError = error.localizedDescription
+      }
+    }
+
+    func restore(_ trashedNote: TrashedNote) {
+      saveTask?.cancel()
+      pendingTrashNotes.removeValue(forKey: trashedNote.id)
+      workspace.addNote(trashedNote.note)
+      let workspace = workspace
+      let preferences = preferences
+      let store = store
+      Task {
+        do {
+          _ = try await store.restore(
+            trashedNote,
+            into: workspace,
+            preferences: preferences
+          )
+          trashedNotes = try await store.loadTrash()
+          saveError = nil
+        } catch {
           saveError = error.localizedDescription
         }
       }
@@ -124,6 +169,7 @@
       do {
         workspace = try await store.loadWorkspace()
         preferences = try await store.loadPreferences()
+        trashedNotes = try await store.loadTrash()
         saveError = nil
       } catch {
         saveError = error.localizedDescription
@@ -134,13 +180,24 @@
       saveTask?.cancel()
       let workspace = workspace
       let preferences = preferences
+      let trashedNotes = Array(pendingTrashNotes.values)
       let store = store
       saveTask = Task {
         try? await Task.sleep(for: .milliseconds(350))
         guard !Task.isCancelled else { return }
         do {
-          try await store.save(workspace: workspace, preferences: preferences)
+          try await store.save(
+            workspace: workspace,
+            preferences: preferences,
+            trashedNotes: trashedNotes
+          )
           guard !Task.isCancelled else { return }
+          for note in trashedNotes {
+            pendingTrashNotes.removeValue(forKey: note.id)
+          }
+          if !trashedNotes.isEmpty {
+            self.trashedNotes = try await store.loadTrash()
+          }
           saveError = nil
         } catch {
           guard !Task.isCancelled else { return }

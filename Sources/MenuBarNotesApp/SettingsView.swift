@@ -40,9 +40,19 @@
 
     private var appearance: some View {
       Section("Editor") {
+        Picker("Theme", selection: preferenceBinding(\.theme)) {
+          ForEach(AppTheme.allCases, id: \.self) { theme in
+            Text(theme.rawValue.capitalized).tag(theme)
+          }
+        }
+        ColorPicker(
+          "Accent color",
+          selection: colorPreferenceBinding(\.accentHex),
+          supportsOpacity: false
+        )
         Picker("Font", selection: preferenceBinding(\.fontFamily)) {
           Text("System").tag(".AppleSystemUIFont")
-          ForEach(NSFontManager.shared.availableFontFamilies, id: \.self) { family in
+          ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
             Text(family).tag(family)
           }
         }
@@ -51,19 +61,38 @@
           value: preferenceBinding(\.fontSize),
           in: 10...36
         )
-        TextField("Accent color", text: preferenceBinding(\.accentHex))
-          .help("Enter a hexadecimal color such as #7C6CF2")
-        TextField("Editor text color", text: optionalPreferenceBinding(\.editorTextHex))
-          .help("Leave empty to follow the system theme")
-        TextField("Editor background", text: optionalPreferenceBinding(\.editorBackgroundHex))
-          .help("Leave empty for transparent glass")
+        HStack {
+          ColorPicker(
+            "Editor text color",
+            selection: optionalColorPreferenceBinding(
+              \.editorTextHex,
+              fallback: .labelColor
+            ),
+            supportsOpacity: false
+          )
+          if appState.preferences.editorTextHex != nil {
+            Button("Use System") {
+              appState.updatePreferences { $0.editorTextHex = nil }
+            }
+          }
+        }
+        HStack {
+          ColorPicker(
+            "Editor background",
+            selection: optionalColorPreferenceBinding(
+              \.editorBackgroundHex,
+              fallback: .textBackgroundColor
+            ),
+            supportsOpacity: false
+          )
+          if appState.preferences.editorBackgroundHex != nil {
+            Button("Use System") {
+              appState.updatePreferences { $0.editorBackgroundHex = nil }
+            }
+          }
+        }
         Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
           Text("Glass opacity")
-        }
-        Picker("Theme", selection: preferenceBinding(\.theme)) {
-          ForEach(AppTheme.allCases, id: \.self) { theme in
-            Text(theme.rawValue.capitalized).tag(theme)
-          }
         }
         HStack {
           Stepper(
@@ -141,16 +170,32 @@
       )
     }
 
-    private func optionalPreferenceBinding(_ keyPath: WritableKeyPath<AppPreferences, String?>)
-      -> Binding<String>
+    private func colorPreferenceBinding(
+      _ keyPath: WritableKeyPath<AppPreferences, String>
+    ) -> Binding<Color>
     {
       Binding(
-        get: { appState.preferences[keyPath: keyPath] ?? "" },
-        set: { value in
+        get: { Color(hex: appState.preferences[keyPath: keyPath]) },
+        set: { color in
+          guard let hex = color.hexString else { return }
+          appState.updatePreferences { $0[keyPath: keyPath] = hex }
+        }
+      )
+    }
+
+    private func optionalColorPreferenceBinding(
+      _ keyPath: WritableKeyPath<AppPreferences, String?>,
+      fallback: NSColor
+    ) -> Binding<Color> {
+      Binding(
+        get: {
+          appState.preferences[keyPath: keyPath].map(Color.init(hex:))
+            ?? Color(nsColor: fallback)
+        },
+        set: { color in
+          guard let hex = color.hexString else { return }
           appState.updatePreferences {
-            $0[keyPath: keyPath] =
-              value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              ? nil : value
+            $0[keyPath: keyPath] = hex
           }
         }
       )
