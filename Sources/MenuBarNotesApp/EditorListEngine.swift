@@ -410,7 +410,7 @@
   }
 
   extension EditorListStyle {
-    fileprivate var numberStyle: EditorNumberStyle? {
+    var numberStyle: EditorNumberStyle? {
       guard case .number(let style) = self else { return nil }
       return style
     }

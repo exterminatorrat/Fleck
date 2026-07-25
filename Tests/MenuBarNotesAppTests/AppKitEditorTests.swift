@@ -133,20 +133,25 @@ import Testing
   textView.string = (1...9).map { "Item \($0)" }.joined(separator: "\n")
   textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
   textView.toggleList(.number(.alphabetic))
-  let alphabeticEnd = (textView.string as NSString).range(of: "i. Item 9").upperBound
-  textView.setSelectedRange(NSRange(location: alphabeticEnd, length: 0))
+  let restoredAlphabetic = rtfRoundTrip(textView)
+  let alphabeticEnd =
+    (restoredAlphabetic.string as NSString).range(of: "i. Item 9").upperBound
+  restoredAlphabetic.setSelectedRange(NSRange(location: alphabeticEnd, length: 0))
 
-  textView.insertNewline(nil)
+  restoredAlphabetic.insertNewline(nil)
 
-  #expect(textView.string.hasSuffix("i. Item 9\nj. "))
+  #expect(restoredAlphabetic.string.hasSuffix("i. Item 9\nj. "))
 
   textView.string = "    Roman"
   textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
   textView.toggleList(.number(.roman))
-  textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
-  textView.insertNewline(nil)
+  let restoredRoman = rtfRoundTrip(textView)
+  restoredRoman.setSelectedRange(
+    NSRange(location: restoredRoman.string.utf16.count, length: 0)
+  )
+  restoredRoman.insertNewline(nil)
 
-  #expect(textView.string == "    i. Roman\n    ii. ")
+  #expect(restoredRoman.string == "    i. Roman\n    ii. ")
 }
 
 @Test @MainActor func returnAndRenumberUndoAsOneAction() throws {
@@ -197,4 +202,21 @@ import Testing
       effectiveRange: nil
     ) as? Int == NSUnderlineStyle.single.rawValue
   )
+}
+
+@MainActor
+private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
+  let storage = textView.textStorage!
+  let data = try! storage.data(
+    from: NSRange(location: 0, length: storage.length),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let attributed = try! NSAttributedString(
+    data: data,
+    options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  let restored = ListAwareTextView(frame: .zero)
+  restored.textStorage?.setAttributedString(attributed)
+  return restored
 }

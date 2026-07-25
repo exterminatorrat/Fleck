@@ -292,7 +292,6 @@
 
   final class ListAwareTextView: NSTextView {
     var automaticLists = true
-    private var preferredNumberStyle: EditorNumberStyle?
 
     override func insertNewline(_ sender: Any?) {
       guard automaticLists, selectedRange().length == 0 else {
@@ -305,7 +304,13 @@
       let paragraphRange = ns.paragraphRange(for: NSRange(location: cursor, length: 0))
       let rawParagraph = ns.substring(with: paragraphRange)
       let paragraph = rawParagraph.trimmingCharacters(in: .newlines)
-      guard let parsed = EditorListEngine.parse(paragraph) else {
+      let paragraphNumberStyle = numberStyleMetadata(at: paragraphRange.location)
+      guard
+        let parsed = EditorListEngine.parse(
+          paragraph,
+          preferredNumberStyle: paragraphNumberStyle
+        )
+      else {
         super.insertNewline(sender)
         return
       }
@@ -324,7 +329,7 @@
       guard
         let continuation = EditorListEngine.continuation(
           after: paragraph,
-          preferredNumberStyle: preferredNumberStyle
+          preferredNumberStyle: paragraphNumberStyle
         )
       else {
         super.insertNewline(sender)
@@ -401,9 +406,6 @@
     }
 
     func toggleList(_ style: EditorListStyle) {
-      if case .number(let numberStyle) = style {
-        preferredNumberStyle = numberStyle
-      }
       let ns = string as NSString
       let lineRange = ns.lineRange(for: selectedRange())
       let original = ns.substring(with: lineRange)
@@ -414,6 +416,10 @@
           original: original,
           with: changed
         )
+        synchronizeNumberStyleMetadata(
+          in: NSRange(location: lineRange.location, length: changed.utf16.count),
+          explicitStyle: style.numberStyle
+        )
         if case .number = style {
           renumberNumberedList(
             around: NSRange(location: lineRange.location, length: changed.utf16.count)
@@ -423,7 +429,6 @@
     }
 
     func toggleAutomaticList(_ family: EditorListFamily) {
-      preferredNumberStyle = nil
       let ns = string as NSString
       let lineRange = ns.lineRange(for: selectedRange())
       let original = ns.substring(with: lineRange)
@@ -433,6 +438,10 @@
           lineRange,
           original: original,
           with: changed
+        )
+        synchronizeNumberStyleMetadata(
+          in: NSRange(location: lineRange.location, length: changed.utf16.count),
+          useAutomaticDepth: family == .numbers
         )
         if family == .numbers {
           renumberNumberedList(
@@ -450,6 +459,10 @@
       guard changed != original else { return }
       performUndoGroup {
         replaceSelectedLines(range, original: original, with: changed)
+        synchronizeNumberStyleMetadata(
+          in: NSRange(location: range.location, length: changed.utf16.count),
+          useAutomaticDepth: true
+        )
         renumberNumberedList(
           around: NSRange(location: range.location, length: changed.utf16.count)
         )
@@ -713,7 +726,7 @@
       let original = ns.substring(with: blockRange)
       let renumbered = EditorListEngine.renumber(
         original,
-        preferredNumberStyle: preferredNumberStyle
+        preferredNumberStyle: numberStyleMetadata(at: affectedRange.location)
       )
       guard original != renumbered else { return }
       let selection = selectedRange()
@@ -757,6 +770,62 @@
         block = NSUnionRange(block, next)
       }
       return block
+    }
+
+    private func synchronizeNumberStyleMetadata(
+      in range: NSRange,
+      explicitStyle: EditorNumberStyle? = nil,
+      useAutomaticDepth: Bool = false
+    ) {
+      guard let storage = textStorage, storage.length > 0 else { return }
+      let ns = string as NSString
+      var location = range.location
+      let end = min(NSMaxRange(range), ns.length)
+      while location <= end, location < ns.length {
+        let paragraphRange = ns.paragraphRange(
+          for: NSRange(location: location, length: 0)
+        )
+        let line = ns.substring(with: paragraphRange).trimmingCharacters(in: .newlines)
+        let parsed = EditorListEngine.parse(line, preferredNumberStyle: explicitStyle)
+        let style: EditorNumberStyle?
+        if let explicitStyle, parsed.map({ if case .number = $0.style { true } else { false } }) == true {
+          style = explicitStyle
+        } else if useAutomaticDepth, let parsed,
+          case .number = parsed.style
+        {
+          style = EditorListEngine.automaticNumber(depth: parsed.depth)
+        } else {
+          style = nil
+        }
+        let existing =
+          (storage.attribute(.paragraphStyle, at: paragraphRange.location, effectiveRange: nil)
+            as? NSParagraphStyle) ?? .default
+        let paragraphStyle = existing.mutableCopy() as! NSMutableParagraphStyle
+        paragraphStyle.textLists = style.map {
+          [
+            NSTextList(
+              markerFormat: $0.markerFormat,
+              options: 0
+            )
+          ]
+        } ?? []
+        storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: paragraphRange)
+        location = NSMaxRange(paragraphRange)
+      }
+    }
+
+    private func numberStyleMetadata(at location: Int) -> EditorNumberStyle? {
+      guard let storage = textStorage, storage.length > 0 else { return nil }
+      let safeLocation = min(location, storage.length - 1)
+      guard
+        let paragraphStyle = storage.attribute(
+          .paragraphStyle,
+          at: safeLocation,
+          effectiveRange: nil
+        ) as? NSParagraphStyle,
+        let format = paragraphStyle.textLists.last?.markerFormat
+      else { return nil }
+      return EditorNumberStyle(markerFormat: format)
     }
 
     private func performUndoGroup(_ action: () -> Void) {
@@ -803,6 +872,25 @@
         parsed.content.utf16.count,
         parsed.isChecklistComplete
       )
+    }
+  }
+
+  extension EditorNumberStyle {
+    fileprivate var markerFormat: NSTextList.MarkerFormat {
+      switch self {
+      case .decimal: return .decimal
+      case .alphabetic: return .lowercaseAlpha
+      case .roman: return .lowercaseRoman
+      }
+    }
+
+    fileprivate init?(markerFormat: NSTextList.MarkerFormat) {
+      switch markerFormat {
+      case .decimal: self = .decimal
+      case .lowercaseAlpha: self = .alphabetic
+      case .lowercaseRoman: self = .roman
+      default: return nil
+      }
     }
   }
 #endif
