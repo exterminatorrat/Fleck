@@ -124,11 +124,6 @@
     }
   }
 
-  enum EditorListStyle {
-    case bullets
-    case numbers
-  }
-
   struct NativeRichTextEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var richTextRTF: Data?
