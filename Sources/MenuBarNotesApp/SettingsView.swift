@@ -5,6 +5,7 @@
 
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedSection = SettingsSection.appearance
 
     private enum SettingsSection: String, CaseIterable, Identifiable {
@@ -24,18 +25,27 @@
         .pickerStyle(.segmented)
         .padding()
 
-        Form {
-          switch selectedSection {
-          case .appearance:
-            appearance
-          case .editing:
-            editing
-          case .shortcuts:
-            shortcuts
+        ZStack {
+          Form {
+            switch selectedSection {
+            case .appearance:
+              appearance
+            case .editing:
+              editing
+            case .shortcuts:
+              shortcuts
+            }
           }
+          .formStyle(.grouped)
+          .id(selectedSection)
+          .transition(.opacity)
         }
-        .formStyle(.grouped)
+        .animation(motion.standard, value: selectedSection)
       }
+    }
+
+    private var motion: AppMotion {
+      AppMotion(reduceMotion: reduceMotion)
     }
 
     private var appearance: some View {

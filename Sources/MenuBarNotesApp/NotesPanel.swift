@@ -8,8 +8,10 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var isPinned = false
     @StateObject private var editorCommands = EditorCommands()
+    @Namespace private var selectedTabHighlight
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var isShowingTrash = false
@@ -67,13 +69,21 @@
           .environmentObject(appState)
       }
       .overlay {
-        if let notePendingDeletion {
-          DeleteConfirmationOverlay(
-            note: notePendingDeletion,
-            onCancel: { self.notePendingDeletion = nil },
-            onConfirm: { confirmDeletion(notePendingDeletion) }
-          )
+        ZStack {
+          if let notePendingDeletion {
+            DeleteConfirmationOverlay(
+              note: notePendingDeletion,
+              onCancel: { self.notePendingDeletion = nil },
+              onConfirm: { confirmDeletion(notePendingDeletion) }
+            )
+            .transition(
+              .opacity.combined(
+                with: .scale(scale: reduceMotion ? 1 : 0.985)
+              )
+            )
+          }
         }
+        .animation(motion.standard, value: notePendingDeletion?.id)
       }
     }
 
@@ -82,6 +92,7 @@
         Label("Notes", systemImage: "note.text")
           .font(.headline)
         Spacer()
+        SaveFeedbackView(status: appState.saveStatus, motion: motion)
         Button {
           appState.addNote()
         } label: {
@@ -156,14 +167,20 @@
               }
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
-              .background(
-                note.id == appState.workspace.selectedNoteID
-                  ? Color.accentColor.opacity(0.18)
-                  : Color.clear,
-                in: Capsule()
-              )
+              .background {
+                if note.id == appState.workspace.selectedNoteID {
+                  Capsule()
+                    .fill(Color.accentColor.opacity(0.18))
+                    .matchedGeometryEffect(id: "selected-tab", in: selectedTabHighlight)
+                }
+              }
             }
             .buttonStyle(.plain)
+            .transition(
+              .opacity.combined(
+                with: .offset(x: motion.offset)
+              )
+            )
             .draggable(note.id.uuidString)
             .dropDestination(for: String.self) { identifiers, _ in
               guard let identifier = identifiers.first,
@@ -194,7 +211,13 @@
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 9)
+        .animation(motion.spatial, value: appState.workspace.selectedNoteID)
+        .animation(motion.spatial, value: appState.workspace.notes.map(\.id))
       }
+    }
+
+    private var motion: AppMotion {
+      AppMotion(reduceMotion: reduceMotion)
     }
 
     private func performShortcut(_ action: Shortcut.Action) {
@@ -352,6 +375,7 @@
   }
 
   private struct FormattingBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var commands: EditorCommands
     let onDelete: () -> Void
 
@@ -432,10 +456,58 @@
         .accessibilityLabel("Delete")
         .keyboardShortcut("w", modifiers: .command)
       }
-      .buttonStyle(.plain)
+      .buttonStyle(CrispToolbarButtonStyle(motion: motion))
+      .animation(motion.quick, value: commands.isBold)
+      .animation(motion.quick, value: commands.isItalic)
+      .animation(motion.quick, value: commands.isUnderlined)
       .padding(.horizontal, 16)
       .padding(.vertical, 9)
       .background(.thinMaterial)
+    }
+
+    private var motion: AppMotion {
+      AppMotion(reduceMotion: reduceMotion)
+    }
+  }
+
+  private struct CrispToolbarButtonStyle: ButtonStyle {
+    let motion: AppMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+      configuration.label
+        .scaleEffect(configuration.isPressed ? motion.pressScale : 1)
+        .animation(motion.quick, value: configuration.isPressed)
+    }
+  }
+
+  private struct SaveFeedbackView: View {
+    let status: AppState.SaveStatus
+    let motion: AppMotion
+
+    var body: some View {
+      ZStack(alignment: .trailing) {
+        switch status {
+        case .idle:
+          Color.clear
+        case .saving:
+          HStack(spacing: 5) {
+            ProgressView()
+              .controlSize(.mini)
+            Text("Saving")
+          }
+          .id(status)
+          .transition(.opacity)
+        case .saved:
+          Label("Saved", systemImage: "checkmark")
+            .id(status)
+            .transition(.opacity)
+        }
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .frame(width: 62, height: 22, alignment: .trailing)
+      .animation(motion.quick, value: status)
+      .accessibilityElement(children: .combine)
     }
   }
 

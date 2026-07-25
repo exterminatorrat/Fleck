@@ -5,6 +5,7 @@
   struct TrashView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
       VStack(spacing: 0) {
@@ -50,7 +51,13 @@
               }
             }
             .padding(.vertical, 4)
+            .transition(
+              .opacity.combined(
+                with: .offset(x: motion.offset)
+              )
+            )
           }
+          .animation(motion.standard, value: appState.trashedNotes.map(\.id))
         }
 
         if let error = appState.saveError {
@@ -66,6 +73,10 @@
       .task {
         await appState.refreshTrash()
       }
+    }
+
+    private var motion: AppMotion {
+      AppMotion(reduceMotion: reduceMotion)
     }
 
     private func deletionDescription(for trashedNote: TrashedNote) -> String {

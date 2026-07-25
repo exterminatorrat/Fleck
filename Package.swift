@@ -19,5 +19,9 @@ let package = Package(
             name: "MenuBarNotesCoreTests",
             dependencies: ["MenuBarNotesCore"]
         ),
+        .testTarget(
+            name: "MenuBarNotesAppTests",
+            dependencies: ["MenuBarNotesApp"]
+        ),
     ]
 )

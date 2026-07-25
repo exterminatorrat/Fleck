@@ -6,13 +6,21 @@
 
   @MainActor
   final class AppState: ObservableObject {
+    enum SaveStatus: Equatable {
+      case idle
+      case saving
+      case saved
+    }
+
     @Published var workspace = Workspace()
     @Published var preferences = AppPreferences()
     @Published var saveError: String?
+    @Published private(set) var saveStatus = SaveStatus.idle
     @Published private(set) var trashedNotes: [TrashedNote] = []
 
     private let store: LocalStore
     private var saveTask: Task<Void, Never>?
+    private var saveStatusResetTask: Task<Void, Never>?
     private var pendingTrashNotes: [UUID: Note] = [:]
 
     init(store: LocalStore? = nil) {
@@ -108,6 +116,7 @@
 
     func saveNow() {
       saveTask?.cancel()
+      markSaveStarted()
       let workspace = workspace
       let preferences = preferences
       let trashedNotes = Array(pendingTrashNotes.values)
@@ -127,9 +136,11 @@
             self.trashedNotes = try await store.loadTrash()
           }
           saveError = nil
+          markSaveSucceeded()
         } catch {
           guard !Task.isCancelled else { return }
           saveError = error.localizedDescription
+          markSaveFailed()
         }
       }
     }
@@ -145,7 +156,9 @@
 
     func restore(_ trashedNote: TrashedNote) {
       saveTask?.cancel()
+      resetSaveStatus()
       pendingTrashNotes.removeValue(forKey: trashedNote.id)
+      trashedNotes.removeAll { $0.id == trashedNote.id }
       workspace.addNote(trashedNote.note)
       let workspace = workspace
       let preferences = preferences
@@ -160,6 +173,9 @@
           trashedNotes = try await store.loadTrash()
           saveError = nil
         } catch {
+          if let refreshedTrash = try? await store.loadTrash() {
+            trashedNotes = refreshedTrash
+          }
           saveError = error.localizedDescription
         }
       }
@@ -178,6 +194,7 @@
 
     private func scheduleSave() {
       saveTask?.cancel()
+      markSaveStarted()
       let workspace = workspace
       let preferences = preferences
       let trashedNotes = Array(pendingTrashNotes.values)
@@ -199,11 +216,37 @@
             self.trashedNotes = try await store.loadTrash()
           }
           saveError = nil
+          markSaveSucceeded()
         } catch {
           guard !Task.isCancelled else { return }
           saveError = error.localizedDescription
+          markSaveFailed()
         }
       }
+    }
+
+    private func markSaveStarted() {
+      saveStatusResetTask?.cancel()
+      saveStatus = .saving
+    }
+
+    private func markSaveSucceeded() {
+      saveStatus = .saved
+      saveStatusResetTask?.cancel()
+      saveStatusResetTask = Task {
+        try? await Task.sleep(for: .seconds(1.2))
+        guard !Task.isCancelled else { return }
+        saveStatus = .idle
+      }
+    }
+
+    private func markSaveFailed() {
+      resetSaveStatus()
+    }
+
+    private func resetSaveStatus() {
+      saveStatusResetTask?.cancel()
+      saveStatus = .idle
     }
   }
 #endif
