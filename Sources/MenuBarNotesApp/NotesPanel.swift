@@ -6,7 +6,9 @@
 
   struct NotesPanel: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
+    var isPinned = false
     @StateObject private var editorCommands = EditorCommands()
     @State private var isImporting = false
     @State private var isExporting = false
@@ -64,17 +66,14 @@
         TrashView()
           .environmentObject(appState)
       }
-      .alert(
-        "Move “\(notePendingDeletion?.displayTitle ?? "Untitled")” to Trash?",
-        isPresented: deletionAlertBinding,
-        presenting: notePendingDeletion
-      ) { note in
-        Button("Cancel", role: .cancel) {}
-        Button("Confirm", role: .destructive) {
-          appState.moveToTrash(note.id)
+      .overlay {
+        if let notePendingDeletion {
+          DeleteConfirmationOverlay(
+            note: notePendingDeletion,
+            onCancel: { self.notePendingDeletion = nil },
+            onConfirm: { confirmDeletion(notePendingDeletion) }
+          )
         }
-      } message: { _ in
-        Text("This note can be restored from Trash for 30 days.")
       }
     }
 
@@ -91,12 +90,22 @@
         .keyboardShortcut("t", modifiers: .command)
         .help("New note")
 
-        Button {
-          openWindow(id: "pinned-notes")
-        } label: {
-          Image(systemName: "pin")
+        if isPinned {
+          Image(systemName: "pin.fill")
+            .frame(width: 22, height: 22)
+            .foregroundStyle(.tint)
+            .accessibilityLabel("Pinned")
+            .help("This window stays open until you close it")
+        } else {
+          Button {
+            presentPersistentWindow {
+              openWindow(id: "pinned-notes")
+            }
+          } label: {
+            Image(systemName: "pin")
+          }
+          .help("Pin notes on screen")
         }
-        .help("Open as a floating window")
 
         Menu {
           Button("Import…", systemImage: "square.and.arrow.down") {
@@ -116,7 +125,11 @@
         .accessibilityLabel("Options")
         .help("Options")
 
-        SettingsLink {
+        Button {
+          presentPersistentWindow {
+            openSettings()
+          }
+        } label: {
           Image(systemName: "slider.horizontal.3")
         }
         .accessibilityLabel("Customize")
@@ -201,19 +214,21 @@
       }
     }
 
-    private var deletionAlertBinding: Binding<Bool> {
-      Binding(
-        get: { notePendingDeletion != nil },
-        set: { isPresented in
-          if !isPresented {
-            notePendingDeletion = nil
-          }
-        }
-      )
-    }
-
     private func requestDeletion(_ note: Note) {
       notePendingDeletion = note
+    }
+
+    private func confirmDeletion(_ note: Note) {
+      notePendingDeletion = nil
+      appState.moveToTrash(note.id)
+    }
+
+    private func presentPersistentWindow(_ present: () -> Void) {
+      NSApp.activate()
+      present()
+      DispatchQueue.main.async {
+        NSApp.activate()
+      }
     }
 
     private func move(_ note: Note, offset: Int) {
@@ -298,6 +313,40 @@
           .id(note.id)
           .padding(.vertical, 10)
         }
+      }
+    }
+  }
+
+  private struct DeleteConfirmationOverlay: View {
+    let note: Note
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
+      ZStack {
+        Color.black.opacity(0.28)
+          .ignoresSafeArea()
+
+        VStack(alignment: .leading, spacing: 16) {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Move “\(note.displayTitle)” to Trash?")
+              .font(.headline)
+            Text("This note can be restored from Trash for 30 days.")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          }
+
+          HStack {
+            Spacer()
+            Button("Cancel", role: .cancel, action: onCancel)
+            Button("Confirm", role: .destructive, action: onConfirm)
+              .keyboardShortcut(.defaultAction)
+          }
+        }
+        .padding(20)
+        .frame(maxWidth: 360)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .shadow(radius: 20, y: 8)
       }
     }
   }

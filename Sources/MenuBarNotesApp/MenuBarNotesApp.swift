@@ -16,7 +16,7 @@
       .menuBarExtraStyle(.window)
 
       Window("Menu Bar Notes", id: "pinned-notes") {
-        NotesPanel()
+        NotesPanel(isPinned: true)
           .environmentObject(appState)
           .preferredColorScheme(colorScheme)
       }
