@@ -170,8 +170,11 @@
               .background {
                 if note.id == appState.workspace.selectedNoteID {
                   Capsule()
-                    .fill(Color.accentColor.opacity(0.18))
+                    .fill(tabColor(for: note, opacity: 0.22))
                     .matchedGeometryEffect(id: "selected-tab", in: selectedTabHighlight)
+                } else if note.tabColorHex != nil {
+                  Capsule()
+                    .fill(tabColor(for: note, opacity: 0.10))
                 }
               }
             }
@@ -202,6 +205,26 @@
               Button("Move Right", systemImage: "arrow.right") {
                 move(note, offset: 1)
               }
+              Menu("Tab Color", systemImage: "paintpalette") {
+                ForEach(TabColorOption.all) { option in
+                  Button {
+                    appState.select(note.id)
+                    appState.setSelectedTabColor(option.hex)
+                  } label: {
+                    HStack {
+                      Label {
+                        Text(option.name)
+                      } icon: {
+                        Image(systemName: option.hex == nil ? "circle.slash" : "circle.fill")
+                          .foregroundStyle(option.hex.map(Color.init(hex:)) ?? .secondary)
+                      }
+                      if note.tabColorHex == option.hex {
+                        Image(systemName: "checkmark")
+                      }
+                    }
+                  }
+                }
+              }
               Divider()
               Button("Move to Trash", systemImage: "trash", role: .destructive) {
                 requestDeletion(note)
@@ -218,6 +241,10 @@
 
     private var motion: AppMotion {
       AppMotion(reduceMotion: reduceMotion)
+    }
+
+    private func tabColor(for note: Note, opacity: Double) -> Color {
+      (note.tabColorHex.map(Color.init(hex:)) ?? Color.accentColor).opacity(opacity)
     }
 
     private func performShortcut(_ action: Shortcut.Action) {
@@ -338,6 +365,25 @@
         }
       }
     }
+  }
+
+  private struct TabColorOption: Identifiable {
+    let name: String
+    let hex: String?
+
+    var id: String { hex ?? "none" }
+
+    static let all = [
+      TabColorOption(name: "None", hex: nil),
+      TabColorOption(name: "Red", hex: "#FF5A5F"),
+      TabColorOption(name: "Orange", hex: "#FF9F0A"),
+      TabColorOption(name: "Yellow", hex: "#FFD60A"),
+      TabColorOption(name: "Green", hex: "#30D158"),
+      TabColorOption(name: "Blue", hex: "#0A84FF"),
+      TabColorOption(name: "Purple", hex: "#BF5AF2"),
+      TabColorOption(name: "Pink", hex: "#FF375F"),
+      TabColorOption(name: "Gray", hex: "#8E8E93"),
+    ]
   }
 
   private struct DeleteConfirmationOverlay: View {
