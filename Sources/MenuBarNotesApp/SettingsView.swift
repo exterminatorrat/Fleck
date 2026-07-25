@@ -17,26 +17,24 @@
     }
 
     var body: some View {
-      VStack(spacing: 0) {
-        sectionSelector
+      ZStack {
+        Form {
+          sectionSelector
 
-        ZStack {
-          Form {
-            switch selectedSection {
-            case .appearance:
-              appearance
-            case .editing:
-              editing
-            case .shortcuts:
-              shortcuts
-            }
+          switch selectedSection {
+          case .appearance:
+            appearance
+          case .editing:
+            editing
+          case .shortcuts:
+            shortcuts
           }
-          .formStyle(.grouped)
-          .id(selectedSection)
-          .transition(.opacity)
         }
-        .animation(motion.standard, value: selectedSection)
+        .formStyle(.grouped)
+        .id(selectedSection)
+        .transition(.opacity)
       }
+      .animation(motion.standard, value: selectedSection)
     }
 
     private var sectionSelector: some View {
