@@ -290,7 +290,7 @@
     }
   }
 
-  private final class ListAwareTextView: NSTextView {
+  final class ListAwareTextView: NSTextView {
     var automaticLists = true
 
     override func insertNewline(_ sender: Any?) {
@@ -326,6 +326,7 @@
       }
       let replacement = "\n" + continuation
       let insertionRange = selectedRange()
+      let suffixLength = max(0, NSMaxRange(paragraphRange) - insertionRange.location)
       let insertedRange = NSRange(
         location: insertionRange.location,
         length: replacement.utf16.count
@@ -335,9 +336,14 @@
         with: replacement,
         selecting: NSRange(location: NSMaxRange(insertedRange), length: 0)
       ) { storage, _ in
-        storage.removeAttribute(.strikethroughStyle, range: insertedRange)
+        let newParagraphRange = NSRange(
+          location: insertedRange.location,
+          length: insertedRange.length + suffixLength
+        )
+        storage.removeAttribute(.strikethroughStyle, range: newParagraphRange)
       }
       typingAttributes[.strikethroughStyle] = 0
+      renumberNumberedLists()
     }
 
     override func insertTab(_ sender: Any?) { indentSelectedLines(removing: false) }
@@ -383,6 +389,9 @@
         original: original,
         with: changed
       )
+      if case .number = style {
+        renumberNumberedLists()
+      }
     }
 
     func toggleAutomaticList(_ family: EditorListFamily) {
@@ -395,6 +404,9 @@
         original: original,
         with: changed
       )
+      if family == .numbers {
+        renumberNumberedLists()
+      }
     }
 
     private func indentSelectedLines(removing: Bool) {
@@ -403,6 +415,7 @@
       let original = ns.substring(with: range)
       let changed = EditorListEngine.indent(original, removing: removing)
       replaceSelectedLines(range, original: original, with: changed)
+      renumberNumberedLists()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -459,28 +472,11 @@
         return
       }
 
-      let contentRange = NSRange(
-        location: NSMaxRange(markerRange) + 1,
-        length: parsed.content.utf16.count
+      _ = toggleChecklist(
+        markerRange: markerRange,
+        contentLength: parsed.content.utf16.count,
+        currentlyCompleted: parsed.isChecklistComplete
       )
-      let selection = selectedRange()
-      let completed = !parsed.isChecklistComplete
-      _ = replaceText(
-        in: markerRange,
-        with: completed ? "●" : "○",
-        selecting: selection
-      ) { storage, _ in
-        guard contentRange.length > 0 else { return }
-        if completed {
-          storage.addAttribute(
-            .strikethroughStyle,
-            value: NSUnderlineStyle.single.rawValue,
-            range: contentRange
-          )
-        } else {
-          storage.removeAttribute(.strikethroughStyle, range: contentRange)
-        }
-      }
     }
 
     private func replaceSelectedLines(
@@ -495,9 +491,10 @@
         location: range.location,
         length: replacement.utf16.count
       )
-      _ = replaceText(
+      let attributed = attributedListReplacement(in: range, with: replacement)
+      _ = replaceAttributedText(
         in: range,
-        with: replacement,
+        with: attributed,
         selecting: replacementRange
       ) { storage, insertedRange in
         if clearsCompletedChecklist {
@@ -525,6 +522,245 @@
       setSelectedRange(selection)
       didChangeText()
       return true
+    }
+
+    @discardableResult
+    private func replaceAttributedText(
+      in range: NSRange,
+      with replacement: NSAttributedString,
+      selecting selection: NSRange,
+      updateAttributes: ((NSTextStorage, NSRange) -> Void)? = nil
+    ) -> Bool {
+      guard shouldChangeText(in: range, replacementString: replacement.string),
+        let storage = textStorage
+      else { return false }
+
+      let insertedRange = NSRange(location: range.location, length: replacement.length)
+      storage.beginEditing()
+      storage.replaceCharacters(in: range, with: replacement)
+      updateAttributes?(storage, insertedRange)
+      storage.endEditing()
+      setSelectedRange(selection)
+      didChangeText()
+      return true
+    }
+
+    private func attributedListReplacement(
+      in range: NSRange,
+      with replacement: String
+    ) -> NSAttributedString {
+      guard let storage = textStorage else { return NSAttributedString(string: replacement) }
+      let source = storage.attributedSubstring(from: range)
+      let sourceLines = source.string.split(
+        separator: "\n",
+        omittingEmptySubsequences: false
+      ).map(String.init)
+      let replacementLines = replacement.split(
+        separator: "\n",
+        omittingEmptySubsequences: false
+      ).map(String.init)
+      guard sourceLines.count == replacementLines.count else {
+        return NSAttributedString(string: replacement, attributes: typingAttributes)
+      }
+
+      let result = NSMutableAttributedString()
+      var sourceLocation = 0
+      for index in sourceLines.indices {
+        let sourceLine = sourceLines[index]
+        let replacementLine = replacementLines[index]
+        let sourceLength = sourceLine.utf16.count
+        let sourcePrefixLength = listPrefixLength(in: sourceLine)
+        let replacementPrefixLength = listPrefixLength(in: replacementLine)
+        let attributesLocation = min(
+          sourceLocation + sourcePrefixLength,
+          max(0, source.length - 1)
+        )
+        let attributes =
+          source.length > 0
+          ? source.attributes(at: attributesLocation, effectiveRange: nil)
+          : typingAttributes
+        let replacementNSString = replacementLine as NSString
+        let replacementPrefix = replacementNSString.substring(
+          with: NSRange(location: 0, length: replacementPrefixLength)
+        )
+        result.append(NSAttributedString(string: replacementPrefix, attributes: attributes))
+        let contentLength = max(0, sourceLength - sourcePrefixLength)
+        if contentLength > 0 {
+          result.append(
+            source.attributedSubstring(
+              from: NSRange(
+                location: sourceLocation + sourcePrefixLength,
+                length: contentLength
+              )
+            )
+          )
+        }
+        sourceLocation += sourceLength
+        if index < sourceLines.index(before: sourceLines.endIndex) {
+          let newlineAttributes =
+            sourceLocation < source.length
+            ? source.attributes(at: sourceLocation, effectiveRange: nil)
+            : attributes
+          result.append(NSAttributedString(string: "\n", attributes: newlineAttributes))
+          sourceLocation += 1
+        }
+      }
+      return result
+    }
+
+    private func listPrefixLength(in line: String) -> Int {
+      if let parsed = EditorListEngine.parse(line) {
+        return (parsed.depth * 4) + line.dropFirst(parsed.depth * 4)
+          .prefix(while: { $0 != " " }).utf16.count + 1
+      }
+      return line.prefix(while: { $0 == " " }).utf16.count
+    }
+
+    @discardableResult
+    private func toggleChecklist(
+      markerRange: NSRange,
+      contentLength: Int,
+      currentlyCompleted: Bool
+    ) -> Bool {
+      let contentRange = NSRange(
+        location: NSMaxRange(markerRange) + 1,
+        length: contentLength
+      )
+      let selection = selectedRange()
+      let completed = !currentlyCompleted
+      undoManager?.beginUndoGrouping()
+      defer { undoManager?.endUndoGrouping() }
+      registerStrikethroughUndo(
+        enabled: currentlyCompleted,
+        range: contentRange
+      )
+      return replaceText(
+        in: markerRange,
+        with: completed ? "●" : "○",
+        selecting: selection
+      ) { storage, _ in
+        guard contentRange.length > 0 else { return }
+        if completed {
+          storage.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: contentRange
+          )
+        } else {
+          storage.removeAttribute(.strikethroughStyle, range: contentRange)
+        }
+      }
+    }
+
+    private func registerStrikethroughUndo(enabled: Bool, range: NSRange) {
+      undoManager?.registerUndo(withTarget: self) { target in
+        target.registerStrikethroughUndo(enabled: !enabled, range: range)
+        guard let storage = target.textStorage, range.length > 0 else { return }
+        if enabled {
+          storage.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: range
+          )
+        } else {
+          storage.removeAttribute(.strikethroughStyle, range: range)
+        }
+        target.didChangeText()
+      }
+    }
+
+    private func renumberNumberedLists() {
+      let original = string
+      let renumbered = EditorListEngine.renumber(original)
+      guard original != renumbered, let storage = textStorage else { return }
+      let originalLines = original.split(separator: "\n", omittingEmptySubsequences: false)
+        .map(String.init)
+      let renumberedLines = renumbered.split(separator: "\n", omittingEmptySubsequences: false)
+        .map(String.init)
+      guard originalLines.count == renumberedLines.count else { return }
+
+      var edits: [(range: NSRange, replacement: String)] = []
+      var location = 0
+      for index in originalLines.indices {
+        let originalLine = originalLines[index]
+        let updatedLine = renumberedLines[index]
+        if let originalParsed = EditorListEngine.parse(originalLine),
+          case .number = originalParsed.style,
+          let updatedParsed = EditorListEngine.parse(updatedLine)
+        {
+          let originalMarker = originalLine.dropFirst(originalParsed.depth * 4)
+            .prefix(while: { $0 != " " })
+          let updatedMarker = updatedLine.dropFirst(updatedParsed.depth * 4)
+            .prefix(while: { $0 != " " })
+          if originalMarker != updatedMarker {
+            edits.append(
+              (
+                NSRange(
+                  location: location + (originalParsed.depth * 4),
+                  length: originalMarker.utf16.count
+                ),
+                String(updatedMarker)
+              )
+            )
+          }
+        }
+        location += originalLine.utf16.count + (index < originalLines.count - 1 ? 1 : 0)
+      }
+      guard !edits.isEmpty else { return }
+
+      var selection = selectedRange()
+      storage.beginEditing()
+      for edit in edits.reversed() {
+        guard shouldChangeText(in: edit.range, replacementString: edit.replacement) else { continue }
+        storage.replaceCharacters(in: edit.range, with: edit.replacement)
+        let delta = edit.replacement.utf16.count - edit.range.length
+        if edit.range.location < selection.location {
+          selection.location += delta
+        }
+      }
+      storage.endEditing()
+      setSelectedRange(selection)
+      didChangeText()
+    }
+
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+      var actions = super.accessibilityCustomActions() ?? []
+      if selectedChecklistLocation() != nil {
+        actions.append(
+          NSAccessibilityCustomAction(
+            name: "Toggle checklist item",
+            target: self,
+            selector: #selector(toggleSelectedChecklist)
+          )
+        )
+      }
+      return actions
+    }
+
+    @objc func toggleSelectedChecklist() -> Bool {
+      guard let item = selectedChecklistLocation() else { return false }
+      return toggleChecklist(
+        markerRange: item.markerRange,
+        contentLength: item.contentLength,
+        currentlyCompleted: item.completed
+      )
+    }
+
+    private func selectedChecklistLocation() -> (
+      markerRange: NSRange, contentLength: Int, completed: Bool
+    )? {
+      let ns = string as NSString
+      let cursor = min(selectedRange().location, ns.length)
+      let range = ns.paragraphRange(for: NSRange(location: cursor, length: 0))
+      let paragraph = ns.substring(with: range).trimmingCharacters(in: .newlines)
+      guard let parsed = EditorListEngine.parse(paragraph), parsed.style == .checklist else {
+        return nil
+      }
+      return (
+        NSRange(location: range.location + (parsed.depth * 4), length: 1),
+        parsed.content.utf16.count,
+        parsed.isChecklistComplete
+      )
     }
   }
 #endif

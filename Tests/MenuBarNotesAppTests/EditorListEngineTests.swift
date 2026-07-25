@@ -19,6 +19,8 @@ import Testing
   #expect(EditorListEngine.parse("– Item")?.style == .bullet(.dash))
   #expect(EditorListEngine.parse("2. Item")?.style == .number(.decimal))
   #expect(EditorListEngine.parse("    b. Child")?.style == .number(.alphabetic))
+  #expect(EditorListEngine.parse("    i. Ninth")?.style == .number(.alphabetic))
+  #expect(EditorListEngine.parse("        i. First")?.style == .number(.roman))
   #expect(EditorListEngine.parse("        ii. Child")?.style == .number(.roman))
   #expect(EditorListEngine.parse("○ Task")?.style == .checklist)
   #expect(EditorListEngine.parse("● Done")?.isChecklistComplete == true)
@@ -63,6 +65,8 @@ import Testing
 
 @Test func returnAndIndentUseListHierarchy() {
   #expect(EditorListEngine.continuation(after: "1. Parent") == "2. ")
+  #expect(EditorListEngine.continuation(after: "    i. Ninth") == "    j. ")
+  #expect(EditorListEngine.continuation(after: "        i. First") == "        ii. ")
   #expect(EditorListEngine.continuation(after: "● Done") == "○ ")
   #expect(EditorListEngine.continuation(after: "○ ") == nil)
   #expect(EditorListEngine.indent("• Child", removing: false) == "    ◦ Child")
@@ -73,6 +77,16 @@ import Testing
   )
   #expect(EditorListEngine.indent("Plain", removing: false) == "    Plain")
   #expect(EditorListEngine.indent("Plain", removing: true) == "Plain")
+  #expect(EditorListEngine.indent("5. Unchanged", removing: true) == "5. Unchanged")
+}
+
+@Test func numberingRecomputesContiguousSiblingBlocks() {
+  #expect(
+    EditorListEngine.renumber(
+      "1. Parent\n    a. Child\n1. Sibling\nPlain\n8. Separate"
+    )
+      == "1. Parent\n    a. Child\n2. Sibling\nPlain\n1. Separate"
+  )
 }
 
 @Test func typedPrefixesAndChecklistsNormalize() {

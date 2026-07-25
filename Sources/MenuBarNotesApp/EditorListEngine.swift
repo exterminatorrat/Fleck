@@ -23,9 +23,6 @@
     case bullet(EditorBulletStyle)
     case number(EditorNumberStyle)
     case checklist
-
-    static let bullets = Self.bullet(.disc)
-    static let numbers = Self.number(.decimal)
   }
 
   struct ParsedEditorListLine: Equatable {
@@ -89,7 +86,18 @@
         )
       }
       guard marker.hasSuffix(".") else { return nil }
-      if let number = romanValue(token) {
+      let roman = romanValue(token)
+      let alphabetic = alphabeticValue(token)
+      if automaticNumber(depth: depth) == .alphabetic, let number = alphabetic {
+        return ParsedEditorListLine(
+          depth: depth,
+          style: .number(.alphabetic),
+          content: content,
+          isChecklistComplete: false,
+          ordinal: number
+        )
+      }
+      if let number = roman {
         return ParsedEditorListLine(
           depth: depth,
           style: .number(.roman),
@@ -98,7 +106,7 @@
           ordinal: number
         )
       }
-      if let number = alphabeticValue(token) {
+      if let number = alphabetic {
         return ParsedEditorListLine(
           depth: depth,
           style: .number(.alphabetic),
@@ -179,9 +187,10 @@
     }
 
     static func indent(_ text: String, removing: Bool) -> String {
-      let transformed = text.split(separator: "\n", omittingEmptySubsequences: false)
-        .map(String.init)
+      let original = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+      let transformed = original
         .map { indentLine($0, removing: removing) }
+      guard transformed != original else { return text }
       var ordinals: [Int: Int] = [:]
       return transformed.map { line in
         guard let parsed = parse(line), case .number(let style) = parsed.style else {
@@ -191,6 +200,27 @@
         return String(repeating: indentation, count: parsed.depth)
           + marker(for: .number(style), ordinal: ordinal) + " " + parsed.content
       }.joined(separator: "\n")
+    }
+
+    static func renumber(_ text: String) -> String {
+      var ordinals: [Int: Int] = [:]
+      return text.split(separator: "\n", omittingEmptySubsequences: false)
+        .map(String.init)
+        .map { line in
+          guard let parsed = parse(line), case .number(let style) = parsed.style else {
+            ordinals.removeAll()
+            return line
+          }
+          ordinals = ordinals.filter { $0.key <= parsed.depth }
+          let ordinal = nextOrdinal(
+            for: parsed.style,
+            depth: parsed.depth,
+            ordinals: &ordinals
+          )
+          return String(repeating: indentation, count: parsed.depth)
+            + marker(for: .number(style), ordinal: ordinal) + " " + parsed.content
+        }
+        .joined(separator: "\n")
     }
 
     static func normalizeTypedPrefix(_ prefix: String) -> String? {

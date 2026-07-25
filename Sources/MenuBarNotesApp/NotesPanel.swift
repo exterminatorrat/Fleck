@@ -244,7 +244,14 @@
     }
 
     private func tabColor(for note: Note, opacity: Double) -> Color {
-      (note.tabColorHex.map(Color.init(hex:)) ?? Color.accentColor).opacity(opacity)
+      guard let hex = note.tabColorHex else {
+        return Color.accentColor.opacity(opacity)
+      }
+      let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+      guard cleaned.count == 6, UInt64(cleaned, radix: 16) != nil else {
+        return Color.accentColor.opacity(opacity)
+      }
+      return Color(hex: hex).opacity(opacity)
     }
 
     private func performShortcut(_ action: Shortcut.Action) {
