@@ -67,6 +67,12 @@ import Testing
   #expect(EditorListEngine.continuation(after: "1. Parent") == "2. ")
   #expect(EditorListEngine.continuation(after: "    i. Ninth") == "    j. ")
   #expect(EditorListEngine.continuation(after: "        i. First") == "        ii. ")
+  #expect(
+    EditorListEngine.continuation(
+      after: "    i. First",
+      preferredNumberStyle: .roman
+    ) == "    ii. "
+  )
   #expect(EditorListEngine.continuation(after: "● Done") == "○ ")
   #expect(EditorListEngine.continuation(after: "○ ") == nil)
   #expect(EditorListEngine.indent("• Child", removing: false) == "    ◦ Child")

@@ -292,6 +292,7 @@
 
   final class ListAwareTextView: NSTextView {
     var automaticLists = true
+    private var preferredNumberStyle: EditorNumberStyle?
 
     override func insertNewline(_ sender: Any?) {
       guard automaticLists, selectedRange().length == 0 else {
@@ -320,30 +321,50 @@
         return
       }
 
-      guard let continuation = EditorListEngine.continuation(after: paragraph) else {
+      guard
+        let continuation = EditorListEngine.continuation(
+          after: paragraph,
+          preferredNumberStyle: preferredNumberStyle
+        )
+      else {
         super.insertNewline(sender)
         return
       }
-      let replacement = "\n" + continuation
-      let insertionRange = selectedRange()
-      let suffixLength = max(0, NSMaxRange(paragraphRange) - insertionRange.location)
-      let insertedRange = NSRange(
-        location: insertionRange.location,
-        length: replacement.utf16.count
-      )
-      _ = replaceText(
-        in: insertionRange,
-        with: replacement,
-        selecting: NSRange(location: NSMaxRange(insertedRange), length: 0)
-      ) { storage, _ in
-        let newParagraphRange = NSRange(
-          location: insertedRange.location,
-          length: insertedRange.length + suffixLength
+      performUndoGroup {
+        guard let storage = textStorage else { return }
+        let replacement = "\n" + continuation
+        let insertionRange = selectedRange()
+        let relativeInsertion = insertionRange.location - paragraphRange.location
+        let attributedParagraph = NSMutableAttributedString(
+          attributedString: storage.attributedSubstring(from: paragraphRange)
         )
-        storage.removeAttribute(.strikethroughStyle, range: newParagraphRange)
+        attributedParagraph.insert(
+          NSAttributedString(string: replacement, attributes: typingAttributes),
+          at: relativeInsertion
+        )
+        attributedParagraph.removeAttribute(
+          .strikethroughStyle,
+          range: NSRange(
+            location: relativeInsertion,
+            length: attributedParagraph.length - relativeInsertion
+          )
+        )
+        _ = replaceAttributedText(
+          in: paragraphRange,
+          with: attributedParagraph,
+          selecting: NSRange(
+            location: insertionRange.location + replacement.utf16.count,
+            length: 0
+          )
+        )
+        typingAttributes[.strikethroughStyle] = 0
+        renumberNumberedList(
+          around: NSRange(
+            location: paragraphRange.location,
+            length: attributedParagraph.length
+          )
+        )
       }
-      typingAttributes[.strikethroughStyle] = 0
-      renumberNumberedLists()
     }
 
     override func insertTab(_ sender: Any?) { indentSelectedLines(removing: false) }
@@ -380,32 +401,44 @@
     }
 
     func toggleList(_ style: EditorListStyle) {
+      if case .number(let numberStyle) = style {
+        preferredNumberStyle = numberStyle
+      }
       let ns = string as NSString
       let lineRange = ns.lineRange(for: selectedRange())
       let original = ns.substring(with: lineRange)
       let changed = EditorListEngine.toggle(style: style, in: original)
-      replaceSelectedLines(
-        lineRange,
-        original: original,
-        with: changed
-      )
-      if case .number = style {
-        renumberNumberedLists()
+      performUndoGroup {
+        replaceSelectedLines(
+          lineRange,
+          original: original,
+          with: changed
+        )
+        if case .number = style {
+          renumberNumberedList(
+            around: NSRange(location: lineRange.location, length: changed.utf16.count)
+          )
+        }
       }
     }
 
     func toggleAutomaticList(_ family: EditorListFamily) {
+      preferredNumberStyle = nil
       let ns = string as NSString
       let lineRange = ns.lineRange(for: selectedRange())
       let original = ns.substring(with: lineRange)
       let changed = EditorListEngine.toggleAutomatic(family: family, in: original)
-      replaceSelectedLines(
-        lineRange,
-        original: original,
-        with: changed
-      )
-      if family == .numbers {
-        renumberNumberedLists()
+      performUndoGroup {
+        replaceSelectedLines(
+          lineRange,
+          original: original,
+          with: changed
+        )
+        if family == .numbers {
+          renumberNumberedList(
+            around: NSRange(location: lineRange.location, length: changed.utf16.count)
+          )
+        }
       }
     }
 
@@ -414,8 +447,13 @@
       let range = ns.lineRange(for: selectedRange())
       let original = ns.substring(with: range)
       let changed = EditorListEngine.indent(original, removing: removing)
-      replaceSelectedLines(range, original: original, with: changed)
-      renumberNumberedLists()
+      guard changed != original else { return }
+      performUndoGroup {
+        replaceSelectedLines(range, original: original, with: changed)
+        renumberNumberedList(
+          around: NSRange(location: range.location, length: changed.utf16.count)
+        )
+      }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -669,58 +707,62 @@
       }
     }
 
-    private func renumberNumberedLists() {
-      let original = string
-      let renumbered = EditorListEngine.renumber(original)
-      guard original != renumbered, let storage = textStorage else { return }
-      let originalLines = original.split(separator: "\n", omittingEmptySubsequences: false)
-        .map(String.init)
-      let renumberedLines = renumbered.split(separator: "\n", omittingEmptySubsequences: false)
-        .map(String.init)
-      guard originalLines.count == renumberedLines.count else { return }
+    private func renumberNumberedList(around affectedRange: NSRange) {
+      guard let blockRange = numberedBlockRange(around: affectedRange) else { return }
+      let ns = string as NSString
+      let original = ns.substring(with: blockRange)
+      let renumbered = EditorListEngine.renumber(
+        original,
+        preferredNumberStyle: preferredNumberStyle
+      )
+      guard original != renumbered else { return }
+      let selection = selectedRange()
+      let attributed = attributedListReplacement(in: blockRange, with: renumbered)
+      _ = replaceAttributedText(in: blockRange, with: attributed, selecting: selection)
+    }
 
-      var edits: [(range: NSRange, replacement: String)] = []
-      var location = 0
-      for index in originalLines.indices {
-        let originalLine = originalLines[index]
-        let updatedLine = renumberedLines[index]
-        if let originalParsed = EditorListEngine.parse(originalLine),
-          case .number = originalParsed.style,
-          let updatedParsed = EditorListEngine.parse(updatedLine)
-        {
-          let originalMarker = originalLine.dropFirst(originalParsed.depth * 4)
-            .prefix(while: { $0 != " " })
-          let updatedMarker = updatedLine.dropFirst(updatedParsed.depth * 4)
-            .prefix(while: { $0 != " " })
-          if originalMarker != updatedMarker {
-            edits.append(
-              (
-                NSRange(
-                  location: location + (originalParsed.depth * 4),
-                  length: originalMarker.utf16.count
-                ),
-                String(updatedMarker)
-              )
-            )
-          }
-        }
-        location += originalLine.utf16.count + (index < originalLines.count - 1 ? 1 : 0)
-      }
-      guard !edits.isEmpty else { return }
+    private func numberedBlockRange(around affectedRange: NSRange) -> NSRange? {
+      let ns = string as NSString
+      guard ns.length > 0 else { return nil }
+      var block = ns.lineRange(for: NSRange(
+        location: min(affectedRange.location, ns.length),
+        length: min(affectedRange.length, max(0, ns.length - affectedRange.location))
+      ))
+      let selectedLines = ns.substring(with: block)
+        .split(separator: "\n", omittingEmptySubsequences: true)
+      guard selectedLines.contains(where: {
+        guard let parsed = EditorListEngine.parse(String($0)) else { return false }
+        if case .number = parsed.style { return true }
+        return false
+      }) else { return nil }
 
-      var selection = selectedRange()
-      storage.beginEditing()
-      for edit in edits.reversed() {
-        guard shouldChangeText(in: edit.range, replacementString: edit.replacement) else { continue }
-        storage.replaceCharacters(in: edit.range, with: edit.replacement)
-        let delta = edit.replacement.utf16.count - edit.range.length
-        if edit.range.location < selection.location {
-          selection.location += delta
+      while block.location > 0 {
+        let previous = ns.lineRange(
+          for: NSRange(location: block.location - 1, length: 0)
+        )
+        let line = ns.substring(with: previous).trimmingCharacters(in: .newlines)
+        guard let parsed = EditorListEngine.parse(line), case .number = parsed.style else {
+          break
         }
+        block = NSUnionRange(block, previous)
       }
-      storage.endEditing()
-      setSelectedRange(selection)
-      didChangeText()
+      while NSMaxRange(block) < ns.length {
+        let next = ns.lineRange(
+          for: NSRange(location: NSMaxRange(block), length: 0)
+        )
+        let line = ns.substring(with: next).trimmingCharacters(in: .newlines)
+        guard let parsed = EditorListEngine.parse(line), case .number = parsed.style else {
+          break
+        }
+        block = NSUnionRange(block, next)
+      }
+      return block
+    }
+
+    private func performUndoGroup(_ action: () -> Void) {
+      undoManager?.beginUndoGrouping()
+      action()
+      undoManager?.endUndoGrouping()
     }
 
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {

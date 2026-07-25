@@ -44,7 +44,10 @@
       [.decimal, .alphabetic, .roman][max(0, depth) % 3]
     }
 
-    static func parse(_ line: String) -> ParsedEditorListLine? {
+    static func parse(
+      _ line: String,
+      preferredNumberStyle: EditorNumberStyle? = nil
+    ) -> ParsedEditorListLine? {
       let spaceCount = line.prefix(while: { $0 == " " }).count
       guard spaceCount.isMultiple(of: indentation.count) else { return nil }
 
@@ -88,6 +91,24 @@
       guard marker.hasSuffix(".") else { return nil }
       let roman = romanValue(token)
       let alphabetic = alphabeticValue(token)
+      if preferredNumberStyle == .alphabetic, let number = alphabetic {
+        return ParsedEditorListLine(
+          depth: depth,
+          style: .number(.alphabetic),
+          content: content,
+          isChecklistComplete: false,
+          ordinal: number
+        )
+      }
+      if preferredNumberStyle == .roman, let number = roman {
+        return ParsedEditorListLine(
+          depth: depth,
+          style: .number(.roman),
+          content: content,
+          isChecklistComplete: false,
+          ordinal: number
+        )
+      }
       if automaticNumber(depth: depth) == .alphabetic, let number = alphabetic {
         return ParsedEditorListLine(
           depth: depth,
@@ -123,12 +144,14 @@
       let populated = lines.filter { !$0.isEmpty }
       let removesMarkers =
         !populated.isEmpty
-        && populated.allSatisfy { parse($0)?.style == style }
+        && populated.allSatisfy {
+          parse($0, preferredNumberStyle: style.numberStyle)?.style == style
+        }
       var ordinals: [Int: Int] = [:]
 
       return lines.map { line in
         guard !line.isEmpty else { return line }
-        if let parsed = parse(line) {
+        if let parsed = parse(line, preferredNumberStyle: style.numberStyle) {
           let indent = String(repeating: indentation, count: parsed.depth)
           if removesMarkers { return indent + parsed.content }
           let ordinal = nextOrdinal(for: style, depth: parsed.depth, ordinals: &ordinals)
@@ -171,8 +194,13 @@
       }.joined(separator: "\n")
     }
 
-    static func continuation(after line: String) -> String? {
-      guard let parsed = parse(line), !parsed.content.isEmpty else { return nil }
+    static func continuation(
+      after line: String,
+      preferredNumberStyle: EditorNumberStyle? = nil
+    ) -> String? {
+      guard let parsed = parse(line, preferredNumberStyle: preferredNumberStyle),
+        !parsed.content.isEmpty
+      else { return nil }
       let indent = String(repeating: indentation, count: parsed.depth)
       switch parsed.style {
       case .bullet, .checklist:
@@ -202,12 +230,18 @@
       }.joined(separator: "\n")
     }
 
-    static func renumber(_ text: String) -> String {
+    static func renumber(
+      _ text: String,
+      preferredNumberStyle: EditorNumberStyle? = nil
+    ) -> String {
       var ordinals: [Int: Int] = [:]
       return text.split(separator: "\n", omittingEmptySubsequences: false)
         .map(String.init)
         .map { line in
-          guard let parsed = parse(line), case .number(let style) = parsed.style else {
+          guard
+            let parsed = parse(line, preferredNumberStyle: preferredNumberStyle),
+            case .number(let style) = parsed.style
+          else {
             ordinals.removeAll()
             return line
           }
@@ -372,6 +406,13 @@
         previous = value
       }
       return romanMarker(total) == token ? total : nil
+    }
+  }
+
+  extension EditorListStyle {
+    fileprivate var numberStyle: EditorNumberStyle? {
+      guard case .number(let style) = self else { return nil }
+      return style
     }
   }
 #endif
