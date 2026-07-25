@@ -481,18 +481,33 @@
         }
         .help("Font")
         .accessibilityLabel("Font")
-        Button {
-          commands.applyList(.bullets)
+        Menu {
+          Button("Disc (•)") { commands.applyList(.bullet(.disc)) }
+          Button("Circle (◦)") { commands.applyList(.bullet(.circle)) }
+          Button("Square (▪)") { commands.applyList(.bullet(.square)) }
+          Button("Dash (–)") { commands.applyList(.bullet(.dash)) }
         } label: {
           ToolbarIconLabel(systemImage: "list.bullet")
+        } primaryAction: {
+          commands.applyAutomaticList(.bullets)
         }
         .accessibilityLabel("Bullets")
-        Button {
-          commands.applyList(.numbers)
+        Menu {
+          Button("Decimal (1.)") { commands.applyList(.number(.decimal)) }
+          Button("Alphabetic (a.)") { commands.applyList(.number(.alphabetic)) }
+          Button("Roman (i.)") { commands.applyList(.number(.roman)) }
         } label: {
           ToolbarIconLabel(systemImage: "list.number")
+        } primaryAction: {
+          commands.applyAutomaticList(.numbers)
         }
         .accessibilityLabel("Numbers")
+        Button {
+          commands.applyList(.checklist)
+        } label: {
+          ToolbarIconLabel(systemImage: "checklist")
+        }
+        .accessibilityLabel("Checklist")
         Spacer()
         Button(role: .destructive) {
           onDelete()

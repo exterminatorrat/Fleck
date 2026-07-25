@@ -51,12 +51,26 @@ import Testing
   )
 }
 
+@Test func automaticListsUseEachParagraphDepth() {
+  let plain = "Parent\n    Child\n        Grandchild"
+  let bullets = "• Parent\n    ◦ Child\n        ▪ Grandchild"
+  let numbers = "1. Parent\n    a. Child\n        i. Grandchild"
+
+  #expect(EditorListEngine.toggleAutomatic(family: .bullets, in: plain) == bullets)
+  #expect(EditorListEngine.toggleAutomatic(family: .bullets, in: bullets) == plain)
+  #expect(EditorListEngine.toggleAutomatic(family: .numbers, in: plain) == numbers)
+}
+
 @Test func returnAndIndentUseListHierarchy() {
   #expect(EditorListEngine.continuation(after: "1. Parent") == "2. ")
   #expect(EditorListEngine.continuation(after: "● Done") == "○ ")
   #expect(EditorListEngine.continuation(after: "○ ") == nil)
   #expect(EditorListEngine.indent("• Child", removing: false) == "    ◦ Child")
   #expect(EditorListEngine.indent("    a. Child", removing: true) == "1. Child")
+  #expect(
+    EditorListEngine.indent("1. First\n2. Second", removing: false)
+      == "    a. First\n    b. Second"
+  )
   #expect(EditorListEngine.indent("Plain", removing: false) == "    Plain")
   #expect(EditorListEngine.indent("Plain", removing: true) == "Plain")
 }

@@ -45,6 +45,10 @@
       (textView as? ListAwareTextView)?.toggleList(style)
     }
 
+    func applyAutomaticList(_ family: EditorListFamily) {
+      (textView as? ListAwareTextView)?.toggleAutomaticList(family)
+    }
+
     func undo() { textView?.undoManager?.undo() }
     func redo() { textView?.undoManager?.redo() }
 
@@ -290,87 +294,237 @@
     var automaticLists = true
 
     override func insertNewline(_ sender: Any?) {
-      guard automaticLists, let continuation = currentListContinuation() else {
+      guard automaticLists, selectedRange().length == 0 else {
         super.insertNewline(sender)
         return
       }
-      if continuation.isEmptyItem {
-        textStorage?.replaceCharacters(in: continuation.paragraphRange, with: "\n")
-        didChangeText()
-      } else {
-        insertText("\n\(continuation.nextPrefix)", replacementRange: selectedRange())
+
+      let ns = string as NSString
+      let cursor = min(selectedRange().location, ns.length)
+      let paragraphRange = ns.paragraphRange(for: NSRange(location: cursor, length: 0))
+      let rawParagraph = ns.substring(with: paragraphRange)
+      let paragraph = rawParagraph.trimmingCharacters(in: .newlines)
+      guard let parsed = EditorListEngine.parse(paragraph) else {
+        super.insertNewline(sender)
+        return
       }
+
+      if parsed.content.isEmpty {
+        let indent = String(repeating: "    ", count: parsed.depth)
+        let trailingNewline = rawParagraph.hasSuffix("\n") ? "\n" : ""
+        _ = replaceText(
+          in: paragraphRange,
+          with: indent + trailingNewline,
+          selecting: NSRange(location: paragraphRange.location + indent.utf16.count, length: 0)
+        )
+        return
+      }
+
+      guard let continuation = EditorListEngine.continuation(after: paragraph) else {
+        super.insertNewline(sender)
+        return
+      }
+      let replacement = "\n" + continuation
+      let insertionRange = selectedRange()
+      let insertedRange = NSRange(
+        location: insertionRange.location,
+        length: replacement.utf16.count
+      )
+      _ = replaceText(
+        in: insertionRange,
+        with: replacement,
+        selecting: NSRange(location: NSMaxRange(insertedRange), length: 0)
+      ) { storage, _ in
+        storage.removeAttribute(.strikethroughStyle, range: insertedRange)
+      }
+      typingAttributes[.strikethroughStyle] = 0
     }
 
     override func insertTab(_ sender: Any?) { indentSelectedLines(removing: false) }
     override func insertBacktab(_ sender: Any?) { indentSelectedLines(removing: true) }
 
-    func toggleList(_ style: EditorListStyle) {
-      let ns = string as NSString
-      let selection = selectedRange()
-      let lineRange = ns.lineRange(for: selection)
-      let original = ns.substring(with: lineRange)
-      let lines = original.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-      let marker = try? NSRegularExpression(pattern: #"^\s*(?:[-*+] |\d+[.)] )"#)
-      let allMarked = lines.filter { !$0.isEmpty }.allSatisfy {
-        marker?.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+      let effectiveRange =
+        replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+      if automaticLists,
+        effectiveRange.length == 0,
+        insertString as? String == " "
+      {
+        let ns = string as NSString
+        let cursor = min(effectiveRange.location, ns.length)
+        let lineRange = ns.lineRange(for: NSRange(location: cursor, length: 0))
+        let prefixRange = NSRange(
+          location: lineRange.location,
+          length: cursor - lineRange.location
+        )
+        let typedPrefix = ns.substring(with: prefixRange) + " "
+        if let normalized = EditorListEngine.normalizeTypedPrefix(typedPrefix) {
+          _ = replaceText(
+            in: prefixRange,
+            with: normalized,
+            selecting: NSRange(
+              location: prefixRange.location + normalized.utf16.count,
+              length: 0
+            )
+          )
+          return
+        }
       }
-      var number = 1
-      let changed = lines.map { line -> String in
-        let range = NSRange(line.startIndex..., in: line)
-        let stripped =
-          marker?.stringByReplacingMatches(in: line, range: range, withTemplate: "") ?? line
-        guard !allMarked, !stripped.isEmpty else { return stripped }
-        defer { number += 1 }
-        return style == .bullets ? "- \(stripped)" : "\(number). \(stripped)"
-      }.joined(separator: "\n")
-      textStorage?.replaceCharacters(in: lineRange, with: changed)
-      setSelectedRange(NSRange(location: lineRange.location, length: (changed as NSString).length))
-      didChangeText()
+      super.insertText(insertString, replacementRange: replacementRange)
     }
 
-    private func currentListContinuation() -> (
-      paragraphRange: NSRange, nextPrefix: String, isEmptyItem: Bool
-    )? {
+    func toggleList(_ style: EditorListStyle) {
       let ns = string as NSString
-      let cursor = selectedRange().location
-      let paragraphRange = ns.paragraphRange(for: NSRange(location: cursor, length: 0))
-      let paragraph = ns.substring(with: paragraphRange).trimmingCharacters(in: .newlines)
-      let expression = try? NSRegularExpression(pattern: #"^(\s*)([-*+]|(\d+)[.)])\s(.*)$"#)
-      guard
-        let match = expression?.firstMatch(
-          in: paragraph, range: NSRange(paragraph.startIndex..., in: paragraph)),
-        let indentRange = Range(match.range(at: 1), in: paragraph),
-        let markerRange = Range(match.range(at: 2), in: paragraph),
-        let contentRange = Range(match.range(at: 4), in: paragraph)
-      else { return nil }
-      let indent = String(paragraph[indentRange])
-      let marker = String(paragraph[markerRange])
-      let content = String(paragraph[contentRange])
-      let nextMarker: String
-      if match.range(at: 3).location != NSNotFound,
-        let numberRange = Range(match.range(at: 3), in: paragraph),
-        let number = Int(paragraph[numberRange])
-      {
-        nextMarker = "\(number + 1)."
-      } else {
-        nextMarker = marker
-      }
-      return (paragraphRange, "\(indent)\(nextMarker) ", content.isEmpty)
+      let lineRange = ns.lineRange(for: selectedRange())
+      let original = ns.substring(with: lineRange)
+      let changed = EditorListEngine.toggle(style: style, in: original)
+      replaceSelectedLines(
+        lineRange,
+        original: original,
+        with: changed
+      )
+    }
+
+    func toggleAutomaticList(_ family: EditorListFamily) {
+      let ns = string as NSString
+      let lineRange = ns.lineRange(for: selectedRange())
+      let original = ns.substring(with: lineRange)
+      let changed = EditorListEngine.toggleAutomatic(family: family, in: original)
+      replaceSelectedLines(
+        lineRange,
+        original: original,
+        with: changed
+      )
     }
 
     private func indentSelectedLines(removing: Bool) {
       let ns = string as NSString
       let range = ns.lineRange(for: selectedRange())
       let original = ns.substring(with: range)
-      let lines = original.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-      let changed = lines.map { line in
-        if removing { return line.hasPrefix("    ") ? String(line.dropFirst(4)) : line }
-        return line.isEmpty ? line : "    " + line
-      }.joined(separator: "\n")
-      textStorage?.replaceCharacters(in: range, with: changed)
-      setSelectedRange(NSRange(location: range.location, length: (changed as NSString).length))
+      let changed = EditorListEngine.indent(original, removing: removing)
+      replaceSelectedLines(range, original: original, with: changed)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+      guard let layoutManager, let textContainer else {
+        super.mouseDown(with: event)
+        return
+      }
+
+      let point = convert(event.locationInWindow, from: nil)
+      let textPoint = NSPoint(
+        x: point.x - textContainerOrigin.x,
+        y: point.y - textContainerOrigin.y
+      )
+      guard textPoint.x >= 0, textPoint.y >= 0, layoutManager.numberOfGlyphs > 0 else {
+        super.mouseDown(with: event)
+        return
+      }
+
+      let glyphIndex = layoutManager.glyphIndex(for: textPoint, in: textContainer)
+      let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+      let ns = string as NSString
+      guard characterIndex < ns.length else {
+        super.mouseDown(with: event)
+        return
+      }
+
+      let paragraphRange = ns.paragraphRange(
+        for: NSRange(location: characterIndex, length: 0)
+      )
+      let paragraph = ns.substring(with: paragraphRange).trimmingCharacters(in: .newlines)
+      guard let parsed = EditorListEngine.parse(paragraph),
+        parsed.style == .checklist
+      else {
+        super.mouseDown(with: event)
+        return
+      }
+
+      let markerRange = NSRange(
+        location: paragraphRange.location + (parsed.depth * 4),
+        length: 1
+      )
+      let glyphRange = layoutManager.glyphRange(
+        forCharacterRange: markerRange,
+        actualCharacterRange: nil
+      )
+      var markerRect = layoutManager.boundingRect(
+        forGlyphRange: glyphRange,
+        in: textContainer
+      )
+      markerRect.origin.x += textContainerOrigin.x
+      markerRect.origin.y += textContainerOrigin.y
+      guard markerRect.insetBy(dx: -4, dy: -3).contains(point) else {
+        super.mouseDown(with: event)
+        return
+      }
+
+      let contentRange = NSRange(
+        location: NSMaxRange(markerRange) + 1,
+        length: parsed.content.utf16.count
+      )
+      let selection = selectedRange()
+      let completed = !parsed.isChecklistComplete
+      _ = replaceText(
+        in: markerRange,
+        with: completed ? "●" : "○",
+        selecting: selection
+      ) { storage, _ in
+        guard contentRange.length > 0 else { return }
+        if completed {
+          storage.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: contentRange
+          )
+        } else {
+          storage.removeAttribute(.strikethroughStyle, range: contentRange)
+        }
+      }
+    }
+
+    private func replaceSelectedLines(
+      _ range: NSRange,
+      original: String,
+      with replacement: String
+    ) {
+      let clearsCompletedChecklist = original
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .contains { EditorListEngine.parse(String($0))?.isChecklistComplete == true }
+      let replacementRange = NSRange(
+        location: range.location,
+        length: replacement.utf16.count
+      )
+      _ = replaceText(
+        in: range,
+        with: replacement,
+        selecting: replacementRange
+      ) { storage, insertedRange in
+        if clearsCompletedChecklist {
+          storage.removeAttribute(.strikethroughStyle, range: insertedRange)
+        }
+      }
+    }
+
+    @discardableResult
+    private func replaceText(
+      in range: NSRange,
+      with replacement: String,
+      selecting selection: NSRange,
+      updateAttributes: ((NSTextStorage, NSRange) -> Void)? = nil
+    ) -> Bool {
+      guard shouldChangeText(in: range, replacementString: replacement),
+        let storage = textStorage
+      else { return false }
+
+      let insertedRange = NSRange(location: range.location, length: replacement.utf16.count)
+      storage.beginEditing()
+      storage.replaceCharacters(in: range, with: replacement)
+      updateAttributes?(storage, insertedRange)
+      storage.endEditing()
+      setSelectedRange(selection)
       didChangeText()
+      return true
     }
   }
 #endif

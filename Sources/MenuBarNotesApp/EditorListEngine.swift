@@ -136,6 +136,33 @@
       }.joined(separator: "\n")
     }
 
+    static func toggleAutomatic(family: EditorListFamily, in text: String) -> String {
+      let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+      let populated = lines.filter { !$0.isEmpty }
+      let removesMarkers =
+        !populated.isEmpty
+        && populated.allSatisfy { line in
+          guard let parsed = parse(line) else { return false }
+          return parsed.style == automaticStyle(family: family, depth: parsed.depth)
+        }
+      var ordinals: [Int: Int] = [:]
+
+      return lines.map { line in
+        guard !line.isEmpty else { return line }
+        let parsed = parse(line)
+        let spaceCount = line.prefix(while: { $0 == " " }).count
+        let depth = parsed?.depth ?? (spaceCount / indentation.count)
+        let indent = parsed.map {
+          String(repeating: indentation, count: $0.depth)
+        } ?? String(line.prefix(spaceCount))
+        let content = parsed?.content ?? String(line.dropFirst(spaceCount))
+        if removesMarkers { return indent + content }
+        let style = automaticStyle(family: family, depth: depth)
+        let ordinal = nextOrdinal(for: style, depth: depth, ordinals: &ordinals)
+        return indent + marker(for: style, ordinal: ordinal) + " " + content
+      }.joined(separator: "\n")
+    }
+
     static func continuation(after line: String) -> String? {
       guard let parsed = parse(line), !parsed.content.isEmpty else { return nil }
       let indent = String(repeating: indentation, count: parsed.depth)
@@ -152,10 +179,18 @@
     }
 
     static func indent(_ text: String, removing: Bool) -> String {
-      text.split(separator: "\n", omittingEmptySubsequences: false)
+      let transformed = text.split(separator: "\n", omittingEmptySubsequences: false)
         .map(String.init)
         .map { indentLine($0, removing: removing) }
-        .joined(separator: "\n")
+      var ordinals: [Int: Int] = [:]
+      return transformed.map { line in
+        guard let parsed = parse(line), case .number(let style) = parsed.style else {
+          return line
+        }
+        let ordinal = nextOrdinal(for: parsed.style, depth: parsed.depth, ordinals: &ordinals)
+        return String(repeating: indentation, count: parsed.depth)
+          + marker(for: .number(style), ordinal: ordinal) + " " + parsed.content
+      }.joined(separator: "\n")
     }
 
     static func normalizeTypedPrefix(_ prefix: String) -> String? {
@@ -216,6 +251,16 @@
       case "▪": return .square
       case "–": return .dash
       default: return nil
+      }
+    }
+
+    private static func automaticStyle(
+      family: EditorListFamily,
+      depth: Int
+    ) -> EditorListStyle {
+      switch family {
+      case .bullets: return .bullet(automaticBullet(depth: depth))
+      case .numbers: return .number(automaticNumber(depth: depth))
       }
     }
 
