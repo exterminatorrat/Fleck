@@ -65,7 +65,7 @@
         }
       }
       .sheet(isPresented: $isShowingTrash) {
-        TrashView()
+        TrashView(onDone: { isShowingTrash = false })
           .environmentObject(appState)
       }
       .overlay {

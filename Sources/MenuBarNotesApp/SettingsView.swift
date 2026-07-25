@@ -7,6 +7,7 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedSection = SettingsSection.appearance
+    @Namespace private var selectedSectionHighlight
 
     private enum SettingsSection: String, CaseIterable, Identifiable {
       case appearance = "Appearance"
@@ -17,13 +18,7 @@
 
     var body: some View {
       VStack(spacing: 0) {
-        Picker("Settings section", selection: $selectedSection) {
-          ForEach(SettingsSection.allCases) { section in
-            Text(section.rawValue).tag(section)
-          }
-        }
-        .pickerStyle(.segmented)
-        .padding()
+        sectionSelector
 
         ZStack {
           Form {
@@ -42,6 +37,43 @@
         }
         .animation(motion.standard, value: selectedSection)
       }
+    }
+
+    private var sectionSelector: some View {
+      HStack(spacing: 4) {
+        ForEach(SettingsSection.allCases) { section in
+          let isSelected = section == selectedSection
+          Button {
+            withAnimation(motion.spatial) {
+              selectedSection = section
+            }
+          } label: {
+            Text(section.rawValue)
+              .font(.callout.weight(.medium))
+              .foregroundStyle(isSelected ? Color.white : Color.primary)
+              .frame(maxWidth: .infinity)
+              .padding(.vertical, 7)
+              .background {
+                if isSelected {
+                  RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.accentColor)
+                    .matchedGeometryEffect(
+                      id: "settings-section",
+                      in: selectedSectionHighlight
+                    )
+                }
+              }
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(section.rawValue)
+          .accessibilityValue(isSelected ? "Selected" : "Not selected")
+          .accessibilityAddTraits(isSelected ? .isSelected : [])
+        }
+      }
+      .padding(3)
+      .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
+      .padding()
     }
 
     private var motion: AppMotion {

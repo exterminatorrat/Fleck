@@ -4,8 +4,8 @@
 
   struct TrashView: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let onDone: () -> Void
 
     var body: some View {
       VStack(spacing: 0) {
@@ -18,9 +18,7 @@
               .foregroundStyle(.secondary)
           }
           Spacer()
-          Button("Done") {
-            dismiss()
-          }
+          Button("Done", action: onDone)
           .keyboardShortcut(.defaultAction)
         }
         .padding()
