@@ -70,3 +70,16 @@ import Testing
   workspace.togglePinned(id: second)
   #expect(workspace.notes.first(where: { $0.id == second })?.isPinned == false)
 }
+
+@Test func workspaceSetsAndClearsTabColor() {
+  let changedAt = Date(timeIntervalSince1970: 200)
+  var workspace = Workspace()
+  let noteID = workspace.addNote()
+
+  workspace.setTabColor(id: noteID, hex: "#FF5A5F", now: changedAt)
+  #expect(workspace.notes.first?.tabColorHex == "#FF5A5F")
+  #expect(workspace.notes.first?.modifiedAt == changedAt)
+
+  workspace.setTabColor(id: noteID, hex: nil, now: changedAt.addingTimeInterval(1))
+  #expect(workspace.notes.first?.tabColorHex == nil)
+}

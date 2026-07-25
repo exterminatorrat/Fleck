@@ -6,6 +6,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
   public var body: String
   /// Versioned RTF data used only when formatting cannot be represented by Markdown.
   public var richTextRTF: Data?
+  public var tabColorHex: String?
   public var createdAt: Date
   public var modifiedAt: Date
   public var isPinned: Bool
@@ -15,6 +16,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     title: String = "Untitled",
     body: String = "",
     richTextRTF: Data? = nil,
+    tabColorHex: String? = nil,
     createdAt: Date = Date(),
     modifiedAt: Date = Date(),
     isPinned: Bool = false
@@ -23,6 +25,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     self.title = title
     self.body = body
     self.richTextRTF = richTextRTF
+    self.tabColorHex = tabColorHex
     self.createdAt = createdAt
     self.modifiedAt = modifiedAt
     self.isPinned = isPinned

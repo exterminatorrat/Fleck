@@ -16,6 +16,7 @@ public actor LocalStore {
 
   private struct Metadata: Codable {
     var title: String
+    var tabColorHex: String?
     var createdAt: Date
     var modifiedAt: Date
     var isPinned: Bool
@@ -24,6 +25,7 @@ public actor LocalStore {
   private struct TrashMetadata: Codable {
     var id: UUID
     var title: String
+    var tabColorHex: String?
     var createdAt: Date
     var modifiedAt: Date
     var isPinned: Bool
@@ -78,6 +80,7 @@ public actor LocalStore {
         title: metadata.title,
         body: body,
         richTextRTF: richTextRTF,
+        tabColorHex: metadata.tabColorHex,
         createdAt: metadata.createdAt,
         modifiedAt: metadata.modifiedAt,
         isPinned: metadata.isPinned
@@ -144,6 +147,7 @@ public actor LocalStore {
             note.id,
             Metadata(
               title: note.title,
+              tabColorHex: note.tabColorHex,
               createdAt: note.createdAt,
               modifiedAt: note.modifiedAt,
               isPinned: note.isPinned
@@ -251,6 +255,7 @@ public actor LocalStore {
       let metadata = TrashMetadata(
         id: note.id,
         title: note.title,
+        tabColorHex: note.tabColorHex,
         createdAt: note.createdAt,
         modifiedAt: note.modifiedAt,
         isPinned: note.isPinned,
@@ -303,6 +308,7 @@ public actor LocalStore {
         title: metadata.title,
         body: body,
         richTextRTF: richTextRTF,
+        tabColorHex: metadata.tabColorHex,
         createdAt: metadata.createdAt,
         modifiedAt: metadata.modifiedAt,
         isPinned: metadata.isPinned

@@ -86,4 +86,10 @@ public struct Workspace: Codable, Equatable, Sendable {
       : (notes.lastIndex(where: \.isPinned).map { $0 + 1 } ?? 0)
     notes.insert(note, at: destination)
   }
+
+  public mutating func setTabColor(id: UUID, hex: String?, now: Date = Date()) {
+    guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+    notes[index].tabColorHex = hex
+    notes[index].modifiedAt = now
+  }
 }

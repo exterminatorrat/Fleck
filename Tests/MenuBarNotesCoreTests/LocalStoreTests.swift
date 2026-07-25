@@ -282,6 +282,33 @@ import Testing
   #expect(!FileManager.default.fileExists(atPath: trashEntryURL(root: root, noteID: deleted.id).path))
 }
 
+@Test func tabColorRoundTripsThroughTrashAndRestore() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let deletedAt = Date(timeIntervalSince1970: 1_700_000_000)
+  let colored = Note(title: "Colored", tabColorHex: "#BF5AF2")
+  let remaining = Note(title: "Remaining")
+  let activeWorkspace = Workspace(notes: [remaining], selectedNoteID: remaining.id)
+  let store = LocalStore(rootURL: root, now: { deletedAt })
+
+  try await store.save(
+    workspace: activeWorkspace,
+    preferences: .init(),
+    trashedNotes: [colored]
+  )
+  let trashedNote = try #require(await store.loadTrash().first)
+  #expect(trashedNote.note.tabColorHex == "#BF5AF2")
+
+  let restoredWorkspace = try await store.restore(
+    trashedNote,
+    into: activeWorkspace,
+    preferences: .init()
+  )
+  #expect(restoredWorkspace.notes.last?.tabColorHex == "#BF5AF2")
+  #expect(try await store.loadWorkspace().notes.last?.tabColorHex == "#BF5AF2")
+}
+
 private func temporaryStoreURL() -> URL {
   FileManager.default.temporaryDirectory.appendingPathComponent(
     "MenuBarNotesTests-\(UUID().uuidString)"

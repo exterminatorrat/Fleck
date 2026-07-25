@@ -90,6 +90,12 @@
       scheduleSave()
     }
 
+    func setSelectedTabColor(_ hex: String?) {
+      guard let id = workspace.selectedNoteID else { return }
+      workspace.setTabColor(id: id, hex: hex)
+      scheduleSave()
+    }
+
     func toggleList(_ style: MarkdownEditing.ListStyle) {
       guard let note = selectedNote else { return }
       updateSelected(body: MarkdownEditing.togglingList(in: note.body, style: style))
