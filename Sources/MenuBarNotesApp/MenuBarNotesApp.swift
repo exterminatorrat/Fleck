@@ -19,6 +19,7 @@
         NotesPanel(isPinned: true)
           .environmentObject(appState)
           .preferredColorScheme(colorScheme)
+          .background(FloatingWindowConfigurator())
       }
       .windowResizability(.contentSize)
 
@@ -26,6 +27,7 @@
         SettingsView()
           .environmentObject(appState)
           .frame(width: 520, height: 440)
+          .background(FloatingWindowConfigurator())
       }
     }
 
@@ -34,6 +36,25 @@
       case .system: nil
       case .light: .light
       case .dark: .dark
+      }
+    }
+  }
+
+  private struct FloatingWindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+      let view = NSView()
+      configure(view)
+      return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+      configure(view)
+    }
+
+    private func configure(_ view: NSView) {
+      DispatchQueue.main.async {
+        view.window?.level = .floating
+        view.window?.hidesOnDeactivate = false
       }
     }
   }
