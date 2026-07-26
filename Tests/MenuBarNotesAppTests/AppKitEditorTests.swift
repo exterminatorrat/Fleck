@@ -63,6 +63,29 @@ import Testing
   )
 }
 
+@Test @MainActor func reduceMotionSkipsChecklistCompletionOverlay() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.string = "○ Task"
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  textView.reduceMotion = true
+
+  #expect(textView.toggleSelectedChecklist())
+  #expect(textView.string == "● Task")
+  #expect(textView.checklistCompletionOverlayCount == 0)
+}
+
+@Test @MainActor func rapidChecklistToggleDoesNotLeaveStaleOverlay() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.string = "○ Task"
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  textView.reduceMotion = false
+
+  #expect(textView.toggleSelectedChecklist())
+  #expect(textView.checklistCompletionOverlayCount <= 1)
+  #expect(textView.toggleSelectedChecklist())
+  #expect(textView.checklistCompletionOverlayCount == 0)
+}
+
 @Test @MainActor func returnInsideCompletedChecklistClearsNewItemFormatting() {
   let textView = ListAwareTextView(frame: .zero)
   textView.string = "● Task"

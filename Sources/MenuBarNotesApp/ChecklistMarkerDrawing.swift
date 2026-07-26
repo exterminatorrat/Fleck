@@ -32,4 +32,50 @@
       context.restoreGState()
     }
   }
+
+  final class ChecklistCompletionOverlay: NSView {
+    static let duration = AppMotion.quickDuration
+    private let accentColor: NSColor
+    private let checkLayer = CAShapeLayer()
+
+    init(frame: NSRect, accentColor: NSColor) {
+      self.accentColor = accentColor
+      super.init(frame: frame)
+      wantsLayer = true
+      layer?.backgroundColor = accentColor.cgColor
+      layer?.cornerRadius = frame.width / 2
+      layer?.masksToBounds = true
+      setAccessibilityElement(false)
+
+      checkLayer.frame = bounds
+      checkLayer.path = ChecklistMarkerDrawing.checkmarkPath(in: bounds, flipped: false)
+      checkLayer.fillColor = NSColor.clear.cgColor
+      checkLayer.strokeColor = NSColor.white.cgColor
+      checkLayer.lineWidth = max(1.35, bounds.width * 0.11)
+      checkLayer.lineCap = .round
+      checkLayer.lineJoin = .round
+      checkLayer.strokeEnd = 1
+      layer?.addSublayer(checkLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func start(completion: @escaping () -> Void) {
+      let animation = CABasicAnimation(keyPath: "strokeEnd")
+      animation.fromValue = 0
+      animation.toValue = 1
+      animation.duration = Self.duration
+      animation.timingFunction = CAMediaTimingFunction(
+        controlPoints: 0.23, 1.0, 0.32, 1.0
+      )
+
+      CATransaction.begin()
+      CATransaction.setCompletionBlock(completion)
+      checkLayer.add(animation, forKey: "checkmark")
+      CATransaction.commit()
+    }
+  }
 #endif

@@ -302,6 +302,26 @@
       didSet { needsDisplay = true }
     }
     var reduceMotion = false
+    private weak var checklistCompletionOverlay: ChecklistCompletionOverlay?
+
+    var checklistCompletionOverlayCount: Int {
+      subviews.filter { $0 is ChecklistCompletionOverlay }.count
+    }
+
+    private func removeChecklistCompletionOverlay() {
+      checklistCompletionOverlay?.removeFromSuperview()
+    }
+
+    private func showChecklistCompletionAnimation(for markerRange: NSRange) {
+      removeChecklistCompletionOverlay()
+      guard !reduceMotion, let rect = checklistMarkerRect(for: markerRange) else { return }
+      let overlay = ChecklistCompletionOverlay(frame: rect, accentColor: checklistAccentColor)
+      checklistCompletionOverlay = overlay
+      addSubview(overlay)
+      overlay.start { [weak overlay] in
+        overlay?.removeFromSuperview()
+      }
+    }
 
     func checklistMarkerRect(for markerRange: NSRange) -> NSRect? {
       guard let layoutManager, let textContainer,
@@ -727,7 +747,7 @@
         enabled: currentlyCompleted,
         range: contentRange
       )
-      return replaceText(
+      let changed = replaceText(
         in: markerRange,
         with: completed ? "●" : "○",
         selecting: selection
@@ -743,6 +763,13 @@
           storage.removeAttribute(.strikethroughStyle, range: contentRange)
         }
       }
+      guard changed else { return false }
+      if completed {
+        showChecklistCompletionAnimation(for: markerRange)
+      } else {
+        removeChecklistCompletionOverlay()
+      }
+      return true
     }
 
     private func registerStrikethroughUndo(enabled: Bool, range: NSRange) {

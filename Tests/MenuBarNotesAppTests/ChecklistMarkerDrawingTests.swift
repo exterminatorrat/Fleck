@@ -4,6 +4,10 @@
 
   @testable import MenuBarNotesApp
 
+  @Test @MainActor func checklistCompletionOverlayUsesQuickNativeTiming() {
+    #expect(ChecklistCompletionOverlay.duration == AppMotion.quickDuration)
+  }
+
   @Test @MainActor func completedChecklistMarkerContainsAccentFillAndWhiteCheck() throws {
     let size = NSSize(width: 24, height: 24)
     let image = NSImage(size: size)
