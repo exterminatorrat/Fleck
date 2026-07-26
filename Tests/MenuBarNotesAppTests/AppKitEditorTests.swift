@@ -41,6 +41,7 @@ import Testing
 
   #expect(textView.toggleSelectedChecklist())
   #expect(textView.string == "● Task")
+  #expect(textView.checklistCompletionOverlayCount == 1)
   #expect(
     textView.textStorage?.attribute(
       .strikethroughStyle,
@@ -54,6 +55,7 @@ import Testing
   undoManager.undo()
 
   #expect(textView.string == "○ Task")
+  #expect(textView.checklistCompletionOverlayCount == 0)
   #expect(
     (textView.textStorage?.attribute(
       .strikethroughStyle,

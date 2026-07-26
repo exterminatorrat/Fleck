@@ -775,6 +775,7 @@
     private func registerStrikethroughUndo(enabled: Bool, range: NSRange) {
       undoManager?.registerUndo(withTarget: self) { target in
         target.registerStrikethroughUndo(enabled: !enabled, range: range)
+        target.removeChecklistCompletionOverlay()
         guard let storage = target.textStorage, range.length > 0 else { return }
         if enabled {
           storage.addAttribute(
