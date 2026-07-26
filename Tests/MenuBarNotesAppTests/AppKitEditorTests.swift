@@ -220,3 +220,26 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   restored.textStorage?.setAttributedString(attributed)
   return restored
 }
+
+@Test @MainActor func tabColorSwatchesAreNonTemplateImages() {
+  for option in TabColorOption.all where option.hex != nil {
+    #expect(option.swatchImage?.isTemplate == false)
+  }
+}
+
+@Test @MainActor func tabColorPaletteMatchesMacOSDarkAppearance() {
+  let expectedHexByName = [
+    "Red": "#FF4245",
+    "Orange": "#FF9230",
+    "Yellow": "#FFD600",
+    "Green": "#30D158",
+    "Blue": "#0091FF",
+    "Purple": "#DB34F2",
+    "Pink": "#FF375F",
+    "Gray": "#98989D",
+  ]
+
+  for option in TabColorOption.all where option.hex != nil {
+    #expect(option.hex == expectedHexByName[option.name])
+  }
+}

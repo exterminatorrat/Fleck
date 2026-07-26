@@ -215,8 +215,11 @@
                       Label {
                         Text(option.name)
                       } icon: {
-                        Image(systemName: option.hex == nil ? "circle.slash" : "circle.fill")
-                          .foregroundStyle(option.hex.map(Color.init(hex:)) ?? .secondary)
+                        if let swatchImage = option.swatchImage {
+                          Image(nsImage: swatchImage)
+                        } else {
+                          Image(systemName: "circle.slash")
+                        }
                       }
                       if note.tabColorHex == option.hex {
                         Image(systemName: "checkmark")
@@ -374,22 +377,33 @@
     }
   }
 
-  private struct TabColorOption: Identifiable {
+  struct TabColorOption: Identifiable {
     let name: String
     let hex: String?
 
     var id: String { hex ?? "none" }
 
+    var swatchImage: NSImage? {
+      guard let hex else { return nil }
+      let image = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { rect in
+        NSColor(Color(hex: hex)).setFill()
+        NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
+        return true
+      }
+      image.isTemplate = false
+      return image
+    }
+
     static let all = [
       TabColorOption(name: "None", hex: nil),
-      TabColorOption(name: "Red", hex: "#FF5A5F"),
-      TabColorOption(name: "Orange", hex: "#FF9F0A"),
-      TabColorOption(name: "Yellow", hex: "#FFD60A"),
+      TabColorOption(name: "Red", hex: "#FF4245"),
+      TabColorOption(name: "Orange", hex: "#FF9230"),
+      TabColorOption(name: "Yellow", hex: "#FFD600"),
       TabColorOption(name: "Green", hex: "#30D158"),
-      TabColorOption(name: "Blue", hex: "#0A84FF"),
-      TabColorOption(name: "Purple", hex: "#BF5AF2"),
+      TabColorOption(name: "Blue", hex: "#0091FF"),
+      TabColorOption(name: "Purple", hex: "#DB34F2"),
       TabColorOption(name: "Pink", hex: "#FF375F"),
-      TabColorOption(name: "Gray", hex: "#8E8E93"),
+      TabColorOption(name: "Gray", hex: "#98989D"),
     ]
   }
 
