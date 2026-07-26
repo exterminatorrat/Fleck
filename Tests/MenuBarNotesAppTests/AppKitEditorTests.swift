@@ -204,6 +204,89 @@ import Testing
   )
 }
 
+@Test @MainActor func checklistHitRectContainsItsRenderedMarker() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.font = .systemFont(ofSize: 16)
+  textView.string = "○ Task"
+  textView.layoutManager?.ensureLayout(for: try #require(textView.textContainer))
+
+  let markerRange = NSRange(location: 0, length: 1)
+  let markerRect = try #require(textView.checklistMarkerRect(for: markerRange))
+  let hitRect = try #require(textView.checklistHitRect(for: markerRange))
+
+  #expect(hitRect.contains(NSPoint(x: markerRect.midX, y: markerRect.midY)))
+  #expect(hitRect.width > markerRect.width)
+  #expect(hitRect.height > markerRect.height)
+}
+
+@Test @MainActor func clickingChecklistControlUsesSharedHitRect() throws {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  textView.string = "○ Task"
+  let container = try #require(textView.textContainer)
+  textView.layoutManager?.ensureLayout(for: container)
+  let hitRect = try #require(
+    textView.checklistHitRect(for: NSRange(location: 0, length: 1))
+  )
+  let windowPoint = textView.convert(
+    NSPoint(x: hitRect.midX, y: hitRect.midY),
+    to: nil
+  )
+  let event = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: windowPoint,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    )
+  )
+
+  textView.mouseDown(with: event)
+
+  #expect(textView.string == "● Task")
+  #expect(
+    textView.textStorage?.attribute(
+      .strikethroughStyle,
+      at: 2,
+      effectiveRange: nil
+    ) as? Int == NSUnderlineStyle.single.rawValue
+  )
+}
+
+@Test @MainActor func completedChecklistRoundTripsWithoutRenderingArtifacts() {
+  let textView = ListAwareTextView(frame: .zero)
+  textView.string = "● Task"
+  textView.textStorage?.addAttribute(
+    .strikethroughStyle,
+    value: NSUnderlineStyle.single.rawValue,
+    range: NSRange(location: 2, length: 4)
+  )
+
+  let restored = rtfRoundTrip(textView)
+
+  #expect(restored.string == "● Task")
+  #expect(
+    restored.textStorage?.attribute(
+      .strikethroughStyle,
+      at: 2,
+      effectiveRange: nil
+    ) as? Int == NSUnderlineStyle.single.rawValue
+  )
+}
+
 @MainActor
 private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   let storage = textView.textStorage!

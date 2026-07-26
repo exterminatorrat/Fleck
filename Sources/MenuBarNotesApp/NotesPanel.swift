@@ -367,6 +367,8 @@
             fontSize: appState.preferences.fontSize,
             textColorHex: appState.preferences.editorTextHex,
             backgroundColorHex: appState.preferences.editorBackgroundHex,
+            accentColorHex: appState.preferences.accentHex,
+            reduceMotion: reduceMotion,
             automaticLists: appState.preferences.automaticLists,
             commands: editorCommands
           )
