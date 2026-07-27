@@ -14,6 +14,7 @@
 - Keep `platforms: [.macOS(.v14)]`.
 - Preserve `Application Support/MenuBarNotes`; do not strand existing notes.
 - `Note.agentAccess` defaults to `false`; private notes must not be discoverable by identifier probing.
+- Unknown and unshared note identifiers both return `note_not_found`; never expose which private UUIDs exist.
 - All human and agent content mutations use one persisted note revision.
 - Motes is the sole writer. The helper must never edit Markdown, RTF, manifests, activity, or preferences directly.
 - Use private same-user Unix-domain IPC. Do not open TCP, HTTP, SSE, or another remotely reachable listener.
@@ -38,17 +39,19 @@ Run this gate before Task 0:
 
 ```bash
 git status --short --branch
-git merge-base --is-ancestor 2d20753 HEAD
+git merge-base --is-ancestor 2b90134 HEAD
 test -f Sources/MenuBarNotesApp/NoteTextAppender.swift
 test -f Sources/MenuBarNotesApp/DictationCoordinator.swift
-rg -n "saveSmartCapture|Dictation History|case dictation" Sources/MenuBarNotesApp
+test -f Sources/MenuBarNotesApp/DictationHistoryView.swift
+rg -n "DictationCoordinator\\(" Sources/MenuBarNotesApp/MenuBarNotesApp.swift
+rg -n "DictationHistoryView\\(" Sources/MenuBarNotesApp
 swift test
 ```
 
 Expected:
 
-- The Agent Workspace specification commit is reachable.
-- Clean Dictation's editor append, coordinator, AppState saving, settings, and history integration are present.
+- The Agent Workspace plan commit is reachable.
+- Clean Dictation's editor append, coordinator, AppState saving, settings, and history UI are wired into the application runtime, not merely present as isolated types.
 - The working tree is clean.
 - The complete baseline suite passes.
 
@@ -185,8 +188,9 @@ git commit -m "build: pin the Motes MCP SDK"
   - `Note.agentAccess: Bool`
   - `Note.revision: UInt64`
   - `Workspace.setAgentAccess(id:enabled:now:)`
-  - `Workspace.updateRichText(id:rtf:now:)`
-  - exactly one revision increment for each actual title, body, RTF, or sharing mutation.
+  - `Workspace.updateContent(id:body:rtf:now:)`
+  - exactly one revision increment for each logical title, combined body/RTF, or sharing mutation.
+  - `AppState.persistenceGeneration` and `waitUntilInitialLoad()` for later compare-and-swap persistence and bridge startup.
 
 - [ ] **Step 1: Write backward-compatibility and revision tests**
 
@@ -214,16 +218,16 @@ Add tests covering:
 @Test func contentAndSharingChangesIncrementRevisionOnce() {
   let id = UUID()
   var workspace = Workspace(notes: [Note(id: id)], selectedNoteID: id)
-  workspace.updateNote(id: id, body: "A")
+  workspace.updateContent(id: id, body: "A", rtf: Data([1]))
   #expect(workspace.notes[0].revision == 1)
-  workspace.updateNote(id: id, body: "A")
+  workspace.updateContent(id: id, body: "A", rtf: Data([1]))
   #expect(workspace.notes[0].revision == 1)
   workspace.setAgentAccess(id: id, enabled: true)
   #expect(workspace.notes[0].revision == 2)
 }
 ```
 
-Add store round-trip coverage for `agentAccess` and `revision`, plus an old manifest fixture without either key.
+Add regressions in `AppStateTests` proving one editor callback that supplies both body and RTF increments the revision once, not once per binding; every persisted workspace, preference, and pending-Trash mutation increments `persistenceGeneration`; and `waitUntilInitialLoad()` resumes on both successful and failed initial load. Add store round-trip coverage for `agentAccess` and `revision`, plus an old manifest fixture without either key.
 
 - [ ] **Step 2: Run focused tests to verify RED**
 
@@ -254,11 +258,12 @@ Implement explicit `CodingKeys` and `init(from:)` so missing values decode to `f
 
 - [ ] **Step 4: Centralize revision increments**
 
-In `Workspace`, update title/body only when the supplied value differs and increment once if either changes. Add:
+In `Workspace`, update title only when it differs. Add one combined editor mutation:
 
 ```swift
-public mutating func updateRichText(
+public mutating func updateContent(
   id: UUID,
+  body: String,
   rtf: Data?,
   now: Date = Date()
 )
@@ -270,7 +275,9 @@ public mutating func setAgentAccess(
 )
 ```
 
-Both no-op when the value is unchanged. Both update `modifiedAt` and increment revision exactly once when changed. Replace AppState's direct RTF assignment with `updateRichText`.
+`updateContent` compares body and RTF together, no-ops when both are unchanged, and increments once when either changes. `setAgentAccess` follows the same no-op rule. Route the editor's body/RTF feedback through one `AppState` method so a keystroke cannot call separate revision-incrementing mutations.
+
+Expose a read-only monotonically increasing `persistenceGeneration` from `AppState` and increment it for every actual persisted-state mutation: workspace, preferences, or pending Trash, including initial load replacement. Add `hasFinishedInitialLoad` plus `waitUntilInitialLoad()` backed by continuations; finish it exactly once on either the load success or failure path.
 
 - [ ] **Step 5: Persist metadata compatibly**
 
@@ -334,6 +341,8 @@ public enum AgentWorkspaceCommand: Codable, Equatable, Sendable
 public enum AgentWorkspaceResponse: Codable, Equatable, Sendable
 public enum AgentWorkspaceErrorCode: String, Codable, Sendable
 public struct AgentWriteReceipt: Codable, Equatable, Sendable
+public enum AgentActivityActor: Codable, Equatable, Sendable
+public struct AgentWorkspaceCommitProof: Codable, Equatable, Sendable
 public struct AgentMutationDraft: Equatable, Sendable
 public struct AgentTextPatch: Codable, Equatable, Sendable
 public struct AgentParsedTask: Equatable, Sendable
@@ -403,14 +412,26 @@ Expected: compilation fails because the agent contract does not exist.
 
 - [ ] **Step 3: Implement stable models**
 
-Use associated-value Codable commands with explicit nested request structs. Define response cases for note summaries, a paged note body, task summaries, a write receipt, activity summaries, and Undo.
+Use associated-value Codable commands with explicit nested request structs. Define response cases for note summaries, a paged note body with `nextLine`, task summaries, a write receipt, activity summaries, and Undo.
+
+Define activity identity explicitly:
+
+```swift
+public enum AgentActivityActor: Codable, Equatable, Sendable {
+  case integration(profileID: UUID, displayName: String)
+  case localUser
+}
+```
+
+Idempotency scopes an operation ID by this actor. A local Motes Undo therefore cannot collide with an integration operation that happens to use the same UUID.
+
+`AgentWorkspaceCommitProof` is content-free and contains change ID, note ID, resulting revision, body SHA-256, actor, operation ID, and expiry. Task 5 persists it inside the same `workspace.json` replacement that commits the note revision, making it durable proof for crash reconciliation without storing note text.
 
 Define the error vocabulary exactly:
 
 ```swift
 public enum AgentWorkspaceErrorCode: String, Codable, Sendable {
   case noteNotFound = "note_not_found"
-  case noteNotShared = "note_not_shared"
   case permissionRevoked = "permission_revoked"
   case revisionConflict = "revision_conflict"
   case taskHandleExpired = "task_handle_expired"
@@ -478,20 +499,23 @@ git commit -m "feat: define safe agent note mutations"
 - Create: `Tests/MenuBarNotesCoreTests/AgentActivityStoreTests.swift`
 
 **Interfaces:**
-- Consumes: `AgentTextPatch`, operation ID, integration profile ID, note revisions, and note body hashes.
+- Consumes: `AgentTextPatch`, operation ID, `AgentActivityActor`, note revisions, and note body hashes.
 - Produces:
 
 ```swift
-public actor AgentActivityStore {
+public final class AgentActivityStore: @unchecked Sendable {
   public init(rootURL: URL, now: @escaping @Sendable () -> Date = Date.init)
   public func prepare(_ transaction: PreparedAgentTransaction) throws
   public func commit(changeID: UUID, receipt: AgentWriteReceipt) throws
   public func abort(changeID: UUID) throws
-  public func priorReceipt(profileID: UUID, operationID: UUID) -> AgentWriteReceipt?
+  public func priorReceipt(actor: AgentActivityActor, operationID: UUID) -> AgentWriteReceipt?
   public func list(profileID: UUID?, visibleNoteIDs: Set<UUID>) -> [AgentActivityRecord]
   public func record(id: UUID) -> AgentActivityRecord?
   public func clearVisibleActivity() throws
-  public func reconcile(workspace: Workspace) throws
+  public func reconcile(
+    workspace: Workspace,
+    commitProofs: [AgentWorkspaceCommitProof]
+  ) throws
 }
 ```
 
@@ -500,9 +524,12 @@ public actor AgentActivityStore {
 Cover:
 
 - Atomic prepared record.
+- A durable content-free commit proof from the workspace manifest is accepted only when its identifiers and hashes match the preparation.
 - Commit moves the visible record and writes a tombstone.
-- Duplicate `(profileID, operationID)` returns the original response.
+- Duplicate `(actor, operationID)` returns the original response without collisions between local-user and integration operations.
 - A prepared record whose resulting revision/body hash exists is finalized on reconciliation.
+- A prepared record with a durable committed proof is finalized when the same note has the resulting or a later revision.
+- A later note revision without a committed proof does not falsely finalize a transaction that crashed before applying.
 - A prepared record not reflected in the workspace is removed.
 - Malformed entries do not poison valid activity.
 - Visible records expire at exactly 30 days.
@@ -532,9 +559,16 @@ Each entry is one lowercased UUID JSON file. Reject filenames that do not parse 
 
 - [ ] **Step 4: Implement reconciliation and purge**
 
-A prepared transaction includes resulting note revision and SHA-256 body hash. Reconciliation finalizes only when both match the loaded workspace; otherwise it removes the preparation without creating an activity record.
+A prepared transaction includes resulting note revision and SHA-256 body hash. Reconciliation validates any manifest proof against the complete prepared identity and finalizes when:
 
-Visible patches expire at `createdAt + 30 days`. Tombstones retain only profile ID, operation ID, the content-free `AgentWriteReceipt` containing change ID and resulting revision, and original expiry. They never retain body text or patches.
+1. The loaded note has exactly the resulting revision and body hash; or
+2. A valid committed proof exists and the loaded note has the resulting or a later revision.
+
+It removes the preparation without activity when neither condition holds. A later revision by itself is never proof, because a human edit may have persisted after preparation but before the agent commit.
+
+Visible patches expire at `createdAt + 30 days`. Tombstones retain only the actor identity, operation ID, the content-free `AgentWriteReceipt` containing change ID and resulting revision, and original expiry. They never retain body text or patches.
+
+Use one internal `NSLock` around every index and filesystem mutation. `AgentActivityStore` is synchronous so its final record/tombstone commit can remain in Task 5's non-yielding main-actor critical section.
 
 - [ ] **Step 5: Verify**
 
@@ -588,7 +622,7 @@ struct AgentTaskHandleCodec {
 Cover:
 
 - Profile creation trims and validates a 1–80 character display name.
-- Creation returns a 32-byte random credential once and stores only SHA-256.
+- Creation returns a 32-byte random credential once and stores only its SHA-256 verifier in Keychain.
 - Equal credentials authorize with constant-time comparison.
 - Wrong, revoked, and unknown profiles fail with scoped errors.
 - Revocation during a test request prevents the next command.
@@ -610,7 +644,14 @@ Persist non-secret metadata below:
 Application Support/MenuBarNotes/AgentIntegrations/profiles.json
 ```
 
-Store credential SHA-256, not the credential. Use an injected random-byte generator in tests and `SecRandomCopyBytes` in production.
+The JSON contains profile ID, display name, creation/connection timestamps, and revocation state only. Store each credential SHA-256 verifier in Keychain with:
+
+```text
+service: com.harryjin.motes.agent-profile-verifier
+account: <profile UUID>
+```
+
+Never store raw credentials or verifiers in JSON. Use an injected random-byte generator and secret store in tests and `SecRandomCopyBytes` plus Security in production.
 
 - [ ] **Step 4: Implement the signing-key provider**
 
@@ -648,9 +689,12 @@ git commit -m "feat: authorize local Motes agents"
 ### Task 5: Implement Rich-Text-Safe Mutations and the Single-Writer Gateway
 
 **Files:**
+- Create: `Sources/MenuBarNotesCore/LocalStoreSnapshotWriter.swift`
+- Modify: `Sources/MenuBarNotesCore/LocalStore.swift`
 - Create: `Sources/MenuBarNotesApp/AgentRichTextMutator.swift`
 - Create: `Sources/MenuBarNotesApp/AgentCommandService.swift`
 - Modify: `Sources/MenuBarNotesApp/AppState.swift`
+- Modify: `Tests/MenuBarNotesCoreTests/LocalStoreTests.swift`
 - Create: `Tests/MenuBarNotesAppTests/AgentRichTextMutatorTests.swift`
 - Create: `Tests/MenuBarNotesAppTests/AgentCommandServiceTests.swift`
 
@@ -670,15 +714,29 @@ final class AgentCommandService {
     profile: AgentIntegrationProfile,
     command: AgentWorkspaceCommand
   ) async -> AgentWorkspaceResponse
+
+  func executeLocalUndo(
+    changeID: UUID,
+    expectedRevision: UInt64,
+    operationID: UUID
+  ) async -> AgentWorkspaceResponse
 }
 
 @MainActor
 protocol AgentWorkspaceStateAccess: AnyObject {
-  var workspace: Workspace { get set }
+  var workspace: Workspace { get }
+  var persistenceGeneration: UInt64 { get }
   var preferences: AppPreferences { get }
-  func persistAgentWorkspace(_ workspace: Workspace) async throws
+  func flushPendingPersistenceForAgent() async throws
+  func commitAgentWorkspace(
+    _ workspace: Workspace,
+    expectedGeneration: UInt64,
+    commitProof: AgentWorkspaceCommitProof
+  ) throws
 }
 ```
+
+`AgentCommandService` uses a FIFO task chain so one complete agent command finishes before the next starts; actor reentrancy alone is not sufficient. Authorization and preparation may await, but the final workspace save and publish are one synchronous main-actor critical section.
 
 - [ ] **Step 1: Write rich-text preservation tests**
 
@@ -696,14 +754,19 @@ Cover:
 Cover:
 
 - Discovery returns shared notes only.
-- Direct probing of an unshared UUID returns `note_not_shared`, not content or metadata.
+- Direct probing of an unknown or unshared UUID returns the same `note_not_found` response.
 - Every write rejects a stale revision before mutation.
 - A duplicate operation ID returns the stored receipt.
 - Successful persistence publishes one new workspace revision and activity record.
 - Save failure publishes no in-memory mutation and aborts preparation.
+- A human edit while authorization or preparation is suspended changes the persistence generation and rejects the agent write without overwriting the human state.
+- Agent execution first drains any existing autosave and pending Trash work; it times out safely instead of entering the critical section while Trash is pending.
+- An activity-commit failure after workspace persistence leaves the persisted workspace published; retrying the same operation reconciles the preparation and does not duplicate the mutation.
+- Two concurrent agent commands run through the FIFO chain rather than interleaving at awaits.
 - Crash-style prepared reconciliation finalizes correctly after reload.
 - List activity exposes only the caller's records for currently shared notes.
 - Agent Undo creates a new attributed activity record.
+- Local user Undo works for an active note after unsharing or revoking the originating profile.
 - Later ambiguous edits return `unsafe_undo`.
 - Human pending edits are part of the revision checked by an agent command.
 
@@ -722,25 +785,61 @@ Construct the resulting `Note` with body and RTF updated together, then incremen
 
 Do not route mutations through the visible `NSTextView`; visible editors update from the published note state after durable commit.
 
-- [ ] **Step 5: Implement transaction ordering**
+- [ ] **Step 5: Extract synchronous snapshot persistence**
+
+Move the existing file-writing body used by `LocalStore.save` into a synchronous, lock-protected `LocalStoreSnapshotWriter`. The `LocalStore` actor and `AppState` must receive the same writer instance; expose it from `LocalStore` as an immutable `nonisolated` dependency if needed. The writer holds one internal `NSLock` for the complete synchronous save, so no two paths can write concurrently. Do not duplicate manifest, Markdown, RTF, preferences, Trash, recovery, or cleanup logic.
+
+Every AppState save carries the `persistenceGeneration` captured with that snapshot. Under the same lock, the writer tracks the highest committed generation and returns `.superseded` without touching disk when an older queued autosave arrives after a newer agent or human snapshot. Advance the watermark only after the atomic manifest commit; a pre-commit failure must leave that generation retryable. Test both lock acquisition orders and a failed newer save followed by its retry.
+
+Extend the backward-compatible manifest with optional `snapshotIntegrityVersion: 1`, per-note Markdown and RTF SHA-256 values, and a bounded list of unexpired `AgentWorkspaceCommitProof` values. A normal save preserves and purges these content-free proofs. An agent save adds its proof to the manifest that records the resulting note revision.
+
+Treat the atomic `workspace.json` replacement as the snapshot commit point:
+
+1. Validate the current root generation. Create a Recovery snapshot only from a valid root; when root validation already fell back to Recovery, preserve that Recovery until a new root manifest commits.
+2. Perform every fallible preferences, Markdown, and RTF write for the active generation.
+3. Compute hashes from the bytes actually written.
+4. Atomically replace `workspace.json` last with matching revisions, hashes, and agent proofs.
+5. Perform orphan cleanup as best-effort, non-throwing maintenance.
+
+On load, `snapshotIntegrityVersion == 1` is valid only when every referenced Markdown/RTF file has the required matching hash. Reject the entire root generation and load Recovery when any hash is missing or wrong. Old manifests with no integrity version remain readable and acquire hashes on their next save. This makes a crash before the manifest commit recover the old complete generation, while a committed proof always names the complete new generation.
+
+Add `LocalStore.loadSnapshot()` returning workspace, preferences, commit proofs, and whether root or Recovery was validated. `AppState` must load workspace and preferences from that one source instead of independently accepting root preferences after the root workspace was rejected.
+
+Add regressions using two queues and controllable filesystem hooks for both stale-save orderings, failed-generation retry, crash points before and after the manifest commit, post-commit cleanup failure, root hash mismatch fallback followed by a save that preserves valid Recovery, and old hashless manifests.
+
+Trash remains on the existing idempotent archive path rather than entering an agent snapshot transaction. `flushPendingPersistenceForAgent()` cancels the debounce, awaits any in-flight save, and repeats until the current `persistenceGeneration` is durable and `pendingTrashNotes` is empty. Bound this drain to two seconds; on continued edits, Trash failure, or timeout, reject the agent command with `motes_unavailable` and a retry action. `commitAgentWorkspace` refuses to run when pending Trash is nonempty and does not archive or restore Trash itself.
+
+`AppState.commitAgentWorkspace` must:
+
+1. Verify `persistenceGeneration == expectedGeneration`.
+2. Cancel the pending debounced save.
+3. Persist the candidate workspace with `persistenceGeneration + 1` and the new commit proof synchronously through the shared writer.
+4. Publish the candidate workspace and advance `persistenceGeneration` to that committed generation.
+
+The method has no `await`. A pre-commit save error leaves published state unchanged; a post-commit cleanup issue is diagnostic only and cannot turn a committed snapshot into a reported failure. This intentionally keeps the ordered disk write, manifest proof, and publication inside one short main-actor critical section so a human binding update cannot interleave. Do not add a second persistence implementation.
+
+- [ ] **Step 6: Implement transaction ordering**
 
 For a write:
 
-1. Authorize profile and scope.
-2. Return a prior idempotent result when present.
-3. Validate expected revision.
-4. Produce body, RTF, patch, and resulting revision on a workspace copy.
-5. Write a prepared activity transaction.
-6. Persist the workspace copy with current preferences and pending Trash.
-7. Commit the activity record/tombstone.
-8. Publish the workspace copy and feedback.
-9. Return the receipt.
+1. Enter the FIFO agent-command chain.
+2. Authorize the profile and reconcile any preparation for the same operation ID.
+3. Return a prior idempotent receipt when present.
+4. Await `flushPendingPersistenceForAgent()` so no older save or pending Trash operation remains.
+5. On the main actor, capture the live workspace and `persistenceGeneration`; scope unknown and unshared notes identically.
+6. Validate the expected note revision and build the candidate body, RTF, patch, and resulting revision from that snapshot.
+7. Write the prepared activity transaction.
+8. Re-enter the main actor and revalidate both the captured generation and expected note revision.
+9. Call synchronous `commitAgentWorkspace` with the candidate, captured generation, and prepared commit proof; successful return means the workspace and its manifest proof are durable and the candidate is published.
+10. Commit the activity record/tombstone synchronously, publish feedback, and return the receipt.
 
-On failure before step 6, abort preparation. On failure after step 6, leave preparation for startup reconciliation and return `internal_save_failure`; retrying the same operation ID must reconcile rather than duplicate.
+On failure before step 9, abort preparation when one exists and publish nothing. A workspace-save failure at step 9 also aborts preparation and publishes nothing. A failure after workspace persistence keeps the durable candidate published and the preparation intact, returns `internal_save_failure`, and reconciles that operation from the manifest proof before any retry can mutate. Never roll back or overwrite newer human state.
 
-- [ ] **Step 6: Integrate AppState**
+`executeLocalUndo` bypasses integration-profile authorization because it represents an explicit Motes user action. It still requires the active note, expected revision, operation ID, safe inverse proof, the same prepared transaction, and the same synchronous durable commit. Attribute the new activity to the local Motes user while retaining the originating integration in the description.
 
-Make `AppState` conform to `AgentWorkspaceStateAccess`. `persistAgentWorkspace` cancels the debounced save, includes current pending Trash, awaits the store, and does not mutate published state itself.
+- [ ] **Step 7: Integrate AppState**
+
+Make `AppState` conform to `AgentWorkspaceStateAccess`, use the Task 1 readiness/generation APIs, and inject the shared synchronous snapshot writer used by `commitAgentWorkspace`. Every existing debounced, immediate, restore, and Trash-related save must pass the generation captured with its workspace snapshot and treat `.superseded` as a safe no-op rather than an error.
 
 Add:
 
@@ -751,7 +850,7 @@ Add:
 
 Human sharing changes use `setAgentAccess`, save immediately, and do not create Agent Activity.
 
-- [ ] **Step 7: Verify**
+- [ ] **Step 8: Verify**
 
 ```bash
 swift test --filter AgentRichTextMutator
@@ -760,12 +859,15 @@ swift test
 git diff --check
 ```
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add Sources/MenuBarNotesApp/AgentRichTextMutator.swift \
+git add Sources/MenuBarNotesCore/LocalStoreSnapshotWriter.swift \
+  Sources/MenuBarNotesCore/LocalStore.swift \
+  Sources/MenuBarNotesApp/AgentRichTextMutator.swift \
   Sources/MenuBarNotesApp/AgentCommandService.swift \
   Sources/MenuBarNotesApp/AppState.swift \
+  Tests/MenuBarNotesCoreTests/LocalStoreTests.swift \
   Tests/MenuBarNotesAppTests/AgentRichTextMutatorTests.swift \
   Tests/MenuBarNotesAppTests/AgentCommandServiceTests.swift
 git commit -m "feat: apply agent changes through Motes"
@@ -819,7 +921,7 @@ Add:
 
 The target depends on `MenuBarNotesCore`; the app target depends on the new protocol target. Add a protocol test target.
 
-Test fragmented frames, coalesced frames, zero length, a frame above 1 MiB, malformed JSON, and request/response correlation.
+Test fragmented frames, coalesced frames, zero length, a frame above 1 MiB, malformed JSON, and request/response correlation. Add a server regression proving an oversized encoded success becomes a correlated, structured `response_too_large` error frame that itself remains below 1 MiB.
 
 - [ ] **Step 2: Run RED**
 
@@ -849,12 +951,13 @@ Requirements:
 - Bound accepted clients and close idle connections.
 - Decode one request at a time per connection.
 - Authenticate the profile before invoking the main-actor service.
+- Measure the fully encoded response envelope before writing. Replace an oversized success with a minimal correlated `response_too_large` failure; never drop the connection merely because a legitimate result was too large.
 - Never include internal paths or credentials in errors.
 - Remove the socket on clean shutdown.
 
 - [ ] **Step 5: Start one server from the app root**
 
-Construct `AgentIPCServer` once beside the final post-dictation runtime. Start it after `AppState` finishes loading; stop it on runtime deinitialization or application termination. Starting a second Motes window must not create another listener.
+Construct `AgentIPCServer` once beside the final post-dictation runtime. Await Task 1's `AppState.waitUntilInitialLoad()` before starting it; stop it on runtime deinitialization or application termination. Starting a second Motes window must not create another listener.
 
 - [ ] **Step 6: Verify**
 
@@ -1112,6 +1215,7 @@ Cover:
 - First share explains read/write access.
 - Unsharing hides a note from service reads immediately.
 - Activity rows expose integration, note, operation, time, patch, and Undo eligibility.
+- A local Undo remains available for an active note after it is unshared or the originating profile is revoked.
 - Integration activity never shows an unshared note through the bridge.
 - Multiple feedback events coalesce the banner count without coalescing records.
 - Reduce Motion removes spatial transition.
@@ -1181,7 +1285,7 @@ Revoke in the app store first so access stops immediately, then invoke `motes di
 
 - [ ] **Step 8: Implement feedback**
 
-Show a compact banner above the editor without taking keyboard focus. Use the existing 100/160 ms motion policy, a crossfade under Reduce Motion, and a safe Undo action. Do not display note body text.
+Show a compact banner above the editor without taking keyboard focus. Use the existing 100/160 ms motion policy, a crossfade under Reduce Motion, and call `executeLocalUndo` for the safe Undo action. Do not display note body text.
 
 - [ ] **Step 9: Verify**
 
@@ -1329,6 +1433,7 @@ git commit -m "build: package the Motes agent bridge"
 Use UUID probing and malformed requests to prove:
 
 - private notes cannot be listed or read;
+- unknown and private note UUID probes return byte-for-byte equivalent safe failures;
 - unshared prior activity cannot be read through an integration;
 - Trash and Dictation History identifiers are rejected;
 - settings and sharing commands do not exist;

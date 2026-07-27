@@ -72,7 +72,7 @@ Motes continues to store checklist content using its existing readable markers. 
 
 Motes is the sole writer for its workspace. Agents never modify Markdown, RTF, manifests, or activity files directly.
 
-All external mutations enter the same serialized application boundary used by the Motes interface. This preserves:
+All external mutations enter the same serialized application boundary used by the Motes interface. Agent commands are queued one at a time, and every persistence continuation revalidates the live workspace generation before it can publish. This preserves:
 
 - Current in-memory state.
 - SwiftUI and AppKit editor synchronization.
@@ -82,7 +82,7 @@ All external mutations enter the same serialized application boundary used by th
 - Revision increments.
 - Agent activity records.
 
-If the user and an agent edit concurrently, the application accepts one serialized revision and rejects stale mutations rather than merging them silently.
+If the user edits while an agent command is awaiting persistence, the application preserves the newer human state and rejects the agent command as stale rather than publishing an old workspace copy. If the workspace save succeeds but activity finalization fails, the saved workspace remains authoritative and is published immediately; the prepared activity transaction is reconciled on retry or launch.
 
 ### Local bridge
 
@@ -194,7 +194,7 @@ Every accepted agent mutation writes an atomic local activity record containing:
 
 Records appear under **Options → Agent Activity**, newest first. The user can inspect the patch, open the affected note, copy details, or request Undo.
 
-An integration can list and undo only its own activity for notes that are currently shared. Unsharing a note immediately hides its historical patches from every integration. The Motes user can still inspect all local activity in the application.
+An integration can list and undo only its own activity for notes that are currently shared. Unsharing a note immediately hides its historical patches from every integration. The Motes user can still inspect all local activity in the application and may request a safe local Undo for any active note even after the originating integration is revoked or the note is unshared.
 
 Undo is conditional:
 
@@ -247,18 +247,18 @@ Motes does not promise automatic configuration for every agent. It provides veri
 Motes validates all external payloads before mutation:
 
 - Note and activity identifiers must exist and be in scope.
+- Unknown and unshared note identifiers are externally indistinguishable and return `note_not_found`.
 - Text must be valid UTF-8.
 - Line ranges must be ordered and within the observed revision.
 - Task handles must authenticate and match the current revision.
 - Unsupported checklist transitions are rejected.
 - Text added or replaced by one mutation is limited to 64 KiB of UTF-8 data. Oversized legitimate updates must be split.
-- One response is limited to 1 MiB. `read_note` uses line windows when the complete body would exceed that boundary.
+- One response is limited to 1 MiB. `read_note` uses line windows when the complete body would exceed that boundary. If an encoded success envelope would still exceed the limit, the bridge returns a small structured `response_too_large` error instead of dropping the connection.
 - Local requests have a bounded timeout. A timed-out caller retries with the same operation identifier instead of inventing a new one.
 
 The initial error vocabulary is:
 
 - `note_not_found`
-- `note_not_shared`
 - `permission_revoked`
 - `revision_conflict`
 - `task_handle_expired`
@@ -280,6 +280,7 @@ Workspace metadata adds:
 
 - Agent Access state.
 - Note revision.
+- Bounded, content-free operation commit proofs retained only for crash recovery and the 30-day retry boundary.
 
 Agent integration state is stored separately from note bodies:
 
@@ -287,9 +288,9 @@ Agent integration state is stored separately from note bodies:
 - Activity records.
 - Minimal idempotency tombstones retained for the full 30-day retry boundary even when visible activity is cleared.
 
-Credentials and the task-handle signing key use the macOS Keychain rather than readable preferences. Activity and IPC state remain separate from Trash and Dictation History.
+Raw credentials, credential verifiers, and the task-handle signing key use the macOS Keychain rather than readable preferences. Profile metadata contains identifiers, display names, timestamps, and revocation state only. Activity and IPC state remain separate from Trash and Dictation History.
 
-All persistent mutations use atomic replacement or staging-and-move behavior consistent with the current local store.
+All persistent mutations use atomic replacement or staging-and-move behavior consistent with the current local store. The workspace manifest is the commit point for a hash-validated complete Markdown/RTF generation; an interrupted partial generation falls back to Recovery rather than being mistaken for an accepted agent operation.
 
 ## Testing and release gates
 
