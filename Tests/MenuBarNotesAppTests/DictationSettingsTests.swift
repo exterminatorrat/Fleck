@@ -675,6 +675,29 @@ import Testing
   #expect(fixture.runtime.currentCapsuleStatus == nil)
 }
 
+@Test @MainActor func RepairFailureCannotReplaceANewerDictationCapsuleStatus() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  let failureGate = DictationTestGate()
+  let repair = fixture.runtime.runModelOperation(
+    showsRepairStatus: true,
+    operation: { _ in
+      await failureGate.wait()
+      throw DictationSettingsTestError.failed
+    }
+  )
+  await failureGate.waitUntilWaiting()
+  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
+
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.currentCapsuleStatus == .listening)
+
+  await failureGate.open()
+  await repair.value
+  #expect(fixture.runtime.currentCapsuleStatus == .listening)
+
+  await fixture.runtime.cancel()
+}
+
 @Test @MainActor func DictationRuntimeShutdownAwaitsCancelledStartupAssessment() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved", startupBlocked: true)
   await fixture.startupGate.waitUntilWaiting()
@@ -726,6 +749,59 @@ import Testing
   await operation.value
   await shutdown.value
   #expect(!FileManager.default.fileExists(atPath: file.path))
+}
+
+@Test @MainActor func DictationRuntimeShutdownAwaitsEverySupersededModelCleanup() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved")
+  let firstOperationGate = DictationTestGate()
+  let firstCleanupGate = DictationTestGate()
+  let secondOperationGate = DictationTestGate()
+  let secondCleanupGate = DictationTestGate()
+  let first = fixture.runtime.runModelOperation(
+    operation: { _ in
+      await firstOperationGate.wait()
+      if Task.isCancelled {
+        await firstCleanupGate.wait()
+        throw CancellationError()
+      }
+    }
+  )
+  await firstOperationGate.waitUntilWaiting()
+
+  let second = fixture.runtime.runModelOperation(
+    operation: { _ in
+      await secondOperationGate.wait()
+      if Task.isCancelled {
+        await secondCleanupGate.wait()
+        throw CancellationError()
+      }
+    }
+  )
+  await secondOperationGate.waitUntilWaiting()
+  await firstOperationGate.open()
+  await firstCleanupGate.waitUntilWaiting()
+  let completed = RuntimeCompletionProbe()
+
+  let shutdown = Task {
+    await fixture.runtime.shutdown()
+    await completed.complete()
+  }
+  await secondOperationGate.open()
+  await secondCleanupGate.waitUntilWaiting()
+  #expect(!(await completed.isComplete))
+
+  await secondCleanupGate.open()
+  await second.value
+  for _ in 0..<20 {
+    if await completed.isComplete { break }
+    await Task.yield()
+  }
+  #expect(!(await completed.isComplete))
+
+  await firstCleanupGate.open()
+  await first.value
+  await shutdown.value
+  #expect(await completed.isComplete)
 }
 
 @Test @MainActor func DictationRuntimeShutdownAwaitsSuspendedProviderAndLateRelease() async throws {

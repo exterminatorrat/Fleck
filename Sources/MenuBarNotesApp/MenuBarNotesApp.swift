@@ -123,6 +123,7 @@
     private var modelStateAssessed = false
     private var modelOperation: Task<Void, Never>?
     private var modelOperationID: UUID?
+    private var modelOperations: [UUID: Task<Void, Never>] = [:]
     private var capsuleOwner: CapsuleOwner?
     private var startupAssessmentTask: Task<Void, Never>?
     private var terminalSynchronizationTask: Task<Void, Never>?
@@ -378,10 +379,10 @@
         return
       }
       shutdownCount += 1
-      let modelOperation = modelOperation
+      let modelOperations = Array(modelOperations.values)
       let startupAssessmentTask = startupAssessmentTask
       let terminalSynchronizationTask = terminalSynchronizationTask
-      modelOperation?.cancel()
+      modelOperations.forEach { $0.cancel() }
       startupAssessmentTask?.cancel()
       terminalSynchronizationTask?.cancel()
       coordinator.setEventObserver(nil)
@@ -395,7 +396,9 @@
         await coordinator.cancel()
         await coordinator.waitForTerminal()
         await shortcutController.uninstall()
-        await modelOperation?.value
+        for modelOperation in modelOperations {
+          await modelOperation.value
+        }
         await startupAssessmentTask?.value
         await terminalSynchronizationTask?.value
         self?.dismissCapsule()
@@ -518,6 +521,7 @@
         showCapsule(.repairingModel, owner: owner)
       }
       let task = Task { @MainActor [weak self, modelManager] in
+        defer { self?.modelOperationDidFinish(operationID) }
         do {
           try await operation(modelManager)
           guard self?.modelOperationID == operationID else { return }
@@ -541,16 +545,15 @@
           self?.modelError = error.localizedDescription
           if
             showsRepairStatus,
-            self?.appState?.preferences.dictationCapsuleEnabled == true
+            self?.appState?.preferences.dictationCapsuleEnabled == true,
+            self?.capsuleOwner == owner
           {
             self?.showCapsule(.failed("Enhanced model repair failed."), owner: owner)
           }
         }
-        guard self?.modelOperationID == operationID else { return }
-        self?.modelOperation = nil
-        self?.modelOperationID = nil
       }
       modelOperation = task
+      modelOperations[operationID] = task
       return task
     }
 
@@ -595,8 +598,15 @@
       capsuleController.dismiss()
     }
 
+    private func modelOperationDidFinish(_ operationID: UUID) {
+      modelOperations.removeValue(forKey: operationID)
+      guard modelOperationID == operationID else { return }
+      modelOperation = nil
+      modelOperationID = nil
+    }
+
     deinit {
-      modelOperation?.cancel()
+      modelOperations.values.forEach { $0.cancel() }
       startupAssessmentTask?.cancel()
       terminalSynchronizationTask?.cancel()
       if let terminationObserver {
