@@ -1,13 +1,13 @@
 [
   {
     "name": "removes fillers and repetition without changing a task",
-    "raw": "um I I need to email Priya Shah about 3 invoices",
+    "raw": "um, I I need to email Priya Shah about 3 invoices",
     "cleaned": "I need to email Priya Shah about 3 invoices.",
     "protected": ["Priya Shah", "3", "to email Priya Shah about 3 invoices"]
   },
   {
     "name": "resolves an explicit correction while preserving names and dates",
-    "raw": "send the report to Alex no send the report to Alex Morgan on September 4",
+    "raw": "send the report to Alex—no, send the report to Alex Morgan on September 4",
     "cleaned": "Send the report to Alex Morgan on September 4.",
     "protected": ["Alex Morgan", "September 4", "4"]
   },

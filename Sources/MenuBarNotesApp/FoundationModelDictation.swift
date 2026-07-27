@@ -37,6 +37,23 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
   typealias CleanupGenerator = @Sendable (FoundationModelCleanupPrompt) async throws -> String
   typealias RoutingGenerator = @Sendable (String, [DictationDestination]) async throws -> FoundationModelRouteDecision
 
+  private struct CorrectionSignal {
+    let index: Int
+    let permitsRestart: Bool
+  }
+
+  private struct ParsedTranscript {
+    let lexemes: [String]
+    let leadingFillerIsExplicit: Bool
+    let corrections: [CorrectionSignal]
+  }
+
+  private struct ScannedLexeme {
+    let value: String
+    let isExplicitLeadingFiller: Bool
+    let correctionPermitsRestart: Bool?
+  }
+
   private let osMajorVersion: @Sendable () -> Int
   private let cleanupGenerator: CleanupGenerator
   private let routingGenerator: RoutingGenerator
@@ -104,17 +121,36 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
   """
 
   private static func isFaithful(_ cleaned: String, to raw: String) -> Bool {
-    let cleanedLexemes = lexemes(in: cleaned)
+    let cleanedLexemes = parseTranscript(cleaned).lexemes
     guard !cleanedLexemes.isEmpty else { return false }
     return canonicalVariants(for: raw).contains(cleanedLexemes)
   }
 
   static func canonicalVariants(for raw: String, limit: Int = maximumCanonicalVariants) -> Set<[String]> {
-    let initial = lexemes(in: raw)
+    let parsed = parseTranscript(raw)
+    let initial = parsed.lexemes
     guard !initial.isEmpty, limit > 0 else { return [] }
     var variants: Set<[String]> = []
-    var pending = [initial]
-    var pendingSet: Set<[String]> = [initial]
+    var pending: [[String]] = []
+    var pendingSet: Set<[String]> = []
+
+    func enqueue(_ variant: [String]) {
+      guard variants.count + pendingSet.count < limit,
+        !variants.contains(variant),
+        !pendingSet.contains(variant)
+      else { return }
+      pending.append(variant)
+      pendingSet.insert(variant)
+    }
+
+    enqueue(initial)
+    for corrected in correctionVariants(from: parsed) { enqueue(corrected) }
+    if parsed.leadingFillerIsExplicit, fillerTokens.contains(initial[0]) {
+      enqueue(Array(initial.dropFirst()))
+      for corrected in correctionVariants(from: parsed) where corrected.first == initial.first {
+        enqueue(Array(corrected.dropFirst()))
+      }
+    }
 
     while let current = pending.popLast() {
       pendingSet.remove(current)
@@ -131,11 +167,6 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
 
   private static func canonicalTransforms(of words: [String]) -> [[String]] {
     var variants: [[String]] = []
-    for index in words.indices where fillerTokens.contains(words[index]) {
-      var withoutFiller = words
-      withoutFiller.remove(at: index)
-      variants.append(withoutFiller)
-    }
     for index in words.indices where index + 1 < words.count && words[index] == "i" && words[index + 1] == "i" {
       var collapsed = words
       collapsed.remove(at: index + 1)
@@ -153,27 +184,31 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
         variants.append(Array(words[count...]))
       }
     }
-    for marker in localCorrectionMarkers {
-      for index in words.indices where words[index] == marker {
-        let suffixStart = index + 1
-        guard index >= 2, suffixStart < words.count else { continue }
-        let prefix = Array(words[..<index])
-        let suffix = Array(words[suffixStart...])
-        if prefix.first != suffix.first {
-          variants.append(Array(words[..<(index - 1)]) + suffix)
-        }
-        guard prefix.first == suffix.first, leadingMeaningfulOverlap(prefix, suffix) >= 3 else {
-          continue
-        }
+    return variants
+  }
+
+  private static func correctionVariants(from parsed: ParsedTranscript) -> [[String]] {
+    parsed.corrections.flatMap { signal -> [[String]] in
+      let words = parsed.lexemes
+      let suffixStart = signal.index + 1
+      guard signal.index >= 2, suffixStart < words.count else { return [] }
+      let prefix = Array(words[..<signal.index])
+      let suffix = Array(words[suffixStart...])
+      var variants: [[String]] = []
+      if prefix.first != suffix.first {
+        variants.append(Array(words[..<(signal.index - 1)]) + suffix)
+      }
+      if signal.permitsRestart,
+        prefix.first == suffix.first,
+        leadingMeaningfulOverlap(prefix, suffix) >= 3 {
         variants.append(suffix)
       }
+      return variants
     }
-    return variants
   }
 
   private static let maximumCanonicalVariants = 128
   private static let fillerTokens: Set<String> = ["erm", "uh", "um"]
-  private static let localCorrectionMarkers: Set<String> = ["actually", "no"]
   private static let nonMeaningfulRestartLexemes: Set<String> = [
     "a", "an", "and", "at", "for", "i", "in", "is", "it", "of", "on", "the", "to", "with",
   ]
@@ -227,16 +262,136 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     title.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
   }
 
-  private static func lexemes(in text: String) -> [String] {
-    let range = NSRange(text.startIndex..., in: text)
-    return lexemePattern.matches(in: text, range: range).compactMap {
-      Range($0.range, in: text).map { String(text[$0]).lowercased() }
+  private static func parseTranscript(_ text: String) -> ParsedTranscript {
+    let characters = Array(text)
+    var index = 0
+    var tokens: [ScannedLexeme] = []
+
+    while index < characters.count {
+      if startsNumericLexeme(characters, at: index) {
+        let start = index
+        var accounting = false
+        if characters[index] == "(" {
+          accounting = true
+          index += 1
+        }
+        if isSign(characters[index]) { index += 1 }
+        if index < characters.count, isCurrency(characters[index]) { index += 1 }
+        guard index < characters.count, characters[index].isNumber else {
+          index = start + 1
+          continue
+        }
+        while index < characters.count {
+          if characters[index].isNumber {
+            index += 1
+          } else if isNumericSeparator(characters[index]),
+            index + 1 < characters.count,
+            characters[index + 1].isNumber {
+            index += 1
+          } else {
+            break
+          }
+        }
+        if index < characters.count, isCurrency(characters[index]) || characters[index] == "%" {
+          index += 1
+        }
+        if accounting, index < characters.count, characters[index] == ")" { index += 1 }
+        tokens.append(.init(
+          value: String(characters[start..<index]).lowercased(),
+          isExplicitLeadingFiller: false,
+          correctionPermitsRestart: nil
+        ))
+        continue
+      }
+
+      guard characters[index].isLetter else {
+        index += 1
+        continue
+      }
+      let start = index
+      index += 1
+      while index < characters.count,
+        characters[index].isLetter || characters[index].isNumber || characters[index] == "'" || characters[index] == "’" {
+        index += 1
+      }
+      let value = String(characters[start..<index]).lowercased()
+      let before = previousNonWhitespace(in: characters, before: start)
+      let after = nextNonWhitespace(in: characters, after: index)
+      let hasComma = after == ","
+      let hasDash = before == "—" || before == "-"
+      let correctionPermitsRestart: Bool?
+      switch value {
+      case "no" where hasComma:
+        correctionPermitsRestart = hasDash
+      case "actually" where hasComma && hasDash:
+        correctionPermitsRestart = true
+      default:
+        correctionPermitsRestart = nil
+      }
+      tokens.append(.init(
+        value: value,
+        isExplicitLeadingFiller: tokens.isEmpty && fillerTokens.contains(value) && hasComma,
+        correctionPermitsRestart: correctionPermitsRestart
+      ))
     }
+
+    return .init(
+      lexemes: tokens.map(\.value),
+      leadingFillerIsExplicit: tokens.count > 1 && tokens.first?.isExplicitLeadingFiller == true,
+      corrections: tokens.enumerated().compactMap { index, token in
+        token.correctionPermitsRestart.map { .init(index: index, permitsRestart: $0) }
+      }
+    )
   }
 
-  private static let lexemePattern = try! NSRegularExpression(
-    pattern: #"(?:-?\$?|\$-?)\d+(?:[./:-]\d+)*(?:%)?|[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*"#
-  )
+  private static func startsNumericLexeme(_ characters: [Character], at index: Int) -> Bool {
+    let character = characters[index]
+    if character.isNumber { return true }
+    if isCurrency(character) { return index + 1 < characters.count && characters[index + 1].isNumber }
+    if isSign(character) {
+      guard index + 1 < characters.count else { return false }
+      return characters[index + 1].isNumber || (
+        isCurrency(characters[index + 1]) && index + 2 < characters.count && characters[index + 2].isNumber
+      )
+    }
+    if character == "(" {
+      guard index + 1 < characters.count else { return false }
+      return characters[index + 1].isNumber || (
+        isCurrency(characters[index + 1]) && index + 2 < characters.count && characters[index + 2].isNumber
+      )
+    }
+    return false
+  }
+
+  private static func previousNonWhitespace(in characters: [Character], before index: Int) -> Character? {
+    var cursor = index
+    while cursor > 0 {
+      cursor -= 1
+      if !characters[cursor].isWhitespace { return characters[cursor] }
+    }
+    return nil
+  }
+
+  private static func nextNonWhitespace(in characters: [Character], after index: Int) -> Character? {
+    var cursor = index
+    while cursor < characters.count {
+      if !characters[cursor].isWhitespace { return characters[cursor] }
+      cursor += 1
+    }
+    return nil
+  }
+
+  private static func isCurrency(_ character: Character) -> Bool {
+    character.unicodeScalars.contains { $0.properties.generalCategory == .currencySymbol }
+  }
+
+  private static func isSign(_ character: Character) -> Bool {
+    character == "-" || character == "−" || character == "+"
+  }
+
+  private static func isNumericSeparator(_ character: Character) -> Bool {
+    character == "." || character == "/" || character == ":" || character == "-"
+  }
 
   private static func titleContains(_ first: String, _ second: String) -> Bool {
     let firstWords = first.split(separator: " ")

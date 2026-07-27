@@ -130,6 +130,14 @@ import Testing
   #expect(result.outcome == .usedRaw)
 }
 
+@Test func FoundationModelDictationDoesNotTreatUmAsAContextFreeFiller() async {
+  let raw = "Use um as the variable name."
+  let result = await cleanupResult(raw: raw, modelOutput: "Use as the variable name.")
+
+  #expect(result.text == raw)
+  #expect(result.outcome == .usedRaw)
+}
+
 @Test func FoundationModelDictationPreservesRepeatedNumericCodes() async {
   let raw = "Enter code 1234 1234."
   let result = await cleanupResult(raw: raw, modelOutput: "Enter code 1234.")
@@ -146,6 +154,17 @@ import Testing
   #expect(result.outcome == .usedRaw)
 }
 
+@Test func FoundationModelDictationRejectsBareCorrectionMarkers() async {
+  let noFact = await cleanupResult(raw: "I said no then left.", modelOutput: "I then left.")
+  let overlappingFacts = await cleanupResult(
+    raw: "I voted yes on the budget motion no I voted yes on the budget motion yesterday.",
+    modelOutput: "I voted yes on the budget motion yesterday."
+  )
+
+  #expect(noFact.outcome == .usedRaw)
+  #expect(overlappingFacts.outcome == .usedRaw)
+}
+
 @Test func FoundationModelDictationPreservesLosslessNumericLexemes() async {
   let signed = await cleanupResult(raw: "Set the threshold to -5.", modelOutput: "Set the threshold to 5.")
   let currency = await cleanupResult(raw: "Pay $20 today.", modelOutput: "Pay 20 today.")
@@ -158,13 +177,26 @@ import Testing
   }
 }
 
+@Test func FoundationModelDictationPreservesUnicodeNumericAffixes() async {
+  let euro = await cleanupResult(raw: "Pay €20 today.", modelOutput: "Pay 20 today.")
+  let pound = await cleanupResult(raw: "Pay £20 today.", modelOutput: "Pay 20 today.")
+  let yen = await cleanupResult(raw: "Pay ¥20 today.", modelOutput: "Pay 20 today.")
+  let cents = await cleanupResult(raw: "Pay 20¢ today.", modelOutput: "Pay 20 today.")
+  let unicodeMinus = await cleanupResult(raw: "Set the threshold to −5.", modelOutput: "Set the threshold to 5.")
+  let accounting = await cleanupResult(raw: "Record (20) today.", modelOutput: "Record 20 today.")
+
+  for result in [euro, pound, yen, cents, unicodeMinus, accounting] {
+    #expect(result.outcome == .usedRaw)
+  }
+}
+
 @Test func FoundationModelDictationAcceptsLocalExplicitCorrections() async {
   let day = await cleanupResult(
-    raw: "Schedule lunch Monday no Tuesday.",
+    raw: "Schedule lunch Monday—no, Tuesday.",
     modelOutput: "Schedule lunch Tuesday."
   )
   let verb = await cleanupResult(
-    raw: "I need to call actually email Priya.",
+    raw: "I need to call—actually, email Priya.",
     modelOutput: "I need to email Priya."
   )
 
@@ -175,7 +207,7 @@ import Testing
 }
 
 @Test func FoundationModelDictationBoundsCanonicalVariantTraversal() {
-  let raw = Array(repeating: "um", count: 400).joined(separator: " ")
+  let raw = Array(repeating: "I", count: 400).joined(separator: " ")
 
   let variants = FoundationModelDictation.canonicalVariants(for: raw)
 
