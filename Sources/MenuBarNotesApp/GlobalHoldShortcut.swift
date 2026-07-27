@@ -24,6 +24,7 @@
     enum RegistrationError: Error, Equatable {
       case activeSession
       case conflict(OSStatus)
+      case eventDeliveryPending
       case primaryKeyHeld
       case system(OSStatus)
       case uninstalled
@@ -43,6 +44,7 @@
     private var escapeCancellationRequested = false
     private var acceptedSession: DictationShortcutSession?
     private var deliveryTask: Task<Void, Never>?
+    private var pendingDeliveryCount = 0
     private var terminalTask: Task<Void, Never>?
     private var isUninstalled = false
 
@@ -63,6 +65,7 @@
 
     func configure(_ shortcut: DictationShortcut) throws {
       guard !isUninstalled else { throw RegistrationError.uninstalled }
+      guard pendingDeliveryCount == 0 else { throw RegistrationError.eventDeliveryPending }
       guard acceptedSession == nil else { throw RegistrationError.activeSession }
       guard !physicalPrimaryDown else { throw RegistrationError.primaryKeyHeld }
       if primaryRegistered {
@@ -88,8 +91,8 @@
 
     func uninstall() async {
       registrar.eventHandler = nil
-      await drainEvents()
       isUninstalled = true
+      await drainEvents()
       physicalPrimaryDown = false
       if let acceptedSession, let handler {
         await handler.cancelShortcut(acceptedSession)
@@ -100,12 +103,17 @@
 
     private func enqueue(id: UInt32, pressed: Bool) {
       guard !isUninstalled else { return }
+      pendingDeliveryCount += 1
       let previous = deliveryTask
       deliveryTask = Task { @MainActor [weak self] in
         await previous?.value
-        guard !Task.isCancelled else { return }
-        await self?.receive(id: id, pressed: pressed)
+        await self?.deliver(id: id, pressed: pressed)
       }
+    }
+
+    private func deliver(id: UInt32, pressed: Bool) async {
+      defer { pendingDeliveryCount -= 1 }
+      await receive(id: id, pressed: pressed)
     }
 
     private func receive(id: UInt32, pressed: Bool) async {
