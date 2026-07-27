@@ -228,6 +228,12 @@
       try await installCurrentModel()
     }
 
+    func markInferenceLoadFailure(message: String) {
+      lifecycleEpoch &+= 1
+      verifiedRepositoryURL = nil
+      setState(.repairRequired(message: message))
+    }
+
     func deleteModel() async throws {
       guard isArchitectureSupported else {
         setState(.notInstalled)

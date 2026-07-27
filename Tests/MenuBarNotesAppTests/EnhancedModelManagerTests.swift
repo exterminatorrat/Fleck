@@ -556,6 +556,62 @@ struct EnhancedModelManagerTests {
     #expect(try Data(contentsOf: fixture.fileURL(for: testManifest)) == testContents)
   }
 
+  @Test @MainActor func updateAvailableRepositoryCanStartEnhancedSpeech() async throws {
+    let current = EnhancedModelManifest(
+      schemaVersion: 1,
+      modelID: testManifest.modelID,
+      revision: "new-revision",
+      totalByteCount: testManifest.totalByteCount,
+      files: testManifest.files
+    )
+    let fixture = try Fixture(
+      manifest: current,
+      trustedManifests: [testManifest, current]
+    )
+    defer { fixture.remove() }
+    try fixture.install(manifest: testManifest)
+    await fixture.manager.refreshState()
+    let inference = EnhancedInferenceSpy()
+    let audio = EnhancedAudioSpy(samples: [0.2])
+    let capture = EnhancedSpeechCapture(
+      modelManager: fixture.manager,
+      makeInference: { inference },
+      makeAudio: { _ in audio }
+    )
+
+    try await capture.start(provisional: { _ in }, level: { _ in })
+    _ = try await capture.finish()
+
+    #expect(fixture.manager.state == .updateAvailable)
+    #expect(inference.loadURLs == [fixture.repositoryURL(for: testManifest)])
+    #expect(fixture.transport.callCount == 0)
+  }
+
+  @Test @MainActor func EnhancedSpeechLoadFailureInvalidatesTheVerifiedRepository() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.install()
+    await fixture.manager.refreshState()
+    let inference = EnhancedInferenceSpy()
+    inference.loadError = EnhancedTestFailure.failed
+    let capture = EnhancedSpeechCapture(
+      modelManager: fixture.manager,
+      makeInference: { inference },
+      makeAudio: { _ in EnhancedAudioSpy(samples: []) }
+    )
+
+    await #expect(throws: EnhancedTestFailure.failed) {
+      try await capture.start(provisional: { _ in }, level: { _ in })
+    }
+
+    #expect(
+      fixture.manager.state
+        == .repairRequired(message: EnhancedTestFailure.failed.localizedDescription)
+    )
+    #expect(fixture.manager.verifiedLoadState == .unavailable)
+    #expect(fixture.manager.verifiedRepositoryURL == nil)
+  }
+
   @Test @MainActor func cleanupFailureAfterMoveAdoptsTheNewVerifiedRevision() async throws {
     let current = EnhancedModelManifest(
       schemaVersion: 1,

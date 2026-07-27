@@ -462,6 +462,161 @@ import Testing
   await fixture.coordinator.cancel()
 }
 
+@Test @MainActor func EnhancedSpeechRejectsAnUnverifiedModelWithoutStartingAudio() async {
+  let inference = EnhancedInferenceSpy()
+  let audio = EnhancedAudioSpy(samples: [0.25])
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: { .unavailable },
+    makeInference: { inference },
+    makeAudio: { _ in audio }
+  )
+
+  await #expect(throws: DictationFailure.unavailable) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+
+  #expect(inference.loadURLs.isEmpty)
+  #expect(inference.releaseCount == 1)
+  #expect(audio.startCount == 0)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechCapturesMemoryOnly16kMonoFloatSamplesAndReturnsFinalText() async throws {
+  let repository = URL(fileURLWithPath: "/verified/parakeet-tdt-0.6b-v2-coreml")
+  let inference = EnhancedInferenceSpy()
+  inference.result = "  Meet at 3 PM.  "
+  let audio = EnhancedAudioSpy(samples: [0.25, -0.5, 0.75], emittedLevel: 0.5)
+  var configuration: EnhancedAudioConfiguration?
+  var provisional: [String] = []
+  var levels: [Float] = []
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: { .ready(repositoryURL: repository) },
+    makeInference: { inference },
+    makeAudio: {
+      configuration = $0
+      return audio
+    }
+  )
+
+  try await capture.start(
+    provisional: { provisional.append($0) },
+    level: { levels.append($0) }
+  )
+  let result = try await capture.finish()
+
+  #expect(configuration == .inference)
+  #expect(inference.loadURLs == [repository])
+  #expect(inference.transcribedSamples == [[0.25, -0.5, 0.75]])
+  #expect(result == "Meet at 3 PM.")
+  #expect(provisional.isEmpty)
+  #expect(levels == [0.5])
+  #expect(audio.releaseCount == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(!capture.hasActiveResources)
+  #expect(EnhancedSpeechCapture.isFluidAudioOffline)
+}
+
+@Test @MainActor func EnhancedSpeechTreatsWhitespaceOnlyInferenceAsNoSpeech() async throws {
+  let inference = EnhancedInferenceSpy()
+  inference.result = " \n "
+  let audio = EnhancedAudioSpy(samples: [0.1])
+  let capture = makeEnhancedCapture(inference: inference, audio: audio)
+
+  try await capture.start(provisional: { _ in }, level: { _ in })
+
+  #expect(try await capture.finish() == nil)
+  #expect(audio.releaseCount == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechReleasesEverythingAfterInferenceFailure() async throws {
+  let inference = EnhancedInferenceSpy()
+  inference.transcriptionError = EnhancedTestFailure.failed
+  let audio = EnhancedAudioSpy(samples: [0.1])
+  let capture = makeEnhancedCapture(inference: inference, audio: audio)
+
+  try await capture.start(provisional: { _ in }, level: { _ in })
+  await #expect(throws: EnhancedTestFailure.failed) {
+    try await capture.finish()
+  }
+
+  #expect(audio.releaseCount == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechMarksRepairAndRecommendsStandardAfterLoadFailure() async {
+  let inference = EnhancedInferenceSpy()
+  inference.loadError = EnhancedTestFailure.failed
+  let audio = EnhancedAudioSpy(samples: [])
+  var repairMessages: [String] = []
+  var standardRecommendations = 0
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: {
+      .ready(repositoryURL: URL(fileURLWithPath: "/verified/parakeet"))
+    },
+    makeInference: { inference },
+    makeAudio: { _ in audio },
+    markRepairRequired: { repairMessages.append($0) },
+    recommendStandard: { standardRecommendations += 1 }
+  )
+
+  await #expect(throws: EnhancedTestFailure.failed) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+
+  #expect(repairMessages.count == 1)
+  #expect(standardRecommendations == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(audio.startCount == 0)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechCancellationDropsSamplesAndReleasesEverything() async throws {
+  let inference = EnhancedInferenceSpy()
+  let audio = EnhancedAudioSpy(samples: [0.4, -0.2])
+  let capture = makeEnhancedCapture(inference: inference, audio: audio)
+
+  try await capture.start(provisional: { _ in }, level: { _ in })
+  await capture.cancel()
+
+  #expect(audio.cancelCount == 1)
+  #expect(audio.releaseCount == 1)
+  #expect(inference.cancelCount == 1)
+  #expect(inference.transcribedSamples.isEmpty)
+  #expect(inference.releaseCount == 1)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechReleaseResourcesIsTerminalAndIdempotent() async throws {
+  let inference = EnhancedInferenceSpy()
+  let audio = EnhancedAudioSpy(samples: [0.2])
+  let capture = makeEnhancedCapture(inference: inference, audio: audio)
+
+  try await capture.start(provisional: { _ in }, level: { _ in })
+  await capture.releaseResources()
+  await capture.releaseResources()
+
+  #expect(audio.releaseCount == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(!capture.hasActiveResources)
+}
+
+@MainActor
+private func makeEnhancedCapture(
+  inference: EnhancedInferenceSpy,
+  audio: EnhancedAudioSpy
+) -> EnhancedSpeechCapture {
+  EnhancedSpeechCapture(
+    verifiedLoadState: {
+      .ready(repositoryURL: URL(fileURLWithPath: "/verified/parakeet"))
+    },
+    makeInference: { inference },
+    makeAudio: { _ in audio }
+  )
+}
+
 @MainActor
 private final class Fixture {
   private let preference: PreferenceBox
@@ -653,6 +808,71 @@ private final class FakeEditor: FocusedDictationEditing {
 }
 
 private enum TestError: Error { case failed }
+
+enum EnhancedTestFailure: Error {
+  case failed
+}
+
+@MainActor
+final class EnhancedInferenceSpy: EnhancedSpeechInferring {
+  var result = "Transcript"
+  var loadError: Error?
+  var transcriptionError: Error?
+  private(set) var loadURLs: [URL] = []
+  private(set) var transcribedSamples: [[Float]] = []
+  private(set) var cancelCount = 0
+  private(set) var releaseCount = 0
+
+  func load(from repositoryURL: URL) async throws {
+    loadURLs.append(repositoryURL)
+    if let loadError { throw loadError }
+  }
+
+  func transcribe(_ samples: [Float]) async throws -> String {
+    transcribedSamples.append(samples)
+    if let transcriptionError { throw transcriptionError }
+    return result
+  }
+
+  func cancel() async {
+    cancelCount += 1
+  }
+
+  func releaseResources() async {
+    releaseCount += 1
+  }
+}
+
+@MainActor
+final class EnhancedAudioSpy: EnhancedAudioCapturing {
+  let samples: [Float]
+  let emittedLevel: Float?
+  private(set) var startCount = 0
+  private(set) var cancelCount = 0
+  private(set) var releaseCount = 0
+
+  init(samples: [Float], emittedLevel: Float? = nil) {
+    self.samples = samples
+    self.emittedLevel = emittedLevel
+  }
+
+  func start(level: @escaping @MainActor (Float) -> Void) throws {
+    startCount += 1
+    if let emittedLevel { level(emittedLevel) }
+  }
+
+  func stopAndTakeSamples() -> [Float] {
+    samples
+  }
+
+  func cancel() {
+    cancelCount += 1
+  }
+
+  func releaseResources() {
+    releaseCount += 1
+  }
+}
 
 @MainActor
 private final class PreferenceBox {
