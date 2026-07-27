@@ -6,7 +6,17 @@ See the [product plan](PRODUCT_PLAN.md) for the complete vision, feature require
 
 ## Project status
 
-The project is currently in the planning stage. Implementation has not started yet.
+Motes is implemented as a native SwiftPM executable. It is not yet a signed or
+exported `.app`.
+
+Clean Dictation is implemented on the unmerged `codex/clean-dictation`
+candidate branch. **Enhanced Local is a non-shippable candidate:** it must not
+be included in a release until the pinned model materially beats Standard on
+the privacy-safe real-device corpus and every device, accessibility, resource,
+legal, attribution, SBOM, signing/notarization, and Mac App Store gate in
+[TESTING.md](TESTING.md) has recorded evidence. A green build or CI run is not
+release approval. Until those gates pass, keep Enhanced Local out of release UI
+and do not describe it as shipping.
 
 ## Development workflow
 
