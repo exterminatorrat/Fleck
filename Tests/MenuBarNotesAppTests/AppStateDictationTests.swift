@@ -168,7 +168,7 @@ import Testing
     workspace: Workspace(notes: [note], selectedNoteID: note.id),
     preferences: .init()
   )
-  let blockedSave = BlockingFailureSave()
+  let blockedSave = BlockingFailureSave(store: store)
   let state = AppState(
     store: store,
     saveOperation: { workspace, preferences, trashedNotes in
@@ -202,6 +202,119 @@ import Testing
   } catch {}
 
   #expect(state.workspace.notes[index] == laterEditedNote)
+}
+
+@Test @MainActor func appStateDictationFailedCaptureDoesNotLeakIntoALaterEditorSave()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let destination = Note(title: "Projects", body: "Existing")
+  let editorNote = Note(title: "Editor")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(
+      notes: [destination, editorNote],
+      selectedNoteID: editorNote.id
+    ),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [destination.id, editorNote.id])
+
+  let task = Task { @MainActor in
+    try await state.saveSmartCapture(
+      text: "Captured",
+      captureID: UUID(),
+      destinationID: destination.id
+    )
+  }
+  await blockedSave.waitUntilStarted()
+  state.updateSelected(body: "Later editor text")
+  await blockedSave.fail()
+
+  do {
+    _ = try await task.value
+    Issue.record("Expected the suspended capture save to fail")
+  } catch {}
+  await blockedSave.waitUntilSaveCount(2)
+
+  let persisted = try await store.loadWorkspace()
+  #expect(persisted.notes.first(where: { $0.id == destination.id })?.body == "Existing")
+  #expect(persisted.notes.first(where: { $0.id == editorNote.id })?.body == "Later editor text")
+}
+
+@Test @MainActor func appStateDictationSelectedFailedInboxKeepsOnlyTheBlankInboxShell()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let existing = Note(title: "Projects")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [existing], selectedNoteID: existing.id),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [existing.id])
+
+  let task = Task { @MainActor in
+    try await state.saveSmartCapture(
+      text: "Captured",
+      captureID: UUID(),
+      destinationID: nil
+    )
+  }
+  await blockedSave.waitUntilStarted()
+  let inboxID = try #require(
+    state.workspace.notes.first(where: {
+      $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
+    })?.id
+  )
+  let attemptedInbox = try #require(state.workspace.notes.first(where: { $0.id == inboxID }))
+  state.select(inboxID)
+  await blockedSave.fail()
+
+  do {
+    _ = try await task.value
+    Issue.record("Expected the suspended Inbox save to fail")
+  } catch {}
+  await blockedSave.waitUntilSaveCount(2)
+
+  let inbox = try #require(state.workspace.notes.first(where: { $0.id == inboxID }))
+  #expect(state.workspace.selectedNoteID == inboxID)
+  #expect(inbox.title == "Inbox")
+  #expect(inbox.body.isEmpty)
+  #expect(inbox.richTextRTF == nil)
+  #expect(inbox.tabColorHex == nil)
+  #expect(!inbox.isPinned)
+  #expect(inbox.createdAt == attemptedInbox.createdAt)
+  #expect(inbox.modifiedAt != attemptedInbox.modifiedAt)
+  let persistedInbox = try #require(
+    try await store.loadWorkspace().notes.first(where: { $0.id == inboxID })
+  )
+  #expect(persistedInbox.body.isEmpty)
+  #expect(persistedInbox.richTextRTF == nil)
 }
 
 @Test @MainActor func appStateDictationTrashRefreshFailureDoesNotFailACommittedCapture()
@@ -272,7 +385,7 @@ import Testing
     }
   )
   try await waitUntilLoaded(state, noteIDs: [note.id])
-  state.saveNow()
+  state.updateSelected(body: "First edit")
   await controlledSave.waitUntilFirstSaveStarted()
 
   state.updateSelected(body: "Newer edit")
@@ -375,6 +488,55 @@ import Testing
   #expect(state.workspace.notes[0].richTextRTF == mismatchedRTF)
 }
 
+@Test @MainActor func appStateDictationFailedUndoPreservesLaterEditsAfterReordering()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let destination = Note(title: "Projects", body: "Existing")
+  let other = Note(title: "Other")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [destination, other], selectedNoteID: other.id),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store, blockedAttempt: 2)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [destination.id, other.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: destination.id
+  )
+
+  let task = Task { @MainActor in
+    await state.undoSmartCapture(receipt)
+  }
+  await blockedSave.waitUntilStarted()
+  state.moveNote(destination.id, to: 1)
+  state.updateSelected(body: "Later edit")
+  let laterRTF = NoteTextAppender.appending("Later edit", to: Note()).richTextRTF
+  state.updateSelectedRichTextRTF(laterRTF)
+  await blockedSave.fail()
+
+  #expect(!(await task.value))
+  let updated = try #require(state.workspace.notes.first(where: { $0.id == destination.id }))
+  #expect(state.workspace.notes.map(\.id) == [other.id, destination.id])
+  #expect(state.workspace.selectedNoteID == destination.id)
+  #expect(updated.body == "Later edit")
+  #expect(updated.richTextRTF == laterRTF)
+  try await state.flushFocusedDictationSave()
+}
+
 @Test @MainActor func appStateDictationFocusedFlushAwaitsTheActualSaveOutcome() async throws {
   let root = temporaryStoreRoot()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -460,21 +622,41 @@ private enum AppStateDictationTestError: Error {
 }
 
 private actor BlockingFailureSave {
+  private let store: LocalStore
+  private let blockedAttempt: Int
+  private var saveCount = 0
   private var started = false
   private var continuation: CheckedContinuation<Void, Never>?
+
+  init(store: LocalStore, blockedAttempt: Int = 1) {
+    self.store = store
+    self.blockedAttempt = blockedAttempt
+  }
 
   func save(
     workspace: Workspace,
     preferences: AppPreferences,
     trashedNotes: [Note]
   ) async throws {
-    started = true
-    await withCheckedContinuation { continuation = $0 }
-    throw AppStateDictationTestError.failed
+    saveCount += 1
+    if saveCount == blockedAttempt {
+      started = true
+      await withCheckedContinuation { continuation = $0 }
+      throw AppStateDictationTestError.failed
+    }
+    try await store.save(
+      workspace: workspace,
+      preferences: preferences,
+      trashedNotes: trashedNotes
+    )
   }
 
   func waitUntilStarted() async {
     while !started { await Task.yield() }
+  }
+
+  func waitUntilSaveCount(_ expectedCount: Int) async {
+    while saveCount < expectedCount { await Task.yield() }
   }
 
   func fail() {

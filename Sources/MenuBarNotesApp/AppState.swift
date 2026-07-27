@@ -25,7 +25,9 @@
     private let store: LocalStore
     private let saveOperation: SaveOperation
     private let loadTrashOperation: LoadTrashOperation
-    private var saveTask: Task<Void, Error>?
+    private var debouncedSaveTask: Task<Void, Error>?
+    private var awaitedSaveCount = 0
+    private var awaitedSaveWaiters: [CheckedContinuation<Void, Never>] = []
     private var saveStatusResetTask: Task<Void, Never>?
     private var pendingTrashNotes: [UUID: Note] = [:]
 
@@ -70,22 +72,29 @@
       captureID: UUID,
       destinationID: UUID?
     ) async throws -> DictationInsertionReceipt {
+      beginAwaitedSave()
+      defer { endAwaitedSave() }
       let destinationIndex: Int
-      let originalNote: Note?
+      let originalNote: Note
+      let createdInbox: Bool
       if let destinationID,
         let index = workspace.notes.firstIndex(where: { $0.id == destinationID })
       {
         destinationIndex = index
         originalNote = workspace.notes[index]
+        createdInbox = false
       } else if let index = workspace.notes.firstIndex(where: {
         $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
       }) {
         destinationIndex = index
         originalNote = workspace.notes[index]
+        createdInbox = false
       } else {
-        workspace.notes.append(Note(title: "Inbox"))
+        let inbox = Note(title: "Inbox")
+        workspace.notes.append(inbox)
         destinationIndex = workspace.notes.index(before: workspace.notes.endIndex)
-        originalNote = nil
+        originalNote = inbox
+        createdInbox = true
       }
 
       let appended = NoteTextAppender.appending(
@@ -107,7 +116,8 @@
         rollbackSmartCapture(
           noteID: noteID,
           insertedNote: insertedNote,
-          originalNote: originalNote
+          originalNote: originalNote,
+          createdInbox: createdInbox
         )
         throw error
       }
@@ -122,6 +132,8 @@
       guard let index = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }) else {
         return false
       }
+      beginAwaitedSave()
+      defer { endAwaitedSave() }
       workspace.selectedNoteID = receipt.noteID
       let note = workspace.notes[index]
       guard
@@ -135,16 +147,24 @@
       workspace.notes[index].body = String(note.body.dropLast(receipt.insertedSuffix.count))
       workspace.notes[index].richTextRTF = richTextRTF
       workspace.notes[index].modifiedAt = Date()
+      let attemptedUndoNote = workspace.notes[index]
       do {
         try await saveNow().value
         return true
       } catch {
-        workspace.notes[index] = note
+        if let currentIndex = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }) {
+          if workspace.notes[currentIndex] == attemptedUndoNote {
+            workspace.notes[currentIndex] = note
+          }
+          workspace.selectedNoteID = receipt.noteID
+        }
         return false
       }
     }
 
     func flushFocusedDictationSave() async throws {
+      beginAwaitedSave()
+      defer { endAwaitedSave() }
       try await saveNow().value
     }
 
@@ -232,13 +252,12 @@
 
     @discardableResult
     func saveNow() -> Task<Void, Error> {
-      saveTask?.cancel()
+      debouncedSaveTask?.cancel()
       markSaveStarted()
       let snapshot = saveSnapshot()
       let task = Task {
         try await persist(snapshot)
       }
-      saveTask = task
       return task
     }
 
@@ -252,7 +271,7 @@
     }
 
     func restore(_ trashedNote: TrashedNote) {
-      saveTask?.cancel()
+      debouncedSaveTask?.cancel()
       resetSaveStatus()
       pendingTrashNotes.removeValue(forKey: trashedNote.id)
       trashedNotes.removeAll { $0.id == trashedNote.id }
@@ -290,15 +309,15 @@
     }
 
     private func scheduleSave() {
-      saveTask?.cancel()
+      debouncedSaveTask?.cancel()
       markSaveStarted()
-      let snapshot = saveSnapshot()
       let task = Task {
         try await Task.sleep(for: .milliseconds(350))
+        await waitForAwaitedSaves()
         try Task.checkCancellation()
-        try await persist(snapshot)
+        try await persist(saveSnapshot())
       }
-      saveTask = task
+      debouncedSaveTask = task
     }
 
     private typealias SaveSnapshot = (
@@ -348,16 +367,38 @@
     private func rollbackSmartCapture(
       noteID: UUID,
       insertedNote: Note,
-      originalNote: Note?
+      originalNote: Note,
+      createdInbox: Bool
     ) {
       guard
         let index = workspace.notes.firstIndex(where: { $0.id == noteID }),
         workspace.notes[index] == insertedNote
       else { return }
-      if let originalNote {
-        workspace.notes[index] = originalNote
-      } else if workspace.selectedNoteID != noteID {
+      if createdInbox, workspace.selectedNoteID != noteID {
         workspace.notes.remove(at: index)
+      } else {
+        workspace.notes[index] = originalNote
+      }
+    }
+
+    private func beginAwaitedSave() {
+      awaitedSaveCount += 1
+    }
+
+    private func endAwaitedSave() {
+      awaitedSaveCount -= 1
+      guard awaitedSaveCount == 0 else { return }
+      let waiters = awaitedSaveWaiters
+      awaitedSaveWaiters.removeAll()
+      for waiter in waiters {
+        waiter.resume()
+      }
+    }
+
+    private func waitForAwaitedSaves() async {
+      guard awaitedSaveCount > 0 else { return }
+      await withCheckedContinuation { continuation in
+        awaitedSaveWaiters.append(continuation)
       }
     }
 
