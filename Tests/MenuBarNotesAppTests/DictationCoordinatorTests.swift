@@ -46,29 +46,59 @@ import Testing
 }
 
 @Test @MainActor func shortShortcutHoldDoesNotStartCapture() async throws {
-  let fixture = try Fixture()
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
 
   fixture.coordinator.beginShortcut(editor: nil)
-  await fixture.coordinator.endShortcut(heldFor: .milliseconds(179))
+  await threshold.waitUntilWaiting()
+  await fixture.coordinator.endShortcut()
+  await threshold.openGate()
+  await Task.yield()
 
   #expect(fixture.provider.requestedKinds.isEmpty)
   #expect(fixture.standard.startCount == 0)
   #expect(fixture.editor.beginCount == 0)
 }
 
+@Test @MainActor func shortcutStartsAtThresholdWhileHeldAndReleaseFinalizes() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Held dictation"
+
+  fixture.coordinator.beginShortcut(editor: nil)
+  #expect(fixture.coordinator.phase == .arming)
+  await threshold.waitUntilWaiting()
+  await threshold.openGate()
+  await Task.yield()
+
+  #expect(fixture.standard.startCount == 1)
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+
+  await fixture.coordinator.endShortcut()
+
+  #expect(fixture.standard.finishCount == 1)
+  #expect(fixture.saver.savedTexts == ["Held dictation"])
+}
+
 @Test @MainActor func shortcutChoosesFocusedOnlyForActiveMotesEditor() async throws {
-  let focused = try Fixture()
+  let focusedThreshold = Gate()
+  let focused = try Fixture(holdSleeper: { _ in await focusedThreshold.wait() })
 
   focused.coordinator.beginShortcut(editor: focused.editor)
-  await focused.coordinator.endShortcut(heldFor: .milliseconds(180))
+  await focusedThreshold.waitUntilWaiting()
+  await focusedThreshold.openGate()
+  await Task.yield()
 
   #expect(focused.coordinator.phase == .listening(mode: .focused, engine: .standard))
   #expect(focused.editor.beginCount == 1)
   await focused.coordinator.cancel()
 
-  let smart = try Fixture()
+  let smartThreshold = Gate()
+  let smart = try Fixture(holdSleeper: { _ in await smartThreshold.wait() })
   smart.coordinator.beginShortcut(editor: nil)
-  await smart.coordinator.endShortcut(heldFor: .milliseconds(180))
+  await smartThreshold.waitUntilWaiting()
+  await smartThreshold.openGate()
+  await Task.yield()
 
   #expect(smart.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
   #expect(smart.editor.beginCount == 0)
@@ -226,6 +256,146 @@ import Testing
   #expect(failedStart.standard.releaseCount == 1)
 }
 
+@Test @MainActor func cancelDuringProviderAwaitInvalidatesLateEngineAndIgnoresSecondActivation() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.provider.gate = gate
+
+  let start = Task { await fixture.coordinator.start(mode: .smartCapture) }
+  await fixture.provider.waitUntilRequested()
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await start.value
+
+  #expect(fixture.provider.requestedKinds == [.standard])
+  #expect(fixture.standard.startCount == 0)
+  #expect(fixture.standard.cancelCount == 1)
+  #expect(fixture.standard.releaseCount == 1)
+  #expect(fixture.editor.beginCount == 0)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor func overlappingFinishFinalizesOnce() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "One result"
+  fixture.standard.finishGate = gate
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let first = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  let second = Task { await fixture.coordinator.finish() }
+  await Task.yield()
+  await gate.openGate()
+  await first.value
+  await second.value
+
+  #expect(fixture.standard.finishCount == 1)
+  #expect(fixture.saver.savedTexts == ["One result"])
+  #expect(try await fixture.history.list().count == 1)
+}
+
+@Test @MainActor func cancelDuringCleanupPreventsRoutingSavingAndHistoryUpdate() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Cancel during cleanup"
+  fixture.cleaner.gate = gate
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await finishing.value
+
+  #expect(fixture.router.callCount == 0)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.cleanupOutcome == .pending)
+  #expect(record.insertionOutcome == .pending)
+  #expect(fixture.standard.releaseCount == 1)
+}
+
+@Test @MainActor func cancelDuringRoutingPreventsSavingAndHistoryUpdate() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Cancel during routing"
+  fixture.router.gate = gate
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await finishing.value
+
+  #expect(fixture.saver.savedTexts.isEmpty)
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.cleanupOutcome == .pending)
+  #expect(record.insertionOutcome == .pending)
+}
+
+@Test @MainActor func finishFailureReleasesBoundEngineWithoutHistory() async throws {
+  let fixture = try Fixture()
+  fixture.standard.finishError = TestError.failed
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(try await fixture.history.list().isEmpty)
+  #expect(fixture.standard.cancelCount == 1)
+  #expect(fixture.standard.releaseCount == 1)
+}
+
+@Test @MainActor func focusedFlushFailureRollsBackAndRecordsUnsaved() async throws {
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Focused failure"
+  fixture.saver.flushError = TestError.failed
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.editor.committedTexts == ["Focused failure"])
+  #expect(fixture.editor.cancelCount == 1)
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.insertionOutcome == .unsaved)
+  #expect(fixture.standard.releaseCount == 1)
+}
+
+@Test @MainActor func focusedCommitFailureRollsBackAndRecordsUnsaved() async throws {
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Commit failure"
+  fixture.editor.commitResult = false
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.saver.flushCount == 0)
+  #expect(fixture.editor.cancelCount == 1)
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.insertionOutcome == .unsaved)
+}
+
+@Test @MainActor func cancelDuringSaveDoesNotWriteACompletionHistoryUpdate() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Cancel during save"
+  fixture.saver.saveGate = gate
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await finishing.value
+
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.cleanupOutcome == .pending)
+  #expect(record.insertionOutcome == .pending)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
 @MainActor
 private final class Fixture {
   private let preference: PreferenceBox
@@ -244,7 +414,11 @@ private final class Fixture {
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let coordinator: DictationCoordinator
 
-  init(preferred: DictationSpeechEngine = .standard, historyEnabled: Bool = true) throws {
+  init(
+    preferred: DictationSpeechEngine = .standard,
+    historyEnabled: Bool = true,
+    holdSleeper: @escaping @Sendable (Duration) async -> Void = { _ in }
+  ) throws {
     preference = PreferenceBox(value: preferred)
     provider = FakeEngineProvider()
     saver = FakeSaver()
@@ -260,7 +434,8 @@ private final class Fixture {
       router: router,
       saver: saver,
       historyStore: history,
-      historyEnabled: { historyEnabled }
+      historyEnabled: { historyEnabled },
+      holdSleeper: holdSleeper
     )
   }
 }
@@ -269,8 +444,10 @@ private final class Fixture {
 private final class FakeSpeechEngine: SpeechEngine {
   let kind: DictationSpeechEngine
   var startError: Error?
+  var finishError: Error?
   var onStart: (() -> Void)?
   var finalText: String?
+  var finishGate: Gate?
   private var provisional: (@MainActor (String) -> Void)?
   var startCount = 0
   var finishCount = 0
@@ -288,6 +465,8 @@ private final class FakeSpeechEngine: SpeechEngine {
 
   func finish() async throws -> String? {
     finishCount += 1
+    if let finishGate { await finishGate.wait() }
+    if let finishError { throw finishError }
     return finalText
   }
 
@@ -300,11 +479,22 @@ private final class FakeSpeechEngine: SpeechEngine {
 private final class FakeEngineProvider: SpeechEngineProviding {
   var engines: [DictationSpeechEngine: any SpeechEngine] = [:]
   var requestedKinds: [DictationSpeechEngine] = []
+  var gate: Gate?
+  private var requestWaiters: [CheckedContinuation<Void, Never>] = []
 
   func engineForCapture(preferred: DictationSpeechEngine) async throws -> any SpeechEngine {
     requestedKinds.append(preferred)
+    let waiters = requestWaiters
+    requestWaiters = []
+    waiters.forEach { $0.resume() }
+    if let gate { await gate.wait() }
     guard let engine = engines[preferred] else { throw TestError.failed }
     return engine
+  }
+
+  func waitUntilRequested() async {
+    guard requestedKinds.isEmpty else { return }
+    await withCheckedContinuation { requestWaiters.append($0) }
   }
 }
 
@@ -312,8 +502,10 @@ private final class FakeCleaner: TranscriptCleaning, @unchecked Sendable {
   var result: String?
   var error: Error?
   var onClean: (() async throws -> String)?
+  var gate: Gate?
 
   func clean(_ rawTranscript: String) async throws -> String {
+    if let gate { await gate.wait() }
     if let onClean { return try await onClean() }
     if let error { throw error }
     return result ?? rawTranscript
@@ -322,9 +514,13 @@ private final class FakeCleaner: TranscriptCleaning, @unchecked Sendable {
 
 private final class FakeRouter: DestinationRouting, @unchecked Sendable {
   var result: UUID?
+  var gate: Gate?
+  private(set) var callCount = 0
 
   func route(transcript: String, candidates: [DictationDestination], inboxID: UUID?) async -> UUID? {
-    result
+    callCount += 1
+    if let gate { await gate.wait() }
+    return result
   }
 }
 
@@ -332,6 +528,8 @@ private final class FakeRouter: DestinationRouting, @unchecked Sendable {
 private final class FakeSaver: DictationSaving {
   var destinations: [DictationDestination] = []
   var saveError: Error?
+  var saveGate: Gate?
+  var flushError: Error?
   var savedTexts: [String] = []
   var destinationIDs: [UUID?] = []
   var flushCount = 0
@@ -339,6 +537,7 @@ private final class FakeSaver: DictationSaving {
   func activeDestinations() -> [DictationDestination] { destinations }
 
   func saveSmartCapture(text: String, captureID: UUID, destinationID: UUID?) async throws -> DictationInsertionReceipt {
+    if let saveGate { await saveGate.wait() }
     savedTexts.append(text)
     destinationIDs.append(destinationID)
     if let saveError { throw saveError }
@@ -347,7 +546,10 @@ private final class FakeSaver: DictationSaving {
   }
 
   func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool { true }
-  func flushFocusedDictationSave() async throws { flushCount += 1 }
+  func flushFocusedDictationSave() async throws {
+    flushCount += 1
+    if let flushError { throw flushError }
+  }
 }
 
 @MainActor
@@ -357,6 +559,7 @@ private final class FakeEditor: FocusedDictationEditing {
   var provisionalTexts: [String] = []
   var committedTexts: [String] = []
   var cancelCount = 0
+  var commitResult = true
 
   func beginFocusedDictation() -> Bool {
     beginCount += 1
@@ -366,7 +569,7 @@ private final class FakeEditor: FocusedDictationEditing {
   func updateFocusedDictation(provisionalText: String) { provisionalTexts.append(provisionalText) }
   func commitFocusedDictation(text: String) -> Bool {
     committedTexts.append(text)
-    return true
+    return commitResult
   }
   func cancelFocusedDictation() { cancelCount += 1 }
 }
@@ -378,4 +581,30 @@ private final class PreferenceBox {
   var value: DictationSpeechEngine
 
   init(value: DictationSpeechEngine) { self.value = value }
+}
+
+private actor Gate {
+  private var isOpen = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+  private var waitingObservers: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    guard !isOpen else { return }
+    let observers = waitingObservers
+    waitingObservers = []
+    observers.forEach { $0.resume() }
+    await withCheckedContinuation { waiters.append($0) }
+  }
+
+  func waitUntilWaiting() async {
+    guard waiters.isEmpty else { return }
+    await withCheckedContinuation { waitingObservers.append($0) }
+  }
+
+  func openGate() {
+    isOpen = true
+    let pending = waiters
+    waiters = []
+    pending.forEach { $0.resume() }
+  }
 }

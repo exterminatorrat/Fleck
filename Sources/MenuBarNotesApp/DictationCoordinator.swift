@@ -17,9 +17,11 @@ final class DictationCoordinator {
   private struct Capture {
     let id: UUID
     let mode: DictationMode
-    let engine: any SpeechEngine
     let editor: (any FocusedDictationEditing)?
     let startedAt: Date
+    var engine: (any SpeechEngine)?
+    var isFinishing = false
+    var releaseRequested = false
   }
 
   private let engineProvider: any SpeechEngineProviding
@@ -30,10 +32,12 @@ final class DictationCoordinator {
   private let historyStore: DictationHistoryStore
   private let historyEnabled: @MainActor () -> Bool
   private let holdThreshold: Duration
+  private let holdSleeper: @Sendable (Duration) async -> Void
 
   private var capture: Capture?
+  private var shortcutID: UUID?
   private var shortcutEditor: (any FocusedDictationEditing)?
-  private var shortcutPending = false
+  private var holdTask: Task<Void, Never>?
 
   private(set) var phase: DictationPhase = .idle
   private(set) var copyableTranscript: String?
@@ -46,7 +50,10 @@ final class DictationCoordinator {
     saver: any DictationSaving,
     historyStore: DictationHistoryStore,
     historyEnabled: @escaping @MainActor () -> Bool,
-    holdThreshold: Duration = .milliseconds(180)
+    holdThreshold: Duration = .milliseconds(180),
+    holdSleeper: @escaping @Sendable (Duration) async -> Void = { duration in
+      try? await Task.sleep(for: duration)
+    }
   ) {
     self.engineProvider = engineProvider
     self.preferredEngine = preferredEngine
@@ -56,92 +63,108 @@ final class DictationCoordinator {
     self.historyStore = historyStore
     self.historyEnabled = historyEnabled
     self.holdThreshold = holdThreshold
+    self.holdSleeper = holdSleeper
   }
 
   func beginShortcut(editor: (any FocusedDictationEditing)?) {
-    guard capture == nil, !shortcutPending else { return }
-    shortcutPending = true
+    guard capture == nil, shortcutID == nil else { return }
+    let id = UUID()
+    shortcutID = id
     shortcutEditor = editor
     phase = .arming
+    holdTask = Task { [weak self, holdSleeper, holdThreshold] in
+      await holdSleeper(holdThreshold)
+      guard !Task.isCancelled else { return }
+      await self?.holdThresholdElapsed(id)
+    }
   }
 
-  func endShortcut(heldFor: Duration) async {
-    guard shortcutPending else { return }
-    let editor = shortcutEditor
-    shortcutPending = false
-    shortcutEditor = nil
-    guard heldFor >= holdThreshold else {
+  func endShortcut() async {
+    if shortcutID != nil {
+      shortcutID = nil
+      shortcutEditor = nil
+      holdTask?.cancel()
+      holdTask = nil
       phase = .idle
       return
     }
-    phase = .idle
-    await start(mode: editor == nil ? .smartCapture : .focused, editor: editor)
+    await finish()
   }
 
   func start(mode: DictationMode, editor: (any FocusedDictationEditing)? = nil) async {
-    guard capture == nil, !shortcutPending else { return }
+    guard capture == nil, shortcutID == nil else { return }
     copyableTranscript = nil
     phase = .arming
 
-    let focusedEditor: (any FocusedDictationEditing)?
-    if mode == .focused {
-      guard let editor, editor.canBeginFocusedDictation, editor.beginFocusedDictation() else {
-        phase = .failed("Unable to begin focused dictation.")
-        return
-      }
-      focusedEditor = editor
-    } else {
-      focusedEditor = nil
-    }
-
-    let requestedEngine = preferredEngine()
-    let engine: any SpeechEngine
-    do {
-      engine = try await engineProvider.engineForCapture(preferred: requestedEngine)
-    } catch {
-      focusedEditor?.cancelFocusedDictation()
-      phase = .failed(message(for: error))
+    let id = UUID()
+    let focusedEditor = mode == .focused ? editor : nil
+    capture = Capture(id: id, mode: mode, editor: focusedEditor, startedAt: Date())
+    guard mode != .focused || (
+      focusedEditor?.canBeginFocusedDictation == true && focusedEditor?.beginFocusedDictation() == true
+    ) else {
+      capture = nil
+      phase = .failed("Unable to begin focused dictation.")
       return
     }
 
-    let id = UUID()
-    let activeCapture = Capture(
-      id: id,
-      mode: mode,
-      engine: engine,
-      editor: focusedEditor,
-      startedAt: Date()
-    )
+    let engine: any SpeechEngine
+    do {
+      engine = try await engineProvider.engineForCapture(preferred: preferredEngine())
+    } catch {
+      guard isCurrent(id) else { return }
+      await end(id, phase: .failed(message(for: error)), cancelEditor: mode == .focused)
+      return
+    }
+    guard var activeCapture = capture, activeCapture.id == id else {
+      await release(engine)
+      return
+    }
+    activeCapture.engine = engine
     capture = activeCapture
+    if activeCapture.releaseRequested {
+      await end(id, phase: .failed("No speech detected."), cancelEditor: mode == .focused)
+      return
+    }
+
     do {
       try await engine.start(
         provisional: { [weak self] text in
-          guard let self, self.capture?.id == id, mode == .focused else { return }
+          guard let self, self.isCurrent(id), mode == .focused else { return }
           self.capture?.editor?.updateFocusedDictation(provisionalText: text)
         },
         level: { _ in }
       )
-      guard capture?.id == id else { return }
+      guard let current = capture, current.id == id else { return }
       phase = .listening(mode: mode, engine: engine.kind)
+      if current.releaseRequested { await finish() }
     } catch {
-      await end(activeCapture, phase: .failed(message(for: error)), cancelEditor: true)
+      guard isCurrent(id) else { return }
+      await end(id, phase: .failed(message(for: error)), cancelEditor: mode == .focused)
     }
   }
 
   func finish() async {
-    guard let capture else { return }
+    guard var capture, !capture.isFinishing else { return }
+    guard let engine = capture.engine else {
+      capture.releaseRequested = true
+      self.capture = capture
+      return
+    }
+    capture.isFinishing = true
+    self.capture = capture
     phase = .finalizing
 
     let rawText: String?
     do {
-      rawText = try await capture.engine.finish()
+      rawText = try await engine.finish()
     } catch {
-      await end(capture, phase: .failed(message(for: error)), cancelEditor: capture.mode == .focused)
+      guard isCurrent(capture.id) else { return }
+      await end(capture.id, phase: .failed(message(for: error)), cancelEditor: capture.mode == .focused)
       return
     }
-    guard self.capture?.id == capture.id else { return }
+    guard isCurrent(capture.id) else { return }
     guard let rawText = nonempty(rawText) else {
-      await end(capture, phase: .failed("No speech detected."), cancelEditor: capture.mode == .focused)
+      await end(capture.id, phase: .failed("No speech detected."), cancelEditor: capture.mode == .focused)
       return
     }
 
@@ -149,77 +172,91 @@ final class DictationCoordinator {
     var record = DictationHistoryRecord(
       id: capture.id,
       mode: capture.mode,
-      engine: capture.engine.kind,
+      engine: engine.kind,
       startedAt: capture.startedAt,
       completedAt: Date(),
       rawTranscript: rawText,
       cleanupOutcome: .pending,
       insertionOutcome: .pending
     )
-    if savesHistory { try? await historyStore.save(record) }
+    guard await updateHistory(record, captureID: capture.id, enabled: savesHistory) else { return }
 
     phase = .cleaning
     let cleanedText: String
     do {
       cleanedText = try await cleaner.clean(rawText)
+      guard isCurrent(capture.id) else { return }
       record.cleanedTranscript = cleanedText
       record.cleanupOutcome = .cleaned
     } catch {
+      guard isCurrent(capture.id) else { return }
       cleanedText = rawText
       record.cleanupOutcome = .usedRaw
     }
-    guard self.capture?.id == capture.id else { return }
 
     if capture.mode == .focused {
-      await finishFocused(capture, text: cleanedText, record: record, savesHistory: savesHistory)
+      await finishFocused(capture.id, text: cleanedText, record: record, savesHistory: savesHistory)
     } else {
-      await finishSmart(capture, text: cleanedText, record: record, savesHistory: savesHistory)
+      await finishSmart(capture.id, text: cleanedText, record: record, savesHistory: savesHistory)
     }
   }
 
   func cancel() async {
-    guard let capture else {
-      if shortcutPending {
-        shortcutPending = false
-        shortcutEditor = nil
-        phase = .idle
-      }
-      return
+    if shortcutID != nil {
+      shortcutID = nil
+      shortcutEditor = nil
+      holdTask?.cancel()
+      holdTask = nil
+      phase = .idle
     }
-    await end(capture, phase: .idle, cancelEditor: capture.mode == .focused)
+    guard let capture else { return }
+    await end(capture.id, phase: .idle, cancelEditor: capture.mode == .focused)
+  }
+
+  private func holdThresholdElapsed(_ id: UUID) async {
+    guard shortcutID == id else { return }
+    let editor = shortcutEditor
+    shortcutID = nil
+    shortcutEditor = nil
+    holdTask = nil
+    await start(mode: editor == nil ? .smartCapture : .focused, editor: editor)
   }
 
   private func finishFocused(
-    _ capture: Capture,
+    _ id: UUID,
     text: String,
     record: DictationHistoryRecord,
     savesHistory: Bool
   ) async {
+    guard let capture, capture.id == id else { return }
     var record = record
     guard capture.editor?.commitFocusedDictation(text: text) == true else {
       record.insertionOutcome = .unsaved
-      await updateHistory(record, enabled: savesHistory)
-      await unsaved(capture, text: text, record: record, savesHistory: savesHistory)
+      guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
+      await unsaved(id, text: text, savesHistory: savesHistory)
       return
     }
     do {
       try await saver.flushFocusedDictationSave()
+      guard isCurrent(id) else { return }
       record.insertionOutcome = .saved
-      await updateHistory(record, enabled: savesHistory)
-      await end(capture, phase: .idle, cancelEditor: false)
+      guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
+      await end(id, phase: .idle, cancelEditor: false)
     } catch {
+      guard isCurrent(id) else { return }
       record.insertionOutcome = .unsaved
-      await updateHistory(record, enabled: savesHistory)
-      await unsaved(capture, text: text, record: record, savesHistory: savesHistory)
+      guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
+      await unsaved(id, text: text, savesHistory: savesHistory)
     }
   }
 
   private func finishSmart(
-    _ capture: Capture,
+    _ id: UUID,
     text: String,
     record: DictationHistoryRecord,
     savesHistory: Bool
   ) async {
+    guard isCurrent(id) else { return }
     var record = record
     phase = .routing
     let candidates = saver.activeDestinations()
@@ -229,52 +266,64 @@ final class DictationCoordinator {
       candidates: candidates,
       inboxID: inbox?.noteID
     )
+    guard isCurrent(id) else { return }
     let destinationID = candidates.contains { $0.noteID == routedID } ? routedID : inbox?.noteID
 
     do {
       let receipt = try await saver.saveSmartCapture(
         text: text,
-        captureID: capture.id,
+        captureID: id,
         destinationID: destinationID
       )
+      guard isCurrent(id) else { return }
       record.insertionOutcome = .saved
       record.destination = candidates.first { $0.noteID == receipt.noteID }
-      await updateHistory(record, enabled: savesHistory)
+      guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
       if let destination = record.destination {
-        await end(capture, phase: .saved(destination), cancelEditor: false)
+        await end(id, phase: .saved(destination), cancelEditor: false)
       } else {
-        await end(capture, phase: .idle, cancelEditor: false)
+        await end(id, phase: .idle, cancelEditor: false)
       }
     } catch {
+      guard isCurrent(id) else { return }
       record.insertionOutcome = .unsaved
       record.destination = candidates.first { $0.noteID == destinationID }
-      await updateHistory(record, enabled: savesHistory)
-      await unsaved(capture, text: text, record: record, savesHistory: savesHistory)
+      guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
+      await unsaved(id, text: text, savesHistory: savesHistory)
     }
   }
 
-  private func unsaved(
-    _ capture: Capture,
-    text: String,
-    record: DictationHistoryRecord,
-    savesHistory: Bool
-  ) async {
+  private func unsaved(_ id: UUID, text: String, savesHistory: Bool) async {
+    guard let capture, capture.id == id else { return }
     if !savesHistory { copyableTranscript = text }
-    await end(capture, phase: .failed("Unable to save dictation."), cancelEditor: false)
+    await end(id, phase: .failed("Unable to save dictation."), cancelEditor: capture.mode == .focused)
   }
 
-  private func updateHistory(_ record: DictationHistoryRecord, enabled: Bool) async {
-    guard enabled else { return }
+  private func updateHistory(
+    _ record: DictationHistoryRecord,
+    captureID: UUID,
+    enabled: Bool
+  ) async -> Bool {
+    guard enabled else { return isCurrent(captureID) }
     try? await historyStore.save(record)
+    return isCurrent(captureID)
   }
 
-  private func end(_ capture: Capture, phase: DictationPhase, cancelEditor: Bool) async {
-    guard self.capture?.id == capture.id else { return }
+  private func end(_ id: UUID, phase: DictationPhase, cancelEditor: Bool) async {
+    guard let capture, capture.id == id else { return }
     self.capture = nil
     if cancelEditor { capture.editor?.cancelFocusedDictation() }
-    await capture.engine.cancel()
-    await capture.engine.releaseResources()
     self.phase = phase
+    if let engine = capture.engine { await release(engine) }
+  }
+
+  private func release(_ engine: any SpeechEngine) async {
+    await engine.cancel()
+    await engine.releaseResources()
+  }
+
+  private func isCurrent(_ id: UUID) -> Bool {
+    capture?.id == id
   }
 
   private func nonempty(_ text: String?) -> String? {
