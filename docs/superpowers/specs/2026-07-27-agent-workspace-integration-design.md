@@ -155,15 +155,15 @@ The CLI mirrors MCP instead of creating a second behavior model. Representative 
 ```bash
 motes notes list
 motes note read <note-id>
-motes note append <note-id> --stdin
-motes note replace-lines <note-id> <start> <end> --stdin
+motes note append <note-id> --revision <revision> --operation-id <uuid> --stdin
+motes note replace-lines <note-id> <start> <end> --revision <revision> --operation-id <uuid> --stdin
 motes tasks list <note-id>
-motes task add <note-id> "Add onboarding screenshots"
-motes task complete <note-id> <task-handle>
-motes task reopen <note-id> <task-handle>
-motes task rename <note-id> <task-handle> "Capture final screenshots"
+motes task add <note-id> "Add onboarding screenshots" --revision <revision> --operation-id <uuid>
+motes task complete <note-id> <task-handle> --revision <revision> --operation-id <uuid>
+motes task reopen <note-id> <task-handle> --revision <revision> --operation-id <uuid>
+motes task rename <note-id> <task-handle> "Capture final screenshots" --revision <revision> --operation-id <uuid>
 motes activity list
-motes activity undo <change-id>
+motes activity undo <change-id> --revision <revision> --operation-id <uuid>
 ```
 
 Human-readable output is the default. A stable JSON output mode is available for programs and agents.
