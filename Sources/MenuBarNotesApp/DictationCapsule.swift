@@ -155,9 +155,22 @@
       )
     }
 
+    static func preferredDisplay<T>(
+      keyboardFocus: T?,
+      pointer: T?,
+      primary: T?
+    ) -> T? {
+      keyboardFocus ?? pointer ?? primary
+    }
+
     private func activeScreen() -> NSScreen? {
       let pointer = NSEvent.mouseLocation
-      return NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
+      let pointerScreen = NSScreen.screens.first { $0.frame.contains(pointer) }
+      return Self.preferredDisplay(
+        keyboardFocus: NSScreen.main,
+        pointer: pointerScreen,
+        primary: NSScreen.screens.first
+      )
     }
   }
 

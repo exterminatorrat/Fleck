@@ -4,9 +4,10 @@
 
   @MainActor
   protocol ShortcutHoldHandling: AnyObject {
-    func beginShortcut(editor: (any FocusedDictationEditing)?)
-    func endShortcut() async
-    func cancel() async
+    func beginShortcut(editor: (any FocusedDictationEditing)?) -> DictationShortcutSession?
+    func endShortcut(_ session: DictationShortcutSession) async
+    func cancelShortcut(_ session: DictationShortcutSession) async
+    func waitForShortcutTerminal(_ session: DictationShortcutSession) async
   }
 
   extension DictationCoordinator: ShortcutHoldHandling {}
@@ -21,6 +22,7 @@
   @MainActor
   final class GlobalHoldShortcut {
     enum RegistrationError: Error, Equatable {
+      case activeSession
       case conflict(OSStatus)
       case system(OSStatus)
     }
@@ -35,7 +37,12 @@
     private let onRegistrationError: @MainActor (RegistrationError) -> Void
     private var primaryRegistered = false
     private var escapeRegistered = false
-    private var isPressed = false
+    private var physicalPrimaryDown = false
+    private var escapeCancellationRequested = false
+    private var acceptedSession: DictationShortcutSession?
+    private var deliveryTask: Task<Void, Never>?
+    private var terminalTask: Task<Void, Never>?
+    private var isUninstalled = false
 
     init(
       handler: any ShortcutHoldHandling,
@@ -48,13 +55,12 @@
       self.registrar = registrar
       self.onRegistrationError = onRegistrationError
       registrar.eventHandler = { [weak self] id, pressed in
-        Task { @MainActor [weak self] in
-          await self?.receive(id: id, pressed: pressed)
-        }
+        self?.enqueue(id: id, pressed: pressed)
       }
     }
 
     func configure(_ shortcut: DictationShortcut) throws {
+      guard acceptedSession == nil else { throw RegistrationError.activeSession }
       if primaryRegistered {
         registrar.unregister(id: Self.primaryID)
         primaryRegistered = false
@@ -68,37 +74,81 @@
       primaryRegistered = true
     }
 
-    func receive(id: UInt32, pressed: Bool) async {
+    func drainEvents() async {
+      await deliveryTask?.value
+    }
+
+    func waitForTerminalObservation() async {
+      await terminalTask?.value
+    }
+
+    func uninstall() async {
+      registrar.eventHandler = nil
+      await drainEvents()
+      isUninstalled = true
+      physicalPrimaryDown = false
+      if let acceptedSession, let handler {
+        await handler.cancelShortcut(acceptedSession)
+        await terminalTask?.value
+      }
+      unregisterAll()
+    }
+
+    private func enqueue(id: UInt32, pressed: Bool) {
+      guard !isUninstalled else { return }
+      let previous = deliveryTask
+      deliveryTask = Task { @MainActor [weak self] in
+        await previous?.value
+        guard !Task.isCancelled else { return }
+        await self?.receive(id: id, pressed: pressed)
+      }
+    }
+
+    private func receive(id: UInt32, pressed: Bool) async {
       if id == Self.primaryID {
         guard primaryRegistered else { return }
         if pressed {
-          guard !isPressed else { return }
-          isPressed = true
-          handler?.beginShortcut(editor: editorProvider())
+          guard !physicalPrimaryDown else { return }
+          physicalPrimaryDown = true
+          guard let session = handler?.beginShortcut(editor: editorProvider()) else { return }
+          acceptedSession = session
+          escapeCancellationRequested = false
           registerEscape()
+          observeTerminal(session)
         } else {
-          guard isPressed else { return }
-          isPressed = false
-          await handler?.endShortcut()
-          unregisterEscape()
+          guard physicalPrimaryDown else { return }
+          physicalPrimaryDown = false
+          guard let acceptedSession else { return }
+          await handler?.endShortcut(acceptedSession)
         }
         return
       }
 
-      guard id == Self.escapeID, pressed, isPressed else { return }
-      isPressed = false
-      await handler?.cancel()
-      unregisterEscape()
+      guard
+        id == Self.escapeID,
+        pressed,
+        escapeRegistered,
+        !escapeCancellationRequested,
+        let acceptedSession
+      else { return }
+      escapeCancellationRequested = true
+      await handler?.cancelShortcut(acceptedSession)
     }
 
-    func uninstall() {
-      isPressed = false
-      if primaryRegistered {
-        registrar.unregister(id: Self.primaryID)
-        primaryRegistered = false
+    private func observeTerminal(_ session: DictationShortcutSession) {
+      guard let handler else { return }
+      terminalTask = Task { @MainActor [weak self] in
+        await handler.waitForShortcutTerminal(session)
+        guard !Task.isCancelled else { return }
+        self?.terminalReached(session)
       }
+    }
+
+    private func terminalReached(_ session: DictationShortcutSession) {
+      guard acceptedSession == session else { return }
+      acceptedSession = nil
+      escapeCancellationRequested = false
       unregisterEscape()
-      registrar.eventHandler = nil
     }
 
     private func registerEscape() {
@@ -121,6 +171,24 @@
       guard escapeRegistered else { return }
       registrar.unregister(id: Self.escapeID)
       escapeRegistered = false
+    }
+
+    private func unregisterAll() {
+      if primaryRegistered {
+        registrar.unregister(id: Self.primaryID)
+        primaryRegistered = false
+      }
+      unregisterEscape()
+    }
+
+    isolated deinit {
+      registrar.eventHandler = nil
+      unregisterAll()
+      if let acceptedSession, let handler {
+        Task { @MainActor in
+          await handler.cancelShortcut(acceptedSession)
+        }
+      }
     }
   }
 
@@ -165,7 +233,7 @@
           let registrar = Unmanaged<CarbonHotKeyRegistrar>.fromOpaque(userData)
             .takeUnretainedValue()
           let pressed = GetEventKind(event) == UInt32(kEventHotKeyPressed)
-          Task { @MainActor in
+          MainActor.assumeIsolated {
             registrar.eventHandler?(hotKeyID.id, pressed)
           }
           return noErr

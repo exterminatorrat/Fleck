@@ -12,6 +12,10 @@ enum DictationPhase: Equatable {
   case failed(String)
 }
 
+struct DictationShortcutSession: Equatable, Hashable, Sendable {
+  let id: UUID
+}
+
 @MainActor
 final class DictationCoordinator {
   private struct Capture {
@@ -42,6 +46,8 @@ final class DictationCoordinator {
   private var shortcutID: UUID?
   private var shortcutEditor: (any FocusedDictationEditing)?
   private var holdTask: Task<Void, Never>?
+  private var activeShortcutSessions = Set<UUID>()
+  private var shortcutTerminalWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
 
   private(set) var phase: DictationPhase = .idle
   private(set) var copyableTranscript: String?
@@ -71,38 +77,76 @@ final class DictationCoordinator {
     self.holdSleeper = holdSleeper
   }
 
-  func beginShortcut(editor: (any FocusedDictationEditing)?) {
-    guard capture == nil, shortcutID == nil else { return }
+  @discardableResult
+  func beginShortcut(editor: (any FocusedDictationEditing)?) -> DictationShortcutSession? {
+    guard capture == nil, shortcutID == nil else { return nil }
     let id = UUID()
     shortcutID = id
     shortcutEditor = editor
+    activeShortcutSessions.insert(id)
     phase = .arming
     holdTask = Task { [weak self, holdSleeper, holdThreshold] in
       await holdSleeper(holdThreshold)
       guard !Task.isCancelled else { return }
       await self?.holdThresholdElapsed(id)
     }
+    return DictationShortcutSession(id: id)
   }
 
   func endShortcut() async {
-    if shortcutID != nil {
-      shortcutID = nil
-      shortcutEditor = nil
-      holdTask?.cancel()
-      holdTask = nil
-      phase = .idle
+    if let shortcutID {
+      await endShortcut(DictationShortcutSession(id: shortcutID))
       return
     }
     await finish()
   }
 
+  func endShortcut(_ session: DictationShortcutSession) async {
+    guard activeShortcutSessions.contains(session.id) else { return }
+    if shortcutID == session.id {
+      shortcutID = nil
+      shortcutEditor = nil
+      holdTask?.cancel()
+      holdTask = nil
+      phase = .idle
+      completeShortcutSession(session.id)
+      return
+    }
+    guard capture?.id == session.id else { return }
+    await finish()
+  }
+
+  func cancelShortcut(_ session: DictationShortcutSession) async {
+    guard activeShortcutSessions.contains(session.id) else { return }
+    guard shortcutID == session.id || capture?.id == session.id else { return }
+    await cancel()
+  }
+
+  func waitForShortcutTerminal(_ session: DictationShortcutSession) async {
+    guard activeShortcutSessions.contains(session.id) else { return }
+    await withCheckedContinuation { continuation in
+      if activeShortcutSessions.contains(session.id) {
+        shortcutTerminalWaiters[session.id, default: []].append(continuation)
+      } else {
+        continuation.resume()
+      }
+    }
+  }
+
   func start(mode: DictationMode, editor: (any FocusedDictationEditing)? = nil) async {
+    await startCapture(id: UUID(), mode: mode, editor: editor)
+  }
+
+  private func startCapture(
+    id: UUID,
+    mode: DictationMode,
+    editor: (any FocusedDictationEditing)?
+  ) async {
     guard capture == nil, shortcutID == nil else { return }
     copyableTranscript = nil
     recoveryReceipt = nil
     phase = .arming
 
-    let id = UUID()
     let focusedEditor = mode == .focused ? editor : nil
     capture = Capture(id: id, mode: mode, editor: focusedEditor, startedAt: Date())
     guard mode != .focused || (
@@ -110,6 +154,7 @@ final class DictationCoordinator {
     ) else {
       capture = nil
       phase = .failed("Unable to begin focused dictation.")
+      completeShortcutSession(id)
       return
     }
 
@@ -216,12 +261,13 @@ final class DictationCoordinator {
   }
 
   func cancel() async {
-    if shortcutID != nil {
+    if let id = shortcutID {
       shortcutID = nil
       shortcutEditor = nil
       holdTask?.cancel()
       holdTask = nil
       phase = .idle
+      completeShortcutSession(id)
     }
     guard var capture, !capture.isTerminating, !capture.cancelRequested else { return }
     capture.cancelRequested = true
@@ -239,7 +285,11 @@ final class DictationCoordinator {
     shortcutID = nil
     shortcutEditor = nil
     holdTask = nil
-    await start(mode: editor == nil ? .smartCapture : .focused, editor: editor)
+    await startCapture(
+      id: id,
+      mode: editor == nil ? .smartCapture : .focused,
+      editor: editor
+    )
   }
 
   private func finishFocused(
@@ -389,6 +439,7 @@ final class DictationCoordinator {
     guard self.capture?.id == id else { return }
     self.capture = nil
     self.phase = phase
+    completeShortcutSession(id)
   }
 
   private func release(_ engine: any SpeechEngine) async {
@@ -439,5 +490,11 @@ final class DictationCoordinator {
 
   private func message(for error: Error) -> String {
     (error as NSError).localizedDescription
+  }
+
+  private func completeShortcutSession(_ id: UUID) {
+    guard activeShortcutSessions.remove(id) != nil else { return }
+    let waiters = shortcutTerminalWaiters.removeValue(forKey: id) ?? []
+    waiters.forEach { $0.resume() }
   }
 }

@@ -426,20 +426,48 @@ import Testing
   fixture.standard.finalText = "Released after start"
   fixture.saver.saveGate = saveGate
 
-  fixture.coordinator.beginShortcut(editor: nil)
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  let terminal = CompletionProbe()
+  let terminalWait = Task {
+    await fixture.coordinator.waitForShortcutTerminal(session)
+    await terminal.complete()
+  }
   await threshold.waitUntilWaiting()
   await threshold.openGate()
   await startGate.waitUntilWaiting()
-  await fixture.coordinator.endShortcut()
+  await fixture.coordinator.endShortcut(session)
 
   #expect(fixture.standard.finishCount == 0)
   #expect(fixture.coordinator.phase == .arming)
+  #expect(!(await terminal.isComplete))
   await startGate.openGate()
   await saveGate.waitUntilWaiting()
 
   #expect(fixture.standard.finishCount == 1)
   #expect(fixture.coordinator.phase == .routing)
+  #expect(!(await terminal.isComplete))
   await saveGate.openGate()
+  await terminalWait.value
+  #expect(await terminal.isComplete)
+}
+
+@Test @MainActor func rejectedGlobalShortcutCannotFinishOrCancelToolbarCapture() async throws {
+  let fixture = try Fixture()
+  await fixture.coordinator.start(mode: .smartCapture)
+  let registrar = CoordinatorHotKeyRegistrarSpy()
+  let shortcut = GlobalHoldShortcut(handler: fixture.coordinator, registrar: registrar)
+  try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
+
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: false)
+  registrar.emit(id: GlobalHoldShortcut.escapeID, pressed: true)
+  await shortcut.drainEvents()
+
+  #expect(fixture.standard.finishCount == 0)
+  #expect(fixture.standard.cancelCount == 0)
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  await shortcut.uninstall()
+  await fixture.coordinator.cancel()
 }
 
 @Test @MainActor func captureReservationSurvivesDelayedResourceRelease() async throws {
@@ -912,6 +940,18 @@ private final class Fixture {
 }
 
 @MainActor
+private final class CoordinatorHotKeyRegistrarSpy: GlobalHotKeyRegistering {
+  var eventHandler: ((UInt32, Bool) -> Void)?
+
+  func register(keyCode: UInt32, modifiers: UInt32, id: UInt32) throws {}
+  func unregister(id: UInt32) {}
+
+  func emit(id: UInt32, pressed: Bool) {
+    eventHandler?(id, pressed)
+  }
+}
+
+@MainActor
 private final class FakeSpeechEngine: SpeechEngine {
   let kind: DictationSpeechEngine
   var startError: Error?
@@ -1285,5 +1325,13 @@ actor Gate {
     let pending = waiters
     waiters = []
     pending.forEach { $0.resume() }
+  }
+}
+
+private actor CompletionProbe {
+  private(set) var isComplete = false
+
+  func complete() {
+    isComplete = true
   }
 }

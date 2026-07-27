@@ -57,3 +57,18 @@ import Testing
   #expect(frame.midX == visibleFrame.midX)
   #expect(frame.minY == visibleFrame.minY + DictationCapsuleController.bottomMargin)
 }
+
+@Test @MainActor func DictationAccessibilityPrefersKeyboardFocusDisplayOverPointerAndPrimary() {
+  let selected = DictationCapsuleController.preferredDisplay(
+    keyboardFocus: "keyboard",
+    pointer: "pointer",
+    primary: "primary"
+  )
+
+  #expect(selected == "keyboard")
+  #expect(DictationCapsuleController.preferredDisplay(
+    keyboardFocus: nil,
+    pointer: "pointer",
+    primary: "primary"
+  ) == "pointer")
+}

@@ -1,3 +1,4 @@
+import Foundation
 import MenuBarNotesCore
 import Testing
 
@@ -33,14 +34,32 @@ import Testing
   }
 }
 
-@Test @MainActor func GlobalHoldShortcutPressesOnceAndIgnoresKeyRepeat() async throws {
+@Test @MainActor func GlobalHoldShortcutRegistrarPathSerializesRapidPressAndRelease() async throws {
   let registrar = HotKeyRegistrarSpy()
   let handler = ShortcutHoldSpy()
   let shortcut = GlobalHoldShortcut(handler: handler, registrar: registrar)
   try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
 
-  await shortcut.receive(id: GlobalHoldShortcut.primaryID, pressed: true)
-  await shortcut.receive(id: GlobalHoldShortcut.primaryID, pressed: true)
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: false)
+  await shortcut.drainEvents()
+
+  #expect(handler.events == [.begin, .end])
+  #expect(registrar.isRegistered(GlobalHoldShortcut.escapeID))
+  await handler.completeTerminal()
+  await shortcut.waitForTerminalObservation()
+  #expect(!registrar.isRegistered(GlobalHoldShortcut.escapeID))
+}
+
+@Test @MainActor func GlobalHoldShortcutPressesOnceAndIgnoresRegistrarKeyRepeat() async throws {
+  let registrar = HotKeyRegistrarSpy()
+  let handler = ShortcutHoldSpy()
+  let shortcut = GlobalHoldShortcut(handler: handler, registrar: registrar)
+  try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
+
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  await shortcut.drainEvents()
 
   #expect(handler.beginCount == 1)
   #expect(registrar.registrations.last == .init(
@@ -50,79 +69,147 @@ import Testing
   ))
 }
 
-@Test @MainActor func GlobalHoldShortcutShortTapOnlyForwardsOnePressAndRelease() async throws {
+@Test @MainActor func GlobalHoldShortcutRejectedPressCannotEndOrCancelAnotherCapture() async throws {
+  let registrar = HotKeyRegistrarSpy()
   let handler = ShortcutHoldSpy()
-  let shortcut = GlobalHoldShortcut(handler: handler, registrar: HotKeyRegistrarSpy())
+  handler.acceptsShortcut = false
+  let shortcut = GlobalHoldShortcut(handler: handler, registrar: registrar)
   try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
 
-  await shortcut.receive(id: GlobalHoldShortcut.primaryID, pressed: true)
-  await shortcut.receive(id: GlobalHoldShortcut.primaryID, pressed: false)
-  await shortcut.receive(id: GlobalHoldShortcut.primaryID, pressed: false)
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  registrar.emit(id: GlobalHoldShortcut.escapeID, pressed: true)
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: false)
+  await shortcut.drainEvents()
 
   #expect(handler.beginCount == 1)
-  #expect(handler.endCount == 1)
+  #expect(handler.endCount == 0)
+  #expect(handler.cancelCount == 0)
+  #expect(!registrar.isRegistered(GlobalHoldShortcut.escapeID))
 }
 
-@Test @MainActor func GlobalHoldShortcutRegistersEscapeOnlyDuringActiveCapture() async throws {
+@Test @MainActor func GlobalHoldShortcutFailureWhileHeldRemovesEscapeWithoutEndingAgain() async throws {
   let registrar = HotKeyRegistrarSpy()
   let handler = ShortcutHoldSpy()
   let shortcut = GlobalHoldShortcut(handler: handler, registrar: registrar)
   try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  await shortcut.drainEvents()
 
-  #expect(!registrar.isRegistered(GlobalHoldShortcut.escapeID))
-  await shortcut.receive(id: GlobalHoldShortcut.primaryID, pressed: true)
-  #expect(registrar.isRegistered(GlobalHoldShortcut.escapeID))
-  await shortcut.receive(id: GlobalHoldShortcut.primaryID, pressed: false)
+  await handler.completeTerminal()
+  await shortcut.waitForTerminalObservation()
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: false)
+  await shortcut.drainEvents()
 
-  #expect(handler.endCount == 1)
-  #expect(!registrar.isRegistered(GlobalHoldShortcut.escapeID))
-}
-
-@Test @MainActor func GlobalHoldShortcutEscapeCancelsOnceAndRemovesItsRegistration() async throws {
-  let registrar = HotKeyRegistrarSpy()
-  let handler = ShortcutHoldSpy()
-  let shortcut = GlobalHoldShortcut(handler: handler, registrar: registrar)
-  try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
-  await shortcut.receive(id: GlobalHoldShortcut.primaryID, pressed: true)
-
-  await shortcut.receive(id: GlobalHoldShortcut.escapeID, pressed: true)
-  await shortcut.receive(id: GlobalHoldShortcut.escapeID, pressed: true)
-  await shortcut.receive(id: GlobalHoldShortcut.primaryID, pressed: false)
-
-  #expect(handler.cancelCount == 1)
   #expect(handler.endCount == 0)
   #expect(!registrar.isRegistered(GlobalHoldShortcut.escapeID))
 }
 
-@Test @MainActor func GlobalHoldShortcutUnregistersEverythingDuringCleanup() async throws {
+@Test @MainActor func GlobalHoldShortcutEscapeStaysRegisteredUntilCancellationTerminates() async throws {
   let registrar = HotKeyRegistrarSpy()
-  let shortcut = GlobalHoldShortcut(handler: ShortcutHoldSpy(), registrar: registrar)
+  let handler = ShortcutHoldSpy()
+  let shortcut = GlobalHoldShortcut(handler: handler, registrar: registrar)
   try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
-  await shortcut.receive(id: GlobalHoldShortcut.primaryID, pressed: true)
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  registrar.emit(id: GlobalHoldShortcut.escapeID, pressed: true)
+  registrar.emit(id: GlobalHoldShortcut.escapeID, pressed: true)
+  await shortcut.drainEvents()
 
-  shortcut.uninstall()
+  #expect(handler.cancelCount == 1)
+  #expect(registrar.isRegistered(GlobalHoldShortcut.escapeID))
+  await handler.completeTerminal()
+  await shortcut.waitForTerminalObservation()
 
+  #expect(!registrar.isRegistered(GlobalHoldShortcut.escapeID))
+}
+
+@Test @MainActor func GlobalHoldShortcutRejectsReconfigurationWhileItOwnsASession() async throws {
+  let registrar = HotKeyRegistrarSpy()
+  let handler = ShortcutHoldSpy()
+  let shortcut = GlobalHoldShortcut(handler: handler, registrar: registrar)
+  try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  await shortcut.drainEvents()
+
+  #expect(throws: GlobalHoldShortcut.RegistrationError.activeSession) {
+    try shortcut.configure(DictationShortcut(keyCode: 36, carbonModifiers: 256))
+  }
+  #expect(registrar.registrations.first == .init(
+    keyCode: 49,
+    modifiers: 768,
+    id: GlobalHoldShortcut.primaryID
+  ))
+}
+
+@Test @MainActor func GlobalHoldShortcutUninstallCancelsItsOwnedSessionAndCleansRegistrations() async throws {
+  let registrar = HotKeyRegistrarSpy()
+  let handler = ShortcutHoldSpy()
+  handler.completesWhenCancelled = true
+  let shortcut = GlobalHoldShortcut(handler: handler, registrar: registrar)
+  try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  await shortcut.drainEvents()
+
+  await shortcut.uninstall()
+
+  #expect(handler.cancelCount == 1)
   #expect(registrar.registeredIDs.isEmpty)
   #expect(registrar.unregisteredIDs.contains(GlobalHoldShortcut.primaryID))
   #expect(registrar.unregisteredIDs.contains(GlobalHoldShortcut.escapeID))
 }
 
+@Test @MainActor func GlobalHoldShortcutDeinitCancelsItsOwnedSessionAndCleansRegistrations() async throws {
+  let registrar = HotKeyRegistrarSpy()
+  let handler = ShortcutHoldSpy()
+  handler.completesWhenCancelled = true
+  var shortcut: GlobalHoldShortcut? = GlobalHoldShortcut(handler: handler, registrar: registrar)
+  try shortcut?.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  await shortcut?.drainEvents()
+
+  shortcut = nil
+  await Task.yield()
+  await Task.yield()
+
+  #expect(handler.cancelCount == 1)
+  #expect(registrar.registeredIDs.isEmpty)
+}
+
 @MainActor
 private final class ShortcutHoldSpy: ShortcutHoldHandling {
-  private(set) var beginCount = 0
-  private(set) var endCount = 0
-  private(set) var cancelCount = 0
-
-  func beginShortcut(editor: (any FocusedDictationEditing)?) {
-    beginCount += 1
+  enum Event: Equatable {
+    case begin, end, cancel
   }
 
-  func endShortcut() async {
-    endCount += 1
+  private let session = DictationShortcutSession(id: UUID())
+  private let terminal = TerminalGate()
+  var acceptsShortcut = true
+  var completesWhenCancelled = false
+  private(set) var events: [Event] = []
+
+  var beginCount: Int { events.count { $0 == .begin } }
+  var endCount: Int { events.count { $0 == .end } }
+  var cancelCount: Int { events.count { $0 == .cancel } }
+
+  func beginShortcut(editor: (any FocusedDictationEditing)?) -> DictationShortcutSession? {
+    events.append(.begin)
+    return acceptsShortcut ? session : nil
   }
 
-  func cancel() async {
-    cancelCount += 1
+  func endShortcut(_ session: DictationShortcutSession) async {
+    events.append(.end)
+  }
+
+  func cancelShortcut(_ session: DictationShortcutSession) async {
+    events.append(.cancel)
+    if completesWhenCancelled { await terminal.openGate() }
+  }
+
+  func waitForShortcutTerminal(_ session: DictationShortcutSession) async {
+    await terminal.wait()
+  }
+
+  func completeTerminal() async {
+    await terminal.openGate()
   }
 }
 
@@ -151,7 +238,28 @@ private final class HotKeyRegistrarSpy: GlobalHotKeyRegistering {
     unregisteredIDs.append(id)
   }
 
+  func emit(id: UInt32, pressed: Bool) {
+    eventHandler?(id, pressed)
+  }
+
   func isRegistered(_ id: UInt32) -> Bool {
     registeredIDs.contains(id)
+  }
+}
+
+private actor TerminalGate {
+  private var isOpen = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    guard !isOpen else { return }
+    await withCheckedContinuation { waiters.append($0) }
+  }
+
+  func openGate() {
+    isOpen = true
+    let pending = waiters
+    waiters = []
+    pending.forEach { $0.resume() }
   }
 }
