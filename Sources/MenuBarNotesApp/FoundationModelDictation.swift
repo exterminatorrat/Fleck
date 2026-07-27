@@ -224,7 +224,9 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
   }
 
   private static func isNumericLexeme(_ lexeme: String) -> Bool {
-    lexeme.first?.isNumber == true || lexeme.first == "-" || lexeme.first == "$"
+    lexeme.contains(where: \.isNumber)
+      || lexeme.contains { isCurrency($0) || isSign($0) }
+      || (lexeme.first == "(" && lexeme.last == ")")
   }
 
   private static func eligibleDestinations(
@@ -277,6 +279,7 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
         }
         if isSign(characters[index]) { index += 1 }
         if index < characters.count, isCurrency(characters[index]) { index += 1 }
+        if index < characters.count, isSign(characters[index]) { index += 1 }
         guard index < characters.count, characters[index].isNumber else {
           index = start + 1
           continue
@@ -304,6 +307,16 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
         continue
       }
 
+      if isCurrency(characters[index]) {
+        tokens.append(.init(
+          value: String(characters[index]),
+          isExplicitLeadingFiller: false,
+          correctionPermitsRestart: nil
+        ))
+        index += 1
+        continue
+      }
+
       guard characters[index].isLetter else {
         index += 1
         continue
@@ -321,8 +334,8 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
       let hasDash = before == "—" || before == "-"
       let correctionPermitsRestart: Bool?
       switch value {
-      case "no" where hasComma:
-        correctionPermitsRestart = hasDash
+      case "no" where hasComma && hasDash:
+        correctionPermitsRestart = true
       case "actually" where hasComma && hasDash:
         correctionPermitsRestart = true
       default:
@@ -347,7 +360,12 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
   private static func startsNumericLexeme(_ characters: [Character], at index: Int) -> Bool {
     let character = characters[index]
     if character.isNumber { return true }
-    if isCurrency(character) { return index + 1 < characters.count && characters[index + 1].isNumber }
+    if isCurrency(character) {
+      guard index + 1 < characters.count else { return false }
+      return characters[index + 1].isNumber || (
+        isSign(characters[index + 1]) && index + 2 < characters.count && characters[index + 2].isNumber
+      )
+    }
     if isSign(character) {
       guard index + 1 < characters.count else { return false }
       return characters[index + 1].isNumber || (

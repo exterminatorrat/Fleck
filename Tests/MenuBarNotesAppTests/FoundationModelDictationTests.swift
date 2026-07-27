@@ -165,6 +165,14 @@ import Testing
   #expect(overlappingFacts.outcome == .usedRaw)
 }
 
+@Test func FoundationModelDictationRequiresADashForNoCorrections() async {
+  let raw = "She said no, then left."
+  let result = await cleanupResult(raw: raw, modelOutput: "She then left.")
+
+  #expect(result.text == raw)
+  #expect(result.outcome == .usedRaw)
+}
+
 @Test func FoundationModelDictationPreservesLosslessNumericLexemes() async {
   let signed = await cleanupResult(raw: "Set the threshold to -5.", modelOutput: "Set the threshold to 5.")
   let currency = await cleanupResult(raw: "Pay $20 today.", modelOutput: "Pay 20 today.")
@@ -186,6 +194,24 @@ import Testing
   let accounting = await cleanupResult(raw: "Record (20) today.", modelOutput: "Record 20 today.")
 
   for result in [euro, pound, yen, cents, unicodeMinus, accounting] {
+    #expect(result.outcome == .usedRaw)
+  }
+}
+
+@Test func FoundationModelDictationDoesNotCollapseCurrencyFalseStarts() async {
+  let raw = "I need €20 today I need €20 today for lunch."
+  let result = await cleanupResult(raw: raw, modelOutput: "I need €20 today for lunch.")
+
+  #expect(result.text == raw)
+  #expect(result.outcome == .usedRaw)
+}
+
+@Test func FoundationModelDictationPreservesCurrencyBeforeSignsAndSeparatedCurrency() async {
+  let dollarBeforeSign = await cleanupResult(raw: "Record $-20 today.", modelOutput: "Record -20 today.")
+  let euroBeforeSign = await cleanupResult(raw: "Record €-20 today.", modelOutput: "Record -20 today.")
+  let separatedEuro = await cleanupResult(raw: "Pay € 20 today.", modelOutput: "Pay 20 today.")
+
+  for result in [dollarBeforeSign, euroBeforeSign, separatedEuro] {
     #expect(result.outcome == .usedRaw)
   }
 }
