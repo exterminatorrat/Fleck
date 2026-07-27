@@ -207,3 +207,106 @@ Automated evidence is not release approval. The following remain required:
 
 Enhanced Local must remain default-off until those gates have recorded evidence
 and an explicit release decision.
+
+## Final re-review closure (2026-07-28)
+
+### Structurally fail-closed candidate packaging
+
+- RED: an isolated
+  `MOTES_ENHANCED_CANDIDATE=1 swift build -c release` completed successfully,
+  compiled FluidAudio, copied the candidate manifest/notices, and linked
+  `Motes`.
+- GREEN: the root package now has no ordinary dependencies. The exact
+  FluidAudio `0.15.5` pin is owned by the opt-in local
+  `Packages/MotesEnhancedCandidateDependencies` package.
+- Ordinary targets exclude `EnhancedModelManager.swift`,
+  `EnhancedSpeechCapture.swift`, and candidate resources. Runtime uses a
+  no-op capability and cannot construct the candidate manager.
+- An all-configuration `CLEAN_DICTATION_ENHANCED_CANDIDATE_REQUESTED` define
+  and debug-only implementation define make a requested production build fail
+  at `#error` before linking.
+- The release gate now rejects active candidate dependency imports,
+  manager/manifest/downloader declarations and symbols, manifest/notices
+  resources, model assets, and candidate UI. The negative release check runs
+  from an isolated scratch directory.
+
+Observed ordinary evidence:
+
+- `swift package show-dependencies --format text`:
+  `No external dependencies found`;
+- candidate resource files in release: `0`;
+- candidate manager/SDK symbols in release: `0`;
+- candidate implementation and dependency link inputs: `0`;
+- requested candidate release: rejected before linking, with no `Motes`
+  artifact.
+
+### Persistent and serialized recovery
+
+- RED: with the capsule preference off, terminal recovery existed only in the
+  coordinator. Concurrent recovery activation could execute Undo twice.
+- GREEN: recovery is published independently of capsule visibility. Notes
+  panels retain an accessible recovery banner, and the Dictation application
+  command exposes Command-Shift-R with tested enabled/dispatch state.
+- Runtime disables and consumes the presented action before awaiting.
+  Coordinator recovery also consumes synchronously and restores only the
+  recoverable Open Destination action after unsafe Undo.
+- `DictationRecoveryRemainsReachableWhenCapsuleIsDisabled` and
+  `concurrentRecoveryActivationPerformsUndoOnlyOnce` pass.
+
+### Honest focused cancellation
+
+- RED: an editor rollback mismatch could be reported as cancelled when the
+  persistence receipt was absent or arrived later.
+- GREEN: editor rollback success is independently required. A mismatch
+  preserves text, ends failed rather than cancelled, and exposes the captured
+  destination without attempting persistence compensation.
+- Both
+  `focusedCancellationWithSuccessfulPersistenceFailsWhenEditorRollbackDoesNotMatch`
+  and
+  `focusedCancellationWithFailedPersistenceStillFailsWhenEditorRollbackDoesNotMatch`
+  pass.
+
+### Permission and capture preflight
+
+- Shortcut permission requests now use the selected preferred engine.
+  Candidate test
+  `ShortcutPermissionRequestUsesThePreferredEnhancedEngine` confirms Enhanced
+  requests microphone only and does not request Speech Recognition.
+- Toolbar capture preflights the selected Standard engine. Denied Microphone,
+  denied Speech Recognition, and unavailable on-device recognition produce
+  localized actionable failure text, expose the correct System Settings pane
+  when one exists, and do not start the provider.
+- Capture errors implement `LocalizedError`.
+
+### Bounded test synchronization
+
+- The shortcut listening observation now has an explicit one-second
+  `ContinuousClock` deadline instead of an unbounded gate wait.
+
+### Final automated verification
+
+```sh
+MOTES_ENHANCED_CANDIDATE=1 swift test --scratch-path .build-candidate
+swift package clean
+env -u MOTES_ENHANCED_CANDIDATE swift test
+env -u MOTES_ENHANCED_CANDIDATE swift build -c release
+Scripts/check-release-size.sh .build/release/Motes
+Scripts/check-candidate-release-rejected.sh
+env -u MOTES_ENHANCED_CANDIDATE Scripts/validate-macos.sh
+git diff --check
+```
+
+Observed results:
+
+- ordinary suite: `246` tests passed;
+- opt-in candidate suite: `315` tests passed;
+- release executable: `3,537,640` bytes;
+- ordinary dependency graph: no external dependencies;
+- release candidate resource, symbol, and link-input matches: `0`;
+- release source, model asset, UI, SDK-symbol, and size assertions: passed;
+- requested candidate release: rejected before linking;
+- FluidAudio's upstream unhandled `benchmark.md` warning remains recorded only
+  for opt-in candidate builds; it was not patched or suppressed.
+
+The manual evidence list above remains unchanged. These automated results do
+not approve Enhanced Local for release.
