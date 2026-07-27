@@ -60,16 +60,6 @@ swift test
 swift build -c release
 Scripts/check-release-size.sh
 Scripts/validate-macos.sh
-if forbidden_matches="$(rg -n \
-  'NSEvent\.addGlobalMonitorForEvents|offlineMode = false|AsrModels\.downloadAndLoad' \
-  Sources)"
-then
-  printf '%s\n' "$forbidden_matches" >&2
-  exit 1
-else
-  rg_exit=$?
-  if (( rg_exit != 1 )); then exit "$rg_exit"; fi
-fi
 git diff --check
 git status --short
 ```
@@ -89,24 +79,29 @@ An unrelated `.bin` outside a model path is allowed even when an absolute
 ancestor happens to be named `models`. The same gate restricts searches to
 Swift sources accepted through regular files, file symlinks, or directory
 symlinks under `Sources`; resolves and deduplicates their physical targets;
-and fails closed on broken links, cycles, or traversal errors. Its code-only
-view removes inert ordinary and raw string contents plus line and nested block
-comments while preserving executable ordinary and raw string interpolation,
-including nested balanced expressions. Malformed interpolation and scrubber
-or ripgrep errors fail closed. The gate detects multiline qualification and
-asserts:
+and fails closed on broken links, cycles, or traversal errors.
+
+For source assertions, the gate generates and compiles a temporary structural
+inspector using the active Xcode toolchain's host `SwiftSyntax` and
+`SwiftParser` modules. It adds no package or network dependency. `SwiftParser`
+parses every discovered production file, including every `#if os(macOS)`
+branch, and malformed syntax fails closed. `SwiftSyntax` then reports only the
+specific member-access and assignment findings owned by this gate. Comments,
+ordinary/raw strings, and bare or extended regex literals are inert, while
+real ordinary/raw/nested string interpolation remains executable syntax and is
+visited. In particular, matching-hash text such as `\#(...)` inside a regex is
+regex pattern content under current Swift semantics, not Swift interpolation.
+Physical source aliases are inspected once with their logical
+`EnhancedSpeechCapture.swift` identity retained for the required assignment.
+Missing toolchain modules, inspector compile/run failures, unknown inspector
+output, and malformed source all exit 2. The structural gate asserts:
 
 - `ModelHub.offlineMode = true` is present.
 - `ModelHub.offlineMode = false` is absent.
-- production sources do not call `AsrModels.downloadAndLoad`.
-- `EnhancedSpeechCapture` does not call `ModelHub.download` or
+- production sources do not access `AsrModels.downloadAndLoad`.
+- production sources do not access `ModelHub.download` or
   `ModelHub.fetchFile`.
-- production sources do not call `NSEvent.addGlobalMonitorForEvents`.
-
-For the standalone forbidden search above, the success result is empty output
-and ripgrep exit 1 (“no matches”). The explicit conditional keeps that expected
-exit safe under `set -e`; exit 0 means forbidden source exists, and exit greater
-than 1 is a tool failure.
+- production sources do not access `NSEvent.addGlobalMonitorForEvents`.
 
 #### Recorded size evidence — 2026-07-28
 
@@ -182,6 +177,16 @@ and directory symlinks are scanned, clean and logical
 exit 2. A logical `Resources/Models` symlink to a neutral physical directory
 retains model context and rejects its generic `.bin`; a neutral cache symlink
 and the external-ancestor clean artifact remain allowed.
+
+Fix Round 4 replaced the custom source scrubber with the compiler-backed
+structural inspector above. Regression fixtures cover both reviewed regex
+failures; ordinary, raw, and nested string interpolation; inert comments,
+strings, and regex patterns; extended regex arbitrary hashes and matching-hash
+pattern text; bare regex escapes and character classes; executable calls after
+regex literals; malformed syntax; inactive `#if` branches; all forbidden
+members; required true and forbidden false assignments; deduplicated source
+aliases; and toolchain/module/compile/run failures. The retained source-symlink
+and artifact/model fixtures remain green.
 
 ### Manual release blockers
 

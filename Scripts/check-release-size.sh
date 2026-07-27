@@ -85,184 +85,6 @@ is_forbidden_model_path() {
   return 1
 }
 
-write_swift_code_only() {
-  local source="$1"
-  local destination="$2"
-
-  perl - "$source" >"$destination" <<'PERL'
-use strict;
-use warnings;
-
-my $path = shift @ARGV;
-open my $input, '<', $path or die "cannot open $path: $!\n";
-local $/;
-my $source = <$input>;
-close $input or die "cannot close $path: $!\n";
-
-my $output = '';
-my $index = 0;
-my $state = 'code';
-my $block_depth = 0;
-my $string_hashes = '';
-my $string_closer = '';
-my $interpolation_depth = 0;
-my @interpolation_frames;
-while ($index < length $source) {
-  my $character = substr($source, $index, 1);
-  my $pair = substr($source, $index, 2);
-  my $remaining = substr($source, $index);
-
-  if ($state eq 'code') {
-    if ($remaining =~ /\A(#+)?("""|")/) {
-      $string_hashes = defined $1 ? $1 : '';
-      my $quotes = $2;
-      my $opening = $string_hashes . $quotes;
-      $string_closer = $quotes . $string_hashes;
-      $output .= ' ' x length($opening);
-      $index += length($opening);
-      $state = length($quotes) == 3 ? 'multiline_string' : 'string';
-    } elsif ($pair eq '//') {
-      $output .= '  ';
-      $index += 2;
-      $state = 'line_comment';
-    } elsif ($pair eq '/*') {
-      $output .= '  ';
-      $index += 2;
-      $block_depth = 1;
-      $state = 'block_comment';
-    } elsif (@interpolation_frames && $character eq '(') {
-      $output .= $character;
-      $index += 1;
-      $interpolation_depth += 1;
-    } elsif (@interpolation_frames && $character eq ')') {
-      $output .= $character;
-      $index += 1;
-      $interpolation_depth -= 1;
-      if ($interpolation_depth == 0) {
-        my $frame = pop @interpolation_frames;
-        ($state, $string_hashes, $string_closer, $interpolation_depth) = @$frame;
-      }
-    } else {
-      $output .= $character;
-      $index += 1;
-    }
-  } elsif ($state eq 'line_comment') {
-    $output .= $character eq "\n" ? "\n" : ' ';
-    $index += 1;
-    $state = 'code' if $character eq "\n";
-  } elsif ($state eq 'block_comment') {
-    if ($pair eq '/*') {
-      $output .= '  ';
-      $index += 2;
-      $block_depth += 1;
-    } elsif ($pair eq '*/') {
-      $output .= '  ';
-      $index += 2;
-      $block_depth -= 1;
-      $state = 'code' if $block_depth == 0;
-    } else {
-      $output .= $character eq "\n" ? "\n" : ' ';
-      $index += 1;
-    }
-  } elsif ($state eq 'string' || $state eq 'multiline_string') {
-    my $raw_escape = '\\' . $string_hashes;
-    my $interpolation_opener = $raw_escape . '(';
-    if (substr($source, $index, length($interpolation_opener))
-      eq $interpolation_opener) {
-      push @interpolation_frames,
-        [$state, $string_hashes, $string_closer, $interpolation_depth];
-      $output .= ' ' x length($interpolation_opener);
-      $index += length($interpolation_opener);
-      $interpolation_depth = 1;
-      $state = 'code';
-    } elsif ($string_hashes ne ''
-      && substr($source, $index, length($raw_escape)) eq $raw_escape
-      && $index + length($raw_escape) < length $source) {
-      my $escaped = substr($source, $index, length($raw_escape) + 1);
-      $escaped =~ s/[^\n]/ /g;
-      $output .= $escaped;
-      $index += length($raw_escape) + 1;
-    } elsif (substr($source, $index, length($string_closer)) eq $string_closer) {
-      $output .= ' ' x length($string_closer);
-      $index += length($string_closer);
-      $state = 'code';
-    } elsif ($string_hashes eq '' && $character eq '\\'
-      && $index + 1 < length $source) {
-      my $escaped = substr($source, $index, 2);
-      $escaped =~ s/[^\n]/ /g;
-      $output .= $escaped;
-      $index += 2;
-    } else {
-      $output .= $character eq "\n" ? "\n" : ' ';
-      $index += 1;
-    }
-  }
-}
-
-die "unterminated Swift comment, string, or interpolation in $path\n"
-  if $state eq 'block_comment' || $state eq 'string'
-    || $state eq 'multiline_string' || @interpolation_frames;
-print $output;
-PERL
-}
-
-assert_rg_present() {
-  local pattern="$1"
-  local description="$2"
-  local output
-  local rg_exit
-  shift 2
-
-  set +e
-  output="$(rg -U -n --glob '*.swift' -- "$pattern" "$@" 2>&1)"
-  rg_exit=$?
-  set -e
-  case "$rg_exit" in
-    0)
-      return
-      ;;
-    1)
-      printf 'error: required production source missing: %s\n' "$description" >&2
-      exit 1
-      ;;
-    *)
-      printf 'error: ripgrep failed while checking %s (exit %s)\n' \
-        "$description" "$rg_exit" >&2
-      if [[ -n "$output" ]]; then printf '%s\n' "$output" >&2; fi
-      exit 2
-      ;;
-  esac
-}
-
-assert_rg_absent() {
-  local pattern="$1"
-  local description="$2"
-  local output
-  local rg_exit
-  shift 2
-
-  set +e
-  output="$(rg -U -n --glob '*.swift' -- "$pattern" "$@" 2>&1)"
-  rg_exit=$?
-  set -e
-  case "$rg_exit" in
-    0)
-      if [[ -n "$output" ]]; then printf '%s\n' "$output" >&2; fi
-      printf 'error: forbidden production source found: %s\n' "$description" >&2
-      exit 1
-      ;;
-    1)
-      return
-      ;;
-    *)
-      printf 'error: ripgrep failed while checking %s (exit %s)\n' \
-        "$description" "$rg_exit" >&2
-      if [[ -n "$output" ]]; then printf '%s\n' "$output" >&2; fi
-      exit 2
-      ;;
-  esac
-}
-
 readonly target="${1:-.build/release/Motes}"
 readonly limit_mb="${APP_SIZE_LIMIT_MB:-15}"
 readonly limit_bytes=$((limit_mb * 1024 * 1024))
@@ -342,12 +164,12 @@ scan_errors="$(mktemp "${TMPDIR:-/tmp}/motes-release-scan-errors.XXXXXX")" || {
   /bin/rm -f "$scan_output"
   exit 2
 }
-all_swift_code="${scan_output}-all.swift"
-enhanced_swift_code="${scan_output}-enhanced.swift"
-swift_piece="${scan_output}-piece.swift"
+inspector_source="${scan_output}-inspector.swift"
+inspector_binary="${scan_output}-inspector"
+inspector_output="${scan_output}-inspector-output"
 cleanup_scan_files() {
   /bin/rm -f "$scan_output" "$scan_errors" \
-    "$all_swift_code" "$enhanced_swift_code" "$swift_piece"
+    "$inspector_source" "$inspector_binary" "$inspector_output"
 }
 trap cleanup_scan_files EXIT
 
@@ -449,17 +271,175 @@ if (( ${#forbidden_model_assets[@]} > 0 )); then
   exit 1
 fi
 
-if ! command -v rg >/dev/null 2>&1; then
-  printf 'error: ripgrep (rg) is required for release source assertions\n' >&2
+if ! command -v xcrun >/dev/null 2>&1; then
+  printf 'error: xcrun is required for Swift source inspection\n' >&2
   exit 2
 fi
 
-if ! command -v perl >/dev/null 2>&1; then
-  printf 'error: perl is required for Swift source assertions\n' >&2
+: > "$scan_errors"
+set +e
+swiftc_path="$(xcrun --find swiftc 2>"$scan_errors")"
+xcrun_exit=$?
+set -e
+if (( xcrun_exit != 0 )) || [[ ! -x "$swiftc_path" ]]; then
+  printf 'error: xcrun could not locate the active Swift compiler\n' >&2
+  if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
+  exit 2
+fi
+swiftc_directory="$(physical_directory "$(dirname "$swiftc_path")")" || {
+  printf 'error: could not resolve the active Swift compiler directory\n' >&2
+  exit 2
+}
+toolchain_root="$(physical_directory "$swiftc_directory/../..")" || {
+  printf 'error: could not resolve the active Swift toolchain\n' >&2
+  exit 2
+}
+swift_syntax_host="$toolchain_root/usr/lib/swift/host"
+if [[ ! -d "$swift_syntax_host/SwiftSyntax.swiftmodule" \
+  || ! -d "$swift_syntax_host/SwiftParser.swiftmodule" ]]; then
+  printf 'error: active Swift toolchain lacks host SwiftSyntax modules: %s\n' \
+    "$swift_syntax_host" >&2
   exit 2
 fi
 
-: > "$all_swift_code"
+cat > "$inspector_source" <<'SWIFT'
+import Foundation
+import SwiftParser
+import SwiftSyntax
+
+enum Finding: String, Comparable {
+  case requiredOfflineTrue = "required-offline-true"
+  case forbiddenOfflineFalse = "forbidden-offline-false"
+  case forbiddenDownloadAndLoad = "forbidden-asr-download-and-load"
+  case forbiddenModelHubDownload = "forbidden-modelhub-download"
+  case forbiddenModelHubFetchFile = "forbidden-modelhub-fetch-file"
+  case forbiddenGlobalMonitor = "forbidden-global-monitor"
+
+  static func < (lhs: Self, rhs: Self) -> Bool {
+    lhs.rawValue < rhs.rawValue
+  }
+}
+
+final class ReleaseVisitor: SyntaxVisitor {
+  private(set) var findings = Set<Finding>()
+
+  override func visit(_ node: MemberAccessExprSyntax) -> SyntaxVisitorContinueKind {
+    guard let base = node.base.flatMap(baseName),
+      let finding = memberFinding(base: base, member: node.declName.baseName.text)
+    else {
+      return .visitChildren
+    }
+    findings.insert(finding)
+    return .visitChildren
+  }
+
+  override func visit(_ node: SequenceExprSyntax) -> SyntaxVisitorContinueKind {
+    let elements = Array(node.elements)
+    guard elements.count == 3,
+      let member = elements[0].as(MemberAccessExprSyntax.self),
+      elements[1].is(AssignmentExprSyntax.self),
+      let value = elements[2].as(BooleanLiteralExprSyntax.self),
+      baseName(member.base) == "ModelHub",
+      member.declName.baseName.text == "offlineMode"
+    else {
+      return .visitChildren
+    }
+
+    switch value.literal.tokenKind {
+    case .keyword(.true):
+      findings.insert(.requiredOfflineTrue)
+    case .keyword(.false):
+      findings.insert(.forbiddenOfflineFalse)
+    default:
+      break
+    }
+    return .visitChildren
+  }
+
+  private func baseName(_ expression: ExprSyntax?) -> String? {
+    expression.flatMap(baseName)
+  }
+
+  private func baseName(_ expression: ExprSyntax) -> String? {
+    if let reference = expression.as(DeclReferenceExprSyntax.self) {
+      return reference.baseName.text
+    }
+    if let member = expression.as(MemberAccessExprSyntax.self) {
+      return member.declName.baseName.text
+    }
+    return nil
+  }
+
+  private func memberFinding(base: String, member: String) -> Finding? {
+    switch (base, member) {
+    case ("AsrModels", "downloadAndLoad"):
+      return .forbiddenDownloadAndLoad
+    case ("ModelHub", "download"):
+      return .forbiddenModelHubDownload
+    case ("ModelHub", "fetchFile"):
+      return .forbiddenModelHubFetchFile
+    case ("NSEvent", "addGlobalMonitorForEvents"):
+      return .forbiddenGlobalMonitor
+    default:
+      return nil
+    }
+  }
+}
+
+guard CommandLine.arguments.count == 2 else {
+  FileHandle.standardError.write(
+    Data("error: release inspector requires one Swift source path\n".utf8)
+  )
+  exit(2)
+}
+
+let source: String
+do {
+  source = try String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8)
+} catch {
+  FileHandle.standardError.write(
+    Data("error: release inspector could not read Swift source\n".utf8)
+  )
+  exit(2)
+}
+
+let tree = Parser.parse(source: source)
+guard !tree.hasError else {
+  FileHandle.standardError.write(
+    Data("error: release inspector found malformed Swift source\n".utf8)
+  )
+  exit(2)
+}
+
+let visitor = ReleaseVisitor(viewMode: .sourceAccurate)
+visitor.walk(tree)
+for finding in visitor.findings.sorted() {
+  print(finding.rawValue)
+}
+SWIFT
+
+: > "$scan_output"
+: > "$scan_errors"
+set +e
+xcrun swiftc \
+  -I "$swift_syntax_host" \
+  -L "$swift_syntax_host" \
+  -lSwiftParser \
+  -lSwiftSyntax \
+  -Xlinker -rpath \
+  -Xlinker "$swift_syntax_host" \
+  "$inspector_source" \
+  -o "$inspector_binary" \
+  >"$scan_output" 2>"$scan_errors"
+inspector_compile_exit=$?
+set -e
+if (( inspector_compile_exit != 0 )) || [[ ! -x "$inspector_binary" ]]; then
+  printf 'error: could not compile the Swift release source inspector\n' >&2
+  if [[ -s "$scan_output" ]]; then cat "$scan_output" >&2; fi
+  if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
+  exit 2
+fi
+
 enhanced_found=false
 source_scan_roots=("$sources_root")
 source_logical_roots=("$sources_root")
@@ -468,7 +448,10 @@ source_ancestor_chains=(
   "${source_ancestor_separator}${sources_root}${source_ancestor_separator}"
 )
 seen_source_roots=()
-seen_source_files=()
+seen_source_logical_roots=()
+source_physical_files=()
+source_logical_files=()
+source_is_enhanced=()
 source_scan_index=0
 while (( source_scan_index < ${#source_scan_roots[@]} )); do
   source_scan_root="${source_scan_roots[$source_scan_index]}"
@@ -478,15 +461,19 @@ while (( source_scan_index < ${#source_scan_roots[@]} )); do
 
   source_root_seen=false
   if (( ${#seen_source_roots[@]} > 0 )); then
-    for seen_source_root in "${seen_source_roots[@]}"; do
-      if [[ "$seen_source_root" == "$source_scan_root" ]]; then
+    seen_index=0
+    while (( seen_index < ${#seen_source_roots[@]} )); do
+      if [[ "${seen_source_roots[$seen_index]}" == "$source_scan_root" \
+        && "${seen_source_logical_roots[$seen_index]}" == "$source_logical_root" ]]; then
         source_root_seen=true
         break
       fi
+      seen_index=$((seen_index + 1))
     done
   fi
   if [[ "$source_root_seen" == true ]]; then continue; fi
   seen_source_roots+=("$source_scan_root")
+  seen_source_logical_roots+=("$source_logical_root")
 
   : > "$scan_output"
   : > "$scan_errors"
@@ -552,40 +539,36 @@ while (( source_scan_index < ${#source_scan_roots[@]} )); do
       exit 2
     fi
 
-    source_file_seen=false
-    if (( ${#seen_source_files[@]} > 0 )); then
-      for seen_source_file in "${seen_source_files[@]}"; do
-        if [[ "$seen_source_file" == "$physical_source_path" ]]; then
-          source_file_seen=true
+    if [[ "$logical_source_path" == "$enhanced_capture" ]]; then
+      enhanced_found=true
+      logical_is_enhanced=true
+    else
+      logical_is_enhanced=false
+    fi
+
+    source_file_index=-1
+    if (( ${#source_physical_files[@]} > 0 )); then
+      candidate_index=0
+      while (( candidate_index < ${#source_physical_files[@]} )); do
+        if [[ "${source_physical_files[$candidate_index]}" == "$physical_source_path" ]]; then
+          source_file_index=$candidate_index
           break
         fi
+        candidate_index=$((candidate_index + 1))
       done
     fi
-    if [[ "$source_file_seen" == true && "$logical_source_path" != "$enhanced_capture" ]]; then
+
+    if (( source_file_index >= 0 )); then
+      if [[ "$logical_is_enhanced" == true ]]; then
+        source_logical_files[$source_file_index]="$logical_source_path"
+        source_is_enhanced[$source_file_index]=true
+      fi
       continue
     fi
 
-    : > "$scan_errors"
-    set +e
-    write_swift_code_only "$physical_source_path" "$swift_piece" 2>"$scan_errors"
-    swift_scan_exit=$?
-    set -e
-    if (( swift_scan_exit != 0 )); then
-      printf 'error: could not prepare Swift source for assertions: %s\n' \
-        "$logical_source_path" >&2
-      if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
-      exit 2
-    fi
-
-    if [[ "$source_file_seen" != true ]]; then
-      seen_source_files+=("$physical_source_path")
-      cat "$swift_piece" >> "$all_swift_code"
-      printf '\n' >> "$all_swift_code"
-    fi
-    if [[ "$logical_source_path" == "$enhanced_capture" ]]; then
-      cp "$swift_piece" "$enhanced_swift_code"
-      enhanced_found=true
-    fi
+    source_physical_files+=("$physical_source_path")
+    source_logical_files+=("$logical_source_path")
+    source_is_enhanced+=("$logical_is_enhanced")
   done < "$scan_output"
 done
 
@@ -594,26 +577,86 @@ if [[ "$enhanced_found" != true ]]; then
   exit 2
 fi
 
-assert_rg_present \
-  '(?m)^[\t ]*ModelHub[\t \r\n]*\.[\t \r\n]*offlineMode[\t \r\n]*=[\t \r\n]*true[\t ]*(?://[^\r\n]*)?$' \
-  'an executable ModelHub.offlineMode = true assignment in EnhancedSpeechCapture' \
-  "$enhanced_swift_code"
-assert_rg_absent \
-  '\bModelHub\s*\.\s*offlineMode\s*=\s*false\b' \
-  'ModelHub.offlineMode = false' \
-  "$all_swift_code"
-assert_rg_absent \
-  '\bAsrModels\s*\.\s*downloadAndLoad\b' \
-  'AsrModels.downloadAndLoad' \
-  "$all_swift_code"
-assert_rg_absent \
-  '\bModelHub\s*\.\s*(download|fetchFile)\b' \
-  'ModelHub.download or ModelHub.fetchFile in EnhancedSpeechCapture' \
-  "$enhanced_swift_code"
-assert_rg_absent \
-  '\bNSEvent\s*\.\s*addGlobalMonitorForEvents\b' \
-  'NSEvent.addGlobalMonitorForEvents' \
-  "$all_swift_code"
+required_offline_true=false
+forbidden_source_findings=()
+source_file_index=0
+while (( source_file_index < ${#source_physical_files[@]} )); do
+  physical_source_path="${source_physical_files[$source_file_index]}"
+  logical_source_path="${source_logical_files[$source_file_index]}"
+  logical_is_enhanced="${source_is_enhanced[$source_file_index]}"
+  source_file_index=$((source_file_index + 1))
+
+  : > "$inspector_output"
+  : > "$scan_errors"
+  set +e
+  "$inspector_binary" "$physical_source_path" \
+    >"$inspector_output" 2>"$scan_errors"
+  inspector_exit=$?
+  set -e
+  if (( inspector_exit != 0 )); then
+    printf 'error: Swift release source inspection failed: %s\n' \
+      "$logical_source_path" >&2
+    if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
+    exit 2
+  fi
+
+  while IFS= read -r finding; do
+    case "$finding" in
+      required-offline-true)
+        if [[ "$logical_is_enhanced" == true ]]; then
+          required_offline_true=true
+        fi
+        ;;
+      forbidden-offline-false)
+        forbidden_source_findings+=(
+          "$logical_source_path: ModelHub.offlineMode = false"
+        )
+        ;;
+      forbidden-asr-download-and-load)
+        forbidden_source_findings+=(
+          "$logical_source_path: AsrModels.downloadAndLoad"
+        )
+        ;;
+      forbidden-modelhub-download)
+        forbidden_source_findings+=(
+          "$logical_source_path: ModelHub.download"
+        )
+        ;;
+      forbidden-modelhub-fetch-file)
+        forbidden_source_findings+=(
+          "$logical_source_path: ModelHub.fetchFile"
+        )
+        ;;
+      forbidden-global-monitor)
+        forbidden_source_findings+=(
+          "$logical_source_path: NSEvent.addGlobalMonitorForEvents"
+        )
+        ;;
+      "")
+        ;;
+      *)
+        printf 'error: Swift release source inspector emitted an unknown finding for %s\n' \
+          "$logical_source_path" >&2
+        exit 2
+        ;;
+    esac
+  done < "$inspector_output"
+done
+
+if (( ${#forbidden_source_findings[@]} > 0 )); then
+  printf 'error: forbidden production source found:\n' >&2
+  for finding in "${forbidden_source_findings[@]}"; do
+    printf '  %s\n' "$finding" >&2
+  done
+  exit 1
+fi
+
+if [[ "$required_offline_true" != true ]]; then
+  printf '%s\n' \
+    'error: required production source missing: ModelHub.offlineMode = true in EnhancedSpeechCapture' \
+    >&2
+  exit 1
+fi
 
 printf 'Release artifact contains no bundled model assets.\n'
 printf 'Release source assertions passed.\n'
