@@ -77,6 +77,25 @@ import Testing
   ))
 }
 
+@Test @MainActor func GlobalHoldShortcutReportsWhenReplacementAndRestorationBothFail() throws {
+  let registrar = HotKeyRegistrarSpy()
+  let shortcut = GlobalHoldShortcut(handler: ShortcutHoldSpy(), registrar: registrar)
+  let old = DictationShortcut(keyCode: 49, carbonModifiers: 768)
+  let replacement = DictationShortcut(keyCode: 36, carbonModifiers: 256)
+  try shortcut.configure(old)
+  registrar.failingKeyCodes = [36, 49]
+
+  #expect(throws: GlobalHoldShortcut.RegistrationError.replacementAndRestoreFailed(
+    replacement: .conflict(-9876),
+    restoration: .conflict(-9876)
+  )) {
+    try shortcut.configure(replacement)
+  }
+
+  #expect(shortcut.registeredShortcut == nil)
+  #expect(!registrar.isRegistered(GlobalHoldShortcut.primaryID))
+}
+
 @Test @MainActor func GlobalHoldShortcutRegistrarPathSerializesRapidPressAndRelease() async throws {
   let registrar = HotKeyRegistrarSpy()
   let handler = ShortcutHoldSpy()
@@ -320,7 +339,10 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
   var endCount: Int { events.count { $0 == .end } }
   var cancelCount: Int { events.count { $0 == .cancel } }
 
-  func beginShortcut(editor: (any FocusedDictationEditing)?) -> DictationShortcutSession? {
+  func beginShortcut(
+    editor: (any FocusedDictationEditing)?,
+    destination: DictationDestination?
+  ) -> DictationShortcutSession? {
     events.append(.begin)
     return acceptsShortcut ? session : nil
   }

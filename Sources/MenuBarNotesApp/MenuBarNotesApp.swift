@@ -89,6 +89,11 @@
   final class DictationRuntime: ObservableObject {
     static let usesPeriodicObservation = false
 
+    private enum CapsuleOwner: Equatable {
+      case dictation
+      case model(UUID)
+    }
+
     private final class ObserverToken: @unchecked Sendable {
       let value: NSObjectProtocol
 
@@ -107,6 +112,7 @@
     @Published private(set) var phase = DictationPhase.idle
     @Published private(set) var shortcutError: String?
     @Published private(set) var modelError: String?
+    private(set) var currentCapsuleStatus: DictationCapsuleStatus?
 
     private weak var appState: AppState?
     private let permissionController: DictationPermissionController
@@ -116,6 +122,8 @@
     private var needsShortcutApplication = false
     private var modelStateAssessed = false
     private var modelOperation: Task<Void, Never>?
+    private var modelOperationID: UUID?
+    private var capsuleOwner: CapsuleOwner?
     private var startupAssessmentTask: Task<Void, Never>?
     private var terminalSynchronizationTask: Task<Void, Never>?
     private var shutdownTask: Task<Void, Never>?
@@ -167,6 +175,11 @@
         handler: coordinator,
         editorProvider: { [weak editorRegistry] in
           editorRegistry?.focusedEditor()
+        },
+        destinationProvider: { [weak appState] in
+          appState?.selectedNote.map {
+            DictationDestination(noteID: $0.id, title: $0.displayTitle)
+          }
         },
         onRegistrationError: { [weak appState] error in
           appState?.saveError = "Dictation shortcut: \(Self.shortcutMessage(error))"
@@ -282,7 +295,8 @@
         let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
         await coordinator.start(
           mode: focusedEditor == nil ? .smartCapture : .focused,
-          editor: focusedEditor
+          editor: focusedEditor,
+          destination: focusedEditor == nil ? nil : selectedDestination()
         )
       case .arming, .listening:
         await coordinator.finish()
@@ -326,25 +340,28 @@
     }
 
     func downloadModel() {
-      runModelOperation { try await $0.download() }
+      runModelOperation(operation: { try await $0.download() })
     }
 
     func repairModel() {
-      if appState?.preferences.dictationCapsuleEnabled == true {
-        capsuleController.show(.repairingModel)
-      }
-      runModelOperation { try await $0.repair() }
+      runModelOperation(
+        showsRepairStatus: true,
+        operation: { try await $0.repair() }
+      )
     }
 
     func updateModel() {
-      runModelOperation { try await $0.update() }
+      runModelOperation(operation: { try await $0.update() })
     }
 
     func deleteModel() {
-      runModelOperation { try await $0.deleteModel() } onSuccess: { [weak self] in
-        self?.appState?.updatePreferences { $0.dictationSpeechEngine = .standard }
-        self?.synchronizePreferences()
-      }
+      runModelOperation(
+        operation: { try await $0.deleteModel() },
+        onSuccess: { [weak self] in
+          self?.appState?.updatePreferences { $0.dictationSpeechEngine = .standard }
+          self?.synchronizePreferences()
+        }
+      )
     }
 
     func cancelModelOperation() {
@@ -361,6 +378,9 @@
         return
       }
       shutdownCount += 1
+      let modelOperation = modelOperation
+      let startupAssessmentTask = startupAssessmentTask
+      let terminalSynchronizationTask = terminalSynchronizationTask
       modelOperation?.cancel()
       startupAssessmentTask?.cancel()
       terminalSynchronizationTask?.cancel()
@@ -371,11 +391,14 @@
       }
       let coordinator = coordinator
       let shortcutController = shortcutController
-      let capsuleController = capsuleController
-      let task = Task { @MainActor in
+      let task = Task { @MainActor [weak self] in
         await coordinator.cancel()
+        await coordinator.waitForTerminal()
         await shortcutController.uninstall()
-        capsuleController.dismiss()
+        await modelOperation?.value
+        await startupAssessmentTask?.value
+        await terminalSynchronizationTask?.value
+        self?.dismissCapsule()
       }
       shutdownTask = task
       await task.value
@@ -411,21 +434,21 @@
       }
 
       if !appState.preferences.dictationCapsuleEnabled {
-        capsuleController.dismiss()
+        dismissCapsule()
       }
     }
 
     private func receive(_ event: DictationCoordinatorEvent) {
       phase = event.phase
       guard appState?.preferences.dictationCapsuleEnabled == true else {
-        capsuleController.dismiss()
+        dismissCapsule()
         synchronizeAfter(event)
         return
       }
       if let status = Self.capsuleStatus(for: event) {
-        capsuleController.show(status)
+        showCapsule(status, owner: .dictation)
       } else {
-        capsuleController.dismiss()
+        dismissCapsule(ifOwnedBy: .dictation)
       }
       synchronizeAfter(event)
     }
@@ -481,24 +504,54 @@
       }
     }
 
-    private func runModelOperation(
-      _ operation: @escaping @MainActor (EnhancedModelManager) async throws -> Void,
+    @discardableResult
+    func runModelOperation(
+      showsRepairStatus: Bool = false,
+      operation: @escaping @MainActor (EnhancedModelManager) async throws -> Void,
       onSuccess: @escaping @MainActor () -> Void = {}
-    ) {
+    ) -> Task<Void, Never> {
       modelOperation?.cancel()
-      modelOperation = Task { @MainActor [weak self, modelManager] in
+      let operationID = UUID()
+      modelOperationID = operationID
+      let owner = CapsuleOwner.model(operationID)
+      if showsRepairStatus, appState?.preferences.dictationCapsuleEnabled == true {
+        showCapsule(.repairingModel, owner: owner)
+      }
+      let task = Task { @MainActor [weak self, modelManager] in
         do {
           try await operation(modelManager)
+          guard self?.modelOperationID == operationID else { return }
           onSuccess()
           self?.modelError = nil
+          if showsRepairStatus {
+            self?.dismissCapsule(ifOwnedBy: owner)
+          }
         } catch is CancellationError {
-          return
+          guard self?.modelOperationID == operationID else { return }
+          if showsRepairStatus {
+            self?.dismissCapsule(ifOwnedBy: owner)
+          }
         } catch ModelDownloadError.cancelled {
-          return
+          guard self?.modelOperationID == operationID else { return }
+          if showsRepairStatus {
+            self?.dismissCapsule(ifOwnedBy: owner)
+          }
         } catch {
+          guard self?.modelOperationID == operationID else { return }
           self?.modelError = error.localizedDescription
+          if
+            showsRepairStatus,
+            self?.appState?.preferences.dictationCapsuleEnabled == true
+          {
+            self?.showCapsule(.failed("Enhanced model repair failed."), owner: owner)
+          }
         }
+        guard self?.modelOperationID == operationID else { return }
+        self?.modelOperation = nil
+        self?.modelOperationID = nil
       }
+      modelOperation = task
+      return task
     }
 
     private static func shortcutMessage(
@@ -511,11 +564,35 @@
         "That shortcut is already in use."
       case .eventDeliveryPending, .primaryKeyHeld:
         "Release the shortcut keys, then try again."
+      case .replacementAndRestoreFailed:
+        "The new shortcut failed and the previous shortcut could not be restored. No dictation shortcut is registered."
       case .system:
         "The shortcut could not be registered."
       case .uninstalled:
         "The shortcut controller is unavailable."
       }
+    }
+
+    private func selectedDestination() -> DictationDestination? {
+      appState?.selectedNote.map {
+        DictationDestination(noteID: $0.id, title: $0.displayTitle)
+      }
+    }
+
+    private func showCapsule(
+      _ status: DictationCapsuleStatus,
+      owner: CapsuleOwner
+    ) {
+      currentCapsuleStatus = status
+      capsuleOwner = owner
+      capsuleController.show(status)
+    }
+
+    private func dismissCapsule(ifOwnedBy owner: CapsuleOwner? = nil) {
+      guard owner == nil || capsuleOwner == owner else { return }
+      currentCapsuleStatus = nil
+      capsuleOwner = nil
+      capsuleController.dismiss()
     }
 
     deinit {

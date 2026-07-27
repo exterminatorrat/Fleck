@@ -4,7 +4,10 @@
 
   @MainActor
   protocol ShortcutHoldHandling: AnyObject {
-    func beginShortcut(editor: (any FocusedDictationEditing)?) -> DictationShortcutSession?
+    func beginShortcut(
+      editor: (any FocusedDictationEditing)?,
+      destination: DictationDestination?
+    ) -> DictationShortcutSession?
     func endShortcut(_ session: DictationShortcutSession) async
     func cancelShortcut(_ session: DictationShortcutSession) async
     func waitForShortcutTerminal(_ session: DictationShortcutSession) async
@@ -21,11 +24,20 @@
 
   @MainActor
   final class GlobalHoldShortcut {
+    enum RegistrationFailure: Equatable {
+      case conflict(OSStatus)
+      case system(OSStatus)
+    }
+
     enum RegistrationError: Error, Equatable {
       case activeSession
       case conflict(OSStatus)
       case eventDeliveryPending
       case primaryKeyHeld
+      case replacementAndRestoreFailed(
+        replacement: RegistrationFailure,
+        restoration: RegistrationFailure
+      )
       case system(OSStatus)
       case uninstalled
     }
@@ -36,6 +48,7 @@
 
     private weak var handler: (any ShortcutHoldHandling)?
     private let editorProvider: @MainActor () -> (any FocusedDictationEditing)?
+    private let destinationProvider: @MainActor () -> DictationDestination?
     private let registrar: any GlobalHotKeyRegistering
     private let onRegistrationError: @MainActor (RegistrationError) -> Void
     private var primaryRegistered = false
@@ -52,11 +65,13 @@
     init(
       handler: any ShortcutHoldHandling,
       editorProvider: @escaping @MainActor () -> (any FocusedDictationEditing)? = { nil },
+      destinationProvider: @escaping @MainActor () -> DictationDestination? = { nil },
       registrar: any GlobalHotKeyRegistering = CarbonHotKeyRegistrar(),
       onRegistrationError: @escaping @MainActor (RegistrationError) -> Void = { _ in }
     ) {
       self.handler = handler
       self.editorProvider = editorProvider
+      self.destinationProvider = destinationProvider
       self.registrar = registrar
       self.onRegistrationError = onRegistrationError
       registrar.eventHandler = { [weak self] id, pressed in
@@ -88,8 +103,16 @@
         primaryRegistered = true
         registeredShortcut = shortcut
       } catch {
-        restore(previousShortcut)
-        throw error
+        let replacementError = error
+        do {
+          try restore(previousShortcut)
+        } catch {
+          throw RegistrationError.replacementAndRestoreFailed(
+            replacement: Self.registrationFailure(replacementError),
+            restoration: Self.registrationFailure(error)
+          )
+        }
+        throw replacementError
       }
     }
 
@@ -134,7 +157,10 @@
         if pressed {
           guard !physicalPrimaryDown else { return }
           physicalPrimaryDown = true
-          guard let session = handler?.beginShortcut(editor: editorProvider()) else { return }
+          guard let session = handler?.beginShortcut(
+            editor: editorProvider(),
+            destination: destinationProvider()
+          ) else { return }
           acceptedSession = session
           escapeCancellationRequested = false
           registerEscape()
@@ -206,7 +232,7 @@
       unregisterEscape()
     }
 
-    private func restore(_ shortcut: DictationShortcut?) {
+    private func restore(_ shortcut: DictationShortcut?) throws {
       guard
         let shortcut,
         shortcut.isEnabled,
@@ -226,6 +252,22 @@
       } catch {
         primaryRegistered = false
         registeredShortcut = nil
+        throw error
+      }
+    }
+
+    private static func registrationFailure(_ error: Error) -> RegistrationFailure {
+      guard let error = error as? RegistrationError else {
+        return .system(OSStatus(eventInternalErr))
+      }
+      switch error {
+      case .conflict(let status):
+        return .conflict(status)
+      case .system(let status):
+        return .system(status)
+      case .activeSession, .eventDeliveryPending, .primaryKeyHeld,
+        .replacementAndRestoreFailed, .uninstalled:
+        return .system(OSStatus(eventInternalErr))
       }
     }
 

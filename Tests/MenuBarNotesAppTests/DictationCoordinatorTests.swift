@@ -81,6 +81,39 @@ import Testing
   #expect(fixture.saver.savedTexts == ["Held dictation"])
 }
 
+@Test @MainActor func heldShortcutPublishesEachPhaseExactlyOnceInOrder() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Held dictation"
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  fixture.coordinator.beginShortcut(editor: nil)
+  await threshold.waitUntilWaiting()
+  await threshold.openGate()
+  for _ in 0..<20 {
+    if case .listening = fixture.coordinator.phase { break }
+    await Task.yield()
+  }
+  await fixture.coordinator.endShortcut()
+
+  #expect(events == [
+    .init(phase: .arming, terminal: nil),
+    .init(phase: .listening(mode: .smartCapture, engine: .standard), terminal: nil),
+    .init(phase: .finalizing, terminal: nil),
+    .init(phase: .cleaning, terminal: nil),
+    .init(phase: .routing, terminal: nil),
+    .init(
+      phase: .saved(fixture.inbox),
+      terminal: .saved(
+        mode: .smartCapture,
+        cleanup: .cleaned,
+        destination: fixture.inbox
+      )
+    ),
+  ])
+}
+
 @Test @MainActor func shortcutChoosesFocusedOnlyForActiveMotesEditor() async throws {
   let focusedThreshold = Gate()
   let focused = try Fixture(holdSleeper: { _ in await focusedThreshold.wait() })
@@ -88,7 +121,10 @@ import Testing
   focused.coordinator.beginShortcut(editor: focused.editor)
   await focusedThreshold.waitUntilWaiting()
   await focusedThreshold.openGate()
-  await Task.yield()
+  for _ in 0..<20 {
+    if case .listening = focused.coordinator.phase { break }
+    await Task.yield()
+  }
 
   #expect(focused.coordinator.phase == .listening(mode: .focused, engine: .standard))
   #expect(focused.editor.beginCount == 1)
@@ -99,7 +135,10 @@ import Testing
   smart.coordinator.beginShortcut(editor: nil)
   await smartThreshold.waitUntilWaiting()
   await smartThreshold.openGate()
-  await Task.yield()
+  for _ in 0..<20 {
+    if case .listening = smart.coordinator.phase { break }
+    await Task.yield()
+  }
 
   #expect(smart.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
   #expect(smart.editor.beginCount == 0)
@@ -307,6 +346,51 @@ import Testing
   #expect(record.insertionOutcome == .saved)
 }
 
+@Test @MainActor func focusedToolbarCapturePersistsItsStartingDestination() async throws {
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Focused"
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(
+    mode: .focused,
+    editor: fixture.editor,
+    destination: fixture.inbox
+  )
+  await fixture.coordinator.finish()
+
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.destination == fixture.inbox)
+  #expect(record.insertionOutcome == .saved)
+  #expect(events.last?.terminal == .saved(
+    mode: .focused,
+    cleanup: .cleaned,
+    destination: fixture.inbox
+  ))
+}
+
+@Test @MainActor func focusedGlobalCapturePersistsItsStartingDestination() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Focused"
+
+  fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    destination: fixture.inbox
+  )
+  await threshold.waitUntilWaiting()
+  await threshold.openGate()
+  for _ in 0..<20 {
+    if case .listening = fixture.coordinator.phase { break }
+    await Task.yield()
+  }
+  await fixture.coordinator.endShortcut()
+
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.destination == fixture.inbox)
+  #expect(record.insertionOutcome == .saved)
+}
+
 @Test @MainActor func everyTerminalPathReleasesItsBoundEngine() async throws {
   let finish = try Fixture()
   finish.standard.finalText = "Finished"
@@ -349,6 +433,57 @@ import Testing
   #expect(fixture.standard.releaseCount == 1)
   #expect(fixture.editor.beginCount == 0)
   #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor func coordinatorWideTerminalWaitIncludesSuspendedProviderStart() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.provider.gate = gate
+  let completed = CompletionProbe()
+
+  let start = Task { await fixture.coordinator.start(mode: .smartCapture) }
+  await fixture.provider.waitUntilRequested()
+  await fixture.coordinator.cancel()
+  let terminal = Task {
+    await fixture.coordinator.waitForTerminal()
+    await completed.complete()
+  }
+  await Task.yield()
+
+  #expect(!(await completed.isComplete))
+  await gate.openGate()
+  await start.value
+  await terminal.value
+  #expect(fixture.standard.releaseCount == 1)
+}
+
+@Test @MainActor func coordinatorWideTerminalWaitIncludesSuspendedEngineFinish() async throws {
+  let finishGate = Gate()
+  let releaseGate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Late"
+  fixture.standard.finishGate = finishGate
+  fixture.standard.releaseGate = releaseGate
+  let completed = CompletionProbe()
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finish = Task { await fixture.coordinator.finish() }
+  await finishGate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  let terminal = Task {
+    await fixture.coordinator.waitForTerminal()
+    await completed.complete()
+  }
+  await Task.yield()
+  #expect(!(await completed.isComplete))
+
+  await finishGate.openGate()
+  await releaseGate.waitUntilWaiting()
+  #expect(!(await completed.isComplete))
+  await releaseGate.openGate()
+  await finish.value
+  await terminal.value
+  #expect(fixture.standard.releaseCount == 1)
 }
 
 @Test @MainActor func overlappingFinishFinalizesOnce() async throws {

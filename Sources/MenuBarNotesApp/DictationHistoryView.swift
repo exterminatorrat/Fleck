@@ -8,56 +8,6 @@
     case delete(UUID)
   }
 
-  struct DictationHistoryPresentation {
-    private(set) var records: [DictationHistoryRecord]
-    private(set) var pendingConfirmation: DictationHistoryConfirmation?
-    private var rollbackRecords: [DictationHistoryRecord]?
-
-    init(records: [DictationHistoryRecord] = []) {
-      self.records = records
-    }
-
-    mutating func replaceRecords(_ records: [DictationHistoryRecord]) {
-      self.records = records
-    }
-
-    mutating func requestClear() {
-      pendingConfirmation = .clear
-    }
-
-    mutating func requestDelete(_ id: UUID) {
-      pendingConfirmation = .delete(id)
-    }
-
-    mutating func cancelConfirmation() {
-      pendingConfirmation = nil
-    }
-
-    @discardableResult
-    mutating func confirmPendingRemoval() -> DictationHistoryConfirmation? {
-      guard let pendingConfirmation else { return nil }
-      rollbackRecords = records
-      switch pendingConfirmation {
-      case .clear:
-        records.removeAll()
-      case .delete(let id):
-        records.removeAll { $0.id == id }
-      }
-      self.pendingConfirmation = nil
-      return pendingConfirmation
-    }
-
-    mutating func rollbackRemoval() {
-      guard let rollbackRecords else { return }
-      records = rollbackRecords
-      self.rollbackRecords = nil
-    }
-
-    mutating func finishRemoval() {
-      rollbackRecords = nil
-    }
-  }
-
   @MainActor
   final class DictationHistoryController: ObservableObject {
     typealias LoadOperation = @Sendable () async throws -> [DictationHistoryRecord]
@@ -99,13 +49,13 @@
     }
 
     func load() async {
-      await writeTail?.value
-      do {
-        records = try await loadOperation()
-        errorMessage = nil
-        generation += 1
-      } catch {
-        errorMessage = "Could not load dictation history: \(error.localizedDescription)"
+      await enqueue {
+        do {
+          self.records = try await self.loadOperation()
+          self.errorMessage = nil
+        } catch {
+          self.errorMessage = "Could not load dictation history: \(error.localizedDescription)"
+        }
       }
     }
 
