@@ -62,18 +62,25 @@
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var isPinned = false
+    @ObservedObject var dictationRuntime: DictationRuntime
+    let isPinned: Bool
     @StateObject private var editorCommands = EditorCommands()
     @Namespace private var selectedTabHighlight
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var isShowingTrash = false
+    @State private var isShowingDictationHistory = false
     @State private var notePendingDeletion: Note?
     @State private var exportDocument: NoteFileDocument?
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
     @State private var draggedNoteID: UUID?
     @State private var tabDragContentType = TabDragReorder.makeContentType()
+
+    init(dictationRuntime: DictationRuntime, isPinned: Bool = false) {
+      self.dictationRuntime = dictationRuntime
+      self.isPinned = isPinned
+    }
 
     var body: some View {
       VStack(spacing: 0) {
@@ -122,6 +129,18 @@
       .sheet(isPresented: $isShowingTrash) {
         TrashView(onDone: { isShowingTrash = false })
           .environmentObject(appState)
+      }
+      .sheet(isPresented: $isShowingDictationHistory) {
+        DictationHistoryView(
+          historyStore: dictationRuntime.historyStore,
+          onOpenDestination: openHistoryDestination
+        )
+      }
+      .onAppear {
+        dictationRuntime.registerEditor(editorCommands)
+      }
+      .onDisappear {
+        dictationRuntime.unregisterEditor(editorCommands)
       }
       .overlay {
         ZStack {
@@ -184,6 +203,9 @@
           Divider()
           Button("Trash…", systemImage: "trash") {
             isShowingTrash = true
+          }
+          Button("Dictation History", systemImage: "waveform") {
+            isShowingDictationHistory = true
           }
         } label: {
           Image(systemName: "ellipsis.circle")
@@ -342,6 +364,12 @@
       appState.moveToTrash(note.id)
     }
 
+    private func openHistoryDestination(_ noteID: UUID) {
+      guard appState.workspace.notes.contains(where: { $0.id == noteID }) else { return }
+      appState.select(noteID)
+      isShowingDictationHistory = false
+    }
+
     private func presentPersistentWindow(_ present: () -> Void) {
       NSApp.activate()
       present()
@@ -394,6 +422,7 @@
           if appState.preferences.showFormattingBar {
             FormattingBar(
               commands: editorCommands,
+              dictationRuntime: dictationRuntime,
               onDelete: {
                 if let note = appState.selectedNote {
                   requestDeletion(note)
@@ -505,10 +534,30 @@
   private struct FormattingBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var commands: EditorCommands
+    @ObservedObject var dictationRuntime: DictationRuntime
     let onDelete: () -> Void
 
     var body: some View {
       HStack(spacing: 8) {
+        Menu {
+          Button("Cancel Dictation", role: .destructive) {
+            Task { await dictationRuntime.cancel() }
+          }
+          .disabled(!dictationRuntime.canCancel)
+        } label: {
+          ToolbarIconLabel(
+            systemImage: dictationRuntime.microphoneSymbol,
+            isActive: dictationRuntime.isListening
+          )
+        } primaryAction: {
+          Task { await dictationRuntime.toggle(editor: commands) }
+        }
+        .accessibilityLabel(dictationRuntime.microphoneHelp)
+        .accessibilityAction(named: Text("Cancel Dictation")) {
+          Task { await dictationRuntime.cancel() }
+        }
+        .help(dictationRuntime.microphoneHelp)
+        Divider().frame(height: 15)
         Button {
           commands.undo()
         } label: {

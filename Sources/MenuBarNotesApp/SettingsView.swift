@@ -1,19 +1,141 @@
 #if os(macOS)
   import AppKit
+  import AVFoundation
+  import Carbon
   import SwiftUI
   import MenuBarNotesCore
+
+  enum SettingsSection: String, CaseIterable, Identifiable {
+    case appearance = "Appearance"
+    case editing = "Editing"
+    case shortcuts = "Shortcuts"
+    case dictation = "Dictation"
+
+    static let selectionEffectID = "settings-section"
+    var id: Self { self }
+  }
+
+  enum DictationModelAction: Equatable {
+    case download
+    case cancel
+    case repair
+    case delete
+    case update
+
+    var title: String {
+      switch self {
+      case .download: "Download Enhanced Model"
+      case .cancel: "Cancel"
+      case .repair: "Repair"
+      case .delete: "Delete"
+      case .update: "Update"
+      }
+    }
+  }
+
+  struct DictationModelConsentPresentation: Equatable {
+    let downloadSize: String
+    let installedSize: String
+    let requirement: String
+    let language: String
+    let attribution: String
+    let privacyCopy: String
+
+    static let standard = Self(
+      downloadSize: "442.9 MiB",
+      installedSize: "442.9 MiB",
+      requirement: "Apple silicon",
+      language: "English",
+      attribution: "Parakeet TDT 0.6B V2 by NVIDIA, adapted for Core ML by FluidInference.",
+      privacyCopy:
+        "Motes downloads model files only after you confirm. It does not upload audio, transcripts, notes, titles, history, routing inputs, or other dictation data."
+    )
+  }
+
+  struct DictationSettingsPresentation {
+    let selectedEngine: DictationSpeechEngine
+    let enhancedChoiceEnabled: Bool
+    let primaryAction: DictationModelAction?
+    let secondaryAction: DictationModelAction?
+    let downloadProgress: Double?
+    let statusCopy: String
+    let architectureCopy: String?
+
+    init(
+      preferences: AppPreferences,
+      modelState: EnhancedModelState,
+      isArchitectureSupported: Bool,
+      enhancedIsReady: Bool
+    ) {
+      enhancedChoiceEnabled = isArchitectureSupported && enhancedIsReady
+      selectedEngine =
+        preferences.dictationSpeechEngine == .enhancedLocal && enhancedChoiceEnabled
+        ? .enhancedLocal : .standard
+      architectureCopy =
+        isArchitectureSupported ? nil : "Enhanced dictation requires Apple silicon."
+
+      switch modelState {
+      case .notInstalled:
+        primaryAction = isArchitectureSupported ? .download : nil
+        secondaryAction = nil
+        downloadProgress = nil
+        statusCopy = "Not Installed"
+      case .downloading(let progress):
+        primaryAction = .cancel
+        secondaryAction = nil
+        downloadProgress = progress
+        statusCopy = "Downloading"
+      case .verifying:
+        primaryAction = nil
+        secondaryAction = nil
+        downloadProgress = nil
+        statusCopy = "Verifying"
+      case .installing:
+        primaryAction = nil
+        secondaryAction = nil
+        downloadProgress = nil
+        statusCopy = "Installing"
+      case .ready:
+        primaryAction = .delete
+        secondaryAction = nil
+        downloadProgress = nil
+        statusCopy = "Ready"
+      case .updateAvailable:
+        primaryAction = .update
+        secondaryAction = .delete
+        downloadProgress = nil
+        statusCopy = "Update Available"
+      case .repairRequired(let message):
+        primaryAction = isArchitectureSupported ? .repair : nil
+        secondaryAction = nil
+        downloadProgress = nil
+        statusCopy = message
+      case .removing:
+        primaryAction = nil
+        secondaryAction = nil
+        downloadProgress = nil
+        statusCopy = "Removing"
+      }
+    }
+  }
 
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject var runtime: DictationRuntime
+    @ObservedObject private var modelManager: EnhancedModelManager
     @State private var selectedSection = SettingsSection.appearance
+    @State private var showsModelConsent = false
+    @State private var showsModelDeleteConfirmation = false
+    @State private var showsHistoryClearConfirmation = false
+    @State private var dictationError: String?
+    @State private var recoveryActions: [DictationSystemSettingsAction] = []
+    @State private var microphones: [DictationMicrophoneOption] = []
     @Namespace private var selectedSectionHighlight
 
-    private enum SettingsSection: String, CaseIterable, Identifiable {
-      case appearance = "Appearance"
-      case editing = "Editing"
-      case shortcuts = "Shortcuts"
-      var id: Self { self }
+    init(runtime: DictationRuntime) {
+      self.runtime = runtime
+      _modelManager = ObservedObject(wrappedValue: runtime.modelManager)
     }
 
     var body: some View {
@@ -28,6 +150,8 @@
             editing
           case .shortcuts:
             shortcuts
+          case .dictation:
+            dictation
           }
         }
         .formStyle(.grouped)
@@ -35,6 +159,67 @@
         .transition(.opacity)
       }
       .animation(motion.standard, value: selectedSection)
+      .task {
+        await modelManager.refreshState()
+        recoveryActions = runtime.permissionRecoveryActions()
+        microphones = DictationMicrophoneOption.available()
+        runtime.preferencesDidChange()
+      }
+      .sheet(isPresented: $showsModelConsent) {
+        ModelConsentView {
+          showsModelConsent = false
+        } onConfirm: {
+          showsModelConsent = false
+          runModelOperation(.download)
+        }
+      }
+      .confirmationDialog(
+        "Delete the Enhanced model?",
+        isPresented: $showsModelDeleteConfirmation
+      ) {
+        Button("Delete Model", role: .destructive) {
+          runModelOperation(.delete)
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("Enhanced dictation returns to Standard. You can download the model again later.")
+      }
+      .confirmationDialog(
+        "Clear all dictation history?",
+        isPresented: $showsHistoryClearConfirmation
+      ) {
+        Button("Clear History", role: .destructive) {
+          Task {
+            do {
+              try await runtime.historyStore.clear()
+            } catch {
+              dictationError = "Could not clear dictation history: \(error.localizedDescription)"
+            }
+          }
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("This removes all local transcript records. This cannot be undone.")
+      }
+      .alert(
+        "Dictation",
+        isPresented: Binding(
+          get: { dictationError != nil || runtime.modelError != nil },
+          set: {
+            if !$0 {
+              dictationError = nil
+              runtime.clearModelError()
+            }
+          }
+        )
+      ) {
+        Button("OK") {
+          dictationError = nil
+          runtime.clearModelError()
+        }
+      } message: {
+        Text(dictationError ?? runtime.modelError ?? "")
+      }
     }
 
     private var sectionSelector: some View {
@@ -56,7 +241,7 @@
                   RoundedRectangle(cornerRadius: 6)
                     .fill(Color.accentColor)
                     .matchedGeometryEffect(
-                      id: "settings-section",
+                      id: SettingsSection.selectionEffectID,
                       in: selectedSectionHighlight
                     )
                 }
@@ -199,6 +384,215 @@
       }
     }
 
+    private var dictationPresentation: DictationSettingsPresentation {
+      DictationSettingsPresentation(
+        preferences: appState.preferences,
+        modelState: modelManager.state,
+        isArchitectureSupported: modelManager.isArchitectureSupported,
+        enhancedIsReady: modelManager.verifiedLoadState.isReady
+      )
+    }
+
+    @ViewBuilder
+    private var dictation: some View {
+      Section("Availability") {
+        if recoveryActions.isEmpty {
+          Label(
+            "Standard dictation uses Apple on-device speech recognition.",
+            systemImage: "checkmark.shield"
+          )
+        } else {
+          ForEach(recoveryActions, id: \.pane) { action in
+            Button(action.title) {
+              NSWorkspace.shared.open(action.url)
+            }
+          }
+        }
+        if let architectureCopy = dictationPresentation.architectureCopy {
+          Label(architectureCopy, systemImage: "desktopcomputer.trianglebadge.exclamationmark")
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      Section("Speech Engine") {
+        Picker("Engine", selection: dictationEngineBinding) {
+          Text("Standard").tag(DictationSpeechEngine.standard)
+          Text("Enhanced")
+            .tag(DictationSpeechEngine.enhancedLocal)
+            .disabled(!dictationPresentation.enhancedChoiceEnabled)
+        }
+        .pickerStyle(.radioGroup)
+
+        HStack {
+          Text("Enhanced model")
+          Spacer()
+          Text(dictationPresentation.statusCopy)
+            .foregroundStyle(.secondary)
+        }
+
+        if let progress = dictationPresentation.downloadProgress {
+          ProgressView(value: progress)
+            .accessibilityLabel("Enhanced model download")
+            .accessibilityValue(progress.formatted(.percent.precision(.fractionLength(0))))
+        }
+
+        HStack {
+          if let action = dictationPresentation.primaryAction {
+            Button(action.title) {
+              handleModelAction(action)
+            }
+          }
+          if let action = dictationPresentation.secondaryAction {
+            Button(action.title, role: action == .delete ? .destructive : nil) {
+              handleModelAction(action)
+            }
+          }
+        }
+
+        let consent = DictationModelConsentPresentation.standard
+        LabeledContent("Download size", value: consent.downloadSize)
+        LabeledContent("Installed size", value: consent.installedSize)
+        LabeledContent("Requirement", value: consent.requirement)
+        LabeledContent("Language", value: consent.language)
+        Text(consent.attribution)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        HStack {
+          Link(
+            "Model attribution",
+            destination: URL(
+              string:
+                "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml"
+            )!
+          )
+          Button("Third-Party Notices") {
+            if let notices = Bundle.module.url(
+              forResource: "ThirdPartyNotices",
+              withExtension: "md"
+            ) {
+              NSWorkspace.shared.open(notices)
+            }
+          }
+        }
+      }
+
+      Section("Controls") {
+        HStack {
+          Text("Hold shortcut")
+          Spacer()
+          DictationShortcutRecorder(shortcut: dictationShortcutBinding)
+            .frame(width: 180, height: 28)
+        }
+        if let shortcutError = runtime.shortcutError {
+          Label(shortcutError, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption)
+            .foregroundStyle(.orange)
+        }
+
+        Picker("Microphone", selection: dictationMicrophoneBinding) {
+          Text("Automatic").tag(String?.none)
+          ForEach(microphones) { microphone in
+            Text(microphone.name).tag(Optional(microphone.id))
+          }
+        }
+
+        LabeledContent("Recognition language", value: "English")
+        Toggle("Show status capsule", isOn: dictationPreferenceBinding(\.dictationCapsuleEnabled))
+        Toggle(
+          "Keep local history for 30 days",
+          isOn: dictationPreferenceBinding(\.dictationHistoryEnabled)
+        )
+        Button("Clear History", role: .destructive) {
+          showsHistoryClearConfirmation = true
+        }
+      }
+
+      Section("Privacy") {
+        Text(DictationModelConsentPresentation.standard.privacyCopy)
+        Text(
+          "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
+        )
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
+    }
+
+    private var dictationEngineBinding: Binding<DictationSpeechEngine> {
+      Binding(
+        get: { dictationPresentation.selectedEngine },
+        set: { engine in
+          guard engine == .standard || dictationPresentation.enhancedChoiceEnabled else { return }
+          appState.updatePreferences { $0.dictationSpeechEngine = engine }
+          runtime.preferencesDidChange()
+        }
+      )
+    }
+
+    private var dictationShortcutBinding: Binding<DictationShortcut> {
+      Binding(
+        get: { appState.preferences.dictationShortcut },
+        set: { shortcut in
+          appState.updatePreferences { $0.dictationShortcut = shortcut }
+          runtime.preferencesDidChange()
+          guard shortcut.isEnabled else { return }
+          Task {
+            await runtime.requestPermissionsAfterShortcutSetup()
+            recoveryActions = runtime.permissionRecoveryActions()
+          }
+        }
+      )
+    }
+
+    private var dictationMicrophoneBinding: Binding<String?> {
+      Binding(
+        get: { appState.preferences.dictationMicrophoneUID },
+        set: { uid in
+          appState.updatePreferences { $0.dictationMicrophoneUID = uid }
+          runtime.preferencesDidChange()
+        }
+      )
+    }
+
+    private func dictationPreferenceBinding(
+      _ keyPath: WritableKeyPath<AppPreferences, Bool>
+    ) -> Binding<Bool> {
+      Binding(
+        get: { appState.preferences[keyPath: keyPath] },
+        set: { value in
+          appState.updatePreferences { $0[keyPath: keyPath] = value }
+          runtime.preferencesDidChange()
+        }
+      )
+    }
+
+    private func handleModelAction(_ action: DictationModelAction) {
+      switch action {
+      case .download:
+        showsModelConsent = true
+      case .cancel:
+        runtime.cancelModelOperation()
+      case .delete:
+        showsModelDeleteConfirmation = true
+      case .repair, .update:
+        runModelOperation(action)
+      }
+    }
+
+    private func runModelOperation(_ action: DictationModelAction) {
+      switch action {
+      case .download:
+        runtime.downloadModel()
+      case .repair:
+        runtime.repairModel()
+      case .update:
+        runtime.updateModel()
+      case .delete:
+        runtime.deleteModel()
+      case .cancel:
+        runtime.cancelModelOperation()
+      }
+    }
+
     private func preferenceBinding<Value>(_ keyPath: WritableKeyPath<AppPreferences, Value>)
       -> Binding<Value>
     {
@@ -304,6 +698,186 @@
         }
       }.joined()
       return symbols + key.uppercased()
+    }
+  }
+
+  private struct DictationMicrophoneOption: Identifiable {
+    let id: String
+    let name: String
+
+    static func available() -> [Self] {
+      AVCaptureDevice.DiscoverySession(
+        deviceTypes: [.microphone, .external],
+        mediaType: .audio,
+        position: .unspecified
+      ).devices
+        .map { Self(id: $0.uniqueID, name: $0.localizedName) }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+  }
+
+  private struct ModelConsentView: View {
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    private let consent = DictationModelConsentPresentation.standard
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 16) {
+        Text("Download Enhanced Model?")
+          .font(.title2.weight(.semibold))
+        Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
+          GridRow {
+            Text("Download")
+            Text(consent.downloadSize)
+          }
+          GridRow {
+            Text("Installed")
+            Text(consent.installedSize)
+          }
+          GridRow {
+            Text("Requirement")
+            Text(consent.requirement)
+          }
+          GridRow {
+            Text("Language")
+            Text(consent.language)
+          }
+        }
+        Text(consent.attribution)
+        Text(consent.privacyCopy)
+          .foregroundStyle(.secondary)
+        HStack {
+          Spacer()
+          Button("Cancel", role: .cancel, action: onCancel)
+          Button("Download", action: onConfirm)
+            .keyboardShortcut(.defaultAction)
+        }
+      }
+      .padding(24)
+      .frame(width: 460)
+    }
+  }
+
+  private struct DictationShortcutRecorder: NSViewRepresentable {
+    @Binding var shortcut: DictationShortcut
+
+    func makeCoordinator() -> Coordinator {
+      Coordinator(shortcut: $shortcut)
+    }
+
+    func makeNSView(context: Context) -> RecorderButton {
+      let button = RecorderButton()
+      button.onShortcut = { [weak coordinator = context.coordinator] shortcut in
+        coordinator?.shortcut.wrappedValue = shortcut
+      }
+      button.update(shortcut)
+      return button
+    }
+
+    func updateNSView(_ button: RecorderButton, context: Context) {
+      context.coordinator.shortcut = $shortcut
+      button.update(shortcut)
+    }
+
+    @MainActor
+    final class Coordinator {
+      var shortcut: Binding<DictationShortcut>
+
+      init(shortcut: Binding<DictationShortcut>) {
+        self.shortcut = shortcut
+      }
+    }
+
+    @MainActor
+    final class RecorderButton: NSButton {
+      var onShortcut: ((DictationShortcut) -> Void)?
+      private var isRecording = false
+
+      override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        bezelStyle = .rounded
+        setButtonType(.momentaryPushIn)
+        setAccessibilityLabel("Hold shortcut")
+        setAccessibilityHelp("Click, then type a key with one or more modifiers.")
+      }
+
+      required init?(coder: NSCoder) {
+        nil
+      }
+
+      override var acceptsFirstResponder: Bool { true }
+
+      override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        isRecording = true
+        title = "Type shortcut…"
+      }
+
+      override func keyDown(with event: NSEvent) {
+        guard isRecording else {
+          super.keyDown(with: event)
+          return
+        }
+        if event.keyCode == 53 {
+          isRecording = false
+          return
+        }
+        if event.keyCode == 51 || event.keyCode == 117 {
+          isRecording = false
+          onShortcut?(DictationShortcut())
+          return
+        }
+
+        let modifiers = Self.carbonModifiers(event.modifierFlags)
+        guard modifiers != 0 else {
+          NSSound.beep()
+          return
+        }
+        isRecording = false
+        onShortcut?(
+          DictationShortcut(
+            keyCode: UInt32(event.keyCode),
+            carbonModifiers: modifiers
+          )
+        )
+      }
+
+      func update(_ shortcut: DictationShortcut) {
+        guard !isRecording else { return }
+        title = Self.title(for: shortcut)
+        setAccessibilityValue(title)
+      }
+
+      private static func carbonModifiers(_ flags: NSEvent.ModifierFlags) -> UInt32 {
+        var result: UInt32 = 0
+        if flags.contains(.command) { result |= UInt32(cmdKey) }
+        if flags.contains(.shift) { result |= UInt32(shiftKey) }
+        if flags.contains(.control) { result |= UInt32(controlKey) }
+        if flags.contains(.option) { result |= UInt32(optionKey) }
+        return result
+      }
+
+      private static func title(for shortcut: DictationShortcut) -> String {
+        guard let keyCode = shortcut.keyCode, shortcut.carbonModifiers != 0 else {
+          return "Record Shortcut"
+        }
+        var result = ""
+        if shortcut.carbonModifiers & UInt32(controlKey) != 0 { result += "⌃" }
+        if shortcut.carbonModifiers & UInt32(optionKey) != 0 { result += "⌥" }
+        if shortcut.carbonModifiers & UInt32(shiftKey) != 0 { result += "⇧" }
+        if shortcut.carbonModifiers & UInt32(cmdKey) != 0 { result += "⌘" }
+        return result + keyName(keyCode)
+      }
+
+      private static func keyName(_ keyCode: UInt32) -> String {
+        [
+          0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X",
+          8: "C", 9: "V", 11: "B", 12: "Q", 13: "W", 14: "E", 15: "R",
+          16: "Y", 17: "T", 31: "O", 32: "U", 34: "I", 35: "P", 37: "L",
+          38: "J", 40: "K", 45: "N", 46: "M", 49: "Space",
+        ][keyCode] ?? "Key \(keyCode)"
+      }
     }
   }
 #endif
