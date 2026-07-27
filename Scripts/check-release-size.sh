@@ -296,13 +296,6 @@ toolchain_root="$(physical_directory "$swiftc_directory/../..")" || {
   exit 2
 }
 swift_syntax_host="$toolchain_root/usr/lib/swift/host"
-if [[ ! -d "$swift_syntax_host/SwiftSyntax.swiftmodule" \
-  || ! -d "$swift_syntax_host/SwiftParser.swiftmodule" \
-  || ! -d "$swift_syntax_host/SwiftIfConfig.swiftmodule" ]]; then
-  printf 'error: active Swift toolchain lacks required host Swift modules: %s\n' \
-    "$swift_syntax_host" >&2
-  exit 2
-fi
 
 if [[ ! -x /usr/bin/plutil ]]; then
   printf 'error: plutil is required for Swift target inspection\n' >&2
@@ -343,6 +336,29 @@ extract_target_value() {
 active_target_arch="$(extract_target_value target.arch)"
 active_target_base="$(extract_target_value target.unversionedTriple)"
 active_compiler_version="$(extract_target_value compilerVersion)"
+active_compiler_version_number="$(
+  printf '%s\n' "$active_compiler_version" \
+    | /usr/bin/sed -E -n 's/.*Swift version ([0-9]+(\.[0-9]+)+).*/\1/p'
+)"
+active_compiler_major="${active_compiler_version_number%%.*}"
+active_compiler_version_tail="${active_compiler_version_number#*.}"
+active_compiler_minor="${active_compiler_version_tail%%.*}"
+if [[ -z "$active_compiler_version_number" \
+  || "$active_compiler_major" == *[!0-9]* \
+  || "$active_compiler_minor" == *[!0-9]* ]] \
+  || (( active_compiler_major < 6 \
+    || (active_compiler_major == 6 && active_compiler_minor < 1) )); then
+  printf 'error: release source inspection requires Xcode 16.3 or later with Swift 6.1 or later (found: %s)\n' \
+    "$active_compiler_version" >&2
+  exit 2
+fi
+if [[ ! -d "$swift_syntax_host/SwiftSyntax.swiftmodule" \
+  || ! -d "$swift_syntax_host/SwiftParser.swiftmodule" \
+  || ! -d "$swift_syntax_host/SwiftIfConfig.swiftmodule" ]]; then
+  printf 'error: release source inspection requires Xcode 16.3 or later with Swift 6.1 or later and host SwiftSyntax, SwiftParser, and SwiftIfConfig modules: %s\n' \
+    "$swift_syntax_host" >&2
+  exit 2
+fi
 case "$active_target_base" in
   *-apple-macosx)
     ;;
@@ -414,7 +430,8 @@ final class ReleaseBuildConfiguration: BuildConfiguration {
   }
 
   func isCustomConditionSet(name: String) -> Bool {
-    false
+    name == "SWIFT_PACKAGE"
+      || name == "SWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE"
   }
 
   func hasFeature(name: String) throws -> Bool {

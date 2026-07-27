@@ -8,7 +8,9 @@
 ## Requirements
 
 - A Mac running macOS 14 Sonoma or later.
-- Xcode 16 or later, installed from Apple.
+- Xcode 16.3 or later with Swift 6.1 or later, installed from Apple. This
+  release-validation toolchain requirement is separate from the macOS 14
+  deployment minimum.
 - The Xcode command-line tools selected with `xcode-select`.
 - A local checkout of this repository on the branch or pull request being tested.
 
@@ -82,14 +84,18 @@ symlinks under `Sources`; resolves and deduplicates their physical targets;
 and fails closed on broken links, cycles, or traversal errors.
 
 For source assertions, the gate generates and compiles a temporary structural
-inspector using the active Xcode toolchain's host `SwiftSyntax` and
-`SwiftParser` and `SwiftIfConfig` modules. It adds no package or network
+inspector using the active Xcode toolchain's host `SwiftSyntax`, `SwiftParser`,
+and `SwiftIfConfig` modules. It adds no package or network
 dependency. `SwiftParser` parses every discovered production file, and
 malformed syntax fails closed. `SwiftIfConfig` evaluates required assignments
 for the package's macOS 14 release target; compiler-backed `canImport` checks
-use release flags and unknown conditions fail closed. Forbidden findings remain
-conservative across all branches. `SwiftSyntax` then reports only the specific
-member-access and assignment findings owned by this gate. Transparent
+use release flags, and the app target's SwiftPM-generated `SWIFT_PACKAGE` and
+`SWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE` conditions are active. `Package.swift`
+currently defines no additional app-target release `-D` flags; if that changes,
+update this adapter and its positive/negated condition fixtures. Unknown
+conditions fail closed. Forbidden findings remain conservative across all
+branches. `SwiftSyntax` then reports only the specific member-access and
+assignment findings owned by this gate. Transparent
 parentheses, single-element tuples, and metatype `.self` wrappers are
 normalized recursively without alias analysis. Comments,
 ordinary/raw strings, and bare or extended regex literals are inert, while
@@ -199,6 +205,12 @@ Linux-only versus macOS-active branches, `#elseif`/`#else`, nested conditions,
 `canImport`, Swift/compiler versions, architecture checks, fail-closed unknown
 conditions, and recursive parentheses/metatype `.self` wrappers. Forbidden
 false assignments and forbidden member accesses remain all-branch checks.
+
+Fix Round 6 models the two SwiftPM-generated app-target custom conditions and
+adds positive and negated fixtures for both. The gate now rejects toolchains
+older than Swift 6.1 and toolchains missing the host `SwiftSyntax`,
+`SwiftParser`, or `SwiftIfConfig` modules with an explicit Xcode 16.3+/Swift
+6.1+ prerequisite message.
 
 ### Manual release blockers
 
