@@ -127,6 +127,7 @@
     private let clock: @Sendable () -> Date
     private let transport: any ModelDownloading
     private let assessmentDidComplete: @Sendable () -> Void
+    private let cleanupWillBegin: @Sendable () -> Void
     private let resumeAuthenticationKeyProvider: @Sendable () throws -> SymmetricKey
     private var stateChangedAt: Date
     private var activeOperationID: UUID?
@@ -155,6 +156,7 @@
       clock: @escaping @Sendable () -> Date = { Date() },
       transport: any ModelDownloading = URLSessionModelDownloader(),
       assessmentDidComplete: @escaping @Sendable () -> Void = {},
+      cleanupWillBegin: @escaping @Sendable () -> Void = {},
       resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
         try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
       }
@@ -174,6 +176,7 @@
       self.clock = clock
       self.transport = transport
       self.assessmentDidComplete = assessmentDidComplete
+      self.cleanupWillBegin = cleanupWillBegin
       self.resumeAuthenticationKeyProvider = resumeAuthenticationKeyProvider
       stateChangedAt = clock()
     }
@@ -429,9 +432,18 @@
 
         setState(.installing)
         let installedRepository = try await Task.detached {
-          try Self.installVerifiedStaging(context, manifest: manifest)
+          try Self.commitVerifiedStaging(context, manifest: manifest)
         }.value
         verifiedRepositoryURL = installedRepository
+        let cleanupWillBegin = cleanupWillBegin
+        try await Task.detached {
+          cleanupWillBegin()
+          try Self.cleanupCommittedInstallation(
+            context,
+            manifest: manifest,
+            installedRepository: installedRepository
+          )
+        }.value
         finishOperation(operationID)
         setState(.ready)
       } catch {
@@ -504,14 +516,21 @@
       )
     }
 
-    nonisolated private static func loadOrCreateResumeAuthenticationKey() throws
-      -> SymmetricKey
+    nonisolated static func resumeAuthenticationKeychainBaseQuery()
+      -> [CFString: Any]
     {
-      let baseQuery: [CFString: Any] = [
+      [
         kSecClass: kSecClassGenericPassword,
         kSecAttrService: "com.motes.enhanced-model-resume",
         kSecAttrAccount: "default",
+        kSecUseDataProtectionKeychain: true,
       ]
+    }
+
+    nonisolated private static func loadOrCreateResumeAuthenticationKey() throws
+      -> SymmetricKey
+    {
+      let baseQuery = resumeAuthenticationKeychainBaseQuery()
       var lookup = baseQuery
       lookup[kSecReturnData] = true
       lookup[kSecMatchLimit] = kSecMatchLimitOne
@@ -827,7 +846,7 @@
       }
     }
 
-    nonisolated private static func installVerifiedStaging(
+    nonisolated private static func commitVerifiedStaging(
       _ context: FileContext,
       manifest: EnhancedModelManifest
     ) throws -> URL {
@@ -841,8 +860,15 @@
       let final = context.installedRevision(manifest.revision)
       try removeOwnedTreeIfPresent(final, context: context)
       try context.fileManager.moveItem(at: staging, to: final)
-      let installedRepository = try repositoryURL(under: final, manifest: manifest)
+      return try repositoryURL(under: final, manifest: manifest)
+    }
 
+    nonisolated private static func cleanupCommittedInstallation(
+      _ context: FileContext,
+      manifest: EnhancedModelManifest,
+      installedRepository: URL
+    ) throws {
+      let final = context.installedRevision(manifest.revision)
       do {
         let revisions = try context.fileManager.contentsOfDirectory(
           at: context.installedRoot,
@@ -860,7 +886,6 @@
           message: error.localizedDescription
         )
       }
-      return installedRepository
     }
 
     nonisolated private static func createOwnedDirectory(
@@ -1074,9 +1099,15 @@
       remoteURL: URL
     ) -> ModelResumeToken? {
       resumeLock.withLock {
-        sessionProducedResumeData[data] == remoteURL
-          ? ModelResumeToken(issuedData: data)
-          : nil
+        guard sessionProducedResumeData[data] == remoteURL else { return nil }
+        sessionProducedResumeData.removeValue(forKey: data)
+        return ModelResumeToken(issuedData: data)
+      }
+    }
+
+    func recordSessionProducedResumeData(_ data: Data, for remoteURL: URL) {
+      resumeLock.withLock {
+        sessionProducedResumeData[data] = remoteURL
       }
     }
 
@@ -1103,9 +1134,7 @@
         }
       } catch ModelDownloadError.cancelled(let data) {
         if let data {
-          resumeLock.withLock {
-            sessionProducedResumeData[data] = remoteURL
-          }
+          recordSessionProducedResumeData(data, for: remoteURL)
         }
         throw ModelDownloadError.cancelled(resumeData: data)
       }

@@ -1,6 +1,7 @@
 import CryptoKit
 import Combine
 import Foundation
+import Security
 import Testing
 
 @testable import MenuBarNotesApp
@@ -236,6 +237,36 @@ struct EnhancedModelManagerTests {
     #expect(
       downloader.sessionProducedResumeToken(
         for: strictResumeData(originalURL: pinnedURL, currentURL: pinnedURL),
+        remoteURL: pinnedURL
+      ) == nil
+    )
+  }
+
+  @Test func resumeKeychainQueryUsesTheDataProtectionKeychain() {
+    let query = EnhancedModelManager.resumeAuthenticationKeychainBaseQuery()
+
+    #expect(query[kSecClass] as? String == kSecClassGenericPassword as String)
+    #expect(query[kSecUseDataProtectionKeychain] as? Bool == true)
+  }
+
+  @Test func productionResumeTokenIsConsumedWhenIssued() throws {
+    let downloader = URLSessionModelDownloader()
+    let data = validResumeData()
+    let pinnedURL = try EnhancedModelManager.remoteURL(
+      for: testManifest.files[0],
+      manifest: testManifest
+    )
+    downloader.recordSessionProducedResumeData(data, for: pinnedURL)
+
+    #expect(
+      downloader.sessionProducedResumeToken(
+        for: data,
+        remoteURL: pinnedURL
+      ) != nil
+    )
+    #expect(
+      downloader.sessionProducedResumeToken(
+        for: data,
         remoteURL: pinnedURL
       ) == nil
     )
@@ -579,6 +610,60 @@ struct EnhancedModelManagerTests {
     )
   }
 
+  @Test @MainActor func publishesNewRepositoryBeforeOldCleanupBegins() async throws {
+    let current = EnhancedModelManifest(
+      schemaVersion: 1,
+      modelID: testManifest.modelID,
+      revision: "new-revision",
+      totalByteCount: testManifest.totalByteCount,
+      files: testManifest.files
+    )
+    let cleanup = CleanupControl()
+    let fixture = try Fixture(
+      manifest: current,
+      trustedManifests: [testManifest, current],
+      cleanupWillBegin: {
+        cleanup.pause()
+      }
+    )
+    defer {
+      cleanup.resume()
+      fixture.remove()
+    }
+    try fixture.install(manifest: testManifest)
+    await fixture.manager.refreshState()
+    fixture.transport.handler = { _, _, _ in
+      ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+    let update = Task { @MainActor in
+      try await fixture.manager.update()
+    }
+
+    await cleanup.waitUntilPaused()
+
+    let newRepository = fixture.repositoryURL(for: current)
+    #expect(fixture.manager.verifiedRepositoryURL == newRepository)
+    #expect(
+      fixture.manager.verifiedLoadState == .ready(repositoryURL: newRepository)
+    )
+    #expect(
+      FileManager.default.fileExists(
+        atPath: fixture.installedURL
+          .appendingPathComponent(testManifest.revision)
+          .path
+      )
+    )
+
+    cleanup.resume()
+    try await update.value
+
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == newRepository)
+  }
+
   @Test @MainActor func installedManifestCannotAuthorizeAnUnshippedRevision() async throws {
     let current = EnhancedModelManifest(
       schemaVersion: 1,
@@ -774,6 +859,7 @@ private final class Fixture {
     capacity: Int64 = .max,
     trustedManifests: [EnhancedModelManifest]? = nil,
     assessmentDidComplete: @escaping @Sendable () -> Void = {},
+    cleanupWillBegin: @escaping @Sendable () -> Void = {},
     resumeAuthenticationKey: SymmetricKey = testResumeAuthenticationKey
   ) throws {
     root = temporaryRoot()
@@ -788,6 +874,7 @@ private final class Fixture {
       clock: { Date() },
       transport: transport,
       assessmentDidComplete: assessmentDidComplete,
+      cleanupWillBegin: cleanupWillBegin,
       resumeAuthenticationKeyProvider: { resumeAuthenticationKey }
     )
   }
@@ -1018,6 +1105,48 @@ private final class LockedCounter: @unchecked Sendable {
 
   func increment() {
     lock.withLock { count += 1 }
+  }
+}
+
+private final class CleanupControl: @unchecked Sendable {
+  private let resumeCleanup = DispatchSemaphore(value: 0)
+  private let lock = NSLock()
+  private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
+  private var isPaused = false
+  private var didResume = false
+
+  func pause() {
+    let waiters = lock.withLock {
+      isPaused = true
+      defer { pauseWaiters.removeAll() }
+      return pauseWaiters
+    }
+    waiters.forEach { $0.resume() }
+    resumeCleanup.wait()
+  }
+
+  func waitUntilPaused() async {
+    await withCheckedContinuation { continuation in
+      let resumeNow = lock.withLock {
+        guard !isPaused else { return true }
+        pauseWaiters.append(continuation)
+        return false
+      }
+      if resumeNow {
+        continuation.resume()
+      }
+    }
+  }
+
+  func resume() {
+    let shouldSignal = lock.withLock {
+      guard !didResume else { return false }
+      didResume = true
+      return true
+    }
+    if shouldSignal {
+      resumeCleanup.signal()
+    }
   }
 }
 
