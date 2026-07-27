@@ -59,7 +59,9 @@
       }
     }
 
-    func save(_ record: DictationHistoryRecord) async {
+    @discardableResult
+    func save(_ record: DictationHistoryRecord) async -> Bool {
+      var saved = false
       await enqueue {
         let previous = self.records
         self.records.removeAll { $0.id == record.id }
@@ -68,11 +70,13 @@
         do {
           try await self.saveOperation(record)
           self.errorMessage = nil
+          saved = true
         } catch {
           self.records = previous
           self.errorMessage = "Could not update dictation history: \(error.localizedDescription)"
         }
       }
+      return saved
     }
 
     func delete(_ id: UUID) async {

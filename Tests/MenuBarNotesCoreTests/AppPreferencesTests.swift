@@ -3,6 +3,11 @@ import Testing
 
 @testable import MenuBarNotesCore
 
+@Test func packageGraphControlsEnhancedCandidateEvaluation() {
+  let optedIn = ProcessInfo.processInfo.environment["MOTES_ENHANCED_CANDIDATE"] == "1"
+  #expect(CleanDictationFeatures.enhancedLocalCandidateEnabled == optedIn)
+}
+
 @Test func dictationPreferencesUseStandardPrivateDefaults() throws {
   let value = AppPreferences()
   #expect(value.dictationSpeechEngine == .standard)

@@ -50,6 +50,7 @@ struct EnhancedModelManagerTests {
     let manager = EnhancedModelManager(
       modelRootURL: root,
       manifest: testManifest,
+      candidateEnabled: true,
       capacityProvider: {
         capacity.increment()
         return Int64.max
@@ -300,6 +301,7 @@ struct EnhancedModelManagerTests {
     let restartedManager = EnhancedModelManager(
       modelRootURL: fixture.root,
       manifest: testManifest,
+      candidateEnabled: true,
       capacityProvider: { .max },
       architectureProvider: { true },
       transport: restartedTransport,
@@ -349,6 +351,7 @@ struct EnhancedModelManagerTests {
     let restartedManager = EnhancedModelManager(
       modelRootURL: fixture.root,
       manifest: testManifest,
+      candidateEnabled: true,
       capacityProvider: { .max },
       architectureProvider: { true },
       transport: restartedTransport,
@@ -685,61 +688,63 @@ struct EnhancedModelManagerTests {
     #expect(fixture.manager.verifiedRepositoryURL == nil)
   }
 
-  @Test @MainActor func updateAvailableRepositoryCanStartEnhancedSpeech() async throws {
-    let current = EnhancedModelManifest(
-      schemaVersion: 1,
-      modelID: testManifest.modelID,
-      revision: "new-revision",
-      totalByteCount: testManifest.totalByteCount,
-      files: testManifest.files
-    )
-    let fixture = try Fixture(
-      manifest: current,
-      trustedManifests: [testManifest, current]
-    )
-    defer { fixture.remove() }
-    try fixture.install(manifest: testManifest)
-    await fixture.manager.refreshState()
-    let inference = EnhancedInferenceSpy()
-    let audio = EnhancedAudioSpy(samples: [0.2])
-    let capture = EnhancedSpeechCapture(
-      modelManager: fixture.manager,
-      makeInference: { inference },
-      makeAudio: { _ in audio }
-    )
+  #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+    @Test @MainActor func updateAvailableRepositoryCanStartEnhancedSpeech() async throws {
+      let current = EnhancedModelManifest(
+        schemaVersion: 1,
+        modelID: testManifest.modelID,
+        revision: "new-revision",
+        totalByteCount: testManifest.totalByteCount,
+        files: testManifest.files
+      )
+      let fixture = try Fixture(
+        manifest: current,
+        trustedManifests: [testManifest, current]
+      )
+      defer { fixture.remove() }
+      try fixture.install(manifest: testManifest)
+      await fixture.manager.refreshState()
+      let inference = EnhancedInferenceSpy()
+      let audio = EnhancedAudioSpy(samples: [0.2])
+      let capture = EnhancedSpeechCapture(
+        modelManager: fixture.manager,
+        makeInference: { inference },
+        makeAudio: { _ in audio }
+      )
 
-    try await capture.start(provisional: { _ in }, level: { _ in })
-    _ = try await capture.finish()
-
-    #expect(fixture.manager.state == .updateAvailable)
-    #expect(inference.loadURLs == [fixture.repositoryURL(for: testManifest)])
-    #expect(fixture.transport.callCount == 0)
-  }
-
-  @Test @MainActor func EnhancedSpeechLoadFailureInvalidatesTheVerifiedRepository() async throws {
-    let fixture = try Fixture()
-    defer { fixture.remove() }
-    try fixture.install()
-    await fixture.manager.refreshState()
-    let inference = EnhancedInferenceSpy()
-    inference.loadError = EnhancedTestFailure.failed
-    let capture = EnhancedSpeechCapture(
-      modelManager: fixture.manager,
-      makeInference: { inference },
-      makeAudio: { _ in EnhancedAudioSpy(samples: []) }
-    )
-
-    await #expect(throws: EnhancedTestFailure.failed) {
       try await capture.start(provisional: { _ in }, level: { _ in })
+      _ = try await capture.finish()
+
+      #expect(fixture.manager.state == .updateAvailable)
+      #expect(inference.loadURLs == [fixture.repositoryURL(for: testManifest)])
+      #expect(fixture.transport.callCount == 0)
     }
 
-    #expect(
-      fixture.manager.state
-        == .repairRequired(message: EnhancedTestFailure.failed.localizedDescription)
-    )
-    #expect(fixture.manager.verifiedLoadState == .unavailable)
-    #expect(fixture.manager.verifiedRepositoryURL == nil)
-  }
+    @Test @MainActor func EnhancedSpeechLoadFailureInvalidatesTheVerifiedRepository() async throws {
+      let fixture = try Fixture()
+      defer { fixture.remove() }
+      try fixture.install()
+      await fixture.manager.refreshState()
+      let inference = EnhancedInferenceSpy()
+      inference.loadError = EnhancedTestFailure.failed
+      let capture = EnhancedSpeechCapture(
+        modelManager: fixture.manager,
+        makeInference: { inference },
+        makeAudio: { _ in EnhancedAudioSpy(samples: []) }
+      )
+
+      await #expect(throws: EnhancedTestFailure.failed) {
+        try await capture.start(provisional: { _ in }, level: { _ in })
+      }
+
+      #expect(
+        fixture.manager.state
+          == .repairRequired(message: EnhancedTestFailure.failed.localizedDescription)
+      )
+      #expect(fixture.manager.verifiedLoadState == .unavailable)
+      #expect(fixture.manager.verifiedRepositoryURL == nil)
+    }
+  #endif
 
   @Test @MainActor func cleanupFailureAfterMoveAdoptsTheNewVerifiedRevision() async throws {
     let current = EnhancedModelManifest(
@@ -882,6 +887,7 @@ struct EnhancedModelManagerTests {
         .appendingPathComponent("nested", isDirectory: true)
         .appendingPathComponent("DictationModels", isDirectory: true),
       manifest: testManifest,
+      candidateEnabled: true,
       capacityProvider: { .max },
       architectureProvider: { true },
       transport: TestTransport()
@@ -1055,6 +1061,7 @@ private final class Fixture {
       modelRootURL: root,
       manifest: manifest,
       trustedManifests: trustedManifests,
+      candidateEnabled: true,
       capacityProvider: { capacity },
       architectureProvider: { true },
       clock: { Date() },

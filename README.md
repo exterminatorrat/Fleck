@@ -22,4 +22,14 @@ and do not describe it as shipping.
 
 GitHub is the source of truth for this project. Changes should be made on a focused branch, committed with a descriptive message, pushed to GitHub, and submitted through a pull request. Keep application changes, relevant tests, and documentation together so the repository always reflects the current state of the product.
 
+Ordinary builds exclude the Enhanced Local SDK and implementation. To compile
+and run the developer-only Enhanced candidate tests, opt in explicitly:
+
+```sh
+MOTES_ENHANCED_CANDIDATE=1 swift test
+```
+
+Never set that variable for release validation; `Scripts/validate-macos.sh` and
+`Scripts/check-release-size.sh` fail closed when it is present.
+
 Do not commit credentials, signing keys, provisioning profiles, local configuration containing secrets, or generated build output.

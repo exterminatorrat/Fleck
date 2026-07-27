@@ -23,7 +23,7 @@ import Testing
   editor.updateFocusedDictation(provisionalText: "draft")
   #expect(textView.string == "Keep draft please")
 
-  #expect(editor.commitFocusedDictation(text: "final"))
+  #expect(editor.commitFocusedDictation(text: "final") != nil)
   #expect(textView.string == "Keep final please")
 }
 
@@ -69,7 +69,7 @@ import Testing
 
   #expect(editor.beginFocusedDictation())
   editor.updateFocusedDictation(provisionalText: "draft")
-  #expect(editor.commitFocusedDictation(text: "final"))
+  #expect(editor.commitFocusedDictation(text: "final") != nil)
   #expect(textView.string == "Keep final please")
 
   let undoManager = try #require(textView.undoManager)
@@ -89,7 +89,7 @@ import Testing
   editor.updateFocusedDictation(provisionalText: "draft")
   textView.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 0), with: "!")
   editor.updateFocusedDictation(provisionalText: "second")
-  #expect(editor.commitFocusedDictation(text: "final"))
+  #expect(editor.commitFocusedDictation(text: "final") != nil)
 
   #expect(textView.string == "!before finalafter")
 }
@@ -108,7 +108,7 @@ import Testing
   #expect(origin.string == "Replace this")
   #expect(origin.selectedRange() == NSRange(location: 0, length: 7))
   #expect(replacementView.string == "Other note")
-  #expect(!editor.commitFocusedDictation(text: "Final"))
+  #expect(editor.commitFocusedDictation(text: "Final") == nil)
 }
 
 @Test @MainActor func focusedDictationDelegateSnapshotsExcludeProvisionalTextAndCancelCannotReloadIt()
@@ -141,7 +141,7 @@ import Testing
   let editor: any FocusedDictationEditing = commands
   #expect(editor.beginFocusedDictation())
   editor.updateFocusedDictation(provisionalText: "Draft")
-  #expect(editor.commitFocusedDictation(text: "Final"))
+  #expect(editor.commitFocusedDictation(text: "Final") != nil)
 
   let undoManager = try #require(textView.undoManager)
   undoManager.undo()

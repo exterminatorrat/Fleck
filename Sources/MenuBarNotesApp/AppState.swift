@@ -162,10 +162,30 @@
       }
     }
 
-    func flushFocusedDictationSave() async throws {
+    func flushFocusedDictationSave(
+      captureID: UUID
+    ) async throws -> FocusedDictationPersistenceReceipt {
       beginAwaitedSave()
       defer { endAwaitedSave() }
       try await saveNow(transactionOwned: true).value
+      return FocusedDictationPersistenceReceipt(captureID: captureID)
+    }
+
+    func flushFocusedDictationSave() async throws {
+      _ = try await flushFocusedDictationSave(captureID: UUID())
+    }
+
+    func compensateFocusedDictationSave(
+      _ receipt: FocusedDictationPersistenceReceipt
+    ) async -> Bool {
+      beginAwaitedSave()
+      defer { endAwaitedSave() }
+      do {
+        try await saveNow(transactionOwned: true).value
+        return true
+      } catch {
+        return false
+      }
     }
 
     func select(_ id: UUID) {

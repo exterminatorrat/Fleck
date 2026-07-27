@@ -1,4 +1,4 @@
-#if os(macOS)
+#if os(macOS) && CLEAN_DICTATION_ENHANCED_CANDIDATE
   @preconcurrency import AVFAudio
   import FluidAudio
   import Foundation
@@ -26,10 +26,17 @@
 
   @MainActor
   protocol EnhancedAudioCapturing: AnyObject {
+    func selectMicrophone(savedUID: String?) -> MicrophoneSelection
     func start(level: @escaping @MainActor (Float) -> Void) throws
     func stopAndTakeSamples() throws -> [Float]
     func cancel()
     func releaseResources()
+  }
+
+  extension EnhancedAudioCapturing {
+    func selectMicrophone(savedUID _: String?) -> MicrophoneSelection {
+      .automatic
+    }
   }
 
   @MainActor
@@ -65,6 +72,11 @@
     }
 
     private let verifiedLoadState: @MainActor () -> EnhancedModelVerifiedLoadState
+    private let requestPermission: @MainActor (
+      DictationSpeechEngine
+    ) async -> DictationPermissionResult
+    private let microphoneUID: String?
+    private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
     private let makeInference: @MainActor () -> any EnhancedSpeechInferring
     private let makeAudio: @MainActor (
       EnhancedAudioConfiguration
@@ -82,6 +94,11 @@
 
     init(
       verifiedLoadState: @escaping @MainActor () -> EnhancedModelVerifiedLoadState,
+      requestPermission: @escaping @MainActor (
+        DictationSpeechEngine
+      ) async -> DictationPermissionResult = { _ in .granted },
+      microphoneUID: String? = nil,
+      microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void = { _ in },
       makeInference: @escaping @MainActor () -> any EnhancedSpeechInferring = {
         FluidEnhancedSpeechInference()
       },
@@ -95,6 +112,9 @@
     ) {
       ModelHub.offlineMode = true
       self.verifiedLoadState = verifiedLoadState
+      self.requestPermission = requestPermission
+      self.microphoneUID = microphoneUID
+      self.microphoneSelectionChanged = microphoneSelectionChanged
       self.makeInference = makeInference
       self.makeAudio = makeAudio
       self.markRepairRequired = markRepairRequired
@@ -103,6 +123,9 @@
 
     convenience init(
       modelManager: EnhancedModelManager,
+      permissions: DictationPermissionController = .init(),
+      microphoneUID: String? = nil,
+      microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void = { _ in },
       makeInference: @escaping @MainActor () -> any EnhancedSpeechInferring = {
         FluidEnhancedSpeechInference()
       },
@@ -117,6 +140,11 @@
         verifiedLoadState: { [weak modelManager] in
           modelManager?.verifiedLoadState ?? .unavailable
         },
+        requestPermission: { engine in
+          await permissions.requestAccess(for: engine, after: .toolbarMicrophone)
+        },
+        microphoneUID: microphoneUID,
+        microphoneSelectionChanged: microphoneSelectionChanged,
         makeInference: makeInference,
         makeAudio: makeAudio,
         markRepairRequired: { [weak modelManager] message, repositoryURL in
@@ -135,6 +163,9 @@
     ) async throws {
       guard !hasActiveResources else {
         throw DictationFailure.unavailable
+      }
+      guard case .granted = await requestPermission(.enhancedLocal) else {
+        throw DictationFailure.permissionDenied
       }
 
       ModelHub.offlineMode = true
@@ -187,6 +218,7 @@
         let audio = try makeAudio(.inference)
         let resources = Resources(inference: inference, audio: audio)
         self.resources = resources
+        microphoneSelectionChanged(audio.selectMicrophone(savedUID: microphoneUID))
         try audio.start(level: level)
         self.loadingResources = nil
       } catch {
@@ -652,6 +684,11 @@
         throw DictationFailure.unavailable
       }
       engine = AVAudioEngine()
+    }
+
+    func selectMicrophone(savedUID: String?) -> MicrophoneSelection {
+      guard let engine else { return .automatic }
+      return CoreAudioMicrophone.select(savedUID: savedUID, for: engine.inputNode)
     }
 
     func start(level: @escaping @MainActor (Float) -> Void) throws {

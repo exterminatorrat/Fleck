@@ -14,6 +14,14 @@
       var undoGroupOpen = false
     }
 
+    private struct CommittedFocusedDictation {
+      let receipt: FocusedDictationCommitReceipt
+      let originalSelection: NSRange
+      let originalAttributedSelection: NSAttributedString
+      let finalRange: NSRange
+      let finalAttributedText: NSAttributedString
+    }
+
     private static let focusedDictationAttribute = NSAttributedString.Key(
       "MotesFocusedDictationProvisional"
     )
@@ -33,6 +41,8 @@
       }
     }
     private var focusedDictation: FocusedDictationTransaction?
+    private var committedFocusedDictation: CommittedFocusedDictation?
+    private var activeFocusedUndoReceipts = Set<FocusedDictationCommitReceipt>()
     private weak var focusedDictationTextView: NSTextView?
     private weak var focusedDictationStorage: NSTextStorage?
     private var focusedDictationTextViewID: ObjectIdentifier?
@@ -187,9 +197,11 @@
       return (textView, storage)
     }
 
-    private func clearFocusedDictation() {
+    private func clearFocusedDictation(keepingOrigin: Bool = false) {
       stopObservingFocusedDictationEdits()
       focusedDictation = nil
+      guard !keepingOrigin else { return }
+      committedFocusedDictation = nil
       focusedDictationTextView = nil
       focusedDictationStorage = nil
       focusedDictationTextViewID = nil
@@ -285,7 +297,9 @@
 
   extension EditorCommands: FocusedDictationEditing {
     var canBeginFocusedDictation: Bool {
-      textView?.textStorage != nil && focusedDictation == nil
+      textView?.textStorage != nil
+        && focusedDictation == nil
+        && committedFocusedDictation == nil
     }
 
     func beginFocusedDictation() -> Bool {
@@ -341,13 +355,13 @@
       textView.setSelectedRange(NSRange(location: NSMaxRange(transaction.provisionalRange), length: 0))
     }
 
-    func commitFocusedDictation(text: String) -> Bool {
-      guard var transaction = focusedDictation else { return false }
+    func commitFocusedDictation(text: String) -> FocusedDictationCommitReceipt? {
+      guard var transaction = focusedDictation else { return nil }
       guard let (textView, storage) = focusedDictationOrigin(), self.textView === textView,
         NSMaxRange(transaction.provisionalRange) <= storage.length
       else {
         cancelFocusedDictation()
-        return false
+        return nil
       }
       let finalText = NSMutableAttributedString(string: text, attributes: textView.typingAttributes)
       finalText.removeAttribute(
@@ -361,7 +375,16 @@
         storage.replaceCharacters(in: transaction.provisionalRange, with: finalText)
       }
       isApplyingFocusedDictationEdit = false
-      clearFocusedDictation()
+      let receipt = FocusedDictationCommitReceipt()
+      committedFocusedDictation = CommittedFocusedDictation(
+        receipt: receipt,
+        originalSelection: transaction.originalSelection,
+        originalAttributedSelection: transaction.originalAttributedSelection,
+        finalRange: finalRange,
+        finalAttributedText: finalText
+      )
+      activeFocusedUndoReceipts.insert(receipt)
+      clearFocusedDictation(keepingOrigin: true)
 
       if let undoManager = textView.undoManager {
         undoManager.beginUndoGrouping()
@@ -371,7 +394,9 @@
           length: transaction.originalAttributedSelection.length
         )
         undoManager.registerUndo(withTarget: self) { [weak textView, weak storage] commands in
-          guard let textView, let storage else { return }
+          guard let textView, let storage,
+            commands.activeFocusedUndoReceipts.contains(receipt)
+          else { return }
           commands.replaceFocusedDictationUndo(
             in: textView,
             storage: storage,
@@ -389,7 +414,7 @@
       }
       textView.setSelectedRange(NSRange(location: NSMaxRange(finalRange), length: 0))
       textView.didChangeText()
-      return true
+      return receipt
     }
 
     func cancelFocusedDictation() {
@@ -409,6 +434,36 @@
         selection: transaction.originalSelection
       )
       isApplyingFocusedDictationEdit = false
+      clearFocusedDictation()
+    }
+
+    func rollbackCommittedFocusedDictation(
+      _ receipt: FocusedDictationCommitReceipt
+    ) -> Bool {
+      guard let committed = committedFocusedDictation,
+        committed.receipt == receipt,
+        let (textView, storage) = focusedDictationOrigin(),
+        NSMaxRange(committed.finalRange) <= storage.length,
+        storage.attributedSubstring(from: committed.finalRange)
+          .isEqual(to: committed.finalAttributedText)
+      else { return false }
+      activeFocusedUndoReceipts.remove(receipt)
+      replaceFocusedDictationRange(
+        in: textView,
+        storage: storage,
+        committed.finalRange,
+        with: committed.originalAttributedSelection,
+        selection: committed.originalSelection
+      )
+      textView.didChangeText()
+      clearFocusedDictation()
+      return true
+    }
+
+    func finalizeCommittedFocusedDictation(
+      _ receipt: FocusedDictationCommitReceipt
+    ) {
+      guard committedFocusedDictation?.receipt == receipt else { return }
       clearFocusedDictation()
     }
   }

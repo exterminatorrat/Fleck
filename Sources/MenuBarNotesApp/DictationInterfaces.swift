@@ -1,6 +1,18 @@
 import Foundation
 import MenuBarNotesCore
 
+struct FocusedDictationCommitReceipt: Equatable, Hashable, Sendable {
+  let id: UUID
+
+  init(id: UUID = UUID()) {
+    self.id = id
+  }
+}
+
+struct FocusedDictationPersistenceReceipt: Equatable, Sendable {
+  let captureID: UUID
+}
+
 @MainActor
 protocol SpeechEngine: AnyObject {
   var kind: DictationSpeechEngine { get }
@@ -36,8 +48,10 @@ protocol FocusedDictationEditing: AnyObject {
   var canBeginFocusedDictation: Bool { get }
   func beginFocusedDictation() -> Bool
   func updateFocusedDictation(provisionalText: String)
-  func commitFocusedDictation(text: String) -> Bool
+  func commitFocusedDictation(text: String) -> FocusedDictationCommitReceipt?
   func cancelFocusedDictation()
+  func rollbackCommittedFocusedDictation(_ receipt: FocusedDictationCommitReceipt) -> Bool
+  func finalizeCommittedFocusedDictation(_ receipt: FocusedDictationCommitReceipt)
 }
 
 @MainActor
@@ -49,5 +63,10 @@ protocol DictationSaving: AnyObject {
     destinationID: UUID?
   ) async throws -> DictationInsertionReceipt
   func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool
-  func flushFocusedDictationSave() async throws
+  func flushFocusedDictationSave(
+    captureID: UUID
+  ) async throws -> FocusedDictationPersistenceReceipt
+  func compensateFocusedDictationSave(
+    _ receipt: FocusedDictationPersistenceReceipt
+  ) async -> Bool
 }

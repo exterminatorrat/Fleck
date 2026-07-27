@@ -15,7 +15,8 @@
     var id: Self { self }
   }
 
-  enum DictationModelAction: Equatable {
+  #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+    enum DictationModelAction: Equatable {
     case download
     case cancel
     case repair
@@ -31,9 +32,9 @@
       case .update: "Update"
       }
     }
-  }
+    }
 
-  struct DictationModelConsentPresentation: Equatable {
+    struct DictationModelConsentPresentation: Equatable {
     let downloadSize: String
     let installedSize: String
     let requirement: String
@@ -50,9 +51,9 @@
       privacyCopy:
         "Motes downloads model files only after you confirm. It does not upload audio, transcripts, notes, titles, history, routing inputs, or other dictation data."
     )
-  }
+    }
 
-  struct DictationSettingsPresentation {
+    struct DictationSettingsPresentation {
     let selectedEngine: DictationSpeechEngine
     let enhancedChoiceEnabled: Bool
     let primaryAction: DictationModelAction?
@@ -117,7 +118,8 @@
         statusCopy = "Removing"
       }
     }
-  }
+    }
+  #endif
 
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
@@ -126,8 +128,10 @@
     @ObservedObject private var modelManager: EnhancedModelManager
     @ObservedObject private var historyController: DictationHistoryController
     @State private var selectedSection = SettingsSection.appearance
-    @State private var showsModelConsent = false
-    @State private var showsModelDeleteConfirmation = false
+    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+      @State private var showsModelConsent = false
+      @State private var showsModelDeleteConfirmation = false
+    #endif
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
@@ -166,6 +170,7 @@
         microphones = DictationMicrophoneOption.available()
         runtime.preferencesDidChange()
       }
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
       .sheet(isPresented: $showsModelConsent) {
         ModelConsentView {
           showsModelConsent = false
@@ -185,6 +190,7 @@
       } message: {
         Text("Enhanced dictation returns to Standard. You can download the model again later.")
       }
+      #endif
       .confirmationDialog(
         "Clear all dictation history?",
         isPresented: $showsHistoryClearConfirmation
@@ -388,45 +394,56 @@
       }
     }
 
-    private var dictationPresentation: DictationSettingsPresentation {
-      DictationSettingsPresentation(
-        preferences: appState.preferences,
-        modelState: modelManager.state,
-        isArchitectureSupported: modelManager.isArchitectureSupported,
-        enhancedIsReady: modelManager.verifiedLoadState.isReady
-      )
-    }
+    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+      private var dictationPresentation: DictationSettingsPresentation {
+        DictationSettingsPresentation(
+          preferences: appState.preferences,
+          modelState: modelManager.state,
+          isArchitectureSupported: modelManager.isArchitectureSupported,
+          enhancedIsReady: modelManager.verifiedLoadState.isReady
+        )
+      }
+    #endif
 
     @ViewBuilder
     private var dictation: some View {
       Section("Availability") {
-        if recoveryActions.isEmpty {
+        if runtime.availability.standardAvailable {
           Label(
-            "Standard dictation uses Apple on-device speech recognition.",
+            "Standard — Apple Speech is available for on-device English dictation.",
             systemImage: "checkmark.shield"
           )
-        } else {
+        } else if let failure = runtime.availability.standardFailureCopy {
+          Label(failure, systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(.secondary)
+        }
+        if !recoveryActions.isEmpty {
           ForEach(recoveryActions, id: \.pane) { action in
             Button(action.title) {
               NSWorkspace.shared.open(action.url)
             }
           }
         }
-        if let architectureCopy = dictationPresentation.architectureCopy {
-          Label(architectureCopy, systemImage: "desktopcomputer.trianglebadge.exclamationmark")
-            .foregroundStyle(.secondary)
-        }
+        #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+          if let architectureCopy = dictationPresentation.architectureCopy {
+            Label(architectureCopy, systemImage: "desktopcomputer.trianglebadge.exclamationmark")
+              .foregroundStyle(.secondary)
+          }
+        #endif
       }
 
       Section("Speech Engine") {
         Picker("Engine", selection: dictationEngineBinding) {
-          Text("Standard").tag(DictationSpeechEngine.standard)
-          Text("Enhanced")
+          Text("Standard — Apple Speech").tag(DictationSpeechEngine.standard)
+          #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+          Text("Enhanced Local")
             .tag(DictationSpeechEngine.enhancedLocal)
             .disabled(!dictationPresentation.enhancedChoiceEnabled)
+          #endif
         }
         .pickerStyle(.radioGroup)
 
+        #if CLEAN_DICTATION_ENHANCED_CANDIDATE
         HStack {
           Text("Enhanced model")
           Spacer()
@@ -478,6 +495,7 @@
             }
           }
         }
+        #endif
       }
 
       Section("Controls") {
@@ -517,7 +535,9 @@
       }
 
       Section("Privacy") {
+        #if CLEAN_DICTATION_ENHANCED_CANDIDATE
         Text(DictationModelConsentPresentation.standard.privacyCopy)
+        #endif
         Text(
           "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
         )
@@ -528,9 +548,19 @@
 
     private var dictationEngineBinding: Binding<DictationSpeechEngine> {
       Binding(
-        get: { dictationPresentation.selectedEngine },
+        get: {
+          #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+            dictationPresentation.selectedEngine
+          #else
+            .standard
+          #endif
+        },
         set: { engine in
+          #if CLEAN_DICTATION_ENHANCED_CANDIDATE
           guard engine == .standard || dictationPresentation.enhancedChoiceEnabled else { return }
+          #else
+            guard engine == .standard else { return }
+          #endif
           appState.updatePreferences { $0.dictationSpeechEngine = engine }
           runtime.preferencesDidChange()
         }
@@ -574,7 +604,8 @@
       )
     }
 
-    private func handleModelAction(_ action: DictationModelAction) {
+    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+      private func handleModelAction(_ action: DictationModelAction) {
       switch action {
       case .download:
         showsModelConsent = true
@@ -585,9 +616,9 @@
       case .repair, .update:
         runModelOperation(action)
       }
-    }
+      }
 
-    private func runModelOperation(_ action: DictationModelAction) {
+      private func runModelOperation(_ action: DictationModelAction) {
       switch action {
       case .download:
         runtime.downloadModel()
@@ -600,7 +631,8 @@
       case .cancel:
         runtime.cancelModelOperation()
       }
-    }
+      }
+    #endif
 
     private func preferenceBinding<Value>(_ keyPath: WritableKeyPath<AppPreferences, Value>)
       -> Binding<Value>
@@ -725,7 +757,8 @@
     }
   }
 
-  private struct ModelConsentView: View {
+  #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+    private struct ModelConsentView: View {
     let onCancel: () -> Void
     let onConfirm: () -> Void
 
@@ -766,7 +799,8 @@
       .padding(24)
       .frame(width: 460)
     }
-  }
+    }
+  #endif
 
   struct DictationShortcutRecorder: NSViewRepresentable {
     @Binding var shortcut: DictationShortcut

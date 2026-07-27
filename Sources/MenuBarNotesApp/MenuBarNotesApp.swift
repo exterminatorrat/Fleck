@@ -112,6 +112,7 @@
     @Published private(set) var phase = DictationPhase.idle
     @Published private(set) var shortcutError: String?
     @Published private(set) var modelError: String?
+    @Published private(set) var availability: DictationAvailability
     private(set) var currentCapsuleStatus: DictationCapsuleStatus?
 
     private weak var appState: AppState?
@@ -128,6 +129,7 @@
     private var startupAssessmentTask: Task<Void, Never>?
     private var terminalSynchronizationTask: Task<Void, Never>?
     private var shutdownTask: Task<Void, Never>?
+    private var historyWindowController: NSWindowController?
     private var terminationObserver: ObserverToken?
     private(set) var shutdownCount = 0
 
@@ -186,6 +188,13 @@
           appState?.saveError = "Dictation shortcut: \(Self.shortcutMessage(error))"
         }
       )
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        let startupAssessment: @MainActor () async -> Void = {
+          await modelManager.refreshState()
+        }
+      #else
+        let startupAssessment: @MainActor () async -> Void = {}
+      #endif
 
       self.init(
         appState: appState,
@@ -197,7 +206,7 @@
         historyController: historyController,
         permissionController: permissionController,
         editorRegistry: editorRegistry,
-        startupAssessment: { await modelManager.refreshState() },
+        startupAssessment: startupAssessment,
         enhancedIsReady: { modelManager.verifiedLoadState.isReady }
       )
     }
@@ -225,6 +234,10 @@
       self.shortcutController = shortcutController
       self.capsuleController = capsuleController
       self.enhancedIsReady = enhancedIsReady
+      availability = DictationAvailability.current(
+        permissions: permissionController,
+        enhancedModelReady: enhancedIsReady()
+      )
       phase = coordinator.phase
 
       coordinator.setEventObserver { [weak self] event in
@@ -246,6 +259,7 @@
         await assessment()
         guard !Task.isCancelled else { return }
         self?.modelStateAssessed = true
+        self?.refreshAvailability()
         self?.synchronizePreferences()
       }
       synchronizePreferences()
@@ -333,18 +347,21 @@
     }
 
     func permissionRecoveryActions() -> [DictationSystemSettingsAction] {
-      permissionController.recoveryActions()
+      availability.openSystemSettings
     }
 
     func requestPermissionsAfterShortcutSetup() async {
       _ = await permissionController.requestAccess(after: .shortcutSetupCompleted)
+      refreshAvailability()
     }
 
     func downloadModel() {
+      guard CleanDictationFeatures.enhancedLocalCandidateEnabled else { return }
       runModelOperation(operation: { try await $0.download() })
     }
 
     func repairModel() {
+      guard CleanDictationFeatures.enhancedLocalCandidateEnabled else { return }
       runModelOperation(
         showsRepairStatus: true,
         operation: { try await $0.repair() }
@@ -352,10 +369,12 @@
     }
 
     func updateModel() {
+      guard CleanDictationFeatures.enhancedLocalCandidateEnabled else { return }
       runModelOperation(operation: { try await $0.update() })
     }
 
     func deleteModel() {
+      guard CleanDictationFeatures.enhancedLocalCandidateEnabled else { return }
       runModelOperation(
         operation: { try await $0.deleteModel() },
         onSuccess: { [weak self] in
@@ -409,6 +428,12 @@
 
     private func synchronizePreferences(applyShortcut: Bool = true) {
       guard let appState else { return }
+      refreshAvailability()
+      if !CleanDictationFeatures.enhancedLocalCandidateEnabled,
+        appState.preferences.dictationSpeechEngine != .standard
+      {
+        appState.updatePreferences { $0.dictationSpeechEngine = .standard }
+      }
       if
         modelStateAssessed,
         appState.preferences.dictationSpeechEngine == .enhancedLocal,
@@ -449,7 +474,11 @@
         return
       }
       if let status = Self.capsuleStatus(for: event) {
-        showCapsule(status, owner: .dictation)
+        showCapsule(
+          status,
+          owner: .dictation,
+          action: capsuleAction(for: coordinator.recoveryAction)
+        )
       } else {
         dismissCapsule(ifOwnedBy: .dictation)
       }
@@ -513,6 +542,9 @@
       operation: @escaping @MainActor (EnhancedModelManager) async throws -> Void,
       onSuccess: @escaping @MainActor () -> Void = {}
     ) -> Task<Void, Never> {
+      guard CleanDictationFeatures.enhancedLocalCandidateEnabled else {
+        return Task {}
+      }
       modelOperation?.cancel()
       let operationID = UUID()
       modelOperationID = operationID
@@ -584,11 +616,85 @@
 
     private func showCapsule(
       _ status: DictationCapsuleStatus,
-      owner: CapsuleOwner
+      owner: CapsuleOwner,
+      action: DictationCapsuleAction? = nil
     ) {
       currentCapsuleStatus = status
       capsuleOwner = owner
-      capsuleController.show(status)
+      capsuleController.show(
+        status,
+        action: action,
+        onAction: { [weak self] in
+          Task { @MainActor [weak self] in
+            await self?.performRecoveryAction()
+          }
+        }
+      )
+    }
+
+    private func capsuleAction(
+      for action: DictationRecoveryAction?
+    ) -> DictationCapsuleAction? {
+      switch action {
+      case .undo: .undo
+      case .copy: .copy
+      case .openHistory: .openHistory
+      case .openDestination: .openDestination
+      case nil: nil
+      }
+    }
+
+    private func performRecoveryAction() async {
+      guard let result = await coordinator.performRecoveryAction() else { return }
+      switch result {
+      case .completed:
+        dismissCapsule(ifOwnedBy: .dictation)
+      case .copy(let text):
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        dismissCapsule(ifOwnedBy: .dictation)
+      case .openHistory:
+        openDictationHistory()
+      case .openDestination(let noteID):
+        openDestination(noteID)
+      }
+    }
+
+    private func openDestination(_ noteID: UUID) {
+      guard appState?.workspace.notes.contains(where: { $0.id == noteID }) == true else {
+        return
+      }
+      appState?.select(noteID)
+      NSApp.activate(ignoringOtherApps: true)
+      NSApp.windows.first {
+        $0 !== capsuleController.panel && $0.title == "Motes"
+      }?.makeKeyAndOrderFront(nil)
+      dismissCapsule(ifOwnedBy: .dictation)
+    }
+
+    private func openDictationHistory() {
+      if let historyWindowController {
+        NSApp.activate(ignoringOtherApps: true)
+        historyWindowController.showWindow(nil)
+        historyWindowController.window?.makeKeyAndOrderFront(nil)
+        dismissCapsule(ifOwnedBy: .dictation)
+        return
+      }
+      let view = DictationHistoryView(
+        history: historyController,
+        onOpenDestination: { [weak self] noteID in
+          self?.openDestination(noteID)
+        }
+      )
+      let window = NSWindow(contentViewController: NSHostingController(rootView: view))
+      window.title = "Dictation History"
+      window.setContentSize(NSSize(width: 680, height: 480))
+      let controller = NSWindowController(window: window)
+      historyWindowController = controller
+      NSApp.activate(ignoringOtherApps: true)
+      controller.showWindow(nil)
+      window.makeKeyAndOrderFront(nil)
+      dismissCapsule(ifOwnedBy: .dictation)
     }
 
     private func dismissCapsule(ifOwnedBy owner: CapsuleOwner? = nil) {
@@ -603,6 +709,13 @@
       guard modelOperationID == operationID else { return }
       modelOperation = nil
       modelOperationID = nil
+    }
+
+    private func refreshAvailability() {
+      availability = DictationAvailability.current(
+        permissions: permissionController,
+        enhancedModelReady: enhancedIsReady()
+      )
     }
 
     deinit {
@@ -655,10 +768,17 @@
           microphoneSelectionChanged: microphoneSelectionChanged
         )
       case .enhancedLocal:
+        #if CLEAN_DICTATION_ENHANCED_CANDIDATE
         EnhancedSpeechCapture(
           modelManager: modelManager,
+          permissions: permissionController,
+          microphoneUID: microphoneUID(),
+          microphoneSelectionChanged: microphoneSelectionChanged,
           recommendStandard: recommendStandard
         )
+        #else
+          throw DictationFailure.unavailable
+        #endif
       }
     }
   }

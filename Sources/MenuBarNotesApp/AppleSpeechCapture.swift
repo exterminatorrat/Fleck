@@ -351,7 +351,7 @@ private extension String {
 }
 
 @MainActor
-private enum CoreAudioMicrophone {
+enum CoreAudioMicrophone {
   static func select(
     savedUID: String?,
     for inputNode: AVAudioInputNode

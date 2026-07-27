@@ -1,5 +1,13 @@
 import Foundation
 
+public enum CleanDictationFeatures {
+  #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+    public static let enhancedLocalCandidateEnabled = true
+  #else
+    public static let enhancedLocalCandidateEnabled = false
+  #endif
+}
+
 public enum DictationMode: String, Codable, Sendable {
   case focused
   case smartCapture

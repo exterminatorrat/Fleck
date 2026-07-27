@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -n "${MOTES_ENHANCED_CANDIDATE+x}" ]]; then
+  printf '%s\n' \
+    'error: unset MOTES_ENHANCED_CANDIDATE before validating an ordinary release' \
+    >&2
+  exit 2
+fi
+
 lowercase() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
@@ -548,11 +555,13 @@ final class ReleaseBuildConfiguration: BuildConfiguration {
 
 enum Finding: String, Comparable {
   case requiredOfflineTrue = "required-offline-true"
+  case forbiddenFluidAudioImport = "forbidden-fluidaudio-import"
   case forbiddenOfflineFalse = "forbidden-offline-false"
   case forbiddenDownloadAndLoad = "forbidden-asr-download-and-load"
   case forbiddenModelHubDownload = "forbidden-modelhub-download"
   case forbiddenModelHubFetchFile = "forbidden-modelhub-fetch-file"
   case forbiddenGlobalMonitor = "forbidden-global-monitor"
+  case forbiddenEnhancedConstruction = "forbidden-enhanced-construction"
 
   static func < (lhs: Self, rhs: Self) -> Bool {
     lhs.rawValue < rhs.rawValue
@@ -576,6 +585,23 @@ final class ReleaseVisitor: SyntaxVisitor {
       return .visitChildren
     }
     findings.insert(finding)
+    return .visitChildren
+  }
+
+  override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind {
+    guard node.path.trimmedDescription == "FluidAudio" else {
+      return .visitChildren
+    }
+    switch configuredRegions.isActive(node) {
+    case .active:
+      findings.insert(.forbiddenFluidAudioImport)
+    case .inactive:
+      break
+    case .unparsed:
+      hasUnknownRequiredRegion = true
+    @unknown default:
+      hasUnknownRequiredRegion = true
+    }
     return .visitChildren
   }
 
@@ -607,6 +633,23 @@ final class ReleaseVisitor: SyntaxVisitor {
       findings.insert(.forbiddenOfflineFalse)
     default:
       break
+    }
+    return .visitChildren
+  }
+
+  override func visit(_ node: FunctionCallExprSyntax) -> SyntaxVisitorContinueKind {
+    guard baseName(node.calledExpression) == "EnhancedSpeechCapture" else {
+      return .visitChildren
+    }
+    switch configuredRegions.isActive(node) {
+    case .active:
+      findings.insert(.forbiddenEnhancedConstruction)
+    case .inactive:
+      break
+    case .unparsed:
+      hasUnknownRequiredRegion = true
+    @unknown default:
+      hasUnknownRequiredRegion = true
     }
     return .visitChildren
   }
@@ -890,7 +933,6 @@ if [[ "$enhanced_found" != true ]]; then
   exit 2
 fi
 
-required_offline_true=false
 forbidden_source_findings=()
 source_file_index=0
 while (( source_file_index < ${#source_physical_files[@]} )); do
@@ -922,9 +964,11 @@ while (( source_file_index < ${#source_physical_files[@]} )); do
   while IFS= read -r finding; do
     case "$finding" in
       required-offline-true)
-        if [[ "$logical_is_enhanced" == true ]]; then
-          required_offline_true=true
-        fi
+        ;;
+      forbidden-fluidaudio-import)
+        forbidden_source_findings+=(
+          "$logical_source_path: active FluidAudio import in release"
+        )
         ;;
       forbidden-offline-false)
         forbidden_source_findings+=(
@@ -951,6 +995,11 @@ while (( source_file_index < ${#source_physical_files[@]} )); do
           "$logical_source_path: NSEvent.addGlobalMonitorForEvents"
         )
         ;;
+      forbidden-enhanced-construction)
+        forbidden_source_findings+=(
+          "$logical_source_path: EnhancedSpeechCapture construction in release"
+        )
+        ;;
       "")
         ;;
       *)
@@ -970,12 +1019,44 @@ if (( ${#forbidden_source_findings[@]} > 0 )); then
   exit 1
 fi
 
-if [[ "$required_offline_true" != true ]]; then
-  printf '%s\n' \
-    'error: required production source missing: ModelHub.offlineMode = true in EnhancedSpeechCapture' \
-    >&2
-  exit 1
+if ! command -v strings >/dev/null 2>&1; then
+  printf 'error: strings is required for release UI assertions\n' >&2
+  exit 2
 fi
+strings "$executable" > "$scan_output"
+for forbidden_ui_string in \
+  'Enhanced Local' \
+  'Download Enhanced Model' \
+  'Delete the Enhanced model?' \
+  'Enhanced model download'
+do
+  if grep -Fq "$forbidden_ui_string" "$scan_output"; then
+    printf 'error: release executable exposes Enhanced UI string: %s\n' \
+      "$forbidden_ui_string" >&2
+    exit 1
+  fi
+done
+
+if ! command -v nm >/dev/null 2>&1; then
+  printf 'error: nm is required for release SDK symbol assertions\n' >&2
+  exit 2
+fi
+nm -a "$executable" > "$scan_output"
+for forbidden_sdk_symbol in \
+  'FluidAudio' \
+  'Parakeet' \
+  'AsrModels' \
+  'ModelHub' \
+  'FluidEnhancedSpeech'
+do
+  if grep -Fiq "$forbidden_sdk_symbol" "$scan_output"; then
+    printf 'error: release executable contains candidate SDK symbol: %s\n' \
+      "$forbidden_sdk_symbol" >&2
+    exit 1
+  fi
+done
 
 printf 'Release artifact contains no bundled model assets.\n'
+printf 'Release artifact exposes no Enhanced candidate controls.\n'
+printf 'Release artifact contains no candidate SDK symbols.\n'
 printf 'Release source assertions passed.\n'

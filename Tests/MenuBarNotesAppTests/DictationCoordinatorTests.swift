@@ -1,4 +1,5 @@
 @preconcurrency import AVFAudio
+import AppKit
 import Foundation
 import MenuBarNotesCore
 import Testing
@@ -63,14 +64,19 @@ import Testing
 
 @Test @MainActor func shortcutStartsAtThresholdWhileHeldAndReleaseFinalizes() async throws {
   let threshold = Gate()
+  let listening = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
   fixture.standard.finalText = "Held dictation"
+  fixture.coordinator.setEventObserver { event in
+    guard case .listening = event.phase else { return }
+    Task { await listening.openGate() }
+  }
 
   fixture.coordinator.beginShortcut(editor: nil)
   #expect(fixture.coordinator.phase == .arming)
   await threshold.waitUntilWaiting()
   await threshold.openGate()
-  await Task.yield()
+  await listening.wait()
 
   #expect(fixture.standard.startCount == 1)
   #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
@@ -326,6 +332,62 @@ import Testing
 
   #expect(try await fixture.history.list().isEmpty)
   #expect(fixture.coordinator.copyableTranscript == "Copy this")
+  #expect(fixture.coordinator.recoveryAction == .copy)
+}
+
+@Test @MainActor func simultaneousHistoryAndDestinationFailurePreservesInMemoryCopy()
+  async throws
+{
+  let fixture = try Fixture(historySaveError: TestError.failed)
+  fixture.standard.finalText = "Recover this"
+  fixture.saver.saveError = TestError.failed
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.coordinator.copyableTranscript == "Recover this")
+  #expect(fixture.coordinator.recoveryAction == .copy)
+  #expect(try await fixture.history.list().isEmpty)
+}
+
+@Test @MainActor func smartSuccessExposesUndoAndUnsafeUndoOpensDestination() async throws {
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Saved capture"
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  fixture.saver.undoSucceeds = false
+  let result = await fixture.coordinator.performRecoveryAction()
+  #expect(result == .openDestination(fixture.inbox.noteID))
+  #expect(fixture.saver.savedTexts == ["Saved capture"])
+}
+
+@Test @MainActor func smartSuccessUndoRemovesTheCaptureAndRecoveryRecord() async throws {
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Undo this"
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let result = await fixture.coordinator.performRecoveryAction()
+
+  #expect(result == .completed)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(try await fixture.history.list().isEmpty)
+  #expect(fixture.coordinator.recoveryAction == nil)
+}
+
+@Test @MainActor func durableUnsavedRecoveryOpensHistoryInsteadOfCopy() async throws {
+  let fixture = try Fixture()
+  fixture.standard.finalText = "History recovery"
+  fixture.saver.saveError = TestError.failed
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.coordinator.recoveryAction == .openHistory)
+  #expect(fixture.coordinator.copyableTranscript == nil)
 }
 
 @Test @MainActor func focusedCaptureSavesRawThenCleansCommitsFlushesAndUpdatesHistory() async throws {
@@ -563,10 +625,104 @@ import Testing
   await fixture.coordinator.finish()
 
   #expect(fixture.editor.committedTexts == ["Focused failure"])
-  #expect(fixture.editor.cancelCount == 1)
+  #expect(fixture.editor.rollbackCommittedCount == 1)
   let record = try #require(await fixture.history.list().first)
   #expect(record.insertionOutcome == .unsaved)
   #expect(fixture.standard.releaseCount == 1)
+}
+
+@Test @MainActor func focusedCancellationDuringSuspendedFlushCompensatesCommittedReceipt()
+  async throws
+{
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Committed then cancelled"
+  fixture.saver.flushGate = gate
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await finishing.value
+
+  #expect(fixture.editor.rollbackCommittedCount == 1)
+  #expect(fixture.saver.compensateFocusedCount == 1)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor func focusedCancellationCompensatesRealEditorAndAppStateAcrossFlush()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("focused-compensation-\(UUID().uuidString)", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Projects", body: "Before")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: .init()
+  )
+  let suspendedSave = SuspendedFocusedSave(store: store)
+  let appState = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await suspendedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  for _ in 0..<100 {
+    if appState.selectedNote?.id == note.id { break }
+    try await Task.sleep(for: .milliseconds(10))
+  }
+  #expect(appState.selectedNote?.id == note.id)
+
+  let textView = NSTextView()
+  textView.string = "Before"
+  textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+  let editor = EditorCommands()
+  editor.textView = textView
+  let bridge = FocusedEditorAppStateBridge(appState: appState)
+  textView.delegate = bridge
+
+  let provider = FakeEngineProvider()
+  let engine = FakeSpeechEngine(kind: .standard)
+  engine.finalText = " committed"
+  provider.engines = [.standard: engine]
+  let history = DictationHistoryController(
+    load: { [] },
+    save: { _ in },
+    delete: { _ in },
+    clear: {}
+  )
+  let coordinator = DictationCoordinator(
+    engineProvider: provider,
+    preferredEngine: { .standard },
+    cleaner: FakeCleaner(),
+    router: FakeRouter(),
+    saver: appState,
+    historyController: history,
+    historyEnabled: { true }
+  )
+
+  await coordinator.start(
+    mode: .focused,
+    editor: editor,
+    destination: .init(noteID: note.id, title: note.title)
+  )
+  let finishing = Task { await coordinator.finish() }
+  await suspendedSave.waitUntilFirstSaveStarted()
+  await coordinator.cancel()
+  await suspendedSave.resumeFirstSave()
+  await finishing.value
+
+  #expect(textView.string == "Before")
+  #expect(appState.selectedNote?.body == "Before")
+  #expect(try await store.loadWorkspace().notes.first?.body == "Before")
+  #expect(await suspendedSave.savedBodies == ["Before committed", "Before"])
 }
 
 @Test @MainActor func focusedCommitFailureRollsBackAndRecordsUnsaved() async throws {
@@ -700,6 +856,7 @@ import Testing
   await fixture.coordinator.cancel()
 }
 
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test @MainActor func EnhancedSpeechRejectsAnUnverifiedModelWithoutStartingAudio() async {
   let inference = EnhancedInferenceSpy()
   let audio = EnhancedAudioSpy(samples: [0.25])
@@ -720,6 +877,35 @@ import Testing
   #expect(audio.startCount == 0)
   #expect(standardRecommendations == 1)
   #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechUsesMicrophoneOnlyPermissionAndSavedDeviceSelection()
+  async throws
+{
+  let inference = EnhancedInferenceSpy()
+  let audio = EnhancedAudioSpy(samples: [])
+  var requestedEngine: DictationSpeechEngine?
+  var selection: MicrophoneSelection?
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: {
+      .ready(repositoryURL: URL(fileURLWithPath: "/verified/parakeet"))
+    },
+    requestPermission: { engine in
+      requestedEngine = engine
+      return .granted
+    },
+    microphoneUID: "usb-microphone",
+    microphoneSelectionChanged: { selection = $0 },
+    makeInference: { inference },
+    makeAudio: { _ in audio }
+  )
+
+  try await capture.start(provisional: { _ in }, level: { _ in })
+
+  #expect(requestedEngine == .enhancedLocal)
+  #expect(audio.selectedMicrophoneUID == "usb-microphone")
+  #expect(selection == .selected(uid: "usb-microphone"))
+  await capture.cancel()
 }
 
 @Test @MainActor func EnhancedSpeechCapturesMemoryOnly16kMonoFloatSamplesAndReturnsFinalText() async throws {
@@ -1103,6 +1289,7 @@ private func makeEnhancedCapture(
     makeAudio: { _ in audio }
   )
 }
+#endif
 
 @MainActor
 private final class Fixture {
@@ -1125,6 +1312,7 @@ private final class Fixture {
   init(
     preferred: DictationSpeechEngine = .standard,
     historyEnabled: Bool = true,
+    historySaveError: Error? = nil,
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { _ in }
   ) throws {
     preference = PreferenceBox(value: preferred)
@@ -1133,6 +1321,15 @@ private final class Fixture {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
     history = DictationHistoryStore(rootURL: root)
+    let historyController = DictationHistoryController(
+      load: { [history] in try await history.list() },
+      save: { [history] record in
+        if let historySaveError { throw historySaveError }
+        try await history.save(record)
+      },
+      delete: { [history] id in try await history.delete(id: id) },
+      clear: { [history] in try await history.clear() }
+    )
     saver.destinations = [inbox]
     provider.engines = [.standard: standard, .enhancedLocal: enhanced]
     coordinator = DictationCoordinator(
@@ -1141,7 +1338,7 @@ private final class Fixture {
       cleaner: cleaner,
       router: router,
       saver: saver,
-      historyStore: history,
+      historyController: historyController,
       historyEnabled: { historyEnabled },
       holdSleeper: holdSleeper
     )
@@ -1255,11 +1452,13 @@ private final class FakeSaver: DictationSaving {
   var destinations: [DictationDestination] = []
   var saveError: Error?
   var saveGate: Gate?
+  var flushGate: Gate?
   var flushError: Error?
   var savedTexts: [String] = []
   var destinationIDs: [UUID?] = []
   var flushCount = 0
   var undoCount = 0
+  var compensateFocusedCount = 0
   var undoSucceeds = true
 
   func activeDestinations() -> [DictationDestination] { destinations }
@@ -1278,9 +1477,20 @@ private final class FakeSaver: DictationSaving {
     if undoSucceeds, !savedTexts.isEmpty { savedTexts.removeLast() }
     return undoSucceeds
   }
-  func flushFocusedDictationSave() async throws {
+  func flushFocusedDictationSave(
+    captureID: UUID
+  ) async throws -> FocusedDictationPersistenceReceipt {
     flushCount += 1
+    if let flushGate { await flushGate.wait() }
     if let flushError { throw flushError }
+    return FocusedDictationPersistenceReceipt(captureID: captureID)
+  }
+
+  func compensateFocusedDictationSave(
+    _ receipt: FocusedDictationPersistenceReceipt
+  ) async -> Bool {
+    compensateFocusedCount += 1
+    return true
   }
 }
 
@@ -1292,6 +1502,7 @@ private final class FakeEditor: FocusedDictationEditing {
   var committedTexts: [String] = []
   var cancelCount = 0
   var commitResult = true
+  var rollbackCommittedCount = 0
 
   func beginFocusedDictation() -> Bool {
     beginCount += 1
@@ -1299,15 +1510,82 @@ private final class FakeEditor: FocusedDictationEditing {
   }
 
   func updateFocusedDictation(provisionalText: String) { provisionalTexts.append(provisionalText) }
-  func commitFocusedDictation(text: String) -> Bool {
+  func commitFocusedDictation(text: String) -> FocusedDictationCommitReceipt? {
     committedTexts.append(text)
-    return commitResult
+    return commitResult ? FocusedDictationCommitReceipt() : nil
   }
   func cancelFocusedDictation() { cancelCount += 1 }
+  func rollbackCommittedFocusedDictation(
+    _ receipt: FocusedDictationCommitReceipt
+  ) -> Bool {
+    rollbackCommittedCount += 1
+    return true
+  }
+  func finalizeCommittedFocusedDictation(
+    _ receipt: FocusedDictationCommitReceipt
+  ) {}
 }
 
 private enum TestError: Error { case failed }
 
+@MainActor
+private final class FocusedEditorAppStateBridge: NSObject, NSTextViewDelegate {
+  private weak var appState: AppState?
+
+  init(appState: AppState) {
+    self.appState = appState
+  }
+
+  func textDidChange(_ notification: Notification) {
+    guard let textView = notification.object as? NSTextView else { return }
+    appState?.updateSelected(body: textView.string)
+  }
+}
+
+private actor SuspendedFocusedSave {
+  private let store: LocalStore
+  private var saveCount = 0
+  private var firstSaveStarted = false
+  private var firstSaveStartedWaiter: CheckedContinuation<Void, Never>?
+  private var firstSaveWaiter: CheckedContinuation<Void, Never>?
+  private(set) var savedBodies: [String] = []
+
+  init(store: LocalStore) {
+    self.store = store
+  }
+
+  func save(
+    workspace: Workspace,
+    preferences: AppPreferences,
+    trashedNotes: [Note]
+  ) async throws {
+    saveCount += 1
+    if saveCount == 1 {
+      firstSaveStarted = true
+      firstSaveStartedWaiter?.resume()
+      firstSaveStartedWaiter = nil
+      await withCheckedContinuation { firstSaveWaiter = $0 }
+    }
+    savedBodies.append(workspace.notes.first?.body ?? "")
+    try await store.save(
+      workspace: workspace,
+      preferences: preferences,
+      trashedNotes: trashedNotes
+    )
+  }
+
+  func waitUntilFirstSaveStarted() async {
+    guard !firstSaveStarted else { return }
+    await withCheckedContinuation { firstSaveStartedWaiter = $0 }
+  }
+
+  func resumeFirstSave() {
+    firstSaveWaiter?.resume()
+    firstSaveWaiter = nil
+  }
+}
+
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
 enum EnhancedTestFailure: Error {
   case failed
 }
@@ -1375,6 +1653,7 @@ final class EnhancedAudioSpy: EnhancedAudioCapturing {
   private(set) var startCount = 0
   private(set) var cancelCount = 0
   private(set) var releaseCount = 0
+  private(set) var selectedMicrophoneUID: String?
 
   init(
     samples: [Float],
@@ -1386,6 +1665,11 @@ final class EnhancedAudioSpy: EnhancedAudioCapturing {
     self.emittedLevel = emittedLevel
     self.startError = startError
     self.lifetime = lifetime
+  }
+
+  func selectMicrophone(savedUID: String?) -> MicrophoneSelection {
+    selectedMicrophoneUID = savedUID
+    return savedUID.map { .selected(uid: $0) } ?? .automatic
   }
 
   func start(level: @escaping @MainActor (Float) -> Void) throws {
@@ -1503,6 +1787,7 @@ private func enhancedAudioBuffer(
   }
   return buffer
 }
+#endif
 
 @MainActor
 private final class PreferenceBox {

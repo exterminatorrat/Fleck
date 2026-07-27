@@ -2,6 +2,7 @@
   import Combine
   import CryptoKit
   import Foundation
+  import MenuBarNotesCore
   import Security
 
   enum EnhancedModelState: Equatable, Sendable {
@@ -67,6 +68,7 @@
   }
 
   enum EnhancedModelManagerError: Error, Equatable, LocalizedError {
+    case candidateDisabled
     case unsupportedArchitecture
     case insufficientSpace(required: Int64, available: Int64)
     case invalidManifestPath(String)
@@ -79,6 +81,8 @@
 
     var errorDescription: String? {
       switch self {
+      case .candidateDisabled:
+        return "This speech engine is unavailable in this release."
       case .unsupportedArchitecture:
         return "Enhanced dictation requires Apple silicon."
       case .insufficientSpace(let required, let available):
@@ -108,6 +112,9 @@
     @Published private(set) var state: EnhancedModelState = .notInstalled
     private(set) var verifiedRepositoryURL: URL?
     var verifiedLoadState: EnhancedModelVerifiedLoadState {
+      guard candidateEnabled else {
+        return .unavailable
+      }
       guard let verifiedRepositoryURL else {
         return .unavailable
       }
@@ -124,6 +131,7 @@
     private let manifest: EnhancedModelManifest
     private let trustedManifests: [EnhancedModelManifest]
     private let capacityProvider: @Sendable () throws -> Int64
+    private let candidateEnabled: Bool
     private let clock: @Sendable () -> Date
     private let transport: any ModelDownloading
     private let assessmentDidComplete: @Sendable () -> Void
@@ -142,6 +150,7 @@
       fileManager: FileManager = .default,
       manifest: EnhancedModelManifest? = nil,
       trustedManifests: [EnhancedModelManifest]? = nil,
+      candidateEnabled: Bool = CleanDictationFeatures.enhancedLocalCandidateEnabled,
       capacityProvider: @escaping @Sendable () throws -> Int64 = {
         let values = try URL(fileURLWithPath: NSHomeDirectory()).resourceValues(
           forKeys: [.volumeAvailableCapacityForImportantUsageKey]
@@ -175,6 +184,7 @@
       self.context = FileContext(root: root, fileManager: fileManager)
       self.manifest = selectedManifest
       self.trustedManifests = trustedManifests ?? [selectedManifest]
+      self.candidateEnabled = candidateEnabled
       self.capacityProvider = capacityProvider
       self.isArchitectureSupported = architectureProvider()
       self.clock = clock
@@ -187,6 +197,11 @@
     }
 
     func refreshState() async {
+      guard candidateEnabled else {
+        verifiedRepositoryURL = nil
+        setState(.notInstalled)
+        return
+      }
       guard activeOperationID == nil else { return }
       activeAssessmentCount += 1
       defer {
@@ -227,14 +242,23 @@
     }
 
     func download() async throws {
+      guard candidateEnabled else {
+        throw EnhancedModelManagerError.candidateDisabled
+      }
       try await installCurrentModel()
     }
 
     func repair() async throws {
+      guard candidateEnabled else {
+        throw EnhancedModelManagerError.candidateDisabled
+      }
       try await installCurrentModel()
     }
 
     func update() async throws {
+      guard candidateEnabled else {
+        throw EnhancedModelManagerError.candidateDisabled
+      }
       try await installCurrentModel()
     }
 
@@ -253,6 +277,9 @@
     }
 
     func deleteModel() async throws {
+      guard candidateEnabled else {
+        throw EnhancedModelManagerError.candidateDisabled
+      }
       guard isArchitectureSupported else {
         setState(.notInstalled)
         return

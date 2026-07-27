@@ -47,6 +47,24 @@ import Testing
   #expect(panel.level == .floating)
   #expect(panel.collectionBehavior.contains(.canJoinAllSpaces))
   #expect(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+
+  panel.allowsActions = true
+  #expect(panel.canBecomeKey)
+  #expect(!panel.canBecomeMain)
+}
+
+@Test func DictationAccessibilityRecoveryActionsHaveKeyboardAndVoiceOverLabels() {
+  let actions: [(DictationCapsuleAction, String)] = [
+    (.undo, "Undo"),
+    (.copy, "Copy"),
+    (.openHistory, "Open Dictation History"),
+    (.openDestination, "Open Destination"),
+  ]
+
+  for (action, title) in actions {
+    #expect(action.title == title)
+    #expect(action.accessibilityLabel == title)
+  }
 }
 
 @Test @MainActor func DictationAccessibilityPositionsCapsuleAtActiveDisplayLowerCenter() {

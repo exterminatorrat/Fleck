@@ -70,7 +70,27 @@
     }
   }
 
+  enum DictationCapsuleAction: Equatable {
+    case undo
+    case copy
+    case openHistory
+    case openDestination
+
+    var title: String {
+      switch self {
+      case .undo: "Undo"
+      case .copy: "Copy"
+      case .openHistory: "Open Dictation History"
+      case .openDestination: "Open Destination"
+      }
+    }
+
+    var accessibilityLabel: String { title }
+  }
+
   final class DictationCapsulePanel: NSPanel {
+    var allowsActions = false
+
     init() {
       super.init(
         contentRect: .zero,
@@ -88,7 +108,7 @@
       hasShadow = true
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { allowsActions }
     override var canBecomeMain: Bool { false }
   }
 
@@ -107,12 +127,21 @@
 
     func show(
       _ status: DictationCapsuleStatus,
+      action: DictationCapsuleAction? = nil,
+      onAction: @escaping @MainActor () -> Void = {},
       on screen: NSScreen? = nil,
       reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     ) {
       dismissalTask?.cancel()
       let presentation = status.presentation
-      panel.contentView = NSHostingView(rootView: DictationCapsuleView(presentation: presentation))
+      panel.allowsActions = action != nil
+      panel.contentView = NSHostingView(
+        rootView: DictationCapsuleView(
+          presentation: presentation,
+          action: action,
+          onAction: onAction
+        )
+      )
 
       let finalFrame = Self.frame(in: (screen ?? activeScreen())?.visibleFrame ?? .zero)
       let transition = DictationCapsuleTransition.forReduceMotion(reduceMotion)
@@ -131,7 +160,7 @@
         }
       }
 
-      if presentation.isSuccess {
+      if presentation.isSuccess, action == nil {
         dismissalTask = Task { [weak self] in
           try? await Task.sleep(for: Self.successDismissDelay)
           guard !Task.isCancelled else { return }
@@ -143,6 +172,7 @@
     func dismiss() {
       dismissalTask?.cancel()
       dismissalTask = nil
+      panel.allowsActions = false
       panel.orderOut(nil)
     }
 
@@ -176,6 +206,8 @@
 
   private struct DictationCapsuleView: View {
     let presentation: DictationCapsulePresentation
+    let action: DictationCapsuleAction?
+    let onAction: @MainActor () -> Void
 
     var body: some View {
       HStack(spacing: 10) {
@@ -184,12 +216,18 @@
         Text(presentation.visibleText)
           .font(.system(size: 14, weight: .semibold))
           .lineLimit(1)
+        if let action {
+          Button(action.title, action: onAction)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel(action.accessibilityLabel)
+        }
       }
       .foregroundStyle(.primary)
       .padding(.horizontal, 18)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(.regularMaterial, in: Capsule())
-      .accessibilityElement(children: .ignore)
+      .accessibilityElement(children: action == nil ? .ignore : .contain)
       .accessibilityLabel(presentation.voiceOverText)
     }
   }

@@ -5,6 +5,7 @@ import Testing
 
 @testable import MenuBarNotesApp
 
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test func DictationSettingsSelectsStandardByDefault() {
   let presentation = DictationSettingsPresentation(
     preferences: AppPreferences(),
@@ -111,6 +112,7 @@ import Testing
   #expect(presentation.primaryAction == .update)
   #expect(presentation.secondaryAction == .delete)
 }
+#endif
 
 @Test func DictationSettingsUsesTheExistingMatchedGeometrySectionSelector() {
   #expect(SettingsSection.allCases == [.appearance, .editing, .shortcuts, .dictation])
@@ -602,6 +604,7 @@ import Testing
   #expect(fixture.runtime.shortcutError == nil)
 }
 
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test @MainActor func DictationRepairCapsuleDismissesOnSuccessAndCancellation() async throws {
   let success = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
   let successfulTask = success.runtime.runModelOperation(
@@ -697,6 +700,7 @@ import Testing
 
   await fixture.runtime.cancel()
 }
+#endif
 
 @Test @MainActor func DictationRuntimeShutdownAwaitsCancelledStartupAssessment() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved", startupBlocked: true)
@@ -715,6 +719,7 @@ import Testing
   #expect(await completed.isComplete)
 }
 
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test @MainActor func DictationRuntimeShutdownAwaitsModelOperationFilesystemCleanup() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
   let operationGate = DictationTestGate()
@@ -803,6 +808,7 @@ import Testing
   await shutdown.value
   #expect(await completed.isComplete)
 }
+#endif
 
 @Test @MainActor func DictationRuntimeShutdownAwaitsSuspendedProviderAndLateRelease() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
@@ -1000,6 +1006,7 @@ private final class RuntimeFixture {
     let modelRoot = root.appendingPathComponent("model", isDirectory: true)
     let modelManager = EnhancedModelManager(
       modelRootURL: modelRoot,
+      candidateEnabled: true,
       architectureProvider: { true }
     )
     let gate = startupGate

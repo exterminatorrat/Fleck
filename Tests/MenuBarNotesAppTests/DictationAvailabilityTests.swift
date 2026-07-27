@@ -137,7 +137,10 @@ import Testing
   ]
 
   for scenario in scenarios {
-    let result = DictationAvailability.evaluate(scenario.input)
+    let result = DictationAvailability.evaluate(
+      scenario.input,
+      enhancedCandidateEnabled: true
+    )
     #expect(result.standardAvailable == scenario.standard, Comment(rawValue: scenario.name))
     #expect(result.enhancedAvailable == scenario.enhanced, Comment(rawValue: scenario.name))
     #expect(result.cleanupAvailable == scenario.cleanup, Comment(rawValue: scenario.name))
@@ -148,6 +151,31 @@ import Testing
       Comment(rawValue: scenario.name)
     )
   }
+}
+
+@Test func dictationAvailabilityProvidesLocalizedActionableStandardFailures() {
+  let permissionFailure = DictationAvailability.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .denied,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  ))
+  #expect(permissionFailure.standardFailureCopy?.contains("Microphone") == true)
+  #expect(permissionFailure.standardFailureCopy?.contains("Open System Settings") == true)
+
+  let recognizerFailure = DictationAvailability.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: false,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  ))
+  #expect(recognizerFailure.standardFailureCopy?.contains("on-device English") == true)
 }
 
 @Test @MainActor func permissionsWaitForExplicitUserIntent() async {
@@ -176,6 +204,34 @@ import Testing
   #expect(result == .granted)
   #expect(microphone.requests == 1)
   #expect(speech.requests == 1)
+}
+
+@Test @MainActor func enhancedPermissionRequestsMicrophoneOnly() async {
+  let microphone = PermissionProbe()
+  let speech = PermissionProbe()
+  let permissions = DictationPermissionController(
+    microphoneStatus: { microphone.status },
+    speechStatus: { speech.status },
+    requestMicrophone: {
+      microphone.requests += 1
+      microphone.status = .authorized
+      return true
+    },
+    requestSpeech: {
+      speech.requests += 1
+      speech.status = .authorized
+      return true
+    }
+  )
+
+  let result = await permissions.requestAccess(
+    for: .enhancedLocal,
+    after: .toolbarMicrophone
+  )
+
+  #expect(result == .granted)
+  #expect(microphone.requests == 1)
+  #expect(speech.requests == 0)
 }
 
 @Test @MainActor func deniedPermissionIsNotRepromptedAndOpensItsPrivacyPane() async {

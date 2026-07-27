@@ -31,6 +31,20 @@ struct DictationShortcutSession: Equatable, Hashable, Sendable {
   let id: UUID
 }
 
+enum DictationRecoveryAction: Equatable {
+  case undo
+  case copy
+  case openHistory
+  case openDestination(UUID)
+}
+
+enum DictationRecoveryResult: Equatable {
+  case completed
+  case copy(String)
+  case openHistory
+  case openDestination(UUID)
+}
+
 @MainActor
 final class DictationCoordinator {
   private struct Capture {
@@ -46,6 +60,10 @@ final class DictationCoordinator {
     var cancelRequested = false
     var isTerminating = false
     var editorCancelled = false
+    var focusedCommitReceipt: FocusedDictationCommitReceipt?
+    var focusedPersistenceReceipt: FocusedDictationPersistenceReceipt?
+    var focusedEditorRollbackSucceeded = false
+    var focusedPersistenceCompensated = false
   }
 
   private let engineProvider: any SpeechEngineProviding
@@ -71,6 +89,7 @@ final class DictationCoordinator {
   private(set) var phase: DictationPhase = .idle
   private(set) var copyableTranscript: String?
   private(set) var recoveryReceipt: DictationInsertionReceipt?
+  private(set) var recoveryAction: DictationRecoveryAction?
 
   var canConfigureShortcut: Bool {
     capture == nil && shortcutID == nil && activeShortcutSessions.isEmpty
@@ -219,6 +238,7 @@ final class DictationCoordinator {
     guard capture == nil, shortcutID == nil else { return }
     copyableTranscript = nil
     recoveryReceipt = nil
+    recoveryAction = nil
     setPhase(.arming)
 
     let focusedEditor = mode == .focused ? editor : nil
@@ -322,7 +342,11 @@ final class DictationCoordinator {
       destination: capture.mode == .focused ? capture.destination : nil,
       insertionOutcome: .pending
     )
-    guard await updateHistory(record, captureID: capture.id, enabled: savesHistory) else { return }
+    guard let historyIsDurable = await updateHistory(
+      record,
+      captureID: capture.id,
+      enabled: savesHistory
+    ) else { return }
 
     setPhase(.cleaning)
     let cleanedText: String
@@ -338,9 +362,21 @@ final class DictationCoordinator {
     }
 
     if capture.mode == .focused {
-      await finishFocused(capture.id, text: cleanedText, record: record, savesHistory: savesHistory)
+      await finishFocused(
+        capture.id,
+        text: cleanedText,
+        record: record,
+        savesHistory: savesHistory,
+        historyIsDurable: historyIsDurable
+      )
     } else {
-      await finishSmart(capture.id, text: cleanedText, record: record, savesHistory: savesHistory)
+      await finishSmart(
+        capture.id,
+        text: cleanedText,
+        record: record,
+        savesHistory: savesHistory,
+        historyIsDurable: historyIsDurable
+      )
     }
   }
 
@@ -358,6 +394,7 @@ final class DictationCoordinator {
     capture.cancelRequested = true
     self.capture = capture
     rollbackEditor(capture.id)
+    _ = await compensateFocusedPersistence(capture.id)
     await historyController.delete(capture.id)
     guard let current = self.capture, current.id == capture.id, !current.isTerminating else { return }
     guard !current.isStarting, !current.isFinishing else { return }
@@ -384,21 +421,31 @@ final class DictationCoordinator {
     _ id: UUID,
     text: String,
     record: DictationHistoryRecord,
-    savesHistory: Bool
+    savesHistory: Bool,
+    historyIsDurable: Bool
   ) async {
     guard let capture, capture.id == id else { return }
     var record = record
-    guard capture.editor?.commitFocusedDictation(text: text) == true else {
+    guard let commitReceipt = capture.editor?.commitFocusedDictation(text: text) else {
       record.insertionOutcome = .unsaved
-      guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
-      await unsaved(id, text: text, savesHistory: savesHistory)
+      guard let durable = await updateHistory(record, captureID: id, enabled: savesHistory)
+      else { return }
+      await unsaved(id, text: text, historyIsDurable: durable || historyIsDurable)
       return
     }
+    setFocusedCommitReceipt(commitReceipt, captureID: id)
     do {
-      try await saver.flushFocusedDictationSave()
+      let persistenceReceipt = try await saver.flushFocusedDictationSave(captureID: id)
+      setFocusedPersistenceReceipt(persistenceReceipt, captureID: id)
+      if isCancellationRequested(id) {
+        _ = await compensateFocusedPersistence(id)
+        await completeCancellation(id)
+        return
+      }
       guard await continueCapture(id) else { return }
       record.insertionOutcome = .saved
-      guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
+      guard await updateHistory(record, captureID: id, enabled: savesHistory) != nil else { return }
+      finalizeFocusedCommit(id)
       await terminate(
         id,
         phase: .idle,
@@ -412,8 +459,9 @@ final class DictationCoordinator {
     } catch {
       guard await continueCapture(id) else { return }
       record.insertionOutcome = .unsaved
-      guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
-      await unsaved(id, text: text, savesHistory: savesHistory)
+      guard let durable = await updateHistory(record, captureID: id, enabled: savesHistory)
+      else { return }
+      await unsaved(id, text: text, historyIsDurable: durable || historyIsDurable)
     }
   }
 
@@ -421,7 +469,8 @@ final class DictationCoordinator {
     _ id: UUID,
     text: String,
     record: DictationHistoryRecord,
-    savesHistory: Bool
+    savesHistory: Bool,
+    historyIsDurable: Bool
   ) async {
     guard await continueCapture(id) else { return }
     var record = record
@@ -461,7 +510,9 @@ final class DictationCoordinator {
       guard isActive(id) else { return }
       record.insertionOutcome = .saved
       record.destination = candidates.first { $0.noteID == receipt.noteID }
-      guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
+      recoveryReceipt = receipt
+      recoveryAction = .undo
+      guard await updateHistory(record, captureID: id, enabled: savesHistory) != nil else { return }
       if let destination = record.destination {
         await terminate(
           id,
@@ -489,14 +540,20 @@ final class DictationCoordinator {
       guard await continueCapture(id) else { return }
       record.insertionOutcome = .unsaved
       record.destination = candidates.first { $0.noteID == destinationID }
-      guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
-      await unsaved(id, text: text, savesHistory: savesHistory)
+      guard let durable = await updateHistory(record, captureID: id, enabled: savesHistory)
+      else { return }
+      await unsaved(id, text: text, historyIsDurable: durable || historyIsDurable)
     }
   }
 
-  private func unsaved(_ id: UUID, text: String, savesHistory: Bool) async {
+  private func unsaved(_ id: UUID, text: String, historyIsDurable: Bool) async {
     guard let capture, capture.id == id else { return }
-    if !savesHistory { copyableTranscript = text }
+    if historyIsDurable {
+      recoveryAction = .openHistory
+    } else {
+      copyableTranscript = text
+      recoveryAction = .copy
+    }
     await terminate(id, phase: .failed("Unable to save dictation."), cancelEditor: capture.mode == .focused)
   }
 
@@ -516,6 +573,7 @@ final class DictationCoordinator {
     guard self.capture?.id == id else { return }
     recoveryReceipt = receipt
     copyableTranscript = text
+    recoveryAction = .openDestination(receipt.noteID)
     await terminate(
       id,
       phase: .failed("Dictation was saved but could not be undone."),
@@ -527,14 +585,24 @@ final class DictationCoordinator {
     _ record: DictationHistoryRecord,
     captureID: UUID,
     enabled: Bool
-  ) async -> Bool {
-    guard enabled else { return await continueCapture(captureID) }
-    await historyController.save(record)
-    return await continueCapture(captureID)
+  ) async -> Bool? {
+    guard enabled else {
+      return await continueCapture(captureID) ? false : nil
+    }
+    let saved = await historyController.save(record)
+    return await continueCapture(captureID) ? saved : nil
   }
 
   private func completeCancellation(_ id: UUID) async {
     guard isCancellationRequested(id) else { return }
+    guard await compensateFocusedPersistence(id) else {
+      await terminate(
+        id,
+        phase: .failed("Dictation could not be cancelled safely. The text was preserved."),
+        cancelEditor: false
+      )
+      return
+    }
     await terminate(id, phase: .idle, cancelEditor: true, deleteHistory: true)
   }
 
@@ -586,9 +654,52 @@ final class DictationCoordinator {
 
   private func rollbackEditor(_ id: UUID) {
     guard var capture, capture.id == id, !capture.editorCancelled else { return }
-    capture.editor?.cancelFocusedDictation()
+    if let receipt = capture.focusedCommitReceipt {
+      capture.focusedEditorRollbackSucceeded =
+        capture.editor?.rollbackCommittedFocusedDictation(receipt) == true
+    } else {
+      capture.editor?.cancelFocusedDictation()
+      capture.focusedEditorRollbackSucceeded = true
+    }
     capture.editorCancelled = true
     self.capture = capture
+  }
+
+  private func compensateFocusedPersistence(_ id: UUID) async -> Bool {
+    guard let current = capture, current.id == id else { return false }
+    guard let receipt = current.focusedPersistenceReceipt else { return true }
+    guard !current.focusedPersistenceCompensated else { return true }
+    guard current.focusedEditorRollbackSucceeded else { return false }
+    let compensated = await saver.compensateFocusedDictationSave(receipt)
+    guard var latest = capture, latest.id == id else { return false }
+    latest.focusedPersistenceCompensated = compensated
+    capture = latest
+    return compensated
+  }
+
+  private func setFocusedCommitReceipt(
+    _ receipt: FocusedDictationCommitReceipt,
+    captureID: UUID
+  ) {
+    guard var capture, capture.id == captureID else { return }
+    capture.focusedCommitReceipt = receipt
+    self.capture = capture
+  }
+
+  private func setFocusedPersistenceReceipt(
+    _ receipt: FocusedDictationPersistenceReceipt,
+    captureID: UUID
+  ) {
+    guard var capture, capture.id == captureID else { return }
+    capture.focusedPersistenceReceipt = receipt
+    self.capture = capture
+  }
+
+  private func finalizeFocusedCommit(_ id: UUID) {
+    guard let capture, capture.id == id,
+      let receipt = capture.focusedCommitReceipt
+    else { return }
+    capture.editor?.finalizeCommittedFocusedDictation(receipt)
   }
 
   private func isActive(_ id: UUID) -> Bool {
@@ -603,6 +714,31 @@ final class DictationCoordinator {
   private func nonempty(_ text: String?) -> String? {
     guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
     return text
+  }
+
+  func performRecoveryAction() async -> DictationRecoveryResult? {
+    switch recoveryAction {
+    case .undo:
+      guard let receipt = recoveryReceipt else { return nil }
+      if await saver.undoSmartCapture(receipt) {
+        await historyController.delete(receipt.captureID)
+        recoveryReceipt = nil
+        recoveryAction = nil
+        copyableTranscript = nil
+        return .completed
+      }
+      recoveryAction = .openDestination(receipt.noteID)
+      return .openDestination(receipt.noteID)
+    case .copy:
+      guard let copyableTranscript else { return nil }
+      return .copy(copyableTranscript)
+    case .openHistory:
+      return .openHistory
+    case .openDestination(let noteID):
+      return .openDestination(noteID)
+    case nil:
+      return nil
+    }
   }
 
   private func message(for error: Error) -> String {

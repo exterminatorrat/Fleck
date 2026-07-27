@@ -1,6 +1,11 @@
 import AVFoundation
 import Foundation
+import MenuBarNotesCore
 import Speech
+
+#if canImport(FoundationModels)
+  import FoundationModels
+#endif
 
 enum DictationArchitecture: Equatable, Sendable {
   case appleSilicon
@@ -60,7 +65,11 @@ struct DictationAvailability: Equatable, Sendable {
   let routing: DictationRoutingAvailability
   let openSystemSettings: [DictationSystemSettingsAction]
 
-  static func evaluate(_ input: Input) -> Self {
+  static func evaluate(
+    _ input: Input,
+    enhancedCandidateEnabled: Bool =
+      CleanDictationFeatures.enhancedLocalCandidateEnabled
+  ) -> Self {
     let supportedOS = input.osMajorVersion >= 14
     let microphoneAvailable = input.microphonePermission.permitsRequestOrUse
     let speechAvailable = input.speechPermission.permitsRequestOrUse
@@ -79,6 +88,7 @@ struct DictationAvailability: Equatable, Sendable {
         && speechAvailable
         && input.appleOnDeviceRecognitionSupported,
       enhancedAvailable: supportedOS
+        && enhancedCandidateEnabled
         && input.architecture == .appleSilicon
         && microphoneAvailable
         && input.enhancedModelReady,
@@ -86,6 +96,54 @@ struct DictationAvailability: Equatable, Sendable {
       routing: foundationModelAvailable ? .foundationModel : .inbox,
       openSystemSettings: settings
     )
+  }
+
+  @MainActor
+  static func current(
+    permissions: DictationPermissionController,
+    enhancedModelReady: Bool
+  ) -> Self {
+    let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    return evaluate(.init(
+      osMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion,
+      architecture: currentArchitecture(),
+      microphonePermission: permissions.currentMicrophoneStatus,
+      speechPermission: permissions.currentSpeechStatus,
+      appleOnDeviceRecognitionSupported: recognizer?.supportsOnDeviceRecognition == true,
+      enhancedModelReady: enhancedModelReady,
+      foundationModelAvailable: foundationModelIsAvailable
+    ))
+  }
+
+  var standardFailureCopy: String? {
+    guard !standardAvailable else { return nil }
+    if openSystemSettings.contains(where: { $0.pane == .microphone }) {
+      return "Standard — Apple Speech needs Microphone access. Open System Settings to allow Motes."
+    }
+    if openSystemSettings.contains(where: { $0.pane == .speechRecognition }) {
+      return "Standard — Apple Speech needs Speech Recognition access. Open System Settings to allow Motes."
+    }
+    return "Standard — Apple Speech is unavailable because on-device English recognition is not installed or supported."
+  }
+
+  private static func currentArchitecture() -> DictationArchitecture {
+    var systemInfo = utsname()
+    uname(&systemInfo)
+    let machine = withUnsafePointer(to: &systemInfo.machine) {
+      $0.withMemoryRebound(to: CChar.self, capacity: 1) {
+        String(cString: $0)
+      }
+    }
+    return machine == "arm64" ? .appleSilicon : .intel
+  }
+
+  private static var foundationModelIsAvailable: Bool {
+    #if canImport(FoundationModels)
+      if #available(macOS 26.0, *) {
+        return SystemLanguageModel.default.isAvailable
+      }
+    #endif
+    return false
   }
 }
 
@@ -105,6 +163,9 @@ final class DictationPermissionController {
   private let speechStatus: () -> DictationPermissionStatus
   private let requestMicrophone: () async -> Bool
   private let requestSpeech: () async -> Bool
+
+  var currentMicrophoneStatus: DictationPermissionStatus { microphoneStatus() }
+  var currentSpeechStatus: DictationPermissionStatus { speechStatus() }
 
   init(
     microphoneStatus: @escaping () -> DictationPermissionStatus = {
@@ -132,13 +193,18 @@ final class DictationPermissionController {
     self.requestSpeech = requestSpeech
   }
 
-  func requestAccess(after _: DictationPermissionIntent) async -> DictationPermissionResult {
+  func requestAccess(
+    for engine: DictationSpeechEngine = .standard,
+    after _: DictationPermissionIntent
+  ) async -> DictationPermissionResult {
     if microphoneStatus() == .notDetermined {
       _ = await requestMicrophone()
     }
     guard microphoneStatus() == .authorized else {
       return .denied(recoveryActions())
     }
+
+    guard engine == .standard else { return .granted }
 
     if speechStatus() == .notDetermined {
       _ = await requestSpeech()

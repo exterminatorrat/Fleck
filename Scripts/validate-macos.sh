@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -n "${MOTES_ENHANCED_CANDIDATE+x}" ]]; then
+  printf '%s\n' \
+    'error: unset MOTES_ENHANCED_CANDIDATE before validating an ordinary release' \
+    >&2
+  exit 2
+fi
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   printf 'error: this validation script must run on macOS\n' >&2
   exit 2

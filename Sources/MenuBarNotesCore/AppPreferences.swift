@@ -51,7 +51,10 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.automaticLists = automaticLists
     self.launchAtLogin = launchAtLogin
     self.shortcuts = shortcuts
-    self.dictationSpeechEngine = dictationSpeechEngine
+    self.dictationSpeechEngine =
+      CleanDictationFeatures.enhancedLocalCandidateEnabled
+      ? dictationSpeechEngine
+      : .standard
     self.dictationShortcut = dictationShortcut
     self.dictationHistoryEnabled = dictationHistoryEnabled
     self.dictationCapsuleEnabled = dictationCapsuleEnabled
