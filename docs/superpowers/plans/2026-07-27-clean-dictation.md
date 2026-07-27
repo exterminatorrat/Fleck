@@ -1,5 +1,7 @@
 # Motes Clean Dictation Implementation Plan
 
+> **Superseded:** The approved design now includes Standard Apple Speech plus an optional downloadable Enhanced Local engine. Do not execute this Apple-only plan. Replace it after the revised specification in `docs/superpowers/specs/2026-07-27-clean-dictation-design.md` is approved.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship private, English, on-device Focused Dictation and global Smart Capture while preserving Motes' macOS 14 baseline and existing local-note behavior.
