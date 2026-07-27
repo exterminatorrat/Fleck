@@ -407,6 +407,35 @@ private func waitForListening(
   #expect(fixture.saver.undoCount == 1)
 }
 
+@Test @MainActor func recoveryInFlightRejectsNewCaptureUntilUndoCompletes() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "First capture"
+  fixture.saver.undoGate = gate
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let receipt = try #require(fixture.coordinator.recoveryReceipt)
+  let recovery = Task { await fixture.coordinator.performRecoveryAction() }
+  await gate.waitUntilWaiting()
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let shortcut = fixture.coordinator.beginShortcut(editor: nil)
+
+  #expect(shortcut == nil)
+  #expect(fixture.provider.requestedKinds == [.standard])
+  #expect(fixture.coordinator.recoveryReceipt == receipt)
+
+  await gate.openGate()
+  #expect(await recovery.value == .completed)
+
+  fixture.standard.finalText = "Second capture"
+  await fixture.coordinator.start(mode: .smartCapture)
+
+  #expect(fixture.provider.requestedKinds == [.standard, .standard])
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+}
+
 @Test @MainActor func durableUnsavedRecoveryOpensHistoryInsteadOfCopy() async throws {
   let fixture = try Fixture()
   fixture.standard.finalText = "History recovery"

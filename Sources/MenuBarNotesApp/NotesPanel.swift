@@ -87,6 +87,24 @@
         header
         tabStrip
         Divider().opacity(0.35)
+        if let failure = dictationRuntime.captureFailure {
+          HStack(spacing: 8) {
+            Label(failure.message, systemImage: "exclamationmark.triangle")
+              .font(.caption)
+            Spacer()
+            ForEach(failure.actions, id: \.pane) { action in
+              Button(action.title) {
+                dictationRuntime.openSystemSettings(action)
+              }
+              .accessibilityLabel(action.title)
+            }
+          }
+          .padding(.horizontal, 10)
+          .padding(.vertical, 7)
+          .background(.quaternary.opacity(0.35))
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("Dictation unavailable")
+        }
         if let recoveryAction = dictationRuntime.recoveryAction {
           HStack(spacing: 8) {
             Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")

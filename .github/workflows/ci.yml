@@ -20,9 +20,13 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
-      - name: Test
-        run: swift test
-      - name: Build release
-        run: swift build -c release
+      - name: Test ordinary graph
+        run: env -u MOTES_ENHANCED_CANDIDATE swift test
+      - name: Test Enhanced Local candidate graph
+        run: MOTES_ENHANCED_CANDIDATE=1 swift test --scratch-path .build-candidate
+      - name: Build ordinary release
+        run: env -u MOTES_ENHANCED_CANDIDATE swift build -c release
       - name: Enforce executable size budget
-        run: Scripts/check-release-size.sh .build/release/Motes
+        run: env -u MOTES_ENHANCED_CANDIDATE Scripts/check-release-size.sh .build/release/Motes
+      - name: Reject candidate release
+        run: Scripts/check-candidate-release-rejected.sh

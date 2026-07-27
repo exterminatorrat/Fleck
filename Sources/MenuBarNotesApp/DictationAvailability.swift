@@ -43,8 +43,15 @@ enum DictationPrivacyPane: Hashable, Sendable {
 }
 
 struct DictationSystemSettingsAction: Equatable, Sendable {
-  let title = "Open System Settings"
   let pane: DictationPrivacyPane
+  var title: String {
+    switch pane {
+    case .microphone:
+      "Open Microphone Settings"
+    case .speechRecognition:
+      "Open Speech Recognition Settings"
+    }
+  }
   var url: URL { pane.url }
 }
 

@@ -99,6 +99,11 @@
     let isEnabled: Bool
   }
 
+  struct DictationCaptureFailurePresentation: Equatable {
+    let message: String
+    let actions: [DictationSystemSettingsAction]
+  }
+
   @MainActor
   final class DictationRuntime: ObservableObject {
     static let usesPeriodicObservation = false
@@ -129,6 +134,7 @@
     @Published private(set) var availability: DictationAvailability
     @Published private(set) var recoveryAction: DictationCapsuleAction?
     @Published private(set) var recoveryActionInFlight = false
+    @Published private(set) var captureFailure: DictationCaptureFailurePresentation?
     private(set) var currentCapsuleStatus: DictationCapsuleStatus?
 
     private weak var appState: AppState?
@@ -339,15 +345,23 @@
     }
 
     func toggle() async {
+      guard !recoveryActionInFlight, !coordinator.recoveryOperationInFlight else {
+        return
+      }
       switch coordinator.phase {
       case .idle, .saved, .failed:
+        captureFailure = nil
         refreshAvailability()
         let preferredEngine =
           appState?.preferences.dictationSpeechEngine ?? .standard
         if preferredEngine == .standard, !availability.standardAvailable {
-          phase = .failed(
+          let message =
             availability.standardFailureCopy
-              ?? "Standard — Apple Speech is unavailable."
+            ?? "Standard — Apple Speech is unavailable."
+          phase = .failed(message)
+          captureFailure = .init(
+            message: message,
+            actions: availability.openSystemSettings
           )
           return
         }
@@ -393,6 +407,10 @@
 
     func permissionRecoveryActions() -> [DictationSystemSettingsAction] {
       availability.openSystemSettings
+    }
+
+    func openSystemSettings(_ action: DictationSystemSettingsAction) {
+      NSWorkspace.shared.open(action.url)
     }
 
     func requestPermissionsAfterShortcutSetup() async {
@@ -521,6 +539,7 @@
     private func receive(_ event: DictationCoordinatorEvent) {
       phase = event.phase
       recoveryAction = capsuleAction(for: coordinator.recoveryAction)
+      updateCaptureFailure(for: event)
       guard appState?.preferences.dictationCapsuleEnabled == true else {
         dismissCapsule()
         synchronizeAfter(event)
@@ -555,6 +574,26 @@
           self.needsShortcutApplication = true
         }
         self.synchronizePreferences()
+      }
+    }
+
+    private func updateCaptureFailure(for event: DictationCoordinatorEvent) {
+      switch event.phase {
+      case .arming, .listening, .finalizing, .cleaning, .routing, .saved:
+        captureFailure = nil
+      case .idle:
+        if event.terminal != nil { captureFailure = nil }
+      case .failed(let message):
+        let denied = DictationFailure.permissionDenied.localizedDescription
+        let unavailable = DictationFailure.unavailable.localizedDescription
+        guard message == denied || message == unavailable else { return }
+        refreshAvailability()
+        let localizedMessage =
+          availability.standardFailureCopy ?? message
+        captureFailure = .init(
+          message: localizedMessage,
+          actions: availability.openSystemSettings
+        )
       }
     }
 

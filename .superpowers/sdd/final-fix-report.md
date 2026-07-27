@@ -310,3 +310,78 @@ Observed results:
 
 The manual evidence list above remains unchanged. These automated results do
 not approve Enhanced Local for release.
+
+## Final bounded closure (2026-07-28)
+
+### Sole candidate lock and offline ordinary graph
+
+- The root `Package.resolved` is removed from version control and
+  `/Package.resolved` is ignored. Candidate resolution may create that root
+  file transiently without making it an audited artifact.
+- `Packages/MotesEnhancedCandidateDependencies/Package.resolved` is the sole
+  tracked lock and retains FluidAudio `0.15.5` at revision
+  `19600a485baa4998812e4654b70d2bab8f2c9949`.
+- A fresh detached checkout and a separately extracted archive were each
+  verified with no root lock, empty explicit SwiftPM cache/config/security and
+  scratch paths, dead HTTP/HTTPS/ALL proxies, and an HTTPS-to-dead-localhost Git
+  rewrite. In both trees:
+  - `swift package show-dependencies --format text` reported
+    `No external dependencies found`;
+  - the ordinary `swift test` passed `249` tests;
+  - the ordinary release build completed without attempting FluidAudio or
+    network access.
+- Candidate resolution generated only the ignored transient root lock, whose
+  FluidAudio version and revision matched the tracked nested audit lock.
+
+### Recovery operation ownership
+
+- RED: while Smart Capture Undo was suspended, a new capture requested a second
+  Standard engine and cleared the original recovery receipt.
+- GREEN: the coordinator now owns a recovery-operation reservation from action
+  consumption through the awaited terminal result. Direct, toolbar, global
+  shortcut, and shortcut-configuration starts are rejected while it is held.
+  Runtime also rejects toolbar toggles while recovery is in flight.
+- The regression test holds Undo, attempts both a direct start and
+  `beginShortcut`, verifies the provider remains at one request and the receipt
+  remains unchanged, then confirms a new capture reaches listening after Undo
+  completes.
+
+### Notes-panel capture failure recovery
+
+- RED: toolbar preflight tests had no published runtime failure presentation,
+  and global capture failures were visible only through transient coordinator
+  or capsule state.
+- GREEN: runtime publishes a localized capture failure with zero or more
+  concrete System Settings actions. The active Notes panel renders it as an
+  accessible, keyboard-actionable banner independently of Settings and capsule
+  visibility.
+- Denied microphone and Speech Recognition states expose
+  `Open Microphone Settings` and `Open Speech Recognition Settings`
+  respectively. Missing on-device English recognition exposes the localized
+  explanation without an irrelevant settings action.
+- Toolbar retry clears the banner before preflight; accepted listening and
+  terminal success keep it cleared. A global-hotkey permission failure
+  publishes the same Notes-panel recovery presentation.
+
+### CI and final automated evidence
+
+- CI now runs:
+  - `env -u MOTES_ENHANCED_CANDIDATE swift test`;
+  - `MOTES_ENHANCED_CANDIDATE=1 swift test --scratch-path .build-candidate`;
+  - the uncontaminated ordinary release build and release gate;
+  - `Scripts/check-candidate-release-rejected.sh`.
+- Fresh local results:
+  - ordinary suite: `249` tests passed;
+  - opt-in candidate suite: `318` tests passed;
+  - ordinary release executable: `3,579,752` bytes;
+  - ordinary release model assets, candidate controls, and candidate SDK
+    symbols: `0`;
+  - requested candidate release: rejected before linking;
+  - `Scripts/validate-macos.sh`: passed on macOS `26.2`, Xcode `26.6`,
+    Apple Swift `6.3.3`;
+  - CI YAML parse and `git diff --check`: passed.
+
+FluidAudio's existing unhandled `benchmark.md` warning remains confined to the
+candidate build. Manual device, microphone, permission, quality, performance,
+accessibility, legal, signing, notarization, and store evidence remains
+outstanding; this closure does not convert those gates into release approval.

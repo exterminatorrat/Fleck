@@ -625,16 +625,18 @@ import Testing
 @Test @MainActor func DictationRuntimePreflightsDeniedMicrophoneAndSpeechPermissions()
   async throws
 {
-  for (microphone, speech, expectedPane) in [
+  for (microphone, speech, expectedPane, expectedTitle) in [
     (
       DictationPermissionStatus.denied,
       DictationPermissionStatus.authorized,
-      DictationPrivacyPane.microphone
+      DictationPrivacyPane.microphone,
+      "Open Microphone Settings"
     ),
     (
       DictationPermissionStatus.authorized,
       DictationPermissionStatus.denied,
-      DictationPrivacyPane.speechRecognition
+      DictationPrivacyPane.speechRecognition,
+      "Open Speech Recognition Settings"
     ),
   ] {
     let availability = DictationAvailability.evaluate(.init(
@@ -656,6 +658,8 @@ import Testing
     }
     #expect(message == availability.standardFailureCopy)
     #expect(fixture.runtime.permissionRecoveryActions().map(\.pane) == [expectedPane])
+    #expect(fixture.runtime.captureFailure?.message == message)
+    #expect(fixture.runtime.captureFailure?.actions.map(\.title) == [expectedTitle])
     #expect(fixture.provider.requestCount == 0)
   }
 }
@@ -683,7 +687,79 @@ import Testing
       )
   )
   #expect(fixture.runtime.permissionRecoveryActions().isEmpty)
+  #expect(
+    fixture.runtime.captureFailure?.message
+      == "Standard — Apple Speech is unavailable because on-device English recognition is not installed or supported."
+  )
+  #expect(fixture.runtime.captureFailure?.actions.isEmpty == true)
   #expect(fixture.provider.requestCount == 0)
+}
+
+@Test @MainActor func DictationRuntimeClearsVisiblePreflightFailureOnRetryAndSuccess()
+  async throws
+{
+  let availability = RuntimeAvailabilityBox(.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .denied,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  )))
+  let fixture = try await RuntimeFixture(
+    finalText: "Saved",
+    availabilityProvider: { availability.value }
+  )
+
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.captureFailure != nil)
+
+  availability.value = .evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  ))
+  await fixture.runtime.toggle()
+
+  #expect(fixture.runtime.captureFailure == nil)
+  #expect(fixture.runtime.phase == .listening(mode: .smartCapture, engine: .standard))
+
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.captureFailure == nil)
+}
+
+@Test @MainActor func DictationRuntimePublishesGlobalPermissionFailureInNotesPanel()
+  async throws
+{
+  let availability = DictationAvailability.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .denied,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  ))
+  let fixture = try await RuntimeFixture(finalText: nil, availability: availability)
+  fixture.provider.error = DictationFailure.permissionDenied
+
+  fixture.registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  await fixture.runtime.shortcutController.drainEvents()
+  for _ in 0..<20 {
+    if fixture.runtime.captureFailure != nil { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.captureFailure?.message == availability.standardFailureCopy)
+  #expect(
+    fixture.runtime.captureFailure?.actions.map(\.title)
+      == ["Open Microphone Settings"]
+  )
 }
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
@@ -1067,7 +1143,8 @@ private final class RuntimeFixture {
       appleOnDeviceRecognitionSupported: true,
       enhancedModelReady: true,
       foundationModelAvailable: true
-    ))
+    )),
+    availabilityProvider: (@MainActor () -> DictationAvailability)? = nil
   ) async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("runtime-\(UUID().uuidString)", isDirectory: true)
@@ -1152,7 +1229,7 @@ private final class RuntimeFixture {
         if startupBlocked { await gate.wait() }
       },
       enhancedIsReady: { [enhancedReady] in enhancedReady.value },
-      availabilityProvider: { availability }
+      availabilityProvider: availabilityProvider ?? { availability }
     )
   }
 
@@ -1187,6 +1264,7 @@ private final class RuntimeRegistrar: GlobalHotKeyRegistering {
 private final class RuntimeEngineProvider: SpeechEngineProviding {
   let engine: RuntimeSpeechEngine
   var gate: DictationTestGate?
+  var error: Error?
   private var requestWaiters: [CheckedContinuation<Void, Never>] = []
   private(set) var requestCount = 0
 
@@ -1200,6 +1278,7 @@ private final class RuntimeEngineProvider: SpeechEngineProviding {
     requestWaiters.removeAll()
     waiters.forEach { $0.resume() }
     if let gate { await gate.wait() }
+    if let error { throw error }
     return engine
   }
 
@@ -1265,6 +1344,15 @@ private actor RuntimeCounter {
 @MainActor
 private final class RuntimeBool {
   var value = false
+}
+
+@MainActor
+private final class RuntimeAvailabilityBox {
+  var value: DictationAvailability
+
+  init(_ value: DictationAvailability) {
+    self.value = value
+  }
 }
 
 private actor RuntimeCompletionProbe {

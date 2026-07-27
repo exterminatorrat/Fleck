@@ -90,9 +90,11 @@ final class DictationCoordinator {
   private(set) var copyableTranscript: String?
   private(set) var recoveryReceipt: DictationInsertionReceipt?
   private(set) var recoveryAction: DictationRecoveryAction?
+  private(set) var recoveryOperationInFlight = false
 
   var canConfigureShortcut: Bool {
     capture == nil && shortcutID == nil && activeShortcutSessions.isEmpty
+      && !recoveryOperationInFlight
   }
 
   init(
@@ -154,7 +156,9 @@ final class DictationCoordinator {
     editor: (any FocusedDictationEditing)?,
     destination: DictationDestination? = nil
   ) -> DictationShortcutSession? {
-    guard capture == nil, shortcutID == nil else { return nil }
+    guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
+      return nil
+    }
     let id = UUID()
     shortcutID = id
     shortcutEditor = editor
@@ -235,7 +239,9 @@ final class DictationCoordinator {
     editor: (any FocusedDictationEditing)?,
     destination: DictationDestination?
   ) async {
-    guard capture == nil, shortcutID == nil else { return }
+    guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
+      return
+    }
     copyableTranscript = nil
     recoveryReceipt = nil
     recoveryAction = nil
@@ -732,8 +738,10 @@ final class DictationCoordinator {
   }
 
   func performRecoveryAction() async -> DictationRecoveryResult? {
-    guard let action = recoveryAction else { return nil }
+    guard !recoveryOperationInFlight, let action = recoveryAction else { return nil }
+    recoveryOperationInFlight = true
     recoveryAction = nil
+    defer { recoveryOperationInFlight = false }
     switch action {
     case .undo:
       guard let receipt = recoveryReceipt else { return nil }

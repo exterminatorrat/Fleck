@@ -158,7 +158,14 @@ import Testing
     #expect(result.routing == scenario.routing, Comment(rawValue: scenario.name))
     #expect(Set(result.openSystemSettings.map(\.pane)) == scenario.settings, Comment(rawValue: scenario.name))
     #expect(
-      result.openSystemSettings.allSatisfy { $0.title == "Open System Settings" },
+      result.openSystemSettings.allSatisfy {
+        switch $0.pane {
+        case .microphone:
+          $0.title == "Open Microphone Settings"
+        case .speechRecognition:
+          $0.title == "Open Speech Recognition Settings"
+        }
+      },
       Comment(rawValue: scenario.name)
     )
   }
