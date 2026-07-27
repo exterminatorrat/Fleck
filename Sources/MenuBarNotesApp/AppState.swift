@@ -1,11 +1,12 @@
 #if os(macOS)
+  import AppKit
   import Combine
   import Foundation
   import MenuBarNotesCore
   import ServiceManagement
 
   @MainActor
-  final class AppState: ObservableObject {
+  final class AppState: ObservableObject, DictationSaving {
     enum SaveStatus: Equatable {
       case idle
       case saving
@@ -36,6 +37,81 @@
     var selectedNote: Note? {
       guard let id = workspace.selectedNoteID else { return nil }
       return workspace.notes.first(where: { $0.id == id })
+    }
+
+    func activeDestinations() -> [DictationDestination] {
+      workspace.notes.map {
+        DictationDestination(noteID: $0.id, title: $0.displayTitle)
+      }
+    }
+
+    func saveSmartCapture(
+      text: String,
+      captureID: UUID,
+      destinationID: UUID?
+    ) async throws -> DictationInsertionReceipt {
+      let destinationIndex: Int
+      if let destinationID,
+        let index = workspace.notes.firstIndex(where: { $0.id == destinationID })
+      {
+        destinationIndex = index
+      } else if let index = workspace.notes.firstIndex(where: {
+        $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
+      }) {
+        destinationIndex = index
+      } else {
+        workspace.notes.append(Note(title: "Inbox"))
+        destinationIndex = workspace.notes.index(before: workspace.notes.endIndex)
+      }
+
+      let appended = NoteTextAppender.appending(
+        text,
+        to: workspace.notes[destinationIndex],
+        defaults: NoteTextAppendDefaults(
+          fontFamily: preferences.fontFamily,
+          fontSize: preferences.fontSize
+        )
+      )
+      workspace.notes[destinationIndex].body = appended.body
+      workspace.notes[destinationIndex].richTextRTF = appended.richTextRTF
+      workspace.notes[destinationIndex].modifiedAt = Date()
+      let noteID = workspace.notes[destinationIndex].id
+      try await saveCurrentState()
+      return DictationInsertionReceipt(
+        captureID: captureID,
+        noteID: noteID,
+        insertedSuffix: appended.insertedSuffix
+      )
+    }
+
+    func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
+      guard let index = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }) else {
+        return false
+      }
+      workspace.selectedNoteID = receipt.noteID
+      let note = workspace.notes[index]
+      guard
+        !receipt.insertedSuffix.isEmpty,
+        note.body.hasSuffix(receipt.insertedSuffix),
+        let richTextRTF = removingSuffix(receipt.insertedSuffix, from: note.richTextRTF)
+      else {
+        return false
+      }
+
+      workspace.notes[index].body = String(note.body.dropLast(receipt.insertedSuffix.count))
+      workspace.notes[index].richTextRTF = richTextRTF
+      workspace.notes[index].modifiedAt = Date()
+      do {
+        try await saveCurrentState()
+        return true
+      } catch {
+        workspace.notes[index] = note
+        return false
+      }
+    }
+
+    func flushFocusedDictationSave() async throws {
+      try await saveCurrentState()
     }
 
     func select(_ id: UUID) {
@@ -123,31 +199,9 @@
     func saveNow() {
       saveTask?.cancel()
       markSaveStarted()
-      let workspace = workspace
-      let preferences = preferences
-      let trashedNotes = Array(pendingTrashNotes.values)
-      let store = store
+      let snapshot = saveSnapshot()
       saveTask = Task {
-        do {
-          try await store.save(
-            workspace: workspace,
-            preferences: preferences,
-            trashedNotes: trashedNotes
-          )
-          guard !Task.isCancelled else { return }
-          for note in trashedNotes {
-            pendingTrashNotes.removeValue(forKey: note.id)
-          }
-          if !trashedNotes.isEmpty {
-            self.trashedNotes = try await store.loadTrash()
-          }
-          saveError = nil
-          markSaveSucceeded()
-        } catch {
-          guard !Task.isCancelled else { return }
-          saveError = error.localizedDescription
-          markSaveFailed()
-        }
+        try? await persist(snapshot)
       }
     }
 
@@ -201,34 +255,74 @@
     private func scheduleSave() {
       saveTask?.cancel()
       markSaveStarted()
-      let workspace = workspace
-      let preferences = preferences
-      let trashedNotes = Array(pendingTrashNotes.values)
-      let store = store
+      let snapshot = saveSnapshot()
       saveTask = Task {
         try? await Task.sleep(for: .milliseconds(350))
         guard !Task.isCancelled else { return }
-        do {
-          try await store.save(
-            workspace: workspace,
-            preferences: preferences,
-            trashedNotes: trashedNotes
-          )
-          guard !Task.isCancelled else { return }
-          for note in trashedNotes {
-            pendingTrashNotes.removeValue(forKey: note.id)
-          }
-          if !trashedNotes.isEmpty {
-            self.trashedNotes = try await store.loadTrash()
-          }
-          saveError = nil
-          markSaveSucceeded()
-        } catch {
-          guard !Task.isCancelled else { return }
-          saveError = error.localizedDescription
-          markSaveFailed()
-        }
+        try? await persist(snapshot)
       }
+    }
+
+    private func saveCurrentState() async throws {
+      saveTask?.cancel()
+      saveTask = nil
+      markSaveStarted()
+      try await persist(saveSnapshot())
+    }
+
+    private typealias SaveSnapshot = (
+      workspace: Workspace,
+      preferences: AppPreferences,
+      trashedNotes: [Note]
+    )
+
+    private func saveSnapshot() -> SaveSnapshot {
+      (workspace, preferences, Array(pendingTrashNotes.values))
+    }
+
+    private func persist(_ snapshot: SaveSnapshot) async throws {
+      do {
+        try await store.save(
+          workspace: snapshot.workspace,
+          preferences: snapshot.preferences,
+          trashedNotes: snapshot.trashedNotes
+        )
+        guard !Task.isCancelled else { throw CancellationError() }
+        for note in snapshot.trashedNotes {
+          pendingTrashNotes.removeValue(forKey: note.id)
+        }
+        if !snapshot.trashedNotes.isEmpty {
+          trashedNotes = try await store.loadTrash()
+        }
+        saveError = nil
+        markSaveSucceeded()
+      } catch let error as CancellationError {
+        throw error
+      } catch {
+        saveError = error.localizedDescription
+        markSaveFailed()
+        throw error
+      }
+    }
+
+    private func removingSuffix(_ suffix: String, from richTextRTF: Data?) -> Data? {
+      guard
+        let richTextRTF,
+        let attributed = try? NSMutableAttributedString(
+          data: richTextRTF,
+          options: [.documentType: NSAttributedString.DocumentType.rtf],
+          documentAttributes: nil
+        ),
+        attributed.string.hasSuffix(suffix)
+      else { return nil }
+      let suffixLength = suffix.utf16.count
+      attributed.deleteCharacters(
+        in: NSRange(location: attributed.length - suffixLength, length: suffixLength)
+      )
+      return try? attributed.data(
+        from: NSRange(location: 0, length: attributed.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+      )
     }
 
     private func markSaveStarted() {
