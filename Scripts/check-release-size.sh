@@ -29,10 +29,23 @@ nearest_app_root() {
 }
 
 is_forbidden_model_path() {
-  local path
+  local path="$1"
+  local boundary="$2"
   local filename
+  local relative_path
+  local boundary_name
 
-  path="$(lowercase "$1")"
+  if [[ "$path" == "$boundary" ]]; then
+    relative_path="${path##*/}"
+  elif [[ "$path" == "$boundary/"* ]]; then
+    relative_path="${path#"$boundary/"}"
+  else
+    relative_path="${path##*/}"
+  fi
+
+  path="$(lowercase "$path")"
+  relative_path="$(lowercase "$relative_path")"
+  boundary_name="$(lowercase "${boundary##*/}")"
   filename="${path##*/}"
   case "$filename" in
     *.mlmodel|*.mlpackage|*.mlmodelc|coremldata.bin|weight.bin|weights.bin)
@@ -42,8 +55,13 @@ is_forbidden_model_path() {
 
   case "$filename" in
     *.bin)
-      case "$path" in
-        *.mlmodelc/*|*.mlpackage/*|*/model/*|*/models/*)
+      case "$boundary_name" in
+        model|models|*.mlmodelc|*.mlpackage)
+          return 0
+          ;;
+      esac
+      case "$relative_path" in
+        *.mlmodelc/*|*.mlpackage/*|model/*|models/*|*/model/*|*/models/*)
           return 0
           ;;
       esac
@@ -70,16 +88,22 @@ my $output = '';
 my $index = 0;
 my $state = 'code';
 my $block_depth = 0;
+my $string_hashes = '';
+my $string_closer = '';
 while ($index < length $source) {
   my $character = substr($source, $index, 1);
   my $pair = substr($source, $index, 2);
-  my $triple = substr($source, $index, 3);
+  my $remaining = substr($source, $index);
 
   if ($state eq 'code') {
-    if ($triple eq '"""') {
-      $output .= '   ';
-      $index += 3;
-      $state = 'multiline_string';
+    if ($remaining =~ /\A(#+)?("""|")/) {
+      $string_hashes = defined $1 ? $1 : '';
+      my $quotes = $2;
+      my $opening = $string_hashes . $quotes;
+      $string_closer = $quotes . $string_hashes;
+      $output .= ' ' x length($opening);
+      $index += length($opening);
+      $state = length($quotes) == 3 ? 'multiline_string' : 'string';
     } elsif ($pair eq '//') {
       $output .= '  ';
       $index += 2;
@@ -89,10 +113,6 @@ while ($index < length $source) {
       $index += 2;
       $block_depth = 1;
       $state = 'block_comment';
-    } elsif ($character eq '"') {
-      $output .= ' ';
-      $index += 1;
-      $state = 'string';
     } else {
       $output .= $character;
       $index += 1;
@@ -116,7 +136,20 @@ while ($index < length $source) {
       $index += 1;
     }
   } elsif ($state eq 'string') {
-    if ($character eq '\\' && $index + 1 < length $source) {
+    my $raw_escape = '\\' . $string_hashes;
+    if ($string_hashes ne ''
+      && substr($source, $index, length($raw_escape)) eq $raw_escape
+      && $index + length($raw_escape) < length $source) {
+      my $escaped = substr($source, $index, length($raw_escape) + 1);
+      $escaped =~ s/[^\n]/ /g;
+      $output .= $escaped;
+      $index += length($raw_escape) + 1;
+    } elsif (substr($source, $index, length($string_closer)) eq $string_closer) {
+      $output .= ' ' x length($string_closer);
+      $index += length($string_closer);
+      $state = 'code';
+    } elsif ($string_hashes eq '' && $character eq '\\'
+      && $index + 1 < length $source) {
       my $escaped = substr($source, $index, 2);
       $escaped =~ s/[^\n]/ /g;
       $output .= $escaped;
@@ -124,14 +157,22 @@ while ($index < length $source) {
     } else {
       $output .= $character eq "\n" ? "\n" : ' ';
       $index += 1;
-      $state = 'code' if $character eq '"';
     }
   } elsif ($state eq 'multiline_string') {
-    if ($triple eq '"""') {
-      $output .= '   ';
-      $index += 3;
+    my $raw_escape = '\\' . $string_hashes;
+    if ($string_hashes ne ''
+      && substr($source, $index, length($raw_escape)) eq $raw_escape
+      && $index + length($raw_escape) < length $source) {
+      my $escaped = substr($source, $index, length($raw_escape) + 1);
+      $escaped =~ s/[^\n]/ /g;
+      $output .= $escaped;
+      $index += length($raw_escape) + 1;
+    } elsif (substr($source, $index, length($string_closer)) eq $string_closer) {
+      $output .= ' ' x length($string_closer);
+      $index += length($string_closer);
       $state = 'code';
-    } elsif ($character eq '\\' && $index + 1 < length $source) {
+    } elsif ($string_hashes eq '' && $character eq '\\'
+      && $index + 1 < length $source) {
       my $escaped = substr($source, $index, 2);
       $escaped =~ s/[^\n]/ /g;
       $output .= $escaped;
@@ -213,17 +254,38 @@ readonly repository_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly sources_root="$repository_root/Sources"
 readonly enhanced_capture="$sources_root/MenuBarNotesApp/EnhancedSpeechCapture.swift"
 
+if ! command -v realpath >/dev/null 2>&1; then
+  printf 'error: realpath is required for safe release artifact traversal\n' >&2
+  exit 2
+fi
+
+additional_artifact_root=""
 if [[ -f "$target" ]]; then
-  executable_directory="$(physical_directory "$(dirname "$target")")" || {
-    printf 'error: cannot resolve release executable directory: %s\n' \
-      "$(dirname "$target")" >&2
+  set +e
+  resolved_executable="$(realpath "$target" 2>/dev/null)"
+  realpath_exit=$?
+  set -e
+  if (( realpath_exit != 0 )) || [[ ! -f "$resolved_executable" ]]; then
+    printf 'error: cannot resolve release executable: %s\n' "$target" >&2
     exit 2
-  }
-  readonly executable="$executable_directory/$(basename "$target")"
+  fi
+  readonly executable="$resolved_executable"
+  executable_directory="$(dirname "$resolved_executable")"
+  logical_app_root=""
+  resolved_app_root=""
   if app_root="$(nearest_app_root "$(dirname "$target")")"; then
-    readonly artifact_root="$app_root"
-  elif app_root="$(nearest_app_root "$executable_directory")"; then
-    readonly artifact_root="$app_root"
+    logical_app_root="$app_root"
+  fi
+  if app_root="$(nearest_app_root "$executable_directory")"; then
+    resolved_app_root="$app_root"
+  fi
+  if [[ -n "$resolved_app_root" ]]; then
+    readonly artifact_root="$resolved_app_root"
+    if [[ -n "$logical_app_root" && "$logical_app_root" != "$resolved_app_root" ]]; then
+      additional_artifact_root="$logical_app_root"
+    fi
+  elif [[ -n "$logical_app_root" ]]; then
+    readonly artifact_root="$logical_app_root"
   else
     readonly artifact_root="$executable_directory"
   fi
@@ -255,11 +317,6 @@ if (( size_bytes > limit_bytes )); then
   exit 1
 fi
 
-if ! command -v realpath >/dev/null 2>&1; then
-  printf 'error: realpath is required for safe release artifact traversal\n' >&2
-  exit 2
-fi
-
 scan_output="$(mktemp "${TMPDIR:-/tmp}/motes-release-scan.XXXXXX")" || {
   printf 'error: could not create release artifact scan output\n' >&2
   exit 2
@@ -269,14 +326,20 @@ scan_errors="$(mktemp "${TMPDIR:-/tmp}/motes-release-scan-errors.XXXXXX")" || {
   /bin/rm -f "$scan_output"
   exit 2
 }
-swift_code="${scan_output}.swift"
+all_swift_code="${scan_output}-all.swift"
+enhanced_swift_code="${scan_output}-enhanced.swift"
+swift_piece="${scan_output}-piece.swift"
 cleanup_scan_files() {
-  /bin/rm -f "$scan_output" "$scan_errors" "$swift_code"
+  /bin/rm -f "$scan_output" "$scan_errors" \
+    "$all_swift_code" "$enhanced_swift_code" "$swift_piece"
 }
 trap cleanup_scan_files EXIT
 
 forbidden_model_assets=()
 scan_roots=("$artifact_root")
+if [[ -n "$additional_artifact_root" ]]; then
+  scan_roots+=("$additional_artifact_root")
+fi
 seen_scan_roots=()
 scan_index=0
 while (( scan_index < ${#scan_roots[@]} )); do
@@ -312,7 +375,7 @@ while (( scan_index < ${#scan_roots[@]} )); do
   fi
 
   while IFS= read -r -d '' path; do
-    if is_forbidden_model_path "$path"; then
+    if is_forbidden_model_path "$path" "$scan_root"; then
       forbidden_model_assets+=("$path")
     fi
 
@@ -328,7 +391,7 @@ while (( scan_index < ${#scan_roots[@]} )); do
         if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
         exit 2
       fi
-      if is_forbidden_model_path "$resolved_path"; then
+      if is_forbidden_model_path "$resolved_path" "$(dirname "$resolved_path")"; then
         forbidden_model_assets+=("$path -> $resolved_path")
       fi
       if [[ -d "$resolved_path" ]]; then
@@ -356,37 +419,66 @@ if ! command -v perl >/dev/null 2>&1; then
   exit 2
 fi
 
+: > "$scan_output"
 : > "$scan_errors"
 set +e
-write_swift_code_only "$enhanced_capture" "$swift_code" 2>"$scan_errors"
-swift_scan_exit=$?
+find "$sources_root" -type f -name '*.swift' -print0 \
+  >"$scan_output" 2>"$scan_errors"
+find_exit=$?
 set -e
-if (( swift_scan_exit != 0 )); then
-  printf 'error: could not prepare EnhancedSpeechCapture for source assertions\n' >&2
+if (( find_exit != 0 )); then
+  printf 'error: Swift source traversal failed (exit %s)\n' "$find_exit" >&2
   if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
+  exit 2
+fi
+
+: > "$all_swift_code"
+enhanced_found=false
+while IFS= read -r -d '' source_path; do
+  : > "$scan_errors"
+  set +e
+  write_swift_code_only "$source_path" "$swift_piece" 2>"$scan_errors"
+  swift_scan_exit=$?
+  set -e
+  if (( swift_scan_exit != 0 )); then
+    printf 'error: could not prepare Swift source for assertions: %s\n' \
+      "$source_path" >&2
+    if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
+    exit 2
+  fi
+  cat "$swift_piece" >> "$all_swift_code"
+  printf '\n' >> "$all_swift_code"
+  if [[ "$source_path" == "$enhanced_capture" ]]; then
+    cp "$swift_piece" "$enhanced_swift_code"
+    enhanced_found=true
+  fi
+done < "$scan_output"
+
+if [[ "$enhanced_found" != true ]]; then
+  printf 'error: EnhancedSpeechCapture Swift source was not found\n' >&2
   exit 2
 fi
 
 assert_rg_present \
   '(?m)^[\t ]*ModelHub[\t \r\n]*\.[\t \r\n]*offlineMode[\t \r\n]*=[\t \r\n]*true[\t ]*(?://[^\r\n]*)?$' \
   'an executable ModelHub.offlineMode = true assignment in EnhancedSpeechCapture' \
-  "$swift_code"
+  "$enhanced_swift_code"
 assert_rg_absent \
   '\bModelHub\s*\.\s*offlineMode\s*=\s*false\b' \
   'ModelHub.offlineMode = false' \
-  "$sources_root"
+  "$all_swift_code"
 assert_rg_absent \
   '\bAsrModels\s*\.\s*downloadAndLoad\b' \
   'AsrModels.downloadAndLoad' \
-  "$sources_root"
+  "$all_swift_code"
 assert_rg_absent \
   '\bModelHub\s*\.\s*(download|fetchFile)\b' \
   'ModelHub.download or ModelHub.fetchFile in EnhancedSpeechCapture' \
-  "$enhanced_capture"
+  "$enhanced_swift_code"
 assert_rg_absent \
   '\bNSEvent\s*\.\s*addGlobalMonitorForEvents\b' \
   'NSEvent.addGlobalMonitorForEvents' \
-  "$sources_root"
+  "$all_swift_code"
 
 printf 'Release artifact contains no bundled model assets.\n'
 printf 'Release source assertions passed.\n'

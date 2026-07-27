@@ -76,14 +76,18 @@ git status --short
 
 `Scripts/check-release-size.sh` accepts the current executable, a directory
 containing `Motes`, or a future `.app` containing `Contents/MacOS/Motes`. It
-also promotes an executable path inside `.app` to the enclosing bundle. It
-resolves command-line directory symlinks to a physical root, inspects nested
-symlink targets without following arbitrary cycles, fails closed on traversal
-errors, and scans case-insensitively for `.mlmodel`, `.mlpackage`, `.mlmodelc`,
-exact `coremldata.bin`/`weight.bin` names, and `.bin` files under model bundle
-or model directory paths. An unrelated `.bin` outside a model path is allowed.
-The same gate restricts searches to Swift sources, detects multiline
-qualification, fails closed on ripgrep errors, and asserts:
+promotes an executable path inside `.app` to the enclosing bundle, including
+when an executable symlink outside the bundle resolves into it. It resolves
+command-line directory symlinks to a physical root, inspects nested symlink
+targets without following arbitrary cycles, fails closed on traversal errors,
+and scans case-insensitively for `.mlmodel`, `.mlpackage`, `.mlmodelc`, exact
+`coremldata.bin`/`weight.bin`/`weights.bin` names, and `.bin` files under model
+bundle or model directory paths relative to each artifact or queued scan root.
+An unrelated `.bin` outside a model path is allowed even when an absolute
+ancestor happens to be named `models`. The same gate restricts searches to
+Swift sources, removes ordinary and raw string contents plus line and nested
+block comments, detects multiline qualification, fails closed on scrubber or
+ripgrep errors, and asserts:
 
 - `ModelHub.offlineMode = true` is present.
 - `ModelHub.offlineMode = false` is absent.
@@ -152,6 +156,15 @@ failed `rg`, Swift-only source scope, multiline forbidden calls, multiline
 required offline assignment, and comment/string-only false positives. A fake
 `find` exit 2 and a fake `rg` exit 2 both make the gate exit 2; only ripgrep exit
 1 counts as an absent forbidden call.
+
+Fix Round 2 added regressions for an executable symlink outside `.app` that
+resolves to `Motes.app/Contents/MacOS/Motes`, generic `.bin` classification
+relative to the artifact boundary, root-level and symlinked `Models`
+directories, raw strings using one or multiple `#` delimiters, raw multiline
+strings, nested comments, and unterminated raw strings. The valid Swift
+fixtures are parsed with `swiftc -frontend -parse`; executable multiline calls
+remain forbidden while the same text in any supported string or comment form
+is ignored.
 
 ### Manual release blockers
 
