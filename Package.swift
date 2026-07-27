@@ -9,11 +9,21 @@ let package = Package(
         .library(name: "MenuBarNotesCore", targets: ["MenuBarNotesCore"]),
         .executable(name: "Motes", targets: ["MenuBarNotesApp"]),
     ],
+    dependencies: [
+        .package(
+            url: "https://github.com/FluidInference/FluidAudio.git",
+            exact: "0.15.5"
+        ),
+    ],
     targets: [
         .target(name: "MenuBarNotesCore"),
         .executableTarget(
             name: "MenuBarNotesApp",
-            dependencies: ["MenuBarNotesCore"]
+            dependencies: [
+                "MenuBarNotesCore",
+                .product(name: "FluidAudio", package: "FluidAudio"),
+            ],
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "MenuBarNotesCoreTests",
