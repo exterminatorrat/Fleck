@@ -125,7 +125,7 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var runtime: DictationRuntime
-    @ObservedObject private var modelManager: EnhancedModelManager
+    @ObservedObject private var modelManager: DictationModelCapability
     @ObservedObject private var historyController: DictationHistoryController
     @State private var selectedSection = SettingsSection.appearance
     #if CLEAN_DICTATION_ENHANCED_CANDIDATE

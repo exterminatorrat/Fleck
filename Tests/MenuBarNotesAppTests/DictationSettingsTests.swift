@@ -604,6 +604,114 @@ import Testing
   #expect(fixture.runtime.shortcutError == nil)
 }
 
+@Test @MainActor func DictationRecoveryRemainsReachableWhenCapsuleIsDisabled()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: "recoverable", capsuleEnabled: false)
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+  #expect(fixture.runtime.recoveryAction == .undo)
+  #expect(fixture.runtime.recoveryCommand == .init(title: "Undo", isEnabled: true))
+
+  await fixture.runtime.performRecoveryAction()
+
+  #expect(fixture.runtime.recoveryAction == nil)
+  #expect(!fixture.runtime.recoveryCommand.isEnabled)
+}
+
+@Test @MainActor func DictationRuntimePreflightsDeniedMicrophoneAndSpeechPermissions()
+  async throws
+{
+  for (microphone, speech, expectedPane) in [
+    (
+      DictationPermissionStatus.denied,
+      DictationPermissionStatus.authorized,
+      DictationPrivacyPane.microphone
+    ),
+    (
+      DictationPermissionStatus.authorized,
+      DictationPermissionStatus.denied,
+      DictationPrivacyPane.speechRecognition
+    ),
+  ] {
+    let availability = DictationAvailability.evaluate(.init(
+      osMajorVersion: 26,
+      architecture: .appleSilicon,
+      microphonePermission: microphone,
+      speechPermission: speech,
+      appleOnDeviceRecognitionSupported: true,
+      enhancedModelReady: false,
+      foundationModelAvailable: true
+    ))
+    let fixture = try await RuntimeFixture(finalText: nil, availability: availability)
+
+    await fixture.runtime.toggle()
+
+    guard case .failed(let message) = fixture.runtime.phase else {
+      Issue.record("Expected permission preflight failure")
+      continue
+    }
+    #expect(message == availability.standardFailureCopy)
+    #expect(fixture.runtime.permissionRecoveryActions().map(\.pane) == [expectedPane])
+    #expect(fixture.provider.requestCount == 0)
+  }
+}
+
+@Test @MainActor func DictationRuntimePreflightsUnavailableOnDeviceRecognizer()
+  async throws
+{
+  let availability = DictationAvailability.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: false,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  ))
+  let fixture = try await RuntimeFixture(finalText: nil, availability: availability)
+
+  await fixture.runtime.toggle()
+
+  #expect(
+    fixture.runtime.phase
+      == .failed(
+        "Standard — Apple Speech is unavailable because on-device English recognition is not installed or supported."
+      )
+  )
+  #expect(fixture.runtime.permissionRecoveryActions().isEmpty)
+  #expect(fixture.provider.requestCount == 0)
+}
+
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test @MainActor func ShortcutPermissionRequestUsesThePreferredEnhancedEngine()
+  async throws
+{
+  let speechRequests = RuntimeCounter()
+  let permissionController = DictationPermissionController(
+    microphoneStatus: { .authorized },
+    speechStatus: { .notDetermined },
+    requestMicrophone: { true },
+    requestSpeech: {
+      await speechRequests.increment()
+      return true
+    }
+  )
+  let fixture = try await RuntimeFixture(
+    finalText: nil,
+    preferredEngine: .enhancedLocal,
+    permissionController: permissionController
+  )
+
+  await fixture.runtime.requestPermissionsAfterShortcutSetup()
+
+  #expect(await speechRequests.value == 0)
+}
+#endif
+
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test @MainActor func DictationRepairCapsuleDismissesOnSuccessAndCancellation() async throws {
   let success = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
@@ -948,12 +1056,24 @@ private final class RuntimeFixture {
   init(
     finalText: String?,
     startupBlocked: Bool = false,
-    capsuleEnabled: Bool = false
+    capsuleEnabled: Bool = false,
+    preferredEngine: DictationSpeechEngine = .standard,
+    permissionController: DictationPermissionController = .init(),
+    availability: DictationAvailability = .evaluate(.init(
+      osMajorVersion: 26,
+      architecture: .appleSilicon,
+      microphonePermission: .authorized,
+      speechPermission: .authorized,
+      appleOnDeviceRecognitionSupported: true,
+      enhancedModelReady: true,
+      foundationModelAvailable: true
+    ))
   ) async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("runtime-\(UUID().uuidString)", isDirectory: true)
     let store = LocalStore(rootURL: root)
     let preferences = AppPreferences(
+      dictationSpeechEngine: preferredEngine,
       dictationShortcut: DictationShortcut(keyCode: 49, carbonModifiers: 768),
       dictationCapsuleEnabled: capsuleEnabled
     )
@@ -984,7 +1104,9 @@ private final class RuntimeFixture {
     )
     let coordinator = DictationCoordinator(
       engineProvider: provider,
-      preferredEngine: { .standard },
+      preferredEngine: { [weak appState] in
+        appState?.preferences.dictationSpeechEngine ?? .standard
+      },
       cleaner: RuntimeCleaner(),
       router: RuntimeRouter(),
       saver: appState,
@@ -1004,11 +1126,15 @@ private final class RuntimeFixture {
       registrar: registrar
     )
     let modelRoot = root.appendingPathComponent("model", isDirectory: true)
-    let modelManager = EnhancedModelManager(
-      modelRootURL: modelRoot,
-      candidateEnabled: true,
-      architectureProvider: { true }
-    )
+    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+      let modelManager = DictationModelCapability(
+        modelRootURL: modelRoot,
+        candidateEnabled: true,
+        architectureProvider: { true }
+      )
+    #else
+      let modelManager = DictationModelCapability()
+    #endif
     let gate = startupGate
     let log = startupLog
     runtime = DictationRuntime(
@@ -1019,13 +1145,14 @@ private final class RuntimeFixture {
       shortcutController: shortcut,
       capsuleController: DictationCapsuleController(),
       historyController: history,
-      permissionController: DictationPermissionController(),
+      permissionController: permissionController,
       editorRegistry: editorRegistry,
       startupAssessment: {
         await log.increment()
         if startupBlocked { await gate.wait() }
       },
-      enhancedIsReady: { [enhancedReady] in enhancedReady.value }
+      enhancedIsReady: { [enhancedReady] in enhancedReady.value },
+      availabilityProvider: { availability }
     )
   }
 
@@ -1061,7 +1188,7 @@ private final class RuntimeEngineProvider: SpeechEngineProviding {
   let engine: RuntimeSpeechEngine
   var gate: DictationTestGate?
   private var requestWaiters: [CheckedContinuation<Void, Never>] = []
-  private var requestCount = 0
+  private(set) var requestCount = 0
 
   init(engine: RuntimeSpeechEngine) {
     self.engine = engine

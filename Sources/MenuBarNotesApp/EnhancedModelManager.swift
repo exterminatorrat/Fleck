@@ -1,4 +1,4 @@
-#if os(macOS)
+#if os(macOS) && CLEAN_DICTATION_ENHANCED_CANDIDATE
   import Combine
   import CryptoKit
   import Foundation

@@ -31,6 +31,15 @@
           .background(FloatingWindowConfigurator())
       }
       .windowResizability(.contentSize)
+      .commands {
+        CommandMenu("Dictation") {
+          Button(dictationRuntime.recoveryCommand.title) {
+            Task { await dictationRuntime.performRecoveryAction() }
+          }
+          .keyboardShortcut("r", modifiers: [.command, .shift])
+          .disabled(!dictationRuntime.recoveryCommand.isEnabled)
+        }
+      }
 
       Settings {
         SettingsView(runtime: dictationRuntime)
@@ -85,6 +94,11 @@
     }
   }
 
+  struct DictationRecoveryCommandPresentation: Equatable {
+    let title: String
+    let isEnabled: Bool
+  }
+
   @MainActor
   final class DictationRuntime: ObservableObject {
     static let usesPeriodicObservation = false
@@ -102,7 +116,7 @@
       }
     }
 
-    let modelManager: EnhancedModelManager
+    let modelManager: DictationModelCapability
     let engineProvider: any SpeechEngineProviding
     let coordinator: DictationCoordinator
     let shortcutController: GlobalHoldShortcut
@@ -113,12 +127,15 @@
     @Published private(set) var shortcutError: String?
     @Published private(set) var modelError: String?
     @Published private(set) var availability: DictationAvailability
+    @Published private(set) var recoveryAction: DictationCapsuleAction?
+    @Published private(set) var recoveryActionInFlight = false
     private(set) var currentCapsuleStatus: DictationCapsuleStatus?
 
     private weak var appState: AppState?
     private let permissionController: DictationPermissionController
     private let editorRegistry: DictationEditorRegistry
     private let enhancedIsReady: @MainActor () -> Bool
+    private let availabilityProvider: @MainActor () -> DictationAvailability
     private var desiredShortcut: DictationShortcut?
     private var needsShortcutApplication = false
     private var modelStateAssessed = false
@@ -139,7 +156,7 @@
         in: .userDomainMask
       )[0]
       let root = appSupport.appendingPathComponent("MenuBarNotes", isDirectory: true)
-      let modelManager = EnhancedModelManager()
+      let modelManager = DictationModelCapability()
       let historyStore = DictationHistoryStore(rootURL: root)
       let historyController = DictationHistoryController(store: historyStore)
       let permissionController = DictationPermissionController()
@@ -207,13 +224,19 @@
         permissionController: permissionController,
         editorRegistry: editorRegistry,
         startupAssessment: startupAssessment,
-        enhancedIsReady: { modelManager.verifiedLoadState.isReady }
+        enhancedIsReady: {
+          #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+            modelManager.verifiedLoadState.isReady
+          #else
+            modelManager.isReady
+          #endif
+        }
       )
     }
 
     init(
       appState: AppState,
-      modelManager: EnhancedModelManager,
+      modelManager: DictationModelCapability,
       engineProvider: any SpeechEngineProviding,
       coordinator: DictationCoordinator,
       shortcutController: GlobalHoldShortcut,
@@ -222,7 +245,8 @@
       permissionController: DictationPermissionController,
       editorRegistry: DictationEditorRegistry,
       startupAssessment: @escaping @MainActor () async -> Void,
-      enhancedIsReady: @escaping @MainActor () -> Bool
+      enhancedIsReady: @escaping @MainActor () -> Bool,
+      availabilityProvider: (@MainActor () -> DictationAvailability)? = nil
     ) {
       self.appState = appState
       self.modelManager = modelManager
@@ -234,10 +258,14 @@
       self.shortcutController = shortcutController
       self.capsuleController = capsuleController
       self.enhancedIsReady = enhancedIsReady
-      availability = DictationAvailability.current(
-        permissions: permissionController,
-        enhancedModelReady: enhancedIsReady()
-      )
+      let resolvedAvailabilityProvider = availabilityProvider ?? {
+        DictationAvailability.current(
+          permissions: permissionController,
+          enhancedModelReady: enhancedIsReady()
+        )
+      }
+      self.availabilityProvider = resolvedAvailabilityProvider
+      availability = resolvedAvailabilityProvider()
       phase = coordinator.phase
 
       coordinator.setEventObserver { [weak self] event in
@@ -295,6 +323,13 @@
       shortcutController.registeredShortcut
     }
 
+    var recoveryCommand: DictationRecoveryCommandPresentation {
+      .init(
+        title: recoveryAction?.title ?? "Recover Last Dictation",
+        isEnabled: recoveryAction != nil && !recoveryActionInFlight
+      )
+    }
+
     func registerEditor(_ editor: any FocusedDictationEditing) {
       editorRegistry.register(editor)
     }
@@ -306,6 +341,16 @@
     func toggle() async {
       switch coordinator.phase {
       case .idle, .saved, .failed:
+        refreshAvailability()
+        let preferredEngine =
+          appState?.preferences.dictationSpeechEngine ?? .standard
+        if preferredEngine == .standard, !availability.standardAvailable {
+          phase = .failed(
+            availability.standardFailureCopy
+              ?? "Standard — Apple Speech is unavailable."
+          )
+          return
+        }
         let editor = editorRegistry.focusedEditor()
         let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
         await coordinator.start(
@@ -351,37 +396,44 @@
     }
 
     func requestPermissionsAfterShortcutSetup() async {
-      _ = await permissionController.requestAccess(after: .shortcutSetupCompleted)
+      _ = await permissionController.requestAccess(
+        for: appState?.preferences.dictationSpeechEngine ?? .standard,
+        after: .shortcutSetupCompleted
+      )
       refreshAvailability()
     }
 
     func downloadModel() {
-      guard CleanDictationFeatures.enhancedLocalCandidateEnabled else { return }
-      runModelOperation(operation: { try await $0.download() })
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        runModelOperation(operation: { try await $0.download() })
+      #endif
     }
 
     func repairModel() {
-      guard CleanDictationFeatures.enhancedLocalCandidateEnabled else { return }
-      runModelOperation(
-        showsRepairStatus: true,
-        operation: { try await $0.repair() }
-      )
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        runModelOperation(
+          showsRepairStatus: true,
+          operation: { try await $0.repair() }
+        )
+      #endif
     }
 
     func updateModel() {
-      guard CleanDictationFeatures.enhancedLocalCandidateEnabled else { return }
-      runModelOperation(operation: { try await $0.update() })
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        runModelOperation(operation: { try await $0.update() })
+      #endif
     }
 
     func deleteModel() {
-      guard CleanDictationFeatures.enhancedLocalCandidateEnabled else { return }
-      runModelOperation(
-        operation: { try await $0.deleteModel() },
-        onSuccess: { [weak self] in
-          self?.appState?.updatePreferences { $0.dictationSpeechEngine = .standard }
-          self?.synchronizePreferences()
-        }
-      )
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        runModelOperation(
+          operation: { try await $0.deleteModel() },
+          onSuccess: { [weak self] in
+            self?.appState?.updatePreferences { $0.dictationSpeechEngine = .standard }
+            self?.synchronizePreferences()
+          }
+        )
+      #endif
     }
 
     func cancelModelOperation() {
@@ -468,6 +520,7 @@
 
     private func receive(_ event: DictationCoordinatorEvent) {
       phase = event.phase
+      recoveryAction = capsuleAction(for: coordinator.recoveryAction)
       guard appState?.preferences.dictationCapsuleEnabled == true else {
         dismissCapsule()
         synchronizeAfter(event)
@@ -536,10 +589,11 @@
       }
     }
 
-    @discardableResult
-    func runModelOperation(
+    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+      @discardableResult
+      func runModelOperation(
       showsRepairStatus: Bool = false,
-      operation: @escaping @MainActor (EnhancedModelManager) async throws -> Void,
+      operation: @escaping @MainActor (DictationModelCapability) async throws -> Void,
       onSuccess: @escaping @MainActor () -> Void = {}
     ) -> Task<Void, Never> {
       guard CleanDictationFeatures.enhancedLocalCandidateEnabled else {
@@ -587,7 +641,8 @@
       modelOperation = task
       modelOperations[operationID] = task
       return task
-    }
+      }
+    #endif
 
     private static func shortcutMessage(
       _ error: GlobalHoldShortcut.RegistrationError
@@ -644,7 +699,14 @@
       }
     }
 
-    private func performRecoveryAction() async {
+    func performRecoveryAction() async {
+      guard recoveryAction != nil, !recoveryActionInFlight else { return }
+      recoveryActionInFlight = true
+      recoveryAction = nil
+      defer {
+        recoveryActionInFlight = false
+        recoveryAction = capsuleAction(for: coordinator.recoveryAction)
+      }
       guard let result = await coordinator.performRecoveryAction() else { return }
       switch result {
       case .completed:
@@ -712,10 +774,7 @@
     }
 
     private func refreshAvailability() {
-      availability = DictationAvailability.current(
-        permissions: permissionController,
-        enhancedModelReady: enhancedIsReady()
-      )
+      availability = availabilityProvider()
     }
 
     deinit {
@@ -739,14 +798,14 @@
 
   @MainActor
   private final class DictationSpeechEngineProvider: SpeechEngineProviding {
-    private let modelManager: EnhancedModelManager
+    private let modelManager: DictationModelCapability
     private let permissionController: DictationPermissionController
     private let microphoneUID: @MainActor () -> String?
     private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
     private let recommendStandard: @MainActor () -> Void
 
     init(
-      modelManager: EnhancedModelManager,
+      modelManager: DictationModelCapability,
       permissionController: DictationPermissionController,
       microphoneUID: @escaping @MainActor () -> String?,
       microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void,
@@ -816,12 +875,14 @@
     }
   }
 
-  extension EnhancedModelVerifiedLoadState {
-    var isReady: Bool {
-      if case .ready = self { return true }
-      return false
+  #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+    extension EnhancedModelVerifiedLoadState {
+      var isReady: Bool {
+        if case .ready = self { return true }
+        return false
+      }
     }
-  }
+  #endif
 
   private struct FloatingWindowConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {

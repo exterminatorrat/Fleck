@@ -14,6 +14,25 @@ enum DictationFailure: Error, Equatable {
   case interrupted
 }
 
+extension DictationFailure: LocalizedError {
+  var errorDescription: String? {
+    switch self {
+    case .unavailable:
+      "On-device speech recognition is unavailable."
+    case .permissionDenied:
+      "Microphone or Speech Recognition access is denied."
+    case .noSpeech:
+      "No speech was detected."
+    case .transcriptionFailed:
+      "Speech recognition could not transcribe the recording."
+    case .saveFailed:
+      "The dictation could not be saved."
+    case .interrupted:
+      "Dictation was interrupted."
+    }
+  }
+}
+
 enum MicrophoneSelection: Equatable, Sendable {
   case automatic
   case selected(uid: String)

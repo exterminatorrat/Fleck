@@ -3,6 +3,17 @@ import Foundation
 import Testing
 @testable import MenuBarNotesApp
 
+@Test func DictationCaptureFailuresProvideLocalizedActionableDescriptions() {
+  #expect(
+    DictationFailure.permissionDenied.localizedDescription
+      == "Microphone or Speech Recognition access is denied."
+  )
+  #expect(
+    DictationFailure.unavailable.localizedDescription
+      == "On-device speech recognition is unavailable."
+  )
+}
+
 @Test func dictationAvailabilityUsesInjectedCapabilityMatrix() {
   struct Scenario {
     let name: String

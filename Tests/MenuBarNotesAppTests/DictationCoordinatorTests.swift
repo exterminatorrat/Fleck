@@ -64,19 +64,14 @@ import Testing
 
 @Test @MainActor func shortcutStartsAtThresholdWhileHeldAndReleaseFinalizes() async throws {
   let threshold = Gate()
-  let listening = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
   fixture.standard.finalText = "Held dictation"
-  fixture.coordinator.setEventObserver { event in
-    guard case .listening = event.phase else { return }
-    Task { await listening.openGate() }
-  }
 
   fixture.coordinator.beginShortcut(editor: nil)
   #expect(fixture.coordinator.phase == .arming)
   await threshold.waitUntilWaiting()
   await threshold.openGate()
-  await listening.wait()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
 
   #expect(fixture.standard.startCount == 1)
   #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
@@ -85,6 +80,21 @@ import Testing
 
   #expect(fixture.standard.finishCount == 1)
   #expect(fixture.saver.savedTexts == ["Held dictation"])
+}
+
+@MainActor
+private func waitForListening(
+  _ coordinator: DictationCoordinator,
+  timeout: Duration
+) async -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: timeout)
+  while clock.now < deadline {
+    if case .listening = coordinator.phase { return true }
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  if case .listening = coordinator.phase { return true }
+  return false
 }
 
 @Test @MainActor func heldShortcutPublishesEachPhaseExactlyOnceInOrder() async throws {
@@ -378,6 +388,25 @@ import Testing
   #expect(fixture.coordinator.recoveryAction == nil)
 }
 
+@Test @MainActor func concurrentRecoveryActivationPerformsUndoOnlyOnce() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Undo once"
+  fixture.saver.undoGate = gate
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let first = Task { await fixture.coordinator.performRecoveryAction() }
+  await gate.waitUntilWaiting()
+  let second = Task { await fixture.coordinator.performRecoveryAction() }
+  await Task.yield()
+  await gate.openGate()
+
+  #expect(await first.value == .completed)
+  #expect(await second.value == nil)
+  #expect(fixture.saver.undoCount == 1)
+}
+
 @Test @MainActor func durableUnsavedRecoveryOpensHistoryInsteadOfCopy() async throws {
   let fixture = try Fixture()
   fixture.standard.finalText = "History recovery"
@@ -649,6 +678,63 @@ import Testing
   #expect(fixture.editor.rollbackCommittedCount == 1)
   #expect(fixture.saver.compensateFocusedCount == 1)
   #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor func focusedCancellationWithSuccessfulPersistenceFailsWhenEditorRollbackDoesNotMatch()
+  async throws
+{
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Preserved text"
+  fixture.saver.flushGate = gate
+  fixture.editor.rollbackCommittedSucceeds = false
+
+  await fixture.coordinator.start(
+    mode: .focused,
+    editor: fixture.editor,
+    destination: fixture.inbox
+  )
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await finishing.value
+
+  #expect(
+    fixture.coordinator.phase
+      == .failed("Dictation could not be cancelled safely. The text was preserved.")
+  )
+  #expect(fixture.coordinator.recoveryAction == .openDestination(fixture.inbox.noteID))
+  #expect(fixture.saver.compensateFocusedCount == 0)
+}
+
+@Test @MainActor func focusedCancellationWithFailedPersistenceStillFailsWhenEditorRollbackDoesNotMatch()
+  async throws
+{
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Preserved after persistence failure"
+  fixture.saver.flushGate = gate
+  fixture.saver.flushError = TestError.failed
+  fixture.editor.rollbackCommittedSucceeds = false
+
+  await fixture.coordinator.start(
+    mode: .focused,
+    editor: fixture.editor,
+    destination: fixture.inbox
+  )
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await finishing.value
+
+  #expect(
+    fixture.coordinator.phase
+      == .failed("Dictation could not be cancelled safely. The text was preserved.")
+  )
+  #expect(fixture.coordinator.recoveryAction == .openDestination(fixture.inbox.noteID))
+  #expect(fixture.saver.compensateFocusedCount == 0)
 }
 
 @Test @MainActor func focusedCancellationCompensatesRealEditorAndAppStateAcrossFlush()
@@ -1460,6 +1546,7 @@ private final class FakeSaver: DictationSaving {
   var undoCount = 0
   var compensateFocusedCount = 0
   var undoSucceeds = true
+  var undoGate: Gate?
 
   func activeDestinations() -> [DictationDestination] { destinations }
 
@@ -1474,6 +1561,7 @@ private final class FakeSaver: DictationSaving {
 
   func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
     undoCount += 1
+    if let undoGate { await undoGate.wait() }
     if undoSucceeds, !savedTexts.isEmpty { savedTexts.removeLast() }
     return undoSucceeds
   }
@@ -1503,6 +1591,7 @@ private final class FakeEditor: FocusedDictationEditing {
   var cancelCount = 0
   var commitResult = true
   var rollbackCommittedCount = 0
+  var rollbackCommittedSucceeds = true
 
   func beginFocusedDictation() -> Bool {
     beginCount += 1
@@ -1519,7 +1608,7 @@ private final class FakeEditor: FocusedDictationEditing {
     _ receipt: FocusedDictationCommitReceipt
   ) -> Bool {
     rollbackCommittedCount += 1
-    return true
+    return rollbackCommittedSucceeds
   }
   func finalizeCommittedFocusedDictation(
     _ receipt: FocusedDictationCommitReceipt

@@ -595,15 +595,30 @@ final class DictationCoordinator {
 
   private func completeCancellation(_ id: UUID) async {
     guard isCancellationRequested(id) else { return }
+    guard let capture, capture.id == id else { return }
+    guard capture.focusedCommitReceipt == nil
+      || capture.focusedEditorRollbackSucceeded
+    else {
+      await failUnsafeFocusedCancellation(id)
+      return
+    }
     guard await compensateFocusedPersistence(id) else {
-      await terminate(
-        id,
-        phase: .failed("Dictation could not be cancelled safely. The text was preserved."),
-        cancelEditor: false
-      )
+      await failUnsafeFocusedCancellation(id)
       return
     }
     await terminate(id, phase: .idle, cancelEditor: true, deleteHistory: true)
+  }
+
+  private func failUnsafeFocusedCancellation(_ id: UUID) async {
+    guard let capture, capture.id == id else { return }
+    if let noteID = capture.destination?.noteID {
+      recoveryAction = .openDestination(noteID)
+    }
+    await terminate(
+      id,
+      phase: .failed("Dictation could not be cancelled safely. The text was preserved."),
+      cancelEditor: false
+    )
   }
 
   private func terminate(
@@ -717,13 +732,14 @@ final class DictationCoordinator {
   }
 
   func performRecoveryAction() async -> DictationRecoveryResult? {
-    switch recoveryAction {
+    guard let action = recoveryAction else { return nil }
+    recoveryAction = nil
+    switch action {
     case .undo:
       guard let receipt = recoveryReceipt else { return nil }
       if await saver.undoSmartCapture(receipt) {
         await historyController.delete(receipt.captureID)
         recoveryReceipt = nil
-        recoveryAction = nil
         copyableTranscript = nil
         return .completed
       }
@@ -736,8 +752,6 @@ final class DictationCoordinator {
       return .openHistory
     case .openDestination(let noteID):
       return .openDestination(noteID)
-    case nil:
-      return nil
     }
   }
 

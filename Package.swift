@@ -9,21 +9,37 @@ let infoPlistPath = packageRoot
 let enhancedCandidateEnabled =
     ProcessInfo.processInfo.environment["MOTES_ENHANCED_CANDIDATE"] == "1"
 
-let packageDependencies: [Package.Dependency] = [
-    .package(
-        url: "https://github.com/FluidInference/FluidAudio.git",
-        exact: "0.15.5"
-    ),
-]
+var packageDependencies: [Package.Dependency] = []
 var appDependencies: [Target.Dependency] = ["MenuBarNotesCore"]
+var appExcludes = [
+    "Info.plist",
+    "Resources",
+    "EnhancedModelManager.swift",
+    "EnhancedSpeechCapture.swift",
+]
+var appResources: [Resource] = []
 var coreSwiftSettings: [SwiftSetting] = []
 var appSwiftSettings: [SwiftSetting] = []
 var appTestSwiftSettings: [SwiftSetting] = []
 
 if enhancedCandidateEnabled {
-    appDependencies.append(
-        .product(name: "FluidAudio", package: "FluidAudio")
+    packageDependencies.append(
+        .package(path: "Packages/MotesEnhancedCandidateDependencies")
     )
+    appDependencies.append(
+        .product(
+            name: "MotesEnhancedCandidateDependencies",
+            package: "MotesEnhancedCandidateDependencies"
+        )
+    )
+    appExcludes = ["Info.plist"]
+    appResources.append(.process("Resources"))
+    let requested = SwiftSetting.define(
+        "CLEAN_DICTATION_ENHANCED_CANDIDATE_REQUESTED"
+    )
+    coreSwiftSettings.append(requested)
+    appSwiftSettings.append(requested)
+    appTestSwiftSettings.append(requested)
     appSwiftSettings.append(
         .define(
             "CLEAN_DICTATION_ENHANCED_CANDIDATE",
@@ -60,8 +76,8 @@ let package = Package(
         .executableTarget(
             name: "MenuBarNotesApp",
             dependencies: appDependencies,
-            exclude: ["Info.plist"],
-            resources: [.process("Resources")],
+            exclude: appExcludes,
+            resources: appResources,
             swiftSettings: appSwiftSettings,
             linkerSettings: [
                 .unsafeFlags([

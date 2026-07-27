@@ -222,7 +222,9 @@ while (( scan_index < ${#scan_roots[@]} )); do
   set +e
   find "$scan_root" \
     \( -type l -o -iname '*.mlmodel' -o -iname '*.mlpackage' \
-      -o -iname '*.mlmodelc' -o -iname '*.bin' \) \
+      -o -iname '*.mlmodelc' -o -iname '*.bin' \
+      -o -iname 'EnhancedModelManifest.json' \
+      -o -iname 'ThirdPartyNotices.md' \) \
     -print0 >"$scan_output" 2>"$scan_errors"
   find_exit=$?
   set -e
@@ -235,6 +237,11 @@ while (( scan_index < ${#scan_roots[@]} )); do
 
   while IFS= read -r -d '' path; do
     logical_path="$scan_logical_root${path#"$scan_root"}"
+    case "$(basename "$logical_path")" in
+      EnhancedModelManifest.json|ThirdPartyNotices.md)
+        forbidden_model_assets+=("$logical_path")
+        ;;
+    esac
     if is_forbidden_model_path \
       "$logical_path" "$scan_boundary" "$scan_model_context"; then
       forbidden_model_assets+=("$logical_path")
@@ -556,12 +563,14 @@ final class ReleaseBuildConfiguration: BuildConfiguration {
 enum Finding: String, Comparable {
   case requiredOfflineTrue = "required-offline-true"
   case forbiddenFluidAudioImport = "forbidden-fluidaudio-import"
+  case forbiddenCandidateDependencyImport = "forbidden-candidate-dependency-import"
   case forbiddenOfflineFalse = "forbidden-offline-false"
   case forbiddenDownloadAndLoad = "forbidden-asr-download-and-load"
   case forbiddenModelHubDownload = "forbidden-modelhub-download"
   case forbiddenModelHubFetchFile = "forbidden-modelhub-fetch-file"
   case forbiddenGlobalMonitor = "forbidden-global-monitor"
   case forbiddenEnhancedConstruction = "forbidden-enhanced-construction"
+  case forbiddenCandidateImplementation = "forbidden-candidate-implementation"
 
   static func < (lhs: Self, rhs: Self) -> Bool {
     lhs.rawValue < rhs.rawValue
@@ -589,12 +598,19 @@ final class ReleaseVisitor: SyntaxVisitor {
   }
 
   override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind {
-    guard node.path.trimmedDescription == "FluidAudio" else {
+    let importPath = node.path.trimmedDescription
+    guard importPath == "FluidAudio"
+      || importPath == "MotesEnhancedCandidateDependencies"
+    else {
       return .visitChildren
     }
     switch configuredRegions.isActive(node) {
     case .active:
-      findings.insert(.forbiddenFluidAudioImport)
+      findings.insert(
+        importPath == "FluidAudio"
+          ? .forbiddenFluidAudioImport
+          : .forbiddenCandidateDependencyImport
+      )
     case .inactive:
       break
     case .unparsed:
@@ -652,6 +668,34 @@ final class ReleaseVisitor: SyntaxVisitor {
       hasUnknownRequiredRegion = true
     }
     return .visitChildren
+  }
+
+  override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
+    inspectCandidateDeclaration(node.name.text, node: Syntax(node))
+    return .visitChildren
+  }
+
+  override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
+    inspectCandidateDeclaration(node.name.text, node: Syntax(node))
+    return .visitChildren
+  }
+
+  private func inspectCandidateDeclaration(_ name: String, node: Syntax) {
+    guard [
+      "EnhancedModelManager",
+      "EnhancedModelManifest",
+      "URLSessionModelDownloader",
+    ].contains(name) else { return }
+    switch configuredRegions.isActive(node) {
+    case .active:
+      findings.insert(.forbiddenCandidateImplementation)
+    case .inactive:
+      break
+    case .unparsed:
+      hasUnknownRequiredRegion = true
+    @unknown default:
+      hasUnknownRequiredRegion = true
+    }
   }
 
   private func baseName(_ expression: ExprSyntax?) -> String? {
@@ -970,6 +1014,11 @@ while (( source_file_index < ${#source_physical_files[@]} )); do
           "$logical_source_path: active FluidAudio import in release"
         )
         ;;
+      forbidden-candidate-dependency-import)
+        forbidden_source_findings+=(
+          "$logical_source_path: active candidate dependency import in release"
+        )
+        ;;
       forbidden-offline-false)
         forbidden_source_findings+=(
           "$logical_source_path: ModelHub.offlineMode = false"
@@ -998,6 +1047,11 @@ while (( source_file_index < ${#source_physical_files[@]} )); do
       forbidden-enhanced-construction)
         forbidden_source_findings+=(
           "$logical_source_path: EnhancedSpeechCapture construction in release"
+        )
+        ;;
+      forbidden-candidate-implementation)
+        forbidden_source_findings+=(
+          "$logical_source_path: active candidate implementation in release"
         )
         ;;
       "")
@@ -1047,7 +1101,10 @@ for forbidden_sdk_symbol in \
   'Parakeet' \
   'AsrModels' \
   'ModelHub' \
-  'FluidEnhancedSpeech'
+  'FluidEnhancedSpeech' \
+  'EnhancedModelManager' \
+  'EnhancedModelManifest' \
+  'URLSessionModelDownloader'
 do
   if grep -Fiq "$forbidden_sdk_symbol" "$scan_output"; then
     printf 'error: release executable contains candidate SDK symbol: %s\n' \

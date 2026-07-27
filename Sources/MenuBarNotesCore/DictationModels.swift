@@ -1,5 +1,9 @@
 import Foundation
 
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE_REQUESTED && !CLEAN_DICTATION_ENHANCED_CANDIDATE
+  #error("Enhanced Local is a debug-only candidate and cannot be built for release.")
+#endif
+
 public enum CleanDictationFeatures {
   #if CLEAN_DICTATION_ENHANCED_CANDIDATE
     public static let enhancedLocalCandidateEnabled = true

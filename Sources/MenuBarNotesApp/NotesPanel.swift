@@ -87,6 +87,22 @@
         header
         tabStrip
         Divider().opacity(0.35)
+        if let recoveryAction = dictationRuntime.recoveryAction {
+          HStack(spacing: 8) {
+            Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
+              .font(.caption)
+            Spacer()
+            Button(recoveryAction.title) {
+              Task { await dictationRuntime.performRecoveryAction() }
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(dictationRuntime.recoveryActionInFlight)
+            .accessibilityLabel(recoveryAction.accessibilityLabel)
+          }
+          .padding(.horizontal, 10)
+          .padding(.vertical, 7)
+          .background(.quaternary.opacity(0.35))
+        }
         editor
         if let error = appState.saveError {
           Text("Could not save: \(error)")
