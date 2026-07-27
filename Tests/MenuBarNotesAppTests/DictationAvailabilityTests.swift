@@ -256,6 +256,86 @@ private final class PermissionProbe {
   #expect(AudioBufferTools.normalizedRMS(copy) == 0.5)
 }
 
+@Test func reusedAudioConverterProducesEverySequentialBuffer() throws {
+  let inputFormat = try #require(
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: 48_000,
+      channels: 1,
+      interleaved: false
+    )
+  )
+  let outputFormat = try #require(
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: 16_000,
+      channels: 1,
+      interleaved: false
+    )
+  )
+  let converter = try #require(AVAudioConverter(from: inputFormat, to: outputFormat))
+
+  let first = try AudioBufferTools.convert(
+    speechBuffer(format: inputFormat, frames: 4_800),
+    using: converter,
+    to: outputFormat
+  )
+  let second = try AudioBufferTools.convert(
+    speechBuffer(format: inputFormat, frames: 4_800),
+    using: converter,
+    to: outputFormat
+  )
+
+  #expect(first.frameLength > 0)
+  #expect(second.frameLength > 0)
+}
+
+@Test func installedSpeechLocaleUsesCanonicalLanguageComponents() {
+  #expect(
+    AppleSpeechLocale.containsEquivalent(
+      Locale(identifier: "en-US"),
+      in: [Locale(identifier: "en_US")]
+    )
+  )
+  #expect(
+    !AppleSpeechLocale.containsEquivalent(
+      Locale(identifier: "en-US"),
+      in: [Locale(identifier: "en-GB")]
+    )
+  )
+}
+
+@Test func boundedAudioIngressDrainsAcceptedBuffersAndFailsOverflow() async throws {
+  let format = try #require(
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: 16_000,
+      channels: 1,
+      interleaved: false
+    )
+  )
+  let draining = BoundedAudioIngress(capacity: 2)
+  let first = try speechBuffer(format: format, frames: 4)
+  let second = try speechBuffer(format: format, frames: 4)
+  #expect(draining.yield(first))
+  #expect(draining.yield(second))
+  draining.finish()
+  var drained = 0
+  for try await _ in draining.buffers {
+    drained += 1
+  }
+  #expect(drained == 2)
+
+  let overflowing = BoundedAudioIngress(capacity: 1)
+  let third = try speechBuffer(format: format, frames: 4)
+  let fourth = try speechBuffer(format: format, frames: 4)
+  #expect(overflowing.yield(third))
+  #expect(!overflowing.yield(fourth))
+  await #expect(throws: DictationFailure.transcriptionFailed) {
+    for try await _ in overflowing.buffers {}
+  }
+}
+
 @Test @MainActor func appleSpeechCaptureEmitsProvisionalRetainsFinalAndReleases() async throws {
   let session = AppleSpeechSessionProbe()
   session.finishResult = .success("final words")
@@ -278,6 +358,10 @@ private final class PermissionProbe {
   #expect(levels == [0.25])
   #expect(final == "final words")
   #expect(session.finishCount == 1)
+  #expect(session.releaseCount == 1)
+  await capture.releaseResources()
+  #expect(session.finishCount == 1)
+  #expect(session.cancelCount == 0)
   #expect(session.releaseCount == 1)
 }
 
@@ -313,6 +397,9 @@ private final class PermissionProbe {
   await cancelled.cancel()
   #expect(cancelledSession.cancelCount == 1)
   #expect(cancelledSession.releaseCount == 1)
+  await cancelled.releaseResources()
+  #expect(cancelledSession.cancelCount == 1)
+  #expect(cancelledSession.releaseCount == 1)
 }
 
 @Test @MainActor func appleSpeechCaptureRejectsCloudFallbackAndDeniedPermission() async {
@@ -339,6 +426,37 @@ private final class PermissionProbe {
   #expect(deniedSession.startCount == 0)
 }
 
+@Test @MainActor func interruptionTerminatesOnceAndUnblocksFinish() async throws {
+  let interruptions = AppleSpeechInterruptionSourceProbe()
+  let session = AppleSpeechSessionProbe()
+  session.waitsForCancellation = true
+  let capture = AppleSpeechCapture(
+    requestPermission: { .granted },
+    makeSession: { session },
+    interruptions: interruptions
+  )
+  try await capture.start(provisional: { _ in }, level: { _ in })
+  let finishTask = Task { @MainActor in
+    try await capture.finish()
+  }
+  while session.finishCount == 0 {
+    await Task.yield()
+  }
+
+  interruptions.emit()
+
+  await #expect(throws: DictationFailure.interrupted) {
+    try await finishTask.value
+  }
+  #expect(session.cancelCount == 1)
+  #expect(session.releaseCount == 1)
+  #expect(interruptions.stopCount == 1)
+  interruptions.emit()
+  await capture.releaseResources()
+  #expect(session.cancelCount == 1)
+  #expect(session.releaseCount == 1)
+}
+
 private enum SpeechProbeError: Error {
   case failed
 }
@@ -351,6 +469,8 @@ private final class AppleSpeechSessionProbe: AppleSpeechSession {
   var finishCount = 0
   var cancelCount = 0
   var releaseCount = 0
+  var waitsForCancellation = false
+  private var finishContinuation: CheckedContinuation<String?, Error>?
   private var provisional: (@MainActor (String) -> Void)?
   private var level: (@MainActor (Float) -> Void)?
 
@@ -365,11 +485,16 @@ private final class AppleSpeechSessionProbe: AppleSpeechSession {
 
   func finish() async throws -> String? {
     finishCount += 1
+    if waitsForCancellation {
+      return try await withCheckedThrowingContinuation { finishContinuation = $0 }
+    }
     return try finishResult.get()
   }
 
   func cancel() async {
     cancelCount += 1
+    finishContinuation?.resume(throwing: DictationFailure.interrupted)
+    finishContinuation = nil
   }
 
   func releaseResources() async {
@@ -385,4 +510,36 @@ private final class AppleSpeechSessionProbe: AppleSpeechSession {
   func emitLevel(_ value: Float) {
     level?(value)
   }
+}
+
+@MainActor
+private final class AppleSpeechInterruptionSourceProbe: AppleSpeechInterruptionSource {
+  private var handler: (@MainActor @Sendable () -> Void)?
+  var stopCount = 0
+
+  func start(_ handler: @escaping @MainActor @Sendable () -> Void) {
+    self.handler = handler
+  }
+
+  func stop() {
+    stopCount += 1
+    handler = nil
+  }
+
+  func emit() {
+    handler?()
+  }
+}
+
+private func speechBuffer(format: AVAudioFormat, frames: AVAudioFrameCount) throws
+  -> AVAudioPCMBuffer
+{
+  let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+  buffer.frameLength = frames
+  if let samples = buffer.floatChannelData?[0] {
+    for index in 0..<Int(frames) {
+      samples[index] = 0.25
+    }
+  }
+  return buffer
 }

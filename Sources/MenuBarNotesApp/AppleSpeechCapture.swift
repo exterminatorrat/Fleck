@@ -93,7 +93,7 @@ enum AudioBufferTools {
     var conversionError: NSError?
     let status = converter.convert(to: result, error: &conversionError) { _, inputStatus in
       if inputSupply.wasSupplied {
-        inputStatus.pointee = .endOfStream
+        inputStatus.pointee = .noDataNow
         return nil
       }
       inputSupply.wasSupplied = true
@@ -104,6 +104,71 @@ enum AudioBufferTools {
       throw conversionError ?? BufferError.conversionFailed
     }
     return result
+  }
+}
+
+enum AppleSpeechLocale {
+  static func containsEquivalent(_ target: Locale, in installed: [Locale]) -> Bool {
+    let target = Locale.Components(identifier: target.identifier).languageComponents
+    return installed.contains {
+      let candidate = Locale.Components(identifier: $0.identifier).languageComponents
+      return candidate.languageCode == target.languageCode
+        && candidate.script == target.script
+        && candidate.region == target.region
+    }
+  }
+}
+
+final class BoundedAudioIngress: @unchecked Sendable {
+  let buffers: AsyncThrowingStream<AVAudioPCMBuffer, Error>
+  private let continuation: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation
+  private let lock = NSLock()
+  private var terminated = false
+
+  init(capacity: Int) {
+    var continuation: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation?
+    buffers = AsyncThrowingStream(bufferingPolicy: .bufferingNewest(capacity)) {
+      continuation = $0
+    }
+    self.continuation = continuation!
+  }
+
+  @discardableResult
+  func yield(_ buffer: AVAudioPCMBuffer) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !terminated else { return false }
+    switch continuation.yield(buffer) {
+    case .enqueued:
+      return true
+    case .dropped:
+      terminated = true
+      continuation.finish(throwing: DictationFailure.transcriptionFailed)
+      return false
+    case .terminated:
+      terminated = true
+      return false
+    @unknown default:
+      terminated = true
+      continuation.finish(throwing: DictationFailure.transcriptionFailed)
+      return false
+    }
+  }
+
+  func finish() {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !terminated else { return }
+    terminated = true
+    continuation.finish()
+  }
+
+  func fail(_ error: Error) {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !terminated else { return }
+    terminated = true
+    continuation.finish(throwing: error)
   }
 }
 
@@ -121,19 +186,53 @@ protocol AppleSpeechSession: AnyObject {
 }
 
 @MainActor
+protocol AppleSpeechInterruptionSource: AnyObject {
+  func start(_ handler: @escaping @MainActor @Sendable () -> Void)
+  func stop()
+}
+
+@MainActor
+private final class SystemAppleSpeechInterruptionSource: AppleSpeechInterruptionSource {
+  private var token: NSObjectProtocol?
+
+  func start(_ handler: @escaping @MainActor @Sendable () -> Void) {
+    stop()
+    token = NotificationCenter.default.addObserver(
+      forName: .AVAudioEngineConfigurationChange,
+      object: nil,
+      queue: nil
+    ) { _ in
+      Task { @MainActor in handler() }
+    }
+  }
+
+  func stop() {
+    guard let token else { return }
+    NotificationCenter.default.removeObserver(token)
+    self.token = nil
+  }
+}
+
+@MainActor
 final class AppleSpeechCapture: SpeechEngine {
   let kind: DictationSpeechEngine = .standard
 
   private let requestPermission: () async -> DictationPermissionResult
   private let makeSession: () async throws -> any AppleSpeechSession
+  private let interruptions: any AppleSpeechInterruptionSource
   private var session: (any AppleSpeechSession)?
+  private var terminalFailure: DictationFailure?
+  private var terminalCommandIssued = false
+  private var interruptionObservationActive = false
 
   init(
     requestPermission: @escaping () async -> DictationPermissionResult,
-    makeSession: @escaping () async throws -> any AppleSpeechSession
+    makeSession: @escaping () async throws -> any AppleSpeechSession,
+    interruptions: any AppleSpeechInterruptionSource = SystemAppleSpeechInterruptionSource()
   ) {
     self.requestPermission = requestPermission
     self.makeSession = makeSession
+    self.interruptions = interruptions
   }
 
   convenience init(
@@ -156,7 +255,8 @@ final class AppleSpeechCapture: SpeechEngine {
           microphoneUID: microphoneUID,
           microphoneSelectionChanged: microphoneSelectionChanged
         )
-      }
+      },
+      interruptions: SystemAppleSpeechInterruptionSource()
     )
   }
 
@@ -173,35 +273,76 @@ final class AppleSpeechCapture: SpeechEngine {
       throw DictationFailure.unavailable
     }
     self.session = session
+    terminalFailure = nil
+    terminalCommandIssued = false
     do {
       try await session.start(provisional: provisional, level: level)
+      interruptionObservationActive = true
+      interruptions.start { [weak self] in
+        Task { @MainActor [weak self] in
+          await self?.interrupt()
+        }
+      }
     } catch {
-      await releaseResources()
+      await release(session)
       throw error
     }
   }
 
   func finish() async throws -> String? {
+    if let terminalFailure { throw terminalFailure }
     guard let session else { throw DictationFailure.unavailable }
+    terminalCommandIssued = true
     do {
       let text = try await session.finish()
-      await releaseResources()
+      await release(session)
+      if let terminalFailure { throw terminalFailure }
       return text?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     } catch {
-      await releaseResources()
-      throw error
+      await release(session)
+      throw terminalFailure ?? error
     }
   }
 
   func cancel() async {
-    await session?.cancel()
-    await releaseResources()
+    guard let session else { return }
+    if !terminalCommandIssued {
+      terminalCommandIssued = true
+      await session.cancel()
+    }
+    await release(session)
   }
 
   func releaseResources() async {
     guard let session else { return }
+    if !terminalCommandIssued {
+      terminalCommandIssued = true
+      await session.cancel()
+    }
+    await release(session)
+  }
+
+  private func interrupt() async {
+    guard terminalFailure == nil, let session else { return }
+    terminalFailure = .interrupted
+    if !terminalCommandIssued {
+      terminalCommandIssued = true
+    }
+    await session.cancel()
+    await release(session)
+  }
+
+  private func release(_ candidate: any AppleSpeechSession) async {
+    guard let session, session === candidate else { return }
     self.session = nil
-    await session.releaseResources()
+    stopInterruptionObservation()
+    await candidate.releaseResources()
+  }
+
+  private func stopInterruptionObservation() {
+    guard interruptionObservationActive else { return }
+    interruptionObservationActive = false
+    interruptions.stop()
   }
 }
 
@@ -317,11 +458,15 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
   private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
   private var request: SFSpeechAudioBufferRecognitionRequest?
   private var recognitionTask: SFSpeechRecognitionTask?
+  private var ingress: BoundedAudioIngress?
+  private var ingressWorker: Task<Void, Never>?
   private var provisional: (@MainActor (String) -> Void)?
   private var level: (@MainActor (Float) -> Void)?
   private var terminal: Result<String?, Error>?
   private var finishContinuation: CheckedContinuation<String?, Error>?
   private var tapInstalled = false
+  private var didEndAudio = false
+  private var didCancelRecognition = false
 
   var supportsOnDeviceRecognition: Bool {
     recognizer?.supportsOnDeviceRecognition == true
@@ -351,17 +496,30 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
     self.provisional = provisional
     self.level = level
     terminal = nil
+    didEndAudio = false
+    didCancelRecognition = false
 
     let inputNode = audioEngine.inputNode
     microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID, for: inputNode))
     let inputFormat = inputNode.inputFormat(forBus: 0)
-    inputNode.installTap(onBus: 0, bufferSize: 1_024, format: inputFormat) {
-      [weak self] buffer, _ in
-      guard let copied = try? AudioBufferTools.copy(buffer) else { return }
-      let rms = AudioBufferTools.normalizedRMS(copied)
-      Task { @MainActor [weak self] in
-        self?.request?.append(copied)
-        self?.level?(rms)
+    let ingress = BoundedAudioIngress(capacity: 8)
+    self.ingress = ingress
+    ingressWorker = Task { @MainActor [weak self] in
+      do {
+        for try await buffer in ingress.buffers {
+          guard let self else { return }
+          self.request?.append(buffer)
+          self.level?(AudioBufferTools.normalizedRMS(buffer))
+        }
+      } catch {
+        self?.resolve(.failure(error))
+      }
+    }
+    inputNode.installTap(onBus: 0, bufferSize: 1_024, format: inputFormat) { buffer, _ in
+      do {
+        _ = ingress.yield(try AudioBufferTools.copy(buffer))
+      } catch {
+        ingress.fail(DictationFailure.transcriptionFailed)
       }
     }
     tapInstalled = true
@@ -375,7 +533,9 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
       try audioEngine.start()
     } catch {
       stopAudio()
-      recognitionTask?.cancel()
+      ingress.finish()
+      await ingressWorker?.value
+      cancelRecognitionOnce()
       recognitionTask = nil
       self.request = nil
       throw error
@@ -384,7 +544,9 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
 
   func finish() async throws -> String? {
     stopAudio()
-    request?.endAudio()
+    ingress?.finish()
+    await ingressWorker?.value
+    endAudioOnce()
     if let terminal {
       return try terminal.get()
     }
@@ -395,20 +557,26 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
 
   func cancel() async {
     stopAudio()
-    request?.endAudio()
-    recognitionTask?.cancel()
+    ingress?.finish()
+    await ingressWorker?.value
+    cancelRecognitionOnce()
     resolve(.success(nil))
   }
 
   func releaseResources() async {
     stopAudio()
-    request?.endAudio()
-    recognitionTask?.cancel()
+    ingress?.finish()
+    await ingressWorker?.value
+    if terminal == nil {
+      cancelRecognitionOnce()
+      resolve(.success(nil))
+    }
     recognitionTask = nil
     request = nil
+    ingress = nil
+    ingressWorker = nil
     provisional = nil
     level = nil
-    resolve(.success(nil))
   }
 
   private func receive(result: SFSpeechRecognitionResult?, error: Error?) {
@@ -449,6 +617,67 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
       audioEngine.stop()
     }
   }
+
+  private func endAudioOnce() {
+    guard !didEndAudio else { return }
+    didEndAudio = true
+    request?.endAudio()
+  }
+
+  private func cancelRecognitionOnce() {
+    guard !didCancelRecognition else { return }
+    didCancelRecognition = true
+    recognitionTask?.cancel()
+  }
+}
+
+@available(macOS 26.0, *)
+private final class ModernAudioConversion: @unchecked Sendable {
+  private let converter: AVAudioConverter
+  private let outputFormat: AVAudioFormat
+  private let level: @MainActor (Float) -> Void
+
+  init(
+    converter: AVAudioConverter,
+    outputFormat: AVAudioFormat,
+    level: @escaping @MainActor (Float) -> Void
+  ) {
+    self.converter = converter
+    self.outputFormat = outputFormat
+    self.level = level
+  }
+
+  func analyzerInput(for buffer: AVAudioPCMBuffer) async throws -> AnalyzerInput {
+    let converted = try AudioBufferTools.convert(
+      buffer,
+      using: converter,
+      to: outputFormat
+    )
+    await level(AudioBufferTools.normalizedRMS(buffer))
+    return AnalyzerInput(buffer: converted)
+  }
+}
+
+@available(macOS 26.0, *)
+private struct ModernAnalyzerInputSequence: AsyncSequence, @unchecked Sendable {
+  typealias Element = AnalyzerInput
+
+  struct AsyncIterator: AsyncIteratorProtocol {
+    var buffers: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Iterator
+    let conversion: ModernAudioConversion
+
+    mutating func next() async throws -> AnalyzerInput? {
+      guard let buffer = try await buffers.next() else { return nil }
+      return try await conversion.analyzerInput(for: buffer)
+    }
+  }
+
+  let buffers: AsyncThrowingStream<AVAudioPCMBuffer, Error>
+  let conversion: ModernAudioConversion
+
+  func makeAsyncIterator() -> AsyncIterator {
+    .init(buffers: buffers.makeAsyncIterator(), conversion: conversion)
+  }
 }
 
 @available(macOS 26.0, *)
@@ -459,16 +688,16 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
   private let microphoneUID: String?
   private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
   private var analyzer: SpeechAnalyzer?
-  private var streamContinuation: AsyncStream<AnalyzerInput>.Continuation?
+  private var ingress: BoundedAudioIngress?
   private var analysisTask: Task<Void, Never>?
   private var resultsTask: Task<Void, Never>?
-  private var converter: AVAudioConverter?
-  private var outputFormat: AVAudioFormat?
   private var provisional: (@MainActor (String) -> Void)?
   private var level: (@MainActor (Float) -> Void)?
   private var finalSegments: [String] = []
   private var terminalError: Error?
   private var tapInstalled = false
+  private var didFinalize = false
+  private var didCancelAnalyzer = false
 
   var supportsOnDeviceRecognition: Bool { true }
 
@@ -485,9 +714,7 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     level: @escaping @MainActor (Float) -> Void
   ) async throws {
     let installedLocales = await DictationTranscriber.installedLocales
-    guard installedLocales.contains(where: {
-      $0.identifier.lowercased() == locale.identifier.lowercased()
-    }) else {
+    guard AppleSpeechLocale.containsEquivalent(locale, in: installedLocales) else {
       throw DictationFailure.unavailable
     }
 
@@ -511,29 +738,29 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     )
     try await analyzer.prepareToAnalyze(in: format)
 
-    var continuation: AsyncStream<AnalyzerInput>.Continuation?
-    let stream = AsyncStream<AnalyzerInput>(bufferingPolicy: .bufferingNewest(8)) {
-      continuation = $0
-    }
-    guard let continuation,
-          let converter = AVAudioConverter(from: naturalFormat, to: format)
-    else {
+    guard let converter = AVAudioConverter(from: naturalFormat, to: format) else {
       throw DictationFailure.unavailable
     }
+    let ingress = BoundedAudioIngress(capacity: 8)
+    let inputs = ModernAnalyzerInputSequence(
+      buffers: ingress.buffers,
+      conversion: .init(converter: converter, outputFormat: format, level: level)
+    )
     self.analyzer = analyzer
-    streamContinuation = continuation
-    self.converter = converter
-    outputFormat = format
+    self.ingress = ingress
     self.provisional = provisional
     self.level = level
     finalSegments = []
     terminalError = nil
+    didFinalize = false
+    didCancelAnalyzer = false
 
     analysisTask = Task { [weak self] in
       do {
-        try await analyzer.start(inputSequence: stream)
+        try await analyzer.start(inputSequence: inputs)
       } catch {
         self?.terminalError = error
+        self?.stopAudio()
       }
     }
     resultsTask = Task { [weak self] in
@@ -552,25 +779,11 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
       }
     }
 
-    inputNode.installTap(onBus: 0, bufferSize: 1_024, format: naturalFormat) {
-      [weak self] buffer, _ in
-      guard let copied = try? AudioBufferTools.copy(buffer) else { return }
-      let rms = AudioBufferTools.normalizedRMS(copied)
-      Task { @MainActor [weak self] in
-        guard let self, let converter = self.converter, let outputFormat = self.outputFormat else {
-          return
-        }
-        do {
-          let converted = try AudioBufferTools.convert(
-            copied,
-            using: converter,
-            to: outputFormat
-          )
-          self.streamContinuation?.yield(AnalyzerInput(buffer: converted))
-          self.level?(rms)
-        } catch {
-          self.terminalError = error
-        }
+    inputNode.installTap(onBus: 0, bufferSize: 1_024, format: naturalFormat) { buffer, _ in
+      do {
+        _ = ingress.yield(try AudioBufferTools.copy(buffer))
+      } catch {
+        ingress.fail(DictationFailure.transcriptionFailed)
       }
     }
     tapInstalled = true
@@ -579,19 +792,32 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
       try audioEngine.start()
     } catch {
       stopAudio()
-      continuation.finish()
-      await analyzer.cancelAndFinishNow()
+      ingress.finish()
+      await analysisTask?.value
+      await cancelAnalyzerOnce()
       throw error
     }
   }
 
   func finish() async throws -> String? {
     stopAudio()
-    streamContinuation?.finish()
-    if let analyzer {
-      try await analyzer.finalizeAndFinishThroughEndOfInput()
-    }
+    ingress?.finish()
     await analysisTask?.value
+    if let terminalError {
+      await cancelAnalyzerOnce()
+      resultsTask?.cancel()
+      await resultsTask?.value
+      throw terminalError
+    }
+    do {
+      try await finalizeAnalyzerOnce()
+    } catch {
+      terminalError = error
+      await cancelAnalyzerOnce()
+      resultsTask?.cancel()
+      await resultsTask?.value
+      throw error
+    }
     await resultsTask?.value
     if let terminalError { throw terminalError }
     let text = finalSegments.joined(separator: " ")
@@ -601,24 +827,31 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
 
   func cancel() async {
     stopAudio()
-    streamContinuation?.finish()
-    await analyzer?.cancelAndFinishNow()
+    ingress?.finish()
+    await cancelAnalyzerOnce()
     analysisTask?.cancel()
     resultsTask?.cancel()
+    await analysisTask?.value
+    await resultsTask?.value
   }
 
   func releaseResources() async {
     stopAudio()
-    streamContinuation?.finish()
-    await analyzer?.cancelAndFinishNow()
-    analysisTask?.cancel()
-    resultsTask?.cancel()
+    ingress?.finish()
+    await analysisTask?.value
+    if !didFinalize && !didCancelAnalyzer {
+      await cancelAnalyzerOnce()
+    }
+    if didCancelAnalyzer {
+      analysisTask?.cancel()
+      resultsTask?.cancel()
+    }
+    await analysisTask?.value
+    await resultsTask?.value
     analysisTask = nil
     resultsTask = nil
-    streamContinuation = nil
+    ingress = nil
     analyzer = nil
-    converter = nil
-    outputFormat = nil
     provisional = nil
     level = nil
     finalSegments = []
@@ -633,5 +866,17 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     if audioEngine.isRunning {
       audioEngine.stop()
     }
+  }
+
+  private func finalizeAnalyzerOnce() async throws {
+    guard !didFinalize else { return }
+    didFinalize = true
+    try await analyzer?.finalizeAndFinishThroughEndOfInput()
+  }
+
+  private func cancelAnalyzerOnce() async {
+    guard !didCancelAnalyzer else { return }
+    didCancelAnalyzer = true
+    await analyzer?.cancelAndFinishNow()
   }
 }
