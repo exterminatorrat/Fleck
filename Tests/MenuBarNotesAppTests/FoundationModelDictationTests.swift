@@ -122,6 +122,66 @@ import Testing
   #expect(result.outcome == .usedRaw)
 }
 
+@Test func FoundationModelDictationPreservesMillimeterUnits() async {
+  let raw = "Use 5 mm screws."
+  let result = await cleanupResult(raw: raw, modelOutput: "Use 5 screws.")
+
+  #expect(result.text == raw)
+  #expect(result.outcome == .usedRaw)
+}
+
+@Test func FoundationModelDictationPreservesRepeatedNumericCodes() async {
+  let raw = "Enter code 1234 1234."
+  let result = await cleanupResult(raw: raw, modelOutput: "Enter code 1234.")
+
+  #expect(result.text == raw)
+  #expect(result.outcome == .usedRaw)
+}
+
+@Test func FoundationModelDictationDoesNotEraseAnEarlierNoFact() async {
+  let raw = "I voted no. I voted yes on a different motion."
+  let result = await cleanupResult(raw: raw, modelOutput: "I voted yes on a different motion.")
+
+  #expect(result.text == raw)
+  #expect(result.outcome == .usedRaw)
+}
+
+@Test func FoundationModelDictationPreservesLosslessNumericLexemes() async {
+  let signed = await cleanupResult(raw: "Set the threshold to -5.", modelOutput: "Set the threshold to 5.")
+  let currency = await cleanupResult(raw: "Pay $20 today.", modelOutput: "Pay 20 today.")
+  let percentage = await cleanupResult(raw: "Keep 10% spare.", modelOutput: "Keep 10 spare.")
+  let decimal = await cleanupResult(raw: "Use 1.2 liters.", modelOutput: "Use 1/2 liters.")
+  let fraction = await cleanupResult(raw: "Add 1/2 cup.", modelOutput: "Add 1.2 cup.")
+
+  for result in [signed, currency, percentage, decimal, fraction] {
+    #expect(result.outcome == .usedRaw)
+  }
+}
+
+@Test func FoundationModelDictationAcceptsLocalExplicitCorrections() async {
+  let day = await cleanupResult(
+    raw: "Schedule lunch Monday no Tuesday.",
+    modelOutput: "Schedule lunch Tuesday."
+  )
+  let verb = await cleanupResult(
+    raw: "I need to call actually email Priya.",
+    modelOutput: "I need to email Priya."
+  )
+
+  #expect(day.text == "Schedule lunch Tuesday.")
+  #expect(day.outcome == .cleaned)
+  #expect(verb.text == "I need to email Priya.")
+  #expect(verb.outcome == .cleaned)
+}
+
+@Test func FoundationModelDictationBoundsCanonicalVariantTraversal() {
+  let raw = Array(repeating: "um", count: 400).joined(separator: " ")
+
+  let variants = FoundationModelDictation.canonicalVariants(for: raw)
+
+  #expect(variants.count <= 128)
+}
+
 @Test func FoundationModelDictationUsesRawWithoutAFoundationModel() async {
   let recorder = CallRecorder()
   let dictation = FoundationModelDictation(
