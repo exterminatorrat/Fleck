@@ -317,6 +317,111 @@ import Testing
   #expect(persistedInbox.richTextRTF == nil)
 }
 
+@Test @MainActor func appStateDictationTrashingAnotherNoteCannotPersistAFailedCapture()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let destination = Note(title: "Projects", body: "Existing")
+  let deleted = Note(title: "Deleted")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(
+      notes: [destination, deleted],
+      selectedNoteID: destination.id
+    ),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [destination.id, deleted.id])
+
+  let task = Task { @MainActor in
+    try await state.saveSmartCapture(
+      text: "Captured",
+      captureID: UUID(),
+      destinationID: destination.id
+    )
+  }
+  await blockedSave.waitUntilStarted()
+  state.moveToTrash(deleted.id)
+  await blockedSave.fail()
+
+  do {
+    _ = try await task.value
+    Issue.record("Expected the suspended capture save to fail")
+  } catch {}
+  await blockedSave.waitUntilSaveCount(2)
+
+  let persisted = try await store.loadWorkspace()
+  #expect(persisted.notes.first(where: { $0.id == destination.id })?.body == "Existing")
+  #expect(try await store.loadTrash().map(\.id) == [deleted.id])
+}
+
+@Test @MainActor func appStateDictationTrashingDestinationCannotArchiveAFailedCapture()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let destination = Note(title: "Projects", body: "Existing")
+  let remaining = Note(title: "Remaining")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(
+      notes: [destination, remaining],
+      selectedNoteID: destination.id
+    ),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [destination.id, remaining.id])
+
+  let task = Task { @MainActor in
+    try await state.saveSmartCapture(
+      text: "Captured",
+      captureID: UUID(),
+      destinationID: destination.id
+    )
+  }
+  await blockedSave.waitUntilStarted()
+  state.moveToTrash(destination.id)
+  await blockedSave.fail()
+
+  do {
+    _ = try await task.value
+    Issue.record("Expected the suspended capture save to fail")
+  } catch {}
+  await blockedSave.waitUntilSaveCount(2)
+
+  #expect(!state.workspace.notes.contains(where: { $0.id == destination.id }))
+  let persisted = try await store.loadWorkspace()
+  #expect(!persisted.notes.contains(where: { $0.id == destination.id }))
+  let trashedDestination = try #require(
+    try await store.loadTrash().first(where: { $0.id == destination.id })
+  )
+  #expect(trashedDestination.note.body == "Existing")
+  #expect(trashedDestination.note.richTextRTF == destination.richTextRTF)
+}
+
 @Test @MainActor func appStateDictationTrashRefreshFailureDoesNotFailACommittedCapture()
   async throws
 {
@@ -355,6 +460,7 @@ import Testing
     captureID: UUID(),
     destinationID: destination.id
   )
+  await controlledSave.cancelFirstSave()
 
   #expect(receipt.noteID == destination.id)
   #expect(state.saveStatus == .saved)
@@ -626,6 +732,9 @@ private actor BlockingFailureSave {
   private let blockedAttempt: Int
   private var saveCount = 0
   private var started = false
+  private var startedContinuation: CheckedContinuation<Void, Never>?
+  private var saveCountTarget: Int?
+  private var saveCountContinuation: CheckedContinuation<Void, Never>?
   private var continuation: CheckedContinuation<Void, Never>?
 
   init(store: LocalStore, blockedAttempt: Int = 1) {
@@ -639,8 +748,11 @@ private actor BlockingFailureSave {
     trashedNotes: [Note]
   ) async throws {
     saveCount += 1
+    signalSaveCountIfNeeded()
     if saveCount == blockedAttempt {
       started = true
+      startedContinuation?.resume()
+      startedContinuation = nil
       await withCheckedContinuation { continuation = $0 }
       throw AppStateDictationTestError.failed
     }
@@ -652,16 +764,26 @@ private actor BlockingFailureSave {
   }
 
   func waitUntilStarted() async {
-    while !started { await Task.yield() }
+    guard !started else { return }
+    await withCheckedContinuation { startedContinuation = $0 }
   }
 
   func waitUntilSaveCount(_ expectedCount: Int) async {
-    while saveCount < expectedCount { await Task.yield() }
+    guard saveCount < expectedCount else { return }
+    saveCountTarget = expectedCount
+    await withCheckedContinuation { saveCountContinuation = $0 }
   }
 
   func fail() {
     continuation?.resume()
     continuation = nil
+  }
+
+  private func signalSaveCountIfNeeded() {
+    guard let saveCountTarget, saveCount >= saveCountTarget else { return }
+    self.saveCountTarget = nil
+    saveCountContinuation?.resume()
+    saveCountContinuation = nil
   }
 }
 
@@ -669,6 +791,8 @@ private actor CancelFirstThenPersist {
   private let store: LocalStore
   private var saveCount = 0
   private var firstSaveStarted = false
+  private var firstSaveStartedContinuation: CheckedContinuation<Void, Never>?
+  private var firstSaveContinuation: CheckedContinuation<Void, Never>?
 
   init(store: LocalStore) {
     self.store = store
@@ -682,8 +806,10 @@ private actor CancelFirstThenPersist {
     saveCount += 1
     if saveCount == 1 {
       firstSaveStarted = true
-      try await Task.sleep(for: .seconds(30))
-      return
+      firstSaveStartedContinuation?.resume()
+      firstSaveStartedContinuation = nil
+      await withCheckedContinuation { firstSaveContinuation = $0 }
+      throw CancellationError()
     }
     try await store.save(
       workspace: workspace,
@@ -693,13 +819,20 @@ private actor CancelFirstThenPersist {
   }
 
   func waitUntilFirstSaveStarted() async {
-    while !firstSaveStarted { await Task.yield() }
+    guard !firstSaveStarted else { return }
+    await withCheckedContinuation { firstSaveStartedContinuation = $0 }
+  }
+
+  func cancelFirstSave() {
+    firstSaveContinuation?.resume()
+    firstSaveContinuation = nil
   }
 }
 
 private actor CancelledGenericFailureSave {
   private var saveCount = 0
   private var firstSaveStarted = false
+  private var firstSaveStartedContinuation: CheckedContinuation<Void, Never>?
   private var firstSaveContinuation: CheckedContinuation<Void, Never>?
 
   func save(
@@ -710,13 +843,16 @@ private actor CancelledGenericFailureSave {
     saveCount += 1
     if saveCount == 1 {
       firstSaveStarted = true
+      firstSaveStartedContinuation?.resume()
+      firstSaveStartedContinuation = nil
       await withCheckedContinuation { firstSaveContinuation = $0 }
       throw AppStateDictationTestError.failed
     }
   }
 
   func waitUntilFirstSaveStarted() async {
-    while !firstSaveStarted { await Task.yield() }
+    guard !firstSaveStarted else { return }
+    await withCheckedContinuation { firstSaveStartedContinuation = $0 }
   }
 
   func failFirstSave() {

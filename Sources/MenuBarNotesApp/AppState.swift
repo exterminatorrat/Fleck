@@ -111,7 +111,7 @@
       let noteID = workspace.notes[destinationIndex].id
       let insertedNote = workspace.notes[destinationIndex]
       do {
-        try await saveNow().value
+        try await saveNow(transactionOwned: true).value
       } catch {
         rollbackSmartCapture(
           noteID: noteID,
@@ -149,7 +149,7 @@
       workspace.notes[index].modifiedAt = Date()
       let attemptedUndoNote = workspace.notes[index]
       do {
-        try await saveNow().value
+        try await saveNow(transactionOwned: true).value
         return true
       } catch {
         if let currentIndex = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }) {
@@ -165,7 +165,7 @@
     func flushFocusedDictationSave() async throws {
       beginAwaitedSave()
       defer { endAwaitedSave() }
-      try await saveNow().value
+      try await saveNow(transactionOwned: true).value
     }
 
     func select(_ id: UUID) {
@@ -251,14 +251,20 @@
     }
 
     @discardableResult
-    func saveNow() -> Task<Void, Error> {
+    func saveNow(transactionOwned: Bool = false) -> Task<Void, Error> {
       debouncedSaveTask?.cancel()
       markSaveStarted()
-      let snapshot = saveSnapshot()
-      let task = Task {
-        try await persist(snapshot)
+      if transactionOwned {
+        let snapshot = saveSnapshot()
+        return Task {
+          try await persist(snapshot)
+        }
       }
-      return task
+      return Task {
+        await waitForAwaitedSaves()
+        try Task.checkCancellation()
+        try await persist(saveSnapshot())
+      }
     }
 
     func refreshTrash() async {
@@ -370,14 +376,21 @@
       originalNote: Note,
       createdInbox: Bool
     ) {
-      guard
-        let index = workspace.notes.firstIndex(where: { $0.id == noteID }),
+      if let index = workspace.notes.firstIndex(where: { $0.id == noteID }),
         workspace.notes[index] == insertedNote
-      else { return }
-      if createdInbox, workspace.selectedNoteID != noteID {
-        workspace.notes.remove(at: index)
+      {
+        if createdInbox, workspace.selectedNoteID != noteID {
+          workspace.notes.remove(at: index)
+        } else {
+          workspace.notes[index] = originalNote
+        }
+        return
+      }
+      guard pendingTrashNotes[noteID] == insertedNote else { return }
+      if createdInbox {
+        pendingTrashNotes.removeValue(forKey: noteID)
       } else {
-        workspace.notes[index] = originalNote
+        pendingTrashNotes[noteID] = originalNote
       }
     }
 
