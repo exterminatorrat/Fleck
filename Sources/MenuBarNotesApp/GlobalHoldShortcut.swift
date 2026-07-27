@@ -47,6 +47,7 @@
     private var pendingDeliveryCount = 0
     private var terminalTask: Task<Void, Never>?
     private var isUninstalled = false
+    private(set) var registeredShortcut: DictationShortcut?
 
     init(
       handler: any ShortcutHoldHandling,
@@ -68,17 +69,28 @@
       guard pendingDeliveryCount == 0 else { throw RegistrationError.eventDeliveryPending }
       guard acceptedSession == nil else { throw RegistrationError.activeSession }
       guard !physicalPrimaryDown else { throw RegistrationError.primaryKeyHeld }
+      let previousShortcut = registeredShortcut
+      guard shortcut != previousShortcut else { return }
       if primaryRegistered {
         registrar.unregister(id: Self.primaryID)
         primaryRegistered = false
       }
-      guard shortcut.isEnabled, let keyCode = shortcut.keyCode else { return }
-      try registrar.register(
-        keyCode: keyCode,
-        modifiers: shortcut.carbonModifiers,
-        id: Self.primaryID
-      )
-      primaryRegistered = true
+      guard shortcut.isEnabled, let keyCode = shortcut.keyCode else {
+        registeredShortcut = nil
+        return
+      }
+      do {
+        try registrar.register(
+          keyCode: keyCode,
+          modifiers: shortcut.carbonModifiers,
+          id: Self.primaryID
+        )
+        primaryRegistered = true
+        registeredShortcut = shortcut
+      } catch {
+        restore(previousShortcut)
+        throw error
+      }
     }
 
     func drainEvents() async {
@@ -190,7 +202,31 @@
         registrar.unregister(id: Self.primaryID)
         primaryRegistered = false
       }
+      registeredShortcut = nil
       unregisterEscape()
+    }
+
+    private func restore(_ shortcut: DictationShortcut?) {
+      guard
+        let shortcut,
+        shortcut.isEnabled,
+        let keyCode = shortcut.keyCode
+      else {
+        registeredShortcut = nil
+        return
+      }
+      do {
+        try registrar.register(
+          keyCode: keyCode,
+          modifiers: shortcut.carbonModifiers,
+          id: Self.primaryID
+        )
+        primaryRegistered = true
+        registeredShortcut = shortcut
+      } catch {
+        primaryRegistered = false
+        registeredShortcut = nil
+      }
     }
 
     isolated deinit {

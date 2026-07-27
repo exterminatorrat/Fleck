@@ -34,6 +34,49 @@ import Testing
   }
 }
 
+@Test @MainActor func GlobalHoldShortcutRestoresTheOldChordWhenReplacementConflicts() throws {
+  let registrar = HotKeyRegistrarSpy()
+  let shortcut = GlobalHoldShortcut(handler: ShortcutHoldSpy(), registrar: registrar)
+  let old = DictationShortcut(keyCode: 49, carbonModifiers: 768)
+  let replacement = DictationShortcut(keyCode: 36, carbonModifiers: 256)
+  try shortcut.configure(old)
+  registrar.failingKeyCodes.insert(36)
+
+  #expect(throws: GlobalHoldShortcut.RegistrationError.conflict(-9876)) {
+    try shortcut.configure(replacement)
+  }
+
+  #expect(shortcut.registeredShortcut == old)
+  #expect(registrar.isRegistered(GlobalHoldShortcut.primaryID))
+  #expect(registrar.registrations.last == .init(
+    keyCode: 49,
+    modifiers: 768,
+    id: GlobalHoldShortcut.primaryID
+  ))
+}
+
+@Test @MainActor func GlobalHoldShortcutCanRetryAReplacementAfterItsConflictClears() throws {
+  let registrar = HotKeyRegistrarSpy()
+  let shortcut = GlobalHoldShortcut(handler: ShortcutHoldSpy(), registrar: registrar)
+  let old = DictationShortcut(keyCode: 49, carbonModifiers: 768)
+  let replacement = DictationShortcut(keyCode: 36, carbonModifiers: 256)
+  try shortcut.configure(old)
+  registrar.failingKeyCodes.insert(36)
+  #expect(throws: GlobalHoldShortcut.RegistrationError.conflict(-9876)) {
+    try shortcut.configure(replacement)
+  }
+
+  registrar.failingKeyCodes.remove(36)
+  try shortcut.configure(replacement)
+
+  #expect(shortcut.registeredShortcut == replacement)
+  #expect(registrar.registrations.last == .init(
+    keyCode: 36,
+    modifiers: 256,
+    id: GlobalHoldShortcut.primaryID
+  ))
+}
+
 @Test @MainActor func GlobalHoldShortcutRegistrarPathSerializesRapidPressAndRelease() async throws {
   let registrar = HotKeyRegistrarSpy()
   let handler = ShortcutHoldSpy()
@@ -311,12 +354,16 @@ private final class HotKeyRegistrarSpy: GlobalHotKeyRegistering {
 
   var eventHandler: ((UInt32, Bool) -> Void)?
   var failure: GlobalHoldShortcut.RegistrationError?
+  var failingKeyCodes = Set<UInt32>()
   private(set) var registrations: [Registration] = []
   private(set) var registeredIDs = Set<UInt32>()
   private(set) var unregisteredIDs: [UInt32] = []
 
   func register(keyCode: UInt32, modifiers: UInt32, id: UInt32) throws {
     if let failure { throw failure }
+    if failingKeyCodes.contains(keyCode) {
+      throw GlobalHoldShortcut.RegistrationError.conflict(-9876)
+    }
     registrations.append(.init(keyCode: keyCode, modifiers: modifiers, id: id))
     registeredIDs.insert(id)
   }

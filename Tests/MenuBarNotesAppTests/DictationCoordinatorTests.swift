@@ -178,6 +178,80 @@ import Testing
   #expect(record.cleanupOutcome == .usedRaw)
 }
 
+@Test @MainActor func coordinatorObserverPublishesEveryProcessingPhaseAndCleanedSmartOutcome()
+  async throws
+{
+  let fixture = try Fixture()
+  fixture.standard.finalText = "raw"
+  fixture.cleaner.result = "Clean."
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(events.map(\.phase).contains(.arming))
+  #expect(events.map(\.phase).contains(.listening(mode: .smartCapture, engine: .standard)))
+  #expect(events.map(\.phase).contains(.finalizing))
+  #expect(events.map(\.phase).contains(.cleaning))
+  #expect(events.map(\.phase).contains(.routing))
+  #expect(events.last == DictationCoordinatorEvent(
+    phase: .saved(fixture.inbox),
+    terminal: .saved(
+      mode: .smartCapture,
+      cleanup: .cleaned,
+      destination: fixture.inbox
+    )
+  ))
+}
+
+@Test @MainActor func coordinatorObserverDistinguishesFocusedRawFallbackAndFailure() async throws {
+  let focused = try Fixture()
+  focused.standard.finalText = "raw"
+  focused.cleaner.error = TestError.failed
+  var focusedEvents: [DictationCoordinatorEvent] = []
+  focused.coordinator.setEventObserver { focusedEvents.append($0) }
+
+  await focused.coordinator.start(mode: .focused, editor: focused.editor)
+  await focused.coordinator.finish()
+
+  #expect(focusedEvents.last?.terminal == .saved(
+    mode: .focused,
+    cleanup: .usedRaw,
+    destination: nil
+  ))
+
+  let failed = try Fixture()
+  failed.standard.finalText = nil
+  var failedEvents: [DictationCoordinatorEvent] = []
+  failed.coordinator.setEventObserver { failedEvents.append($0) }
+
+  await failed.coordinator.start(mode: .smartCapture)
+  await failed.coordinator.finish()
+
+  #expect(failedEvents.last?.terminal == .failed("No speech detected."))
+}
+
+@Test @MainActor func coordinatorObserverDetachesAndTerminalStateAllowsShortcutConfiguration()
+  async throws
+{
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Saved"
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  #expect(!fixture.coordinator.canConfigureShortcut)
+  await fixture.coordinator.finish()
+  #expect(fixture.coordinator.canConfigureShortcut)
+
+  let count = events.count
+  fixture.coordinator.setEventObserver(nil)
+  await fixture.coordinator.start(mode: .smartCapture)
+  #expect(events.count == count)
+  await fixture.coordinator.cancel()
+}
+
 @Test @MainActor func routingFailureUsesInbox() async throws {
   let fixture = try Fixture()
   fixture.standard.finalText = "Put this somewhere"

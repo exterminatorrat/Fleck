@@ -132,7 +132,7 @@
       }
       .sheet(isPresented: $isShowingDictationHistory) {
         DictationHistoryView(
-          historyStore: dictationRuntime.historyStore,
+          history: dictationRuntime.historyController,
           onOpenDestination: openHistoryDestination
         )
       }
@@ -550,7 +550,8 @@
             isActive: dictationRuntime.isListening
           )
         } primaryAction: {
-          Task { await dictationRuntime.toggle(editor: commands) }
+          guard dictationRuntime.toolbarPresentation.primaryAction != nil else { return }
+          Task { await dictationRuntime.toggle() }
         }
         .accessibilityLabel(dictationRuntime.microphoneHelp)
         .accessibilityAction(named: Text("Cancel Dictation")) {

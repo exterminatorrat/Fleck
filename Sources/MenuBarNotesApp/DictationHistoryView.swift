@@ -59,26 +59,32 @@
   }
 
   @MainActor
-  final class DictationHistoryViewModel: ObservableObject {
+  final class DictationHistoryController: ObservableObject {
     typealias LoadOperation = @Sendable () async throws -> [DictationHistoryRecord]
+    typealias SaveOperation = @Sendable (DictationHistoryRecord) async throws -> Void
     typealias DeleteOperation = @Sendable (UUID) async throws -> Void
     typealias ClearOperation = @Sendable () async throws -> Void
 
-    @Published private(set) var presentation: DictationHistoryPresentation
+    @Published private(set) var records: [DictationHistoryRecord]
     @Published var errorMessage: String?
+    @Published private(set) var generation = 0
 
     private let loadOperation: LoadOperation
+    private let saveOperation: SaveOperation
     private let deleteOperation: DeleteOperation
     private let clearOperation: ClearOperation
+    private var writeTail: Task<Void, Never>?
 
     init(
       records: [DictationHistoryRecord] = [],
       load: @escaping LoadOperation,
+      save: @escaping SaveOperation,
       delete: @escaping DeleteOperation,
       clear: @escaping ClearOperation
     ) {
-      presentation = DictationHistoryPresentation(records: records)
+      self.records = records
       loadOperation = load
+      saveOperation = save
       deleteOperation = delete
       clearOperation = clear
     }
@@ -86,54 +92,133 @@
     convenience init(store: DictationHistoryStore) {
       self.init(
         load: { try await store.list() },
+        save: { try await store.save($0) },
         delete: { try await store.delete(id: $0) },
         clear: { try await store.clear() }
       )
     }
 
-    var records: [DictationHistoryRecord] {
-      presentation.records
-    }
-
-    var pendingConfirmation: DictationHistoryConfirmation? {
-      presentation.pendingConfirmation
-    }
-
     func load() async {
+      await writeTail?.value
       do {
-        presentation.replaceRecords(try await loadOperation())
+        records = try await loadOperation()
         errorMessage = nil
+        generation += 1
       } catch {
         errorMessage = "Could not load dictation history: \(error.localizedDescription)"
       }
     }
 
+    func save(_ record: DictationHistoryRecord) async {
+      await enqueue {
+        let previous = self.records
+        self.records.removeAll { $0.id == record.id }
+        self.records.append(record)
+        self.records.sort { $0.completedAt > $1.completedAt }
+        do {
+          try await self.saveOperation(record)
+          self.errorMessage = nil
+        } catch {
+          self.records = previous
+          self.errorMessage = "Could not update dictation history: \(error.localizedDescription)"
+        }
+      }
+    }
+
+    func delete(_ id: UUID) async {
+      await enqueue {
+        let previous = self.records
+        self.records.removeAll { $0.id == id }
+        do {
+          try await self.deleteOperation(id)
+          self.errorMessage = nil
+        } catch {
+          self.records = previous
+          self.errorMessage = "Could not update dictation history: \(error.localizedDescription)"
+        }
+      }
+    }
+
+    func clear() async {
+      await enqueue {
+        let previous = self.records
+        self.records.removeAll()
+        do {
+          try await self.clearOperation()
+          self.errorMessage = nil
+        } catch {
+          self.records = previous
+          self.errorMessage = "Could not update dictation history: \(error.localizedDescription)"
+        }
+      }
+    }
+
+    func waitForPendingWrites() async {
+      await writeTail?.value
+    }
+
+    private func enqueue(_ operation: @escaping @MainActor () async -> Void) async {
+      let previous = writeTail
+      let task = Task { @MainActor in
+        await previous?.value
+        await operation()
+        generation += 1
+      }
+      writeTail = task
+      await task.value
+    }
+  }
+
+  @MainActor
+  final class DictationHistoryViewModel: ObservableObject {
+    @Published private(set) var pendingConfirmation: DictationHistoryConfirmation?
+    let controller: DictationHistoryController
+
+    init(controller: DictationHistoryController) {
+      self.controller = controller
+    }
+
     func requestClear() {
-      presentation.requestClear()
+      pendingConfirmation = .clear
     }
 
     func requestDelete(_ id: UUID) {
-      presentation.requestDelete(id)
+      pendingConfirmation = .delete(id)
     }
 
     func cancelConfirmation() {
-      presentation.cancelConfirmation()
+      pendingConfirmation = nil
     }
 
     func confirmRemoval() async {
-      guard let removal = presentation.confirmPendingRemoval() else { return }
-      do {
-        switch removal {
-        case .clear:
-          try await clearOperation()
-        case .delete(let id):
-          try await deleteOperation(id)
-        }
-        presentation.finishRemoval()
-        errorMessage = nil
-      } catch {
-        presentation.rollbackRemoval()
-        errorMessage = "Could not update dictation history: \(error.localizedDescription)"
+      guard let removal = pendingConfirmation else { return }
+      pendingConfirmation = nil
+      switch removal {
+      case .clear:
+        await controller.clear()
+      case .delete(let id):
+        await controller.delete(id)
+      }
+    }
+  }
+
+  struct DictationHistoryRowPresentation: Equatable {
+    let primaryTitle: String
+    let primaryTranscript: String
+    let rawTranscript: String?
+    let canCopyClean: Bool
+
+    init(record: DictationHistoryRecord) {
+      if let cleaned = record.cleanedTranscript, record.cleanupOutcome == .cleaned {
+        primaryTitle = "Cleaned"
+        primaryTranscript = cleaned
+        rawTranscript = record.rawTranscript
+        canCopyClean = true
+      } else {
+        primaryTitle = "Raw fallback"
+        primaryTranscript = record.rawTranscript
+        rawTranscript = nil
+        canCopyClean = false
       }
     }
   }
@@ -141,13 +226,15 @@
   struct DictationHistoryView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: DictationHistoryViewModel
+    @ObservedObject private var history: DictationHistoryController
     let onOpenDestination: (UUID) -> Void
 
     init(
-      historyStore: DictationHistoryStore,
+      history: DictationHistoryController,
       onOpenDestination: @escaping (UUID) -> Void
     ) {
-      _model = StateObject(wrappedValue: DictationHistoryViewModel(store: historyStore))
+      _model = StateObject(wrappedValue: DictationHistoryViewModel(controller: history))
+      _history = ObservedObject(wrappedValue: history)
       self.onOpenDestination = onOpenDestination
     }
 
@@ -160,7 +247,7 @@
           Button("Clear History", role: .destructive) {
             model.requestClear()
           }
-          .disabled(model.records.isEmpty)
+          .disabled(history.records.isEmpty)
           Button("Done") {
             dismiss()
           }
@@ -170,14 +257,14 @@
 
         Divider()
 
-        if model.records.isEmpty {
+        if history.records.isEmpty {
           ContentUnavailableView(
             "No Dictation History",
             systemImage: "waveform",
             description: Text("Successful captures kept for recovery appear here for 30 days.")
           )
         } else {
-          List(model.records) { record in
+          List(history.records) { record in
             HistoryRow(
               record: record,
               onOpenDestination: onOpenDestination,
@@ -189,7 +276,7 @@
       }
       .frame(minWidth: 640, minHeight: 440)
       .task {
-        await model.load()
+        await history.load()
       }
       .confirmationDialog(
         confirmationTitle,
@@ -210,15 +297,15 @@
       .alert(
         "Dictation History",
         isPresented: Binding(
-          get: { model.errorMessage != nil },
-          set: { if !$0 { model.errorMessage = nil } }
+          get: { history.errorMessage != nil },
+          set: { if !$0 { history.errorMessage = nil } }
         )
       ) {
         Button("OK") {
-          model.errorMessage = nil
+          history.errorMessage = nil
         }
       } message: {
-        Text(model.errorMessage ?? "")
+        Text(history.errorMessage ?? "")
       }
     }
 
@@ -262,6 +349,7 @@
     let onDelete: () -> Void
 
     var body: some View {
+      let presentation = DictationHistoryRowPresentation(record: record)
       VStack(alignment: .leading, spacing: 10) {
         HStack(alignment: .firstTextBaseline) {
           Text(record.completedAt.formatted(date: .abbreviated, time: .shortened))
@@ -272,12 +360,16 @@
             .foregroundStyle(.secondary)
         }
 
-        transcript("Cleaned", text: record.cleanedTranscript ?? record.rawTranscript)
-        transcript("Raw", text: record.rawTranscript)
+        transcript(presentation.primaryTitle, text: presentation.primaryTranscript)
+        if let rawTranscript = presentation.rawTranscript {
+          transcript("Raw", text: rawTranscript)
+        }
 
         HStack {
-          Button("Copy Clean") {
-            copy(record.cleanedTranscript ?? record.rawTranscript)
+          if presentation.canCopyClean {
+            Button("Copy Clean") {
+              copy(presentation.primaryTranscript)
+            }
           }
           Button("Copy Raw") {
             copy(record.rawTranscript)

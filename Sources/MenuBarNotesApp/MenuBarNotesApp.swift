@@ -49,14 +49,60 @@
     }
   }
 
+  struct DictationToolbarPresentation: Equatable {
+    enum PrimaryAction: Equatable {
+      case start
+      case finish
+    }
+
+    let primaryLabel: String
+    let primaryAction: PrimaryAction?
+    let canCancel: Bool
+
+    init(phase: DictationPhase) {
+      switch phase {
+      case .idle, .saved, .failed:
+        primaryLabel = "Start Dictation"
+        primaryAction = .start
+        canCancel = false
+      case .arming, .listening:
+        primaryLabel = "Finish Dictation"
+        primaryAction = .finish
+        canCancel = true
+      case .finalizing:
+        primaryLabel = "Finalizing Dictation"
+        primaryAction = nil
+        canCancel = true
+      case .cleaning:
+        primaryLabel = "Cleaning Dictation"
+        primaryAction = nil
+        canCancel = true
+      case .routing:
+        primaryLabel = "Routing Dictation"
+        primaryAction = nil
+        canCancel = true
+      }
+    }
+  }
+
   @MainActor
   final class DictationRuntime: ObservableObject {
+    static let usesPeriodicObservation = false
+
+    private final class ObserverToken: @unchecked Sendable {
+      let value: NSObjectProtocol
+
+      init(_ value: NSObjectProtocol) {
+        self.value = value
+      }
+    }
+
     let modelManager: EnhancedModelManager
     let engineProvider: any SpeechEngineProviding
     let coordinator: DictationCoordinator
     let shortcutController: GlobalHoldShortcut
     let capsuleController: DictationCapsuleController
-    let historyStore: DictationHistoryStore
+    let historyController: DictationHistoryController
 
     @Published private(set) var phase = DictationPhase.idle
     @Published private(set) var shortcutError: String?
@@ -65,12 +111,18 @@
     private weak var appState: AppState?
     private let permissionController: DictationPermissionController
     private let editorRegistry: DictationEditorRegistry
-    private var configuredShortcut: DictationShortcut?
+    private let enhancedIsReady: @MainActor () -> Bool
+    private var desiredShortcut: DictationShortcut?
+    private var needsShortcutApplication = false
     private var modelStateAssessed = false
     private var modelOperation: Task<Void, Never>?
-    private var observationTask: Task<Void, Never>?
+    private var startupAssessmentTask: Task<Void, Never>?
+    private var terminalSynchronizationTask: Task<Void, Never>?
+    private var shutdownTask: Task<Void, Never>?
+    private var terminationObserver: ObserverToken?
+    private(set) var shutdownCount = 0
 
-    init(appState: AppState) {
+    convenience init(appState: AppState) {
       let appSupport = FileManager.default.urls(
         for: .applicationSupportDirectory,
         in: .userDomainMask
@@ -78,6 +130,7 @@
       let root = appSupport.appendingPathComponent("MenuBarNotes", isDirectory: true)
       let modelManager = EnhancedModelManager()
       let historyStore = DictationHistoryStore(rootURL: root)
+      let historyController = DictationHistoryController(store: historyStore)
       let permissionController = DictationPermissionController()
       let editorRegistry = DictationEditorRegistry()
 
@@ -104,7 +157,7 @@
         cleaner: languageModel,
         router: languageModel,
         saver: appState,
-        historyStore: historyStore,
+        historyController: historyController,
         historyEnabled: { [weak appState] in
           appState?.preferences.dictationHistoryEnabled ?? true
         }
@@ -120,27 +173,68 @@
         }
       )
 
+      self.init(
+        appState: appState,
+        modelManager: modelManager,
+        engineProvider: engineProvider,
+        coordinator: coordinator,
+        shortcutController: shortcutController,
+        capsuleController: capsuleController,
+        historyController: historyController,
+        permissionController: permissionController,
+        editorRegistry: editorRegistry,
+        startupAssessment: { await modelManager.refreshState() },
+        enhancedIsReady: { modelManager.verifiedLoadState.isReady }
+      )
+    }
+
+    init(
+      appState: AppState,
+      modelManager: EnhancedModelManager,
+      engineProvider: any SpeechEngineProviding,
+      coordinator: DictationCoordinator,
+      shortcutController: GlobalHoldShortcut,
+      capsuleController: DictationCapsuleController,
+      historyController: DictationHistoryController,
+      permissionController: DictationPermissionController,
+      editorRegistry: DictationEditorRegistry,
+      startupAssessment: @escaping @MainActor () async -> Void,
+      enhancedIsReady: @escaping @MainActor () -> Bool
+    ) {
       self.appState = appState
       self.modelManager = modelManager
-      self.historyStore = historyStore
+      self.historyController = historyController
       self.permissionController = permissionController
       self.editorRegistry = editorRegistry
       self.engineProvider = engineProvider
       self.coordinator = coordinator
       self.shortcutController = shortcutController
       self.capsuleController = capsuleController
+      self.enhancedIsReady = enhancedIsReady
+      phase = coordinator.phase
 
-      Task { @MainActor [weak self, modelManager] in
-        await modelManager.refreshState()
+      coordinator.setEventObserver { [weak self] event in
+        self?.receive(event)
+      }
+      terminationObserver = ObserverToken(
+        NotificationCenter.default.addObserver(
+          forName: NSApplication.willTerminateNotification,
+          object: nil,
+          queue: .main
+        ) { [weak self] _ in
+          Task { @MainActor [weak self] in
+            await self?.shutdown()
+          }
+        }
+      )
+      let assessment = startupAssessment
+      startupAssessmentTask = Task { @MainActor [weak self] in
+        await assessment()
+        guard !Task.isCancelled else { return }
         self?.modelStateAssessed = true
         self?.synchronizePreferences()
       }
-      observationTask = Task { @MainActor [weak self] in
-        while !Task.isCancelled {
-          self?.synchronize()
-          try? await Task.sleep(for: .milliseconds(50))
-        }
-      }
+      synchronizePreferences()
     }
 
     var isListening: Bool {
@@ -162,7 +256,15 @@
     }
 
     var microphoneHelp: String {
-      isListening ? "Finish Dictation" : "Start Dictation"
+      toolbarPresentation.primaryLabel
+    }
+
+    var toolbarPresentation: DictationToolbarPresentation {
+      DictationToolbarPresentation(phase: phase)
+    }
+
+    var actualShortcut: DictationShortcut? {
+      shortcutController.registeredShortcut
     }
 
     func registerEditor(_ editor: any FocusedDictationEditing) {
@@ -173,12 +275,11 @@
       editorRegistry.unregister(editor)
     }
 
-    func toggle(editor: (any FocusedDictationEditing)?) async {
+    func toggle() async {
       switch coordinator.phase {
       case .idle, .saved, .failed:
+        let editor = editorRegistry.focusedEditor()
         let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
-        phase = .arming
-        presentCapsule(for: .arming)
         await coordinator.start(
           mode: focusedEditor == nil ? .smartCapture : .focused,
           editor: focusedEditor
@@ -188,16 +289,32 @@
       case .finalizing, .cleaning, .routing:
         return
       }
-      synchronizePhase()
     }
 
     func cancel() async {
       await coordinator.cancel()
-      synchronizePhase()
     }
 
     func preferencesDidChange() {
+      let current = appState?.preferences.dictationShortcut
+      if current != desiredShortcut {
+        desiredShortcut = current
+        needsShortcutApplication = true
+      }
       synchronizePreferences()
+    }
+
+    func retryShortcutRegistration() {
+      needsShortcutApplication = true
+      synchronizePreferences()
+    }
+
+    func awaitStartupAssessment() async {
+      await startupAssessmentTask?.value
+    }
+
+    func waitForTerminalSynchronization() async {
+      await terminalSynchronizationTask?.value
     }
 
     func permissionRecoveryActions() -> [DictationSystemSettingsAction] {
@@ -213,6 +330,9 @@
     }
 
     func repairModel() {
+      if appState?.preferences.dictationCapsuleEnabled == true {
+        capsuleController.show(.repairingModel)
+      }
       runModelOperation { try await $0.repair() }
     }
 
@@ -235,39 +355,58 @@
       modelError = nil
     }
 
-    private func synchronize() {
-      synchronizePreferences()
-      synchronizePhase()
+    func shutdown() async {
+      if let shutdownTask {
+        await shutdownTask.value
+        return
+      }
+      shutdownCount += 1
+      modelOperation?.cancel()
+      startupAssessmentTask?.cancel()
+      terminalSynchronizationTask?.cancel()
+      coordinator.setEventObserver(nil)
+      if let terminationObserver {
+        NotificationCenter.default.removeObserver(terminationObserver.value)
+        self.terminationObserver = nil
+      }
+      let coordinator = coordinator
+      let shortcutController = shortcutController
+      let capsuleController = capsuleController
+      let task = Task { @MainActor in
+        await coordinator.cancel()
+        await shortcutController.uninstall()
+        capsuleController.dismiss()
+      }
+      shutdownTask = task
+      await task.value
     }
 
-    private func synchronizePreferences() {
+    private func synchronizePreferences(applyShortcut: Bool = true) {
       guard let appState else { return }
       if
         modelStateAssessed,
         appState.preferences.dictationSpeechEngine == .enhancedLocal,
-        !modelManager.verifiedLoadState.isReady
+        !enhancedIsReady()
       {
         appState.updatePreferences { $0.dictationSpeechEngine = .standard }
       }
 
-      let desiredShortcut = appState.preferences.dictationShortcut
-      if configuredShortcut != desiredShortcut, coordinator.phase == .idle {
+      let currentDesiredShortcut = appState.preferences.dictationShortcut
+      if desiredShortcut != currentDesiredShortcut {
+        desiredShortcut = currentDesiredShortcut
+        needsShortcutApplication = true
+      }
+      if applyShortcut, needsShortcutApplication, coordinator.canConfigureShortcut {
         do {
-          try shortcutController.configure(desiredShortcut)
-          configuredShortcut = desiredShortcut
+          try shortcutController.configure(currentDesiredShortcut)
+          needsShortcutApplication = false
           shortcutError = nil
         } catch let error as GlobalHoldShortcut.RegistrationError {
           shortcutError = Self.shortcutMessage(error)
-          if case .conflict = error {
-            configuredShortcut = desiredShortcut
-          } else if case .system = error {
-            configuredShortcut = desiredShortcut
-          } else if case .uninstalled = error {
-            configuredShortcut = desiredShortcut
-          }
+          needsShortcutApplication = false
         } catch {
           shortcutError = error.localizedDescription
-          configuredShortcut = desiredShortcut
+          needsShortcutApplication = false
         }
       }
 
@@ -276,29 +415,69 @@
       }
     }
 
-    private func synchronizePhase() {
-      let newPhase = coordinator.phase
-      guard phase != newPhase else { return }
-      phase = newPhase
-      presentCapsule(for: newPhase)
-    }
-
-    private func presentCapsule(for phase: DictationPhase) {
+    private func receive(_ event: DictationCoordinatorEvent) {
+      phase = event.phase
       guard appState?.preferences.dictationCapsuleEnabled == true else {
         capsuleController.dismiss()
+        synchronizeAfter(event)
         return
       }
-      switch phase {
-      case .arming, .listening:
-        capsuleController.show(.listening)
-      case .finalizing, .cleaning, .routing:
-        capsuleController.show(.cleaning)
-      case .saved(let destination):
-        capsuleController.show(.saved(destination: destination.title))
-      case .failed(let message):
-        capsuleController.show(.failed(message))
-      case .idle:
+      if let status = Self.capsuleStatus(for: event) {
+        capsuleController.show(status)
+      } else {
         capsuleController.dismiss()
+      }
+      synchronizeAfter(event)
+    }
+
+    private func synchronizeAfter(_ event: DictationCoordinatorEvent) {
+      guard event.terminal != nil else {
+        synchronizePreferences()
+        return
+      }
+      synchronizePreferences(applyShortcut: false)
+      terminalSynchronizationTask?.cancel()
+      let shortcutController = shortcutController
+      terminalSynchronizationTask = Task { @MainActor [weak self] in
+        await shortcutController.waitForTerminalObservation()
+        guard !Task.isCancelled, let self else { return }
+        if self.shortcutController.registeredShortcut
+          != self.appState?.preferences.dictationShortcut
+        {
+          self.needsShortcutApplication = true
+        }
+        self.synchronizePreferences()
+      }
+    }
+
+    static func capsuleStatus(for event: DictationCoordinatorEvent) -> DictationCapsuleStatus? {
+      if let terminal = event.terminal {
+        switch terminal {
+        case .saved(let mode, let cleanup, let destination):
+          let title =
+            mode == .focused
+            ? "current note"
+            : destination?.title ?? "your notes"
+          return cleanup == .cleaned
+            ? .saved(destination: title)
+            : .savedWithoutCleanup(destination: title)
+        case .failed(let message):
+          return .failed(message)
+        case .cancelled:
+          return nil
+        }
+      }
+      switch event.phase {
+      case .arming, .listening:
+        return .listening
+      case .finalizing, .cleaning, .routing:
+        return .cleaning
+      case .saved(let destination):
+        return .saved(destination: destination.title)
+      case .failed(let message):
+        return .failed(message)
+      case .idle:
+        return nil
       }
     }
 
@@ -336,6 +515,24 @@
         "The shortcut could not be registered."
       case .uninstalled:
         "The shortcut controller is unavailable."
+      }
+    }
+
+    deinit {
+      modelOperation?.cancel()
+      startupAssessmentTask?.cancel()
+      terminalSynchronizationTask?.cancel()
+      if let terminationObserver {
+        NotificationCenter.default.removeObserver(terminationObserver.value)
+      }
+      guard shutdownCount == 0 else { return }
+      let coordinator = coordinator
+      let shortcutController = shortcutController
+      let capsuleController = capsuleController
+      Task { @MainActor in
+        await coordinator.cancel()
+        await shortcutController.uninstall()
+        capsuleController.dismiss()
       }
     }
   }
@@ -380,7 +577,7 @@
   }
 
   @MainActor
-  private final class DictationEditorRegistry {
+  final class DictationEditorRegistry {
     private final class WeakEditor {
       weak var value: (any FocusedDictationEditing)?
 

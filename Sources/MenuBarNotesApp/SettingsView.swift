@@ -124,11 +124,11 @@
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var modelManager: EnhancedModelManager
+    @ObservedObject private var historyController: DictationHistoryController
     @State private var selectedSection = SettingsSection.appearance
     @State private var showsModelConsent = false
     @State private var showsModelDeleteConfirmation = false
     @State private var showsHistoryClearConfirmation = false
-    @State private var dictationError: String?
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
     @Namespace private var selectedSectionHighlight
@@ -136,6 +136,7 @@
     init(runtime: DictationRuntime) {
       self.runtime = runtime
       _modelManager = ObservedObject(wrappedValue: runtime.modelManager)
+      _historyController = ObservedObject(wrappedValue: runtime.historyController)
     }
 
     var body: some View {
@@ -160,7 +161,7 @@
       }
       .animation(motion.standard, value: selectedSection)
       .task {
-        await modelManager.refreshState()
+        await runtime.awaitStartupAssessment()
         recoveryActions = runtime.permissionRecoveryActions()
         microphones = DictationMicrophoneOption.available()
         runtime.preferencesDidChange()
@@ -190,11 +191,7 @@
       ) {
         Button("Clear History", role: .destructive) {
           Task {
-            do {
-              try await runtime.historyStore.clear()
-            } catch {
-              dictationError = "Could not clear dictation history: \(error.localizedDescription)"
-            }
+            await historyController.clear()
           }
         }
         Button("Cancel", role: .cancel) {}
@@ -204,21 +201,28 @@
       .alert(
         "Dictation",
         isPresented: Binding(
-          get: { dictationError != nil || runtime.modelError != nil },
+          get: {
+            runtime.modelError != nil
+              || historyController.errorMessage != nil
+          },
           set: {
             if !$0 {
-              dictationError = nil
               runtime.clearModelError()
+              historyController.errorMessage = nil
             }
           }
         )
       ) {
         Button("OK") {
-          dictationError = nil
           runtime.clearModelError()
+          historyController.errorMessage = nil
         }
       } message: {
-        Text(dictationError ?? runtime.modelError ?? "")
+        Text(
+          runtime.modelError
+            ?? historyController.errorMessage
+            ?? ""
+        )
       }
     }
 
@@ -484,9 +488,14 @@
             .frame(width: 180, height: 28)
         }
         if let shortcutError = runtime.shortcutError {
-          Label(shortcutError, systemImage: "exclamationmark.triangle.fill")
-            .font(.caption)
-            .foregroundStyle(.orange)
+          HStack {
+            Label(shortcutError, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.orange)
+            Button("Retry") {
+              runtime.retryShortcutRegistration()
+            }
+          }
         }
 
         Picker("Microphone", selection: dictationMicrophoneBinding) {
@@ -759,7 +768,7 @@
     }
   }
 
-  private struct DictationShortcutRecorder: NSViewRepresentable {
+  struct DictationShortcutRecorder: NSViewRepresentable {
     @Binding var shortcut: DictationShortcut
 
     func makeCoordinator() -> Coordinator {
@@ -792,7 +801,8 @@
     @MainActor
     final class RecorderButton: NSButton {
       var onShortcut: ((DictationShortcut) -> Void)?
-      private var isRecording = false
+      private(set) var isRecording = false
+      private var currentShortcut = DictationShortcut()
 
       override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -810,8 +820,13 @@
 
       override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        beginRecording()
+      }
+
+      func beginRecording() {
         isRecording = true
         title = "Type shortcut…"
+        setAccessibilityValue(title)
       }
 
       override func keyDown(with event: NSEvent) {
@@ -819,31 +834,56 @@
           super.keyDown(with: event)
           return
         }
-        if event.keyCode == 53 {
-          isRecording = false
-          return
+        handleKey(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
+      }
+
+      @discardableResult
+      func handleKey(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags
+      ) -> Bool {
+        guard isRecording else { return false }
+        if keyCode == 53 {
+          cancelRecording()
+          return true
         }
-        if event.keyCode == 51 || event.keyCode == 117 {
+        if keyCode == 51 || keyCode == 117 {
           isRecording = false
           onShortcut?(DictationShortcut())
-          return
+          return true
         }
 
-        let modifiers = Self.carbonModifiers(event.modifierFlags)
+        let modifiers = Self.carbonModifiers(modifierFlags)
         guard modifiers != 0 else {
           NSSound.beep()
-          return
+          return false
         }
         isRecording = false
         onShortcut?(
           DictationShortcut(
-            keyCode: UInt32(event.keyCode),
+            keyCode: UInt32(keyCode),
             carbonModifiers: modifiers
           )
         )
+        return true
+      }
+
+      func cancelRecording() {
+        isRecording = false
+        title = Self.title(for: currentShortcut)
+        setAccessibilityValue(title)
+      }
+
+      override func resignFirstResponder() -> Bool {
+        let didResign = super.resignFirstResponder()
+        if didResign {
+          cancelRecording()
+        }
+        return didResign
       }
 
       func update(_ shortcut: DictationShortcut) {
+        currentShortcut = shortcut
         guard !isRecording else { return }
         title = Self.title(for: shortcut)
         setAccessibilityValue(title)
