@@ -202,38 +202,131 @@ struct EnhancedModelManagerTests {
     #expect(fixture.manager.state == .ready)
   }
 
-  @Test func productionResumeValidatorRejectsMagicKeyPlistsAndMismatchedRequests() throws {
+  @Test func productionResumeValidatorRejectsEverySyntheticPlist() throws {
     let downloader = URLSessionModelDownloader()
     let pinnedURL = try EnhancedModelManager.remoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
-    #expect(downloader.validatedResumeData(validResumeData(), for: pinnedURL) == nil)
     #expect(
-      downloader.validatedResumeData(
-        strictResumeData(
-          originalURL: URL(string: "https://evil.example/model")!,
-          currentURL: URL(string: "https://evil.example/model")!
-        ),
-        for: pinnedURL
+      downloader.sessionProducedResumeToken(
+        for: validResumeData(),
+        remoteURL: pinnedURL
       ) == nil
     )
     #expect(
-      downloader.validatedResumeData(
-        strictResumeData(
+      downloader.sessionProducedResumeToken(
+        for: strictResumeData(
+          originalURL: URL(string: "https://evil.example/model")!,
+          currentURL: URL(string: "https://evil.example/model")!
+        ),
+        remoteURL: pinnedURL
+      ) == nil
+    )
+    #expect(
+      downloader.sessionProducedResumeToken(
+        for: strictResumeData(
           originalURL: pinnedURL,
           currentURL: pinnedURL,
           downloadURL: URL(string: "https://evil.example/model")!
         ),
-        for: pinnedURL
+        remoteURL: pinnedURL
       ) == nil
     )
     #expect(
-      downloader.validatedResumeData(
-        strictResumeData(originalURL: pinnedURL, currentURL: pinnedURL),
-        for: pinnedURL
-      ) != nil
+      downloader.sessionProducedResumeToken(
+        for: strictResumeData(originalURL: pinnedURL, currentURL: pinnedURL),
+        remoteURL: pinnedURL
+      ) == nil
     )
+  }
+
+  @Test @MainActor func authenticatedResumeDataSurvivesANewTransport() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let data = validResumeData()
+    let remoteURL = try EnhancedModelManager.remoteURL(
+      for: testManifest.files[0],
+      manifest: testManifest
+    )
+    fixture.transport.markResumeDataIssued(data, for: remoteURL)
+    fixture.transport.handler = { _, _, _ in
+      throw ModelDownloadError.cancelled(resumeData: data)
+    }
+    await #expect(throws: ModelDownloadError.self) {
+      try await fixture.manager.download()
+    }
+
+    let restartedTransport = TestTransport()
+    restartedTransport.handler = { receivedURL, resumeData, _ in
+      #expect(receivedURL == remoteURL)
+      #expect(resumeData == data)
+      return ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+    let restartedManager = EnhancedModelManager(
+      modelRootURL: fixture.root,
+      manifest: testManifest,
+      capacityProvider: { .max },
+      architectureProvider: { true },
+      transport: restartedTransport,
+      resumeAuthenticationKeyProvider: { testResumeAuthenticationKey }
+    )
+
+    try await restartedManager.download()
+
+    #expect(restartedManager.state == .ready)
+  }
+
+  @Test @MainActor func tamperedAuthenticatedResumeDataFailsClosed() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let data = validResumeData()
+    let remoteURL = try EnhancedModelManager.remoteURL(
+      for: testManifest.files[0],
+      manifest: testManifest
+    )
+    fixture.transport.markResumeDataIssued(data, for: remoteURL)
+    fixture.transport.handler = { _, _, _ in
+      throw ModelDownloadError.cancelled(resumeData: data)
+    }
+    await #expect(throws: ModelDownloadError.self) {
+      try await fixture.manager.download()
+    }
+    var envelope = try #require(
+      JSONSerialization.jsonObject(
+        with: Data(contentsOf: fixture.resumeFileURL)
+      ) as? [String: Any]
+    )
+    envelope["authenticationTag"] = Data(repeating: 0, count: 32).base64EncodedString()
+    try JSONSerialization.data(withJSONObject: envelope).write(
+      to: fixture.resumeFileURL,
+      options: .atomic
+    )
+
+    let restartedTransport = TestTransport()
+    restartedTransport.handler = { receivedURL, resumeData, _ in
+      #expect(receivedURL == remoteURL)
+      #expect(resumeData == nil)
+      return ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+    let restartedManager = EnhancedModelManager(
+      modelRootURL: fixture.root,
+      manifest: testManifest,
+      capacityProvider: { .max },
+      architectureProvider: { true },
+      transport: restartedTransport,
+      resumeAuthenticationKeyProvider: { testResumeAuthenticationKey }
+    )
+
+    try await restartedManager.download()
+
+    #expect(restartedManager.state == .ready)
   }
 
   @Test func cancellationBeforeTaskRegistrationPreventsTheTaskFromStarting() {
@@ -387,6 +480,10 @@ struct EnhancedModelManagerTests {
 
     #expect(fixture.manager.state == .updateAvailable)
     #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL(for: testManifest))
+    #expect(
+      fixture.manager.verifiedLoadState
+        == .ready(repositoryURL: fixture.repositoryURL(for: testManifest))
+    )
     #expect(try Data(contentsOf: fixture.fileURL(for: testManifest)) == oldData)
     #expect(!FileManager.default.fileExists(atPath: fixture.stagingURL.path))
     #expect(fixture.transport.callCount == 0)
@@ -428,6 +525,60 @@ struct EnhancedModelManagerTests {
     #expect(try Data(contentsOf: fixture.fileURL(for: testManifest)) == testContents)
   }
 
+  @Test @MainActor func cleanupFailureAfterMoveAdoptsTheNewVerifiedRevision() async throws {
+    let current = EnhancedModelManifest(
+      schemaVersion: 1,
+      modelID: testManifest.modelID,
+      revision: "new-revision",
+      totalByteCount: testManifest.totalByteCount,
+      files: testManifest.files
+    )
+    let fixture = try Fixture(
+      manifest: current,
+      trustedManifests: [testManifest, current]
+    )
+    defer { fixture.remove() }
+    try fixture.install(manifest: testManifest)
+    let outside = canonicalTemporaryDirectory()
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    let blockedCleanup = fixture.installedURL.appendingPathComponent("zzzz-blocked")
+    try FileManager.default.createSymbolicLink(
+      at: blockedCleanup,
+      withDestinationURL: outside
+    )
+    defer { try? FileManager.default.removeItem(at: outside) }
+    await fixture.manager.refreshState()
+    fixture.transport.handler = { _, _, _ in
+      ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+
+    do {
+      try await fixture.manager.update()
+      Issue.record("Expected cleanup failure")
+    } catch {
+      // The committed model remains usable even though old-revision cleanup failed.
+    }
+
+    let newRepository = fixture.repositoryURL(for: current)
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == newRepository)
+    #expect(
+      fixture.manager.verifiedLoadState == .ready(repositoryURL: newRepository)
+    )
+    #expect(try Data(contentsOf: fixture.fileURL(for: current)) == testContents)
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: fixture.installedURL
+          .appendingPathComponent(testManifest.revision)
+          .path
+      )
+    )
+  }
+
   @Test @MainActor func installedManifestCannotAuthorizeAnUnshippedRevision() async throws {
     let current = EnhancedModelManifest(
       schemaVersion: 1,
@@ -447,14 +598,19 @@ struct EnhancedModelManagerTests {
   }
 
   @Test @MainActor func symlinkedModelRootsAndDestructiveTargetsAreRejected() async throws {
-    let base = FileManager.default.temporaryDirectory
+    let base = canonicalTemporaryDirectory()
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
     let outside = base.appendingPathComponent("outside", isDirectory: true)
-    let linkedParent = base.appendingPathComponent("linked", isDirectory: true)
+    let linkedGrandparent = base.appendingPathComponent("linked", isDirectory: true)
     try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
-    try FileManager.default.createSymbolicLink(at: linkedParent, withDestinationURL: outside)
+    try FileManager.default.createSymbolicLink(
+      at: linkedGrandparent,
+      withDestinationURL: outside
+    )
     let manager = EnhancedModelManager(
-      modelRootURL: linkedParent.appendingPathComponent("DictationModels"),
+      modelRootURL: linkedGrandparent
+        .appendingPathComponent("nested", isDirectory: true)
+        .appendingPathComponent("DictationModels", isDirectory: true),
       manifest: testManifest,
       capacityProvider: { .max },
       architectureProvider: { true },
@@ -469,7 +625,9 @@ struct EnhancedModelManagerTests {
       return
     }
     #expect(!FileManager.default.fileExists(
-      atPath: outside.appendingPathComponent("DictationModels").path
+      atPath: outside
+        .appendingPathComponent("nested")
+        .appendingPathComponent("DictationModels").path
     ))
 
     let fixture = try Fixture()
@@ -587,6 +745,9 @@ enum Corruption: CaseIterable {
 }
 
 private let testContents = Data("model".utf8)
+private let testResumeAuthenticationKey = SymmetricKey(
+  data: Data(repeating: 0xA5, count: 32)
+)
 private let testManifest = EnhancedModelManifest(
   schemaVersion: 1,
   modelID: "owner/parakeet-tdt-0.6b-v2-coreml",
@@ -612,7 +773,8 @@ private final class Fixture {
     manifest: EnhancedModelManifest = testManifest,
     capacity: Int64 = .max,
     trustedManifests: [EnhancedModelManifest]? = nil,
-    assessmentDidComplete: @escaping @Sendable () -> Void = {}
+    assessmentDidComplete: @escaping @Sendable () -> Void = {},
+    resumeAuthenticationKey: SymmetricKey = testResumeAuthenticationKey
   ) throws {
     root = temporaryRoot()
     self.manifest = manifest
@@ -625,7 +787,8 @@ private final class Fixture {
       architectureProvider: { true },
       clock: { Date() },
       transport: transport,
-      assessmentDidComplete: assessmentDidComplete
+      assessmentDidComplete: assessmentDidComplete,
+      resumeAuthenticationKeyProvider: { resumeAuthenticationKey }
     )
   }
 
@@ -738,19 +901,24 @@ private final class TestTransport: ModelDownloading, @unchecked Sendable {
     lock.withLock { issuedResumeData[data] = remoteURL }
   }
 
-  func validatedResumeData(_ data: Data, for remoteURL: URL) -> Data? {
+  func sessionProducedResumeToken(
+    for data: Data,
+    remoteURL: URL
+  ) -> ModelResumeToken? {
     lock.withLock {
-      issuedResumeData[data] == remoteURL ? data : nil
+      issuedResumeData[data] == remoteURL
+        ? ModelResumeToken(issuedData: data)
+        : nil
     }
   }
 
   func download(
     from remoteURL: URL,
-    resumeData: Data?,
+    resumeToken: ModelResumeToken?,
     progress: @escaping @Sendable (Int64, Int64) -> Void
   ) async throws -> ModelDownloadResult {
     lock.withLock { calls += 1 }
-    return try await handler(remoteURL, resumeData, progress)
+    return try await handler(remoteURL, resumeToken?.data, progress)
   }
 }
 
@@ -867,16 +1035,24 @@ private final class StateRecorder: @unchecked Sendable {
 }
 
 private func temporaryRoot() -> URL {
-  FileManager.default.temporaryDirectory
+  canonicalTemporaryDirectory()
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
     .appendingPathComponent("DictationModels", isDirectory: true)
 }
 
 private func writeTemporary(_ data: Data) throws -> URL {
-  let url = FileManager.default.temporaryDirectory
+  let url = canonicalTemporaryDirectory()
     .appendingPathComponent(UUID().uuidString)
   try data.write(to: url)
   return url
+}
+
+private func canonicalTemporaryDirectory() -> URL {
+  let temporary = FileManager.default.temporaryDirectory.standardizedFileURL
+  guard temporary.path == "/var" || temporary.path.hasPrefix("/var/") else {
+    return temporary
+  }
+  return URL(fileURLWithPath: "/private" + temporary.path, isDirectory: true)
 }
 
 private func filesBelow(_ root: URL) -> [URL] {

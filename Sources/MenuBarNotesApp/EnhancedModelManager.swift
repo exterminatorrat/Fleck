@@ -2,6 +2,7 @@
   import Combine
   import CryptoKit
   import Foundation
+  import Security
 
   enum EnhancedModelState: Equatable, Sendable {
     case notInstalled
@@ -12,6 +13,11 @@
     case updateAvailable
     case repairRequired(message: String)
     case removing
+  }
+
+  enum EnhancedModelVerifiedLoadState: Equatable, Sendable {
+    case unavailable
+    case ready(repositoryURL: URL)
   }
 
   struct EnhancedModelFile: Codable, Equatable, Sendable {
@@ -28,12 +34,23 @@
     let files: [EnhancedModelFile]
   }
 
+  struct ModelResumeToken: Equatable, Sendable {
+    let data: Data
+
+    init(issuedData: Data) {
+      data = issuedData
+    }
+  }
+
   protocol ModelDownloading: Sendable {
-    func validatedResumeData(_ data: Data, for remoteURL: URL) -> Data?
+    func sessionProducedResumeToken(
+      for data: Data,
+      remoteURL: URL
+    ) -> ModelResumeToken?
 
     func download(
       from remoteURL: URL,
-      resumeData: Data?,
+      resumeToken: ModelResumeToken?,
       progress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws -> ModelDownloadResult
   }
@@ -90,6 +107,17 @@
 
     @Published private(set) var state: EnhancedModelState = .notInstalled
     private(set) var verifiedRepositoryURL: URL?
+    var verifiedLoadState: EnhancedModelVerifiedLoadState {
+      guard let verifiedRepositoryURL else {
+        return .unavailable
+      }
+      switch state {
+      case .ready, .updateAvailable, .downloading, .verifying, .installing:
+        return .ready(repositoryURL: verifiedRepositoryURL)
+      case .notInstalled, .repairRequired, .removing:
+        return .unavailable
+      }
+    }
     let isArchitectureSupported: Bool
 
     private let context: FileContext
@@ -99,6 +127,7 @@
     private let clock: @Sendable () -> Date
     private let transport: any ModelDownloading
     private let assessmentDidComplete: @Sendable () -> Void
+    private let resumeAuthenticationKeyProvider: @Sendable () throws -> SymmetricKey
     private var stateChangedAt: Date
     private var activeOperationID: UUID?
     private var lifecycleEpoch: UInt64 = 0
@@ -125,7 +154,10 @@
       },
       clock: @escaping @Sendable () -> Date = { Date() },
       transport: any ModelDownloading = URLSessionModelDownloader(),
-      assessmentDidComplete: @escaping @Sendable () -> Void = {}
+      assessmentDidComplete: @escaping @Sendable () -> Void = {},
+      resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
+        try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
+      }
     ) {
       let root = modelRootURL ?? fileManager.urls(
         for: .applicationSupportDirectory,
@@ -142,6 +174,7 @@
       self.clock = clock
       self.transport = transport
       self.assessmentDidComplete = assessmentDidComplete
+      self.resumeAuthenticationKeyProvider = resumeAuthenticationKeyProvider
       stateChangedAt = clock()
     }
 
@@ -302,7 +335,8 @@
           )
           let remoteURL = try Self.remoteURL(for: file, manifest: manifest)
           let transport = transport
-          let resumeData = await Task.detached { () -> Data? in
+          let resumeAuthenticationKeyProvider = resumeAuthenticationKeyProvider
+          let resumeToken = await Task.detached { () -> ModelResumeToken? in
             guard
               (try? Self.assertOwnedPath(resumeURL, context: context)) != nil,
               let stored = try? Data(contentsOf: resumeURL),
@@ -310,15 +344,17 @@
                 ModelResumeEnvelope.self,
                 from: stored
               ),
-              envelope.remoteURL == remoteURL
+              envelope.remoteURL == remoteURL,
+              let key = try? resumeAuthenticationKeyProvider(),
+              envelope.isAuthenticated(using: key)
             else { return nil }
-            return transport.validatedResumeData(envelope.data, for: remoteURL)
+            return ModelResumeToken(issuedData: envelope.data)
           }.value
           do {
             let completedBeforeFile = completedBytes
             let result = try await transport.download(
               from: remoteURL,
-              resumeData: resumeData
+              resumeToken: resumeToken
             ) { [weak self] received, _ in
               Task { @MainActor in
                 self?.updateProgress(
@@ -346,7 +382,11 @@
           } catch ModelDownloadError.cancelled(let data) {
             if
               let data,
-              let validated = transport.validatedResumeData(data, for: remoteURL)
+              let token = transport.sessionProducedResumeToken(
+                for: data,
+                remoteURL: remoteURL
+              ),
+              let key = try? resumeAuthenticationKeyProvider()
             {
               try await Task.detached {
                 try Self.createOwnedDirectory(
@@ -354,7 +394,11 @@
                   context: context
                 )
                 try JSONEncoder().encode(
-                  ModelResumeEnvelope(remoteURL: remoteURL, data: validated)
+                  ModelResumeEnvelope(
+                    remoteURL: remoteURL,
+                    data: token.data,
+                    authenticationKey: key
+                  )
                 ).write(to: resumeURL, options: .atomic)
               }.value
             } else {
@@ -392,7 +436,13 @@
         setState(.ready)
       } catch {
         finishOperation(operationID)
-        if let previousRepositoryURL {
+        if
+          let installError = error as? ModelInstallError,
+          case .cleanupFailed(let repositoryURL, _) = installError
+        {
+          verifiedRepositoryURL = repositoryURL
+          setState(.ready)
+        } else if let previousRepositoryURL {
           verifiedRepositoryURL = previousRepositoryURL
           setState(previousState == .updateAvailable ? .updateAvailable : .ready)
         } else if
@@ -451,6 +501,64 @@
       return try! JSONDecoder().decode(
         EnhancedModelManifest.self,
         from: Data(contentsOf: url)
+      )
+    }
+
+    nonisolated private static func loadOrCreateResumeAuthenticationKey() throws
+      -> SymmetricKey
+    {
+      let baseQuery: [CFString: Any] = [
+        kSecClass: kSecClassGenericPassword,
+        kSecAttrService: "com.motes.enhanced-model-resume",
+        kSecAttrAccount: "default",
+      ]
+      var lookup = baseQuery
+      lookup[kSecReturnData] = true
+      lookup[kSecMatchLimit] = kSecMatchLimitOne
+      var result: CFTypeRef?
+      var status = SecItemCopyMatching(lookup as CFDictionary, &result)
+      if status == errSecSuccess, let data = result as? Data {
+        return SymmetricKey(data: data)
+      }
+      guard status == errSecItemNotFound else {
+        throw keychainError(status)
+      }
+
+      var bytes = Data(count: 32)
+      let randomStatus = bytes.withUnsafeMutableBytes {
+        SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!)
+      }
+      guard randomStatus == errSecSuccess else {
+        throw keychainError(randomStatus)
+      }
+      var insertion = baseQuery
+      insertion[kSecValueData] = bytes
+      insertion[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+      status = SecItemAdd(insertion as CFDictionary, nil)
+      if status == errSecSuccess {
+        return SymmetricKey(data: bytes)
+      }
+      guard status == errSecDuplicateItem else {
+        throw keychainError(status)
+      }
+
+      result = nil
+      status = SecItemCopyMatching(lookup as CFDictionary, &result)
+      guard status == errSecSuccess, let data = result as? Data else {
+        throw keychainError(status)
+      }
+      return SymmetricKey(data: data)
+    }
+
+    nonisolated private static func keychainError(_ status: OSStatus) -> NSError {
+      NSError(
+        domain: NSOSStatusErrorDomain,
+        code: Int(status),
+        userInfo: [
+          NSLocalizedDescriptionKey:
+            SecCopyErrorMessageString(status, nil) as String?
+              ?? "Keychain operation failed."
+        ]
       )
     }
 
@@ -593,10 +701,10 @@
       under root: URL
     ) throws -> URL {
       try validateRelativePath(relativePath)
-      let root = root.standardizedFileURL
+      let root = lexicallyNormalizedURL(root)
       let candidate = relativePath.split(separator: "/").reduce(root) {
         $0.appendingPathComponent(String($1))
-      }.standardizedFileURL
+      }
       guard candidate.path.hasPrefix(root.path + "/") else {
         throw EnhancedModelManagerError.invalidManifestPath(relativePath)
       }
@@ -733,18 +841,26 @@
       let final = context.installedRevision(manifest.revision)
       try removeOwnedTreeIfPresent(final, context: context)
       try context.fileManager.moveItem(at: staging, to: final)
+      let installedRepository = try repositoryURL(under: final, manifest: manifest)
 
-      let revisions = try context.fileManager.contentsOfDirectory(
-        at: context.installedRoot,
-        includingPropertiesForKeys: [.isSymbolicLinkKey]
-      )
-      for revision in revisions
-      where revision.standardizedFileURL.path != final.standardizedFileURL.path {
-        try removeOwnedTreeIfPresent(revision, context: context)
+      do {
+        let revisions = try context.fileManager.contentsOfDirectory(
+          at: context.installedRoot,
+          includingPropertiesForKeys: [.isSymbolicLinkKey]
+        ).sorted { $0.lastPathComponent < $1.lastPathComponent }
+        for revision in revisions
+        where revision.standardizedFileURL.path != final.standardizedFileURL.path {
+          try removeOwnedTreeIfPresent(revision, context: context)
+        }
+        let resume = context.resumeRevision(manifest.revision)
+        try removeOwnedTreeIfPresent(resume, context: context)
+      } catch {
+        throw ModelInstallError.cleanupFailed(
+          repositoryURL: installedRepository,
+          message: error.localizedDescription
+        )
       }
-      let resume = context.resumeRevision(manifest.revision)
-      try removeOwnedTreeIfPresent(resume, context: context)
-      return try repositoryURL(under: final, manifest: manifest)
+      return installedRepository
     }
 
     nonisolated private static func createOwnedDirectory(
@@ -780,13 +896,14 @@
     nonisolated private static func assertSafeModelRoot(
       _ context: FileContext
     ) throws {
-      for url in [context.root.deletingLastPathComponent(), context.root] {
-        guard let type = try fileType(at: url, fileManager: context.fileManager) else {
-          continue
-        }
-        guard type == .typeDirectory else {
-          throw EnhancedModelManagerError.unsafeFilesystemPath(url.path)
-        }
+      try assertNoSymlinkAncestors(
+        context.root,
+        fileManager: context.fileManager
+      )
+      if let type = try fileType(at: context.root, fileManager: context.fileManager),
+        type != .typeDirectory
+      {
+        throw EnhancedModelManagerError.unsafeFilesystemPath(context.root.path)
       }
     }
 
@@ -806,33 +923,47 @@
       root: URL,
       fileManager: FileManager
     ) throws {
-      let root = root.standardizedFileURL
-      let candidate = url.standardizedFileURL
+      let root = lexicallyNormalizedURL(root)
+      let candidate = lexicallyNormalizedURL(url)
       guard candidate == root || candidate.path.hasPrefix(root.path + "/") else {
         throw EnhancedModelManagerError.unsafeFilesystemPath(candidate.path)
       }
 
-      let parent = root.deletingLastPathComponent()
-      if let type = try fileType(at: parent, fileManager: fileManager),
-        type != .typeDirectory
-      {
-        throw EnhancedModelManagerError.unsafeFilesystemPath(parent.path)
-      }
+      try assertNoSymlinkAncestors(candidate, fileManager: fileManager)
+    }
 
+    nonisolated private static func assertNoSymlinkAncestors(
+      _ url: URL,
+      fileManager: FileManager
+    ) throws {
+      let candidate = lexicallyNormalizedURL(url)
       var current = candidate
       while true {
-        if let type = try fileType(at: current, fileManager: fileManager),
-          type == .typeSymbolicLink
-        {
-          throw EnhancedModelManagerError.unsafeFilesystemPath(current.path)
+        if let type = try fileType(at: current, fileManager: fileManager) {
+          guard type != .typeSymbolicLink else {
+            throw EnhancedModelManagerError.unsafeFilesystemPath(current.path)
+          }
+          if current != candidate, type != .typeDirectory {
+            throw EnhancedModelManagerError.unsafeFilesystemPath(current.path)
+          }
         }
-        if current == root { break }
         let next = current.deletingLastPathComponent()
-        guard next.path.count >= root.path.count else {
-          throw EnhancedModelManagerError.unsafeFilesystemPath(candidate.path)
-        }
+        if next.path == current.path { return }
         current = next
       }
+    }
+
+    nonisolated private static func lexicallyNormalizedURL(_ url: URL) -> URL {
+      var components: [Substring] = []
+      for component in url.path.split(separator: "/", omittingEmptySubsequences: true) {
+        if component == "." { continue }
+        if component == ".." {
+          if !components.isEmpty { components.removeLast() }
+        } else {
+          components.append(component)
+        }
+      }
+      return URL(fileURLWithPath: "/" + components.joined(separator: "/"))
     }
 
     nonisolated private static func fileType(
@@ -855,9 +986,45 @@
     let repositoryURL: URL?
   }
 
+  private enum ModelInstallError: Error, LocalizedError, Sendable {
+    case cleanupFailed(repositoryURL: URL, message: String)
+
+    var errorDescription: String? {
+      switch self {
+      case .cleanupFailed(_, let message):
+        return "The new model is ready, but old model cleanup failed: \(message)"
+      }
+    }
+  }
+
   private struct ModelResumeEnvelope: Codable, Sendable {
     let remoteURL: URL
     let data: Data
+    let authenticationTag: Data
+
+    init(remoteURL: URL, data: Data, authenticationKey: SymmetricKey) {
+      self.remoteURL = remoteURL
+      self.data = data
+      authenticationTag = Data(HMAC<SHA256>.authenticationCode(
+        for: Self.authenticatedBytes(remoteURL: remoteURL, data: data),
+        using: authenticationKey
+      ))
+    }
+
+    func isAuthenticated(using key: SymmetricKey) -> Bool {
+      HMAC<SHA256>.isValidAuthenticationCode(
+        authenticationTag,
+        authenticating: Self.authenticatedBytes(remoteURL: remoteURL, data: data),
+        using: key
+      )
+    }
+
+    private static func authenticatedBytes(remoteURL: URL, data: Data) -> Data {
+      var bytes = Data(remoteURL.absoluteString.utf8)
+      bytes.append(0)
+      bytes.append(data)
+      return bytes
+    }
   }
 
   private final class FileContext: @unchecked Sendable {
@@ -899,70 +1066,48 @@
   }
 
   final class URLSessionModelDownloader: NSObject, ModelDownloading, @unchecked Sendable {
-    func validatedResumeData(_ data: Data, for remoteURL: URL) -> Data? {
-      guard
-        Self.isPinnedInitialURL(remoteURL),
-        let value = try? PropertyListSerialization.propertyList(
-          from: data,
-          options: [],
-          format: nil
-        ),
-        let dictionary = value as? [String: Any],
-        dictionary["NSURLSessionResumeInfoVersion"] is NSNumber,
-        let received = dictionary["NSURLSessionResumeBytesReceived"] as? NSNumber,
-        received.int64Value >= 0,
-        let temporaryName = dictionary["NSURLSessionResumeInfoTempFileName"] as? String,
-        !temporaryName.isEmpty,
-        let originalData = dictionary["NSURLSessionResumeOriginalRequest"] as? Data,
-        let currentData = dictionary["NSURLSessionResumeCurrentRequest"] as? Data,
-        let originalRequest = try? NSKeyedUnarchiver.unarchivedObject(
-          ofClass: NSURLRequest.self,
-          from: originalData
-        ),
-        let currentRequest = try? NSKeyedUnarchiver.unarchivedObject(
-          ofClass: NSURLRequest.self,
-          from: currentData
-        ),
-        originalRequest.url == remoteURL,
-        let currentURL = currentRequest.url,
-        Self.isAllowedRedirectURL(currentURL)
-      else {
-        return nil
+    private let resumeLock = NSLock()
+    private var sessionProducedResumeData: [Data: URL] = [:]
+
+    func sessionProducedResumeToken(
+      for data: Data,
+      remoteURL: URL
+    ) -> ModelResumeToken? {
+      resumeLock.withLock {
+        sessionProducedResumeData[data] == remoteURL
+          ? ModelResumeToken(issuedData: data)
+          : nil
       }
-      if let storedDownloadURL = dictionary["NSURLSessionDownloadURL"] {
-        guard
-          let value = storedDownloadURL as? String,
-          let url = URL(string: value),
-          Self.isAllowedRedirectURL(url)
-        else {
-          return nil
-        }
-      }
-      return data
     }
 
     func download(
       from remoteURL: URL,
-      resumeData: Data?,
+      resumeToken: ModelResumeToken?,
       progress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws -> ModelDownloadResult {
       guard Self.isPinnedInitialURL(remoteURL) else {
         throw ModelDownloadError.redirectRejected
       }
       let delegate = DownloadDelegate(progress: progress)
-      let resumeData = resumeData.flatMap {
-        validatedResumeData($0, for: remoteURL)
-      }
-      return try await withTaskCancellationHandler {
-        try await withCheckedThrowingContinuation { continuation in
-          delegate.start(
-            remoteURL: remoteURL,
-            resumeData: resumeData,
-            continuation: continuation
-          )
+      do {
+        return try await withTaskCancellationHandler {
+          try await withCheckedThrowingContinuation { continuation in
+            delegate.start(
+              remoteURL: remoteURL,
+              resumeData: resumeToken?.data,
+              continuation: continuation
+            )
+          }
+        } onCancel: {
+          delegate.cancel()
         }
-      } onCancel: {
-        delegate.cancel()
+      } catch ModelDownloadError.cancelled(let data) {
+        if let data {
+          resumeLock.withLock {
+            sessionProducedResumeData[data] = remoteURL
+          }
+        }
+        throw ModelDownloadError.cancelled(resumeData: data)
       }
     }
 
