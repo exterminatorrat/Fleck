@@ -392,6 +392,30 @@ import Testing
   #expect(fixture.coordinator.phase == .idle)
 }
 
+@Test @MainActor func failedUndoAfterCancelledSavePreservesHonestRecovery() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Saved but not undone"
+  fixture.saver.saveGate = gate
+  fixture.saver.undoSucceeds = false
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await finishing.value
+
+  #expect(fixture.saver.undoCount == 1)
+  #expect(fixture.saver.savedTexts == ["Saved but not undone"])
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.insertionOutcome == .saved)
+  #expect(record.destination == fixture.inbox)
+  #expect(fixture.coordinator.copyableTranscript == "Saved but not undone")
+  #expect(fixture.coordinator.phase == .failed("Dictation was saved but could not be undone."))
+  #expect(fixture.standard.releaseCount == 1)
+}
+
 @Test @MainActor func shortcutReleaseDuringSuspendedStartDefersFinishUntilStartReturns() async throws {
   let threshold = Gate()
   let startGate = Gate()
@@ -582,6 +606,7 @@ private final class FakeSaver: DictationSaving {
   var destinationIDs: [UUID?] = []
   var flushCount = 0
   var undoCount = 0
+  var undoSucceeds = true
 
   func activeDestinations() -> [DictationDestination] { destinations }
 
@@ -596,8 +621,8 @@ private final class FakeSaver: DictationSaving {
 
   func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
     undoCount += 1
-    if !savedTexts.isEmpty { savedTexts.removeLast() }
-    return true
+    if undoSucceeds, !savedTexts.isEmpty { savedTexts.removeLast() }
+    return undoSucceeds
   }
   func flushFocusedDictationSave() async throws {
     flushCount += 1

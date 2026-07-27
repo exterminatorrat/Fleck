@@ -45,6 +45,7 @@ final class DictationCoordinator {
 
   private(set) var phase: DictationPhase = .idle
   private(set) var copyableTranscript: String?
+  private(set) var recoveryReceipt: DictationInsertionReceipt?
 
   init(
     engineProvider: any SpeechEngineProviding,
@@ -98,6 +99,7 @@ final class DictationCoordinator {
   func start(mode: DictationMode, editor: (any FocusedDictationEditing)? = nil) async {
     guard capture == nil, shortcutID == nil else { return }
     copyableTranscript = nil
+    recoveryReceipt = nil
     phase = .arming
 
     let id = UUID()
@@ -221,7 +223,7 @@ final class DictationCoordinator {
       holdTask = nil
       phase = .idle
     }
-    guard var capture, !capture.isTerminating else { return }
+    guard var capture, !capture.isTerminating, !capture.cancelRequested else { return }
     capture.cancelRequested = true
     self.capture = capture
     rollbackEditor(capture.id)
@@ -295,8 +297,18 @@ final class DictationCoordinator {
         destinationID: destinationID
       )
       if isCancellationRequested(id) {
-        _ = await saver.undoSmartCapture(receipt)
-        await completeCancellation(id)
+        if await saver.undoSmartCapture(receipt) {
+          await completeCancellation(id)
+        } else {
+          await preserveFailedUndoRecovery(
+            id,
+            record: record,
+            text: text,
+            receipt: receipt,
+            candidates: candidates,
+            savesHistory: savesHistory
+          )
+        }
         return
       }
       guard isActive(id) else { return }
@@ -321,6 +333,29 @@ final class DictationCoordinator {
     guard let capture, capture.id == id else { return }
     if !savesHistory { copyableTranscript = text }
     await terminate(id, phase: .failed("Unable to save dictation."), cancelEditor: capture.mode == .focused)
+  }
+
+  private func preserveFailedUndoRecovery(
+    _ id: UUID,
+    record: DictationHistoryRecord,
+    text: String,
+    receipt: DictationInsertionReceipt,
+    candidates: [DictationDestination],
+    savesHistory: Bool
+  ) async {
+    guard let capture, capture.id == id, !capture.isTerminating else { return }
+    var record = record
+    record.insertionOutcome = .saved
+    record.destination = candidates.first { $0.noteID == receipt.noteID }
+    if savesHistory { try? await historyStore.save(record) }
+    guard self.capture?.id == id else { return }
+    recoveryReceipt = receipt
+    copyableTranscript = text
+    await terminate(
+      id,
+      phase: .failed("Dictation was saved but could not be undone."),
+      cancelEditor: false
+    )
   }
 
   private func updateHistory(
