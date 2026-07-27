@@ -1,6 +1,11 @@
 // swift-tools-version: 6.0
 
 import PackageDescription
+import Foundation
+
+let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let infoPlistPath = packageRoot
+    .appendingPathComponent("Sources/MenuBarNotesApp/Info.plist").path
 
 let package = Package(
     name: "Motes",
@@ -23,7 +28,16 @@ let package = Package(
                 "MenuBarNotesCore",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
-            resources: [.process("Resources")]
+            exclude: ["Info.plist"],
+            resources: [.process("Resources")],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", infoPlistPath,
+                ])
+            ]
         ),
         .testTarget(
             name: "MenuBarNotesCoreTests",

@@ -3,6 +3,22 @@ import Testing
 
 @testable import MenuBarNotesCore
 
+@Test func dictationPreferencesUseStandardPrivateDefaults() throws {
+  let value = AppPreferences()
+  #expect(value.dictationSpeechEngine == .standard)
+  #expect(!value.dictationShortcut.isEnabled)
+  #expect(value.dictationHistoryEnabled)
+  #expect(value.dictationCapsuleEnabled)
+  #expect(value.dictationMicrophoneUID == nil)
+}
+
+@Test func oldPreferencesDecodeWithDictationDefaults() throws {
+  let data = Data(#"{"fontFamily":".AppleSystemUIFont","fontSize":15}"#.utf8)
+  let value = try JSONDecoder().decode(AppPreferences.self, from: data)
+  #expect(value.dictationSpeechEngine == .standard)
+  #expect(value.dictationHistoryEnabled)
+}
+
 @Test func preferencesDecodeOlderDocumentsWithNewDefaults() throws {
   let old =
     ##"{"fontFamily":"Test","fontSize":14,"accentHex":"#000000","panelOpacity":0.8,"showFormattingBar":true,"automaticLists":true,"shortcuts":[]}"##
