@@ -93,6 +93,20 @@ import Testing
   }
 }
 
+@Test @MainActor func noteTextAppenderAppliesDefaultsToTheEntirePlainNoteAfterRTFRoundTrip()
+  throws
+{
+  let defaults = NoteTextAppendDefaults(fontFamily: "Menlo", fontSize: 21)
+  let result = NoteTextAppender.appending("Dictated", to: Note(body: "Plain"), defaults: defaults)
+  let appended = try attributedString(from: result.richTextRTF)
+
+  for location in [0, appended.length - "Dictated".utf16.count] {
+    let font = try #require(appended.attribute(.font, at: location, effectiveRange: nil) as? NSFont)
+    #expect(font.familyName == "Menlo")
+    #expect(font.pointSize == 21)
+  }
+}
+
 @MainActor
 private func attributedString(from rtf: Data) throws -> NSAttributedString {
   try NSAttributedString(

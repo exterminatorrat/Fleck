@@ -12,7 +12,7 @@
     let fontFamily: String
     let fontSize: CGFloat
 
-    init(fontFamily: String = ".AppleSystemUIFont", fontSize: CGFloat = NSFont.systemFontSize) {
+    init(fontFamily: String = ".AppleSystemUIFont", fontSize: CGFloat = 15) {
       self.fontFamily = fontFamily
       self.fontSize = fontSize
     }
@@ -33,7 +33,7 @@
       defaults: NoteTextAppendDefaults
     ) -> NoteTextAppendResult {
       let suffix = (note.body.isEmpty ? "" : "\n\n") + text
-      let appended = NSMutableAttributedString(attributedString: attributedText(for: note))
+      let appended = NSMutableAttributedString(attributedString: attributedText(for: note, defaults: defaults))
       appended.append(NSAttributedString(string: suffix, attributes: [.font: defaults.font]))
       let rtf = try! appended.data(
         from: NSRange(location: 0, length: appended.length),
@@ -46,7 +46,10 @@
       )
     }
 
-    private static func attributedText(for note: Note) -> NSAttributedString {
+    private static func attributedText(
+      for note: Note,
+      defaults: NoteTextAppendDefaults
+    ) -> NSAttributedString {
       guard let rtf = note.richTextRTF,
         let attributed = try? NSAttributedString(
           data: rtf,
@@ -54,7 +57,7 @@
           documentAttributes: nil
         )
       else {
-        return NSAttributedString(string: note.body)
+        return NSAttributedString(string: note.body, attributes: [.font: defaults.font])
       }
       return attributed
     }
