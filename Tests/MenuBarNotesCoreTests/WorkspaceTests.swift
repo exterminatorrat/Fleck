@@ -71,6 +71,20 @@ import Testing
   #expect(workspace.notes.first(where: { $0.id == second })?.isPinned == false)
 }
 
+@Test func repeatedLiveTabMovesPreserveEveryNoteExactlyOnce() {
+  var workspace = Workspace()
+  let first = workspace.addNote()
+  let second = workspace.addNote()
+  let third = workspace.addNote()
+
+  workspace.moveNote(id: first, to: 1)
+  #expect(workspace.notes.map(\.id) == [second, first, third])
+
+  workspace.moveNote(id: first, to: 2)
+  #expect(workspace.notes.map(\.id) == [second, third, first])
+  #expect(Set(workspace.notes.map(\.id)) == Set([first, second, third]))
+}
+
 @Test func workspaceSetsAndClearsTabColor() {
   let changedAt = Date(timeIntervalSince1970: 200)
   var workspace = Workspace()

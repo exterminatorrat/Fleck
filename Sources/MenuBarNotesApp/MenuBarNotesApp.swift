@@ -8,14 +8,14 @@
     @StateObject private var appState = AppState()
 
     var body: some Scene {
-      MenuBarExtra("Menu Bar Notes", systemImage: "note.text") {
+      MenuBarExtra("Motes", systemImage: "note.text") {
         NotesPanel()
           .environmentObject(appState)
           .preferredColorScheme(colorScheme)
       }
       .menuBarExtraStyle(.window)
 
-      Window("Menu Bar Notes", id: "pinned-notes") {
+      Window("Motes", id: "pinned-notes") {
         NotesPanel(isPinned: true)
           .environmentObject(appState)
           .preferredColorScheme(colorScheme)
@@ -64,7 +64,7 @@
   @main
   enum MenuBarNotesApp {
     static func main() {
-      print("MenuBarNotes is a native macOS application. Build this package on macOS 14 or later.")
+      print("Motes is a native macOS application. Build this package on macOS 14 or later.")
     }
   }
 #endif

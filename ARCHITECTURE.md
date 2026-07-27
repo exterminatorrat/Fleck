@@ -1,8 +1,8 @@
-# Menu Bar Notes — Application Framework
+# Motes — Application Framework
 
 ## Constraints that guide the design
 
-Menu Bar Notes is a native macOS utility, not a miniature web application. The initial engineering budgets are:
+Motes is a native macOS utility, not a miniature web application. The initial engineering budgets are:
 
 - **Installed app size target:** at or below 15 MB for a release build where practical.
 - **Memory ceiling:** never intentionally ship a normal idle workflow that exceeds 75 MB; profile representative release builds before releases.

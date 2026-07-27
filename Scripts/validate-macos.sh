@@ -8,7 +8,7 @@ fi
 
 major_version="$(sw_vers -productVersion | cut -d. -f1)"
 if (( major_version < 14 )); then
-  printf 'error: Menu Bar Notes requires macOS 14 or later (found %s)\n' \
+  printf 'error: Motes requires macOS 14 or later (found %s)\n' \
     "$(sw_vers -productVersion)" >&2
   exit 2
 fi
@@ -28,7 +28,7 @@ swift test
 
 printf '%s\n' '--- Release build ---'
 swift build -c release
-Scripts/check-release-size.sh .build/release/MenuBarNotes
+Scripts/check-release-size.sh .build/release/Motes
 
 printf '\nValidation build passed. Launch manually with:\n  %s\n' \
-  "$(pwd)/.build/release/MenuBarNotes"
+  "$(pwd)/.build/release/Motes"
