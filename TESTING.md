@@ -83,10 +83,15 @@ and fails closed on broken links, cycles, or traversal errors.
 
 For source assertions, the gate generates and compiles a temporary structural
 inspector using the active Xcode toolchain's host `SwiftSyntax` and
-`SwiftParser` modules. It adds no package or network dependency. `SwiftParser`
-parses every discovered production file, including every `#if os(macOS)`
-branch, and malformed syntax fails closed. `SwiftSyntax` then reports only the
-specific member-access and assignment findings owned by this gate. Comments,
+`SwiftParser` and `SwiftIfConfig` modules. It adds no package or network
+dependency. `SwiftParser` parses every discovered production file, and
+malformed syntax fails closed. `SwiftIfConfig` evaluates required assignments
+for the package's macOS 14 release target; compiler-backed `canImport` checks
+use release flags and unknown conditions fail closed. Forbidden findings remain
+conservative across all branches. `SwiftSyntax` then reports only the specific
+member-access and assignment findings owned by this gate. Transparent
+parentheses, single-element tuples, and metatype `.self` wrappers are
+normalized recursively without alias analysis. Comments,
 ordinary/raw strings, and bare or extended regex literals are inert, while
 real ordinary/raw/nested string interpolation remains executable syntax and is
 visited. In particular, matching-hash text such as `\#(...)` inside a regex is
@@ -187,6 +192,13 @@ regex literals; malformed syntax; inactive `#if` branches; all forbidden
 members; required true and forbidden false assignments; deduplicated source
 aliases; and toolchain/module/compile/run failures. The retained source-symlink
 and artifact/model fixtures remain green.
+
+Fix Round 5 made the required `ModelHub.offlineMode = true` assertion
+conditional on the active macOS release region. Regression fixtures cover
+Linux-only versus macOS-active branches, `#elseif`/`#else`, nested conditions,
+`canImport`, Swift/compiler versions, architecture checks, fail-closed unknown
+conditions, and recursive parentheses/metatype `.self` wrappers. Forbidden
+false assignments and forbidden member accesses remain all-branch checks.
 
 ### Manual release blockers
 

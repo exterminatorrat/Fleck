@@ -275,10 +275,11 @@ if ! command -v xcrun >/dev/null 2>&1; then
   printf 'error: xcrun is required for Swift source inspection\n' >&2
   exit 2
 fi
+readonly xcrun_path="$(command -v xcrun)"
 
 : > "$scan_errors"
 set +e
-swiftc_path="$(xcrun --find swiftc 2>"$scan_errors")"
+swiftc_path="$("$xcrun_path" --find swiftc 2>"$scan_errors")"
 xcrun_exit=$?
 set -e
 if (( xcrun_exit != 0 )) || [[ ! -x "$swiftc_path" ]]; then
@@ -296,16 +297,237 @@ toolchain_root="$(physical_directory "$swiftc_directory/../..")" || {
 }
 swift_syntax_host="$toolchain_root/usr/lib/swift/host"
 if [[ ! -d "$swift_syntax_host/SwiftSyntax.swiftmodule" \
-  || ! -d "$swift_syntax_host/SwiftParser.swiftmodule" ]]; then
-  printf 'error: active Swift toolchain lacks host SwiftSyntax modules: %s\n' \
+  || ! -d "$swift_syntax_host/SwiftParser.swiftmodule" \
+  || ! -d "$swift_syntax_host/SwiftIfConfig.swiftmodule" ]]; then
+  printf 'error: active Swift toolchain lacks required host Swift modules: %s\n' \
     "$swift_syntax_host" >&2
   exit 2
 fi
 
+if [[ ! -x /usr/bin/plutil ]]; then
+  printf 'error: plutil is required for Swift target inspection\n' >&2
+  exit 2
+fi
+
+: > "$scan_output"
+: > "$scan_errors"
+set +e
+"$xcrun_path" swiftc -print-target-info \
+  >"$scan_output" 2>"$scan_errors"
+target_info_exit=$?
+set -e
+if (( target_info_exit != 0 )); then
+  printf 'error: active Swift compiler target inspection failed\n' >&2
+  if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
+  exit 2
+fi
+
+extract_target_value() {
+  local key="$1"
+  local value
+  local plutil_exit
+
+  : > "$scan_errors"
+  set +e
+  value="$(/usr/bin/plutil -extract "$key" raw -o - "$scan_output" 2>"$scan_errors")"
+  plutil_exit=$?
+  set -e
+  if (( plutil_exit != 0 )) || [[ -z "$value" ]]; then
+    printf 'error: active Swift compiler target is missing %s\n' "$key" >&2
+    if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
+    exit 2
+  fi
+  printf '%s' "$value"
+}
+
+active_target_arch="$(extract_target_value target.arch)"
+active_target_base="$(extract_target_value target.unversionedTriple)"
+active_compiler_version="$(extract_target_value compilerVersion)"
+case "$active_target_base" in
+  *-apple-macosx)
+    ;;
+  *)
+    printf 'error: active Swift compiler does not target macOS: %s\n' \
+      "$active_target_base" >&2
+    exit 2
+    ;;
+esac
+readonly release_target="${active_target_base}14.0"
+readonly release_modules="$repository_root/.build/release/Modules"
+
 cat > "$inspector_source" <<'SWIFT'
 import Foundation
+import SwiftIfConfig
 import SwiftParser
 import SwiftSyntax
+
+enum InspectorError: Error {
+  case invalidConfiguration
+  case unknownCondition
+}
+
+final class ReleaseBuildConfiguration: BuildConfiguration {
+  private let xcrunPath: String
+  private let targetArchitecture: String
+  private let targetTriple: String
+  private let moduleSearchPath: String
+  private var conditionCache: [String: Bool] = [:]
+
+  let targetPointerBitWidth = 64
+  let targetAtomicBitWidths = [8, 16, 32, 64]
+  let endianness = Endianness.little
+  let languageVersion = VersionTuple(6, 0)
+  let compilerVersion: VersionTuple
+
+  init(
+    xcrunPath: String,
+    targetArchitecture: String,
+    targetTriple: String,
+    compilerDescription: String,
+    moduleSearchPath: String
+  ) throws {
+    guard
+      FileManager.default.isExecutableFile(atPath: xcrunPath),
+      Self.isIdentifier(targetArchitecture),
+      targetTriple.hasSuffix("-apple-macosx14.0")
+    else {
+      throw InspectorError.invalidConfiguration
+    }
+    guard
+      let marker = compilerDescription.range(of: "Swift version "),
+      let versionRange = compilerDescription[marker.upperBound...].range(
+        of: #"^[0-9]+(?:\.[0-9]+)*"#,
+        options: .regularExpression
+      ),
+      let compilerVersion = VersionTuple(
+        parsing: String(compilerDescription[versionRange])
+      )
+    else {
+      throw InspectorError.invalidConfiguration
+    }
+
+    self.xcrunPath = xcrunPath
+    self.targetArchitecture = targetArchitecture
+    self.targetTriple = targetTriple
+    self.compilerVersion = compilerVersion
+    self.moduleSearchPath = moduleSearchPath
+  }
+
+  func isCustomConditionSet(name: String) -> Bool {
+    false
+  }
+
+  func hasFeature(name: String) throws -> Bool {
+    throw InspectorError.unknownCondition
+  }
+
+  func hasAttribute(name: String) throws -> Bool {
+    throw InspectorError.unknownCondition
+  }
+
+  func canImport(
+    importPath: [(TokenSyntax, String)],
+    version: CanImportVersion
+  ) throws -> Bool {
+    guard case .unversioned = version else {
+      throw InspectorError.unknownCondition
+    }
+    let path = try importPath.map { try validated($0.1) }.joined(separator: ".")
+    return try evaluate("canImport(\(path))")
+  }
+
+  func isActiveTargetOS(name: String) -> Bool {
+    name == "macOS"
+  }
+
+  func isActiveTargetArchitecture(name: String) -> Bool {
+    name == targetArchitecture
+  }
+
+  func isActiveTargetEnvironment(name: String) throws -> Bool {
+    throw InspectorError.unknownCondition
+  }
+
+  func isActiveTargetRuntime(name: String) throws -> Bool {
+    throw InspectorError.unknownCondition
+  }
+
+  func isActiveTargetPointerAuthentication(name: String) throws -> Bool {
+    throw InspectorError.unknownCondition
+  }
+
+  func isActiveTargetObjectFormat(name: String) -> Bool {
+    name == "MachO"
+  }
+
+  private static func isIdentifier(_ value: String) -> Bool {
+    value.range(
+      of: #"^[A-Za-z_][A-Za-z0-9_]*$"#,
+      options: .regularExpression
+    ) != nil
+  }
+
+  private func validated(_ value: String) throws -> String {
+    guard Self.isIdentifier(value) else {
+      throw InspectorError.unknownCondition
+    }
+    return value
+  }
+
+  private func evaluate(_ condition: String) throws -> Bool {
+    if let cached = conditionCache[condition] {
+      return cached
+    }
+
+    let positive = """
+      #if \(condition)
+      #else
+      #error("inactive")
+      #endif
+      """
+    if try compilerAccepts(positive) {
+      conditionCache[condition] = true
+      return true
+    }
+
+    let negative = """
+      #if \(condition)
+      #error("active")
+      #endif
+      """
+    if try compilerAccepts(negative) {
+      conditionCache[condition] = false
+      return false
+    }
+    throw InspectorError.unknownCondition
+  }
+
+  private func compilerAccepts(_ source: String) throws -> Bool {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: xcrunPath)
+    process.arguments = [
+      "swiftc",
+      "-typecheck",
+      "-swift-version", "6",
+      "-O",
+      "-target", targetTriple,
+    ]
+    if FileManager.default.fileExists(atPath: moduleSearchPath) {
+      process.arguments?.append(contentsOf: ["-I", moduleSearchPath])
+    }
+    process.arguments?.append("-")
+
+    let input = Pipe()
+    process.standardInput = input
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    input.fileHandleForWriting.write(Data(source.utf8))
+    try input.fileHandleForWriting.close()
+    process.waitUntilExit()
+    return process.terminationReason == .exit && process.terminationStatus == 0
+  }
+}
 
 enum Finding: String, Comparable {
   case requiredOfflineTrue = "required-offline-true"
@@ -321,7 +543,14 @@ enum Finding: String, Comparable {
 }
 
 final class ReleaseVisitor: SyntaxVisitor {
+  private let configuredRegions: ConfiguredRegions
   private(set) var findings = Set<Finding>()
+  private(set) var hasUnknownRequiredRegion = false
+
+  init(configuredRegions: ConfiguredRegions) {
+    self.configuredRegions = configuredRegions
+    super.init(viewMode: .sourceAccurate)
+  }
 
   override func visit(_ node: MemberAccessExprSyntax) -> SyntaxVisitorContinueKind {
     guard let base = node.base.flatMap(baseName),
@@ -336,9 +565,9 @@ final class ReleaseVisitor: SyntaxVisitor {
   override func visit(_ node: SequenceExprSyntax) -> SyntaxVisitorContinueKind {
     let elements = Array(node.elements)
     guard elements.count == 3,
-      let member = elements[0].as(MemberAccessExprSyntax.self),
+      let member = transparent(elements[0]).as(MemberAccessExprSyntax.self),
       elements[1].is(AssignmentExprSyntax.self),
-      let value = elements[2].as(BooleanLiteralExprSyntax.self),
+      let value = transparent(elements[2]).as(BooleanLiteralExprSyntax.self),
       baseName(member.base) == "ModelHub",
       member.declName.baseName.text == "offlineMode"
     else {
@@ -347,7 +576,16 @@ final class ReleaseVisitor: SyntaxVisitor {
 
     switch value.literal.tokenKind {
     case .keyword(.true):
-      findings.insert(.requiredOfflineTrue)
+      switch configuredRegions.isActive(node) {
+      case .active:
+        findings.insert(.requiredOfflineTrue)
+      case .inactive:
+        break
+      case .unparsed:
+        hasUnknownRequiredRegion = true
+      @unknown default:
+        hasUnknownRequiredRegion = true
+      }
     case .keyword(.false):
       findings.insert(.forbiddenOfflineFalse)
     default:
@@ -361,6 +599,7 @@ final class ReleaseVisitor: SyntaxVisitor {
   }
 
   private func baseName(_ expression: ExprSyntax) -> String? {
+    let expression = transparent(expression)
     if let reference = expression.as(DeclReferenceExprSyntax.self) {
       return reference.baseName.text
     }
@@ -368,6 +607,29 @@ final class ReleaseVisitor: SyntaxVisitor {
       return member.declName.baseName.text
     }
     return nil
+  }
+
+  private func transparent(_ expression: ExprSyntax) -> ExprSyntax {
+    var expression = expression
+    while true {
+      if let member = expression.as(MemberAccessExprSyntax.self),
+        member.declName.baseName.text == "self",
+        let base = member.base
+      {
+        expression = base
+        continue
+      }
+      if let tuple = expression.as(TupleExprSyntax.self),
+        tuple.elements.count == 1,
+        let element = tuple.elements.first,
+        element.label == nil,
+        element.colon == nil
+      {
+        expression = element.expression
+        continue
+      }
+      return expression
+    }
   }
 
   private func memberFinding(base: String, member: String) -> Finding? {
@@ -386,9 +648,9 @@ final class ReleaseVisitor: SyntaxVisitor {
   }
 }
 
-guard CommandLine.arguments.count == 2 else {
+guard CommandLine.arguments.count == 7 else {
   FileHandle.standardError.write(
-    Data("error: release inspector requires one Swift source path\n".utf8)
+    Data("error: release inspector received invalid configuration\n".utf8)
   )
   exit(2)
 }
@@ -403,6 +665,22 @@ do {
   exit(2)
 }
 
+let configuration: ReleaseBuildConfiguration
+do {
+  configuration = try ReleaseBuildConfiguration(
+    xcrunPath: CommandLine.arguments[2],
+    targetArchitecture: CommandLine.arguments[3],
+    targetTriple: CommandLine.arguments[4],
+    compilerDescription: CommandLine.arguments[5],
+    moduleSearchPath: CommandLine.arguments[6]
+  )
+} catch {
+  FileHandle.standardError.write(
+    Data("error: release inspector could not configure macOS release conditions\n".utf8)
+  )
+  exit(2)
+}
+
 let tree = Parser.parse(source: source)
 guard !tree.hasError else {
   FileHandle.standardError.write(
@@ -411,8 +689,24 @@ guard !tree.hasError else {
   exit(2)
 }
 
-let visitor = ReleaseVisitor(viewMode: .sourceAccurate)
+let configuredRegions = tree.configuredRegions(in: configuration)
+guard configuredRegions.diagnostics.isEmpty,
+  !configuredRegions.contains(where: { $0.state == .unparsed })
+else {
+  FileHandle.standardError.write(
+    Data("error: release inspector could not evaluate compilation conditions\n".utf8)
+  )
+  exit(2)
+}
+
+let visitor = ReleaseVisitor(configuredRegions: configuredRegions)
 visitor.walk(tree)
+guard !visitor.hasUnknownRequiredRegion else {
+  FileHandle.standardError.write(
+    Data("error: release inspector found an unknown required-source region\n".utf8)
+  )
+  exit(2)
+}
 for finding in visitor.findings.sorted() {
   print(finding.rawValue)
 }
@@ -421,9 +715,11 @@ SWIFT
 : > "$scan_output"
 : > "$scan_errors"
 set +e
-xcrun swiftc \
+"$xcrun_path" swiftc \
+  -swift-version 6 \
   -I "$swift_syntax_host" \
   -L "$swift_syntax_host" \
+  -lSwiftIfConfig \
   -lSwiftParser \
   -lSwiftSyntax \
   -Xlinker -rpath \
@@ -589,7 +885,13 @@ while (( source_file_index < ${#source_physical_files[@]} )); do
   : > "$inspector_output"
   : > "$scan_errors"
   set +e
-  "$inspector_binary" "$physical_source_path" \
+  "$inspector_binary" \
+    "$physical_source_path" \
+    "$xcrun_path" \
+    "$active_target_arch" \
+    "$release_target" \
+    "$active_compiler_version" \
+    "$release_modules" \
     >"$inspector_output" 2>"$scan_errors"
   inspector_exit=$?
   set -e
