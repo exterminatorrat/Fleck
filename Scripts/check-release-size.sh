@@ -28,10 +28,9 @@ nearest_app_root() {
   done
 }
 
-is_forbidden_model_path() {
+is_model_context_path() {
   local path="$1"
   local boundary="$2"
-  local filename
   local relative_path
   local boundary_name
 
@@ -46,6 +45,28 @@ is_forbidden_model_path() {
   path="$(lowercase "$path")"
   relative_path="$(lowercase "$relative_path")"
   boundary_name="$(lowercase "${boundary##*/}")"
+  case "$boundary_name" in
+    model|models|*.mlmodelc|*.mlpackage)
+      return 0
+      ;;
+  esac
+  case "$relative_path" in
+    *.mlmodelc|*.mlmodelc/*|*.mlpackage|*.mlpackage/*|\
+      model|model/*|models|models/*|*/model|*/model/*|*/models|*/models/*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+is_forbidden_model_path() {
+  local path="$1"
+  local boundary="$2"
+  local model_context="${3:-false}"
+  local filename
+  local original_path="$path"
+
+  path="$(lowercase "$path")"
   filename="${path##*/}"
   case "$filename" in
     *.mlmodel|*.mlpackage|*.mlmodelc|coremldata.bin|weight.bin|weights.bin)
@@ -55,16 +76,10 @@ is_forbidden_model_path() {
 
   case "$filename" in
     *.bin)
-      case "$boundary_name" in
-        model|models|*.mlmodelc|*.mlpackage)
-          return 0
-          ;;
-      esac
-      case "$relative_path" in
-        *.mlmodelc/*|*.mlpackage/*|model/*|models/*|*/model/*|*/models/*)
-          return 0
-          ;;
-      esac
+      if [[ "$model_context" == true ]] \
+        || is_model_context_path "$original_path" "$boundary"; then
+        return 0
+      fi
       ;;
   esac
   return 1
@@ -90,6 +105,8 @@ my $state = 'code';
 my $block_depth = 0;
 my $string_hashes = '';
 my $string_closer = '';
+my $interpolation_depth = 0;
+my @interpolation_frames;
 while ($index < length $source) {
   my $character = substr($source, $index, 1);
   my $pair = substr($source, $index, 2);
@@ -113,6 +130,18 @@ while ($index < length $source) {
       $index += 2;
       $block_depth = 1;
       $state = 'block_comment';
+    } elsif (@interpolation_frames && $character eq '(') {
+      $output .= $character;
+      $index += 1;
+      $interpolation_depth += 1;
+    } elsif (@interpolation_frames && $character eq ')') {
+      $output .= $character;
+      $index += 1;
+      $interpolation_depth -= 1;
+      if ($interpolation_depth == 0) {
+        my $frame = pop @interpolation_frames;
+        ($state, $string_hashes, $string_closer, $interpolation_depth) = @$frame;
+      }
     } else {
       $output .= $character;
       $index += 1;
@@ -135,32 +164,18 @@ while ($index < length $source) {
       $output .= $character eq "\n" ? "\n" : ' ';
       $index += 1;
     }
-  } elsif ($state eq 'string') {
+  } elsif ($state eq 'string' || $state eq 'multiline_string') {
     my $raw_escape = '\\' . $string_hashes;
-    if ($string_hashes ne ''
-      && substr($source, $index, length($raw_escape)) eq $raw_escape
-      && $index + length($raw_escape) < length $source) {
-      my $escaped = substr($source, $index, length($raw_escape) + 1);
-      $escaped =~ s/[^\n]/ /g;
-      $output .= $escaped;
-      $index += length($raw_escape) + 1;
-    } elsif (substr($source, $index, length($string_closer)) eq $string_closer) {
-      $output .= ' ' x length($string_closer);
-      $index += length($string_closer);
+    my $interpolation_opener = $raw_escape . '(';
+    if (substr($source, $index, length($interpolation_opener))
+      eq $interpolation_opener) {
+      push @interpolation_frames,
+        [$state, $string_hashes, $string_closer, $interpolation_depth];
+      $output .= ' ' x length($interpolation_opener);
+      $index += length($interpolation_opener);
+      $interpolation_depth = 1;
       $state = 'code';
-    } elsif ($string_hashes eq '' && $character eq '\\'
-      && $index + 1 < length $source) {
-      my $escaped = substr($source, $index, 2);
-      $escaped =~ s/[^\n]/ /g;
-      $output .= $escaped;
-      $index += 2;
-    } else {
-      $output .= $character eq "\n" ? "\n" : ' ';
-      $index += 1;
-    }
-  } elsif ($state eq 'multiline_string') {
-    my $raw_escape = '\\' . $string_hashes;
-    if ($string_hashes ne ''
+    } elsif ($string_hashes ne ''
       && substr($source, $index, length($raw_escape)) eq $raw_escape
       && $index + length($raw_escape) < length $source) {
       my $escaped = substr($source, $index, length($raw_escape) + 1);
@@ -184,8 +199,9 @@ while ($index < length $source) {
   }
 }
 
-die "unterminated Swift comment or string in $path\n"
-  if $state eq 'block_comment' || $state eq 'string' || $state eq 'multiline_string';
+die "unterminated Swift comment, string, or interpolation in $path\n"
+  if $state eq 'block_comment' || $state eq 'string'
+    || $state eq 'multiline_string' || @interpolation_frames;
 print $output;
 PERL
 }
@@ -337,26 +353,40 @@ trap cleanup_scan_files EXIT
 
 forbidden_model_assets=()
 scan_roots=("$artifact_root")
+scan_logical_roots=("$artifact_root")
+scan_boundaries=("$artifact_root")
+scan_model_contexts=(false)
 if [[ -n "$additional_artifact_root" ]]; then
   scan_roots+=("$additional_artifact_root")
+  scan_logical_roots+=("$additional_artifact_root")
+  scan_boundaries+=("$additional_artifact_root")
+  scan_model_contexts+=(false)
 fi
 seen_scan_roots=()
+seen_scan_contexts=()
 scan_index=0
 while (( scan_index < ${#scan_roots[@]} )); do
   scan_root="${scan_roots[$scan_index]}"
+  scan_logical_root="${scan_logical_roots[$scan_index]}"
+  scan_boundary="${scan_boundaries[$scan_index]}"
+  scan_model_context="${scan_model_contexts[$scan_index]}"
   scan_index=$((scan_index + 1))
 
   already_scanned=false
   if (( ${#seen_scan_roots[@]} > 0 )); then
-    for seen_root in "${seen_scan_roots[@]}"; do
-      if [[ "$seen_root" == "$scan_root" ]]; then
+    seen_index=0
+    while (( seen_index < ${#seen_scan_roots[@]} )); do
+      if [[ "${seen_scan_roots[$seen_index]}" == "$scan_root" \
+        && "${seen_scan_contexts[$seen_index]}" == "$scan_model_context" ]]; then
         already_scanned=true
         break
       fi
+      seen_index=$((seen_index + 1))
     done
   fi
   if [[ "$already_scanned" == true ]]; then continue; fi
   seen_scan_roots+=("$scan_root")
+  seen_scan_contexts+=("$scan_model_context")
 
   : > "$scan_output"
   : > "$scan_errors"
@@ -375,8 +405,10 @@ while (( scan_index < ${#scan_roots[@]} )); do
   fi
 
   while IFS= read -r -d '' path; do
-    if is_forbidden_model_path "$path" "$scan_root"; then
-      forbidden_model_assets+=("$path")
+    logical_path="$scan_logical_root${path#"$scan_root"}"
+    if is_forbidden_model_path \
+      "$logical_path" "$scan_boundary" "$scan_model_context"; then
+      forbidden_model_assets+=("$logical_path")
     fi
 
     if [[ -L "$path" ]]; then
@@ -392,10 +424,18 @@ while (( scan_index < ${#scan_roots[@]} )); do
         exit 2
       fi
       if is_forbidden_model_path "$resolved_path" "$(dirname "$resolved_path")"; then
-        forbidden_model_assets+=("$path -> $resolved_path")
+        forbidden_model_assets+=("$logical_path -> $resolved_path")
       fi
       if [[ -d "$resolved_path" ]]; then
+        linked_model_context="$scan_model_context"
+        if is_model_context_path "$logical_path" "$scan_boundary" \
+          || is_model_context_path "$resolved_path" "$resolved_path"; then
+          linked_model_context=true
+        fi
         scan_roots+=("$resolved_path")
+        scan_logical_roots+=("$logical_path")
+        scan_boundaries+=("$scan_boundary")
+        scan_model_contexts+=("$linked_model_context")
       fi
     fi
   done < "$scan_output"
@@ -419,40 +459,135 @@ if ! command -v perl >/dev/null 2>&1; then
   exit 2
 fi
 
-: > "$scan_output"
-: > "$scan_errors"
-set +e
-find "$sources_root" -type f -name '*.swift' -print0 \
-  >"$scan_output" 2>"$scan_errors"
-find_exit=$?
-set -e
-if (( find_exit != 0 )); then
-  printf 'error: Swift source traversal failed (exit %s)\n' "$find_exit" >&2
-  if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
-  exit 2
-fi
-
 : > "$all_swift_code"
 enhanced_found=false
-while IFS= read -r -d '' source_path; do
+source_scan_roots=("$sources_root")
+source_logical_roots=("$sources_root")
+source_ancestor_separator=$'\034'
+source_ancestor_chains=(
+  "${source_ancestor_separator}${sources_root}${source_ancestor_separator}"
+)
+seen_source_roots=()
+seen_source_files=()
+source_scan_index=0
+while (( source_scan_index < ${#source_scan_roots[@]} )); do
+  source_scan_root="${source_scan_roots[$source_scan_index]}"
+  source_logical_root="${source_logical_roots[$source_scan_index]}"
+  source_ancestor_chain="${source_ancestor_chains[$source_scan_index]}"
+  source_scan_index=$((source_scan_index + 1))
+
+  source_root_seen=false
+  if (( ${#seen_source_roots[@]} > 0 )); then
+    for seen_source_root in "${seen_source_roots[@]}"; do
+      if [[ "$seen_source_root" == "$source_scan_root" ]]; then
+        source_root_seen=true
+        break
+      fi
+    done
+  fi
+  if [[ "$source_root_seen" == true ]]; then continue; fi
+  seen_source_roots+=("$source_scan_root")
+
+  : > "$scan_output"
   : > "$scan_errors"
   set +e
-  write_swift_code_only "$source_path" "$swift_piece" 2>"$scan_errors"
-  swift_scan_exit=$?
+  find "$source_scan_root" \
+    \( -type l -o \( -type f -name '*.swift' \) \) \
+    -print0 >"$scan_output" 2>"$scan_errors"
+  find_exit=$?
   set -e
-  if (( swift_scan_exit != 0 )); then
-    printf 'error: could not prepare Swift source for assertions: %s\n' \
-      "$source_path" >&2
+  if (( find_exit != 0 )); then
+    printf 'error: Swift source traversal failed at %s (exit %s)\n' \
+      "$source_logical_root" "$find_exit" >&2
     if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
     exit 2
   fi
-  cat "$swift_piece" >> "$all_swift_code"
-  printf '\n' >> "$all_swift_code"
-  if [[ "$source_path" == "$enhanced_capture" ]]; then
-    cp "$swift_piece" "$enhanced_swift_code"
-    enhanced_found=true
-  fi
-done < "$scan_output"
+
+  while IFS= read -r -d '' source_path; do
+    logical_source_path="$source_logical_root${source_path#"$source_scan_root"}"
+    physical_source_path="$source_path"
+
+    if [[ -L "$source_path" ]]; then
+      : > "$scan_errors"
+      set +e
+      physical_source_path="$(realpath "$source_path" 2>"$scan_errors")"
+      realpath_exit=$?
+      set -e
+      if (( realpath_exit != 0 )) || [[ ! -e "$physical_source_path" ]]; then
+        printf 'error: Swift source symlink cannot be resolved: %s\n' \
+          "$logical_source_path" >&2
+        if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
+        exit 2
+      fi
+
+      if [[ -d "$physical_source_path" ]]; then
+        source_parent="$(dirname "$source_path")"
+        if [[ "$source_parent" == "$physical_source_path" \
+          || "$source_parent" == "$physical_source_path/"* \
+          || "$source_ancestor_chain" == \
+            *"${source_ancestor_separator}${physical_source_path}${source_ancestor_separator}"* ]]; then
+          printf 'error: Swift source symlink cycle detected: %s\n' \
+            "$logical_source_path" >&2
+          exit 2
+        fi
+        source_scan_roots+=("$physical_source_path")
+        source_logical_roots+=("$logical_source_path")
+        source_ancestor_chains+=(
+          "${source_ancestor_chain}${physical_source_path}${source_ancestor_separator}"
+        )
+        continue
+      fi
+    fi
+
+    case "$logical_source_path" in
+      *.swift)
+        ;;
+      *)
+        continue
+        ;;
+    esac
+    if [[ ! -f "$physical_source_path" ]]; then
+      printf 'error: Swift source path is not a file: %s\n' \
+        "$logical_source_path" >&2
+      exit 2
+    fi
+
+    source_file_seen=false
+    if (( ${#seen_source_files[@]} > 0 )); then
+      for seen_source_file in "${seen_source_files[@]}"; do
+        if [[ "$seen_source_file" == "$physical_source_path" ]]; then
+          source_file_seen=true
+          break
+        fi
+      done
+    fi
+    if [[ "$source_file_seen" == true && "$logical_source_path" != "$enhanced_capture" ]]; then
+      continue
+    fi
+
+    : > "$scan_errors"
+    set +e
+    write_swift_code_only "$physical_source_path" "$swift_piece" 2>"$scan_errors"
+    swift_scan_exit=$?
+    set -e
+    if (( swift_scan_exit != 0 )); then
+      printf 'error: could not prepare Swift source for assertions: %s\n' \
+        "$logical_source_path" >&2
+      if [[ -s "$scan_errors" ]]; then cat "$scan_errors" >&2; fi
+      exit 2
+    fi
+
+    if [[ "$source_file_seen" != true ]]; then
+      seen_source_files+=("$physical_source_path")
+      cat "$swift_piece" >> "$all_swift_code"
+      printf '\n' >> "$all_swift_code"
+    fi
+    if [[ "$logical_source_path" == "$enhanced_capture" ]]; then
+      cp "$swift_piece" "$enhanced_swift_code"
+      enhanced_found=true
+    fi
+  done < "$scan_output"
+done
 
 if [[ "$enhanced_found" != true ]]; then
   printf 'error: EnhancedSpeechCapture Swift source was not found\n' >&2

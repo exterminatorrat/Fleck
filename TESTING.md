@@ -83,11 +83,18 @@ targets without following arbitrary cycles, fails closed on traversal errors,
 and scans case-insensitively for `.mlmodel`, `.mlpackage`, `.mlmodelc`, exact
 `coremldata.bin`/`weight.bin`/`weights.bin` names, and `.bin` files under model
 bundle or model directory paths relative to each artifact or queued scan root.
+When a model-named symlink resolves to a neutral external directory, the
+logical model context follows that queued physical root.
 An unrelated `.bin` outside a model path is allowed even when an absolute
 ancestor happens to be named `models`. The same gate restricts searches to
-Swift sources, removes ordinary and raw string contents plus line and nested
-block comments, detects multiline qualification, fails closed on scrubber or
-ripgrep errors, and asserts:
+Swift sources accepted through regular files, file symlinks, or directory
+symlinks under `Sources`; resolves and deduplicates their physical targets;
+and fails closed on broken links, cycles, or traversal errors. Its code-only
+view removes inert ordinary and raw string contents plus line and nested block
+comments while preserving executable ordinary and raw string interpolation,
+including nested balanced expressions. Malformed interpolation and scrubber
+or ripgrep errors fail closed. The gate detects multiline qualification and
+asserts:
 
 - `ModelHub.offlineMode = true` is present.
 - `ModelHub.offlineMode = false` is absent.
@@ -165,6 +172,16 @@ strings, nested comments, and unterminated raw strings. The valid Swift
 fixtures are parsed with `swiftc -frontend -parse`; executable multiline calls
 remain forbidden while the same text in any supported string or comment form
 is ignored.
+
+Fix Round 3 added typechecked ordinary, raw, and nested string-interpolation
+fixtures, including the production `NSEvent` call shape. Executable calls
+inside interpolation exit 1; forbidden text inside nested strings or comments
+remains inert; malformed ordinary and raw interpolation exits 2. Source file
+and directory symlinks are scanned, clean and logical
+`EnhancedSpeechCapture.swift` symlinks pass, and broken or cyclic source links
+exit 2. A logical `Resources/Models` symlink to a neutral physical directory
+retains model context and rejects its generic `.bin`; a neutral cache symlink
+and the external-ancestor clean artifact remain allowed.
 
 ### Manual release blockers
 
