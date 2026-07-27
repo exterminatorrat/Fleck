@@ -140,6 +140,25 @@ import Testing
   ))
 }
 
+@Test @MainActor func GlobalHoldShortcutRejectsReconfigurationWhileRejectedPressIsHeld() async throws {
+  let registrar = HotKeyRegistrarSpy()
+  let handler = ShortcutHoldSpy()
+  handler.acceptsShortcut = false
+  let shortcut = GlobalHoldShortcut(handler: handler, registrar: registrar)
+  try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
+  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  await shortcut.drainEvents()
+
+  #expect(throws: GlobalHoldShortcut.RegistrationError.primaryKeyHeld) {
+    try shortcut.configure(DictationShortcut(keyCode: 36, carbonModifiers: 256))
+  }
+
+  #expect(registrar.registrations == [
+    .init(keyCode: 49, modifiers: 768, id: GlobalHoldShortcut.primaryID)
+  ])
+  #expect(registrar.isRegistered(GlobalHoldShortcut.primaryID))
+}
+
 @Test @MainActor func GlobalHoldShortcutUninstallCancelsItsOwnedSessionAndCleansRegistrations() async throws {
   let registrar = HotKeyRegistrarSpy()
   let handler = ShortcutHoldSpy()
@@ -155,6 +174,22 @@ import Testing
   #expect(registrar.registeredIDs.isEmpty)
   #expect(registrar.unregisteredIDs.contains(GlobalHoldShortcut.primaryID))
   #expect(registrar.unregisteredIDs.contains(GlobalHoldShortcut.escapeID))
+}
+
+@Test @MainActor func GlobalHoldShortcutRejectsConfigurationAfterUninstall() async throws {
+  let registrar = HotKeyRegistrarSpy()
+  let shortcut = GlobalHoldShortcut(handler: ShortcutHoldSpy(), registrar: registrar)
+  try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
+  await shortcut.uninstall()
+
+  #expect(throws: GlobalHoldShortcut.RegistrationError.uninstalled) {
+    try shortcut.configure(DictationShortcut(keyCode: 36, carbonModifiers: 256))
+  }
+
+  #expect(registrar.registrations == [
+    .init(keyCode: 49, modifiers: 768, id: GlobalHoldShortcut.primaryID)
+  ])
+  #expect(registrar.registeredIDs.isEmpty)
 }
 
 @Test @MainActor func GlobalHoldShortcutDeinitCancelsItsOwnedSessionAndCleansRegistrations() async throws {

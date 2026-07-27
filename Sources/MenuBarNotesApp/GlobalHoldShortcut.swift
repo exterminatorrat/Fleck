@@ -24,7 +24,9 @@
     enum RegistrationError: Error, Equatable {
       case activeSession
       case conflict(OSStatus)
+      case primaryKeyHeld
       case system(OSStatus)
+      case uninstalled
     }
 
     static let primaryID: UInt32 = 1
@@ -60,7 +62,9 @@
     }
 
     func configure(_ shortcut: DictationShortcut) throws {
+      guard !isUninstalled else { throw RegistrationError.uninstalled }
       guard acceptedSession == nil else { throw RegistrationError.activeSession }
+      guard !physicalPrimaryDown else { throw RegistrationError.primaryKeyHeld }
       if primaryRegistered {
         registrar.unregister(id: Self.primaryID)
         primaryRegistered = false
