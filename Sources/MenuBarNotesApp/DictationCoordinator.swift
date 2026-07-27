@@ -20,8 +20,12 @@ final class DictationCoordinator {
     let editor: (any FocusedDictationEditing)?
     let startedAt: Date
     var engine: (any SpeechEngine)?
+    var isStarting = true
     var isFinishing = false
     var releaseRequested = false
+    var cancelRequested = false
+    var isTerminating = false
+    var editorCancelled = false
   }
 
   private let engineProvider: any SpeechEngineProviding
@@ -111,8 +115,9 @@ final class DictationCoordinator {
     do {
       engine = try await engineProvider.engineForCapture(preferred: preferredEngine())
     } catch {
-      guard isCurrent(id) else { return }
-      await end(id, phase: .failed(message(for: error)), cancelEditor: mode == .focused)
+      guard finishStarting(id) != nil else { return }
+      guard await continueCapture(id) else { return }
+      await terminate(id, phase: .failed(message(for: error)), cancelEditor: mode == .focused)
       return
     }
     guard var activeCapture = capture, activeCapture.id == id else {
@@ -120,36 +125,43 @@ final class DictationCoordinator {
       return
     }
     activeCapture.engine = engine
+    activeCapture.isStarting = false
     capture = activeCapture
+    guard await continueCapture(id) else { return }
     if activeCapture.releaseRequested {
-      await end(id, phase: .failed("No speech detected."), cancelEditor: mode == .focused)
+      await terminate(id, phase: .failed("No speech detected."), cancelEditor: mode == .focused)
       return
     }
 
+    setStarting(id, true)
     do {
       try await engine.start(
         provisional: { [weak self] text in
-          guard let self, self.isCurrent(id), mode == .focused else { return }
+          guard let self, self.isActive(id), mode == .focused else { return }
           self.capture?.editor?.updateFocusedDictation(provisionalText: text)
         },
         level: { _ in }
       )
-      guard let current = capture, current.id == id else { return }
-      phase = .listening(mode: mode, engine: engine.kind)
-      if current.releaseRequested { await finish() }
     } catch {
-      guard isCurrent(id) else { return }
-      await end(id, phase: .failed(message(for: error)), cancelEditor: mode == .focused)
+      guard finishStarting(id) != nil else { return }
+      guard await continueCapture(id) else { return }
+      await terminate(id, phase: .failed(message(for: error)), cancelEditor: mode == .focused)
+      return
     }
+    guard let current = finishStarting(id) else { return }
+    guard await continueCapture(id) else { return }
+    phase = .listening(mode: mode, engine: engine.kind)
+    if current.releaseRequested { await finish() }
   }
 
   func finish() async {
-    guard var capture, !capture.isFinishing else { return }
-    guard let engine = capture.engine else {
+    guard var capture, !capture.isTerminating, !capture.cancelRequested else { return }
+    if capture.isStarting {
       capture.releaseRequested = true
       self.capture = capture
       return
     }
+    guard !capture.isFinishing, let engine = capture.engine else { return }
     capture.isFinishing = true
     self.capture = capture
     phase = .finalizing
@@ -158,13 +170,13 @@ final class DictationCoordinator {
     do {
       rawText = try await engine.finish()
     } catch {
-      guard isCurrent(capture.id) else { return }
-      await end(capture.id, phase: .failed(message(for: error)), cancelEditor: capture.mode == .focused)
+      guard await continueCapture(capture.id) else { return }
+      await terminate(capture.id, phase: .failed(message(for: error)), cancelEditor: capture.mode == .focused)
       return
     }
-    guard isCurrent(capture.id) else { return }
+    guard await continueCapture(capture.id) else { return }
     guard let rawText = nonempty(rawText) else {
-      await end(capture.id, phase: .failed("No speech detected."), cancelEditor: capture.mode == .focused)
+      await terminate(capture.id, phase: .failed("No speech detected."), cancelEditor: capture.mode == .focused)
       return
     }
 
@@ -185,11 +197,11 @@ final class DictationCoordinator {
     let cleanedText: String
     do {
       cleanedText = try await cleaner.clean(rawText)
-      guard isCurrent(capture.id) else { return }
+      guard await continueCapture(capture.id) else { return }
       record.cleanedTranscript = cleanedText
       record.cleanupOutcome = .cleaned
     } catch {
-      guard isCurrent(capture.id) else { return }
+      guard await continueCapture(capture.id) else { return }
       cleanedText = rawText
       record.cleanupOutcome = .usedRaw
     }
@@ -209,8 +221,14 @@ final class DictationCoordinator {
       holdTask = nil
       phase = .idle
     }
-    guard let capture else { return }
-    await end(capture.id, phase: .idle, cancelEditor: capture.mode == .focused)
+    guard var capture, !capture.isTerminating else { return }
+    capture.cancelRequested = true
+    self.capture = capture
+    rollbackEditor(capture.id)
+    try? await historyStore.delete(id: capture.id)
+    guard let current = self.capture, current.id == capture.id, !current.isTerminating else { return }
+    guard !current.isStarting, !current.isFinishing else { return }
+    await completeCancellation(capture.id)
   }
 
   private func holdThresholdElapsed(_ id: UUID) async {
@@ -238,12 +256,12 @@ final class DictationCoordinator {
     }
     do {
       try await saver.flushFocusedDictationSave()
-      guard isCurrent(id) else { return }
+      guard await continueCapture(id) else { return }
       record.insertionOutcome = .saved
       guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
-      await end(id, phase: .idle, cancelEditor: false)
+      await terminate(id, phase: .idle, cancelEditor: false)
     } catch {
-      guard isCurrent(id) else { return }
+      guard await continueCapture(id) else { return }
       record.insertionOutcome = .unsaved
       guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
       await unsaved(id, text: text, savesHistory: savesHistory)
@@ -256,7 +274,7 @@ final class DictationCoordinator {
     record: DictationHistoryRecord,
     savesHistory: Bool
   ) async {
-    guard isCurrent(id) else { return }
+    guard await continueCapture(id) else { return }
     var record = record
     phase = .routing
     let candidates = saver.activeDestinations()
@@ -266,26 +284,32 @@ final class DictationCoordinator {
       candidates: candidates,
       inboxID: inbox?.noteID
     )
-    guard isCurrent(id) else { return }
+    guard await continueCapture(id) else { return }
     let destinationID = candidates.contains { $0.noteID == routedID } ? routedID : inbox?.noteID
 
     do {
+      // A receipt is the save commit boundary: a later cancellation must compensate it.
       let receipt = try await saver.saveSmartCapture(
         text: text,
         captureID: id,
         destinationID: destinationID
       )
-      guard isCurrent(id) else { return }
+      if isCancellationRequested(id) {
+        _ = await saver.undoSmartCapture(receipt)
+        await completeCancellation(id)
+        return
+      }
+      guard isActive(id) else { return }
       record.insertionOutcome = .saved
       record.destination = candidates.first { $0.noteID == receipt.noteID }
       guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
       if let destination = record.destination {
-        await end(id, phase: .saved(destination), cancelEditor: false)
+        await terminate(id, phase: .saved(destination), cancelEditor: false)
       } else {
-        await end(id, phase: .idle, cancelEditor: false)
+        await terminate(id, phase: .idle, cancelEditor: false)
       }
     } catch {
-      guard isCurrent(id) else { return }
+      guard await continueCapture(id) else { return }
       record.insertionOutcome = .unsaved
       record.destination = candidates.first { $0.noteID == destinationID }
       guard await updateHistory(record, captureID: id, enabled: savesHistory) else { return }
@@ -296,7 +320,7 @@ final class DictationCoordinator {
   private func unsaved(_ id: UUID, text: String, savesHistory: Bool) async {
     guard let capture, capture.id == id else { return }
     if !savesHistory { copyableTranscript = text }
-    await end(id, phase: .failed("Unable to save dictation."), cancelEditor: capture.mode == .focused)
+    await terminate(id, phase: .failed("Unable to save dictation."), cancelEditor: capture.mode == .focused)
   }
 
   private func updateHistory(
@@ -304,17 +328,32 @@ final class DictationCoordinator {
     captureID: UUID,
     enabled: Bool
   ) async -> Bool {
-    guard enabled else { return isCurrent(captureID) }
+    guard enabled else { return await continueCapture(captureID) }
     try? await historyStore.save(record)
-    return isCurrent(captureID)
+    return await continueCapture(captureID)
   }
 
-  private func end(_ id: UUID, phase: DictationPhase, cancelEditor: Bool) async {
-    guard let capture, capture.id == id else { return }
+  private func completeCancellation(_ id: UUID) async {
+    guard isCancellationRequested(id) else { return }
+    await terminate(id, phase: .idle, cancelEditor: true, deleteHistory: true)
+  }
+
+  private func terminate(
+    _ id: UUID,
+    phase: DictationPhase,
+    cancelEditor: Bool,
+    deleteHistory: Bool = false
+  ) async {
+    guard var capture, capture.id == id, !capture.isTerminating else { return }
+    capture.isTerminating = true
+    self.capture = capture
+    if cancelEditor { rollbackEditor(id) }
+    if deleteHistory { try? await historyStore.delete(id: id) }
+    guard let current = self.capture, current.id == id else { return }
+    if let engine = current.engine { await release(engine) }
+    guard self.capture?.id == id else { return }
     self.capture = nil
-    if cancelEditor { capture.editor?.cancelFocusedDictation() }
     self.phase = phase
-    if let engine = capture.engine { await release(engine) }
   }
 
   private func release(_ engine: any SpeechEngine) async {
@@ -322,8 +361,40 @@ final class DictationCoordinator {
     await engine.releaseResources()
   }
 
-  private func isCurrent(_ id: UUID) -> Bool {
-    capture?.id == id
+  private func continueCapture(_ id: UUID) async -> Bool {
+    guard let capture, capture.id == id, !capture.isTerminating else { return false }
+    guard capture.cancelRequested else { return true }
+    await completeCancellation(id)
+    return false
+  }
+
+  private func finishStarting(_ id: UUID) -> Capture? {
+    guard var capture, capture.id == id else { return nil }
+    capture.isStarting = false
+    self.capture = capture
+    return capture
+  }
+
+  private func setStarting(_ id: UUID, _ isStarting: Bool) {
+    guard var capture, capture.id == id else { return }
+    capture.isStarting = isStarting
+    self.capture = capture
+  }
+
+  private func rollbackEditor(_ id: UUID) {
+    guard var capture, capture.id == id, !capture.editorCancelled else { return }
+    capture.editor?.cancelFocusedDictation()
+    capture.editorCancelled = true
+    self.capture = capture
+  }
+
+  private func isActive(_ id: UUID) -> Bool {
+    guard let capture, capture.id == id else { return false }
+    return !capture.cancelRequested && !capture.isTerminating
+  }
+
+  private func isCancellationRequested(_ id: UUID) -> Bool {
+    capture?.id == id && capture?.cancelRequested == true
   }
 
   private func nonempty(_ text: String?) -> String? {

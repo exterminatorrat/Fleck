@@ -311,9 +311,7 @@ import Testing
 
   #expect(fixture.router.callCount == 0)
   #expect(fixture.saver.savedTexts.isEmpty)
-  let record = try #require(await fixture.history.list().first)
-  #expect(record.cleanupOutcome == .pending)
-  #expect(record.insertionOutcome == .pending)
+  #expect(try await fixture.history.list().isEmpty)
   #expect(fixture.standard.releaseCount == 1)
 }
 
@@ -331,9 +329,7 @@ import Testing
   await finishing.value
 
   #expect(fixture.saver.savedTexts.isEmpty)
-  let record = try #require(await fixture.history.list().first)
-  #expect(record.cleanupOutcome == .pending)
-  #expect(record.insertionOutcome == .pending)
+  #expect(try await fixture.history.list().isEmpty)
 }
 
 @Test @MainActor func finishFailureReleasesBoundEngineWithoutHistory() async throws {
@@ -377,7 +373,7 @@ import Testing
   #expect(record.insertionOutcome == .unsaved)
 }
 
-@Test @MainActor func cancelDuringSaveDoesNotWriteACompletionHistoryUpdate() async throws {
+@Test @MainActor func cancelDuringSaveCompensatesTheReceiptAndDeletesHistory() async throws {
   let gate = Gate()
   let fixture = try Fixture()
   fixture.standard.finalText = "Cancel during save"
@@ -390,10 +386,56 @@ import Testing
   await gate.openGate()
   await finishing.value
 
-  let record = try #require(await fixture.history.list().first)
-  #expect(record.cleanupOutcome == .pending)
-  #expect(record.insertionOutcome == .pending)
+  #expect(fixture.saver.undoCount == 1)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(try await fixture.history.list().isEmpty)
   #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor func shortcutReleaseDuringSuspendedStartDefersFinishUntilStartReturns() async throws {
+  let threshold = Gate()
+  let startGate = Gate()
+  let saveGate = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.startGate = startGate
+  fixture.standard.finalText = "Released after start"
+  fixture.saver.saveGate = saveGate
+
+  fixture.coordinator.beginShortcut(editor: nil)
+  await threshold.waitUntilWaiting()
+  await threshold.openGate()
+  await startGate.waitUntilWaiting()
+  await fixture.coordinator.endShortcut()
+
+  #expect(fixture.standard.finishCount == 0)
+  #expect(fixture.coordinator.phase == .arming)
+  await startGate.openGate()
+  await saveGate.waitUntilWaiting()
+
+  #expect(fixture.standard.finishCount == 1)
+  #expect(fixture.coordinator.phase == .routing)
+  await saveGate.openGate()
+}
+
+@Test @MainActor func captureReservationSurvivesDelayedResourceRelease() async throws {
+  let releaseGate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.releaseGate = releaseGate
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  await releaseGate.waitUntilWaiting()
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+
+  #expect(fixture.provider.requestedKinds == [.standard])
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  await releaseGate.openGate()
+  await cancelling.value
+
+  #expect(fixture.coordinator.phase == .idle)
+  await fixture.coordinator.start(mode: .smartCapture)
+  #expect(fixture.provider.requestedKinds == [.standard, .standard])
+  await fixture.coordinator.cancel()
 }
 
 @MainActor
@@ -447,7 +489,9 @@ private final class FakeSpeechEngine: SpeechEngine {
   var finishError: Error?
   var onStart: (() -> Void)?
   var finalText: String?
+  var startGate: Gate?
   var finishGate: Gate?
+  var releaseGate: Gate?
   private var provisional: (@MainActor (String) -> Void)?
   var startCount = 0
   var finishCount = 0
@@ -459,6 +503,7 @@ private final class FakeSpeechEngine: SpeechEngine {
   func start(provisional: @escaping @MainActor (String) -> Void, level: @escaping @MainActor (Float) -> Void) async throws {
     startCount += 1
     onStart?()
+    if let startGate { await startGate.wait() }
     if let startError { throw startError }
     self.provisional = provisional
   }
@@ -471,7 +516,10 @@ private final class FakeSpeechEngine: SpeechEngine {
   }
 
   func cancel() async { cancelCount += 1 }
-  func releaseResources() async { releaseCount += 1 }
+  func releaseResources() async {
+    releaseCount += 1
+    if let releaseGate { await releaseGate.wait() }
+  }
   func emitProvisional(_ text: String) { provisional?(text) }
 }
 
@@ -533,6 +581,7 @@ private final class FakeSaver: DictationSaving {
   var savedTexts: [String] = []
   var destinationIDs: [UUID?] = []
   var flushCount = 0
+  var undoCount = 0
 
   func activeDestinations() -> [DictationDestination] { destinations }
 
@@ -545,7 +594,11 @@ private final class FakeSaver: DictationSaving {
     return DictationInsertionReceipt(captureID: captureID, noteID: noteID, insertedSuffix: text)
   }
 
-  func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool { true }
+  func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
+    undoCount += 1
+    if !savedTexts.isEmpty { savedTexts.removeLast() }
+    return true
+  }
   func flushFocusedDictationSave() async throws {
     flushCount += 1
     if let flushError { throw flushError }
