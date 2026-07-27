@@ -131,6 +131,7 @@
     private let resumeAuthenticationKeyProvider: @Sendable () throws -> SymmetricKey
     private var stateChangedAt: Date
     private var activeOperationID: UUID?
+    private var activeAssessmentCount = 0
     private var lifecycleEpoch: UInt64 = 0
     private var highestProgress = 0.0
 
@@ -183,6 +184,8 @@
 
     func refreshState() async {
       guard activeOperationID == nil else { return }
+      activeAssessmentCount += 1
+      defer { activeAssessmentCount -= 1 }
       lifecycleEpoch &+= 1
       let epoch = lifecycleEpoch
       guard isArchitectureSupported else {
@@ -228,7 +231,15 @@
       try await installCurrentModel()
     }
 
-    func markInferenceLoadFailure(message: String) {
+    func markInferenceLoadFailure(
+      message: String,
+      failedRepositoryURL: URL
+    ) {
+      guard
+        activeOperationID == nil,
+        activeAssessmentCount == 0,
+        verifiedRepositoryURL == failedRepositoryURL
+      else { return }
       lifecycleEpoch &+= 1
       verifiedRepositoryURL = nil
       setState(.repairRequired(message: message))

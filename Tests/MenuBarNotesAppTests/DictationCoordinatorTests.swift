@@ -1,3 +1,4 @@
+@preconcurrency import AVFAudio
 import Foundation
 import MenuBarNotesCore
 import Testing
@@ -465,10 +466,12 @@ import Testing
 @Test @MainActor func EnhancedSpeechRejectsAnUnverifiedModelWithoutStartingAudio() async {
   let inference = EnhancedInferenceSpy()
   let audio = EnhancedAudioSpy(samples: [0.25])
+  var standardRecommendations = 0
   let capture = EnhancedSpeechCapture(
     verifiedLoadState: { .unavailable },
     makeInference: { inference },
-    makeAudio: { _ in audio }
+    makeAudio: { _ in audio },
+    recommendStandard: { standardRecommendations += 1 }
   )
 
   await #expect(throws: DictationFailure.unavailable) {
@@ -478,6 +481,7 @@ import Testing
   #expect(inference.loadURLs.isEmpty)
   #expect(inference.releaseCount == 1)
   #expect(audio.startCount == 0)
+  #expect(standardRecommendations == 1)
   #expect(!capture.hasActiveResources)
 }
 
@@ -558,7 +562,7 @@ import Testing
     },
     makeInference: { inference },
     makeAudio: { _ in audio },
-    markRepairRequired: { repairMessages.append($0) },
+    markRepairRequired: { message, _ in repairMessages.append(message) },
     recommendStandard: { standardRecommendations += 1 }
   )
 
@@ -567,6 +571,32 @@ import Testing
   }
 
   #expect(repairMessages.count == 1)
+  #expect(standardRecommendations == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(audio.startCount == 0)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechRecommendsStandardAfterVerifiedRepositoryChangesDuringLoad() async {
+  let repository = URL(fileURLWithPath: "/verified/parakeet")
+  var state: EnhancedModelVerifiedLoadState = .ready(repositoryURL: repository)
+  let inference = EnhancedInferenceSpy()
+  inference.onLoad = {
+    state = .ready(repositoryURL: URL(fileURLWithPath: "/verified/new-parakeet"))
+  }
+  let audio = EnhancedAudioSpy(samples: [])
+  var standardRecommendations = 0
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: { state },
+    makeInference: { inference },
+    makeAudio: { _ in audio },
+    recommendStandard: { standardRecommendations += 1 }
+  )
+
+  await #expect(throws: DictationFailure.unavailable) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+
   #expect(standardRecommendations == 1)
   #expect(inference.releaseCount == 1)
   #expect(audio.startCount == 0)
@@ -589,6 +619,80 @@ import Testing
   #expect(!capture.hasActiveResources)
 }
 
+@Test @MainActor func EnhancedSpeechCancellationDuringLoadReleasesInferenceExactlyOnce() async {
+  let loadGate = Gate()
+  let lifetime = EnhancedLifetimeTracker()
+  var inference: EnhancedInferenceSpy? = EnhancedInferenceSpy(lifetime: lifetime)
+  inference?.loadGate = loadGate
+  weak let weakInference = inference
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: {
+      .ready(repositoryURL: URL(fileURLWithPath: "/verified/parakeet"))
+    },
+    makeInference: { [weak inference] in inference! },
+    makeAudio: { _ in EnhancedAudioSpy(samples: []) }
+  )
+  let start = Task {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+  await loadGate.waitUntilWaiting()
+  inference = nil
+
+  await capture.cancel()
+  await #expect(throws: CancellationError.self) {
+    try await start.value
+  }
+
+  #expect(lifetime.cancelCount == 1)
+  #expect(lifetime.releaseCount == 1)
+  #expect(lifetime.deinitCount == 1)
+  #expect(weakInference == nil)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechCancellationDuringTranscriptionHasNoStaleFinish() async throws {
+  let transcriptionGate = Gate()
+  let inferenceLifetime = EnhancedLifetimeTracker()
+  let audioLifetime = EnhancedLifetimeTracker()
+  var inference: EnhancedInferenceSpy? = EnhancedInferenceSpy(lifetime: inferenceLifetime)
+  inference?.transcriptionGate = transcriptionGate
+  inference?.ignoresCancellation = true
+  var audio: EnhancedAudioSpy? = EnhancedAudioSpy(
+    samples: [0.4],
+    lifetime: audioLifetime
+  )
+  weak let weakInference = inference
+  weak let weakAudio = audio
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: {
+      .ready(repositoryURL: URL(fileURLWithPath: "/verified/parakeet"))
+    },
+    makeInference: { [weak inference] in inference! },
+    makeAudio: { [weak audio] _ in audio! }
+  )
+  try await capture.start(provisional: { _ in }, level: { _ in })
+  let finish = Task {
+    try await capture.finish()
+  }
+  await transcriptionGate.waitUntilWaiting()
+  inference = nil
+  audio = nil
+
+  await capture.cancel()
+  await #expect(throws: CancellationError.self) {
+    try await finish.value
+  }
+
+  #expect(inferenceLifetime.cancelCount == 1)
+  #expect(inferenceLifetime.releaseCount == 1)
+  #expect(inferenceLifetime.deinitCount == 1)
+  #expect(audioLifetime.releaseCount == 1)
+  #expect(audioLifetime.deinitCount == 1)
+  #expect(weakInference == nil)
+  #expect(weakAudio == nil)
+  #expect(!capture.hasActiveResources)
+}
+
 @Test @MainActor func EnhancedSpeechReleaseResourcesIsTerminalAndIdempotent() async throws {
   let inference = EnhancedInferenceSpy()
   let audio = EnhancedAudioSpy(samples: [0.2])
@@ -601,6 +705,45 @@ import Testing
   #expect(audio.releaseCount == 1)
   #expect(inference.releaseCount == 1)
   #expect(!capture.hasActiveResources)
+}
+
+@Test func EnhancedSpeechSequentialConversionDrainsTheFinalResamplerFrames() throws {
+  let inputFormat = try #require(
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: 48_000,
+      channels: 1,
+      interleaved: false
+    )
+  )
+  let outputFormat = try #require(
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: 16_000,
+      channels: 1,
+      interleaved: false
+    )
+  )
+  let converter = try EnhancedAudioStreamConverter(
+    inputFormat: inputFormat,
+    outputFormat: outputFormat,
+    level: { _ in }
+  )
+
+  try converter.append(enhancedAudioBuffer(
+    format: inputFormat,
+    frameCount: 2_400,
+    value: 0.25
+  ))
+  try converter.append(enhancedAudioBuffer(
+    format: inputFormat,
+    frameCount: 2_400,
+    value: 0.5
+  ))
+  let samples = try converter.finishAndTakeSamples()
+
+  #expect(samples.count == 1_600)
+  #expect(abs((samples.last ?? 0) - 0.5) < 0.05)
 }
 
 @MainActor
@@ -818,28 +961,52 @@ final class EnhancedInferenceSpy: EnhancedSpeechInferring {
   var result = "Transcript"
   var loadError: Error?
   var transcriptionError: Error?
+  var loadGate: Gate?
+  var transcriptionGate: Gate?
+  var onLoad: (() -> Void)?
+  var ignoresCancellation = false
+  private let lifetime: EnhancedLifetimeTracker?
+  private var isCancelled = false
   private(set) var loadURLs: [URL] = []
   private(set) var transcribedSamples: [[Float]] = []
   private(set) var cancelCount = 0
   private(set) var releaseCount = 0
 
+  init(lifetime: EnhancedLifetimeTracker? = nil) {
+    self.lifetime = lifetime
+  }
+
   func load(from repositoryURL: URL) async throws {
     loadURLs.append(repositoryURL)
+    if let loadGate { await loadGate.wait() }
+    if isCancelled { throw CancellationError() }
     if let loadError { throw loadError }
+    onLoad?()
   }
 
   func transcribe(_ samples: [Float]) async throws -> String {
     transcribedSamples.append(samples)
+    if let transcriptionGate { await transcriptionGate.wait() }
+    if isCancelled, !ignoresCancellation { throw CancellationError() }
     if let transcriptionError { throw transcriptionError }
     return result
   }
 
   func cancel() async {
     cancelCount += 1
+    lifetime?.recordCancel()
+    isCancelled = true
+    await loadGate?.openGate()
+    await transcriptionGate?.openGate()
   }
 
   func releaseResources() async {
     releaseCount += 1
+    lifetime?.recordRelease()
+  }
+
+  deinit {
+    lifetime?.recordDeinit()
   }
 }
 
@@ -847,13 +1014,19 @@ final class EnhancedInferenceSpy: EnhancedSpeechInferring {
 final class EnhancedAudioSpy: EnhancedAudioCapturing {
   let samples: [Float]
   let emittedLevel: Float?
+  private let lifetime: EnhancedLifetimeTracker?
   private(set) var startCount = 0
   private(set) var cancelCount = 0
   private(set) var releaseCount = 0
 
-  init(samples: [Float], emittedLevel: Float? = nil) {
+  init(
+    samples: [Float],
+    emittedLevel: Float? = nil,
+    lifetime: EnhancedLifetimeTracker? = nil
+  ) {
     self.samples = samples
     self.emittedLevel = emittedLevel
+    self.lifetime = lifetime
   }
 
   func start(level: @escaping @MainActor (Float) -> Void) throws {
@@ -871,7 +1044,51 @@ final class EnhancedAudioSpy: EnhancedAudioCapturing {
 
   func releaseResources() {
     releaseCount += 1
+    lifetime?.recordRelease()
   }
+
+  deinit {
+    lifetime?.recordDeinit()
+  }
+}
+
+final class EnhancedLifetimeTracker: @unchecked Sendable {
+  private let lock = NSLock()
+  private var cancels = 0
+  private var releases = 0
+  private var deinits = 0
+
+  var cancelCount: Int { lock.withLock { cancels } }
+  var releaseCount: Int { lock.withLock { releases } }
+  var deinitCount: Int { lock.withLock { deinits } }
+
+  func recordCancel() {
+    lock.withLock { cancels += 1 }
+  }
+
+  func recordRelease() {
+    lock.withLock { releases += 1 }
+  }
+
+  func recordDeinit() {
+    lock.withLock { deinits += 1 }
+  }
+}
+
+private func enhancedAudioBuffer(
+  format: AVAudioFormat,
+  frameCount: AVAudioFrameCount,
+  value: Float
+) throws -> AVAudioPCMBuffer {
+  let buffer = try #require(
+    AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)
+  )
+  buffer.frameLength = frameCount
+  let channel = try #require(buffer.floatChannelData?[0])
+  for index in 0..<Int(frameCount) {
+    channel[index] = value
+  }
+  return buffer
 }
 
 @MainActor
@@ -881,7 +1098,7 @@ private final class PreferenceBox {
   init(value: DictationSpeechEngine) { self.value = value }
 }
 
-private actor Gate {
+actor Gate {
   private var isOpen = false
   private var waiters: [CheckedContinuation<Void, Never>] = []
   private var waitingObservers: [CheckedContinuation<Void, Never>] = []

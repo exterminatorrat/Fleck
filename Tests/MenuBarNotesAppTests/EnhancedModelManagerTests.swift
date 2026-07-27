@@ -546,6 +546,17 @@ struct EnhancedModelManagerTests {
     await control.waitUntilStarted()
 
     #expect(fixture.manager.verifiedRepositoryURL == oldRepository)
+    fixture.manager.markInferenceLoadFailure(
+      message: "stale load failure",
+      failedRepositoryURL: oldRepository
+    )
+    #expect(fixture.manager.verifiedRepositoryURL == oldRepository)
+    let updateRemainsActive = if case .downloading = fixture.manager.state {
+      true
+    } else {
+      false
+    }
+    #expect(updateRemainsActive)
     control.fail(with: TestError.downloadFailed)
     await #expect(throws: TestError.downloadFailed) {
       try await update.value
@@ -554,6 +565,75 @@ struct EnhancedModelManagerTests {
     #expect(fixture.manager.state == .updateAvailable)
     #expect(fixture.manager.verifiedRepositoryURL == oldRepository)
     #expect(try Data(contentsOf: fixture.fileURL(for: testManifest)) == testContents)
+  }
+
+  @Test @MainActor func inferenceFailureForAStaleRepositoryCannotInvalidateCurrentState() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.install()
+    await fixture.manager.refreshState()
+    let currentRepository = try #require(fixture.manager.verifiedRepositoryURL)
+
+    fixture.manager.markInferenceLoadFailure(
+      message: "stale load failure",
+      failedRepositoryURL: URL(fileURLWithPath: "/stale/parakeet")
+    )
+
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == currentRepository)
+  }
+
+  @Test @MainActor func inferenceFailureDuringRefreshCannotInvalidateCurrentState() async throws {
+    let assessment = AssessmentControl()
+    let fixture = try Fixture(assessmentDidComplete: {
+      assessment.didComplete()
+    })
+    defer {
+      assessment.release()
+      fixture.remove()
+    }
+    try fixture.install()
+    let firstRefresh = Task { @MainActor in
+      await fixture.manager.refreshState()
+    }
+    await assessment.waitUntilComplete()
+    assessment.release()
+    await firstRefresh.value
+    let repository = try #require(fixture.manager.verifiedRepositoryURL)
+
+    assessment.prepareNext()
+    let refresh = Task { @MainActor in
+      await fixture.manager.refreshState()
+    }
+    await assessment.waitUntilComplete()
+    fixture.manager.markInferenceLoadFailure(
+      message: "stale load failure",
+      failedRepositoryURL: repository
+    )
+
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == repository)
+    assessment.release()
+    await refresh.value
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == repository)
+  }
+
+  @Test @MainActor func inferenceFailureAfterDeleteCannotResurrectRepairState() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    try fixture.install()
+    await fixture.manager.refreshState()
+    let deletedRepository = try #require(fixture.manager.verifiedRepositoryURL)
+
+    try await fixture.manager.deleteModel()
+    fixture.manager.markInferenceLoadFailure(
+      message: "stale load failure",
+      failedRepositoryURL: deletedRepository
+    )
+
+    #expect(fixture.manager.state == .notInstalled)
+    #expect(fixture.manager.verifiedRepositoryURL == nil)
   }
 
   @Test @MainActor func updateAvailableRepositoryCanStartEnhancedSpeech() async throws {
@@ -1148,6 +1228,12 @@ private final class AssessmentControl: @unchecked Sendable {
 
   func release() {
     proceed.signal()
+  }
+
+  func prepareNext() {
+    lock.withLock {
+      isComplete = false
+    }
   }
 }
 
