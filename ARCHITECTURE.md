@@ -142,7 +142,7 @@ Glass opacity is stored now, but fine-grained material rendering and contrast ad
 6. **Release profiling (pending macOS):** measure signed release app size, idle and active memory, idle CPU, launch time, and typing latency against representative workspaces.
 7. **Clean Dictation (implemented candidate, not release-approved):** Standard,
    optional local cleanup/routing, history, and Enhanced infrastructure are on
-   the unmerged candidate branch. Real-device quality, device matrices,
+   a release-disabled candidate. Real-device quality, device matrices,
    accessibility, resource, legal, artifact, signing/notarization, and store
    gates remain pending.
 

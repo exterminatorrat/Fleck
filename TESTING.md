@@ -60,18 +60,30 @@ swift test
 swift build -c release
 Scripts/check-release-size.sh
 Scripts/validate-macos.sh
-rg -n 'NSEvent\.addGlobalMonitorForEvents|offlineMode = false|AsrModels\.downloadAndLoad' \
-  Sources
+if forbidden_matches="$(rg -n \
+  'NSEvent\.addGlobalMonitorForEvents|offlineMode = false|AsrModels\.downloadAndLoad' \
+  Sources)"
+then
+  printf '%s\n' "$forbidden_matches" >&2
+  exit 1
+else
+  rg_exit=$?
+  if (( rg_exit != 1 )); then exit "$rg_exit"; fi
+fi
 git diff --check
 git status --short
 ```
 
 `Scripts/check-release-size.sh` accepts the current executable, a directory
 containing `Motes`, or a future `.app` containing `Contents/MacOS/Motes`. It
-keeps the 15 MiB executable budget and scans the corresponding artifact root
-for `.mlmodel`, `.mlpackage`, `.mlmodelc`, exact `coremldata.bin`/`weight.bin`
-names, and `.bin` files under model bundle or model directory paths. An
-unrelated `.bin` outside a model path is allowed. The same gate asserts:
+also promotes an executable path inside `.app` to the enclosing bundle. It
+resolves command-line directory symlinks to a physical root, inspects nested
+symlink targets without following arbitrary cycles, fails closed on traversal
+errors, and scans case-insensitively for `.mlmodel`, `.mlpackage`, `.mlmodelc`,
+exact `coremldata.bin`/`weight.bin` names, and `.bin` files under model bundle
+or model directory paths. An unrelated `.bin` outside a model path is allowed.
+The same gate restricts searches to Swift sources, detects multiline
+qualification, fails closed on ripgrep errors, and asserts:
 
 - `ModelHub.offlineMode = true` is present.
 - `ModelHub.offlineMode = false` is absent.
@@ -79,6 +91,11 @@ unrelated `.bin` outside a model path is allowed. The same gate asserts:
 - `EnhancedSpeechCapture` does not call `ModelHub.download` or
   `ModelHub.fetchFile`.
 - production sources do not call `NSEvent.addGlobalMonitorForEvents`.
+
+For the standalone forbidden search above, the success result is empty output
+and ripgrep exit 1 (“no matches”). The explicit conditional keeps that expected
+exit safe under `set -e`; exit 0 means forbidden source exists, and exit greater
+than 1 is a tool failure.
 
 #### Recorded size evidence — 2026-07-28
 
@@ -126,6 +143,15 @@ prints its exact path. A clean artifact and an unrelated
 `Resources/Cache/payload.bin` both exit 0. Executable-path, generic-directory,
 and `.app`-directory inputs also exit 0 when clean. All fixtures were created
 under the system temporary directory; none are committed.
+
+Fix Round 1 added regressions for the real SwiftPM
+`.build/release -> arm64-apple-macosx/release` symlink layout, symlinked
+directory and `.app` inputs, executable paths inside `.app`, nested symlink
+targets and cycles, mixed-case model extensions/names/paths, failed `find`,
+failed `rg`, Swift-only source scope, multiline forbidden calls, multiline
+required offline assignment, and comment/string-only false positives. A fake
+`find` exit 2 and a fake `rg` exit 2 both make the gate exit 2; only ripgrep exit
+1 counts as an absent forbidden call.
 
 ### Manual release blockers
 
