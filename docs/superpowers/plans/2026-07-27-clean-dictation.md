@@ -408,28 +408,28 @@ rg -n '19600a485baa4998812e4654b70d2bab8f2c9949|0.15.5' Package.resolved
 ```text
 Preprocessor.mlmodelc/analytics/coremldata.bin  243        03ab3c1327a054c54c07a40325db967ec574f2c91dcc8192bfa44aa561bcf2d8
 Preprocessor.mlmodelc/coremldata.bin            494        d88ea1fc349459c9e100d6a96688c5b29a1f0d865f544be103001724b986b6d6
-Preprocessor.mlmodelc/metadata.json             2974       9320bc56773f5eb9b53ff8eebb4f6dca5a4844d623f0a2c819766f6d9bd6212f
-Preprocessor.mlmodelc/model.mil                 27166      8f8be99d18b1f40aed3b66d2d7addf6cbf68c952ef5b2038d02019d3cd3d0586
+Preprocessor.mlmodelc/metadata.json             2974       fb16c581ff5e1b962e7cb2181ed892cd32f9f84c12b6e80ff3e089f28e35bcbb
+Preprocessor.mlmodelc/model.mil                 27166      3e06d16fd061294c8a75be68c43a3b1ed1f593d4a9c35249e9cdbccadc59721e
 Preprocessor.mlmodelc/weights/weight.bin        298880     a5f7df6c7f47147ae9486fe18cc7792f9a44d093ec3c6a11e91ef2dc363c48dc
 Encoder.mlmodelc/analytics/coremldata.bin       243        42e638870d73f26b332918a3496ce36793fbb413a81cbd3d16ba01328637a105
 Encoder.mlmodelc/coremldata.bin                 485        4def7aa848599ad0e17a8b9a982edcdbf33cf92e1f4b798de32e2ca0bc74b030
-Encoder.mlmodelc/metadata.json                  2926       7669e4a9c43357419c68ce581f73e4dd3935a8bef27fc7a94aa6dd3bbc707f1e
-Encoder.mlmodelc/model.mil                      959769     821cf00f00f05d6da36d704de708b0c296aed1f14f072ac008f1fd89a2730e4d
+Encoder.mlmodelc/metadata.json                  2926       58222fbc48c13c49d9715567803cd50cb9c23e4360462e0f8ffcea59a2c73c63
+Encoder.mlmodelc/model.mil                      959769     ed7b19156ca29fa7dfd6891deb9fda4b0e8893f68597c985d135736546a43808
 Encoder.mlmodelc/weights/weight.bin             445187200  4adc7ad44f9d05e1bffeb2b06d3bb02861a5c7602dff63a6b494aed3bf8a6c3e
 Decoder.mlmodelc/analytics/coremldata.bin       243        46de1a6fe2e49d19a2125bc91acf020df7f2aea84ba821532aade8427a440b05
 Decoder.mlmodelc/coremldata.bin                 554        d200ca07694a347f6d02a3886a062ae839831e094e443222f2e48a14945966a8
-Decoder.mlmodelc/metadata.json                  3427       5983e89e9d9b42fd8df5074041e98558f62c1fe5e258e1788ec1b2ef6ae6332e
-Decoder.mlmodelc/model.mil                      13106      b0729665b2540e1012ee034afc2ec65c59d509c6739da702a6467be247bd895b
+Decoder.mlmodelc/metadata.json                  3427       90a279b822496316458febc0ce761ab05954fadd9d66aa97bea077a35fc8f2b2
+Decoder.mlmodelc/model.mil                      13106      7b95a5a6b672c652000348a67b6d4d92bb8e176b978c6666fe73c28a4d7ec579
 Decoder.mlmodelc/weights/weight.bin             14429952   27d26890221d82322c1092fd99d7b40578e435d5cf4b83c887c42603caf97aba
 JointDecision.mlmodelc/analytics/coremldata.bin 243        f1183ba213bb94a918c8d2cad19ab045320618f97f6ca662245b3936d7b090f7
 JointDecision.mlmodelc/coremldata.bin           534        e2c6752f1c8cf2d3f6f26ec93195c9bfa759ad59edf9f806696a138154f96f11
-JointDecision.mlmodelc/metadata.json            2936       14a9fe6d9f79e630bc138277365d6af93dab82d0dc905899925b79616057b165
-JointDecision.mlmodelc/model.mil                9722       56632cbd11afc3bd9f7aa2c235e92fc975c8ac311e6ed3deee6cd48162831903
+JointDecision.mlmodelc/metadata.json            2936       ba8d309417b9acd4a175fdb15687de6a941db2f5b06666a60e7cf3cc8e2d3c3c
+JointDecision.mlmodelc/model.mil                9722       93bf82042235127cb81ab537dcae47a1c2e7e242ce4ffdaf772981b45eedc4f0
 JointDecision.mlmodelc/weights/weight.bin       3453388    ca22a65903a05e64137677da608077578a8606090a598abf4875fa6199aaa19d
-parakeet_vocab.json                             18762      cf1e92f198acd7e515044f9e9d3d17f5cc916e3503cf3d18aa9e9389a9acec39
+parakeet_vocab.json                             18762      57019fe3c745772ca83a1b048a4bb951cd51329504ea33d4d83316b96e279a97
 ```
 
-The verifier decodes the JSON, rejects duplicate/absolute/`..` paths, checks the exact total, optionally hashes a supplied installed directory using `CryptoKit.SHA256`, and exits nonzero on mismatch.
+These content hashes must be audited with redirects followed (`curl -fL` or equivalent); hashing the initial Hugging Face 307 response is invalid. The verifier decodes the JSON, rejects duplicate/absolute/`..` paths, checks the exact total, optionally hashes a supplied installed directory using `CryptoKit.SHA256`, and exits nonzero on mismatch.
 
 - [ ] **Step 4: Record notices and the human audit gate.**
 
