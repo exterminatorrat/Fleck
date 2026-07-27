@@ -520,7 +520,7 @@ struct EnhancedModelManagerTests {
     #expect(fixture.transport.callCount == 0)
   }
 
-  @Test @MainActor func failedUpdateKeepsPriorVerifiedRevisionReadyForUse() async throws {
+  @Test @MainActor func inferenceFailureDuringFailedUpdateRepairsRestoredRevision() async throws {
     let current = EnhancedModelManifest(
       schemaVersion: 1,
       modelID: testManifest.modelID,
@@ -562,9 +562,47 @@ struct EnhancedModelManagerTests {
       try await update.value
     }
 
-    #expect(fixture.manager.state == .updateAvailable)
-    #expect(fixture.manager.verifiedRepositoryURL == oldRepository)
+    #expect(fixture.manager.state == .repairRequired(message: "stale load failure"))
+    #expect(fixture.manager.verifiedRepositoryURL == nil)
     #expect(try Data(contentsOf: fixture.fileURL(for: testManifest)) == testContents)
+  }
+
+  @Test @MainActor func inferenceFailureDuringSuccessfulUpdateDoesNotInvalidateNewRevision()
+    async throws
+  {
+    let current = EnhancedModelManifest(
+      schemaVersion: 1,
+      modelID: testManifest.modelID,
+      revision: "new-revision",
+      totalByteCount: testManifest.totalByteCount,
+      files: testManifest.files
+    )
+    let fixture = try Fixture(
+      manifest: current,
+      trustedManifests: [testManifest, current]
+    )
+    defer { fixture.remove() }
+    try fixture.install(manifest: testManifest)
+    await fixture.manager.refreshState()
+    let oldRepository = fixture.repositoryURL(for: testManifest)
+    let control = DownloadControl()
+    fixture.transport.handler = { _, _, _ in
+      try await control.download()
+    }
+    let update = Task { @MainActor in
+      try await fixture.manager.update()
+    }
+    await control.waitUntilStarted()
+
+    fixture.manager.markInferenceLoadFailure(
+      message: "old revision failed to load",
+      failedRepositoryURL: oldRepository
+    )
+    control.succeed(with: testContents)
+    try await update.value
+
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL(for: current))
   }
 
   @Test @MainActor func inferenceFailureForAStaleRepositoryCannotInvalidateCurrentState() async throws {
@@ -583,7 +621,7 @@ struct EnhancedModelManagerTests {
     #expect(fixture.manager.verifiedRepositoryURL == currentRepository)
   }
 
-  @Test @MainActor func inferenceFailureDuringRefreshCannotInvalidateCurrentState() async throws {
+  @Test @MainActor func inferenceFailureDuringRefreshRepairsSameVerifiedRevision() async throws {
     let assessment = AssessmentControl()
     let fixture = try Fixture(assessmentDidComplete: {
       assessment.didComplete()
@@ -615,22 +653,33 @@ struct EnhancedModelManagerTests {
     #expect(fixture.manager.verifiedRepositoryURL == repository)
     assessment.release()
     await refresh.value
-    #expect(fixture.manager.state == .ready)
-    #expect(fixture.manager.verifiedRepositoryURL == repository)
+    #expect(fixture.manager.state == .repairRequired(message: "stale load failure"))
+    #expect(fixture.manager.verifiedRepositoryURL == nil)
   }
 
-  @Test @MainActor func inferenceFailureAfterDeleteCannotResurrectRepairState() async throws {
-    let fixture = try Fixture()
-    defer { fixture.remove() }
+  @Test @MainActor func inferenceFailureDuringDeleteCannotResurrectRepairState() async throws {
+    let removal = CleanupControl()
+    let fixture = try Fixture(removalWillBegin: {
+      removal.pause()
+    })
+    defer {
+      removal.resume()
+      fixture.remove()
+    }
     try fixture.install()
     await fixture.manager.refreshState()
     let deletedRepository = try #require(fixture.manager.verifiedRepositoryURL)
 
-    try await fixture.manager.deleteModel()
+    let deletion = Task { @MainActor in
+      try await fixture.manager.deleteModel()
+    }
+    await removal.waitUntilPaused()
     fixture.manager.markInferenceLoadFailure(
       message: "stale load failure",
       failedRepositoryURL: deletedRepository
     )
+    removal.resume()
+    try await deletion.value
 
     #expect(fixture.manager.state == .notInstalled)
     #expect(fixture.manager.verifiedRepositoryURL == nil)
@@ -996,6 +1045,7 @@ private final class Fixture {
     trustedManifests: [EnhancedModelManifest]? = nil,
     assessmentDidComplete: @escaping @Sendable () -> Void = {},
     cleanupWillBegin: @escaping @Sendable () -> Void = {},
+    removalWillBegin: @escaping @Sendable () -> Void = {},
     resumeAuthenticationKey: SymmetricKey = testResumeAuthenticationKey
   ) throws {
     root = temporaryRoot()
@@ -1011,6 +1061,7 @@ private final class Fixture {
       transport: transport,
       assessmentDidComplete: assessmentDidComplete,
       cleanupWillBegin: cleanupWillBegin,
+      removalWillBegin: removalWillBegin,
       resumeAuthenticationKeyProvider: { resumeAuthenticationKey }
     )
   }

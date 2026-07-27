@@ -603,6 +603,74 @@ import Testing
   #expect(!capture.hasActiveResources)
 }
 
+@Test @MainActor func EnhancedSpeechRecommendsStandardAfterAudioConstructionFailure() async {
+  let inference = EnhancedInferenceSpy()
+  var standardRecommendations = 0
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: {
+      .ready(repositoryURL: URL(fileURLWithPath: "/verified/parakeet"))
+    },
+    makeInference: { inference },
+    makeAudio: { _ in throw EnhancedTestFailure.failed },
+    recommendStandard: { standardRecommendations += 1 }
+  )
+
+  await #expect(throws: EnhancedTestFailure.failed) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+
+  #expect(standardRecommendations == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechRecommendsStandardAfterAudioStartFailure() async {
+  let inference = EnhancedInferenceSpy()
+  let audio = EnhancedAudioSpy(samples: [], startError: EnhancedTestFailure.failed)
+  var standardRecommendations = 0
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: {
+      .ready(repositoryURL: URL(fileURLWithPath: "/verified/parakeet"))
+    },
+    makeInference: { inference },
+    makeAudio: { _ in audio },
+    recommendStandard: { standardRecommendations += 1 }
+  )
+
+  await #expect(throws: EnhancedTestFailure.failed) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+
+  #expect(standardRecommendations == 1)
+  #expect(audio.cancelCount == 1)
+  #expect(audio.releaseCount == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechDoesNotRecommendStandardAfterCancelledAudioStart() async {
+  let inference = EnhancedInferenceSpy()
+  let audio = EnhancedAudioSpy(samples: [], startError: CancellationError())
+  var standardRecommendations = 0
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: {
+      .ready(repositoryURL: URL(fileURLWithPath: "/verified/parakeet"))
+    },
+    makeInference: { inference },
+    makeAudio: { _ in audio },
+    recommendStandard: { standardRecommendations += 1 }
+  )
+
+  await #expect(throws: CancellationError.self) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+
+  #expect(standardRecommendations == 0)
+  #expect(audio.releaseCount == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(!capture.hasActiveResources)
+}
+
 @Test @MainActor func EnhancedSpeechCancellationDropsSamplesAndReleasesEverything() async throws {
   let inference = EnhancedInferenceSpy()
   let audio = EnhancedAudioSpy(samples: [0.4, -0.2])
@@ -647,6 +715,45 @@ import Testing
   #expect(lifetime.releaseCount == 1)
   #expect(lifetime.deinitCount == 1)
   #expect(weakInference == nil)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor func EnhancedSpeechCancellationCleansResourcesReturnedByLateFluidLoad() async {
+  let lifetime = EnhancedLifetimeTracker()
+  var loadedResources: FluidEnhancedSpeechResourcesSpy? = .init(lifetime: lifetime)
+  weak let weakLoadedResources = loadedResources
+  let loader = LateFluidResourcesLoader(resources: loadedResources!)
+  loadedResources = nil
+  let inference = FluidEnhancedSpeechInference(loadResources: { _ in
+    await loader.loadIgnoringCancellation()
+  })
+  let capture = EnhancedSpeechCapture(
+    verifiedLoadState: {
+      .ready(repositoryURL: URL(fileURLWithPath: "/verified/parakeet"))
+    },
+    makeInference: { inference },
+    makeAudio: { _ in EnhancedAudioSpy(samples: []) }
+  )
+  let start = Task {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+  await loader.waitUntilWaiting()
+
+  await inference.cancel()
+  let cancellation = Task {
+    await capture.cancel()
+  }
+  await loader.release()
+  await cancellation.value
+  await #expect(throws: CancellationError.self) {
+    try await start.value
+  }
+
+  #expect(lifetime.cancelCount == 0)
+  #expect(lifetime.releaseCount == 1)
+  #expect(lifetime.deinitCount == 1)
+  #expect(weakLoadedResources == nil)
+  #expect(!inference.hasLoadedResources)
   #expect(!capture.hasActiveResources)
 }
 
@@ -1014,6 +1121,7 @@ final class EnhancedInferenceSpy: EnhancedSpeechInferring {
 final class EnhancedAudioSpy: EnhancedAudioCapturing {
   let samples: [Float]
   let emittedLevel: Float?
+  let startError: Error?
   private let lifetime: EnhancedLifetimeTracker?
   private(set) var startCount = 0
   private(set) var cancelCount = 0
@@ -1022,15 +1130,18 @@ final class EnhancedAudioSpy: EnhancedAudioCapturing {
   init(
     samples: [Float],
     emittedLevel: Float? = nil,
+    startError: Error? = nil,
     lifetime: EnhancedLifetimeTracker? = nil
   ) {
     self.samples = samples
     self.emittedLevel = emittedLevel
+    self.startError = startError
     self.lifetime = lifetime
   }
 
   func start(level: @escaping @MainActor (Float) -> Void) throws {
     startCount += 1
+    if let startError { throw startError }
     if let emittedLevel { level(emittedLevel) }
   }
 
@@ -1049,6 +1160,59 @@ final class EnhancedAudioSpy: EnhancedAudioCapturing {
 
   deinit {
     lifetime?.recordDeinit()
+  }
+}
+
+@MainActor
+private final class FluidEnhancedSpeechResourcesSpy: FluidEnhancedSpeechResources {
+  private let lifetime: EnhancedLifetimeTracker
+
+  init(lifetime: EnhancedLifetimeTracker) {
+    self.lifetime = lifetime
+  }
+
+  func prepare() async throws {}
+
+  func transcribe(_: [Float]) async throws -> String {
+    "Transcript"
+  }
+
+  func cleanup() async {
+    lifetime.recordRelease()
+  }
+
+  deinit {
+    lifetime.recordDeinit()
+  }
+}
+
+private actor LateFluidResourcesLoader {
+  private var resources: (any FluidEnhancedSpeechResources)?
+  private var continuation: CheckedContinuation<Void, Never>?
+  private var waitingObservers: [CheckedContinuation<Void, Never>] = []
+
+  init(resources: any FluidEnhancedSpeechResources) {
+    self.resources = resources
+  }
+
+  func loadIgnoringCancellation() async -> any FluidEnhancedSpeechResources {
+    let observers = waitingObservers
+    waitingObservers.removeAll()
+    observers.forEach { $0.resume() }
+    await withCheckedContinuation { continuation = $0 }
+    let result = resources!
+    resources = nil
+    return result
+  }
+
+  func waitUntilWaiting() async {
+    guard continuation == nil else { return }
+    await withCheckedContinuation { waitingObservers.append($0) }
+  }
+
+  func release() {
+    continuation?.resume()
+    continuation = nil
   }
 }
 

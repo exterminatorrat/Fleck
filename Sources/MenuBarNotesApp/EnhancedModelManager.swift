@@ -128,10 +128,12 @@
     private let transport: any ModelDownloading
     private let assessmentDidComplete: @Sendable () -> Void
     private let cleanupWillBegin: @Sendable () -> Void
+    private let removalWillBegin: @Sendable () -> Void
     private let resumeAuthenticationKeyProvider: @Sendable () throws -> SymmetricKey
     private var stateChangedAt: Date
     private var activeOperationID: UUID?
     private var activeAssessmentCount = 0
+    private var pendingInferenceLoadFailure: (message: String, repositoryURL: URL)?
     private var lifecycleEpoch: UInt64 = 0
     private var highestProgress = 0.0
 
@@ -158,6 +160,7 @@
       transport: any ModelDownloading = URLSessionModelDownloader(),
       assessmentDidComplete: @escaping @Sendable () -> Void = {},
       cleanupWillBegin: @escaping @Sendable () -> Void = {},
+      removalWillBegin: @escaping @Sendable () -> Void = {},
       resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
         try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
       }
@@ -178,6 +181,7 @@
       self.transport = transport
       self.assessmentDidComplete = assessmentDidComplete
       self.cleanupWillBegin = cleanupWillBegin
+      self.removalWillBegin = removalWillBegin
       self.resumeAuthenticationKeyProvider = resumeAuthenticationKeyProvider
       stateChangedAt = clock()
     }
@@ -185,7 +189,10 @@
     func refreshState() async {
       guard activeOperationID == nil else { return }
       activeAssessmentCount += 1
-      defer { activeAssessmentCount -= 1 }
+      defer {
+        activeAssessmentCount -= 1
+        applyPendingInferenceLoadFailureIfCurrent()
+      }
       lifecycleEpoch &+= 1
       let epoch = lifecycleEpoch
       guard isArchitectureSupported else {
@@ -235,11 +242,11 @@
       message: String,
       failedRepositoryURL: URL
     ) {
-      guard
-        activeOperationID == nil,
-        activeAssessmentCount == 0,
-        verifiedRepositoryURL == failedRepositoryURL
-      else { return }
+      guard verifiedRepositoryURL == failedRepositoryURL else { return }
+      if activeOperationID != nil || activeAssessmentCount > 0 {
+        pendingInferenceLoadFailure = (message, failedRepositoryURL)
+        return
+      }
       lifecycleEpoch &+= 1
       verifiedRepositoryURL = nil
       setState(.repairRequired(message: message))
@@ -253,8 +260,10 @@
       let operationID = try beginOperation()
       setState(.removing)
       let context = context
+      let removalWillBegin = removalWillBegin
       do {
         try await Task.detached {
+          removalWillBegin()
           for url in [
             context.installedRoot,
             context.stagingRoot,
@@ -267,9 +276,11 @@
         finishOperation(operationID)
         verifiedRepositoryURL = nil
         setState(.notInstalled)
+        applyPendingInferenceLoadFailureIfCurrent()
       } catch {
         finishOperation(operationID)
         setState(.repairRequired(message: error.localizedDescription))
+        applyPendingInferenceLoadFailureIfCurrent()
         throw error
       }
     }
@@ -463,6 +474,7 @@
         }.value
         finishOperation(operationID)
         setState(.ready)
+        applyPendingInferenceLoadFailureIfCurrent()
       } catch {
         finishOperation(operationID)
         if
@@ -485,6 +497,7 @@
         } else {
           await refreshState()
         }
+        applyPendingInferenceLoadFailureIfCurrent()
         throw error
       }
     }
@@ -502,6 +515,16 @@
     private func finishOperation(_ operationID: UUID) {
       guard activeOperationID == operationID else { return }
       activeOperationID = nil
+    }
+
+    private func applyPendingInferenceLoadFailureIfCurrent() {
+      guard activeOperationID == nil, activeAssessmentCount == 0 else { return }
+      guard let pendingInferenceLoadFailure else { return }
+      self.pendingInferenceLoadFailure = nil
+      guard verifiedRepositoryURL == pendingInferenceLoadFailure.repositoryURL else { return }
+      lifecycleEpoch &+= 1
+      verifiedRepositoryURL = nil
+      setState(.repairRequired(message: pendingInferenceLoadFailure.message))
     }
 
     private func updateProgress(

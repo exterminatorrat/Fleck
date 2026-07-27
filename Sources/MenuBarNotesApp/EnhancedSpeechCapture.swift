@@ -190,12 +190,16 @@
         try audio.start(level: level)
         self.loadingResources = nil
       } catch {
+        let wasCancelled = error is CancellationError
         let resources = self.resources
         self.resources = nil
         self.lifecycleID = nil
         resources?.audio.cancel()
         resources?.audio.releaseResources()
         await release(loadingResources, cancelling: true)
+        if !wasCancelled {
+          recommendStandard()
+        }
         throw error
       }
     }
@@ -288,25 +292,56 @@
   }
 
   @MainActor
-  private final class FluidEnhancedSpeechInference: EnhancedSpeechInferring {
+  protocol FluidEnhancedSpeechResources: AnyObject, Sendable {
+    func prepare() async throws
+    func transcribe(_ samples: [Float]) async throws -> String
+    func cleanup() async
+  }
+
+  private final class FluidInferenceLifecycle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var generation: UInt64 = 0
+    private var cancelled = false
+
+    func begin() -> UInt64 {
+      lock.withLock {
+        generation &+= 1
+        cancelled = false
+        return generation
+      }
+    }
+
+    func cancel() {
+      lock.withLock {
+        cancelled = true
+        generation &+= 1
+      }
+    }
+
+    func isCurrent(_ candidate: UInt64) -> Bool {
+      lock.withLock {
+        !cancelled && generation == candidate
+      }
+    }
+  }
+
+  @MainActor
+  private final class FluidPinnedSpeechResources:
+    FluidEnhancedSpeechResources,
+    @unchecked Sendable
+  {
     private var models: AsrModels?
     private var manager: AsrManager?
-    private var loadTask: Task<AsrModels, Error>?
+    private var cleaned = false
 
-    func load(from repositoryURL: URL) async throws {
-      ModelHub.offlineMode = true
-      let task = Task {
-        try await AsrModels.load(
-          from: repositoryURL,
-          configuration: AsrModels.defaultConfiguration(),
-          version: .v2
-        )
+    init(models: AsrModels) {
+      self.models = models
+    }
+
+    func prepare() async throws {
+      guard let models, !cleaned else {
+        throw CancellationError()
       }
-      loadTask = task
-      let models = try await task.value
-      loadTask = nil
-      try Task.checkCancellation()
-
       let manager = AsrManager(config: .default)
       do {
         try await manager.loadModels(models)
@@ -314,12 +349,11 @@
         await manager.cleanup()
         throw error
       }
-      self.models = models
       self.manager = manager
     }
 
     func transcribe(_ samples: [Float]) async throws -> String {
-      guard let manager else {
+      guard let manager, !cleaned else {
         throw DictationFailure.unavailable
       }
       var decoderState = TdtDecoderState.make(
@@ -331,17 +365,116 @@
       ).text
     }
 
+    func cleanup() async {
+      guard !cleaned else { return }
+      cleaned = true
+      await manager?.cleanup()
+      manager = nil
+      models = nil
+    }
+  }
+
+  @MainActor
+  final class FluidEnhancedSpeechInference: EnhancedSpeechInferring {
+    typealias ResourcesLoader = @MainActor @Sendable (
+      URL
+    ) async throws -> any FluidEnhancedSpeechResources
+
+    private let lifecycle = FluidInferenceLifecycle()
+    private let loadResources: ResourcesLoader
+    private var resources: (any FluidEnhancedSpeechResources)?
+    private var loadTask: Task<any FluidEnhancedSpeechResources, Error>?
+    private var loadedGeneration: UInt64?
+
+    var hasLoadedResources: Bool {
+      resources != nil
+    }
+
+    init(loadResources: @escaping ResourcesLoader = { repositoryURL in
+      ModelHub.offlineMode = true
+      let models = try await AsrModels.load(
+        from: repositoryURL,
+        configuration: AsrModels.defaultConfiguration(),
+        version: .v2
+      )
+      return FluidPinnedSpeechResources(models: models)
+    }) {
+      self.loadResources = loadResources
+    }
+
+    func load(from repositoryURL: URL) async throws {
+      guard loadTask == nil, resources == nil else {
+        throw DictationFailure.unavailable
+      }
+      ModelHub.offlineMode = true
+      let generation = lifecycle.begin()
+      let lifecycle = lifecycle
+      let loadResources = loadResources
+      let task = Task { @MainActor in
+        let candidate = try await loadResources(repositoryURL)
+        guard lifecycle.isCurrent(generation) else {
+          await candidate.cleanup()
+          throw CancellationError()
+        }
+        do {
+          try await candidate.prepare()
+        } catch {
+          await candidate.cleanup()
+          throw error
+        }
+        guard lifecycle.isCurrent(generation) else {
+          await candidate.cleanup()
+          throw CancellationError()
+        }
+        return candidate
+      }
+      loadTask = task
+
+      do {
+        let candidate = try await task.value
+        guard lifecycle.isCurrent(generation) else {
+          await candidate.cleanup()
+          throw CancellationError()
+        }
+        resources = candidate
+        loadedGeneration = generation
+        loadTask = nil
+      } catch {
+        loadTask = nil
+        throw error
+      }
+    }
+
+    func transcribe(_ samples: [Float]) async throws -> String {
+      guard
+        let resources,
+        let loadedGeneration,
+        lifecycle.isCurrent(loadedGeneration)
+      else {
+        throw DictationFailure.unavailable
+      }
+      let text = try await resources.transcribe(samples)
+      guard lifecycle.isCurrent(loadedGeneration) else {
+        throw CancellationError()
+      }
+      return text
+    }
+
     func cancel() async {
+      lifecycle.cancel()
       loadTask?.cancel()
     }
 
     func releaseResources() async {
-      loadTask?.cancel()
-      _ = await loadTask?.result
+      lifecycle.cancel()
+      let task = loadTask
+      task?.cancel()
+      _ = await task?.result
       loadTask = nil
-      await manager?.cleanup()
-      manager = nil
-      models = nil
+      guard let resources else { return }
+      self.resources = nil
+      loadedGeneration = nil
+      await resources.cleanup()
     }
   }
 
