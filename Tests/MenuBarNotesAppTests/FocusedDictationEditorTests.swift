@@ -94,6 +94,76 @@ import Testing
   #expect(textView.string == "!before finalafter")
 }
 
+@Test @MainActor func focusedDictationCancelsItsOriginWhenTheEditorViewChanges() {
+  let (commands, origin) = makeFocusedEditor(body: "Replace this")
+  origin.setSelectedRange(NSRange(location: 0, length: 7))
+  let editor: any FocusedDictationEditing = commands
+  #expect(editor.beginFocusedDictation())
+  editor.updateFocusedDictation(provisionalText: "Draft")
+
+  let replacementView = NSTextView(frame: .zero)
+  replacementView.string = "Other note"
+  commands.textView = replacementView
+
+  #expect(origin.string == "Replace this")
+  #expect(origin.selectedRange() == NSRange(location: 0, length: 7))
+  #expect(replacementView.string == "Other note")
+  #expect(!editor.commitFocusedDictation(text: "Final"))
+}
+
+@Test @MainActor func focusedDictationDelegateSnapshotsExcludeProvisionalTextAndCancelCannotReloadIt()
+  throws
+{
+  let (commands, textView) = makeFocusedEditor(body: "before replace after")
+  textView.setSelectedRange(NSRange(location: 7, length: 7))
+  let delegate = BindingRecordingDelegate(commands: commands)
+  textView.delegate = delegate
+  let editor: any FocusedDictationEditing = commands
+  #expect(editor.beginFocusedDictation())
+  editor.updateFocusedDictation(provisionalText: "Draft")
+
+  textView.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 0), with: "!")
+  textView.didChangeText()
+
+  #expect(delegate.bodies == ["!before replace after"])
+  #expect(try #require(delegate.rtf.last).contains(Data("Draft".utf8)) == false)
+
+  editor.cancelFocusedDictation()
+  #expect(textView.string == "!before replace after")
+  #expect(delegate.bodies.last == textView.string)
+}
+
+@Test @MainActor func focusedDictationUndoAndRedoEmitBindingUpdates() throws {
+  let (commands, textView) = makeFocusedEditor(body: "Replace this")
+  textView.setSelectedRange(NSRange(location: 0, length: 7))
+  let delegate = BindingRecordingDelegate(commands: commands)
+  textView.delegate = delegate
+  let editor: any FocusedDictationEditing = commands
+  #expect(editor.beginFocusedDictation())
+  editor.updateFocusedDictation(provisionalText: "Draft")
+  #expect(editor.commitFocusedDictation(text: "Final"))
+
+  let undoManager = try #require(textView.undoManager)
+  undoManager.undo()
+  undoManager.redo()
+
+  #expect(delegate.bodies == ["Final this", "Replace this", "Final this"])
+  #expect(delegate.rtf.count == 3)
+}
+
+@Test @MainActor func focusedDictationCancellationTracksTheOriginalSelectionAfterEarlierEdits() {
+  let (commands, textView) = makeFocusedEditor(body: "before replace after")
+  textView.setSelectedRange(NSRange(location: 7, length: 7))
+  let editor: any FocusedDictationEditing = commands
+  #expect(editor.beginFocusedDictation())
+  editor.updateFocusedDictation(provisionalText: "Draft")
+
+  textView.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 0), with: "!")
+  editor.cancelFocusedDictation()
+
+  #expect(textView.selectedRange() == NSRange(location: 8, length: 7))
+}
+
 @MainActor
 private func makeFocusedEditor(body: String) -> (EditorCommands, NSTextView) {
   let commands = EditorCommands()
@@ -117,5 +187,27 @@ private final class ChangeRecordingDelegate: NSObject, NSTextViewDelegate {
 
   func textDidChange(_ notification: Notification) {
     changeCount += 1
+  }
+}
+
+@MainActor
+private final class BindingRecordingDelegate: NSObject, NSTextViewDelegate {
+  let commands: EditorCommands
+  var bodies: [String] = []
+  var rtf: [Data] = []
+
+  init(commands: EditorCommands) {
+    self.commands = commands
+  }
+
+  func textDidChange(_ notification: Notification) {
+    guard let textView = notification.object as? NSTextView,
+      let snapshot = commands.attributedBindingSnapshot(for: textView)
+    else { return }
+    bodies.append(snapshot.string)
+    rtf.append(try! snapshot.data(
+      from: NSRange(location: 0, length: snapshot.length),
+      documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+    ))
   }
 }

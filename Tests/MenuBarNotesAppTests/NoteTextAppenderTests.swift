@@ -63,6 +63,36 @@ import Testing
   #expect(bodyWithoutSuffix == "Existing")
 }
 
+@Test @MainActor func noteTextAppenderUsesExplicitEditorDefaultsForEmptyPlainAndFormattedNotes()
+  throws
+{
+  let defaults = NoteTextAppendDefaults(fontFamily: "Menlo", fontSize: 21)
+  let formatted = NSMutableAttributedString(string: "Bold")
+  formatted.addAttribute(
+    .font,
+    value: NSFont.boldSystemFont(ofSize: 18),
+    range: NSRange(location: 0, length: formatted.length)
+  )
+  let formattedRTF = try formatted.data(
+    from: NSRange(location: 0, length: formatted.length),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+
+  for note in [
+    Note(body: ""),
+    Note(body: "Plain"),
+    Note(body: "Bold", richTextRTF: formattedRTF),
+  ] {
+    let result = NoteTextAppender.appending("Dictated", to: note, defaults: defaults)
+    let appended = try attributedString(from: result.richTextRTF)
+    let suffixLocation = appended.length - "Dictated".utf16.count
+    let suffixFont = try #require(appended.attribute(.font, at: suffixLocation, effectiveRange: nil) as? NSFont)
+
+    #expect(suffixFont.pointSize == 21)
+    #expect(suffixFont.familyName == "Menlo")
+  }
+}
+
 @MainActor
 private func attributedString(from rtf: Data) throws -> NSAttributedString {
   try NSAttributedString(

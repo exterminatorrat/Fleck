@@ -8,11 +8,33 @@
     let insertedSuffix: String
   }
 
+  struct NoteTextAppendDefaults {
+    let fontFamily: String
+    let fontSize: CGFloat
+
+    init(fontFamily: String = ".AppleSystemUIFont", fontSize: CGFloat = NSFont.systemFontSize) {
+      self.fontFamily = fontFamily
+      self.fontSize = fontSize
+    }
+
+    var font: NSFont {
+      NSFontManager.shared.convert(NSFont.systemFont(ofSize: fontSize), toFamily: fontFamily)
+    }
+  }
+
   enum NoteTextAppender {
     static func appending(_ text: String, to note: Note) -> NoteTextAppendResult {
+      appending(text, to: note, defaults: NoteTextAppendDefaults())
+    }
+
+    static func appending(
+      _ text: String,
+      to note: Note,
+      defaults: NoteTextAppendDefaults
+    ) -> NoteTextAppendResult {
       let suffix = (note.body.isEmpty ? "" : "\n\n") + text
       let appended = NSMutableAttributedString(attributedString: attributedText(for: note))
-      appended.append(NSAttributedString(string: suffix))
+      appended.append(NSAttributedString(string: suffix, attributes: [.font: defaults.font]))
       let rtf = try! appended.data(
         from: NSRange(location: 0, length: appended.length),
         documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
