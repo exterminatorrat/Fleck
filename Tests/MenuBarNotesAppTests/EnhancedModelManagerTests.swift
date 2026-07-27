@@ -91,6 +91,7 @@ struct EnhancedModelManagerTests {
       )
     }
     #expect(fixture.transport.callCount == 0)
+    #expect(fixture.manager.state == .notInstalled)
   }
 
   @Test @MainActor func progressIsByteWeightedAndMonotonic() async throws {
@@ -136,11 +137,20 @@ struct EnhancedModelManagerTests {
     _ = cancellable
   }
 
-  @Test @MainActor func cancellationPersistsOnlyURLSessionResumeData() async throws {
-    for data in [validResumeData(), Data("not resume data".utf8)] {
+  @Test @MainActor func cancellationPersistsOnlyTransportIssuedResumeData() async throws {
+    for issued in [true, false] {
       let fixture = try Fixture()
       defer { fixture.remove() }
-      fixture.transport.handler = { _, _, _ in
+      let data = validResumeData()
+      let remoteURL = try EnhancedModelManager.remoteURL(
+        for: testManifest.files[0],
+        manifest: testManifest
+      )
+      if issued {
+        fixture.transport.markResumeDataIssued(data, for: remoteURL)
+      }
+      fixture.transport.handler = { receivedURL, _, _ in
+        #expect(receivedURL == remoteURL)
         throw ModelDownloadError.cancelled(resumeData: data)
       }
 
@@ -149,8 +159,94 @@ struct EnhancedModelManagerTests {
       }
 
       let resumeFiles = filesBelow(fixture.resumeURL)
-      #expect(resumeFiles.count == (data == validResumeData() ? 1 : 0))
+      #expect(resumeFiles.count == (issued ? 1 : 0))
+      if issued {
+        fixture.transport.handler = { receivedURL, resumeData, _ in
+          #expect(receivedURL == remoteURL)
+          #expect(resumeData == data)
+          return ModelDownloadResult(
+            temporaryURL: try writeTemporary(testContents),
+            resumeData: nil
+          )
+        }
+        try await fixture.manager.download()
+        #expect(fixture.manager.state == .ready)
+      }
     }
+  }
+
+  @Test @MainActor func fabricatedResumePlistCannotBypassPinnedDownloadURL() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let resumeFile = fixture.resumeFileURL
+    try FileManager.default.createDirectory(
+      at: resumeFile.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try validResumeData().write(to: resumeFile)
+    let expectedURL = try EnhancedModelManager.remoteURL(
+      for: testManifest.files[0],
+      manifest: testManifest
+    )
+    fixture.transport.handler = { receivedURL, resumeData, _ in
+      #expect(receivedURL == expectedURL)
+      #expect(resumeData == nil)
+      return ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+
+    try await fixture.manager.download()
+
+    #expect(fixture.manager.state == .ready)
+  }
+
+  @Test func productionResumeValidatorRejectsMagicKeyPlistsAndMismatchedRequests() throws {
+    let downloader = URLSessionModelDownloader()
+    let pinnedURL = try EnhancedModelManager.remoteURL(
+      for: testManifest.files[0],
+      manifest: testManifest
+    )
+    #expect(downloader.validatedResumeData(validResumeData(), for: pinnedURL) == nil)
+    #expect(
+      downloader.validatedResumeData(
+        strictResumeData(
+          originalURL: URL(string: "https://evil.example/model")!,
+          currentURL: URL(string: "https://evil.example/model")!
+        ),
+        for: pinnedURL
+      ) == nil
+    )
+    #expect(
+      downloader.validatedResumeData(
+        strictResumeData(
+          originalURL: pinnedURL,
+          currentURL: pinnedURL,
+          downloadURL: URL(string: "https://evil.example/model")!
+        ),
+        for: pinnedURL
+      ) == nil
+    )
+    #expect(
+      downloader.validatedResumeData(
+        strictResumeData(originalURL: pinnedURL, currentURL: pinnedURL),
+        for: pinnedURL
+      ) != nil
+    )
+  }
+
+  @Test func cancellationBeforeTaskRegistrationPreventsTheTaskFromStarting() {
+    let handshake = DownloadStartHandshake()
+    let session = URLSession(configuration: .ephemeral)
+    let task = session.downloadTask(
+      with: URL(string: "https://huggingface.co/never-started")!
+    )
+    defer { session.invalidateAndCancel() }
+
+    #expect(handshake.requestCancellation() == nil)
+    #expect(handshake.installAndResume(task) == false)
+    #expect(task.state == .suspended)
   }
 
   @Test @MainActor func checksumFailureClearsStagingAndResume() async throws {
@@ -220,6 +316,47 @@ struct EnhancedModelManagerTests {
     #expect(FileManager.default.fileExists(atPath: sibling.path))
   }
 
+  @Test @MainActor func lifecycleOperationsCannotOverlap() async throws {
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let control = DownloadControl()
+    fixture.transport.handler = { _, _, _ in
+      try await control.download()
+    }
+    let download = Task { @MainActor in
+      try await fixture.manager.download()
+    }
+    await control.waitUntilStarted()
+
+    await #expect(throws: EnhancedModelManagerError.operationInProgress) {
+      try await fixture.manager.deleteModel()
+    }
+
+    control.succeed(with: testContents)
+    try await download.value
+    #expect(fixture.manager.state == .ready)
+  }
+
+  @Test @MainActor func staleRefreshCannotOverwriteANewerDelete() async throws {
+    let assessment = AssessmentControl()
+    let fixture = try Fixture(assessmentDidComplete: {
+      assessment.didComplete()
+    })
+    defer { fixture.remove() }
+    try fixture.install()
+    let refresh = Task { @MainActor in
+      await fixture.manager.refreshState()
+    }
+    await assessment.waitUntilComplete()
+
+    try await fixture.manager.deleteModel()
+    assessment.release()
+    await refresh.value
+
+    #expect(fixture.manager.state == .notInstalled)
+    #expect(fixture.manager.verifiedRepositoryURL == nil)
+  }
+
   @Test @MainActor func modelRootIsExcludedFromBackup() async throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
@@ -238,7 +375,10 @@ struct EnhancedModelManagerTests {
       totalByteCount: testManifest.totalByteCount,
       files: testManifest.files
     )
-    let fixture = try Fixture(manifest: current)
+    let fixture = try Fixture(
+      manifest: current,
+      trustedManifests: [testManifest, current]
+    )
     defer { fixture.remove() }
     try fixture.install(manifest: testManifest)
     let oldData = try Data(contentsOf: fixture.fileURL(for: testManifest))
@@ -246,9 +386,109 @@ struct EnhancedModelManagerTests {
     await fixture.manager.refreshState()
 
     #expect(fixture.manager.state == .updateAvailable)
+    #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL(for: testManifest))
     #expect(try Data(contentsOf: fixture.fileURL(for: testManifest)) == oldData)
     #expect(!FileManager.default.fileExists(atPath: fixture.stagingURL.path))
     #expect(fixture.transport.callCount == 0)
+  }
+
+  @Test @MainActor func failedUpdateKeepsPriorVerifiedRevisionReadyForUse() async throws {
+    let current = EnhancedModelManifest(
+      schemaVersion: 1,
+      modelID: testManifest.modelID,
+      revision: "new-revision",
+      totalByteCount: testManifest.totalByteCount,
+      files: testManifest.files
+    )
+    let fixture = try Fixture(
+      manifest: current,
+      trustedManifests: [testManifest, current]
+    )
+    defer { fixture.remove() }
+    try fixture.install(manifest: testManifest)
+    await fixture.manager.refreshState()
+    let oldRepository = fixture.repositoryURL(for: testManifest)
+    let control = DownloadControl()
+    fixture.transport.handler = { _, _, _ in
+      try await control.download()
+    }
+    let update = Task { @MainActor in
+      try await fixture.manager.update()
+    }
+    await control.waitUntilStarted()
+
+    #expect(fixture.manager.verifiedRepositoryURL == oldRepository)
+    control.fail(with: TestError.downloadFailed)
+    await #expect(throws: TestError.downloadFailed) {
+      try await update.value
+    }
+
+    #expect(fixture.manager.state == .updateAvailable)
+    #expect(fixture.manager.verifiedRepositoryURL == oldRepository)
+    #expect(try Data(contentsOf: fixture.fileURL(for: testManifest)) == testContents)
+  }
+
+  @Test @MainActor func installedManifestCannotAuthorizeAnUnshippedRevision() async throws {
+    let current = EnhancedModelManifest(
+      schemaVersion: 1,
+      modelID: testManifest.modelID,
+      revision: "new-revision",
+      totalByteCount: testManifest.totalByteCount,
+      files: testManifest.files
+    )
+    let fixture = try Fixture(manifest: current, trustedManifests: [current])
+    defer { fixture.remove() }
+    try fixture.install(manifest: testManifest)
+
+    await fixture.manager.refreshState()
+
+    #expect(fixture.manager.state == .notInstalled)
+    #expect(fixture.manager.verifiedRepositoryURL == nil)
+  }
+
+  @Test @MainActor func symlinkedModelRootsAndDestructiveTargetsAreRejected() async throws {
+    let base = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let outside = base.appendingPathComponent("outside", isDirectory: true)
+    let linkedParent = base.appendingPathComponent("linked", isDirectory: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: linkedParent, withDestinationURL: outside)
+    let manager = EnhancedModelManager(
+      modelRootURL: linkedParent.appendingPathComponent("DictationModels"),
+      manifest: testManifest,
+      capacityProvider: { .max },
+      architectureProvider: { true },
+      transport: TestTransport()
+    )
+    defer { try? FileManager.default.removeItem(at: base) }
+
+    await manager.refreshState()
+
+    guard case .repairRequired = manager.state else {
+      Issue.record("Expected a symlinked ancestor to be rejected")
+      return
+    }
+    #expect(!FileManager.default.fileExists(
+      atPath: outside.appendingPathComponent("DictationModels").path
+    ))
+
+    let fixture = try Fixture()
+    defer { fixture.remove() }
+    let sentinel = outside.appendingPathComponent("sentinel")
+    try testContents.write(to: sentinel)
+    try FileManager.default.createDirectory(
+      at: fixture.root,
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createSymbolicLink(
+      at: fixture.installedURL,
+      withDestinationURL: outside
+    )
+
+    await #expect(throws: EnhancedModelManagerError.self) {
+      try await fixture.manager.deleteModel()
+    }
+    #expect(try Data(contentsOf: sentinel) == testContents)
   }
 
   @Test func artifactURLUsesEncodedAllowlistedPathAndPinnedRevision() throws {
@@ -323,11 +563,25 @@ struct EnhancedModelManagerTests {
   func redirectHostAllowlistUsesDNSLabels(host: String, allowed: Bool) {
     #expect(URLSessionModelDownloader.isAllowedRedirectHost(host) == allowed)
   }
+
+  @Test(arguments: [
+    ("https://huggingface.co/file", true),
+    ("https://cdn.huggingface.co/file", true),
+    ("https://transfer.xethub.hf.co/file", true),
+    ("http://huggingface.co/file", false),
+    ("https://evil-huggingface.co/file", false),
+  ])
+  func redirectsRequireHTTPSAndAnAllowedHost(value: String, allowed: Bool) {
+    #expect(
+      URLSessionModelDownloader.isAllowedRedirectURL(URL(string: value)!) == allowed
+    )
+  }
 }
 
 enum Corruption: CaseIterable {
   case missing
   case extra
+  case extraDirectory
   case wrongSize
   case wrongHash
 }
@@ -356,7 +610,9 @@ private final class Fixture {
 
   init(
     manifest: EnhancedModelManifest = testManifest,
-    capacity: Int64 = .max
+    capacity: Int64 = .max,
+    trustedManifests: [EnhancedModelManifest]? = nil,
+    assessmentDidComplete: @escaping @Sendable () -> Void = {}
   ) throws {
     root = temporaryRoot()
     self.manifest = manifest
@@ -364,10 +620,12 @@ private final class Fixture {
     manager = EnhancedModelManager(
       modelRootURL: root,
       manifest: manifest,
+      trustedManifests: trustedManifests,
       capacityProvider: { capacity },
       architectureProvider: { true },
       clock: { Date() },
-      transport: transport
+      transport: transport,
+      assessmentDidComplete: assessmentDidComplete
     )
   }
 
@@ -385,6 +643,13 @@ private final class Fixture {
 
   var derivedURL: URL {
     root.appendingPathComponent("derived", isDirectory: true)
+  }
+
+  var resumeFileURL: URL {
+    resumeURL
+      .appendingPathComponent(manifest.revision, isDirectory: true)
+      .appendingPathComponent(manifest.modelID.split(separator: "/").last.map(String.init)!)
+      .appendingPathComponent(manifest.files[0].path + ".resumeData")
   }
 
   var repositoryURL: URL {
@@ -433,6 +698,12 @@ private final class Fixture {
     if corruption == .extra {
       try Data().write(to: repository.appendingPathComponent(".extra.bin"))
     }
+    if corruption == .extraDirectory {
+      try FileManager.default.createDirectory(
+        at: repository.appendingPathComponent("unexpected", isDirectory: true),
+        withIntermediateDirectories: true
+      )
+    }
     let encoded = try JSONEncoder().encode(manifest)
     try encoded.write(
       to: repository.deletingLastPathComponent()
@@ -454,12 +725,23 @@ private final class TestTransport: ModelDownloading, @unchecked Sendable {
 
   private let lock = NSLock()
   private var calls = 0
+  private var issuedResumeData: [Data: URL] = [:]
   var handler: Handler = { _, _, _ in
     throw TestError.noHandler
   }
 
   var callCount: Int {
     lock.withLock { calls }
+  }
+
+  func markResumeDataIssued(_ data: Data, for remoteURL: URL) {
+    lock.withLock { issuedResumeData[data] = remoteURL }
+  }
+
+  func validatedResumeData(_ data: Data, for remoteURL: URL) -> Data? {
+    lock.withLock {
+      issuedResumeData[data] == remoteURL ? data : nil
+    }
   }
 
   func download(
@@ -474,6 +756,88 @@ private final class TestTransport: ModelDownloading, @unchecked Sendable {
 
 private enum TestError: Error {
   case noHandler
+  case downloadFailed
+}
+
+private final class DownloadControl: @unchecked Sendable {
+  private let lock = NSLock()
+  private var startWaiters: [CheckedContinuation<Void, Never>] = []
+  private var started = false
+  private var completion: CheckedContinuation<ModelDownloadResult, Error>?
+
+  func download() async throws -> ModelDownloadResult {
+    try await withCheckedThrowingContinuation { continuation in
+      let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+        completion = continuation
+        started = true
+        defer { startWaiters.removeAll() }
+        return startWaiters
+      }
+      waiters.forEach { $0.resume() }
+    }
+  }
+
+  func waitUntilStarted() async {
+    await withCheckedContinuation { continuation in
+      let resumeNow = lock.withLock {
+        if started { return true }
+        startWaiters.append(continuation)
+        return false
+      }
+      if resumeNow { continuation.resume() }
+    }
+  }
+
+  func succeed(with data: Data) {
+    finish(.success(ModelDownloadResult(
+      temporaryURL: try! writeTemporary(data),
+      resumeData: nil
+    )))
+  }
+
+  func fail(with error: Error) {
+    finish(.failure(error))
+  }
+
+  private func finish(_ result: Result<ModelDownloadResult, Error>) {
+    let continuation = lock.withLock {
+      defer { completion = nil }
+      return completion
+    }
+    continuation?.resume(with: result)
+  }
+}
+
+private final class AssessmentControl: @unchecked Sendable {
+  private let lock = NSLock()
+  private let proceed = DispatchSemaphore(value: 0)
+  private var isComplete = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func didComplete() {
+    let pending = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+      isComplete = true
+      defer { waiters.removeAll() }
+      return waiters
+    }
+    pending.forEach { $0.resume() }
+    proceed.wait()
+  }
+
+  func waitUntilComplete() async {
+    await withCheckedContinuation { continuation in
+      let resumeNow = lock.withLock {
+        if isComplete { return true }
+        waiters.append(continuation)
+        return false
+      }
+      if resumeNow { continuation.resume() }
+    }
+  }
+
+  func release() {
+    proceed.signal()
+  }
 }
 
 private final class LockedCounter: @unchecked Sendable {
@@ -534,6 +898,34 @@ private func filesBelow(_ root: URL) -> [URL] {
 private func validResumeData() -> Data {
   try! PropertyListSerialization.data(
     fromPropertyList: ["NSURLSessionDownloadURL": "https://huggingface.co/file"],
+    format: .binary,
+    options: 0
+  )
+}
+
+private func strictResumeData(
+  originalURL: URL,
+  currentURL: URL,
+  downloadURL: URL? = nil
+) -> Data {
+  let original = try! NSKeyedArchiver.archivedData(
+    withRootObject: NSURLRequest(url: originalURL),
+    requiringSecureCoding: true
+  )
+  let current = try! NSKeyedArchiver.archivedData(
+    withRootObject: NSURLRequest(url: currentURL),
+    requiringSecureCoding: true
+  )
+  var propertyList: [String: Any] = [
+    "NSURLSessionResumeInfoVersion": 2,
+    "NSURLSessionResumeBytesReceived": 1,
+    "NSURLSessionResumeInfoTempFileName": "CFNetworkDownload_test.tmp",
+    "NSURLSessionResumeOriginalRequest": original,
+    "NSURLSessionResumeCurrentRequest": current,
+  ]
+  propertyList["NSURLSessionDownloadURL"] = downloadURL?.absoluteString
+  return try! PropertyListSerialization.data(
+    fromPropertyList: propertyList,
     format: .binary,
     options: 0
   )

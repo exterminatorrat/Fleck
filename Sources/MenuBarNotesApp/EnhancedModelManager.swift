@@ -29,6 +29,8 @@
   }
 
   protocol ModelDownloading: Sendable {
+    func validatedResumeData(_ data: Data, for remoteURL: URL) -> Data?
+
     func download(
       from remoteURL: URL,
       resumeData: Data?,
@@ -55,6 +57,8 @@
     case checksumMismatch(String)
     case wrongByteCount(String)
     case unexpectedFile(String)
+    case operationInProgress
+    case unsafeFilesystemPath(String)
 
     var errorDescription: String? {
       switch self {
@@ -72,6 +76,10 @@
         return "The downloaded model has the wrong size: \(path)"
       case .unexpectedFile(let path):
         return "The model contains an unexpected file: \(path)"
+      case .operationInProgress:
+        return "Another model operation is already in progress."
+      case .unsafeFilesystemPath(let path):
+        return "The model storage path is unsafe: \(path)"
       }
     }
   }
@@ -86,17 +94,21 @@
 
     private let context: FileContext
     private let manifest: EnhancedModelManifest
+    private let trustedManifests: [EnhancedModelManifest]
     private let capacityProvider: @Sendable () throws -> Int64
     private let clock: @Sendable () -> Date
     private let transport: any ModelDownloading
+    private let assessmentDidComplete: @Sendable () -> Void
     private var stateChangedAt: Date
     private var activeOperationID: UUID?
+    private var lifecycleEpoch: UInt64 = 0
     private var highestProgress = 0.0
 
     init(
       modelRootURL: URL? = nil,
       fileManager: FileManager = .default,
       manifest: EnhancedModelManifest? = nil,
+      trustedManifests: [EnhancedModelManifest]? = nil,
       capacityProvider: @escaping @Sendable () throws -> Int64 = {
         let values = try URL(fileURLWithPath: NSHomeDirectory()).resourceValues(
           forKeys: [.volumeAvailableCapacityForImportantUsageKey]
@@ -112,7 +124,8 @@
         return machine == "arm64"
       },
       clock: @escaping @Sendable () -> Date = { Date() },
-      transport: any ModelDownloading = URLSessionModelDownloader()
+      transport: any ModelDownloading = URLSessionModelDownloader(),
+      assessmentDidComplete: @escaping @Sendable () -> Void = {}
     ) {
       let root = modelRootURL ?? fileManager.urls(
         for: .applicationSupportDirectory,
@@ -120,25 +133,43 @@
       )[0]
       .appendingPathComponent("MenuBarNotes", isDirectory: true)
       .appendingPathComponent("DictationModels", isDirectory: true)
+      let selectedManifest = manifest ?? Self.embeddedManifest()
       self.context = FileContext(root: root, fileManager: fileManager)
-      self.manifest = manifest ?? Self.embeddedManifest()
+      self.manifest = selectedManifest
+      self.trustedManifests = trustedManifests ?? [selectedManifest]
       self.capacityProvider = capacityProvider
       self.isArchitectureSupported = architectureProvider()
       self.clock = clock
       self.transport = transport
+      self.assessmentDidComplete = assessmentDidComplete
       stateChangedAt = clock()
     }
 
     func refreshState() async {
+      guard activeOperationID == nil else { return }
+      lifecycleEpoch &+= 1
+      let epoch = lifecycleEpoch
       guard isArchitectureSupported else {
+        guard activeOperationID == nil, lifecycleEpoch == epoch else { return }
         setState(.notInstalled)
         return
       }
       let context = context
       let manifest = manifest
+      let trustedManifests = trustedManifests
+      let assessmentDidComplete = assessmentDidComplete
       let assessment = await Task.detached {
-        Result { try Self.assess(context: context, manifest: manifest) }
+        let result = Result {
+          try Self.assess(
+            context: context,
+            manifest: manifest,
+            trustedManifests: trustedManifests
+          )
+        }
+        assessmentDidComplete()
+        return result
       }.value
+      guard activeOperationID == nil, lifecycleEpoch == epoch else { return }
       switch assessment {
       case .success(let result):
         verifiedRepositoryURL = result.repositoryURL
@@ -166,6 +197,7 @@
         setState(.notInstalled)
         return
       }
+      let operationID = try beginOperation()
       setState(.removing)
       let context = context
       do {
@@ -175,13 +207,15 @@
             context.stagingRoot,
             context.resumeRoot,
             context.derivedRoot,
-          ] where context.fileManager.fileExists(atPath: url.path) {
-            try context.fileManager.removeItem(at: url)
+          ] {
+            try Self.removeOwnedTreeIfPresent(url, context: context)
           }
         }.value
+        finishOperation(operationID)
         verifiedRepositoryURL = nil
         setState(.notInstalled)
       } catch {
+        finishOperation(operationID)
         setState(.repairRequired(message: error.localizedDescription))
         throw error
       }
@@ -211,22 +245,22 @@
       guard isArchitectureSupported else {
         throw EnhancedModelManagerError.unsupportedArchitecture
       }
-      let available = try capacityProvider()
-      guard available >= Self.requiredAvailableCapacity else {
-        throw EnhancedModelManagerError.insufficientSpace(
-          required: Self.requiredAvailableCapacity,
-          available: available
-        )
-      }
-
-      let operationID = UUID()
-      activeOperationID = operationID
-      highestProgress = 0
-      setState(.downloading(progress: 0))
+      let operationID = try beginOperation()
+      let previousRepositoryURL = verifiedRepositoryURL
+      let previousState = state
       let context = context
       let manifest = manifest
 
       do {
+        let available = try capacityProvider()
+        guard available >= Self.requiredAvailableCapacity else {
+          throw EnhancedModelManagerError.insufficientSpace(
+            required: Self.requiredAvailableCapacity,
+            available: available
+          )
+        }
+        highestProgress = 0
+        setState(.downloading(progress: 0))
         try await Task.detached {
           try Self.prepareRoot(context)
           try Self.validateManifest(manifest)
@@ -244,7 +278,12 @@
             under: stagingRepository
           )
           let alreadyValid = await Task.detached {
-            (try? Self.verifyFile(file, at: target)) != nil
+            (try? Self.verifyFile(
+              file,
+              at: target,
+              ownershipRoot: context.root,
+              fileManager: context.fileManager
+            )) != nil
           }.value
           if alreadyValid {
             completedBytes += file.byteCount
@@ -261,14 +300,20 @@
             context: context,
             manifest: manifest
           )
+          let remoteURL = try Self.remoteURL(for: file, manifest: manifest)
+          let transport = transport
           let resumeData = await Task.detached { () -> Data? in
             guard
-              let data = try? Data(contentsOf: resumeURL),
-              Self.isValidResumeData(data)
+              (try? Self.assertOwnedPath(resumeURL, context: context)) != nil,
+              let stored = try? Data(contentsOf: resumeURL),
+              let envelope = try? JSONDecoder().decode(
+                ModelResumeEnvelope.self,
+                from: stored
+              ),
+              envelope.remoteURL == remoteURL
             else { return nil }
-            return data
+            return transport.validatedResumeData(envelope.data, for: remoteURL)
           }.value
-          let remoteURL = try Self.remoteURL(for: file, manifest: manifest)
           do {
             let completedBeforeFile = completedBytes
             let result = try await transport.download(
@@ -284,17 +329,13 @@
               }
             }
             try await Task.detached {
-              try context.fileManager.createDirectory(
-                at: target.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+              try Self.createOwnedDirectory(
+                target.deletingLastPathComponent(),
+                context: context
               )
-              if context.fileManager.fileExists(atPath: target.path) {
-                try context.fileManager.removeItem(at: target)
-              }
+              try Self.removeOwnedItemIfPresent(target, context: context)
               try context.fileManager.moveItem(at: result.temporaryURL, to: target)
-              if context.fileManager.fileExists(atPath: resumeURL.path) {
-                try context.fileManager.removeItem(at: resumeURL)
-              }
+              try Self.removeOwnedItemIfPresent(resumeURL, context: context)
             }.value
             completedBytes += file.byteCount
             updateProgress(
@@ -303,19 +344,22 @@
               operationID: operationID
             )
           } catch ModelDownloadError.cancelled(let data) {
-            if let data, Self.isValidResumeData(data) {
+            if
+              let data,
+              let validated = transport.validatedResumeData(data, for: remoteURL)
+            {
               try await Task.detached {
-                try context.fileManager.createDirectory(
-                  at: resumeURL.deletingLastPathComponent(),
-                  withIntermediateDirectories: true
+                try Self.createOwnedDirectory(
+                  resumeURL.deletingLastPathComponent(),
+                  context: context
                 )
-                try data.write(to: resumeURL, options: .atomic)
+                try JSONEncoder().encode(
+                  ModelResumeEnvelope(remoteURL: remoteURL, data: validated)
+                ).write(to: resumeURL, options: .atomic)
               }.value
             } else {
               try? await Task.detached {
-                if context.fileManager.fileExists(atPath: resumeURL.path) {
-                  try context.fileManager.removeItem(at: resumeURL)
-                }
+                try Self.removeOwnedItemIfPresent(resumeURL, context: context)
               }.value
             }
             throw ModelDownloadError.cancelled(resumeData: data)
@@ -328,7 +372,8 @@
             try Self.verifyRepository(
               at: stagingRepository,
               manifest: manifest,
-              fileManager: context.fileManager
+              fileManager: context.fileManager,
+              ownershipRoot: context.root
             )
           }.value
         } catch {
@@ -343,12 +388,19 @@
           try Self.installVerifiedStaging(context, manifest: manifest)
         }.value
         verifiedRepositoryURL = installedRepository
+        finishOperation(operationID)
         setState(.ready)
       } catch {
-        activeOperationID = nil
-        if !(error is CancellationError),
-          !(error is ModelDownloadError)
+        finishOperation(operationID)
+        if let previousRepositoryURL {
+          verifiedRepositoryURL = previousRepositoryURL
+          setState(previousState == .updateAvailable ? .updateAvailable : .ready)
+        } else if
+          let managerError = error as? EnhancedModelManagerError,
+          case .insufficientSpace = managerError
         {
+          setState(previousState)
+        } else if !(error is CancellationError), !(error is ModelDownloadError) {
           verifiedRepositoryURL = nil
           setState(.repairRequired(message: error.localizedDescription))
         } else {
@@ -356,6 +408,20 @@
         }
         throw error
       }
+    }
+
+    private func beginOperation() throws -> UUID {
+      guard activeOperationID == nil else {
+        throw EnhancedModelManagerError.operationInProgress
+      }
+      lifecycleEpoch &+= 1
+      let operationID = UUID()
+      activeOperationID = operationID
+      return operationID
+    }
+
+    private func finishOperation(_ operationID: UUID) {
+      guard activeOperationID == operationID else { return }
       activeOperationID = nil
     }
 
@@ -390,10 +456,14 @@
 
     nonisolated private static func assess(
       context: FileContext,
-      manifest: EnhancedModelManifest
+      manifest: EnhancedModelManifest,
+      trustedManifests: [EnhancedModelManifest]
     ) throws -> Assessment {
       try prepareRoot(context)
       try validateManifest(manifest)
+      for trustedManifest in trustedManifests {
+        try validateManifest(trustedManifest)
+      }
       let currentRevision = context.installedRevision(manifest.revision)
       if context.fileManager.fileExists(atPath: currentRevision.path) {
         let repository = try repositoryURL(under: currentRevision, manifest: manifest)
@@ -401,7 +471,8 @@
           try verifyRepository(
             at: repository,
             manifest: manifest,
-            fileManager: context.fileManager
+            fileManager: context.fileManager,
+            ownershipRoot: context.root
           )
           return Assessment(state: .ready, repositoryURL: repository)
         } catch {
@@ -415,21 +486,18 @@
       guard context.fileManager.fileExists(atPath: context.installedRoot.path) else {
         return Assessment(state: .notInstalled, repositoryURL: nil)
       }
+      try assertOwnedPath(context.installedRoot, context: context)
       let revisions = try context.fileManager.contentsOfDirectory(
         at: context.installedRoot,
         includingPropertiesForKeys: [.isDirectoryKey],
-        options: [.skipsHiddenFiles]
+        options: []
       )
       for revision in revisions where revision.lastPathComponent != manifest.revision {
-        let manifestURL = revision.appendingPathComponent("manifest.json")
         guard
-          let data = try? Data(contentsOf: manifestURL),
-          let oldManifest = try? JSONDecoder().decode(
-            EnhancedModelManifest.self,
-            from: data
-          ),
+          let oldManifest = trustedManifests.first(where: {
+            $0.revision == revision.lastPathComponent && $0.modelID == manifest.modelID
+          }),
           oldManifest.modelID == manifest.modelID,
-          oldManifest.revision == revision.lastPathComponent,
           let repository = try? repositoryURL(
             under: revision,
             manifest: oldManifest
@@ -437,19 +505,22 @@
           (try? verifyRepository(
             at: repository,
             manifest: oldManifest,
-            fileManager: context.fileManager
+            fileManager: context.fileManager,
+            ownershipRoot: context.root
           )) != nil
         else { continue }
-        return Assessment(state: .updateAvailable, repositoryURL: nil)
+        return Assessment(state: .updateAvailable, repositoryURL: repository)
       }
       return Assessment(state: .notInstalled, repositoryURL: nil)
     }
 
     nonisolated private static func prepareRoot(_ context: FileContext) throws {
+      try assertSafeModelRoot(context)
       try context.fileManager.createDirectory(
         at: context.root,
         withIntermediateDirectories: true
       )
+      try assertSafeModelRoot(context)
       var values = URLResourceValues()
       values.isExcludedFromBackup = true
       var root = context.root
@@ -535,18 +606,35 @@
     nonisolated private static func verifyRepository(
       at repository: URL,
       manifest: EnhancedModelManifest,
-      fileManager: FileManager
+      fileManager: FileManager,
+      ownershipRoot: URL
     ) throws {
       let allowed = Set(manifest.files.map(\.path))
+      let allowedDirectories = Set(manifest.files.flatMap { file -> [String] in
+        let pieces = file.path.split(separator: "/").dropLast()
+        return pieces.indices.map {
+          pieces.prefix(through: $0).joined(separator: "/")
+        }
+      })
+      try assertOwnedPath(
+        repository,
+        root: ownershipRoot,
+        fileManager: fileManager
+      )
       for file in manifest.files {
         let url = try containedURL(for: file.path, under: repository)
-        try verifyFile(file, at: url)
+        try verifyFile(
+          file,
+          at: url,
+          ownershipRoot: ownershipRoot,
+          fileManager: fileManager
+        )
       }
       guard
         let enumerator = fileManager.enumerator(
           at: repository,
           includingPropertiesForKeys: [
-            .isRegularFileKey, .isSymbolicLinkKey,
+            .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey,
           ]
         )
       else {
@@ -554,7 +642,7 @@
       }
       for case let url as URL in enumerator {
         let values = try url.resourceValues(
-          forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+          forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
         )
         let standardizedRepositoryPath = repository.standardizedFileURL.path
         let repositoryPath = standardizedRepositoryPath.hasSuffix("/")
@@ -566,7 +654,15 @@
         if values.isSymbolicLink == true {
           throw EnhancedModelManagerError.unexpectedFile(relative)
         }
-        if values.isRegularFile == true, !allowed.contains(relative) {
+        if values.isRegularFile == true {
+          guard allowed.contains(relative) else {
+            throw EnhancedModelManagerError.unexpectedFile(relative)
+          }
+        } else if values.isDirectory == true {
+          guard allowedDirectories.contains(relative) else {
+            throw EnhancedModelManagerError.unexpectedFile(relative)
+          }
+        } else {
           throw EnhancedModelManagerError.unexpectedFile(relative)
         }
       }
@@ -574,8 +670,11 @@
 
     nonisolated private static func verifyFile(
       _ file: EnhancedModelFile,
-      at url: URL
+      at url: URL,
+      ownershipRoot: URL,
+      fileManager: FileManager
     ) throws {
+      try assertOwnedPath(url, root: ownershipRoot, fileManager: fileManager)
       let values = try url.resourceValues(
         forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
       )
@@ -609,28 +708,14 @@
       return try containedURL(for: file.path + ".resumeData", under: repository)
     }
 
-    nonisolated private static func isValidResumeData(_ data: Data) -> Bool {
-      guard
-        let value = try? PropertyListSerialization.propertyList(
-          from: data,
-          options: [],
-          format: nil
-        ),
-        let dictionary = value as? [String: Any]
-      else { return false }
-      return dictionary["NSURLSessionResumeCurrentRequest"] != nil
-        || dictionary["NSURLSessionResumeOriginalRequest"] != nil
-        || dictionary["NSURLSessionDownloadURL"] != nil
-    }
-
     nonisolated private static func removeStagingAndResume(
       _ context: FileContext
     ) throws {
       for url in [
         context.stagingRoot,
         context.resumeRoot,
-      ] where context.fileManager.fileExists(atPath: url.path) {
-        try context.fileManager.removeItem(at: url)
+      ] {
+        try removeOwnedTreeIfPresent(url, context: context)
       }
     }
 
@@ -639,39 +724,140 @@
       manifest: EnhancedModelManifest
     ) throws -> URL {
       let staging = context.stagingRevision(manifest.revision)
+      try assertOwnedPath(staging, context: context)
       try JSONEncoder().encode(manifest).write(
         to: staging.appendingPathComponent("manifest.json"),
         options: .atomic
       )
-      try context.fileManager.createDirectory(
-        at: context.installedRoot,
-        withIntermediateDirectories: true
-      )
+      try createOwnedDirectory(context.installedRoot, context: context)
       let final = context.installedRevision(manifest.revision)
-      if context.fileManager.fileExists(atPath: final.path) {
-        try context.fileManager.removeItem(at: final)
-      }
+      try removeOwnedTreeIfPresent(final, context: context)
       try context.fileManager.moveItem(at: staging, to: final)
 
       let revisions = try context.fileManager.contentsOfDirectory(
         at: context.installedRoot,
-        includingPropertiesForKeys: nil
+        includingPropertiesForKeys: [.isSymbolicLinkKey]
       )
       for revision in revisions
       where revision.standardizedFileURL.path != final.standardizedFileURL.path {
-        try context.fileManager.removeItem(at: revision)
+        try removeOwnedTreeIfPresent(revision, context: context)
       }
       let resume = context.resumeRevision(manifest.revision)
-      if context.fileManager.fileExists(atPath: resume.path) {
-        try context.fileManager.removeItem(at: resume)
-      }
+      try removeOwnedTreeIfPresent(resume, context: context)
       return try repositoryURL(under: final, manifest: manifest)
+    }
+
+    nonisolated private static func createOwnedDirectory(
+      _ url: URL,
+      context: FileContext
+    ) throws {
+      try assertOwnedPath(url, context: context)
+      try context.fileManager.createDirectory(
+        at: url,
+        withIntermediateDirectories: true
+      )
+      try assertOwnedPath(url, context: context)
+    }
+
+    nonisolated private static func removeOwnedItemIfPresent(
+      _ url: URL,
+      context: FileContext
+    ) throws {
+      try assertOwnedPath(url, context: context)
+      guard try fileType(at: url, fileManager: context.fileManager) != nil else {
+        return
+      }
+      try context.fileManager.removeItem(at: url)
+    }
+
+    nonisolated private static func removeOwnedTreeIfPresent(
+      _ url: URL,
+      context: FileContext
+    ) throws {
+      try removeOwnedItemIfPresent(url, context: context)
+    }
+
+    nonisolated private static func assertSafeModelRoot(
+      _ context: FileContext
+    ) throws {
+      for url in [context.root.deletingLastPathComponent(), context.root] {
+        guard let type = try fileType(at: url, fileManager: context.fileManager) else {
+          continue
+        }
+        guard type == .typeDirectory else {
+          throw EnhancedModelManagerError.unsafeFilesystemPath(url.path)
+        }
+      }
+    }
+
+    nonisolated private static func assertOwnedPath(
+      _ url: URL,
+      context: FileContext
+    ) throws {
+      try assertOwnedPath(
+        url,
+        root: context.root,
+        fileManager: context.fileManager
+      )
+    }
+
+    nonisolated private static func assertOwnedPath(
+      _ url: URL,
+      root: URL,
+      fileManager: FileManager
+    ) throws {
+      let root = root.standardizedFileURL
+      let candidate = url.standardizedFileURL
+      guard candidate == root || candidate.path.hasPrefix(root.path + "/") else {
+        throw EnhancedModelManagerError.unsafeFilesystemPath(candidate.path)
+      }
+
+      let parent = root.deletingLastPathComponent()
+      if let type = try fileType(at: parent, fileManager: fileManager),
+        type != .typeDirectory
+      {
+        throw EnhancedModelManagerError.unsafeFilesystemPath(parent.path)
+      }
+
+      var current = candidate
+      while true {
+        if let type = try fileType(at: current, fileManager: fileManager),
+          type == .typeSymbolicLink
+        {
+          throw EnhancedModelManagerError.unsafeFilesystemPath(current.path)
+        }
+        if current == root { break }
+        let next = current.deletingLastPathComponent()
+        guard next.path.count >= root.path.count else {
+          throw EnhancedModelManagerError.unsafeFilesystemPath(candidate.path)
+        }
+        current = next
+      }
+    }
+
+    nonisolated private static func fileType(
+      at url: URL,
+      fileManager: FileManager
+    ) throws -> FileAttributeType? {
+      guard fileManager.fileExists(atPath: url.path) else {
+        if (try? fileManager.destinationOfSymbolicLink(atPath: url.path)) != nil {
+          return .typeSymbolicLink
+        }
+        return nil
+      }
+      return try fileManager.attributesOfItem(atPath: url.path)[.type]
+        as? FileAttributeType
     }
   }
 
   private struct Assessment: Sendable {
     let state: EnhancedModelState
     let repositoryURL: URL?
+  }
+
+  private struct ModelResumeEnvelope: Codable, Sendable {
+    let remoteURL: URL
+    let data: Data
   }
 
   private final class FileContext: @unchecked Sendable {
@@ -713,12 +899,60 @@
   }
 
   final class URLSessionModelDownloader: NSObject, ModelDownloading, @unchecked Sendable {
+    func validatedResumeData(_ data: Data, for remoteURL: URL) -> Data? {
+      guard
+        Self.isPinnedInitialURL(remoteURL),
+        let value = try? PropertyListSerialization.propertyList(
+          from: data,
+          options: [],
+          format: nil
+        ),
+        let dictionary = value as? [String: Any],
+        dictionary["NSURLSessionResumeInfoVersion"] is NSNumber,
+        let received = dictionary["NSURLSessionResumeBytesReceived"] as? NSNumber,
+        received.int64Value >= 0,
+        let temporaryName = dictionary["NSURLSessionResumeInfoTempFileName"] as? String,
+        !temporaryName.isEmpty,
+        let originalData = dictionary["NSURLSessionResumeOriginalRequest"] as? Data,
+        let currentData = dictionary["NSURLSessionResumeCurrentRequest"] as? Data,
+        let originalRequest = try? NSKeyedUnarchiver.unarchivedObject(
+          ofClass: NSURLRequest.self,
+          from: originalData
+        ),
+        let currentRequest = try? NSKeyedUnarchiver.unarchivedObject(
+          ofClass: NSURLRequest.self,
+          from: currentData
+        ),
+        originalRequest.url == remoteURL,
+        let currentURL = currentRequest.url,
+        Self.isAllowedRedirectURL(currentURL)
+      else {
+        return nil
+      }
+      if let storedDownloadURL = dictionary["NSURLSessionDownloadURL"] {
+        guard
+          let value = storedDownloadURL as? String,
+          let url = URL(string: value),
+          Self.isAllowedRedirectURL(url)
+        else {
+          return nil
+        }
+      }
+      return data
+    }
+
     func download(
       from remoteURL: URL,
       resumeData: Data?,
       progress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws -> ModelDownloadResult {
+      guard Self.isPinnedInitialURL(remoteURL) else {
+        throw ModelDownloadError.redirectRejected
+      }
       let delegate = DownloadDelegate(progress: progress)
+      let resumeData = resumeData.flatMap {
+        validatedResumeData($0, for: remoteURL)
+      }
       return try await withTaskCancellationHandler {
         try await withCheckedThrowingContinuation { continuation in
           delegate.start(
@@ -738,15 +972,51 @@
         || host.hasSuffix(".huggingface.co")
         || host.hasSuffix(".xethub.hf.co")
     }
+
+    static func isAllowedRedirectURL(_ url: URL) -> Bool {
+      url.scheme?.lowercased() == "https"
+        && url.host.map(isAllowedRedirectHost) == true
+    }
+
+    private static func isPinnedInitialURL(_ url: URL) -> Bool {
+      url.scheme?.lowercased() == "https"
+        && url.host?.lowercased() == "huggingface.co"
+    }
+  }
+
+  final class DownloadStartHandshake: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancellationRequested = false
+    private var task: URLSessionDownloadTask?
+
+    func installAndResume(_ task: URLSessionDownloadTask) -> Bool {
+      lock.withLock {
+        guard !cancellationRequested else { return false }
+        self.task = task
+        task.resume()
+        return true
+      }
+    }
+
+    func requestCancellation() -> URLSessionDownloadTask? {
+      lock.withLock {
+        cancellationRequested = true
+        return task
+      }
+    }
+
+    func clear() {
+      lock.withLock { task = nil }
+    }
   }
 
   private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate,
     @unchecked Sendable
   {
     private let lock = NSLock()
+    private let startHandshake = DownloadStartHandshake()
     private let progress: @Sendable (Int64, Int64) -> Void
     private var continuation: CheckedContinuation<ModelDownloadResult, Error>?
-    private var task: URLSessionDownloadTask?
     private var session: URLSession?
     private var downloadedURL: URL?
 
@@ -759,7 +1029,7 @@
       resumeData: Data?,
       continuation: CheckedContinuation<ModelDownloadResult, Error>
     ) {
-      lock.withLock {
+      let task = lock.withLock { () -> URLSessionDownloadTask in
         self.continuation = continuation
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = false
@@ -769,15 +1039,17 @@
           delegateQueue: nil
         )
         self.session = session
-        let task = resumeData.map(session.downloadTask(withResumeData:))
+        return resumeData.map(session.downloadTask(withResumeData:))
           ?? session.downloadTask(with: remoteURL)
-        self.task = task
-        task.resume()
+      }
+      guard startHandshake.installAndResume(task) else {
+        finish(.failure(ModelDownloadError.cancelled(resumeData: nil)))
+        return
       }
     }
 
     func cancel() {
-      let task = lock.withLock { self.task }
+      let task = startHandshake.requestCancellation()
       task?.cancel { [weak self] data in
         self?.finish(.failure(ModelDownloadError.cancelled(resumeData: data)))
       }
@@ -801,8 +1073,8 @@
       completionHandler: @escaping (URLRequest?) -> Void
     ) {
       guard
-        let host = request.url?.host,
-        URLSessionModelDownloader.isAllowedRedirectHost(host)
+        let url = request.url,
+        URLSessionModelDownloader.isAllowedRedirectURL(url)
       else {
         completionHandler(nil)
         finish(.failure(ModelDownloadError.redirectRejected))
@@ -850,7 +1122,7 @@
       let continuation = lock.withLock { () -> CheckedContinuation<ModelDownloadResult, Error>? in
         defer {
           self.continuation = nil
-          task = nil
+          startHandshake.clear()
           session?.finishTasksAndInvalidate()
           session = nil
         }
