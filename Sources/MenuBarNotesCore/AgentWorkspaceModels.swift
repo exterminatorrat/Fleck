@@ -274,6 +274,7 @@ public struct AgentActivitySummary: Codable, Equatable, Sendable {
   public let noteID: UUID
   public let noteTitle: String
   public let actor: AgentActivityActor
+  public let originatingActor: AgentActivityActor?
   public let createdAt: Date
   public let operation: AgentActivityOperation
   public let patch: AgentTextPatch
@@ -286,6 +287,7 @@ public struct AgentActivitySummary: Codable, Equatable, Sendable {
     noteID: UUID,
     noteTitle: String,
     actor: AgentActivityActor,
+    originatingActor: AgentActivityActor? = nil,
     createdAt: Date,
     operation: AgentActivityOperation,
     patch: AgentTextPatch,
@@ -297,6 +299,7 @@ public struct AgentActivitySummary: Codable, Equatable, Sendable {
     self.noteID = noteID
     self.noteTitle = noteTitle
     self.actor = actor
+    self.originatingActor = originatingActor
     self.createdAt = createdAt
     self.operation = operation
     self.patch = patch

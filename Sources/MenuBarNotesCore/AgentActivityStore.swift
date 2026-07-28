@@ -6,6 +6,7 @@ public struct PreparedAgentTransaction: Codable, Equatable, Sendable {
   public let noteID: UUID
   public let noteTitle: String
   public let actor: AgentActivityActor
+  public let originatingActor: AgentActivityActor?
   public let operationID: UUID
   public let createdAt: Date
   public let operation: AgentActivityOperation
@@ -20,6 +21,7 @@ public struct PreparedAgentTransaction: Codable, Equatable, Sendable {
     noteID: UUID,
     noteTitle: String,
     actor: AgentActivityActor,
+    originatingActor: AgentActivityActor? = nil,
     operationID: UUID,
     createdAt: Date,
     operation: AgentActivityOperation,
@@ -33,6 +35,7 @@ public struct PreparedAgentTransaction: Codable, Equatable, Sendable {
     self.noteID = noteID
     self.noteTitle = noteTitle
     self.actor = actor
+    self.originatingActor = originatingActor
     self.operationID = operationID
     self.createdAt = createdAt
     self.operation = operation
@@ -53,6 +56,7 @@ public struct AgentActivityRecord: Codable, Equatable, Sendable {
   public let noteID: UUID
   public let noteTitle: String
   public let actor: AgentActivityActor
+  public let originatingActor: AgentActivityActor?
   public let operationID: UUID
   public let createdAt: Date
   public let operation: AgentActivityOperation
@@ -71,6 +75,7 @@ public struct AgentActivityRecord: Codable, Equatable, Sendable {
     noteID = transaction.noteID
     noteTitle = transaction.noteTitle
     actor = transaction.actor
+    originatingActor = transaction.originatingActor
     operationID = transaction.operationID
     createdAt = transaction.createdAt
     operation = transaction.operation

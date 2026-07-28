@@ -6,8 +6,20 @@
   import ServiceManagement
 
   @MainActor
-  final class AppState: ObservableObject, DictationSaving {
-    typealias SaveOperation = @Sendable (Workspace, AppPreferences, [Note]) async throws -> Void
+  final class AppState: ObservableObject, DictationSaving, AgentWorkspaceStateAccess {
+    typealias SaveOperation =
+      @Sendable (
+        Workspace,
+        AppPreferences,
+        [Note],
+        UInt64
+      ) async throws -> LocalStoreSnapshotWriteResult
+    typealias LegacySaveOperation =
+      @Sendable (
+        Workspace,
+        AppPreferences,
+        [Note]
+      ) async throws -> Void
     typealias LoadTrashOperation = @Sendable () async throws -> [TrashedNote]
 
     enum SaveStatus: Equatable {
@@ -33,10 +45,15 @@
     @Published var saveError: String?
     @Published private(set) var saveStatus = SaveStatus.idle
     @Published private(set) var trashedNotes: [TrashedNote] = []
+    @Published private(set) var latestAgentFeedback: AgentChangeFeedback?
+    @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
     private(set) var persistenceGeneration: UInt64 = 0
     private(set) var hasFinishedInitialLoad = false
+    private(set) var isAgentWorkspaceAvailable = false
+    private(set) var agentCommitProofs: [AgentWorkspaceCommitProof] = []
 
     private let store: LocalStore
+    private let snapshotWriter: LocalStoreSnapshotWriter
     private let saveOperation: SaveOperation
     private let loadTrashOperation: LoadTrashOperation
     private var debouncedSaveTask: Task<Void, Error>?
@@ -63,18 +80,37 @@
       ).first!
       let store = store ?? LocalStore(rootURL: appSupport.appendingPathComponent("MenuBarNotes"))
       self.store = store
-      self.saveOperation = saveOperation ?? { workspace, preferences, trashedNotes in
-        try await store.save(
-          workspace: workspace,
-          preferences: preferences,
-          trashedNotes: trashedNotes
-        )
-      }
-      self.loadTrashOperation = loadTrashOperation ?? {
-        try await store.loadTrash()
-      }
+      snapshotWriter = store.snapshotWriter
+      self.saveOperation =
+        saveOperation ?? { workspace, preferences, trashedNotes, generation in
+          try await store.save(
+            workspace: workspace,
+            preferences: preferences,
+            trashedNotes: trashedNotes,
+            generation: generation
+          )
+        }
+      self.loadTrashOperation =
+        loadTrashOperation ?? {
+          try await store.loadTrash()
+        }
       workspace.ensureNoteExists()
       Task { await load() }
+    }
+
+    convenience init(
+      store: LocalStore? = nil,
+      saveOperation: @escaping LegacySaveOperation,
+      loadTrashOperation: LoadTrashOperation? = nil
+    ) {
+      self.init(
+        store: store,
+        saveOperation: { workspace, preferences, trashedNotes, _ in
+          try await saveOperation(workspace, preferences, trashedNotes)
+          return .committed
+        },
+        loadTrashOperation: loadTrashOperation
+      )
     }
 
     var selectedNote: Note? {
@@ -284,6 +320,14 @@
       scheduleSave()
     }
 
+    func setSelectedAgentAccess(_ enabled: Bool) {
+      guard let id = workspace.selectedNoteID else { return }
+      let originalWorkspace = workspace
+      workspace.setAgentAccess(id: id, enabled: enabled)
+      guard workspace != originalWorkspace else { return }
+      saveNow()
+    }
+
     func toggleList(_ style: MarkdownEditing.ListStyle) {
       guard let note = selectedNote else { return }
       updateSelected(body: MarkdownEditing.togglingList(in: note.body, style: style))
@@ -341,20 +385,26 @@
       resetSaveStatus()
       pendingTrashNotes.removeValue(forKey: trashedNote.id)
       trashedNotes.removeAll { $0.id == trashedNote.id }
+      let originalWorkspace = workspace
       workspace.addNote(trashedNote.note)
-      let workspace = workspace
+      let optimisticWorkspace = workspace
       let preferences = preferences
+      let generation = persistenceGeneration
       let store = store
       Task {
         do {
           _ = try await store.restore(
             trashedNote,
-            into: workspace,
-            preferences: preferences
+            into: optimisticWorkspace,
+            preferences: preferences,
+            generation: generation
           )
           trashedNotes = try await store.loadTrash()
           saveError = nil
         } catch {
+          if workspace == optimisticWorkspace {
+            workspace = originalWorkspace
+          }
           if let refreshedTrash = try? await store.loadTrash() {
             trashedNotes = refreshedTrash
           }
@@ -366,11 +416,19 @@
     private func load() async {
       defer { finishInitialLoad() }
       do {
-        workspace = try await store.loadWorkspace()
-        preferences = try await store.loadPreferences()
+        let snapshot = try await store.loadSnapshot()
+        workspace = snapshot.workspace
+        preferences = snapshot.preferences
+        persistenceGeneration = max(
+          persistenceGeneration,
+          snapshot.generation
+        )
+        agentCommitProofs = snapshot.commitProofs
         trashedNotes = try await store.loadTrash()
+        isAgentWorkspaceAvailable = true
         saveError = nil
       } catch {
+        isAgentWorkspaceAvailable = false
         saveError = error.localizedDescription
       }
     }
@@ -407,19 +465,26 @@
     private typealias SaveSnapshot = (
       workspace: Workspace,
       preferences: AppPreferences,
-      trashedNotes: [Note]
+      trashedNotes: [Note],
+      generation: UInt64
     )
 
     private func saveSnapshot() -> SaveSnapshot {
-      (workspace, preferences, Array(pendingTrashNotes.values))
+      (
+        workspace,
+        preferences,
+        Array(pendingTrashNotes.values),
+        persistenceGeneration
+      )
     }
 
     private func persist(_ snapshot: SaveSnapshot) async throws {
       do {
-        try await saveOperation(
+        _ = try await saveOperation(
           snapshot.workspace,
           snapshot.preferences,
-          snapshot.trashedNotes
+          snapshot.trashedNotes,
+          snapshot.generation
         )
       } catch {
         if Task.isCancelled || error is CancellationError {
@@ -446,6 +511,108 @@
       guard !Task.isCancelled else { return }
       saveError = trashRefreshError?.localizedDescription
       markSaveSucceeded()
+    }
+
+    func flushPendingPersistenceForAgent() async throws {
+      try await withCheckedThrowingContinuation { continuation in
+        let resolution = AgentPersistenceDrainResolution(continuation)
+        Task { @MainActor [weak self] in
+          do {
+            guard let self else {
+              throw AgentWorkspaceError(code: .motesUnavailable)
+            }
+            try await self.drainPersistenceForAgent()
+            resolution.resolve(.success(()))
+          } catch {
+            resolution.resolve(.failure(error))
+          }
+        }
+        Task {
+          try? await Task.sleep(for: .seconds(2))
+          resolution.resolve(
+            .failure(
+              AgentWorkspaceError(
+                code: .motesUnavailable,
+                recoveryAction: "Wait for Motes to finish saving, then retry."
+              )
+            )
+          )
+        }
+      }
+    }
+
+    func commitAgentWorkspace(
+      _ workspace: Workspace,
+      expectedGeneration: UInt64,
+      commitProof: AgentWorkspaceCommitProof
+    ) throws {
+      guard
+        isAgentWorkspaceAvailable,
+        persistenceGeneration == expectedGeneration
+      else {
+        throw AgentWorkspaceError(code: .revisionConflict)
+      }
+      guard pendingTrashNotes.isEmpty else {
+        throw AgentWorkspaceError(
+          code: .motesUnavailable,
+          recoveryAction: "Wait for Trash to finish saving, then retry."
+        )
+      }
+      debouncedSaveTask?.cancel()
+      let committedGeneration = expectedGeneration + 1
+      do {
+        let result = try snapshotWriter.save(
+          workspace: workspace,
+          preferences: preferences,
+          generation: committedGeneration,
+          commitProof: commitProof
+        )
+        guard result == .committed else {
+          throw AgentWorkspaceError(code: .revisionConflict)
+        }
+      } catch let error as AgentWorkspaceError {
+        throw error
+      } catch {
+        throw AgentWorkspaceError(code: .internalSaveFailure)
+      }
+
+      self.workspace = workspace
+      persistenceGeneration = committedGeneration
+      agentCommitProofs.removeAll {
+        $0.changeID == commitProof.changeID
+      }
+      agentCommitProofs.append(commitProof)
+      saveError = nil
+      markSaveSucceeded()
+    }
+
+    func publishAgentFeedback(_ feedback: AgentChangeFeedback) {
+      latestAgentFeedback = feedback
+    }
+
+    private func drainPersistenceForAgent() async throws {
+      while true {
+        await waitForAwaitedSaves()
+        debouncedSaveTask?.cancel()
+        let generation = persistenceGeneration
+        do {
+          try await saveNow(transactionOwned: true).value
+        } catch is CancellationError {
+          continue
+        } catch {
+          throw AgentWorkspaceError(
+            code: .motesUnavailable,
+            recoveryAction: "Resolve the Motes save error, then retry."
+          )
+        }
+        guard
+          generation == persistenceGeneration,
+          pendingTrashNotes.isEmpty
+        else {
+          continue
+        }
+        return
+      }
     }
 
     private func rollbackSmartCapture(
@@ -535,6 +702,23 @@
     private func resetSaveStatus() {
       saveStatusResetTask?.cancel()
       saveStatus = .idle
+    }
+  }
+
+  private final class AgentPersistenceDrainResolution: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(_ continuation: CheckedContinuation<Void, Error>) {
+      self.continuation = continuation
+    }
+
+    func resolve(_ result: Result<Void, Error>) {
+      let continuation = lock.withLock {
+        defer { self.continuation = nil }
+        return self.continuation
+      }
+      continuation?.resume(with: result)
     }
   }
 #endif

@@ -45,6 +45,79 @@ import Testing
   #expect(try directoryFiles(root, "AgentActivity/Tombstones").count == 1)
 }
 
+@Test func agentActivityAttributionPersistsAndDecodesLegacyEntries() throws {
+  let root = temporaryAgentActivityURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let origin = AgentActivityActor.integration(
+    profileID: UUID(),
+    displayName: "Codex"
+  )
+  let transaction = preparedTransaction(
+    actor: .localUser,
+    originatingActor: origin
+  )
+  let store = AgentActivityStore(rootURL: root)
+
+  try store.prepare(transaction)
+  try store.commit(
+    changeID: transaction.changeID,
+    receipt: receipt(for: transaction)
+  )
+
+  #expect(store.record(id: transaction.changeID)?.actor == .localUser)
+  #expect(store.record(id: transaction.changeID)?.originatingActor == origin)
+
+  var legacyJSON = try #require(
+    JSONSerialization.jsonObject(
+      with: JSONEncoder.agentActivity.encode(transaction)
+    ) as? [String: Any]
+  )
+  legacyJSON.removeValue(forKey: "originatingActor")
+  let legacy = try JSONDecoder.agentActivity.decode(
+    PreparedAgentTransaction.self,
+    from: JSONSerialization.data(withJSONObject: legacyJSON)
+  )
+  #expect(legacy.originatingActor == nil)
+
+  let record = try #require(store.record(id: transaction.changeID))
+  var legacyRecordJSON = try #require(
+    JSONSerialization.jsonObject(
+      with: JSONEncoder.agentActivity.encode(record)
+    ) as? [String: Any]
+  )
+  legacyRecordJSON.removeValue(forKey: "originatingActor")
+  let legacyRecord = try JSONDecoder.agentActivity.decode(
+    AgentActivityRecord.self,
+    from: JSONSerialization.data(withJSONObject: legacyRecordJSON)
+  )
+  #expect(legacyRecord.originatingActor == nil)
+
+  let summary = AgentActivitySummary(
+    changeID: record.changeID,
+    noteID: record.noteID,
+    noteTitle: record.noteTitle,
+    actor: record.actor,
+    originatingActor: record.originatingActor,
+    createdAt: record.createdAt,
+    operation: record.operation,
+    patch: record.patch,
+    previousRevision: record.previousRevision,
+    resultingRevision: record.resultingRevision,
+    canUndo: true
+  )
+  var legacySummaryJSON = try #require(
+    JSONSerialization.jsonObject(
+      with: JSONEncoder.agentActivity.encode(summary)
+    ) as? [String: Any]
+  )
+  legacySummaryJSON.removeValue(forKey: "originatingActor")
+  let legacySummary = try JSONDecoder.agentActivity.decode(
+    AgentActivitySummary.self,
+    from: JSONSerialization.data(withJSONObject: legacySummaryJSON)
+  )
+  #expect(legacySummary.originatingActor == nil)
+}
+
 @Test func agentActivityStoreScopesOperationIDsByActorIdentity() throws {
   let root = temporaryAgentActivityURL()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -478,6 +551,7 @@ private func preparedTransaction(
   changeID: UUID = UUID(),
   noteID: UUID = UUID(),
   actor: AgentActivityActor = .integration(profileID: UUID(), displayName: "Codex"),
+  originatingActor: AgentActivityActor? = nil,
   operationID: UUID = UUID(),
   createdAt: Date = Date(timeIntervalSince1970: 1_900_000_000),
   resultingRevision: UInt64 = 4,
@@ -489,6 +563,7 @@ private func preparedTransaction(
     noteID: noteID,
     noteTitle: "Tasks",
     actor: actor,
+    originatingActor: originatingActor,
     operationID: operationID,
     createdAt: createdAt,
     operation: .replaceLines,

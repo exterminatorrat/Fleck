@@ -274,7 +274,8 @@ import Testing
 
   let atExpiry = deletedAt.addingTimeInterval(30 * 24 * 60 * 60)
   #expect(try await LocalStore(rootURL: root, now: { atExpiry }).loadTrash().isEmpty)
-  #expect(!FileManager.default.fileExists(atPath: trashEntryURL(root: root, noteID: deleted.id).path))
+  #expect(
+    !FileManager.default.fileExists(atPath: trashEntryURL(root: root, noteID: deleted.id).path))
 }
 
 @Test func retryingTrashArchiveKeepsTheOriginalDeletionDate() async throws {
@@ -362,7 +363,8 @@ import Testing
   #expect(restoredWorkspace.notes.last == deleted)
   #expect(try await store.loadWorkspace() == restoredWorkspace)
   #expect(try await store.loadPreferences() == preferences)
-  #expect(!FileManager.default.fileExists(atPath: trashEntryURL(root: root, noteID: deleted.id).path))
+  #expect(
+    !FileManager.default.fileExists(atPath: trashEntryURL(root: root, noteID: deleted.id).path))
 }
 
 @Test func tabColorRoundTripsThroughTrashAndRestore() async throws {
@@ -392,10 +394,584 @@ import Testing
   #expect(try await store.loadWorkspace().notes.last?.tabColorHex == "#BF5AF2")
 }
 
+@Test func snapshotWriterRejectsOlderGenerationWithoutTouchingDisk() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let writer = LocalStoreSnapshotWriter(rootURL: root)
+  let newer = Note(title: "Newer")
+  let older = Note(title: "Older")
+
+  #expect(
+    try writer.save(
+      workspace: Workspace(notes: [newer], selectedNoteID: newer.id),
+      preferences: .init(),
+      generation: 2
+    ) == .committed
+  )
+  #expect(
+    try writer.save(
+      workspace: Workspace(notes: [older], selectedNoteID: older.id),
+      preferences: .init(),
+      generation: 1
+    ) == .superseded
+  )
+  #expect(try writer.loadSnapshot().workspace.notes.map(\.title) == ["Newer"])
+}
+
+@Test func supersededDeleteSnapshotCannotRearchiveARestoredNote() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let deleted = Note(
+    title: "Restored",
+    createdAt: date,
+    modifiedAt: date
+  )
+  let remaining = Note(
+    title: "Remaining",
+    createdAt: date,
+    modifiedAt: date
+  )
+  let activeWorkspace = Workspace(notes: [remaining], selectedNoteID: remaining.id)
+  let store = LocalStore(rootURL: root)
+
+  #expect(
+    try await store.save(
+      workspace: activeWorkspace,
+      preferences: .init(),
+      trashedNotes: [deleted],
+      generation: 2
+    ) == .committed
+  )
+  let trashed = try #require(await store.loadTrash().first)
+  let restoredWorkspace = try await store.restore(
+    trashed,
+    into: activeWorkspace,
+    preferences: .init(),
+    generation: 3
+  )
+  #expect(try await store.loadTrash().isEmpty)
+
+  #expect(
+    try await store.save(
+      workspace: activeWorkspace,
+      preferences: .init(),
+      trashedNotes: [deleted],
+      generation: 2
+    ) == .superseded
+  )
+  #expect(try await store.loadTrash().isEmpty)
+  #expect(try await store.loadSnapshot().workspace == restoredWorkspace)
+}
+
+@Test func failedSnapshotGenerationRemainsRetryable() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let failure = SnapshotFailureController(failingGeneration: 3)
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(beforeManifestCommit: { generation in
+      try failure.failOnce(generation)
+    })
+  )
+  let note = Note(title: "Retry")
+  let workspace = Workspace(notes: [note], selectedNoteID: note.id)
+
+  #expect(throws: SnapshotTestError.failed) {
+    try writer.save(workspace: workspace, preferences: .init(), generation: 3)
+  }
+  #expect(
+    try writer.save(workspace: workspace, preferences: .init(), generation: 3)
+      == .committed
+  )
+}
+
+@Test func failedNewerGenerationSupersedesOlderButRemainsRetryable() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let failure = SnapshotFailureController(failingGeneration: 3)
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(beforeManifestCommit: { generation in
+      try failure.failOnce(generation)
+    })
+  )
+  let newer = Note(title: "Newer")
+  let older = Note(title: "Older")
+
+  #expect(throws: SnapshotTestError.failed) {
+    try writer.save(
+      workspace: Workspace(notes: [newer], selectedNoteID: newer.id),
+      preferences: .init(),
+      generation: 3
+    )
+  }
+  #expect(
+    try writer.save(
+      workspace: Workspace(notes: [older], selectedNoteID: older.id),
+      preferences: .init(),
+      generation: 2
+    ) == .superseded
+  )
+  #expect(
+    try writer.save(
+      workspace: Workspace(notes: [newer], selectedNoteID: newer.id),
+      preferences: .init(),
+      generation: 3
+    ) == .committed
+  )
+}
+
+@Test func supersededRestoreKeepsTheOnlyTrashCopy() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let deleted = Note(
+    title: "Only copy",
+    body: "Recover me",
+    createdAt: date,
+    modifiedAt: date
+  )
+  let remaining = Note(
+    title: "Remaining",
+    createdAt: date,
+    modifiedAt: date
+  )
+  let active = Workspace(notes: [remaining], selectedNoteID: remaining.id)
+
+  _ = try await store.save(
+    workspace: active,
+    preferences: .init(),
+    trashedNotes: [deleted],
+    generation: 2
+  )
+  _ = try await store.save(
+    workspace: active,
+    preferences: .init(),
+    generation: 4
+  )
+  let trashed = try #require(await store.loadTrash().first)
+
+  await #expect(throws: LocalStore.StoreError.self) {
+    try await store.restore(
+      trashed,
+      into: active,
+      preferences: .init(),
+      generation: 3
+    )
+  }
+
+  #expect(try await store.loadTrash().map(\.id) == [deleted.id])
+  #expect(try await store.loadSnapshot().workspace == active)
+}
+
+@Test func trashArchiveCompletesBeforeManifestCommit() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(beforeManifestCommit: { _ in
+      throw SnapshotTestError.failed
+    })
+  )
+  let deleted = Note(title: "Recoverable", body: "Keep me")
+  let remaining = Note(title: "Remaining")
+
+  #expect(throws: SnapshotTestError.failed) {
+    try writer.save(
+      workspace: Workspace(notes: [remaining], selectedNoteID: remaining.id),
+      preferences: .init(),
+      generation: 1,
+      trashedNotes: [deleted]
+    )
+  }
+  let entryURL = trashEntryURL(root: root, noteID: deleted.id)
+  #expect(
+    try String(
+      contentsOf: entryURL.appendingPathComponent("body.md"),
+      encoding: .utf8
+    ) == deleted.body
+  )
+}
+
+@Test func snapshotIntegrityCouplesWorkspaceAndPreferencesToRecovery() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let first = Note(title: "First", body: "First body")
+  try await store.save(
+    workspace: Workspace(notes: [first], selectedNoteID: first.id),
+    preferences: AppPreferences(fontFamily: "Menlo"),
+    generation: 1
+  )
+  let second = Note(title: "Second", body: "Second body")
+  try await store.save(
+    workspace: Workspace(notes: [second], selectedNoteID: second.id),
+    preferences: AppPreferences(fontFamily: "Avenir"),
+    generation: 2
+  )
+  try Data("corrupt".utf8).write(
+    to: root.appendingPathComponent("preferences.json")
+  )
+
+  let snapshot = try await store.loadSnapshot()
+
+  #expect(snapshot.source == .recovery)
+  #expect(snapshot.workspace.notes.map(\.title) == ["First"])
+  #expect(snapshot.preferences.fontFamily == "Menlo")
+}
+
+@Test func snapshotManifestCommitsExactHashesAndAgentProof() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let note = Note(title: "Shared", body: "Body", agentAccess: true, revision: 2)
+  let proof = AgentWorkspaceCommitProof(
+    changeID: UUID(),
+    noteID: note.id,
+    resultingRevision: note.revision,
+    bodySHA256:
+      "6ccaa6415b5ee449e3c0e6150de1203414a8bb8dfcf7a595702f18c5412a3f6e",
+    actor: .localUser,
+    operationID: UUID(),
+    expiresAt: Date(timeIntervalSince1970: 1_900_000_000)
+  )
+
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: AppPreferences(fontFamily: "Menlo"),
+    generation: 4,
+    commitProof: proof
+  )
+  let snapshot = try await store.loadSnapshot()
+
+  #expect(snapshot.source == .root)
+  #expect(snapshot.commitProofs == [proof])
+  let manifest = try #require(
+    try JSONSerialization.jsonObject(
+      with: Data(contentsOf: root.appendingPathComponent("workspace.json"))
+    ) as? [String: Any]
+  )
+  #expect(manifest["snapshotIntegrityVersion"] as? Int == 1)
+  #expect(manifest["preferencesSHA256"] as? String != nil)
+  let markdownHashes = try #require(manifest["markdownSHA256"] as? [String: String])
+  #expect(markdownHashes[note.id.uuidString.lowercased()] != nil)
+}
+
+@Test func preferencesOnlyPrecommitFailureFallsBackToPreviousCompleteGeneration() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let first = Note(title: "First")
+  try await store.save(
+    workspace: Workspace(notes: [first], selectedNoteID: first.id),
+    preferences: AppPreferences(fontFamily: "Menlo"),
+    generation: 1
+  )
+  let failure = SnapshotFailureController(failingGeneration: 2)
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(beforeManifestCommit: { generation in
+      try failure.failOnce(generation)
+    })
+  )
+  let second = Note(title: "Second")
+
+  #expect(throws: SnapshotTestError.failed) {
+    try writer.save(
+      workspace: Workspace(notes: [second], selectedNoteID: second.id),
+      preferences: AppPreferences(fontFamily: "Avenir"),
+      generation: 2
+    )
+  }
+  let snapshot = try writer.loadSnapshot()
+
+  #expect(snapshot.source == .recovery)
+  #expect(snapshot.workspace.notes.map(\.title) == ["First"])
+  #expect(snapshot.preferences.fontFamily == "Menlo")
+}
+
+@Test func snapshotWriterSerializesNewerThenOlderAsCommittedThenSuperseded() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let entered = DispatchSemaphore(value: 0)
+  let release = DispatchSemaphore(value: 0)
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(beforeManifestCommit: { generation in
+      guard generation == 2 else { return }
+      entered.signal()
+      release.wait()
+    })
+  )
+  let newer = Note(title: "Newer")
+  let older = Note(title: "Older")
+  let newerTask = Task.detached {
+    try writer.save(
+      workspace: Workspace(notes: [newer], selectedNoteID: newer.id),
+      preferences: .init(),
+      generation: 2
+    )
+  }
+  await wait(for: entered)
+  let olderTask = Task.detached {
+    try writer.save(
+      workspace: Workspace(notes: [older], selectedNoteID: older.id),
+      preferences: .init(),
+      generation: 1
+    )
+  }
+  release.signal()
+
+  #expect(try await newerTask.value == .committed)
+  #expect(try await olderTask.value == .superseded)
+  #expect(try writer.loadSnapshot().workspace.notes.map(\.title) == ["Newer"])
+}
+
+@Test func snapshotWriterSerializesOlderThenNewerAndLeavesNewerOnDisk() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let entered = DispatchSemaphore(value: 0)
+  let release = DispatchSemaphore(value: 0)
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(beforeManifestCommit: { generation in
+      guard generation == 1 else { return }
+      entered.signal()
+      release.wait()
+    })
+  )
+  let older = Note(title: "Older")
+  let newer = Note(title: "Newer")
+  let olderTask = Task.detached {
+    try writer.save(
+      workspace: Workspace(notes: [older], selectedNoteID: older.id),
+      preferences: .init(),
+      generation: 1
+    )
+  }
+  await wait(for: entered)
+  let newerTask = Task.detached {
+    try writer.save(
+      workspace: Workspace(notes: [newer], selectedNoteID: newer.id),
+      preferences: .init(),
+      generation: 2
+    )
+  }
+  release.signal()
+
+  #expect(try await olderTask.value == .committed)
+  #expect(try await newerTask.value == .committed)
+  #expect(try writer.loadSnapshot().workspace.notes.map(\.title) == ["Newer"])
+}
+
+@Test func postManifestMaintenanceFailureDoesNotTurnCommitIntoFailure() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(afterManifestCommit: { _ in
+      throw SnapshotTestError.failed
+    })
+  )
+  let note = Note(title: "Committed")
+
+  #expect(
+    try writer.save(
+      workspace: Workspace(notes: [note], selectedNoteID: note.id),
+      preferences: .init(),
+      generation: 1
+    ) == .committed
+  )
+  #expect(
+    try writer.loadSnapshot().workspace.notes.map(\.title)
+      == ["Committed"]
+  )
+}
+
+@Test func missingPreferencesRejectRootAndLoadsWorkspaceAndPreferencesFromRecovery()
+  async throws
+{
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let first = Note(title: "First")
+  try await store.save(
+    workspace: Workspace(notes: [first], selectedNoteID: first.id),
+    preferences: AppPreferences(fontFamily: "Menlo"),
+    generation: 1
+  )
+  let second = Note(title: "Second")
+  try await store.save(
+    workspace: Workspace(notes: [second], selectedNoteID: second.id),
+    preferences: AppPreferences(fontFamily: "Avenir"),
+    generation: 2
+  )
+  try FileManager.default.removeItem(
+    at: root.appendingPathComponent("preferences.json")
+  )
+
+  let snapshot = try await store.loadSnapshot()
+
+  #expect(snapshot.source == .recovery)
+  #expect(snapshot.workspace.notes.map(\.title) == ["First"])
+  #expect(snapshot.preferences.fontFamily == "Menlo")
+}
+
+@Test func invalidRootRetryPreservesLastValidRecoveryUntilNewManifestCommits()
+  throws
+{
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let writer = LocalStoreSnapshotWriter(rootURL: root)
+  let first = Note(title: "First", body: "safe")
+  let second = Note(title: "Second", body: "new")
+  _ = try writer.save(
+    workspace: Workspace(notes: [first], selectedNoteID: first.id),
+    preferences: .init(),
+    generation: 1
+  )
+  _ = try writer.save(
+    workspace: Workspace(notes: [second], selectedNoteID: second.id),
+    preferences: .init(),
+    generation: 2
+  )
+  try Data("corrupt".utf8).write(
+    to: root.appendingPathComponent(
+      "\(second.id.uuidString.lowercased()).md"
+    )
+  )
+  let third = Note(title: "Third", body: "final")
+
+  _ = try writer.save(
+    workspace: Workspace(notes: [third], selectedNoteID: third.id),
+    preferences: .init(),
+    generation: 3
+  )
+
+  #expect(
+    try String(
+      contentsOf:
+        root
+        .appendingPathComponent("Recovery", isDirectory: true)
+        .appendingPathComponent(
+          "\(first.id.uuidString.lowercased()).md"
+        ),
+      encoding: .utf8
+    ) == "safe"
+  )
+  #expect(try writer.loadSnapshot().workspace.notes.map(\.title) == ["Third"])
+}
+
+@Test func oldHashlessManifestLoadsAndAcquiresIntegrityOnNextSave() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let id = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+  try FileManager.default.createDirectory(
+    at: root,
+    withIntermediateDirectories: true
+  )
+  try Data(
+    """
+    {
+      "formatVersion": 1,
+      "noteOrder": ["\(id.uuidString)"],
+      "selectedNoteID": "\(id.uuidString)",
+      "metadata": [
+        "\(id.uuidString)",
+        {
+          "title": "Legacy",
+          "createdAt": "1970-01-01T00:00:00Z",
+          "modifiedAt": "1970-01-01T00:00:00Z",
+          "isPinned": false
+        }
+      ]
+    }
+    """.utf8
+  ).write(to: root.appendingPathComponent("workspace.json"))
+  try "legacy".write(
+    to: root.appendingPathComponent("\(id.uuidString.lowercased()).md"),
+    atomically: true,
+    encoding: .utf8
+  )
+  let store = LocalStore(rootURL: root)
+  let snapshot = try await store.loadSnapshot()
+
+  _ = try await store.save(
+    workspace: snapshot.workspace,
+    preferences: snapshot.preferences,
+    generation: 1
+  )
+
+  let manifest = try #require(
+    try JSONSerialization.jsonObject(
+      with: Data(contentsOf: root.appendingPathComponent("workspace.json"))
+    ) as? [String: Any]
+  )
+  #expect(manifest["snapshotIntegrityVersion"] as? Int == 1)
+  #expect(manifest["markdownSHA256"] as? [String: String] != nil)
+  #expect(manifest["preferencesSHA256"] as? String != nil)
+}
+
+@Test func integritySnapshotNeverLoadsAnUnhashedRTFOrphan() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Plain", body: "Body")
+  let store = LocalStore(rootURL: root)
+  _ = try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: .init(),
+    generation: 1
+  )
+  try Data("uncommitted sidecar".utf8).write(
+    to: root.appendingPathComponent(
+      "\(note.id.uuidString.lowercased()).rtf"
+    )
+  )
+
+  let snapshot = try await store.loadSnapshot()
+
+  #expect(snapshot.source == .root)
+  #expect(snapshot.workspace.notes.first?.body == "Body")
+  #expect(snapshot.workspace.notes.first?.richTextRTF == nil)
+}
+
 private func temporaryStoreURL() -> URL {
   FileManager.default.temporaryDirectory.appendingPathComponent(
     "MenuBarNotesTests-\(UUID().uuidString)"
   )
+}
+
+private enum SnapshotTestError: Error {
+  case failed
+}
+
+private func wait(for semaphore: DispatchSemaphore) async {
+  await withCheckedContinuation { continuation in
+    DispatchQueue.global().async {
+      semaphore.wait()
+      continuation.resume()
+    }
+  }
+}
+
+private final class SnapshotFailureController: @unchecked Sendable {
+  private let lock = NSLock()
+  private let generation: UInt64
+  private var hasFailed = false
+
+  init(failingGeneration: UInt64) {
+    generation = failingGeneration
+  }
+
+  func failOnce(_ generation: UInt64) throws {
+    try lock.withLock {
+      guard generation == self.generation, !hasFailed else { return }
+      hasFailed = true
+      throw SnapshotTestError.failed
+    }
+  }
 }
 
 private func trashEntryURL(root: URL, noteID: UUID) -> URL {
