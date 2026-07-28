@@ -154,6 +154,8 @@
     private var shutdownTask: Task<Void, Never>?
     private var historyWindowController: NSWindowController?
     private var terminationObserver: ObserverToken?
+    private var captureEngine: DictationSpeechEngine?
+    private var captureReachedListening = false
     private(set) var shutdownCount = 0
 
     convenience init(appState: AppState) {
@@ -365,6 +367,8 @@
           )
           return
         }
+        captureEngine = preferredEngine
+        captureReachedListening = false
         let editor = editorRegistry.focusedEditor()
         let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
         await coordinator.start(
@@ -539,7 +543,24 @@
     private func receive(_ event: DictationCoordinatorEvent) {
       phase = event.phase
       recoveryAction = capsuleAction(for: coordinator.recoveryAction)
+      switch event.phase {
+      case .arming:
+        captureEngine =
+          captureEngine
+          ?? appState?.preferences.dictationSpeechEngine
+          ?? .standard
+        captureReachedListening = false
+      case .listening(_, let engine):
+        captureEngine = engine
+        captureReachedListening = true
+      case .idle, .finalizing, .cleaning, .routing, .saved, .failed:
+        break
+      }
       updateCaptureFailure(for: event)
+      if event.terminal != nil {
+        captureEngine = nil
+        captureReachedListening = false
+      }
       guard appState?.preferences.dictationCapsuleEnabled == true else {
         dismissCapsule()
         synchronizeAfter(event)
@@ -586,14 +607,28 @@
       case .failed(let message):
         let denied = DictationFailure.permissionDenied.localizedDescription
         let unavailable = DictationFailure.unavailable.localizedDescription
-        guard message == denied || message == unavailable else { return }
         refreshAvailability()
-        let localizedMessage =
-          availability.standardFailureCopy ?? message
-        captureFailure = .init(
-          message: localizedMessage,
-          actions: availability.openSystemSettings
-        )
+        switch captureEngine ?? .standard {
+        case .standard:
+          guard message == denied || message == unavailable else { return }
+          captureFailure = .init(
+            message: availability.standardFailureCopy ?? message,
+            actions: availability.openSystemSettings
+          )
+        case .enhancedLocal:
+          guard
+            message == denied
+              || message == unavailable
+              || !captureReachedListening
+          else { return }
+          captureFailure = .init(
+            message: availability.enhancedFailureCopy
+              ?? "Enhanced Local could not start. Try again, repair the model in Dictation Settings, or switch to Standard.",
+            actions: availability.openSystemSettings.filter {
+              $0.pane == .microphone
+            }
+          )
+        }
       }
     }
 

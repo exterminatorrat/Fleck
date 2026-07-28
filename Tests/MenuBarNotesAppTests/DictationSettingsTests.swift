@@ -763,6 +763,136 @@ import Testing
 }
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test @MainActor func FocusedEnhancedToolbarFailureUsesOnlyMicrophoneRecoveryAndClearsOnRetry()
+  async throws
+{
+  let availability = RuntimeAvailabilityBox(.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .denied,
+    speechPermission: .denied,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: true,
+    foundationModelAvailable: true
+  ), enhancedCandidateEnabled: true))
+  let fixture = try await RuntimeFixture(
+    finalText: "Enhanced",
+    preferredEngine: .enhancedLocal,
+    enhancedReadyAtStartup: true,
+    availabilityProvider: { availability.value }
+  )
+  let focused = focusRuntimeEditor(fixture)
+  fixture.provider.error = DictationFailure.permissionDenied
+
+  await fixture.runtime.toggle()
+
+  #expect(fixture.provider.requestedKinds == [.enhancedLocal])
+  #expect(
+    fixture.runtime.captureFailure?.message
+      == "Enhanced Local needs Microphone access. Open System Settings to allow Motes."
+  )
+  #expect(
+    fixture.runtime.captureFailure?.actions.map(\.title)
+      == ["Open Microphone Settings"]
+  )
+  #expect(fixture.runtime.captureFailure?.message.contains("Apple Speech") == false)
+  #expect(fixture.runtime.captureFailure?.message.contains("Speech Recognition") == false)
+  #expect(!focused.commands.isFocusedDictationActive)
+
+  availability.value = .evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .denied,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: true,
+    foundationModelAvailable: true
+  ), enhancedCandidateEnabled: true)
+  fixture.provider.error = nil
+  await fixture.runtime.toggle()
+
+  #expect(fixture.runtime.captureFailure == nil)
+  #expect(fixture.runtime.phase == .listening(mode: .focused, engine: .enhancedLocal))
+  #expect(focused.commands.isFocusedDictationActive)
+
+  await fixture.runtime.cancel()
+  #expect(fixture.runtime.captureFailure == nil)
+}
+
+@Test @MainActor func FocusedEnhancedGlobalFailuresExplainModelArchitectureAndStartup()
+  async throws
+{
+  let scenarios: [(DictationAvailability, Error, String)] = [
+    (
+      .evaluate(.init(
+        osMajorVersion: 26,
+        architecture: .appleSilicon,
+        microphonePermission: .authorized,
+        speechPermission: .denied,
+        appleOnDeviceRecognitionSupported: true,
+        enhancedModelReady: false,
+        foundationModelAvailable: true
+      ), enhancedCandidateEnabled: true),
+      DictationFailure.unavailable,
+      "Enhanced Local is unavailable because its model is not ready. Open Dictation Settings to download or repair it."
+    ),
+    (
+      .evaluate(.init(
+        osMajorVersion: 26,
+        architecture: .intel,
+        microphonePermission: .authorized,
+        speechPermission: .denied,
+        appleOnDeviceRecognitionSupported: true,
+        enhancedModelReady: true,
+        foundationModelAvailable: true
+      ), enhancedCandidateEnabled: true),
+      DictationFailure.unavailable,
+      "Enhanced Local requires Apple silicon."
+    ),
+    (
+      .evaluate(.init(
+        osMajorVersion: 26,
+        architecture: .appleSilicon,
+        microphonePermission: .authorized,
+        speechPermission: .denied,
+        appleOnDeviceRecognitionSupported: true,
+        enhancedModelReady: true,
+        foundationModelAvailable: true
+      ), enhancedCandidateEnabled: true),
+      DictationSettingsTestError.failed,
+      "Enhanced Local could not start. Try again, repair the model in Dictation Settings, or switch to Standard."
+    ),
+  ]
+
+  for (availability, error, expectedMessage) in scenarios {
+    let fixture = try await RuntimeFixture(
+      finalText: nil,
+      preferredEngine: .enhancedLocal,
+      enhancedReadyAtStartup: true,
+      availability: availability
+    )
+    let focused = focusRuntimeEditor(fixture)
+    fixture.provider.error = error
+
+    fixture.registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+    await fixture.runtime.shortcutController.drainEvents()
+    for _ in 0..<20 {
+      if fixture.runtime.captureFailure != nil { break }
+      await Task.yield()
+    }
+
+    #expect(fixture.provider.requestedKinds == [.enhancedLocal])
+    #expect(fixture.runtime.captureFailure?.message == expectedMessage)
+    #expect(fixture.runtime.captureFailure?.actions.isEmpty == true)
+    #expect(fixture.runtime.captureFailure?.message.contains("Apple Speech") == false)
+    #expect(fixture.runtime.captureFailure?.message.contains("Speech Recognition") == false)
+    #expect(!focused.commands.isFocusedDictationActive)
+
+    fixture.registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: false)
+    await fixture.runtime.shortcutController.drainEvents()
+  }
+}
+
 @Test @MainActor func ShortcutPermissionRequestUsesThePreferredEnhancedEngine()
   async throws
 {
@@ -1082,6 +1212,25 @@ private enum DictationSettingsTestError: Error {
   case failed
 }
 
+@MainActor
+private func focusRuntimeEditor(
+  _ fixture: RuntimeFixture
+) -> (commands: EditorCommands, window: NSWindow) {
+  let commands = EditorCommands()
+  let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 220, height: 100),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  commands.textView = textView
+  fixture.editorRegistry.register(commands)
+  window.makeFirstResponder(textView)
+  return (commands, window)
+}
+
 private actor DictationTestGate {
   private var openState = false
   private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -1134,6 +1283,7 @@ private final class RuntimeFixture {
     startupBlocked: Bool = false,
     capsuleEnabled: Bool = false,
     preferredEngine: DictationSpeechEngine = .standard,
+    enhancedReadyAtStartup: Bool = false,
     permissionController: DictationPermissionController = .init(),
     availability: DictationAvailability = .evaluate(.init(
       osMajorVersion: 26,
@@ -1171,7 +1321,8 @@ private final class RuntimeFixture {
       throw DictationSettingsTestError.failed
     }
     appState.preferences = preferences
-    engine = RuntimeSpeechEngine(finalText: finalText)
+    enhancedReady.value = enhancedReadyAtStartup
+    engine = RuntimeSpeechEngine(finalText: finalText, kind: preferredEngine)
     provider = RuntimeEngineProvider(engine: engine)
     history = DictationHistoryController(
       load: { [] },
@@ -1265,6 +1416,7 @@ private final class RuntimeEngineProvider: SpeechEngineProviding {
   let engine: RuntimeSpeechEngine
   var gate: DictationTestGate?
   var error: Error?
+  private(set) var requestedKinds: [DictationSpeechEngine] = []
   private var requestWaiters: [CheckedContinuation<Void, Never>] = []
   private(set) var requestCount = 0
 
@@ -1274,6 +1426,7 @@ private final class RuntimeEngineProvider: SpeechEngineProviding {
 
   func engineForCapture(preferred: DictationSpeechEngine) async throws -> any SpeechEngine {
     requestCount += 1
+    requestedKinds.append(preferred)
     let waiters = requestWaiters
     requestWaiters.removeAll()
     waiters.forEach { $0.resume() }
@@ -1290,14 +1443,15 @@ private final class RuntimeEngineProvider: SpeechEngineProviding {
 
 @MainActor
 private final class RuntimeSpeechEngine: SpeechEngine {
-  let kind = DictationSpeechEngine.standard
+  let kind: DictationSpeechEngine
   let finalText: String?
   var finishGate: DictationTestGate?
   var releaseGate: DictationTestGate?
   private(set) var releaseCount = 0
 
-  init(finalText: String?) {
+  init(finalText: String?, kind: DictationSpeechEngine = .standard) {
     self.finalText = finalText
+    self.kind = kind
   }
 
   func start(

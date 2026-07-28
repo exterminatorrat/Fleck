@@ -71,6 +71,7 @@ struct DictationAvailability: Equatable, Sendable {
   let cleanupAvailable: Bool
   let routing: DictationRoutingAvailability
   let openSystemSettings: [DictationSystemSettingsAction]
+  let enhancedFailureCopy: String?
 
   static func evaluate(
     _ input: Input,
@@ -81,6 +82,11 @@ struct DictationAvailability: Equatable, Sendable {
     let microphoneAvailable = input.microphonePermission.permitsRequestOrUse
     let speechAvailable = input.speechPermission.permitsRequestOrUse
     let foundationModelAvailable = input.osMajorVersion >= 26 && input.foundationModelAvailable
+    let enhancedAvailable = supportedOS
+      && enhancedCandidateEnabled
+      && input.architecture == .appleSilicon
+      && microphoneAvailable
+      && input.enhancedModelReady
     var settings: [DictationSystemSettingsAction] = []
     if !microphoneAvailable {
       settings.append(.init(pane: .microphone))
@@ -94,14 +100,16 @@ struct DictationAvailability: Equatable, Sendable {
         && microphoneAvailable
         && speechAvailable
         && input.appleOnDeviceRecognitionSupported,
-      enhancedAvailable: supportedOS
-        && enhancedCandidateEnabled
-        && input.architecture == .appleSilicon
-        && microphoneAvailable
-        && input.enhancedModelReady,
+      enhancedAvailable: enhancedAvailable,
       cleanupAvailable: foundationModelAvailable,
       routing: foundationModelAvailable ? .foundationModel : .inbox,
-      openSystemSettings: settings
+      openSystemSettings: settings,
+      enhancedFailureCopy: enhancedFailureCopy(
+        input,
+        enhancedCandidateEnabled: enhancedCandidateEnabled,
+        microphoneAvailable: microphoneAvailable,
+        enhancedAvailable: enhancedAvailable
+      )
     )
   }
 
@@ -131,6 +139,28 @@ struct DictationAvailability: Equatable, Sendable {
       return "Standard — Apple Speech needs Speech Recognition access. Open System Settings to allow Motes."
     }
     return "Standard — Apple Speech is unavailable because on-device English recognition is not installed or supported."
+  }
+
+  private static func enhancedFailureCopy(
+    _ input: Input,
+    enhancedCandidateEnabled: Bool,
+    microphoneAvailable: Bool,
+    enhancedAvailable: Bool
+  ) -> String? {
+    guard !enhancedAvailable else { return nil }
+    if !microphoneAvailable {
+      return "Enhanced Local needs Microphone access. Open System Settings to allow Motes."
+    }
+    if input.osMajorVersion < 14 {
+      return "Enhanced Local requires macOS 14 or later."
+    }
+    if !enhancedCandidateEnabled {
+      return "Enhanced Local is unavailable in this build."
+    }
+    if input.architecture == .intel {
+      return "Enhanced Local requires Apple silicon."
+    }
+    return "Enhanced Local is unavailable because its model is not ready. Open Dictation Settings to download or repair it."
   }
 
   private static func currentArchitecture() -> DictationArchitecture {
