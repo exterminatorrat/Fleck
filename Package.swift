@@ -78,6 +78,7 @@ let package = Package(
             targets: ["MenuBarNotesAgentProtocol"]
         ),
         .executable(name: "Motes", targets: ["MenuBarNotesApp"]),
+        .executable(name: "motes-agent", targets: ["MotesAgentBridge"]),
     ],
     dependencies: packageDependencies,
     targets: [
@@ -104,6 +105,13 @@ let package = Package(
                 ])
             ]
         ),
+        .executableTarget(
+            name: "MotesAgentBridge",
+            dependencies: [
+                "MenuBarNotesCore",
+                "MenuBarNotesAgentProtocol",
+            ]
+        ),
         .testTarget(
             name: "MenuBarNotesCoreTests",
             dependencies: ["MenuBarNotesCore"]
@@ -116,6 +124,10 @@ let package = Package(
             name: "MenuBarNotesAppTests",
             dependencies: ["MenuBarNotesApp"],
             swiftSettings: appTestSwiftSettings
+        ),
+        .testTarget(
+            name: "MotesAgentBridgeTests",
+            dependencies: ["MotesAgentBridge"]
         ),
     ]
 )
