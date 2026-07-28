@@ -11,6 +11,7 @@
   struct AgentSettingsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var showsClearConfirmation = false
+    @State private var showsAgentActivity = false
 
     var body: some View {
       Section("Command Bridge") {
@@ -63,7 +64,14 @@
 
       Section("Activity") {
         Button("Open Agent Activity") {
-          appState.requestsAgentActivity = true
+          showsAgentActivity = true
+        }
+        .sheet(isPresented: $showsAgentActivity) {
+          AgentActivityView { noteID in
+            appState.select(noteID)
+            showsAgentActivity = false
+          }
+          .environmentObject(appState)
         }
         Button("Clear Activity", role: .destructive) {
           showsClearConfirmation = true

@@ -38,7 +38,6 @@
     private let fileSystem: any AgentBridgeInstallerFileSystem
     private let processRunner: any AgentBridgeProcessRunning
     private let installedVersion: String
-    private let bundleIdentifier: String
 
     init(
       bundledHelperURL: URL,
@@ -47,15 +46,13 @@
       processRunner: any AgentBridgeProcessRunning = LocalAgentBridgeProcessRunner(),
       installedVersion: String = Bundle.main.object(
         forInfoDictionaryKey: "CFBundleShortVersionString"
-      ) as? String ?? "development",
-      bundleIdentifier: String = Bundle.main.bundleIdentifier ?? ownerBundleIdentifier
+      ) as? String ?? "development"
     ) {
       self.bundledHelperURL = bundledHelperURL
       self.applicationSupportURL = applicationSupportURL
       self.fileSystem = fileSystem
       self.processRunner = processRunner
       self.installedVersion = installedVersion
-      self.bundleIdentifier = bundleIdentifier
     }
 
     static func live() throws -> Self {
@@ -80,7 +77,7 @@
         .standardizedFileURL
     }
 
-    private var receiptURL: URL {
+    var installationReceiptURL: URL {
       applicationSupportURL
         .appendingPathComponent("AgentBridge", isDirectory: true)
         .appendingPathComponent("install-receipt.json")
@@ -92,16 +89,7 @@
         throw AgentBridgeInstallerError.bundledHelperMissing
       }
       let bundledData = try fileSystem.data(at: bundledHelperURL)
-      if fileSystem.fileExists(at: installedHelperURL) {
-        guard
-          let prior = try? receipt(),
-          prior.destination == installedHelperURL.path,
-          prior.bundleIdentifier == bundleIdentifier,
-          prior.sha256 == sha256(try fileSystem.data(at: installedHelperURL))
-        else {
-          throw AgentBridgeInstallerError.destinationNotOwned
-        }
-      }
+      let previous = try previousInstall()
 
       let directory = installedHelperURL.deletingLastPathComponent()
       try fileSystem.createDirectory(at: directory)
@@ -109,26 +97,54 @@
       try fileSystem.write(bundledData, to: staging)
       try fileSystem.makeExecutable(at: staging)
       defer { try? fileSystem.removeItem(at: staging) }
-      try fileSystem.replaceItem(at: installedHelperURL, with: staging)
-      let installedHash = sha256(try fileSystem.data(at: installedHelperURL))
-      guard installedHash == sha256(bundledData) else {
-        throw AgentBridgeInstallerError.verificationFailed
+      var didSwap = false
+      do {
+        try fileSystem.replaceItem(at: installedHelperURL, with: staging)
+        didSwap = true
+        let installedHash = sha256(try fileSystem.data(at: installedHelperURL))
+        guard installedHash == sha256(bundledData) else {
+          throw AgentBridgeInstallerError.verificationFailed
+        }
+        let receipt = AgentBridgeInstallationReceipt(
+          destination: installedHelperURL.path,
+          sha256: installedHash,
+          installedVersion: installedVersion,
+          bundleIdentifier: Self.ownerBundleIdentifier
+        )
+        try fileSystem.write(
+          try JSONEncoder().encode(receipt),
+          to: installationReceiptURL
+        )
+        guard verifiedInstalledHelperURL() == installedHelperURL else {
+          throw AgentBridgeInstallerError.verificationFailed
+        }
+        return installedHelperURL
+      } catch {
+        if didSwap {
+          try restore(previous)
+        }
+        throw error
       }
-      let receipt = AgentBridgeInstallationReceipt(
-        destination: installedHelperURL.path,
-        sha256: installedHash,
-        installedVersion: installedVersion,
-        bundleIdentifier: bundleIdentifier
-      )
-      try fileSystem.write(try JSONEncoder().encode(receipt), to: receiptURL)
-      return installedHelperURL
     }
 
     func receipt() throws -> AgentBridgeInstallationReceipt {
       try JSONDecoder().decode(
         AgentBridgeInstallationReceipt.self,
-        from: fileSystem.data(at: receiptURL)
+        from: fileSystem.data(at: installationReceiptURL)
       )
+    }
+
+    func verifiedInstalledHelperURL() -> URL? {
+      guard
+        fileSystem.fileExists(at: installedHelperURL),
+        let receipt = try? receipt(),
+        receipt.destination == installedHelperURL.path,
+        receipt.bundleIdentifier == Self.ownerBundleIdentifier,
+        receipt.installedVersion == installedVersion,
+        let installedData = try? fileSystem.data(at: installedHelperURL),
+        receipt.sha256 == sha256(installedData)
+      else { return nil }
+      return installedHelperURL
     }
 
     func provision(profileID: UUID, token: Data) throws {
@@ -155,7 +171,7 @@
         fileSystem.fileExists(at: installedHelperURL),
         let prior = try? receipt(),
         prior.destination == installedHelperURL.path,
-        prior.bundleIdentifier == bundleIdentifier,
+        prior.bundleIdentifier == Self.ownerBundleIdentifier,
         prior.sha256 == sha256(try fileSystem.data(at: installedHelperURL))
       else {
         if fileSystem.fileExists(at: installedHelperURL) {
@@ -164,7 +180,7 @@
         return
       }
       try fileSystem.removeItem(at: installedHelperURL)
-      try fileSystem.removeItem(at: receiptURL)
+      try fileSystem.removeItem(at: installationReceiptURL)
     }
 
     func setupSnippet(profileID: UUID) -> String {
@@ -173,6 +189,53 @@
 
     private func sha256(_ data: Data) -> String {
       SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private struct PreviousInstall {
+      let helper: Data?
+      let receipt: Data?
+    }
+
+    private func previousInstall() throws -> PreviousInstall {
+      let receiptData =
+        fileSystem.fileExists(at: installationReceiptURL)
+        ? try fileSystem.data(at: installationReceiptURL)
+        : nil
+      guard fileSystem.fileExists(at: installedHelperURL) else {
+        return PreviousInstall(helper: nil, receipt: receiptData)
+      }
+      let helper = try fileSystem.data(at: installedHelperURL)
+      guard
+        let receiptData,
+        let receipt = try? JSONDecoder().decode(
+          AgentBridgeInstallationReceipt.self,
+          from: receiptData
+        ),
+        receipt.destination == installedHelperURL.path,
+        receipt.bundleIdentifier == Self.ownerBundleIdentifier,
+        receipt.sha256 == sha256(helper)
+      else {
+        throw AgentBridgeInstallerError.destinationNotOwned
+      }
+      return PreviousInstall(helper: helper, receipt: receiptData)
+    }
+
+    private func restore(_ previous: PreviousInstall) throws {
+      if let helper = previous.helper {
+        let staging = installedHelperURL.deletingLastPathComponent()
+          .appendingPathComponent(".motes-\(UUID().uuidString).rollback")
+        try fileSystem.write(helper, to: staging)
+        try fileSystem.makeExecutable(at: staging)
+        defer { try? fileSystem.removeItem(at: staging) }
+        try fileSystem.replaceItem(at: installedHelperURL, with: staging)
+      } else {
+        try fileSystem.removeItem(at: installedHelperURL)
+      }
+      if let receipt = previous.receipt {
+        try fileSystem.write(receipt, to: installationReceiptURL)
+      } else {
+        try fileSystem.removeItem(at: installationReceiptURL)
+      }
     }
   }
 

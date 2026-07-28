@@ -8,7 +8,7 @@
       case spatial
     }
 
-    let feedback: AgentChangeFeedback
+    private(set) var feedback: AgentChangeFeedback
     private(set) var count: Int
 
     init(feedback: AgentChangeFeedback, count: Int = 1) {
@@ -27,6 +27,7 @@
     }
 
     mutating func coalesce(feedback: AgentChangeFeedback) {
+      self.feedback = feedback
       count += 1
     }
 

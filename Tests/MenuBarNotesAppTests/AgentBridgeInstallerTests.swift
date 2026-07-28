@@ -26,6 +26,7 @@ struct AgentBridgeInstallerTests {
     #expect(installed.path.hasPrefix("/"))
     #expect(fileSystem.files[expected.path] == helper)
     #expect(try installer.receipt().sha256 == SHA256.hash(data: helper).hexString)
+    #expect(installer.verifiedInstalledHelperURL() == expected)
   }
 
   @Test func refusesToOverwriteAFileWithoutMatchingMotesReceipt() throws {
@@ -45,6 +46,10 @@ struct AgentBridgeInstallerTests {
     #expect(throws: AgentBridgeInstallerError.destinationNotOwned) {
       try installer.install()
     }
+    #expect(
+      fileSystem.files[installer.installedHelperURL.path]
+        == Data("someone else".utf8)
+    )
   }
 
   @Test func provisioningSendsTokenOnlyThroughStdin() throws {
@@ -91,10 +96,93 @@ struct AgentBridgeInstallerTests {
     #expect(fileSystem.files[installed.path] == nil)
     #expect(fileSystem.files[unrelated.path] != nil)
   }
+
+  @Test func failedPostSwapHashVerificationRemovesANewUnownedDestination() throws {
+    let fileSystem = FakeInstallerFileSystem()
+    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    let support = URL(fileURLWithPath: "/support")
+    fileSystem.files[bundle.path] = Data("helper".utf8)
+    fileSystem.corruptNextReplacement = true
+    let installer = AgentBridgeInstaller(
+      bundledHelperURL: bundle,
+      applicationSupportURL: support,
+      fileSystem: fileSystem,
+      processRunner: RecordingAgentProcessRunner()
+    )
+
+    #expect(throws: AgentBridgeInstallerError.verificationFailed) {
+      try installer.install()
+    }
+    #expect(fileSystem.files[installer.installedHelperURL.path] == nil)
+    #expect(installer.verifiedInstalledHelperURL() == nil)
+  }
+
+  @Test func failedReceiptWriteAtomicallyRestoresPriorVerifiedInstall() throws {
+    let fileSystem = FakeInstallerFileSystem()
+    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    let support = URL(fileURLWithPath: "/support")
+    let installer = AgentBridgeInstaller(
+      bundledHelperURL: bundle,
+      applicationSupportURL: support,
+      fileSystem: fileSystem,
+      processRunner: RecordingAgentProcessRunner()
+    )
+    let original = Data("original".utf8)
+    fileSystem.files[bundle.path] = original
+    _ = try installer.install()
+    let originalReceipt = try fileSystem.data(at: installer.installationReceiptURL)
+    fileSystem.files[bundle.path] = Data("replacement".utf8)
+    fileSystem.failNextWritePath = installer.installationReceiptURL.path
+
+    #expect(throws: (any Error).self) {
+      try installer.install()
+    }
+    #expect(fileSystem.files[installer.installedHelperURL.path] == original)
+    #expect(fileSystem.files[installer.installationReceiptURL.path] == originalReceipt)
+    #expect(installer.verifiedInstalledHelperURL() == installer.installedHelperURL)
+  }
+
+  @Test func installedStatusRejectsMissingAndTamperedHelpers() throws {
+    let fixture = try InstalledHelperFixture()
+    fixture.fileSystem.files.removeValue(forKey: fixture.installer.installedHelperURL.path)
+    #expect(fixture.installer.verifiedInstalledHelperURL() == nil)
+
+    let tampered = try InstalledHelperFixture()
+    tampered.fileSystem.files[tampered.installer.installedHelperURL.path] = Data("tampered".utf8)
+    #expect(tampered.installer.verifiedInstalledHelperURL() == nil)
+  }
+
+  @Test func installedStatusRejectsWrongOwnerAndVersionReceipts() throws {
+    let wrongOwner = try InstalledHelperFixture()
+    var receipt = try wrongOwner.installer.receipt()
+    receipt = AgentBridgeInstallationReceipt(
+      destination: receipt.destination,
+      sha256: receipt.sha256,
+      installedVersion: receipt.installedVersion,
+      bundleIdentifier: "example.not-motes"
+    )
+    wrongOwner.fileSystem.files[wrongOwner.installer.installationReceiptURL.path] =
+      try JSONEncoder().encode(receipt)
+    #expect(wrongOwner.installer.verifiedInstalledHelperURL() == nil)
+
+    let wrongVersion = try InstalledHelperFixture()
+    let current = try wrongVersion.installer.receipt()
+    wrongVersion.fileSystem.files[wrongVersion.installer.installationReceiptURL.path] =
+      try JSONEncoder().encode(
+        AgentBridgeInstallationReceipt(
+          destination: current.destination,
+          sha256: current.sha256,
+          installedVersion: "0.0.0",
+          bundleIdentifier: current.bundleIdentifier
+        ))
+    #expect(wrongVersion.installer.verifiedInstalledHelperURL() == nil)
+  }
 }
 
 private final class FakeInstallerFileSystem: AgentBridgeInstallerFileSystem, @unchecked Sendable {
   var files: [String: Data] = [:]
+  var corruptNextReplacement = false
+  var failNextWritePath: String?
 
   func data(at url: URL) throws -> Data {
     guard let data = files[url.path] else { throw CocoaError(.fileNoSuchFile) }
@@ -108,11 +196,19 @@ private final class FakeInstallerFileSystem: AgentBridgeInstallerFileSystem, @un
   func createDirectory(at url: URL) throws {}
 
   func write(_ data: Data, to url: URL) throws {
+    if failNextWritePath == url.path {
+      failNextWritePath = nil
+      throw CocoaError(.fileWriteUnknown)
+    }
     files[url.path] = data
   }
 
   func replaceItem(at destination: URL, with staging: URL) throws {
     files[destination.path] = files.removeValue(forKey: staging.path)
+    if corruptNextReplacement {
+      corruptNextReplacement = false
+      files[destination.path] = Data("corrupt".utf8)
+    }
   }
 
   func removeItem(at url: URL) throws {
@@ -120,6 +216,25 @@ private final class FakeInstallerFileSystem: AgentBridgeInstallerFileSystem, @un
   }
 
   func makeExecutable(at url: URL) throws {}
+}
+
+private struct InstalledHelperFixture {
+  let fileSystem = FakeInstallerFileSystem()
+  let installer: AgentBridgeInstaller
+
+  init() throws {
+    let bundle = URL(fileURLWithPath: "/bundle/\(UUID().uuidString)/motes-agent")
+    let support = URL(fileURLWithPath: "/support/\(UUID().uuidString)")
+    installer = AgentBridgeInstaller(
+      bundledHelperURL: bundle,
+      applicationSupportURL: support,
+      fileSystem: fileSystem,
+      processRunner: RecordingAgentProcessRunner(),
+      installedVersion: "1.2.3"
+    )
+    fileSystem.files[bundle.path] = Data("helper".utf8)
+    _ = try installer.install()
+  }
 }
 
 private final class RecordingAgentProcessRunner: AgentBridgeProcessRunning, @unchecked Sendable {

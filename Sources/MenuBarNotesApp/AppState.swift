@@ -49,7 +49,6 @@
     @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
     @Published private(set) var agentActivity: [AgentActivityRecord] = []
     @Published private(set) var agentBannerPresentation: AgentBannerPresentation?
-    @Published var requestsAgentActivity = false
     @Published var agentCleanupError: String?
     private(set) var persistenceGeneration: UInt64 = 0
     private(set) var hasFinishedInitialLoad = false
@@ -627,10 +626,7 @@
     }
 
     var isAgentBridgeInstalled: Bool {
-      guard let installer = try? AgentBridgeInstaller.live(),
-        let receipt = try? installer.receipt()
-      else { return false }
-      return receipt.destination == installer.installedHelperURL.path
+      (try? AgentBridgeInstaller.live().verifiedInstalledHelperURL()) != nil
     }
 
     func installAgentBridge() async {
@@ -727,7 +723,7 @@
     }
 
     func undoLatestAgentChange() async {
-      guard let feedback = latestAgentFeedback,
+      guard let feedback = agentBannerPresentation?.feedback,
         let record = agentActivityStore.record(id: feedback.changeID)
       else { return }
       await undoAgentChange(record)

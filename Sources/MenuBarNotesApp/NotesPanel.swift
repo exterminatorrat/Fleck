@@ -211,11 +211,6 @@
       .onDisappear {
         dictationRuntime.unregisterEditor(editorCommands)
       }
-      .onChange(of: appState.requestsAgentActivity) { _, requested in
-        guard requested else { return }
-        appState.requestsAgentActivity = false
-        isShowingAgentActivity = true
-      }
       .overlay {
         ZStack {
           if let notePendingDeletion {

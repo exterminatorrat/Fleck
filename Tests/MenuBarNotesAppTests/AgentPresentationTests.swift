@@ -71,13 +71,20 @@ struct AgentPresentationTests {
   }
 
   @Test func feedbackCoalescesBannerCountWithoutChangingActivityCount() {
-    var banner = AgentBannerPresentation(feedback: feedback(changeID: UUID()))
+    let firstID = UUID()
+    let latestID = UUID()
+    var banner = AgentBannerPresentation(
+      feedback: feedback(changeID: firstID, noteTitle: "Launch", actorName: "Codex"))
     let records = [UUID(), UUID()]
 
-    banner.coalesce(feedback: feedback(changeID: UUID()))
+    banner.coalesce(
+      feedback: feedback(changeID: latestID, noteTitle: "Release", actorName: "Claude"))
 
     #expect(banner.count == 2)
     #expect(records.count == 2)
+    #expect(banner.feedback.changeID == latestID)
+    #expect(banner.feedback.noteTitle == "Release")
+    #expect(banner.message == "Claude updated Release (2)")
     #expect(!banner.message.contains("body"))
   }
 
@@ -131,12 +138,16 @@ struct AgentPresentationTests {
     )
   }
 
-  private func feedback(changeID: UUID) -> AgentChangeFeedback {
+  private func feedback(
+    changeID: UUID,
+    noteTitle: String,
+    actorName: String
+  ) -> AgentChangeFeedback {
     AgentChangeFeedback(
       changeID: changeID,
       noteID: UUID(),
-      noteTitle: "Launch",
-      actor: .integration(profileID: UUID(), displayName: "Codex"),
+      noteTitle: noteTitle,
+      actor: .integration(profileID: UUID(), displayName: actorName),
       resultingRevision: 1,
       createdAt: Date()
     )
