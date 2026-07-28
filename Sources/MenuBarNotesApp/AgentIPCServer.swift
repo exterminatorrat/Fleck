@@ -20,14 +20,71 @@
       ) async throws -> AgentWorkspaceResponse
     typealias PeerUIDLookup = @Sendable (Int32) throws -> uid_t
     typealias ResponseWriter = @Sendable (Data, Int, Int32) -> Int
+    typealias DescriptorCloser = @Sendable (Int32) -> Void
 
     private struct BoundSocket: Equatable {
       let device: dev_t
       let inode: ino_t
     }
 
-    private final class Client: @unchecked Sendable {
+    private final class DescriptorLifecycle: @unchecked Sendable {
       let descriptor: Int32
+
+      private let closer: DescriptorCloser
+      private let lock = NSLock()
+      private let closed = DispatchGroup()
+      private var sourceCount = 0
+      private var closeRequested = false
+      private var didClose = false
+
+      init(descriptor: Int32, closer: @escaping DescriptorCloser) {
+        self.descriptor = descriptor
+        self.closer = closer
+        closed.enter()
+      }
+
+      func registerSource() -> Bool {
+        lock.withLock {
+          guard !closeRequested else { return false }
+          sourceCount += 1
+          return true
+        }
+      }
+
+      func sourceCancellationDidComplete() {
+        closeIfNeeded {
+          precondition(sourceCount > 0)
+          sourceCount -= 1
+        }
+      }
+
+      func requestClose() {
+        closeIfNeeded {
+          closeRequested = true
+        }
+      }
+
+      func waitUntilClosed() {
+        closed.wait()
+      }
+
+      private func closeIfNeeded(_ update: () -> Void) {
+        let shouldClose = lock.withLock {
+          update()
+          guard closeRequested, sourceCount == 0, !didClose else {
+            return false
+          }
+          didClose = true
+          return true
+        }
+        guard shouldClose else { return }
+        closer(descriptor)
+        closed.leave()
+      }
+    }
+
+    private final class Client: @unchecked Sendable {
+      let lifecycle: DescriptorLifecycle
       let source: DispatchSourceRead
       var buffer = Data()
       var timeout: DispatchWorkItem?
@@ -35,10 +92,17 @@
       var responseOffset = 0
       var writeSource: DispatchSourceWrite?
 
-      init(descriptor: Int32, source: DispatchSourceRead) {
-        self.descriptor = descriptor
+      var descriptor: Int32 { lifecycle.descriptor }
+
+      init(lifecycle: DescriptorLifecycle, source: DispatchSourceRead) {
+        self.lifecycle = lifecycle
         self.source = source
       }
+    }
+
+    private struct StopResult {
+      let identity: BoundSocket?
+      let lifecycles: [DescriptorLifecycle]
     }
 
     let maximumActiveClients: Int
@@ -49,12 +113,16 @@
     private let peerUID: PeerUIDLookup
     private let responseWriter: ResponseWriter
     private let responseWriteWillBegin: @Sendable () -> Void
+    private let descriptorCloser: DescriptorCloser
+    private let stopWillCancelSources: @Sendable () -> Void
+    private let sourceCancellationDidComplete: @Sendable (Int32) -> Void
     private let execute: Execute
     private let queue = DispatchQueue(label: "Motes.AgentIPCServer")
     private let queueKey = DispatchSpecificKey<Void>()
     private let lock = NSLock()
     private var listenerDescriptor: Int32 = -1
     private var listenerSource: DispatchSourceRead?
+    private var listenerLifecycle: DescriptorLifecycle?
     private var clients: [Int32: Client] = [:]
     private var boundSocket: BoundSocket?
 
@@ -66,6 +134,9 @@
       peerUID: @escaping PeerUIDLookup = AgentIPCServer.lookupPeerUID,
       responseWriter: @escaping ResponseWriter = AgentIPCServer.writeAll,
       responseWriteWillBegin: @escaping @Sendable () -> Void = {},
+      descriptorCloser: @escaping DescriptorCloser = AgentIPCServer.closeDescriptor,
+      stopWillCancelSources: @escaping @Sendable () -> Void = {},
+      sourceCancellationDidComplete: @escaping @Sendable (Int32) -> Void = { _ in },
       execute: @escaping Execute
     ) {
       self.endpointURL = endpointURL
@@ -75,6 +146,9 @@
       self.peerUID = peerUID
       self.responseWriter = responseWriter
       self.responseWriteWillBegin = responseWriteWillBegin
+      self.descriptorCloser = descriptorCloser
+      self.stopWillCancelSources = stopWillCancelSources
+      self.sourceCancellationDidComplete = sourceCancellationDidComplete
       self.execute = execute
       queue.setSpecific(key: queueKey, value: ())
     }
@@ -124,6 +198,11 @@
         }
         let identity = try socketIdentity(at: endpointURL.path)
 
+        let lifecycle = DescriptorLifecycle(
+          descriptor: descriptor,
+          closer: descriptorCloser
+        )
+        precondition(lifecycle.registerSource())
         let source = DispatchSource.makeReadSource(
           fileDescriptor: descriptor,
           queue: queue
@@ -131,8 +210,13 @@
         source.setEventHandler { [weak self] in
           self?.acceptClients()
         }
+        source.setCancelHandler { [weak self, lifecycle] in
+          self?.sourceCancellationDidComplete(descriptor)
+          lifecycle.sourceCancellationDidComplete()
+        }
         listenerDescriptor = descriptor
         listenerSource = source
+        listenerLifecycle = lifecycle
         boundSocket = identity
         shouldClose = false
         source.resume()
@@ -140,39 +224,48 @@
     }
 
     func stop() {
-      let identity: BoundSocket?
+      let result: StopResult
       if DispatchQueue.getSpecific(key: queueKey) != nil {
-        identity = stopOnQueue()
+        result = stopOnQueue()
       } else {
-        identity = queue.sync { stopOnQueue() }
+        result = queue.sync { stopOnQueue() }
+        for lifecycle in result.lifecycles {
+          lifecycle.waitUntilClosed()
+        }
       }
 
-      if let identity {
+      if let identity = result.identity {
         unlinkOwnedSocket(ifMatching: identity)
       }
     }
 
-    private func stopOnQueue() -> BoundSocket? {
-      lock.withLock {
+    private func stopOnQueue() -> StopResult {
+      let state = lock.withLock {
         let identity = boundSocket
-        listenerSource?.cancel()
-        if listenerDescriptor >= 0 {
-          Darwin.shutdown(listenerDescriptor, SHUT_RDWR)
-          Darwin.close(listenerDescriptor)
-        }
-        for client in clients.values {
-          client.timeout?.cancel()
-          client.source.cancel()
-          client.writeSource?.cancel()
-          Darwin.shutdown(client.descriptor, SHUT_RDWR)
-          Darwin.close(client.descriptor)
-        }
+        let listener = listenerSource
+        let listenerLifecycle = listenerLifecycle
+        let clients = Array(clients.values)
         listenerSource = nil
+        self.listenerLifecycle = nil
         listenerDescriptor = -1
-        clients.removeAll()
+        self.clients.removeAll()
         boundSocket = nil
-        return identity
+        return (identity, listener, listenerLifecycle, clients)
       }
+
+      stopWillCancelSources()
+      state.1?.cancel()
+      state.2?.requestClose()
+      for client in state.3 {
+        client.timeout?.cancel()
+        client.source.cancel()
+        client.writeSource?.cancel()
+        client.lifecycle.requestClose()
+      }
+      return StopResult(
+        identity: state.0,
+        lifecycles: [state.2].compactMap { $0 } + state.3.map(\.lifecycle)
+      )
     }
 
     func response(to request: AgentWireRequest) async -> AgentWireResponse {
@@ -342,7 +435,16 @@
         fileDescriptor: descriptor,
         queue: queue
       )
-      let client = Client(descriptor: descriptor, source: source)
+      let lifecycle = DescriptorLifecycle(
+        descriptor: descriptor,
+        closer: descriptorCloser
+      )
+      precondition(lifecycle.registerSource())
+      source.setCancelHandler { [weak self, lifecycle] in
+        self?.sourceCancellationDidComplete(descriptor)
+        lifecycle.sourceCancellationDidComplete()
+      }
+      let client = Client(lifecycle: lifecycle, source: source)
       let inserted = lock.withLock {
         guard
           listenerDescriptor >= 0,
@@ -354,7 +456,7 @@
       guard inserted else {
         source.cancel()
         source.resume()
-        Darwin.close(descriptor)
+        lifecycle.requestClose()
         return
       }
       source.setEventHandler { [weak self] in
@@ -365,6 +467,10 @@
     }
 
     private func read(_ client: Client) {
+      guard
+        lock.withLock({ clients[client.descriptor] === client })
+      else { return }
+
       var bytes = [UInt8](repeating: 0, count: 8_192)
       let count = Darwin.read(client.descriptor, &bytes, bytes.count)
       if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
@@ -450,6 +556,10 @@
         return true
       }
       guard active else { return }
+      guard client.lifecycle.registerSource() else {
+        finish(client)
+        return
+      }
       let source = DispatchSource.makeWriteSource(
         fileDescriptor: client.descriptor,
         queue: queue
@@ -457,6 +567,10 @@
       client.writeSource = source
       source.setEventHandler { [weak self] in
         self?.continueWrite(client)
+      }
+      source.setCancelHandler { [weak self, lifecycle = client.lifecycle] in
+        self?.sourceCancellationDidComplete(client.descriptor)
+        lifecycle.sourceCancellationDidComplete()
       }
       source.resume()
       responseWriteWillBegin()
@@ -506,18 +620,24 @@
     }
 
     private func finish(_ client: Client, cancelTimeout: Bool = true) {
-      lock.withLock {
-        guard clients[client.descriptor] === client else { return }
+      let active = lock.withLock { () -> Bool in
+        guard clients[client.descriptor] === client else { return false }
         clients.removeValue(forKey: client.descriptor)
-        if cancelTimeout {
-          client.timeout?.cancel()
-        }
-        client.timeout = nil
-        client.source.cancel()
-        client.writeSource?.cancel()
-        Darwin.shutdown(client.descriptor, SHUT_RDWR)
-        Darwin.close(client.descriptor)
+        return true
       }
+      guard active else { return }
+      if cancelTimeout {
+        client.timeout?.cancel()
+      }
+      client.timeout = nil
+      client.source.cancel()
+      client.writeSource?.cancel()
+      client.lifecycle.requestClose()
+    }
+
+    private static func closeDescriptor(_ descriptor: Int32) {
+      Darwin.shutdown(descriptor, SHUT_RDWR)
+      Darwin.close(descriptor)
     }
 
     private static func lookupPeerUID(_ descriptor: Int32) throws -> uid_t {

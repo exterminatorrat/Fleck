@@ -447,6 +447,77 @@ import Testing
   #expect(writes.value == 0)
 }
 
+@Test @MainActor func canceledReadSourceCannotConsumeReusedDescriptor() async throws {
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let cancellationEntered = DispatchSemaphore(value: 0)
+  let allowCancellation = DispatchSemaphore(value: 0)
+  let cancellationCompleted = DispatchSemaphore(value: 0)
+  let cancellationTouchedReplacement = LockedFlag()
+  let stopGate = OneShotFlag()
+  let replacement = DescriptorReplacement(marker: 0xA5)
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    peerUID: { descriptor in
+      replacement.capture(descriptor)
+      return geteuid()
+    },
+    descriptorCloser: { replacement.closeOrReplace($0) },
+    stopWillCancelSources: {
+      guard stopGate.take() else { return }
+      cancellationEntered.signal()
+      allowCancellation.wait()
+    },
+    sourceCancellationDidComplete: { descriptor in
+      guard descriptor == replacement.target else { return }
+      let readReplacement = replacement.readMarker() == 0xA5
+      let wroteReplacement = replacement.writeIfInstalled(0xCC)
+      if readReplacement || wroteReplacement {
+        cancellationTouchedReplacement.set()
+      }
+      cancellationCompleted.signal()
+    },
+    execute: { _, _, _ in .sharedNotes(notes: []) }
+  )
+  try server.start()
+
+  let descriptor = try await Task.detached {
+    try connectedSocket(to: socketURL)
+  }.value
+  for _ in 0..<100 where replacement.target == -1 {
+    try await Task.sleep(for: .milliseconds(2))
+  }
+  #expect(replacement.target >= 0)
+
+  let stopped = DispatchSemaphore(value: 0)
+  Task.detached {
+    server.stop()
+    stopped.signal()
+  }
+  let entered = await Task.detached {
+    waitForSemaphore(cancellationEntered)
+  }.value
+  #expect(entered)
+  var trigger: UInt8 = 1
+  #expect(Darwin.write(descriptor, &trigger, 1) == 1)
+  try await Task.sleep(for: .milliseconds(10))
+  allowCancellation.signal()
+  let didStop = await Task.detached {
+    waitForSemaphore(stopped)
+  }.value
+  #expect(didStop)
+  Darwin.close(descriptor)
+
+  let didCancel = await Task.detached {
+    waitForSemaphore(cancellationCompleted)
+  }.value
+  #expect(didCancel)
+  #expect(!cancellationTouchedReplacement.value)
+  #expect(replacement.readMarker() == 0xA5)
+  #expect(replacement.roundTrips(0x5A))
+}
+
 @Test @MainActor func agentIPCRuntimeWaitsForReadinessAndOwnsOneListener()
   async throws
 {
@@ -675,6 +746,10 @@ private func readAfterDelay(
   return Darwin.read(descriptor, &byte, 1) == 0
 }
 
+private func waitForSemaphore(_ semaphore: DispatchSemaphore) -> Bool {
+  semaphore.wait(timeout: .now() + 1) == .success
+}
+
 private struct SecretFailure: Error {
   let message: String
 }
@@ -693,6 +768,104 @@ private final class LockedFlag: @unchecked Sendable {
 
   var value: Bool { lock.withLock { state } }
   func set() { lock.withLock { state = true } }
+}
+
+private final class OneShotFlag: @unchecked Sendable {
+  private let lock = NSLock()
+  private var available = true
+
+  func take() -> Bool {
+    lock.withLock {
+      defer { available = false }
+      return available
+    }
+  }
+}
+
+private final class DescriptorReplacement: @unchecked Sendable {
+  private let lock = NSLock()
+  private let marker: UInt8
+  private var targetDescriptor: Int32 = -1
+  private var replacementDescriptor: Int32 = -1
+  private var peerDescriptor: Int32 = -1
+
+  init(marker: UInt8) {
+    self.marker = marker
+  }
+
+  deinit {
+    if replacementDescriptor >= 0 {
+      Darwin.close(replacementDescriptor)
+    }
+    if peerDescriptor >= 0 {
+      Darwin.close(peerDescriptor)
+    }
+  }
+
+  var target: Int32 { lock.withLock { targetDescriptor } }
+
+  func capture(_ descriptor: Int32) {
+    lock.withLock { targetDescriptor = descriptor }
+  }
+
+  func closeOrReplace(_ descriptor: Int32) {
+    let shouldReplace = lock.withLock {
+      descriptor == targetDescriptor && replacementDescriptor == -1
+    }
+    guard shouldReplace else {
+      Darwin.shutdown(descriptor, SHUT_RDWR)
+      Darwin.close(descriptor)
+      return
+    }
+
+    var pair = [Int32](repeating: -1, count: 2)
+    let pairResult = socketpair(AF_UNIX, SOCK_STREAM, 0, &pair)
+    Darwin.shutdown(descriptor, SHUT_RDWR)
+    Darwin.close(descriptor)
+    guard
+      pairResult == 0,
+      dup2(pair[0], descriptor) == descriptor
+    else {
+      if pair[0] >= 0 { Darwin.close(pair[0]) }
+      if pair[1] >= 0 { Darwin.close(pair[1]) }
+      return
+    }
+    Darwin.close(pair[0])
+    let flags = fcntl(descriptor, F_GETFL)
+    _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
+    var marker = marker
+    _ = Darwin.write(pair[1], &marker, 1)
+    lock.withLock {
+      replacementDescriptor = descriptor
+      peerDescriptor = pair[1]
+    }
+  }
+
+  func readMarker() -> UInt8? {
+    let descriptor = lock.withLock { replacementDescriptor }
+    guard descriptor >= 0 else { return nil }
+    var byte: UInt8 = 0
+    return Darwin.read(descriptor, &byte, 1) == 1 ? byte : nil
+  }
+
+  func writeIfInstalled(_ byte: UInt8) -> Bool {
+    let descriptor = lock.withLock { replacementDescriptor }
+    guard descriptor >= 0 else { return false }
+    var byte = byte
+    return Darwin.write(descriptor, &byte, 1) == 1
+  }
+
+  func roundTrips(_ byte: UInt8) -> Bool {
+    let descriptors = lock.withLock {
+      (replacementDescriptor, peerDescriptor)
+    }
+    guard descriptors.0 >= 0, descriptors.1 >= 0 else { return false }
+    var outgoing = byte
+    guard Darwin.write(descriptors.0, &outgoing, 1) == 1 else { return false }
+    var incoming: UInt8 = 0
+    return Darwin.read(descriptors.1, &incoming, 1) == 1
+      && incoming == byte
+  }
 }
 
 @MainActor
