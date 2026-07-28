@@ -410,6 +410,31 @@ private final class PermissionProbe {
   }
 }
 
+@Test func audioTapHandlerCanRunOffMainActor() async throws {
+  let format = try #require(
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: 16_000,
+      channels: 1,
+      interleaved: false
+    )
+  )
+  let ingress = BoundedAudioIngress(capacity: 1)
+  let buffer = try speechBuffer(format: format, frames: 4)
+  let handler = AudioTapIngress.makeHandler(for: ingress)
+
+  await Task.detached {
+    handler(buffer, AVAudioTime(hostTime: 0))
+  }.value
+  ingress.finish()
+
+  var drained = 0
+  for try await _ in ingress.buffers {
+    drained += 1
+  }
+  #expect(drained == 1)
+}
+
 @Test @MainActor func appleSpeechCaptureEmitsProvisionalRetainsFinalAndReleases() async throws {
   let session = AppleSpeechSessionProbe()
   session.finishResult = .success("final words")

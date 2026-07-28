@@ -191,6 +191,18 @@ final class BoundedAudioIngress: @unchecked Sendable {
   }
 }
 
+enum AudioTapIngress {
+  static func makeHandler(for ingress: BoundedAudioIngress) -> AVAudioNodeTapBlock {
+    { buffer, _ in
+      do {
+        _ = ingress.yield(try AudioBufferTools.copy(buffer))
+      } catch {
+        ingress.fail(DictationFailure.transcriptionFailed)
+      }
+    }
+  }
+}
+
 @MainActor
 protocol AppleSpeechSession: AnyObject {
   var supportsOnDeviceRecognition: Bool { get }
@@ -534,13 +546,12 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
         self?.resolve(.failure(error))
       }
     }
-    inputNode.installTap(onBus: 0, bufferSize: 1_024, format: inputFormat) { buffer, _ in
-      do {
-        _ = ingress.yield(try AudioBufferTools.copy(buffer))
-      } catch {
-        ingress.fail(DictationFailure.transcriptionFailed)
-      }
-    }
+    inputNode.installTap(
+      onBus: 0,
+      bufferSize: 1_024,
+      format: inputFormat,
+      block: AudioTapIngress.makeHandler(for: ingress)
+    )
     tapInstalled = true
     recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
       Task { @MainActor [weak self] in
@@ -798,13 +809,12 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
       }
     }
 
-    inputNode.installTap(onBus: 0, bufferSize: 1_024, format: naturalFormat) { buffer, _ in
-      do {
-        _ = ingress.yield(try AudioBufferTools.copy(buffer))
-      } catch {
-        ingress.fail(DictationFailure.transcriptionFailed)
-      }
-    }
+    inputNode.installTap(
+      onBus: 0,
+      bufferSize: 1_024,
+      format: naturalFormat,
+      block: AudioTapIngress.makeHandler(for: ingress)
+    )
     tapInstalled = true
     audioEngine.prepare()
     do {
