@@ -154,8 +154,25 @@ else
   exit 2
 fi
 
+helper_candidate="$artifact_root/Contents/SharedSupport/motes-agent"
+if [[ ! -f "$helper_candidate" ]]; then
+  helper_candidate="$(dirname "$executable")/motes-agent"
+fi
+if [[ ! -f "$helper_candidate" ]]; then
+  printf 'error: release helper not found beside Motes or in SharedSupport: %s\n' \
+    "$target" >&2
+  exit 2
+fi
+resolved_helper="$(realpath "$helper_candidate" 2>/dev/null)" || {
+  printf 'error: cannot resolve release helper: %s\n' "$helper_candidate" >&2
+  exit 2
+}
+readonly helper="$resolved_helper"
+
 size_bytes="$(wc -c < "$executable" | tr -d '[:space:]')"
-printf 'Release executable: %s bytes (budget: %s MB)\n' "$size_bytes" "$limit_mb"
+helper_size_bytes="$(wc -c < "$helper" | tr -d '[:space:]')"
+printf 'Motes executable: %s bytes (budget: %s MB)\n' "$size_bytes" "$limit_mb"
+printf 'motes-agent helper: %s bytes\n' "$helper_size_bytes"
 
 if (( size_bytes > limit_bytes )); then
   printf 'error: release executable exceeds the %s MB budget\n' "$limit_mb" >&2
