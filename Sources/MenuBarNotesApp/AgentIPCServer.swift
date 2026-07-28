@@ -19,7 +19,7 @@
         AgentWorkspaceCommand
       ) async throws -> AgentWorkspaceResponse
     typealias PeerUIDLookup = @Sendable (Int32) throws -> uid_t
-    typealias ResponseWriter = @Sendable (Data, Int32) -> Void
+    typealias ResponseWriter = @Sendable (Data, Int, Int32) -> Int
 
     private struct BoundSocket: Equatable {
       let device: dev_t
@@ -31,6 +31,9 @@
       let source: DispatchSourceRead
       var buffer = Data()
       var timeout: DispatchWorkItem?
+      var response: Data?
+      var responseOffset = 0
+      var writeSource: DispatchSourceWrite?
 
       init(descriptor: Int32, source: DispatchSourceRead) {
         self.descriptor = descriptor
@@ -45,8 +48,10 @@
     private let effectiveUID: uid_t
     private let peerUID: PeerUIDLookup
     private let responseWriter: ResponseWriter
+    private let responseWriteWillBegin: @Sendable () -> Void
     private let execute: Execute
     private let queue = DispatchQueue(label: "Motes.AgentIPCServer")
+    private let queueKey = DispatchSpecificKey<Void>()
     private let lock = NSLock()
     private var listenerDescriptor: Int32 = -1
     private var listenerSource: DispatchSourceRead?
@@ -60,6 +65,7 @@
       effectiveUID: uid_t = geteuid(),
       peerUID: @escaping PeerUIDLookup = AgentIPCServer.lookupPeerUID,
       responseWriter: @escaping ResponseWriter = AgentIPCServer.writeAll,
+      responseWriteWillBegin: @escaping @Sendable () -> Void = {},
       execute: @escaping Execute
     ) {
       self.endpointURL = endpointURL
@@ -68,7 +74,9 @@
       self.effectiveUID = effectiveUID
       self.peerUID = peerUID
       self.responseWriter = responseWriter
+      self.responseWriteWillBegin = responseWriteWillBegin
       self.execute = execute
+      queue.setSpecific(key: queueKey, value: ())
     }
 
     deinit {
@@ -132,7 +140,20 @@
     }
 
     func stop() {
-      let identity = lock.withLock {
+      let identity: BoundSocket?
+      if DispatchQueue.getSpecific(key: queueKey) != nil {
+        identity = stopOnQueue()
+      } else {
+        identity = queue.sync { stopOnQueue() }
+      }
+
+      if let identity {
+        unlinkOwnedSocket(ifMatching: identity)
+      }
+    }
+
+    private func stopOnQueue() -> BoundSocket? {
+      lock.withLock {
         let identity = boundSocket
         listenerSource?.cancel()
         if listenerDescriptor >= 0 {
@@ -142,6 +163,7 @@
         for client in clients.values {
           client.timeout?.cancel()
           client.source.cancel()
+          client.writeSource?.cancel()
           Darwin.shutdown(client.descriptor, SHUT_RDWR)
           Darwin.close(client.descriptor)
         }
@@ -150,10 +172,6 @@
         clients.removeAll()
         boundSocket = nil
         return identity
-      }
-
-      if let identity {
-        unlinkOwnedSocket(ifMatching: identity)
       }
     }
 
@@ -313,7 +331,8 @@
     private func acceptClient(_ descriptor: Int32) {
       guard
         setNoSigPipe(descriptor),
-        peerIsAllowed(descriptor)
+        peerIsAllowed(descriptor),
+        setNonBlocking(descriptor)
       else {
         Darwin.close(descriptor)
         return
@@ -348,6 +367,10 @@
     private func read(_ client: Client) {
       var bytes = [UInt8](repeating: 0, count: 8_192)
       let count = Darwin.read(client.descriptor, &bytes, bytes.count)
+      if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+        resetTimeout(client)
+        return
+      }
       guard count > 0 else {
         finish(client)
         return
@@ -395,9 +418,10 @@
           )
           self.queue.async {
             if let frame {
-              self.writeIfActive(frame, to: client)
+              self.beginWrite(frame, to: client)
+            } else {
+              self.finish(client)
             }
-            self.finish(client)
           }
         }
       } catch {
@@ -418,28 +442,66 @@
       )
     }
 
-    private func writeIfActive(_ data: Data, to client: Client) {
-      lock.withLock {
-        guard clients[client.descriptor] === client else { return }
-        responseWriter(data, client.descriptor)
+    private func beginWrite(_ data: Data, to client: Client) {
+      let active = lock.withLock {
+        guard clients[client.descriptor] === client else { return false }
+        client.response = data
+        client.responseOffset = 0
+        return true
       }
+      guard active else { return }
+      let source = DispatchSource.makeWriteSource(
+        fileDescriptor: client.descriptor,
+        queue: queue
+      )
+      client.writeSource = source
+      source.setEventHandler { [weak self] in
+        self?.continueWrite(client)
+      }
+      source.resume()
+      responseWriteWillBegin()
+      resetTimeout(client)
+      continueWrite(client)
     }
 
-    private static func writeAll(_ data: Data, to descriptor: Int32) {
-      data.withUnsafeBytes { rawBuffer in
-        guard var base = rawBuffer.baseAddress else { return }
-        var remaining = rawBuffer.count
-        while remaining > 0 {
-          let count = Darwin.write(descriptor, base, remaining)
-          if count > 0 {
-            remaining -= count
-            base = base.advanced(by: count)
-          } else if count < 0, errno == EINTR {
-            continue
-          } else {
-            return
-          }
+    private func continueWrite(_ client: Client) {
+      guard
+        lock.withLock({ clients[client.descriptor] === client }),
+        let response = client.response
+      else { return }
+
+      while client.responseOffset < response.count {
+        let count = responseWriter(
+          response,
+          client.responseOffset,
+          client.descriptor
+        )
+        if count > 0 {
+          client.responseOffset += count
+        } else if count < 0, errno == EINTR {
+          continue
+        } else if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+          return
+        } else {
+          finish(client)
+          return
         }
+      }
+      finish(client)
+    }
+
+    private static func writeAll(
+      _ data: Data,
+      from offset: Int,
+      to descriptor: Int32
+    ) -> Int {
+      data.withUnsafeBytes { rawBuffer in
+        guard let base = rawBuffer.baseAddress else { return 0 }
+        return Darwin.write(
+          descriptor,
+          base.advanced(by: offset),
+          rawBuffer.count - offset
+        )
       }
     }
 
@@ -452,6 +514,7 @@
         }
         client.timeout = nil
         client.source.cancel()
+        client.writeSource?.cancel()
         Darwin.shutdown(client.descriptor, SHUT_RDWR)
         Darwin.close(client.descriptor)
       }
@@ -476,6 +539,12 @@
         socklen_t(MemoryLayout<Int32>.size)
       ) == 0
     }
+
+    private func setNonBlocking(_ descriptor: Int32) -> Bool {
+      let flags = fcntl(descriptor, F_GETFL)
+      return flags >= 0
+        && fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0
+    }
   }
 
   @MainActor
@@ -489,8 +558,10 @@
     }
 
     private let server: AgentIPCServer
+    private let notificationCenter: NotificationCenter
     private var startupTask: Task<Void, Never>?
     private var terminationObserver: ObserverToken?
+    private var terminated = false
 
     convenience init(appState: AppState, server: AgentIPCServer) {
       self.init(
@@ -503,29 +574,44 @@
 
     init(
       server: AgentIPCServer,
-      waitUntilReady: @escaping @MainActor @Sendable () async -> Void
+      waitUntilReady: @escaping @MainActor @Sendable () async -> Void,
+      notificationCenter: NotificationCenter = .default
     ) {
       self.server = server
-      startupTask = Task { [weak server] in
+      self.notificationCenter = notificationCenter
+      startupTask = Task { [weak self, weak server] in
         await waitUntilReady()
-        guard !Task.isCancelled else { return }
+        guard
+          let self,
+          !Task.isCancelled,
+          !terminated
+        else { return }
         try? server?.start()
       }
       terminationObserver = ObserverToken(
-        NotificationCenter.default.addObserver(
+        notificationCenter.addObserver(
           forName: NSApplication.willTerminateNotification,
           object: nil,
           queue: .main
-        ) { [weak server] _ in
-          server?.stop()
+        ) { [weak self] _ in
+          MainActor.assumeIsolated {
+            self?.terminate()
+          }
         }
       )
+    }
+
+    private func terminate() {
+      terminated = true
+      startupTask?.cancel()
+      startupTask = nil
+      server.stop()
     }
 
     deinit {
       startupTask?.cancel()
       if let terminationObserver {
-        NotificationCenter.default.removeObserver(terminationObserver.value)
+        notificationCenter.removeObserver(terminationObserver.value)
       }
       server.stop()
     }

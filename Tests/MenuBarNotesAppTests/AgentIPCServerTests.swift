@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 import MenuBarNotesAgentProtocol
@@ -325,6 +326,91 @@ import Testing
   #expect(response.result == .sharedNotes(notes: []))
 }
 
+@Test @MainActor func nonReadingLargeResponseCannotBlockStopOrRestart()
+  async throws
+{
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let calls = LockedCounter()
+  let writeStarted = LockedFlag()
+  let page = AgentNotePage(
+    noteID: UUID(),
+    title: "Large",
+    revision: 1,
+    body: String(repeating: "x", count: 1_000_000),
+    startLine: 1,
+    endLine: 1,
+    totalLineCount: 1,
+    nextLine: nil,
+    modifiedAt: Date(timeIntervalSince1970: 0)
+  )
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    peerUID: { descriptor in
+      let flags = fcntl(descriptor, F_GETFL)
+      _ = fcntl(descriptor, F_SETFL, flags & ~O_NONBLOCK)
+      var sendBytes: Int32 = 4_096
+      _ = setsockopt(
+        descriptor,
+        SOL_SOCKET,
+        SO_SNDBUF,
+        &sendBytes,
+        socklen_t(MemoryLayout<Int32>.size)
+      )
+      return geteuid()
+    },
+    responseWriteWillBegin: { writeStarted.set() },
+    execute: { _, _, _ in
+      calls.increment()
+      return calls.value == 1
+        ? .note(page: page)
+        : .sharedNotes(notes: [])
+    }
+  )
+  try server.start()
+
+  let descriptor = try await Task.detached {
+    let descriptor = try connectedSocket(
+      to: socketURL,
+      receiveBufferBytes: 4_096
+    )
+    try writeRequest(validRequest(), to: descriptor)
+    return descriptor
+  }.value
+  for _ in 0..<100 where calls.value == 0 {
+    try await Task.sleep(for: .milliseconds(2))
+  }
+  for _ in 0..<100 where !writeStarted.value {
+    try await Task.sleep(for: .milliseconds(2))
+  }
+  #expect(writeStarted.value)
+
+  let stopped = LockedFlag()
+  Task.detached {
+    server.stop()
+    stopped.set()
+  }
+  for _ in 0..<40 where !stopped.value {
+    try await Task.sleep(for: .milliseconds(5))
+  }
+  let stoppedPromptly = stopped.value
+  Darwin.close(descriptor)
+  if !stoppedPromptly {
+    for _ in 0..<100 where !stopped.value {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+  }
+  #expect(stoppedPromptly)
+
+  try server.start()
+  defer { server.stop() }
+  let response = try await Task.detached {
+    try transact(validRequest(), at: socketURL)
+  }.value
+  #expect(response.result == .sharedNotes(notes: []))
+}
+
 @Test @MainActor func stopDuringServicePreventsLateDescriptorWrite() async throws {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -333,7 +419,10 @@ import Testing
   let writes = LockedCounter()
   let server = AgentIPCServer(
     endpointURL: socketURL,
-    responseWriter: { _, _ in writes.increment() },
+    responseWriter: { data, offset, _ in
+      writes.increment()
+      return data.count - offset
+    },
     execute: { _, _, _ in
       await gate.execute()
       return .sharedNotes(notes: [])
@@ -411,6 +500,35 @@ import Testing
   #expect(!FileManager.default.fileExists(atPath: socketURL.path))
 }
 
+@Test @MainActor func appTerminationBeforeReadinessPermanentlyPreventsBind()
+  async throws
+{
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    execute: { _, _, _ in .sharedNotes(notes: []) }
+  )
+  let gate = ReadinessGate()
+  let notifications = NotificationCenter()
+  let runtime = AgentIPCRuntime(
+    server: server,
+    waitUntilReady: { await gate.wait() },
+    notificationCenter: notifications
+  )
+  _ = runtime
+  await Task.yield()
+
+  notifications.post(
+    name: NSApplication.willTerminateNotification,
+    object: nil
+  )
+  gate.open()
+  try await Task.sleep(for: .milliseconds(10))
+  #expect(!FileManager.default.fileExists(atPath: socketURL.path))
+}
+
 @Test @MainActor func agentIPCRejectsUnsafeParentAndPreservesForeignLeaf() throws {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -456,9 +574,21 @@ private func temporarySocketURL() -> URL {
   temporaryRoot().appendingPathComponent("bridge/motes.sock")
 }
 
-private func connectedSocket(to url: URL) throws -> Int32 {
+private func connectedSocket(
+  to url: URL,
+  receiveBufferBytes: Int32? = nil
+) throws -> Int32 {
   let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
   guard descriptor >= 0 else { throw SecretFailure(message: "socket") }
+  if var receiveBufferBytes {
+    _ = setsockopt(
+      descriptor,
+      SOL_SOCKET,
+      SO_RCVBUF,
+      &receiveBufferBytes,
+      socklen_t(MemoryLayout<Int32>.size)
+    )
+  }
   var timeout = timeval(tv_sec: 1, tv_usec: 0)
   _ = setsockopt(
     descriptor,
@@ -496,13 +626,7 @@ private func transact(
 ) throws -> AgentWireResponse {
   let descriptor = try connectedSocket(to: socketURL)
   defer { Darwin.close(descriptor) }
-  let requestFrame = try AgentWireFraming.encode(request)
-  let written = requestFrame.withUnsafeBytes {
-    Darwin.write(descriptor, $0.baseAddress, $0.count)
-  }
-  guard written == requestFrame.count else {
-    throw SecretFailure(message: "write")
-  }
+  try writeRequest(request, to: descriptor)
   let header = try readExactly(4, from: descriptor)
   let length = header.reduce(UInt32.zero) { ($0 << 8) | UInt32($1) }
   let payload = try readExactly(Int(length), from: descriptor)
@@ -516,6 +640,19 @@ private func transact(
     throw SecretFailure(message: "decode")
   }
   return response
+}
+
+private func writeRequest(
+  _ request: AgentWireRequest,
+  to descriptor: Int32
+) throws {
+  let requestFrame = try AgentWireFraming.encode(request)
+  let written = requestFrame.withUnsafeBytes {
+    Darwin.write(descriptor, $0.baseAddress, $0.count)
+  }
+  guard written == requestFrame.count else {
+    throw SecretFailure(message: "write")
+  }
 }
 
 private func readExactly(_ count: Int, from descriptor: Int32) throws -> Data {
@@ -548,6 +685,14 @@ private final class LockedCounter: @unchecked Sendable {
 
   var value: Int { lock.withLock { count } }
   func increment() { lock.withLock { count += 1 } }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+  private let lock = NSLock()
+  private var state = false
+
+  var value: Bool { lock.withLock { state } }
+  func set() { lock.withLock { state = true } }
 }
 
 @MainActor
