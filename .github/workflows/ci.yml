@@ -13,16 +13,44 @@ jobs:
   macos:
     name: macOS build and tests
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: |
           xcodebuild -version
           swift --version
-      - name: Test
-        run: swift test
-      - name: Build release
-        run: swift build -c release
+      - name: Test ordinary graph
+        run: |
+          unset MOTES_ENHANCED_CANDIDATE
+          swift test
+      - name: Build Motes release product
+        run: |
+          unset MOTES_ENHANCED_CANDIDATE
+          swift build -c release --product Motes
+      - name: Build agent bridge release product
+        run: |
+          unset MOTES_ENHANCED_CANDIDATE
+          swift build -c release --product motes-agent
+      - name: Audit agent boundary
+        run: Scripts/audit-agent-boundary.sh
       - name: Enforce executable size budget
         run: Scripts/check-release-size.sh .build/release/Motes
+      - name: Validate native bundle launch and Keychain contracts
+        run: Scripts/validate-macos.sh
+      - name: Verify Enhanced Local candidate pin
+        run: Scripts/test-enhanced-candidate-pin.sh
+      - name: Test Enhanced Local candidate graph
+        run: |
+          Scripts/resolve-enhanced-candidate.sh .build-candidate \
+            swift test --disable-automatic-resolution \
+              --scratch-path .build-candidate
+          git diff --exit-code -- Package.resolved
+      - name: Preserve ordinary lock from a foreign working directory
+        run: |
+          Scripts/test-enhanced-candidate-lock-preservation.sh
+          git diff --exit-code -- Package.resolved
+      - name: Reject candidate release
+        run: |
+          Scripts/check-candidate-release-rejected.sh
+          git diff --exit-code -- Package.resolved

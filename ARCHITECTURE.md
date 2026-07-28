@@ -9,7 +9,7 @@ Motes is a native macOS utility, not a miniature web application. The initial en
 - **Idle behavior:** no polling, server process, web view, analytics client, or network requirement.
 - **Storage:** local, readable, atomic, and recoverable.
 
-These are release gates to measure, not assumptions guaranteed by choosing a particular framework. Native AppKit and SwiftUI APIs are used without third-party runtime dependencies, giving the implementation the best opportunity to stay within the budgets.
+These are release gates to measure, not assumptions guaranteed by choosing a particular framework. Native AppKit and SwiftUI APIs keep the base notes experience small. The Clean Dictation candidate adds a checksum-pinned FluidAudio dependency for Enhanced Local, so its executable, external model, runtime resources, and licenses are measured and approved separately.
 
 ## Main user flows
 
@@ -57,10 +57,15 @@ These are release gates to measure, not assumptions guaranteed by choosing a par
 
 ```text
 Sources/
-├── MenuBarNotesCore/       # Portable models, text transforms, and local persistence
-└── MenuBarNotesApp/        # macOS menu-bar scenes, state coordination, and views
+├── MenuBarNotesCore/          # Models, mutations, persistence, and activity journal
+├── MenuBarNotesAgentProtocol/ # Versioned typed IPC messages and framing
+├── MenuBarNotesApp/           # macOS scenes, state coordination, IPC service, and views
+└── MotesAgentBridge/          # Separate MCP/CLI helper and Unix-socket client
 Tests/
-└── MenuBarNotesCoreTests/  # Fast tests that do not require a macOS UI session
+├── MenuBarNotesCoreTests/
+├── MenuBarNotesAgentProtocolTests/
+├── MenuBarNotesAppTests/
+└── MotesAgentBridgeTests/
 ```
 
 `MenuBarNotesCore` deliberately does not import AppKit or SwiftUI. Keeping storage and state transformations portable makes them inexpensive to test and prevents UI choices from becoming persistence requirements.
@@ -76,6 +81,88 @@ Tests/
 - `AppState` is main-actor isolated, presents state to SwiftUI, and schedules debounced saves.
 
 The initial format favors plain Markdown note bodies because it is small, readable, portable, and resilient. Font family, size, accent, and glass appearance are app preferences rather than markup embedded into every character. If mixed rich-text formatting becomes a hard requirement, it should be added through an explicitly versioned sidecar format while keeping Markdown export available.
+
+## Agent workspace trust and data flow
+
+```text
+local MCP client or CLI
+  -> motes helper (stdio or CLI output; credential in Keychain)
+  -> private AF_UNIX socket (same-user peer check + profile authorization)
+  -> AgentCommandService
+  -> explicit-share filter -> typed mutation -> atomic LocalStore commit
+  -> 30-day activity record and retry tombstone
+```
+
+- A note is private until the user enables `agentAccess` for that note. Listing,
+  reads, task operations, activity, writes, and Undo all derive visibility from
+  the current in-memory workspace. Unknown UUIDs and private UUIDs return the
+  same `note_not_found` error.
+- The helper never opens note `.md`/`.rtf` files, `workspace.json`, Trash, or
+  Dictation History. It cannot receive settings, share, note-delete, path, or
+  shell commands because those cases do not exist in the typed protocol.
+- `MotesAgentBridge` is a separately packaged executable. Its only AppKit use
+  is the non-activating Motes launch adapter. IPC uses an `AF_UNIX` socket below
+  the user's Motes Application Support directory, with a private parent,
+  private socket mode, and a matching peer UID. There is no HTTP/TCP listener,
+  cloud bridge, or internet-facing port.
+- Each integration profile has an independent random credential. Motes stores
+  only its verifier in the data-protection Keychain; the helper stores the
+  credential in its own Keychain item. Profile JSON, setup snippets, command
+  arguments, normal errors, and MCP stdout do not contain it.
+- Writes use optimistic revisions and caller-supplied operation UUIDs. A
+  revision conflict rejects the mutation. A repeated operation UUID in the same
+  actor scope returns its prior receipt instead of applying the change twice;
+  retry tombstones expire after 30 days.
+- The activity journal retains exact before/after patches for 30 days. Undo
+  requires the authorized profile (or local user), current note visibility,
+  expected revision, and an unambiguous inverse patch. Clearing visible
+  activity does not clear retry tombstones.
+- This is a cooperative local-client boundary. A malicious process already
+  executing as the same macOS user may have equivalent access to local files,
+  Keychain prompts, input, or accessibility APIs and is outside this bridge's
+  threat model.
+
+## Clean Dictation data flow and privacy boundary
+
+```text
+microphone -> selected local speech engine -> raw transcript
+  -> optional local cleanup -> focused editor OR title-only router -> LocalStore
+```
+
+- **Standard** uses Apple's speech APIs only when on-device recognition is
+  available and sets `requiresOnDeviceRecognition = true`. Unavailability is an
+  error; there is no cloud fallback.
+- **Enhanced Local** is a non-shippable candidate backed by external, data-only
+  Core ML model content. The exact model revision and every file byte count and
+  checksum are embedded in the application manifest. The 464,413,247-byte
+  (442.9 MiB) model must not be bundled; the release gate rejects it in the
+  current executable root or a future application artifact.
+- FluidAudio inference is forced offline before load and inference. Release
+  checks require `ModelHub.offlineMode = true` and reject code that disables
+  offline mode or invokes FluidAudio model download helpers from production
+  capture code.
+- Microphone buffers and Enhanced float samples exist in memory only for the
+  active capture and are released afterward. No audio is written to notes,
+  dictation history, model storage, or logs.
+- Cleanup uses the local Foundation Models framework when available. Failure,
+  unavailability, or an unfaithful result falls back to the raw transcript
+  without blocking persistence.
+- Focused capture writes the transcript into the active editor transaction.
+  Smart Capture gives routing the transcript plus candidate UUIDs and display
+  titles only; note bodies and other note content never enter the routing
+  prompt. Low-confidence or unavailable routing falls back to Inbox.
+- `LocalStore` persists notes locally. Optional dictation history stores
+  transcript text and destination metadata as atomic local JSON, contains no
+  audio, and purges records after 30 days.
+- The only intended product network operation is an explicit user-approved
+  Enhanced model download, repair, or update from the embedded allowlist.
+  Standard recognition, Enhanced inference, cleanup, routing, notes, and
+  history have no application-controlled network path.
+
+This architecture is not release approval. Enhanced Local remains disabled
+from release until the pinned model materially beats Standard and the manual
+device, resource, accessibility, legal, attribution, SBOM, signing, and store
+gates in `TESTING.md` have recorded evidence.
 
 ## UI direction
 
@@ -98,13 +185,26 @@ Glass opacity is stored now, but fine-grained material rendering and contrast ad
 4. **Panel and tabs (partially implemented):** pinning, dimensions, reordering, navigation, and overflow scrolling work; cursor/scroll/window-position restoration remains.
 5. **Hardening (partially implemented):** recovery snapshots, format versioning, malformed-file fallback, and import/export are covered by portable tests; native accessibility and integration audits remain.
 6. **Release profiling (pending macOS):** measure signed release app size, idle and active memory, idle CPU, launch time, and typing latency against representative workspaces.
+7. **Clean Dictation (implemented candidate, not release-approved):** Standard,
+   optional local cleanup/routing, history, and Enhanced infrastructure are on
+   a release-disabled candidate. Real-device quality, device matrices,
+   accessibility, resource, legal, artifact, signing/notarization, and store
+   gates remain pending.
+8. **Agent workspace (implemented, manual compatibility pending):** explicit
+   per-note sharing, typed mutations, local same-user IPC, CLI/MCP helper,
+   revision/idempotency contracts, 30-day activity, safe Undo, packaging, and
+   automated privacy audits are implemented. Manual Codex, Claude Code, Kimi,
+   generic CLI, accessibility, lifecycle, and signed-distribution checks remain.
 
 ## Explicit non-goals for the lightweight base app
 
 - Electron or an embedded browser runtime.
 - Accounts, analytics, advertising, or mandatory network access.
 - A database server or background synchronization daemon.
+- Agent access to private notes, Trash, Dictation History, settings, sharing,
+  note deletion, arbitrary file paths, a shell, or direct storage edits.
 - Bundled font collections.
-- Plug-in or AI runtimes in the base process.
+- Bundled speech-model weights, cloud speech fallback, cloud cleanup/routing,
+  or a mandatory AI runtime for ordinary notes.
 
 Features that threaten the resource ceiling must be optional, isolated, measured, and justified before inclusion.

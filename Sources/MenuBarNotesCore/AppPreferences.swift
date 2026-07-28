@@ -18,6 +18,11 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var automaticLists: Bool
   public var launchAtLogin: Bool
   public var shortcuts: [Shortcut]
+  public var dictationSpeechEngine: DictationSpeechEngine
+  public var dictationShortcut: DictationShortcut
+  public var dictationHistoryEnabled: Bool
+  public var dictationCapsuleEnabled: Bool
+  public var dictationMicrophoneUID: String?
 
   public init(
     fontFamily: String = ".AppleSystemUIFont", fontSize: Double = 15,
@@ -26,7 +31,12 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     theme: AppTheme = .system, panelWidth: Double = 520, panelHeight: Double = 430,
     showFormattingBar: Bool = true, automaticLists: Bool = true,
     launchAtLogin: Bool = false,
-    shortcuts: [Shortcut] = Shortcut.defaults
+    shortcuts: [Shortcut] = Shortcut.defaults,
+    dictationSpeechEngine: DictationSpeechEngine = .standard,
+    dictationShortcut: DictationShortcut = DictationShortcut(),
+    dictationHistoryEnabled: Bool = true,
+    dictationCapsuleEnabled: Bool = true,
+    dictationMicrophoneUID: String? = nil
   ) {
     self.fontFamily = fontFamily
     self.fontSize = fontSize
@@ -41,11 +51,21 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.automaticLists = automaticLists
     self.launchAtLogin = launchAtLogin
     self.shortcuts = shortcuts
+    self.dictationSpeechEngine =
+      CleanDictationFeatures.enhancedLocalCandidateEnabled
+      ? dictationSpeechEngine
+      : .standard
+    self.dictationShortcut = dictationShortcut
+    self.dictationHistoryEnabled = dictationHistoryEnabled
+    self.dictationCapsuleEnabled = dictationCapsuleEnabled
+    self.dictationMicrophoneUID = dictationMicrophoneUID
   }
 
   private enum CodingKeys: String, CodingKey {
     case fontFamily, fontSize, accentHex, editorTextHex, editorBackgroundHex, panelOpacity, theme,
-      panelWidth, panelHeight, showFormattingBar, automaticLists, launchAtLogin, shortcuts
+      panelWidth, panelHeight, showFormattingBar, automaticLists, launchAtLogin, shortcuts,
+      dictationSpeechEngine, dictationShortcut, dictationHistoryEnabled, dictationCapsuleEnabled,
+      dictationMicrophoneUID
   }
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -62,7 +82,12 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       showFormattingBar: try c.decodeIfPresent(Bool.self, forKey: .showFormattingBar) ?? true,
       automaticLists: try c.decodeIfPresent(Bool.self, forKey: .automaticLists) ?? true,
       launchAtLogin: try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false,
-      shortcuts: try c.decodeIfPresent([Shortcut].self, forKey: .shortcuts) ?? Shortcut.defaults)
+      shortcuts: try c.decodeIfPresent([Shortcut].self, forKey: .shortcuts) ?? Shortcut.defaults,
+      dictationSpeechEngine: try c.decodeIfPresent(DictationSpeechEngine.self, forKey: .dictationSpeechEngine) ?? .standard,
+      dictationShortcut: try c.decodeIfPresent(DictationShortcut.self, forKey: .dictationShortcut) ?? DictationShortcut(),
+      dictationHistoryEnabled: try c.decodeIfPresent(Bool.self, forKey: .dictationHistoryEnabled) ?? true,
+      dictationCapsuleEnabled: try c.decodeIfPresent(Bool.self, forKey: .dictationCapsuleEnabled) ?? true,
+      dictationMicrophoneUID: try c.decodeIfPresent(String.self, forKey: .dictationMicrophoneUID))
   }
 }
 

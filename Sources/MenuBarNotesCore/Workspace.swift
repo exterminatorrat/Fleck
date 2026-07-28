@@ -57,9 +57,54 @@ public struct Workspace: Codable, Equatable, Sendable {
     now: Date = Date()
   ) {
     guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
-    if let title { notes[index].title = title }
-    if let body { notes[index].body = body }
-    if let isPinned { notes[index].isPinned = isPinned }
+    var changed = false
+    var incrementsRevision = false
+    if let title, title != notes[index].title {
+      notes[index].title = title
+      changed = true
+      incrementsRevision = true
+    }
+    if let body, body != notes[index].body {
+      notes[index].body = body
+      changed = true
+      incrementsRevision = true
+    }
+    if let isPinned, isPinned != notes[index].isPinned {
+      notes[index].isPinned = isPinned
+      changed = true
+    }
+    guard changed else { return }
+    if incrementsRevision {
+      notes[index].revision += 1
+    }
+    notes[index].modifiedAt = now
+  }
+
+  public mutating func updateContent(
+    id: UUID,
+    body: String,
+    rtf: Data?,
+    now: Date = Date()
+  ) {
+    guard let index = notes.firstIndex(where: { $0.id == id }),
+      notes[index].body != body || notes[index].richTextRTF != rtf
+    else { return }
+    notes[index].body = body
+    notes[index].richTextRTF = rtf
+    notes[index].revision += 1
+    notes[index].modifiedAt = now
+  }
+
+  public mutating func setAgentAccess(
+    id: UUID,
+    enabled: Bool,
+    now: Date = Date()
+  ) {
+    guard let index = notes.firstIndex(where: { $0.id == id }),
+      notes[index].agentAccess != enabled
+    else { return }
+    notes[index].agentAccess = enabled
+    notes[index].revision += 1
     notes[index].modifiedAt = now
   }
 

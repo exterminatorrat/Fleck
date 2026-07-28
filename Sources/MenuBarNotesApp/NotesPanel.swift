@@ -62,24 +62,75 @@
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var isPinned = false
+    @ObservedObject var dictationRuntime: DictationRuntime
+    let isPinned: Bool
     @StateObject private var editorCommands = EditorCommands()
     @Namespace private var selectedTabHighlight
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var isShowingTrash = false
+    @State private var isShowingDictationHistory = false
+    @State private var isShowingAgentActivity = false
     @State private var notePendingDeletion: Note?
+    @State private var notePendingAgentShare: Note?
     @State private var exportDocument: NoteFileDocument?
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
     @State private var draggedNoteID: UUID?
     @State private var tabDragContentType = TabDragReorder.makeContentType()
 
+    init(dictationRuntime: DictationRuntime, isPinned: Bool = false) {
+      self.dictationRuntime = dictationRuntime
+      self.isPinned = isPinned
+    }
+
     var body: some View {
       VStack(spacing: 0) {
         header
         tabStrip
         Divider().opacity(0.35)
+        if let failure = dictationRuntime.captureFailure {
+          HStack(spacing: 8) {
+            Label(failure.message, systemImage: "exclamationmark.triangle")
+              .font(.caption)
+            Spacer()
+            ForEach(failure.actions, id: \.pane) { action in
+              Button(action.title) {
+                dictationRuntime.openSystemSettings(action)
+              }
+              .accessibilityLabel(action.title)
+            }
+          }
+          .padding(.horizontal, 10)
+          .padding(.vertical, 7)
+          .background(.quaternary.opacity(0.35))
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("Dictation unavailable")
+        }
+        if let recoveryAction = dictationRuntime.recoveryAction {
+          HStack(spacing: 8) {
+            Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
+              .font(.caption)
+            Spacer()
+            Button(recoveryAction.title) {
+              Task { await dictationRuntime.performRecoveryAction() }
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(!dictationRuntime.recoveryCommand.isEnabled)
+            .accessibilityLabel(recoveryAction.accessibilityLabel)
+          }
+          .padding(.horizontal, 10)
+          .padding(.vertical, 7)
+          .background(.quaternary.opacity(0.35))
+        }
+        if let banner = appState.agentBannerPresentation {
+          AgentChangeBanner(
+            presentation: banner,
+            motion: motion,
+            onUndo: { Task { await appState.undoLatestAgentChange() } }
+          )
+          .animation(motion.quick, value: banner)
+        }
         editor
         if let error = appState.saveError {
           Text("Could not save: \(error)")
@@ -122,6 +173,43 @@
       .sheet(isPresented: $isShowingTrash) {
         TrashView(onDone: { isShowingTrash = false })
           .environmentObject(appState)
+      }
+      .sheet(isPresented: $isShowingDictationHistory) {
+        DictationHistoryView(
+          history: dictationRuntime.historyController,
+          onOpenDestination: openHistoryDestination
+        )
+      }
+      .sheet(isPresented: $isShowingAgentActivity) {
+        AgentActivityView { noteID in
+          appState.select(noteID)
+          isShowingAgentActivity = false
+        }
+        .environmentObject(appState)
+      }
+      .confirmationDialog(
+        "Allow authorized agents to read and edit this note?",
+        isPresented: Binding(
+          get: { notePendingAgentShare != nil },
+          set: { if !$0 { notePendingAgentShare = nil } }
+        )
+      ) {
+        Button("Allow Agent Access") {
+          guard let note = notePendingAgentShare else { return }
+          notePendingAgentShare = nil
+          appState.confirmFirstAgentShare(noteID: note.id)
+        }
+        Button("Cancel", role: .cancel) {
+          notePendingAgentShare = nil
+        }
+      } message: {
+        Text("Every authorized local integration will be able to read and edit this note.")
+      }
+      .onAppear {
+        dictationRuntime.registerEditor(editorCommands)
+      }
+      .onDisappear {
+        dictationRuntime.unregisterEditor(editorCommands)
       }
       .overlay {
         ZStack {
@@ -185,6 +273,21 @@
           Button("Trash…", systemImage: "trash") {
             isShowingTrash = true
           }
+          Button("Dictation History", systemImage: "waveform") {
+            isShowingDictationHistory = true
+          }
+          Button("Agent Activity", systemImage: "clock.arrow.circlepath") {
+            isShowingAgentActivity = true
+          }
+          if let note = appState.selectedNote {
+            Toggle(
+              "Allow Agent Access",
+              isOn: Binding(
+                get: { note.agentAccess },
+                set: { requestAgentAccess(note, enabled: $0) }
+              )
+            )
+          }
         } label: {
           Image(systemName: "ellipsis.circle")
         }
@@ -219,6 +322,11 @@
                     .font(.caption2)
                 }
                 Text(note.displayTitle).lineLimit(1)
+                if note.agentAccess {
+                  Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.caption2)
+                    .accessibilityLabel(AgentSharingPresentation.sharedBadgeAccessibilityLabel)
+                }
               }
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
@@ -287,6 +395,13 @@
                   }
                 }
               }
+              Toggle(
+                "Allow Agent Access",
+                isOn: Binding(
+                  get: { note.agentAccess },
+                  set: { requestAgentAccess(note, enabled: $0) }
+                )
+              )
               Divider()
               Button("Move to Trash", systemImage: "trash", role: .destructive) {
                 requestDeletion(note)
@@ -337,9 +452,30 @@
       notePendingDeletion = note
     }
 
+    private func requestAgentAccess(_ note: Note, enabled: Bool) {
+      guard enabled else {
+        appState.setAgentAccess(noteID: note.id, enabled: false)
+        return
+      }
+      if AgentSharingPresentation(
+        note: note,
+        hasConfirmedFirstShare: appState.hasConfirmedFirstAgentShare
+      ).requiresEnableConfirmation {
+        notePendingAgentShare = note
+      } else {
+        appState.setAgentAccess(noteID: note.id, enabled: true)
+      }
+    }
+
     private func confirmDeletion(_ note: Note) {
       notePendingDeletion = nil
       appState.moveToTrash(note.id)
+    }
+
+    private func openHistoryDestination(_ noteID: UUID) {
+      guard appState.workspace.notes.contains(where: { $0.id == noteID }) else { return }
+      appState.select(noteID)
+      isShowingDictationHistory = false
     }
 
     private func presentPersistentWindow(_ present: () -> Void) {
@@ -394,6 +530,7 @@
           if appState.preferences.showFormattingBar {
             FormattingBar(
               commands: editorCommands,
+              dictationRuntime: dictationRuntime,
               onDelete: {
                 if let note = appState.selectedNote {
                   requestDeletion(note)
@@ -414,14 +551,11 @@
           .padding(.top, 12)
 
           NativeRichTextEditor(
-            text: Binding(
-              get: { note.body },
-              set: { appState.updateSelected(body: $0) }
-            ),
-            richTextRTF: Binding(
-              get: { note.richTextRTF },
-              set: { appState.updateSelectedRichTextRTF($0) }
-            ),
+            text: note.body,
+            richTextRTF: note.richTextRTF,
+            onChange: { body, richTextRTF in
+              appState.updateSelected(body: body, richTextRTF: richTextRTF)
+            },
             fontFamily: appState.preferences.fontFamily,
             fontSize: appState.preferences.fontSize,
             textColorHex: appState.preferences.editorTextHex,
@@ -505,10 +639,31 @@
   private struct FormattingBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var commands: EditorCommands
+    @ObservedObject var dictationRuntime: DictationRuntime
     let onDelete: () -> Void
 
     var body: some View {
       HStack(spacing: 8) {
+        Menu {
+          Button("Cancel Dictation", role: .destructive) {
+            Task { await dictationRuntime.cancel() }
+          }
+          .disabled(!dictationRuntime.canCancel)
+        } label: {
+          ToolbarIconLabel(
+            systemImage: dictationRuntime.microphoneSymbol,
+            isActive: dictationRuntime.isListening
+          )
+        } primaryAction: {
+          guard dictationRuntime.toolbarPresentation.primaryAction != nil else { return }
+          Task { await dictationRuntime.toggle() }
+        }
+        .accessibilityLabel(dictationRuntime.microphoneHelp)
+        .accessibilityAction(named: Text("Cancel Dictation")) {
+          Task { await dictationRuntime.cancel() }
+        }
+        .help(dictationRuntime.microphoneHelp)
+        Divider().frame(height: 15)
         Button {
           commands.undo()
         } label: {

@@ -625,6 +625,7 @@ Cover:
 - Creation returns a 32-byte random credential once and stores only its SHA-256 verifier in Keychain.
 - Equal credentials authorize with constant-time comparison.
 - Wrong, revoked, and unknown profiles fail with scoped errors.
+- Wrong credentials, revoked profiles, and unknown profile IDs all throw the same byte-for-byte `AgentWorkspaceError(code: .permissionRevoked)` so callers cannot enumerate profiles.
 - Revocation during a test request prevents the next command.
 - Handles reject changed bytes, the wrong note, and the wrong revision.
 - Handles round-trip Unicode task text hashes.
@@ -686,6 +687,53 @@ git commit -m "feat: authorize local Motes agents"
 
 ---
 
+### Task 4.5: Expose the Exact Resolved Undo Mutation
+
+**Files:**
+- Modify: `Sources/MenuBarNotesCore/AgentUndoEngine.swift`
+- Modify: `Tests/MenuBarNotesCoreTests/AgentUndoEngineTests.swift`
+
+**Interfaces:**
+
+Add:
+
+```swift
+public static func draft(
+  inverting patch: AgentTextPatch,
+  in body: String
+) throws -> AgentMutationDraft
+```
+
+Keep `inverting(_:in:)` as a compatibility wrapper returning `draft.body`.
+
+- [ ] **Step 1: Write RED tests**
+
+Cover an Undo whose context uniquely relocates the edit after nearby human text was inserted. Require the draft to return:
+
+- The resulting body.
+- The actual resolved UTF-16 range, not the stale original range.
+- An inverse patch whose `beforeText` is the text being removed and whose `afterText` is the restored text.
+- Prefix and suffix context from the current body at the resolved range.
+
+Add an attributed-text-oriented regression fixture with identical nearby text carrying different formatting so Task 5 can prove it mutates the resolved run rather than the original offset.
+
+- [ ] **Step 2: Implement minimally**
+
+Reuse the existing exact/context matcher once, return the resolved range, and build the inverse `AgentMutationDraft`. Do not duplicate the matcher in Task 5 and do not change current conservative ambiguity or whole-body-deletion behavior.
+
+- [ ] **Step 3: Verify and commit**
+
+```bash
+swift test --filter AgentUndoEngine
+swift test
+git diff --check
+git add Sources/MenuBarNotesCore/AgentUndoEngine.swift \
+  Tests/MenuBarNotesCoreTests/AgentUndoEngineTests.swift
+git commit -m "feat: expose resolved agent undo patches"
+```
+
+---
+
 ### Task 5: Implement Rich-Text-Safe Mutations and the Single-Writer Gateway
 
 **Files:**
@@ -711,15 +759,25 @@ git commit -m "feat: authorize local Motes agents"
 @MainActor
 final class AgentCommandService {
   func execute(
-    profile: AgentIntegrationProfile,
+    profileID: UUID,
+    credential: Data,
     command: AgentWorkspaceCommand
-  ) async -> AgentWorkspaceResponse
+  ) async throws -> AgentWorkspaceResponse
 
   func executeLocalUndo(
     changeID: UUID,
     expectedRevision: UInt64,
     operationID: UUID
-  ) async -> AgentWorkspaceResponse
+  ) async throws -> AgentWorkspaceResponse
+}
+
+struct AgentChangeFeedback: Equatable, Sendable {
+  let changeID: UUID
+  let noteID: UUID
+  let noteTitle: String
+  let actor: AgentActivityActor
+  let resultingRevision: UInt64
+  let createdAt: Date
 }
 
 @MainActor
@@ -727,6 +785,7 @@ protocol AgentWorkspaceStateAccess: AnyObject {
   var workspace: Workspace { get }
   var persistenceGeneration: UInt64 { get }
   var preferences: AppPreferences { get }
+  var isAgentWorkspaceAvailable: Bool { get }
   func flushPendingPersistenceForAgent() async throws
   func commitAgentWorkspace(
     _ workspace: Workspace,
@@ -736,7 +795,7 @@ protocol AgentWorkspaceStateAccess: AnyObject {
 }
 ```
 
-`AgentCommandService` uses a FIFO task chain so one complete agent command finishes before the next starts; actor reentrancy alone is not sufficient. Authorization and preparation may await, but the final workspace save and publish are one synchronous main-actor critical section.
+`AgentCommandService` uses a FIFO task chain so one complete agent command finishes before the next starts; actor reentrancy alone is not sufficient. It owns `AgentProfileStore`, authorizes `profileID` plus `credential` inside that FIFO immediately before each command, and retains the returned profile only for that command. Authorization and preparation may await, but the final workspace save and publish are one synchronous main-actor critical section.
 
 - [ ] **Step 1: Write rich-text preservation tests**
 
@@ -748,6 +807,9 @@ Cover:
 - Completing a task strikes through task content but not indentation or marker.
 - Reopening removes only the task-content strike.
 - Removing one task preserves adjacent rich text.
+- Relocated safe Undo mutates the exact attributed range returned by `AgentUndoEngine.draft`, preserving a differently formatted identical nearby run.
+- A stale or semantically mismatched RTF sidecar is rejected safely rather than applying body-derived ranges to unrelated attributed text.
+- CR/LF/CRLF body and decoded RTF strings must match exactly in UTF-16 before a rich-text mutation; an unrepresentable newline mismatch is rejected without publishing or persisting a change.
 
 - [ ] **Step 2: Write service contract tests**
 
@@ -769,6 +831,8 @@ Cover:
 - Local user Undo works for an active note after unsharing or revoking the originating profile.
 - Later ambiguous edits return `unsafe_undo`.
 - Human pending edits are part of the revision checked by an agent command.
+- Every rejection throws the existing Codable `AgentWorkspaceError`; successful return values remain `AgentWorkspaceResponse`.
+- A failed initial root/Recovery load leaves `isAgentWorkspaceAvailable == false`; every command, including discovery, throws `motes_unavailable` before observing the default in-memory workspace. A fresh no-manifest workspace is a successful validated load.
 
 - [ ] **Step 3: Run RED**
 
@@ -779,7 +843,7 @@ swift test --filter AgentCommandService
 
 - [ ] **Step 4: Implement attributed mutations**
 
-Decode existing RTF when valid; otherwise create attributed text from `note.body` and current font preferences. Map body line ranges to `NSRange` using `NSString`. Apply the exact pure-engine replacement, serialize RTF, and return body plus RTF together.
+Decode existing RTF when valid; otherwise create attributed text from `note.body` and current font preferences. Before applying anything, require the attributed string and `note.body` to be exactly equal in UTF-16. A parseable but stale sidecar, or a CR/LF/CRLF representation that cannot round-trip exactly through RTF, fails safely with `motes_unavailable` and a retry/recovery action; it is never silently normalized, reformatted, or applied at a guessed range. Map body line ranges to `NSRange` using `NSString`. Apply the exact pure-engine replacement (or the exact resolved inverse patch returned by Task 4.5), serialize RTF, decode it again, and require its string to equal the resulting body before returning body plus RTF together.
 
 Construct the resulting `Note` with body and RTF updated together, then increment its revision exactly once. Do not call the separate human body and RTF mutation methods in sequence.
 
@@ -791,21 +855,21 @@ Move the existing file-writing body used by `LocalStore.save` into a synchronous
 
 Every AppState save carries the `persistenceGeneration` captured with that snapshot. Under the same lock, the writer tracks the highest committed generation and returns `.superseded` without touching disk when an older queued autosave arrives after a newer agent or human snapshot. Advance the watermark only after the atomic manifest commit; a pre-commit failure must leave that generation retryable. Test both lock acquisition orders and a failed newer save followed by its retry.
 
-Extend the backward-compatible manifest with optional `snapshotIntegrityVersion: 1`, per-note Markdown and RTF SHA-256 values, and a bounded list of unexpired `AgentWorkspaceCommitProof` values. A normal save preserves and purges these content-free proofs. An agent save adds its proof to the manifest that records the resulting note revision.
+Extend the backward-compatible manifest with optional `snapshotIntegrityVersion: 1`, per-note Markdown and RTF SHA-256 values, `preferencesSHA256`, and a bounded list of unexpired `AgentWorkspaceCommitProof` values. A normal save preserves and purges these content-free proofs. An agent save adds its proof to the manifest that records the resulting note revision.
 
 Treat the atomic `workspace.json` replacement as the snapshot commit point:
 
 1. Validate the current root generation. Create a Recovery snapshot only from a valid root; when root validation already fell back to Recovery, preserve that Recovery until a new root manifest commits.
-2. Perform every fallible preferences, Markdown, and RTF write for the active generation.
+2. Encode preferences once, then perform every fallible preferences, Markdown, and RTF write for the active generation.
 3. Compute hashes from the bytes actually written.
 4. Atomically replace `workspace.json` last with matching revisions, hashes, and agent proofs.
 5. Perform orphan cleanup as best-effort, non-throwing maintenance.
 
-On load, `snapshotIntegrityVersion == 1` is valid only when every referenced Markdown/RTF file has the required matching hash. Reject the entire root generation and load Recovery when any hash is missing or wrong. Old manifests with no integrity version remain readable and acquire hashes on their next save. This makes a crash before the manifest commit recover the old complete generation, while a committed proof always names the complete new generation.
+On load, `snapshotIntegrityVersion == 1` is valid only when every referenced Markdown/RTF file and the exact encoded `preferences.json` bytes have the required matching hash. Reject the entire root generation and load workspace plus preferences from Recovery when any hash is missing or wrong. Old manifests with no integrity version remain readable and acquire hashes on their next save. This makes a preferences-only crash before the manifest commit recover the old complete generation, while a committed proof always names the complete new generation.
 
 Add `LocalStore.loadSnapshot()` returning workspace, preferences, commit proofs, and whether root or Recovery was validated. `AppState` must load workspace and preferences from that one source instead of independently accepting root preferences after the root workspace was rejected.
 
-Add regressions using two queues and controllable filesystem hooks for both stale-save orderings, failed-generation retry, crash points before and after the manifest commit, post-commit cleanup failure, root hash mismatch fallback followed by a save that preserves valid Recovery, and old hashless manifests.
+Add regressions using two queues and controllable filesystem hooks for both stale-save orderings, failed-generation retry, crash points before and after the manifest commit, a preferences-only pre-commit crash, missing or corrupt preferences fallback, post-commit cleanup failure, root hash mismatch fallback followed by a save that preserves valid Recovery, and old hashless manifests.
 
 Trash remains on the existing idempotent archive path rather than entering an agent snapshot transaction. `flushPendingPersistenceForAgent()` cancels the debounce, awaits any in-flight save, and repeats until the current `persistenceGeneration` is durable and `pendingTrashNotes` is empty. Bound this drain to two seconds; on continued edits, Trash failure, or timeout, reject the agent command with `motes_unavailable` and a retry action. `commitAgentWorkspace` refuses to run when pending Trash is nonempty and does not archive or restore Trash itself.
 
@@ -823,7 +887,7 @@ The method has no `await`. A pre-commit save error leaves published state unchan
 For a write:
 
 1. Enter the FIFO agent-command chain.
-2. Authorize the profile and reconcile any preparation for the same operation ID.
+2. Authorize the supplied profile ID and credential through `AgentProfileStore`, then discard the credential after this command; reconcile any preparation for the same operation ID.
 3. Return a prior idempotent receipt when present.
 4. Await `flushPendingPersistenceForAgent()` so no older save or pending Trash operation remains.
 5. On the main actor, capture the live workspace and `persistenceGeneration`; scope unknown and unshared notes identically.
@@ -833,13 +897,13 @@ For a write:
 9. Call synchronous `commitAgentWorkspace` with the candidate, captured generation, and prepared commit proof; successful return means the workspace and its manifest proof are durable and the candidate is published.
 10. Commit the activity record/tombstone synchronously, publish feedback, and return the receipt.
 
-On failure before step 9, abort preparation when one exists and publish nothing. A workspace-save failure at step 9 also aborts preparation and publishes nothing. A failure after workspace persistence keeps the durable candidate published and the preparation intact, returns `internal_save_failure`, and reconciles that operation from the manifest proof before any retry can mutate. Never roll back or overwrite newer human state.
+On failure before step 9, abort preparation when one exists and publish nothing. A workspace-save failure at step 9 also aborts preparation and publishes nothing. A failure after workspace persistence keeps the durable candidate published and the preparation intact, throws `AgentWorkspaceError(code: .internalSaveFailure)`, and reconciles that operation from the manifest proof before any retry can mutate. Never roll back or overwrite newer human state.
 
 `executeLocalUndo` bypasses integration-profile authorization because it represents an explicit Motes user action. It still requires the active note, expected revision, operation ID, safe inverse proof, the same prepared transaction, and the same synchronous durable commit. Attribute the new activity to the local Motes user while retaining the originating integration in the description.
 
 - [ ] **Step 7: Integrate AppState**
 
-Make `AppState` conform to `AgentWorkspaceStateAccess`, use the Task 1 readiness/generation APIs, and inject the shared synchronous snapshot writer used by `commitAgentWorkspace`. Every existing debounced, immediate, restore, and Trash-related save must pass the generation captured with its workspace snapshot and treat `.superseded` as a safe no-op rather than an error.
+Make `AppState` conform to `AgentWorkspaceStateAccess`, use the Task 1 readiness/generation APIs, and inject the shared synchronous snapshot writer used by `commitAgentWorkspace`. Track successful initial snapshot availability separately from `hasFinishedInitialLoad`: no-manifest initialization and a validated root/Recovery load are available; a thrown load remains unavailable for the process lifetime. Every existing debounced, immediate, restore, and Trash-related save must pass the generation captured with its workspace snapshot and treat `.superseded` as a safe no-op rather than an error.
 
 Add:
 
@@ -881,6 +945,7 @@ git commit -m "feat: apply agent changes through Motes"
 - Modify: `Package.swift`
 - Create: `Sources/MenuBarNotesAgentProtocol/AgentWireProtocol.swift`
 - Create: `Sources/MenuBarNotesAgentProtocol/AgentWireFraming.swift`
+- Create: `Sources/MenuBarNotesAgentProtocol/AgentBridgeEndpoint.swift`
 - Create: `Sources/MenuBarNotesApp/AgentIPCServer.swift`
 - Modify: `Sources/MenuBarNotesApp/MenuBarNotesApp.swift`
 - Create: `Tests/MenuBarNotesAgentProtocolTests/AgentWireProtocolTests.swift`
@@ -892,16 +957,45 @@ git commit -m "feat: apply agent changes through Motes"
 
 ```swift
 public struct AgentWireRequest: Codable, Equatable, Sendable {
+  public static let currentProtocolVersion = 1
+  public let protocolVersion: Int
   public let requestID: UUID
   public let profileID: UUID
   public let credentialBase64: String
   public let command: AgentWorkspaceCommand
+
+  public init(
+    protocolVersion: Int = currentProtocolVersion,
+    requestID: UUID,
+    profileID: UUID,
+    credentialBase64: String,
+    command: AgentWorkspaceCommand
+  )
 }
 
 public struct AgentWireResponse: Codable, Equatable, Sendable {
+  public let protocolVersion: Int
   public let requestID: UUID
   public let result: AgentWorkspaceResponse?
-  public let error: AgentWorkspaceFailure?
+  public let error: AgentWorkspaceError?
+
+  public static func success(
+    requestID: UUID,
+    result: AgentWorkspaceResponse
+  ) -> AgentWireResponse
+  public static func failure(
+    requestID: UUID,
+    error: AgentWorkspaceError
+  ) -> AgentWireResponse
+}
+
+public enum AgentBridgeEndpoint {
+  public static func applicationSupportURL(
+    fileManager: FileManager = .default
+  ) -> URL
+  public static func socketURL(
+    fileManager: FileManager = .default
+  ) -> URL
 }
 
 public enum AgentWireFraming {
@@ -921,7 +1015,7 @@ Add:
 
 The target depends on `MenuBarNotesCore`; the app target depends on the new protocol target. Add a protocol test target.
 
-Test fragmented frames, coalesced frames, zero length, a frame above 1 MiB, malformed JSON, and request/response correlation. Add a server regression proving an oversized encoded success becomes a correlated, structured `response_too_large` error frame that itself remains below 1 MiB.
+Test fragmented frames, coalesced frames, zero length, a frame above 1 MiB, malformed JSON, request/response correlation, old/new/unsupported protocol versions, and the shared exact `Application Support/MenuBarNotes/AgentBridge/motes.sock` endpoint. `AgentWireResponse` decoding must reject envelopes containing both result and error or neither. Add a server regression proving an oversized encoded success becomes a correlated, structured `response_too_large` error frame that itself remains below 1 MiB.
 
 - [ ] **Step 2: Run RED**
 
@@ -934,6 +1028,8 @@ swift test --filter AgentIPCServer
 
 Prefix each JSON payload with an unsigned four-byte big-endian length. Reject zero-length and lengths above 1,048,576 before allocating the payload buffer. Encode dates as ISO-8601.
 
+Both request and response envelopes carry `protocolVersion == 1`. Expose the public request initializer and response success/failure factories above so the helper target never relies on internal memberwise initializers and cannot construct an invalid response. Reject unsupported request versions with a correlated `invalid_payload` recovery action instructing the user to update Motes and the helper. Use custom response decoding to enforce exactly one of `result` or `error`.
+
 - [ ] **Step 4: Implement the server**
 
 Create the socket at:
@@ -945,19 +1041,26 @@ Application Support/MenuBarNotes/AgentBridge/motes.sock
 Requirements:
 
 - Parent directory mode `0700`.
+- Before creating or changing the parent, use `lstat` to reject a symlink, non-directory, or directory not owned by the current effective user.
 - Remove an existing path only when `lstat` proves it is a socket owned by the current user.
+- Reject a socket path whose UTF-8 representation plus NUL exceeds macOS `sockaddr_un.sun_path` (104 bytes).
 - Socket mode `0600`.
 - Use `getpeereid` to reject a peer UID different from `geteuid()`.
-- Bound accepted clients and close idle connections.
+- Use explicit injectable limits: at most 8 accepted clients and a 10-second idle-read timeout. Reject excess clients immediately.
 - Decode one request at a time per connection.
-- Authenticate the profile before invoking the main-actor service.
+- Decode Base64 credentials strictly, then pass the profile ID and credential to `AgentCommandService`, which authenticates inside its FIFO immediately before executing the command. Catch `AgentWorkspaceError` from the service and encode it directly in the correlated error envelope; map malformed Base64 to `invalid_payload` and unexpected errors to a content-free `internal_save_failure`.
+- Require the credential string to round-trip through canonical Base64 and decode to exactly 32 bytes before invoking the service.
 - Measure the fully encoded response envelope before writing. Replace an oversized success with a minimal correlated `response_too_large` failure; never drop the connection merely because a legitimate result was too large.
 - Never include internal paths or credentials in errors.
-- Remove the socket on clean shutdown.
+- Set `SO_NOSIGPIPE` on accepted sockets so a disconnected writer cannot terminate Motes.
+- Bound each connection buffer to one framed request and reject an oversized declared length immediately after the fourth byte. Apply the idle timeout only while waiting for request bytes, never while an authorized command is executing.
+- Record the bound socket device/inode and remove it on shutdown only when `lstat` still matches. Listener/client descriptor closure and owned-socket unlink are synchronous and thread-safe; `stop()` is safe before start and when repeated.
 
 - [ ] **Step 5: Start one server from the app root**
 
-Construct `AgentIPCServer` once beside the final post-dictation runtime. Await Task 1's `AppState.waitUntilInitialLoad()` before starting it; stop it on runtime deinitialization or application termination. Starting a second Motes window must not create another listener.
+Construct `AgentIPCServer` once beside the final post-dictation runtime. Await Task 1's `AppState.waitUntilInitialLoad()` before starting it; the Task 5 service availability gate still rejects every command after a failed load. Stop the server synchronously on runtime deinitialization or application termination. Starting a second Motes window must not create another listener.
+
+Inject peer-credential lookup, active-client limit, idle clock/timeout, and low-level descriptor hooks in tests. Cover matching UID, mismatched UID, `getpeereid` failure, saturation, idle eviction, stop-before-start, start-twice, termination-before-readiness, multiple-window construction, raw-buffer overflow, and a disconnected response writer. Rejected peers and malformed/noncanonical/wrong-length credentials must never invoke authorization. Assert credentials, internal paths, and unexpected error text never appear in responses.
 
 - [ ] **Step 6: Verify**
 
@@ -965,6 +1068,16 @@ Construct `AgentIPCServer` once beside the final post-dictation runtime. Await T
 swift test --filter AgentWireProtocol
 swift test --filter AgentIPCServer
 swift test
+swift test --filter mcpDependencyAndNoticeArePinned
+Scripts/test-enhanced-candidate-pin.sh
+Scripts/test-enhanced-candidate-lock-preservation.sh
+candidate_scratch="$(mktemp -d "${TMPDIR:-/tmp}/motes-task6-candidate.XXXXXX")"
+rmdir "$candidate_scratch"
+Scripts/resolve-enhanced-candidate.sh "$candidate_scratch" \
+  /bin/sh -c 'swift build --scratch-path "$1" --build-tests && swift test --scratch-path "$1"' \
+  task6-candidate "$candidate_scratch"
+rm -rf "$candidate_scratch"
+Scripts/check-candidate-release-rejected.sh
 git diff --check
 ```
 
@@ -974,6 +1087,7 @@ git diff --check
 git add Package.swift \
   Sources/MenuBarNotesAgentProtocol/AgentWireProtocol.swift \
   Sources/MenuBarNotesAgentProtocol/AgentWireFraming.swift \
+  Sources/MenuBarNotesAgentProtocol/AgentBridgeEndpoint.swift \
   Sources/MenuBarNotesApp/AgentIPCServer.swift \
   Sources/MenuBarNotesApp/MenuBarNotesApp.swift \
   Tests/MenuBarNotesAgentProtocolTests/AgentWireProtocolTests.swift \
@@ -1033,7 +1147,7 @@ Use injected launch and socket closures to cover:
 - Existing app connects immediately.
 - Missing socket launches bundle ID `com.harryjin.motes` without activation.
 - Client waits at most 10 seconds for readiness.
-- Partial frames and response request-ID mismatch fail.
+- Partial frames, response request-ID mismatch, and response protocol-version mismatch fail without displaying a result.
 - A timed-out write prints a retry-safe message retaining the operation ID.
 
 - [ ] **Step 4: Implement credential storage**
@@ -1051,7 +1165,7 @@ Normal commands load the credential by profile ID. `disconnect --profile` delete
 
 Use `NSWorkspace.shared.urlForApplication(withBundleIdentifier:)` and `openApplication(at:configuration:)` with `.withoutActivation`. Never invoke `open` through a shell.
 
-Use the exact socket and framing rules from Task 6. CLI output defaults to concise human text; `--json` encodes `AgentWorkspaceResponse`.
+Use `AgentBridgeEndpoint` and the exact socket/framing rules from Task 6. Require both the correlated request ID and `AgentWireRequest.currentProtocolVersion` on every response before exposing its result or error. CLI output defaults to concise human text; `--json` encodes `AgentWorkspaceResponse`.
 
 - [ ] **Step 6: Verify**
 

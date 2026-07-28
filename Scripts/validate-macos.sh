@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+
+if [[ -n "${MOTES_ENHANCED_CANDIDATE+x}" ]]; then
+  printf '%s\n' \
+    'error: unset MOTES_ENHANCED_CANDIDATE before validating an ordinary release' \
+    >&2
+  exit 2
+fi
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   printf 'error: this validation script must run on macOS\n' >&2
   exit 2
@@ -18,17 +28,79 @@ if ! xcode-select -p >/dev/null 2>&1; then
   exit 2
 fi
 
+cd "$repo_root"
+
 printf '%s\n' '--- Host ---'
 sw_vers
 xcodebuild -version
 swift --version
 
 printf '%s\n' '--- Tests ---'
-swift test
+swift test --disable-automatic-resolution
 
 printf '%s\n' '--- Release build ---'
-swift build -c release
-Scripts/check-release-size.sh .build/release/Motes
+swift package clean
+"$script_dir/build-motes-app.sh"
+
+readonly app_bundle="$repo_root/.build/Motes.app"
+readonly app_binary="$app_bundle/Contents/MacOS/Motes"
+readonly bundled_helper="$app_bundle/Contents/SharedSupport/motes-agent"
+readonly expected_bundle_identifier="com.harryjin.motes"
+
+bundle_identifier="$(
+  /usr/bin/plutil -extract CFBundleIdentifier raw -o - \
+    "$app_bundle/Contents/Info.plist"
+)"
+if [[ "$bundle_identifier" != "$expected_bundle_identifier" ]]; then
+  printf 'error: unexpected app bundle identifier: %s\n' \
+    "$bundle_identifier" >&2
+  exit 1
+fi
+if ! /usr/bin/strings "$app_binary" \
+  | /usr/bin/grep -Fx "$expected_bundle_identifier" >/dev/null; then
+  printf 'error: app binary is missing embedded bundle identifier: %s\n' \
+    "$expected_bundle_identifier" >&2
+  exit 1
+fi
+if [[ ! -x "$bundled_helper" ]]; then
+  printf 'error: executable bundled helper not found: %s\n' \
+    "$bundled_helper" >&2
+  exit 1
+fi
+"$script_dir/check-release-size.sh" "$app_bundle"
+
+printf '%s\n' '--- Bounded app-binary smoke test ---'
+smoke_output="$(mktemp "${TMPDIR:-/tmp}/motes-smoke.XXXXXX")"
+smoke_pid=""
+cleanup_smoke() {
+  if [[ -n "$smoke_pid" ]] && /bin/kill -0 "$smoke_pid" 2>/dev/null; then
+    /bin/kill -TERM "$smoke_pid" 2>/dev/null || true
+    wait "$smoke_pid" 2>/dev/null || true
+  fi
+  /bin/rm -f -- "$smoke_output"
+}
+trap cleanup_smoke EXIT
+
+"$app_binary" >"$smoke_output" 2>&1 &
+smoke_pid=$!
+/bin/sleep 2
+if ! /bin/kill -0 "$smoke_pid" 2>/dev/null; then
+  smoke_status=0
+  wait "$smoke_pid" || smoke_status=$?
+  printf 'error: Motes exited during smoke test with status %s\n' \
+    "$smoke_status" >&2
+  cat "$smoke_output" >&2
+  exit 1
+fi
+/bin/kill -TERM "$smoke_pid" 2>/dev/null || true
+wait "$smoke_pid" 2>/dev/null || true
+smoke_pid=""
+
+printf '%s\n' '--- Candidate lock preservation ---'
+"$script_dir/test-enhanced-candidate-lock-preservation.sh"
+
+printf '%s\n' '--- Candidate release rejection ---'
+"$script_dir/check-candidate-release-rejected.sh"
 
 printf '\nValidation build passed. Launch manually with:\n  %s\n' \
-  "$(pwd)/.build/release/Motes"
+  "$app_binary"
