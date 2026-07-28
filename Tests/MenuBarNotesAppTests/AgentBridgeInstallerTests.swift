@@ -242,6 +242,7 @@ struct AgentBridgeInstallerTests {
   @Test func concurrentProvisionAndInstallSerializeTheSharedHelperTransaction() async throws {
     let fileSystem = FakeInstallerFileSystem()
     let blockingRunner = BlockingAgentProcessRunner()
+    let secondAttempt = BlockingTransactionAttempt()
     let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
     let support = URL(fileURLWithPath: "/support")
     fileSystem.files[bundle.path] = Data("helper".utf8)
@@ -255,7 +256,8 @@ struct AgentBridgeInstallerTests {
       bundledHelperURL: bundle,
       applicationSupportURL: support,
       fileSystem: fileSystem,
-      processRunner: RecordingAgentProcessRunner()
+      processRunner: RecordingAgentProcessRunner(),
+      transactionAttemptObserver: { secondAttempt.signal() }
     )
 
     let provision = Task {
@@ -270,7 +272,7 @@ struct AgentBridgeInstallerTests {
       try await installingInstaller.installAsync()
     }
 
-    try await Task.sleep(for: .milliseconds(50))
+    #expect(secondAttempt.waitUntilAttempted())
     #expect(fileSystem.operationCount == operationCount)
 
     blockingRunner.release()
@@ -359,6 +361,18 @@ private struct InstalledHelperFixture {
     )
     fileSystem.files[bundle.path] = Data("helper".utf8)
     _ = try installer.install()
+  }
+}
+
+private final class BlockingTransactionAttempt: @unchecked Sendable {
+  private let attempted = DispatchSemaphore(value: 0)
+
+  func signal() {
+    attempted.signal()
+  }
+
+  func waitUntilAttempted() -> Bool {
+    attempted.wait(timeout: .now() + 2) == .success
   }
 }
 

@@ -41,6 +41,7 @@
     private let fileSystem: any AgentBridgeInstallerFileSystem
     private let processRunner: any AgentBridgeProcessRunning
     private let installedVersion: String
+    private let transactionAttemptObserver: @Sendable () -> Void
 
     init(
       bundledHelperURL: URL,
@@ -49,13 +50,15 @@
       processRunner: any AgentBridgeProcessRunning = LocalAgentBridgeProcessRunner(),
       installedVersion: String = Bundle.main.object(
         forInfoDictionaryKey: "CFBundleShortVersionString"
-      ) as? String ?? "development"
+      ) as? String ?? "development",
+      transactionAttemptObserver: @escaping @Sendable () -> Void = {}
     ) {
       self.bundledHelperURL = bundledHelperURL
       self.applicationSupportURL = applicationSupportURL
       self.fileSystem = fileSystem
       self.processRunner = processRunner
       self.installedVersion = installedVersion
+      self.transactionAttemptObserver = transactionAttemptObserver
     }
 
     static func live() throws -> Self {
@@ -88,7 +91,8 @@
 
     @discardableResult
     func install() throws -> URL {
-      try Self.transactionLock.withLock {
+      transactionAttemptObserver()
+      return try Self.transactionLock.withLock {
         guard fileSystem.fileExists(at: bundledHelperURL) else {
           throw AgentBridgeInstallerError.bundledHelperMissing
         }
@@ -159,6 +163,7 @@
     }
 
     func provision(profileID: UUID, token: Data) throws {
+      transactionAttemptObserver()
       try Self.transactionLock.withLock {
         let helper = try install()
         try processRunner.run(
@@ -178,6 +183,7 @@
     }
 
     func disconnect(profileID: UUID) throws {
+      transactionAttemptObserver()
       try Self.transactionLock.withLock {
         guard let helper = verifiedInstalledHelperURL() else {
           throw AgentBridgeInstallerError.verificationFailed
@@ -197,6 +203,7 @@
     }
 
     func removeInstalledHelper() throws {
+      transactionAttemptObserver()
       try Self.transactionLock.withLock {
         guard
           fileSystem.fileExists(at: installedHelperURL),
