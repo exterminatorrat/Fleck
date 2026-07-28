@@ -477,14 +477,11 @@
           .padding(.top, 12)
 
           NativeRichTextEditor(
-            text: Binding(
-              get: { note.body },
-              set: { appState.updateSelected(body: $0) }
-            ),
-            richTextRTF: Binding(
-              get: { note.richTextRTF },
-              set: { appState.updateSelectedRichTextRTF($0) }
-            ),
+            text: note.body,
+            richTextRTF: note.richTextRTF,
+            onChange: { body, richTextRTF in
+              appState.updateSelected(body: body, richTextRTF: richTextRTF)
+            },
             fontFamily: appState.preferences.fontFamily,
             fontSize: appState.preferences.fontSize,
             textColorHex: appState.preferences.editorTextHex,

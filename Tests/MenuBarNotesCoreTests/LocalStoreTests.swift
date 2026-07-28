@@ -10,7 +10,14 @@ import Testing
 
   let store = LocalStore(rootURL: root)
   let date = Date(timeIntervalSince1970: 1_700_000_000)
-  let note = Note(title: "Shopping", body: "- Tea\n- Coffee", createdAt: date, modifiedAt: date)
+  let note = Note(
+    title: "Shopping",
+    body: "- Tea\n- Coffee",
+    createdAt: date,
+    modifiedAt: date,
+    agentAccess: true,
+    revision: 7
+  )
   let workspace = Workspace(notes: [note], selectedNoteID: note.id)
   let preferences = AppPreferences(fontFamily: "Avenir", accentHex: "#336699")
 
@@ -125,6 +132,42 @@ import Testing
   #expect(manifest["formatVersion"] as? Int == 1)
 }
 
+@Test func oldManifestDefaultsAgentFields() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+  try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+  try Data(
+    """
+    {
+      "formatVersion": 1,
+      "noteOrder": ["\(id.uuidString)"],
+      "selectedNoteID": "\(id.uuidString)",
+      "metadata": [
+        "\(id.uuidString)",
+        {
+          "title": "Legacy",
+          "createdAt": "1970-01-01T00:00:00Z",
+          "modifiedAt": "1970-01-01T00:00:00Z",
+          "isPinned": false
+        }
+      ]
+    }
+    """.utf8
+  ).write(to: root.appendingPathComponent("workspace.json"))
+  try "Legacy body".write(
+    to: root.appendingPathComponent("\(id.uuidString.lowercased()).md"),
+    atomically: true,
+    encoding: .utf8
+  )
+
+  let note = try #require(await LocalStore(rootURL: root).loadWorkspace().notes.first)
+
+  #expect(note.id == id)
+  #expect(note.agentAccess == false)
+  #expect(note.revision == 0)
+}
+
 @Test func storeArchivesDeletedNoteBodyMetadataAndRichText() async throws {
   let root = temporaryStoreURL()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -136,7 +179,9 @@ import Testing
     richTextRTF: Data("{\\rtf1 kept formatting}".utf8),
     createdAt: deletedAt.addingTimeInterval(-120),
     modifiedAt: deletedAt.addingTimeInterval(-60),
-    isPinned: true
+    isPinned: true,
+    agentAccess: true,
+    revision: 9
   )
   let remaining = Note(
     title: "Remaining",
@@ -170,7 +215,45 @@ import Testing
   #expect(metadata["id"] as? String == deleted.id.uuidString)
   #expect(metadata["title"] as? String == deleted.title)
   #expect(metadata["isPinned"] as? Bool == true)
+  #expect(metadata["agentAccess"] as? Bool == true)
+  #expect(metadata["revision"] as? Int == 9)
   #expect(metadata["deletedAt"] != nil)
+}
+
+@Test func oldTrashMetadataDefaultsAgentFields() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let id = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+  let entryURL = trashEntryURL(root: root, noteID: id)
+  try FileManager.default.createDirectory(at: entryURL, withIntermediateDirectories: true)
+  try Data(
+    """
+    {
+      "id": "\(id.uuidString)",
+      "title": "Legacy trash",
+      "createdAt": "1970-01-01T00:00:00Z",
+      "modifiedAt": "1970-01-01T00:00:00Z",
+      "isPinned": false,
+      "deletedAt": "1970-01-02T00:00:00Z"
+    }
+    """.utf8
+  ).write(to: entryURL.appendingPathComponent("metadata.json"))
+  try "Legacy trash body".write(
+    to: entryURL.appendingPathComponent("body.md"),
+    atomically: true,
+    encoding: .utf8
+  )
+
+  let note = try #require(
+    await LocalStore(
+      rootURL: root,
+      now: { Date(timeIntervalSince1970: 86_401) }
+    ).loadTrash().first?.note
+  )
+
+  #expect(note.id == id)
+  #expect(note.agentAccess == false)
+  #expect(note.revision == 0)
 }
 
 @Test func trashRetainsEntriesUntilThirtyDaysThenPurgesThem() async throws {

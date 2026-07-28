@@ -97,3 +97,80 @@ import Testing
   workspace.setTabColor(id: noteID, hex: nil, now: changedAt.addingTimeInterval(1))
   #expect(workspace.notes.first?.tabColorHex == nil)
 }
+
+@Test func oldNoteJSONDefaultsAgentFields() throws {
+  let data = Data(
+    """
+    {
+      "id":"00000000-0000-0000-0000-000000000001",
+      "title":"Legacy",
+      "body":"Body",
+      "createdAt":0,
+      "modifiedAt":0,
+      "isPinned":false
+    }
+    """.utf8
+  )
+  let decoder = JSONDecoder()
+  decoder.dateDecodingStrategy = .secondsSince1970
+
+  let note = try decoder.decode(Note.self, from: data)
+
+  #expect(note.agentAccess == false)
+  #expect(note.revision == 0)
+}
+
+@Test func contentAndSharingChangesIncrementRevisionOnce() {
+  let id = UUID()
+  let changedAt = Date(timeIntervalSince1970: 300)
+  var workspace = Workspace(notes: [Note(id: id)], selectedNoteID: id)
+
+  workspace.updateContent(id: id, body: "A", rtf: Data([1]), now: changedAt)
+  #expect(workspace.notes[0].revision == 1)
+  #expect(workspace.notes[0].modifiedAt == changedAt)
+
+  workspace.updateContent(
+    id: id,
+    body: "A",
+    rtf: Data([1]),
+    now: changedAt.addingTimeInterval(1)
+  )
+  #expect(workspace.notes[0].revision == 1)
+  #expect(workspace.notes[0].modifiedAt == changedAt)
+
+  workspace.setAgentAccess(
+    id: id,
+    enabled: true,
+    now: changedAt.addingTimeInterval(2)
+  )
+  #expect(workspace.notes[0].agentAccess)
+  #expect(workspace.notes[0].revision == 2)
+
+  workspace.setAgentAccess(
+    id: id,
+    enabled: true,
+    now: changedAt.addingTimeInterval(3)
+  )
+  #expect(workspace.notes[0].revision == 2)
+}
+
+@Test func titleChangesIncrementRevisionOnceAndNoOpsDoNot() {
+  let id = UUID()
+  let changedAt = Date(timeIntervalSince1970: 400)
+  var workspace = Workspace(
+    notes: [Note(id: id, title: "Before")],
+    selectedNoteID: id
+  )
+
+  workspace.updateNote(id: id, title: "After", now: changedAt)
+  #expect(workspace.notes[0].revision == 1)
+  #expect(workspace.notes[0].modifiedAt == changedAt)
+
+  workspace.updateNote(
+    id: id,
+    title: "After",
+    now: changedAt.addingTimeInterval(1)
+  )
+  #expect(workspace.notes[0].revision == 1)
+  #expect(workspace.notes[0].modifiedAt == changedAt)
+}

@@ -469,8 +469,9 @@
   }
 
   struct NativeRichTextEditor: NSViewRepresentable {
-    @Binding var text: String
-    @Binding var richTextRTF: Data?
+    let text: String
+    let richTextRTF: Data?
+    let onChange: (String, Data?) -> Void
     let fontFamily: String
     let fontSize: Double
     let textColorHex: String?
@@ -613,8 +614,7 @@
           documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
         )
         richTextRTF = updatedRTF
-        parent.text = snapshot.string
-        parent.richTextRTF = updatedRTF
+        parent.onChange(snapshot.string, updatedRTF)
         parent.commands.refreshFormattingState()
       }
 

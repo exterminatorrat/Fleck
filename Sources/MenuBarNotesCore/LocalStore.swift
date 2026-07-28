@@ -20,6 +20,8 @@ public actor LocalStore {
     var createdAt: Date
     var modifiedAt: Date
     var isPinned: Bool
+    var agentAccess: Bool?
+    var revision: UInt64?
   }
 
   private struct TrashMetadata: Codable {
@@ -30,6 +32,8 @@ public actor LocalStore {
     var modifiedAt: Date
     var isPinned: Bool
     var deletedAt: Date
+    var agentAccess: Bool?
+    var revision: UInt64?
   }
 
   private let rootURL: URL
@@ -83,7 +87,9 @@ public actor LocalStore {
         tabColorHex: metadata.tabColorHex,
         createdAt: metadata.createdAt,
         modifiedAt: metadata.modifiedAt,
-        isPinned: metadata.isPinned
+        isPinned: metadata.isPinned,
+        agentAccess: metadata.agentAccess ?? false,
+        revision: metadata.revision ?? 0
       )
     }
 
@@ -150,7 +156,9 @@ public actor LocalStore {
               tabColorHex: note.tabColorHex,
               createdAt: note.createdAt,
               modifiedAt: note.modifiedAt,
-              isPinned: note.isPinned
+              isPinned: note.isPinned,
+              agentAccess: note.agentAccess,
+              revision: note.revision
             )
           )
         })
@@ -259,7 +267,9 @@ public actor LocalStore {
         createdAt: note.createdAt,
         modifiedAt: note.modifiedAt,
         isPinned: note.isPinned,
-        deletedAt: now()
+        deletedAt: now(),
+        agentAccess: note.agentAccess,
+        revision: note.revision
       )
       try encoder.encode(metadata).write(
         to: stagingURL.appendingPathComponent("metadata.json"),
@@ -311,7 +321,9 @@ public actor LocalStore {
         tabColorHex: metadata.tabColorHex,
         createdAt: metadata.createdAt,
         modifiedAt: metadata.modifiedAt,
-        isPinned: metadata.isPinned
+        isPinned: metadata.isPinned,
+        agentAccess: metadata.agentAccess ?? false,
+        revision: metadata.revision ?? 0
       ),
       deletedAt: metadata.deletedAt
     )

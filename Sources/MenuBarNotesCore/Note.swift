@@ -10,6 +10,8 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
   public var createdAt: Date
   public var modifiedAt: Date
   public var isPinned: Bool
+  public var agentAccess: Bool
+  public var revision: UInt64
 
   public init(
     id: UUID = UUID(),
@@ -19,7 +21,9 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     tabColorHex: String? = nil,
     createdAt: Date = Date(),
     modifiedAt: Date = Date(),
-    isPinned: Bool = false
+    isPinned: Bool = false,
+    agentAccess: Bool = false,
+    revision: UInt64 = 0
   ) {
     self.id = id
     self.title = title
@@ -29,6 +33,35 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     self.createdAt = createdAt
     self.modifiedAt = modifiedAt
     self.isPinned = isPinned
+    self.agentAccess = agentAccess
+    self.revision = revision
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case title
+    case body
+    case richTextRTF
+    case tabColorHex
+    case createdAt
+    case modifiedAt
+    case isPinned
+    case agentAccess
+    case revision
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(UUID.self, forKey: .id)
+    title = try container.decode(String.self, forKey: .title)
+    body = try container.decode(String.self, forKey: .body)
+    richTextRTF = try container.decodeIfPresent(Data.self, forKey: .richTextRTF)
+    tabColorHex = try container.decodeIfPresent(String.self, forKey: .tabColorHex)
+    createdAt = try container.decode(Date.self, forKey: .createdAt)
+    modifiedAt = try container.decode(Date.self, forKey: .modifiedAt)
+    isPinned = try container.decode(Bool.self, forKey: .isPinned)
+    agentAccess = try container.decodeIfPresent(Bool.self, forKey: .agentAccess) ?? false
+    revision = try container.decodeIfPresent(UInt64.self, forKey: .revision) ?? 0
   }
 
   public var displayTitle: String {

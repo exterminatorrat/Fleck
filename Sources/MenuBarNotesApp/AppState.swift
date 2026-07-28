@@ -16,11 +16,25 @@
       case saved
     }
 
-    @Published var workspace = Workspace()
-    @Published var preferences = AppPreferences()
+    @Published var workspace = Workspace() {
+      didSet {
+        if workspace != oldValue {
+          persistenceGeneration += 1
+        }
+      }
+    }
+    @Published var preferences = AppPreferences() {
+      didSet {
+        if preferences != oldValue {
+          persistenceGeneration += 1
+        }
+      }
+    }
     @Published var saveError: String?
     @Published private(set) var saveStatus = SaveStatus.idle
     @Published private(set) var trashedNotes: [TrashedNote] = []
+    private(set) var persistenceGeneration: UInt64 = 0
+    private(set) var hasFinishedInitialLoad = false
 
     private let store: LocalStore
     private let saveOperation: SaveOperation
@@ -28,8 +42,15 @@
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
     private var awaitedSaveWaiters: [CheckedContinuation<Void, Never>] = []
+    private var initialLoadWaiters: [CheckedContinuation<Void, Never>] = []
     private var saveStatusResetTask: Task<Void, Never>?
-    private var pendingTrashNotes: [UUID: Note] = [:]
+    private var pendingTrashNotes: [UUID: Note] = [:] {
+      didSet {
+        if pendingTrashNotes != oldValue {
+          persistenceGeneration += 1
+        }
+      }
+    }
 
     init(
       store: LocalStore? = nil,
@@ -105,10 +126,12 @@
           fontSize: preferences.fontSize
         )
       )
-      workspace.notes[destinationIndex].body = appended.body
-      workspace.notes[destinationIndex].richTextRTF = appended.richTextRTF
-      workspace.notes[destinationIndex].modifiedAt = Date()
       let noteID = workspace.notes[destinationIndex].id
+      workspace.updateContent(
+        id: noteID,
+        body: appended.body,
+        rtf: appended.richTextRTF
+      )
       let insertedNote = workspace.notes[destinationIndex]
       do {
         try await saveNow(transactionOwned: true).value
@@ -144,9 +167,11 @@
         return false
       }
 
-      workspace.notes[index].body = String(note.body.dropLast(receipt.insertedSuffix.count))
-      workspace.notes[index].richTextRTF = richTextRTF
-      workspace.notes[index].modifiedAt = Date()
+      workspace.updateContent(
+        id: receipt.noteID,
+        body: String(note.body.dropLast(receipt.insertedSuffix.count)),
+        rtf: richTextRTF
+      )
       let attemptedUndoNote = workspace.notes[index]
       do {
         try await saveNow(transactionOwned: true).value
@@ -227,17 +252,30 @@
 
     func updateSelected(title: String? = nil, body: String? = nil) {
       guard let id = workspace.selectedNoteID else { return }
-      workspace.updateNote(id: id, title: title, body: body)
+      let originalWorkspace = workspace
+      if let title {
+        workspace.updateNote(id: id, title: title)
+      }
+      if let body,
+        let note = workspace.notes.first(where: { $0.id == id })
+      {
+        workspace.updateContent(id: id, body: body, rtf: note.richTextRTF)
+      }
+      guard workspace != originalWorkspace else { return }
+      scheduleSave()
+    }
+
+    func updateSelected(body: String, richTextRTF: Data?) {
+      guard let id = workspace.selectedNoteID else { return }
+      let originalWorkspace = workspace
+      workspace.updateContent(id: id, body: body, rtf: richTextRTF)
+      guard workspace != originalWorkspace else { return }
       scheduleSave()
     }
 
     func updateSelectedRichTextRTF(_ rtf: Data?) {
-      guard let id = workspace.selectedNoteID,
-        let index = workspace.notes.firstIndex(where: { $0.id == id })
-      else { return }
-      workspace.notes[index].richTextRTF = rtf
-      workspace.notes[index].modifiedAt = Date()
-      scheduleSave()
+      guard let body = selectedNote?.body else { return }
+      updateSelected(body: body, richTextRTF: rtf)
     }
 
     func setSelectedTabColor(_ hex: String?) {
@@ -252,7 +290,9 @@
     }
 
     func updatePreferences(_ update: (inout AppPreferences) -> Void) {
+      let originalPreferences = preferences
       update(&preferences)
+      guard preferences != originalPreferences else { return }
       scheduleSave()
     }
 
@@ -324,6 +364,7 @@
     }
 
     private func load() async {
+      defer { finishInitialLoad() }
       do {
         workspace = try await store.loadWorkspace()
         preferences = try await store.loadPreferences()
@@ -331,6 +372,23 @@
         saveError = nil
       } catch {
         saveError = error.localizedDescription
+      }
+    }
+
+    func waitUntilInitialLoad() async {
+      guard !hasFinishedInitialLoad else { return }
+      await withCheckedContinuation { continuation in
+        initialLoadWaiters.append(continuation)
+      }
+    }
+
+    private func finishInitialLoad() {
+      guard !hasFinishedInitialLoad else { return }
+      hasFinishedInitialLoad = true
+      let waiters = initialLoadWaiters
+      initialLoadWaiters.removeAll()
+      for waiter in waiters {
+        waiter.resume()
       }
     }
 
