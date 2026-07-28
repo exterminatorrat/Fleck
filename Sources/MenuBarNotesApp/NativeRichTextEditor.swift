@@ -7,11 +7,50 @@
   /// state through SwiftUI on every keystroke.
   @MainActor
   final class EditorCommands: ObservableObject {
+    private struct FocusedDictationTransaction {
+      var originalSelection: NSRange
+      let originalAttributedSelection: NSAttributedString
+      var provisionalRange: NSRange
+      var undoGroupOpen = false
+    }
+
+    private struct CommittedFocusedDictation {
+      let receipt: FocusedDictationCommitReceipt
+      let originalSelection: NSRange
+      let originalAttributedSelection: NSAttributedString
+      let finalRange: NSRange
+      let finalAttributedText: NSAttributedString
+    }
+
+    private static let focusedDictationAttribute = NSAttributedString.Key(
+      "MotesFocusedDictationProvisional"
+    )
+
     @Published private(set) var isBold = false
     @Published private(set) var isItalic = false
     @Published private(set) var isUnderlined = false
 
-    weak var textView: NSTextView?
+    weak var textView: NSTextView? {
+      didSet {
+        guard focusedDictation != nil else { return }
+        guard let origin = focusedDictationTextView else {
+          clearFocusedDictation()
+          return
+        }
+        if textView !== origin { cancelFocusedDictation() }
+      }
+    }
+    private var focusedDictation: FocusedDictationTransaction?
+    private var committedFocusedDictation: CommittedFocusedDictation?
+    private var activeFocusedUndoReceipts = Set<FocusedDictationCommitReceipt>()
+    private weak var focusedDictationTextView: NSTextView?
+    private weak var focusedDictationStorage: NSTextStorage?
+    private var focusedDictationTextViewID: ObjectIdentifier?
+    private var focusedDictationStorageID: ObjectIdentifier?
+    private var focusedDictationEditObserver: NSObjectProtocol?
+    private var isApplyingFocusedDictationEdit = false
+
+    var isFocusedDictationActive: Bool { focusedDictation != nil }
 
     func toggleBold() {
       toggleFontTrait(.boldFontMask)
@@ -126,6 +165,307 @@
       textView.textStorage?.addAttribute(key, value: isEnabled ? 0 : enabledValue, range: range)
       textView.didChangeText()
     }
+
+    func attributedBindingSnapshot(for textView: NSTextView) -> NSAttributedString? {
+      guard let storage = textView.textStorage else { return nil }
+      guard let transaction = focusedDictation,
+        let (origin, originStorage) = focusedDictationOrigin(),
+        origin === textView,
+        originStorage === storage,
+        NSMaxRange(transaction.provisionalRange) <= storage.length
+      else {
+        return NSAttributedString(attributedString: storage)
+      }
+
+      let snapshot = NSMutableAttributedString(attributedString: storage)
+      snapshot.replaceCharacters(
+        in: transaction.provisionalRange,
+        with: transaction.originalAttributedSelection
+      )
+      return snapshot
+    }
+
+    private func focusedDictationOrigin() -> (NSTextView, NSTextStorage)? {
+      guard let textView = focusedDictationTextView,
+        let storage = focusedDictationStorage,
+        let textViewID = focusedDictationTextViewID,
+        let storageID = focusedDictationStorageID,
+        ObjectIdentifier(textView) == textViewID,
+        ObjectIdentifier(storage) == storageID,
+        textView.textStorage === storage
+      else { return nil }
+      return (textView, storage)
+    }
+
+    private func clearFocusedDictation(keepingOrigin: Bool = false) {
+      stopObservingFocusedDictationEdits()
+      focusedDictation = nil
+      guard !keepingOrigin else { return }
+      committedFocusedDictation = nil
+      focusedDictationTextView = nil
+      focusedDictationStorage = nil
+      focusedDictationTextViewID = nil
+      focusedDictationStorageID = nil
+    }
+
+    private func replaceFocusedDictationRange(
+      in textView: NSTextView,
+      storage: NSTextStorage,
+      _ range: NSRange,
+      with replacement: NSAttributedString,
+      selection: NSRange
+    ) {
+      guard textView.textStorage === storage, NSMaxRange(range) <= storage.length else { return }
+      withoutUndoRegistration(textView) {
+        storage.replaceCharacters(in: range, with: replacement)
+      }
+      textView.setSelectedRange(selection)
+    }
+
+    private func replaceFocusedDictationUndo(
+      in textView: NSTextView,
+      storage: NSTextStorage,
+      range: NSRange,
+      replacement: NSAttributedString,
+      selection: NSRange,
+      inverseRange: NSRange,
+      inverseReplacement: NSAttributedString,
+      inverseSelection: NSRange
+    ) {
+      guard textView.textStorage === storage, NSMaxRange(range) <= storage.length else { return }
+      replaceFocusedDictationRange(
+        in: textView,
+        storage: storage,
+        range,
+        with: replacement,
+        selection: selection
+      )
+      textView.undoManager?.registerUndo(withTarget: self) { [weak textView, weak storage] commands in
+        guard let textView, let storage else { return }
+        commands.replaceFocusedDictationUndo(
+          in: textView,
+          storage: storage,
+          range: inverseRange,
+          replacement: inverseReplacement,
+          selection: inverseSelection,
+          inverseRange: range,
+          inverseReplacement: replacement,
+          inverseSelection: selection
+        )
+      }
+      textView.didChangeText()
+    }
+
+    private func withoutUndoRegistration(_ textView: NSTextView, _ changes: () -> Void) {
+      let undoManager = textView.undoManager
+      undoManager?.disableUndoRegistration()
+      changes()
+      undoManager?.enableUndoRegistration()
+    }
+
+    private func observeFocusedDictationEdits(in storage: NSTextStorage) {
+      focusedDictationEditObserver = NotificationCenter.default.addObserver(
+        forName: NSTextStorage.didProcessEditingNotification,
+        object: storage,
+        queue: nil
+      ) { [weak self] notification in
+        guard let storage = notification.object as? NSTextStorage else { return }
+        let editedRange = storage.editedRange
+        let changeInLength = storage.changeInLength
+        MainActor.assumeIsolated {
+          guard let self, !self.isApplyingFocusedDictationEdit,
+            var transaction = self.focusedDictation
+          else { return }
+
+          if NSMaxRange(editedRange) <= transaction.provisionalRange.location {
+            transaction.provisionalRange.location += changeInLength
+            transaction.originalSelection.location += changeInLength
+            self.focusedDictation = transaction
+          }
+        }
+      }
+    }
+
+    private func stopObservingFocusedDictationEdits() {
+      if let focusedDictationEditObserver {
+        NotificationCenter.default.removeObserver(focusedDictationEditObserver)
+      }
+      focusedDictationEditObserver = nil
+    }
+
+  }
+
+  extension EditorCommands: FocusedDictationEditing {
+    var canBeginFocusedDictation: Bool {
+      textView?.textStorage != nil
+        && focusedDictation == nil
+        && committedFocusedDictation == nil
+    }
+
+    func beginFocusedDictation() -> Bool {
+      guard let textView, let storage = textView.textStorage, focusedDictation == nil else {
+        return false
+      }
+      let selection = textView.selectedRange()
+      guard NSMaxRange(selection) <= storage.length else { return false }
+
+      focusedDictation = FocusedDictationTransaction(
+        originalSelection: selection,
+        originalAttributedSelection: storage.attributedSubstring(from: selection),
+        provisionalRange: selection
+      )
+      focusedDictationTextView = textView
+      focusedDictationStorage = storage
+      focusedDictationTextViewID = ObjectIdentifier(textView)
+      focusedDictationStorageID = ObjectIdentifier(storage)
+      observeFocusedDictationEdits(in: storage)
+      return true
+    }
+
+    func updateFocusedDictation(provisionalText: String) {
+      guard var transaction = focusedDictation else { return }
+      guard let (textView, storage) = focusedDictationOrigin(), self.textView === textView,
+        NSMaxRange(transaction.provisionalRange) <= storage.length
+      else {
+        cancelFocusedDictation()
+        return
+      }
+      let provisional = NSMutableAttributedString(
+        string: provisionalText,
+        attributes: textView.typingAttributes
+      )
+      provisional.addAttribute(
+        Self.focusedDictationAttribute,
+        value: true,
+        range: NSRange(location: 0, length: provisional.length)
+      )
+      provisional.addAttribute(
+        .backgroundColor,
+        value: NSColor.selectedContentBackgroundColor.withAlphaComponent(0.25),
+        range: NSRange(location: 0, length: provisional.length)
+      )
+
+      isApplyingFocusedDictationEdit = true
+      withoutUndoRegistration(textView) {
+        storage.replaceCharacters(in: transaction.provisionalRange, with: provisional)
+      }
+      isApplyingFocusedDictationEdit = false
+      transaction.provisionalRange.length = provisional.length
+      focusedDictation = transaction
+      textView.setSelectedRange(NSRange(location: NSMaxRange(transaction.provisionalRange), length: 0))
+    }
+
+    func commitFocusedDictation(text: String) -> FocusedDictationCommitReceipt? {
+      guard var transaction = focusedDictation else { return nil }
+      guard let (textView, storage) = focusedDictationOrigin(), self.textView === textView,
+        NSMaxRange(transaction.provisionalRange) <= storage.length
+      else {
+        cancelFocusedDictation()
+        return nil
+      }
+      let finalText = NSMutableAttributedString(string: text, attributes: textView.typingAttributes)
+      finalText.removeAttribute(
+        Self.focusedDictationAttribute,
+        range: NSRange(location: 0, length: finalText.length)
+      )
+      let finalRange = NSRange(location: transaction.provisionalRange.location, length: finalText.length)
+
+      isApplyingFocusedDictationEdit = true
+      withoutUndoRegistration(textView) {
+        storage.replaceCharacters(in: transaction.provisionalRange, with: finalText)
+      }
+      isApplyingFocusedDictationEdit = false
+      let receipt = FocusedDictationCommitReceipt()
+      committedFocusedDictation = CommittedFocusedDictation(
+        receipt: receipt,
+        originalSelection: transaction.originalSelection,
+        originalAttributedSelection: transaction.originalAttributedSelection,
+        finalRange: finalRange,
+        finalAttributedText: finalText
+      )
+      activeFocusedUndoReceipts.insert(receipt)
+      clearFocusedDictation(keepingOrigin: true)
+
+      if let undoManager = textView.undoManager {
+        undoManager.beginUndoGrouping()
+        transaction.undoGroupOpen = true
+        let originalRange = NSRange(
+          location: transaction.originalSelection.location,
+          length: transaction.originalAttributedSelection.length
+        )
+        undoManager.registerUndo(withTarget: self) { [weak textView, weak storage] commands in
+          guard let textView, let storage,
+            commands.activeFocusedUndoReceipts.contains(receipt)
+          else { return }
+          commands.replaceFocusedDictationUndo(
+            in: textView,
+            storage: storage,
+            range: finalRange,
+            replacement: transaction.originalAttributedSelection,
+            selection: transaction.originalSelection,
+            inverseRange: originalRange,
+            inverseReplacement: finalText,
+            inverseSelection: NSRange(location: NSMaxRange(finalRange), length: 0)
+          )
+        }
+        undoManager.setActionName("Dictation")
+        undoManager.endUndoGrouping()
+        transaction.undoGroupOpen = false
+      }
+      textView.setSelectedRange(NSRange(location: NSMaxRange(finalRange), length: 0))
+      textView.didChangeText()
+      return receipt
+    }
+
+    func cancelFocusedDictation() {
+      guard let transaction = focusedDictation else { return }
+      guard let (textView, storage) = focusedDictationOrigin(),
+        NSMaxRange(transaction.provisionalRange) <= storage.length
+      else {
+        clearFocusedDictation()
+        return
+      }
+      isApplyingFocusedDictationEdit = true
+      replaceFocusedDictationRange(
+        in: textView,
+        storage: storage,
+        transaction.provisionalRange,
+        with: transaction.originalAttributedSelection,
+        selection: transaction.originalSelection
+      )
+      isApplyingFocusedDictationEdit = false
+      clearFocusedDictation()
+    }
+
+    func rollbackCommittedFocusedDictation(
+      _ receipt: FocusedDictationCommitReceipt
+    ) -> Bool {
+      guard let committed = committedFocusedDictation,
+        committed.receipt == receipt,
+        let (textView, storage) = focusedDictationOrigin(),
+        NSMaxRange(committed.finalRange) <= storage.length,
+        storage.attributedSubstring(from: committed.finalRange)
+          .isEqual(to: committed.finalAttributedText)
+      else { return false }
+      activeFocusedUndoReceipts.remove(receipt)
+      replaceFocusedDictationRange(
+        in: textView,
+        storage: storage,
+        committed.finalRange,
+        with: committed.originalAttributedSelection,
+        selection: committed.originalSelection
+      )
+      textView.didChangeText()
+      clearFocusedDictation()
+      return true
+    }
+
+    func finalizeCommittedFocusedDictation(
+      _ receipt: FocusedDictationCommitReceipt
+    ) {
+      guard committedFocusedDictation?.receipt == receipt else { return }
+      clearFocusedDictation()
+    }
   }
 
   struct NativeRichTextEditor: NSViewRepresentable {
@@ -191,7 +531,9 @@
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
       applyColors(to: textView)
-      if context.coordinator.richTextRTF != richTextRTF || textView.string != text {
+      if !commands.isFocusedDictationActive
+        && (context.coordinator.richTextRTF != richTextRTF || textView.string != text)
+      {
         let selection = textView.selectedRange()
         loadContent(into: textView)
         textView.setSelectedRange(
@@ -265,13 +607,13 @@
 
       func textDidChange(_ notification: Notification) {
         guard let textView = notification.object as? NSTextView else { return }
-        guard let storage = textView.textStorage else { return }
-        let updatedRTF = try? storage.data(
-          from: NSRange(location: 0, length: storage.length),
+        guard let snapshot = parent.commands.attributedBindingSnapshot(for: textView) else { return }
+        let updatedRTF = try? snapshot.data(
+          from: NSRange(location: 0, length: snapshot.length),
           documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
         )
         richTextRTF = updatedRTF
-        parent.text = textView.string
+        parent.text = snapshot.string
         parent.richTextRTF = updatedRTF
         parent.commands.refreshFormattingState()
       }

@@ -1,15 +1,15 @@
-# Menu Bar Notes — Application Framework
+# Motes — Application Framework
 
 ## Constraints that guide the design
 
-Menu Bar Notes is a native macOS utility, not a miniature web application. The initial engineering budgets are:
+Motes is a native macOS utility, not a miniature web application. The initial engineering budgets are:
 
 - **Installed app size target:** at or below 15 MB for a release build where practical.
 - **Memory ceiling:** never intentionally ship a normal idle workflow that exceeds 75 MB; profile representative release builds before releases.
 - **Idle behavior:** no polling, server process, web view, analytics client, or network requirement.
 - **Storage:** local, readable, atomic, and recoverable.
 
-These are release gates to measure, not assumptions guaranteed by choosing a particular framework. Native AppKit and SwiftUI APIs are used without third-party runtime dependencies, giving the implementation the best opportunity to stay within the budgets.
+These are release gates to measure, not assumptions guaranteed by choosing a particular framework. Native AppKit and SwiftUI APIs keep the base notes experience small. The Clean Dictation candidate adds a checksum-pinned FluidAudio dependency for Enhanced Local, so its executable, external model, runtime resources, and licenses are measured and approved separately.
 
 ## Main user flows
 
@@ -77,6 +77,48 @@ Tests/
 
 The initial format favors plain Markdown note bodies because it is small, readable, portable, and resilient. Font family, size, accent, and glass appearance are app preferences rather than markup embedded into every character. If mixed rich-text formatting becomes a hard requirement, it should be added through an explicitly versioned sidecar format while keeping Markdown export available.
 
+## Clean Dictation data flow and privacy boundary
+
+```text
+microphone -> selected local speech engine -> raw transcript
+  -> optional local cleanup -> focused editor OR title-only router -> LocalStore
+```
+
+- **Standard** uses Apple's speech APIs only when on-device recognition is
+  available and sets `requiresOnDeviceRecognition = true`. Unavailability is an
+  error; there is no cloud fallback.
+- **Enhanced Local** is a non-shippable candidate backed by external, data-only
+  Core ML model content. The exact model revision and every file byte count and
+  checksum are embedded in the application manifest. The 464,413,247-byte
+  (442.9 MiB) model must not be bundled; the release gate rejects it in the
+  current executable root or a future application artifact.
+- FluidAudio inference is forced offline before load and inference. Release
+  checks require `ModelHub.offlineMode = true` and reject code that disables
+  offline mode or invokes FluidAudio model download helpers from production
+  capture code.
+- Microphone buffers and Enhanced float samples exist in memory only for the
+  active capture and are released afterward. No audio is written to notes,
+  dictation history, model storage, or logs.
+- Cleanup uses the local Foundation Models framework when available. Failure,
+  unavailability, or an unfaithful result falls back to the raw transcript
+  without blocking persistence.
+- Focused capture writes the transcript into the active editor transaction.
+  Smart Capture gives routing the transcript plus candidate UUIDs and display
+  titles only; note bodies and other note content never enter the routing
+  prompt. Low-confidence or unavailable routing falls back to Inbox.
+- `LocalStore` persists notes locally. Optional dictation history stores
+  transcript text and destination metadata as atomic local JSON, contains no
+  audio, and purges records after 30 days.
+- The only intended product network operation is an explicit user-approved
+  Enhanced model download, repair, or update from the embedded allowlist.
+  Standard recognition, Enhanced inference, cleanup, routing, notes, and
+  history have no application-controlled network path.
+
+This architecture is not release approval. Enhanced Local remains disabled
+from release until the pinned model materially beats Standard and the manual
+device, resource, accessibility, legal, attribution, SBOM, signing, and store
+gates in `TESTING.md` have recorded evidence.
+
 ## UI direction
 
 The visual hierarchy is intentionally restrained:
@@ -98,6 +140,11 @@ Glass opacity is stored now, but fine-grained material rendering and contrast ad
 4. **Panel and tabs (partially implemented):** pinning, dimensions, reordering, navigation, and overflow scrolling work; cursor/scroll/window-position restoration remains.
 5. **Hardening (partially implemented):** recovery snapshots, format versioning, malformed-file fallback, and import/export are covered by portable tests; native accessibility and integration audits remain.
 6. **Release profiling (pending macOS):** measure signed release app size, idle and active memory, idle CPU, launch time, and typing latency against representative workspaces.
+7. **Clean Dictation (implemented candidate, not release-approved):** Standard,
+   optional local cleanup/routing, history, and Enhanced infrastructure are on
+   a release-disabled candidate. Real-device quality, device matrices,
+   accessibility, resource, legal, artifact, signing/notarization, and store
+   gates remain pending.
 
 ## Explicit non-goals for the lightweight base app
 
@@ -105,6 +152,7 @@ Glass opacity is stored now, but fine-grained material rendering and contrast ad
 - Accounts, analytics, advertising, or mandatory network access.
 - A database server or background synchronization daemon.
 - Bundled font collections.
-- Plug-in or AI runtimes in the base process.
+- Bundled speech-model weights, cloud speech fallback, cloud cleanup/routing,
+  or a mandatory AI runtime for ordinary notes.
 
 Features that threaten the resource ceiling must be optional, isolated, measured, and justified before inclusion.

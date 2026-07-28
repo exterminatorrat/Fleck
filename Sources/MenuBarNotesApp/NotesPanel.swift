@@ -4,27 +4,123 @@
   import MenuBarNotesCore
   import UniformTypeIdentifiers
 
+  enum TabDragReorder {
+    static let dropOperation: DropOperation = .move
+
+    static func makeContentType(id: UUID = UUID()) -> UTType {
+      let token = id.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+      return UTType(exportedAs: "com.menubarnotes.tabdrag.session\(token)")
+    }
+
+    static func destinationIndex(
+      draggedID: UUID?,
+      over destinationID: UUID,
+      in noteIDs: [UUID]
+    ) -> Int? {
+      guard let draggedID,
+        draggedID != destinationID,
+        noteIDs.contains(draggedID),
+        let destination = noteIDs.firstIndex(of: destinationID)
+      else { return nil }
+      return destination
+    }
+
+    static func itemProvider(for noteID: UUID, contentType: UTType) -> NSItemProvider {
+      let provider = NSItemProvider()
+      let data = Data(noteID.uuidString.utf8)
+      provider.registerDataRepresentation(
+        forTypeIdentifier: contentType.identifier,
+        visibility: .ownProcess
+      ) { completion in
+        completion(data, nil)
+        return nil
+      }
+      return provider
+    }
+
+    @discardableResult
+    static func performLiveMove(
+      draggedID: UUID?,
+      over destinationID: UUID,
+      currentNoteIDs: () -> [UUID],
+      move: (UUID, Int) -> Void
+    ) -> Bool {
+      guard let draggedID,
+        let destination = destinationIndex(
+          draggedID: draggedID,
+          over: destinationID,
+          in: currentNoteIDs()
+        )
+      else { return false }
+      move(draggedID, destination)
+      return true
+    }
+  }
+
   struct NotesPanel: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var isPinned = false
+    @ObservedObject var dictationRuntime: DictationRuntime
+    let isPinned: Bool
     @StateObject private var editorCommands = EditorCommands()
     @Namespace private var selectedTabHighlight
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var isShowingTrash = false
+    @State private var isShowingDictationHistory = false
     @State private var notePendingDeletion: Note?
     @State private var exportDocument: NoteFileDocument?
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
+    @State private var draggedNoteID: UUID?
+    @State private var tabDragContentType = TabDragReorder.makeContentType()
+
+    init(dictationRuntime: DictationRuntime, isPinned: Bool = false) {
+      self.dictationRuntime = dictationRuntime
+      self.isPinned = isPinned
+    }
 
     var body: some View {
       VStack(spacing: 0) {
         header
         tabStrip
         Divider().opacity(0.35)
+        if let failure = dictationRuntime.captureFailure {
+          HStack(spacing: 8) {
+            Label(failure.message, systemImage: "exclamationmark.triangle")
+              .font(.caption)
+            Spacer()
+            ForEach(failure.actions, id: \.pane) { action in
+              Button(action.title) {
+                dictationRuntime.openSystemSettings(action)
+              }
+              .accessibilityLabel(action.title)
+            }
+          }
+          .padding(.horizontal, 10)
+          .padding(.vertical, 7)
+          .background(.quaternary.opacity(0.35))
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("Dictation unavailable")
+        }
+        if let recoveryAction = dictationRuntime.recoveryAction {
+          HStack(spacing: 8) {
+            Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
+              .font(.caption)
+            Spacer()
+            Button(recoveryAction.title) {
+              Task { await dictationRuntime.performRecoveryAction() }
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(!dictationRuntime.recoveryCommand.isEnabled)
+            .accessibilityLabel(recoveryAction.accessibilityLabel)
+          }
+          .padding(.horizontal, 10)
+          .padding(.vertical, 7)
+          .background(.quaternary.opacity(0.35))
+        }
         editor
         if let error = appState.saveError {
           Text("Could not save: \(error)")
@@ -68,6 +164,18 @@
         TrashView(onDone: { isShowingTrash = false })
           .environmentObject(appState)
       }
+      .sheet(isPresented: $isShowingDictationHistory) {
+        DictationHistoryView(
+          history: dictationRuntime.historyController,
+          onOpenDestination: openHistoryDestination
+        )
+      }
+      .onAppear {
+        dictationRuntime.registerEditor(editorCommands)
+      }
+      .onDisappear {
+        dictationRuntime.unregisterEditor(editorCommands)
+      }
       .overlay {
         ZStack {
           if let notePendingDeletion {
@@ -89,7 +197,7 @@
 
     private var header: some View {
       HStack(spacing: 10) {
-        Label("Notes", systemImage: "note.text")
+        Label("Motes", systemImage: "note.text")
           .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
@@ -129,6 +237,9 @@
           Divider()
           Button("Trash…", systemImage: "trash") {
             isShowingTrash = true
+          }
+          Button("Dictation History", systemImage: "waveform") {
+            isShowingDictationHistory = true
           }
         } label: {
           Image(systemName: "ellipsis.circle")
@@ -184,15 +295,19 @@
                 with: .offset(x: motion.offset)
               )
             )
-            .draggable(note.id.uuidString)
-            .dropDestination(for: String.self) { identifiers, _ in
-              guard let identifier = identifiers.first,
-                let id = UUID(uuidString: identifier),
-                let destination = appState.workspace.notes.firstIndex(where: { $0.id == note.id })
-              else { return false }
-              appState.moveNote(id, to: destination)
-              return true
+            .onDrag {
+              draggedNoteID = note.id
+              return TabDragReorder.itemProvider(for: note.id, contentType: tabDragContentType)
             }
+            .onDrop(
+              of: [tabDragContentType],
+              delegate: TabDropDelegate(
+                destinationID: note.id,
+                currentNoteIDs: { appState.workspace.notes.map(\.id) },
+                draggedNoteID: $draggedNoteID,
+                move: appState.moveNote
+              )
+            )
             .contextMenu {
               Button(
                 note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin"
@@ -283,6 +398,12 @@
       appState.moveToTrash(note.id)
     }
 
+    private func openHistoryDestination(_ noteID: UUID) {
+      guard appState.workspace.notes.contains(where: { $0.id == noteID }) else { return }
+      appState.select(noteID)
+      isShowingDictationHistory = false
+    }
+
     private func presentPersistentWindow(_ present: () -> Void) {
       NSApp.activate()
       present()
@@ -335,6 +456,7 @@
           if appState.preferences.showFormattingBar {
             FormattingBar(
               commands: editorCommands,
+              dictationRuntime: dictationRuntime,
               onDelete: {
                 if let note = appState.selectedNote {
                   requestDeletion(note)
@@ -446,10 +568,31 @@
   private struct FormattingBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var commands: EditorCommands
+    @ObservedObject var dictationRuntime: DictationRuntime
     let onDelete: () -> Void
 
     var body: some View {
       HStack(spacing: 8) {
+        Menu {
+          Button("Cancel Dictation", role: .destructive) {
+            Task { await dictationRuntime.cancel() }
+          }
+          .disabled(!dictationRuntime.canCancel)
+        } label: {
+          ToolbarIconLabel(
+            systemImage: dictationRuntime.microphoneSymbol,
+            isActive: dictationRuntime.isListening
+          )
+        } primaryAction: {
+          guard dictationRuntime.toolbarPresentation.primaryAction != nil else { return }
+          Task { await dictationRuntime.toggle() }
+        }
+        .accessibilityLabel(dictationRuntime.microphoneHelp)
+        .accessibilityAction(named: Text("Cancel Dictation")) {
+          Task { await dictationRuntime.cancel() }
+        }
+        .help(dictationRuntime.microphoneHelp)
+        Divider().frame(height: 15)
         Button {
           commands.undo()
         } label: {
@@ -592,6 +735,31 @@
       .frame(width: 62, height: 22, alignment: .trailing)
       .animation(motion.quick, value: status)
       .accessibilityElement(children: .combine)
+    }
+  }
+
+  private struct TabDropDelegate: DropDelegate {
+    let destinationID: UUID
+    let currentNoteIDs: () -> [UUID]
+    @Binding var draggedNoteID: UUID?
+    let move: (UUID, Int) -> Void
+
+    func dropEntered(info: DropInfo) {
+      TabDragReorder.performLiveMove(
+        draggedID: draggedNoteID,
+        over: destinationID,
+        currentNoteIDs: currentNoteIDs,
+        move: move
+      )
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+      DropProposal(operation: TabDragReorder.dropOperation)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+      draggedNoteID = nil
+      return true
     }
   }
 
