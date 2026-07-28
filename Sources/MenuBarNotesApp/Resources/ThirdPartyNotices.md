@@ -13,6 +13,23 @@ FluidAudio is licensed under
 The SHA-256 checksum of that pinned license file is
 `c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4`.
 
+## Model Context Protocol Swift SDK
+
+Motes uses the official
+[`modelcontextprotocol/swift-sdk`](https://github.com/modelcontextprotocol/swift-sdk)
+package at exact tag
+[`0.12.1`](https://github.com/modelcontextprotocol/swift-sdk/releases/tag/0.12.1),
+commit
+[`a0ae212ebf6eab5f754c3129608bc5557637e605`](https://github.com/modelcontextprotocol/swift-sdk/commit/a0ae212ebf6eab5f754c3129608bc5557637e605).
+The pinned
+[license file](https://github.com/modelcontextprotocol/swift-sdk/blob/a0ae212ebf6eab5f754c3129608bc5557637e605/LICENSE)
+covers Apache License 2.0, MIT-licensed contributions that have not been
+relicensed, and CC BY 4.0 documentation. Its SHA-256 checksum is
+`0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a`
+and its size is 12,227 bytes.
+
+Copyright (c) 2024-2025 Model Context Protocol a Series of LF Projects, LLC.
+
 ## Parakeet TDT 0.6B V2 Core ML model
 
 The Enhanced Local model is

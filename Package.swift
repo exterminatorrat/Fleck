@@ -9,7 +9,12 @@ let infoPlistPath = packageRoot
 let enhancedCandidateEnabled =
     ProcessInfo.processInfo.environment["MOTES_ENHANCED_CANDIDATE"] == "1"
 
-var packageDependencies: [Package.Dependency] = []
+var packageDependencies: [Package.Dependency] = [
+    .package(
+        url: "https://github.com/modelcontextprotocol/swift-sdk.git",
+        revision: "a0ae212ebf6eab5f754c3129608bc5557637e605"
+    ),
+]
 var appDependencies: [Target.Dependency] = ["MenuBarNotesCore"]
 var appExcludes = [
     "Info.plist",
