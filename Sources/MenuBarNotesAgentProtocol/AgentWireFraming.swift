@@ -5,6 +5,7 @@ public enum AgentWireFraming {
 
   public static func encode<T: Encodable>(_ value: T) throws -> Data {
     let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
     encoder.dateEncodingStrategy = .iso8601
     let payload = try encoder.encode(value)
     guard !payload.isEmpty, payload.count <= maximumFrameBytes else {

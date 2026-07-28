@@ -76,6 +76,30 @@ func agentWireRequestCarriesUnsupportedVersionsForServerRejection(
   #expect(failure.error?.code == .invalidPayload)
 }
 
+@Test func agentWireFramingCanonicalizesEquivalentFailureBytes() async throws {
+  let response = AgentWireResponse.failure(
+    requestID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+    error: AgentWorkspaceError(code: .noteNotFound)
+  )
+  let frames = try await withThrowingTaskGroup(
+    of: Data.self,
+    returning: [Data].self
+  ) { group in
+    for _ in 0..<128 {
+      group.addTask {
+        try AgentWireFraming.encode(response)
+      }
+    }
+    var frames: [Data] = []
+    for try await frame in group {
+      frames.append(frame)
+    }
+    return frames
+  }
+
+  #expect(Set(frames).count == 1)
+}
+
 @Test(arguments: [
   #"{"protocolVersion":1,"requestID":"00000000-0000-0000-0000-000000000001","result":{"sharedNotes":{"notes":[]}},"error":{"code":"invalid_payload"}}"#,
   #"{"protocolVersion":1,"requestID":"00000000-0000-0000-0000-000000000001"}"#,
