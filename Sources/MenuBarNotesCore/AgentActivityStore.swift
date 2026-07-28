@@ -10,6 +10,7 @@ public struct PreparedAgentTransaction: Codable, Equatable, Sendable {
   public let operationID: UUID
   public let createdAt: Date
   public let operation: AgentActivityOperation
+  public let sourceOperation: AgentActivityOperation?
   public let patch: AgentTextPatch
   public let previousRevision: UInt64
   public let resultingRevision: UInt64
@@ -29,7 +30,8 @@ public struct PreparedAgentTransaction: Codable, Equatable, Sendable {
     previousRevision: UInt64,
     resultingRevision: UInt64,
     resultingBodySHA256: String,
-    taskHandle: String? = nil
+    taskHandle: String? = nil,
+    sourceOperation: AgentActivityOperation? = nil
   ) {
     self.changeID = changeID
     self.noteID = noteID
@@ -39,6 +41,7 @@ public struct PreparedAgentTransaction: Codable, Equatable, Sendable {
     self.operationID = operationID
     self.createdAt = createdAt
     self.operation = operation
+    self.sourceOperation = sourceOperation
     self.patch = patch
     self.previousRevision = previousRevision
     self.resultingRevision = resultingRevision
@@ -60,6 +63,7 @@ public struct AgentActivityRecord: Codable, Equatable, Sendable {
   public let operationID: UUID
   public let createdAt: Date
   public let operation: AgentActivityOperation
+  public let sourceOperation: AgentActivityOperation?
   public let patch: AgentTextPatch
   public let previousRevision: UInt64
   public let resultingRevision: UInt64
@@ -79,6 +83,7 @@ public struct AgentActivityRecord: Codable, Equatable, Sendable {
     operationID = transaction.operationID
     createdAt = transaction.createdAt
     operation = transaction.operation
+    sourceOperation = transaction.sourceOperation
     patch = transaction.patch
     previousRevision = transaction.previousRevision
     resultingRevision = transaction.resultingRevision

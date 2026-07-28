@@ -169,13 +169,15 @@
             throw AgentWorkspaceError(code: .revisionConflict)
           }
           let draft = try undoDraft(for: record, in: note)
+          let sourceOperation = record.sourceOperation ?? record.operation
           let pending = try pendingWrite(
             draft: draft,
             operation: .undoChange,
             operationID: operationID,
             actor: actor,
             originatingActor: record.originatingActor ?? record.actor,
-            checklistFormatting: checklistFormatting(forUndoing: record.operation),
+            sourceOperation: sourceOperation,
+            checklistFormatting: checklistFormatting(forUndoing: sourceOperation),
             note: note,
             workspace: state.workspace,
             preferences: state.preferences
@@ -382,13 +384,15 @@
         throw AgentWorkspaceError(code: .revisionConflict)
       }
       let draft = try undoDraft(for: record, in: note)
+      let sourceOperation = record.sourceOperation ?? record.operation
       let pending = try pendingWrite(
         draft: draft,
         operation: .undoChange,
         operationID: request.operationID,
         actor: actor,
         originatingActor: record.originatingActor ?? record.actor,
-        checklistFormatting: checklistFormatting(forUndoing: record.operation),
+        sourceOperation: sourceOperation,
+        checklistFormatting: checklistFormatting(forUndoing: sourceOperation),
         note: note,
         workspace: state.workspace,
         preferences: state.preferences
@@ -407,6 +411,7 @@
       operationID: UUID,
       actor: AgentActivityActor,
       originatingActor: AgentActivityActor? = nil,
+      sourceOperation: AgentActivityOperation? = nil,
       checklistFormatting: AgentChecklistFormattingIntent? = nil,
       note: Note,
       workspace: Workspace,
@@ -450,7 +455,8 @@
         previousRevision: note.revision,
         resultingRevision: changed.revision,
         resultingBodySHA256: bodySHA256(changed.body),
-        taskHandle: taskHandle
+        taskHandle: taskHandle,
+        sourceOperation: sourceOperation
       )
       let receipt = AgentWriteReceipt(
         changeID: changeID,

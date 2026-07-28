@@ -1,3 +1,4 @@
+import AppKit
 import CryptoKit
 import Foundation
 import MenuBarNotesCore
@@ -307,6 +308,109 @@ import Testing
         profileID: fixture.profile.id,
         displayName: fixture.profile.displayName
       )
+  )
+}
+
+@Test @MainActor func undoingTaskCompletionUndoRestoresCompletedRichText()
+  async throws
+{
+  let source = NSMutableAttributedString(string: "○ Ship release")
+  source.addAttribute(
+    .underlineStyle,
+    value: NSUnderlineStyle.single.rawValue,
+    range: NSRange(location: 2, length: "Ship release".utf16.count)
+  )
+  let note = Note(
+    title: "Work",
+    body: source.string,
+    richTextRTF: try source.data(
+      from: NSRange(location: 0, length: source.length),
+      documentAttributes: [
+        .documentType: NSAttributedString.DocumentType.rtf
+      ]
+    ),
+    agentAccess: true,
+    revision: 3
+  )
+  let fixture = AgentServiceFixture(note: note)
+  guard
+    case .tasks(let tasks) = try await fixture.execute(
+      .listTasks(request: .init(noteID: note.id))
+    ),
+    let task = tasks.first
+  else {
+    Issue.record("Expected task")
+    return
+  }
+
+  guard
+    case .write(let completion) = try await fixture.execute(
+      .setTaskState(
+        request: .init(
+          context: .init(
+            noteID: note.id,
+            expectedRevision: note.revision,
+            operationID: UUID()
+          ),
+          taskHandle: task.taskHandle,
+          completed: true
+        )
+      )
+    )
+  else {
+    Issue.record("Expected completion")
+    return
+  }
+  guard
+    case .undo(let firstUndo) = try await fixture.execute(
+      .undoChange(
+        request: .init(
+          changeID: completion.changeID,
+          expectedRevision: completion.resultingRevision,
+          operationID: UUID()
+        )
+      )
+    )
+  else {
+    Issue.record("Expected first Undo")
+    return
+  }
+  guard
+    case .undo = try await fixture.execute(
+      .undoChange(
+        request: .init(
+          changeID: firstUndo.changeID,
+          expectedRevision: firstUndo.resultingRevision,
+          operationID: UUID()
+        )
+      )
+    )
+  else {
+    Issue.record("Expected second Undo")
+    return
+  }
+
+  let restored = fixture.state.workspace.notes[0]
+  #expect(restored.body == "● Ship release")
+  let data = try #require(restored.richTextRTF)
+  let attributed = try NSAttributedString(
+    data: data,
+    options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  #expect(
+    (attributed.attribute(
+      .strikethroughStyle,
+      at: 2,
+      effectiveRange: nil
+    ) as? Int) == NSUnderlineStyle.single.rawValue
+  )
+  #expect(
+    (attributed.attribute(
+      .underlineStyle,
+      at: 2,
+      effectiveRange: nil
+    ) as? Int) == NSUnderlineStyle.single.rawValue
   )
 }
 
@@ -1010,6 +1114,7 @@ private final class AgentServiceFixture {
 
   init(
     shared: Bool = true,
+    note providedNote: Note? = nil,
     authorizer: (any AgentProfileAuthorizing)? = nil,
     signingKeyProvider: any AgentSigningKeyProviding =
       FixedAgentSigningKeyProvider()
@@ -1018,12 +1123,14 @@ private final class AgentServiceFixture {
       "AgentCommandServiceTests-\(UUID().uuidString)",
       isDirectory: true
     )
-    note = Note(
-      title: "Work",
-      body: "Original",
-      agentAccess: shared,
-      revision: 3
-    )
+    note =
+      providedNote
+      ?? Note(
+        title: "Work",
+        body: "Original",
+        agentAccess: shared,
+        revision: 3
+      )
     profile = AgentIntegrationProfile(
       id: UUID(),
       displayName: "Codex",
