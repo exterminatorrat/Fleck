@@ -625,6 +625,7 @@ Cover:
 - Creation returns a 32-byte random credential once and stores only its SHA-256 verifier in Keychain.
 - Equal credentials authorize with constant-time comparison.
 - Wrong, revoked, and unknown profiles fail with scoped errors.
+- Wrong credentials, revoked profiles, and unknown profile IDs all throw the same byte-for-byte `AgentWorkspaceError(code: .permissionRevoked)` so callers cannot enumerate profiles.
 - Revocation during a test request prevents the next command.
 - Handles reject changed bytes, the wrong note, and the wrong revision.
 - Handles round-trip Unicode task text hashes.
@@ -686,6 +687,53 @@ git commit -m "feat: authorize local Motes agents"
 
 ---
 
+### Task 4.5: Expose the Exact Resolved Undo Mutation
+
+**Files:**
+- Modify: `Sources/MenuBarNotesCore/AgentUndoEngine.swift`
+- Modify: `Tests/MenuBarNotesCoreTests/AgentUndoEngineTests.swift`
+
+**Interfaces:**
+
+Add:
+
+```swift
+public static func draft(
+  inverting patch: AgentTextPatch,
+  in body: String
+) throws -> AgentMutationDraft
+```
+
+Keep `inverting(_:in:)` as a compatibility wrapper returning `draft.body`.
+
+- [ ] **Step 1: Write RED tests**
+
+Cover an Undo whose context uniquely relocates the edit after nearby human text was inserted. Require the draft to return:
+
+- The resulting body.
+- The actual resolved UTF-16 range, not the stale original range.
+- An inverse patch whose `beforeText` is the text being removed and whose `afterText` is the restored text.
+- Prefix and suffix context from the current body at the resolved range.
+
+Add an attributed-text-oriented regression fixture with identical nearby text carrying different formatting so Task 5 can prove it mutates the resolved run rather than the original offset.
+
+- [ ] **Step 2: Implement minimally**
+
+Reuse the existing exact/context matcher once, return the resolved range, and build the inverse `AgentMutationDraft`. Do not duplicate the matcher in Task 5 and do not change current conservative ambiguity or whole-body-deletion behavior.
+
+- [ ] **Step 3: Verify and commit**
+
+```bash
+swift test --filter AgentUndoEngine
+swift test
+git diff --check
+git add Sources/MenuBarNotesCore/AgentUndoEngine.swift \
+  Tests/MenuBarNotesCoreTests/AgentUndoEngineTests.swift
+git commit -m "feat: expose resolved agent undo patches"
+```
+
+---
+
 ### Task 5: Implement Rich-Text-Safe Mutations and the Single-Writer Gateway
 
 **Files:**
@@ -711,15 +759,25 @@ git commit -m "feat: authorize local Motes agents"
 @MainActor
 final class AgentCommandService {
   func execute(
-    profile: AgentIntegrationProfile,
+    profileID: UUID,
+    credential: Data,
     command: AgentWorkspaceCommand
-  ) async -> AgentWorkspaceResponse
+  ) async throws -> AgentWorkspaceResponse
 
   func executeLocalUndo(
     changeID: UUID,
     expectedRevision: UInt64,
     operationID: UUID
-  ) async -> AgentWorkspaceResponse
+  ) async throws -> AgentWorkspaceResponse
+}
+
+struct AgentChangeFeedback: Equatable, Sendable {
+  let changeID: UUID
+  let noteID: UUID
+  let noteTitle: String
+  let actor: AgentActivityActor
+  let resultingRevision: UInt64
+  let createdAt: Date
 }
 
 @MainActor
@@ -736,7 +794,7 @@ protocol AgentWorkspaceStateAccess: AnyObject {
 }
 ```
 
-`AgentCommandService` uses a FIFO task chain so one complete agent command finishes before the next starts; actor reentrancy alone is not sufficient. Authorization and preparation may await, but the final workspace save and publish are one synchronous main-actor critical section.
+`AgentCommandService` uses a FIFO task chain so one complete agent command finishes before the next starts; actor reentrancy alone is not sufficient. It owns `AgentProfileStore`, authorizes `profileID` plus `credential` inside that FIFO immediately before each command, and retains the returned profile only for that command. Authorization and preparation may await, but the final workspace save and publish are one synchronous main-actor critical section.
 
 - [ ] **Step 1: Write rich-text preservation tests**
 
@@ -748,6 +806,9 @@ Cover:
 - Completing a task strikes through task content but not indentation or marker.
 - Reopening removes only the task-content strike.
 - Removing one task preserves adjacent rich text.
+- Relocated safe Undo mutates the exact attributed range returned by `AgentUndoEngine.draft`, preserving a differently formatted identical nearby run.
+- A stale or semantically mismatched RTF sidecar is rejected safely rather than applying body-derived ranges to unrelated attributed text.
+- CR/LF/CRLF body and decoded RTF strings must match exactly in UTF-16 before a rich-text mutation; an unrepresentable newline mismatch is rejected without publishing or persisting a change.
 
 - [ ] **Step 2: Write service contract tests**
 
@@ -769,6 +830,7 @@ Cover:
 - Local user Undo works for an active note after unsharing or revoking the originating profile.
 - Later ambiguous edits return `unsafe_undo`.
 - Human pending edits are part of the revision checked by an agent command.
+- Every rejection throws the existing Codable `AgentWorkspaceError`; successful return values remain `AgentWorkspaceResponse`.
 
 - [ ] **Step 3: Run RED**
 
@@ -779,7 +841,7 @@ swift test --filter AgentCommandService
 
 - [ ] **Step 4: Implement attributed mutations**
 
-Decode existing RTF when valid; otherwise create attributed text from `note.body` and current font preferences. Map body line ranges to `NSRange` using `NSString`. Apply the exact pure-engine replacement, serialize RTF, and return body plus RTF together.
+Decode existing RTF when valid; otherwise create attributed text from `note.body` and current font preferences. Before applying anything, require the attributed string and `note.body` to be exactly equal in UTF-16. A parseable but stale sidecar, or a CR/LF/CRLF representation that cannot round-trip exactly through RTF, fails safely with `motes_unavailable` and a retry/recovery action; it is never silently normalized, reformatted, or applied at a guessed range. Map body line ranges to `NSRange` using `NSString`. Apply the exact pure-engine replacement (or the exact resolved inverse patch returned by Task 4.5), serialize RTF, decode it again, and require its string to equal the resulting body before returning body plus RTF together.
 
 Construct the resulting `Note` with body and RTF updated together, then increment its revision exactly once. Do not call the separate human body and RTF mutation methods in sequence.
 
@@ -791,21 +853,21 @@ Move the existing file-writing body used by `LocalStore.save` into a synchronous
 
 Every AppState save carries the `persistenceGeneration` captured with that snapshot. Under the same lock, the writer tracks the highest committed generation and returns `.superseded` without touching disk when an older queued autosave arrives after a newer agent or human snapshot. Advance the watermark only after the atomic manifest commit; a pre-commit failure must leave that generation retryable. Test both lock acquisition orders and a failed newer save followed by its retry.
 
-Extend the backward-compatible manifest with optional `snapshotIntegrityVersion: 1`, per-note Markdown and RTF SHA-256 values, and a bounded list of unexpired `AgentWorkspaceCommitProof` values. A normal save preserves and purges these content-free proofs. An agent save adds its proof to the manifest that records the resulting note revision.
+Extend the backward-compatible manifest with optional `snapshotIntegrityVersion: 1`, per-note Markdown and RTF SHA-256 values, `preferencesSHA256`, and a bounded list of unexpired `AgentWorkspaceCommitProof` values. A normal save preserves and purges these content-free proofs. An agent save adds its proof to the manifest that records the resulting note revision.
 
 Treat the atomic `workspace.json` replacement as the snapshot commit point:
 
 1. Validate the current root generation. Create a Recovery snapshot only from a valid root; when root validation already fell back to Recovery, preserve that Recovery until a new root manifest commits.
-2. Perform every fallible preferences, Markdown, and RTF write for the active generation.
+2. Encode preferences once, then perform every fallible preferences, Markdown, and RTF write for the active generation.
 3. Compute hashes from the bytes actually written.
 4. Atomically replace `workspace.json` last with matching revisions, hashes, and agent proofs.
 5. Perform orphan cleanup as best-effort, non-throwing maintenance.
 
-On load, `snapshotIntegrityVersion == 1` is valid only when every referenced Markdown/RTF file has the required matching hash. Reject the entire root generation and load Recovery when any hash is missing or wrong. Old manifests with no integrity version remain readable and acquire hashes on their next save. This makes a crash before the manifest commit recover the old complete generation, while a committed proof always names the complete new generation.
+On load, `snapshotIntegrityVersion == 1` is valid only when every referenced Markdown/RTF file and the exact encoded `preferences.json` bytes have the required matching hash. Reject the entire root generation and load workspace plus preferences from Recovery when any hash is missing or wrong. Old manifests with no integrity version remain readable and acquire hashes on their next save. This makes a preferences-only crash before the manifest commit recover the old complete generation, while a committed proof always names the complete new generation.
 
 Add `LocalStore.loadSnapshot()` returning workspace, preferences, commit proofs, and whether root or Recovery was validated. `AppState` must load workspace and preferences from that one source instead of independently accepting root preferences after the root workspace was rejected.
 
-Add regressions using two queues and controllable filesystem hooks for both stale-save orderings, failed-generation retry, crash points before and after the manifest commit, post-commit cleanup failure, root hash mismatch fallback followed by a save that preserves valid Recovery, and old hashless manifests.
+Add regressions using two queues and controllable filesystem hooks for both stale-save orderings, failed-generation retry, crash points before and after the manifest commit, a preferences-only pre-commit crash, missing or corrupt preferences fallback, post-commit cleanup failure, root hash mismatch fallback followed by a save that preserves valid Recovery, and old hashless manifests.
 
 Trash remains on the existing idempotent archive path rather than entering an agent snapshot transaction. `flushPendingPersistenceForAgent()` cancels the debounce, awaits any in-flight save, and repeats until the current `persistenceGeneration` is durable and `pendingTrashNotes` is empty. Bound this drain to two seconds; on continued edits, Trash failure, or timeout, reject the agent command with `motes_unavailable` and a retry action. `commitAgentWorkspace` refuses to run when pending Trash is nonempty and does not archive or restore Trash itself.
 
@@ -823,7 +885,7 @@ The method has no `await`. A pre-commit save error leaves published state unchan
 For a write:
 
 1. Enter the FIFO agent-command chain.
-2. Authorize the profile and reconcile any preparation for the same operation ID.
+2. Authorize the supplied profile ID and credential through `AgentProfileStore`, then discard the credential after this command; reconcile any preparation for the same operation ID.
 3. Return a prior idempotent receipt when present.
 4. Await `flushPendingPersistenceForAgent()` so no older save or pending Trash operation remains.
 5. On the main actor, capture the live workspace and `persistenceGeneration`; scope unknown and unshared notes identically.
@@ -833,7 +895,7 @@ For a write:
 9. Call synchronous `commitAgentWorkspace` with the candidate, captured generation, and prepared commit proof; successful return means the workspace and its manifest proof are durable and the candidate is published.
 10. Commit the activity record/tombstone synchronously, publish feedback, and return the receipt.
 
-On failure before step 9, abort preparation when one exists and publish nothing. A workspace-save failure at step 9 also aborts preparation and publishes nothing. A failure after workspace persistence keeps the durable candidate published and the preparation intact, returns `internal_save_failure`, and reconciles that operation from the manifest proof before any retry can mutate. Never roll back or overwrite newer human state.
+On failure before step 9, abort preparation when one exists and publish nothing. A workspace-save failure at step 9 also aborts preparation and publishes nothing. A failure after workspace persistence keeps the durable candidate published and the preparation intact, throws `AgentWorkspaceError(code: .internalSaveFailure)`, and reconciles that operation from the manifest proof before any retry can mutate. Never roll back or overwrite newer human state.
 
 `executeLocalUndo` bypasses integration-profile authorization because it represents an explicit Motes user action. It still requires the active note, expected revision, operation ID, safe inverse proof, the same prepared transaction, and the same synchronous durable commit. Attribute the new activity to the local Motes user while retaining the originating integration in the description.
 
@@ -901,7 +963,7 @@ public struct AgentWireRequest: Codable, Equatable, Sendable {
 public struct AgentWireResponse: Codable, Equatable, Sendable {
   public let requestID: UUID
   public let result: AgentWorkspaceResponse?
-  public let error: AgentWorkspaceFailure?
+  public let error: AgentWorkspaceError?
 }
 
 public enum AgentWireFraming {
@@ -950,7 +1012,7 @@ Requirements:
 - Use `getpeereid` to reject a peer UID different from `geteuid()`.
 - Bound accepted clients and close idle connections.
 - Decode one request at a time per connection.
-- Authenticate the profile before invoking the main-actor service.
+- Decode Base64 credentials strictly, then pass the profile ID and credential to `AgentCommandService`, which authenticates inside its FIFO immediately before executing the command. Catch `AgentWorkspaceError` from the service and encode it directly in the correlated error envelope; map malformed Base64 to `invalid_payload` and unexpected errors to a content-free `internal_save_failure`.
 - Measure the fully encoded response envelope before writing. Replace an oversized success with a minimal correlated `response_too_large` failure; never drop the connection merely because a legitimate result was too large.
 - Never include internal paths or credentials in errors.
 - Remove the socket on clean shutdown.
