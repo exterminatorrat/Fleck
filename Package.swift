@@ -110,6 +110,7 @@ let package = Package(
             dependencies: [
                 "MenuBarNotesCore",
                 "MenuBarNotesAgentProtocol",
+                .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
         .testTarget(

@@ -13,7 +13,10 @@
         let command = try BridgeCommand.parse(arguments: arguments) {
           try stdin.read()
         }
-        Darwin.exit(run(command, stdin: stdin))
+        Task {
+          Darwin.exit(await run(command, stdin: stdin))
+        }
+        dispatchMain()
       } catch let error as BridgeParseError {
         write("\(error.description)\n", to: .standardError)
         Darwin.exit(error.exitCode)
@@ -28,7 +31,7 @@
       stdin: StdinReader,
       credentialStore: BridgeCredentialStore = BridgeCredentialStore(),
       client: AgentIPCClient = AgentIPCClient()
-    ) -> Int32 {
+    ) async -> Int32 {
       switch command {
       case .help:
         write(BridgeOutput.help + "\n", to: .standardOutput)
@@ -54,12 +57,14 @@
           write("Could not disconnect the profile.\n", to: .standardError)
           return 1
         }
-      case .mcp:
-        write(
-          "MCP mode is reserved for the next Motes bridge release.\n",
-          to: .standardError
-        )
-        return 69
+      case .mcp(let profileID):
+        do {
+          try await MotesMCPServer.run(profileID: profileID)
+          return 0
+        } catch {
+          write("MCP server failed.\n", to: .standardError)
+          return 1
+        }
       case .workspace(let profileID, let workspaceCommand, let json):
         do {
           let credential = try credentialStore.load(profileID: profileID)
@@ -132,10 +137,13 @@
     }
   }
 
-  private final class StdinReader {
+  private final class StdinReader: @unchecked Sendable {
+    private let lock = NSLock()
     private var cached: String?
 
     func read() throws -> String {
+      lock.lock()
+      defer { lock.unlock() }
       if let cached { return cached }
       let result =
         String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
