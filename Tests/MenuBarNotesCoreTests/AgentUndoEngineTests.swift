@@ -157,3 +157,45 @@ import Testing
   #expect(draft.patch.range == NSRange(location: 3, length: 6))
   #expect(try AgentUndoEngine.inverting(draft.patch, in: draft.body) == "😀\nTarget\nEnd")
 }
+
+@Test func undoRestoresStoredNewlineSequencesExactly() throws {
+  let original = "One\r\nTwo\rThree"
+  let appended = try AgentNoteMutationEngine.append(
+    text: "Agent\r\nUpdate",
+    to: original,
+    maximumBytes: 65_536
+  )
+
+  #expect(appended.body == original + "\n\nAgent\nUpdate")
+  #expect(appended.patch.range == NSRange(location: 14, length: 0))
+  #expect(try AgentUndoEngine.inverting(appended.patch, in: appended.body) == original)
+
+  let replaced = try AgentNoteMutationEngine.replaceLines(
+    in: original,
+    startLine: 2,
+    endLine: 3,
+    expectedTextSHA256:
+      "ce032d1a4fe8f9cea24fd385a1322b4eb82f9851cde5213b28561d06b98dd1f9",
+    replacement: "Changed\r\nAgain",
+    maximumBytes: 65_536
+  )
+
+  #expect(replaced.patch.beforeText == "Two\rThree")
+  #expect(replaced.patch.afterText == "Changed\nAgain")
+  #expect(replaced.body == "One\r\nChanged\nAgain")
+  #expect(try AgentUndoEngine.inverting(replaced.patch, in: replaced.body) == original)
+}
+
+@Test func wholeBodyDeletionUndoRequiresTheBodyToRemainEmpty() throws {
+  let task = AgentNoteMutationEngine.tasks(in: "○ Only")[0]
+  let deletion = try AgentNoteMutationEngine.removeTask(task, in: "○ Only")
+
+  #expect(deletion.body == "")
+  #expect(deletion.patch.afterText == "")
+  #expect(deletion.patch.prefixContext == "")
+  #expect(deletion.patch.suffixContext == "")
+  #expect(try AgentUndoEngine.inverting(deletion.patch, in: "") == "○ Only")
+  #expect(throws: AgentWorkspaceError.self) {
+    try AgentUndoEngine.inverting(deletion.patch, in: "Unrelated")
+  }
+}

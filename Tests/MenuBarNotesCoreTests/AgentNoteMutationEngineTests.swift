@@ -237,7 +237,7 @@ import Testing
   #expect(draft.patch.suffixContext == "")
 }
 
-@Test func commandTextAndBodiesNormalizeNewlines() throws {
+@Test func commandTextNormalizesNewlinesWithoutRewritingStoredBodies() throws {
   let appended = try AgentNoteMutationEngine.append(
     text: "A\r\nB\rC",
     to: "Existing\rLine",
@@ -259,9 +259,9 @@ import Testing
     maximumBytes: 65_536
   )
 
-  #expect(appended.body == "Existing\nLine\n\nA\nB\nC")
-  #expect(inserted.body == "One\nA\nB\nTwo")
-  #expect(replaced.body == "One\nA\nB")
+  #expect(appended.body == "Existing\rLine\n\nA\nB\nC")
+  #expect(inserted.body == "One\rA\nB\nTwo")
+  #expect(replaced.body == "One\r\nA\nB")
 }
 
 @Test func insertionUsesOneBasedLineBoundaries() throws {

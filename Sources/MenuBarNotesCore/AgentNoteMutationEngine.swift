@@ -7,7 +7,6 @@ public enum AgentNoteMutationEngine {
     to body: String,
     maximumBytes: Int = 65_536
   ) throws -> AgentMutationDraft {
-    let body = normalize(body)
     let text = normalize(text)
     let insertion = body.isEmpty ? text : "\n\n" + text
     try validatePayload(insertion, maximumBytes: maximumBytes)
@@ -25,7 +24,6 @@ public enum AgentNoteMutationEngine {
     in body: String,
     maximumBytes: Int = 65_536
   ) throws -> AgentMutationDraft {
-    let body = normalize(body)
     let text = normalize(text)
 
     if body.isEmpty {
@@ -72,7 +70,6 @@ public enum AgentNoteMutationEngine {
     replacement: String,
     maximumBytes: Int = 65_536
   ) throws -> AgentMutationDraft {
-    let body = normalize(body)
     let replacement = normalize(replacement)
     try validatePayload(replacement, maximumBytes: maximumBytes)
     let lines =
@@ -102,7 +99,6 @@ public enum AgentNoteMutationEngine {
   }
 
   public static func tasks(in body: String) -> [AgentParsedTask] {
-    let body = normalize(body)
     guard !body.isEmpty else { return [] }
     let source = body as NSString
 
@@ -117,7 +113,6 @@ public enum AgentNoteMutationEngine {
     in body: String,
     maximumBytes: Int = 65_536
   ) throws -> AgentMutationDraft {
-    let body = normalize(body)
     let text = try normalizedTaskText(text, maximumBytes: maximumBytes)
     let indentation: String
     let range: NSRange
@@ -162,7 +157,6 @@ public enum AgentNoteMutationEngine {
     in body: String,
     maximumBytes: Int = 65_536
   ) throws -> AgentMutationDraft {
-    let body = normalize(body)
     let text = try normalizedTaskText(text, maximumBytes: maximumBytes)
     let task = try currentTask(matching: task, in: body)
     let lineRange = lineRanges(in: body)[task.line - 1]
@@ -186,7 +180,6 @@ public enum AgentNoteMutationEngine {
     completed: Bool,
     in body: String
   ) throws -> AgentMutationDraft {
-    let body = normalize(body)
     let task = try currentTask(matching: task, in: body)
     let lineRange = lineRanges(in: body)[task.line - 1]
     let range = NSRange(
@@ -211,7 +204,6 @@ public enum AgentNoteMutationEngine {
     _ task: AgentParsedTask,
     in body: String
   ) throws -> AgentMutationDraft {
-    let body = normalize(body)
     let task = try currentTask(matching: task, in: body)
     let lines = lineRanges(in: body)
     let line = lines[task.line - 1]
@@ -225,9 +217,11 @@ public enum AgentNoteMutationEngine {
         length: lines[task.line].location - line.location
       )
     } else {
+      let previousLine = lines[task.line - 2]
+      let delimiterStart = NSMaxRange(previousLine)
       range = NSRange(
-        location: line.location - 1,
-        length: line.length + 1
+        location: delimiterStart,
+        length: NSMaxRange(line) - delimiterStart
       )
     }
 
@@ -296,25 +290,42 @@ public enum AgentNoteMutationEngine {
 
   private static func lineRanges(in body: String) -> [NSRange] {
     let source = body as NSString
+    guard source.length > 0 else {
+      return [NSRange(location: 0, length: 0)]
+    }
     var ranges: [NSRange] = []
     var start = 0
 
-    while start <= source.length {
-      let searchRange = NSRange(
-        location: start,
-        length: source.length - start
-      )
-      let newline = source.range(of: "\n", options: [], range: searchRange)
-      if newline.location == NSNotFound {
+    while true {
+      var cursor = start
+      while
+        cursor < source.length,
+        source.character(at: cursor) != 10,
+        source.character(at: cursor) != 13
+      {
+        cursor += 1
+      }
+      if cursor == source.length {
         ranges.append(
           NSRange(location: start, length: source.length - start)
         )
         break
       }
       ranges.append(
-        NSRange(location: start, length: newline.location - start)
+        NSRange(location: start, length: cursor - start)
       )
-      start = NSMaxRange(newline)
+      if
+        source.character(at: cursor) == 13,
+        cursor + 1 < source.length,
+        source.character(at: cursor + 1) == 10
+      {
+        cursor += 1
+      }
+      start = cursor + 1
+      if start == source.length {
+        ranges.append(NSRange(location: start, length: 0))
+        break
+      }
     }
     return ranges
   }

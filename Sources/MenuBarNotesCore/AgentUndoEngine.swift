@@ -5,9 +5,20 @@ public enum AgentUndoEngine {
     _ patch: AgentTextPatch,
     in body: String
   ) throws -> String {
-    let body = body
-      .replacingOccurrences(of: "\r\n", with: "\n")
-      .replacingOccurrences(of: "\r", with: "\n")
+    if
+      patch.range.location == 0,
+      patch.range.length == patch.beforeText.utf16.count,
+      !patch.beforeText.isEmpty,
+      patch.afterText.isEmpty,
+      patch.prefixContext.isEmpty,
+      patch.suffixContext.isEmpty
+    {
+      guard body.isEmpty else {
+        throw AgentWorkspaceError(code: .unsafeUndo)
+      }
+      return patch.beforeText
+    }
+
     let exactRange = NSRange(
       location: patch.range.location,
       length: patch.afterText.utf16.count
