@@ -75,9 +75,9 @@ Recorded 2026-07-29 from source base
 `264f988beee8fbca79415797d1cf0222916ec4b3` on arm64 macOS 26.2 (25C56),
 Xcode 26.6 (17F113), and Swift 6.3.3:
 
-- `swift test`: **470 tests in 8 suites passed** on the fresh release-validation
+- `swift test`: **471 tests in 8 suites passed** on the fresh release-validation
   rerun.
-- Unsigned release `Motes` executable: **5,551,400 bytes** against the unchanged
+- Unsigned release `Motes` executable: **5,551,416 bytes** against the unchanged
   15 MiB budget.
 - Separately packaged `motes-agent` helper: **10,458,296 bytes**.
 - Official MCP Swift SDK tag/revision: **0.12.1** /

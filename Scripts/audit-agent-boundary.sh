@@ -7,13 +7,17 @@ readonly helper_root="$repo_root/Sources/MotesAgentBridge"
 readonly launch_adapter="$helper_root/AgentIPCClient.swift"
 readonly mcp_server="$helper_root/MotesMCPServer.swift"
 readonly tool_registry="$helper_root/MotesMCPToolRegistry.swift"
+readonly cli_entrypoint="$helper_root/MotesAgentBridge.swift"
 readonly client_setup="$repo_root/Sources/MenuBarNotesApp/AgentClientSetup.swift"
 readonly installer="$repo_root/Sources/MenuBarNotesApp/AgentBridgeInstaller.swift"
+readonly stdout_pattern='FileHandle\.standardOutput|\.standardOutput|\bSTDOUT_FILENO\b|\bstdout\b|(^|[^A-Za-z])print[[:space:]]*\(|(Darwin\.)?write[[:space:]]*\([[:space:]]*1[[:space:]]*,'
 
-if ! command -v rg >/dev/null 2>&1; then
-  printf 'error: audit-agent-boundary requires rg\n' >&2
-  exit 2
-fi
+for command in rg perl; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    printf 'error: audit-agent-boundary requires %s\n' "$command" >&2
+    exit 2
+  fi
+done
 
 fail_matches() {
   local boundary="$1"
@@ -32,7 +36,7 @@ while IFS= read -r file; do
   if [[ "$file" != "$launch_adapter" ]]; then
     helper_without_launch+=("$file")
   fi
-done < <(find "$helper_root" -maxdepth 1 -name '*.swift' -type f | sort)
+done < <(find "$helper_root" -name '*.swift' -type f | sort)
 fail_matches \
   'MotesAgentBridge imports AppKit outside the launch adapter' \
   '^[[:space:]]*(import|@_implementationOnly[[:space:]]+import)[[:space:]]+AppKit([[:space:]]|$)' \
@@ -42,8 +46,12 @@ if [[ "$(rg -c '^[[:space:]]*import[[:space:]]+AppKit$' "$launch_adapter")" != "
   exit 1
 fi
 launch_stripped="$(mktemp "${TMPDIR:-/tmp}/motes-launch-audit.XXXXXX")"
+tool_parser_probe="$(mktemp "${TMPDIR:-/tmp}/motes-tool-parser-probe.XXXXXX")"
+stdout_probe="$(mktemp "${TMPDIR:-/tmp}/motes-stdout-probe.XXXXXX")"
 cleanup() {
-  /bin/rm -f -- "$launch_stripped" "${expected_tools:-}" "${actual_tools:-}"
+  /bin/rm -f -- \
+    "$launch_stripped" "$tool_parser_probe" "$stdout_probe" \
+    "${expected_tools:-}" "${actual_tools:-}"
 }
 trap cleanup EXIT
 awk '
@@ -78,29 +86,43 @@ fail_matches \
   '"[^"]*(\.md|\.rtf|workspace\.json|Dictation[[:space:]]*History)[^"]*"|"Trash"' \
   "$helper_root"
 
-# The MCP surface is the approved twelve tools, in the reviewed order.
+# The MCP surface is the exact approved twelve tools, independent of whether
+# registrations use one line or several.
+extract_tool_names() {
+  perl -0777 -ne '
+    while (/\btool\s*\(\s*"([^"]+)"/g) {
+      print "$1\n";
+    }
+  ' "$@"
+}
+printf '%s\n' \
+  'tool("dangerous_one_line", description: "probe")' \
+  'tool(' \
+  '  "dangerous_multi_line",' \
+  '  description: "probe"' \
+  ')' >"$tool_parser_probe"
+tool_parser_result="$(extract_tool_names "$tool_parser_probe" | LC_ALL=C sort)"
+if [[ "$tool_parser_result" != $'dangerous_multi_line\ndangerous_one_line' ]]; then
+  printf 'error: MCP tool parser self-test did not detect both registration formats\n' >&2
+  exit 2
+fi
+
 expected_tools="$(mktemp "${TMPDIR:-/tmp}/motes-tools-expected.XXXXXX")"
 actual_tools="$(mktemp "${TMPDIR:-/tmp}/motes-tools-actual.XXXXXX")"
 printf '%s\n' \
-  list_shared_notes \
-  read_note \
+  add_task \
   append_text \
   insert_text \
-  replace_lines \
-  list_tasks \
-  add_task \
-  rename_task \
-  set_task_state \
-  remove_task \
   list_agent_activity \
+  list_shared_notes \
+  list_tasks \
+  read_note \
+  remove_task \
+  rename_task \
+  replace_lines \
+  set_task_state \
   undo_agent_change >"$expected_tools"
-awk '
-  /^[[:space:]]+tool\($/ {
-    if (getline > 0 && match($0, /"[^"]+"/)) {
-      print substr($0, RSTART + 1, RLENGTH - 2)
-    }
-  }
-' "$tool_registry" >"$actual_tools"
+extract_tool_names "$tool_registry" | LC_ALL=C sort >"$actual_tools"
 if ! diff -u "$expected_tools" "$actual_tools"; then
   printf 'error: MCP tool registry differs from the approved twelve\n' >&2
   exit 1
@@ -127,23 +149,41 @@ fail_matches \
   '\b(List|Get|Subscribe)(Resources|ResourceTemplates|Prompts|Roots|Completions)\b|\b(CreateMessage|Elicit)\b' \
   "$mcp_server"
 
-# stdout is the MCP protocol channel. MCP runtime files and the `.mcp` command
-# branch must not write production diagnostics or prose to it.
+# stdout is the MCP protocol channel. Only the reviewed non-MCP CLI branches in
+# the entrypoint may write to it; every other helper Swift source is forbidden.
+printf '%s\n' 'print("dangerous helper output")' >"$stdout_probe"
+if ! rg -n "$stdout_pattern" "$stdout_probe" >/dev/null; then
+  printf 'error: helper stdout self-test did not detect a print call\n' >&2
+  exit 2
+fi
+helper_without_cli=()
+while IFS= read -r file; do
+  if [[ "$file" != "$cli_entrypoint" ]]; then
+    helper_without_cli+=("$file")
+  fi
+done < <(find "$helper_root" -name '*.swift' -type f | sort)
 fail_matches \
-  'MCP runtime writes non-protocol output to stdout' \
-  'FileHandle\.standardOutput|\.standardOutput|(^|[^A-Za-z])print[[:space:]]*\(' \
-  "$mcp_server" "$tool_registry" \
-  "$helper_root/AgentIPCClient.swift" "$helper_root/BridgeCredentialStore.swift"
-mcp_branch="$(
-  awk '
-    /case \.mcp\(let profileID\):/ { inside = 1 }
-    inside && /case \.workspace\(/ { exit }
-    inside { print }
-  ' "$helper_root/MotesAgentBridge.swift"
+  'MotesAgentBridge Swift source outside the audited CLI entrypoint writes to stdout' \
+  "$stdout_pattern" \
+  "${helper_without_cli[@]}"
+cli_stdout_branches="$(
+  perl -ne '
+    if (/case \.(help|configure|disconnect|mcp|workspace)(?:\(|:)/) {
+      $branch = $1;
+    }
+    if (
+      /FileHandle\.standardOutput|\.standardOutput|\bSTDOUT_FILENO\b|\bstdout\b/
+      || /(?:^|[^A-Za-z])print\s*\(/
+      || /(?:Darwin\.)?write\s*\(\s*1\s*,/
+    ) {
+      print(($branch // "outside"), "\n");
+    }
+  ' "$cli_entrypoint"
 )"
-if rg -n '\.standardOutput|(^|[^A-Za-z])print[[:space:]]*\(' \
-  <<<"$mcp_branch" >/dev/null; then
-  printf 'error: MCP command branch writes production output to stdout\n' >&2
+if [[ "$cli_stdout_branches" != $'help\nconfigure\ndisconnect\nworkspace' ]]; then
+  printf \
+    'error: CLI stdout writes differ from the four audited branches\n%s\n' \
+    "$cli_stdout_branches" >&2
   exit 1
 fi
 

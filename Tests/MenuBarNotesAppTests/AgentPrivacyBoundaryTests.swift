@@ -1,4 +1,5 @@
 import Foundation
+import MenuBarNotesAgentProtocol
 import MenuBarNotesCore
 import Testing
 
@@ -10,8 +11,58 @@ struct AgentPrivacyBoundaryTests {
   func privateUnknownTrashAndHistoryIDsShareTheSameSafeFailure() async throws {
     let shared = Note(title: "Shared", body: "Visible", agentAccess: true)
     let privateNote = Note(title: "Private", body: "Secret", agentAccess: false)
+    let trashNote = Note(title: "Trash", body: "Deleted", agentAccess: true)
+    let historyRecord = DictationHistoryRecord(
+      id: UUID(),
+      mode: .focused,
+      engine: .standard,
+      startedAt: Date().addingTimeInterval(-1),
+      completedAt: Date(),
+      rawTranscript: "Private dictation",
+      cleanupOutcome: .usedRaw,
+      insertionOutcome: .unsaved
+    )
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "AgentPrivacyBoundaryTests-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let localStore = LocalStore(rootURL: root)
+    _ = try await localStore.save(
+      workspace: Workspace(
+        notes: [shared, privateNote],
+        selectedNoteID: shared.id
+      ),
+      preferences: AppPreferences(),
+      trashedNotes: [trashNote]
+    )
+    let persistedTrashID = try #require(
+      await localStore.loadTrash().first { $0.id == trashNote.id }?.id
+    )
+    let historyStore = DictationHistoryStore(rootURL: root)
+    try await historyStore.save(historyRecord)
+    let persistedHistoryID = try #require(
+      await historyStore.list().first { $0.id == historyRecord.id }?.id
+    )
+
     let fixture = AgentPrivacyFixture(notes: [shared, privateNote])
-    let excludedIDs = [privateNote.id, UUID(), UUID(), UUID()]
+    let server = AgentIPCServer(
+      endpointURL: root.appendingPathComponent("privacy.sock"),
+      execute: { profileID, credential, command in
+        try await fixture.service.execute(
+          profileID: profileID,
+          credential: credential,
+          command: command
+        )
+      }
+    )
+    let requestID = UUID()
+    let excludedIDs = [
+      privateNote.id,
+      UUID(),
+      persistedTrashID,
+      persistedHistoryID,
+    ]
     var failures: [Data] = []
 
     let listed = try await fixture.execute(.listSharedNotes)
@@ -29,24 +80,21 @@ struct AgentPrivacyBoundaryTests {
     )
 
     for noteID in excludedIDs {
-      do {
-        _ = try await fixture.execute(
-          .readNote(request: .init(noteID: noteID))
+      let response = await server.response(
+        to: AgentWireRequest(
+          requestID: requestID,
+          profileID: fixture.profile.id,
+          credentialBase64: fixture.credential.base64EncodedString(),
+          command: .readNote(request: .init(noteID: noteID))
         )
-        Issue.record("Expected note_not_found")
-      } catch let error as AgentWorkspaceError {
-        failures.append(try JSONEncoder().encode(error))
-      }
+      )
+      #expect(response.error?.code == .noteNotFound)
+      #expect(response.result == nil)
+      failures.append(try AgentWireFraming.encode(response))
     }
 
     #expect(failures.count == excludedIDs.count)
     #expect(Set(failures).count == 1)
-    #expect(
-      try JSONDecoder().decode(
-        AgentWorkspaceError.self,
-        from: failures[0]
-      ).code == .noteNotFound
-    )
   }
 
   @Test @MainActor
@@ -96,17 +144,74 @@ struct AgentPrivacyBoundaryTests {
   }
 
   @Test
-  func closedWireCommandRejectsSettingsSharingDeletionAndPathPayloads() {
-    let forbiddenCommands = [
-      "readPath", "deleteNote", "setNoteSharing", "updateSettings",
-      "listTrash", "readDictationHistory",
+  func closedWireCommandHasAnExhaustiveReviewedAllowlist() throws {
+    let noteID = UUID()
+    let operationID = UUID()
+    let context = AgentWriteContext(
+      noteID: noteID,
+      expectedRevision: 4,
+      operationID: operationID
+    )
+    let commands: [AgentWorkspaceCommand] = [
+      .listSharedNotes,
+      .readNote(request: .init(noteID: noteID, startLine: 2, maxLines: 5)),
+      .appendText(request: .init(context: context, text: "Append")),
+      .insertText(request: .init(context: context, beforeLine: 2, text: "Insert")),
+      .replaceLines(
+        request: .init(
+          context: context,
+          startLine: 2,
+          endLine: 3,
+          expectedTextSHA256: String(repeating: "0", count: 64),
+          text: "Replace"
+        )
+      ),
+      .listTasks(request: .init(noteID: noteID)),
+      .addTask(request: .init(context: context, afterTaskHandle: "task-1", text: "Add")),
+      .renameTask(request: .init(context: context, taskHandle: "task-1", text: "Rename")),
+      .setTaskState(request: .init(context: context, taskHandle: "task-1", completed: true)),
+      .removeTask(request: .init(context: context, taskHandle: "task-1")),
+      .listActivity,
+      .undoChange(
+        request: .init(
+          changeID: UUID(),
+          expectedRevision: 5,
+          operationID: operationID
+        )
+      ),
     ]
 
-    for command in forbiddenCommands {
-      let payload = Data(#"{"\#(command)":{"request":{"path":"/tmp/private"}}}"#.utf8)
-      #expect(throws: (any Error).self) {
-        try JSONDecoder().decode(AgentWorkspaceCommand.self, from: payload)
-      }
+    #expect(
+      Set(commands.map(reviewedWireCommandName))
+        == Set([
+          "addTask",
+          "appendText",
+          "insertText",
+          "listActivity",
+          "listSharedNotes",
+          "listTasks",
+          "readNote",
+          "removeTask",
+          "renameTask",
+          "replaceLines",
+          "setTaskState",
+          "undoChange",
+        ])
+    )
+    for command in commands {
+      let encoded = try JSONEncoder().encode(command)
+      #expect(
+        try JSONDecoder().decode(
+          AgentWorkspaceCommand.self,
+          from: encoded
+        ) == command
+      )
+    }
+
+    let unknown = Data(
+      #"{"deleteNote":{"request":{"noteID":"00000000-0000-0000-0000-000000000000"}}}"#.utf8)
+    #expect(throws: (any Error).self) {
+      try JSONDecoder().decode(AgentWorkspaceCommand.self, from: unknown)
     }
   }
 
@@ -157,6 +262,7 @@ struct AgentPrivacyBoundaryTests {
 
 @MainActor
 private final class AgentPrivacyFixture {
+  let credential = Data(repeating: 7, count: 32)
   let profile = AgentIntegrationProfile(
     id: UUID(),
     displayName: "Privacy test",
@@ -184,9 +290,40 @@ private final class AgentPrivacyFixture {
   ) async throws -> AgentWorkspaceResponse {
     try await service.execute(
       profileID: profile.id,
-      credential: Data(repeating: 7, count: 32),
+      credential: credential,
       command: command
     )
+  }
+}
+
+private func reviewedWireCommandName(
+  _ command: AgentWorkspaceCommand
+) -> String {
+  switch command {
+  case .listSharedNotes:
+    "listSharedNotes"
+  case .readNote:
+    "readNote"
+  case .appendText:
+    "appendText"
+  case .insertText:
+    "insertText"
+  case .replaceLines:
+    "replaceLines"
+  case .listTasks:
+    "listTasks"
+  case .addTask:
+    "addTask"
+  case .renameTask:
+    "renameTask"
+  case .setTaskState:
+    "setTaskState"
+  case .removeTask:
+    "removeTask"
+  case .listActivity:
+    "listActivity"
+  case .undoChange:
+    "undoChange"
   }
 }
 
@@ -256,10 +393,11 @@ private final class PrivacyActivityStore:
     lastVisibleNoteIDs = visibleNoteIDs
     return records.filter {
       visibleNoteIDs.contains($0.noteID)
-        && $0.actor == .integration(
-          profileID: profileID ?? UUID(),
-          displayName: "Privacy test"
-        )
+        && $0.actor
+          == .integration(
+            profileID: profileID ?? UUID(),
+            displayName: "Privacy test"
+          )
     }
   }
 
