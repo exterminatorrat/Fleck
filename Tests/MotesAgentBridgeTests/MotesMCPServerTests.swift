@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import MCP
 import MenuBarNotesCore
 import Testing
@@ -48,5 +49,65 @@ struct MotesMCPServerTests {
 
     #expect(listed.tools.map(\.name) == MotesMCPToolRegistry.tools.map(\.name))
     #expect(called.isError == false)
+  }
+
+  @Test func canceledSingleAndBatchRequestsDoNotBlockEOFDrain() async {
+    let transport = MotesStdioTransport(transport: FailingSendTransport())
+    let messages = [
+      (
+        #"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"slow"}}"#,
+        #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}"#
+      ),
+      (
+        #"[{"jsonrpc":"2.0","id":"batch","method":"tools/call","params":{"name":"slow"}}]"#,
+        #"[{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"batch"}}]"#
+      ),
+    ]
+
+    for (request, cancellation) in messages {
+      await transport.recordRequests(in: Data(request.utf8))
+      #expect(await transport.pendingRequestCount == 1)
+      await transport.recordRequests(in: Data(cancellation.utf8))
+      #expect(await transport.pendingRequestCount == 0)
+      await transport.waitUntilDrained()
+    }
+  }
+
+  @Test func failedResponseSendStillResolvesPendingRequest() async {
+    let transport = MotesStdioTransport(transport: FailingSendTransport())
+    await transport.recordRequests(
+      in: Data(
+        #"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"slow"}}"#
+          .utf8
+      )
+    )
+
+    await #expect(throws: TestTransportError.self) {
+      try await transport.send(
+        Data(#"{"jsonrpc":"2.0","id":9,"result":{}}"#.utf8)
+      )
+    }
+    #expect(await transport.pendingRequestCount == 0)
+    await transport.waitUntilDrained()
+  }
+}
+
+private enum TestTransportError: Error {
+  case sendFailed
+}
+
+private actor FailingSendTransport: Transport {
+  nonisolated let logger = Logger(label: "motes.mcp.test")
+
+  func connect() {}
+
+  func disconnect() {}
+
+  func send(_ data: Data) throws {
+    throw TestTransportError.sendFailed
+  }
+
+  func receive() -> AsyncThrowingStream<Data, Error> {
+    AsyncThrowingStream { $0.finish() }
   }
 }

@@ -62,10 +62,10 @@
     }
   }
 
-  private actor MotesStdioTransport: Transport {
+  actor MotesStdioTransport: Transport {
     nonisolated let logger: Logger
 
-    private let transport: StdioTransport
+    private let transport: any Transport
     private var pendingRequestIDs: Set<ID> = []
     private var drainContinuation: CheckedContinuation<Void, Never>?
     private var drainWasAborted = false
@@ -76,6 +76,13 @@
       self.logger = transport.logger
     }
 
+    init(transport: any Transport) {
+      self.transport = transport
+      self.logger = Logger(label: "mcp.transport.motes")
+    }
+
+    var pendingRequestCount: Int { pendingRequestIDs.count }
+
     func connect() async throws {
       try await transport.connect()
     }
@@ -85,11 +92,12 @@
     }
 
     func send(_ data: Data) async throws {
-      try await transport.send(data)
-      for id in Self.messageIDs(in: data, requiringMethod: false) {
-        pendingRequestIDs.remove(id)
+      let responseIDs = Self.messages(in: data).compactMap(\.id)
+      defer {
+        pendingRequestIDs.subtract(responseIDs)
+        resumeDrainIfReady()
       }
-      resumeDrainIfReady()
+      try await transport.send(data)
     }
 
     func receive() -> AsyncThrowingStream<Data, Error> {
@@ -121,10 +129,17 @@
       resumeDrainIfReady()
     }
 
-    private func recordRequests(in data: Data) {
-      pendingRequestIDs.formUnion(
-        Self.messageIDs(in: data, requiringMethod: true)
-      )
+    func recordRequests(in data: Data) {
+      for message in Self.messages(in: data) {
+        if message.method == CancelledNotification.name,
+          let requestID = message.params?.requestId
+        {
+          pendingRequestIDs.remove(requestID)
+        } else if message.method != nil, let requestID = message.id {
+          pendingRequestIDs.insert(requestID)
+        }
+      }
+      resumeDrainIfReady()
     }
 
     private func resumeDrainIfReady() {
@@ -133,24 +148,22 @@
       drainContinuation = nil
     }
 
-    private nonisolated static func messageIDs(
-      in data: Data,
-      requiringMethod: Bool
-    ) -> [ID] {
+    private nonisolated static func messages(in data: Data) -> [WireMessage] {
       let decoder = JSONDecoder()
-      let messages =
+      return
         (try? decoder.decode([WireMessage].self, from: data))
         ?? (try? decoder.decode(WireMessage.self, from: data)).map { [$0] }
         ?? []
-      return messages.compactMap { message in
-        guard !requiringMethod || message.method != nil else { return nil }
-        return message.id
-      }
     }
   }
 
   private struct WireMessage: Decodable {
     let id: ID?
     let method: String?
+    let params: Parameters?
+
+    struct Parameters: Decodable {
+      let requestId: ID?
+    }
   }
 #endif
