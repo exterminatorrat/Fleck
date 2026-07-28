@@ -785,6 +785,7 @@ protocol AgentWorkspaceStateAccess: AnyObject {
   var workspace: Workspace { get }
   var persistenceGeneration: UInt64 { get }
   var preferences: AppPreferences { get }
+  var isAgentWorkspaceAvailable: Bool { get }
   func flushPendingPersistenceForAgent() async throws
   func commitAgentWorkspace(
     _ workspace: Workspace,
@@ -831,6 +832,7 @@ Cover:
 - Later ambiguous edits return `unsafe_undo`.
 - Human pending edits are part of the revision checked by an agent command.
 - Every rejection throws the existing Codable `AgentWorkspaceError`; successful return values remain `AgentWorkspaceResponse`.
+- A failed initial root/Recovery load leaves `isAgentWorkspaceAvailable == false`; every command, including discovery, throws `motes_unavailable` before observing the default in-memory workspace. A fresh no-manifest workspace is a successful validated load.
 
 - [ ] **Step 3: Run RED**
 
@@ -901,7 +903,7 @@ On failure before step 9, abort preparation when one exists and publish nothing.
 
 - [ ] **Step 7: Integrate AppState**
 
-Make `AppState` conform to `AgentWorkspaceStateAccess`, use the Task 1 readiness/generation APIs, and inject the shared synchronous snapshot writer used by `commitAgentWorkspace`. Every existing debounced, immediate, restore, and Trash-related save must pass the generation captured with its workspace snapshot and treat `.superseded` as a safe no-op rather than an error.
+Make `AppState` conform to `AgentWorkspaceStateAccess`, use the Task 1 readiness/generation APIs, and inject the shared synchronous snapshot writer used by `commitAgentWorkspace`. Track successful initial snapshot availability separately from `hasFinishedInitialLoad`: no-manifest initialization and a validated root/Recovery load are available; a thrown load remains unavailable for the process lifetime. Every existing debounced, immediate, restore, and Trash-related save must pass the generation captured with its workspace snapshot and treat `.superseded` as a safe no-op rather than an error.
 
 Add:
 
@@ -943,6 +945,7 @@ git commit -m "feat: apply agent changes through Motes"
 - Modify: `Package.swift`
 - Create: `Sources/MenuBarNotesAgentProtocol/AgentWireProtocol.swift`
 - Create: `Sources/MenuBarNotesAgentProtocol/AgentWireFraming.swift`
+- Create: `Sources/MenuBarNotesAgentProtocol/AgentBridgeEndpoint.swift`
 - Create: `Sources/MenuBarNotesApp/AgentIPCServer.swift`
 - Modify: `Sources/MenuBarNotesApp/MenuBarNotesApp.swift`
 - Create: `Tests/MenuBarNotesAgentProtocolTests/AgentWireProtocolTests.swift`
@@ -954,16 +957,45 @@ git commit -m "feat: apply agent changes through Motes"
 
 ```swift
 public struct AgentWireRequest: Codable, Equatable, Sendable {
+  public static let currentProtocolVersion = 1
+  public let protocolVersion: Int
   public let requestID: UUID
   public let profileID: UUID
   public let credentialBase64: String
   public let command: AgentWorkspaceCommand
+
+  public init(
+    protocolVersion: Int = currentProtocolVersion,
+    requestID: UUID,
+    profileID: UUID,
+    credentialBase64: String,
+    command: AgentWorkspaceCommand
+  )
 }
 
 public struct AgentWireResponse: Codable, Equatable, Sendable {
+  public let protocolVersion: Int
   public let requestID: UUID
   public let result: AgentWorkspaceResponse?
   public let error: AgentWorkspaceError?
+
+  public static func success(
+    requestID: UUID,
+    result: AgentWorkspaceResponse
+  ) -> AgentWireResponse
+  public static func failure(
+    requestID: UUID,
+    error: AgentWorkspaceError
+  ) -> AgentWireResponse
+}
+
+public enum AgentBridgeEndpoint {
+  public static func applicationSupportURL(
+    fileManager: FileManager = .default
+  ) -> URL
+  public static func socketURL(
+    fileManager: FileManager = .default
+  ) -> URL
 }
 
 public enum AgentWireFraming {
@@ -983,7 +1015,7 @@ Add:
 
 The target depends on `MenuBarNotesCore`; the app target depends on the new protocol target. Add a protocol test target.
 
-Test fragmented frames, coalesced frames, zero length, a frame above 1 MiB, malformed JSON, and request/response correlation. Add a server regression proving an oversized encoded success becomes a correlated, structured `response_too_large` error frame that itself remains below 1 MiB.
+Test fragmented frames, coalesced frames, zero length, a frame above 1 MiB, malformed JSON, request/response correlation, old/new/unsupported protocol versions, and the shared exact `Application Support/MenuBarNotes/AgentBridge/motes.sock` endpoint. `AgentWireResponse` decoding must reject envelopes containing both result and error or neither. Add a server regression proving an oversized encoded success becomes a correlated, structured `response_too_large` error frame that itself remains below 1 MiB.
 
 - [ ] **Step 2: Run RED**
 
@@ -996,6 +1028,8 @@ swift test --filter AgentIPCServer
 
 Prefix each JSON payload with an unsigned four-byte big-endian length. Reject zero-length and lengths above 1,048,576 before allocating the payload buffer. Encode dates as ISO-8601.
 
+Both request and response envelopes carry `protocolVersion == 1`. Expose the public request initializer and response success/failure factories above so the helper target never relies on internal memberwise initializers and cannot construct an invalid response. Reject unsupported request versions with a correlated `invalid_payload` recovery action instructing the user to update Motes and the helper. Use custom response decoding to enforce exactly one of `result` or `error`.
+
 - [ ] **Step 4: Implement the server**
 
 Create the socket at:
@@ -1007,19 +1041,26 @@ Application Support/MenuBarNotes/AgentBridge/motes.sock
 Requirements:
 
 - Parent directory mode `0700`.
+- Before creating or changing the parent, use `lstat` to reject a symlink, non-directory, or directory not owned by the current effective user.
 - Remove an existing path only when `lstat` proves it is a socket owned by the current user.
+- Reject a socket path whose UTF-8 representation plus NUL exceeds macOS `sockaddr_un.sun_path` (104 bytes).
 - Socket mode `0600`.
 - Use `getpeereid` to reject a peer UID different from `geteuid()`.
-- Bound accepted clients and close idle connections.
+- Use explicit injectable limits: at most 8 accepted clients and a 10-second idle-read timeout. Reject excess clients immediately.
 - Decode one request at a time per connection.
 - Decode Base64 credentials strictly, then pass the profile ID and credential to `AgentCommandService`, which authenticates inside its FIFO immediately before executing the command. Catch `AgentWorkspaceError` from the service and encode it directly in the correlated error envelope; map malformed Base64 to `invalid_payload` and unexpected errors to a content-free `internal_save_failure`.
+- Require the credential string to round-trip through canonical Base64 and decode to exactly 32 bytes before invoking the service.
 - Measure the fully encoded response envelope before writing. Replace an oversized success with a minimal correlated `response_too_large` failure; never drop the connection merely because a legitimate result was too large.
 - Never include internal paths or credentials in errors.
-- Remove the socket on clean shutdown.
+- Set `SO_NOSIGPIPE` on accepted sockets so a disconnected writer cannot terminate Motes.
+- Bound each connection buffer to one framed request and reject an oversized declared length immediately after the fourth byte. Apply the idle timeout only while waiting for request bytes, never while an authorized command is executing.
+- Record the bound socket device/inode and remove it on shutdown only when `lstat` still matches. Listener/client descriptor closure and owned-socket unlink are synchronous and thread-safe; `stop()` is safe before start and when repeated.
 
 - [ ] **Step 5: Start one server from the app root**
 
-Construct `AgentIPCServer` once beside the final post-dictation runtime. Await Task 1's `AppState.waitUntilInitialLoad()` before starting it; stop it on runtime deinitialization or application termination. Starting a second Motes window must not create another listener.
+Construct `AgentIPCServer` once beside the final post-dictation runtime. Await Task 1's `AppState.waitUntilInitialLoad()` before starting it; the Task 5 service availability gate still rejects every command after a failed load. Stop the server synchronously on runtime deinitialization or application termination. Starting a second Motes window must not create another listener.
+
+Inject peer-credential lookup, active-client limit, idle clock/timeout, and low-level descriptor hooks in tests. Cover matching UID, mismatched UID, `getpeereid` failure, saturation, idle eviction, stop-before-start, start-twice, termination-before-readiness, multiple-window construction, raw-buffer overflow, and a disconnected response writer. Rejected peers and malformed/noncanonical/wrong-length credentials must never invoke authorization. Assert credentials, internal paths, and unexpected error text never appear in responses.
 
 - [ ] **Step 6: Verify**
 
@@ -1027,6 +1068,16 @@ Construct `AgentIPCServer` once beside the final post-dictation runtime. Await T
 swift test --filter AgentWireProtocol
 swift test --filter AgentIPCServer
 swift test
+swift test --filter mcpDependencyAndNoticeArePinned
+Scripts/test-enhanced-candidate-pin.sh
+Scripts/test-enhanced-candidate-lock-preservation.sh
+candidate_scratch="$(mktemp -d "${TMPDIR:-/tmp}/motes-task6-candidate.XXXXXX")"
+rmdir "$candidate_scratch"
+Scripts/resolve-enhanced-candidate.sh "$candidate_scratch" \
+  /bin/sh -c 'swift build --scratch-path "$1" --build-tests && swift test --scratch-path "$1"' \
+  task6-candidate "$candidate_scratch"
+rm -rf "$candidate_scratch"
+Scripts/check-candidate-release-rejected.sh
 git diff --check
 ```
 
@@ -1036,6 +1087,7 @@ git diff --check
 git add Package.swift \
   Sources/MenuBarNotesAgentProtocol/AgentWireProtocol.swift \
   Sources/MenuBarNotesAgentProtocol/AgentWireFraming.swift \
+  Sources/MenuBarNotesAgentProtocol/AgentBridgeEndpoint.swift \
   Sources/MenuBarNotesApp/AgentIPCServer.swift \
   Sources/MenuBarNotesApp/MenuBarNotesApp.swift \
   Tests/MenuBarNotesAgentProtocolTests/AgentWireProtocolTests.swift \
@@ -1095,7 +1147,7 @@ Use injected launch and socket closures to cover:
 - Existing app connects immediately.
 - Missing socket launches bundle ID `com.harryjin.motes` without activation.
 - Client waits at most 10 seconds for readiness.
-- Partial frames and response request-ID mismatch fail.
+- Partial frames, response request-ID mismatch, and response protocol-version mismatch fail without displaying a result.
 - A timed-out write prints a retry-safe message retaining the operation ID.
 
 - [ ] **Step 4: Implement credential storage**
@@ -1113,7 +1165,7 @@ Normal commands load the credential by profile ID. `disconnect --profile` delete
 
 Use `NSWorkspace.shared.urlForApplication(withBundleIdentifier:)` and `openApplication(at:configuration:)` with `.withoutActivation`. Never invoke `open` through a shell.
 
-Use the exact socket and framing rules from Task 6. CLI output defaults to concise human text; `--json` encodes `AgentWorkspaceResponse`.
+Use `AgentBridgeEndpoint` and the exact socket/framing rules from Task 6. Require both the correlated request ID and `AgentWireRequest.currentProtocolVersion` on every response before exposing its result or error. CLI output defaults to concise human text; `--json` encodes `AgentWorkspaceResponse`.
 
 - [ ] **Step 6: Verify**
 
