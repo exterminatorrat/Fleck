@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly scratch="$(mktemp -d "${TMPDIR:-/tmp}/motes-candidate-release.XXXXXX")"
-readonly output="$(mktemp "${TMPDIR:-/tmp}/motes-candidate-release-output.XXXXXX")"
+readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly temp_root="$(mktemp -d "${TMPDIR:-/tmp}/motes-candidate-release.XXXXXX")"
+readonly scratch="$temp_root/build"
+readonly output="$temp_root/output"
 cleanup() {
-  /bin/rm -rf -- "$scratch"
-  /bin/rm -f -- "$output"
+  /bin/rm -rf -- "$temp_root"
 }
 trap cleanup EXIT
 
 set +e
-MOTES_ENHANCED_CANDIDATE=1 swift build -c release \
+"$script_dir/resolve-enhanced-candidate.sh" "$scratch" \
+  swift build -c release --disable-automatic-resolution \
   --scratch-path "$scratch" >"$output" 2>&1
 readonly build_exit=$?
 set -e

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+
 if [[ -n "${MOTES_ENHANCED_CANDIDATE+x}" ]]; then
   printf '%s\n' \
     'error: unset MOTES_ENHANCED_CANDIDATE before validating an ordinary release' \
@@ -25,21 +28,26 @@ if ! xcode-select -p >/dev/null 2>&1; then
   exit 2
 fi
 
+cd "$repo_root"
+
 printf '%s\n' '--- Host ---'
 sw_vers
 xcodebuild -version
 swift --version
 
 printf '%s\n' '--- Tests ---'
-swift test
+swift test --disable-automatic-resolution
 
 printf '%s\n' '--- Release build ---'
 swift package clean
-swift build -c release
-Scripts/check-release-size.sh .build/release/Motes
+swift build -c release --disable-automatic-resolution
+"$script_dir/check-release-size.sh" .build/release/Motes
+
+printf '%s\n' '--- Candidate lock preservation ---'
+"$script_dir/test-enhanced-candidate-lock-preservation.sh"
 
 printf '%s\n' '--- Candidate release rejection ---'
-Scripts/check-candidate-release-rejected.sh
+"$script_dir/check-candidate-release-rejected.sh"
 
 printf '\nValidation build passed. Launch manually with:\n  %s\n' \
   "$(pwd)/.build/release/Motes"
