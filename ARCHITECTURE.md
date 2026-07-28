@@ -57,10 +57,15 @@ These are release gates to measure, not assumptions guaranteed by choosing a par
 
 ```text
 Sources/
-├── MenuBarNotesCore/       # Portable models, text transforms, and local persistence
-└── MenuBarNotesApp/        # macOS menu-bar scenes, state coordination, and views
+├── MenuBarNotesCore/          # Models, mutations, persistence, and activity journal
+├── MenuBarNotesAgentProtocol/ # Versioned typed IPC messages and framing
+├── MenuBarNotesApp/           # macOS scenes, state coordination, IPC service, and views
+└── MotesAgentBridge/          # Separate MCP/CLI helper and Unix-socket client
 Tests/
-└── MenuBarNotesCoreTests/  # Fast tests that do not require a macOS UI session
+├── MenuBarNotesCoreTests/
+├── MenuBarNotesAgentProtocolTests/
+├── MenuBarNotesAppTests/
+└── MotesAgentBridgeTests/
 ```
 
 `MenuBarNotesCore` deliberately does not import AppKit or SwiftUI. Keeping storage and state transformations portable makes them inexpensive to test and prevents UI choices from becoming persistence requirements.
@@ -76,6 +81,46 @@ Tests/
 - `AppState` is main-actor isolated, presents state to SwiftUI, and schedules debounced saves.
 
 The initial format favors plain Markdown note bodies because it is small, readable, portable, and resilient. Font family, size, accent, and glass appearance are app preferences rather than markup embedded into every character. If mixed rich-text formatting becomes a hard requirement, it should be added through an explicitly versioned sidecar format while keeping Markdown export available.
+
+## Agent workspace trust and data flow
+
+```text
+local MCP client or CLI
+  -> motes helper (stdio or CLI output; credential in Keychain)
+  -> private AF_UNIX socket (same-user peer check + profile authorization)
+  -> AgentCommandService
+  -> explicit-share filter -> typed mutation -> atomic LocalStore commit
+  -> 30-day activity record and retry tombstone
+```
+
+- A note is private until the user enables `agentAccess` for that note. Listing,
+  reads, task operations, activity, writes, and Undo all derive visibility from
+  the current in-memory workspace. Unknown UUIDs and private UUIDs return the
+  same `note_not_found` error.
+- The helper never opens note `.md`/`.rtf` files, `workspace.json`, Trash, or
+  Dictation History. It cannot receive settings, share, note-delete, path, or
+  shell commands because those cases do not exist in the typed protocol.
+- `MotesAgentBridge` is a separately packaged executable. Its only AppKit use
+  is the non-activating Motes launch adapter. IPC uses an `AF_UNIX` socket below
+  the user's Motes Application Support directory, with a private parent,
+  private socket mode, and a matching peer UID. There is no HTTP/TCP listener,
+  cloud bridge, or internet-facing port.
+- Each integration profile has an independent random credential. Motes stores
+  only its verifier in the data-protection Keychain; the helper stores the
+  credential in its own Keychain item. Profile JSON, setup snippets, command
+  arguments, normal errors, and MCP stdout do not contain it.
+- Writes use optimistic revisions and caller-supplied operation UUIDs. A
+  revision conflict rejects the mutation. A repeated operation UUID in the same
+  actor scope returns its prior receipt instead of applying the change twice;
+  retry tombstones expire after 30 days.
+- The activity journal retains exact before/after patches for 30 days. Undo
+  requires the authorized profile (or local user), current note visibility,
+  expected revision, and an unambiguous inverse patch. Clearing visible
+  activity does not clear retry tombstones.
+- This is a cooperative local-client boundary. A malicious process already
+  executing as the same macOS user may have equivalent access to local files,
+  Keychain prompts, input, or accessibility APIs and is outside this bridge's
+  threat model.
 
 ## Clean Dictation data flow and privacy boundary
 
@@ -145,12 +190,19 @@ Glass opacity is stored now, but fine-grained material rendering and contrast ad
    a release-disabled candidate. Real-device quality, device matrices,
    accessibility, resource, legal, artifact, signing/notarization, and store
    gates remain pending.
+8. **Agent workspace (implemented, manual compatibility pending):** explicit
+   per-note sharing, typed mutations, local same-user IPC, CLI/MCP helper,
+   revision/idempotency contracts, 30-day activity, safe Undo, packaging, and
+   automated privacy audits are implemented. Manual Codex, Claude Code, Kimi,
+   generic CLI, accessibility, lifecycle, and signed-distribution checks remain.
 
 ## Explicit non-goals for the lightweight base app
 
 - Electron or an embedded browser runtime.
 - Accounts, analytics, advertising, or mandatory network access.
 - A database server or background synchronization daemon.
+- Agent access to private notes, Trash, Dictation History, settings, sharing,
+  note deletion, arbitrary file paths, a shell, or direct storage edits.
 - Bundled font collections.
 - Bundled speech-model weights, cloud speech fallback, cloud cleanup/routing,
   or a mandatory AI runtime for ordinary notes.

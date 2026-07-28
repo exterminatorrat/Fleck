@@ -48,7 +48,110 @@ The final command stays attached to Terminal. Look for the note icon in the macO
 6. Click the note icon in the macOS menu bar.
 7. Use Xcode's Stop button when testing is finished.
 
-The project is currently a Swift Package executable, not a signed distributable `.app`. Launch-at-login must be validated later from the packaged and signed application; it may report an error when launched directly through SwiftPM or Xcode's package runner.
+The source project is a Swift Package. `Scripts/build-motes-app.sh` assembles an
+unsigned native `.app`, but no signed distributable exists. Launch-at-login must
+be validated later from the packaged and signed application; it may report an
+error when launched directly through SwiftPM or Xcode's package runner.
+
+## Agent workspace release gates
+
+### Automated gate
+
+Run from the repository root with `MOTES_ENHANCED_CANDIDATE` unset:
+
+```sh
+swift test
+swift build
+swift build -c release
+Scripts/audit-agent-boundary.sh
+Scripts/validate-macos.sh
+git diff --check
+```
+
+CI also makes the product split explicit:
+
+```sh
+swift test
+swift build -c release --product Motes
+swift build -c release --product motes-agent
+Scripts/audit-agent-boundary.sh
+Scripts/check-release-size.sh .build/release/Motes
+```
+
+The test suite probes private, unknown, Trash, and Dictation History UUIDs;
+unshared activity; the closed command model; secret-free profile persistence
+and setup output; same-user IPC; revisions, retries, transaction recovery, and
+Undo; the exact twelve MCP tools; and tools-only MCP capabilities.
+`Scripts/audit-agent-boundary.sh` separately rejects helper AppKit outside the
+non-activating launch adapter, HTTP/TCP/listener APIs, direct Motes storage
+paths, an altered MCP tool/handler surface, MCP-mode stdout prose, and
+credential-bearing snippets.
+
+`Scripts/validate-macos.sh` builds the native unsigned `Motes.app`, verifies the
+bundle identifier and separately packaged helper, runs a bounded native launch
+smoke test, and runs the complete macOS test suite, including Keychain API
+contract tests. It does not prove a live Keychain round trip, third-party client
+compatibility, physical-device accessibility, signing, notarization, or
+distribution.
+
+### Manual client, lifecycle, and accessibility gate
+
+- **Status:** PENDING — no Codex, Claude Code, Kimi, generic CLI, live Keychain,
+  physical-device accessibility, or distribution result is claimed by the
+  automated run.
+- **Required setup:** Build with `Scripts/build-motes-app.sh`; launch
+  `.build/Motes.app/Contents/MacOS/Motes`; create one temporary shared note and
+  four separate temporary profiles in **Settings → Agents**. Record the commit,
+  macOS/Xcode/Swift versions, client versions, profile names, and timestamps.
+- **Codex:** Connect the Codex profile with:
+
+  ```sh
+  codex mcp add motes -- "/absolute/path/to/motes" mcp --profile PROFILE_UUID
+  ```
+
+- **Claude Code:** Connect its separate profile with:
+
+  ```sh
+  claude mcp add --scope user motes -- "/absolute/path/to/motes" mcp \
+    --profile PROFILE_UUID
+  ```
+
+- **Kimi:** Add the `command` and `["mcp", "--profile", "PROFILE_UUID"]`
+  arguments shown in `README.md` to a temporary Kimi MCP configuration.
+- **Generic CLI:** Use the installed helper directly with `--json`, beginning
+  with:
+
+  ```sh
+  motes notes list --profile PROFILE_UUID --json
+  motes note read NOTE_UUID --profile PROFILE_UUID --json
+  ```
+
+For each client, record evidence for list, read, append, add task, complete
+task, a stale-revision conflict, retrying an uncertain write with the unchanged
+operation UUID, Agent Activity, and safe Undo. Then:
+
+1. Revoke the profile while idle, then repeat during a request; both must deny
+   subsequent work without exposing credential material.
+2. Turn off **Allow Agent Access** while connected; list, read, activity, and
+   mutation probes must immediately return the same safe absence as an unknown
+   UUID.
+3. Quit Motes and call the helper; Motes must launch without activation and the
+   bounded request must complete or return a safe timeout.
+4. Edit the note locally while a client holds a stale revision; the client
+   write must be rejected without overwriting the local edit.
+5. Relaunch a prepared-transaction fixture after interruption; reconciliation
+   must produce one mutation and one receipt, not a duplicate.
+6. Confirm the temporary credential is created and removed in Keychain through
+   the UI workflow; never copy the credential into the report.
+7. With VoiceOver and Full Keyboard Access, verify the Agent Access toggle and
+   confirmation, shared badge, profile buttons, activity rows, banner, and Undo
+   names/order. Repeat with Reduce Motion.
+8. Repeat with multiple Motes windows, sleep/wake, and a five-minute idle
+   bridge session; record CPU and unexpected stdout/stderr.
+
+Do not use real private notes for this gate. Revoke all temporary profiles,
+unshare/delete the temporary note, remove temporary client configuration, and
+retain only sanitized evidence.
 
 ## Clean Dictation release gates
 
