@@ -622,6 +622,21 @@ import Testing
   #expect(!fixture.runtime.recoveryCommand.isEnabled)
 }
 
+@Test @MainActor func DictationRecoveryCommandDisablesWhileShortcutIsArmed()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: "recoverable")
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let session = try #require(fixture.runtime.coordinator.beginShortcut(editor: nil))
+
+  #expect(!fixture.runtime.recoveryCommand.isEnabled)
+
+  await fixture.runtime.coordinator.cancelShortcut(session)
+  #expect(fixture.runtime.recoveryCommand.isEnabled)
+}
+
 @Test @MainActor func DictationRuntimePreflightsDeniedMicrophoneAndSpeechPermissions()
   async throws
 {

@@ -114,7 +114,7 @@
               Task { await dictationRuntime.performRecoveryAction() }
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
-            .disabled(dictationRuntime.recoveryActionInFlight)
+            .disabled(!dictationRuntime.recoveryCommand.isEnabled)
             .accessibilityLabel(recoveryAction.accessibilityLabel)
           }
           .padding(.horizontal, 10)

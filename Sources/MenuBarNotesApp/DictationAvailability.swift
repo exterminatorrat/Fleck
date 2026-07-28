@@ -70,8 +70,10 @@ struct DictationAvailability: Equatable, Sendable {
   let enhancedAvailable: Bool
   let cleanupAvailable: Bool
   let routing: DictationRoutingAvailability
+  #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+    let enhancedFailureCopy: String?
+  #endif
   let openSystemSettings: [DictationSystemSettingsAction]
-  let enhancedFailureCopy: String?
 
   static func evaluate(
     _ input: Input,
@@ -95,22 +97,36 @@ struct DictationAvailability: Equatable, Sendable {
       settings.append(.init(pane: .speechRecognition))
     }
 
-    return .init(
-      standardAvailable: supportedOS
-        && microphoneAvailable
-        && speechAvailable
-        && input.appleOnDeviceRecognitionSupported,
-      enhancedAvailable: enhancedAvailable,
-      cleanupAvailable: foundationModelAvailable,
-      routing: foundationModelAvailable ? .foundationModel : .inbox,
-      openSystemSettings: settings,
-      enhancedFailureCopy: enhancedFailureCopy(
-        input,
-        enhancedCandidateEnabled: enhancedCandidateEnabled,
-        microphoneAvailable: microphoneAvailable,
-        enhancedAvailable: enhancedAvailable
+    let standardAvailable = supportedOS
+      && microphoneAvailable
+      && speechAvailable
+      && input.appleOnDeviceRecognitionSupported
+    let routing: DictationRoutingAvailability =
+      foundationModelAvailable ? .foundationModel : .inbox
+
+    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+      return .init(
+        standardAvailable: standardAvailable,
+        enhancedAvailable: enhancedAvailable,
+        cleanupAvailable: foundationModelAvailable,
+        routing: routing,
+        enhancedFailureCopy: enhancedFailureCopy(
+          input,
+          enhancedCandidateEnabled: enhancedCandidateEnabled,
+          microphoneAvailable: microphoneAvailable,
+          enhancedAvailable: enhancedAvailable
+        ),
+        openSystemSettings: settings
       )
-    )
+    #else
+      return .init(
+        standardAvailable: standardAvailable,
+        enhancedAvailable: enhancedAvailable,
+        cleanupAvailable: foundationModelAvailable,
+        routing: routing,
+        openSystemSettings: settings
+      )
+    #endif
   }
 
   @MainActor
@@ -141,27 +157,29 @@ struct DictationAvailability: Equatable, Sendable {
     return "Standard — Apple Speech is unavailable because on-device English recognition is not installed or supported."
   }
 
-  private static func enhancedFailureCopy(
-    _ input: Input,
-    enhancedCandidateEnabled: Bool,
-    microphoneAvailable: Bool,
-    enhancedAvailable: Bool
-  ) -> String? {
-    guard !enhancedAvailable else { return nil }
-    if !microphoneAvailable {
-      return "Enhanced Local needs Microphone access. Open System Settings to allow Motes."
+  #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+    private static func enhancedFailureCopy(
+      _ input: Input,
+      enhancedCandidateEnabled: Bool,
+      microphoneAvailable: Bool,
+      enhancedAvailable: Bool
+    ) -> String? {
+      guard !enhancedAvailable else { return nil }
+      if !microphoneAvailable {
+        return "Enhanced Local needs Microphone access. Open System Settings to allow Motes."
+      }
+      if input.osMajorVersion < 14 {
+        return "Enhanced Local requires macOS 14 or later."
+      }
+      if !enhancedCandidateEnabled {
+        return "Enhanced Local is unavailable in this build."
+      }
+      if input.architecture == .intel {
+        return "Enhanced Local requires Apple silicon."
+      }
+      return "Enhanced Local is unavailable because its model is not ready. Open Dictation Settings to download or repair it."
     }
-    if input.osMajorVersion < 14 {
-      return "Enhanced Local requires macOS 14 or later."
-    }
-    if !enhancedCandidateEnabled {
-      return "Enhanced Local is unavailable in this build."
-    }
-    if input.architecture == .intel {
-      return "Enhanced Local requires Apple silicon."
-    }
-    return "Enhanced Local is unavailable because its model is not ready. Open Dictation Settings to download or repair it."
-  }
+  #endif
 
   private static func currentArchitecture() -> DictationArchitecture {
     var systemInfo = utsname()
