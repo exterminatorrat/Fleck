@@ -132,7 +132,9 @@
     func recordRequests(in data: Data) {
       for message in Self.messages(in: data) {
         if message.method == CancelledNotification.name,
-          let requestID = message.params?.requestId
+          let requestID = Self.id(
+            from: message.params?.objectValue?["requestId"]
+          )
         {
           pendingRequestIDs.remove(requestID)
         } else if message.method != nil, let requestID = message.id {
@@ -155,15 +157,17 @@
         ?? (try? decoder.decode(WireMessage.self, from: data)).map { [$0] }
         ?? []
     }
+
+    private nonisolated static func id(from value: Value?) -> ID? {
+      if let string = value?.stringValue { return .string(string) }
+      if let number = value?.intValue { return .number(number) }
+      return nil
+    }
   }
 
   private struct WireMessage: Decodable {
     let id: ID?
     let method: String?
-    let params: Parameters?
-
-    struct Parameters: Decodable {
-      let requestId: ID?
-    }
+    let params: Value?
   }
 #endif

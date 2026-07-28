@@ -73,6 +73,28 @@ struct MotesMCPServerTests {
     }
   }
 
+  @Test func arrayParametersStillTrackSingleAndBatchRequestIDs() async {
+    let transport = MotesStdioTransport(transport: FailingSendTransport())
+    let messages = [
+      (
+        #"{"jsonrpc":"2.0","id":11,"method":"custom/request","params":[1,2,3]}"#,
+        #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":11}}"#
+      ),
+      (
+        #"[{"jsonrpc":"2.0","id":"array-batch","method":"custom/request","params":["value"]}]"#,
+        #"[{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"array-batch"}}]"#
+      ),
+    ]
+
+    for (request, cancellation) in messages {
+      await transport.recordRequests(in: Data(request.utf8))
+      #expect(await transport.pendingRequestCount == 1)
+      await transport.recordRequests(in: Data(cancellation.utf8))
+      #expect(await transport.pendingRequestCount == 0)
+      await transport.waitUntilDrained()
+    }
+  }
+
   @Test func failedResponseSendStillResolvesPendingRequest() async {
     let transport = MotesStdioTransport(transport: FailingSendTransport())
     await transport.recordRequests(
