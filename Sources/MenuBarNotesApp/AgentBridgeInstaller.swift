@@ -1,5 +1,6 @@
 #if os(macOS)
   import CryptoKit
+  import Darwin
   import Foundation
 
   enum AgentBridgeInstallerError: Error, Equatable {
@@ -7,6 +8,7 @@
     case destinationNotOwned
     case verificationFailed
     case processFailed(Int32)
+    case processTimedOut
   }
 
   struct AgentBridgeInstallationReceipt: Codable, Equatable {
@@ -30,7 +32,7 @@
     func run(executable: URL, arguments: [String], stdin: Data?) throws
   }
 
-  struct AgentBridgeInstaller {
+  struct AgentBridgeInstaller: Sendable {
     static let ownerBundleIdentifier = "com.harryjin.motes"
 
     let bundledHelperURL: URL
@@ -127,6 +129,12 @@
       }
     }
 
+    func installAsync() async throws -> URL {
+      try await Task.detached(priority: .userInitiated) {
+        try install()
+      }.value
+    }
+
     func receipt() throws -> AgentBridgeInstallationReceipt {
       try JSONDecoder().decode(
         AgentBridgeInstallationReceipt.self,
@@ -158,12 +166,27 @@
       )
     }
 
+    func provisionAsync(profileID: UUID, token: Data) async throws {
+      try await Task.detached(priority: .userInitiated) {
+        try provision(profileID: profileID, token: token)
+      }.value
+    }
+
     func disconnect(profileID: UUID) throws {
+      guard let helper = verifiedInstalledHelperURL() else {
+        throw AgentBridgeInstallerError.verificationFailed
+      }
       try processRunner.run(
-        executable: installedHelperURL,
+        executable: helper,
         arguments: ["disconnect", "--profile", profileID.uuidString],
         stdin: nil
       )
+    }
+
+    func disconnectAsync(profileID: UUID) async throws {
+      try await Task.detached(priority: .userInitiated) {
+        try disconnect(profileID: profileID)
+      }.value
     }
 
     func removeInstalledHelper() throws {
@@ -278,10 +301,18 @@
   }
 
   struct LocalAgentBridgeProcessRunner: AgentBridgeProcessRunning {
+    let timeout: TimeInterval
+
+    init(timeout: TimeInterval = 10) {
+      self.timeout = timeout
+    }
+
     func run(executable: URL, arguments: [String], stdin: Data?) throws {
       let process = Process()
+      let completion = DispatchSemaphore(value: 0)
       process.executableURL = executable
       process.arguments = arguments
+      process.terminationHandler = { _ in completion.signal() }
       if let stdin {
         let pipe = Pipe()
         process.standardInput = pipe
@@ -291,7 +322,14 @@
       } else {
         try process.run()
       }
-      process.waitUntilExit()
+      guard completion.wait(timeout: .now() + timeout) == .success else {
+        process.terminate()
+        if completion.wait(timeout: .now() + 1) == .timedOut {
+          Darwin.kill(process.processIdentifier, SIGKILL)
+          _ = completion.wait(timeout: .now() + 1)
+        }
+        throw AgentBridgeInstallerError.processTimedOut
+      }
       guard process.terminationStatus == 0 else {
         throw AgentBridgeInstallerError.processFailed(process.terminationStatus)
       }

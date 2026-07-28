@@ -532,21 +532,38 @@
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
       applyColors(to: textView)
-      if !commands.isFocusedDictationActive
-        && (context.coordinator.richTextRTF != richTextRTF || textView.string != text)
-      {
-        let selection = textView.selectedRange()
-        loadContent(into: textView)
-        textView.setSelectedRange(
-          NSRange(location: min(selection.location, text.utf16.count), length: 0))
-      } else if context.coordinator.fontFamily != fontFamily
+      if !applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator),
+        context.coordinator.fontFamily != fontFamily
         || context.coordinator.fontSize != fontSize
       {
         applyTypingFont(to: textView)
       }
       context.coordinator.fontFamily = fontFamily
       context.coordinator.fontSize = fontSize
+      context.coordinator.text = text
       context.coordinator.richTextRTF = richTextRTF
+    }
+
+    @discardableResult
+    func applyExternalContentIfNeeded(
+      to textView: NSTextView,
+      coordinator: Coordinator
+    ) -> Bool {
+      let modelChanged = coordinator.text != text || coordinator.richTextRTF != richTextRTF
+      if modelChanged, commands.isFocusedDictationActive {
+        commands.cancelFocusedDictation()
+      }
+      guard !commands.isFocusedDictationActive, modelChanged || textView.string != text else {
+        return false
+      }
+      let selection = textView.selectedRange()
+      loadContent(into: textView)
+      textView.setSelectedRange(
+        NSRange(location: min(selection.location, text.utf16.count), length: 0)
+      )
+      coordinator.text = text
+      coordinator.richTextRTF = richTextRTF
+      return true
     }
 
     private func loadContent(into textView: NSTextView) {
@@ -597,12 +614,14 @@
       var parent: NativeRichTextEditor
       var fontFamily: String
       var fontSize: Double
+      var text: String
       var richTextRTF: Data?
       @MainActor
       init(parent: NativeRichTextEditor) {
         self.parent = parent
         fontFamily = parent.fontFamily
         fontSize = parent.fontSize
+        text = parent.text
         richTextRTF = parent.richTextRTF
       }
 
@@ -613,6 +632,7 @@
           from: NSRange(location: 0, length: snapshot.length),
           documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
         )
+        text = snapshot.string
         richTextRTF = updatedRTF
         parent.onChange(snapshot.string, updatedRTF)
         parent.commands.refreshFormattingState()

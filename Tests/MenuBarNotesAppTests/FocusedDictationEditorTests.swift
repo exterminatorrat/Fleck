@@ -164,6 +164,39 @@ import Testing
   #expect(textView.selectedRange() == NSRange(location: 8, length: 7))
 }
 
+@Test @MainActor func externalModelUpdateCancelsFocusedDictationBeforeReloading() {
+  let commands = EditorCommands()
+  let textView = NSTextView(frame: .zero)
+  textView.string = "Original note"
+  commands.textView = textView
+  textView.setSelectedRange(NSRange(location: 0, length: 8))
+
+  let originalEditor = makeNativeEditor(
+    text: "Original note",
+    commands: commands
+  )
+  let coordinator = originalEditor.makeCoordinator()
+  let editor: any FocusedDictationEditing = commands
+  #expect(editor.beginFocusedDictation())
+  editor.updateFocusedDictation(provisionalText: "Draft")
+  #expect(textView.string == "Draft note")
+
+  let externallyUpdatedEditor = makeNativeEditor(
+    text: "Agent update",
+    commands: commands
+  )
+  #expect(
+    externallyUpdatedEditor.applyExternalContentIfNeeded(
+      to: textView,
+      coordinator: coordinator
+    )
+  )
+
+  #expect(editor.canBeginFocusedDictation)
+  #expect(!commands.isFocusedDictationActive)
+  #expect(textView.string == "Agent update")
+}
+
 @MainActor
 private func makeFocusedEditor(body: String) -> (EditorCommands, NSTextView) {
   let commands = EditorCommands()
@@ -179,6 +212,26 @@ private func makeFocusedEditor(body: String) -> (EditorCommands, NSTextView) {
   textView.string = body
   commands.textView = textView
   return (commands, textView)
+}
+
+@MainActor
+private func makeNativeEditor(
+  text: String,
+  commands: EditorCommands
+) -> NativeRichTextEditor {
+  NativeRichTextEditor(
+    text: text,
+    richTextRTF: nil,
+    onChange: { _, _ in },
+    fontFamily: NSFont.systemFont(ofSize: 14).familyName ?? "Helvetica",
+    fontSize: 14,
+    textColorHex: nil,
+    backgroundColorHex: nil,
+    accentColorHex: "#007AFF",
+    reduceMotion: false,
+    automaticLists: true,
+    commands: commands
+  )
 }
 
 @MainActor

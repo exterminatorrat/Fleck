@@ -50,7 +50,6 @@
         Spacer()
         Button("Undo", action: onUndo)
           .buttonStyle(.borderless)
-          .focusable(false)
       }
       .padding(.horizontal, 10)
       .padding(.vertical, 7)

@@ -59,8 +59,8 @@
     private let snapshotWriter: LocalStoreSnapshotWriter
     private let saveOperation: SaveOperation
     private let loadTrashOperation: LoadTrashOperation
-    private let agentProfileStore: AgentProfileStore
-    private let agentActivityStore: AgentActivityStore
+    let agentProfileStore: AgentProfileStore
+    let agentActivityStore: AgentActivityStore
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
     private var awaitedSaveWaiters: [CheckedContinuation<Void, Never>] = []
@@ -77,7 +77,9 @@
     init(
       store: LocalStore? = nil,
       saveOperation: SaveOperation? = nil,
-      loadTrashOperation: LoadTrashOperation? = nil
+      loadTrashOperation: LoadTrashOperation? = nil,
+      agentProfileStore: AgentProfileStore? = nil,
+      agentActivityStore: AgentActivityStore? = nil
     ) {
       let appSupport = FileManager.default.urls(
         for: .applicationSupportDirectory,
@@ -99,9 +101,10 @@
         loadTrashOperation ?? {
           try await store.loadTrash()
         }
-      agentProfileStore = AgentProfileStore()
-      agentActivityStore = AgentActivityStore(
-        rootURL: appSupport.appendingPathComponent("MenuBarNotes"))
+      self.agentProfileStore = agentProfileStore ?? AgentProfileStore()
+      self.agentActivityStore =
+        agentActivityStore
+        ?? AgentActivityStore(rootURL: appSupport.appendingPathComponent("MenuBarNotes"))
       workspace.ensureNoteExists()
       Task {
         await load()
@@ -631,7 +634,7 @@
 
     func installAgentBridge() async {
       do {
-        _ = try AgentBridgeInstaller.live().install()
+        _ = try await AgentBridgeInstaller.live().installAsync()
         agentCleanupError = nil
       } catch {
         agentCleanupError = "Could not install the command bridge: \(error.localizedDescription)"
@@ -642,7 +645,7 @@
       do {
         let provisioning = try await agentProfileStore.create(name: name)
         do {
-          try AgentBridgeInstaller.live().provision(
+          try await AgentBridgeInstaller.live().provisionAsync(
             profileID: provisioning.profile.id,
             token: provisioning.credential
           )
@@ -668,7 +671,7 @@
       await refreshAgentProfiles()
       guard !agentProfiles.contains(where: { $0.id == profile.id }) else { return }
       do {
-        try AgentBridgeInstaller.live().disconnect(profileID: profile.id)
+        try await AgentBridgeInstaller.live().disconnectAsync(profileID: profile.id)
         if !localCleanupFailed {
           agentCleanupError = nil
         }

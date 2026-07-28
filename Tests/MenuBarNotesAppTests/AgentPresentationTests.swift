@@ -93,6 +93,17 @@ struct AgentPresentationTests {
     #expect(AgentBannerPresentation.transition(reduceMotion: false) == .spatial)
   }
 
+  @Test func agentChangeUndoRemainsKeyboardFocusable() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let source = testFile.deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/MenuBarNotesApp/AgentChangeBanner.swift")
+    let contents = try String(contentsOf: source, encoding: .utf8)
+
+    #expect(!contents.contains(".focusable(false)"))
+  }
+
   @Test func revokedProfilesNeverAppearActive() {
     let active = profile(name: "Codex", revokedAt: nil)
     let revoked = profile(name: "Claude", revokedAt: Date())

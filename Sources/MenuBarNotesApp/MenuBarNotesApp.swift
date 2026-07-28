@@ -11,12 +11,17 @@
     private let agentRuntime: AgentIPCRuntime
 
     init() {
-      let appState = AppState()
       let appSupport = AgentBridgeEndpoint.applicationSupportURL()
+      let agentProfileStore = AgentProfileStore()
+      let agentActivityStore = AgentActivityStore(rootURL: appSupport)
+      let appState = AppState(
+        agentProfileStore: agentProfileStore,
+        agentActivityStore: agentActivityStore
+      )
       let agentService = AgentCommandService(
         state: appState,
-        profileStore: AgentProfileStore(),
-        activityStore: AgentActivityStore(rootURL: appSupport)
+        profileStore: agentProfileStore,
+        activityStore: agentActivityStore
       )
       let agentServer = AgentIPCServer { profileID, credential, command in
         try await agentService.execute(

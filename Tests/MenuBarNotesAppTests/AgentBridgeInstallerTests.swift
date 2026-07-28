@@ -177,25 +177,96 @@ struct AgentBridgeInstallerTests {
         ))
     #expect(wrongVersion.installer.verifiedInstalledHelperURL() == nil)
   }
+
+  @Test func disconnectFailsClosedWhenInstalledHelperIsMissing() throws {
+    let runner = RecordingAgentProcessRunner()
+    let installer = AgentBridgeInstaller(
+      bundledHelperURL: URL(fileURLWithPath: "/bundle/motes-agent"),
+      applicationSupportURL: URL(fileURLWithPath: "/support"),
+      fileSystem: FakeInstallerFileSystem(),
+      processRunner: runner
+    )
+
+    #expect(throws: AgentBridgeInstallerError.verificationFailed) {
+      try installer.disconnect(profileID: UUID())
+    }
+    #expect(runner.invocations.isEmpty)
+  }
+
+  @Test func disconnectFailsClosedWhenInstalledHelperWasTampered() throws {
+    let fixture = try InstalledHelperFixture()
+    fixture.fileSystem.files[fixture.installer.installedHelperURL.path] = Data("tampered".utf8)
+
+    #expect(throws: AgentBridgeInstallerError.verificationFailed) {
+      try fixture.installer.disconnect(profileID: UUID())
+    }
+    #expect(fixture.runner.invocations.isEmpty)
+  }
+
+  @Test func asynchronousInstallerOperationsStayOffMainThread() async throws {
+    let fileSystem = FakeInstallerFileSystem()
+    let runner = RecordingAgentProcessRunner()
+    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    fileSystem.files[bundle.path] = Data("helper".utf8)
+    let installer = AgentBridgeInstaller(
+      bundledHelperURL: bundle,
+      applicationSupportURL: URL(fileURLWithPath: "/support"),
+      fileSystem: fileSystem,
+      processRunner: runner
+    )
+    fileSystem.observedMainThread.removeAll()
+    let profileID = UUID()
+
+    _ = try await installer.installAsync()
+    try await installer.provisionAsync(profileID: profileID, token: Data(repeating: 1, count: 32))
+    try await installer.disconnectAsync(profileID: profileID)
+
+    #expect(!fileSystem.observedMainThread.isEmpty)
+    #expect(fileSystem.observedMainThread.allSatisfy { !$0 })
+    #expect(runner.invocations.count == 2)
+    #expect(runner.invocations.allSatisfy { !$0.ranOnMainThread })
+  }
+
+  @Test func localProcessRunnerTimesOutInsteadOfWaitingForever() {
+    let runner = LocalAgentBridgeProcessRunner(timeout: 0.01)
+
+    #expect(throws: AgentBridgeInstallerError.processTimedOut) {
+      try runner.run(
+        executable: URL(fileURLWithPath: "/bin/sleep"),
+        arguments: ["5"],
+        stdin: nil
+      )
+    }
+  }
 }
 
 private final class FakeInstallerFileSystem: AgentBridgeInstallerFileSystem, @unchecked Sendable {
   var files: [String: Data] = [:]
   var corruptNextReplacement = false
   var failNextWritePath: String?
+  var observedMainThread: [Bool] = []
+
+  private func observeThread() {
+    observedMainThread.append(Thread.isMainThread)
+  }
 
   func data(at url: URL) throws -> Data {
+    observeThread()
     guard let data = files[url.path] else { throw CocoaError(.fileNoSuchFile) }
     return data
   }
 
   func fileExists(at url: URL) -> Bool {
-    files[url.path] != nil
+    observeThread()
+    return files[url.path] != nil
   }
 
-  func createDirectory(at url: URL) throws {}
+  func createDirectory(at url: URL) throws {
+    observeThread()
+  }
 
   func write(_ data: Data, to url: URL) throws {
+    observeThread()
     if failNextWritePath == url.path {
       failNextWritePath = nil
       throw CocoaError(.fileWriteUnknown)
@@ -204,6 +275,7 @@ private final class FakeInstallerFileSystem: AgentBridgeInstallerFileSystem, @un
   }
 
   func replaceItem(at destination: URL, with staging: URL) throws {
+    observeThread()
     files[destination.path] = files.removeValue(forKey: staging.path)
     if corruptNextReplacement {
       corruptNextReplacement = false
@@ -212,14 +284,18 @@ private final class FakeInstallerFileSystem: AgentBridgeInstallerFileSystem, @un
   }
 
   func removeItem(at url: URL) throws {
+    observeThread()
     files.removeValue(forKey: url.path)
   }
 
-  func makeExecutable(at url: URL) throws {}
+  func makeExecutable(at url: URL) throws {
+    observeThread()
+  }
 }
 
 private struct InstalledHelperFixture {
   let fileSystem = FakeInstallerFileSystem()
+  let runner = RecordingAgentProcessRunner()
   let installer: AgentBridgeInstaller
 
   init() throws {
@@ -229,7 +305,7 @@ private struct InstalledHelperFixture {
       bundledHelperURL: bundle,
       applicationSupportURL: support,
       fileSystem: fileSystem,
-      processRunner: RecordingAgentProcessRunner(),
+      processRunner: runner,
       installedVersion: "1.2.3"
     )
     fileSystem.files[bundle.path] = Data("helper".utf8)
@@ -242,12 +318,20 @@ private final class RecordingAgentProcessRunner: AgentBridgeProcessRunning, @unc
     let executable: URL
     let arguments: [String]
     let stdin: Data?
+    let ranOnMainThread: Bool
   }
 
   var invocations: [Invocation] = []
 
   func run(executable: URL, arguments: [String], stdin: Data?) throws {
-    invocations.append(Invocation(executable: executable, arguments: arguments, stdin: stdin))
+    invocations.append(
+      Invocation(
+        executable: executable,
+        arguments: arguments,
+        stdin: stdin,
+        ranOnMainThread: Thread.isMainThread
+      )
+    )
   }
 }
 

@@ -160,3 +160,39 @@ import Testing
   await state.waitUntilInitialLoad()
   #expect(state.persistenceGeneration == generation)
 }
+
+@Test @MainActor func appStateUsesInjectedAgentStores() {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let profileStore = AgentProfileStore(
+    profilesURL: root.appendingPathComponent("profiles.json")
+  )
+  let activityStore = AgentActivityStore(rootURL: root)
+
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    agentProfileStore: profileStore,
+    agentActivityStore: activityStore
+  )
+
+  #expect(state.agentProfileStore === profileStore)
+  #expect(state.agentActivityStore === activityStore)
+}
+
+@Test func productionAgentServiceAndAppStateShareStoreInstances() throws {
+  let testFile = URL(fileURLWithPath: #filePath)
+  let source = testFile.deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .appendingPathComponent("Sources/MenuBarNotesApp/MenuBarNotesApp.swift")
+  let contents = try String(contentsOf: source, encoding: .utf8)
+
+  #expect(contents.components(separatedBy: "AgentProfileStore()").count - 1 == 1)
+  #expect(contents.components(separatedBy: "AgentActivityStore(rootURL: appSupport)").count - 1 == 1)
+  #expect(contents.contains("AppState("))
+  #expect(contents.contains("agentProfileStore: agentProfileStore"))
+  #expect(contents.contains("agentActivityStore: agentActivityStore"))
+  #expect(contents.contains("profileStore: agentProfileStore"))
+  #expect(contents.contains("activityStore: agentActivityStore"))
+}
