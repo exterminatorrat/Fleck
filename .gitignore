@@ -5,5 +5,6 @@
 .swiftpm/
 .worktrees/
 DerivedData/
+dist/
 *.xcuserstate
 xcuserdata/

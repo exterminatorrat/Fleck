@@ -10,8 +10,12 @@
   <string>com.harryjin.motes</string>
   <key>CFBundleName</key>
   <string>Motes</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Motes uses the microphone to transcribe your dictated notes on this Mac.</string>
   <key>NSSpeechRecognitionUsageDescription</key>

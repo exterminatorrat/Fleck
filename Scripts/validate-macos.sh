@@ -41,5 +41,5 @@ Scripts/check-release-size.sh .build/release/Motes
 printf '%s\n' '--- Candidate release rejection ---'
 Scripts/check-candidate-release-rejected.sh
 
-printf '\nValidation build passed. Launch manually with:\n  %s\n' \
-  "$(pwd)/.build/release/Motes"
+printf '\nValidation build passed. Launch Motes as an app bundle with:\n  %s\n' \
+  "$(pwd)/Scripts/build_and_run.sh"

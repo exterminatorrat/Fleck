@@ -22,6 +22,16 @@ and do not describe it as shipping.
 
 GitHub is the source of truth for this project. Changes should be made on a focused branch, committed with a descriptive message, pushed to GitHub, and submitted through a pull request. Keep application changes, relevant tests, and documentation together so the repository always reflects the current state of the product.
 
+Run Motes through its development app bundle so macOS can associate microphone
+and Speech permissions with Motes:
+
+```sh
+./Scripts/build_and_run.sh
+```
+
+Do not use `swift run Motes` for interactive testing. That launches a bare
+executable without the app-bundle privacy identity required by dictation.
+
 Ordinary builds have no external package dependencies and exclude the Enhanced
 Local SDK, implementation, manifest, and resources. The exact FluidAudio pin
 lives in the resolver-only
