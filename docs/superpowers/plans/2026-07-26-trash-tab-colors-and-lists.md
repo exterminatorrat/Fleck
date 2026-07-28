@@ -567,7 +567,7 @@ Expected: every production change maps to Trash dismissal, Settings navigation, 
 
 - [ ] **Step 3: Perform manual macOS checks**
 
-Launch `.build/release/MenuBarNotes` and verify:
+Launch `.build/release/Motes` and verify:
 
 - Done closes Trash once in the transient and pinned windows.
 - The Settings label is absent and the blue capsule moves fluidly.

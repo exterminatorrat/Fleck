@@ -3,11 +3,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "MenuBarNotes",
+    name: "Motes",
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "MenuBarNotesCore", targets: ["MenuBarNotesCore"]),
-        .executable(name: "MenuBarNotes", targets: ["MenuBarNotesApp"]),
+        .executable(name: "Motes", targets: ["MenuBarNotesApp"]),
     ],
     targets: [
         .target(name: "MenuBarNotesCore"),

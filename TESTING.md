@@ -1,4 +1,4 @@
-# Testing Menu Bar Notes on macOS
+# Testing Motes on macOS
 
 ## Requirements
 
@@ -17,7 +17,7 @@ From the repository root:
 xcode-select -p
 swift --version
 Scripts/validate-macos.sh
-swift run MenuBarNotes
+swift run Motes
 ```
 
 The final command stays attached to Terminal. Look for the note icon in the macOS menu bar, click it to open the notes panel, and press `Control-C` in Terminal when you want to stop the app.
@@ -33,7 +33,7 @@ The final command stays attached to Terminal. Look for the note icon in the macO
    ```
 
 2. Wait for Xcode to finish resolving the package.
-3. Select the **MenuBarNotes** scheme and **My Mac** destination.
+3. Select the **Motes** scheme and **My Mac** destination.
 4. Choose **Product → Test** (`Command-U`).
 5. Choose **Product → Run** (`Command-R`).
 6. Click the note icon in the macOS menu bar.
@@ -113,13 +113,13 @@ Build and run the release executable first:
 
 ```sh
 swift build -c release
-.build/release/MenuBarNotes
+.build/release/Motes
 ```
 
 In a second Terminal window, measure resident memory:
 
 ```sh
-Scripts/profile-memory.sh MenuBarNotes
+Scripts/profile-memory.sh Motes
 ```
 
 Also inspect **Activity Monitor → Memory** and **Activity Monitor → CPU** after leaving the closed panel idle for at least one minute. Record:

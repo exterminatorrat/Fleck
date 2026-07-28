@@ -22,7 +22,7 @@ This design keeps that model and changes only when the existing move operation i
 
 ### Drag Start
 
-Beginning a drag stores the dragged note’s stable `UUID` in view-local state and provides its string representation through the native drag item.
+Beginning a drag stores the dragged note’s stable `UUID` in view-local state and provides its string representation through a native, own-process drag item. Each `NotesPanel` instance uses a unique drag type, so its menu-bar and pinned-window tabs cannot be mistaken for one another.
 
 The existing tab remains the source and preview. No duplicate ghost model or separate preview array is introduced.
 
@@ -35,7 +35,7 @@ When the dragged tab enters another tab’s bounds:
 1. Resolve the dragged and destination indices from the current workspace order.
 2. Ignore the event if the identifiers are equal or the indices already match.
 3. Call the existing `AppState.moveNote(_:to:)`.
-4. Wrap that move in the app’s standard restrained animation.
+4. Let the existing order animation respond to that workspace mutation.
 
 Because the `ForEach` is driven by the workspace array, neighboring tabs receive new positions and slide left or right automatically.
 
@@ -72,6 +72,7 @@ The existing selected-tab highlight continues to use its matched geometry effect
 ## Failure Handling
 
 - Unknown or malformed drag identifiers are ignored.
+- Text drags and drags from another `NotesPanel` instance are ignored.
 - Missing source or destination notes are ignored.
 - Re-entering the current position is a no-op.
 - Dropping outside a valid tab target leaves the most recent live order intact and cannot delete or duplicate notes.

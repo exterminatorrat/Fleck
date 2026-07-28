@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly target="${1:-.build/release/MenuBarNotes}"
+readonly target="${1:-.build/release/Motes}"
 readonly limit_mb="${APP_SIZE_LIMIT_MB:-15}"
 readonly limit_bytes=$((limit_mb * 1024 * 1024))
 

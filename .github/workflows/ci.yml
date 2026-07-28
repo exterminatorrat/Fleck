@@ -25,4 +25,4 @@ jobs:
       - name: Build release
         run: swift build -c release
       - name: Enforce executable size budget
-        run: Scripts/check-release-size.sh .build/release/MenuBarNotes
+        run: Scripts/check-release-size.sh .build/release/Motes

@@ -4,6 +4,59 @@
   import MenuBarNotesCore
   import UniformTypeIdentifiers
 
+  enum TabDragReorder {
+    static let dropOperation: DropOperation = .move
+
+    static func makeContentType(id: UUID = UUID()) -> UTType {
+      let token = id.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+      return UTType(exportedAs: "com.menubarnotes.tabdrag.session\(token)")
+    }
+
+    static func destinationIndex(
+      draggedID: UUID?,
+      over destinationID: UUID,
+      in noteIDs: [UUID]
+    ) -> Int? {
+      guard let draggedID,
+        draggedID != destinationID,
+        noteIDs.contains(draggedID),
+        let destination = noteIDs.firstIndex(of: destinationID)
+      else { return nil }
+      return destination
+    }
+
+    static func itemProvider(for noteID: UUID, contentType: UTType) -> NSItemProvider {
+      let provider = NSItemProvider()
+      let data = Data(noteID.uuidString.utf8)
+      provider.registerDataRepresentation(
+        forTypeIdentifier: contentType.identifier,
+        visibility: .ownProcess
+      ) { completion in
+        completion(data, nil)
+        return nil
+      }
+      return provider
+    }
+
+    @discardableResult
+    static func performLiveMove(
+      draggedID: UUID?,
+      over destinationID: UUID,
+      currentNoteIDs: () -> [UUID],
+      move: (UUID, Int) -> Void
+    ) -> Bool {
+      guard let draggedID,
+        let destination = destinationIndex(
+          draggedID: draggedID,
+          over: destinationID,
+          in: currentNoteIDs()
+        )
+      else { return false }
+      move(draggedID, destination)
+      return true
+    }
+  }
+
   struct NotesPanel: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
@@ -19,6 +72,8 @@
     @State private var exportDocument: NoteFileDocument?
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
+    @State private var draggedNoteID: UUID?
+    @State private var tabDragContentType = TabDragReorder.makeContentType()
 
     var body: some View {
       VStack(spacing: 0) {
@@ -89,7 +144,7 @@
 
     private var header: some View {
       HStack(spacing: 10) {
-        Label("Notes", systemImage: "note.text")
+        Label("Motes", systemImage: "note.text")
           .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
@@ -184,15 +239,19 @@
                 with: .offset(x: motion.offset)
               )
             )
-            .draggable(note.id.uuidString)
-            .dropDestination(for: String.self) { identifiers, _ in
-              guard let identifier = identifiers.first,
-                let id = UUID(uuidString: identifier),
-                let destination = appState.workspace.notes.firstIndex(where: { $0.id == note.id })
-              else { return false }
-              appState.moveNote(id, to: destination)
-              return true
+            .onDrag {
+              draggedNoteID = note.id
+              return TabDragReorder.itemProvider(for: note.id, contentType: tabDragContentType)
             }
+            .onDrop(
+              of: [tabDragContentType],
+              delegate: TabDropDelegate(
+                destinationID: note.id,
+                currentNoteIDs: { appState.workspace.notes.map(\.id) },
+                draggedNoteID: $draggedNoteID,
+                move: appState.moveNote
+              )
+            )
             .contextMenu {
               Button(
                 note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin"
@@ -592,6 +651,31 @@
       .frame(width: 62, height: 22, alignment: .trailing)
       .animation(motion.quick, value: status)
       .accessibilityElement(children: .combine)
+    }
+  }
+
+  private struct TabDropDelegate: DropDelegate {
+    let destinationID: UUID
+    let currentNoteIDs: () -> [UUID]
+    @Binding var draggedNoteID: UUID?
+    let move: (UUID, Int) -> Void
+
+    func dropEntered(info: DropInfo) {
+      TabDragReorder.performLiveMove(
+        draggedID: draggedNoteID,
+        over: destinationID,
+        currentNoteIDs: currentNoteIDs,
+        move: move
+      )
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+      DropProposal(operation: TabDragReorder.dropOperation)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+      draggedNoteID = nil
+      return true
     }
   }
 
