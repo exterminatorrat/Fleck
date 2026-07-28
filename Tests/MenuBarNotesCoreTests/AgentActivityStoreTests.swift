@@ -137,6 +137,36 @@ import Testing
   #expect(store.record(id: transaction.changeID) != nil)
 }
 
+@Test func agentActivityStoreMatchesManifestCanonicalProofExpiry() throws {
+  let root = temporaryAgentActivityURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = AgentActivityStore(rootURL: root)
+  let noteID = UUID()
+  let transaction = preparedTransaction(
+    noteID: noteID,
+    createdAt: Date(timeIntervalSince1970: 1_900_000_000.875),
+    resultingRevision: 4,
+    resultingBodySHA256: sha256("Agent result")
+  )
+  let laterNote = Note(id: noteID, body: "Later edit", revision: 5)
+  let manifestEncoder = JSONEncoder()
+  manifestEncoder.dateEncodingStrategy = .iso8601
+  let manifestDecoder = JSONDecoder()
+  manifestDecoder.dateDecodingStrategy = .iso8601
+  let persistedProof = try manifestDecoder.decode(
+    AgentWorkspaceCommitProof.self,
+    from: manifestEncoder.encode(commitProof(for: transaction))
+  )
+  try store.prepare(transaction)
+
+  try store.reconcile(
+    workspace: Workspace(notes: [laterNote], selectedNoteID: noteID),
+    commitProofs: [persistedProof]
+  )
+
+  #expect(store.record(id: transaction.changeID) != nil)
+}
+
 @Test func agentActivityStoreRejectsIncompleteProofAndLaterRevisionAlone() throws {
   let root = temporaryAgentActivityURL()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -210,6 +240,91 @@ import Testing
     store.list(profileID: nil, visibleNoteIDs: [valid.noteID]).map(\.changeID) == [valid.changeID])
 }
 
+@Test func agentActivityStoreRejectsSemanticallyIncoherentRecords() throws {
+  let root = temporaryAgentActivityURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = AgentActivityStore(rootURL: root)
+  let transaction = preparedTransaction(taskHandle: "task-handle")
+  try store.prepare(transaction)
+  try store.commit(
+    changeID: transaction.changeID,
+    receipt: receipt(for: transaction)
+  )
+  let recordURL = try #require(
+    directoryFiles(root, "AgentActivity/Records").first
+  )
+  let original = try jsonObject(at: recordURL)
+  #expect(original["taskHandle"] as? String == transaction.taskHandle)
+  let mismatches: [(String, Any)] = [
+    ("changeID", UUID().uuidString),
+    ("noteID", UUID().uuidString),
+    ("previousRevision", Int(transaction.previousRevision + 1)),
+    ("resultingRevision", Int(transaction.resultingRevision + 1)),
+    ("taskHandle", "different-task"),
+  ]
+
+  for (key, value) in mismatches {
+    var object = original
+    var receipt = try #require(object["receipt"] as? [String: Any])
+    receipt[key] = value
+    object["receipt"] = receipt
+    try writeJSONObject(object, to: recordURL)
+
+    #expect(store.record(id: transaction.changeID) == nil)
+    #expect(
+      store.list(profileID: nil, visibleNoteIDs: [transaction.noteID]).isEmpty
+    )
+  }
+}
+
+@Test func agentActivityStoreRejectsSemanticallyIncoherentTombstones() throws {
+  let root = temporaryAgentActivityURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = AgentActivityStore(rootURL: root)
+  let transaction = preparedTransaction(taskHandle: "task-handle")
+  try store.prepare(transaction)
+  try store.commit(
+    changeID: transaction.changeID,
+    receipt: receipt(for: transaction)
+  )
+  let tombstoneURL = try #require(
+    directoryFiles(root, "AgentActivity/Tombstones").first
+  )
+  let original = try jsonObject(at: tombstoneURL)
+  #expect(original["noteID"] as? String == transaction.noteID.uuidString)
+  #expect(
+    original["previousRevision"] as? Int
+      == Int(transaction.previousRevision)
+  )
+  #expect(
+    original["resultingRevision"] as? Int
+      == Int(transaction.resultingRevision)
+  )
+  #expect(original["taskHandle"] as? String == transaction.taskHandle)
+  let mismatches: [(String, Any)] = [
+    ("changeID", UUID().uuidString),
+    ("noteID", UUID().uuidString),
+    ("previousRevision", Int(transaction.previousRevision + 1)),
+    ("resultingRevision", Int(transaction.resultingRevision + 1)),
+    ("taskHandle", "different-task"),
+  ]
+
+  for (key, value) in mismatches {
+    var object = original
+    var receipt = try #require(object["receipt"] as? [String: Any])
+    receipt[key] = value
+    object["receipt"] = receipt
+    try writeJSONObject(object, to: tombstoneURL)
+
+    #expect(
+      store.priorReceipt(
+        actor: transaction.actor,
+        operationID: transaction.operationID
+      ) == nil
+    )
+  }
+}
+
 @Test func agentActivityStoreExpiresRecordsAndTombstonesAtThirtyDaysExactly() throws {
   let root = temporaryAgentActivityURL()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -232,6 +347,38 @@ import Testing
   #expect(
     store.priorReceipt(actor: transaction.actor, operationID: transaction.operationID)
       == nil
+  )
+}
+
+@Test func agentActivityStoreNeverReturnsExpiredDataWhenDeletionFails() throws {
+  let root = temporaryAgentActivityURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+  let transaction = preparedTransaction(createdAt: createdAt)
+  let setupStore = AgentActivityStore(rootURL: root, now: { createdAt })
+  try setupStore.prepare(transaction)
+  try setupStore.commit(
+    changeID: transaction.changeID,
+    receipt: receipt(for: transaction)
+  )
+  let expiry = createdAt.addingTimeInterval(
+    AgentActivityStore.retentionInterval
+  )
+  let store = AgentActivityStore(
+    rootURL: root,
+    now: { expiry },
+    removeItem: { _ in throw AgentActivityDeletionFailure() }
+  )
+
+  #expect(
+    store.list(profileID: nil, visibleNoteIDs: [transaction.noteID]).isEmpty
+  )
+  #expect(store.record(id: transaction.changeID) == nil)
+  #expect(
+    store.priorReceipt(
+      actor: transaction.actor,
+      operationID: transaction.operationID
+    ) == nil
   )
 }
 
@@ -334,7 +481,8 @@ private func preparedTransaction(
   operationID: UUID = UUID(),
   createdAt: Date = Date(timeIntervalSince1970: 1_900_000_000),
   resultingRevision: UInt64 = 4,
-  resultingBodySHA256: String = sha256("Result")
+  resultingBodySHA256: String = sha256("Result"),
+  taskHandle: String? = nil
 ) -> PreparedAgentTransaction {
   PreparedAgentTransaction(
     changeID: changeID,
@@ -354,7 +502,7 @@ private func preparedTransaction(
     previousRevision: resultingRevision - 1,
     resultingRevision: resultingRevision,
     resultingBodySHA256: resultingBodySHA256,
-    taskHandle: nil
+    taskHandle: taskHandle
   )
 }
 
@@ -393,6 +541,18 @@ private func directoryFiles(_ root: URL, _ path: String) throws -> [URL] {
   ).sorted { $0.lastPathComponent < $1.lastPathComponent }
 }
 
+private func jsonObject(at url: URL) throws -> [String: Any] {
+  try #require(
+    JSONSerialization.jsonObject(with: Data(contentsOf: url))
+      as? [String: Any]
+  )
+}
+
+private func writeJSONObject(_ object: [String: Any], to url: URL) throws {
+  try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    .write(to: url, options: .atomic)
+}
+
 private final class AgentActivityTestClock: @unchecked Sendable {
   private let lock = NSLock()
   private var value: Date
@@ -406,6 +566,8 @@ private final class AgentActivityTestClock: @unchecked Sendable {
     set { lock.withLock { value = newValue } }
   }
 }
+
+private struct AgentActivityDeletionFailure: Error {}
 
 extension JSONEncoder {
   fileprivate static var agentActivity: JSONEncoder {

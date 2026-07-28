@@ -59,6 +59,7 @@ public struct AgentActivityRecord: Codable, Equatable, Sendable {
   public let patch: AgentTextPatch
   public let previousRevision: UInt64
   public let resultingRevision: UInt64
+  public let taskHandle: String?
   public let receipt: AgentWriteReceipt
   public let expiresAt: Date
 
@@ -76,6 +77,7 @@ public struct AgentActivityRecord: Codable, Equatable, Sendable {
     patch = transaction.patch
     previousRevision = transaction.previousRevision
     resultingRevision = transaction.resultingRevision
+    taskHandle = transaction.taskHandle
     self.receipt = receipt
     expiresAt = transaction.expiresAt
   }
@@ -86,6 +88,10 @@ public final class AgentActivityStore: @unchecked Sendable {
 
   private struct Tombstone: Codable, Equatable, Sendable {
     let changeID: UUID
+    let noteID: UUID
+    let previousRevision: UInt64
+    let resultingRevision: UInt64
+    let taskHandle: String?
     let actor: AgentActivityActor
     let operationID: UUID
     let receipt: AgentWriteReceipt
@@ -102,19 +108,33 @@ public final class AgentActivityStore: @unchecked Sendable {
   private let now: @Sendable () -> Date
   private let lock = NSLock()
   private let fileManager = FileManager.default
+  private let removeItem: (URL) throws -> Void
 
-  public init(
+  public convenience init(
     rootURL: URL,
     now: @escaping @Sendable () -> Date = Date.init
   ) {
+    self.init(
+      rootURL: rootURL,
+      now: now,
+      removeItem: { try FileManager.default.removeItem(at: $0) }
+    )
+  }
+
+  init(
+    rootURL: URL,
+    now: @escaping @Sendable () -> Date,
+    removeItem: @escaping (URL) throws -> Void
+  ) {
     activityURL = rootURL.appendingPathComponent("AgentActivity", isDirectory: true)
     self.now = now
+    self.removeItem = removeItem
   }
 
   public func prepare(_ transaction: PreparedAgentTransaction) throws {
     try lock.withLock {
       try ensureDirectories()
-      try purgeExpired()
+      try purgeExpired(at: now())
       try write(transaction, id: transaction.changeID, kind: .prepared)
     }
   }
@@ -122,7 +142,7 @@ public final class AgentActivityStore: @unchecked Sendable {
   public func commit(changeID: UUID, receipt: AgentWriteReceipt) throws {
     try lock.withLock {
       try ensureDirectories()
-      try purgeExpired()
+      try purgeExpired(at: now())
       guard let transaction = preparedTransaction(id: changeID),
         receipt.changeID == transaction.changeID,
         receipt.noteID == transaction.noteID,
@@ -148,10 +168,12 @@ public final class AgentActivityStore: @unchecked Sendable {
   ) -> AgentWriteReceipt? {
     lock.withLock {
       try? ensureDirectories()
-      try? purgeExpired()
-      return validEntries(Tombstone.self, kind: .tombstones, id: \.changeID)
+      let currentDate = now()
+      try? purgeExpired(at: currentDate)
+      return validTombstones()
         .first {
-          sameActorScope($0.actor, actor)
+          $0.expiresAt > currentDate
+            && sameActorScope($0.actor, actor)
             && $0.operationID == operationID
         }?
         .receipt
@@ -164,48 +186,55 @@ public final class AgentActivityStore: @unchecked Sendable {
   ) -> [AgentActivityRecord] {
     lock.withLock {
       try? ensureDirectories()
-      try? purgeExpired()
-      return validEntries(
-        AgentActivityRecord.self,
-        kind: .records,
-        id: \.changeID
-      )
-      .filter { record in
-        guard visibleNoteIDs.contains(record.noteID) else { return false }
-        guard let profileID else { return true }
-        guard case .integration(let recordProfileID, _) = record.actor else {
-          return false
+      let currentDate = now()
+      try? purgeExpired(at: currentDate)
+      return validRecords()
+        .filter { record in
+          guard
+            record.expiresAt > currentDate,
+            visibleNoteIDs.contains(record.noteID)
+          else { return false }
+          guard let profileID else { return true }
+          guard case .integration(let recordProfileID, _) = record.actor else {
+            return false
+          }
+          return recordProfileID == profileID
         }
-        return recordProfileID == profileID
-      }
-      .sorted {
-        if $0.createdAt != $1.createdAt {
-          return $0.createdAt > $1.createdAt
+        .sorted {
+          if $0.createdAt != $1.createdAt {
+            return $0.createdAt > $1.createdAt
+          }
+          return $0.changeID.uuidString < $1.changeID.uuidString
         }
-        return $0.changeID.uuidString < $1.changeID.uuidString
-      }
     }
   }
 
   public func record(id: UUID) -> AgentActivityRecord? {
     lock.withLock {
       try? ensureDirectories()
-      try? purgeExpired()
-      return validEntry(
+      let currentDate = now()
+      try? purgeExpired(at: currentDate)
+      let record = validEntry(
         AgentActivityRecord.self,
         id: id,
         kind: .records,
         embeddedID: \.changeID
       )
+      guard
+        let record,
+        recordIsCoherent(record),
+        record.expiresAt > currentDate
+      else { return nil }
+      return record
     }
   }
 
   public func clearVisibleActivity() throws {
     try lock.withLock {
       try ensureDirectories()
-      try purgeExpired()
+      try purgeExpired(at: now())
       for url in try entryURLs(kind: .records) {
-        try fileManager.removeItem(at: url)
+        try removeItem(url)
       }
     }
   }
@@ -216,7 +245,7 @@ public final class AgentActivityStore: @unchecked Sendable {
   ) throws {
     try lock.withLock {
       try ensureDirectories()
-      try purgeExpired()
+      try purgeExpired(at: now())
       for transaction in validEntries(
         PreparedAgentTransaction.self,
         kind: .prepared,
@@ -259,6 +288,10 @@ public final class AgentActivityStore: @unchecked Sendable {
     let record = AgentActivityRecord(transaction: transaction, receipt: receipt)
     let tombstone = Tombstone(
       changeID: transaction.changeID,
+      noteID: transaction.noteID,
+      previousRevision: transaction.previousRevision,
+      resultingRevision: transaction.resultingRevision,
+      taskHandle: transaction.taskHandle,
       actor: transaction.actor,
       operationID: transaction.operationID,
       receipt: receipt,
@@ -279,23 +312,22 @@ public final class AgentActivityStore: @unchecked Sendable {
       && proof.bodySHA256 == transaction.resultingBodySHA256
       && proof.actor == transaction.actor
       && proof.operationID == transaction.operationID
-      && proof.expiresAt == transaction.expiresAt
+      && manifestDateIdentity(proof.expiresAt)
+        == manifestDateIdentity(transaction.expiresAt)
   }
 
-  private func purgeExpired() throws {
-    let currentDate = now()
-    for record in validEntries(
-      AgentActivityRecord.self,
-      kind: .records,
-      id: \.changeID
-    ) where record.expiresAt <= currentDate {
+  private func manifestDateIdentity(_ date: Date) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.string(from: date)
+  }
+
+  private func purgeExpired(at currentDate: Date) throws {
+    for record in validRecords() where record.expiresAt <= currentDate {
       try remove(id: record.changeID, kind: .records)
     }
-    for tombstone in validEntries(
-      Tombstone.self,
-      kind: .tombstones,
-      id: \.changeID
-    ) where tombstone.expiresAt <= currentDate {
+    for tombstone in validTombstones()
+    where tombstone.expiresAt <= currentDate {
       try remove(id: tombstone.changeID, kind: .tombstones)
     }
     for transaction in validEntries(
@@ -344,7 +376,7 @@ public final class AgentActivityStore: @unchecked Sendable {
   private func remove(id: UUID, kind: EntryKind) throws {
     let url = entryURL(id: id, kind: kind)
     guard fileManager.fileExists(atPath: url.path) else { return }
-    try fileManager.removeItem(at: url)
+    try removeItem(url)
   }
 
   private func preparedTransaction(id: UUID) -> PreparedAgentTransaction? {
@@ -354,6 +386,38 @@ public final class AgentActivityStore: @unchecked Sendable {
       kind: .prepared,
       embeddedID: \.changeID
     )
+  }
+
+  private func validRecords() -> [AgentActivityRecord] {
+    validEntries(
+      AgentActivityRecord.self,
+      kind: .records,
+      id: \.changeID
+    ).filter(recordIsCoherent)
+  }
+
+  private func validTombstones() -> [Tombstone] {
+    validEntries(
+      Tombstone.self,
+      kind: .tombstones,
+      id: \.changeID
+    ).filter(tombstoneIsCoherent)
+  }
+
+  private func recordIsCoherent(_ record: AgentActivityRecord) -> Bool {
+    record.receipt.changeID == record.changeID
+      && record.receipt.noteID == record.noteID
+      && record.receipt.previousRevision == record.previousRevision
+      && record.receipt.resultingRevision == record.resultingRevision
+      && record.receipt.taskHandle == record.taskHandle
+  }
+
+  private func tombstoneIsCoherent(_ tombstone: Tombstone) -> Bool {
+    tombstone.receipt.changeID == tombstone.changeID
+      && tombstone.receipt.noteID == tombstone.noteID
+      && tombstone.receipt.previousRevision == tombstone.previousRevision
+      && tombstone.receipt.resultingRevision == tombstone.resultingRevision
+      && tombstone.receipt.taskHandle == tombstone.taskHandle
   }
 
   private func validEntries<Value: Decodable>(
