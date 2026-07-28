@@ -88,6 +88,13 @@
             write("The request write timed out.\n", to: .standardError)
           }
           return 1
+        } catch AgentIPCClientError.responseTimedOut {
+          write(
+            BridgeOutput.responseTimedOut(operationID: command.operationID)
+              + "\n",
+            to: .standardError
+          )
+          return 1
         } catch BridgeCredentialStoreError.credentialNotFound {
           writeWorkspaceError(
             AgentWorkspaceError(

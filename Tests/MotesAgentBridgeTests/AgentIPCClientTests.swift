@@ -20,7 +20,7 @@ private let clientProfileID = UUID(
     connect: { _ in 12 },
     launch: { launches += 1 },
     write: { data, _ in written = data },
-    read: { _ in reads.removeFirst() },
+    read: { _, _ in reads.removeFirst() },
     close: { _ in }
   )
 
@@ -51,7 +51,7 @@ private let clientProfileID = UUID(
     sleep: { now += $0 },
     now: { now },
     write: { _, _ in },
-    read: { _ in Data() },
+    read: { _, _ in Data() },
     close: { _ in }
   )
 
@@ -79,7 +79,7 @@ private let clientProfileID = UUID(
     sleep: { _ in },
     now: { 0 },
     write: { _, _ in },
-    read: { _ in reads.removeFirst() },
+    read: { _, _ in reads.removeFirst() },
     close: { _ in }
   )
 
@@ -96,9 +96,57 @@ private let clientProfileID = UUID(
     Data(frame.dropFirst(2).prefix(7)),
     Data(frame.dropFirst(9)),
   ]
-  let client = testClient(read: { _ in reads.removeFirst() })
+  let client = testClient(read: { _, _ in reads.removeFirst() })
 
   #expect(try client.send(request()) == .sharedNotes(notes: []))
+}
+
+@Test func connectedPeerMustRespondBeforeTheSeparateResponseDeadline() {
+  var now: TimeInterval = 0
+  let client = AgentIPCClient(
+    responseTimeout: 60,
+    connect: { _ in 12 },
+    launch: {},
+    now: { now },
+    write: { _, _ in },
+    read: { _, _ in
+      now = 60
+      return Data([0])
+    },
+    close: { _ in }
+  )
+
+  #expect(throws: AgentIPCClientError.responseTimedOut) {
+    _ = try client.send(request())
+  }
+}
+
+@Test func partialFramesShareOneOverallResponseDeadline() throws {
+  let frame = try responseFrame(requestID: requestID)
+  var reads = [
+    Data(frame.prefix(2)),
+    Data(frame.dropFirst(2).prefix(2)),
+  ]
+  var now: TimeInterval = 0
+  var allowedWaits: [TimeInterval] = []
+  let client = AgentIPCClient(
+    responseTimeout: 60,
+    connect: { _ in 12 },
+    launch: {},
+    now: { now },
+    write: { _, _ in },
+    read: { _, remaining in
+      allowedWaits.append(remaining)
+      now += 40
+      return reads.removeFirst()
+    },
+    close: { _ in }
+  )
+
+  #expect(throws: AgentIPCClientError.responseTimedOut) {
+    _ = try client.send(request())
+  }
+  #expect(allowedWaits == [60, 20])
 }
 
 @Test func mismatchedRequestIDAndProtocolNeverExposeAResult() throws {
@@ -106,7 +154,7 @@ private let clientProfileID = UUID(
     uuidString: "10000000-0000-0000-0000-000000000099"
   )!
   var mismatchedID = [try responseFrame(requestID: wrongID)]
-  let requestIDClient = testClient { _ in mismatchedID.removeFirst() }
+  let requestIDClient = testClient { _, _ in mismatchedID.removeFirst() }
   #expect(throws: AgentIPCClientError.responseMismatch) {
     _ = try requestIDClient.send(request())
   }
@@ -114,7 +162,7 @@ private let clientProfileID = UUID(
   var mismatchedVersion = [
     try responseFrame(requestID: requestID, protocolVersion: 2)
   ]
-  let versionClient = testClient { _ in mismatchedVersion.removeFirst() }
+  let versionClient = testClient { _, _ in mismatchedVersion.removeFirst() }
   #expect(throws: AgentIPCClientError.protocolMismatch) {
     _ = try versionClient.send(request())
   }
@@ -130,7 +178,7 @@ private let clientProfileID = UUID(
       AgentWireResponse.failure(requestID: requestID, error: error)
     )
   ]
-  let client = testClient { _ in reads.removeFirst() }
+  let client = testClient { _, _ in reads.removeFirst() }
 
   do {
     _ = try client.send(request())
@@ -145,7 +193,7 @@ private let clientProfileID = UUID(
     connect: { _ in 12 },
     launch: {},
     write: { _, _ in throw AgentIPCClientError.writeTimedOut },
-    read: { _ in Data() },
+    read: { _, _ in Data() },
     close: { _ in }
   )
 

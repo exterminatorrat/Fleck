@@ -201,6 +201,24 @@ private let changeID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
   ])
 }
 
+@Test func leftoverArgumentPresentationNeverEchoesItsContents() {
+  let sentinelSecret = "SENTINEL-SECRET-MUST-NOT-APPEAR"
+  do {
+    _ = try BridgeCommand.parse(
+      arguments: [
+        "notes", "list", "--profile", profileID.uuidString, sentinelSecret,
+      ]
+    ) { "" }
+    Issue.record("Expected usage error")
+  } catch let error as BridgeParseError {
+    let presentation = String(describing: error)
+    #expect(presentation == "Unknown argument.")
+    #expect(!presentation.contains(sentinelSecret))
+  } catch {
+    Issue.record("Unexpected error type")
+  }
+}
+
 @Test func parserSupportsJSONConfigureDisconnectAndReservedMCP() throws {
   let configure = try BridgeCommand.parse(
     arguments: [
@@ -249,6 +267,16 @@ private let changeID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
   #expect(message.contains(operationID.uuidString))
   #expect(message.contains("retry"))
   #expect(!message.contains("credential"))
+}
+
+@Test func timedOutResponseMessageRetainsOperationIDOnlyForWrites() {
+  let writeMessage = BridgeOutput.responseTimedOut(operationID: operationID)
+  #expect(writeMessage.contains(operationID.uuidString))
+  #expect(writeMessage.contains("retry"))
+
+  let readMessage = BridgeOutput.responseTimedOut(operationID: nil)
+  #expect(!readMessage.contains(operationID.uuidString))
+  #expect(!readMessage.contains("credential"))
 }
 
 private func context() -> AgentWriteContext {

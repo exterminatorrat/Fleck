@@ -420,6 +420,14 @@ enum BridgeOutput {
       + "\(operationID.uuidString) to avoid a duplicate change."
   }
 
+  static func responseTimedOut(operationID: UUID?) -> String {
+    guard let operationID else {
+      return "Motes did not respond before the request timed out."
+    }
+    return "The response timed out; retry with the same operation ID "
+      + "\(operationID.uuidString) to retrieve the original write result safely."
+  }
+
   private static func encode<T: Encodable>(_ value: T) throws -> String {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
@@ -510,7 +518,7 @@ private struct ArgumentBag {
 
   func requireEmpty() throws {
     guard values.isEmpty else {
-      throw BridgeParseError("Unknown argument: \(values[0])")
+      throw BridgeParseError("Unknown argument.")
     }
   }
 }

@@ -9,6 +9,7 @@
     case connectionFailed
     case motesUnavailable
     case writeTimedOut
+    case responseTimedOut
     case connectionClosed
     case invalidFrame
     case responseMismatch
@@ -21,11 +22,12 @@
     typealias Sleeper = (TimeInterval) -> Void
     typealias Clock = () -> TimeInterval
     typealias Writer = (Data, Int32) throws -> Void
-    typealias Reader = (Int32) throws -> Data
+    typealias Reader = (Int32, TimeInterval) throws -> Data
     typealias Closer = (Int32) -> Void
 
     private let endpointURL: URL
     private let readinessTimeout: TimeInterval
+    private let responseTimeout: TimeInterval
     private let pollInterval: TimeInterval
     private let connect: Connector
     private let launch: Launcher
@@ -38,6 +40,7 @@
     init(
       endpointURL: URL = AgentBridgeEndpoint.socketURL(),
       readinessTimeout: TimeInterval = 10,
+      responseTimeout: TimeInterval = 60,
       pollInterval: TimeInterval = 0.05,
       connect: @escaping Connector = AgentIPCClient.connectSocket,
       launch: @escaping Launcher = AgentIPCClient.launchMotes,
@@ -49,6 +52,7 @@
     ) {
       self.endpointURL = endpointURL
       self.readinessTimeout = readinessTimeout
+      self.responseTimeout = responseTimeout
       self.pollInterval = pollInterval
       self.connect = connect
       self.launch = launch
@@ -71,8 +75,12 @@
         throw AgentIPCClientError.connectionClosed
       }
 
+      let responseDeadline = now() + responseTimeout
       var buffer = Data()
       while true {
+        guard now() < responseDeadline else {
+          throw AgentIPCClientError.responseTimedOut
+        }
         do {
           if let response = try AgentWireFraming.decodeFrame(
             AgentWireResponse.self,
@@ -103,7 +111,13 @@
           throw AgentIPCClientError.invalidFrame
         }
 
-        let chunk = try read(descriptor)
+        let chunk = try read(
+          descriptor,
+          max(0, responseDeadline - now())
+        )
+        guard now() < responseDeadline else {
+          throw AgentIPCClientError.responseTimedOut
+        }
         guard !chunk.isEmpty else {
           throw AgentIPCClientError.connectionClosed
         }
@@ -246,15 +260,32 @@
       }
     }
 
-    private static func readChunk(from descriptor: Int32) throws -> Data {
+    private static func readChunk(
+      from descriptor: Int32,
+      timeout: TimeInterval
+    ) throws -> Data {
+      guard timeout > 0 else {
+        throw AgentIPCClientError.responseTimedOut
+      }
+      let deadline = ProcessInfo.processInfo.systemUptime + timeout
       while true {
         var descriptorPoll = pollfd(
           fd: descriptor,
           events: Int16(POLLIN),
           revents: 0
         )
-        let pollResult = Darwin.poll(&descriptorPoll, 1, -1)
+        let remaining = deadline - ProcessInfo.processInfo.systemUptime
+        guard remaining > 0 else {
+          throw AgentIPCClientError.responseTimedOut
+        }
+        let milliseconds = Int32(
+          min(ceil(remaining * 1_000), Double(Int32.max))
+        )
+        let pollResult = Darwin.poll(&descriptorPoll, 1, milliseconds)
         if pollResult < 0, errno == EINTR { continue }
+        if pollResult == 0 {
+          throw AgentIPCClientError.responseTimedOut
+        }
         guard pollResult > 0 else {
           throw AgentIPCClientError.connectionClosed
         }
