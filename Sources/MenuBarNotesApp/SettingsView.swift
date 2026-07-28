@@ -10,7 +10,10 @@
     case editing = "Editing"
     case shortcuts = "Shortcuts"
     case dictation = "Dictation"
+    case agents = "Agents"
 
+    static let allCases: [SettingsSection] = [.appearance, .editing, .shortcuts, .dictation]
+    static let selectorCases = allCases + [.agents]
     static let selectionEffectID = "settings-section"
     var id: Self { self }
   }
@@ -157,6 +160,8 @@
             shortcuts
           case .dictation:
             dictation
+          case .agents:
+            AgentSettingsView()
           }
         }
         .formStyle(.grouped)
@@ -169,6 +174,8 @@
         recoveryActions = runtime.permissionRecoveryActions()
         microphones = DictationMicrophoneOption.available()
         runtime.preferencesDidChange()
+        await appState.refreshAgentProfiles()
+        appState.refreshAgentActivity()
       }
       #if CLEAN_DICTATION_ENHANCED_CANDIDATE
       .sheet(isPresented: $showsModelConsent) {
@@ -234,7 +241,7 @@
 
     private var sectionSelector: some View {
       HStack(spacing: 4) {
-        ForEach(SettingsSection.allCases) { section in
+        ForEach(SettingsSection.selectorCases) { section in
           let isSelected = section == selectedSection
           Button {
             withAnimation(motion.spatial) {

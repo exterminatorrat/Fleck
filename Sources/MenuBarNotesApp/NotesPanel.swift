@@ -70,7 +70,9 @@
     @State private var isExporting = false
     @State private var isShowingTrash = false
     @State private var isShowingDictationHistory = false
+    @State private var isShowingAgentActivity = false
     @State private var notePendingDeletion: Note?
+    @State private var notePendingAgentShare: Note?
     @State private var exportDocument: NoteFileDocument?
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
@@ -121,6 +123,14 @@
           .padding(.vertical, 7)
           .background(.quaternary.opacity(0.35))
         }
+        if let banner = appState.agentBannerPresentation {
+          AgentChangeBanner(
+            presentation: banner,
+            motion: motion,
+            onUndo: { Task { await appState.undoLatestAgentChange() } }
+          )
+          .animation(motion.quick, value: banner)
+        }
         editor
         if let error = appState.saveError {
           Text("Could not save: \(error)")
@@ -170,11 +180,41 @@
           onOpenDestination: openHistoryDestination
         )
       }
+      .sheet(isPresented: $isShowingAgentActivity) {
+        AgentActivityView { noteID in
+          appState.select(noteID)
+          isShowingAgentActivity = false
+        }
+        .environmentObject(appState)
+      }
+      .confirmationDialog(
+        "Allow authorized agents to read and edit this note?",
+        isPresented: Binding(
+          get: { notePendingAgentShare != nil },
+          set: { if !$0 { notePendingAgentShare = nil } }
+        )
+      ) {
+        Button("Allow Agent Access") {
+          guard let note = notePendingAgentShare else { return }
+          notePendingAgentShare = nil
+          appState.confirmFirstAgentShare(noteID: note.id)
+        }
+        Button("Cancel", role: .cancel) {
+          notePendingAgentShare = nil
+        }
+      } message: {
+        Text("Every authorized local integration will be able to read and edit this note.")
+      }
       .onAppear {
         dictationRuntime.registerEditor(editorCommands)
       }
       .onDisappear {
         dictationRuntime.unregisterEditor(editorCommands)
+      }
+      .onChange(of: appState.requestsAgentActivity) { _, requested in
+        guard requested else { return }
+        appState.requestsAgentActivity = false
+        isShowingAgentActivity = true
       }
       .overlay {
         ZStack {
@@ -241,6 +281,18 @@
           Button("Dictation History", systemImage: "waveform") {
             isShowingDictationHistory = true
           }
+          Button("Agent Activity", systemImage: "clock.arrow.circlepath") {
+            isShowingAgentActivity = true
+          }
+          if let note = appState.selectedNote {
+            Toggle(
+              "Allow Agent Access",
+              isOn: Binding(
+                get: { note.agentAccess },
+                set: { requestAgentAccess(note, enabled: $0) }
+              )
+            )
+          }
         } label: {
           Image(systemName: "ellipsis.circle")
         }
@@ -275,6 +327,11 @@
                     .font(.caption2)
                 }
                 Text(note.displayTitle).lineLimit(1)
+                if note.agentAccess {
+                  Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.caption2)
+                    .accessibilityLabel(AgentSharingPresentation.sharedBadgeAccessibilityLabel)
+                }
               }
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
@@ -343,6 +400,13 @@
                   }
                 }
               }
+              Toggle(
+                "Allow Agent Access",
+                isOn: Binding(
+                  get: { note.agentAccess },
+                  set: { requestAgentAccess(note, enabled: $0) }
+                )
+              )
               Divider()
               Button("Move to Trash", systemImage: "trash", role: .destructive) {
                 requestDeletion(note)
@@ -391,6 +455,21 @@
 
     private func requestDeletion(_ note: Note) {
       notePendingDeletion = note
+    }
+
+    private func requestAgentAccess(_ note: Note, enabled: Bool) {
+      guard enabled else {
+        appState.setAgentAccess(noteID: note.id, enabled: false)
+        return
+      }
+      if AgentSharingPresentation(
+        note: note,
+        hasConfirmedFirstShare: appState.hasConfirmedFirstAgentShare
+      ).requiresEnableConfirmation {
+        notePendingAgentShare = note
+      } else {
+        appState.setAgentAccess(noteID: note.id, enabled: true)
+      }
     }
 
     private func confirmDeletion(_ note: Note) {

@@ -47,6 +47,10 @@
     @Published private(set) var trashedNotes: [TrashedNote] = []
     @Published private(set) var latestAgentFeedback: AgentChangeFeedback?
     @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
+    @Published private(set) var agentActivity: [AgentActivityRecord] = []
+    @Published private(set) var agentBannerPresentation: AgentBannerPresentation?
+    @Published var requestsAgentActivity = false
+    @Published var agentCleanupError: String?
     private(set) var persistenceGeneration: UInt64 = 0
     private(set) var hasFinishedInitialLoad = false
     private(set) var isAgentWorkspaceAvailable = false
@@ -56,6 +60,8 @@
     private let snapshotWriter: LocalStoreSnapshotWriter
     private let saveOperation: SaveOperation
     private let loadTrashOperation: LoadTrashOperation
+    private let agentProfileStore: AgentProfileStore
+    private let agentActivityStore: AgentActivityStore
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
     private var awaitedSaveWaiters: [CheckedContinuation<Void, Never>] = []
@@ -94,8 +100,15 @@
         loadTrashOperation ?? {
           try await store.loadTrash()
         }
+      agentProfileStore = AgentProfileStore()
+      agentActivityStore = AgentActivityStore(
+        rootURL: appSupport.appendingPathComponent("MenuBarNotes"))
       workspace.ensureNoteExists()
-      Task { await load() }
+      Task {
+        await load()
+        await refreshAgentProfiles()
+        refreshAgentActivity()
+      }
     }
 
     convenience init(
@@ -322,10 +335,24 @@
 
     func setSelectedAgentAccess(_ enabled: Bool) {
       guard let id = workspace.selectedNoteID else { return }
+      setAgentAccess(noteID: id, enabled: enabled)
+    }
+
+    func setAgentAccess(noteID: UUID, enabled: Bool) {
       let originalWorkspace = workspace
-      workspace.setAgentAccess(id: id, enabled: enabled)
+      workspace.setAgentAccess(id: noteID, enabled: enabled)
       guard workspace != originalWorkspace else { return }
       saveNow()
+      refreshAgentActivity()
+    }
+
+    var hasConfirmedFirstAgentShare: Bool {
+      UserDefaults.standard.bool(forKey: "hasConfirmedFirstAgentShare")
+    }
+
+    func confirmFirstAgentShare(noteID: UUID) {
+      UserDefaults.standard.set(true, forKey: "hasConfirmedFirstAgentShare")
+      setAgentAccess(noteID: noteID, enabled: true)
     }
 
     func toggleList(_ style: MarkdownEditing.ListStyle) {
@@ -588,6 +615,126 @@
 
     func publishAgentFeedback(_ feedback: AgentChangeFeedback) {
       latestAgentFeedback = feedback
+      if var banner = agentBannerPresentation,
+        feedback.createdAt.timeIntervalSince(banner.feedback.createdAt) <= 2
+      {
+        banner.coalesce(feedback: feedback)
+        agentBannerPresentation = banner
+      } else {
+        agentBannerPresentation = AgentBannerPresentation(feedback: feedback)
+      }
+      refreshAgentActivity()
+    }
+
+    var isAgentBridgeInstalled: Bool {
+      guard let installer = try? AgentBridgeInstaller.live(),
+        let receipt = try? installer.receipt()
+      else { return false }
+      return receipt.destination == installer.installedHelperURL.path
+    }
+
+    func installAgentBridge() async {
+      do {
+        _ = try AgentBridgeInstaller.live().install()
+        agentCleanupError = nil
+      } catch {
+        agentCleanupError = "Could not install the command bridge: \(error.localizedDescription)"
+      }
+    }
+
+    func addAgentProfile(named name: String) async {
+      do {
+        let provisioning = try await agentProfileStore.create(name: name)
+        do {
+          try AgentBridgeInstaller.live().provision(
+            profileID: provisioning.profile.id,
+            token: provisioning.credential
+          )
+        } catch {
+          try? await agentProfileStore.revoke(profileID: provisioning.profile.id)
+          throw error
+        }
+        await refreshAgentProfiles()
+        agentCleanupError = nil
+      } catch {
+        agentCleanupError = "Could not add \(name): \(error.localizedDescription)"
+      }
+    }
+
+    func revokeAgentProfile(_ profile: AgentIntegrationProfile) async {
+      var localCleanupFailed = false
+      do {
+        try await agentProfileStore.revoke(profileID: profile.id)
+      } catch {
+        localCleanupFailed = true
+        agentCleanupError = "Could not revoke \(profile.displayName): \(error.localizedDescription)"
+      }
+      await refreshAgentProfiles()
+      guard !agentProfiles.contains(where: { $0.id == profile.id }) else { return }
+      do {
+        try AgentBridgeInstaller.live().disconnect(profileID: profile.id)
+        if !localCleanupFailed {
+          agentCleanupError = nil
+        }
+      } catch {
+        agentCleanupError =
+          "\(profile.displayName) is revoked, but its helper credential could not be removed."
+      }
+    }
+
+    func refreshAgentProfiles() async {
+      do {
+        agentProfiles = try await agentProfileStore.activeProfiles()
+      } catch {
+        agentCleanupError = "Could not load agent profiles: \(error.localizedDescription)"
+      }
+    }
+
+    func refreshAgentActivity() {
+      agentActivity = agentActivityStore.list(
+        profileID: nil,
+        visibleNoteIDs: Set(workspace.notes.map(\.id))
+      )
+    }
+
+    func clearAgentActivity() {
+      do {
+        try agentActivityStore.clearVisibleActivity()
+        refreshAgentActivity()
+      } catch {
+        agentCleanupError = "Could not clear Agent Activity: \(error.localizedDescription)"
+      }
+    }
+
+    func undoAgentChange(_ record: AgentActivityRecord) async {
+      guard let note = workspace.notes.first(where: { $0.id == record.noteID }) else { return }
+      select(note.id)
+      let service = AgentCommandService(
+        state: self,
+        profileStore: agentProfileStore,
+        activityStore: agentActivityStore
+      )
+      do {
+        _ = try await service.executeLocalUndo(
+          changeID: record.changeID,
+          expectedRevision: note.revision,
+          operationID: UUID()
+        )
+        refreshAgentActivity()
+      } catch {
+        agentCleanupError = "Undo was not safe: \(error.localizedDescription)"
+      }
+    }
+
+    func undoLatestAgentChange() async {
+      guard let feedback = latestAgentFeedback,
+        let record = agentActivityStore.record(id: feedback.changeID)
+      else { return }
+      await undoAgentChange(record)
+    }
+
+    func agentSetupSnippet(profileID: UUID) -> String? {
+      try? AgentBridgeInstaller.live().setupSnippet(profileID: profileID)
     }
 
     private func drainPersistenceForAgent() async throws {
