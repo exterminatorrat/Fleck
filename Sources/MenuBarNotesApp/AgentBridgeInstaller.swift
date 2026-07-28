@@ -34,6 +34,7 @@
 
   struct AgentBridgeInstaller: Sendable {
     static let ownerBundleIdentifier = "com.harryjin.motes"
+    private static let transactionLock = NSRecursiveLock()
 
     let bundledHelperURL: URL
     let applicationSupportURL: URL
@@ -87,45 +88,47 @@
 
     @discardableResult
     func install() throws -> URL {
-      guard fileSystem.fileExists(at: bundledHelperURL) else {
-        throw AgentBridgeInstallerError.bundledHelperMissing
-      }
-      let bundledData = try fileSystem.data(at: bundledHelperURL)
-      let previous = try previousInstall()
+      try Self.transactionLock.withLock {
+        guard fileSystem.fileExists(at: bundledHelperURL) else {
+          throw AgentBridgeInstallerError.bundledHelperMissing
+        }
+        let bundledData = try fileSystem.data(at: bundledHelperURL)
+        let previous = try previousInstall()
 
-      let directory = installedHelperURL.deletingLastPathComponent()
-      try fileSystem.createDirectory(at: directory)
-      let staging = directory.appendingPathComponent(".motes-\(UUID().uuidString).staging")
-      try fileSystem.write(bundledData, to: staging)
-      try fileSystem.makeExecutable(at: staging)
-      defer { try? fileSystem.removeItem(at: staging) }
-      var didSwap = false
-      do {
-        try fileSystem.replaceItem(at: installedHelperURL, with: staging)
-        didSwap = true
-        let installedHash = sha256(try fileSystem.data(at: installedHelperURL))
-        guard installedHash == sha256(bundledData) else {
-          throw AgentBridgeInstallerError.verificationFailed
+        let directory = installedHelperURL.deletingLastPathComponent()
+        try fileSystem.createDirectory(at: directory)
+        let staging = directory.appendingPathComponent(".motes-\(UUID().uuidString).staging")
+        try fileSystem.write(bundledData, to: staging)
+        try fileSystem.makeExecutable(at: staging)
+        defer { try? fileSystem.removeItem(at: staging) }
+        var didSwap = false
+        do {
+          try fileSystem.replaceItem(at: installedHelperURL, with: staging)
+          didSwap = true
+          let installedHash = sha256(try fileSystem.data(at: installedHelperURL))
+          guard installedHash == sha256(bundledData) else {
+            throw AgentBridgeInstallerError.verificationFailed
+          }
+          let receipt = AgentBridgeInstallationReceipt(
+            destination: installedHelperURL.path,
+            sha256: installedHash,
+            installedVersion: installedVersion,
+            bundleIdentifier: Self.ownerBundleIdentifier
+          )
+          try fileSystem.write(
+            try JSONEncoder().encode(receipt),
+            to: installationReceiptURL
+          )
+          guard verifiedInstalledHelperURL() == installedHelperURL else {
+            throw AgentBridgeInstallerError.verificationFailed
+          }
+          return installedHelperURL
+        } catch {
+          if didSwap {
+            try restore(previous)
+          }
+          throw error
         }
-        let receipt = AgentBridgeInstallationReceipt(
-          destination: installedHelperURL.path,
-          sha256: installedHash,
-          installedVersion: installedVersion,
-          bundleIdentifier: Self.ownerBundleIdentifier
-        )
-        try fileSystem.write(
-          try JSONEncoder().encode(receipt),
-          to: installationReceiptURL
-        )
-        guard verifiedInstalledHelperURL() == installedHelperURL else {
-          throw AgentBridgeInstallerError.verificationFailed
-        }
-        return installedHelperURL
-      } catch {
-        if didSwap {
-          try restore(previous)
-        }
-        throw error
       }
     }
 
@@ -156,14 +159,16 @@
     }
 
     func provision(profileID: UUID, token: Data) throws {
-      let helper = try install()
-      try processRunner.run(
-        executable: helper,
-        arguments: [
-          "configure", "--profile", profileID.uuidString, "--token-stdin",
-        ],
-        stdin: Data(token.base64EncodedString().utf8)
-      )
+      try Self.transactionLock.withLock {
+        let helper = try install()
+        try processRunner.run(
+          executable: helper,
+          arguments: [
+            "configure", "--profile", profileID.uuidString, "--token-stdin",
+          ],
+          stdin: Data(token.base64EncodedString().utf8)
+        )
+      }
     }
 
     func provisionAsync(profileID: UUID, token: Data) async throws {
@@ -173,14 +178,16 @@
     }
 
     func disconnect(profileID: UUID) throws {
-      guard let helper = verifiedInstalledHelperURL() else {
-        throw AgentBridgeInstallerError.verificationFailed
+      try Self.transactionLock.withLock {
+        guard let helper = verifiedInstalledHelperURL() else {
+          throw AgentBridgeInstallerError.verificationFailed
+        }
+        try processRunner.run(
+          executable: helper,
+          arguments: ["disconnect", "--profile", profileID.uuidString],
+          stdin: nil
+        )
       }
-      try processRunner.run(
-        executable: helper,
-        arguments: ["disconnect", "--profile", profileID.uuidString],
-        stdin: nil
-      )
     }
 
     func disconnectAsync(profileID: UUID) async throws {
@@ -190,20 +197,22 @@
     }
 
     func removeInstalledHelper() throws {
-      guard
-        fileSystem.fileExists(at: installedHelperURL),
-        let prior = try? receipt(),
-        prior.destination == installedHelperURL.path,
-        prior.bundleIdentifier == Self.ownerBundleIdentifier,
-        prior.sha256 == sha256(try fileSystem.data(at: installedHelperURL))
-      else {
-        if fileSystem.fileExists(at: installedHelperURL) {
-          throw AgentBridgeInstallerError.destinationNotOwned
+      try Self.transactionLock.withLock {
+        guard
+          fileSystem.fileExists(at: installedHelperURL),
+          let prior = try? receipt(),
+          prior.destination == installedHelperURL.path,
+          prior.bundleIdentifier == Self.ownerBundleIdentifier,
+          prior.sha256 == sha256(try fileSystem.data(at: installedHelperURL))
+        else {
+          if fileSystem.fileExists(at: installedHelperURL) {
+            throw AgentBridgeInstallerError.destinationNotOwned
+          }
+          return
         }
-        return
+        try fileSystem.removeItem(at: installedHelperURL)
+        try fileSystem.removeItem(at: installationReceiptURL)
       }
-      try fileSystem.removeItem(at: installedHelperURL)
-      try fileSystem.removeItem(at: installationReceiptURL)
     }
 
     func setupSnippet(profileID: UUID) -> String {

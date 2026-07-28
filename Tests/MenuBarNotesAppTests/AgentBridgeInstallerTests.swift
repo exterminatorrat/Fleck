@@ -238,6 +238,46 @@ struct AgentBridgeInstallerTests {
       )
     }
   }
+
+  @Test func concurrentProvisionAndInstallSerializeTheSharedHelperTransaction() async throws {
+    let fileSystem = FakeInstallerFileSystem()
+    let blockingRunner = BlockingAgentProcessRunner()
+    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    let support = URL(fileURLWithPath: "/support")
+    fileSystem.files[bundle.path] = Data("helper".utf8)
+    let provisioningInstaller = AgentBridgeInstaller(
+      bundledHelperURL: bundle,
+      applicationSupportURL: support,
+      fileSystem: fileSystem,
+      processRunner: blockingRunner
+    )
+    let installingInstaller = AgentBridgeInstaller(
+      bundledHelperURL: bundle,
+      applicationSupportURL: support,
+      fileSystem: fileSystem,
+      processRunner: RecordingAgentProcessRunner()
+    )
+
+    let provision = Task {
+      try await provisioningInstaller.provisionAsync(
+        profileID: UUID(),
+        token: Data(repeating: 1, count: 32)
+      )
+    }
+    #expect(blockingRunner.waitUntilEntered())
+    let operationCount = fileSystem.operationCount
+    let install = Task {
+      try await installingInstaller.installAsync()
+    }
+
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(fileSystem.operationCount == operationCount)
+
+    blockingRunner.release()
+    try await provision.value
+    _ = try await install.value
+    #expect(installingInstaller.verifiedInstalledHelperURL() == installingInstaller.installedHelperURL)
+  }
 }
 
 private final class FakeInstallerFileSystem: AgentBridgeInstallerFileSystem, @unchecked Sendable {
@@ -245,9 +285,18 @@ private final class FakeInstallerFileSystem: AgentBridgeInstallerFileSystem, @un
   var corruptNextReplacement = false
   var failNextWritePath: String?
   var observedMainThread: [Bool] = []
+  private let observationLock = NSLock()
+  private var observedOperationCount = 0
+
+  var operationCount: Int {
+    observationLock.withLock { observedOperationCount }
+  }
 
   private func observeThread() {
-    observedMainThread.append(Thread.isMainThread)
+    observationLock.withLock {
+      observedMainThread.append(Thread.isMainThread)
+      observedOperationCount += 1
+    }
   }
 
   func data(at url: URL) throws -> Data {
@@ -310,6 +359,24 @@ private struct InstalledHelperFixture {
     )
     fileSystem.files[bundle.path] = Data("helper".utf8)
     _ = try installer.install()
+  }
+}
+
+private final class BlockingAgentProcessRunner: AgentBridgeProcessRunning, @unchecked Sendable {
+  private let entered = DispatchSemaphore(value: 0)
+  private let released = DispatchSemaphore(value: 0)
+
+  func run(executable: URL, arguments: [String], stdin: Data?) throws {
+    entered.signal()
+    released.wait()
+  }
+
+  func waitUntilEntered() -> Bool {
+    entered.wait(timeout: .now() + 2) == .success
+  }
+
+  func release() {
+    released.signal()
   }
 }
 
