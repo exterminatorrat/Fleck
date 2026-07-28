@@ -22,8 +22,12 @@ jobs:
           swift --version
       - name: Test ordinary graph
         run: env -u MOTES_ENHANCED_CANDIDATE swift test
+      - name: Verify Enhanced Local candidate pin
+        run: |
+          Scripts/test-enhanced-candidate-pin.sh
+          Scripts/resolve-enhanced-candidate.sh .build-candidate
       - name: Test Enhanced Local candidate graph
-        run: MOTES_ENHANCED_CANDIDATE=1 swift test --scratch-path .build-candidate
+        run: MOTES_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --scratch-path .build-candidate
       - name: Build ordinary release
         run: env -u MOTES_ENHANCED_CANDIDATE swift build -c release
       - name: Enforce executable size budget

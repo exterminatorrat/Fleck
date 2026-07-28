@@ -1,0 +1,12 @@
+{
+  "pins": [
+    {
+      "identity": "fluidaudio",
+      "state": {
+        "revision": "0000000000000000000000000000000000000000",
+        "version": "0.15.5"
+      }
+    }
+  ],
+  "version": 3
+}

@@ -401,7 +401,6 @@ final class DictationCoordinator {
     self.capture = capture
     rollbackEditor(capture.id)
     _ = await compensateFocusedPersistence(capture.id)
-    await historyController.delete(capture.id)
     guard let current = self.capture, current.id == capture.id, !current.isTerminating else { return }
     guard !current.isStarting, !current.isFinishing else { return }
     await completeCancellation(capture.id)
@@ -498,27 +497,37 @@ final class DictationCoordinator {
         captureID: id,
         destinationID: destinationID
       )
+      record.insertionOutcome = .saved
+      record.destination = candidates.first { $0.noteID == receipt.noteID }
       if isCancellationRequested(id) {
-        if await saver.undoSmartCapture(receipt) {
-          await completeCancellation(id)
-        } else {
-          await preserveFailedUndoRecovery(
-            id,
-            record: record,
-            text: text,
-            receipt: receipt,
-            candidates: candidates,
-            savesHistory: savesHistory
-          )
-        }
+        await cancelCommittedSmartCapture(
+          id,
+          record: record,
+          text: text,
+          receipt: receipt,
+          candidates: candidates,
+          savesHistory: savesHistory
+        )
         return
       }
       guard isActive(id) else { return }
-      record.insertionOutcome = .saved
-      record.destination = candidates.first { $0.noteID == receipt.noteID }
       recoveryReceipt = receipt
       recoveryAction = .undo
-      guard await updateHistory(record, captureID: id, enabled: savesHistory) != nil else { return }
+      if savesHistory {
+        _ = await historyController.save(record)
+      }
+      if isCancellationRequested(id) {
+        await cancelCommittedSmartCapture(
+          id,
+          record: record,
+          text: text,
+          receipt: receipt,
+          candidates: candidates,
+          savesHistory: savesHistory
+        )
+        return
+      }
+      guard isActive(id) else { return }
       if let destination = record.destination {
         await terminate(
           id,
@@ -587,6 +596,31 @@ final class DictationCoordinator {
     )
   }
 
+  private func cancelCommittedSmartCapture(
+    _ id: UUID,
+    record: DictationHistoryRecord,
+    text: String,
+    receipt: DictationInsertionReceipt,
+    candidates: [DictationDestination],
+    savesHistory: Bool
+  ) async {
+    guard isCancellationRequested(id) else { return }
+    if await saver.undoSmartCapture(receipt) {
+      recoveryReceipt = nil
+      recoveryAction = nil
+      await completeCancellation(id)
+    } else {
+      await preserveFailedUndoRecovery(
+        id,
+        record: record,
+        text: text,
+        receipt: receipt,
+        candidates: candidates,
+        savesHistory: savesHistory
+      )
+    }
+  }
+
   private func updateHistory(
     _ record: DictationHistoryRecord,
     captureID: UUID,
@@ -638,14 +672,21 @@ final class DictationCoordinator {
     capture.isTerminating = true
     self.capture = capture
     if cancelEditor { rollbackEditor(id) }
-    if deleteHistory { await historyController.delete(id) }
+    var terminalPhase = phase
+    var terminalOutcome = outcome
+    if deleteHistory, !(await historyController.delete(id)) {
+      let message = "Dictation cancellation could not remove its History transcript."
+      recoveryAction = .openHistory
+      terminalPhase = .failed(message)
+      terminalOutcome = .failed(message)
+    }
     guard let current = self.capture, current.id == id else { return }
     if let engine = current.engine { await release(engine) }
     guard self.capture?.id == id else { return }
     self.capture = nil
     completeShortcutSession(id)
-    let terminalOutcome = outcome ?? inferredTerminalOutcome(for: phase)
-    publishTerminal(phase: phase, outcome: terminalOutcome)
+    let resolvedOutcome = terminalOutcome ?? inferredTerminalOutcome(for: terminalPhase)
+    publishTerminal(phase: terminalPhase, outcome: resolvedOutcome)
   }
 
   private func release(_ engine: any SpeechEngine) async {
@@ -738,7 +779,7 @@ final class DictationCoordinator {
   }
 
   func performRecoveryAction() async -> DictationRecoveryResult? {
-    guard !recoveryOperationInFlight, let action = recoveryAction else { return nil }
+    guard canConfigureShortcut, let action = recoveryAction else { return nil }
     recoveryOperationInFlight = true
     recoveryAction = nil
     defer { recoveryOperationInFlight = false }
@@ -746,9 +787,12 @@ final class DictationCoordinator {
     case .undo:
       guard let receipt = recoveryReceipt else { return nil }
       if await saver.undoSmartCapture(receipt) {
-        await historyController.delete(receipt.captureID)
         recoveryReceipt = nil
         copyableTranscript = nil
+        guard await historyController.delete(receipt.captureID) else {
+          recoveryAction = .openHistory
+          return .openHistory
+        }
         return .completed
       }
       recoveryAction = .openDestination(receipt.noteID)

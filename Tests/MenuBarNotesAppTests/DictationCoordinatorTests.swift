@@ -436,6 +436,25 @@ private func waitForListening(
   #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
 }
 
+@Test @MainActor func armedShortcutRejectsRecoveryUntilItsSessionCompletes() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "First capture"
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  await threshold.waitUntilWaiting()
+
+  #expect(await fixture.coordinator.performRecoveryAction() == nil)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.saver.undoCount == 0)
+
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+  await fixture.coordinator.cancelShortcut(session)
+}
+
 @Test @MainActor func durableUnsavedRecoveryOpensHistoryInsteadOfCopy() async throws {
   let fixture = try Fixture()
   fixture.standard.finalText = "History recovery"
@@ -871,6 +890,89 @@ private func waitForListening(
   #expect(fixture.saver.savedTexts.isEmpty)
   #expect(try await fixture.history.list().isEmpty)
   #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor func cancelDuringFinalSmartHistoryWriteCompensatesCommittedInsertion()
+  async throws
+{
+  let gate = Gate()
+  let fixture = try Fixture(historyFinalSaveGate: gate)
+  fixture.standard.finalText = "Committed before final history"
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await finishing.value
+
+  #expect(fixture.saver.undoCount == 1)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(try await fixture.history.list().isEmpty)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor func unsafeCancelDuringFinalSmartHistoryWriteOpensCommittedDestination()
+  async throws
+{
+  let gate = Gate()
+  let fixture = try Fixture(historyFinalSaveGate: gate)
+  fixture.standard.finalText = "Committed and preserved"
+  fixture.saver.undoSucceeds = false
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await finishing.value
+
+  #expect(fixture.saver.undoCount == 1)
+  #expect(fixture.saver.savedTexts == ["Committed and preserved"])
+  #expect(fixture.coordinator.recoveryAction == .openDestination(fixture.inbox.noteID))
+  #expect(
+    fixture.coordinator.phase
+      == .failed("Dictation was saved but could not be undone.")
+  )
+}
+
+@Test @MainActor func cancellationHistoryDeleteFailureKeepsOpenHistoryRecovery()
+  async throws
+{
+  let cleaningGate = Gate()
+  let fixture = try Fixture(historyDeleteError: TestError.failed)
+  fixture.standard.finalText = "Durable transcript"
+  fixture.cleaner.gate = cleaningGate
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await cleaningGate.waitUntilWaiting()
+  await fixture.coordinator.cancel()
+  await cleaningGate.openGate()
+  await finishing.value
+
+  #expect(try await fixture.history.list().count == 1)
+  #expect(fixture.coordinator.recoveryAction == .openHistory)
+  #expect(
+    fixture.coordinator.phase
+      == .failed("Dictation cancellation could not remove its History transcript.")
+  )
+}
+
+@Test @MainActor func recoveryUndoHistoryDeleteFailureOpensHistoryInsteadOfCompleting()
+  async throws
+{
+  let fixture = try Fixture(historyDeleteError: TestError.failed)
+  fixture.standard.finalText = "Undo note but retain history"
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let result = await fixture.coordinator.performRecoveryAction()
+
+  #expect(result == .openHistory)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(try await fixture.history.list().count == 1)
+  #expect(fixture.coordinator.recoveryAction == .openHistory)
 }
 
 @Test @MainActor func failedUndoAfterCancelledSavePreservesHonestRecovery() async throws {
@@ -1428,6 +1530,8 @@ private final class Fixture {
     preferred: DictationSpeechEngine = .standard,
     historyEnabled: Bool = true,
     historySaveError: Error? = nil,
+    historyFinalSaveGate: Gate? = nil,
+    historyDeleteError: Error? = nil,
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { _ in }
   ) throws {
     preference = PreferenceBox(value: preferred)
@@ -1439,10 +1543,16 @@ private final class Fixture {
     let historyController = DictationHistoryController(
       load: { [history] in try await history.list() },
       save: { [history] record in
+        if record.insertionOutcome == .saved, let historyFinalSaveGate {
+          await historyFinalSaveGate.wait()
+        }
         if let historySaveError { throw historySaveError }
         try await history.save(record)
       },
-      delete: { [history] id in try await history.delete(id: id) },
+      delete: { [history] id in
+        if let historyDeleteError { throw historyDeleteError }
+        try await history.delete(id: id)
+      },
       clear: { [history] in try await history.clear() }
     )
     saver.destinations = [inbox]
