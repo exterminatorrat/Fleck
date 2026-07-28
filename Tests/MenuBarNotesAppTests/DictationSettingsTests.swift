@@ -346,7 +346,7 @@ import Testing
   await Task.yield()
   #expect(await log.values.count == 1)
   await gate.open()
-  await deletion.value
+  _ = await deletion.value
   await clear.value
 
   #expect(await log.values == ["delete-\(first.id)", "clear"])
@@ -424,7 +424,7 @@ import Testing
   await Task.yield()
   await loadGate.open()
   await loading.value
-  await deleting.value
+  _ = await deleting.value
 
   #expect(controller.records == [second])
   #expect(otherScene.controller.records == [second])
