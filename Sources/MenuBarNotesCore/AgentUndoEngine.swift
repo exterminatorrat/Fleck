@@ -5,8 +5,26 @@ public enum AgentUndoEngine {
     _ patch: AgentTextPatch,
     in body: String
   ) throws -> String {
-    if
-      patch.range.location == 0,
+    try draft(inverting: patch, in: body).body
+  }
+
+  public static func draft(
+    inverting patch: AgentTextPatch,
+    in body: String
+  ) throws -> AgentMutationDraft {
+    let range = try resolvedRange(for: patch, in: body)
+    return inverseDraft(
+      replacing: range,
+      with: patch.beforeText,
+      in: body
+    )
+  }
+
+  private static func resolvedRange(
+    for patch: AgentTextPatch,
+    in body: String
+  ) throws -> NSRange {
+    if patch.range.location == 0,
       patch.range.length == patch.beforeText.utf16.count,
       !patch.beforeText.isEmpty,
       patch.afterText.isEmpty,
@@ -16,7 +34,7 @@ public enum AgentUndoEngine {
       guard body.isEmpty else {
         throw AgentWorkspaceError(code: .unsafeUndo)
       }
-      return patch.beforeText
+      return NSRange(location: 0, length: 0)
     }
 
     let exactRange = NSRange(
@@ -24,7 +42,7 @@ public enum AgentUndoEngine {
       length: patch.afterText.utf16.count
     )
     if matches(patch, at: exactRange, in: body) {
-      return replacing(exactRange, with: patch.beforeText, in: body)
+      return exactRange
     }
 
     let candidates = candidateRanges(for: patch.afterText, in: body)
@@ -32,7 +50,7 @@ public enum AgentUndoEngine {
     guard candidates.count == 1, let range = candidates.first else {
       throw AgentWorkspaceError(code: .unsafeUndo)
     }
-    return replacing(range, with: patch.beforeText, in: body)
+    return range
   }
 
   private static func candidateRanges(
@@ -104,12 +122,34 @@ public enum AgentUndoEngine {
       && exactlyEqual(suffix, patch.suffixContext)
   }
 
-  private static func replacing(
-    _ range: NSRange,
+  private static func inverseDraft(
+    replacing range: NSRange,
     with replacement: String,
     in body: String
-  ) -> String {
-    (body as NSString).replacingCharacters(in: range, with: replacement)
+  ) -> AgentMutationDraft {
+    let source = body as NSString
+    let prefix = source.substring(
+      with: NSRange(location: 0, length: range.location)
+    )
+    let suffixStart = NSMaxRange(range)
+    let suffix = source.substring(
+      with: NSRange(
+        location: suffixStart,
+        length: source.length - suffixStart
+      )
+    )
+    let patch = AgentTextPatch(
+      beforeText: source.substring(with: range),
+      afterText: replacement,
+      range: range,
+      prefixContext: String(prefix.suffix(32)),
+      suffixContext: String(suffix.prefix(32))
+    )
+
+    return AgentMutationDraft(
+      body: source.replacingCharacters(in: range, with: replacement),
+      patch: patch
+    )
   }
 
   private static func exactlyEqual(_ lhs: String, _ rhs: String) -> Bool {

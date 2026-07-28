@@ -38,6 +38,96 @@ import Testing
   )
 }
 
+@Test func undoDraftReturnsTheResolvedRangeAndInversePatch() throws {
+  let forward = try AgentNoteMutationEngine.replaceLines(
+    in: "Alpha\nTarget\nOmega",
+    startLine: 2,
+    endLine: 2,
+    expectedTextSHA256:
+      "978354db0c00fc78c3a5524f462a73bc425df3fb2767e51a5f46352ae26ae6f9",
+    replacement: "Changed",
+    maximumBytes: 65_536
+  )
+  let currentBody = "Human preface\n" + forward.body
+  let resolvedRange = NSRange(
+    location: "Human preface\nAlpha\n".utf16.count,
+    length: "Changed".utf16.count
+  )
+
+  let undo = try AgentUndoEngine.draft(
+    inverting: forward.patch,
+    in: currentBody
+  )
+
+  #expect(undo.body == "Human preface\nAlpha\nTarget\nOmega")
+  #expect(
+    undo.patch
+      == AgentTextPatch(
+        beforeText: "Changed",
+        afterText: "Target",
+        range: resolvedRange,
+        prefixContext: "Human preface\nAlpha\n",
+        suffixContext: "\nOmega"
+      )
+  )
+}
+
+@Test func undoDraftIdentifiesTheContextQualifiedRunAmongIdenticalText() throws {
+  let forward = try AgentNoteMutationEngine.replaceLines(
+    in: "Left\nTarget\nRight",
+    startLine: 2,
+    endLine: 2,
+    expectedTextSHA256:
+      "978354db0c00fc78c3a5524f462a73bc425df3fb2767e51a5f46352ae26ae6f9",
+    replacement: "Shared",
+    maximumBytes: 65_536
+  )
+  let currentBody = "Shared\n" + forward.body
+  let resolvedRange = NSRange(
+    location: "Shared\nLeft\n".utf16.count,
+    length: "Shared".utf16.count
+  )
+  let styleKey = NSAttributedString.Key("fixtureStyle")
+  let attributedBody = NSMutableAttributedString(string: currentBody)
+  attributedBody.addAttribute(
+    styleKey,
+    value: "human",
+    range: NSRange(location: 0, length: "Shared".utf16.count)
+  )
+  attributedBody.addAttribute(
+    styleKey,
+    value: "agent",
+    range: resolvedRange
+  )
+
+  let undo = try AgentUndoEngine.draft(
+    inverting: forward.patch,
+    in: currentBody
+  )
+
+  #expect(undo.patch.range == resolvedRange)
+  #expect(undo.patch.beforeText == "Shared")
+  #expect(undo.patch.afterText == "Target")
+  #expect(undo.patch.prefixContext == "Shared\nLeft\n")
+  #expect(undo.patch.suffixContext == "\nRight")
+  #expect(undo.body == "Shared\nLeft\nTarget\nRight")
+  #expect(attributedBody.attribute(styleKey, at: 0, effectiveRange: nil) as? String == "human")
+  #expect(
+    attributedBody.attribute(
+      styleKey,
+      at: resolvedRange.location,
+      effectiveRange: nil
+    ) as? String == "agent"
+  )
+
+  attributedBody.replaceCharacters(
+    in: undo.patch.range,
+    with: undo.patch.afterText
+  )
+  #expect(attributedBody.string == undo.body)
+  #expect(attributedBody.attribute(styleKey, at: 0, effectiveRange: nil) as? String == "human")
+}
+
 @Test func undoRejectsWhenReplacementIsGone() throws {
   let patch = AgentTextPatch(
     beforeText: "Before",
