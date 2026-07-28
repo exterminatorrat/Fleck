@@ -1,15 +1,34 @@
 #if os(macOS)
   import AppKit
   import SwiftUI
+  import MenuBarNotesAgentProtocol
   import MenuBarNotesCore
 
   @main
   struct MenuBarNotesApp: App {
     @StateObject private var appState: AppState
     @StateObject private var dictationRuntime: DictationRuntime
+    private let agentRuntime: AgentIPCRuntime
 
     init() {
       let appState = AppState()
+      let appSupport = AgentBridgeEndpoint.applicationSupportURL()
+      let agentService = AgentCommandService(
+        state: appState,
+        profileStore: AgentProfileStore(),
+        activityStore: AgentActivityStore(rootURL: appSupport)
+      )
+      let agentServer = AgentIPCServer { profileID, credential, command in
+        try await agentService.execute(
+          profileID: profileID,
+          credential: credential,
+          command: command
+        )
+      }
+      agentRuntime = AgentIPCRuntime(
+        appState: appState,
+        server: agentServer
+      )
       _appState = StateObject(wrappedValue: appState)
       _dictationRuntime = StateObject(
         wrappedValue: DictationRuntime(appState: appState)

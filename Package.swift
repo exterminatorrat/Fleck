@@ -15,7 +15,10 @@ var packageDependencies: [Package.Dependency] = [
         revision: "a0ae212ebf6eab5f754c3129608bc5557637e605"
     ),
 ]
-var appDependencies: [Target.Dependency] = ["MenuBarNotesCore"]
+var appDependencies: [Target.Dependency] = [
+    "MenuBarNotesCore",
+    "MenuBarNotesAgentProtocol",
+]
 var appExcludes = [
     "Info.plist",
     "Resources",
@@ -70,6 +73,10 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "MenuBarNotesCore", targets: ["MenuBarNotesCore"]),
+        .library(
+            name: "MenuBarNotesAgentProtocol",
+            targets: ["MenuBarNotesAgentProtocol"]
+        ),
         .executable(name: "Motes", targets: ["MenuBarNotesApp"]),
     ],
     dependencies: packageDependencies,
@@ -77,6 +84,10 @@ let package = Package(
         .target(
             name: "MenuBarNotesCore",
             swiftSettings: coreSwiftSettings
+        ),
+        .target(
+            name: "MenuBarNotesAgentProtocol",
+            dependencies: ["MenuBarNotesCore"]
         ),
         .executableTarget(
             name: "MenuBarNotesApp",
@@ -96,6 +107,10 @@ let package = Package(
         .testTarget(
             name: "MenuBarNotesCoreTests",
             dependencies: ["MenuBarNotesCore"]
+        ),
+        .testTarget(
+            name: "MenuBarNotesAgentProtocolTests",
+            dependencies: ["MenuBarNotesAgentProtocol", "MenuBarNotesCore"]
         ),
         .testTarget(
             name: "MenuBarNotesAppTests",
