@@ -79,7 +79,9 @@ public struct FleckProductMigration {
       let legacyHasWorkspace = legacyExists && containsWorkspaceData(legacy)
       let canonicalHasWorkspace =
         canonicalExists && containsWorkspaceData(canonical)
-      if legacyHasWorkspace && canonicalHasWorkspace {
+      let canonicalIsDisposable =
+        canonicalExists && containsOnlyEmptyGeneratedScaffolding(canonical)
+      if legacyHasWorkspace && canonicalHasWorkspace && !canonicalIsDisposable {
         return .failed(
           canonical,
           .conflictingWorkspaces(
@@ -90,7 +92,11 @@ public struct FleckProductMigration {
       }
       if canonicalExists {
         if legacyHasWorkspace {
-          return .failed(canonical, .filesystemFailure)
+          guard canonicalIsDisposable else {
+            return .failed(canonical, .filesystemFailure)
+          }
+          try fileManager.removeItem(at: canonical)
+          return migrate(legacy: legacy, canonical: canonical)
         }
         return .alreadyMigrated(canonical)
       }
@@ -229,5 +235,36 @@ public struct FleckProductMigration {
       }
       return ["md", "rtf"].contains(item.pathExtension.lowercased())
     }
+  }
+
+  private func containsOnlyEmptyGeneratedScaffolding(_ root: URL) -> Bool {
+    guard !isSymbolicLink(root) else { return false }
+    let allowedDirectories: Set<String> = [
+      "AgentActivity",
+      "AgentActivity/Prepared",
+      "AgentActivity/Records",
+      "AgentActivity/Tombstones",
+    ]
+    let rootComponents = root.standardizedFileURL.pathComponents
+    guard
+      let enumerator = fileManager.enumerator(
+        at: root,
+        includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+      )
+    else { return false }
+    for case let item as URL in enumerator {
+      let values = try? item.resourceValues(
+        forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+      )
+      let relativePath = item.standardizedFileURL.pathComponents
+        .dropFirst(rootComponents.count)
+        .joined(separator: "/")
+      guard
+        values?.isDirectory == true,
+        values?.isSymbolicLink != true,
+        allowedDirectories.contains(relativePath)
+      else { return false }
+    }
+    return true
   }
 }

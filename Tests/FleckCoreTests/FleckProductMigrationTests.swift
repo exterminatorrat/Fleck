@@ -100,6 +100,54 @@ import Testing
   #expect(FileManager.default.fileExists(atPath: legacy.path))
 }
 
+@Test func emptyCanonicalAgentScaffoldingDoesNotBlockLegacyMigration() throws {
+  let parent = migrationTestDirectory()
+  defer { try? FileManager.default.removeItem(at: parent) }
+  let legacy = legacyMigrationURL(in: parent)
+  let canonical = canonicalMigrationURL(in: parent)
+  try createLegacyMigrationFixture(at: legacy)
+  for directory in ["Prepared", "Records", "Tombstones"] {
+    try FileManager.default.createDirectory(
+      at: canonical.appendingPathComponent("AgentActivity/\(directory)"),
+      withIntermediateDirectories: true
+    )
+  }
+
+  #expect(
+    FleckProductMigration(applicationSupportParent: parent).prepare()
+      == .migrated(canonical)
+  )
+  #expect(!FileManager.default.fileExists(atPath: legacy.path))
+  #expect(
+    FileManager.default.fileExists(
+      atPath: canonical.appendingPathComponent("workspace.json").path
+    )
+  )
+}
+
+@Test func unknownCanonicalScaffoldingIsNeverRemoved() throws {
+  let parent = migrationTestDirectory()
+  defer { try? FileManager.default.removeItem(at: parent) }
+  let legacy = legacyMigrationURL(in: parent)
+  let canonical = canonicalMigrationURL(in: parent)
+  try createLegacyMigrationFixture(at: legacy)
+  try FileManager.default.createDirectory(
+    at: canonical.appendingPathComponent("Unknown"),
+    withIntermediateDirectories: true
+  )
+
+  #expect(
+    FleckProductMigration(applicationSupportParent: parent).prepare()
+      == .failed(canonical, .filesystemFailure)
+  )
+  #expect(FileManager.default.fileExists(atPath: legacy.path))
+  #expect(
+    FileManager.default.fileExists(
+      atPath: canonical.appendingPathComponent("Unknown").path
+    )
+  )
+}
+
 @Test func twoWorkspaceRootsFailClosedAndPreserveBoth() throws {
   let parent = migrationTestDirectory()
   defer { try? FileManager.default.removeItem(at: parent) }
