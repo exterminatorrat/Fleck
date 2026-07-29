@@ -17,6 +17,41 @@ import Testing
   #expect(value.dictationMicrophoneUID == nil)
 }
 
+@Test func dictationModifierAndDockUsePersistentDefaults() throws {
+  let value = AppPreferences()
+  #expect(value.dictationModifierKey == .rightOption)
+  #expect(value.dictationCapsuleDock == .bottom)
+
+  let roundTrip = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: JSONEncoder().encode(value)
+  )
+  #expect(roundTrip.dictationModifierKey == .rightOption)
+  #expect(roundTrip.dictationCapsuleDock == .bottom)
+}
+
+@Test func oldShortcutPreferencesMigrateToRightOptionAndBottomDock() throws {
+  let data = Data(
+    #"{"fontFamily":".AppleSystemUIFont","fontSize":15,"dictationShortcut":{"keyCode":49,"carbonModifiers":768}}"#.utf8
+  )
+  let value = try JSONDecoder().decode(AppPreferences.self, from: data)
+  #expect(value.dictationModifierKey == .rightOption)
+  #expect(value.dictationCapsuleDock == .bottom)
+}
+
+@Test func dictationModifierChoicesKeepPhysicalSidesDistinct() {
+  #expect(DictationModifierKey.allCases == [
+    .function,
+    .leftCommand,
+    .rightCommand,
+    .leftOption,
+    .rightOption,
+    .leftControl,
+    .rightControl,
+  ])
+  #expect(Set(DictationModifierKey.allCases.map(\.displayName)).count == 7)
+}
+
 @Test func oldPreferencesDecodeWithDictationDefaults() throws {
   let data = Data(#"{"fontFamily":".AppleSystemUIFont","fontSize":15}"#.utf8)
   let value = try JSONDecoder().decode(AppPreferences.self, from: data)

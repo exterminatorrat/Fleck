@@ -47,6 +47,34 @@ public struct DictationShortcut: Codable, Equatable, Sendable {
   }
 }
 
+public enum DictationModifierKey: String, Codable, CaseIterable, Sendable {
+  case function
+  case leftCommand
+  case rightCommand
+  case leftOption
+  case rightOption
+  case leftControl
+  case rightControl
+
+  public var displayName: String {
+    switch self {
+    case .function: "Fn"
+    case .leftCommand: "Left Command"
+    case .rightCommand: "Right Command"
+    case .leftOption: "Left Option"
+    case .rightOption: "Right Option"
+    case .leftControl: "Left Control"
+    case .rightControl: "Right Control"
+    }
+  }
+}
+
+public enum DictationCapsuleDock: String, Codable, CaseIterable, Sendable {
+  case bottom
+  case left
+  case right
+}
+
 public struct DictationDestination: Codable, Equatable, Sendable {
   public let noteID: UUID
   public let title: String

@@ -19,7 +19,10 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var launchAtLogin: Bool
   public var shortcuts: [Shortcut]
   public var dictationSpeechEngine: DictationSpeechEngine
+  @available(*, deprecated, message: "Use dictationModifierKey")
   public var dictationShortcut: DictationShortcut
+  public var dictationModifierKey: DictationModifierKey
+  public var dictationCapsuleDock: DictationCapsuleDock
   public var dictationHistoryEnabled: Bool
   public var dictationCapsuleEnabled: Bool
   public var dictationMicrophoneUID: String?
@@ -34,6 +37,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     shortcuts: [Shortcut] = Shortcut.defaults,
     dictationSpeechEngine: DictationSpeechEngine = .standard,
     dictationShortcut: DictationShortcut = DictationShortcut(),
+    dictationModifierKey: DictationModifierKey = .rightOption,
+    dictationCapsuleDock: DictationCapsuleDock = .bottom,
     dictationHistoryEnabled: Bool = true,
     dictationCapsuleEnabled: Bool = true,
     dictationMicrophoneUID: String? = nil
@@ -56,6 +61,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       ? dictationSpeechEngine
       : .standard
     self.dictationShortcut = dictationShortcut
+    self.dictationModifierKey = dictationModifierKey
+    self.dictationCapsuleDock = dictationCapsuleDock
     self.dictationHistoryEnabled = dictationHistoryEnabled
     self.dictationCapsuleEnabled = dictationCapsuleEnabled
     self.dictationMicrophoneUID = dictationMicrophoneUID
@@ -64,8 +71,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case fontFamily, fontSize, accentHex, editorTextHex, editorBackgroundHex, panelOpacity, theme,
       panelWidth, panelHeight, showFormattingBar, automaticLists, launchAtLogin, shortcuts,
-      dictationSpeechEngine, dictationShortcut, dictationHistoryEnabled, dictationCapsuleEnabled,
-      dictationMicrophoneUID
+      dictationSpeechEngine, dictationShortcut, dictationModifierKey, dictationCapsuleDock,
+      dictationHistoryEnabled, dictationCapsuleEnabled, dictationMicrophoneUID
   }
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -85,6 +92,14 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       shortcuts: try c.decodeIfPresent([Shortcut].self, forKey: .shortcuts) ?? Shortcut.defaults,
       dictationSpeechEngine: try c.decodeIfPresent(DictationSpeechEngine.self, forKey: .dictationSpeechEngine) ?? .standard,
       dictationShortcut: try c.decodeIfPresent(DictationShortcut.self, forKey: .dictationShortcut) ?? DictationShortcut(),
+      dictationModifierKey: try c.decodeIfPresent(
+        DictationModifierKey.self,
+        forKey: .dictationModifierKey
+      ) ?? .rightOption,
+      dictationCapsuleDock: try c.decodeIfPresent(
+        DictationCapsuleDock.self,
+        forKey: .dictationCapsuleDock
+      ) ?? .bottom,
       dictationHistoryEnabled: try c.decodeIfPresent(Bool.self, forKey: .dictationHistoryEnabled) ?? true,
       dictationCapsuleEnabled: try c.decodeIfPresent(Bool.self, forKey: .dictationCapsuleEnabled) ?? true,
       dictationMicrophoneUID: try c.decodeIfPresent(String.self, forKey: .dictationMicrophoneUID))
