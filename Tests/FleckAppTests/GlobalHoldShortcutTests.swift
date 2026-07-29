@@ -212,13 +212,19 @@ import Testing
   #expect(fixture.shortcut.canChangeModifier)
 }
 
-@Test @MainActor func coordinatorGateParticipatesInUnifiedReconfigurationGate() throws {
+@Test @MainActor func coordinatorGateRejectsConfigurationBeforeMonitorMutation() throws {
   let fixture = ShortcutFixture()
   try fixture.shortcut.configure(.rightOption)
-
   fixture.handler.canConfigureShortcut = false
+  fixture.monitor.accessGranted = false
 
   #expect(!fixture.shortcut.canChangeModifier)
+  #expect(throws: GlobalHoldShortcut.RegistrationError.activeSession) {
+    try fixture.shortcut.configure(.leftOption)
+  }
+  #expect(fixture.shortcut.registeredModifier == .rightOption)
+  #expect(fixture.monitor.startCount == 1)
+  #expect(fixture.monitor.stopCount == 0)
 }
 
 @Test @MainActor func deniedMonitoringLeavesExistingConfigurationRunning() throws {
@@ -233,7 +239,7 @@ import Testing
   #expect(fixture.monitor.stopCount == 0)
 }
 
-@Test @MainActor func reconfigurationRestartsMonitorAndClearsTapState() async throws {
+@Test @MainActor func runningMonitorChangesSemanticModifierWithoutRestart() async throws {
   let fixture = ShortcutFixture()
   try fixture.shortcut.configure(.rightOption)
   fixture.monitor.emit(.pressed(.rightOption))
@@ -243,8 +249,9 @@ import Testing
 
   try fixture.shortcut.configure(.leftOption)
 
-  #expect(fixture.monitor.startCount == 2)
-  #expect(fixture.monitor.stopCount == 1)
+  #expect(fixture.shortcut.registeredModifier == .leftOption)
+  #expect(fixture.monitor.startCount == 1)
+  #expect(fixture.monitor.stopCount == 0)
   fixture.clock.advance(by: .milliseconds(20))
   fixture.monitor.emit(.pressed(.leftOption))
   await fixture.shortcut.drainEvents()
@@ -339,7 +346,7 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
   func beginHandsFreeShortcut(
     editor: (any FocusedDictationEditing)?,
     destination: DictationDestination?
-  ) async -> DictationShortcutSession? {
+  ) -> DictationShortcutSession? {
     events.append(.handsFreeBegin)
     guard acceptsHandsFree else { return nil }
     return makeSession()

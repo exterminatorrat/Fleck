@@ -12,7 +12,7 @@
     func beginHandsFreeShortcut(
       editor: (any FocusedDictationEditing)?,
       destination: DictationDestination?
-    ) async -> DictationShortcutSession?
+    ) -> DictationShortcutSession?
     func endShortcut(_ session: DictationShortcutSession) async
     func finishHandsFreeShortcut(_ session: DictationShortcutSession) async
     func cancelShortcut(_ session: DictationShortcutSession) async
@@ -123,26 +123,31 @@
 
     func configure(_ modifier: DictationModifierKey) throws {
       guard !isUninstalled else { throw RegistrationError.uninstalled }
+      guard handler?.canConfigureShortcut == true else {
+        throw RegistrationError.activeSession
+      }
       guard pendingDeliveryCount == 0 else { throw RegistrationError.eventDeliveryPending }
       guard acceptedSession == nil else { throw RegistrationError.activeSession }
       guard !physicalPrimaryDown else { throw RegistrationError.primaryKeyHeld }
       guard monitor.accessGranted else {
-        publishMonitorState(.unauthorized)
+        if monitorState != .running {
+          publishMonitorState(.unauthorized)
+        }
         throw RegistrationError.unauthorized
       }
       guard registeredModifier != modifier || monitorState != .running else { return }
 
       clearTapState()
-      if registeredModifier != nil || monitorState == .running {
-        monitorStopExpected = true
-        monitor.stop()
-        monitorStopExpected = false
+      if monitorState == .running {
+        registeredModifier = modifier
+        return
       }
-      registeredModifier = nil
+      let previousModifier = registeredModifier
       do {
         try monitor.start()
         registeredModifier = modifier
       } catch {
+        registeredModifier = previousModifier
         if monitorState != .unauthorized {
           publishMonitorState(.failed)
         }
@@ -155,14 +160,18 @@
     @discardableResult
     func preflightAccess() -> Bool {
       let granted = monitor.accessGranted
-      if !granted { publishMonitorState(.unauthorized) }
+      if !granted, monitorState != .running {
+        publishMonitorState(.unauthorized)
+      }
       return granted
     }
 
     @discardableResult
     func requestAccess() -> Bool {
       let granted = monitor.requestAccess() && monitor.accessGranted
-      if !granted { publishMonitorState(.unauthorized) }
+      if !granted, monitorState != .running {
+        publishMonitorState(.unauthorized)
+      }
       return granted
     }
 
@@ -249,7 +258,7 @@
         self.lastShortRelease = nil
         if interval >= .zero, interval <= Self.doubleTapWindow {
           guard
-            let session = await handler?.beginHandsFreeShortcut(
+            let session = handler?.beginHandsFreeShortcut(
               editor: editorProvider(),
               destination: destinationProvider()
             )

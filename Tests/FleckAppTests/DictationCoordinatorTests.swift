@@ -87,11 +87,12 @@ import Testing
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
   fixture.standard.finalText = "Hands free"
 
-  let session = try #require(await fixture.coordinator.beginHandsFreeShortcut(
+  let session = try #require(fixture.coordinator.beginHandsFreeShortcut(
     editor: nil,
     destination: nil
   ))
 
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
   #expect(fixture.coordinator.phase == .listening(
     mode: .smartCapture,
     engine: .standard
@@ -103,12 +104,13 @@ import Testing
 
 @Test @MainActor func handsFreeShortcutFinishAndCancelRequireTheOwnedSession() async throws {
   let fixture = try Fixture()
-  let session = try #require(await fixture.coordinator.beginHandsFreeShortcut(
+  let session = try #require(fixture.coordinator.beginHandsFreeShortcut(
     editor: nil,
     destination: nil
   ))
   let foreignSession = DictationShortcutSession(id: UUID())
 
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
   await fixture.coordinator.finishHandsFreeShortcut(foreignSession)
   await fixture.coordinator.cancelShortcut(foreignSession)
 
@@ -125,7 +127,7 @@ import Testing
   let fixture = try Fixture()
   await fixture.coordinator.start(mode: .smartCapture)
 
-  let session = await fixture.coordinator.beginHandsFreeShortcut(
+  let session = fixture.coordinator.beginHandsFreeShortcut(
     editor: nil,
     destination: nil
   )
@@ -149,7 +151,7 @@ import Testing
   let recovery = Task { await fixture.coordinator.performRecoveryAction() }
   await gate.waitUntilWaiting()
 
-  let session = await fixture.coordinator.beginHandsFreeShortcut(
+  let session = fixture.coordinator.beginHandsFreeShortcut(
     editor: nil,
     destination: nil
   )
@@ -165,7 +167,7 @@ import Testing
   let holdSession = try #require(fixture.coordinator.beginShortcut(editor: nil))
   await threshold.waitUntilWaiting()
 
-  let handsFreeSession = await fixture.coordinator.beginHandsFreeShortcut(
+  let handsFreeSession = fixture.coordinator.beginHandsFreeShortcut(
     editor: nil,
     destination: nil
   )
@@ -176,12 +178,12 @@ import Testing
 
 @Test @MainActor func handsFreeShortcutRejectsAnotherHandsFreeSession() async throws {
   let fixture = try Fixture()
-  let session = try #require(await fixture.coordinator.beginHandsFreeShortcut(
+  let session = try #require(fixture.coordinator.beginHandsFreeShortcut(
     editor: nil,
     destination: nil
   ))
 
-  let secondSession = await fixture.coordinator.beginHandsFreeShortcut(
+  let secondSession = fixture.coordinator.beginHandsFreeShortcut(
     editor: nil,
     destination: nil
   )
@@ -203,6 +205,19 @@ private func waitForListening(
   }
   if case .listening = coordinator.phase { return true }
   return false
+}
+
+private func waitForCompletion(
+  _ probe: CompletionProbe,
+  timeout: Duration
+) async -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: timeout)
+  while clock.now < deadline {
+    if await probe.isComplete { return true }
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  return await probe.isComplete
 }
 
 @Test @MainActor func heldShortcutPublishesEachPhaseExactlyOnceInOrder() async throws {
@@ -1143,7 +1158,6 @@ private func waitForListening(
 
 @Test @MainActor func rejectedGlobalShortcutCannotFinishOrCancelToolbarCapture() async throws {
   let fixture = try Fixture()
-  await fixture.coordinator.start(mode: .smartCapture)
   let monitor = CoordinatorModifierMonitorSpy()
   let escape = CoordinatorEscapeRegistrarSpy()
   let shortcut = GlobalHoldShortcut(
@@ -1152,6 +1166,7 @@ private func waitForListening(
     escapeRegistrar: escape
   )
   try shortcut.configure(.rightOption)
+  await fixture.coordinator.start(mode: .smartCapture)
 
   monitor.emit(.pressed(.rightOption))
   monitor.emit(.released(.rightOption))
@@ -1163,6 +1178,83 @@ private func waitForListening(
   #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
   await shortcut.uninstall()
   await fixture.coordinator.cancel()
+}
+
+@Test @MainActor func handsFreeStartupOwnsEscapeBeforeProviderReturns() async throws {
+  let holdGate = Gate()
+  let providerGate = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await holdGate.wait() })
+  fixture.provider.gate = providerGate
+  let monitor = CoordinatorModifierMonitorSpy()
+  let escape = CoordinatorEscapeRegistrarSpy()
+  let shortcut = GlobalHoldShortcut(
+    handler: fixture.coordinator,
+    monitor: monitor,
+    escapeRegistrar: escape
+  )
+  try shortcut.configure(.rightOption)
+
+  monitor.emit(.pressed(.rightOption))
+  monitor.emit(.released(.rightOption))
+  await shortcut.drainEvents()
+  monitor.emit(.pressed(.rightOption))
+  await fixture.provider.waitUntilRequested()
+
+  #expect(escape.registerCount == 2)
+  escape.emit()
+  let drained = CompletionProbe()
+  let drain = Task {
+    await shortcut.drainEvents()
+    await drained.complete()
+  }
+  #expect(await waitForCompletion(drained, timeout: .seconds(1)))
+
+  await providerGate.openGate()
+  await drain.value
+  await shortcut.waitForTerminalObservation()
+  #expect(fixture.coordinator.phase == .idle)
+  #expect(fixture.standard.startCount == 0)
+  await holdGate.openGate()
+  await shortcut.uninstall()
+}
+
+@Test @MainActor func handsFreeStartupMonitorLossCancelsBeforeProviderReturns()
+  async throws
+{
+  let holdGate = Gate()
+  let providerGate = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await holdGate.wait() })
+  fixture.provider.gate = providerGate
+  let monitor = CoordinatorModifierMonitorSpy()
+  let escape = CoordinatorEscapeRegistrarSpy()
+  let shortcut = GlobalHoldShortcut(
+    handler: fixture.coordinator,
+    monitor: monitor,
+    escapeRegistrar: escape
+  )
+  try shortcut.configure(.rightOption)
+
+  monitor.emit(.pressed(.rightOption))
+  monitor.emit(.released(.rightOption))
+  await shortcut.drainEvents()
+  monitor.emit(.pressed(.rightOption))
+  await fixture.provider.waitUntilRequested()
+
+  monitor.publish(.failed)
+  let drained = CompletionProbe()
+  let drain = Task {
+    await shortcut.drainEvents()
+    await drained.complete()
+  }
+  #expect(await waitForCompletion(drained, timeout: .seconds(1)))
+
+  await providerGate.openGate()
+  await drain.value
+  await shortcut.waitForTerminalObservation()
+  #expect(fixture.coordinator.phase == .idle)
+  #expect(fixture.standard.startCount == 0)
+  await holdGate.openGate()
+  await shortcut.uninstall()
 }
 
 @Test @MainActor func captureReservationSurvivesDelayedResourceRelease() async throws {
@@ -1704,14 +1796,25 @@ private final class CoordinatorModifierMonitorSpy: ModifierKeyMonitoring {
   func emit(_ transition: ModifierKeyTransition) {
     transitionHandler?(transition)
   }
+
+  func publish(_ state: ModifierMonitorState) {
+    stateHandler?(state)
+  }
 }
 
 @MainActor
 private final class CoordinatorEscapeRegistrarSpy: EscapeHotKeyRegistering {
   var eventHandler: (() -> Void)?
+  private(set) var registerCount = 0
+  private(set) var unregisterCount = 0
 
-  func register() throws {}
-  func unregister() {}
+  func register() throws {
+    registerCount += 1
+  }
+
+  func unregister() {
+    unregisterCount += 1
+  }
 
   func emit() {
     eventHandler?()

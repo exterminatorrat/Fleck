@@ -599,26 +599,38 @@ import Testing
   #expect(fixture.monitor.stopCount == 0)
 }
 
-@Test @MainActor func DictationRuntimePersistsModifierOnlyAfterMonitorStarts()
+@Test @MainActor func DictationRuntimeRunningMonitorChangesWithoutRestart()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: "saved")
+  await fixture.runtime.awaitStartupAssessment()
+  fixture.monitor.startError = DictationSettingsTestError.failed
+
+  let changed = await fixture.runtime.changeModifier(to: .leftCommand)
+
+  #expect(changed)
+  #expect(fixture.runtime.actualModifier == .leftCommand)
+  #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
+  #expect(fixture.monitor.startCount == 1)
+  #expect(fixture.monitor.stopCount == 0)
+}
+
+@Test @MainActor func DictationRuntimeFailedRestartPreservesStoredSemanticModifier()
   async throws
 {
   let fixture = try await RuntimeFixture(finalText: "saved")
   await fixture.runtime.awaitStartupAssessment()
   let old = fixture.appState.preferences.dictationModifierKey
+  fixture.monitor.publish(.failed)
+  await fixture.runtime.shortcutController.drainEvents()
   fixture.monitor.startError = DictationSettingsTestError.failed
 
-  let failed = await fixture.runtime.changeModifier(to: .leftCommand)
-
-  #expect(!failed)
-  #expect(fixture.appState.preferences.dictationModifierKey == old)
-  #expect(fixture.runtime.actualModifier == nil)
-
-  fixture.monitor.startError = nil
   let changed = await fixture.runtime.changeModifier(to: .leftCommand)
-  #expect(changed)
-  #expect(fixture.runtime.actualModifier == .leftCommand)
-  #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
-  #expect(fixture.runtime.shortcutError == nil)
+
+  #expect(!changed)
+  #expect(fixture.appState.preferences.dictationModifierKey == old)
+  #expect(fixture.runtime.shortcutController.registeredModifier == old)
+  #expect(fixture.runtime.actualModifier == nil)
 }
 
 @Test @MainActor func DictationRecoveryRemainsReachableWhenCapsuleIsDisabled()
@@ -1461,6 +1473,10 @@ private final class RuntimeModifierMonitor: ModifierKeyMonitoring {
 
   func emit(_ transition: ModifierKeyTransition) {
     transitionHandler?(transition)
+  }
+
+  func publish(_ state: ModifierMonitorState) {
+    stateHandler?(state)
   }
 }
 

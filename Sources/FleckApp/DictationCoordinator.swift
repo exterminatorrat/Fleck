@@ -176,21 +176,23 @@ final class DictationCoordinator {
   func beginHandsFreeShortcut(
     editor: (any FocusedDictationEditing)?,
     destination: DictationDestination? = nil
-  ) async -> DictationShortcutSession? {
+  ) -> DictationShortcutSession? {
     guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
       return nil
     }
     let session = DictationShortcutSession(id: UUID())
     activeShortcutSessions.insert(session.id)
     let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
-    await startCapture(
+    guard reserveCapture(
       id: session.id,
       mode: focusedEditor == nil ? .smartCapture : .focused,
       editor: focusedEditor,
       destination: focusedEditor == nil ? nil : destination
-    )
-    guard activeShortcutSessions.contains(session.id), capture?.id == session.id else {
+    ) else {
       return nil
+    }
+    Task { [weak self] in
+      await self?.startReservedCapture(session.id)
     }
     return session
   }
@@ -268,8 +270,25 @@ final class DictationCoordinator {
     editor: (any FocusedDictationEditing)?,
     destination: DictationDestination?
   ) async {
-    guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
+    guard reserveCapture(
+      id: id,
+      mode: mode,
+      editor: editor,
+      destination: destination
+    ) else {
       return
+    }
+    await startReservedCapture(id)
+  }
+
+  private func reserveCapture(
+    id: UUID,
+    mode: DictationMode,
+    editor: (any FocusedDictationEditing)?,
+    destination: DictationDestination?
+  ) -> Bool {
+    guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
+      return false
     }
     copyableTranscript = nil
     recoveryReceipt = nil
@@ -293,9 +312,14 @@ final class DictationCoordinator {
         phase: .failed("Unable to begin focused dictation."),
         outcome: .failed("Unable to begin focused dictation.")
       )
-      return
+      return false
     }
+    return true
+  }
 
+  private func startReservedCapture(_ id: UUID) async {
+    guard let reservedCapture = capture, reservedCapture.id == id else { return }
+    let mode = reservedCapture.mode
     let engine: any SpeechEngine
     do {
       engine = try await engineProvider.engineForCapture(preferred: preferredEngine())

@@ -412,7 +412,8 @@
     }
 
     var actualModifier: DictationModifierKey? {
-      shortcutController.registeredModifier
+      guard shortcutController.monitorState == .running else { return nil }
+      return shortcutController.registeredModifier
     }
 
     var canChangeModifier: Bool {
