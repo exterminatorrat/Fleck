@@ -688,6 +688,9 @@
         server: server,
         waitUntilReady: { [weak appState] in
           await appState?.waitUntilInitialLoad()
+        },
+        canStart: { [weak appState] in
+          appState?.isAgentWorkspaceAvailable == true
         }
       )
     }
@@ -695,6 +698,7 @@
     init(
       server: AgentIPCServer,
       waitUntilReady: @escaping @MainActor @Sendable () async -> Void,
+      canStart: @escaping @MainActor @Sendable () -> Bool = { true },
       notificationCenter: NotificationCenter = .default
     ) {
       self.server = server
@@ -704,7 +708,8 @@
         guard
           let self,
           !Task.isCancelled,
-          !terminated
+          !terminated,
+          canStart()
         else { return }
         try? server?.start()
       }

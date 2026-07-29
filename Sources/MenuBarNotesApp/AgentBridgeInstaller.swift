@@ -2,6 +2,7 @@
   import CryptoKit
   import Darwin
   import Foundation
+  import MenuBarNotesCore
 
   enum AgentBridgeInstallerError: Error, Equatable {
     case bundledHelperMissing
@@ -68,7 +69,10 @@
       let applicationSupportURL = FileManager.default.urls(
         for: .applicationSupportDirectory,
         in: .userDomainMask
-      )[0].appendingPathComponent("MenuBarNotes", isDirectory: true)
+      )[0].appendingPathComponent(
+        FleckProductPaths.canonicalDirectoryName,
+        isDirectory: true
+      )
       return Self(
         bundledHelperURL: sharedSupportURL.appendingPathComponent("motes-agent"),
         applicationSupportURL: applicationSupportURL

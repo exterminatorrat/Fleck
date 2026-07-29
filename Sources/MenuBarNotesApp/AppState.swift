@@ -43,6 +43,7 @@
       }
     }
     @Published var saveError: String?
+    @Published private(set) var startupMigrationError: FleckProductMigrationError?
     @Published private(set) var saveStatus = SaveStatus.idle
     @Published private(set) var trashedNotes: [TrashedNote] = []
     @Published private(set) var latestAgentFeedback: AgentChangeFeedback?
@@ -54,6 +55,7 @@
     private(set) var hasFinishedInitialLoad = false
     private(set) var isAgentWorkspaceAvailable = false
     private(set) var agentCommitProofs: [AgentWorkspaceCommitProof] = []
+    var isPersistenceBlocked: Bool { startupMigrationError != nil }
 
     private let store: LocalStore
     private let snapshotWriter: LocalStoreSnapshotWriter
@@ -79,13 +81,18 @@
       saveOperation: SaveOperation? = nil,
       loadTrashOperation: LoadTrashOperation? = nil,
       agentProfileStore: AgentProfileStore? = nil,
-      agentActivityStore: AgentActivityStore? = nil
+      agentActivityStore: AgentActivityStore? = nil,
+      startupMigrationError: FleckProductMigrationError? = nil
     ) {
       let appSupport = FileManager.default.urls(
         for: .applicationSupportDirectory,
         in: .userDomainMask
       ).first!
-      let store = store ?? LocalStore(rootURL: appSupport.appendingPathComponent("MenuBarNotes"))
+      let canonicalRoot = appSupport.appendingPathComponent(
+        FleckProductPaths.canonicalDirectoryName,
+        isDirectory: true
+      )
+      let store = store ?? LocalStore(rootURL: canonicalRoot)
       self.store = store
       snapshotWriter = store.snapshotWriter
       self.saveOperation =
@@ -104,9 +111,16 @@
       self.agentProfileStore = agentProfileStore ?? AgentProfileStore()
       self.agentActivityStore =
         agentActivityStore
-        ?? AgentActivityStore(rootURL: appSupport.appendingPathComponent("MenuBarNotes"))
+        ?? AgentActivityStore(rootURL: canonicalRoot)
+      self.startupMigrationError = startupMigrationError
       workspace.ensureNoteExists()
       Task {
+        if let startupMigrationError {
+          isAgentWorkspaceAvailable = false
+          saveError = Self.migrationFailureMessage(for: startupMigrationError)
+          finishInitialLoad()
+          return
+        }
         await load()
         await refreshAgentProfiles()
         refreshAgentActivity()
@@ -385,6 +399,9 @@
 
     @discardableResult
     func saveNow(transactionOwned: Bool = false) -> Task<Void, Error> {
+      if let startupMigrationError {
+        return Task { throw startupMigrationError }
+      }
       debouncedSaveTask?.cancel()
       markSaveStarted()
       if transactionOwned {
@@ -410,6 +427,7 @@
     }
 
     func restore(_ trashedNote: TrashedNote) {
+      guard startupMigrationError == nil else { return }
       debouncedSaveTask?.cancel()
       resetSaveStatus()
       pendingTrashNotes.removeValue(forKey: trashedNote.id)
@@ -480,6 +498,7 @@
     }
 
     private func scheduleSave() {
+      guard startupMigrationError == nil else { return }
       debouncedSaveTask?.cancel()
       markSaveStarted()
       let task = Task {
@@ -489,6 +508,28 @@
         try await persist(saveSnapshot())
       }
       debouncedSaveTask = task
+    }
+
+    private static func migrationFailureMessage(
+      for error: FleckProductMigrationError
+    ) -> String {
+      switch error {
+      case .conflictingWorkspaces(let legacyPath, let canonicalPath):
+        "Fleck found data in both \(legacyPath) and \(canonicalPath). "
+          + "Close Fleck and resolve those folders before editing."
+      case .unsafeLegacyRoot:
+        "Fleck could not safely migrate the legacy data folder because it is "
+          + "a symbolic link. Restore a normal local folder, then reopen Fleck."
+      case .invalidMigratedWorkspace:
+        "Fleck could not validate the migrated notes and restored the legacy "
+          + "folder. Check the legacy data, then reopen Fleck."
+      case .rollbackFailed(let legacyPath, let canonicalPath):
+        "Fleck could not finish or roll back migration. Do not edit "
+          + "\(legacyPath) or \(canonicalPath) until the folders are resolved."
+      case .filesystemFailure:
+        "Fleck could not prepare its Application Support folder. Check disk "
+          + "access and available space, then reopen Fleck."
+      }
     }
 
     private typealias SaveSnapshot = (

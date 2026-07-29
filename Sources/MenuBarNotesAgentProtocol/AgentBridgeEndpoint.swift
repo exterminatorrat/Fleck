@@ -1,4 +1,5 @@
 import Foundation
+import MenuBarNotesCore
 
 public enum AgentBridgeEndpoint {
   public static func applicationSupportURL(
@@ -8,7 +9,10 @@ public enum AgentBridgeEndpoint {
       for: .applicationSupportDirectory,
       in: .userDomainMask
     )[0]
-    .appendingPathComponent("MenuBarNotes", isDirectory: true)
+    .appendingPathComponent(
+      FleckProductPaths.canonicalDirectoryName,
+      isDirectory: true
+    )
   }
 
   public static func socketURL(
@@ -16,6 +20,6 @@ public enum AgentBridgeEndpoint {
   ) -> URL {
     applicationSupportURL(fileManager: fileManager)
       .appendingPathComponent("AgentBridge", isDirectory: true)
-      .appendingPathComponent("motes.sock")
+      .appendingPathComponent("fleck.sock")
   }
 }

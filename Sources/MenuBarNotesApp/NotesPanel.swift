@@ -86,58 +86,62 @@
 
     var body: some View {
       VStack(spacing: 0) {
-        header
-        tabStrip
-        Divider().opacity(0.35)
-        if let failure = dictationRuntime.captureFailure {
-          HStack(spacing: 8) {
-            Label(failure.message, systemImage: "exclamationmark.triangle")
-              .font(.caption)
-            Spacer()
-            ForEach(failure.actions, id: \.pane) { action in
-              Button(action.title) {
-                dictationRuntime.openSystemSettings(action)
+        if let migrationError = appState.startupMigrationError {
+          migrationFailure(migrationError)
+        } else {
+          header
+          tabStrip
+          Divider().opacity(0.35)
+          if let failure = dictationRuntime.captureFailure {
+            HStack(spacing: 8) {
+              Label(failure.message, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+              Spacer()
+              ForEach(failure.actions, id: \.pane) { action in
+                Button(action.title) {
+                  dictationRuntime.openSystemSettings(action)
+                }
+                .accessibilityLabel(action.title)
               }
-              .accessibilityLabel(action.title)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(.quaternary.opacity(0.35))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Dictation unavailable")
           }
-          .padding(.horizontal, 10)
-          .padding(.vertical, 7)
-          .background(.quaternary.opacity(0.35))
-          .accessibilityElement(children: .contain)
-          .accessibilityLabel("Dictation unavailable")
-        }
-        if let recoveryAction = dictationRuntime.recoveryAction {
-          HStack(spacing: 8) {
-            Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
+          if let recoveryAction = dictationRuntime.recoveryAction {
+            HStack(spacing: 8) {
+              Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
+                .font(.caption)
+              Spacer()
+              Button(recoveryAction.title) {
+                Task { await dictationRuntime.performRecoveryAction() }
+              }
+              .keyboardShortcut("r", modifiers: [.command, .shift])
+              .disabled(!dictationRuntime.recoveryCommand.isEnabled)
+              .accessibilityLabel(recoveryAction.accessibilityLabel)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(.quaternary.opacity(0.35))
+          }
+          if let banner = appState.agentBannerPresentation {
+            AgentChangeBanner(
+              presentation: banner,
+              motion: motion,
+              onUndo: { Task { await appState.undoLatestAgentChange() } }
+            )
+            .animation(motion.quick, value: banner)
+          }
+          editor
+          if let error = appState.saveError {
+            Text("Could not save: \(error)")
               .font(.caption)
-            Spacer()
-            Button(recoveryAction.title) {
-              Task { await dictationRuntime.performRecoveryAction() }
-            }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
-            .disabled(!dictationRuntime.recoveryCommand.isEnabled)
-            .accessibilityLabel(recoveryAction.accessibilityLabel)
+              .foregroundStyle(.red)
+              .padding(8)
+              .frame(maxWidth: .infinity, alignment: .leading)
           }
-          .padding(.horizontal, 10)
-          .padding(.vertical, 7)
-          .background(.quaternary.opacity(0.35))
-        }
-        if let banner = appState.agentBannerPresentation {
-          AgentChangeBanner(
-            presentation: banner,
-            motion: motion,
-            onUndo: { Task { await appState.undoLatestAgentChange() } }
-          )
-          .animation(motion.quick, value: banner)
-        }
-        editor
-        if let error = appState.saveError {
-          Text("Could not save: \(error)")
-            .font(.caption)
-            .foregroundStyle(.red)
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
       }
       .frame(
@@ -228,6 +232,34 @@
         }
         .animation(motion.standard, value: notePendingDeletion?.id)
       }
+    }
+
+    private func migrationFailure(
+      _ error: FleckProductMigrationError
+    ) -> some View {
+      VStack(spacing: 12) {
+        Image(systemName: "externaldrive.badge.exclamationmark")
+          .font(.system(size: 28))
+          .foregroundStyle(.orange)
+        Text("Fleck needs your help")
+          .font(.headline)
+        Text(
+          "Fleck found both legacy and current note data. Nothing was changed. "
+            + "Close Fleck and resolve the two Application Support folders "
+            + "before reopening it."
+        )
+        .font(.callout)
+        .multilineTextAlignment(.center)
+        .foregroundStyle(.secondary)
+        Text(String(describing: error))
+          .font(.caption2.monospaced())
+          .foregroundStyle(.tertiary)
+          .textSelection(.enabled)
+      }
+      .padding(24)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .accessibilityElement(children: .combine)
+      .accessibilityLabel("Fleck data migration requires attention")
     }
 
     private var header: some View {

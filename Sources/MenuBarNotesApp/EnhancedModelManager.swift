@@ -178,7 +178,10 @@
         for: .applicationSupportDirectory,
         in: .userDomainMask
       )[0]
-      .appendingPathComponent("MenuBarNotes", isDirectory: true)
+      .appendingPathComponent(
+        FleckProductPaths.canonicalDirectoryName,
+        isDirectory: true
+      )
       .appendingPathComponent("DictationModels", isDirectory: true)
       let selectedManifest = manifest ?? Self.embeddedManifest()
       self.context = FileContext(root: root, fileManager: fileManager)

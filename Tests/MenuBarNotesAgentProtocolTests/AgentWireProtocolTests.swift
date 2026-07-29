@@ -172,12 +172,12 @@ func invalidDeclaredFrameLengthsAreRejectedImmediately(_ length: Int) {
   }
 }
 
-@Test func endpointHasOneCanonicalApplicationSupportPath() {
+@Test func canonicalEndpointsUseFleckAndFleckSocket() {
   let support = AgentBridgeEndpoint.applicationSupportURL().path
   let socket = AgentBridgeEndpoint.socketURL().path
 
-  #expect(support.hasSuffix("/Application Support/MenuBarNotes"))
-  #expect(socket == support + "/AgentBridge/motes.sock")
+  #expect(support.hasSuffix("/Application Support/Fleck"))
+  #expect(socket == support + "/AgentBridge/fleck.sock")
 }
 
 private func makeRequest(requestID: UUID = UUID()) -> AgentWireRequest {

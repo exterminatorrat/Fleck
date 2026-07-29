@@ -188,7 +188,7 @@ import Testing
     .appendingPathComponent("Sources/MenuBarNotesApp/MenuBarNotesApp.swift")
   let contents = try String(contentsOf: source, encoding: .utf8)
 
-  #expect(contents.components(separatedBy: "AgentProfileStore()").count - 1 == 1)
+  #expect(contents.components(separatedBy: "AgentProfileStore(").count - 1 == 1)
   #expect(contents.components(separatedBy: "AgentActivityStore(rootURL: appSupport)").count - 1 == 1)
   #expect(contents.contains("AppState("))
   #expect(contents.contains("agentProfileStore: agentProfileStore"))

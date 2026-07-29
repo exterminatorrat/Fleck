@@ -571,6 +571,28 @@ import Testing
   #expect(!FileManager.default.fileExists(atPath: socketURL.path))
 }
 
+@Test @MainActor func agentIPCRuntimeDoesNotBindWhenStartupIsUnavailable()
+  async throws
+{
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    execute: { _, _, _ in .sharedNotes(notes: []) }
+  )
+  let runtime = AgentIPCRuntime(
+    server: server,
+    waitUntilReady: {},
+    canStart: { false }
+  )
+  _ = runtime
+
+  try await Task.sleep(for: .milliseconds(10))
+
+  #expect(!FileManager.default.fileExists(atPath: socketURL.path))
+}
+
 @Test @MainActor func appTerminationBeforeReadinessPermanentlyPreventsBind()
   async throws
 {

@@ -4,6 +4,22 @@
   import MenuBarNotesAgentProtocol
   import MenuBarNotesCore
 
+  struct FleckStartupContext {
+    let applicationSupportURL: URL
+    let migrationError: FleckProductMigrationError?
+
+    init(outcome: FleckProductMigrationOutcome) {
+      switch outcome {
+      case .freshInstall(let url), .migrated(let url), .alreadyMigrated(let url):
+        applicationSupportURL = url
+        migrationError = nil
+      case .failed(let url, let error):
+        applicationSupportURL = url
+        migrationError = error
+      }
+    }
+  }
+
   @main
   struct MenuBarNotesApp: App {
     @StateObject private var appState: AppState
@@ -13,19 +29,38 @@
 
     init() {
       statusItemContextMenuController = StatusItemContextMenuController()
-      let appSupport = AgentBridgeEndpoint.applicationSupportURL()
-      let agentProfileStore = AgentProfileStore()
+      let applicationSupportParent = FileManager.default.urls(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask
+      )[0]
+      let startup = FleckStartupContext(
+        outcome: FleckProductMigration(
+          applicationSupportParent: applicationSupportParent
+        ).prepare()
+      )
+      let appSupport = startup.applicationSupportURL
+      let agentProfileStore = AgentProfileStore(
+        profilesURL: appSupport
+          .appendingPathComponent("AgentIntegrations", isDirectory: true)
+          .appendingPathComponent("profiles.json")
+      )
       let agentActivityStore = AgentActivityStore(rootURL: appSupport)
       let appState = AppState(
+        store: LocalStore(rootURL: appSupport),
         agentProfileStore: agentProfileStore,
-        agentActivityStore: agentActivityStore
+        agentActivityStore: agentActivityStore,
+        startupMigrationError: startup.migrationError
       )
       let agentService = AgentCommandService(
         state: appState,
         profileStore: agentProfileStore,
         activityStore: agentActivityStore
       )
-      let agentServer = AgentIPCServer { profileID, credential, command in
+      let agentServer = AgentIPCServer(
+        endpointURL: appSupport
+          .appendingPathComponent("AgentBridge", isDirectory: true)
+          .appendingPathComponent("fleck.sock")
+      ) { profileID, credential, command in
         try await agentService.execute(
           profileID: profileID,
           credential: credential,
@@ -38,7 +73,10 @@
       )
       _appState = StateObject(wrappedValue: appState)
       _dictationRuntime = StateObject(
-        wrappedValue: DictationRuntime(appState: appState)
+        wrappedValue: DictationRuntime(
+          appState: appState,
+          applicationSupportURL: appSupport
+        )
       )
     }
 
@@ -186,14 +224,21 @@
     #endif
     private(set) var shutdownCount = 0
 
-    convenience init(appState: AppState) {
-      let appSupport = FileManager.default.urls(
-        for: .applicationSupportDirectory,
-        in: .userDomainMask
-      )[0]
-      let root = appSupport.appendingPathComponent("MenuBarNotes", isDirectory: true)
-      let modelManager = DictationModelCapability()
-      let historyStore = DictationHistoryStore(rootURL: root)
+    convenience init(
+      appState: AppState,
+      applicationSupportURL: URL = AgentBridgeEndpoint.applicationSupportURL()
+    ) {
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        let modelManager = DictationModelCapability(
+          modelRootURL: applicationSupportURL.appendingPathComponent(
+            "DictationModels",
+            isDirectory: true
+          )
+        )
+      #else
+        let modelManager = DictationModelCapability()
+      #endif
+      let historyStore = DictationHistoryStore(rootURL: applicationSupportURL)
       let historyController = DictationHistoryController(store: historyStore)
       let permissionController = DictationPermissionController()
       let editorRegistry = DictationEditorRegistry()

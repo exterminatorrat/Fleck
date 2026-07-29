@@ -213,7 +213,10 @@ actor AgentProfileStore {
       for: .applicationSupportDirectory,
       in: .userDomainMask
     )[0]
-    .appendingPathComponent("MenuBarNotes", isDirectory: true)
+    .appendingPathComponent(
+      FleckProductPaths.canonicalDirectoryName,
+      isDirectory: true
+    )
     .appendingPathComponent("AgentIntegrations", isDirectory: true)
     .appendingPathComponent("profiles.json")
   }
