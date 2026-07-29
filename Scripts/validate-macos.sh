@@ -36,7 +36,7 @@ xcodebuild -version
 swift --version
 
 printf '%s\n' '--- Tests ---'
-swift test --disable-automatic-resolution
+swift test --disable-automatic-resolution --no-parallel
 
 printf '%s\n' '--- Release build ---'
 swift package clean
