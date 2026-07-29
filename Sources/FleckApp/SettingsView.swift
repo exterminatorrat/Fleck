@@ -506,19 +506,36 @@
       }
 
       Section("Controls") {
-        HStack {
-          Text("Hold shortcut")
-          Spacer()
-          DictationShortcutRecorder(shortcut: dictationShortcutBinding)
-            .frame(width: 180, height: 28)
+        Picker("Modifier key", selection: dictationModifierBinding) {
+          ForEach(DictationModifierKey.allCases, id: \.self) { key in
+            Text(
+              key == .rightOption
+                ? "\(key.displayName) — Recommended"
+                : key.displayName
+            ).tag(key)
+          }
         }
-        if let shortcutError = runtime.shortcutError {
-          HStack {
-            Label(shortcutError, systemImage: "exclamationmark.triangle.fill")
-              .font(.caption)
-              .foregroundStyle(.orange)
+        .disabled(!dictationModifierPresentation.isPickerEnabled)
+
+        Text(dictationModifierPresentation.statusCopy)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        if let guidance = dictationModifierPresentation.guidanceCopy {
+          Text(guidance)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        if let action = dictationModifierPresentation.recoveryAction {
+          switch action {
+          case .openInputMonitoringSettings:
+            Button("Open Input Monitoring Settings") {
+              runtime.openSystemSettings(.init(pane: .inputMonitoring))
+            }
+          case .retry:
             Button("Retry") {
-              runtime.retryShortcutRegistration()
+              Task {
+                _ = await runtime.retryModifierMonitoring()
+              }
             }
           }
         }
@@ -574,14 +591,20 @@
       )
     }
 
-    private var dictationShortcutBinding: Binding<DictationShortcut> {
+    private var dictationModifierPresentation: DictationModifierSettingsPresentation {
+      .init(
+        selected: appState.preferences.dictationModifierKey,
+        monitorStatus: runtime.modifierMonitorState,
+        canChange: runtime.canChangeModifier
+      )
+    }
+
+    private var dictationModifierBinding: Binding<DictationModifierKey> {
       Binding(
-        get: { appState.preferences.dictationShortcut },
-        set: { shortcut in
-          appState.updatePreferences { $0.dictationShortcut = shortcut }
-          runtime.preferencesDidChange()
-          guard shortcut.isEnabled else { return }
-          Task {
+        get: { appState.preferences.dictationModifierKey },
+        set: { modifier in
+          Task { @MainActor in
+            guard await runtime.changeModifier(to: modifier) else { return }
             await runtime.requestPermissionsAfterShortcutSetup()
             recoveryActions = runtime.permissionRecoveryActions()
           }
@@ -809,156 +832,4 @@
     }
   #endif
 
-  struct DictationShortcutRecorder: NSViewRepresentable {
-    @Binding var shortcut: DictationShortcut
-
-    func makeCoordinator() -> Coordinator {
-      Coordinator(shortcut: $shortcut)
-    }
-
-    func makeNSView(context: Context) -> RecorderButton {
-      let button = RecorderButton()
-      button.onShortcut = { [weak coordinator = context.coordinator] shortcut in
-        coordinator?.shortcut.wrappedValue = shortcut
-      }
-      button.update(shortcut)
-      return button
-    }
-
-    func updateNSView(_ button: RecorderButton, context: Context) {
-      context.coordinator.shortcut = $shortcut
-      button.update(shortcut)
-    }
-
-    @MainActor
-    final class Coordinator {
-      var shortcut: Binding<DictationShortcut>
-
-      init(shortcut: Binding<DictationShortcut>) {
-        self.shortcut = shortcut
-      }
-    }
-
-    @MainActor
-    final class RecorderButton: NSButton {
-      var onShortcut: ((DictationShortcut) -> Void)?
-      private(set) var isRecording = false
-      private var currentShortcut = DictationShortcut()
-
-      override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        bezelStyle = .rounded
-        setButtonType(.momentaryPushIn)
-        setAccessibilityLabel("Hold shortcut")
-        setAccessibilityHelp("Click, then type a key with one or more modifiers.")
-      }
-
-      required init?(coder: NSCoder) {
-        nil
-      }
-
-      override var acceptsFirstResponder: Bool { true }
-
-      override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        beginRecording()
-      }
-
-      func beginRecording() {
-        isRecording = true
-        title = "Type shortcut…"
-        setAccessibilityValue(title)
-      }
-
-      override func keyDown(with event: NSEvent) {
-        guard isRecording else {
-          super.keyDown(with: event)
-          return
-        }
-        handleKey(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
-      }
-
-      @discardableResult
-      func handleKey(
-        keyCode: UInt16,
-        modifierFlags: NSEvent.ModifierFlags
-      ) -> Bool {
-        guard isRecording else { return false }
-        if keyCode == 53 {
-          cancelRecording()
-          return true
-        }
-        if keyCode == 51 || keyCode == 117 {
-          isRecording = false
-          onShortcut?(DictationShortcut())
-          return true
-        }
-
-        let modifiers = Self.carbonModifiers(modifierFlags)
-        guard modifiers != 0 else {
-          NSSound.beep()
-          return false
-        }
-        isRecording = false
-        onShortcut?(
-          DictationShortcut(
-            keyCode: UInt32(keyCode),
-            carbonModifiers: modifiers
-          )
-        )
-        return true
-      }
-
-      func cancelRecording() {
-        isRecording = false
-        title = Self.title(for: currentShortcut)
-        setAccessibilityValue(title)
-      }
-
-      override func resignFirstResponder() -> Bool {
-        let didResign = super.resignFirstResponder()
-        if didResign {
-          cancelRecording()
-        }
-        return didResign
-      }
-
-      func update(_ shortcut: DictationShortcut) {
-        currentShortcut = shortcut
-        guard !isRecording else { return }
-        title = Self.title(for: shortcut)
-        setAccessibilityValue(title)
-      }
-
-      private static func carbonModifiers(_ flags: NSEvent.ModifierFlags) -> UInt32 {
-        var result: UInt32 = 0
-        if flags.contains(.command) { result |= UInt32(cmdKey) }
-        if flags.contains(.shift) { result |= UInt32(shiftKey) }
-        if flags.contains(.control) { result |= UInt32(controlKey) }
-        if flags.contains(.option) { result |= UInt32(optionKey) }
-        return result
-      }
-
-      private static func title(for shortcut: DictationShortcut) -> String {
-        guard let keyCode = shortcut.keyCode, shortcut.carbonModifiers != 0 else {
-          return "Record Shortcut"
-        }
-        var result = ""
-        if shortcut.carbonModifiers & UInt32(controlKey) != 0 { result += "⌃" }
-        if shortcut.carbonModifiers & UInt32(optionKey) != 0 { result += "⌥" }
-        if shortcut.carbonModifiers & UInt32(shiftKey) != 0 { result += "⇧" }
-        if shortcut.carbonModifiers & UInt32(cmdKey) != 0 { result += "⌘" }
-        return result + keyName(keyCode)
-      }
-
-      private static func keyName(_ keyCode: UInt32) -> String {
-        [
-          0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X",
-          8: "C", 9: "V", 11: "B", 12: "Q", 13: "W", 14: "E", 15: "R",
-          16: "Y", 17: "T", 31: "O", 32: "U", 34: "I", 35: "P", 37: "L",
-          38: "J", 40: "K", 45: "N", 46: "M", 49: "Space",
-        ][keyCode] ?? "Key \(keyCode)"
-      }
-    }
-  }
 #endif

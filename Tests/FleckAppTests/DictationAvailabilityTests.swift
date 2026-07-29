@@ -14,6 +14,17 @@ import Testing
   )
 }
 
+@Test func inputMonitoringUsesItsDedicatedPrivacyPane() {
+  #expect(
+    DictationPrivacyPane.inputMonitoring.url.absoluteString
+      == "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+  )
+  #expect(
+    DictationSystemSettingsAction(pane: .inputMonitoring).title
+      == "Open Input Monitoring Settings"
+  )
+}
+
 @Test func dictationAvailabilityUsesInjectedCapabilityMatrix() {
   struct Scenario {
     let name: String
@@ -164,6 +175,8 @@ import Testing
           $0.title == "Open Microphone Settings"
         case .speechRecognition:
           $0.title == "Open Speech Recognition Settings"
+        case .inputMonitoring:
+          $0.title == "Open Input Monitoring Settings"
         }
       },
       Comment(rawValue: scenario.name)

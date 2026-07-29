@@ -394,15 +394,21 @@ do not change the status from pending based on CI alone.
 
 - **Status:** PENDING — manual release blocker
 - **Owner:** QA owner (unassigned)
-- **Required evidence:** Results for shortcut conflicts, rapid tap, Escape,
-  active/hidden/pinned/behind-another-app windows, sleep/wake, device
-  disconnect, focused rollback/Undo, title-only routing/Inbox, history
-  copy/open/delete/purge/clear, and ordinary notes with no model installed.
+- **Required evidence:** Results for every left/right Command, Option, and
+  Control key; Fn on built-in and external keyboards; Input Monitoring grant,
+  denial, revocation, retry, restart, sleep/wake; ordinary modifier conflicts;
+  180 ms hold, short tap, double-tap hands-free, finish, and Escape; active,
+  hidden, pinned, and behind-another-app windows; all Spaces, full-screen apps,
+  multiple displays, display removal, and docking; focused rollback/Undo;
+  title-only routing/Inbox; history copy/open/delete/purge/clear; and ordinary
+  notes with no model installed.
 - **Exact procedure:** Run every interaction from both idle and active capture
-  states. Use uniquely identifiable note-body secrets to confirm routing sees
-  titles only. Force failed cleanup and low-confidence routing, verify raw/Inbox
-  fallback, advance a test clock or use dated fixtures for 30-day purge, and
-  inspect the saved note/history after each terminal path.
+  states. Confirm the persistent bar remains non-activating and shows neither a
+  transcript nor a shortcut hint at idle. Use uniquely identifiable note-body
+  secrets to confirm routing sees titles only. Force failed cleanup and
+  low-confidence routing, verify raw/Inbox fallback, advance a test clock or
+  use dated fixtures for 30-day purge, and inspect the saved note/history after
+  each terminal path.
 
 #### VoiceOver and Reduce Motion
 
@@ -608,6 +614,10 @@ The current targets are at or below 15 MB for the release executable where pract
 - [ ] Confirm the editor is announced as “Note body.”
 - [ ] Enable **System Settings → Accessibility → Display → Reduce transparency** and verify the panel remains legible.
 - [ ] Increase display contrast and verify selected tabs and warnings remain distinguishable.
+- [ ] With VoiceOver and Full Keyboard Access, operate the modifier picker and
+  Input Monitoring recovery controls without moving focus into the status bar.
+- [ ] Enable Reduce Motion and verify the persistent bar uses understandable
+  opacity-only state changes while docking remains immediate.
 
 ## Reporting a problem
 

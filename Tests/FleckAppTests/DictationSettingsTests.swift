@@ -265,21 +265,87 @@ import Testing
   #expect(cleanPresentation.canCopyClean)
 }
 
-@Test @MainActor func DictationShortcutRecorderEscapeAndFocusLossRestoreItsShortcutTitle() {
-  let shortcut = DictationShortcut(keyCode: 49, carbonModifiers: 256)
-  let button = DictationShortcutRecorder.RecorderButton()
-  button.update(shortcut)
-  let originalTitle = button.title
+@Test func dictationModifierSettingsShowsAllPhysicalKeysAndItsRunningStatus() {
+  let presentation = DictationModifierSettingsPresentation(
+    selected: .rightOption,
+    monitorStatus: .running,
+    canChange: true
+  )
 
-  button.beginRecording()
-  #expect(button.title == "Type shortcut…")
-  #expect(button.handleKey(keyCode: 53, modifierFlags: []))
-  #expect(button.title == originalTitle)
+  #expect(presentation.rows.count == 7)
+  #expect(presentation.recommended == .rightOption)
+  #expect(presentation.statusCopy == "Input Monitoring enabled")
+  #expect(presentation.isPickerEnabled)
+  #expect(presentation.recoveryAction == nil)
+}
 
-  button.beginRecording()
-  _ = button.resignFirstResponder()
-  #expect(button.title == originalTitle)
-  #expect(!button.isRecording)
+@Test func dictationModifierSettingsShowsDeniedUnavailableRetryAndActiveCaptureCopy() {
+  let denied = DictationModifierSettingsPresentation(
+    selected: .rightOption,
+    monitorStatus: .unauthorized,
+    canChange: true
+  )
+  #expect(denied.statusCopy.contains("required"))
+  #expect(denied.recoveryAction == .openInputMonitoringSettings)
+
+  let unavailable = DictationModifierSettingsPresentation(
+    selected: .rightOption,
+    monitorStatus: .stopped,
+    canChange: true
+  )
+  #expect(unavailable.statusCopy.contains("unavailable"))
+
+  let failed = DictationModifierSettingsPresentation(
+    selected: .rightOption,
+    monitorStatus: .failed,
+    canChange: true
+  )
+  #expect(failed.statusCopy.contains("could not start"))
+  #expect(failed.recoveryAction == .retry)
+
+  let activeCapture = DictationModifierSettingsPresentation(
+    selected: .rightOption,
+    monitorStatus: .running,
+    canChange: false
+  )
+  #expect(!activeCapture.isPickerEnabled)
+  #expect(activeCapture.statusCopy.contains("finish"))
+}
+
+@Test func dictationModifierSettingsExplainsFnAndConflictProneKeys() {
+  let function = DictationModifierSettingsPresentation(
+    selected: .function,
+    monitorStatus: .running,
+    canChange: true
+  )
+  #expect(function.guidanceCopy?.contains("best-effort") == true)
+
+  for key in [
+    DictationModifierKey.leftCommand,
+    .rightCommand,
+    .leftOption,
+    .leftControl,
+    .rightControl,
+  ] {
+    let presentation = DictationModifierSettingsPresentation(
+      selected: key,
+      monitorStatus: .running,
+      canChange: true
+    )
+    #expect(presentation.guidanceCopy?.contains("conflict") == true)
+  }
+}
+
+@Test func settingsSourceDoesNotInstantiateTheLegacyShortcutRecorder() throws {
+  let testsDirectory = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: testsDirectory.appendingPathComponent("Sources/FleckApp/SettingsView.swift")
+  )
+
+  #expect(!source.contains("DictationShortcutRecorder("))
 }
 
 @Test @MainActor func DictationEditorRegistryUsesOnlyTheActualFirstResponder() {

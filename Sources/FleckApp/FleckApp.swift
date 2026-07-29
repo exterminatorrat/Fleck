@@ -201,7 +201,6 @@
     let historyController: DictationHistoryController
 
     @Published private(set) var phase = DictationPhase.idle
-    @Published private(set) var shortcutError: String?
     @Published private(set) var modifierMonitorState = ModifierMonitorState.stopped
     @Published private(set) var modelError: String?
     @Published private(set) var availability: DictationAvailability
@@ -509,11 +508,6 @@
       synchronizePreferences()
     }
 
-    func retryShortcutRegistration() {
-      needsModifierApplication = true
-      synchronizePreferences()
-    }
-
     func changeModifier(to modifier: DictationModifierKey) async -> Bool {
       guard shortcutController.canChangeModifier else { return false }
       if !shortcutController.preflightAccess(), !shortcutController.requestAccess() {
@@ -521,18 +515,20 @@
       }
       do {
         try shortcutController.configure(modifier)
-      } catch let error as GlobalHoldShortcut.RegistrationError {
-        shortcutError = Self.shortcutMessage(error)
-        return false
       } catch {
-        shortcutError = error.localizedDescription
         return false
       }
       desiredModifier = modifier
       needsModifierApplication = false
-      shortcutError = nil
       appState?.updatePreferences { $0.dictationModifierKey = modifier }
       return true
+    }
+
+    func retryModifierMonitoring() async -> Bool {
+      guard let modifier = appState?.preferences.dictationModifierKey else {
+        return false
+      }
+      return await changeModifier(to: modifier)
     }
 
     func requestModifierMonitoringAccess() -> Bool {
@@ -674,11 +670,8 @@
         do {
           try shortcutController.configure(currentDesiredModifier)
           needsModifierApplication = false
-          shortcutError = nil
-        } catch let error as GlobalHoldShortcut.RegistrationError {
-          shortcutError = Self.shortcutMessage(error)
         } catch {
-          shortcutError = error.localizedDescription
+          return
         }
       }
 

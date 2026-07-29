@@ -31,6 +31,7 @@ enum DictationRoutingAvailability: Equatable, Sendable {
 enum DictationPrivacyPane: Hashable, Sendable {
   case microphone
   case speechRecognition
+  case inputMonitoring
 
   var url: URL {
     switch self {
@@ -38,6 +39,11 @@ enum DictationPrivacyPane: Hashable, Sendable {
       URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
     case .speechRecognition:
       URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")!
+    case .inputMonitoring:
+      URL(
+        string:
+          "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+      )!
     }
   }
 }
@@ -50,6 +56,8 @@ struct DictationSystemSettingsAction: Equatable, Sendable {
       "Open Microphone Settings"
     case .speechRecognition:
       "Open Speech Recognition Settings"
+    case .inputMonitoring:
+      "Open Input Monitoring Settings"
     }
   }
   var url: URL { pane.url }

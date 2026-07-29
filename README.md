@@ -19,6 +19,24 @@ attribution, SBOM, signing/notarization, and Mac App Store gate in
 release approval. Until those gates pass, keep Enhanced Local out of release UI
 and do not describe it as shipping.
 
+## Persistent Dictation Bar
+
+When enabled in **Settings → Dictation**, Fleck keeps one small, non-activating
+status bar visible across Spaces. Its default trigger is **Right Option**. Hold
+the selected physical modifier for 180 ms to dictate until release, or tap it
+twice to start hands-free dictation; the next press finishes and Escape
+cancels. The bar contains no transcript or shortcut hint while idle.
+
+The trigger observes only modifier `flagsChanged` transitions through macOS
+**Input Monitoring**; Fleck never observes ordinary key presses. Choose a
+different left/right modifier or Fn in Settings if needed. Fn is best-effort,
+and Command, Control, and Left Option can conflict with normal modifier use.
+
+Use **Show status capsule** to hide or restore the persistent bar, then drag it
+or use its menu to dock it at the bottom, left, or right edge. Dictation cleanup
+remains on-device. Smart Capture routes only against active note IDs and titles;
+ambiguous or failed routing saves to Inbox, never by reading note bodies.
+
 ## Agent workspace
 
 Fleck can expose selected notes to local Codex, Claude Code, Kimi, or another
