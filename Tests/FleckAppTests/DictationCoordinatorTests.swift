@@ -1144,13 +1144,18 @@ private func waitForListening(
 @Test @MainActor func rejectedGlobalShortcutCannotFinishOrCancelToolbarCapture() async throws {
   let fixture = try Fixture()
   await fixture.coordinator.start(mode: .smartCapture)
-  let registrar = CoordinatorHotKeyRegistrarSpy()
-  let shortcut = GlobalHoldShortcut(handler: fixture.coordinator, registrar: registrar)
-  try shortcut.configure(DictationShortcut(keyCode: 49, carbonModifiers: 768))
+  let monitor = CoordinatorModifierMonitorSpy()
+  let escape = CoordinatorEscapeRegistrarSpy()
+  let shortcut = GlobalHoldShortcut(
+    handler: fixture.coordinator,
+    monitor: monitor,
+    escapeRegistrar: escape
+  )
+  try shortcut.configure(.rightOption)
 
-  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
-  registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: false)
-  registrar.emit(id: GlobalHoldShortcut.escapeID, pressed: true)
+  monitor.emit(.pressed(.rightOption))
+  monitor.emit(.released(.rightOption))
+  escape.emit()
   await shortcut.drainEvents()
 
   #expect(fixture.standard.finishCount == 0)
@@ -1679,14 +1684,37 @@ private final class Fixture {
 }
 
 @MainActor
-private final class CoordinatorHotKeyRegistrarSpy: GlobalHotKeyRegistering {
-  var eventHandler: ((UInt32, Bool) -> Void)?
+private final class CoordinatorModifierMonitorSpy: ModifierKeyMonitoring {
+  var transitionHandler: ((ModifierKeyTransition) -> Void)?
+  var stateHandler: ((ModifierMonitorState) -> Void)?
+  var accessGranted = true
 
-  func register(keyCode: UInt32, modifiers: UInt32, id: UInt32) throws {}
-  func unregister(id: UInt32) {}
+  func start() throws {
+    stateHandler?(.running)
+  }
 
-  func emit(id: UInt32, pressed: Bool) {
-    eventHandler?(id, pressed)
+  func stop() {
+    stateHandler?(.stopped)
+  }
+
+  func requestAccess() -> Bool {
+    accessGranted
+  }
+
+  func emit(_ transition: ModifierKeyTransition) {
+    transitionHandler?(transition)
+  }
+}
+
+@MainActor
+private final class CoordinatorEscapeRegistrarSpy: EscapeHotKeyRegistering {
+  var eventHandler: (() -> Void)?
+
+  func register() throws {}
+  func unregister() {}
+
+  func emit() {
+    eventHandler?()
   }
 }
 

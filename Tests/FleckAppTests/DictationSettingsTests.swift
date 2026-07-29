@@ -448,21 +448,40 @@ import Testing
   #expect(await fixture.startupLog.value == 1)
 }
 
-@Test @MainActor func DictationRuntimeUsesCoordinatorEventsAndAppliesShortcutAfterTerminal() async throws {
+@Test @MainActor func DictationRuntimeWaitsForLoadedModifierWithoutRequestingAccess()
+  async throws
+{
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    preferredModifier: .leftCommand,
+    waitForInitialLoadBeforeRuntime: false
+  )
+
+  #expect(fixture.runtime.actualModifier == nil)
+  #expect(fixture.monitor.requestCount == 0)
+
+  await fixture.appState.waitUntilInitialLoad()
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.runtime.actualModifier == .leftCommand)
+  #expect(fixture.monitor.requestCount == 0)
+}
+
+@Test @MainActor func DictationRuntimeUsesCoordinatorEventsAndAppliesModifierAfterTerminal() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
-  let replacement = DictationShortcut(keyCode: 36, carbonModifiers: 256)
+  let replacement = DictationModifierKey.leftCommand
   await fixture.runtime.awaitStartupAssessment()
   #expect(!DictationRuntime.usesPeriodicObservation)
 
   await fixture.runtime.toggle()
   #expect(fixture.runtime.phase == .listening(mode: .smartCapture, engine: .standard))
-  fixture.appState.preferences.dictationShortcut = replacement
+  fixture.appState.preferences.dictationModifierKey = replacement
   fixture.runtime.preferencesDidChange()
-  #expect(fixture.runtime.actualShortcut != replacement)
+  #expect(fixture.runtime.actualModifier != replacement)
 
   await fixture.runtime.toggle()
   await fixture.runtime.waitForTerminalSynchronization()
-  #expect(fixture.runtime.actualShortcut == replacement)
+  #expect(fixture.runtime.actualModifier == replacement)
   #expect(fixture.runtime.phase != .finalizing)
 }
 
@@ -510,14 +529,15 @@ import Testing
   fixture.editorRegistry.register(commands)
   window.makeFirstResponder(textView)
   let selected = try #require(fixture.appState.selectedNote)
+  await fixture.runtime.awaitStartupAssessment()
 
-  fixture.registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  fixture.monitor.emit(.pressed(.rightOption))
   await fixture.runtime.shortcutController.drainEvents()
   for _ in 0..<20 {
     if case .listening = fixture.runtime.phase { break }
     await Task.yield()
   }
-  fixture.registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: false)
+  fixture.monitor.emit(.released(.rightOption))
   await fixture.runtime.shortcutController.drainEvents()
   await fixture.runtime.waitForTerminalSynchronization()
 
@@ -527,15 +547,15 @@ import Testing
   #expect(record.insertionOutcome == .saved)
 }
 
-@Test @MainActor func DictationRuntimeAppliesPendingShortcutAfterSavedAndFailedHotkeySessions()
+@Test @MainActor func DictationRuntimeAppliesPendingModifierAfterSavedAndFailedSessions()
   async throws
 {
   for finalText in ["saved", nil] as [String?] {
     let fixture = try await RuntimeFixture(finalText: finalText)
     await fixture.runtime.awaitStartupAssessment()
-    let replacement = DictationShortcut(keyCode: 36, carbonModifiers: 256)
+    let replacement = DictationModifierKey.leftCommand
 
-    fixture.registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+    fixture.monitor.emit(.pressed(.rightOption))
     await fixture.runtime.shortcutController.drainEvents()
     for _ in 0..<20 {
       if case .listening = fixture.runtime.phase { break }
@@ -547,13 +567,13 @@ import Testing
       Issue.record("Expected listening phase, got \(fixture.runtime.phase)")
     }
 
-    fixture.appState.updatePreferences { $0.dictationShortcut = replacement }
+    fixture.appState.updatePreferences { $0.dictationModifierKey = replacement }
     fixture.runtime.preferencesDidChange()
-    fixture.registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: false)
+    fixture.monitor.emit(.released(.rightOption))
     await fixture.runtime.shortcutController.drainEvents()
     await fixture.runtime.waitForTerminalSynchronization()
 
-    #expect(fixture.runtime.actualShortcut == replacement)
+    #expect(fixture.runtime.actualModifier == replacement)
     if finalText == nil {
       #expect(fixture.runtime.phase == .failed("No speech detected."))
     } else {
@@ -562,45 +582,42 @@ import Testing
   }
 }
 
-@Test @MainActor func DictationRuntimePreservesActualShortcutOnConflictAndRetriesExplicitly()
+@Test @MainActor func DictationRuntimeDeniedModifierChangePreservesActiveAndStoredModifier()
   async throws
 {
   let fixture = try await RuntimeFixture(finalText: "saved")
   await fixture.runtime.awaitStartupAssessment()
-  let old = fixture.appState.preferences.dictationShortcut
-  let replacement = DictationShortcut(keyCode: 36, carbonModifiers: 256)
-  fixture.registrar.failingKeyCodes.insert(36)
-  fixture.appState.preferences.dictationShortcut = replacement
-  fixture.runtime.preferencesDidChange()
+  let old = fixture.appState.preferences.dictationModifierKey
+  fixture.monitor.accessGranted = false
+  fixture.monitor.requestAccessResult = false
 
-  #expect(fixture.runtime.actualShortcut == old)
-  #expect(fixture.runtime.shortcutError == "That shortcut is already in use.")
+  let changed = await fixture.runtime.changeModifier(to: .leftCommand)
 
-  fixture.registrar.failingKeyCodes.remove(36)
-  fixture.runtime.retryShortcutRegistration()
-  #expect(fixture.runtime.actualShortcut == replacement)
-  #expect(fixture.runtime.shortcutError == nil)
+  #expect(!changed)
+  #expect(fixture.runtime.actualModifier == old)
+  #expect(fixture.appState.preferences.dictationModifierKey == old)
+  #expect(fixture.monitor.stopCount == 0)
 }
 
-@Test @MainActor func DictationRuntimeReportsUnregisteredAfterReplacementAndRestoreFail()
+@Test @MainActor func DictationRuntimePersistsModifierOnlyAfterMonitorStarts()
   async throws
 {
   let fixture = try await RuntimeFixture(finalText: "saved")
   await fixture.runtime.awaitStartupAssessment()
-  let replacement = DictationShortcut(keyCode: 36, carbonModifiers: 256)
-  fixture.registrar.failingKeyCodes = [36, 49]
-  fixture.appState.preferences.dictationShortcut = replacement
-  fixture.runtime.preferencesDidChange()
+  let old = fixture.appState.preferences.dictationModifierKey
+  fixture.monitor.startError = DictationSettingsTestError.failed
 
-  #expect(fixture.runtime.actualShortcut == nil)
-  #expect(
-    fixture.runtime.shortcutError
-      == "The new shortcut failed and the previous shortcut could not be restored. No dictation shortcut is registered."
-  )
+  let failed = await fixture.runtime.changeModifier(to: .leftCommand)
 
-  fixture.registrar.failingKeyCodes.removeAll()
-  fixture.runtime.retryShortcutRegistration()
-  #expect(fixture.runtime.actualShortcut == replacement)
+  #expect(!failed)
+  #expect(fixture.appState.preferences.dictationModifierKey == old)
+  #expect(fixture.runtime.actualModifier == nil)
+
+  fixture.monitor.startError = nil
+  let changed = await fixture.runtime.changeModifier(to: .leftCommand)
+  #expect(changed)
+  #expect(fixture.runtime.actualModifier == .leftCommand)
+  #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
   #expect(fixture.runtime.shortcutError == nil)
 }
 
@@ -762,8 +779,9 @@ import Testing
   ))
   let fixture = try await RuntimeFixture(finalText: nil, availability: availability)
   fixture.provider.error = DictationFailure.permissionDenied
+  await fixture.runtime.awaitStartupAssessment()
 
-  fixture.registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+  fixture.monitor.emit(.pressed(.rightOption))
   await fixture.runtime.shortcutController.drainEvents()
   for _ in 0..<20 {
     if fixture.runtime.captureFailure != nil { break }
@@ -888,8 +906,9 @@ import Testing
     )
     let focused = focusRuntimeEditor(fixture)
     fixture.provider.error = error
+    await fixture.runtime.awaitStartupAssessment()
 
-    fixture.registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: true)
+    fixture.monitor.emit(.pressed(.rightOption))
     await fixture.runtime.shortcutController.drainEvents()
     for _ in 0..<20 {
       if fixture.runtime.captureFailure != nil { break }
@@ -903,7 +922,7 @@ import Testing
     #expect(fixture.runtime.captureFailure?.message.contains("Speech Recognition") == false)
     #expect(!focused.commands.isFocusedDictationActive)
 
-    fixture.registrar.emit(id: GlobalHoldShortcut.primaryID, pressed: false)
+    fixture.monitor.emit(.released(.rightOption))
     await fixture.runtime.shortcutController.drainEvents()
   }
 }
@@ -1283,7 +1302,8 @@ private actor DictationOperationLog {
 @MainActor
 private final class RuntimeFixture {
   let appState: AppState
-  let registrar = RuntimeRegistrar()
+  let monitor = RuntimeModifierMonitor()
+  let escapeRegistrar = RuntimeEscapeRegistrar()
   let startupGate = DictationTestGate()
   let startupLog = RuntimeCounter()
   let enhancedReady = RuntimeBool()
@@ -1298,6 +1318,9 @@ private final class RuntimeFixture {
     startupBlocked: Bool = false,
     capsuleEnabled: Bool = false,
     preferredEngine: DictationSpeechEngine = .standard,
+    preferredModifier: DictationModifierKey = .rightOption,
+    waitForInitialLoadBeforeRuntime: Bool = true,
+    monitorAccessGranted: Bool = true,
     enhancedReadyAtStartup: Bool = false,
     permissionController: DictationPermissionController = .init(),
     availability: DictationAvailability = .evaluate(.init(
@@ -1316,7 +1339,7 @@ private final class RuntimeFixture {
     let store = LocalStore(rootURL: root)
     let preferences = AppPreferences(
       dictationSpeechEngine: preferredEngine,
-      dictationShortcut: DictationShortcut(keyCode: 49, carbonModifiers: 768),
+      dictationModifierKey: preferredModifier,
       dictationCapsuleEnabled: capsuleEnabled
     )
     var workspace = Workspace()
@@ -1328,14 +1351,17 @@ private final class RuntimeFixture {
       trashedNotes: []
     )
     appState = AppState(store: store, saveOperation: { _, _, _ in })
-    for _ in 0..<100 {
-      if appState.selectedNote?.id == persistedSelectedNoteID { break }
-      try await Task.sleep(for: .milliseconds(1))
+    if waitForInitialLoadBeforeRuntime {
+      for _ in 0..<100 {
+        if appState.selectedNote?.id == persistedSelectedNoteID { break }
+        try await Task.sleep(for: .milliseconds(1))
+      }
+      guard appState.selectedNote?.id == persistedSelectedNoteID else {
+        throw DictationSettingsTestError.failed
+      }
+      appState.preferences = preferences
     }
-    guard appState.selectedNote?.id == persistedSelectedNoteID else {
-      throw DictationSettingsTestError.failed
-    }
-    appState.preferences = preferences
+    monitor.accessGranted = monitorAccessGranted
     enhancedReady.value = enhancedReadyAtStartup
     engine = RuntimeSpeechEngine(finalText: finalText, kind: preferredEngine)
     provider = RuntimeEngineProvider(engine: engine)
@@ -1366,7 +1392,8 @@ private final class RuntimeFixture {
           DictationDestination(noteID: $0.id, title: $0.displayTitle)
         }
       },
-      registrar: registrar
+      monitor: monitor,
+      escapeRegistrar: escapeRegistrar
     )
     let modelRoot = root.appendingPathComponent("model", isDirectory: true)
     #if CLEAN_DICTATION_ENHANCED_CANDIDATE
@@ -1405,25 +1432,44 @@ private final class RuntimeFixture {
 }
 
 @MainActor
-private final class RuntimeRegistrar: GlobalHotKeyRegistering {
-  var eventHandler: ((UInt32, Bool) -> Void)?
-  var failingKeyCodes = Set<UInt32>()
-  private(set) var registrations = Set<UInt32>()
+private final class RuntimeModifierMonitor: ModifierKeyMonitoring {
+  var transitionHandler: ((ModifierKeyTransition) -> Void)?
+  var stateHandler: ((ModifierMonitorState) -> Void)?
+  var accessGranted = true
+  var requestAccessResult = true
+  var startError: Error?
+  private(set) var startCount = 0
+  private(set) var stopCount = 0
+  private(set) var requestCount = 0
 
-  func register(keyCode: UInt32, modifiers: UInt32, id: UInt32) throws {
-    if failingKeyCodes.contains(keyCode) {
-      throw GlobalHoldShortcut.RegistrationError.conflict(-9876)
-    }
-    registrations.insert(id)
+  func start() throws {
+    startCount += 1
+    if let startError { throw startError }
+    stateHandler?(.running)
   }
 
-  func unregister(id: UInt32) {
-    registrations.remove(id)
+  func stop() {
+    stopCount += 1
+    stateHandler?(.stopped)
   }
 
-  func emit(id: UInt32, pressed: Bool) {
-    eventHandler?(id, pressed)
+  func requestAccess() -> Bool {
+    requestCount += 1
+    accessGranted = requestAccessResult
+    return requestAccessResult
   }
+
+  func emit(_ transition: ModifierKeyTransition) {
+    transitionHandler?(transition)
+  }
+}
+
+@MainActor
+private final class RuntimeEscapeRegistrar: EscapeHotKeyRegistering {
+  var eventHandler: (() -> Void)?
+
+  func register() throws {}
+  func unregister() {}
 }
 
 @MainActor

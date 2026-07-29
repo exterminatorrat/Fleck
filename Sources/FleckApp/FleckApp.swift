@@ -194,6 +194,7 @@
 
     @Published private(set) var phase = DictationPhase.idle
     @Published private(set) var shortcutError: String?
+    @Published private(set) var modifierMonitorState = ModifierMonitorState.stopped
     @Published private(set) var modelError: String?
     @Published private(set) var availability: DictationAvailability
     @Published private(set) var recoveryAction: DictationCapsuleAction?
@@ -206,14 +207,15 @@
     private let editorRegistry: DictationEditorRegistry
     private let enhancedIsReady: @MainActor () -> Bool
     private let availabilityProvider: @MainActor () -> DictationAvailability
-    private var desiredShortcut: DictationShortcut?
-    private var needsShortcutApplication = false
+    private var desiredModifier: DictationModifierKey?
+    private var needsModifierApplication = false
     private var modelStateAssessed = false
     private var modelOperation: Task<Void, Never>?
     private var modelOperationID: UUID?
     private var modelOperations: [UUID: Task<Void, Never>] = [:]
     private var capsuleOwner: CapsuleOwner?
     private var startupAssessmentTask: Task<Void, Never>?
+    private var initialLoadSynchronizationTask: Task<Void, Never>?
     private var terminalSynchronizationTask: Task<Void, Never>?
     private var shutdownTask: Task<Void, Never>?
     private var historyWindowController: NSWindowController?
@@ -348,9 +350,13 @@
       self.availabilityProvider = resolvedAvailabilityProvider
       availability = resolvedAvailabilityProvider()
       phase = coordinator.phase
+      modifierMonitorState = shortcutController.monitorState
 
       coordinator.setEventObserver { [weak self] event in
         self?.receive(event)
+      }
+      shortcutController.monitorStateHandler = { [weak self] state in
+        self?.modifierMonitorState = state
       }
       terminationObserver = ObserverToken(
         NotificationCenter.default.addObserver(
@@ -370,6 +376,11 @@
         self?.modelStateAssessed = true
         self?.refreshAvailability()
         self?.synchronizePreferences()
+      }
+      initialLoadSynchronizationTask = Task { @MainActor [weak self, weak appState] in
+        await appState?.waitUntilInitialLoad()
+        guard !Task.isCancelled, let self, let appState else { return }
+        self.applyLoadedModifier(appState.preferences.dictationModifierKey)
       }
       synchronizePreferences()
     }
@@ -400,8 +411,12 @@
       DictationToolbarPresentation(phase: phase)
     }
 
-    var actualShortcut: DictationShortcut? {
-      shortcutController.registeredShortcut
+    var actualModifier: DictationModifierKey? {
+      shortcutController.registeredModifier
+    }
+
+    var canChangeModifier: Bool {
+      shortcutController.canChangeModifier
     }
 
     var recoveryCommand: DictationRecoveryCommandPresentation {
@@ -465,21 +480,47 @@
     }
 
     func preferencesDidChange() {
-      let current = appState?.preferences.dictationShortcut
-      if current != desiredShortcut {
-        desiredShortcut = current
-        needsShortcutApplication = true
+      let current = appState?.preferences.dictationModifierKey
+      if current != desiredModifier {
+        desiredModifier = current
+        needsModifierApplication = true
       }
       synchronizePreferences()
     }
 
     func retryShortcutRegistration() {
-      needsShortcutApplication = true
+      needsModifierApplication = true
       synchronizePreferences()
+    }
+
+    func changeModifier(to modifier: DictationModifierKey) async -> Bool {
+      guard shortcutController.canChangeModifier else { return false }
+      if !shortcutController.preflightAccess(), !shortcutController.requestAccess() {
+        return false
+      }
+      do {
+        try shortcutController.configure(modifier)
+      } catch let error as GlobalHoldShortcut.RegistrationError {
+        shortcutError = Self.shortcutMessage(error)
+        return false
+      } catch {
+        shortcutError = error.localizedDescription
+        return false
+      }
+      desiredModifier = modifier
+      needsModifierApplication = false
+      shortcutError = nil
+      appState?.updatePreferences { $0.dictationModifierKey = modifier }
+      return true
+    }
+
+    func requestModifierMonitoringAccess() -> Bool {
+      shortcutController.requestAccess()
     }
 
     func awaitStartupAssessment() async {
       await startupAssessmentTask?.value
+      await initialLoadSynchronizationTask?.value
     }
 
     func waitForTerminalSynchronization() async {
@@ -551,9 +592,11 @@
       shutdownCount += 1
       let modelOperations = Array(modelOperations.values)
       let startupAssessmentTask = startupAssessmentTask
+      let initialLoadSynchronizationTask = initialLoadSynchronizationTask
       let terminalSynchronizationTask = terminalSynchronizationTask
       modelOperations.forEach { $0.cancel() }
       startupAssessmentTask?.cancel()
+      initialLoadSynchronizationTask?.cancel()
       terminalSynchronizationTask?.cancel()
       coordinator.setEventObserver(nil)
       if let terminationObserver {
@@ -570,6 +613,7 @@
           await modelOperation.value
         }
         await startupAssessmentTask?.value
+        await initialLoadSynchronizationTask?.value
         await terminalSynchronizationTask?.value
         self?.dismissCapsule()
       }
@@ -577,7 +621,7 @@
       await task.value
     }
 
-    private func synchronizePreferences(applyShortcut: Bool = true) {
+    private func synchronizePreferences(applyModifier: Bool = true) {
       guard let appState else { return }
       refreshAvailability()
       if !CleanDictationFeatures.enhancedLocalCandidateEnabled,
@@ -593,22 +637,26 @@
         appState.updatePreferences { $0.dictationSpeechEngine = .standard }
       }
 
-      let currentDesiredShortcut = appState.preferences.dictationShortcut
-      if desiredShortcut != currentDesiredShortcut {
-        desiredShortcut = currentDesiredShortcut
-        needsShortcutApplication = true
+      guard appState.hasFinishedInitialLoad else { return }
+      let currentDesiredModifier = appState.preferences.dictationModifierKey
+      if desiredModifier != currentDesiredModifier {
+        desiredModifier = currentDesiredModifier
+        needsModifierApplication = true
       }
-      if applyShortcut, needsShortcutApplication, coordinator.canConfigureShortcut {
+      if
+        applyModifier,
+        needsModifierApplication,
+        shortcutController.canChangeModifier,
+        shortcutController.preflightAccess()
+      {
         do {
-          try shortcutController.configure(currentDesiredShortcut)
-          needsShortcutApplication = false
+          try shortcutController.configure(currentDesiredModifier)
+          needsModifierApplication = false
           shortcutError = nil
         } catch let error as GlobalHoldShortcut.RegistrationError {
           shortcutError = Self.shortcutMessage(error)
-          needsShortcutApplication = false
         } catch {
           shortcutError = error.localizedDescription
-          needsShortcutApplication = false
         }
       }
 
@@ -664,16 +712,16 @@
         synchronizePreferences()
         return
       }
-      synchronizePreferences(applyShortcut: false)
+      synchronizePreferences(applyModifier: false)
       terminalSynchronizationTask?.cancel()
       let shortcutController = shortcutController
       terminalSynchronizationTask = Task { @MainActor [weak self] in
         await shortcutController.waitForTerminalObservation()
         guard !Task.isCancelled, let self else { return }
-        if self.shortcutController.registeredShortcut
-          != self.appState?.preferences.dictationShortcut
+        if self.shortcutController.registeredModifier
+          != self.appState?.preferences.dictationModifierKey
         {
-          self.needsShortcutApplication = true
+          self.needsModifierApplication = true
         }
         self.synchronizePreferences()
       }
@@ -813,17 +861,21 @@
       switch error {
       case .activeSession:
         "Finish the active dictation before changing its shortcut."
-      case .conflict:
-        "That shortcut is already in use."
       case .eventDeliveryPending, .primaryKeyHeld:
         "Release the shortcut keys, then try again."
-      case .replacementAndRestoreFailed:
-        "The new shortcut failed and the previous shortcut could not be restored. No dictation shortcut is registered."
-      case .system:
-        "The shortcut could not be registered."
+      case .monitorFailed, .system:
+        "The modifier monitor could not be started."
+      case .unauthorized:
+        "Input Monitoring access is required for the modifier shortcut."
       case .uninstalled:
         "The shortcut controller is unavailable."
       }
+    }
+
+    private func applyLoadedModifier(_ modifier: DictationModifierKey) {
+      desiredModifier = modifier
+      needsModifierApplication = true
+      synchronizePreferences()
     }
 
     private func selectedDestination() -> DictationDestination? {
@@ -943,6 +995,7 @@
     deinit {
       modelOperations.values.forEach { $0.cancel() }
       startupAssessmentTask?.cancel()
+      initialLoadSynchronizationTask?.cancel()
       terminalSynchronizationTask?.cancel()
       if let terminationObserver {
         NotificationCenter.default.removeObserver(terminationObserver.value)

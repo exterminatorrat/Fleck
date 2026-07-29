@@ -4,11 +4,17 @@
 
   @MainActor
   protocol ShortcutHoldHandling: AnyObject {
+    var canConfigureShortcut: Bool { get }
     func beginShortcut(
       editor: (any FocusedDictationEditing)?,
       destination: DictationDestination?
     ) -> DictationShortcutSession?
+    func beginHandsFreeShortcut(
+      editor: (any FocusedDictationEditing)?,
+      destination: DictationDestination?
+    ) async -> DictationShortcutSession?
     func endShortcut(_ session: DictationShortcutSession) async
+    func finishHandsFreeShortcut(_ session: DictationShortcutSession) async
     func cancelShortcut(_ session: DictationShortcutSession) async
     func waitForShortcutTerminal(_ session: DictationShortcutSession) async
   }
@@ -16,104 +22,148 @@
   extension DictationCoordinator: ShortcutHoldHandling {}
 
   @MainActor
-  protocol GlobalHotKeyRegistering: AnyObject {
-    var eventHandler: ((UInt32, Bool) -> Void)? { get set }
-    func register(keyCode: UInt32, modifiers: UInt32, id: UInt32) throws
-    func unregister(id: UInt32)
+  protocol GestureClock: AnyObject {
+    var now: ContinuousClock.Instant { get }
+  }
+
+  @MainActor
+  private final class ContinuousGestureClock: GestureClock {
+    private let clock = ContinuousClock()
+    var now: ContinuousClock.Instant { clock.now }
+  }
+
+  @MainActor
+  protocol EscapeHotKeyRegistering: AnyObject {
+    var eventHandler: (() -> Void)? { get set }
+    func register() throws
+    func unregister()
   }
 
   @MainActor
   final class GlobalHoldShortcut {
-    enum RegistrationFailure: Equatable {
-      case conflict(OSStatus)
-      case system(OSStatus)
-    }
-
     enum RegistrationError: Error, Equatable {
       case activeSession
-      case conflict(OSStatus)
       case eventDeliveryPending
+      case monitorFailed
       case primaryKeyHeld
-      case replacementAndRestoreFailed(
-        replacement: RegistrationFailure,
-        restoration: RegistrationFailure
-      )
       case system(OSStatus)
+      case unauthorized
       case uninstalled
     }
 
-    static let primaryID: UInt32 = 1
-    static let escapeID: UInt32 = 2
-    static let escapeKeyCode: UInt32 = 53
+    private enum Delivery {
+      case transition(ModifierKeyTransition, ContinuousClock.Instant)
+      case escape
+      case monitorLost
+    }
+
+    static let holdThreshold = Duration.milliseconds(180)
+    static let doubleTapWindow = Duration.milliseconds(320)
 
     private weak var handler: (any ShortcutHoldHandling)?
     private let editorProvider: @MainActor () -> (any FocusedDictationEditing)?
     private let destinationProvider: @MainActor () -> DictationDestination?
-    private let registrar: any GlobalHotKeyRegistering
+    private let monitor: any ModifierKeyMonitoring
+    private let clock: any GestureClock
+    private let escapeRegistrar: any EscapeHotKeyRegistering
     private let onRegistrationError: @MainActor (RegistrationError) -> Void
-    private var primaryRegistered = false
+    var monitorStateHandler: @MainActor (ModifierMonitorState) -> Void
+    private var monitorStopExpected = false
     private var escapeRegistered = false
-    private var physicalPrimaryDown = false
     private var escapeCancellationRequested = false
+    private var physicalPrimaryDown = false
+    private var pressStartedAt: ContinuousClock.Instant?
+    private var lastShortRelease: ContinuousClock.Instant?
     private var acceptedSession: DictationShortcutSession?
+    private var handsFreeSession: DictationShortcutSession?
+    private var ignoresReleaseAfterHandsFreeStart = false
     private var deliveryTask: Task<Void, Never>?
     private var pendingDeliveryCount = 0
     private var terminalTask: Task<Void, Never>?
     private var isUninstalled = false
-    private(set) var registeredShortcut: DictationShortcut?
+    private(set) var monitorState = ModifierMonitorState.stopped
+    private(set) var registeredModifier: DictationModifierKey?
+
+    var canChangeModifier: Bool {
+      handler?.canConfigureShortcut == true
+        && !physicalPrimaryDown
+        && pendingDeliveryCount == 0
+        && acceptedSession == nil
+    }
 
     init(
       handler: any ShortcutHoldHandling,
       editorProvider: @escaping @MainActor () -> (any FocusedDictationEditing)? = { nil },
       destinationProvider: @escaping @MainActor () -> DictationDestination? = { nil },
-      registrar: any GlobalHotKeyRegistering = CarbonHotKeyRegistrar(),
-      onRegistrationError: @escaping @MainActor (RegistrationError) -> Void = { _ in }
+      monitor: any ModifierKeyMonitoring = ModifierKeyEventTap(),
+      clock: any GestureClock = ContinuousGestureClock(),
+      escapeRegistrar: any EscapeHotKeyRegistering = EscapeHotKeyRegistrar(),
+      onRegistrationError: @escaping @MainActor (RegistrationError) -> Void = { _ in },
+      onMonitorStateChange: @escaping @MainActor (ModifierMonitorState) -> Void = { _ in }
     ) {
       self.handler = handler
       self.editorProvider = editorProvider
       self.destinationProvider = destinationProvider
-      self.registrar = registrar
+      self.monitor = monitor
+      self.clock = clock
+      self.escapeRegistrar = escapeRegistrar
       self.onRegistrationError = onRegistrationError
-      registrar.eventHandler = { [weak self] id, pressed in
-        self?.enqueue(id: id, pressed: pressed)
+      monitorStateHandler = onMonitorStateChange
+      monitor.transitionHandler = { [weak self] transition in
+        guard let self else { return }
+        self.enqueue(.transition(transition, self.clock.now))
+      }
+      monitor.stateHandler = { [weak self] state in
+        self?.monitorDidChange(state)
+      }
+      escapeRegistrar.eventHandler = { [weak self] in
+        self?.enqueue(.escape)
       }
     }
 
-    func configure(_ shortcut: DictationShortcut) throws {
+    func configure(_ modifier: DictationModifierKey) throws {
       guard !isUninstalled else { throw RegistrationError.uninstalled }
       guard pendingDeliveryCount == 0 else { throw RegistrationError.eventDeliveryPending }
       guard acceptedSession == nil else { throw RegistrationError.activeSession }
       guard !physicalPrimaryDown else { throw RegistrationError.primaryKeyHeld }
-      let previousShortcut = registeredShortcut
-      guard shortcut != previousShortcut else { return }
-      if primaryRegistered {
-        registrar.unregister(id: Self.primaryID)
-        primaryRegistered = false
+      guard monitor.accessGranted else {
+        publishMonitorState(.unauthorized)
+        throw RegistrationError.unauthorized
       }
-      guard shortcut.isEnabled, let keyCode = shortcut.keyCode else {
-        registeredShortcut = nil
-        return
+      guard registeredModifier != modifier || monitorState != .running else { return }
+
+      clearTapState()
+      if registeredModifier != nil || monitorState == .running {
+        monitorStopExpected = true
+        monitor.stop()
+        monitorStopExpected = false
       }
+      registeredModifier = nil
       do {
-        try registrar.register(
-          keyCode: keyCode,
-          modifiers: shortcut.carbonModifiers,
-          id: Self.primaryID
-        )
-        primaryRegistered = true
-        registeredShortcut = shortcut
+        try monitor.start()
+        registeredModifier = modifier
       } catch {
-        let replacementError = error
-        do {
-          try restore(previousShortcut)
-        } catch {
-          throw RegistrationError.replacementAndRestoreFailed(
-            replacement: Self.registrationFailure(replacementError),
-            restoration: Self.registrationFailure(error)
-          )
+        if monitorState != .unauthorized {
+          publishMonitorState(.failed)
         }
-        throw replacementError
+        throw monitorState == .unauthorized
+          ? RegistrationError.unauthorized
+          : RegistrationError.monitorFailed
       }
+    }
+
+    @discardableResult
+    func preflightAccess() -> Bool {
+      let granted = monitor.accessGranted
+      if !granted { publishMonitorState(.unauthorized) }
+      return granted
+    }
+
+    @discardableResult
+    func requestAccess() -> Bool {
+      let granted = monitor.requestAccess() && monitor.accessGranted
+      if !granted { publishMonitorState(.unauthorized) }
+      return granted
     }
 
     func drainEvents() async {
@@ -125,64 +175,165 @@
     }
 
     func uninstall() async {
-      registrar.eventHandler = nil
+      guard !isUninstalled else { return }
       isUninstalled = true
+      registeredModifier = nil
+      monitor.transitionHandler = nil
+      monitor.stateHandler = nil
+      escapeRegistrar.eventHandler = nil
+      monitorStopExpected = true
+      monitor.stop()
+      monitorStopExpected = false
       await drainEvents()
       physicalPrimaryDown = false
+      clearTapState()
       if let acceptedSession, let handler {
         await handler.cancelShortcut(acceptedSession)
         await terminalTask?.value
       }
-      unregisterAll()
+      acceptedSession = nil
+      handsFreeSession = nil
+      unregisterEscape()
+      publishMonitorState(.stopped)
     }
 
-    private func enqueue(id: UInt32, pressed: Bool) {
+    private func enqueue(_ delivery: Delivery) {
       guard !isUninstalled else { return }
       pendingDeliveryCount += 1
       let previous = deliveryTask
       deliveryTask = Task { @MainActor [weak self] in
         await previous?.value
-        await self?.deliver(id: id, pressed: pressed)
+        await self?.deliver(delivery)
       }
     }
 
-    private func deliver(id: UInt32, pressed: Bool) async {
+    private func deliver(_ delivery: Delivery) async {
       defer { pendingDeliveryCount -= 1 }
-      await receive(id: id, pressed: pressed)
+      switch delivery {
+      case .transition(let transition, let instant):
+        await receive(transition, at: instant)
+      case .escape:
+        await receiveEscape()
+      case .monitorLost:
+        await receiveMonitorLoss()
+      }
     }
 
-    private func receive(id: UInt32, pressed: Bool) async {
-      if id == Self.primaryID {
-        guard primaryRegistered else { return }
-        if pressed {
-          guard !physicalPrimaryDown else { return }
-          physicalPrimaryDown = true
-          guard let session = handler?.beginShortcut(
-            editor: editorProvider(),
-            destination: destinationProvider()
-          ) else { return }
-          acceptedSession = session
-          escapeCancellationRequested = false
-          registerEscape()
-          observeTerminal(session)
-        } else {
-          guard physicalPrimaryDown else { return }
-          physicalPrimaryDown = false
-          guard let acceptedSession else { return }
-          await handler?.endShortcut(acceptedSession)
-        }
+    private func receive(
+      _ transition: ModifierKeyTransition,
+      at instant: ContinuousClock.Instant
+    ) async {
+      guard let registeredModifier else { return }
+      switch transition {
+      case .pressed(let modifier):
+        guard modifier == registeredModifier, !physicalPrimaryDown else { return }
+        physicalPrimaryDown = true
+        await receiveSelectedPress(at: instant)
+      case .released(let modifier):
+        guard modifier == registeredModifier, physicalPrimaryDown else { return }
+        physicalPrimaryDown = false
+        await receiveSelectedRelease(at: instant)
+      }
+    }
+
+    private func receiveSelectedPress(at now: ContinuousClock.Instant) async {
+      if let handsFreeSession {
+        lastShortRelease = nil
+        ignoresReleaseAfterHandsFreeStart = true
+        await handler?.finishHandsFreeShortcut(handsFreeSession)
         return
       }
 
+      if let lastShortRelease {
+        let interval = lastShortRelease.duration(to: now)
+        self.lastShortRelease = nil
+        if interval >= .zero, interval <= Self.doubleTapWindow {
+          guard
+            let session = await handler?.beginHandsFreeShortcut(
+              editor: editorProvider(),
+              destination: destinationProvider()
+            )
+          else { return }
+          acceptedSession = session
+          handsFreeSession = session
+          ignoresReleaseAfterHandsFreeStart = true
+          escapeCancellationRequested = false
+          registerEscape()
+          observeTerminal(session)
+          return
+        }
+      }
+
+      pressStartedAt = now
       guard
-        id == Self.escapeID,
-        pressed,
+        let session = handler?.beginShortcut(
+          editor: editorProvider(),
+          destination: destinationProvider()
+        )
+      else { return }
+      acceptedSession = session
+      escapeCancellationRequested = false
+      registerEscape()
+      observeTerminal(session)
+    }
+
+    private func receiveSelectedRelease(at now: ContinuousClock.Instant) async {
+      if ignoresReleaseAfterHandsFreeStart {
+        ignoresReleaseAfterHandsFreeStart = false
+        return
+      }
+      guard handsFreeSession == nil, let session = acceptedSession else {
+        pressStartedAt = nil
+        return
+      }
+      let isShort =
+        pressStartedAt.map { $0.duration(to: now) < Self.holdThreshold } ?? false
+      acceptedSession = nil
+      pressStartedAt = nil
+      escapeCancellationRequested = false
+      unregisterEscape()
+      await handler?.endShortcut(session)
+      lastShortRelease = isShort ? now : nil
+    }
+
+    private func receiveEscape() async {
+      guard
         escapeRegistered,
         !escapeCancellationRequested,
         let acceptedSession
       else { return }
       escapeCancellationRequested = true
+      clearTapState()
       await handler?.cancelShortcut(acceptedSession)
+    }
+
+    private func receiveMonitorLoss() async {
+      physicalPrimaryDown = false
+      clearTapState()
+      guard let acceptedSession else { return }
+      escapeCancellationRequested = true
+      await handler?.cancelShortcut(acceptedSession)
+    }
+
+    private func monitorDidChange(_ state: ModifierMonitorState) {
+      publishMonitorState(state)
+      guard
+        !isUninstalled,
+        !monitorStopExpected,
+        state == .failed || state == .unauthorized || state == .stopped
+      else { return }
+      enqueue(.monitorLost)
+    }
+
+    private func publishMonitorState(_ state: ModifierMonitorState) {
+      monitorState = state
+      monitorStateHandler(state)
+    }
+
+    private func clearTapState() {
+      lastShortRelease = nil
+      pressStartedAt = nil
+      ignoresReleaseAfterHandsFreeStart = false
     }
 
     private func observeTerminal(_ session: DictationShortcutSession) {
@@ -197,18 +348,18 @@
     private func terminalReached(_ session: DictationShortcutSession) {
       guard acceptedSession == session else { return }
       acceptedSession = nil
+      if handsFreeSession == session {
+        handsFreeSession = nil
+      }
       escapeCancellationRequested = false
+      clearTapState()
       unregisterEscape()
     }
 
     private func registerEscape() {
       guard !escapeRegistered else { return }
       do {
-        try registrar.register(
-          keyCode: Self.escapeKeyCode,
-          modifiers: 0,
-          id: Self.escapeID
-        )
+        try escapeRegistrar.register()
         escapeRegistered = true
       } catch let error as RegistrationError {
         onRegistrationError(error)
@@ -219,61 +370,16 @@
 
     private func unregisterEscape() {
       guard escapeRegistered else { return }
-      registrar.unregister(id: Self.escapeID)
+      escapeRegistrar.unregister()
       escapeRegistered = false
     }
 
-    private func unregisterAll() {
-      if primaryRegistered {
-        registrar.unregister(id: Self.primaryID)
-        primaryRegistered = false
-      }
-      registeredShortcut = nil
-      unregisterEscape()
-    }
-
-    private func restore(_ shortcut: DictationShortcut?) throws {
-      guard
-        let shortcut,
-        shortcut.isEnabled,
-        let keyCode = shortcut.keyCode
-      else {
-        registeredShortcut = nil
-        return
-      }
-      do {
-        try registrar.register(
-          keyCode: keyCode,
-          modifiers: shortcut.carbonModifiers,
-          id: Self.primaryID
-        )
-        primaryRegistered = true
-        registeredShortcut = shortcut
-      } catch {
-        primaryRegistered = false
-        registeredShortcut = nil
-        throw error
-      }
-    }
-
-    private static func registrationFailure(_ error: Error) -> RegistrationFailure {
-      guard let error = error as? RegistrationError else {
-        return .system(OSStatus(eventInternalErr))
-      }
-      switch error {
-      case .conflict(let status):
-        return .conflict(status)
-      case .system(let status):
-        return .system(status)
-      case .activeSession, .eventDeliveryPending, .primaryKeyHeld,
-        .replacementAndRestoreFailed, .uninstalled:
-        return .system(OSStatus(eventInternalErr))
-      }
-    }
-
     isolated deinit {
-      registrar.eventHandler = nil
-      unregisterAll()
+      monitor.transitionHandler = nil
+      monitor.stateHandler = nil
+      escapeRegistrar.eventHandler = nil
+      monitor.stop()
+      unregisterEscape()
       if let acceptedSession, let handler {
         Task { @MainActor in
           await handler.cancelShortcut(acceptedSession)
@@ -283,25 +389,21 @@
   }
 
   @MainActor
-  private final class CarbonHotKeyRegistrar: GlobalHotKeyRegistering {
-    var eventHandler: ((UInt32, Bool) -> Void)?
+  private final class EscapeHotKeyRegistrar: EscapeHotKeyRegistering {
+    var eventHandler: (() -> Void)?
 
     private static let signature: OSType = 0x4D4F5445
+    private static let escapeID: UInt32 = 2
+    private static let escapeKeyCode: UInt32 = 53
     private var eventHandlerRef: EventHandlerRef?
-    private var eventHandlerStatus: OSStatus = noErr
-    private var registrations: [UInt32: EventHotKeyRef] = [:]
+    private var eventHandlerStatus = OSStatus(noErr)
+    private var registration: EventHotKeyRef?
 
     init() {
-      var eventTypes = [
-        EventTypeSpec(
-          eventClass: OSType(kEventClassKeyboard),
-          eventKind: UInt32(kEventHotKeyPressed)
-        ),
-        EventTypeSpec(
-          eventClass: OSType(kEventClassKeyboard),
-          eventKind: UInt32(kEventHotKeyReleased)
-        ),
-      ]
+      var eventType = EventTypeSpec(
+        eventClass: OSType(kEventClassKeyboard),
+        eventKind: UInt32(kEventHotKeyPressed)
+      )
       eventHandlerStatus = InstallEventHandler(
         GetApplicationEventTarget(),
         { _, event, userData in
@@ -317,55 +419,54 @@
             &hotKeyID
           )
           guard status == noErr else { return status }
-          guard hotKeyID.signature == CarbonHotKeyRegistrar.signature else {
+          guard
+            hotKeyID.signature == EscapeHotKeyRegistrar.signature,
+            hotKeyID.id == EscapeHotKeyRegistrar.escapeID
+          else {
             return OSStatus(eventNotHandledErr)
           }
-          let registrar = Unmanaged<CarbonHotKeyRegistrar>.fromOpaque(userData)
+          let registrar = Unmanaged<EscapeHotKeyRegistrar>.fromOpaque(userData)
             .takeUnretainedValue()
-          let pressed = GetEventKind(event) == UInt32(kEventHotKeyPressed)
           MainActor.assumeIsolated {
-            registrar.eventHandler?(hotKeyID.id, pressed)
+            registrar.eventHandler?()
           }
           return noErr
         },
-        eventTypes.count,
-        &eventTypes,
+        1,
+        &eventType,
         Unmanaged.passUnretained(self).toOpaque(),
         &eventHandlerRef
       )
     }
 
-    func register(keyCode: UInt32, modifiers: UInt32, id: UInt32) throws {
+    func register() throws {
+      guard registration == nil else { return }
       guard eventHandlerStatus == noErr else {
         throw GlobalHoldShortcut.RegistrationError.system(eventHandlerStatus)
       }
       var reference: EventHotKeyRef?
       let status = RegisterEventHotKey(
-        keyCode,
-        modifiers,
-        EventHotKeyID(signature: Self.signature, id: id),
+        Self.escapeKeyCode,
+        0,
+        EventHotKeyID(signature: Self.signature, id: Self.escapeID),
         GetApplicationEventTarget(),
         0,
         &reference
       )
       guard status == noErr, let reference else {
-        if status == eventHotKeyExistsErr {
-          throw GlobalHoldShortcut.RegistrationError.conflict(status)
-        }
         throw GlobalHoldShortcut.RegistrationError.system(status)
       }
-      registrations[id] = reference
+      registration = reference
     }
 
-    func unregister(id: UInt32) {
-      guard let reference = registrations.removeValue(forKey: id) else { return }
-      UnregisterEventHotKey(reference)
+    func unregister() {
+      guard let registration else { return }
+      UnregisterEventHotKey(registration)
+      self.registration = nil
     }
 
     isolated deinit {
-      for reference in registrations.values {
-        UnregisterEventHotKey(reference)
-      }
+      unregister()
       if let eventHandlerRef {
         RemoveEventHandler(eventHandlerRef)
       }
