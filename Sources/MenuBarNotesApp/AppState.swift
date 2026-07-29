@@ -603,7 +603,7 @@
             .failure(
               AgentWorkspaceError(
                 code: .motesUnavailable,
-                recoveryAction: "Wait for Motes to finish saving, then retry."
+                recoveryAction: "Wait for Fleck to finish saving, then retry."
               )
             )
           )
@@ -789,7 +789,7 @@
         } catch {
           throw AgentWorkspaceError(
             code: .motesUnavailable,
-            recoveryAction: "Resolve the Motes save error, then retry."
+            recoveryAction: "Resolve the Fleck save error, then retry."
           )
         }
         guard

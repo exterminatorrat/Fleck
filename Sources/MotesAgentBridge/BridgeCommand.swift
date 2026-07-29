@@ -350,7 +350,7 @@ struct BridgeParseError: Error, Equatable, CustomStringConvertible {
 
 enum BridgeOutput {
   static let help = """
-    Usage: motes-agent <command> --profile <uuid> [--json]
+    Usage: fleck-agent <command> --profile <uuid> [--json]
 
       notes list
       note read <note-id> [--start-line <line>] [--max-lines <count>]
@@ -422,7 +422,7 @@ enum BridgeOutput {
 
   static func responseTimedOut(operationID: UUID?) -> String {
     guard let operationID else {
-      return "Motes did not respond before the request timed out."
+      return "Fleck did not respond before the request timed out."
     }
     return "The response timed out; retry with the same operation ID "
       + "\(operationID.uuidString) to retrieve the original write result safely."

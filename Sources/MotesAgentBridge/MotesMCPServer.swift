@@ -13,7 +13,7 @@
       callTool: @escaping ToolHandler
     ) async -> Server {
       let server = Server(
-        name: "motes",
+        name: "fleck",
         version: "1.0.0",
         capabilities: .init(tools: .init(listChanged: false))
       )
@@ -78,7 +78,7 @@
 
     init(transport: any Transport) {
       self.transport = transport
-      self.logger = Logger(label: "mcp.transport.motes")
+      self.logger = Logger(label: "mcp.transport.fleck")
     }
 
     var pendingRequestCount: Int { pendingRequestIDs.count }

@@ -17,7 +17,7 @@ struct MotesMCPServerTests {
       }
     )
 
-    #expect(server.name == "motes")
+    #expect(server.name == "fleck")
     #expect(server.version == "1.0.0")
     let capabilities = await server.capabilities
     #expect(capabilities.tools?.listChanged == false)

@@ -25,7 +25,7 @@ import Testing
 
   #expect(response.requestID == requestID)
   #expect(response.error?.code == .invalidPayload)
-  #expect(response.error?.recoveryAction?.contains("update Motes") == true)
+  #expect(response.error?.recoveryAction?.contains("update Fleck") == true)
 }
 
 @Test @MainActor func agentIPCCanonicalCredentialGatePrecedesService() async {

@@ -274,7 +274,7 @@
           requestID: request.requestID,
           error: AgentWorkspaceError(
             code: .invalidPayload,
-            recoveryAction: "Please update Motes and the helper, then try again."
+            recoveryAction: "Please update Fleck and the helper, then try again."
           )
         )
       }

@@ -149,7 +149,7 @@
     private static func launchMotes() throws {
       guard
         let applicationURL = NSWorkspace.shared.urlForApplication(
-          withBundleIdentifier: "com.harryjin.motes"
+          withBundleIdentifier: "com.harryjin.fleck"
         )
       else {
         throw AgentIPCClientError.motesUnavailable

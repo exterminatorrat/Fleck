@@ -259,14 +259,14 @@
         return fallbackResult(
           for: AgentWorkspaceError(
             code: .permissionRevoked,
-            recoveryAction: "Reconnect this profile in Motes."
+            recoveryAction: "Reconnect this profile in Fleck."
           )
         )
       } catch {
         return fallbackResult(
           for: AgentWorkspaceError(
             code: .motesUnavailable,
-            recoveryAction: "Open Motes and try again."
+            recoveryAction: "Open Fleck and try again."
           )
         )
       }

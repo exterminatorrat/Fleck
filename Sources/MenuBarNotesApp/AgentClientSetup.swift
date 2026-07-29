@@ -6,18 +6,18 @@
     let profileID: UUID
 
     var codexCommand: String {
-      "codex mcp add motes -- \(shellArgument(installedHelperURL.path)) \(arguments.joined(separator: " "))"
+      "codex mcp add fleck -- \(ShellArgument.encode(installedHelperURL.path)) \(arguments.joined(separator: " "))"
     }
 
     var claudeCodeCommand: String {
-      "claude mcp add --scope user motes -- \(shellArgument(installedHelperURL.path)) \(arguments.joined(separator: " "))"
+      "claude mcp add --scope user fleck -- \(ShellArgument.encode(installedHelperURL.path)) \(arguments.joined(separator: " "))"
     }
 
     var kimiConfiguration: String {
       """
       {
         "mcpServers": {
-          "motes": {
+          "fleck": {
             "command": \(jsonString(installedHelperURL.path)),
             "args": [\(arguments.map(jsonString).joined(separator: ", "))]
           }
@@ -37,16 +37,6 @@
 
     private var arguments: [String] {
       ["mcp", "--profile", profileID.uuidString]
-    }
-
-    private func shellArgument(_ value: String) -> String {
-      let safe = CharacterSet.alphanumerics.union(
-        CharacterSet(charactersIn: "_@%+=:,./-")
-      )
-      if value.unicodeScalars.allSatisfy(safe.contains) {
-        return value
-      }
-      return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private func jsonString(_ value: String) -> String {

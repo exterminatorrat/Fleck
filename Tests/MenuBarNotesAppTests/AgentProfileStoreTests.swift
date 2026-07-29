@@ -271,7 +271,7 @@ private func permissionRevokedError(
     return AgentWorkspaceError(code: .internalSaveFailure)
   } catch let error as AgentWorkspaceError {
     #expect(error.code == .permissionRevoked)
-    #expect(error.recoveryAction == "Reconnect this integration in Motes Settings.")
+    #expect(error.recoveryAction == "Reconnect this integration in Fleck Settings.")
     return error
   } catch {
     Issue.record("Unexpected error: \(error)")

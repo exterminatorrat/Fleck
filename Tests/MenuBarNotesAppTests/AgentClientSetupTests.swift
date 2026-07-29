@@ -7,27 +7,27 @@ import Testing
 struct AgentClientSetupTests {
   private let profileID = UUID(uuidString: "01234567-89AB-CDEF-0123-456789ABCDEF")!
 
-  @Test func generatesCurrentClientSetupFormats() {
+  @Test func newClientSetupUsesFleckNamesAndPath() {
     let setup = AgentClientSetup(
-      installedHelperURL: URL(fileURLWithPath: "/absolute/path/to/motes"),
+      installedHelperURL: URL(fileURLWithPath: "/absolute/path/to/fleck"),
       profileID: profileID
     )
 
     #expect(
       setup.codexCommand
-        == "codex mcp add motes -- /absolute/path/to/motes mcp --profile \(profileID.uuidString)"
+        == "codex mcp add fleck -- /absolute/path/to/fleck mcp --profile \(profileID.uuidString)"
     )
     #expect(
       setup.claudeCodeCommand
-        == "claude mcp add --scope user motes -- /absolute/path/to/motes mcp --profile \(profileID.uuidString)"
+        == "claude mcp add --scope user fleck -- /absolute/path/to/fleck mcp --profile \(profileID.uuidString)"
     )
     #expect(
       setup.kimiConfiguration
         == """
         {
           "mcpServers": {
-            "motes": {
-              "command": "/absolute/path/to/motes",
+            "fleck": {
+              "command": "/absolute/path/to/fleck",
               "args": ["mcp", "--profile", "\(profileID.uuidString)"]
             }
           }
@@ -38,7 +38,7 @@ struct AgentClientSetupTests {
       setup.genericConfiguration
         == """
         {
-          "command": "/absolute/path/to/motes",
+          "command": "/absolute/path/to/fleck",
           "args": ["mcp", "--profile", "\(profileID.uuidString)"]
         }
         """
@@ -46,7 +46,7 @@ struct AgentClientSetupTests {
   }
 
   @Test func escapesShellAndJSONSpecialCharactersWithoutCredentials() {
-    let helperPath = "/Users/Test User/Mote's \"Bridge\"/motes"
+    let helperPath = "/Users/Test User/Fleck's \"Bridge\"/fleck"
     let setup = AgentClientSetup(
       installedHelperURL: URL(fileURLWithPath: helperPath),
       profileID: profileID
@@ -54,16 +54,16 @@ struct AgentClientSetupTests {
 
     #expect(
       setup.codexCommand
-        == "codex mcp add motes -- '/Users/Test User/Mote'\\''s \"Bridge\"/motes' mcp --profile \(profileID.uuidString)"
+        == "codex mcp add fleck -- '/Users/Test User/Fleck'\\''s \"Bridge\"/fleck' mcp --profile \(profileID.uuidString)"
     )
     #expect(
       setup.claudeCodeCommand
-        == "claude mcp add --scope user motes -- '/Users/Test User/Mote'\\''s \"Bridge\"/motes' mcp --profile \(profileID.uuidString)"
+        == "claude mcp add --scope user fleck -- '/Users/Test User/Fleck'\\''s \"Bridge\"/fleck' mcp --profile \(profileID.uuidString)"
     )
     #expect(
-      setup.kimiConfiguration.contains(#""command": "/Users/Test User/Mote's \"Bridge\"/motes""#))
+      setup.kimiConfiguration.contains(#""command": "/Users/Test User/Fleck's \"Bridge\"/fleck""#))
     #expect(
-      setup.genericConfiguration.contains(#""command": "/Users/Test User/Mote's \"Bridge\"/motes""#)
+      setup.genericConfiguration.contains(#""command": "/Users/Test User/Fleck's \"Bridge\"/fleck""#)
     )
     for snippet in [
       setup.codexCommand,

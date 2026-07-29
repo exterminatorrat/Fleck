@@ -19,6 +19,16 @@
     let bundleIdentifier: String
   }
 
+  struct AgentBridgeCompatibilityReceipt: Codable, Equatable {
+    let schemaVersion: Int
+    let canonicalDestination: String
+    let canonicalSHA256: String
+    let launcherDestination: String
+    let launcherSHA256: String
+    let installedVersion: String
+    let bundleIdentifier: String
+  }
+
   protocol AgentBridgeInstallerFileSystem: Sendable {
     func data(at url: URL) throws -> Data
     func fileExists(at url: URL) -> Bool
@@ -34,7 +44,8 @@
   }
 
   struct AgentBridgeInstaller: Sendable {
-    static let ownerBundleIdentifier = "com.harryjin.motes"
+    static let ownerBundleIdentifier = "com.harryjin.fleck"
+    static let legacyOwnerBundleIdentifier = "com.harryjin.motes"
     private static let transactionLock = NSRecursiveLock()
 
     let bundledHelperURL: URL
@@ -74,12 +85,32 @@
         isDirectory: true
       )
       return Self(
-        bundledHelperURL: sharedSupportURL.appendingPathComponent("motes-agent"),
+        bundledHelperURL: sharedSupportURL.appendingPathComponent("fleck-agent"),
         applicationSupportURL: applicationSupportURL
       )
     }
 
     var installedHelperURL: URL {
+      applicationSupportURL
+        .appendingPathComponent("AgentBridge", isDirectory: true)
+        .appendingPathComponent("bin", isDirectory: true)
+        .appendingPathComponent("fleck")
+        .standardizedFileURL
+    }
+
+    var legacyLauncherURL: URL {
+      applicationSupportURL.deletingLastPathComponent()
+        .appendingPathComponent(
+          FleckProductPaths.legacyDirectoryName,
+          isDirectory: true
+        )
+        .appendingPathComponent("AgentBridge", isDirectory: true)
+        .appendingPathComponent("bin", isDirectory: true)
+        .appendingPathComponent("motes")
+        .standardizedFileURL
+    }
+
+    var migratedLegacyHelperURL: URL {
       applicationSupportURL
         .appendingPathComponent("AgentBridge", isDirectory: true)
         .appendingPathComponent("bin", isDirectory: true)
@@ -93,6 +124,18 @@
         .appendingPathComponent("install-receipt.json")
     }
 
+    var compatibilityReceiptURL: URL {
+      legacyLauncherURL.deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("fleck-compatibility-v1.json")
+    }
+
+    private var migrationReceiptURL: URL {
+      applicationSupportURL.appendingPathComponent(
+        FleckProductPaths.migrationReceiptName
+      )
+    }
+
     @discardableResult
     func install() throws -> URL {
       transactionAttemptObserver()
@@ -103,18 +146,42 @@
         let bundledData = try fileSystem.data(at: bundledHelperURL)
         let previous = try previousInstall()
 
-        let directory = installedHelperURL.deletingLastPathComponent()
-        try fileSystem.createDirectory(at: directory)
-        let staging = directory.appendingPathComponent(".motes-\(UUID().uuidString).staging")
-        try fileSystem.write(bundledData, to: staging)
-        try fileSystem.makeExecutable(at: staging)
-        defer { try? fileSystem.removeItem(at: staging) }
-        var didSwap = false
+        let canonicalDirectory = installedHelperURL.deletingLastPathComponent()
+        let legacyDirectory = legacyLauncherURL.deletingLastPathComponent()
+        try fileSystem.createDirectory(at: canonicalDirectory)
+        try fileSystem.createDirectory(at: legacyDirectory)
+        let canonicalStaging = canonicalDirectory.appendingPathComponent(
+          ".fleck-\(UUID().uuidString).staging"
+        )
+        let launcherStaging = legacyDirectory.appendingPathComponent(
+          ".motes-\(UUID().uuidString).staging"
+        )
+        let launcherData = compatibilityLauncherData()
+        try fileSystem.write(bundledData, to: canonicalStaging)
+        try fileSystem.makeExecutable(at: canonicalStaging)
+        try fileSystem.write(launcherData, to: launcherStaging)
+        try fileSystem.makeExecutable(at: launcherStaging)
+        defer {
+          try? fileSystem.removeItem(at: canonicalStaging)
+          try? fileSystem.removeItem(at: launcherStaging)
+        }
+        var didMutate = false
         do {
-          try fileSystem.replaceItem(at: installedHelperURL, with: staging)
-          didSwap = true
+          try fileSystem.replaceItem(
+            at: installedHelperURL,
+            with: canonicalStaging
+          )
+          didMutate = true
+          try fileSystem.replaceItem(
+            at: legacyLauncherURL,
+            with: launcherStaging
+          )
           let installedHash = sha256(try fileSystem.data(at: installedHelperURL))
-          guard installedHash == sha256(bundledData) else {
+          let launcherHash = sha256(try fileSystem.data(at: legacyLauncherURL))
+          guard
+            installedHash == sha256(bundledData),
+            launcherHash == sha256(launcherData)
+          else {
             throw AgentBridgeInstallerError.verificationFailed
           }
           let receipt = AgentBridgeInstallationReceipt(
@@ -127,12 +194,31 @@
             try JSONEncoder().encode(receipt),
             to: installationReceiptURL
           )
-          guard verifiedInstalledHelperURL() == installedHelperURL else {
+          let compatibility = AgentBridgeCompatibilityReceipt(
+            schemaVersion: 1,
+            canonicalDestination: installedHelperURL.path,
+            canonicalSHA256: installedHash,
+            launcherDestination: legacyLauncherURL.path,
+            launcherSHA256: launcherHash,
+            installedVersion: installedVersion,
+            bundleIdentifier: Self.ownerBundleIdentifier
+          )
+          let compatibilityEncoder = JSONEncoder()
+          compatibilityEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+          try fileSystem.write(
+            try compatibilityEncoder.encode(compatibility),
+            to: compatibilityReceiptURL
+          )
+          try fileSystem.removeItem(at: migratedLegacyHelperURL)
+          guard
+            verifiedInstalledHelperURL() == installedHelperURL,
+            verifiedLegacyLauncherURL() == legacyLauncherURL
+          else {
             throw AgentBridgeInstallerError.verificationFailed
           }
           return installedHelperURL
         } catch {
-          if didSwap {
+          if didMutate {
             try restore(previous)
           }
           throw error
@@ -164,6 +250,28 @@
         receipt.sha256 == sha256(installedData)
       else { return nil }
       return installedHelperURL
+    }
+
+    func verifiedLegacyLauncherURL() -> URL? {
+      guard
+        fileSystem.fileExists(at: legacyLauncherURL),
+        fileSystem.fileExists(at: installedHelperURL),
+        let markerData = try? fileSystem.data(at: compatibilityReceiptURL),
+        let marker = try? JSONDecoder().decode(
+          AgentBridgeCompatibilityReceipt.self,
+          from: markerData
+        ),
+        marker.schemaVersion == 1,
+        marker.canonicalDestination == installedHelperURL.path,
+        marker.launcherDestination == legacyLauncherURL.path,
+        marker.installedVersion == installedVersion,
+        marker.bundleIdentifier == Self.ownerBundleIdentifier,
+        let canonicalData = try? fileSystem.data(at: installedHelperURL),
+        let launcherData = try? fileSystem.data(at: legacyLauncherURL),
+        marker.canonicalSHA256 == sha256(canonicalData),
+        marker.launcherSHA256 == sha256(launcherData)
+      else { return nil }
+      return legacyLauncherURL
     }
 
     func provision(profileID: UUID, token: Data) throws {
@@ -221,8 +329,18 @@
           }
           return
         }
+        let hasLegacyLauncher = fileSystem.fileExists(at: legacyLauncherURL)
+        if hasLegacyLauncher {
+          guard verifiedLegacyLauncherURL() == legacyLauncherURL else {
+            throw AgentBridgeInstallerError.destinationNotOwned
+          }
+        }
         try fileSystem.removeItem(at: installedHelperURL)
         try fileSystem.removeItem(at: installationReceiptURL)
+        if hasLegacyLauncher {
+          try fileSystem.removeItem(at: legacyLauncherURL)
+          try fileSystem.removeItem(at: compatibilityReceiptURL)
+        }
       }
     }
 
@@ -237,6 +355,9 @@
     private struct PreviousInstall {
       let helper: Data?
       let receipt: Data?
+      let migratedLegacyHelper: Data?
+      let legacyLauncher: Data?
+      let compatibilityReceipt: Data?
     }
 
     private func previousInstall() throws -> PreviousInstall {
@@ -244,10 +365,99 @@
         fileSystem.fileExists(at: installationReceiptURL)
         ? try fileSystem.data(at: installationReceiptURL)
         : nil
-      guard fileSystem.fileExists(at: installedHelperURL) else {
-        return PreviousInstall(helper: nil, receipt: receiptData)
+      let helper =
+        fileSystem.fileExists(at: installedHelperURL)
+        ? try fileSystem.data(at: installedHelperURL)
+        : nil
+      let migratedLegacyHelper =
+        fileSystem.fileExists(at: migratedLegacyHelperURL)
+        ? try fileSystem.data(at: migratedLegacyHelperURL)
+        : nil
+      let legacyLauncher =
+        fileSystem.fileExists(at: legacyLauncherURL)
+        ? try fileSystem.data(at: legacyLauncherURL)
+        : nil
+      let compatibilityReceipt =
+        fileSystem.fileExists(at: compatibilityReceiptURL)
+        ? try fileSystem.data(at: compatibilityReceiptURL)
+        : nil
+      if helper != nil, !ownsInstalledHelper(receiptData: receiptData) {
+        throw AgentBridgeInstallerError.destinationNotOwned
       }
-      let helper = try fileSystem.data(at: installedHelperURL)
+      if migratedLegacyHelper != nil,
+        !ownsMigratedLegacyHelper(receiptData: receiptData)
+      {
+        throw AgentBridgeInstallerError.destinationNotOwned
+      }
+      if legacyLauncher != nil,
+        !ownsLegacyLauncher(markerData: compatibilityReceipt)
+      {
+        throw AgentBridgeInstallerError.destinationNotOwned
+      }
+      if receiptData != nil, helper == nil, migratedLegacyHelper == nil {
+        throw AgentBridgeInstallerError.destinationNotOwned
+      }
+      if compatibilityReceipt != nil, legacyLauncher == nil {
+        throw AgentBridgeInstallerError.destinationNotOwned
+      }
+      return PreviousInstall(
+        helper: helper,
+        receipt: receiptData,
+        migratedLegacyHelper: migratedLegacyHelper,
+        legacyLauncher: legacyLauncher,
+        compatibilityReceipt: compatibilityReceipt
+      )
+    }
+
+    private func restore(_ previous: PreviousInstall) throws {
+      try restore(previous.helper, at: installedHelperURL, executable: true)
+      try restore(previous.receipt, at: installationReceiptURL)
+      try restore(
+        previous.migratedLegacyHelper,
+        at: migratedLegacyHelperURL,
+        executable: true
+      )
+      try restore(
+        previous.legacyLauncher,
+        at: legacyLauncherURL,
+        executable: true
+      )
+      try restore(
+        previous.compatibilityReceipt,
+        at: compatibilityReceiptURL
+      )
+    }
+
+    private func restore(
+      _ data: Data?,
+      at destination: URL,
+      executable: Bool = false
+    ) throws {
+      guard let data else {
+        try fileSystem.removeItem(at: destination)
+        return
+      }
+      let staging = destination.deletingLastPathComponent()
+        .appendingPathComponent(".fleck-\(UUID().uuidString).rollback")
+      try fileSystem.write(data, to: staging)
+      if executable {
+        try fileSystem.makeExecutable(at: staging)
+      }
+      defer { try? fileSystem.removeItem(at: staging) }
+      try fileSystem.replaceItem(at: destination, with: staging)
+    }
+
+    private func compatibilityLauncherData() -> Data {
+      Data(
+        (
+          "#!/bin/sh\nexec "
+            + ShellArgument.encode(installedHelperURL.path)
+            + " \"$@\"\n"
+        ).utf8
+      )
+    }
+
+    private func ownsInstalledHelper(receiptData: Data?) -> Bool {
       guard
         let receiptData,
         let receipt = try? JSONDecoder().decode(
@@ -256,29 +466,59 @@
         ),
         receipt.destination == installedHelperURL.path,
         receipt.bundleIdentifier == Self.ownerBundleIdentifier,
+        let helper = try? fileSystem.data(at: installedHelperURL),
         receipt.sha256 == sha256(helper)
-      else {
-        throw AgentBridgeInstallerError.destinationNotOwned
-      }
-      return PreviousInstall(helper: helper, receipt: receiptData)
+      else { return false }
+      return true
     }
 
-    private func restore(_ previous: PreviousInstall) throws {
-      if let helper = previous.helper {
-        let staging = installedHelperURL.deletingLastPathComponent()
-          .appendingPathComponent(".motes-\(UUID().uuidString).rollback")
-        try fileSystem.write(helper, to: staging)
-        try fileSystem.makeExecutable(at: staging)
-        defer { try? fileSystem.removeItem(at: staging) }
-        try fileSystem.replaceItem(at: installedHelperURL, with: staging)
-      } else {
-        try fileSystem.removeItem(at: installedHelperURL)
-      }
-      if let receipt = previous.receipt {
-        try fileSystem.write(receipt, to: installationReceiptURL)
-      } else {
-        try fileSystem.removeItem(at: installationReceiptURL)
-      }
+    private func ownsMigratedLegacyHelper(receiptData: Data?) -> Bool {
+      let decoder = JSONDecoder()
+      decoder.dateDecodingStrategy = .iso8601
+      guard
+        let receiptData,
+        let receipt = try? JSONDecoder().decode(
+          AgentBridgeInstallationReceipt.self,
+          from: receiptData
+        ),
+        receipt.destination == legacyLauncherURL.path,
+        receipt.bundleIdentifier == Self.legacyOwnerBundleIdentifier,
+        let helper = try? fileSystem.data(at: migratedLegacyHelperURL),
+        receipt.sha256 == sha256(helper),
+        let migrationData = try? fileSystem.data(at: migrationReceiptURL),
+        let migration = try? decoder.decode(
+          FleckMigrationReceipt.self,
+          from: migrationData
+        ),
+        migration.schemaVersion == 1,
+        migration.legacyPath
+          == legacyLauncherURL
+          .deletingLastPathComponent()
+          .deletingLastPathComponent()
+          .deletingLastPathComponent()
+          .path,
+        migration.canonicalPath == applicationSupportURL.path
+      else { return false }
+      return true
+    }
+
+    private func ownsLegacyLauncher(markerData: Data?) -> Bool {
+      guard
+        let markerData,
+        let marker = try? JSONDecoder().decode(
+          AgentBridgeCompatibilityReceipt.self,
+          from: markerData
+        ),
+        marker.schemaVersion == 1,
+        marker.canonicalDestination == installedHelperURL.path,
+        marker.launcherDestination == legacyLauncherURL.path,
+        marker.bundleIdentifier == Self.ownerBundleIdentifier,
+        let canonicalData = try? fileSystem.data(at: installedHelperURL),
+        let launcherData = try? fileSystem.data(at: legacyLauncherURL),
+        marker.canonicalSHA256 == sha256(canonicalData),
+        marker.launcherSHA256 == sha256(launcherData)
+      else { return false }
+      return true
     }
   }
 

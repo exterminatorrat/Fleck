@@ -42,7 +42,7 @@ enum AgentCredentialSecurity {
   static var permissionRevokedError: AgentWorkspaceError {
     AgentWorkspaceError(
       code: .permissionRevoked,
-      recoveryAction: "Reconnect this integration in Motes Settings."
+      recoveryAction: "Reconnect this integration in Fleck Settings."
     )
   }
 

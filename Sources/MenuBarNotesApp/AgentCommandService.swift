@@ -736,7 +736,7 @@
       guard state.isAgentWorkspaceAvailable else {
         throw AgentWorkspaceError(
           code: .motesUnavailable,
-          recoveryAction: "Reopen Motes after resolving its workspace storage."
+          recoveryAction: "Reopen Fleck after resolving its workspace storage."
         )
       }
     }

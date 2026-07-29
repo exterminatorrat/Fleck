@@ -21,7 +21,7 @@
         write("\(error.description)\n", to: .standardError)
         Darwin.exit(error.exitCode)
       } catch {
-        write("motes-agent failed.\n", to: .standardError)
+        write("fleck-agent failed.\n", to: .standardError)
         Darwin.exit(1)
       }
     }
@@ -104,7 +104,7 @@
           writeWorkspaceError(
             AgentWorkspaceError(
               code: .permissionRevoked,
-              recoveryAction: "Reconnect this profile in Motes."
+              recoveryAction: "Reconnect this profile in Fleck."
             ),
             json: json
           )
@@ -113,7 +113,7 @@
           writeWorkspaceError(
             AgentWorkspaceError(
               code: .motesUnavailable,
-              recoveryAction: "Open Motes and try again."
+              recoveryAction: "Open Fleck and try again."
             ),
             json: json
           )
