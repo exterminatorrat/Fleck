@@ -580,6 +580,38 @@ import Testing
   #expect(!fixture.runtime.capsuleController.panel.isVisible)
 }
 
+@Test @MainActor func DictationRuntimeSyncsCapsuleWhenModifierMonitorFailsToStart()
+  async throws
+{
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    capsuleEnabled: true,
+    preferredModifier: .leftCommand,
+    waitForInitialLoadBeforeRuntime: false,
+    blockInitialLoad: true
+  )
+  let blocker = try #require(fixture.initialLoadBlocker)
+  fixture.monitor.startError = DictationSettingsTestError.failed
+
+  blocker.release()
+  await fixture.appState.waitUntilInitialLoad()
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.runtime.modifierMonitorState == .failed)
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+  #expect(fixture.runtime.capsuleController.panel.isVisible)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+  #expect(!fixture.runtime.capsuleController.panel.isVisible)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+  #expect(fixture.runtime.capsuleController.panel.isVisible)
+}
+
 @Test @MainActor func DictationRuntimeBuffersCapsuleEventsUntilLoadedPreferencesAreApplied()
   async throws
 {

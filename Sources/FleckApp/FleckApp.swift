@@ -671,7 +671,6 @@
           try shortcutController.configure(currentDesiredModifier)
           needsModifierApplication = false
         } catch {
-          return
         }
       }
 

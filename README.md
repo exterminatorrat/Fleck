@@ -27,10 +27,12 @@ the selected physical modifier for 180 ms to dictate until release, or tap it
 twice to start hands-free dictation; the next press finishes and Escape
 cancels. The bar contains no transcript or shortcut hint while idle.
 
-The trigger observes only modifier `flagsChanged` transitions through macOS
-**Input Monitoring**; Fleck never observes ordinary key presses. Choose a
-different left/right modifier or Fn in Settings if needed. Fn is best-effort,
-and Command, Control, and Left Option can conflict with normal modifier use.
+The trigger subscribes only to modifier `flagsChanged` transitions through macOS
+**Input Monitoring** and never observes ordinary keys. During an accepted
+capture, Fleck registers only Escape as a capture-scoped cancellation hot key,
+then unregisters it at terminal. Choose a different left/right modifier or Fn
+in Settings if needed. Fn is best-effort, and Command, Control, and Left Option
+can conflict with normal modifier use.
 
 Use **Show status capsule** to hide or restore the persistent bar, then drag it
 or use its menu to dock it at the bottom, left, or right edge. Dictation cleanup
