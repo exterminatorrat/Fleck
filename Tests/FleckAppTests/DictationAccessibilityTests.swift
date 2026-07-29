@@ -1,12 +1,16 @@
 import AppKit
+import FleckCore
 import Testing
 
 @testable import FleckApp
 
 @Test func DictationAccessibilityMapsEveryStatusToVisibleAndVoiceOverText() {
-  let cases: [(DictationCapsuleStatus, String, String)] = [
+  let cases: [(DictationCapsuleStatus, String?, String)] = [
+    (.idle, nil, "Fleck dictation ready"),
     (.listening, "Listening", "Dictation listening"),
+    (.finalizing, "Finishing", "Finishing dictation"),
     (.cleaning, "Cleaning up", "Cleaning up dictation"),
+    (.routing, "Finding note", "Finding a note for dictation"),
     (.saved(destination: "Inbox"), "Saved to Inbox", "Dictation saved to Inbox"),
     (
       .savedWithoutCleanup(destination: "Inbox"),
@@ -47,9 +51,10 @@ import Testing
   #expect(panel.level == .floating)
   #expect(panel.collectionBehavior.contains(.canJoinAllSpaces))
   #expect(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+  #expect(panel.collectionBehavior.contains(.stationary))
 
   panel.allowsActions = true
-  #expect(panel.canBecomeKey)
+  #expect(!panel.canBecomeKey)
   #expect(!panel.canBecomeMain)
 }
 
@@ -67,13 +72,64 @@ import Testing
   }
 }
 
-@Test @MainActor func DictationAccessibilityPositionsCapsuleAtActiveDisplayLowerCenter() {
+@Test @MainActor func DictationAccessibilityUsesCompactDockAwareGeometry() {
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
 
-  let frame = DictationCapsuleController.frame(in: visibleFrame)
+  let bottom = DictationCapsuleController.frame(for: .bottom, in: visibleFrame)
+  let left = DictationCapsuleController.frame(for: .left, in: visibleFrame)
+  let right = DictationCapsuleController.frame(for: .right, in: visibleFrame)
 
-  #expect(frame.midX == visibleFrame.midX)
-  #expect(frame.minY == visibleFrame.minY + DictationCapsuleController.bottomMargin)
+  #expect(bottom.size == DictationCapsuleController.idleSize)
+  #expect(bottom.midX == visibleFrame.midX)
+  #expect(bottom.minY > visibleFrame.minY)
+  #expect(left.minX > visibleFrame.minX)
+  #expect(left.midY == visibleFrame.midY)
+  #expect(right.maxX < visibleFrame.maxX)
+  #expect(right.midY == visibleFrame.midY)
+}
+
+@Test @MainActor func DictationAccessibilitySelectsTheNearestSupportedDock() {
+  let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
+
+  #expect(DictationCapsuleController.nearestDock(
+    to: CGPoint(x: visibleFrame.minX, y: visibleFrame.midY),
+    in: visibleFrame
+  ) == .left)
+  #expect(DictationCapsuleController.nearestDock(
+    to: CGPoint(x: visibleFrame.maxX, y: visibleFrame.midY),
+    in: visibleFrame
+  ) == .right)
+  #expect(DictationCapsuleController.nearestDock(
+    to: CGPoint(x: visibleFrame.midX, y: visibleFrame.minY),
+    in: visibleFrame
+  ) == .bottom)
+}
+
+@Test @MainActor func DictationAccessibilityKeepsOnePanelAndOffersDockMenuFallback() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  var dockChanges: [DictationCapsuleDock] = []
+  controller.presentIdle(
+    dock: .bottom,
+    onOpenFleck: {},
+    onDockChanged: { dockChanges.append($0) }
+  )
+
+  #expect(controller.panel === panel)
+  #expect(panel.contentView?.menu?.items.map(\.title) == [
+    "Dock Bottom",
+    "Dock Left",
+    "Dock Right",
+  ])
+  panel.contentView?.menu?.performActionForItem(at: 1)
+  #expect(controller.currentDock == .left)
+  #expect(dockChanges == [.left])
+
+  controller.render(.failed("Unavailable"), action: .copy, onAction: {})
+  #expect(controller.panel === panel)
+  #expect(!panel.canBecomeKey)
+  #expect(!panel.canBecomeMain)
+  controller.dismiss()
 }
 
 @Test @MainActor func DictationAccessibilityPrefersKeyboardFocusDisplayOverPointerAndPrimary() {

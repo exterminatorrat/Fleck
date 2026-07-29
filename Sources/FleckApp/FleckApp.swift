@@ -171,8 +171,11 @@
   @MainActor
   final class DictationRuntime: ObservableObject {
     static let usesPeriodicObservation = false
+    static let savedCapsuleDuration = Duration.milliseconds(1_600)
+    static let failureCapsuleDuration = Duration.seconds(3)
 
     private enum CapsuleOwner: Equatable {
+      case idle
       case dictation
       case model(UUID)
     }
@@ -207,6 +210,7 @@
     private let editorRegistry: DictationEditorRegistry
     private let enhancedIsReady: @MainActor () -> Bool
     private let availabilityProvider: @MainActor () -> DictationAvailability
+    private let capsuleSleeper: @MainActor (Duration) async -> Void
     private var desiredModifier: DictationModifierKey?
     private var needsModifierApplication = false
     private var modelStateAssessed = false
@@ -214,6 +218,10 @@
     private var modelOperationID: UUID?
     private var modelOperations: [UUID: Task<Void, Never>] = [:]
     private var capsuleOwner: CapsuleOwner?
+    private var capsuleDock = DictationCapsuleDock.bottom
+    private var appliedCapsuleEnabled: Bool?
+    private var capsuleReturnTask: Task<Void, Never>?
+    private var capsuleGeneration: UInt64 = 0
     private var startupAssessmentTask: Task<Void, Never>?
     private var initialLoadSynchronizationTask: Task<Void, Never>?
     private var terminalSynchronizationTask: Task<Void, Never>?
@@ -329,7 +337,10 @@
       editorRegistry: DictationEditorRegistry,
       startupAssessment: @escaping @MainActor () async -> Void,
       enhancedIsReady: @escaping @MainActor () -> Bool,
-      availabilityProvider: (@MainActor () -> DictationAvailability)? = nil
+      availabilityProvider: (@MainActor () -> DictationAvailability)? = nil,
+      capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
+        try? await Task.sleep(for: duration)
+      }
     ) {
       self.appState = appState
       self.modelManager = modelManager
@@ -341,6 +352,7 @@
       self.shortcutController = shortcutController
       self.capsuleController = capsuleController
       self.enhancedIsReady = enhancedIsReady
+      self.capsuleSleeper = capsuleSleeper
       let resolvedAvailabilityProvider = availabilityProvider ?? {
         DictationAvailability.current(
           permissions: permissionController,
@@ -380,7 +392,7 @@
       initialLoadSynchronizationTask = Task { @MainActor [weak self, weak appState] in
         await appState?.waitUntilInitialLoad()
         guard !Task.isCancelled, let self, let appState else { return }
-        self.applyLoadedModifier(appState.preferences.dictationModifierKey)
+        self.applyLoadedPreferences(appState.preferences)
       }
       synchronizePreferences()
     }
@@ -591,6 +603,7 @@
         return
       }
       shutdownCount += 1
+      invalidateCapsuleReturn()
       let modelOperations = Array(modelOperations.values)
       let startupAssessmentTask = startupAssessmentTask
       let initialLoadSynchronizationTask = initialLoadSynchronizationTask
@@ -661,9 +674,7 @@
         }
       }
 
-      if !appState.preferences.dictationCapsuleEnabled {
-        dismissCapsule()
-      }
+      synchronizeCapsulePreferences()
     }
 
     private func receive(_ event: DictationCoordinatorEvent) {
@@ -692,18 +703,37 @@
         }
       #endif
       guard appState?.preferences.dictationCapsuleEnabled == true else {
+        invalidateCapsuleReturn()
         dismissCapsule()
         synchronizeAfter(event)
         return
       }
-      if let status = Self.capsuleStatus(for: event) {
+      let status = Self.capsuleStatus(for: event)
+      if let terminal = event.terminal {
+        switch terminal {
+        case .saved:
+          showCapsule(
+            status,
+            owner: .dictation,
+            action: capsuleAction(for: coordinator.recoveryAction)
+          )
+          scheduleIdle(after: Self.savedCapsuleDuration, owner: .dictation)
+        case .failed:
+          showCapsule(
+            status,
+            owner: .dictation,
+            action: capsuleAction(for: coordinator.recoveryAction)
+          )
+          scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
+        case .cancelled:
+          showIdleCapsule()
+        }
+      } else {
         showCapsule(
           status,
           owner: .dictation,
           action: capsuleAction(for: coordinator.recoveryAction)
         )
-      } else {
-        dismissCapsule(ifOwnedBy: .dictation)
       }
       synchronizeAfter(event)
     }
@@ -770,7 +800,7 @@
       }
     }
 
-    static func capsuleStatus(for event: DictationCoordinatorEvent) -> DictationCapsuleStatus? {
+    static func capsuleStatus(for event: DictationCoordinatorEvent) -> DictationCapsuleStatus {
       if let terminal = event.terminal {
         switch terminal {
         case .saved(let mode, let cleanup, let destination):
@@ -784,20 +814,24 @@
         case .failed(let message):
           return .failed(message)
         case .cancelled:
-          return nil
+          return .idle
         }
       }
       switch event.phase {
       case .arming, .listening:
         return .listening
-      case .finalizing, .cleaning, .routing:
+      case .finalizing:
+        return .finalizing
+      case .cleaning:
         return .cleaning
+      case .routing:
+        return .routing
       case .saved(let destination):
         return .saved(destination: destination.title)
       case .failed(let message):
         return .failed(message)
       case .idle:
-        return nil
+        return .idle
       }
     }
 
@@ -826,17 +860,17 @@
           onSuccess()
           self?.modelError = nil
           if showsRepairStatus {
-            self?.dismissCapsule(ifOwnedBy: owner)
+            self?.showIdleCapsule(ifOwnedBy: owner)
           }
         } catch is CancellationError {
           guard self?.modelOperationID == operationID else { return }
           if showsRepairStatus {
-            self?.dismissCapsule(ifOwnedBy: owner)
+            self?.showIdleCapsule(ifOwnedBy: owner)
           }
         } catch ModelDownloadError.cancelled {
           guard self?.modelOperationID == operationID else { return }
           if showsRepairStatus {
-            self?.dismissCapsule(ifOwnedBy: owner)
+            self?.showIdleCapsule(ifOwnedBy: owner)
           }
         } catch {
           guard self?.modelOperationID == operationID else { return }
@@ -847,6 +881,7 @@
             self?.capsuleOwner == owner
           {
             self?.showCapsule(.failed("Enhanced model repair failed."), owner: owner)
+            self?.scheduleIdle(after: Self.failureCapsuleDuration, owner: owner)
           }
         }
       }
@@ -873,9 +908,10 @@
       }
     }
 
-    private func applyLoadedModifier(_ modifier: DictationModifierKey) {
-      desiredModifier = modifier
+    private func applyLoadedPreferences(_ preferences: AppPreferences) {
+      desiredModifier = preferences.dictationModifierKey
       needsModifierApplication = true
+      capsuleDock = preferences.dictationCapsuleDock
       synchronizePreferences()
     }
 
@@ -890,9 +926,10 @@
       owner: CapsuleOwner,
       action: DictationCapsuleAction? = nil
     ) {
+      invalidateCapsuleReturn()
       currentCapsuleStatus = status
       capsuleOwner = owner
-      capsuleController.show(
+      capsuleController.render(
         status,
         action: action,
         onAction: { [weak self] in
@@ -901,6 +938,81 @@
           }
         }
       )
+    }
+
+    private func showIdleCapsule(ifOwnedBy owner: CapsuleOwner? = nil) {
+      guard owner == nil || capsuleOwner == owner else { return }
+      guard appState?.preferences.dictationCapsuleEnabled == true else {
+        dismissCapsule()
+        return
+      }
+      invalidateCapsuleReturn()
+      capsuleOwner = .idle
+      currentCapsuleStatus = .idle
+      capsuleController.presentIdle(
+        dock: capsuleDock,
+        onOpenFleck: { [weak self] in self?.openFleckPanel() },
+        onDockChanged: { [weak self] dock in self?.capsuleDockDidChange(dock) }
+      )
+    }
+
+    private func scheduleIdle(
+      after delay: Duration,
+      owner: CapsuleOwner
+    ) {
+      capsuleGeneration &+= 1
+      let generation = capsuleGeneration
+      capsuleReturnTask?.cancel()
+      let sleeper = capsuleSleeper
+      capsuleReturnTask = Task { @MainActor [weak self] in
+        await sleeper(delay)
+        guard
+          !Task.isCancelled,
+          let self,
+          self.capsuleGeneration == generation,
+          self.capsuleOwner == owner
+        else { return }
+        self.showIdleCapsule()
+      }
+    }
+
+    private func invalidateCapsuleReturn() {
+      capsuleGeneration &+= 1
+      capsuleReturnTask?.cancel()
+      capsuleReturnTask = nil
+    }
+
+    private func synchronizeCapsulePreferences() {
+      guard let appState, appState.hasFinishedInitialLoad else { return }
+      let enabled = appState.preferences.dictationCapsuleEnabled
+      let dock = appState.preferences.dictationCapsuleDock
+      let becameEnabled = appliedCapsuleEnabled != true && enabled
+      let dockChanged = dock != capsuleDock
+      capsuleDock = dock
+      appliedCapsuleEnabled = enabled
+
+      guard enabled else {
+        invalidateCapsuleReturn()
+        dismissCapsule()
+        return
+      }
+      if becameEnabled {
+        showIdleCapsule()
+      } else if dockChanged {
+        capsuleController.setDock(dock)
+      }
+    }
+
+    private func capsuleDockDidChange(_ dock: DictationCapsuleDock) {
+      capsuleDock = dock
+      appState?.updatePreferences { $0.dictationCapsuleDock = dock }
+    }
+
+    private func openFleckPanel() {
+      NSApp.activate(ignoringOtherApps: true)
+      NSApp.windows.first {
+        $0 !== capsuleController.panel && $0.title == "Fleck"
+      }?.makeKeyAndOrderFront(nil)
     }
 
     private func capsuleAction(
@@ -926,11 +1038,11 @@
       guard let result = await coordinator.performRecoveryAction() else { return }
       switch result {
       case .completed:
-        dismissCapsule(ifOwnedBy: .dictation)
+        showIdleCapsule(ifOwnedBy: .dictation)
       case .copy(let text):
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        dismissCapsule(ifOwnedBy: .dictation)
+        showIdleCapsule(ifOwnedBy: .dictation)
       case .openHistory:
         openDictationHistory()
       case .openDestination(let noteID):
@@ -947,7 +1059,7 @@
       NSApp.windows.first {
         $0 !== capsuleController.panel && $0.title == "Fleck"
       }?.makeKeyAndOrderFront(nil)
-      dismissCapsule(ifOwnedBy: .dictation)
+      showIdleCapsule(ifOwnedBy: .dictation)
     }
 
     private func openDictationHistory() {
@@ -955,7 +1067,7 @@
         NSApp.activate(ignoringOtherApps: true)
         historyWindowController.showWindow(nil)
         historyWindowController.window?.makeKeyAndOrderFront(nil)
-        dismissCapsule(ifOwnedBy: .dictation)
+        showIdleCapsule(ifOwnedBy: .dictation)
         return
       }
       let view = DictationHistoryView(
@@ -972,11 +1084,12 @@
       NSApp.activate(ignoringOtherApps: true)
       controller.showWindow(nil)
       window.makeKeyAndOrderFront(nil)
-      dismissCapsule(ifOwnedBy: .dictation)
+      showIdleCapsule(ifOwnedBy: .dictation)
     }
 
     private func dismissCapsule(ifOwnedBy owner: CapsuleOwner? = nil) {
       guard owner == nil || capsuleOwner == owner else { return }
+      invalidateCapsuleReturn()
       currentCapsuleStatus = nil
       capsuleOwner = nil
       capsuleController.dismiss()
@@ -995,6 +1108,7 @@
 
     deinit {
       modelOperations.values.forEach { $0.cancel() }
+      capsuleReturnTask?.cancel()
       startupAssessmentTask?.cancel()
       initialLoadSynchronizationTask?.cancel()
       terminalSynchronizationTask?.cancel()

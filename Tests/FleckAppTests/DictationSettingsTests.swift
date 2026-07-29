@@ -231,6 +231,22 @@ import Testing
     phase: .failed("No speech"),
     terminal: .failed("No speech")
   )) == .failed("No speech"))
+  #expect(DictationRuntime.capsuleStatus(for: .init(
+    phase: .finalizing,
+    terminal: nil
+  )) == .finalizing)
+  #expect(DictationRuntime.capsuleStatus(for: .init(
+    phase: .cleaning,
+    terminal: nil
+  )) == .cleaning)
+  #expect(DictationRuntime.capsuleStatus(for: .init(
+    phase: .routing,
+    terminal: nil
+  )) == .routing)
+  #expect(DictationRuntime.capsuleStatus(for: .init(
+    phase: .idle,
+    terminal: .cancelled
+  )) == .idle)
 }
 
 @Test func DictationHistoryRowDoesNotMislabelOrDuplicateRawFallback() {
@@ -465,6 +481,68 @@ import Testing
 
   #expect(fixture.runtime.actualModifier == .leftCommand)
   #expect(fixture.monitor.requestCount == 0)
+}
+
+@Test @MainActor func DictationRuntimeLoadsCapsuleVisibilityAndDockBeforeFirstPresentation()
+  async throws
+{
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    capsuleEnabled: false,
+    preferredDock: .left,
+    waitForInitialLoadBeforeRuntime: false
+  )
+
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+  #expect(!fixture.runtime.capsuleController.panel.isVisible)
+
+  await fixture.appState.waitUntilInitialLoad()
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+  #expect(!fixture.runtime.capsuleController.panel.isVisible)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+  #expect(fixture.runtime.capsuleController.currentDock == .left)
+  #expect(fixture.runtime.capsuleController.panel.isVisible)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+  #expect(!fixture.runtime.capsuleController.panel.isVisible)
+}
+
+@Test @MainActor func DictationRuntimeReturnTimersCannotReplaceNewerListeningState()
+  async throws
+{
+  for (finalText, delay) in [
+    ("saved", Duration.milliseconds(1_600)),
+    (nil, Duration.seconds(3)),
+  ] as [(String?, Duration)] {
+    let sleeper = RuntimeCapsuleSleeper()
+    let fixture = try await RuntimeFixture(
+      finalText: finalText,
+      capsuleEnabled: true,
+      capsuleSleeper: { duration in await sleeper.sleep(duration) }
+    )
+    await fixture.runtime.awaitStartupAssessment()
+
+    await fixture.runtime.toggle()
+    await fixture.runtime.toggle()
+    await sleeper.waitForRequest()
+    #expect(await sleeper.requestedDurations == [delay])
+
+    await fixture.runtime.toggle()
+    #expect(fixture.runtime.currentCapsuleStatus == .listening)
+    await sleeper.resumeAll()
+    await Task.yield()
+    #expect(fixture.runtime.currentCapsuleStatus == .listening)
+
+    await fixture.runtime.cancel()
+    #expect(fixture.runtime.currentCapsuleStatus == .idle)
+  }
 }
 
 @Test @MainActor func DictationRuntimeUsesCoordinatorEventsAndAppliesModifierAfterTerminal() async throws {
@@ -965,7 +1043,7 @@ import Testing
 #endif
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-@Test @MainActor func DictationRepairCapsuleDismissesOnSuccessAndCancellation() async throws {
+@Test @MainActor func DictationRepairCapsuleReturnsToIdleOnSuccessAndCancellation() async throws {
   let success = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
   let successfulTask = success.runtime.runModelOperation(
     showsRepairStatus: true,
@@ -973,7 +1051,7 @@ import Testing
   )
   #expect(success.runtime.currentCapsuleStatus == .repairingModel)
   await successfulTask.value
-  #expect(success.runtime.currentCapsuleStatus == nil)
+  #expect(success.runtime.currentCapsuleStatus == .idle)
 
   let cancelled = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
   let gate = DictationTestGate()
@@ -989,7 +1067,7 @@ import Testing
   cancelled.runtime.cancelModelOperation()
   await gate.open()
   await cancelledTask.value
-  #expect(cancelled.runtime.currentCapsuleStatus == nil)
+  #expect(cancelled.runtime.currentCapsuleStatus == .idle)
 }
 
 @Test @MainActor func DictationRepairCapsuleShowsNonTranscriptFailure() async throws {
@@ -1035,7 +1113,7 @@ import Testing
 
   await secondGate.open()
   await second.value
-  #expect(fixture.runtime.currentCapsuleStatus == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
 }
 
 @Test @MainActor func RepairFailureCannotReplaceANewerDictationCapsuleStatus() async throws {
@@ -1331,6 +1409,7 @@ private final class RuntimeFixture {
     capsuleEnabled: Bool = false,
     preferredEngine: DictationSpeechEngine = .standard,
     preferredModifier: DictationModifierKey = .rightOption,
+    preferredDock: DictationCapsuleDock = .bottom,
     waitForInitialLoadBeforeRuntime: Bool = true,
     monitorAccessGranted: Bool = true,
     enhancedReadyAtStartup: Bool = false,
@@ -1344,7 +1423,10 @@ private final class RuntimeFixture {
       enhancedModelReady: true,
       foundationModelAvailable: true
     )),
-    availabilityProvider: (@MainActor () -> DictationAvailability)? = nil
+    availabilityProvider: (@MainActor () -> DictationAvailability)? = nil,
+    capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
+      try? await Task.sleep(for: duration)
+    }
   ) async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("runtime-\(UUID().uuidString)", isDirectory: true)
@@ -1352,6 +1434,7 @@ private final class RuntimeFixture {
     let preferences = AppPreferences(
       dictationSpeechEngine: preferredEngine,
       dictationModifierKey: preferredModifier,
+      dictationCapsuleDock: preferredDock,
       dictationCapsuleEnabled: capsuleEnabled
     )
     var workspace = Workspace()
@@ -1434,7 +1517,8 @@ private final class RuntimeFixture {
         if startupBlocked { await gate.wait() }
       },
       enhancedIsReady: { [enhancedReady] in enhancedReady.value },
-      availabilityProvider: availabilityProvider ?? { availability }
+      availabilityProvider: availabilityProvider ?? { availability },
+      capsuleSleeper: capsuleSleeper
     )
   }
 
@@ -1569,6 +1653,31 @@ private actor RuntimeCounter {
 
   func increment() {
     value += 1
+  }
+}
+
+private actor RuntimeCapsuleSleeper {
+  private(set) var requestedDurations: [Duration] = []
+  private var continuations: [CheckedContinuation<Void, Never>] = []
+  private var requestObservers: [CheckedContinuation<Void, Never>] = []
+
+  func sleep(_ duration: Duration) async {
+    requestedDurations.append(duration)
+    let observers = requestObservers
+    requestObservers.removeAll()
+    observers.forEach { $0.resume() }
+    await withCheckedContinuation { continuations.append($0) }
+  }
+
+  func waitForRequest() async {
+    guard requestedDurations.isEmpty else { return }
+    await withCheckedContinuation { requestObservers.append($0) }
+  }
+
+  func resumeAll() {
+    let pending = continuations
+    continuations.removeAll()
+    pending.forEach { $0.resume() }
   }
 }
 

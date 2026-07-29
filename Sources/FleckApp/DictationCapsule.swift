@@ -1,10 +1,14 @@
 #if os(macOS)
   import AppKit
+  import FleckCore
   import SwiftUI
 
   enum DictationCapsuleStatus: Equatable {
+    case idle
     case listening
+    case finalizing
     case cleaning
+    case routing
     case saved(destination: String)
     case savedWithoutCleanup(destination: String)
     case repairingModel
@@ -12,17 +16,35 @@
 
     var presentation: DictationCapsulePresentation {
       switch self {
+      case .idle:
+        .init(
+          visibleText: nil,
+          voiceOverText: "Fleck dictation ready",
+          symbolName: "waveform"
+        )
       case .listening:
         .init(
           visibleText: "Listening",
           voiceOverText: "Dictation listening",
           symbolName: "waveform"
         )
+      case .finalizing:
+        .init(
+          visibleText: "Finishing",
+          voiceOverText: "Finishing dictation",
+          symbolName: "ellipsis.circle"
+        )
       case .cleaning:
         .init(
           visibleText: "Cleaning up",
           voiceOverText: "Cleaning up dictation",
           symbolName: "sparkles"
+        )
+      case .routing:
+        .init(
+          visibleText: "Finding note",
+          voiceOverText: "Finding a note for dictation",
+          symbolName: "arrow.triangle.branch"
         )
       case .saved(let destination):
         .init(
@@ -55,7 +77,7 @@
   }
 
   struct DictationCapsulePresentation: Equatable {
-    let visibleText: String
+    let visibleText: String?
     let voiceOverText: String
     let symbolName: String
     var isSuccess = false
@@ -99,90 +121,121 @@
         defer: true
       )
       level = .floating
-      collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+      collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
       isFloatingPanel = true
       hidesOnDeactivate = false
       isReleasedWhenClosed = false
+      isMovableByWindowBackground = false
       isOpaque = false
       backgroundColor = .clear
       hasShadow = true
     }
 
-    override var canBecomeKey: Bool { allowsActions }
+    override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+  }
+
+  private final class DictationCapsuleObserverToken: @unchecked Sendable {
+    let value: NSObjectProtocol
+
+    init(_ value: NSObjectProtocol) {
+      self.value = value
+    }
   }
 
   @MainActor
   final class DictationCapsuleController {
-    static let size = CGSize(width: 280, height: 52)
-    static let bottomMargin: CGFloat = 48
-    static let successDismissDelay = Duration.seconds(1.2)
+    static let idleSize = CGSize(width: 48, height: 36)
+    static let activeSize = CGSize(width: 280, height: 52)
+    static let edgeInset: CGFloat = 24
 
     let panel: DictationCapsulePanel
-    private var dismissalTask: Task<Void, Never>?
+    private(set) var currentDock = DictationCapsuleDock.bottom
+    private var currentStatus = DictationCapsuleStatus.idle
+    private var currentAction: DictationCapsuleAction?
+    private var currentActionHandler: @MainActor () -> Void = {}
+    private var currentScreen: NSScreen?
+    private var onOpenFleck: (@MainActor () -> Void)?
+    private var onDockChanged: (@MainActor (DictationCapsuleDock) -> Void)?
+    private var screenParametersObserver: DictationCapsuleObserverToken?
 
     init(panel: DictationCapsulePanel = DictationCapsulePanel()) {
       self.panel = panel
+      screenParametersObserver = DictationCapsuleObserverToken(
+        NotificationCenter.default.addObserver(
+          forName: NSApplication.didChangeScreenParametersNotification,
+          object: nil,
+          queue: .main
+        ) { [weak self] _ in
+          Task { @MainActor [weak self] in
+            self?.redockAfterScreenChange()
+          }
+        }
+      )
     }
 
-    func show(
+    func presentIdle(
+      dock: DictationCapsuleDock,
+      onOpenFleck: @escaping @MainActor () -> Void,
+      onDockChanged: @escaping @MainActor (DictationCapsuleDock) -> Void
+    ) {
+      currentDock = dock
+      currentStatus = .idle
+      currentAction = nil
+      currentActionHandler = {}
+      self.onOpenFleck = onOpenFleck
+      self.onDockChanged = onDockChanged
+      installContent(status: .idle, action: nil, onAction: {})
+      applyCurrentFrame(animated: panel.isVisible)
+      panel.orderFrontRegardless()
+    }
+
+    func render(
       _ status: DictationCapsuleStatus,
       action: DictationCapsuleAction? = nil,
-      onAction: @escaping @MainActor () -> Void = {},
-      on screen: NSScreen? = nil,
-      reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+      onAction: @escaping @MainActor () -> Void = {}
     ) {
-      dismissalTask?.cancel()
-      let presentation = status.presentation
-      panel.allowsActions = action != nil
-      panel.contentView = NSHostingView(
-        rootView: DictationCapsuleView(
-          presentation: presentation,
-          action: action,
-          onAction: onAction
-        )
-      )
-
-      let finalFrame = Self.frame(in: (screen ?? activeScreen())?.visibleFrame ?? .zero)
-      let transition = DictationCapsuleTransition.forReduceMotion(reduceMotion)
-      panel.setFrame(
-        transition == .opacity ? finalFrame : finalFrame.insetBy(dx: 8, dy: 4),
-        display: false
-      )
-      panel.alphaValue = 0
+      currentStatus = status
+      currentAction = action
+      currentActionHandler = onAction
+      installContent(status: status, action: action, onAction: onAction)
+      applyCurrentFrame(animated: panel.isVisible)
       panel.orderFrontRegardless()
-      NSAnimationContext.runAnimationGroup { context in
-        context.duration = 0.08
-        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        panel.animator().alphaValue = 1
-        if transition == .scaleAndOpacity {
-          panel.animator().setFrame(finalFrame, display: true)
-        }
-      }
+    }
 
-      if presentation.isSuccess, action == nil {
-        dismissalTask = Task { [weak self] in
-          try? await Task.sleep(for: Self.successDismissDelay)
-          guard !Task.isCancelled else { return }
-          self?.dismiss()
-        }
-      }
+    func setDock(_ dock: DictationCapsuleDock) {
+      currentDock = dock
+      installContent(
+        status: currentStatus,
+        action: currentAction,
+        onAction: currentActionHandler
+      )
+      applyCurrentFrame(animated: panel.isVisible)
     }
 
     func dismiss() {
-      dismissalTask?.cancel()
-      dismissalTask = nil
       panel.allowsActions = false
       panel.orderOut(nil)
     }
 
-    static func frame(in visibleFrame: CGRect) -> CGRect {
-      CGRect(
-        x: visibleFrame.midX - size.width / 2,
-        y: visibleFrame.minY + bottomMargin,
-        width: size.width,
-        height: size.height
-      )
+    static func frame(
+      for dock: DictationCapsuleDock,
+      in visibleFrame: CGRect
+    ) -> CGRect {
+      frame(for: dock, size: idleSize, in: visibleFrame)
+    }
+
+    static func nearestDock(
+      to point: CGPoint,
+      in visibleFrame: CGRect
+    ) -> DictationCapsuleDock {
+      let bottomDistance = abs(point.y - visibleFrame.minY)
+      let leftDistance = abs(point.x - visibleFrame.minX)
+      let rightDistance = abs(point.x - visibleFrame.maxX)
+      if bottomDistance <= leftDistance, bottomDistance <= rightDistance {
+        return .bottom
+      }
+      return leftDistance <= rightDistance ? .left : .right
     }
 
     static func preferredDisplay<T>(
@@ -202,33 +255,273 @@
         primary: NSScreen.screens.first
       )
     }
+
+    private static func frame(
+      for dock: DictationCapsuleDock,
+      size: CGSize,
+      in visibleFrame: CGRect
+    ) -> CGRect {
+      var orientedSize =
+        dock == .bottom
+        ? size
+        : CGSize(width: size.height, height: size.width)
+      orientedSize.width = min(orientedSize.width, max(visibleFrame.width, 0))
+      orientedSize.height = min(orientedSize.height, max(visibleFrame.height, 0))
+      let horizontalInset = min(
+        edgeInset,
+        max((visibleFrame.width - orientedSize.width) / 2, 0)
+      )
+      let verticalInset = min(
+        edgeInset,
+        max((visibleFrame.height - orientedSize.height) / 2, 0)
+      )
+      let origin: CGPoint
+      switch dock {
+      case .bottom:
+        origin = CGPoint(
+          x: visibleFrame.midX - orientedSize.width / 2,
+          y: visibleFrame.minY + verticalInset
+        )
+      case .left:
+        origin = CGPoint(
+          x: visibleFrame.minX + horizontalInset,
+          y: visibleFrame.midY - orientedSize.height / 2
+        )
+      case .right:
+        origin = CGPoint(
+          x: visibleFrame.maxX - horizontalInset - orientedSize.width,
+          y: visibleFrame.midY - orientedSize.height / 2
+        )
+      }
+      return CGRect(origin: origin, size: orientedSize)
+    }
+
+    private func installContent(
+      status: DictationCapsuleStatus,
+      action: DictationCapsuleAction?,
+      onAction: @escaping @MainActor () -> Void
+    ) {
+      panel.allowsActions = action != nil
+      let view = AnyView(
+        DictationCapsuleView(
+          presentation: status.presentation,
+          dock: currentDock,
+          action: action,
+          onAction: onAction,
+          onOpenFleck: onOpenFleck
+        )
+      )
+      if status == .idle {
+        panel.contentView = DictationCapsuleIdleHostingView(
+          rootView: view,
+          onOpenFleck: { [weak self] in self?.onOpenFleck?() },
+          onDragEnded: { [weak self] in self?.finishDrag() },
+          onDockSelected: { [weak self] dock in self?.selectDock(dock) }
+        )
+      } else {
+        panel.contentView = NSHostingView(rootView: view)
+      }
+    }
+
+    private func applyCurrentFrame(animated: Bool) {
+      guard let screen = resolvedScreen() else { return }
+      currentScreen = screen
+      let size = currentStatus == .idle ? Self.idleSize : Self.activeSize
+      let finalFrame = Self.frame(
+        for: currentDock,
+        size: size,
+        in: screen.visibleFrame
+      )
+      let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+      guard animated else {
+        panel.setFrame(finalFrame, display: true)
+        panel.alphaValue = 1
+        return
+      }
+      if reduceMotion {
+        panel.alphaValue = 0
+        panel.setFrame(finalFrame, display: true)
+      }
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = reduceMotion ? 0.08 : 0.12
+        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        panel.animator().alphaValue = 1
+        if !reduceMotion {
+          panel.animator().setFrame(finalFrame, display: true)
+        }
+      }
+    }
+
+    private func finishDrag() {
+      let center = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
+      guard let screen = screen(containing: center) ?? resolvedScreen() else {
+        return
+      }
+      selectDock(Self.nearestDock(to: center, in: screen.visibleFrame), on: screen)
+    }
+
+    private func selectDock(
+      _ dock: DictationCapsuleDock,
+      on screen: NSScreen? = nil
+    ) {
+      currentDock = dock
+      if let screen { currentScreen = screen }
+      installContent(
+        status: currentStatus,
+        action: currentAction,
+        onAction: currentActionHandler
+      )
+      applyCurrentFrame(animated: true)
+      onDockChanged?(dock)
+    }
+
+    private func resolvedScreen() -> NSScreen? {
+      if let currentScreen, NSScreen.screens.contains(where: { $0 === currentScreen }) {
+        return currentScreen
+      }
+      return panel.screen ?? activeScreen()
+    }
+
+    private func screen(containing point: CGPoint) -> NSScreen? {
+      NSScreen.screens.first { $0.frame.contains(point) }
+    }
+
+    private func redockAfterScreenChange() {
+      let center = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
+      currentScreen = screen(containing: center) ?? activeScreen()
+      applyCurrentFrame(animated: false)
+    }
+
+    deinit {
+      if let screenParametersObserver {
+        NotificationCenter.default.removeObserver(screenParametersObserver.value)
+      }
+    }
   }
 
   private struct DictationCapsuleView: View {
     let presentation: DictationCapsulePresentation
+    let dock: DictationCapsuleDock
     let action: DictationCapsuleAction?
     let onAction: @MainActor () -> Void
+    let onOpenFleck: (@MainActor () -> Void)?
 
     var body: some View {
-      HStack(spacing: 10) {
-        Image(systemName: presentation.symbolName)
-          .font(.system(size: 15, weight: .semibold))
-        Text(presentation.visibleText)
-          .font(.system(size: 14, weight: .semibold))
-          .lineLimit(1)
-        if let action {
-          Button(action.title, action: onAction)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .accessibilityLabel(action.accessibilityLabel)
+      Group {
+        if dock == .bottom {
+          HStack(spacing: 10) {
+            content
+          }
+        } else {
+          VStack(spacing: 10) {
+            content
+          }
         }
       }
       .foregroundStyle(.primary)
-      .padding(.horizontal, 18)
+      .padding(dock == .bottom ? .horizontal : .vertical, 12)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(.regularMaterial, in: Capsule())
       .accessibilityElement(children: action == nil ? .ignore : .contain)
       .accessibilityLabel(presentation.voiceOverText)
+      .accessibilityAction(named: Text("Open Fleck")) {
+        guard presentation.visibleText == nil else { return }
+        onOpenFleck?()
+      }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+      Image(systemName: presentation.symbolName)
+        .font(.system(size: 15, weight: .semibold))
+      if let visibleText = presentation.visibleText {
+        Text(visibleText)
+          .font(.system(size: 14, weight: .semibold))
+          .lineLimit(1)
+      }
+      if let action {
+        Button(action.title, action: onAction)
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .accessibilityLabel(action.accessibilityLabel)
+      }
+    }
+  }
+
+  @MainActor
+  private final class DictationCapsuleIdleHostingView: NSView {
+    private let onOpenFleck: @MainActor () -> Void
+    private let onDragEnded: @MainActor () -> Void
+    private let onDockSelected: @MainActor (DictationCapsuleDock) -> Void
+
+    init(
+      rootView: AnyView,
+      onOpenFleck: @escaping @MainActor () -> Void,
+      onDragEnded: @escaping @MainActor () -> Void,
+      onDockSelected: @escaping @MainActor (DictationCapsuleDock) -> Void
+    ) {
+      self.onOpenFleck = onOpenFleck
+      self.onDragEnded = onDragEnded
+      self.onDockSelected = onDockSelected
+      super.init(frame: .zero)
+      let hostingView = NSHostingView(rootView: rootView)
+      hostingView.translatesAutoresizingMaskIntoConstraints = false
+      addSubview(hostingView)
+      NSLayoutConstraint.activate([
+        hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+        hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+        hostingView.topAnchor.constraint(equalTo: topAnchor),
+        hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
+      ])
+      menu = makeDockMenu()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+      fatalError("init(coder:) has not been implemented")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+      guard let window else { return }
+      let start = window.frame.origin
+      window.performDrag(with: event)
+      let end = window.frame.origin
+      let movement = hypot(end.x - start.x, end.y - start.y)
+      if movement < 4 {
+        onOpenFleck()
+      } else {
+        onDragEnded()
+      }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+      bounds.contains(point) ? self : nil
+    }
+
+    private func makeDockMenu() -> NSMenu {
+      let menu = NSMenu()
+      for (title, action) in [
+        ("Dock Bottom", #selector(dockBottom)),
+        ("Dock Left", #selector(dockLeft)),
+        ("Dock Right", #selector(dockRight)),
+      ] {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+      }
+      return menu
+    }
+
+    @objc private func dockBottom() {
+      onDockSelected(.bottom)
+    }
+
+    @objc private func dockLeft() {
+      onDockSelected(.left)
+    }
+
+    @objc private func dockRight() {
+      onDockSelected(.right)
     }
   }
 #endif
