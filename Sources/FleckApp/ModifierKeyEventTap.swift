@@ -55,6 +55,30 @@
       }
     }
 
+    @MainActor
+    final class DisabledTapRecovery {
+      private var didAttemptReenable = false
+
+      func recover(
+        stateHandler: (ModifierMonitorState) -> Void,
+        synchronize: () -> Void,
+        reenable: () -> Bool
+      ) -> Bool {
+        guard !didAttemptReenable else { return false }
+        didAttemptReenable = true
+        stateHandler(.stopped)
+        synchronize()
+        guard reenable() else { return false }
+        didAttemptReenable = false
+        stateHandler(.running)
+        return true
+      }
+
+      func reset() {
+        didAttemptReenable = false
+      }
+    }
+
     var transitionHandler: ((ModifierKeyTransition) -> Void)?
     var stateHandler: ((ModifierMonitorState) -> Void)?
 
@@ -68,7 +92,7 @@
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var keyStates = DictationModifierKey.allCases.map(KeyState.init)
-    private var didAttemptReenable = false
+    private let disabledTapRecovery = DisabledTapRecovery()
 
     func start() throws {
       guard tap == nil else { return }
@@ -97,7 +121,7 @@
 
       self.tap = tap
       runLoopSource = source
-      didAttemptReenable = false
+      disabledTapRecovery.reset()
       synchronizePhysicalState()
       CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
       CGEvent.tapEnable(tap: tap, enable: true)
@@ -141,14 +165,22 @@
     }
 
     private func recoverDisabledTap() {
-      guard !didAttemptReenable, let tap else {
+      guard let tap else {
         fail()
         return
       }
-      didAttemptReenable = true
-      synchronizePhysicalState()
-      CGEvent.tapEnable(tap: tap, enable: true)
-      guard CGEvent.tapIsEnabled(tap: tap) else {
+      guard disabledTapRecovery.recover(
+        stateHandler: { [weak self] state in
+          self?.stateHandler?(state)
+        },
+        synchronize: { [weak self] in
+          self?.synchronizePhysicalState()
+        },
+        reenable: {
+          CGEvent.tapEnable(tap: tap, enable: true)
+          return CGEvent.tapIsEnabled(tap: tap)
+        }
+      ) else {
         fail()
         return
       }
@@ -168,7 +200,7 @@
       }
       runLoopSource = nil
       tap = nil
-      didAttemptReenable = false
+      disabledTapRecovery.reset()
     }
 
     nonisolated static func modifier(

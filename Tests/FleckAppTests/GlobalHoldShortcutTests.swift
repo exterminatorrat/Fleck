@@ -173,6 +173,81 @@ import Testing
   #expect(fixture.handler.cancelCount == 1)
 }
 
+@Test @MainActor func successfulTapRecoveryCancelsOwnedHoldAndSuppressesRelease()
+  async throws
+{
+  let fixture = ShortcutFixture()
+  try fixture.shortcut.configure(.rightOption)
+  fixture.monitor.emit(.pressed(.rightOption))
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.monitor.recoverDisabledTap())
+  await fixture.shortcut.drainEvents()
+  fixture.monitor.emit(.released(.rightOption))
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.cancelCount == 1)
+  #expect(fixture.handler.endCount == 0)
+  #expect(fixture.shortcut.registeredModifier == .rightOption)
+  #expect(fixture.shortcut.monitorState == .running)
+}
+
+@Test @MainActor func successfulTapRecoveryCancelsOwnedHandsFreeSession() async throws {
+  let fixture = ShortcutFixture()
+  try fixture.shortcut.configure(.rightOption)
+  await fixture.startHandsFree()
+
+  #expect(fixture.monitor.recoverDisabledTap())
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.cancelCount == 1)
+  #expect(fixture.handler.handsFreeFinishCount == 0)
+  #expect(fixture.shortcut.registeredModifier == .rightOption)
+  #expect(fixture.shortcut.monitorState == .running)
+}
+
+@Test @MainActor func twoSuccessfulTapRecoveriesEachResetThenResume() {
+  let monitor = ModifierMonitorSpy()
+  var states: [ModifierMonitorState] = []
+  monitor.stateHandler = { states.append($0) }
+
+  #expect(monitor.recoverDisabledTap())
+  #expect(monitor.recoverDisabledTap())
+
+  #expect(states == [.stopped, .running, .stopped, .running])
+}
+
+@Test @MainActor func failedTapReenablePublishesResetThenFailure() {
+  let monitor = ModifierMonitorSpy()
+  var states: [ModifierMonitorState] = []
+  monitor.stateHandler = { states.append($0) }
+
+  #expect(!monitor.recoverDisabledTap(succeeds: false))
+
+  #expect(states == [.stopped, .failed])
+}
+
+@Test @MainActor func tapRecoveryRejectsRecursiveAttemptWithinOneCallback() {
+  let recovery = ModifierKeyEventTap.DisabledTapRecovery()
+  var nestedRecovery: Bool?
+
+  let recovered = recovery.recover(
+    stateHandler: { _ in },
+    synchronize: {},
+    reenable: {
+      nestedRecovery = recovery.recover(
+        stateHandler: { _ in },
+        synchronize: {},
+        reenable: { true }
+      )
+      return true
+    }
+  )
+
+  #expect(recovered)
+  #expect(nestedRecovery == false)
+}
+
 @Test func modifierMonitorStatesContainNoKeyboardEventData() {
   let states: [ModifierMonitorState] = [
     .stopped,
@@ -392,6 +467,7 @@ private final class ModifierMonitorSpy: ModifierKeyMonitoring {
   var startError: Error?
   private(set) var startCount = 0
   private(set) var stopCount = 0
+  private let disabledTapRecovery = ModifierKeyEventTap.DisabledTapRecovery()
 
   func start() throws {
     startCount += 1
@@ -414,6 +490,21 @@ private final class ModifierMonitorSpy: ModifierKeyMonitoring {
 
   func publish(_ state: ModifierMonitorState) {
     stateHandler?(state)
+  }
+
+  func recoverDisabledTap(succeeds: Bool = true) -> Bool {
+    let recovered = disabledTapRecovery.recover(
+      stateHandler: { [weak self] state in
+        self?.stateHandler?(state)
+      },
+      synchronize: {},
+      reenable: { succeeds }
+    )
+    if !recovered {
+      disabledTapRecovery.reset()
+      stateHandler?(.failed)
+    }
+    return recovered
   }
 }
 
