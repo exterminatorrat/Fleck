@@ -1,5 +1,6 @@
 #if os(macOS)
   import Foundation
+  import MenuBarNotesCore
   import Security
 
   enum BridgeCredentialStoreError: Error, Equatable {
@@ -8,8 +9,25 @@
     case keychainFailure
   }
 
+  protocol BridgeKeychainDataStoring:
+    KeychainDataStoring,
+    Sendable
+  {
+    func delete(service: String, account: String) throws
+  }
+
   struct BridgeCredentialStore {
-    static let service = "com.harryjin.motes.agent-profile"
+    static let service = "com.harryjin.fleck.agent-profile"
+    static let legacyService = "com.harryjin.motes.agent-profile"
+
+    private let keychainStore: any BridgeKeychainDataStoring
+
+    init(
+      keychainStore: any BridgeKeychainDataStoring =
+        BridgeSystemKeychainDataStore()
+    ) {
+      self.keychainStore = keychainStore
+    }
 
     func store(profileID: UUID, canonicalBase64: String) throws {
       guard
@@ -19,33 +37,30 @@
       else {
         throw BridgeCredentialStoreError.invalidCredential
       }
-
-      let query = keychainQuery(profileID: profileID)
-      let update = [kSecValueData: credential] as CFDictionary
-      let updateStatus = SecItemUpdate(query as CFDictionary, update)
-      if updateStatus == errSecSuccess { return }
-      guard updateStatus == errSecItemNotFound else {
-        throw BridgeCredentialStoreError.keychainFailure
-      }
-
-      var item = query
-      item[kSecValueData] = credential
-      item[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-      guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else {
+      do {
+        try migratingStore.write(
+          credential,
+          account: profileID.uuidString
+        )
+      } catch {
         throw BridgeCredentialStoreError.keychainFailure
       }
     }
 
     func load(profileID: UUID) throws -> String {
-      var query = keychainQuery(profileID: profileID)
-      query[kSecReturnData] = true
-      query[kSecMatchLimit] = kSecMatchLimitOne
-      var result: CFTypeRef?
-      let status = SecItemCopyMatching(query as CFDictionary, &result)
-      guard status != errSecItemNotFound else {
-        throw BridgeCredentialStoreError.credentialNotFound
-      }
-      guard status == errSecSuccess, let data = result as? Data else {
+      let data: Data
+      do {
+        guard
+          let loaded = try migratingStore.readOrMigrate(
+            account: profileID.uuidString
+          )
+        else {
+          throw BridgeCredentialStoreError.credentialNotFound
+        }
+        data = loaded
+      } catch let error as BridgeCredentialStoreError {
+        throw error
+      } catch {
         throw BridgeCredentialStoreError.keychainFailure
       }
       guard data.count == 32 else {
@@ -55,17 +70,80 @@
     }
 
     func delete(profileID: UUID) throws {
-      let status = SecItemDelete(keychainQuery(profileID: profileID) as CFDictionary)
+      do {
+        try keychainStore.delete(
+          service: Self.service,
+          account: profileID.uuidString
+        )
+      } catch {
+        throw BridgeCredentialStoreError.keychainFailure
+      }
+    }
+
+    private var migratingStore: MigratingKeychainDataStore {
+      MigratingKeychainDataStore(
+        store: keychainStore,
+        canonicalService: Self.service,
+        legacyServices: [Self.legacyService]
+      )
+    }
+  }
+
+  private final class BridgeSystemKeychainDataStore:
+    BridgeKeychainDataStoring,
+    @unchecked Sendable
+  {
+    func read(service: String, account: String) throws -> Data? {
+      var query = keychainQuery(service: service, account: account)
+      query[kSecReturnData] = true
+      query[kSecMatchLimit] = kSecMatchLimitOne
+      var result: CFTypeRef?
+      let status = SecItemCopyMatching(query as CFDictionary, &result)
+      if status == errSecItemNotFound {
+        return nil
+      }
+      guard status == errSecSuccess, let data = result as? Data else {
+        throw BridgeCredentialStoreError.keychainFailure
+      }
+      return data
+    }
+
+    func write(_ data: Data, service: String, account: String) throws {
+      let query = keychainQuery(service: service, account: account)
+      let updateStatus = SecItemUpdate(
+        query as CFDictionary,
+        [kSecValueData: data] as CFDictionary
+      )
+      if updateStatus == errSecSuccess { return }
+      guard updateStatus == errSecItemNotFound else {
+        throw BridgeCredentialStoreError.keychainFailure
+      }
+      var item = query
+      item[kSecValueData] = data
+      item[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+      guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else {
+        throw BridgeCredentialStoreError.keychainFailure
+      }
+    }
+
+    func delete(service: String, account: String) throws {
+      let status = SecItemDelete(
+        keychainQuery(service: service, account: account) as CFDictionary
+      )
       guard status == errSecSuccess || status == errSecItemNotFound else {
         throw BridgeCredentialStoreError.keychainFailure
       }
     }
 
-    private func keychainQuery(profileID: UUID) -> [CFString: Any] {
+    private func keychainQuery(
+      service: String,
+      account: String
+    ) -> [CFString: Any] {
       [
         kSecClass: kSecClassGenericPassword,
-        kSecAttrService: Self.service,
-        kSecAttrAccount: profileID.uuidString,
+        kSecAttrService: service,
+        kSecAttrAccount: account,
+        kSecUseDataProtectionKeychain: true,
       ]
     }
   }

@@ -200,6 +200,49 @@ struct AgentProfileStoreTests {
     )
   }
 
+  @Test func legacyProfileVerifierMigratesBeforeAuthorization() async throws {
+    let fixture = try ProfileFixture(
+      randomBytes: Data(repeating: 0x73, count: 32)
+    )
+    defer { fixture.remove() }
+    let provisioning = try await fixture.store.create(name: "Legacy Codex")
+    let account = provisioning.profile.id.uuidString
+    let verifier = try #require(
+      fixture.secrets.value(
+        service: AgentCredentialSecurity.profileVerifierService,
+        account: account
+      )
+    )
+    try fixture.secrets.delete(
+      service: AgentCredentialSecurity.profileVerifierService,
+      account: account
+    )
+    try fixture.secrets.write(
+      verifier,
+      service: AgentCredentialSecurity.legacyProfileVerifierService,
+      account: account
+    )
+
+    #expect(
+      try await fixture.store.authorize(
+        profileID: provisioning.profile.id,
+        credential: provisioning.credential
+      ).id == provisioning.profile.id
+    )
+    #expect(
+      fixture.secrets.value(
+        service: AgentCredentialSecurity.profileVerifierService,
+        account: account
+      ) == verifier
+    )
+    #expect(
+      fixture.secrets.value(
+        service: AgentCredentialSecurity.legacyProfileVerifierService,
+        account: account
+      ) == verifier
+    )
+  }
+
   @Test func constantTimeComparisonHandlesEqualWrongAndDifferentLengthData() {
     let value = Data(repeating: 0xEF, count: 32)
 

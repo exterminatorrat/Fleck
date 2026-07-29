@@ -3,9 +3,7 @@ import Foundation
 import MenuBarNotesCore
 import Security
 
-protocol AgentSecretStoring: Sendable {
-  func read(service: String, account: String) throws -> Data?
-  func write(_ data: Data, service: String, account: String) throws
+protocol AgentSecretStoring: KeychainDataStoring {
   func delete(service: String, account: String) throws
 }
 
@@ -15,8 +13,12 @@ protocol AgentRandomBytesProviding: Sendable {
 
 enum AgentCredentialSecurity {
   static let profileVerifierService =
+    "com.harryjin.fleck.agent-profile-verifier"
+  static let legacyProfileVerifierService =
     "com.harryjin.motes.agent-profile-verifier"
   static let taskHandleSigningService =
+    "com.harryjin.fleck.agent-task-handles"
+  static let legacyTaskHandleSigningService =
     "com.harryjin.motes.agent-task-handles"
   static let taskHandleSigningAccount = "default"
   static let secretByteCount = 32
@@ -67,7 +69,7 @@ struct AgentSystemRandomBytesProvider: AgentRandomBytesProviding {
 
 final class AgentKeychainSecretStore: AgentSecretStoring, @unchecked Sendable {
   func read(service: String, account: String) throws -> Data? {
-    var query = baseQuery(service: service, account: account)
+    var query = Self.baseQuery(service: service, account: account)
     query[kSecReturnData] = true
     query[kSecMatchLimit] = kSecMatchLimitOne
     var result: CFTypeRef?
@@ -83,7 +85,7 @@ final class AgentKeychainSecretStore: AgentSecretStoring, @unchecked Sendable {
   }
 
   func write(_ data: Data, service: String, account: String) throws {
-    let query = baseQuery(service: service, account: account)
+    let query = Self.baseQuery(service: service, account: account)
     let updateStatus = SecItemUpdate(
       query as CFDictionary,
       [kSecValueData: data] as CFDictionary
@@ -105,14 +107,14 @@ final class AgentKeychainSecretStore: AgentSecretStoring, @unchecked Sendable {
 
   func delete(service: String, account: String) throws {
     let status = SecItemDelete(
-      baseQuery(service: service, account: account) as CFDictionary
+      Self.baseQuery(service: service, account: account) as CFDictionary
     )
     guard status == errSecSuccess || status == errSecItemNotFound else {
       throw AgentCredentialSecurity.internalFailure
     }
   }
 
-  private func baseQuery(
+  static func baseQuery(
     service: String,
     account: String
   ) -> [CFString: Any] {

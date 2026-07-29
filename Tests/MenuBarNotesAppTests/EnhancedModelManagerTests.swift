@@ -248,6 +248,10 @@ struct EnhancedModelManagerTests {
     let query = EnhancedModelManager.resumeAuthenticationKeychainBaseQuery()
 
     #expect(query[kSecClass] as? String == kSecClassGenericPassword as String)
+    #expect(
+      query[kSecAttrService] as? String
+        == "com.harryjin.fleck.enhanced-model-resume"
+    )
     #expect(query[kSecUseDataProtectionKeychain] as? Bool == true)
   }
 

@@ -69,9 +69,8 @@ actor AgentProfileStore {
     )
     let account = profile.id.uuidString
     do {
-      try secretStore.write(
+      try verifierStore.write(
         AgentCredentialSecurity.sha256(credential),
-        service: AgentCredentialSecurity.profileVerifierService,
         account: account
       )
       profiles.append(profile)
@@ -108,8 +107,7 @@ actor AgentProfileStore {
     let storedVerifier: Data
     do {
       guard
-        let value = try secretStore.read(
-          service: AgentCredentialSecurity.profileVerifierService,
+        let value = try verifierStore.readOrMigrate(
           account: profileID.uuidString
         )
       else {
@@ -178,6 +176,16 @@ actor AgentProfileStore {
         }
         return $0.id.uuidString < $1.id.uuidString
       }
+  }
+
+  private var verifierStore: MigratingKeychainDataStore {
+    MigratingKeychainDataStore(
+      store: secretStore,
+      canonicalService: AgentCredentialSecurity.profileVerifierService,
+      legacyServices: [
+        AgentCredentialSecurity.legacyProfileVerifierService
+      ]
+    )
   }
 
   private func loadProfiles() throws -> [AgentIntegrationProfile] {

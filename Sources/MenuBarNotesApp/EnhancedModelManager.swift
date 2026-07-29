@@ -107,6 +107,12 @@
 
   @MainActor
   final class EnhancedModelManager: ObservableObject {
+    nonisolated static let resumeAuthenticationService =
+      "com.harryjin.fleck.enhanced-model-resume"
+    nonisolated static let legacyResumeAuthenticationService =
+      "com.motes.enhanced-model-resume"
+    nonisolated private static let resumeAuthenticationAccount = "default"
+    nonisolated private static let resumeAuthenticationLock = NSLock()
     static let requiredAvailableCapacity: Int64 = 1_197_261_950
 
     @Published private(set) var state: EnhancedModelState = .notInstalled
@@ -586,60 +592,60 @@
       )
     }
 
-    nonisolated static func resumeAuthenticationKeychainBaseQuery()
+    nonisolated static func resumeAuthenticationKeychainBaseQuery(
+      service: String = EnhancedModelManager.resumeAuthenticationService,
+      account: String = EnhancedModelManager.resumeAuthenticationAccount
+    )
       -> [CFString: Any]
     {
-      [
-        kSecClass: kSecClassGenericPassword,
-        kSecAttrService: "com.motes.enhanced-model-resume",
-        kSecAttrAccount: "default",
-        kSecUseDataProtectionKeychain: true,
-      ]
+      AgentKeychainSecretStore.baseQuery(
+        service: service,
+        account: account
+      )
     }
 
     nonisolated private static func loadOrCreateResumeAuthenticationKey() throws
       -> SymmetricKey
     {
-      let baseQuery = resumeAuthenticationKeychainBaseQuery()
-      var lookup = baseQuery
-      lookup[kSecReturnData] = true
-      lookup[kSecMatchLimit] = kSecMatchLimitOne
-      var result: CFTypeRef?
-      var status = SecItemCopyMatching(lookup as CFDictionary, &result)
-      if status == errSecSuccess, let data = result as? Data {
-        return SymmetricKey(data: data)
-      }
-      guard status == errSecItemNotFound else {
-        throw keychainError(status)
-      }
+      try resumeAuthenticationLock.withLock {
+        let store = AgentKeychainSecretStore()
+        let migrating = MigratingKeychainDataStore(
+          store: store,
+          canonicalService: resumeAuthenticationService,
+          legacyServices: [legacyResumeAuthenticationService]
+        )
+        if let data = try migrating.readOrMigrate(
+          account: resumeAuthenticationAccount
+        ) {
+          guard data.count == 32 else {
+            throw KeychainMigrationError.verificationFailed
+          }
+          return SymmetricKey(data: data)
+        }
 
-      var bytes = Data(count: 32)
-      let randomStatus = bytes.withUnsafeMutableBytes {
-        SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!)
-      }
-      guard randomStatus == errSecSuccess else {
-        throw keychainError(randomStatus)
-      }
-      var insertion = baseQuery
-      insertion[kSecValueData] = bytes
-      insertion[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-      status = SecItemAdd(insertion as CFDictionary, nil)
-      if status == errSecSuccess {
+        var bytes = Data(count: 32)
+        let randomStatus = bytes.withUnsafeMutableBytes {
+          SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!)
+        }
+        guard randomStatus == errSecSuccess else {
+          throw keychainError(randomStatus)
+        }
+        try migrating.write(bytes, account: resumeAuthenticationAccount)
+        guard
+          try store.read(
+            service: resumeAuthenticationService,
+            account: resumeAuthenticationAccount
+          ) == bytes
+        else {
+          throw KeychainMigrationError.verificationFailed
+        }
         return SymmetricKey(data: bytes)
       }
-      guard status == errSecDuplicateItem else {
-        throw keychainError(status)
-      }
-
-      result = nil
-      status = SecItemCopyMatching(lookup as CFDictionary, &result)
-      guard status == errSecSuccess, let data = result as? Data else {
-        throw keychainError(status)
-      }
-      return SymmetricKey(data: data)
     }
 
-    nonisolated private static func keychainError(_ status: OSStatus) -> NSError {
+    nonisolated fileprivate static func keychainError(
+      _ status: OSStatus
+    ) -> NSError {
       NSError(
         domain: NSOSStatusErrorDomain,
         code: Int(status),

@@ -259,6 +259,36 @@ struct AgentTaskHandleCodecTests {
       try malformedGenerated.signingKey()
     }
   }
+
+  @Test func legacyTaskSigningKeyMigratesWithoutRegeneration() throws {
+    let secrets = FakeTaskHandleSecretStore()
+    let key = Data(repeating: 0x42, count: 32)
+    try secrets.write(
+      key,
+      service: AgentCredentialSecurity.legacyTaskHandleSigningService,
+      account: AgentCredentialSecurity.taskHandleSigningAccount
+    )
+    let random = CountingRandomBytes(value: Data(repeating: 0x99, count: 32))
+    let provider = AgentKeychainSigningKeyProvider(
+      secretStore: secrets,
+      randomBytes: random
+    )
+
+    #expect(try provider.signingKey() == key)
+    #expect(random.callCount == 0)
+    #expect(
+      secrets.value(
+        service: AgentCredentialSecurity.taskHandleSigningService,
+        account: AgentCredentialSecurity.taskHandleSigningAccount
+      ) == key
+    )
+    #expect(
+      secrets.value(
+        service: AgentCredentialSecurity.legacyTaskHandleSigningService,
+        account: AgentCredentialSecurity.taskHandleSigningAccount
+      ) == key
+    )
+  }
 }
 
 private func expectExpired(_ operation: () throws -> Void) throws {

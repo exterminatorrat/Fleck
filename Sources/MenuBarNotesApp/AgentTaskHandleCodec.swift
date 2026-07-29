@@ -54,8 +54,14 @@ final class AgentKeychainSigningKeyProvider:
 
   func signingKey() throws -> Data {
     try Self.lock.withLock {
-      if let stored = try secretStore.read(
-        service: AgentCredentialSecurity.taskHandleSigningService,
+      let migratingStore = MigratingKeychainDataStore(
+        store: secretStore,
+        canonicalService: AgentCredentialSecurity.taskHandleSigningService,
+        legacyServices: [
+          AgentCredentialSecurity.legacyTaskHandleSigningService
+        ]
+      )
+      if let stored = try migratingStore.readOrMigrate(
         account: AgentCredentialSecurity.taskHandleSigningAccount
       ) {
         guard stored.count == AgentCredentialSecurity.secretByteCount else {
@@ -70,9 +76,8 @@ final class AgentKeychainSigningKeyProvider:
       guard generated.count == AgentCredentialSecurity.secretByteCount else {
         throw AgentCredentialSecurity.internalFailure
       }
-      try secretStore.write(
+      try migratingStore.write(
         generated,
-        service: AgentCredentialSecurity.taskHandleSigningService,
         account: AgentCredentialSecurity.taskHandleSigningAccount
       )
       return generated
