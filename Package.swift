@@ -5,7 +5,7 @@ import Foundation
 
 let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let infoPlistPath = packageRoot
-    .appendingPathComponent("Sources/MenuBarNotesApp/Info.plist").path
+    .appendingPathComponent("Sources/FleckApp/Info.plist").path
 let enhancedCandidateEnabled =
     ProcessInfo.processInfo.environment["MOTES_ENHANCED_CANDIDATE"] == "1"
 
@@ -16,8 +16,8 @@ var packageDependencies: [Package.Dependency] = [
     ),
 ]
 var appDependencies: [Target.Dependency] = [
-    "MenuBarNotesCore",
-    "MenuBarNotesAgentProtocol",
+    "FleckCore",
+    "FleckAgentProtocol",
 ]
 var appExcludes = [
     "Info.plist",
@@ -69,29 +69,29 @@ if enhancedCandidateEnabled {
 }
 
 let package = Package(
-    name: "Motes",
+    name: "Fleck",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "MenuBarNotesCore", targets: ["MenuBarNotesCore"]),
+        .library(name: "FleckCore", targets: ["FleckCore"]),
         .library(
-            name: "MenuBarNotesAgentProtocol",
-            targets: ["MenuBarNotesAgentProtocol"]
+            name: "FleckAgentProtocol",
+            targets: ["FleckAgentProtocol"]
         ),
-        .executable(name: "Motes", targets: ["MenuBarNotesApp"]),
-        .executable(name: "motes-agent", targets: ["MotesAgentBridge"]),
+        .executable(name: "Fleck", targets: ["FleckApp"]),
+        .executable(name: "fleck-agent", targets: ["FleckAgentBridge"]),
     ],
     dependencies: packageDependencies,
     targets: [
         .target(
-            name: "MenuBarNotesCore",
+            name: "FleckCore",
             swiftSettings: coreSwiftSettings
         ),
         .target(
-            name: "MenuBarNotesAgentProtocol",
-            dependencies: ["MenuBarNotesCore"]
+            name: "FleckAgentProtocol",
+            dependencies: ["FleckCore"]
         ),
         .executableTarget(
-            name: "MenuBarNotesApp",
+            name: "FleckApp",
             dependencies: appDependencies,
             exclude: appExcludes,
             resources: appResources,
@@ -106,29 +106,29 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "MotesAgentBridge",
+            name: "FleckAgentBridge",
             dependencies: [
-                "MenuBarNotesCore",
-                "MenuBarNotesAgentProtocol",
+                "FleckCore",
+                "FleckAgentProtocol",
                 .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
         .testTarget(
-            name: "MenuBarNotesCoreTests",
-            dependencies: ["MenuBarNotesCore"]
+            name: "FleckCoreTests",
+            dependencies: ["FleckCore"]
         ),
         .testTarget(
-            name: "MenuBarNotesAgentProtocolTests",
-            dependencies: ["MenuBarNotesAgentProtocol", "MenuBarNotesCore"]
+            name: "FleckAgentProtocolTests",
+            dependencies: ["FleckAgentProtocol", "FleckCore"]
         ),
         .testTarget(
-            name: "MenuBarNotesAppTests",
-            dependencies: ["MenuBarNotesApp"],
+            name: "FleckAppTests",
+            dependencies: ["FleckApp"],
             swiftSettings: appTestSwiftSettings
         ),
         .testTarget(
-            name: "MotesAgentBridgeTests",
-            dependencies: ["MotesAgentBridge"]
+            name: "FleckAgentBridgeTests",
+            dependencies: ["FleckAgentBridge"]
         ),
     ]
 )
