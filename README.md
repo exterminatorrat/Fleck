@@ -32,7 +32,9 @@ The trigger subscribes only to modifier `flagsChanged` transitions through macOS
 capture, Fleck registers only Escape as a capture-scoped cancellation hot key,
 then unregisters it at terminal. Choose a different left/right modifier or Fn
 in Settings if needed. Fn is best-effort, and Command, Control, and Left Option
-can conflict with normal modifier use.
+can conflict with normal modifier use. If Input Monitoring is unavailable, use
+**Enable Input Monitoring** in Settings; after granting access, choose it again
+to recheck and activate the selected modifier.
 
 Use **Show status capsule** to hide or restore the persistent bar, then drag it
 or use its menu to dock it at the bottom, left, or right edge. Dictation cleanup

@@ -2,7 +2,7 @@
   import FleckCore
 
   enum DictationModifierSettingsRecoveryAction: Equatable {
-    case openInputMonitoringSettings
+    case enableInputMonitoring
     case retry
   }
 
@@ -37,7 +37,7 @@
       recommended = .rightOption
       isPickerEnabled = canChange
       recoveryAction = switch monitorStatus {
-      case .unauthorized: .openInputMonitoringSettings
+      case .unauthorized: .enableInputMonitoring
       case .failed: .retry
       case .stopped, .running: nil
       }
@@ -46,7 +46,7 @@
       case .running:
         "Input Monitoring enabled"
       case .unauthorized:
-        "Input Monitoring is required to use the modifier key."
+        "Input Monitoring is required. Enable it to use the modifier key."
       case .failed:
         "Input Monitoring could not start. Retry to use the modifier key."
       case .stopped:

@@ -527,9 +527,14 @@
         }
         if let action = dictationModifierPresentation.recoveryAction {
           switch action {
-          case .openInputMonitoringSettings:
-            Button("Open Input Monitoring Settings") {
-              runtime.openSystemSettings(.init(pane: .inputMonitoring))
+          case .enableInputMonitoring:
+            Button("Enable Input Monitoring") {
+              Task { @MainActor in
+                let enabled = await runtime.retryModifierMonitoring()
+                guard !enabled else { return }
+                guard runtime.modifierMonitorState == .unauthorized else { return }
+                runtime.openSystemSettings(.init(pane: .inputMonitoring))
+              }
             }
           case .retry:
             Button("Retry") {

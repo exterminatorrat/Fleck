@@ -286,7 +286,7 @@ import Testing
     canChange: true
   )
   #expect(denied.statusCopy.contains("required"))
-  #expect(denied.recoveryAction == .openInputMonitoringSettings)
+  #expect(denied.recoveryAction == .enableInputMonitoring)
 
   let unavailable = DictationModifierSettingsPresentation(
     selected: .rightOption,
@@ -346,6 +346,9 @@ import Testing
   )
 
   #expect(!source.contains("DictationShortcutRecorder("))
+  #expect(source.contains("Button(\"Enable Input Monitoring\")"))
+  #expect(source.contains("await runtime.retryModifierMonitoring()"))
+  #expect(source.contains("runtime.openSystemSettings(.init(pane: .inputMonitoring))"))
 }
 
 @Test @MainActor func DictationEditorRegistryUsesOnlyTheActualFirstResponder() {
@@ -935,6 +938,37 @@ import Testing
   #expect(fixture.runtime.actualModifier == old)
   #expect(fixture.appState.preferences.dictationModifierKey == old)
   #expect(fixture.monitor.stopCount == 0)
+}
+
+@Test @MainActor func DictationRuntimeEnablesStoredModifierAfterAccessIsGranted()
+  async throws
+{
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    preferredModifier: .leftCommand,
+    monitorAccessGranted: false
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.monitor.requestCount == 0)
+  #expect(fixture.runtime.modifierMonitorState == .unauthorized)
+  #expect(fixture.runtime.actualModifier == nil)
+  #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
+
+  fixture.monitor.requestAccessResult = false
+  let denied = await fixture.runtime.retryModifierMonitoring()
+  #expect(!denied)
+  #expect(fixture.monitor.requestCount == 1)
+  #expect(fixture.runtime.modifierMonitorState == .unauthorized)
+  #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
+
+  fixture.monitor.requestAccessResult = true
+  let granted = await fixture.runtime.retryModifierMonitoring()
+  #expect(granted)
+  #expect(fixture.monitor.requestCount == 2)
+  #expect(fixture.runtime.modifierMonitorState == .running)
+  #expect(fixture.runtime.actualModifier == .leftCommand)
+  #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
 }
 
 @Test @MainActor func DictationRuntimeRunningMonitorChangesWithoutRestart()
