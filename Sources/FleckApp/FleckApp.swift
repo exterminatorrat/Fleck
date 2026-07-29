@@ -180,6 +180,11 @@
       case model(UUID)
     }
 
+    private enum CapsuleUpdate {
+      case coordinator(DictationCoordinatorEvent)
+      case preflightFailure(String)
+    }
+
     private final class ObserverToken: @unchecked Sendable {
       let value: NSObjectProtocol
 
@@ -222,6 +227,7 @@
     private var appliedCapsuleEnabled: Bool?
     private var capsuleReturnTask: Task<Void, Never>?
     private var capsuleGeneration: UInt64 = 0
+    private var latestCapsuleUpdate: CapsuleUpdate?
     private var startupAssessmentTask: Task<Void, Never>?
     private var initialLoadSynchronizationTask: Task<Void, Never>?
     private var terminalSynchronizationTask: Task<Void, Never>?
@@ -463,8 +469,7 @@
           let message =
             availability.standardFailureCopy
             ?? "Standard — Apple Speech is unavailable."
-          phase = .failed(message)
-          captureFailure = .init(
+          publishPreflightFailure(
             message: message,
             actions: availability.openSystemSettings
           )
@@ -702,40 +707,62 @@
           captureReachedListening = false
         }
       #endif
+      presentCapsuleUpdate(.coordinator(event))
+      synchronizeAfter(event)
+    }
+
+    private func presentCapsuleUpdate(_ update: CapsuleUpdate) {
+      latestCapsuleUpdate = update
+      guard appState?.hasFinishedInitialLoad == true else { return }
+      renderCapsuleUpdate(update)
+    }
+
+    private func renderCapsuleUpdate(_ update: CapsuleUpdate) {
       guard appState?.preferences.dictationCapsuleEnabled == true else {
-        invalidateCapsuleReturn()
         dismissCapsule()
-        synchronizeAfter(event)
         return
       }
+      switch update {
+      case .preflightFailure(let message):
+        showFailureCapsule(message, action: nil)
+      case .coordinator(let event):
+        renderCoordinatorCapsule(event)
+      }
+    }
+
+    private func renderCoordinatorCapsule(_ event: DictationCoordinatorEvent) {
+      let action = capsuleAction(for: coordinator.recoveryAction)
       let status = Self.capsuleStatus(for: event)
       if let terminal = event.terminal {
         switch terminal {
         case .saved:
-          showCapsule(
-            status,
-            owner: .dictation,
-            action: capsuleAction(for: coordinator.recoveryAction)
-          )
+          showCapsule(status, owner: .dictation, action: action)
           scheduleIdle(after: Self.savedCapsuleDuration, owner: .dictation)
-        case .failed:
-          showCapsule(
-            status,
-            owner: .dictation,
-            action: capsuleAction(for: coordinator.recoveryAction)
-          )
-          scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
+        case .failed(let message):
+          showFailureCapsule(message, action: action)
         case .cancelled:
           showIdleCapsule()
         }
       } else {
-        showCapsule(
-          status,
-          owner: .dictation,
-          action: capsuleAction(for: coordinator.recoveryAction)
-        )
+        showCapsule(status, owner: .dictation, action: action)
       }
-      synchronizeAfter(event)
+    }
+
+    private func publishPreflightFailure(
+      message: String,
+      actions: [DictationSystemSettingsAction]
+    ) {
+      phase = .failed(message)
+      captureFailure = .init(message: message, actions: actions)
+      presentCapsuleUpdate(.preflightFailure(message))
+    }
+
+    private func showFailureCapsule(
+      _ message: String,
+      action: DictationCapsuleAction?
+    ) {
+      showCapsule(.failed(message), owner: .dictation, action: action)
+      scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
     }
 
     private func synchronizeAfter(_ event: DictationCoordinatorEvent) {
@@ -911,8 +938,14 @@
     private func applyLoadedPreferences(_ preferences: AppPreferences) {
       desiredModifier = preferences.dictationModifierKey
       needsModifierApplication = true
-      capsuleDock = preferences.dictationCapsuleDock
+      appliedCapsuleEnabled = preferences.dictationCapsuleEnabled
       synchronizePreferences()
+      guard preferences.dictationCapsuleEnabled else { return }
+      if let latestCapsuleUpdate {
+        renderCapsuleUpdate(latestCapsuleUpdate)
+      } else {
+        showIdleCapsule()
+      }
     }
 
     private func selectedDestination() -> DictationDestination? {
@@ -926,6 +959,7 @@
       owner: CapsuleOwner,
       action: DictationCapsuleAction? = nil
     ) {
+      guard appState?.hasFinishedInitialLoad == true else { return }
       invalidateCapsuleReturn()
       currentCapsuleStatus = status
       capsuleOwner = owner
@@ -942,11 +976,13 @@
 
     private func showIdleCapsule(ifOwnedBy owner: CapsuleOwner? = nil) {
       guard owner == nil || capsuleOwner == owner else { return }
+      guard appState?.hasFinishedInitialLoad == true else { return }
       guard appState?.preferences.dictationCapsuleEnabled == true else {
         dismissCapsule()
         return
       }
       invalidateCapsuleReturn()
+      latestCapsuleUpdate = nil
       capsuleOwner = .idle
       currentCapsuleStatus = .idle
       capsuleController.presentIdle(
@@ -991,15 +1027,20 @@
       capsuleDock = dock
       appliedCapsuleEnabled = enabled
 
+      if dockChanged {
+        capsuleController.setDock(dock)
+      }
       guard enabled else {
         invalidateCapsuleReturn()
         dismissCapsule()
         return
       }
       if becameEnabled {
-        showIdleCapsule()
-      } else if dockChanged {
-        capsuleController.setDock(dock)
+        if let latestCapsuleUpdate {
+          renderCapsuleUpdate(latestCapsuleUpdate)
+        } else {
+          showIdleCapsule()
+        }
       }
     }
 

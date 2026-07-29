@@ -514,6 +514,65 @@ import Testing
   #expect(!fixture.runtime.capsuleController.panel.isVisible)
 }
 
+@Test @MainActor func DictationRuntimeBuffersCapsuleEventsUntilLoadedPreferencesAreApplied()
+  async throws
+{
+  for capsuleEnabled in [false, true] {
+    let fixture = try await RuntimeFixture(
+      finalText: "saved",
+      capsuleEnabled: capsuleEnabled,
+      preferredDock: .left,
+      waitForInitialLoadBeforeRuntime: false,
+      blockInitialLoad: true
+    )
+    guard let loadBlocker = fixture.initialLoadBlocker else {
+      Issue.record("Expected a deterministic initial-load blocker")
+      continue
+    }
+    defer { loadBlocker.release() }
+    for _ in 0..<1_000 {
+      if loadBlocker.hasBlocked { break }
+      await Task.yield()
+    }
+    guard loadBlocker.hasBlocked else {
+      Issue.record("Initial load did not reach the deterministic blocker")
+      continue
+    }
+    let orderProbe = RuntimeCapsuleOrderProbe(panel: fixture.runtime.capsuleController.panel)
+    defer { orderProbe.stop() }
+
+    await fixture.runtime.toggle()
+
+    #expect(fixture.runtime.phase == .listening(mode: .smartCapture, engine: .standard))
+    #expect(fixture.runtime.currentCapsuleStatus == nil)
+    #expect(!fixture.runtime.capsuleController.panel.isVisible)
+    #expect(orderProbe.count == 0)
+
+    loadBlocker.release()
+    await fixture.appState.waitUntilInitialLoad()
+    await fixture.runtime.awaitStartupAssessment()
+
+    #expect(fixture.runtime.capsuleController.currentDock == .left)
+    if capsuleEnabled {
+      #expect(fixture.runtime.currentCapsuleStatus == .listening)
+      #expect(fixture.runtime.capsuleController.panel.isVisible)
+      #expect(orderProbe.count == 1)
+    } else {
+      #expect(fixture.runtime.currentCapsuleStatus == nil)
+      #expect(!fixture.runtime.capsuleController.panel.isVisible)
+      #expect(orderProbe.count == 0)
+
+      fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+      fixture.runtime.preferencesDidChange()
+      #expect(fixture.runtime.currentCapsuleStatus == .listening)
+      #expect(fixture.runtime.capsuleController.panel.isVisible)
+      #expect(orderProbe.count == 1)
+    }
+
+    await fixture.runtime.cancel()
+  }
+}
+
 @Test @MainActor func DictationRuntimeReturnTimersCannotReplaceNewerListeningState()
   async throws
 {
@@ -815,6 +874,57 @@ import Testing
   )
   #expect(fixture.runtime.captureFailure?.actions.isEmpty == true)
   #expect(fixture.provider.requestCount == 0)
+}
+
+@Test @MainActor func DictationRuntimePreflightFailureUsesProtectedCapsuleReturnTimer()
+  async throws
+{
+  let availability = RuntimeAvailabilityBox(.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .denied,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  )))
+  let sleeper = RuntimeCapsuleSleeper()
+  let fixture = try await RuntimeFixture(
+    finalText: "Saved",
+    capsuleEnabled: true,
+    availabilityProvider: { availability.value },
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+
+  guard
+    fixture.runtime.currentCapsuleStatus
+      == .failed(availability.value.standardFailureCopy ?? "")
+  else {
+    Issue.record("Expected preflight failure capsule")
+    return
+  }
+  await sleeper.waitForRequest()
+  #expect(await sleeper.requestedDurations == [Duration.seconds(3)])
+
+  availability.value = .evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  ))
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.currentCapsuleStatus == .listening)
+
+  await sleeper.resumeAll()
+  await Task.yield()
+  #expect(fixture.runtime.currentCapsuleStatus == .listening)
+  await fixture.runtime.cancel()
 }
 
 @Test @MainActor func DictationRuntimeClearsVisiblePreflightFailureOnRetryAndSuccess()
@@ -1401,6 +1511,7 @@ private final class RuntimeFixture {
   let provider: RuntimeEngineProvider
   let history: DictationHistoryController
   let editorRegistry = DictationEditorRegistry()
+  let initialLoadBlocker: RuntimeBlockingFileManager?
   var runtime: DictationRuntime!
 
   init(
@@ -1411,6 +1522,7 @@ private final class RuntimeFixture {
     preferredModifier: DictationModifierKey = .rightOption,
     preferredDock: DictationCapsuleDock = .bottom,
     waitForInitialLoadBeforeRuntime: Bool = true,
+    blockInitialLoad: Bool = false,
     monitorAccessGranted: Bool = true,
     enhancedReadyAtStartup: Bool = false,
     permissionController: DictationPermissionController = .init(),
@@ -1430,7 +1542,14 @@ private final class RuntimeFixture {
   ) async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("runtime-\(UUID().uuidString)", isDirectory: true)
-    let store = LocalStore(rootURL: root)
+    initialLoadBlocker = blockInitialLoad ? RuntimeBlockingFileManager() : nil
+    let store: LocalStore
+    if let initialLoadBlocker {
+      nonisolated(unsafe) let fileManager: FileManager = initialLoadBlocker
+      store = LocalStore(rootURL: root, fileManager: fileManager)
+    } else {
+      store = LocalStore(rootURL: root)
+    }
     let preferences = AppPreferences(
       dictationSpeechEngine: preferredEngine,
       dictationModifierKey: preferredModifier,
@@ -1445,6 +1564,7 @@ private final class RuntimeFixture {
       preferences: preferences,
       trashedNotes: []
     )
+    initialLoadBlocker?.beginBlocking()
     appState = AppState(store: store, saveOperation: { _, _, _ in })
     if waitForInitialLoadBeforeRuntime {
       for _ in 0..<100 {
@@ -1678,6 +1798,91 @@ private actor RuntimeCapsuleSleeper {
     let pending = continuations
     continuations.removeAll()
     pending.forEach { $0.resume() }
+  }
+}
+
+private final class RuntimeBlockingFileManager: FileManager, @unchecked Sendable {
+  private let lock = NSLock()
+  private let releaseSemaphore = DispatchSemaphore(value: 0)
+  private var isBlocking = false
+  private var didBlock = false
+
+  var hasBlocked: Bool {
+    lock.withLock { didBlock }
+  }
+
+  func beginBlocking() {
+    lock.withLock {
+      isBlocking = true
+      didBlock = false
+    }
+  }
+
+  func release() {
+    let shouldSignal = lock.withLock {
+      let shouldSignal = isBlocking
+      isBlocking = false
+      return shouldSignal
+    }
+    if shouldSignal {
+      releaseSemaphore.signal()
+    }
+  }
+
+  override func createDirectory(
+    at url: URL,
+    withIntermediateDirectories createIntermediates: Bool,
+    attributes: [FileAttributeKey: Any]? = nil
+  ) throws {
+    try super.createDirectory(
+      at: url,
+      withIntermediateDirectories: createIntermediates,
+      attributes: attributes
+    )
+    let shouldBlock = lock.withLock {
+      guard isBlocking else { return false }
+      didBlock = true
+      return true
+    }
+    if shouldBlock {
+      releaseSemaphore.wait()
+    }
+  }
+}
+
+@MainActor
+private final class RuntimeCapsuleOrderProbe: NSObject {
+  private(set) var count = 0
+  private let panel: NSPanel
+
+  init(panel: NSPanel) {
+    self.panel = panel
+    super.init()
+    panel.addObserver(
+      self,
+      forKeyPath: "visible",
+      options: [.new],
+      context: nil
+    )
+  }
+
+  func stop() {
+    panel.removeObserver(self, forKeyPath: "visible")
+  }
+
+  override nonisolated func observeValue(
+    forKeyPath keyPath: String?,
+    of object: Any?,
+    change: [NSKeyValueChangeKey: Any]?,
+    context: UnsafeMutableRawPointer?
+  ) {
+    guard
+      keyPath == "visible",
+      change?[.newKey] as? Bool == true
+    else { return }
+    MainActor.assumeIsolated {
+      count += 1
+    }
   }
 }
 
