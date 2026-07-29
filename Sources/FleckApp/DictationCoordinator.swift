@@ -173,6 +173,35 @@ final class DictationCoordinator {
     return DictationShortcutSession(id: id)
   }
 
+  func beginHandsFreeShortcut(
+    editor: (any FocusedDictationEditing)?,
+    destination: DictationDestination? = nil
+  ) async -> DictationShortcutSession? {
+    guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
+      return nil
+    }
+    let session = DictationShortcutSession(id: UUID())
+    activeShortcutSessions.insert(session.id)
+    let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
+    await startCapture(
+      id: session.id,
+      mode: focusedEditor == nil ? .smartCapture : .focused,
+      editor: focusedEditor,
+      destination: focusedEditor == nil ? nil : destination
+    )
+    guard activeShortcutSessions.contains(session.id), capture?.id == session.id else {
+      return nil
+    }
+    return session
+  }
+
+  func finishHandsFreeShortcut(_ session: DictationShortcutSession) async {
+    guard activeShortcutSessions.contains(session.id), capture?.id == session.id else {
+      return
+    }
+    await finish()
+  }
+
   func endShortcut() async {
     if let shortcutID {
       await endShortcut(DictationShortcutSession(id: shortcutID))

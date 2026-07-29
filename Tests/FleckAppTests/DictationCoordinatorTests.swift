@@ -82,6 +82,114 @@ import Testing
   #expect(fixture.saver.savedTexts == ["Held dictation"])
 }
 
+@Test @MainActor func handsFreeShortcutStartsWithoutTheHoldThreshold() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Hands free"
+
+  let session = try #require(await fixture.coordinator.beginHandsFreeShortcut(
+    editor: nil,
+    destination: nil
+  ))
+
+  #expect(fixture.coordinator.phase == .listening(
+    mode: .smartCapture,
+    engine: .standard
+  ))
+  await fixture.coordinator.finishHandsFreeShortcut(session)
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  #expect(fixture.saver.savedTexts == ["Hands free"])
+}
+
+@Test @MainActor func handsFreeShortcutFinishAndCancelRequireTheOwnedSession() async throws {
+  let fixture = try Fixture()
+  let session = try #require(await fixture.coordinator.beginHandsFreeShortcut(
+    editor: nil,
+    destination: nil
+  ))
+  let foreignSession = DictationShortcutSession(id: UUID())
+
+  await fixture.coordinator.finishHandsFreeShortcut(foreignSession)
+  await fixture.coordinator.cancelShortcut(foreignSession)
+
+  #expect(fixture.coordinator.phase == .listening(
+    mode: .smartCapture,
+    engine: .standard
+  ))
+  await fixture.coordinator.cancelShortcut(session)
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  #expect(fixture.saver.savedTexts.isEmpty)
+}
+
+@Test @MainActor func handsFreeShortcutRejectsToolbarCapture() async throws {
+  let fixture = try Fixture()
+  await fixture.coordinator.start(mode: .smartCapture)
+
+  let session = await fixture.coordinator.beginHandsFreeShortcut(
+    editor: nil,
+    destination: nil
+  )
+
+  #expect(session == nil)
+  #expect(fixture.coordinator.phase == .listening(
+    mode: .smartCapture,
+    engine: .standard
+  ))
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor func handsFreeShortcutRejectsRecoveryInFlight() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "First capture"
+  fixture.saver.undoGate = gate
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let recovery = Task { await fixture.coordinator.performRecoveryAction() }
+  await gate.waitUntilWaiting()
+
+  let session = await fixture.coordinator.beginHandsFreeShortcut(
+    editor: nil,
+    destination: nil
+  )
+
+  #expect(session == nil)
+  await gate.openGate()
+  #expect(await recovery.value == .completed)
+}
+
+@Test @MainActor func handsFreeShortcutRejectsAnArmedHold() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  let holdSession = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  await threshold.waitUntilWaiting()
+
+  let handsFreeSession = await fixture.coordinator.beginHandsFreeShortcut(
+    editor: nil,
+    destination: nil
+  )
+
+  #expect(handsFreeSession == nil)
+  await fixture.coordinator.cancelShortcut(holdSession)
+}
+
+@Test @MainActor func handsFreeShortcutRejectsAnotherHandsFreeSession() async throws {
+  let fixture = try Fixture()
+  let session = try #require(await fixture.coordinator.beginHandsFreeShortcut(
+    editor: nil,
+    destination: nil
+  ))
+
+  let secondSession = await fixture.coordinator.beginHandsFreeShortcut(
+    editor: nil,
+    destination: nil
+  )
+
+  #expect(secondSession == nil)
+  await fixture.coordinator.cancelShortcut(session)
+}
+
 @MainActor
 private func waitForListening(
   _ coordinator: DictationCoordinator,
