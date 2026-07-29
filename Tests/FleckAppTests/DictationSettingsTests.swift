@@ -604,6 +604,109 @@ import Testing
   }
 }
 
+@Test @MainActor func DictationRuntimeDoesNotReplayTerminalUpdatesReceivedWhileDisabled()
+  async throws
+{
+  for finalText in ["saved", nil] as [String?] {
+    let sleeper = RuntimeCapsuleSleeper()
+    let fixture = try await RuntimeFixture(
+      finalText: finalText,
+      capsuleEnabled: false,
+      capsuleSleeper: { duration in await sleeper.sleep(duration) }
+    )
+    await fixture.runtime.awaitStartupAssessment()
+
+    await fixture.runtime.toggle()
+    await fixture.runtime.toggle()
+    await Task.yield()
+    #expect(fixture.runtime.currentCapsuleStatus == nil)
+    #expect(await sleeper.requestedDurations.isEmpty)
+
+    fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+    fixture.runtime.preferencesDidChange()
+    #expect(fixture.runtime.currentCapsuleStatus == .idle)
+    if fixture.runtime.currentCapsuleStatus != .idle {
+      await sleeper.waitForRequest()
+    }
+    #expect(await sleeper.requestedDurations.isEmpty)
+    await sleeper.resumeAll()
+  }
+
+  let availability = DictationAvailability.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .denied,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  ))
+  let preflight = try await RuntimeFixture(
+    finalText: nil,
+    capsuleEnabled: false,
+    availability: availability
+  )
+  await preflight.runtime.awaitStartupAssessment()
+  await preflight.runtime.toggle()
+  preflight.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  preflight.runtime.preferencesDidChange()
+  #expect(preflight.runtime.currentCapsuleStatus == .idle)
+}
+
+@Test @MainActor func DictationRuntimeClearsVisibleTerminalReplayWhenDisabled()
+  async throws
+{
+  for (finalText, delay) in [
+    ("saved", Duration.milliseconds(1_600)),
+    (nil, Duration.seconds(3)),
+  ] as [(String?, Duration)] {
+    let sleeper = RuntimeCapsuleSleeper()
+    let fixture = try await RuntimeFixture(
+      finalText: finalText,
+      capsuleEnabled: true,
+      capsuleSleeper: { duration in await sleeper.sleep(duration) }
+    )
+    await fixture.runtime.awaitStartupAssessment()
+
+    await fixture.runtime.toggle()
+    await fixture.runtime.toggle()
+    await sleeper.waitForRequest()
+    #expect(await sleeper.requestedDurations == [delay])
+
+    fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+    fixture.runtime.preferencesDidChange()
+    fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+    fixture.runtime.preferencesDidChange()
+
+    #expect(fixture.runtime.currentCapsuleStatus == .idle)
+    if fixture.runtime.currentCapsuleStatus != .idle {
+      for _ in 0..<1_000 {
+        if await sleeper.requestedDurations.count >= 2 { break }
+        await Task.yield()
+      }
+    }
+    await sleeper.resumeAll()
+    await Task.yield()
+    #expect(fixture.runtime.currentCapsuleStatus == .idle)
+    #expect(await sleeper.requestedDurations == [delay])
+  }
+}
+
+@Test @MainActor func DictationRuntimeReplaysLiveDictationWhenReenabled() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: false)
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == .listening)
+
+  await fixture.runtime.cancel()
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+}
+
 @Test @MainActor func DictationRuntimeUsesCoordinatorEventsAndAppliesModifierAfterTerminal() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
   let replacement = DictationModifierKey.leftCommand
@@ -1153,6 +1256,34 @@ import Testing
 #endif
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test @MainActor func DictationRuntimeReplaysOnlyAnActiveModelRepairWhenReenabled()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: false)
+  let gate = DictationTestGate()
+  await fixture.runtime.awaitStartupAssessment()
+  let repair = fixture.runtime.runModelOperation(
+    showsRepairStatus: true,
+    operation: { _ in await gate.wait() }
+  )
+  await gate.waitUntilWaiting()
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+  fixture.runtime.preferencesDidChange()
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
+
+  await gate.open()
+  await repair.value
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+}
+
 @Test @MainActor func DictationRepairCapsuleReturnsToIdleOnSuccessAndCancellation() async throws {
   let success = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
   let successfulTask = success.runtime.runModelOperation(

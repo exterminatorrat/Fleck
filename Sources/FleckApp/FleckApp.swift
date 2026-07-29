@@ -227,7 +227,10 @@
     private var appliedCapsuleEnabled: Bool?
     private var capsuleReturnTask: Task<Void, Never>?
     private var capsuleGeneration: UInt64 = 0
-    private var latestCapsuleUpdate: CapsuleUpdate?
+    private var preloadCapsuleUpdate: CapsuleUpdate?
+    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+      private var activeModelRepairOwner: CapsuleOwner?
+    #endif
     private var startupAssessmentTask: Task<Void, Never>?
     private var initialLoadSynchronizationTask: Task<Void, Never>?
     private var terminalSynchronizationTask: Task<Void, Never>?
@@ -712,8 +715,10 @@
     }
 
     private func presentCapsuleUpdate(_ update: CapsuleUpdate) {
-      latestCapsuleUpdate = update
-      guard appState?.hasFinishedInitialLoad == true else { return }
+      guard appState?.hasFinishedInitialLoad == true else {
+        preloadCapsuleUpdate = update
+        return
+      }
       renderCapsuleUpdate(update)
     }
 
@@ -876,11 +881,19 @@
       let operationID = UUID()
       modelOperationID = operationID
       let owner = CapsuleOwner.model(operationID)
-      if showsRepairStatus, appState?.preferences.dictationCapsuleEnabled == true {
-        showCapsule(.repairingModel, owner: owner)
+      if showsRepairStatus {
+        activeModelRepairOwner = owner
+        if appState?.preferences.dictationCapsuleEnabled == true {
+          showCapsule(.repairingModel, owner: owner)
+        }
       }
       let task = Task { @MainActor [weak self, modelManager] in
-        defer { self?.modelOperationDidFinish(operationID) }
+        defer {
+          if self?.activeModelRepairOwner == owner {
+            self?.activeModelRepairOwner = nil
+          }
+          self?.modelOperationDidFinish(operationID)
+        }
         do {
           try await operation(modelManager)
           guard self?.modelOperationID == operationID else { return }
@@ -936,15 +949,17 @@
     }
 
     private func applyLoadedPreferences(_ preferences: AppPreferences) {
+      let bufferedCapsuleUpdate = preloadCapsuleUpdate
+      preloadCapsuleUpdate = nil
       desiredModifier = preferences.dictationModifierKey
       needsModifierApplication = true
       appliedCapsuleEnabled = preferences.dictationCapsuleEnabled
       synchronizePreferences()
       guard preferences.dictationCapsuleEnabled else { return }
-      if let latestCapsuleUpdate {
-        renderCapsuleUpdate(latestCapsuleUpdate)
+      if let bufferedCapsuleUpdate {
+        renderCapsuleUpdate(bufferedCapsuleUpdate)
       } else {
-        showIdleCapsule()
+        replayLiveCapsuleOrIdle()
       }
     }
 
@@ -982,7 +997,6 @@
         return
       }
       invalidateCapsuleReturn()
-      latestCapsuleUpdate = nil
       capsuleOwner = .idle
       currentCapsuleStatus = .idle
       capsuleController.presentIdle(
@@ -1031,17 +1045,31 @@
         capsuleController.setDock(dock)
       }
       guard enabled else {
+        preloadCapsuleUpdate = nil
         invalidateCapsuleReturn()
         dismissCapsule()
         return
       }
       if becameEnabled {
-        if let latestCapsuleUpdate {
-          renderCapsuleUpdate(latestCapsuleUpdate)
-        } else {
-          showIdleCapsule()
-        }
+        replayLiveCapsuleOrIdle()
       }
+    }
+
+    private func replayLiveCapsuleOrIdle() {
+      switch phase {
+      case .arming, .listening, .finalizing, .cleaning, .routing:
+        renderCoordinatorCapsule(.init(phase: phase, terminal: nil))
+        return
+      case .idle, .saved, .failed:
+        break
+      }
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        if let activeModelRepairOwner {
+          showCapsule(.repairingModel, owner: activeModelRepairOwner)
+          return
+        }
+      #endif
+      showIdleCapsule()
     }
 
     private func capsuleDockDidChange(_ dock: DictationCapsuleDock) {
