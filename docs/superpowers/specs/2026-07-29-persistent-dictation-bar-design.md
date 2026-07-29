@@ -145,6 +145,7 @@ The event boundary:
 - Never stores, logs, or exposes keyboard events.
 - Performs constant-time mapping in the event-tap callback and forwards semantic press/release events to the main actor.
 - Re-enables itself after timeout/user-input disable notifications.
+- Publishes semantic monitor states (`stopped`, `unauthorized`, `running`, or `failed`) without exposing keyboard events.
 - Tears down its run-loop source and event tap deterministically during shutdown.
 
 Because the privacy boundary intentionally excludes ordinary key events, Fleck cannot determine whether the chosen modifier is being held as part of another keyboard shortcut. Settings warns that Command, Control, and Left Option are more likely to conflict. Right Option remains the default.
@@ -202,7 +203,6 @@ The controller receives the stored dock and an `onDockChanged` callback. It:
 
 - Shows idle once startup/preferences synchronization finishes.
 - Renders transient statuses without creating another panel.
-- Returns to idle after bounded saved/failure delays.
 - Snaps to the nearest supported edge after a drag.
 - Uses bottom-center, left-center, or right-center frames inset from the screen's visible frame.
 - Changes to a vertical layout for side docks.
@@ -211,6 +211,8 @@ The controller receives the stored dock and an `onDockChanged` callback. It:
 - Clamps every frame to the current visible screen after display configuration changes.
 
 Dragging is available from the idle bar background. Buttons in transient recovery states remain clickable and do not start a drag.
+
+`DictationRuntime` owns the saved/failure return timers so its published capsule state and the rendered panel cannot diverge. Each timer captures the current presentation generation and owner; a later dictation, model repair, preference change, or shutdown invalidates the older timer before it can restore idle.
 
 When the capsule preference is disabled, the panel is ordered out and the modifier trigger may continue to work. Re-enabling the preference immediately restores the idle bar.
 
@@ -247,12 +249,14 @@ The Dictation settings section includes:
 
 Changing the modifier:
 
-1. Finishes or cancels no active capture.
-2. Is disabled while a capture or recovery action is active.
-3. Tears down the previous monitor after the selected key is neutral.
-4. Persists the new preference.
-5. Requests/rechecks Input Monitoring.
-6. Starts the new monitor or surfaces a recoverable error.
+1. Is disabled while a capture, recovery action, queued modifier delivery, or physical modifier press is active.
+2. Requests/rechecks Input Monitoring.
+3. Leaves the previous selection and monitor unchanged when access is denied.
+4. Applies the new modifier only after the old and new modifier families are neutral.
+5. Persists the new preference only after the monitor accepts the configuration.
+6. Surfaces a recoverable error without leaving the displayed preference different from the active monitor.
+
+Startup awaits `AppState.waitUntilInitialLoad()` before applying the persisted modifier, capsule visibility, or dock. Opening Settings is never required to make loaded preferences active.
 
 ## Accessibility and Motion
 
@@ -260,6 +264,7 @@ Changing the modifier:
 - Listening, processing, saved, fallback, repair, and failure keep concise phase labels.
 - The idle bar's click action is `Open Fleck`.
 - Recovery buttons remain keyboard and VoiceOver accessible.
+- The panel remains non-key and non-main even when it displays an action.
 - Dragging has a context menu fallback with `Dock Bottom`, `Dock Left`, and `Dock Right`.
 - Reduce Motion uses opacity-only state changes and immediate dock snapping.
 - Normal motion uses the existing crisp 80–160 millisecond easing range.
