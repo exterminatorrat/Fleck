@@ -107,6 +107,17 @@ Settings can reinstall those two bridge-owned files. Do not remove the broader
 
 GitHub is the source of truth for this project. Changes should be made on a focused branch, committed with a descriptive message, pushed to GitHub, and submitted through a pull request. Keep application changes, relevant tests, and documentation together so the repository always reflects the current state of the product.
 
+Build and launch the packaged development app so macOS associates microphone
+and Speech permissions with Motes:
+
+```sh
+Scripts/build-motes-app.sh
+/usr/bin/open -n .build/Motes.app
+```
+
+Do not use `swift run Motes` for interactive testing. It launches a bare
+executable without the app-bundle privacy identity required by dictation.
+
 Ordinary package resolution includes the MCP Swift SDK and its transitive
 dependencies, all pinned by the root `Package.resolved`; none are linked into
 Motes. Ordinary builds also exclude the Enhanced Local SDK, implementation,

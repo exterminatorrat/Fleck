@@ -56,6 +56,25 @@ if [[ "$bundle_identifier" != "$expected_bundle_identifier" ]]; then
     "$bundle_identifier" >&2
   exit 1
 fi
+if [[ "$(/usr/bin/plutil -extract CFBundlePackageType raw -o - \
+  "$app_bundle/Contents/Info.plist")" != "APPL" ]]; then
+  printf 'error: packaged Motes is missing CFBundlePackageType=APPL\n' >&2
+  exit 1
+fi
+if [[ "$(/usr/bin/plutil -extract NSPrincipalClass raw -o - \
+  "$app_bundle/Contents/Info.plist")" != "NSApplication" ]]; then
+  printf 'error: packaged Motes is missing NSPrincipalClass=NSApplication\n' >&2
+  exit 1
+fi
+for privacy_key in \
+  NSMicrophoneUsageDescription \
+  NSSpeechRecognitionUsageDescription; do
+  if [[ -z "$(/usr/bin/plutil -extract "$privacy_key" raw -o - \
+    "$app_bundle/Contents/Info.plist")" ]]; then
+    printf 'error: packaged Motes is missing %s\n' "$privacy_key" >&2
+    exit 1
+  fi
+done
 if ! /usr/bin/strings "$app_binary" \
   | /usr/bin/grep -Fx "$expected_bundle_identifier" >/dev/null; then
   printf 'error: app binary is missing embedded bundle identifier: %s\n' \
@@ -102,5 +121,5 @@ printf '%s\n' '--- Candidate lock preservation ---'
 printf '%s\n' '--- Candidate release rejection ---'
 "$script_dir/check-candidate-release-rejected.sh"
 
-printf '\nValidation build passed. Launch manually with:\n  %s\n' \
-  "$app_binary"
+printf '\nValidation build passed. Launch Motes as an app bundle with:\n  %s\n' \
+  "/usr/bin/open -n \"$app_bundle\""
