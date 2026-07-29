@@ -9,8 +9,10 @@
     @StateObject private var appState: AppState
     @StateObject private var dictationRuntime: DictationRuntime
     private let agentRuntime: AgentIPCRuntime
+    private let statusItemContextMenuController: StatusItemContextMenuController
 
     init() {
+      statusItemContextMenuController = StatusItemContextMenuController()
       let appSupport = AgentBridgeEndpoint.applicationSupportURL()
       let agentProfileStore = AgentProfileStore()
       let agentActivityStore = AgentActivityStore(rootURL: appSupport)
