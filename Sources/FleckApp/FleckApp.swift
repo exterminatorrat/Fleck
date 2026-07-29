@@ -81,14 +81,14 @@
     }
 
     var body: some Scene {
-      MenuBarExtra("Motes", systemImage: "note.text") {
+      MenuBarExtra("Fleck", systemImage: "note.text") {
         NotesPanel(dictationRuntime: dictationRuntime)
           .environmentObject(appState)
           .preferredColorScheme(colorScheme)
       }
       .menuBarExtraStyle(.window)
 
-      Window("Motes", id: "pinned-notes") {
+      Window("Fleck", id: "pinned-notes") {
         NotesPanel(dictationRuntime: dictationRuntime, isPinned: true)
           .environmentObject(appState)
           .preferredColorScheme(colorScheme)
@@ -892,7 +892,7 @@
       appState?.select(noteID)
       NSApp.activate(ignoringOtherApps: true)
       NSApp.windows.first {
-        $0 !== capsuleController.panel && $0.title == "Motes"
+        $0 !== capsuleController.panel && $0.title == "Fleck"
       }?.makeKeyAndOrderFront(nil)
       dismissCapsule(ifOwnedBy: .dictation)
     }

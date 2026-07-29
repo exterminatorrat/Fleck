@@ -1,4 +1,4 @@
-# Testing Motes on macOS
+# Testing Fleck on macOS
 
 > **Release approval is blocked.** Automated checks can validate code and a
 > SwiftPM executable, but they cannot approve a release. Enhanced Local is a
@@ -26,7 +26,7 @@ From the repository root:
 xcode-select -p
 swift --version
 Scripts/validate-macos.sh
-swift run Motes
+swift run Fleck
 ```
 
 The final command stays attached to Terminal. Look for the note icon in the macOS menu bar, click it to open the notes panel, and press `Control-C` in Terminal when you want to stop the app.
@@ -42,13 +42,13 @@ The final command stays attached to Terminal. Look for the note icon in the macO
    ```
 
 2. Wait for Xcode to finish resolving the package.
-3. Select the **Motes** scheme and **My Mac** destination.
+3. Select the **Fleck** scheme and **My Mac** destination.
 4. Choose **Product → Test** (`Command-U`).
 5. Choose **Product → Run** (`Command-R`).
 6. Click the note icon in the macOS menu bar.
 7. Use Xcode's Stop button when testing is finished.
 
-The source project is a Swift Package. `Scripts/build-motes-app.sh` assembles an
+The source project is a Swift Package. `Scripts/build-fleck-app.sh` assembles an
 unsigned native `.app`, but no signed distributable exists. Launch-at-login must
 be validated later from the packaged and signed application; it may report an
 error when launched directly through SwiftPM or Xcode's package runner.
@@ -57,7 +57,7 @@ error when launched directly through SwiftPM or Xcode's package runner.
 
 ### Automated gate
 
-Run from the repository root with `MOTES_ENHANCED_CANDIDATE` unset:
+Run from the repository root with `FLECK_ENHANCED_CANDIDATE` unset:
 
 ```sh
 swift test
@@ -72,10 +72,10 @@ CI also makes the product split explicit:
 
 ```sh
 swift test
-swift build -c release --product Motes
-swift build -c release --product motes-agent
+swift build -c release --product Fleck
+swift build -c release --product fleck-agent
 Scripts/audit-agent-boundary.sh
-Scripts/check-release-size.sh .build/release/Motes
+Scripts/check-release-size.sh .build/release/Fleck
 ```
 
 The test suite probes private, unknown, Trash, and Dictation History UUIDs;
@@ -83,11 +83,11 @@ unshared activity; the closed command model; secret-free profile persistence
 and setup output; same-user IPC; revisions, retries, transaction recovery, and
 Undo; the exact twelve MCP tools; and tools-only MCP capabilities.
 `Scripts/audit-agent-boundary.sh` separately rejects helper AppKit outside the
-non-activating launch adapter, HTTP/TCP/listener APIs, direct Motes storage
+non-activating launch adapter, HTTP/TCP/listener APIs, direct Fleck storage
 paths, an altered MCP tool/handler surface, MCP-mode stdout prose, and
 credential-bearing snippets.
 
-`Scripts/validate-macos.sh` builds the native unsigned `Motes.app`, verifies the
+`Scripts/validate-macos.sh` builds the native unsigned `Fleck.app`, verifies the
 bundle identifier and separately packaged helper, runs a bounded native launch
 smoke test, and runs the complete macOS test suite, including Keychain API
 contract tests. It does not prove a live Keychain round trip, third-party client
@@ -99,20 +99,20 @@ distribution.
 - **Status:** PENDING — no Codex, Claude Code, Kimi, generic CLI, live Keychain,
   physical-device accessibility, or distribution result is claimed by the
   automated run.
-- **Required setup:** Build with `Scripts/build-motes-app.sh`; launch
-  `.build/Motes.app/Contents/MacOS/Motes`; create one temporary shared note and
+- **Required setup:** Build with `Scripts/build-fleck-app.sh`; launch
+  `.build/Fleck.app/Contents/MacOS/Fleck`; create one temporary shared note and
   four separate temporary profiles in **Settings → Agents**. Record the commit,
   macOS/Xcode/Swift versions, client versions, profile names, and timestamps.
 - **Codex:** Connect the Codex profile with:
 
   ```sh
-  codex mcp add motes -- "/absolute/path/to/motes" mcp --profile PROFILE_UUID
+  codex mcp add fleck -- "/absolute/path/to/fleck" mcp --profile PROFILE_UUID
   ```
 
 - **Claude Code:** Connect its separate profile with:
 
   ```sh
-  claude mcp add --scope user motes -- "/absolute/path/to/motes" mcp \
+  claude mcp add --scope user fleck -- "/absolute/path/to/fleck" mcp \
     --profile PROFILE_UUID
   ```
 
@@ -122,8 +122,8 @@ distribution.
   with:
 
   ```sh
-  motes notes list --profile PROFILE_UUID --json
-  motes note read NOTE_UUID --profile PROFILE_UUID --json
+  fleck notes list --profile PROFILE_UUID --json
+  fleck note read NOTE_UUID --profile PROFILE_UUID --json
   ```
 
 For each client, record evidence for list, read, append, add task, complete
@@ -135,7 +135,7 @@ operation UUID, Agent Activity, and safe Undo. Then:
 2. Turn off **Allow Agent Access** while connected; list, read, activity, and
    mutation probes must immediately return the same safe absence as an unknown
    UUID.
-3. Quit Motes and call the helper; Motes must launch without activation and the
+3. Quit Fleck and call the helper; Fleck must launch without activation and the
    bounded request must complete or return a safe timeout.
 4. Edit the note locally while a client holds a stale revision; the client
    write must be rejected without overwriting the local edit.
@@ -146,7 +146,7 @@ operation UUID, Agent Activity, and safe Undo. Then:
 7. With VoiceOver and Full Keyboard Access, verify the Agent Access toggle and
    confirmation, shared badge, profile buttons, activity rows, banner, and Undo
    names/order. Repeat with Reduce Motion.
-8. Repeat with multiple Motes windows, sleep/wake, and a five-minute idle
+8. Repeat with multiple Fleck windows, sleep/wake, and a five-minute idle
    bridge session; record CPU and unexpected stdout/stderr.
 
 Do not use real private notes for this gate. Revoke all temporary profiles,
@@ -170,8 +170,8 @@ git status --short
 ```
 
 `Scripts/check-release-size.sh` accepts the current executable, a directory
-containing `Motes`, or a future `.app` containing `Contents/MacOS/Motes`. It
-promotes an executable path inside `.app` to the enclosing bundle, including
+containing `Fleck`, or a future `.app` containing `Contents/MacOS/Fleck`. It
+profleck an executable path inside `.app` to the enclosing bundle, including
 when an executable symlink outside the bundle resolves into it. It resolves
 command-line directory symlinks to a physical root, inspects nested symlink
 targets without following arbitrary cycles, fails closed on traversal errors,
@@ -250,7 +250,7 @@ git archive d9e5c658586446e638a85833042af59087a42498 |
   cd "$baseline_root"
   swift package resolve
   swift build -c release
-  wc -c .build/release/Motes
+  wc -c .build/release/Fleck
 )
 ```
 
@@ -274,7 +274,7 @@ required offline assignment, and comment/string-only false positives. A fake
 1 counts as an absent forbidden call.
 
 Fix Round 2 added regressions for an executable symlink outside `.app` that
-resolves to `Motes.app/Contents/MacOS/Motes`, generic `.bin` classification
+resolves to `Fleck.app/Contents/MacOS/Fleck`, generic `.bin` classification
 relative to the artifact boundary, root-level and symlinked `Models`
 directories, raw strings using one or multiple `#` delimiters, raw multiline
 strings, nested comments, and unterminated raw strings. The valid Swift
@@ -488,7 +488,7 @@ do not change the status from pending based on CI alone.
   result, and Gatekeeper assessment.
 - **Exact procedure:** Produce the actual release `.app`, record its exported
   path as `artifact_path`, and stop if
-  `test -f "$artifact_path/Contents/MacOS/Motes"` fails. Measure it and run
+  `test -f "$artifact_path/Contents/MacOS/Fleck"` fails. Measure it and run
   `Scripts/check-release-size.sh "$artifact_path"`; inspect with
   `codesign -d --entitlements :- "$artifact_path"`; run `codesign --verify
   --deep --strict --verbose=2 "$artifact_path"`; submit with `xcrun notarytool`,
@@ -564,14 +564,14 @@ The configurable show/hide shortcut is currently panel-local. System-wide activa
 Working data is stored in:
 
 ```text
-~/Library/Application Support/MenuBarNotes/
+~/Library/Application Support/Fleck/
 ```
 
 The directory contains readable `.md` note bodies, optional `.rtf` formatting sidecars, `workspace.json`, `preferences.json`, and a previous-generation `Recovery` snapshot. To perform a clean-state test, stop the app first, back up the directory, and then move it out of Application Support:
 
 ```sh
-mv "$HOME/Library/Application Support/MenuBarNotes" \
-   "$HOME/Desktop/MenuBarNotes-test-backup"
+mv "$HOME/Library/Application Support/Fleck" \
+   "$HOME/Desktop/Fleck-test-backup"
 ```
 
 Do not remove that directory while the app is running.
@@ -582,13 +582,13 @@ Build and run the release executable first:
 
 ```sh
 swift build -c release
-.build/release/Motes
+.build/release/Fleck
 ```
 
 In a second Terminal window, measure resident memory:
 
 ```sh
-Scripts/profile-memory.sh Motes
+Scripts/profile-memory.sh Fleck
 ```
 
 Also inspect **Activity Monitor → Memory** and **Activity Monitor → CPU** after leaving the closed panel idle for at least one minute. Record:

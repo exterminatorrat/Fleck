@@ -3,13 +3,13 @@ set -euo pipefail
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
-readonly helper_root="$repo_root/Sources/MotesAgentBridge"
+readonly helper_root="$repo_root/Sources/FleckAgentBridge"
 readonly launch_adapter="$helper_root/AgentIPCClient.swift"
-readonly mcp_server="$helper_root/MotesMCPServer.swift"
-readonly tool_registry="$helper_root/MotesMCPToolRegistry.swift"
-readonly cli_entrypoint="$helper_root/MotesAgentBridge.swift"
-readonly client_setup="$repo_root/Sources/MenuBarNotesApp/AgentClientSetup.swift"
-readonly installer="$repo_root/Sources/MenuBarNotesApp/AgentBridgeInstaller.swift"
+readonly mcp_server="$helper_root/FleckMCPServer.swift"
+readonly tool_registry="$helper_root/FleckMCPToolRegistry.swift"
+readonly cli_entrypoint="$helper_root/FleckAgentBridge.swift"
+readonly client_setup="$repo_root/Sources/FleckApp/AgentClientSetup.swift"
+readonly installer="$repo_root/Sources/FleckApp/AgentBridgeInstaller.swift"
 readonly stdout_pattern='FileHandle\.standardOutput|\.standardOutput|\bSTDOUT_FILENO\b|\bstdout\b|(^|[^A-Za-z])print[[:space:]]*\(|(Darwin\.)?write[[:space:]]*\([[:space:]]*1[[:space:]]*,'
 
 for command in rg perl; do
@@ -38,16 +38,16 @@ while IFS= read -r file; do
   fi
 done < <(find "$helper_root" -name '*.swift' -type f | sort)
 fail_matches \
-  'MotesAgentBridge imports AppKit outside the launch adapter' \
+  'FleckAgentBridge imports AppKit outside the launch adapter' \
   '^[[:space:]]*(import|@_implementationOnly[[:space:]]+import)[[:space:]]+AppKit([[:space:]]|$)' \
   "${helper_without_launch[@]}"
 if [[ "$(rg -c '^[[:space:]]*import[[:space:]]+AppKit$' "$launch_adapter")" != "1" ]]; then
   printf 'error: launch adapter must contain exactly one AppKit import\n' >&2
   exit 1
 fi
-launch_stripped="$(mktemp "${TMPDIR:-/tmp}/motes-launch-audit.XXXXXX")"
-tool_parser_probe="$(mktemp "${TMPDIR:-/tmp}/motes-tool-parser-probe.XXXXXX")"
-stdout_probe="$(mktemp "${TMPDIR:-/tmp}/motes-stdout-probe.XXXXXX")"
+launch_stripped="$(mktemp "${TMPDIR:-/tmp}/fleck-launch-audit.XXXXXX")"
+tool_parser_probe="$(mktemp "${TMPDIR:-/tmp}/fleck-tool-parser-probe.XXXXXX")"
+stdout_probe="$(mktemp "${TMPDIR:-/tmp}/fleck-stdout-probe.XXXXXX")"
 cleanup() {
   /bin/rm -f -- \
     "$launch_stripped" "$tool_parser_probe" "$stdout_probe" \
@@ -55,7 +55,7 @@ cleanup() {
 }
 trap cleanup EXIT
 awk '
-  /private static func launchMotes\(\) throws/ { inside = 1 }
+  /private static func launchFleck\(\) throws/ { inside = 1 }
   {
     if (!inside) print
     if (inside) {
@@ -68,7 +68,7 @@ awk '
   }
 ' "$launch_adapter" >"$launch_stripped"
 fail_matches \
-  'AppKit symbols occur outside AgentIPCClient.launchMotes' \
+  'AppKit symbols occur outside AgentIPCClient.launchFleck' \
   '\bNS(Application|RunningApplication|Workspace|WorkspaceOpenConfiguration)\b' \
   "$launch_stripped"
 
@@ -80,9 +80,9 @@ fail_matches \
   "$helper_root"
 
 # The helper receives typed values over IPC; it must never discover or edit
-# Motes note, workspace, Trash, or Dictation History storage paths directly.
+# Fleck note, workspace, Trash, or Dictation History storage paths directly.
 fail_matches \
-  'helper references a forbidden Motes storage path' \
+  'helper references a forbidden Fleck storage path' \
   '"[^"]*(\.md|\.rtf|workspace\.json|Dictation[[:space:]]*History)[^"]*"|"Trash"' \
   "$helper_root"
 
@@ -107,8 +107,8 @@ if [[ "$tool_parser_result" != $'dangerous_multi_line\ndangerous_one_line' ]]; t
   exit 2
 fi
 
-expected_tools="$(mktemp "${TMPDIR:-/tmp}/motes-tools-expected.XXXXXX")"
-actual_tools="$(mktemp "${TMPDIR:-/tmp}/motes-tools-actual.XXXXXX")"
+expected_tools="$(mktemp "${TMPDIR:-/tmp}/fleck-tools-expected.XXXXXX")"
+actual_tools="$(mktemp "${TMPDIR:-/tmp}/fleck-tools-actual.XXXXXX")"
 printf '%s\n' \
   add_task \
   append_text \
@@ -163,7 +163,7 @@ while IFS= read -r file; do
   fi
 done < <(find "$helper_root" -name '*.swift' -type f | sort)
 fail_matches \
-  'MotesAgentBridge Swift source outside the audited CLI entrypoint writes to stdout' \
+  'FleckAgentBridge Swift source outside the audited CLI entrypoint writes to stdout' \
   "$stdout_pattern" \
   "${helper_without_cli[@]}"
 cli_stdout_branches="$(

@@ -4,7 +4,7 @@
   @testable import FleckApp
 
   @Test @MainActor func statusItemContextMenuOnlyHandlesSecondaryStatusBarClicks() {
-    #expect(StatusItemContextMenuController.quitTitle == "Quit Motes")
+    #expect(StatusItemContextMenuController.quitTitle == "Quit Fleck")
     let secondaryStatusBarClick = StatusItemContextMenuController.handles(
       eventType: .rightMouseDown,
       windowLevel: .statusBar

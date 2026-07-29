@@ -52,7 +52,7 @@
       language: "English",
       attribution: "Parakeet TDT 0.6B V2 by NVIDIA, adapted for Core ML by FluidInference.",
       privacyCopy:
-        "Motes downloads model files only after you confirm. It does not upload audio, transcripts, notes, titles, history, routing inputs, or other dictation data."
+        "Fleck downloads model files only after you confirm. It does not upload audio, transcripts, notes, titles, history, routing inputs, or other dictation data."
     )
     }
 

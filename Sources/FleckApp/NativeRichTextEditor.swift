@@ -23,7 +23,7 @@
     }
 
     private static let focusedDictationAttribute = NSAttributedString.Key(
-      "MotesFocusedDictationProvisional"
+      "FleckFocusedDictationProvisional"
     )
 
     @Published private(set) var isBold = false

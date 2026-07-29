@@ -6,7 +6,7 @@ import Testing
 
 @testable import FleckAgentBridge
 
-@Suite("MotesMCP server")
+@Suite("FleckMCP server")
 struct FleckMCPServerTests {
   @Test func advertisesOnlyToolCapabilitiesAtVersionOne() async {
     let server = await FleckMCPServer.makeServer(
@@ -52,7 +52,7 @@ struct FleckMCPServerTests {
   }
 
   @Test func canceledSingleAndBatchRequestsDoNotBlockEOFDrain() async {
-    let transport = MotesStdioTransport(transport: FailingSendTransport())
+    let transport = FleckStdioTransport(transport: FailingSendTransport())
     let messages = [
       (
         #"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"slow"}}"#,
@@ -74,7 +74,7 @@ struct FleckMCPServerTests {
   }
 
   @Test func arrayParametersStillTrackSingleAndBatchRequestIDs() async {
-    let transport = MotesStdioTransport(transport: FailingSendTransport())
+    let transport = FleckStdioTransport(transport: FailingSendTransport())
     let messages = [
       (
         #"{"jsonrpc":"2.0","id":11,"method":"custom/request","params":[1,2,3]}"#,
@@ -96,7 +96,7 @@ struct FleckMCPServerTests {
   }
 
   @Test func failedResponseSendStillResolvesPendingRequest() async {
-    let transport = MotesStdioTransport(transport: FailingSendTransport())
+    let transport = FleckStdioTransport(transport: FailingSendTransport())
     await transport.recordRequests(
       in: Data(
         #"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"slow"}}"#

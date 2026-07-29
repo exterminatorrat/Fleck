@@ -86,7 +86,10 @@ func migrationConflictBlocksEditorPersistenceAndPreservesBothRoots()
     isDirectory: true
   )
   defer { try? FileManager.default.removeItem(at: parent) }
-  let legacy = parent.appendingPathComponent("MenuBarNotes", isDirectory: true)
+  let legacy = parent.appendingPathComponent(
+    FleckProductPaths.legacyDirectoryName,
+    isDirectory: true
+  )
   let canonical = parent.appendingPathComponent("Fleck", isDirectory: true)
   try FileManager.default.createDirectory(
     at: legacy,
@@ -117,4 +120,3 @@ func migrationConflictBlocksEditorPersistenceAndPreservesBothRoots()
   #expect(try Data(contentsOf: canonicalMarker) == Data("canonical".utf8))
   #expect(state.saveStatus == .idle)
 }
-

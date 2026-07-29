@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>Motes</string>
+  <string>Fleck</string>
   <key>CFBundleExecutable</key>
-  <string>Motes</string>
+  <string>Fleck</string>
   <key>CFBundleIdentifier</key>
-  <string>com.harryjin.motes</string>
+  <string>com.harryjin.fleck</string>
   <key>CFBundleName</key>
-  <string>Motes</string>
+  <string>Fleck</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>LSMinimumSystemVersion</key>
@@ -17,8 +17,8 @@
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Motes uses the microphone to transcribe your dictated notes on this Mac.</string>
+  <string>Fleck uses the microphone to transcribe your dictated notes on this Mac.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Motes recognizes speech on this Mac to transcribe your dictated notes.</string>
+  <string>Fleck recognizes speech on this Mac to transcribe your dictated notes.</string>
 </dict>
 </plist>

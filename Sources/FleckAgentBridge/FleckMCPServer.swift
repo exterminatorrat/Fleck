@@ -28,7 +28,7 @@
       let server = await makeServer { parameters in
         FleckMCPToolRegistry.call(parameters, profileID: profileID)
       }
-      let transport = MotesStdioTransport()
+      let transport = FleckStdioTransport()
 
       try await server.start(transport: transport)
       let signals = terminationSignals(for: server, transport: transport)
@@ -42,7 +42,7 @@
 
     private static func terminationSignals(
       for server: Server,
-      transport: MotesStdioTransport
+      transport: FleckStdioTransport
     ) -> [DispatchSourceSignal] {
       [SIGINT, SIGTERM].map { signalNumber in
         Darwin.signal(signalNumber, SIG_IGN)
@@ -62,7 +62,7 @@
     }
   }
 
-  actor MotesStdioTransport: Transport {
+  actor FleckStdioTransport: Transport {
     nonisolated let logger: Logger
 
     private let transport: any Transport

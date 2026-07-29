@@ -15,7 +15,7 @@ This document distinguishes implemented behavior from work that still requires n
 - Launch-at-login integration through `SMAppService` when running as a packaged macOS application.
 - Explicit per-note Agent Access with first-share confirmation, shared badges,
   immediate unshare, per-client profiles, revocation, and visible activity.
-- A separately packaged `motes-agent` bridge with direct JSON CLI and twelve-tool
+- A separately packaged `fleck-agent` bridge with direct JSON CLI and twelve-tool
   MCP interfaces for shared-note reads, bounded text/task mutations, activity,
   and safe Undo.
 - Same-user Unix-domain IPC, Keychain-backed credentials, optimistic revisions,
@@ -77,9 +77,9 @@ Xcode 26.6 (17F113), and Swift 6.3.3:
 
 - `swift test`: **471 tests in 8 suites passed** on the fresh release-validation
   rerun.
-- Unsigned release `Motes` executable: **5,551,416 bytes** against the unchanged
+- Unsigned release `Fleck` executable: **5,551,416 bytes** against the unchanged
   15 MiB budget.
-- Separately packaged `motes-agent` helper: **10,458,296 bytes**.
+- Separately packaged `fleck-agent` helper: **10,458,296 bytes**.
 - Official MCP Swift SDK tag/revision: **0.12.1** /
   **`a0ae212ebf6eab5f754c3129608bc5557637e605`**.
 - Codex, Claude Code, and Kimi setup syntax was rechecked on 2026-07-29

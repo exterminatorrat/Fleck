@@ -15,11 +15,11 @@ enum AgentCredentialSecurity {
   static let profileVerifierService =
     "com.harryjin.fleck.agent-profile-verifier"
   static let legacyProfileVerifierService =
-    "com.harryjin.motes.agent-profile-verifier"
+    "com.harryjin.motes.agent-profile-verifier" // Legacy Keychain fallback.
   static let taskHandleSigningService =
     "com.harryjin.fleck.agent-task-handles"
   static let legacyTaskHandleSigningService =
-    "com.harryjin.motes.agent-task-handles"
+    "com.harryjin.motes.agent-task-handles" // Legacy Keychain fallback.
   static let taskHandleSigningAccount = "default"
   static let secretByteCount = 32
 

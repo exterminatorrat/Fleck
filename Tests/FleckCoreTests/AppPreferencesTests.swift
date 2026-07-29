@@ -4,7 +4,7 @@ import Testing
 @testable import FleckCore
 
 @Test func packageGraphControlsEnhancedCandidateEvaluation() {
-  let optedIn = ProcessInfo.processInfo.environment["MOTES_ENHANCED_CANDIDATE"] == "1"
+  let optedIn = ProcessInfo.processInfo.environment["FLECK_ENHANCED_CANDIDATE"] == "1"
   #expect(CleanDictationFeatures.enhancedLocalCandidateEnabled == optedIn)
 }
 

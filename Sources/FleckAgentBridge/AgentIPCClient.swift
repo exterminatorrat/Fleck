@@ -43,7 +43,7 @@
       responseTimeout: TimeInterval = 60,
       pollInterval: TimeInterval = 0.05,
       connect: @escaping Connector = AgentIPCClient.connectSocket,
-      launch: @escaping Launcher = AgentIPCClient.launchMotes,
+      launch: @escaping Launcher = AgentIPCClient.launchFleck,
       sleep: @escaping Sleeper = Thread.sleep(forTimeInterval:),
       now: @escaping Clock = { ProcessInfo.processInfo.systemUptime },
       write: @escaping Writer = AgentIPCClient.writeFrame,
@@ -146,7 +146,7 @@
       throw AgentIPCClientError.fleckUnavailable
     }
 
-    private static func launchMotes() throws {
+    private static func launchFleck() throws {
       guard
         let applicationURL = NSWorkspace.shared.urlForApplication(
           withBundleIdentifier: "com.harryjin.fleck"

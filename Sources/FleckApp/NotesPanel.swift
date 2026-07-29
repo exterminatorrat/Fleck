@@ -264,7 +264,7 @@
 
     private var header: some View {
       HStack(spacing: 10) {
-        Label("Motes", systemImage: "note.text")
+        Label("Fleck", systemImage: "note.text")
           .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)

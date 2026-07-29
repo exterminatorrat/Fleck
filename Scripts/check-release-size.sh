@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -n "${MOTES_ENHANCED_CANDIDATE+x}" ]]; then
+if [[ -n "${FLECK_ENHANCED_CANDIDATE+x}" ]]; then
   printf '%s\n' \
-    'error: unset MOTES_ENHANCED_CANDIDATE before validating an ordinary release' \
+    'error: unset FLECK_ENHANCED_CANDIDATE before validating an ordinary release' \
     >&2
   exit 2
 fi
@@ -92,12 +92,12 @@ is_forbidden_model_path() {
   return 1
 }
 
-readonly target="${1:-.build/release/Motes}"
+readonly target="${1:-.build/release/Fleck}"
 readonly limit_mb="${APP_SIZE_LIMIT_MB:-15}"
 readonly limit_bytes=$((limit_mb * 1024 * 1024))
 readonly repository_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly sources_root="$repository_root/Sources"
-readonly enhanced_capture="$sources_root/MenuBarNotesApp/EnhancedSpeechCapture.swift"
+readonly enhanced_capture="$sources_root/FleckApp/EnhancedSpeechCapture.swift"
 
 if ! command -v realpath >/dev/null 2>&1; then
   printf 'error: realpath is required for safe release artifact traversal\n' >&2
@@ -139,11 +139,11 @@ elif [[ -d "$target" ]]; then
     printf 'error: cannot resolve release artifact directory: %s\n' "$target" >&2
     exit 2
   }
-  if [[ -f "$resolved_target/Contents/MacOS/Motes" ]]; then
-    readonly executable="$resolved_target/Contents/MacOS/Motes"
+  if [[ -f "$resolved_target/Contents/MacOS/Fleck" ]]; then
+    readonly executable="$resolved_target/Contents/MacOS/Fleck"
     readonly artifact_root="$resolved_target"
-  elif [[ -f "$resolved_target/Motes" ]]; then
-    readonly executable="$resolved_target/Motes"
+  elif [[ -f "$resolved_target/Fleck" ]]; then
+    readonly executable="$resolved_target/Fleck"
     readonly artifact_root="$resolved_target"
   else
     printf 'error: release executable not found in artifact: %s\n' "$target" >&2
@@ -154,12 +154,12 @@ else
   exit 2
 fi
 
-helper_candidate="$artifact_root/Contents/SharedSupport/motes-agent"
+helper_candidate="$artifact_root/Contents/SharedSupport/fleck-agent"
 if [[ ! -f "$helper_candidate" ]]; then
-  helper_candidate="$(dirname "$executable")/motes-agent"
+  helper_candidate="$(dirname "$executable")/fleck-agent"
 fi
 if [[ ! -f "$helper_candidate" ]]; then
-  printf 'error: release helper not found beside Motes or in SharedSupport: %s\n' \
+  printf 'error: release helper not found beside Fleck or in SharedSupport: %s\n' \
     "$target" >&2
   exit 2
 fi
@@ -171,19 +171,19 @@ readonly helper="$resolved_helper"
 
 size_bytes="$(wc -c < "$executable" | tr -d '[:space:]')"
 helper_size_bytes="$(wc -c < "$helper" | tr -d '[:space:]')"
-printf 'Motes executable: %s bytes (budget: %s MB)\n' "$size_bytes" "$limit_mb"
-printf 'motes-agent helper: %s bytes\n' "$helper_size_bytes"
+printf 'Fleck executable: %s bytes (budget: %s MB)\n' "$size_bytes" "$limit_mb"
+printf 'fleck-agent helper: %s bytes\n' "$helper_size_bytes"
 
 if (( size_bytes > limit_bytes )); then
   printf 'error: release executable exceeds the %s MB budget\n' "$limit_mb" >&2
   exit 1
 fi
 
-scan_output="$(mktemp "${TMPDIR:-/tmp}/motes-release-scan.XXXXXX")" || {
+scan_output="$(mktemp "${TMPDIR:-/tmp}/fleck-release-scan.XXXXXX")" || {
   printf 'error: could not create release artifact scan output\n' >&2
   exit 2
 }
-scan_errors="$(mktemp "${TMPDIR:-/tmp}/motes-release-scan-errors.XXXXXX")" || {
+scan_errors="$(mktemp "${TMPDIR:-/tmp}/fleck-release-scan-errors.XXXXXX")" || {
   printf 'error: could not create release artifact scan error output\n' >&2
   /bin/rm -f "$scan_output"
   exit 2
@@ -617,7 +617,7 @@ final class ReleaseVisitor: SyntaxVisitor {
   override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind {
     let importPath = node.path.trimmedDescription
     guard importPath == "FluidAudio"
-      || importPath == "MotesEnhancedCandidateDependencies"
+      || importPath == "FleckEnhancedCandidateDependencies"
     else {
       return .visitChildren
     }

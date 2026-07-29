@@ -23,7 +23,7 @@ if [[ -e "$scratch" ]]; then
   exit 1
 fi
 readonly ordinary_backup="$(
-  mktemp "${TMPDIR:-/tmp}/motes-ordinary-package-resolved.XXXXXX"
+  mktemp "${TMPDIR:-/tmp}/fleck-ordinary-package-resolved.XXXXXX"
 )"
 /bin/cp -p "$resolved" "$ordinary_backup"
 cleanup() {
@@ -35,10 +35,10 @@ trap cleanup EXIT
 
 /bin/rm -f -- "$resolved"
 cd "$repo_root"
-MOTES_ENHANCED_CANDIDATE=1 \
+FLECK_ENHANCED_CANDIDATE=1 \
   swift package --scratch-path "$scratch" resolve
 "$script_dir/verify-enhanced-candidate-pin.swift" "$resolved"
 
 if (( $# > 0 )); then
-  MOTES_ENHANCED_CANDIDATE=1 "$@"
+  FLECK_ENHANCED_CANDIDATE=1 "$@"
 fi

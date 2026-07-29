@@ -2,7 +2,7 @@
 
 ## FluidAudio
 
-Motes uses the
+Fleck uses the
 [FluidAudio Swift package](https://github.com/FluidInference/FluidAudio) at
 exact tag
 [`v0.15.5`](https://github.com/FluidInference/FluidAudio/releases/tag/v0.15.5),
@@ -15,7 +15,7 @@ The SHA-256 checksum of that pinned license file is
 
 ## Model Context Protocol Swift SDK
 
-Motes uses the official
+Fleck uses the official
 [`modelcontextprotocol/swift-sdk`](https://github.com/modelcontextprotocol/swift-sdk)
 package at exact tag
 [`0.12.1`](https://github.com/modelcontextprotocol/swift-sdk/releases/tag/0.12.1),

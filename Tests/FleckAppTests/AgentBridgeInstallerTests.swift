@@ -22,10 +22,10 @@ struct AgentBridgeInstallerTests {
 
     let installed = try installer.install()
     let expected = support.appendingPathComponent("AgentBridge/bin/fleck")
-    let legacyLauncher = URL(
-      fileURLWithPath:
-        "/Users/test/Library/Application Support/MenuBarNotes/AgentBridge/bin/motes"
-    )
+    let legacyLauncherName = "motes"
+    let legacyLauncher = URL(fileURLWithPath: "/Users/test/Library/Application Support")
+      .appendingPathComponent(FleckProductPaths.legacyDirectoryName)
+      .appendingPathComponent("AgentBridge/bin/\(legacyLauncherName)")
 
     #expect(installed == expected)
     #expect(installed.path.hasPrefix("/"))
@@ -41,7 +41,7 @@ struct AgentBridgeInstallerTests {
 
   @Test func existingFleckReceiptMustVerifyBeforeReplacement() throws {
     let fileSystem = FakeInstallerFileSystem()
-    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    let bundle = URL(fileURLWithPath: "/bundle/fleck-agent")
     let support = URL(fileURLWithPath: "/support")
     fileSystem.files[bundle.path] = Data("new".utf8)
     fileSystem.files[support.appendingPathComponent("AgentBridge/bin/fleck").path] =
@@ -67,23 +67,26 @@ struct AgentBridgeInstallerTests {
     let bundle = URL(fileURLWithPath: "/bundle/fleck-agent")
     let parent = URL(fileURLWithPath: "/Users/test/Library/Application Support")
     let support = parent.appendingPathComponent("Fleck", isDirectory: true)
-    let legacy = parent.appendingPathComponent("MenuBarNotes", isDirectory: true)
+    let legacy = parent.appendingPathComponent(
+      FleckProductPaths.legacyDirectoryName,
+      isDirectory: true
+    )
     let installer = AgentBridgeInstaller(
       bundledHelperURL: bundle,
       applicationSupportURL: support,
       fileSystem: fileSystem,
       processRunner: RecordingAgentProcessRunner()
     )
-    let oldHelper = Data("old motes helper".utf8)
+    let oldHelper = Data("old motes helper".utf8) // Legacy helper fixture.
     fileSystem.files[bundle.path] = Data("new fleck helper".utf8)
     fileSystem.files[installer.migratedLegacyHelperURL.path] = oldHelper
     fileSystem.files[installer.installationReceiptURL.path] =
       try JSONEncoder().encode(
         AgentBridgeInstallationReceipt(
-          destination: legacy.appendingPathComponent("AgentBridge/bin/motes").path,
+          destination: legacy.appendingPathComponent("AgentBridge/bin/motes").path, // Legacy receipt.
           sha256: SHA256.hash(data: oldHelper).hexString,
           installedVersion: "development",
-          bundleIdentifier: "com.harryjin.motes"
+          bundleIdentifier: "com.harryjin.motes" // Legacy bundle identifier.
         )
       )
     let migration = FleckMigrationReceipt(
@@ -133,7 +136,7 @@ struct AgentBridgeInstallerTests {
   @Test func provisioningSendsTokenOnlyThroughStdin() throws {
     let fileSystem = FakeInstallerFileSystem()
     let runner = RecordingAgentProcessRunner()
-    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    let bundle = URL(fileURLWithPath: "/bundle/fleck-agent")
     let support = URL(fileURLWithPath: "/support")
     fileSystem.files[bundle.path] = Data("helper".utf8)
     let installer = AgentBridgeInstaller(
@@ -156,7 +159,7 @@ struct AgentBridgeInstallerTests {
 
   @Test func cleanupRemovesOnlyReceiptOwnedHelperPaths() throws {
     let fileSystem = FakeInstallerFileSystem()
-    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    let bundle = URL(fileURLWithPath: "/bundle/fleck-agent")
     let support = URL(fileURLWithPath: "/support")
     fileSystem.files[bundle.path] = Data("helper".utf8)
     let unrelated = support.appendingPathComponent("unrelated.txt")
@@ -177,7 +180,7 @@ struct AgentBridgeInstallerTests {
 
   @Test func failedPostSwapHashVerificationRemovesANewUnownedDestination() throws {
     let fileSystem = FakeInstallerFileSystem()
-    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    let bundle = URL(fileURLWithPath: "/bundle/fleck-agent")
     let support = URL(fileURLWithPath: "/support")
     fileSystem.files[bundle.path] = Data("helper".utf8)
     fileSystem.corruptNextReplacement = true
@@ -197,7 +200,7 @@ struct AgentBridgeInstallerTests {
 
   @Test func failedReceiptWriteAtomicallyRestoresPriorVerifiedInstall() throws {
     let fileSystem = FakeInstallerFileSystem()
-    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    let bundle = URL(fileURLWithPath: "/bundle/fleck-agent")
     let support = URL(fileURLWithPath: "/support")
     let installer = AgentBridgeInstaller(
       bundledHelperURL: bundle,
@@ -278,7 +281,7 @@ struct AgentBridgeInstallerTests {
       destination: receipt.destination,
       sha256: receipt.sha256,
       installedVersion: receipt.installedVersion,
-      bundleIdentifier: "example.not-motes"
+      bundleIdentifier: "example.not-fleck"
     )
     wrongOwner.fileSystem.files[wrongOwner.installer.installationReceiptURL.path] =
       try JSONEncoder().encode(receipt)
@@ -300,7 +303,7 @@ struct AgentBridgeInstallerTests {
   @Test func disconnectFailsClosedWhenInstalledHelperIsMissing() throws {
     let runner = RecordingAgentProcessRunner()
     let installer = AgentBridgeInstaller(
-      bundledHelperURL: URL(fileURLWithPath: "/bundle/motes-agent"),
+      bundledHelperURL: URL(fileURLWithPath: "/bundle/fleck-agent"),
       applicationSupportURL: URL(fileURLWithPath: "/support"),
       fileSystem: FakeInstallerFileSystem(),
       processRunner: runner
@@ -339,7 +342,7 @@ struct AgentBridgeInstallerTests {
   @Test func asynchronousInstallerOperationsStayOffMainThread() async throws {
     let fileSystem = FakeInstallerFileSystem()
     let runner = RecordingAgentProcessRunner()
-    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    let bundle = URL(fileURLWithPath: "/bundle/fleck-agent")
     fileSystem.files[bundle.path] = Data("helper".utf8)
     let installer = AgentBridgeInstaller(
       bundledHelperURL: bundle,
@@ -413,7 +416,7 @@ struct AgentBridgeInstallerTests {
     let fileSystem = FakeInstallerFileSystem()
     let blockingRunner = BlockingAgentProcessRunner()
     let secondAttempt = BlockingTransactionAttempt()
-    let bundle = URL(fileURLWithPath: "/bundle/motes-agent")
+    let bundle = URL(fileURLWithPath: "/bundle/fleck-agent")
     let support = URL(fileURLWithPath: "/support")
     fileSystem.files[bundle.path] = Data("helper".utf8)
     let provisioningInstaller = AgentBridgeInstaller(
@@ -546,7 +549,7 @@ private struct InstalledHelperFixture {
   let installer: AgentBridgeInstaller
 
   init() throws {
-    let bundle = URL(fileURLWithPath: "/bundle/\(UUID().uuidString)/motes-agent")
+    let bundle = URL(fileURLWithPath: "/bundle/\(UUID().uuidString)/fleck-agent")
     let support = URL(fileURLWithPath: "/support/\(UUID().uuidString)")
     installer = AgentBridgeInstaller(
       bundledHelperURL: bundle,

@@ -90,7 +90,7 @@ import Testing
     to: bridge.appendingPathComponent("fleck-compatibility-v1.json")
   )
   try Data("#!/bin/sh".utf8).write(
-    to: bridge.appendingPathComponent("bin/motes")
+    to: bridge.appendingPathComponent("bin/motes") // Legacy launcher fixture.
   )
 
   #expect(

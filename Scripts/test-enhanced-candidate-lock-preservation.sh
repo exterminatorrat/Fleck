@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
-readonly temp_root="$(mktemp -d "${TMPDIR:-/tmp}/motes-candidate-lock-test.XXXXXX")"
+readonly temp_root="$(mktemp -d "${TMPDIR:-/tmp}/fleck-candidate-lock-test.XXXXXX")"
 readonly foreign_root="$temp_root/foreign"
 readonly scratch="$temp_root/candidate-build"
 readonly ordinary_copy="$temp_root/Package.resolved"
@@ -26,7 +26,7 @@ printf '%s\n' \
   '    test "$2" = "--scratch-path"' \
   '    test "$3" = "$FAKE_CANDIDATE_SCRATCH"' \
   '    test "$4" = "resolve"' \
-  '    test "${MOTES_ENHANCED_CANDIDATE:-}" = "1"' \
+  '    test "${FLECK_ENHANCED_CANDIDATE:-}" = "1"' \
   '    /bin/mkdir "$FAKE_CANDIDATE_SCRATCH"' \
   '    /bin/cp "$FAKE_CANDIDATE_FIXTURE" "$FAKE_REPO_ROOT/Package.resolved"' \
   '    ;;' \
@@ -49,7 +49,7 @@ set +e
   FAKE_CANDIDATE_SCRATCH="$scratch" \
   "$script_dir/resolve-enhanced-candidate.sh" "$scratch" \
     /bin/sh -c '
-      test "${MOTES_ENHANCED_CANDIDATE:-}" = "1"
+      test "${FLECK_ENHANCED_CANDIDATE:-}" = "1"
       grep -Fq "\"identity\": \"fluidaudio\"" "$1/Package.resolved"
       printf "candidate lock active\n" > "$2"
       exit 23

@@ -1,13 +1,13 @@
-# Motes
+# Fleck
 
-Motes is a lightweight, native macOS menu-bar app for keeping multiple quick notes in tabs. The goal is a fast, local-first editor with rich-text formatting, bullets, numbered lists, installed-font support, and low idle resource use.
+Fleck is a lightweight, native macOS menu-bar app for keeping multiple quick notes in tabs. The goal is a fast, local-first editor with rich-text formatting, bullets, numbered lists, installed-font support, and low idle resource use.
 
 See the [product plan](PRODUCT_PLAN.md) for the complete vision, feature requirements, technical direction, performance goals, and delivery roadmap.
 
 ## Project status
 
-Motes is implemented as native SwiftPM executables. `Scripts/build-motes-app.sh`
-creates an unsigned `Motes.app` with the agent helper packaged separately in
+Fleck is implemented as native SwiftPM executables. `Scripts/build-fleck-app.sh`
+creates an unsigned `Fleck.app` with the agent helper packaged separately in
 `Contents/SharedSupport`; signing, notarization, and export remain pending.
 
 Clean Dictation is implemented as a release-disabled candidate. **Enhanced
@@ -21,7 +21,7 @@ and do not describe it as shipping.
 
 ## Agent workspace
 
-Motes can expose selected notes to local Codex, Claude Code, Kimi, or another
+Fleck can expose selected notes to local Codex, Claude Code, Kimi, or another
 MCP client. Access is off by default and granted per note: use **Allow Agent
 Access** in the note menu and accept the first-share confirmation. Turning the
 toggle off immediately removes that note and its activity from integration
@@ -32,15 +32,15 @@ profile for each client, and copy its profile UUID. The verified helper is
 installed at:
 
 ```text
-~/Library/Application Support/MenuBarNotes/AgentBridge/bin/motes
+~/Library/Application Support/Fleck/AgentBridge/bin/fleck
 ```
 
 Use the absolute expanded helper path and profile UUID in one of these setup
 forms:
 
 ```sh
-codex mcp add motes -- "/absolute/path/to/motes" mcp --profile PROFILE_UUID
-claude mcp add --scope user motes -- "/absolute/path/to/motes" mcp --profile PROFILE_UUID
+codex mcp add fleck -- "/absolute/path/to/fleck" mcp --profile PROFILE_UUID
+claude mcp add --scope user fleck -- "/absolute/path/to/fleck" mcp --profile PROFILE_UUID
 ```
 
 Kimi configuration:
@@ -48,8 +48,8 @@ Kimi configuration:
 ```json
 {
   "mcpServers": {
-    "motes": {
-      "command": "/absolute/path/to/motes",
+    "fleck": {
+      "command": "/absolute/path/to/fleck",
       "args": ["mcp", "--profile", "PROFILE_UUID"]
     }
   }
@@ -57,14 +57,14 @@ Kimi configuration:
 ```
 
 The generic MCP configuration is the inner `command`/`args` object above. The
-helper also has a direct CLI; run `motes --help`, then add `--profile
+helper also has a direct CLI; run `fleck --help`, then add `--profile
 PROFILE_UUID` to every command and `--json` when machine-readable output is
 needed. For example:
 
 ```sh
-motes notes list --profile PROFILE_UUID --json
-motes note read NOTE_UUID --profile PROFILE_UUID --json
-printf '%s' 'Follow up' | motes note append NOTE_UUID --stdin \
+fleck notes list --profile PROFILE_UUID --json
+fleck note read NOTE_UUID --profile PROFILE_UUID --json
+printf '%s' 'Follow up' | fleck note append NOTE_UUID --stdin \
   --revision REVISION --operation-id OPERATION_UUID \
   --profile PROFILE_UUID --json
 ```
@@ -90,39 +90,39 @@ Dictation History, settings, sharing controls, note deletion, a shell, arbitrary
 paths, or direct note files.
 
 Revoke each profile in **Settings → Agents** before removing a client
-configuration; revocation takes effect in Motes even if helper-Keychain cleanup
-needs a retry. There is not yet a helper-removal button. After quitting Motes
+configuration; revocation takes effect in Fleck even if helper-Keychain cleanup
+needs a retry. There is not yet a helper-removal button. After quitting Fleck
 and connected clients, the verified install can be removed without touching
 notes:
 
 ```sh
-rm -- "$HOME/Library/Application Support/MenuBarNotes/AgentBridge/bin/motes" \
-  "$HOME/Library/Application Support/MenuBarNotes/AgentBridge/install-receipt.json"
+rm -- "$HOME/Library/Application Support/Fleck/AgentBridge/bin/fleck" \
+  "$HOME/Library/Application Support/Fleck/AgentBridge/install-receipt.json"
 ```
 
 Settings can reinstall those two bridge-owned files. Do not remove the broader
-`MenuBarNotes` Application Support directory; it contains notes and history.
+`Fleck` Application Support directory; it contains notes and history.
 
 ## Development workflow
 
 GitHub is the source of truth for this project. Changes should be made on a focused branch, committed with a descriptive message, pushed to GitHub, and submitted through a pull request. Keep application changes, relevant tests, and documentation together so the repository always reflects the current state of the product.
 
 Build and launch the packaged development app so macOS associates microphone
-and Speech permissions with Motes:
+and Speech permissions with Fleck:
 
 ```sh
-Scripts/build-motes-app.sh
-/usr/bin/open -n .build/Motes.app
+Scripts/build-fleck-app.sh
+/usr/bin/open -n .build/Fleck.app
 ```
 
-Do not use `swift run Motes` for interactive testing. It launches a bare
+Do not use `swift run Fleck` for interactive testing. It launches a bare
 executable without the app-bundle privacy identity required by dictation.
 
 Ordinary package resolution includes the MCP Swift SDK and its transitive
 dependencies, all pinned by the root `Package.resolved`; none are linked into
-Motes. Ordinary builds also exclude the Enhanced Local SDK, implementation,
+Fleck. Ordinary builds also exclude the Enhanced Local SDK, implementation,
 manifest, and resources. The exact FluidAudio pin lives in the resolver-only
-`Packages/MotesEnhancedCandidateDependencies` package. To compile and run the
+`Packages/FleckEnhancedCandidateDependencies` package. To compile and run the
 developer-only Enhanced candidate tests from the repository root, use the
 lock-preservation wrapper with a separate scratch directory:
 

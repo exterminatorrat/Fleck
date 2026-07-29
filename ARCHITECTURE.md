@@ -1,8 +1,8 @@
-# Motes — Application Framework
+# Fleck — Application Framework
 
 ## Constraints that guide the design
 
-Motes is a native macOS utility, not a miniature web application. The initial engineering budgets are:
+Fleck is a native macOS utility, not a miniature web application. The initial engineering budgets are:
 
 - **Installed app size target:** at or below 15 MB for a release build where practical.
 - **Memory ceiling:** never intentionally ship a normal idle workflow that exceeds 75 MB; profile representative release builds before releases.
@@ -57,20 +57,20 @@ These are release gates to measure, not assumptions guaranteed by choosing a par
 
 ```text
 Sources/
-├── MenuBarNotesCore/          # Models, mutations, persistence, and activity journal
-├── MenuBarNotesAgentProtocol/ # Versioned typed IPC messages and framing
-├── MenuBarNotesApp/           # macOS scenes, state coordination, IPC service, and views
-└── MotesAgentBridge/          # Separate MCP/CLI helper and Unix-socket client
+├── FleckCore/          # Models, mutations, persistence, and activity journal
+├── FleckAgentProtocol/ # Versioned typed IPC messages and framing
+├── FleckApp/           # macOS scenes, state coordination, IPC service, and views
+└── FleckAgentBridge/          # Separate MCP/CLI helper and Unix-socket client
 Tests/
-├── MenuBarNotesCoreTests/
-├── MenuBarNotesAgentProtocolTests/
-├── MenuBarNotesAppTests/
-└── MotesAgentBridgeTests/
+├── FleckCoreTests/
+├── FleckAgentProtocolTests/
+├── FleckAppTests/
+└── FleckAgentBridgeTests/
 ```
 
-`MenuBarNotesCore` deliberately does not import AppKit or SwiftUI. Keeping storage and state transformations portable makes them inexpensive to test and prevents UI choices from becoming persistence requirements.
+`FleckCore` deliberately does not import AppKit or SwiftUI. Keeping storage and state transformations portable makes them inexpensive to test and prevents UI choices from becoming persistence requirements.
 
-`MenuBarNotesApp` is compiled as the native executable. On macOS it supplies the menu-bar scene and customization UI. The non-macOS entry point only explains the platform requirement, allowing core builds and tests to run in Linux-based continuous integration.
+`FleckApp` is compiled as the native executable. On macOS it supplies the menu-bar scene and customization UI. The non-macOS entry point only explains the platform requirement, allowing core builds and tests to run in Linux-based continuous integration.
 
 ## State and persistence boundaries
 
@@ -86,7 +86,7 @@ The initial format favors plain Markdown note bodies because it is small, readab
 
 ```text
 local MCP client or CLI
-  -> motes helper (stdio or CLI output; credential in Keychain)
+  -> fleck helper (stdio or CLI output; credential in Keychain)
   -> private AF_UNIX socket (same-user peer check + profile authorization)
   -> AgentCommandService
   -> explicit-share filter -> typed mutation -> atomic LocalStore commit
@@ -100,12 +100,12 @@ local MCP client or CLI
 - The helper never opens note `.md`/`.rtf` files, `workspace.json`, Trash, or
   Dictation History. It cannot receive settings, share, note-delete, path, or
   shell commands because those cases do not exist in the typed protocol.
-- `MotesAgentBridge` is a separately packaged executable. Its only AppKit use
-  is the non-activating Motes launch adapter. IPC uses an `AF_UNIX` socket below
-  the user's Motes Application Support directory, with a private parent,
+- `FleckAgentBridge` is a separately packaged executable. Its only AppKit use
+  is the non-activating Fleck launch adapter. IPC uses an `AF_UNIX` socket below
+  the user's Fleck Application Support directory, with a private parent,
   private socket mode, and a matching peer UID. There is no HTTP/TCP listener,
   cloud bridge, or internet-facing port.
-- Each integration profile has an independent random credential. Motes stores
+- Each integration profile has an independent random credential. Fleck stores
   only its verifier in the data-protection Keychain; the helper stores the
   credential in its own Keychain item. Profile JSON, setup snippets, command
   arguments, normal errors, and MCP stdout do not contain it.

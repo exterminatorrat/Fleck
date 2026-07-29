@@ -1,8 +1,8 @@
-# Contributing to Motes
+# Contributing to Fleck
 
 ## Repository workflow
 
-GitHub is the source of truth for Motes. Intentional changes to application code, tests, documentation, assets, configuration, and release metadata must be committed and pushed; project work should not exist only on a local machine.
+GitHub is the source of truth for Fleck. Intentional changes to application code, tests, documentation, assets, configuration, and release metadata must be committed and pushed; project work should not exist only on a local machine.
 
 The preferred workflow is a dedicated feature branch:
 

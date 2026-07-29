@@ -4,9 +4,9 @@ set -euo pipefail
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 
-if [[ -n "${MOTES_ENHANCED_CANDIDATE+x}" ]]; then
+if [[ -n "${FLECK_ENHANCED_CANDIDATE+x}" ]]; then
   printf '%s\n' \
-    'error: unset MOTES_ENHANCED_CANDIDATE before validating an ordinary release' \
+    'error: unset FLECK_ENHANCED_CANDIDATE before validating an ordinary release' \
     >&2
   exit 2
 fi
@@ -18,7 +18,7 @@ fi
 
 major_version="$(sw_vers -productVersion | cut -d. -f1)"
 if (( major_version < 14 )); then
-  printf 'error: Motes requires macOS 14 or later (found %s)\n' \
+  printf 'error: Fleck requires macOS 14 or later (found %s)\n' \
     "$(sw_vers -productVersion)" >&2
   exit 2
 fi
@@ -40,12 +40,12 @@ swift test --disable-automatic-resolution
 
 printf '%s\n' '--- Release build ---'
 swift package clean
-"$script_dir/build-motes-app.sh"
+"$script_dir/build-fleck-app.sh"
 
-readonly app_bundle="$repo_root/.build/Motes.app"
-readonly app_binary="$app_bundle/Contents/MacOS/Motes"
-readonly bundled_helper="$app_bundle/Contents/SharedSupport/motes-agent"
-readonly expected_bundle_identifier="com.harryjin.motes"
+readonly app_bundle="$repo_root/.build/Fleck.app"
+readonly app_binary="$app_bundle/Contents/MacOS/Fleck"
+readonly bundled_helper="$app_bundle/Contents/SharedSupport/fleck-agent"
+readonly expected_bundle_identifier="com.harryjin.fleck"
 
 bundle_identifier="$(
   /usr/bin/plutil -extract CFBundleIdentifier raw -o - \
@@ -58,12 +58,12 @@ if [[ "$bundle_identifier" != "$expected_bundle_identifier" ]]; then
 fi
 if [[ "$(/usr/bin/plutil -extract CFBundlePackageType raw -o - \
   "$app_bundle/Contents/Info.plist")" != "APPL" ]]; then
-  printf 'error: packaged Motes is missing CFBundlePackageType=APPL\n' >&2
+  printf 'error: packaged Fleck is missing CFBundlePackageType=APPL\n' >&2
   exit 1
 fi
 if [[ "$(/usr/bin/plutil -extract NSPrincipalClass raw -o - \
   "$app_bundle/Contents/Info.plist")" != "NSApplication" ]]; then
-  printf 'error: packaged Motes is missing NSPrincipalClass=NSApplication\n' >&2
+  printf 'error: packaged Fleck is missing NSPrincipalClass=NSApplication\n' >&2
   exit 1
 fi
 for privacy_key in \
@@ -71,7 +71,7 @@ for privacy_key in \
   NSSpeechRecognitionUsageDescription; do
   if [[ -z "$(/usr/bin/plutil -extract "$privacy_key" raw -o - \
     "$app_bundle/Contents/Info.plist")" ]]; then
-    printf 'error: packaged Motes is missing %s\n' "$privacy_key" >&2
+    printf 'error: packaged Fleck is missing %s\n' "$privacy_key" >&2
     exit 1
   fi
 done
@@ -89,7 +89,7 @@ fi
 "$script_dir/check-release-size.sh" "$app_bundle"
 
 printf '%s\n' '--- Bounded app-binary smoke test ---'
-smoke_output="$(mktemp "${TMPDIR:-/tmp}/motes-smoke.XXXXXX")"
+smoke_output="$(mktemp "${TMPDIR:-/tmp}/fleck-smoke.XXXXXX")"
 smoke_pid=""
 cleanup_smoke() {
   if [[ -n "$smoke_pid" ]] && /bin/kill -0 "$smoke_pid" 2>/dev/null; then
@@ -106,7 +106,7 @@ smoke_pid=$!
 if ! /bin/kill -0 "$smoke_pid" 2>/dev/null; then
   smoke_status=0
   wait "$smoke_pid" || smoke_status=$?
-  printf 'error: Motes exited during smoke test with status %s\n' \
+  printf 'error: Fleck exited during smoke test with status %s\n' \
     "$smoke_status" >&2
   cat "$smoke_output" >&2
   exit 1
@@ -121,5 +121,5 @@ printf '%s\n' '--- Candidate lock preservation ---'
 printf '%s\n' '--- Candidate release rejection ---'
 "$script_dir/check-candidate-release-rejected.sh"
 
-printf '\nValidation build passed. Launch Motes as an app bundle with:\n  %s\n' \
+printf '\nValidation build passed. Launch Fleck as an app bundle with:\n  %s\n' \
   "/usr/bin/open -n \"$app_bundle\""

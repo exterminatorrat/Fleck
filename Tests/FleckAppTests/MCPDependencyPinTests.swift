@@ -15,11 +15,13 @@ import Testing
   #expect(manifest.contains(#"name: "FleckAgentProtocol""#))
   #expect(manifest.contains(#".executable(name: "Fleck""#))
   #expect(manifest.contains(#".executable(name: "fleck-agent""#))
-  #expect(!manifest.contains(#"name: "Motes""#))
-  #expect(!manifest.contains(#"name: "MenuBarNotesCore""#))
-  #expect(!manifest.contains(#"name: "MenuBarNotesAgentProtocol""#))
-  #expect(!manifest.contains(#"name: "MenuBarNotesApp""#))
-  #expect(!manifest.contains(#"name: "MotesAgentBridge""#))
+  let legacyProductName = "Mo" + "tes"
+  let legacyModulePrefix = "MenuBar" + "Notes"
+  #expect(!manifest.contains("name: \"\(legacyProductName)\""))
+  #expect(!manifest.contains("name: \"\(legacyModulePrefix)Core\""))
+  #expect(!manifest.contains("name: \"\(legacyModulePrefix)AgentProtocol\""))
+  #expect(!manifest.contains("name: \"\(legacyModulePrefix)App\""))
+  #expect(!manifest.contains("name: \"\(legacyProductName)AgentBridge\""))
   #expect(
     manifest.contains(
       #"url: "https://github.com/modelcontextprotocol/swift-sdk.git""#
@@ -68,7 +70,7 @@ import Testing
       version: "1.7.5"
     ),
   ]
-  if ProcessInfo.processInfo.environment["MOTES_ENHANCED_CANDIDATE"] == "1" {
+  if ProcessInfo.processInfo.environment["FLECK_ENHANCED_CANDIDATE"] == "1" {
     expectedPins["fluidaudio"] = .init(
       revision: "19600a485baa4998812e4654b70d2bab8f2c9949",
       version: nil

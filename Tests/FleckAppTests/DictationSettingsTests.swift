@@ -804,7 +804,7 @@ import Testing
   #expect(fixture.provider.requestedKinds == [.enhancedLocal])
   #expect(
     fixture.runtime.captureFailure?.message
-      == "Enhanced Local needs Microphone access. Open System Settings to allow Motes."
+      == "Enhanced Local needs Microphone access. Open System Settings to allow Fleck."
   )
   #expect(
     fixture.runtime.captureFailure?.actions.map(\.title)

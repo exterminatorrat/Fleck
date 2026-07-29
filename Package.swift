@@ -7,7 +7,7 @@ let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let infoPlistPath = packageRoot
     .appendingPathComponent("Sources/FleckApp/Info.plist").path
 let enhancedCandidateEnabled =
-    ProcessInfo.processInfo.environment["MOTES_ENHANCED_CANDIDATE"] == "1"
+    ProcessInfo.processInfo.environment["FLECK_ENHANCED_CANDIDATE"] == "1"
 
 var packageDependencies: [Package.Dependency] = [
     .package(
@@ -32,12 +32,12 @@ var appTestSwiftSettings: [SwiftSetting] = []
 
 if enhancedCandidateEnabled {
     packageDependencies.append(
-        .package(path: "Packages/MotesEnhancedCandidateDependencies")
+        .package(path: "Packages/FleckEnhancedCandidateDependencies")
     )
     appDependencies.append(
         .product(
-            name: "MotesEnhancedCandidateDependencies",
-            package: "MotesEnhancedCandidateDependencies"
+            name: "FleckEnhancedCandidateDependencies",
+            package: "FleckEnhancedCandidateDependencies"
         )
     )
     appExcludes = ["Info.plist"]

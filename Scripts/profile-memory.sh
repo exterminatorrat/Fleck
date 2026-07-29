@@ -6,7 +6,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 2
 fi
 
-readonly process_name="${1:-Motes}"
+readonly process_name="${1:-Fleck}"
 readonly limit_mb="${RAM_LIMIT_MB:-75}"
 readonly pid="$(pgrep -x "$process_name" | head -n 1 || true)"
 

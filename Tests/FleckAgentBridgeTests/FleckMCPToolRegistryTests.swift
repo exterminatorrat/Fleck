@@ -9,7 +9,7 @@ private let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 private let operationID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
 private let changeID = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
 
-@Suite("MotesMCP tool registry")
+@Suite("FleckMCP tool registry")
 struct FleckMCPToolRegistryTests {
   @Test func exposesOnlyTheApprovedToolsInOrder() {
     #expect(

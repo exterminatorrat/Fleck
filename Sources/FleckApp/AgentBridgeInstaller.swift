@@ -106,7 +106,7 @@
         )
         .appendingPathComponent("AgentBridge", isDirectory: true)
         .appendingPathComponent("bin", isDirectory: true)
-        .appendingPathComponent("motes")
+        .appendingPathComponent("motes") // Legacy launcher for one release.
         .standardizedFileURL
     }
 
@@ -114,7 +114,7 @@
       applicationSupportURL
         .appendingPathComponent("AgentBridge", isDirectory: true)
         .appendingPathComponent("bin", isDirectory: true)
-        .appendingPathComponent("motes")
+        .appendingPathComponent("motes") // Legacy migrated helper name.
         .standardizedFileURL
     }
 
@@ -154,7 +154,7 @@
           ".fleck-\(UUID().uuidString).staging"
         )
         let launcherStaging = legacyDirectory.appendingPathComponent(
-          ".motes-\(UUID().uuidString).staging"
+          ".motes-\(UUID().uuidString).staging" // Compatibility launcher.
         )
         let launcherData = compatibilityLauncherData()
         try fileSystem.write(bundledData, to: canonicalStaging)

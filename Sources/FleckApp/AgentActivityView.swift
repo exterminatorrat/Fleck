@@ -71,7 +71,7 @@
     private static func actorName(_ actor: AgentActivityActor) -> String {
       switch actor {
       case .integration(_, let displayName): displayName
-      case .localUser: "Motes"
+      case .localUser: "Fleck"
       }
     }
 

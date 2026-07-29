@@ -1,6 +1,6 @@
 #if os(macOS) && CLEAN_DICTATION_ENHANCED_CANDIDATE
   @preconcurrency import AVFAudio
-  import MotesEnhancedCandidateDependencies
+  import FleckEnhancedCandidateDependencies
   import Foundation
   import FleckCore
 

@@ -232,7 +232,7 @@ struct AgentPrivacyBoundaryTests {
 
     let provisioning = try await store.create(name: "Codex")
     let setup = AgentClientSetup(
-      installedHelperURL: URL(fileURLWithPath: "/Applications/Motes Helper/motes"),
+      installedHelperURL: URL(fileURLWithPath: "/Applications/Fleck Helper/fleck"),
       profileID: provisioning.profile.id
     )
     let persisted = String(

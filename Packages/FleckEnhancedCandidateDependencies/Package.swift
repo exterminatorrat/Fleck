@@ -3,12 +3,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "MotesEnhancedCandidateDependencies",
+    name: "FleckEnhancedCandidateDependencies",
     platforms: [.macOS(.v14)],
     products: [
         .library(
-            name: "MotesEnhancedCandidateDependencies",
-            targets: ["MotesEnhancedCandidateDependencies"]
+            name: "FleckEnhancedCandidateDependencies",
+            targets: ["FleckEnhancedCandidateDependencies"]
         ),
     ],
     dependencies: [
@@ -19,7 +19,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "MotesEnhancedCandidateDependencies",
+            name: "FleckEnhancedCandidateDependencies",
             dependencies: [
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ]

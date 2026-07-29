@@ -20,7 +20,7 @@
       let actor: String
       switch feedback.actor {
       case .integration(_, let displayName): actor = displayName
-      case .localUser: actor = "Motes"
+      case .localUser: actor = "Fleck"
       }
       let suffix = count > 1 ? " (\(count))" : ""
       return "\(actor) updated \(feedback.noteTitle)\(suffix)"

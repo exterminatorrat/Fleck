@@ -130,7 +130,7 @@ private func waitForListening(
   ])
 }
 
-@Test @MainActor func shortcutChoosesFocusedOnlyForActiveMotesEditor() async throws {
+@Test @MainActor func shortcutChoosesFocusedOnlyForActiveFleckEditor() async throws {
   let focusedThreshold = Gate()
   let focused = try Fixture(holdSleeper: { _ in await focusedThreshold.wait() })
 

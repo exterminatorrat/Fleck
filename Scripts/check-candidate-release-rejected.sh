@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-readonly temp_root="$(mktemp -d "${TMPDIR:-/tmp}/motes-candidate-release.XXXXXX")"
+readonly temp_root="$(mktemp -d "${TMPDIR:-/tmp}/fleck-candidate-release.XXXXXX")"
 readonly scratch="$temp_root/build"
 readonly output="$temp_root/output"
 cleanup() {
@@ -28,8 +28,8 @@ if ! grep -Fq \
   cat "$output" >&2
   exit 1
 fi
-if find "$scratch" -type f -name Motes -print -quit | grep -q .; then
-  printf 'error: candidate release produced a linked Motes executable\n' >&2
+if find "$scratch" -type f -name Fleck -print -quit | grep -q .; then
+  printf 'error: candidate release produced a linked Fleck executable\n' >&2
   exit 1
 fi
 

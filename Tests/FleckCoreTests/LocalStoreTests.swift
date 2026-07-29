@@ -5,7 +5,7 @@ import Testing
 
 @Test func storeRoundTripsWorkspaceAndPreferences() async throws {
   let root = FileManager.default.temporaryDirectory
-    .appendingPathComponent("MenuBarNotesTests-\(UUID().uuidString)")
+    .appendingPathComponent("FleckTests-\(UUID().uuidString)")
   defer { try? FileManager.default.removeItem(at: root) }
 
   let store = LocalStore(rootURL: root)
@@ -33,7 +33,7 @@ import Testing
 
 @Test func storeRoundTripsOptionalRichTextSidecar() async throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-    "MenuBarNotesTests-\(UUID())")
+    "FleckTests-\(UUID())")
   defer { try? FileManager.default.removeItem(at: root) }
   let store = LocalStore(rootURL: root)
   let rtf = Data("{\\rtf1 formatted}".utf8)
@@ -51,7 +51,7 @@ import Testing
 
 @Test func storeRemovesFilesForDeletedNotes() async throws {
   let root = FileManager.default.temporaryDirectory
-    .appendingPathComponent("MenuBarNotesTests-\(UUID().uuidString)")
+    .appendingPathComponent("FleckTests-\(UUID().uuidString)")
   defer { try? FileManager.default.removeItem(at: root) }
 
   let store = LocalStore(rootURL: root)
@@ -78,7 +78,7 @@ import Testing
 
 @Test func malformedManifestRecoversPreviousGeneration() async throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-    "MenuBarNotesTests-\(UUID())")
+    "FleckTests-\(UUID())")
   defer { try? FileManager.default.removeItem(at: root) }
   let store = LocalStore(rootURL: root)
   let original = Note(title: "Recover me", body: "safe body")
@@ -97,7 +97,7 @@ import Testing
 
 @Test func malformedPreferencesFallBackWithoutFailing() async throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-    "MenuBarNotesTests-\(UUID())")
+    "FleckTests-\(UUID())")
   defer { try? FileManager.default.removeItem(at: root) }
   try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
   try Data("broken".utf8).write(to: root.appendingPathComponent("preferences.json"))
@@ -107,7 +107,7 @@ import Testing
 
 @Test func missingAndInvalidNoteFilesDoNotPreventWorkspaceLoading() async throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-    "MenuBarNotesTests-\(UUID())")
+    "FleckTests-\(UUID())")
   defer { try? FileManager.default.removeItem(at: root) }
   let store = LocalStore(rootURL: root)
   let note = Note(title: "Damaged")
@@ -122,7 +122,7 @@ import Testing
 
 @Test func manifestRecordsFormatVersion() async throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-    "MenuBarNotesTests-\(UUID())")
+    "FleckTests-\(UUID())")
   defer { try? FileManager.default.removeItem(at: root) }
   let store = LocalStore(rootURL: root)
   try await store.save(workspace: Workspace(notes: [Note()]), preferences: .init())
@@ -939,7 +939,7 @@ import Testing
 
 private func temporaryStoreURL() -> URL {
   FileManager.default.temporaryDirectory.appendingPathComponent(
-    "MenuBarNotesTests-\(UUID().uuidString)"
+    "FleckTests-\(UUID().uuidString)"
   )
 }
 

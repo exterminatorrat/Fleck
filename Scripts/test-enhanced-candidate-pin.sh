@@ -14,9 +14,9 @@ then
 fi
 
 rg -F "revision: \"$revision\"" \
-  Packages/MotesEnhancedCandidateDependencies/Package.swift >/dev/null
+  Packages/FleckEnhancedCandidateDependencies/Package.swift >/dev/null
 if rg -F 'exact: "0.15.5"' \
-  Packages/MotesEnhancedCandidateDependencies/Package.swift >/dev/null
+  Packages/FleckEnhancedCandidateDependencies/Package.swift >/dev/null
 then
   printf 'error: mutable FluidAudio version requirement remains in candidate manifest\n' >&2
   exit 1

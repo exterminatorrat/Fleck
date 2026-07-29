@@ -542,7 +542,7 @@ import Testing
 
 private func temporaryAgentActivityURL() -> URL {
   FileManager.default.temporaryDirectory.appendingPathComponent(
-    "MenuBarNotesAgentActivityTests-\(UUID().uuidString)",
+    "FleckAgentActivityTests-\(UUID().uuidString)",
     isDirectory: true
   )
 }

@@ -110,7 +110,7 @@
     nonisolated static let resumeAuthenticationService =
       "com.harryjin.fleck.enhanced-model-resume"
     nonisolated static let legacyResumeAuthenticationService =
-      "com.motes.enhanced-model-resume"
+      "com.motes.enhanced-model-resume" // Legacy Keychain fallback.
     nonisolated private static let resumeAuthenticationAccount = "default"
     nonisolated private static let resumeAuthenticationLock = NSLock()
     static let requiredAvailableCapacity: Int64 = 1_197_261_950

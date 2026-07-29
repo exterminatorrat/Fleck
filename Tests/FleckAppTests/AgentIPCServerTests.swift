@@ -114,7 +114,7 @@ import Testing
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
   let server = AgentIPCServer(
-    endpointURL: root.appendingPathComponent("bridge/motes.sock"),
+    endpointURL: root.appendingPathComponent("bridge/fleck.sock"),
     maximumActiveClients: 8,
     idleReadTimeout: 10,
     execute: { _, _, _ in .sharedNotes(notes: []) }
@@ -158,7 +158,7 @@ import Testing
 @Test @MainActor func agentIPCSocketUsesPrivateModesAndOwnedShutdown() throws {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let server = AgentIPCServer(
     endpointURL: socketURL,
     execute: { _, _, _ in .sharedNotes(notes: []) }
@@ -179,7 +179,7 @@ import Testing
 @Test @MainActor func agentIPCShutdownPreservesReplacedLeaf() throws {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let server = AgentIPCServer(
     endpointURL: socketURL,
     execute: { _, _, _ in .sharedNotes(notes: []) }
@@ -195,7 +195,7 @@ import Testing
 @Test @MainActor func agentIPCTransactsOverSameUserSocket() async throws {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let calls = LockedCounter()
   let server = AgentIPCServer(
     endpointURL: socketURL,
@@ -221,7 +221,7 @@ import Testing
 {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let calls = LockedCounter()
   let server = AgentIPCServer(
     endpointURL: socketURL,
@@ -246,7 +246,7 @@ import Testing
 @Test @MainActor func agentIPCRejectsSaturatedAndIdleClients() async throws {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let server = AgentIPCServer(
     endpointURL: socketURL,
     maximumActiveClients: 1,
@@ -273,7 +273,7 @@ import Testing
 @Test @MainActor func agentIPCRejectsOversizedPrefixWithoutService() async throws {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let calls = LockedCounter()
   let server = AgentIPCServer(
     endpointURL: socketURL,
@@ -302,7 +302,7 @@ import Testing
 @Test @MainActor func disconnectedWriterDoesNotStopLaterRequests() async throws {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let server = AgentIPCServer(
     endpointURL: socketURL,
     execute: { _, _, _ in .sharedNotes(notes: []) }
@@ -331,7 +331,7 @@ import Testing
 {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let calls = LockedCounter()
   let writeStarted = LockedFlag()
   let page = AgentNotePage(
@@ -414,7 +414,7 @@ import Testing
 @Test @MainActor func stopDuringServicePreventsLateDescriptorWrite() async throws {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let gate = ServiceGate()
   let writes = LockedCounter()
   let server = AgentIPCServer(
@@ -450,7 +450,7 @@ import Testing
 @Test @MainActor func canceledReadSourceCannotConsumeReusedDescriptor() async throws {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let cancellationEntered = DispatchSemaphore(value: 0)
   let allowCancellation = DispatchSemaphore(value: 0)
   let cancellationCompleted = DispatchSemaphore(value: 0)
@@ -523,7 +523,7 @@ import Testing
 {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let server = AgentIPCServer(
     endpointURL: socketURL,
     execute: { _, _, _ in .sharedNotes(notes: []) }
@@ -552,7 +552,7 @@ import Testing
 {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let server = AgentIPCServer(
     endpointURL: socketURL,
     execute: { _, _, _ in .sharedNotes(notes: []) }
@@ -598,7 +598,7 @@ import Testing
 {
   let root = temporaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let socketURL = root.appendingPathComponent("bridge/motes.sock")
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let server = AgentIPCServer(
     endpointURL: socketURL,
     execute: { _, _, _ in .sharedNotes(notes: []) }
@@ -630,14 +630,14 @@ import Testing
   try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
   try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
   let symlinkServer = AgentIPCServer(
-    endpointURL: link.appendingPathComponent("motes.sock"),
+    endpointURL: link.appendingPathComponent("fleck.sock"),
     execute: { _, _, _ in .sharedNotes(notes: []) }
   )
   #expect(throws: (any Error).self) { try symlinkServer.start() }
 
   let bridge = root.appendingPathComponent("bridge", isDirectory: true)
   try FileManager.default.createDirectory(at: bridge, withIntermediateDirectories: true)
-  let leaf = bridge.appendingPathComponent("motes.sock")
+  let leaf = bridge.appendingPathComponent("fleck.sock")
   try Data("preserve".utf8).write(to: leaf)
   let regularServer = AgentIPCServer(
     endpointURL: leaf,
@@ -658,13 +658,13 @@ private func validRequest() -> AgentWireRequest {
 
 private func temporaryRoot() -> URL {
   URL(fileURLWithPath: "/private/tmp", isDirectory: true).appendingPathComponent(
-    "motes-ipc-\(UUID().uuidString)",
+    "fleck-ipc-\(UUID().uuidString)",
     isDirectory: true
   )
 }
 
 private func temporarySocketURL() -> URL {
-  temporaryRoot().appendingPathComponent("bridge/motes.sock")
+  temporaryRoot().appendingPathComponent("bridge/fleck.sock")
 }
 
 private func connectedSocket(

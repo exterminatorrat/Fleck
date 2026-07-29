@@ -11,7 +11,7 @@
       }
     }
 
-    static let quitTitle = "Quit Motes"
+    static let quitTitle = "Quit Fleck"
 
     private var eventMonitor: EventMonitorToken?
     private lazy var menu: NSMenu = {

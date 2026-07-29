@@ -149,10 +149,10 @@ struct DictationAvailability: Equatable, Sendable {
   var standardFailureCopy: String? {
     guard !standardAvailable else { return nil }
     if openSystemSettings.contains(where: { $0.pane == .microphone }) {
-      return "Standard — Apple Speech needs Microphone access. Open System Settings to allow Motes."
+      return "Standard — Apple Speech needs Microphone access. Open System Settings to allow Fleck."
     }
     if openSystemSettings.contains(where: { $0.pane == .speechRecognition }) {
-      return "Standard — Apple Speech needs Speech Recognition access. Open System Settings to allow Motes."
+      return "Standard — Apple Speech needs Speech Recognition access. Open System Settings to allow Fleck."
     }
     return "Standard — Apple Speech is unavailable because on-device English recognition is not installed or supported."
   }
@@ -166,7 +166,7 @@ struct DictationAvailability: Equatable, Sendable {
     ) -> String? {
       guard !enhancedAvailable else { return nil }
       if !microphoneAvailable {
-        return "Enhanced Local needs Microphone access. Open System Settings to allow Motes."
+        return "Enhanced Local needs Microphone access. Open System Settings to allow Fleck."
       }
       if input.osMajorVersion < 14 {
         return "Enhanced Local requires macOS 14 or later."

@@ -1,8 +1,8 @@
-# Motes — Product Plan
+# Fleck — Product Plan
 
 ## Product vision
 
-Motes is an extremely lightweight, native macOS notes app that stays one click or keyboard shortcut away in the menu bar. It is designed for quickly capturing and organizing short notes without the memory use, interface complexity, or setup required by a full document editor.
+Fleck is an extremely lightweight, native macOS notes app that stays one click or keyboard shortcut away in the menu bar. It is designed for quickly capturing and organizing short notes without the memory use, interface complexity, or setup required by a full document editor.
 
 The app should feel immediate: open it, type, switch notes, and dismiss it. Notes save automatically and return exactly as the user left them.
 

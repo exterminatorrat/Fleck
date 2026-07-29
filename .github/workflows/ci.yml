@@ -22,20 +22,20 @@ jobs:
           swift --version
       - name: Test ordinary graph
         run: |
-          unset MOTES_ENHANCED_CANDIDATE
+          unset FLECK_ENHANCED_CANDIDATE
           swift test
-      - name: Build Motes release product
+      - name: Build Fleck release product
         run: |
-          unset MOTES_ENHANCED_CANDIDATE
-          swift build -c release --product Motes
+          unset FLECK_ENHANCED_CANDIDATE
+          swift build -c release --product Fleck
       - name: Build agent bridge release product
         run: |
-          unset MOTES_ENHANCED_CANDIDATE
-          swift build -c release --product motes-agent
+          unset FLECK_ENHANCED_CANDIDATE
+          swift build -c release --product fleck-agent
       - name: Audit agent boundary
         run: Scripts/audit-agent-boundary.sh
       - name: Enforce executable size budget
-        run: Scripts/check-release-size.sh .build/release/Motes
+        run: Scripts/check-release-size.sh .build/release/Fleck
       - name: Validate native bundle launch and Keychain contracts
         run: Scripts/validate-macos.sh
       - name: Verify Enhanced Local candidate pin

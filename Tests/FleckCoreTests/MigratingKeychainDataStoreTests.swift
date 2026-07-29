@@ -6,7 +6,7 @@ import Testing
 @Suite(.serialized)
 struct MigratingKeychainDataStoreTests {
   private let canonical = "com.harryjin.fleck.test"
-  private let legacy = "com.harryjin.motes.test"
+  private let legacy = "com.harryjin.previous.test"
   private let account = "profile"
 
   @Test func canonicalSecretWinsWithoutReadingLegacy() throws {
@@ -78,13 +78,13 @@ struct MigratingKeychainDataStoreTests {
     let value = Data((0..<32).map(UInt8.init))
     store.seed(
       value,
-      service: "com.motes.enhanced-model-resume",
+      service: "com.previous.enhanced-model-resume",
       account: "default"
     )
     let migrating = MigratingKeychainDataStore(
       store: store,
       canonicalService: "com.harryjin.fleck.enhanced-model-resume",
-      legacyServices: ["com.motes.enhanced-model-resume"]
+      legacyServices: ["com.previous.enhanced-model-resume"]
     )
 
     #expect(try migrating.readOrMigrate(account: "default") == value)

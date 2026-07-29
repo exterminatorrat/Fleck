@@ -114,7 +114,7 @@ import Testing
 
 private func temporaryHistoryStoreURL() -> URL {
   FileManager.default.temporaryDirectory.appendingPathComponent(
-    "MenuBarNotesHistoryTests-\(UUID().uuidString)",
+    "FleckHistoryTests-\(UUID().uuidString)",
     isDirectory: true
   )
 }

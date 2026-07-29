@@ -42,7 +42,7 @@ struct AgentTaskHandleCodecTests {
     let codec = AgentTaskHandleCodec(
       signingKeyProvider: FixedSigningKeyProvider(key: key)
     )
-    let line = "  ● Ship Motes"
+    let line = "  ● Ship Fleck"
     let first = try codec.encode(
       .init(noteID: noteID, revision: 2, line: 1, checklistLine: line)
     )
@@ -50,7 +50,7 @@ struct AgentTaskHandleCodecTests {
       .init(noteID: noteID, revision: 2, line: 2, checklistLine: line)
     )
     let changedIndent = try codec.encode(
-      .init(noteID: noteID, revision: 2, line: 1, checklistLine: " ● Ship Motes")
+      .init(noteID: noteID, revision: 2, line: 1, checklistLine: " ● Ship Fleck")
     )
 
     #expect(first != second)
