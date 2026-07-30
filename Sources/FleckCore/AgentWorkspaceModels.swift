@@ -342,6 +342,39 @@ public struct AgentWorkspaceError: Codable, Equatable, Error, Sendable {
   }
 }
 
+extension AgentWorkspaceError: LocalizedError {
+  public var errorDescription: String? {
+    switch code {
+    case .noteNotFound:
+      "The shared note could not be found."
+    case .permissionRevoked:
+      "This agent connection is no longer authorized."
+    case .revisionConflict:
+      "The note changed before the agent update could be saved."
+    case .taskHandleExpired:
+      "This task reference is out of date."
+    case .unsafeUndo:
+      "Fleck cannot safely undo this agent change."
+    case .fleckUnavailable:
+      "Fleck's agent workspace is not available."
+    case .writeTooLarge:
+      "The agent update is too large."
+    case .responseTooLarge:
+      "The agent response is too large."
+    case .invalidOperation:
+      "The agent request is not supported."
+    case .invalidPayload:
+      "The agent request is invalid."
+    case .internalSaveFailure:
+      "Fleck could not update its local agent data."
+    }
+  }
+
+  public var recoverySuggestion: String? {
+    recoveryAction
+  }
+}
+
 public struct AgentWorkspaceCommitProof: Codable, Equatable, Sendable {
   public let changeID: UUID
   public let noteID: UUID

@@ -1,12 +1,36 @@
 import CryptoKit
-import Foundation
 import FleckCore
+import Foundation
 import Testing
 
 @testable import FleckApp
 
 @Suite("AgentBridgeInstaller")
 struct AgentBridgeInstallerTests {
+  @Test func missingBundledHelperExplainsPackagedAppWorkflow() {
+    let error = AgentBridgeInstallerError.bundledHelperMissing
+
+    #expect(error.localizedDescription.contains("packaged Fleck app"))
+    #expect(
+      error.recoverySuggestion?.contains("Scripts/build-fleck-app.sh")
+        == true
+    )
+    #expect(
+      error.recoverySuggestion?.contains(
+        "/usr/bin/open -n .build/Fleck.app"
+      ) == true
+    )
+    for forbidden in [
+      "FleckApp.",
+      "FleckCore.",
+      "MenuBarNotes",
+      "error 1",
+      "/Users/",
+    ] {
+      #expect(!error.localizedDescription.contains(forbidden))
+    }
+  }
+
   @Test func installWritesVerifiedFleckHelperAndMotesCompatibilityLauncher() throws {
     let fileSystem = FakeInstallerFileSystem()
     let bundle = URL(fileURLWithPath: "/Fleck.app/Contents/SharedSupport/fleck-agent")

@@ -1,11 +1,87 @@
-import Foundation
 import FleckCore
+import Foundation
 import Testing
 
 @testable import FleckApp
 
 @Suite("AgentPresentation")
 struct AgentPresentationTests {
+  @Test func agentConnectorExplainsScopeAndGatesIntegrationSetup() {
+    #expect(AgentConnectorPresentation.sectionTitle == "Agent Connector")
+    #expect(
+      AgentConnectorPresentation.installTitle == "Install Agent Connector"
+    )
+    #expect(AgentConnectorPresentation.explanation.contains("local helper"))
+    #expect(AgentConnectorPresentation.explanation.contains("explicitly shared"))
+    #expect(AgentConnectorPresentation.explanation.contains("no network listener"))
+    #expect(
+      !AgentConnectorPresentation.canAddIntegration(
+        workspaceAvailable: true,
+        connectorInstalled: false
+      )
+    )
+    #expect(
+      !AgentConnectorPresentation.canAddIntegration(
+        workspaceAvailable: false,
+        connectorInstalled: true
+      )
+    )
+    #expect(
+      AgentConnectorPresentation.canAddIntegration(
+        workspaceAvailable: true,
+        connectorInstalled: true
+      )
+    )
+  }
+
+  @Test func agentConnectorInstallStatusIsCachedAndRefreshedAsynchronously() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let sourceRoot = testFile.deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp")
+    let appState = try String(
+      contentsOf: sourceRoot.appendingPathComponent("AppState.swift"),
+      encoding: .utf8
+    )
+    let settings = try String(
+      contentsOf: sourceRoot.appendingPathComponent("AgentSettingsView.swift"),
+      encoding: .utf8
+    )
+
+    #expect(
+      appState.contains(
+        "@Published private(set) var isAgentConnectorInstalled = false"
+      )
+    )
+    #expect(!appState.contains("var isAgentConnectorInstalled: Bool {"))
+    #expect(appState.contains("Task.detached(priority: .utility)"))
+    #expect(settings.contains("await appState.refreshAgentConnectorStatus()"))
+    #expect(
+      appState.components(
+        separatedBy: "await refreshAgentConnectorStatus()"
+      ).count >= 4
+    )
+  }
+
+  @Test func agentWorkspaceErrorsAreShortAndActionable() {
+    let error = AgentWorkspaceError(code: .internalSaveFailure)
+
+    #expect(
+      error.localizedDescription
+        == "Fleck could not update its local agent data."
+    )
+    for forbidden in [
+      "FleckApp.",
+      "FleckCore.",
+      "MenuBarNotes",
+      "error 1",
+      "/Users/",
+    ] {
+      #expect(!error.localizedDescription.contains(forbidden))
+    }
+  }
+
   @Test func sharingStartsPrivateAndFirstEnableRequiresConfirmation() {
     let note = Note()
 

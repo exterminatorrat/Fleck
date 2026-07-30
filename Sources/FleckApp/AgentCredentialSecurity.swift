@@ -1,6 +1,6 @@
 import CryptoKit
-import Foundation
 import FleckCore
+import Foundation
 import Security
 
 protocol AgentSecretStoring: KeychainDataStoring {
@@ -122,7 +122,6 @@ final class AgentKeychainSecretStore: AgentSecretStoring, @unchecked Sendable {
       kSecClass: kSecClassGenericPassword,
       kSecAttrService: service,
       kSecAttrAccount: account,
-      kSecUseDataProtectionKeychain: true,
     ]
   }
 }

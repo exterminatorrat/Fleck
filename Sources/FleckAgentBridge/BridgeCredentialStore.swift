@@ -20,6 +20,17 @@
     static let service = "com.harryjin.fleck.agent-profile"
     static let legacyService = "com.harryjin.motes.agent-profile"
 
+    static func keychainQuery(
+      service: String,
+      account: String
+    ) -> [CFString: Any] {
+      [
+        kSecClass: kSecClassGenericPassword,
+        kSecAttrService: service,
+        kSecAttrAccount: account,
+      ]
+    }
+
     private let keychainStore: any BridgeKeychainDataStoring
 
     init(
@@ -94,7 +105,10 @@
     @unchecked Sendable
   {
     func read(service: String, account: String) throws -> Data? {
-      var query = keychainQuery(service: service, account: account)
+      var query = BridgeCredentialStore.keychainQuery(
+        service: service,
+        account: account
+      )
       query[kSecReturnData] = true
       query[kSecMatchLimit] = kSecMatchLimitOne
       var result: CFTypeRef?
@@ -109,7 +123,10 @@
     }
 
     func write(_ data: Data, service: String, account: String) throws {
-      let query = keychainQuery(service: service, account: account)
+      let query = BridgeCredentialStore.keychainQuery(
+        service: service,
+        account: account
+      )
       let updateStatus = SecItemUpdate(
         query as CFDictionary,
         [kSecValueData: data] as CFDictionary
@@ -128,23 +145,14 @@
 
     func delete(service: String, account: String) throws {
       let status = SecItemDelete(
-        keychainQuery(service: service, account: account) as CFDictionary
+        BridgeCredentialStore.keychainQuery(
+          service: service,
+          account: account
+        ) as CFDictionary
       )
       guard status == errSecSuccess || status == errSecItemNotFound else {
         throw BridgeCredentialStoreError.keychainFailure
       }
-    }
-
-    private func keychainQuery(
-      service: String,
-      account: String
-    ) -> [CFString: Any] {
-      [
-        kSecClass: kSecClassGenericPassword,
-        kSecAttrService: service,
-        kSecAttrAccount: account,
-        kSecUseDataProtectionKeychain: true,
-      ]
     }
   }
 #endif

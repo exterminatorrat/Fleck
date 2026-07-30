@@ -34,12 +34,16 @@ Fleck may ignore a recreated legacy workspace only when all of these are true:
 - Fleck has a valid migration receipt matching the canonical and legacy paths.
 - The legacy snapshot contains exactly one default, unpinned, private,
   uncolored `Untitled` note with an empty body and no rich text.
-- The legacy root contains no Trash, history, recovery, model, agent, or
-  unknown data.
+- The note's Markdown file is zero bytes, and the manifest selection and note
+  order point only to that note.
+- The legacy root contains no Trash, history, recovery, model, agent data, or
+  unknown data. Fleck may tolerate only the exact empty generated directories
+  `AgentActivity/{Prepared,Records,Tombstones}` and `AgentBridge`; any file
+  inside them fails closed.
 
 Fleck leaves that legacy folder untouched. Any meaningful legacy content,
-unknown file, missing receipt, malformed snapshot, or symlink continues to
-fail closed and preserve both roots.
+unknown file, missing receipt, malformed manifest or preferences, or symlink
+continues to fail closed and preserve both roots.
 
 ### Agent Connector
 
@@ -92,4 +96,3 @@ Scripts/build-fleck-app.sh
 - Manual verification launches the packaged app, installs the connector,
   creates a temporary Codex profile, and confirms the generated setup command
   contains no credential.
-
