@@ -15,9 +15,9 @@ This document distinguishes implemented behavior from work that still requires n
 - Launch-at-login integration through `SMAppService` when running as a packaged macOS application.
 - Explicit per-note Agent Access with first-share confirmation, shared badges,
   immediate unshare, per-client profiles, revocation, and visible activity.
-- A separately packaged `fleck-agent` bridge with direct JSON CLI and twelve-tool
-  MCP interfaces for shared-note reads, bounded text/task mutations, activity,
-  and safe Undo.
+- A separately packaged `fleck-agent` **Agent Connector** with direct JSON CLI
+  and twelve-tool MCP interfaces for shared-note reads, bounded text/task
+  mutations, activity, and safe Undo.
 - Same-user Unix-domain IPC, Keychain-backed credentials, optimistic revisions,
   caller-owned retry IDs, durable transaction reconciliation, and 30-day
   activity/idempotency retention.
@@ -58,7 +58,7 @@ physical-device or interactive behavior still requires recorded manual evidence:
 - Add malformed RTF-sidecar UI reporting and optional recovery-history browsing.
 - Add application icon assets, signing configuration, packaging, and release automation.
 - Capture native macOS screenshots after visual review.
-- Add an in-app command-bridge removal control; manual removal of the two
+- Add an in-app Agent Connector removal control; manual removal of the two
   receipt-owned helper files is documented in `README.md`.
 
 These items must remain visible in the pull request and cannot be declared

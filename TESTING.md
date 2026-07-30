@@ -26,14 +26,18 @@ From the repository root:
 xcode-select -p
 swift --version
 Scripts/validate-macos.sh
-swift run Fleck
+Scripts/build-fleck-app.sh
+/usr/bin/open -n .build/Fleck.app
 ```
 
-The final command stays attached to Terminal. Look for the note icon in the macOS menu bar, click it to open the notes panel, and press `Control-C` in Terminal when you want to stop the app.
+Look for the note icon in the macOS menu bar, then click it to open the notes
+panel. Quit Fleck from the menu-bar icon's context menu when testing is done.
+The packaged app is required for the embedded Agent Connector and for stable
+macOS privacy permissions.
 
 `Scripts/validate-macos.sh` verifies the host OS, runs the complete test suite, creates a release build, checks the release executable against the 15 MB budget, and prints the exact executable path. It does not launch or terminate the app because visual testing should remain under the tester's control.
 
-## Run from Xcode
+## Test from Xcode
 
 1. Open the package:
 
@@ -44,14 +48,12 @@ The final command stays attached to Terminal. Look for the note icon in the macO
 2. Wait for Xcode to finish resolving the package.
 3. Select the **Fleck** scheme and **My Mac** destination.
 4. Choose **Product → Test** (`Command-U`).
-5. Choose **Product → Run** (`Command-R`).
-6. Click the note icon in the macOS menu bar.
-7. Use Xcode's Stop button when testing is finished.
 
-The source project is a Swift Package. `Scripts/build-fleck-app.sh` assembles an
+For interactive UI and Agent Connector testing, use the packaged Terminal flow
+above. Xcode's Swift package runner is not a supported interactive launch. The
+source project is a Swift Package. `Scripts/build-fleck-app.sh` assembles an
 unsigned native `.app`, but no signed distributable exists. Launch-at-login must
-be validated later from the packaged and signed application; it may report an
-error when launched directly through SwiftPM or Xcode's package runner.
+be validated later from the packaged and signed application.
 
 ## Agent workspace release gates
 
@@ -99,10 +101,11 @@ distribution.
 - **Status:** PENDING — no Codex, Claude Code, Kimi, generic CLI, live Keychain,
   physical-device accessibility, or distribution result is claimed by the
   automated run.
-- **Required setup:** Build with `Scripts/build-fleck-app.sh`; launch
-  `.build/Fleck.app/Contents/MacOS/Fleck`; create one temporary shared note and
-  four separate temporary profiles in **Settings → Agents**. Record the commit,
-  macOS/Xcode/Swift versions, client versions, profile names, and timestamps.
+- **Required setup:** Build with `Scripts/build-fleck-app.sh`; launch with
+  `/usr/bin/open -n .build/Fleck.app`; install the **Agent Connector**; create
+  one temporary shared note and four separate temporary profiles in
+  **Settings → Agents**. Record the commit, macOS/Xcode/Swift versions, client
+  versions, profile names, and timestamps.
 - **Codex:** Connect the Codex profile with:
 
   ```sh
@@ -584,11 +587,11 @@ Do not remove that directory while the app is running.
 
 ## Resource checks
 
-Build and run the release executable first:
+Build and open the packaged app first:
 
 ```sh
-swift build -c release
-.build/release/Fleck
+Scripts/build-fleck-app.sh
+/usr/bin/open -n .build/Fleck.app
 ```
 
 In a second Terminal window, measure resident memory:

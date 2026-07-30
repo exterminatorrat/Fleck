@@ -1,11 +1,30 @@
-import Foundation
 import FleckCore
+import Foundation
+import Security
 import Testing
 
 @testable import FleckApp
 
 @Suite(.serialized)
 struct AgentProfileStoreTests {
+  @Test func unsignedDevelopmentKeychainQueryUsesLoginKeychain() {
+    let query = AgentKeychainSecretStore.baseQuery(
+      service: "service",
+      account: "account"
+    )
+
+    #expect(
+      query[kSecClass] as? String == kSecClassGenericPassword as String
+    )
+    #expect(query[kSecAttrService] as? String == "service")
+    #expect(query[kSecAttrAccount] as? String == "account")
+    #expect(query[kSecUseDataProtectionKeychain] == nil)
+    #expect(
+      query[kSecAttrAccessible] == nil,
+      "Accessibility belongs on additions, not lookup/update queries."
+    )
+  }
+
   @Test func createTrimsNameReturnsCredentialOnceAndPersistsMetadataOnly() async throws {
     let fixture = try ProfileFixture(
       randomBytes: Data(repeating: 0xA5, count: 32)
@@ -118,6 +137,7 @@ struct AgentProfileStoreTests {
       )
     }
     let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
     #expect(try encoder.encode(wrongError) == encoder.encode(unknownError))
     #expect(try encoder.encode(wrongError) == encoder.encode(revokedError))
     #expect(

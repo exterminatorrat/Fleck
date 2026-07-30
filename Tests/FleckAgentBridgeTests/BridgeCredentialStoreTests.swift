@@ -1,8 +1,27 @@
-import Foundation
 import FleckCore
+import Foundation
+import Security
 import Testing
 
 @testable import FleckAgentBridge
+
+@Test func bridgeUnsignedDevelopmentKeychainQueryUsesLoginKeychain() {
+  let query = BridgeCredentialStore.keychainQuery(
+    service: "service",
+    account: "account"
+  )
+
+  #expect(
+    query[kSecClass] as? String == kSecClassGenericPassword as String
+  )
+  #expect(query[kSecAttrService] as? String == "service")
+  #expect(query[kSecAttrAccount] as? String == "account")
+  #expect(query[kSecUseDataProtectionKeychain] == nil)
+  #expect(
+    query[kSecAttrAccessible] == nil,
+    "Accessibility belongs on additions, not lookup/update queries."
+  )
+}
 
 @Test func bridgeCredentialLoadsLegacyProfileAndThenUsesFleckService() throws {
   let store = BridgeMemoryKeychainStore()

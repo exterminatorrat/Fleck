@@ -49,7 +49,7 @@ Access** in the note menu and accept the first-share confirmation. Turning the
 toggle off immediately removes that note and its activity from integration
 results.
 
-In **Settings → Agents**, choose **Install Command Bridge**, add a separate
+In **Settings → Agents**, choose **Install Agent Connector**, add a separate
 profile for each client, and copy its profile UUID. The verified helper is
 installed at:
 
@@ -106,12 +106,12 @@ tombstones and visible activity expire after 30 days. Undo is offered only
 while the integration/profile scope, revision, note visibility, and exact text
 patch still make reversal safe.
 
-The bridge uses a private Unix-domain socket and Keychain credentials. It has no
-cloud service, HTTP listener, or internet-facing port. This protects private
-notes from cooperative integrations, not from malicious software already
-running as the same macOS user. Integrations cannot reach unshared notes, Trash,
-Dictation History, settings, sharing controls, note deletion, a shell, arbitrary
-paths, or direct note files.
+The Agent Connector uses a private Unix-domain socket and Keychain credentials.
+It has no cloud service, HTTP listener, or internet-facing port. This protects
+private notes from cooperative integrations, not from malicious software
+already running as the same macOS user. Integrations cannot reach unshared
+notes, Trash, Dictation History, settings, sharing controls, note deletion, a
+shell, arbitrary paths, or direct note files.
 
 Revoke each profile in **Settings → Agents** before removing a client
 configuration; revocation takes effect in Fleck even if helper-Keychain cleanup

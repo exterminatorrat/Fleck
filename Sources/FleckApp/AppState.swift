@@ -50,6 +50,7 @@
     @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
     @Published private(set) var agentActivity: [AgentActivityRecord] = []
     @Published private(set) var agentBannerPresentation: AgentBannerPresentation?
+    @Published private(set) var isAgentConnectorInstalled = false
     @Published var agentCleanupError: String?
     private(set) var persistenceGeneration: UInt64 = 0
     private(set) var hasFinishedInitialLoad = false
@@ -68,6 +69,7 @@
     private var awaitedSaveWaiters: [CheckedContinuation<Void, Never>] = []
     private var initialLoadWaiters: [CheckedContinuation<Void, Never>] = []
     private var saveStatusResetTask: Task<Void, Never>?
+    private var agentConnectorStatusGeneration: UInt64 = 0
     private var pendingTrashNotes: [UUID: Note] = [:] {
       didSet {
         if pendingTrashNotes != oldValue {
@@ -669,16 +671,27 @@
       refreshAgentActivity()
     }
 
-    var isAgentBridgeInstalled: Bool {
-      (try? AgentBridgeInstaller.live().verifiedInstalledHelperURL()) != nil
+    func refreshAgentConnectorStatus() async {
+      agentConnectorStatusGeneration &+= 1
+      let generation = agentConnectorStatusGeneration
+      let installed = await Task.detached(priority: .utility) {
+        (try? AgentBridgeInstaller.live().verifiedInstalledHelperURL()) != nil
+      }.value
+      guard generation == agentConnectorStatusGeneration else { return }
+      isAgentConnectorInstalled = installed
     }
 
     func installAgentBridge() async {
+      agentConnectorStatusGeneration &+= 1
       do {
         _ = try await AgentBridgeInstaller.live().installAsync()
+        agentConnectorStatusGeneration &+= 1
+        isAgentConnectorInstalled = true
         agentCleanupError = nil
       } catch {
-        agentCleanupError = "Could not install the command bridge: \(error.localizedDescription)"
+        await refreshAgentConnectorStatus()
+        agentCleanupError =
+          "Could not install the Agent Connector: \(error.localizedDescription)"
       }
     }
 
@@ -697,6 +710,7 @@
         await refreshAgentProfiles()
         agentCleanupError = nil
       } catch {
+        await refreshAgentConnectorStatus()
         agentCleanupError = "Could not add \(name): \(error.localizedDescription)"
       }
     }
@@ -717,6 +731,7 @@
           agentCleanupError = nil
         }
       } catch {
+        await refreshAgentConnectorStatus()
         agentCleanupError =
           "\(profile.displayName) is revoked, but its helper credential could not be removed."
       }

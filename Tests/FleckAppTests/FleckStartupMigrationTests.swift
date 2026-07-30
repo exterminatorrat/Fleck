@@ -1,5 +1,5 @@
-import Foundation
 import FleckCore
+import Foundation
 import Testing
 
 @testable import FleckApp
@@ -49,6 +49,71 @@ func startupMigrationCompletesBeforeAnyStoreOrSocketUsesFleckRoot() async throws
   #expect(state.selectedNote?.id == note.id)
   #expect(state.isAgentWorkspaceAvailable)
   #expect(!state.isPersistenceBlocked)
+}
+
+@Test @MainActor
+func receiptBackedRecreatedEmptyLegacyWorkspaceLoadsCanonicalFleckData()
+  async throws
+{
+  let parent = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "FleckStartupMigrationTests-\(UUID())",
+    isDirectory: true
+  )
+  defer { try? FileManager.default.removeItem(at: parent) }
+  let legacy = parent.appendingPathComponent(
+    FleckProductPaths.legacyDirectoryName,
+    isDirectory: true
+  )
+  let canonical = parent.appendingPathComponent(
+    FleckProductPaths.canonicalDirectoryName,
+    isDirectory: true
+  )
+  let canonicalNote = Note(title: "Canonical", body: "Keep this")
+  _ = try LocalStoreSnapshotWriter(rootURL: canonical).save(
+    workspace: Workspace(
+      notes: [canonicalNote],
+      selectedNoteID: canonicalNote.id
+    ),
+    preferences: .init(),
+    generation: 4
+  )
+  let receipt = FleckMigrationReceipt(
+    schemaVersion: 1,
+    migratedAt: Date(timeIntervalSince1970: 1_800_000_000),
+    legacyPath: legacy.path,
+    canonicalPath: canonical.path
+  )
+  let encoder = JSONEncoder()
+  encoder.dateEncodingStrategy = .iso8601
+  try encoder.encode(receipt).write(
+    to: canonical.appendingPathComponent(
+      FleckProductPaths.migrationReceiptName
+    )
+  )
+  let empty = Note()
+  _ = try LocalStoreSnapshotWriter(rootURL: legacy).save(
+    workspace: Workspace(notes: [empty], selectedNoteID: empty.id),
+    preferences: .init(),
+    generation: 1
+  )
+
+  let startup = FleckStartupContext(
+    outcome: FleckProductMigration(
+      applicationSupportParent: parent
+    ).prepare()
+  )
+  let state = AppState(
+    store: LocalStore(rootURL: startup.applicationSupportURL),
+    startupMigrationError: startup.migrationError
+  )
+  await state.waitUntilInitialLoad()
+
+  #expect(startup.migrationError == nil)
+  #expect(state.isAgentWorkspaceAvailable)
+  #expect(!state.isPersistenceBlocked)
+  #expect(state.selectedNote?.id == canonicalNote.id)
+  #expect(FileManager.default.fileExists(atPath: legacy.path))
+  #expect(FileManager.default.fileExists(atPath: canonical.path))
 }
 
 @Test @MainActor

@@ -30,3 +30,52 @@ import Testing
   #expect(appSource.contains(#"MenuBarExtra("Fleck""#))
   #expect(appSource.contains(#"Window("Fleck""#))
 }
+
+@Test func agentConnectorDocumentationUsesPackagedLaunch() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let documentationNames = [
+    "README.md",
+    "TESTING.md",
+    "IMPLEMENTATION_STATUS.md",
+  ]
+  let documentation = try documentationNames.map {
+    try String(
+      contentsOf: root.appendingPathComponent($0),
+      encoding: .utf8
+    )
+  }
+  let testing = try String(
+    contentsOf: root.appendingPathComponent("TESTING.md"),
+    encoding: .utf8
+  )
+  let sources = try sourceText(in: root.appendingPathComponent("Sources"))
+
+  #expect(documentation.allSatisfy { $0.contains("Agent Connector") })
+  #expect(testing.contains("Scripts/build-fleck-app.sh"))
+  #expect(testing.contains("/usr/bin/open -n .build/Fleck.app"))
+  #expect(!testing.contains("swift run Fleck"))
+  #expect(!testing.contains("Product → Run"))
+  #expect(
+    (documentation + [sources]).allSatisfy {
+      !$0.localizedCaseInsensitiveContains("command bridge")
+    }
+  )
+}
+
+private func sourceText(in root: URL) throws -> String {
+  guard
+    let enumerator = FileManager.default.enumerator(
+      at: root,
+      includingPropertiesForKeys: [.isRegularFileKey]
+    )
+  else { return "" }
+  var result = ""
+  for case let file as URL in enumerator
+  where file.pathExtension == "swift" {
+    result += try String(contentsOf: file, encoding: .utf8)
+  }
+  return result
+}

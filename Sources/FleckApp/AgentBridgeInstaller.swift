@@ -12,6 +12,32 @@
     case processTimedOut
   }
 
+  extension AgentBridgeInstallerError: LocalizedError {
+    var errorDescription: String? {
+      switch self {
+      case .bundledHelperMissing:
+        "The Agent Connector is available only in the packaged Fleck app."
+      case .destinationNotOwned:
+        "Fleck cannot replace an Agent Connector it did not install."
+      case .verificationFailed:
+        "Fleck could not verify the Agent Connector."
+      case .processFailed:
+        "The Agent Connector stopped unexpectedly."
+      case .processTimedOut:
+        "The Agent Connector did not respond in time."
+      }
+    }
+
+    var recoverySuggestion: String? {
+      guard self == .bundledHelperMissing else { return nil }
+      return """
+        Build and open the packaged app:
+        Scripts/build-fleck-app.sh
+        /usr/bin/open -n .build/Fleck.app
+        """
+    }
+  }
+
   struct AgentBridgeInstallationReceipt: Codable, Equatable {
     let destination: String
     let sha256: String

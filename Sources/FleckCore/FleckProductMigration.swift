@@ -41,6 +41,12 @@ public enum FleckProductMigrationOutcome: Equatable, Sendable {
 }
 
 public struct FleckProductMigration {
+  private struct DisposableLegacyManifest: Decodable {
+    let noteOrder: [UUID]
+    let selectedNoteID: UUID?
+    let agentCommitProofs: [AgentWorkspaceCommitProof]?
+  }
+
   private let applicationSupportParent: URL
   private let fileManager: FileManager
   private let now: @Sendable () -> Date
@@ -82,6 +88,12 @@ public struct FleckProductMigration {
       let canonicalIsDisposable =
         canonicalExists && containsOnlyEmptyGeneratedScaffolding(canonical)
       if legacyHasWorkspace && canonicalHasWorkspace && !canonicalIsDisposable {
+        if canIgnoreRecreatedLegacyWorkspace(
+          legacy: legacy,
+          canonical: canonical
+        ) {
+          return .alreadyMigrated(canonical)
+        }
         return .failed(
           canonical,
           .conflictingWorkspaces(
@@ -263,6 +275,172 @@ public struct FleckProductMigration {
         values?.isDirectory == true,
         values?.isSymbolicLink != true,
         allowedDirectories.contains(relativePath)
+      else { return false }
+    }
+    return true
+  }
+
+  private func canIgnoreRecreatedLegacyWorkspace(
+    legacy: URL,
+    canonical: URL
+  ) -> Bool {
+    guard
+      !isSymbolicLink(canonical),
+      hasMatchingMigrationReceipt(legacy: legacy, canonical: canonical),
+      containsOnlyDisposableLegacySnapshot(legacy)
+    else { return false }
+    return true
+  }
+
+  private func hasMatchingMigrationReceipt(
+    legacy: URL,
+    canonical: URL
+  ) -> Bool {
+    let receiptURL = canonical.appendingPathComponent(
+      FleckProductPaths.migrationReceiptName
+    )
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    guard
+      let data = try? Data(contentsOf: receiptURL),
+      let receipt = try? decoder.decode(FleckMigrationReceipt.self, from: data),
+      receipt.schemaVersion == 1
+    else { return false }
+    return URL(fileURLWithPath: receipt.legacyPath).standardizedFileURL.path
+      == legacy.standardizedFileURL.path
+      && URL(fileURLWithPath: receipt.canonicalPath).standardizedFileURL.path
+        == canonical.standardizedFileURL.path
+  }
+
+  private func containsOnlyDisposableLegacySnapshot(_ legacy: URL) -> Bool {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let manifestURL = legacy.appendingPathComponent("workspace.json")
+    let preferencesURL = legacy.appendingPathComponent("preferences.json")
+    guard
+      let manifestData = try? Data(contentsOf: manifestURL),
+      let manifest = try? decoder.decode(
+        DisposableLegacyManifest.self,
+        from: manifestData
+      ),
+      (try? decoder.decode(
+        AppPreferences.self,
+        from: Data(contentsOf: preferencesURL)
+      )) != nil
+    else { return false }
+
+    let writer = LocalStoreSnapshotWriter(
+      rootURL: legacy,
+      fileManager: fileManager,
+      now: now
+    )
+    guard
+      let snapshot = try? writer.loadSnapshot(),
+      snapshot.source == .root,
+      snapshot.workspace.notes.count == 1,
+      let note = snapshot.workspace.notes.first,
+      manifest.noteOrder == [note.id],
+      manifest.selectedNoteID == note.id,
+      (manifest.agentCommitProofs ?? []).isEmpty,
+      snapshot.workspace.selectedNoteID == note.id,
+      snapshot.commitProofs.isEmpty,
+      note.title == "Untitled",
+      note.body.isEmpty,
+      note.richTextRTF == nil,
+      note.tabColorHex == nil,
+      !note.isPinned,
+      !note.agentAccess,
+      note.revision == 0
+    else { return false }
+
+    let noteName = "\(note.id.uuidString.lowercased()).md"
+    guard
+      let noteData = try? Data(
+        contentsOf: legacy.appendingPathComponent(noteName)
+      ),
+      noteData.isEmpty
+    else { return false }
+
+    let allowedFiles: Set<String> = [
+      "workspace.json",
+      "preferences.json",
+      noteName,
+    ]
+    let allowedDirectories: Set<String> = [
+      "AgentActivity",
+      "AgentActivity/Prepared",
+      "AgentActivity/Records",
+      "AgentActivity/Tombstones",
+      "AgentBridge",
+    ]
+    let rootComponents = legacy.standardizedFileURL.pathComponents
+    var enumerationFailed = false
+    guard
+      let enumerator = fileManager.enumerator(
+        at: legacy,
+        includingPropertiesForKeys: [
+          .isDirectoryKey,
+          .isRegularFileKey,
+          .isSymbolicLinkKey,
+        ],
+        errorHandler: { _, _ in
+          enumerationFailed = true
+          return false
+        }
+      )
+    else { return false }
+
+    var foundFiles = Set<String>()
+    for case let item as URL in enumerator {
+      guard
+        let values = try? item.resourceValues(
+          forKeys: [
+            .isDirectoryKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+          ]
+        )
+      else { return false }
+      let relativePath = item.standardizedFileURL.pathComponents
+        .dropFirst(rootComponents.count)
+        .joined(separator: "/")
+      guard values.isSymbolicLink != true else { return false }
+      if values.isDirectory == true {
+        guard allowedDirectories.contains(relativePath) else { return false }
+        continue
+      }
+      guard
+        values.isRegularFile == true,
+        allowedFiles.contains(relativePath)
+      else { return false }
+      foundFiles.insert(relativePath)
+    }
+    guard !enumerationFailed, foundFiles == allowedFiles else { return false }
+
+    let allowedDirectoryChildren: [String: Set<String>] = [
+      "AgentActivity": ["Prepared", "Records", "Tombstones"],
+      "AgentActivity/Prepared": [],
+      "AgentActivity/Records": [],
+      "AgentActivity/Tombstones": [],
+      "AgentBridge": [],
+    ]
+    for (relativePath, allowedChildren) in allowedDirectoryChildren {
+      let directory = legacy.appendingPathComponent(
+        relativePath,
+        isDirectory: true
+      )
+      guard fileManager.fileExists(atPath: directory.path) else { continue }
+      guard
+        let values = try? directory.resourceValues(
+          forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+        ),
+        values.isDirectory == true,
+        values.isSymbolicLink != true,
+        let children = try? fileManager.contentsOfDirectory(
+          at: directory,
+          includingPropertiesForKeys: nil
+        ),
+        Set(children.map(\.lastPathComponent)).isSubset(of: allowedChildren)
       else { return false }
     }
     return true

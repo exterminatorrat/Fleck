@@ -8,23 +8,43 @@
     }
   }
 
+  enum AgentConnectorPresentation {
+    static let sectionTitle = "Agent Connector"
+    static let installTitle = "Install Agent Connector"
+    static let explanation =
+      "A local helper lets authorized tools use only explicitly shared notes. It opens no network listener."
+
+    static func canAddIntegration(
+      workspaceAvailable: Bool,
+      connectorInstalled: Bool
+    ) -> Bool {
+      workspaceAvailable && connectorInstalled
+    }
+  }
+
   struct AgentSettingsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var showsClearConfirmation = false
     @State private var showsAgentActivity = false
 
     var body: some View {
-      Section("Command Bridge") {
+      Section(AgentConnectorPresentation.sectionTitle) {
         LabeledContent(
           "Status",
-          value: appState.isAgentBridgeInstalled ? "Installed" : "Not Installed"
+          value: appState.isAgentConnectorInstalled ? "Installed" : "Not Installed"
         )
-        Button("Install Command Bridge") {
+        Text(AgentConnectorPresentation.explanation)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Button(AgentConnectorPresentation.installTitle) {
           Task { await appState.installAgentBridge() }
         }
         if let error = appState.agentCleanupError {
           Text(error).font(.caption).foregroundStyle(.orange)
         }
+      }
+      .task {
+        await appState.refreshAgentConnectorStatus()
       }
 
       Section("Integrations") {
@@ -97,6 +117,12 @@
       Button(title) {
         Task { await appState.addAgentProfile(named: name) }
       }
+      .disabled(
+        !AgentConnectorPresentation.canAddIntegration(
+          workspaceAvailable: appState.isAgentWorkspaceAvailable,
+          connectorInstalled: appState.isAgentConnectorInstalled
+        )
+      )
     }
 
     private func lastConnection(_ profile: AgentIntegrationProfile) -> String {

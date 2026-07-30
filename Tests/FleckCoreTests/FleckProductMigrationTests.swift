@@ -172,6 +172,70 @@ import Testing
   #expect(FileManager.default.fileExists(atPath: canonical.path))
 }
 
+@Test func receiptBackedRecreatedEmptyLegacyWorkspaceUsesCanonicalRoot() throws {
+  let parent = migrationTestDirectory()
+  defer { try? FileManager.default.removeItem(at: parent) }
+  let legacy = legacyMigrationURL(in: parent)
+  let canonical = canonicalMigrationURL(in: parent)
+  try createLegacyMigrationFixture(at: canonical)
+  try writeMigrationReceipt(legacy: legacy, canonical: canonical)
+  try createEmptyLegacyMigrationFixture(at: legacy)
+  let expectedLegacy = try migrationFileContents(at: legacy)
+  let expectedCanonical = try migrationFileContents(at: canonical)
+
+  #expect(
+    FleckProductMigration(applicationSupportParent: parent).prepare()
+      == .alreadyMigrated(canonical)
+  )
+  #expect(try migrationFileContents(at: legacy) == expectedLegacy)
+  #expect(try migrationFileContents(at: canonical) == expectedCanonical)
+}
+
+@Test func unreadableGeneratedLegacyDirectoryFailsClosed() throws {
+  let parent = migrationTestDirectory()
+  defer { try? FileManager.default.removeItem(at: parent) }
+  let legacy = legacyMigrationURL(in: parent)
+  let canonical = canonicalMigrationURL(in: parent)
+  try createLegacyMigrationFixture(at: canonical)
+  try writeMigrationReceipt(legacy: legacy, canonical: canonical)
+  try createEmptyLegacyMigrationFixture(at: legacy)
+  let expectedLegacy = try migrationFileContents(at: legacy)
+  let expectedCanonical = try migrationFileContents(at: canonical)
+  let fileManager = DirectoryReadFailingFileManager(
+    blockedDirectory: legacy.appendingPathComponent(
+      "AgentBridge",
+      isDirectory: true
+    )
+  )
+
+  #expect(
+    FleckProductMigration(
+      applicationSupportParent: parent,
+      fileManager: fileManager
+    ).prepare()
+      == .failed(
+        canonical,
+        .conflictingWorkspaces(
+          legacyPath: legacy.path,
+          canonicalPath: canonical.path
+        )
+      )
+  )
+  #expect(try migrationFileContents(at: legacy) == expectedLegacy)
+  #expect(try migrationFileContents(at: canonical) == expectedCanonical)
+}
+
+@Test func recreatedEmptyLegacyWorkspaceWithoutReceiptFailsClosed() throws {
+  try expectRecreatedLegacyConflict(.missingReceipt)
+}
+
+@Test(arguments: InvalidRecreatedLegacyWorkspace.allCases)
+func recreatedLegacyWorkspaceFailsClosedWhenItIsNotExactlyDisposable(
+  _ invalid: InvalidRecreatedLegacyWorkspace
+) throws {
+  try expectRecreatedLegacyConflict(invalid)
+}
+
 @Test func symlinkedLegacyRootFailsClosed() throws {
   let parent = migrationTestDirectory()
   defer { try? FileManager.default.removeItem(at: parent) }
@@ -238,6 +302,183 @@ import Testing
   #expect(FileManager.default.fileExists(atPath: canonical.path))
 }
 
+enum InvalidRecreatedLegacyWorkspace: CaseIterable, Sendable {
+  case missingReceipt
+  case wrongReceiptLegacyPath
+  case wrongReceiptCanonicalPath
+  case wrongReceiptSchema
+  case nonemptyBody
+  case richText
+  case bomOnlyBody
+  case malformedPreferences
+  case malformedManifest
+  case wrongSelectedNote
+  case renamedNote
+  case pinnedNote
+  case coloredNote
+  case sharedNote
+  case revisedNote
+  case secondNote
+  case trashDirectory
+  case recoveryDirectory
+  case agentActivityFile
+  case agentBridgeFile
+  case unknownFile
+  case nestedDirectory
+  case nestedSymlink
+
+  static var allCases: [Self] {
+    [
+      .wrongReceiptLegacyPath,
+      .wrongReceiptCanonicalPath,
+      .wrongReceiptSchema,
+      .nonemptyBody,
+      .richText,
+      .bomOnlyBody,
+      .malformedPreferences,
+      .malformedManifest,
+      .wrongSelectedNote,
+      .renamedNote,
+      .pinnedNote,
+      .coloredNote,
+      .sharedNote,
+      .revisedNote,
+      .secondNote,
+      .trashDirectory,
+      .recoveryDirectory,
+      .agentActivityFile,
+      .agentBridgeFile,
+      .unknownFile,
+      .nestedDirectory,
+      .nestedSymlink,
+    ]
+  }
+}
+
+private func expectRecreatedLegacyConflict(
+  _ invalid: InvalidRecreatedLegacyWorkspace
+) throws {
+  let parent = migrationTestDirectory()
+  defer { try? FileManager.default.removeItem(at: parent) }
+  let legacy = legacyMigrationURL(in: parent)
+  let canonical = canonicalMigrationURL(in: parent)
+  try createLegacyMigrationFixture(at: canonical)
+  if invalid != .missingReceipt {
+    try writeMigrationReceipt(
+      legacy: legacy,
+      canonical: canonical,
+      schemaVersion: invalid == .wrongReceiptSchema ? 2 : 1,
+      legacyPath:
+        invalid == .wrongReceiptLegacyPath
+        ? parent.appendingPathComponent("WrongLegacy").path
+        : legacy.path,
+      canonicalPath:
+        invalid == .wrongReceiptCanonicalPath
+        ? parent.appendingPathComponent("WrongCanonical").path
+        : canonical.path
+    )
+  }
+
+  var note = Note()
+  switch invalid {
+  case .nonemptyBody:
+    note.body = "Meaningful"
+  case .richText:
+    note.richTextRTF = Data("{\\rtf1 Meaningful}".utf8)
+  case .renamedNote:
+    note.title = "Named"
+  case .pinnedNote:
+    note.isPinned = true
+  case .coloredNote:
+    note.tabColorHex = "#7257F5"
+  case .sharedNote:
+    note.agentAccess = true
+  case .revisedNote:
+    note.revision = 1
+  default:
+    break
+  }
+  let notes = invalid == .secondNote ? [note, Note()] : [note]
+  _ = try LocalStoreSnapshotWriter(rootURL: legacy).save(
+    workspace: Workspace(notes: notes, selectedNoteID: note.id),
+    preferences: .init(),
+    generation: 1
+  )
+  try createEmptyLegacyCompatibilityDirectories(at: legacy)
+
+  switch invalid {
+  case .bomOnlyBody:
+    try removeSnapshotIntegrity(at: legacy)
+    try Data([0xEF, 0xBB, 0xBF]).write(
+      to: legacy.appendingPathComponent(
+        "\(note.id.uuidString.lowercased()).md"
+      )
+    )
+  case .malformedPreferences:
+    try removeSnapshotIntegrity(at: legacy)
+    try Data("not-json".utf8).write(
+      to: legacy.appendingPathComponent("preferences.json")
+    )
+  case .malformedManifest:
+    try Data("not-json".utf8).write(
+      to: legacy.appendingPathComponent("workspace.json")
+    )
+  case .wrongSelectedNote:
+    try updateManifest(at: legacy) {
+      $0["selectedNoteID"] = UUID().uuidString
+    }
+  case .trashDirectory:
+    try FileManager.default.createDirectory(
+      at: legacy.appendingPathComponent("Trash"),
+      withIntermediateDirectories: false
+    )
+  case .recoveryDirectory:
+    try FileManager.default.createDirectory(
+      at: legacy.appendingPathComponent("Recovery"),
+      withIntermediateDirectories: false
+    )
+  case .agentActivityFile:
+    try Data("agent activity".utf8).write(
+      to: legacy.appendingPathComponent("AgentActivity/Records/change.json")
+    )
+  case .agentBridgeFile:
+    try Data("helper".utf8).write(
+      to: legacy.appendingPathComponent("AgentBridge/fleck")
+    )
+  case .unknownFile:
+    try Data("unknown".utf8).write(
+      to: legacy.appendingPathComponent(".unknown")
+    )
+  case .nestedDirectory:
+    try FileManager.default.createDirectory(
+      at: legacy.appendingPathComponent("Unknown/Nested"),
+      withIntermediateDirectories: true
+    )
+  case .nestedSymlink:
+    try FileManager.default.createSymbolicLink(
+      at: legacy.appendingPathComponent("linked"),
+      withDestinationURL: canonical
+    )
+  default:
+    break
+  }
+
+  let expectedLegacy = try migrationFileContents(at: legacy)
+  let expectedCanonical = try migrationFileContents(at: canonical)
+  #expect(
+    FleckProductMigration(applicationSupportParent: parent).prepare()
+      == .failed(
+        canonical,
+        .conflictingWorkspaces(
+          legacyPath: legacy.path,
+          canonicalPath: canonical.path
+        )
+      )
+  )
+  #expect(try migrationFileContents(at: legacy) == expectedLegacy)
+  #expect(try migrationFileContents(at: canonical) == expectedCanonical)
+}
+
 private final class RollbackFailingFileManager: FileManager, @unchecked Sendable {
   private let rollbackSource: URL
   private let rollbackDestination: URL
@@ -253,6 +494,33 @@ private final class RollbackFailingFileManager: FileManager, @unchecked Sendable
       throw CocoaError(.fileWriteUnknown)
     }
     try super.moveItem(at: srcURL, to: dstURL)
+  }
+}
+
+private final class DirectoryReadFailingFileManager:
+  FileManager,
+  @unchecked Sendable
+{
+  private let blockedDirectory: URL
+
+  init(blockedDirectory: URL) {
+    self.blockedDirectory = blockedDirectory.standardizedFileURL
+    super.init()
+  }
+
+  override func contentsOfDirectory(
+    at url: URL,
+    includingPropertiesForKeys keys: [URLResourceKey]?,
+    options mask: DirectoryEnumerationOptions = []
+  ) throws -> [URL] {
+    if url.standardizedFileURL == blockedDirectory {
+      throw CocoaError(.fileReadNoPermission)
+    }
+    return try super.contentsOfDirectory(
+      at: url,
+      includingPropertiesForKeys: keys,
+      options: mask
+    )
   }
 }
 
@@ -307,6 +575,81 @@ private func createLegacyMigrationFixture(at root: URL) throws {
   }
 }
 
+private func createEmptyLegacyMigrationFixture(at root: URL) throws {
+  let note = Note()
+  _ = try LocalStoreSnapshotWriter(rootURL: root).save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: .init(),
+    generation: 1
+  )
+  try createEmptyLegacyCompatibilityDirectories(at: root)
+}
+
+private func createEmptyLegacyCompatibilityDirectories(at root: URL) throws {
+  for relativePath in [
+    "AgentActivity/Prepared",
+    "AgentActivity/Records",
+    "AgentActivity/Tombstones",
+    "AgentBridge",
+  ] {
+    try FileManager.default.createDirectory(
+      at: root.appendingPathComponent(relativePath),
+      withIntermediateDirectories: true
+    )
+  }
+}
+
+private func writeMigrationReceipt(
+  legacy: URL,
+  canonical: URL,
+  schemaVersion: Int = 1,
+  legacyPath: String? = nil,
+  canonicalPath: String? = nil
+) throws {
+  let receipt = FleckMigrationReceipt(
+    schemaVersion: schemaVersion,
+    migratedAt: Date(timeIntervalSince1970: 1_800_000_000),
+    legacyPath: legacyPath ?? legacy.path,
+    canonicalPath: canonicalPath ?? canonical.path
+  )
+  let encoder = JSONEncoder()
+  encoder.dateEncodingStrategy = .iso8601
+  encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+  try encoder.encode(receipt).write(
+    to: canonical.appendingPathComponent(
+      FleckProductPaths.migrationReceiptName
+    ),
+    options: .atomic
+  )
+}
+
+private func removeSnapshotIntegrity(at root: URL) throws {
+  try updateManifest(at: root) { object in
+    for key in [
+      "snapshotIntegrityVersion",
+      "markdownSHA256",
+      "rtfSHA256",
+      "preferencesSHA256",
+    ] {
+      object.removeValue(forKey: key)
+    }
+  }
+}
+
+private func updateManifest(
+  at root: URL,
+  mutate: (inout [String: Any]) -> Void
+) throws {
+  let manifestURL = root.appendingPathComponent("workspace.json")
+  let data = try Data(contentsOf: manifestURL)
+  var object = try #require(
+    JSONSerialization.jsonObject(with: data) as? [String: Any]
+  )
+  mutate(&object)
+  try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    .write(to: manifestURL, options: .atomic)
+}
+
 private func migrationFileContents(at root: URL) throws -> [String: Data] {
   let keys: Set<URLResourceKey> = [.isRegularFileKey]
   let rootComponents = root.resolvingSymlinksInPath().pathComponents
@@ -329,8 +672,8 @@ private func migrationFileContents(at root: URL) throws -> [String: Data] {
   return contents
 }
 
-private extension JSONDecoder {
-  static var fleckMigration: JSONDecoder {
+extension JSONDecoder {
+  fileprivate static var fleckMigration: JSONDecoder {
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
     return decoder
