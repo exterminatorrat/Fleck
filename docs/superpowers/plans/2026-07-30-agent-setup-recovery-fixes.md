@@ -11,7 +11,10 @@
 ## Global Constraints
 
 - Ignore a legacy root only when the canonical Fleck workspace exists, a schema-v1 migration receipt matches both exact standardized paths, and the legacy root is a non-symlink default empty workspace.
-- The disposable legacy workspace contains exactly one `Untitled` note with empty body, no RTF, no color, no pin, no agent access, and revision zero.
+- The disposable legacy workspace contains exactly one `Untitled` note with
+  empty body, no RTF, no color, and no pin. Agent-access and revision
+  bookkeeping may differ because the receipt-backed canonical workspace is
+  authoritative and these fields carry no note content.
 - Only `workspace.json`, `preferences.json`, that note's zero-byte Markdown
   file, and the exact empty generated directories
   `AgentActivity/{Prepared,Records,Tombstones}` and `AgentBridge` are allowed

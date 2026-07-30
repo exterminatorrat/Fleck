@@ -348,9 +348,7 @@ public struct FleckProductMigration {
       note.body.isEmpty,
       note.richTextRTF == nil,
       note.tabColorHex == nil,
-      !note.isPinned,
-      !note.agentAccess,
-      note.revision == 0
+      !note.isPinned
     else { return false }
 
     let noteName = "\(note.id.uuidString.lowercased()).md"

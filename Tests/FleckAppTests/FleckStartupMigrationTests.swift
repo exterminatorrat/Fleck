@@ -90,12 +90,23 @@ func receiptBackedRecreatedEmptyLegacyWorkspaceLoadsCanonicalFleckData()
       FleckProductPaths.migrationReceiptName
     )
   )
-  let empty = Note()
+  let empty = Note(agentAccess: true, revision: 1)
   _ = try LocalStoreSnapshotWriter(rootURL: legacy).save(
     workspace: Workspace(notes: [empty], selectedNoteID: empty.id),
     preferences: .init(),
-    generation: 1
+    generation: 3
   )
+  for relativePath in [
+    "AgentActivity/Prepared",
+    "AgentActivity/Records",
+    "AgentActivity/Tombstones",
+    "AgentBridge",
+  ] {
+    try FileManager.default.createDirectory(
+      at: legacy.appendingPathComponent(relativePath),
+      withIntermediateDirectories: true
+    )
+  }
 
   let startup = FleckStartupContext(
     outcome: FleckProductMigration(
