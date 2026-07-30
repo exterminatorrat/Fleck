@@ -236,6 +236,8 @@
     private var shutdownTask: Task<Void, Never>?
     private var historyWindowController: NSWindowController?
     private var terminationObserver: ObserverToken?
+    private var activationObserver: ObserverToken?
+    private var didRequestModifierAccess = false
     #if CLEAN_DICTATION_ENHANCED_CANDIDATE
       private var captureEngine: DictationSpeechEngine?
       private var captureReachedListening = false
@@ -389,6 +391,17 @@
           }
         }
       )
+      activationObserver = ObserverToken(
+        NotificationCenter.default.addObserver(
+          forName: NSApplication.didBecomeActiveNotification,
+          object: nil,
+          queue: .main
+        ) { [weak self] _ in
+          Task { @MainActor [weak self] in
+            self?.applicationDidBecomeActive()
+          }
+        }
+      )
       let assessment = startupAssessment
       startupAssessmentTask = Task { @MainActor [weak self] in
         await assessment()
@@ -535,6 +548,10 @@
       shortcutController.requestAccess()
     }
 
+    func applicationDidBecomeActive() {
+      synchronizePreferences()
+    }
+
     func awaitStartupAssessment() async {
       await startupAssessmentTask?.value
       await initialLoadSynchronizationTask?.value
@@ -621,6 +638,10 @@
         NotificationCenter.default.removeObserver(terminationObserver.value)
         self.terminationObserver = nil
       }
+      if let activationObserver {
+        NotificationCenter.default.removeObserver(activationObserver.value)
+        self.activationObserver = nil
+      }
       let coordinator = coordinator
       let shortcutController = shortcutController
       let task = Task { @MainActor [weak self] in
@@ -664,13 +685,19 @@
       if
         applyModifier,
         needsModifierApplication,
-        shortcutController.canChangeModifier,
-        shortcutController.preflightAccess()
+        shortcutController.canChangeModifier
       {
-        do {
-          try shortcutController.configure(currentDesiredModifier)
-          needsModifierApplication = false
-        } catch {
+        var hasAccess = shortcutController.preflightAccess()
+        if !hasAccess, !didRequestModifierAccess {
+          didRequestModifierAccess = true
+          hasAccess = shortcutController.requestAccess()
+        }
+        if hasAccess {
+          do {
+            try shortcutController.configure(currentDesiredModifier)
+            needsModifierApplication = false
+          } catch {
+          }
         }
       }
 
@@ -1175,6 +1202,9 @@
       terminalSynchronizationTask?.cancel()
       if let terminationObserver {
         NotificationCenter.default.removeObserver(terminationObserver.value)
+      }
+      if let activationObserver {
+        NotificationCenter.default.removeObserver(activationObserver.value)
       }
       guard shutdownCount == 0 else { return }
       let coordinator = coordinator

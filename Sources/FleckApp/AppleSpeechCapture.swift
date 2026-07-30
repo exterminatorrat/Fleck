@@ -723,7 +723,7 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
   private var resultsTask: Task<Void, Never>?
   private var provisional: (@MainActor (String) -> Void)?
   private var level: (@MainActor (Float) -> Void)?
-  private var finalSegments: [String] = []
+  private var transcript = AppleSpeechTranscriptAssembler()
   private var terminalError: Error?
   private var tapInstalled = false
   private var didFinalize = false
@@ -780,7 +780,7 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     self.ingress = ingress
     self.provisional = provisional
     self.level = level
-    finalSegments = []
+    transcript = AppleSpeechTranscriptAssembler()
     terminalError = nil
     didFinalize = false
     didCancelAnalyzer = false
@@ -799,9 +799,10 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
           guard let self else { return }
           let text = String(result.text.characters)
           if result.isFinal {
-            self.finalSegments.append(text)
+            self.transcript.appendFinal(text)
+            self.provisional?(self.transcript.displayText())
           } else {
-            self.provisional?(text)
+            self.provisional?(self.transcript.displayText(provisional: text))
           }
         }
       } catch {
@@ -849,9 +850,7 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     }
     await resultsTask?.value
     if let terminalError { throw terminalError }
-    let text = finalSegments.joined(separator: " ")
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    return text.nilIfEmpty
+    return transcript.displayText().nilIfEmpty
   }
 
   func cancel() async {
@@ -883,7 +882,7 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     analyzer = nil
     provisional = nil
     level = nil
-    finalSegments = []
+    transcript = AppleSpeechTranscriptAssembler()
     terminalError = nil
   }
 
@@ -907,5 +906,39 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     guard !didCancelAnalyzer else { return }
     didCancelAnalyzer = true
     await analyzer?.cancelAndFinishNow()
+  }
+}
+
+struct AppleSpeechTranscriptAssembler {
+  private var finalizedWords: [String] = []
+
+  mutating func appendFinal(_ text: String) {
+    finalizedWords = Self.merge(finalizedWords, with: Self.words(in: text))
+  }
+
+  func displayText(provisional: String = "") -> String {
+    Self.merge(finalizedWords, with: Self.words(in: provisional))
+      .joined(separator: " ")
+  }
+
+  private static func words(in text: String) -> [String] {
+    text.split(whereSeparator: \.isWhitespace).map(String.init)
+  }
+
+  private static func merge(_ first: [String], with second: [String]) -> [String] {
+    guard !first.isEmpty else { return second }
+    guard !second.isEmpty else { return first }
+    let maximumOverlap = min(8, first.count, second.count)
+    if maximumOverlap >= 2 {
+      for count in stride(from: maximumOverlap, through: 2, by: -1) {
+        let suffix = first.suffix(count)
+        let prefix = second.prefix(count)
+        guard zip(suffix, prefix).allSatisfy({
+          $0.0.caseInsensitiveCompare($0.1) == .orderedSame
+        }) else { continue }
+        return first + second.dropFirst(count)
+      }
+    }
+    return first + second
   }
 }

@@ -477,6 +477,30 @@ private final class PermissionProbe {
   #expect(session.releaseCount == 1)
 }
 
+@Test func appleSpeechTranscriptAssemblerKeepsPauseSegmentsOnOneCleanLine() {
+  var assembler = AppleSpeechTranscriptAssembler()
+
+  assembler.appendFinal("Finishing on clarifying all the ")
+  #expect(
+    assembler.displayText(provisional: " all the stuff like ")
+      == "Finishing on clarifying all the stuff like"
+  )
+
+  assembler.appendFinal(" all the stuff like ")
+  #expect(
+    assembler.displayText(provisional: " trying to make cleanup better")
+      == "Finishing on clarifying all the stuff like trying to make cleanup better"
+  )
+}
+
+@Test func appleSpeechTranscriptAssemblerDoesNotCollapseSingleRepeatedWord() {
+  var assembler = AppleSpeechTranscriptAssembler()
+
+  assembler.appendFinal("This is very")
+
+  #expect(assembler.displayText(provisional: "very important") == "This is very very important")
+}
+
 @Test @MainActor func appleSpeechCaptureHandlesNoSpeechErrorAndCancellation() async throws {
   let noSpeechSession = AppleSpeechSessionProbe()
   noSpeechSession.finishResult = .success("   ")
