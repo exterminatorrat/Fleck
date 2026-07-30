@@ -32,8 +32,10 @@ Fleck may ignore a recreated legacy workspace only when all of these are true:
 
 - The canonical Fleck workspace is present.
 - Fleck has a valid migration receipt matching the canonical and legacy paths.
-- The legacy snapshot contains exactly one default, unpinned, private,
-  uncolored `Untitled` note with an empty body and no rich text.
+- The legacy snapshot contains exactly one unpinned, uncolored `Untitled` note
+  with an empty body and no rich text. Agent-access and revision bookkeeping
+  may differ because the obsolete app can update them after migration; they
+  carry no note content and Fleck remains authoritative.
 - The note's Markdown file is zero bytes, and the manifest selection and note
   order point only to that note.
 - The legacy root contains no Trash, history, recovery, model, agent data, or

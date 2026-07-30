@@ -191,6 +191,31 @@ import Testing
   #expect(try migrationFileContents(at: canonical) == expectedCanonical)
 }
 
+@Test func recreatedEmptyLegacyWorkspaceIgnoresAgentAccessBookkeeping() throws {
+  let parent = migrationTestDirectory()
+  defer { try? FileManager.default.removeItem(at: parent) }
+  let legacy = legacyMigrationURL(in: parent)
+  let canonical = canonicalMigrationURL(in: parent)
+  try createLegacyMigrationFixture(at: canonical)
+  try writeMigrationReceipt(legacy: legacy, canonical: canonical)
+  let note = Note(agentAccess: true, revision: 1)
+  _ = try LocalStoreSnapshotWriter(rootURL: legacy).save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: .init(),
+    generation: 3
+  )
+  try createEmptyLegacyCompatibilityDirectories(at: legacy)
+  let expectedLegacy = try migrationFileContents(at: legacy)
+  let expectedCanonical = try migrationFileContents(at: canonical)
+
+  #expect(
+    FleckProductMigration(applicationSupportParent: parent).prepare()
+      == .alreadyMigrated(canonical)
+  )
+  #expect(try migrationFileContents(at: legacy) == expectedLegacy)
+  #expect(try migrationFileContents(at: canonical) == expectedCanonical)
+}
+
 @Test func unreadableGeneratedLegacyDirectoryFailsClosed() throws {
   let parent = migrationTestDirectory()
   defer { try? FileManager.default.removeItem(at: parent) }
@@ -316,8 +341,6 @@ enum InvalidRecreatedLegacyWorkspace: CaseIterable, Sendable {
   case renamedNote
   case pinnedNote
   case coloredNote
-  case sharedNote
-  case revisedNote
   case secondNote
   case trashDirectory
   case recoveryDirectory
@@ -341,8 +364,6 @@ enum InvalidRecreatedLegacyWorkspace: CaseIterable, Sendable {
       .renamedNote,
       .pinnedNote,
       .coloredNote,
-      .sharedNote,
-      .revisedNote,
       .secondNote,
       .trashDirectory,
       .recoveryDirectory,
@@ -391,10 +412,6 @@ private func expectRecreatedLegacyConflict(
     note.isPinned = true
   case .coloredNote:
     note.tabColorHex = "#7257F5"
-  case .sharedNote:
-    note.agentAccess = true
-  case .revisedNote:
-    note.revision = 1
   default:
     break
   }
