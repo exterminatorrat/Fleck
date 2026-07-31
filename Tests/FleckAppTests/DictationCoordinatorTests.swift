@@ -16,6 +16,30 @@ import Testing
   await fixture.coordinator.cancel()
 }
 
+@Test @MainActor func coordinatorForwardsOnlyActiveCaptureLevels() async throws {
+  let fixture = try Fixture()
+  var levels: [Float] = []
+  fixture.coordinator.setLevelObserver { levels.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  fixture.standard.emitLevel(0.42)
+  await fixture.coordinator.cancel()
+  fixture.standard.emitLevel(0.9)
+
+  #expect(levels == [0.42, 0])
+}
+
+@Test @MainActor func failedStartResetsTheLevel() async throws {
+  let fixture = try Fixture()
+  fixture.standard.startError = TestError.failed
+  var levels: [Float] = []
+  fixture.coordinator.setLevelObserver { levels.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+
+  #expect(levels == [0])
+}
+
 @Test @MainActor func enhancedCaptureStaysBoundToItsSelectedEngine() async throws {
   let fixture = try Fixture(preferred: .enhancedLocal)
   fixture.enhanced.finalText = "Plan lunch"
@@ -1832,6 +1856,7 @@ private final class FakeSpeechEngine: SpeechEngine {
   var finishGate: Gate?
   var releaseGate: Gate?
   private var provisional: (@MainActor (String) -> Void)?
+  private var level: (@MainActor (Float) -> Void)?
   var startCount = 0
   var finishCount = 0
   var cancelCount = 0
@@ -1845,6 +1870,7 @@ private final class FakeSpeechEngine: SpeechEngine {
     if let startGate { await startGate.wait() }
     if let startError { throw startError }
     self.provisional = provisional
+    self.level = level
   }
 
   func finish() async throws -> String? {
@@ -1860,6 +1886,7 @@ private final class FakeSpeechEngine: SpeechEngine {
     if let releaseGate { await releaseGate.wait() }
   }
   func emitProvisional(_ text: String) { provisional?(text) }
+  func emitLevel(_ value: Float) { level?(value) }
 }
 
 @MainActor

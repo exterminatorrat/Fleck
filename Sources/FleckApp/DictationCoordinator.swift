@@ -85,6 +85,7 @@ final class DictationCoordinator {
   private var shortcutTerminalWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
   private var terminalWaiters: [CheckedContinuation<Void, Never>] = []
   private var eventObserver: (@MainActor (DictationCoordinatorEvent) -> Void)?
+  private var levelObserver: (@MainActor (Float) -> Void)?
 
   private(set) var phase: DictationPhase = .idle
   private(set) var copyableTranscript: String?
@@ -149,6 +150,12 @@ final class DictationCoordinator {
     _ observer: (@MainActor (DictationCoordinatorEvent) -> Void)?
   ) {
     eventObserver = observer
+  }
+
+  func setLevelObserver(
+    _ observer: (@MainActor (Float) -> Void)?
+  ) {
+    levelObserver = observer
   }
 
   @discardableResult
@@ -349,7 +356,10 @@ final class DictationCoordinator {
           guard let self, self.isActive(id), mode == .focused else { return }
           self.capture?.editor?.updateFocusedDictation(provisionalText: text)
         },
-        level: { _ in }
+        level: { [weak self] level in
+          guard let self, self.isActive(id) else { return }
+          self.levelObserver?(level)
+        }
       )
     } catch {
       guard finishStarting(id) != nil else { return }
@@ -737,6 +747,7 @@ final class DictationCoordinator {
     if let engine = current.engine { await release(engine) }
     guard self.capture?.id == id else { return }
     self.capture = nil
+    levelObserver?(0)
     completeShortcutSession(id)
     let resolvedOutcome = terminalOutcome ?? inferredTerminalOutcome(for: terminalPhase)
     publishTerminal(phase: terminalPhase, outcome: resolvedOutcome)
