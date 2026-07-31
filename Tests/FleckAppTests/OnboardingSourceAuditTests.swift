@@ -48,6 +48,16 @@ import Testing
   #expect(source.contains("sizing: .container"))
   #expect(notesPanelSource.contains("enum NotesPanelSizing"))
   #expect(notesPanelSource.contains("sizing: NotesPanelSizing = .storedPreferences"))
+  for required in [
+    "GeometryReader",
+    "OnboardingLayoutPresentation(",
+    "liveEditorCanvas(layout:",
+    "ViewThatFits(in: .vertical)",
+    ".layoutPriority(1)",
+  ] {
+    #expect(source.contains(required), Comment(rawValue: required))
+  }
+  #expect(source.components(separatedBy: "private func liveCanvas").count - 1 == 0)
 }
 
 private func onboardingSourceURL() -> URL {

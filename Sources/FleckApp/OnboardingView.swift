@@ -158,20 +158,39 @@
     @ObservedObject var dictationRuntime: DictationRuntime
 
     var body: some View {
-      HStack(spacing: 0) {
-        OnboardingRail(
-          presentation: .init(current: coordinator.visibleStep)
+      GeometryReader { geometry in
+        let layout = OnboardingLayoutPresentation(
+          width: geometry.size.width,
+          height: geometry.size.height
         )
-        Divider().opacity(0.45)
-        VStack(spacing: 0) {
-          stepContent
-            .id(coordinator.visibleStep)
-            .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .trailing)))
+
+        HStack(spacing: 0) {
+          OnboardingRail(
+            presentation: .init(current: coordinator.visibleStep),
+            layout: layout
+          )
           Divider().opacity(0.45)
-          OnboardingFooter(coordinator: coordinator)
+          VStack(spacing: 0) {
+            stepContent(layout: layout)
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+              .clipped()
+              .id(coordinator.visibleStep)
+              .transition(
+                reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .trailing))
+              )
+            Divider().opacity(0.45)
+            OnboardingFooter(coordinator: coordinator, layout: layout)
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
-      .frame(minWidth: 920, idealWidth: 1_080, minHeight: 620, idealHeight: 700)
+      .frame(
+        minWidth: OnboardingWindowPresenter.minimumSize.width,
+        idealWidth: OnboardingWindowPresenter.defaultSize.width,
+        minHeight: OnboardingWindowPresenter.minimumSize.height,
+        idealHeight: OnboardingWindowPresenter.defaultSize.height
+      )
       .background {
         if reduceTransparency {
           Color(nsColor: .windowBackgroundColor)
@@ -185,27 +204,29 @@
     }
 
     @ViewBuilder
-    private var stepContent: some View {
+    private func stepContent(layout: OnboardingLayoutPresentation) -> some View {
       switch coordinator.visibleStep {
       case .welcome:
-        welcome
+        welcome(layout: layout)
       case .firstNote:
-        liveCanvas(
-          title: "Write your first thought",
-          detail: "This is Fleck's actual note. Add anything below to continue."
-        )
+        firstNote(layout: layout)
       case .dictation:
-        dictation
+        dictation(layout: layout)
       case .permissions:
-        permissions
+        permissions(layout: layout)
       case .getFleck:
-        getFleck
+        getFleck(layout: layout)
       }
     }
 
-    private var welcome: some View {
+    private func welcome(layout: OnboardingLayoutPresentation) -> some View {
+      adaptiveStaticStep(layout: layout) {
+        welcomeContent
+      }
+    }
+
+    private var welcomeContent: some View {
       VStack(alignment: .leading, spacing: 24) {
-        Spacer()
         Image(systemName: "note.text")
           .font(.system(size: 36, weight: .medium))
           .foregroundStyle(.blue)
@@ -223,40 +244,47 @@
         }
         .font(.callout)
         .foregroundStyle(.secondary)
-        Spacer()
       }
-      .padding(48)
       .frame(maxWidth: 650, alignment: .leading)
     }
 
-    private func liveCanvas(title: String, detail: String) -> some View {
-      VStack(alignment: .leading, spacing: 18) {
+    private func firstNote(layout: OnboardingLayoutPresentation) -> some View {
+      VStack(alignment: .leading, spacing: layout.tier == .regular ? 18 : 14) {
         VStack(alignment: .leading, spacing: 6) {
-          Text(title)
+          Text("Write your first thought")
             .font(.title2.weight(.semibold))
             .accessibilityHeading(.h1)
-          Text(detail)
+          Text("This is Fleck's actual note. Add anything below to continue.")
             .foregroundStyle(.secondary)
         }
-        NotesPanel(
-          dictationRuntime: dictationRuntime,
-          isPinned: true,
-          sizing: .container
-        )
-          .environmentObject(appState)
-          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-              .stroke(.white.opacity(0.1))
-          }
-          .shadow(color: .black.opacity(0.28), radius: 22, y: 10)
+        liveEditorCanvas(layout: layout)
       }
-      .padding(32)
+      .padding(layout.contentPadding)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var dictation: some View {
-      VStack(alignment: .leading, spacing: 18) {
+    private func liveEditorCanvas(layout: OnboardingLayoutPresentation) -> some View {
+      NotesPanel(
+        dictationRuntime: dictationRuntime,
+        isPinned: true,
+        sizing: .container
+      )
+      .environmentObject(appState)
+      .frame(minHeight: layout.minimumEditorHeight, maxHeight: .infinity)
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(.white.opacity(0.1))
+      }
+      .shadow(color: .black.opacity(0.28), radius: 22, y: 10)
+      .layoutPriority(1)
+    }
+
+    private func dictation(layout: OnboardingLayoutPresentation) -> some View {
+      VStack(
+        alignment: .leading,
+        spacing: layout.tier == .regular ? 18 : 12
+      ) {
         Text("Dictate into the note you just made")
           .font(.title2.weight(.semibold))
           .accessibilityHeading(.h1)
@@ -271,20 +299,23 @@
           }
         }
         .frame(maxWidth: 320)
-        liveCanvas(
-          title: "Try it in Fleck",
-          detail:
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Try it in Fleck")
+            .font(.headline)
+          Text(
             "Click in the editor, then use \(coordinator.selectedModifier.displayName) "
-            + "or Fleck's microphone button."
-        )
-        .padding(0)
+              + "or Fleck's microphone button."
+          )
+          .foregroundStyle(.secondary)
+        }
+        liveEditorCanvas(layout: layout)
         if coordinator.dictationDemoSucceeded {
           Label("Dictation added to First Note", systemImage: "checkmark.circle.fill")
             .font(.callout.weight(.medium))
             .foregroundStyle(.green)
         }
       }
-      .padding(32)
+      .padding(layout.contentPadding)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .onAppear {
         coordinator.beginObservingDictationDemo()
@@ -295,22 +326,29 @@
     }
 
     @ViewBuilder
-    private var permissions: some View {
+    private func permissions(layout: OnboardingLayoutPresentation) -> some View {
       let presentation = OnboardingPermissionPresentation(
         cursor: coordinator.permissionCursor,
         modifier: coordinator.selectedModifier
       )
-      VStack(alignment: .leading, spacing: 24) {
-        Text(presentation.title)
-          .font(.title2.weight(.semibold))
-          .accessibilityHeading(.h1)
-        Text(presentation.body)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-        if coordinator.permissionCursor == .compatibility {
-          compatibility
-        } else {
-          Spacer()
+      VStack(spacing: 0) {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 24) {
+            Text(presentation.title)
+              .font(.title2.weight(.semibold))
+              .accessibilityHeading(.h1)
+            Text(presentation.body)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+            if coordinator.permissionCursor == .compatibility {
+              compatibility
+            }
+          }
+          .padding(layout.contentPadding)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        if coordinator.permissionCursor != .compatibility {
+          Divider().opacity(0.25)
           HStack {
             Button("Not Now") {
               Task { await coordinator.deferCurrentPermission() }
@@ -321,10 +359,11 @@
             }
             .buttonStyle(.borderedProminent)
           }
+          .padding(.horizontal, layout.contentPadding)
+          .frame(height: layout.footerHeight)
         }
       }
-      .padding(40)
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var compatibility: some View {
@@ -341,14 +380,17 @@
           ],
           id: \.title
         ) { row in
-          HStack {
+          HStack(alignment: .firstTextBaseline) {
             Label(
               row.title,
               systemImage: row.available ? "checkmark.circle.fill" : "info.circle"
             )
             .foregroundStyle(row.available ? Color.green : Color.secondary)
             Spacer()
-            Text(row.detail).foregroundStyle(.secondary)
+            Text(row.detail)
+              .foregroundStyle(.secondary)
+              .multilineTextAlignment(.trailing)
+              .fixedSize(horizontal: false, vertical: true)
           }
           .padding(12)
           .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
@@ -360,11 +402,16 @@
       }
     }
 
-    private var getFleck: some View {
+    private func getFleck(layout: OnboardingLayoutPresentation) -> some View {
+      adaptiveStaticStep(layout: layout) {
+        getFleckContent
+      }
+    }
+
+    private var getFleckContent: some View {
       let access = coordinator.accessActions.presentation
       let presentation = OnboardingGetFleckPresentation(access: access)
       return VStack(alignment: .leading, spacing: 24) {
-        Spacer()
         Image(systemName: "checkmark.seal")
           .font(.system(size: 34))
           .foregroundStyle(.blue)
@@ -392,10 +439,29 @@
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-        Spacer()
       }
-      .padding(48)
       .frame(maxWidth: 620, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func adaptiveStaticStep<Content: View>(
+      layout: OnboardingLayoutPresentation,
+      @ViewBuilder content: () -> Content
+    ) -> some View {
+      ViewThatFits(in: .vertical) {
+        VStack {
+          Spacer(minLength: 0)
+          content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+          Spacer(minLength: 0)
+        }
+        .padding(layout.contentPadding)
+        ScrollView {
+          content()
+            .padding(layout.contentPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
     }
 
     private func accessButton(
@@ -412,6 +478,7 @@
 
   private struct OnboardingRail: View {
     let presentation: OnboardingRailPresentation
+    let layout: OnboardingLayoutPresentation
 
     var body: some View {
       VStack(alignment: .leading, spacing: 0) {
@@ -456,8 +523,8 @@
           .font(.caption)
           .foregroundStyle(.secondary)
       }
-      .padding(28)
-      .frame(width: 240)
+      .padding(layout.tier == .regular ? 28 : 20)
+      .frame(width: layout.railWidth)
       .frame(maxHeight: .infinity, alignment: .topLeading)
       .background(.black.opacity(0.16))
     }
@@ -465,6 +532,7 @@
 
   private struct OnboardingFooter: View {
     @ObservedObject var coordinator: OnboardingCoordinator
+    let layout: OnboardingLayoutPresentation
 
     var body: some View {
       HStack {
@@ -490,8 +558,8 @@
           .disabled(!coordinator.canContinue || coordinator.isSaving)
         }
       }
-      .padding(.horizontal, 24)
-      .frame(height: 72)
+      .padding(.horizontal, layout.tier == .regular ? 24 : 20)
+      .frame(height: layout.footerHeight)
     }
   }
 #endif
