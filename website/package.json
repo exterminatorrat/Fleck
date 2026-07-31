@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node -e \"import('node:fs/promises').then(({ rm }) => rm('dist', { recursive: true, force: true }))\" && vite build --outDir dist/client && mkdir -p dist/server && cp worker/index.js dist/server/index.js",
+    "build": "vite build",
     "test": "node --test src/brainModel.test.js worker/index.test.js",
     "preview": "vite preview"
   },
@@ -15,6 +15,8 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "vite": "8.2.0"
+    "@cloudflare/vite-plugin": "1.37.1",
+    "vite": "8.2.0",
+    "wrangler": "4.92.0"
   }
 }
