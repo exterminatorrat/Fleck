@@ -110,11 +110,13 @@ final class OnboardingCoordinator: ObservableObject {
       case .persistAndRequire(let progress):
         try await persist(progress)
         apply(progress)
+        await accessActions.refresh()
         gateState = .required
       case .requireExisting:
         if let progress = appState.preferences.onboardingProgress {
           apply(progress)
         }
+        await accessActions.refresh()
         gateState = .required
       case .persistAndSkip(let progress):
         try await persist(progress)

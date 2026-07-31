@@ -27,6 +27,10 @@ This document distinguishes implemented behavior from work that still requires n
 - Tests for workspace behavior, preferences, shortcuts, persistence, recovery,
   sidecars, transfer formats, dictation, agent protocol/service/bridge/UI, and
   packaging.
+- Mandatory, resumable first-launch onboarding with the real Fleck note editor
+  and dictation runtime, individually optional permission steps, truthful
+  compatibility details, and an access-action boundary for trial, purchase,
+  and restore.
 - macOS GitHub Actions build/test coverage and scripts for native bundle
   assembly, launch smoke testing, release executable size, resident-memory
   budgets, and agent-boundary enforcement.
@@ -58,6 +62,10 @@ physical-device or interactive behavior still requires recorded manual evidence:
 - Add malformed RTF-sidecar UI reporting and optional recovery-history browsing.
 - Add application icon assets, signing configuration, packaging, and release automation.
 - Capture native macOS screenshots after visual review.
+- Replace `UnavailableFleckAccessActions` with the later StoreKit 2 access
+  subsystem, including the localized lifetime price, authoritative trial and
+  purchase state, restore, seven-day expiry, and read-only enforcement. Until
+  then, Get Fleck intentionally cannot mark onboarding complete.
 - Add an in-app Agent Connector removal control; manual removal of the two
   receipt-owned helper files is documented in `README.md`.
 

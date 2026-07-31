@@ -17,6 +17,15 @@ import Testing
   #expect(fixture.coordinator.visibleStep == .welcome)
 }
 
+@Test @MainActor func requiredBootstrapRefreshesTheAccessPresentation() async {
+  let access = OnboardingAccessFake()
+  let fixture = await OnboardingCoordinatorFixture(access: access)
+
+  await fixture.coordinator.bootstrap()
+
+  #expect(access.refreshCount == 1)
+}
+
 @Test @MainActor func firstNoteRequiresARealMutation() async {
   let fixture = await OnboardingCoordinatorFixture()
   await fixture.coordinator.bootstrap()
@@ -123,8 +132,9 @@ private final class OnboardingAccessFake: FleckAccessActions {
     message: nil
   )
   var nextResult = FleckAccessActionResult.cancelled
+  private(set) var refreshCount = 0
 
-  func refresh() async {}
+  func refresh() async { refreshCount += 1 }
   func startTrial() async -> FleckAccessActionResult { nextResult }
   func purchaseLifetime() async -> FleckAccessActionResult { nextResult }
   func restorePurchase() async -> FleckAccessActionResult { nextResult }
