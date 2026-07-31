@@ -58,6 +58,10 @@ import Testing
     #expect(source.contains(required), Comment(rawValue: required))
   }
   #expect(source.components(separatedBy: "private func liveCanvas").count - 1 == 0)
+  #expect(
+    source.components(separatedBy: ".fixedSize(horizontal: false, vertical: true)").count - 1
+      >= 7
+  )
 }
 
 private func onboardingSourceURL() -> URL {

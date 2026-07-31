@@ -293,6 +293,7 @@
             + "capsule appears at its configured screen edge."
         )
         .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
         Picker("Hold to dictate", selection: $coordinator.selectedModifier) {
           ForEach(DictationModifierKey.allCases, id: \.self) { modifier in
             Text(modifier.displayName).tag(modifier)
@@ -307,6 +308,7 @@
               + "or Fleck's microphone button."
           )
           .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
         }
         liveEditorCanvas(layout: layout)
         if coordinator.dictationDemoSucceeded {
