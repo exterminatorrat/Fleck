@@ -178,8 +178,12 @@ a {
     transform var(--motion);
 }
 
+.waitlist-link-mobile {
+  display: none;
+}
+
 .waitlist-link:hover {
-  background: var(--violet);
+  background: #684aef;
 }
 
 .waitlist-link:active {
@@ -241,6 +245,14 @@ a {
     grid-area: waitlist;
     min-height: 44px;
     padding-inline: 16px;
+  }
+
+  .waitlist-link-desktop {
+    display: none;
+  }
+
+  .waitlist-link-mobile {
+    display: inline-flex;
   }
 }
 

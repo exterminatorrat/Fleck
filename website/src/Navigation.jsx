@@ -13,6 +13,10 @@ export default function Navigation() {
           <span className="brand-name">Fleck</span>
         </a>
 
+        <a className="waitlist-link waitlist-link-mobile" href="#waitlist">
+          Join waitlist
+        </a>
+
         <div className="navigation-links">
           {links.map(({ label, href }) => (
             <a className="navigation-link" href={href} key={href}>
@@ -21,7 +25,7 @@ export default function Navigation() {
           ))}
         </div>
 
-        <a className="waitlist-link" href="#waitlist">
+        <a className="waitlist-link waitlist-link-desktop" href="#waitlist">
           Join waitlist
         </a>
       </nav>
