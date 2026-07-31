@@ -5,6 +5,34 @@ import Testing
 
 @testable import FleckApp
 
+private enum AppStateTestError: Error {
+  case failed
+}
+
+@Test @MainActor func appStateExposesFreshInitialSnapshotSource() async {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = AppState(store: LocalStore(rootURL: root))
+
+  await state.waitUntilInitialLoad()
+
+  #expect(state.initialSnapshotSource == .fresh)
+}
+
+@Test @MainActor func onboardingProgressPersistenceRollsBackAfterFailure() async {
+  let state = AppState(
+    saveOperation: { _, _, _ in throw AppStateTestError.failed }
+  )
+  await state.waitUntilInitialLoad()
+  let progress = OnboardingProgress(status: .inProgress(step: .welcome))
+
+  await #expect(throws: AppStateTestError.self) {
+    try await state.persistOnboardingProgress(progress)
+  }
+  #expect(state.preferences.onboardingProgress == nil)
+}
+
 @Test @MainActor func editingReportsSavingThenSaved() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)

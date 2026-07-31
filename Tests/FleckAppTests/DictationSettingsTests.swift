@@ -970,7 +970,7 @@ import Testing
   )
   await fixture.runtime.awaitStartupAssessment()
 
-  #expect(fixture.monitor.requestCount == 1)
+  #expect(fixture.monitor.requestCount == 0)
   #expect(fixture.runtime.modifierMonitorState == .unauthorized)
   #expect(fixture.runtime.actualModifier == nil)
   #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
@@ -982,7 +982,7 @@ import Testing
   #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
 }
 
-@Test @MainActor func DictationRuntimeRequestsModifierMonitoringOnceAtStartup() async throws {
+@Test @MainActor func DictationRuntimeNeverRequestsModifierMonitoringAtStartup() async throws {
   let fixture = try await RuntimeFixture(
     finalText: "saved",
     monitorAccessGranted: false,
@@ -992,9 +992,9 @@ import Testing
   await fixture.runtime.awaitStartupAssessment()
   fixture.runtime.preferencesDidChange()
 
-  #expect(fixture.monitor.requestCount == 1)
-  #expect(fixture.runtime.modifierMonitorState == .running)
-  #expect(fixture.runtime.actualModifier == .rightOption)
+  #expect(fixture.monitor.requestCount == 0)
+  #expect(fixture.runtime.modifierMonitorState == .unauthorized)
+  #expect(fixture.runtime.actualModifier == nil)
 }
 
 @Test @MainActor func DictationRuntimeRunningMonitorChangesWithoutRestart()

@@ -111,6 +111,12 @@ import Testing
   #expect(value.dictationHistoryEnabled)
 }
 
+@Test func oldPreferencesHaveNoOnboardingMarker() throws {
+  let old = Data(#"{"fontFamily":".AppleSystemUIFont","fontSize":15}"#.utf8)
+  let value = try JSONDecoder().decode(AppPreferences.self, from: old)
+  #expect(value.onboardingProgress == nil)
+}
+
 @Test func preferencesDecodeOlderDocumentsWithNewDefaults() throws {
   let old =
     ##"{"fontFamily":"Test","fontSize":14,"accentHex":"#000000","panelOpacity":0.8,"showFormattingBar":true,"automaticLists":true,"shortcuts":[]}"##

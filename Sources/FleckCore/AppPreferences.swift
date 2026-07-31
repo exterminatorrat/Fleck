@@ -33,6 +33,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var dictationHistoryEnabled: Bool
   public var dictationCapsuleEnabled: Bool
   public var dictationMicrophoneUID: String?
+  public var onboardingProgress: OnboardingProgress?
 
   public init(
     fontFamily: String = "Avenir Next", fontSize: Double = 17,
@@ -49,7 +50,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     dictationCapsuleDock: DictationCapsuleDock = .bottom,
     dictationHistoryEnabled: Bool = true,
     dictationCapsuleEnabled: Bool = true,
-    dictationMicrophoneUID: String? = nil
+    dictationMicrophoneUID: String? = nil,
+    onboardingProgress: OnboardingProgress? = nil
   ) {
     self.fontFamily = fontFamily
     self.fontSize = fontSize
@@ -75,6 +77,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.dictationHistoryEnabled = dictationHistoryEnabled
     self.dictationCapsuleEnabled = dictationCapsuleEnabled
     self.dictationMicrophoneUID = dictationMicrophoneUID
+    self.onboardingProgress = onboardingProgress
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -83,7 +86,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       automaticLists, launchAtLogin, shortcuts, dictationSpeechEngine,
       legacyDictationShortcut = "dictationShortcut", dictationModifierKey,
       dictationCapsuleDock, dictationHistoryEnabled, dictationCapsuleEnabled,
-      dictationMicrophoneUID
+      dictationMicrophoneUID, onboardingProgress
   }
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -130,7 +133,11 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       ) ?? .bottom,
       dictationHistoryEnabled: try c.decodeIfPresent(Bool.self, forKey: .dictationHistoryEnabled) ?? true,
       dictationCapsuleEnabled: try c.decodeIfPresent(Bool.self, forKey: .dictationCapsuleEnabled) ?? true,
-      dictationMicrophoneUID: try c.decodeIfPresent(String.self, forKey: .dictationMicrophoneUID))
+      dictationMicrophoneUID: try c.decodeIfPresent(String.self, forKey: .dictationMicrophoneUID),
+      onboardingProgress: try c.decodeIfPresent(
+        OnboardingProgress.self,
+        forKey: .onboardingProgress
+      ))
   }
 }
 

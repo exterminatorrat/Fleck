@@ -237,6 +237,66 @@ import Testing
   #expect(speech.requests == 1)
 }
 
+@Test @MainActor func permissionsRequestOnlyTheSelectedCapability() async {
+  let microphone = PermissionProbe()
+  let speech = PermissionProbe()
+  let permissions = DictationPermissionController(
+    microphoneStatus: { microphone.status },
+    speechStatus: { speech.status },
+    requestMicrophone: {
+      microphone.requests += 1
+      microphone.status = .authorized
+      return true
+    },
+    requestSpeech: {
+      speech.requests += 1
+      speech.status = .authorized
+      return true
+    }
+  )
+
+  _ = await permissions.requestMicrophoneAccess()
+  #expect(microphone.requests == 1)
+  #expect(speech.requests == 0)
+
+  _ = await permissions.requestSpeechRecognitionAccess()
+  #expect(microphone.requests == 1)
+  #expect(speech.requests == 1)
+}
+
+@Test func DictationCompatibilityExplainsFoundationModelLimits() {
+  let device = DictationAvailability.Input(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailability: .deviceNotEligible
+  )
+  let devicePresentation = DictationCompatibilityPresentation(
+    availability: DictationAvailability.evaluate(device)
+  )
+  #expect(
+    devicePresentation.cleanup.detail
+      == "Requires a Mac that supports Apple Intelligence"
+  )
+
+  let disabled = DictationAvailability.Input(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailability: .appleIntelligenceNotEnabled
+  )
+  let disabledPresentation = DictationCompatibilityPresentation(
+    availability: DictationAvailability.evaluate(disabled)
+  )
+  #expect(disabledPresentation.smartCapture.detail == "Saves to Inbox")
+}
+
 @Test @MainActor func enhancedPermissionRequestsMicrophoneOnly() async {
   let microphone = PermissionProbe()
   let speech = PermissionProbe()

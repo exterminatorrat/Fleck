@@ -585,6 +585,42 @@ mv "$HOME/Library/Application Support/Fleck" \
 
 Do not remove that directory while the app is running.
 
+### First-launch onboarding
+
+Automated coverage:
+
+```sh
+swift test --disable-automatic-resolution --filter Onboarding
+swift test --disable-automatic-resolution \
+  --filter 'DictationAvailability|DictationSettings|AppStateDictation'
+```
+
+Manual validation requires a disposable Application Support directory or a
+separate macOS test account. Do not move live Fleck data while the app is
+running.
+
+- [ ] A fresh store opens mandatory onboarding at Welcome and cannot skip it.
+- [ ] Quit and relaunch at every rail step and permission substep; the exact
+  next incomplete screen returns.
+- [ ] The First Note and Dictation canvases are the real Fleck tab/editor
+  surface, and editing the starter note unlocks Continue.
+- [ ] The configured modifier name, floating capsule, cleanup fallback,
+  Smart Capture fallback, and focused-editor insertion match normal Fleck.
+- [ ] Microphone, Speech Recognition, and Input Monitoring are requested only
+  after their individual buttons; denial and Not Now both remain recoverable.
+- [ ] Compatibility matches the Mac's Apple Speech and Apple Intelligence
+  state. Check VoiceOver, keyboard order, Reduce Motion, and Reduce
+  Transparency.
+- [ ] Get Fleck states no credit card, no Apple purchase sheet, and no
+  automatic charge. Verify the StoreKit-localized price, trial, purchase,
+  restore, and completion transition only after the later access subsystem is
+  integrated.
+
+This branch deliberately uses an unavailable access adapter. It cannot provide
+a real trial, purchase, restore, localized price, seven-day expiry, or
+read-only enforcement, and onboarding therefore cannot complete in production
+until the StoreKit 2 access phase replaces that adapter.
+
 ## Resource checks
 
 Build and open the packaged app first:

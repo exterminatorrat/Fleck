@@ -45,6 +45,7 @@
     @Published var saveError: String?
     @Published private(set) var startupMigrationError: FleckProductMigrationError?
     @Published private(set) var saveStatus = SaveStatus.idle
+    @Published private(set) var initialSnapshotSource: LocalStoreSnapshotSource?
     @Published private(set) var trashedNotes: [TrashedNote] = []
     @Published private(set) var latestAgentFeedback: AgentChangeFeedback?
     @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
@@ -385,6 +386,19 @@
       scheduleSave()
     }
 
+    func persistOnboardingProgress(_ progress: OnboardingProgress) async throws {
+      let previous = preferences.onboardingProgress
+      preferences.onboardingProgress = progress
+      do {
+        try await saveNow(transactionOwned: true).value
+      } catch {
+        if preferences.onboardingProgress == progress {
+          preferences.onboardingProgress = previous
+        }
+        throw error
+      }
+    }
+
     func setLaunchAtLogin(_ enabled: Bool) {
       do {
         if enabled {
@@ -468,6 +482,7 @@
         let snapshot = try await store.loadSnapshot()
         workspace = snapshot.workspace
         preferences = snapshot.preferences
+        initialSnapshotSource = snapshot.source
         persistenceGeneration = max(
           persistenceGeneration,
           snapshot.generation

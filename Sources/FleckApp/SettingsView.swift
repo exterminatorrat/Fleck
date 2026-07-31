@@ -415,14 +415,23 @@
     @ViewBuilder
     private var dictation: some View {
       Section("Availability") {
-        if runtime.availability.standardAvailable {
+        let compatibility = DictationCompatibilityPresentation(
+          availability: runtime.availability
+        )
+        ForEach(
+          [
+            compatibility.notes,
+            compatibility.appleSpeech,
+            compatibility.cleanup,
+            compatibility.smartCapture,
+          ],
+          id: \.title
+        ) { row in
           Label(
-            "Standard — Apple Speech is available for on-device English dictation.",
-            systemImage: "checkmark.shield"
+            "\(row.title) — \(row.detail)",
+            systemImage: row.available ? "checkmark.shield" : "info.circle"
           )
-        } else if let failure = runtime.availability.standardFailureCopy {
-          Label(failure, systemImage: "exclamationmark.triangle.fill")
-            .foregroundStyle(.secondary)
+          .foregroundStyle(row.available ? .primary : .secondary)
         }
         if !recoveryActions.isEmpty {
           ForEach(recoveryActions, id: \.pane) { action in
