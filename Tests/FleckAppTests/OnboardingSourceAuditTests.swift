@@ -7,6 +7,12 @@ import Testing
     encoding: .utf8
   )
   let allSources = onboardingSources()
+  let notesPanelSource = try String(
+    contentsOf: onboardingSourceURL()
+      .deletingLastPathComponent()
+      .appendingPathComponent("NotesPanel.swift"),
+    encoding: .utf8
+  )
   for required in [
     "NotesPanel(",
     "DictationModifierKey",
@@ -39,6 +45,9 @@ import Testing
   ] {
     #expect(allSources.contains(required), Comment(rawValue: required))
   }
+  #expect(source.contains("sizing: .container"))
+  #expect(notesPanelSource.contains("enum NotesPanelSizing"))
+  #expect(notesPanelSource.contains("sizing: NotesPanelSizing = .storedPreferences"))
 }
 
 private func onboardingSourceURL() -> URL {

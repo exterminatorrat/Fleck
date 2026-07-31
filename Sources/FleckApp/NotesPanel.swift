@@ -57,6 +57,11 @@
     }
   }
 
+  enum NotesPanelSizing: Equatable {
+    case storedPreferences
+    case container
+  }
+
   struct NotesPanel: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
@@ -64,6 +69,7 @@
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var dictationRuntime: DictationRuntime
     let isPinned: Bool
+    let sizing: NotesPanelSizing
     @StateObject private var editorCommands = EditorCommands()
     @Namespace private var selectedTabHighlight
     @State private var isImporting = false
@@ -79,9 +85,14 @@
     @State private var draggedNoteID: UUID?
     @State private var tabDragContentType = TabDragReorder.makeContentType()
 
-    init(dictationRuntime: DictationRuntime, isPinned: Bool = false) {
+    init(
+      dictationRuntime: DictationRuntime,
+      isPinned: Bool = false,
+      sizing: NotesPanelSizing = .storedPreferences
+    ) {
       self.dictationRuntime = dictationRuntime
       self.isPinned = isPinned
+      self.sizing = sizing
     }
 
     var body: some View {
@@ -145,8 +156,12 @@
         }
       }
       .frame(
-        width: appState.preferences.panelWidth,
-        height: appState.preferences.panelHeight
+        width: sizing == .storedPreferences ? appState.preferences.panelWidth : nil,
+        height: sizing == .storedPreferences ? appState.preferences.panelHeight : nil
+      )
+      .frame(
+        maxWidth: sizing == .container ? .infinity : nil,
+        maxHeight: sizing == .container ? .infinity : nil
       )
       .background {
         Rectangle()

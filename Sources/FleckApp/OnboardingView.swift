@@ -238,7 +238,11 @@
           Text(detail)
             .foregroundStyle(.secondary)
         }
-        NotesPanel(dictationRuntime: dictationRuntime, isPinned: true)
+        NotesPanel(
+          dictationRuntime: dictationRuntime,
+          isPinned: true,
+          sizing: .container
+        )
           .environmentObject(appState)
           .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
           .overlay {
