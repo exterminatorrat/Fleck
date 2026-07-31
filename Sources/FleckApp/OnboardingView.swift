@@ -2,6 +2,24 @@
   import SwiftUI
   import FleckCore
 
+  struct OnboardingLayoutPresentation: Equatable {
+    enum Tier: Equatable {
+      case compact
+      case regular
+    }
+
+    let tier: Tier
+
+    init(width: CGFloat, height: CGFloat) {
+      tier = width >= 920 && height >= 620 ? .regular : .compact
+    }
+
+    var railWidth: CGFloat { tier == .regular ? 240 : 188 }
+    var contentPadding: CGFloat { tier == .regular ? 32 : 20 }
+    var footerHeight: CGFloat { tier == .regular ? 72 : 64 }
+    var minimumEditorHeight: CGFloat { tier == .regular ? 240 : 180 }
+  }
+
   enum OnboardingRailItemState: Equatable {
     case completed
     case current

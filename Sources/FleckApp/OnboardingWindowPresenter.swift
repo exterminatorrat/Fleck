@@ -130,6 +130,8 @@
     nonisolated static let windowIdentifier = "pinned-notes"
     nonisolated static let onboardingTitle = "Welcome to Fleck"
     nonisolated static let completedTitle = "Fleck"
+    nonisolated static let defaultSize = NSSize(width: 1_080, height: 700)
+    nonisolated static let minimumSize = NSSize(width: 760, height: 520)
 
     let gateState: OnboardingGateState
     let completedSize: NSSize
@@ -166,11 +168,13 @@
         switch gateState {
         case .required:
           window.title = OnboardingWindowPresenter.onboardingTitle
-          window.setContentSize(NSSize(width: 1_080, height: 700))
+          window.contentMinSize = OnboardingWindowPresenter.minimumSize
+          window.setContentSize(OnboardingWindowPresenter.defaultSize)
           NSApp.activate(ignoringOtherApps: true)
           window.makeKeyAndOrderFront(nil)
         case .complete:
           window.title = OnboardingWindowPresenter.completedTitle
+          window.contentMinSize = completedSize
           window.setContentSize(completedSize)
         case .loading, .blocked:
           break

@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Testing
 
 @testable import FleckApp
@@ -15,6 +15,11 @@ import Testing
   #expect(OnboardingWindowPresenter.windowIdentifier == "pinned-notes")
   #expect(OnboardingWindowPresenter.onboardingTitle == "Welcome to Fleck")
   #expect(OnboardingWindowPresenter.completedTitle == "Fleck")
+}
+
+@Test func OnboardingWindowDeclaresDefaultAndMinimumResponsiveSizes() {
+  #expect(OnboardingWindowPresenter.defaultSize == NSSize(width: 1_080, height: 700))
+  #expect(OnboardingWindowPresenter.minimumSize == NSSize(width: 760, height: 520))
 }
 
 @Test func OnboardingWindowSourceHasOneExistingScene() throws {

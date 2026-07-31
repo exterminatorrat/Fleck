@@ -13,6 +13,25 @@ import Testing
   ])
 }
 
+@Test func onboardingLayoutUsesExactCompactAndRegularBoundaries() {
+  let minimum = OnboardingLayoutPresentation(width: 760, height: 520)
+  #expect(minimum.tier == .compact)
+  #expect(minimum.railWidth == 188)
+  #expect(minimum.contentPadding == 20)
+  #expect(minimum.footerHeight == 64)
+  #expect(minimum.minimumEditorHeight == 180)
+
+  #expect(OnboardingLayoutPresentation(width: 919, height: 620).tier == .compact)
+  #expect(OnboardingLayoutPresentation(width: 920, height: 619).tier == .compact)
+
+  let regular = OnboardingLayoutPresentation(width: 920, height: 620)
+  #expect(regular.tier == .regular)
+  #expect(regular.railWidth == 240)
+  #expect(regular.contentPadding == 32)
+  #expect(regular.footerHeight == 72)
+  #expect(regular.minimumEditorHeight == 240)
+}
+
 @Test func getFleckCopyContainsRequiredPromisesAndNoSkip() {
   let presentation = OnboardingGetFleckPresentation(
     access: FleckAccessPresentation(
