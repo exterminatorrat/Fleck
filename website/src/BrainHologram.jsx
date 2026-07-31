@@ -143,16 +143,6 @@ export default function BrainHologram() {
         context.fill();
       });
 
-      if (pointer.active && !reducedMotion.matches) {
-        for (let ring = 0; ring < 3; ring += 1) {
-          context.beginPath();
-          context.arc(pointer.x, pointer.y, 23 + ring * 17, -0.85, 0.85);
-          context.strokeStyle = rgba(VIOLET, 0.16 - ring * 0.035);
-          context.lineWidth = 1;
-          context.stroke();
-        }
-      }
-
       if (!reducedMotion.matches) frame = window.requestAnimationFrame(draw);
     };
 

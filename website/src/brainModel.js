@@ -20,11 +20,17 @@ function addHemisphere(nodes, side, target, width, height, random) {
   for (let attempts = 0; nodes.length < target && attempts < target * 80; attempts += 1) {
     const x = random() * 2 - 1;
     const y = random() * 2 - 1;
-    const edgeNoise = 0.92 + Math.sin(y * 9 + side) * 0.05;
+    const angle = Math.atan2(y, x);
+    const distance = Math.hypot(x, y);
+    const lobedEdge =
+      0.94 +
+      Math.cos(angle * 3 - side * 0.45) * 0.035 +
+      Math.cos(angle * 5 + side * 0.3) * 0.02;
+    const inward = side === -1 ? x : -x;
+    const fissureLimit = 0.47 + Math.min(1, Math.abs(y) / 0.78) * 0.08;
 
-    if (x * x + y * y > edgeNoise) continue;
-    if (side === -1 && x > 0.02 && Math.abs(y) < 0.57) continue;
-    if (side === 1 && x < -0.02 && Math.abs(y) < 0.57) continue;
+    if (distance > lobedEdge) continue;
+    if (inward > fissureLimit) continue;
 
     nodes.push({
       x: centerX + x * radiusX,

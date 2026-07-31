@@ -12,6 +12,16 @@ test("creates a deterministic two-sided brain model with valid edges", () => {
   assert.ok(first.nodes.some(({ side }) => side === 1));
   assert.ok(first.edges.length > first.nodes.length);
 
+  const left = first.nodes.filter(({ side }) => side === -1);
+  const right = first.nodes.filter(({ side }) => side === 1);
+  const centerX = 1586 / 2;
+
+  assert.equal(left.length, right.length);
+  assert.equal(
+    first.nodes.filter(({ x }) => Math.abs(x - centerX) < 16).length,
+    0,
+  );
+
   first.edges.forEach(([from, to]) => {
     assert.ok(from >= 0 && from < first.nodes.length);
     assert.ok(to > from && to < first.nodes.length);
