@@ -11,10 +11,14 @@ import Testing
 @Test func dictationPreferencesUseStandardPrivateDefaults() throws {
   let value = AppPreferences()
   #expect(value.dictationSpeechEngine == .standard)
-  #expect(!value.dictationShortcut.isEnabled)
   #expect(value.dictationHistoryEnabled)
   #expect(value.dictationCapsuleEnabled)
   #expect(value.dictationMicrophoneUID == nil)
+  let encoded = try JSONEncoder().encode(value)
+  let json = try #require(
+    JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+  )
+  #expect(json["dictationShortcut"] != nil)
 }
 
 @Test func dictationModifierAndDockUsePersistentDefaults() throws {

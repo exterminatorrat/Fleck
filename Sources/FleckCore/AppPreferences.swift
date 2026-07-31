@@ -19,8 +19,12 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var launchAtLogin: Bool
   public var shortcuts: [Shortcut]
   public var dictationSpeechEngine: DictationSpeechEngine
+  private var legacyDictationShortcut: DictationShortcut
   @available(*, deprecated, message: "Use dictationModifierKey")
-  public var dictationShortcut: DictationShortcut
+  public var dictationShortcut: DictationShortcut {
+    get { legacyDictationShortcut }
+    set { legacyDictationShortcut = newValue }
+  }
   public var dictationModifierKey: DictationModifierKey
   public var dictationCapsuleDock: DictationCapsuleDock
   public var dictationHistoryEnabled: Bool
@@ -60,7 +64,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       CleanDictationFeatures.enhancedLocalCandidateEnabled
       ? dictationSpeechEngine
       : .standard
-    self.dictationShortcut = dictationShortcut
+    self.legacyDictationShortcut = dictationShortcut
     self.dictationModifierKey = dictationModifierKey
     self.dictationCapsuleDock = dictationCapsuleDock
     self.dictationHistoryEnabled = dictationHistoryEnabled
@@ -71,7 +75,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case fontFamily, fontSize, accentHex, editorTextHex, editorBackgroundHex, panelOpacity, theme,
       panelWidth, panelHeight, showFormattingBar, automaticLists, launchAtLogin, shortcuts,
-      dictationSpeechEngine, dictationShortcut, dictationModifierKey, dictationCapsuleDock,
+      dictationSpeechEngine, legacyDictationShortcut = "dictationShortcut",
+      dictationModifierKey, dictationCapsuleDock,
       dictationHistoryEnabled, dictationCapsuleEnabled, dictationMicrophoneUID
   }
   public init(from decoder: Decoder) throws {
@@ -91,7 +96,10 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       launchAtLogin: try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false,
       shortcuts: try c.decodeIfPresent([Shortcut].self, forKey: .shortcuts) ?? Shortcut.defaults,
       dictationSpeechEngine: try c.decodeIfPresent(DictationSpeechEngine.self, forKey: .dictationSpeechEngine) ?? .standard,
-      dictationShortcut: try c.decodeIfPresent(DictationShortcut.self, forKey: .dictationShortcut) ?? DictationShortcut(),
+      dictationShortcut: try c.decodeIfPresent(
+        DictationShortcut.self,
+        forKey: .legacyDictationShortcut
+      ) ?? DictationShortcut(),
       dictationModifierKey: try c.decodeIfPresent(
         DictationModifierKey.self,
         forKey: .dictationModifierKey
