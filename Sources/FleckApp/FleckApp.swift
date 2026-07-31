@@ -24,6 +24,7 @@
   struct FleckApp: App {
     @StateObject private var appState: AppState
     @StateObject private var dictationRuntime: DictationRuntime
+    @StateObject private var onboarding: OnboardingCoordinator
     private let agentRuntime: AgentIPCRuntime
     private let statusItemContextMenuController: StatusItemContextMenuController
 
@@ -71,25 +72,36 @@
         appState: appState,
         server: agentServer
       )
-      _appState = StateObject(wrappedValue: appState)
-      _dictationRuntime = StateObject(
-        wrappedValue: DictationRuntime(
-          appState: appState,
-          applicationSupportURL: appSupport
-        )
+      let dictationRuntime = DictationRuntime(
+        appState: appState,
+        applicationSupportURL: appSupport
       )
+      let onboarding = OnboardingCoordinator(
+        appState: appState,
+        dictationRuntime: dictationRuntime,
+        accessActions: UnavailableFleckAccessActions()
+      )
+      _appState = StateObject(wrappedValue: appState)
+      _dictationRuntime = StateObject(wrappedValue: dictationRuntime)
+      _onboarding = StateObject(wrappedValue: onboarding)
     }
 
     var body: some Scene {
       MenuBarExtra("Fleck", systemImage: "note.text") {
-        NotesPanel(dictationRuntime: dictationRuntime)
+        FleckMenuBarRoot(
+          onboarding: onboarding,
+          dictationRuntime: dictationRuntime
+        )
           .environmentObject(appState)
           .preferredColorScheme(colorScheme)
       }
       .menuBarExtraStyle(.window)
 
       Window("Fleck", id: "pinned-notes") {
-        NotesPanel(dictationRuntime: dictationRuntime, isPinned: true)
+        FleckPinnedNotesRoot(
+          onboarding: onboarding,
+          dictationRuntime: dictationRuntime
+        )
           .environmentObject(appState)
           .preferredColorScheme(colorScheme)
           .background(FloatingWindowConfigurator())

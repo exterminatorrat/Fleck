@@ -89,6 +89,7 @@ final class OnboardingCoordinator: ObservableObject {
   }
 
   func bootstrap() async {
+    guard gateState == .loading else { return }
     await appState.waitUntilInitialLoad()
     guard let source = appState.initialSnapshotSource else {
       gateState = .blocked(
