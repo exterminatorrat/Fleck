@@ -197,6 +197,39 @@ import Testing
   #expect(textView.string == "Agent update")
 }
 
+@Test @MainActor func staleModelEchoDoesNotReplaceNewerLocalTyping() {
+  let commands = EditorCommands()
+  let textView = NSTextView(frame: .zero)
+  textView.string = "First line\nSecond line"
+  commands.textView = textView
+
+  let originalEditor = makeNativeEditor(
+    text: textView.string,
+    commands: commands
+  )
+  let coordinator = originalEditor.makeCoordinator()
+  textView.delegate = coordinator
+  textView.setSelectedRange(NSRange(location: 10, length: 0))
+  textView.insertText("!", replacementRange: textView.selectedRange())
+
+  let localText = textView.string
+  let localSelection = textView.selectedRange()
+  let staleEditor = makeNativeEditor(
+    text: "First line\nSecond line",
+    commands: commands
+  )
+
+  #expect(
+    !staleEditor.applyExternalContentIfNeeded(
+      to: textView,
+      coordinator: coordinator
+    )
+  )
+  #expect(textView.string == localText)
+  #expect(textView.string.hasSuffix("Second line"))
+  #expect(textView.selectedRange() == localSelection)
+}
+
 @MainActor
 private func makeFocusedEditor(body: String) -> (EditorCommands, NSTextView) {
   let commands = EditorCommands()
