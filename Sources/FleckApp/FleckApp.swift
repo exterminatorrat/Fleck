@@ -237,7 +237,6 @@
     private var historyWindowController: NSWindowController?
     private var terminationObserver: ObserverToken?
     private var activationObserver: ObserverToken?
-    private var didRequestModifierAccess = false
     #if CLEAN_DICTATION_ENHANCED_CANDIDATE
       private var captureEngine: DictationSpeechEngine?
       private var captureReachedListening = false
@@ -548,6 +547,28 @@
       shortcutController.requestAccess()
     }
 
+    var microphonePermissionStatus: DictationPermissionStatus {
+      permissionController.currentMicrophoneStatus
+    }
+
+    var speechRecognitionPermissionStatus: DictationPermissionStatus {
+      permissionController.currentSpeechStatus
+    }
+
+    func requestMicrophonePermission() async {
+      _ = await permissionController.requestMicrophoneAccess()
+      refreshAvailability()
+    }
+
+    func requestSpeechRecognitionPermission() async {
+      _ = await permissionController.requestSpeechRecognitionAccess()
+      refreshAvailability()
+    }
+
+    func requestInputMonitoringPermission() async -> Bool {
+      await retryModifierMonitoring()
+    }
+
     func applicationDidBecomeActive() {
       synchronizePreferences()
     }
@@ -687,11 +708,7 @@
         needsModifierApplication,
         shortcutController.canChangeModifier
       {
-        var hasAccess = shortcutController.preflightAccess()
-        if !hasAccess, !didRequestModifierAccess {
-          didRequestModifierAccess = true
-          hasAccess = shortcutController.requestAccess()
-        }
+        let hasAccess = shortcutController.preflightAccess()
         if hasAccess {
           do {
             try shortcutController.configure(currentDesiredModifier)

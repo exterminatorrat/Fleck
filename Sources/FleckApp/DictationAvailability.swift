@@ -28,6 +28,15 @@ enum DictationRoutingAvailability: Equatable, Sendable {
   case foundationModel
 }
 
+enum DictationFoundationModelAvailability: Equatable, Sendable {
+  case available
+  case unsupportedOS
+  case deviceNotEligible
+  case appleIntelligenceNotEnabled
+  case modelNotReady
+  case unknown
+}
+
 enum DictationPrivacyPane: Hashable, Sendable {
   case microphone
   case speechRecognition
@@ -71,13 +80,59 @@ struct DictationAvailability: Equatable, Sendable {
     let speechPermission: DictationPermissionStatus
     let appleOnDeviceRecognitionSupported: Bool
     let enhancedModelReady: Bool
-    let foundationModelAvailable: Bool
+    let foundationModelAvailability: DictationFoundationModelAvailability
+
+    init(
+      osMajorVersion: Int,
+      architecture: DictationArchitecture,
+      microphonePermission: DictationPermissionStatus,
+      speechPermission: DictationPermissionStatus,
+      appleOnDeviceRecognitionSupported: Bool,
+      enhancedModelReady: Bool,
+      foundationModelAvailability: DictationFoundationModelAvailability
+    ) {
+      self.osMajorVersion = osMajorVersion
+      self.architecture = architecture
+      self.microphonePermission = microphonePermission
+      self.speechPermission = speechPermission
+      self.appleOnDeviceRecognitionSupported = appleOnDeviceRecognitionSupported
+      self.enhancedModelReady = enhancedModelReady
+      self.foundationModelAvailability = foundationModelAvailability
+    }
+
+    init(
+      osMajorVersion: Int,
+      architecture: DictationArchitecture,
+      microphonePermission: DictationPermissionStatus,
+      speechPermission: DictationPermissionStatus,
+      appleOnDeviceRecognitionSupported: Bool,
+      enhancedModelReady: Bool,
+      foundationModelAvailable: Bool
+    ) {
+      self.init(
+        osMajorVersion: osMajorVersion,
+        architecture: architecture,
+        microphonePermission: microphonePermission,
+        speechPermission: speechPermission,
+        appleOnDeviceRecognitionSupported: appleOnDeviceRecognitionSupported,
+        enhancedModelReady: enhancedModelReady,
+        foundationModelAvailability:
+          osMajorVersion < 26
+          ? .unsupportedOS
+          : foundationModelAvailable ? .available : .unknown
+      )
+    }
   }
 
   let standardAvailable: Bool
   let enhancedAvailable: Bool
   let cleanupAvailable: Bool
   let routing: DictationRoutingAvailability
+  let foundationModelAvailability: DictationFoundationModelAvailability
+  let microphonePermission: DictationPermissionStatus
+  let speechPermission: DictationPermissionStatus
+  let appleOnDeviceRecognitionSupported: Bool
+  let osMajorVersion: Int
   #if CLEAN_DICTATION_ENHANCED_CANDIDATE
     let enhancedFailureCopy: String?
   #endif
@@ -91,7 +146,7 @@ struct DictationAvailability: Equatable, Sendable {
     let supportedOS = input.osMajorVersion >= 14
     let microphoneAvailable = input.microphonePermission.permitsRequestOrUse
     let speechAvailable = input.speechPermission.permitsRequestOrUse
-    let foundationModelAvailable = input.osMajorVersion >= 26 && input.foundationModelAvailable
+    let foundationModelAvailable = input.foundationModelAvailability == .available
     let enhancedAvailable = supportedOS
       && enhancedCandidateEnabled
       && input.architecture == .appleSilicon
@@ -118,6 +173,11 @@ struct DictationAvailability: Equatable, Sendable {
         enhancedAvailable: enhancedAvailable,
         cleanupAvailable: foundationModelAvailable,
         routing: routing,
+        foundationModelAvailability: input.foundationModelAvailability,
+        microphonePermission: input.microphonePermission,
+        speechPermission: input.speechPermission,
+        appleOnDeviceRecognitionSupported: input.appleOnDeviceRecognitionSupported,
+        osMajorVersion: input.osMajorVersion,
         enhancedFailureCopy: enhancedFailureCopy(
           input,
           enhancedCandidateEnabled: enhancedCandidateEnabled,
@@ -132,6 +192,11 @@ struct DictationAvailability: Equatable, Sendable {
         enhancedAvailable: enhancedAvailable,
         cleanupAvailable: foundationModelAvailable,
         routing: routing,
+        foundationModelAvailability: input.foundationModelAvailability,
+        microphonePermission: input.microphonePermission,
+        speechPermission: input.speechPermission,
+        appleOnDeviceRecognitionSupported: input.appleOnDeviceRecognitionSupported,
+        osMajorVersion: input.osMajorVersion,
         openSystemSettings: settings
       )
     #endif
@@ -150,7 +215,7 @@ struct DictationAvailability: Equatable, Sendable {
       speechPermission: permissions.currentSpeechStatus,
       appleOnDeviceRecognitionSupported: recognizer?.supportsOnDeviceRecognition == true,
       enhancedModelReady: enhancedModelReady,
-      foundationModelAvailable: foundationModelIsAvailable
+      foundationModelAvailability: foundationModelAvailability
     ))
   }
 
@@ -200,13 +265,85 @@ struct DictationAvailability: Equatable, Sendable {
     return machine == "arm64" ? .appleSilicon : .intel
   }
 
-  private static var foundationModelIsAvailable: Bool {
+  private static var foundationModelAvailability: DictationFoundationModelAvailability {
     #if canImport(FoundationModels)
       if #available(macOS 26.0, *) {
-        return SystemLanguageModel.default.isAvailable
+        switch SystemLanguageModel.default.availability {
+        case .available:
+          return .available
+        case .unavailable(.deviceNotEligible):
+          return .deviceNotEligible
+        case .unavailable(.appleIntelligenceNotEnabled):
+          return .appleIntelligenceNotEnabled
+        case .unavailable(.modelNotReady):
+          return .modelNotReady
+        @unknown default:
+          return .unknown
+        }
       }
     #endif
-    return false
+    return .unsupportedOS
+  }
+}
+
+struct DictationCompatibilityRow: Equatable, Sendable {
+  let title: String
+  let detail: String
+  let available: Bool
+}
+
+struct DictationCompatibilityPresentation: Equatable, Sendable {
+  let notes: DictationCompatibilityRow
+  let appleSpeech: DictationCompatibilityRow
+  let cleanup: DictationCompatibilityRow
+  let smartCapture: DictationCompatibilityRow
+
+  init(availability: DictationAvailability) {
+    notes = .init(title: "Fleck notes", detail: "Available", available: true)
+
+    let speechDetail: String
+    if availability.osMajorVersion < 14 {
+      speechDetail = "Requires macOS 14 or later"
+    } else if availability.microphonePermission != .authorized {
+      speechDetail = "Needs Microphone"
+    } else if availability.speechPermission != .authorized {
+      speechDetail = "Needs Speech Recognition"
+    } else if !availability.appleOnDeviceRecognitionSupported {
+      speechDetail = "On-device English unavailable"
+    } else {
+      speechDetail = "Available"
+    }
+    appleSpeech = .init(
+      title: "Apple Speech",
+      detail: speechDetail,
+      available: availability.standardAvailable
+    )
+
+    let cleanupDetail: String
+    switch availability.foundationModelAvailability {
+    case .available:
+      cleanupDetail = "Available"
+    case .unsupportedOS:
+      cleanupDetail = "Requires macOS 26 or later"
+    case .deviceNotEligible:
+      cleanupDetail = "Requires a Mac that supports Apple Intelligence"
+    case .appleIntelligenceNotEnabled:
+      cleanupDetail = "Turn on Apple Intelligence in System Settings"
+    case .modelNotReady:
+      cleanupDetail = "Apple Intelligence model is not ready"
+    case .unknown:
+      cleanupDetail = "Unavailable"
+    }
+    cleanup = .init(
+      title: "AI cleanup",
+      detail: cleanupDetail,
+      available: availability.cleanupAvailable
+    )
+    smartCapture = .init(
+      title: "Smart Capture",
+      detail: availability.routing == .foundationModel ? "Available" : "Saves to Inbox",
+      available: availability.routing == .foundationModel
+    )
   }
 }
 
@@ -260,22 +397,30 @@ final class DictationPermissionController {
     for engine: DictationSpeechEngine = .standard,
     after _: DictationPermissionIntent
   ) async -> DictationPermissionResult {
-    if microphoneStatus() == .notDetermined {
-      _ = await requestMicrophone()
-    }
-    guard microphoneStatus() == .authorized else {
+    guard await requestMicrophoneAccess() == .authorized else {
       return .denied(recoveryActions())
     }
 
     guard engine == .standard else { return .granted }
 
-    if speechStatus() == .notDetermined {
-      _ = await requestSpeech()
-    }
-    guard speechStatus() == .authorized else {
+    guard await requestSpeechRecognitionAccess() == .authorized else {
       return .denied(recoveryActions())
     }
     return .granted
+  }
+
+  func requestMicrophoneAccess() async -> DictationPermissionStatus {
+    if microphoneStatus() == .notDetermined {
+      _ = await requestMicrophone()
+    }
+    return microphoneStatus()
+  }
+
+  func requestSpeechRecognitionAccess() async -> DictationPermissionStatus {
+    if speechStatus() == .notDetermined {
+      _ = await requestSpeech()
+    }
+    return speechStatus()
   }
 
   func recoveryActions() -> [DictationSystemSettingsAction] {
