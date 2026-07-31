@@ -1,4 +1,5 @@
 import Combine
+import Foundation
 import FleckCore
 
 enum OnboardingBootstrapDecision: Equatable {
@@ -53,6 +54,7 @@ final class OnboardingCoordinator: ObservableObject {
   @Published private(set) var isSaving = false
   @Published private(set) var isPerformingAccessAction = false
   @Published private(set) var message: String?
+  @Published private(set) var dictationDemoSucceeded = false
   @Published var selectedModifier: DictationModifierKey
 
   let accessActions: any FleckAccessActions
@@ -60,6 +62,7 @@ final class OnboardingCoordinator: ObservableObject {
   private let appState: AppState
   private weak var dictationRuntime: DictationRuntime?
   private var accessAlreadyGranted = false
+  private var dictationDemoBaseline: (noteID: UUID, revision: UInt64)?
 
   init(
     appState: AppState,
@@ -124,6 +127,26 @@ final class OnboardingCoordinator: ObservableObject {
     }
   }
 
+  func beginObservingDictationDemo() {
+    guard let note = appState.selectedNote else { return }
+    dictationDemoBaseline = (note.id, note.revision)
+    dictationDemoSucceeded = false
+  }
+
+  func observeDictationTerminalState() {
+    guard let phase = dictationRuntime?.phase else { return }
+    observeDictationTerminalState(phase: phase)
+  }
+
+  func observeDictationTerminalState(phase: DictationPhase) {
+    guard case .saved = phase,
+      let baseline = dictationDemoBaseline,
+      let note = appState.workspace.notes.first(where: { $0.id == baseline.noteID }),
+      note.revision > baseline.revision
+    else { return }
+    dictationDemoSucceeded = true
+  }
+
   func prepareFirstNoteIfNeeded() async {
     guard appState.workspace.notes.count == 1,
       let note = appState.selectedNote
@@ -156,8 +179,11 @@ final class OnboardingCoordinator: ObservableObject {
       dictationRuntime?.preferencesDidChange()
       await advance(to: .permissions)
     case .permissions:
-      guard permissionCursor == .compatibility else { return }
-      await advance(to: .getFleck)
+      if permissionCursor == .compatibility {
+        await advance(to: .getFleck)
+      } else {
+        await deferCurrentPermission()
+      }
     case .getFleck:
       break
     }

@@ -51,6 +51,26 @@ import Testing
   #expect(fixture.coordinator.permissionCursor == .speechRecognition)
 }
 
+@Test @MainActor func onboardingDemoRequiresASavedRealNoteRevision() async {
+  let fixture = await OnboardingCoordinatorFixture()
+  await fixture.coordinator.bootstrap()
+  await fixture.coordinator.continueFromCurrentStep()
+  await fixture.coordinator.prepareFirstNoteIfNeeded()
+  fixture.state.updateSelected(body: "A real first thought")
+  await fixture.coordinator.continueFromCurrentStep()
+  fixture.coordinator.beginObservingDictationDemo()
+
+  fixture.coordinator.observeDictationTerminalState(phase: .idle)
+  #expect(!fixture.coordinator.dictationDemoSucceeded)
+
+  fixture.state.updateSelected(body: "Added through real dictation")
+  let note = fixture.state.selectedNote!
+  fixture.coordinator.observeDictationTerminalState(
+    phase: .saved(.init(noteID: note.id, title: note.displayTitle))
+  )
+  #expect(fixture.coordinator.dictationDemoSucceeded)
+}
+
 @Test @MainActor func accessRequiresAuthoritativeFullAccess() async {
   let access = OnboardingAccessFake()
   let fixture = await OnboardingCoordinatorFixture(access: access)

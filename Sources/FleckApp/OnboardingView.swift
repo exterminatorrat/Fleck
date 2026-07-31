@@ -256,9 +256,20 @@
             + "or Fleck's microphone button."
         )
         .padding(0)
+        if coordinator.dictationDemoSucceeded {
+          Label("Dictation added to First Note", systemImage: "checkmark.circle.fill")
+            .font(.callout.weight(.medium))
+            .foregroundStyle(.green)
+        }
       }
       .padding(32)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .onAppear {
+        coordinator.beginObservingDictationDemo()
+      }
+      .onChange(of: dictationRuntime.phase) {
+        coordinator.observeDictationTerminalState()
+      }
     }
 
     @ViewBuilder

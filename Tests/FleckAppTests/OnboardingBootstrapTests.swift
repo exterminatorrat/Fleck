@@ -40,3 +40,18 @@ import Testing
       == .skipExisting
   )
 }
+
+@Test func everyPersistedCursorResumesExactly() {
+  for step in OnboardingStep.allCases {
+    for cursor in OnboardingPermissionCursor.allCases {
+      let progress = OnboardingProgress(
+        status: .inProgress(step: step),
+        permissionCursor: cursor
+      )
+      #expect(
+        OnboardingBootstrapPolicy.resolve(source: .root, progress: progress)
+          == .requireExisting
+      )
+    }
+  }
+}
