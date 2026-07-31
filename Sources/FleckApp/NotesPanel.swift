@@ -578,7 +578,7 @@
             )
           )
           .textFieldStyle(.plain)
-          .font(.title3.weight(.semibold))
+          .font(EditorTypography.titleFont(family: appState.preferences.fontFamily))
           .padding(.horizontal, 16)
           .padding(.top, 12)
 

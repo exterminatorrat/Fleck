@@ -596,8 +596,10 @@
     }
 
     private func configuredFont() -> NSFont {
-      let systemFont = NSFont.systemFont(ofSize: fontSize)
-      return NSFontManager.shared.convert(systemFont, toFamily: fontFamily)
+      EditorTypography.bodyFont(
+        family: fontFamily,
+        size: fontSize
+      )
     }
 
     private func applyColors(to textView: NSTextView) {
@@ -611,8 +613,15 @@
     }
 
     private func applyTypingFont(to textView: NSTextView) {
-      let font = configuredFont()
-      textView.typingAttributes[.font] = font
+      var attributes = textView.typingAttributes
+      attributes.merge(
+        EditorTypography.defaultAttributes(
+          family: fontFamily,
+          size: fontSize
+        ),
+        uniquingKeysWith: { _, new in new }
+      )
+      textView.typingAttributes = attributes
     }
 
     private func applyDefaultFont(to textView: NSTextView) {
@@ -620,7 +629,13 @@
       applyTypingFont(to: textView)
       textView.font = font
       guard let storage = textView.textStorage, storage.length > 0 else { return }
-      storage.addAttribute(.font, value: font, range: NSRange(location: 0, length: storage.length))
+      storage.addAttributes(
+        EditorTypography.defaultAttributes(
+          family: fontFamily,
+          size: fontSize
+        ),
+        range: NSRange(location: 0, length: storage.length)
+      )
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {

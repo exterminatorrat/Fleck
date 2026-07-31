@@ -12,13 +12,17 @@
     let fontFamily: String
     let fontSize: CGFloat
 
-    init(fontFamily: String = ".AppleSystemUIFont", fontSize: CGFloat = 15) {
+    init(fontFamily: String = "Avenir Next", fontSize: CGFloat = 17) {
       self.fontFamily = fontFamily
       self.fontSize = fontSize
     }
 
     var font: NSFont {
-      NSFontManager.shared.convert(NSFont.systemFont(ofSize: fontSize), toFamily: fontFamily)
+      EditorTypography.bodyFont(family: fontFamily, size: fontSize)
+    }
+
+    var attributes: [NSAttributedString.Key: Any] {
+      EditorTypography.defaultAttributes(family: fontFamily, size: fontSize)
     }
   }
 
@@ -34,7 +38,16 @@
     ) -> NoteTextAppendResult {
       let suffix = (note.body.isEmpty ? "" : "\n\n") + text
       let appended = NSMutableAttributedString(attributedString: attributedText(for: note, defaults: defaults))
-      appended.append(NSAttributedString(string: suffix, attributes: [.font: defaults.font]))
+      if appended.length > 0 {
+        let priorAttributes = appended.attributes(
+          at: appended.length - 1,
+          effectiveRange: nil
+        )
+        appended.append(NSAttributedString(string: "\n", attributes: priorAttributes))
+        appended.append(NSAttributedString(string: "\n\(text)", attributes: defaults.attributes))
+      } else {
+        appended.append(NSAttributedString(string: text, attributes: defaults.attributes))
+      }
       let rtf = try! appended.data(
         from: NSRange(location: 0, length: appended.length),
         documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
@@ -55,9 +68,9 @@
           data: rtf,
           options: [.documentType: NSAttributedString.DocumentType.rtf],
           documentAttributes: nil
-        )
+      )
       else {
-        return NSAttributedString(string: note.body, attributes: [.font: defaults.font])
+        return NSAttributedString(string: note.body, attributes: defaults.attributes)
       }
       return attributed
     }

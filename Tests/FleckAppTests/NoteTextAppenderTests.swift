@@ -67,6 +67,7 @@ import Testing
   throws
 {
   let defaults = NoteTextAppendDefaults(fontFamily: "Menlo", fontSize: 21)
+  let expectedLineHeight: CGFloat = 21.0 / 17.0 * 27.0
   let formatted = NSMutableAttributedString(string: "Bold")
   formatted.addAttribute(
     .font,
@@ -87,9 +88,15 @@ import Testing
     let appended = try attributedString(from: result.richTextRTF)
     let suffixLocation = appended.length - "Dictated".utf16.count
     let suffixFont = try #require(appended.attribute(.font, at: suffixLocation, effectiveRange: nil) as? NSFont)
+    let suffixParagraph = try #require(
+      appended.attribute(.paragraphStyle, at: suffixLocation, effectiveRange: nil)
+        as? NSParagraphStyle
+    )
 
     #expect(suffixFont.pointSize == 21)
     #expect(suffixFont.familyName == "Menlo")
+    #expect(abs(suffixParagraph.minimumLineHeight - expectedLineHeight) < 0.01)
+    #expect(abs(suffixParagraph.maximumLineHeight - expectedLineHeight) < 0.01)
   }
 }
 
