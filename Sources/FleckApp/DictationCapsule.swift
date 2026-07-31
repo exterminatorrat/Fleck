@@ -20,37 +20,43 @@
         .init(
           visibleText: nil,
           voiceOverText: "Fleck dictation ready",
-          symbolName: "waveform"
+          symbolName: "waveform",
+          visualMode: .idle
         )
       case .listening:
         .init(
-          visibleText: "Listening",
+          visibleText: nil,
           voiceOverText: "Dictation listening",
-          symbolName: "waveform"
+          symbolName: "waveform",
+          visualMode: .listening
         )
       case .finalizing:
         .init(
           visibleText: "Finishing",
           voiceOverText: "Finishing dictation",
-          symbolName: "ellipsis.circle"
+          symbolName: "ellipsis.circle",
+          visualMode: .progress
         )
       case .cleaning:
         .init(
           visibleText: "Cleaning up",
           voiceOverText: "Cleaning up dictation",
-          symbolName: "sparkles"
+          symbolName: "sparkles",
+          visualMode: .progress
         )
       case .routing:
         .init(
           visibleText: "Finding note",
           voiceOverText: "Finding a note for dictation",
-          symbolName: "arrow.triangle.branch"
+          symbolName: "arrow.triangle.branch",
+          visualMode: .progress
         )
       case .saved(let destination):
         .init(
           visibleText: "Saved to \(destination)",
           voiceOverText: "Dictation saved to \(destination)",
           symbolName: "checkmark.circle.fill",
+          visualMode: .success,
           isSuccess: true
         )
       case .savedWithoutCleanup(let destination):
@@ -58,28 +64,41 @@
           visibleText: "Saved to \(destination) without cleanup",
           voiceOverText: "Dictation saved to \(destination) without cleanup",
           symbolName: "exclamationmark.triangle.fill",
+          visualMode: .warning,
           isSuccess: true
         )
       case .repairingModel:
         .init(
           visibleText: "Repairing enhanced model",
           voiceOverText: "Repairing enhanced dictation model",
-          symbolName: "wrench.and.screwdriver.fill"
+          symbolName: "wrench.and.screwdriver.fill",
+          visualMode: .progress
         )
       case .failed(let message):
         .init(
           visibleText: "Dictation failed",
           voiceOverText: "Dictation failed: \(message)",
-          symbolName: "exclamationmark.circle.fill"
+          symbolName: "exclamationmark.circle.fill",
+          visualMode: .failure
         )
       }
     }
+  }
+
+  enum DictationCapsuleVisualMode: Equatable {
+    case idle
+    case listening
+    case progress
+    case success
+    case warning
+    case failure
   }
 
   struct DictationCapsulePresentation: Equatable {
     let visibleText: String?
     let voiceOverText: String
     let symbolName: String
+    let visualMode: DictationCapsuleVisualMode
     var isSuccess = false
   }
 
@@ -145,11 +164,13 @@
 
   @MainActor
   final class DictationCapsuleController {
-    static let idleSize = CGSize(width: 48, height: 36)
-    static let activeSize = CGSize(width: 280, height: 52)
+    static let idleSize = CGSize(width: 40, height: 26)
+    static let listeningSize = CGSize(width: 196, height: 32)
+    static let activeSize = CGSize(width: 280, height: 32)
     static let edgeInset: CGFloat = 24
 
     let panel: DictationCapsulePanel
+    let waveformModel: DictationWaveformModel
     private(set) var currentDock = DictationCapsuleDock.bottom
     private var currentStatus = DictationCapsuleStatus.idle
     private var currentAction: DictationCapsuleAction?
@@ -159,8 +180,12 @@
     private var onDockChanged: (@MainActor (DictationCapsuleDock) -> Void)?
     private var screenParametersObserver: DictationCapsuleObserverToken?
 
-    init(panel: DictationCapsulePanel = DictationCapsulePanel()) {
+    init(
+      panel: DictationCapsulePanel = DictationCapsulePanel(),
+      waveformModel: DictationWaveformModel = DictationWaveformModel()
+    ) {
       self.panel = panel
+      self.waveformModel = waveformModel
       screenParametersObserver = DictationCapsuleObserverToken(
         NotificationCenter.default.addObserver(
           forName: NSApplication.didChangeScreenParametersNotification,
@@ -181,6 +206,7 @@
     ) {
       currentDock = dock
       currentStatus = .idle
+      waveformModel.reset()
       currentAction = nil
       currentActionHandler = {}
       self.onOpenFleck = onOpenFleck
@@ -195,7 +221,15 @@
       action: DictationCapsuleAction? = nil,
       onAction: @escaping @MainActor () -> Void = {}
     ) {
+      let wasListening = currentStatus == .listening
       currentStatus = status
+      if status == .listening {
+        if !wasListening {
+          waveformModel.beginListening()
+        }
+      } else {
+        waveformModel.reset()
+      }
       currentAction = action
       currentActionHandler = onAction
       installContent(status: status, action: action, onAction: onAction)
@@ -214,8 +248,26 @@
     }
 
     func dismiss() {
+      waveformModel.reset()
       panel.allowsActions = false
       panel.orderOut(nil)
+    }
+
+    func updateAudioLevel(_ level: Float) {
+      guard currentStatus == .listening, panel.isVisible else { return }
+      waveformModel.receive(level: level)
+    }
+
+    static func size(for status: DictationCapsuleStatus) -> CGSize {
+      switch status {
+      case .idle:
+        idleSize
+      case .listening:
+        listeningSize
+      case .finalizing, .cleaning, .routing, .saved, .savedWithoutCleanup,
+        .repairingModel, .failed:
+        activeSize
+      }
     }
 
     static func frame(
@@ -306,6 +358,7 @@
         DictationCapsuleView(
           presentation: status.presentation,
           dock: currentDock,
+          waveformModel: waveformModel,
           action: action,
           onAction: onAction,
           onOpenFleck: onOpenFleck
@@ -326,7 +379,7 @@
     private func applyCurrentFrame(animated: Bool) {
       guard let screen = resolvedScreen() else { return }
       currentScreen = screen
-      let size = currentStatus == .idle ? Self.idleSize : Self.activeSize
+      let size = Self.size(for: currentStatus)
       let finalFrame = Self.frame(
         for: currentDock,
         size: size,
@@ -400,28 +453,29 @@
   }
 
   private struct DictationCapsuleView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     let presentation: DictationCapsulePresentation
     let dock: DictationCapsuleDock
+    @ObservedObject var waveformModel: DictationWaveformModel
     let action: DictationCapsuleAction?
     let onAction: @MainActor () -> Void
     let onOpenFleck: (@MainActor () -> Void)?
 
     var body: some View {
-      Group {
-        if dock == .bottom {
-          HStack(spacing: 10) {
-            content
-          }
+      content
+        .rotationEffect(dock == .bottom ? .zero : .degrees(90))
+      .foregroundStyle(.primary)
+      .padding(.horizontal, presentation.visualMode == .idle ? 8 : 10)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background {
+        if reduceTransparency {
+          Capsule().fill(Color(nsColor: .windowBackgroundColor))
         } else {
-          VStack(spacing: 10) {
-            content
-          }
+          Capsule().fill(.regularMaterial)
         }
       }
-      .foregroundStyle(.primary)
-      .padding(dock == .bottom ? .horizontal : .vertical, 12)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(.regularMaterial, in: Capsule())
       .accessibilityElement(children: action == nil ? .ignore : .contain)
       .accessibilityLabel(presentation.voiceOverText)
       .accessibilityAction(named: Text("Open Fleck")) {
@@ -432,18 +486,97 @@
 
     @ViewBuilder
     private var content: some View {
-      Image(systemName: presentation.symbolName)
-        .font(.system(size: 15, weight: .semibold))
+      switch presentation.visualMode {
+      case .listening:
+        listeningContent
+      case .progress:
+        HStack(spacing: 8) {
+          progressDots
+          statusText
+          actionButton
+        }
+      case .idle, .success, .warning, .failure:
+        HStack(spacing: 8) {
+          Image(systemName: presentation.symbolName)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(iconColor)
+          statusText
+          actionButton
+        }
+      }
+    }
+
+    private var listeningContent: some View {
+      TimelineView(.periodic(from: .now, by: reduceMotion ? 1 : 1 / 30)) { context in
+        HStack(spacing: 9) {
+          Circle()
+            .fill(Color.accentColor)
+            .frame(width: 6, height: 6)
+          HStack(alignment: .center, spacing: 3) {
+            ForEach(
+              Array(
+                waveformModel.barLevels(
+                  at: context.date,
+                  reduceMotion: reduceMotion
+                ).enumerated()
+              ),
+              id: \.offset
+            ) { _, level in
+              Capsule()
+                .fill(Color.accentColor)
+                .frame(width: 3, height: 4 + (level * 15))
+            }
+          }
+          Text(waveformModel.elapsedText(at: context.date))
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .frame(width: 34, alignment: .trailing)
+        }
+      }
+    }
+
+    private var progressDots: some View {
+      Image(systemName: "ellipsis")
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(Color.accentColor)
+        .symbolEffect(
+          .variableColor.iterative,
+          options: .repeating,
+          isActive: !reduceMotion
+        )
+        .frame(width: 18)
+    }
+
+    @ViewBuilder
+    private var statusText: some View {
       if let visibleText = presentation.visibleText {
         Text(visibleText)
-          .font(.system(size: 14, weight: .semibold))
+          .font(.system(size: 12, weight: .semibold))
           .lineLimit(1)
       }
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
       if let action {
         Button(action.title, action: onAction)
-          .buttonStyle(.bordered)
-          .controlSize(.small)
+          .buttonStyle(.borderless)
+          .font(.system(size: 11, weight: .semibold))
           .accessibilityLabel(action.accessibilityLabel)
+      }
+    }
+
+    private var iconColor: Color {
+      switch presentation.visualMode {
+      case .success:
+        .green
+      case .warning:
+        .orange
+      case .failure:
+        .red
+      case .idle, .listening, .progress:
+        .accentColor
       }
     }
   }

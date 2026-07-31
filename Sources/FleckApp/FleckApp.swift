@@ -377,6 +377,20 @@
       coordinator.setEventObserver { [weak self] event in
         self?.receive(event)
       }
+      coordinator.setLevelObserver { [weak self] level in
+        guard
+          let self,
+          self.appState?.preferences.dictationCapsuleEnabled == true
+        else {
+          return
+        }
+        switch self.phase {
+        case .arming, .listening:
+          self.capsuleController.updateAudioLevel(level)
+        case .idle, .finalizing, .cleaning, .routing, .saved, .failed:
+          self.capsuleController.updateAudioLevel(0)
+        }
+      }
       shortcutController.monitorStateHandler = { [weak self] state in
         self?.modifierMonitorState = state
       }
@@ -634,6 +648,7 @@
       initialLoadSynchronizationTask?.cancel()
       terminalSynchronizationTask?.cancel()
       coordinator.setEventObserver(nil)
+      coordinator.setLevelObserver(nil)
       if let terminationObserver {
         NotificationCenter.default.removeObserver(terminationObserver.value)
         self.terminationObserver = nil

@@ -808,6 +808,25 @@ import Testing
   #expect(fixture.runtime.currentCapsuleStatus == .idle)
 }
 
+@Test @MainActor func DictationRuntimeForwardsLevelsOnlyToAnActiveVisibleCapsule() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: false)
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  fixture.engine.emitLevel(0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  fixture.engine.emitLevel(0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+
+  await fixture.runtime.cancel()
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+  fixture.engine.emitLevel(1)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+}
+
 @Test @MainActor func DictationRuntimeUsesCoordinatorEventsAndAppliesModifierAfterTerminal() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
   let replacement = DictationModifierKey.leftCommand
@@ -2001,6 +2020,7 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   var finishGate: DictationTestGate?
   var releaseGate: DictationTestGate?
   private(set) var releaseCount = 0
+  private var level: (@MainActor (Float) -> Void)?
 
   init(finalText: String?, kind: DictationSpeechEngine = .standard) {
     self.finalText = finalText
@@ -2010,7 +2030,9 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   func start(
     provisional: @escaping @MainActor (String) -> Void,
     level: @escaping @MainActor (Float) -> Void
-  ) async throws {}
+  ) async throws {
+    self.level = level
+  }
 
   func finish() async throws -> String? {
     if let finishGate { await finishGate.wait() }
@@ -2018,6 +2040,7 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   }
 
   func cancel() async {}
+  func emitLevel(_ value: Float) { level?(value) }
   func releaseResources() async {
     releaseCount += 1
     if let releaseGate { await releaseGate.wait() }
