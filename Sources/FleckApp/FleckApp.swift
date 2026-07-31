@@ -569,6 +569,13 @@
       return await changeModifier(to: modifier)
     }
 
+    func recoverModifierMonitoring() async -> DictationSystemSettingsAction? {
+      let enabled = await retryModifierMonitoring()
+      guard !enabled else { return nil }
+      guard modifierMonitorState == .unauthorized else { return nil }
+      return .init(pane: .inputMonitoring)
+    }
+
     func requestModifierMonitoringAccess() -> Bool {
       shortcutController.requestAccess()
     }

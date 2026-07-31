@@ -539,10 +539,8 @@
           case .enableInputMonitoring:
             Button("Enable Input Monitoring") {
               Task { @MainActor in
-                let enabled = await runtime.retryModifierMonitoring()
-                guard !enabled else { return }
-                guard runtime.modifierMonitorState == .unauthorized else { return }
-                runtime.openSystemSettings(.init(pane: .inputMonitoring))
+                guard let settings = await runtime.recoverModifierMonitoring() else { return }
+                runtime.openSystemSettings(settings)
               }
             }
           case .retry:

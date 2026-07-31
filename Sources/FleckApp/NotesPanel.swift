@@ -103,6 +103,27 @@
           header
           tabStrip
           Divider().opacity(0.35)
+          if let title = modifierRecoveryPresentation.recoveryButtonTitle {
+            HStack(spacing: 8) {
+              Label(modifierRecoveryPresentation.statusCopy, systemImage: "keyboard.badge.ellipsis")
+                .font(.caption)
+              Spacer()
+              Button(title) {
+                Task { @MainActor in
+                  guard let settings = await dictationRuntime.recoverModifierMonitoring() else {
+                    return
+                  }
+                  dictationRuntime.openSystemSettings(settings)
+                }
+              }
+              .accessibilityLabel(title)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(.quaternary.opacity(0.35))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Dictation shortcut unavailable")
+          }
           if let failure = dictationRuntime.captureFailure {
             HStack(spacing: 8) {
               Label(failure.message, systemImage: "exclamationmark.triangle")
@@ -247,6 +268,14 @@
         }
         .animation(motion.standard, value: notePendingDeletion?.id)
       }
+    }
+
+    private var modifierRecoveryPresentation: DictationModifierSettingsPresentation {
+      .init(
+        selected: appState.preferences.dictationModifierKey,
+        monitorStatus: dictationRuntime.modifierMonitorState,
+        canChange: dictationRuntime.canChangeModifier
+      )
     }
 
     private func migrationFailure(

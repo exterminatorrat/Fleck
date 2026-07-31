@@ -19,6 +19,7 @@
     let statusCopy: String
     let isPickerEnabled: Bool
     let recoveryAction: DictationModifierSettingsRecoveryAction?
+    let recoveryButtonTitle: String?
     let guidanceCopy: String?
 
     init(
@@ -40,6 +41,15 @@
       case .unauthorized: .enableInputMonitoring
       case .failed: .retry
       case .stopped, .running: nil
+      }
+      if canChange {
+        recoveryButtonTitle = switch recoveryAction {
+        case .enableInputMonitoring: "Enable \(selected.displayName)"
+        case .retry: "Retry \(selected.displayName)"
+        case nil: nil
+        }
+      } else {
+        recoveryButtonTitle = nil
       }
 
       let monitorCopy = switch monitorStatus {

@@ -287,6 +287,7 @@ import Testing
   )
   #expect(denied.statusCopy.contains("required"))
   #expect(denied.recoveryAction == .enableInputMonitoring)
+  #expect(denied.recoveryButtonTitle == "Enable Right Option")
 
   let unavailable = DictationModifierSettingsPresentation(
     selected: .rightOption,
@@ -302,6 +303,7 @@ import Testing
   )
   #expect(failed.statusCopy.contains("could not start"))
   #expect(failed.recoveryAction == .retry)
+  #expect(failed.recoveryButtonTitle == "Retry Right Option")
 
   let activeCapture = DictationModifierSettingsPresentation(
     selected: .rightOption,
@@ -310,6 +312,27 @@ import Testing
   )
   #expect(!activeCapture.isPickerEnabled)
   #expect(activeCapture.statusCopy.contains("finish"))
+  #expect(activeCapture.recoveryButtonTitle == nil)
+
+  let deniedDuringCapture = DictationModifierSettingsPresentation(
+    selected: .rightOption,
+    monitorStatus: .unauthorized,
+    canChange: false
+  )
+  #expect(deniedDuringCapture.recoveryButtonTitle == nil)
+}
+
+@Test func notesPanelExposesModifierMonitoringRecoveryBesideTheEditor() throws {
+  let testsDirectory = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: testsDirectory.appendingPathComponent("Sources/FleckApp/NotesPanel.swift")
+  )
+
+  #expect(source.contains("modifierRecoveryPresentation"))
+  #expect(source.contains("await dictationRuntime.recoverModifierMonitoring()"))
 }
 
 @Test func dictationModifierSettingsExplainsFnAndConflictProneKeys() {
@@ -347,8 +370,8 @@ import Testing
 
   #expect(!source.contains("DictationShortcutRecorder("))
   #expect(source.contains("Button(\"Enable Input Monitoring\")"))
-  #expect(source.contains("await runtime.retryModifierMonitoring()"))
-  #expect(source.contains("runtime.openSystemSettings(.init(pane: .inputMonitoring))"))
+  #expect(source.contains("await runtime.recoverModifierMonitoring()"))
+  #expect(source.contains("runtime.openSystemSettings(settings)"))
 }
 
 @Test @MainActor func DictationEditorRegistryUsesOnlyTheActualFirstResponder() {
@@ -980,6 +1003,38 @@ import Testing
   #expect(fixture.runtime.modifierMonitorState == .running)
   #expect(fixture.runtime.actualModifier == .leftCommand)
   #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
+}
+
+@Test @MainActor func DictationRuntimeModifierRecoveryReturnsSettingsOnlyWhenAccessIsDenied()
+  async throws
+{
+  let denied = try await RuntimeFixture(
+    finalText: "saved",
+    monitorAccessGranted: false,
+    monitorRequestAccessResult: false
+  )
+  await denied.runtime.awaitStartupAssessment()
+
+  let recovery = await denied.runtime.recoverModifierMonitoring()
+
+  #expect(recovery?.pane == .inputMonitoring)
+  #expect(denied.monitor.requestCount == 1)
+  #expect(denied.runtime.modifierMonitorState == .unauthorized)
+  #expect(denied.runtime.actualModifier == nil)
+
+  let granted = try await RuntimeFixture(
+    finalText: "saved",
+    monitorAccessGranted: false,
+    monitorRequestAccessResult: true
+  )
+  await granted.runtime.awaitStartupAssessment()
+
+  let noRecovery = await granted.runtime.recoverModifierMonitoring()
+
+  #expect(noRecovery == nil)
+  #expect(granted.monitor.requestCount == 1)
+  #expect(granted.runtime.modifierMonitorState == .running)
+  #expect(granted.runtime.actualModifier == .rightOption)
 }
 
 @Test @MainActor func DictationRuntimeNeverRequestsModifierMonitoringAtStartup() async throws {
