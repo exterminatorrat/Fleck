@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && mkdir -p dist/server && cp worker/index.js dist/server/index.js",
+    "test": "node --test src/brainModel.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
