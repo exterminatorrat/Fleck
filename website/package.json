@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && mkdir -p dist/server && cp worker/index.js dist/server/index.js",
-    "test": "node --test src/brainModel.test.js",
+    "test": "node --test src/brainModel.test.js worker/index.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
