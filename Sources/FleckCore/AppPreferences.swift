@@ -5,8 +5,11 @@ public enum AppTheme: String, Codable, CaseIterable, Sendable {
 }
 
 public struct AppPreferences: Codable, Equatable, Sendable {
+  public static let currentEditorTypographyVersion = 1
+
   public var fontFamily: String
   public var fontSize: Double
+  public var editorTypographyVersion: Int
   public var accentHex: String
   public var editorTextHex: String?
   public var editorBackgroundHex: String?
@@ -28,7 +31,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var dictationMicrophoneUID: String?
 
   public init(
-    fontFamily: String = ".AppleSystemUIFont", fontSize: Double = 15,
+    fontFamily: String = "Avenir Next", fontSize: Double = 17,
+    editorTypographyVersion: Int = AppPreferences.currentEditorTypographyVersion,
     accentHex: String = "#7C6CF2", editorTextHex: String? = nil,
     editorBackgroundHex: String? = nil, panelOpacity: Double = 0.82,
     theme: AppTheme = .system, panelWidth: Double = 520, panelHeight: Double = 430,
@@ -45,6 +49,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   ) {
     self.fontFamily = fontFamily
     self.fontSize = fontSize
+    self.editorTypographyVersion = editorTypographyVersion
     self.accentHex = accentHex
     self.editorTextHex = editorTextHex
     self.editorBackgroundHex = editorBackgroundHex
@@ -69,16 +74,31 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case fontFamily, fontSize, accentHex, editorTextHex, editorBackgroundHex, panelOpacity, theme,
-      panelWidth, panelHeight, showFormattingBar, automaticLists, launchAtLogin, shortcuts,
-      dictationSpeechEngine, dictationShortcut, dictationModifierKey, dictationCapsuleDock,
-      dictationHistoryEnabled, dictationCapsuleEnabled, dictationMicrophoneUID
+    case fontFamily, fontSize, editorTypographyVersion, accentHex, editorTextHex,
+      editorBackgroundHex, panelOpacity, theme, panelWidth, panelHeight, showFormattingBar,
+      automaticLists, launchAtLogin, shortcuts, dictationSpeechEngine, dictationShortcut,
+      dictationModifierKey, dictationCapsuleDock, dictationHistoryEnabled,
+      dictationCapsuleEnabled, dictationMicrophoneUID
   }
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
+    let decodedFamily =
+      try c.decodeIfPresent(String.self, forKey: .fontFamily)
+      ?? "Avenir Next"
+    let decodedSize =
+      try c.decodeIfPresent(Double.self, forKey: .fontSize)
+      ?? 17
+    let decodedTypographyVersion =
+      try c.decodeIfPresent(Int.self, forKey: .editorTypographyVersion)
+    let migratesUntouchedTypography =
+      decodedTypographyVersion == nil
+      && decodedFamily == ".AppleSystemUIFont"
+      && decodedSize == 15
     self.init(
-      fontFamily: try c.decodeIfPresent(String.self, forKey: .fontFamily) ?? ".AppleSystemUIFont",
-      fontSize: try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? 15,
+      fontFamily: migratesUntouchedTypography ? "Avenir Next" : decodedFamily,
+      fontSize: migratesUntouchedTypography ? 17 : decodedSize,
+      editorTypographyVersion:
+        decodedTypographyVersion ?? Self.currentEditorTypographyVersion,
       accentHex: try c.decodeIfPresent(String.self, forKey: .accentHex) ?? "#7C6CF2",
       editorTextHex: try c.decodeIfPresent(String.self, forKey: .editorTextHex),
       editorBackgroundHex: try c.decodeIfPresent(String.self, forKey: .editorBackgroundHex),

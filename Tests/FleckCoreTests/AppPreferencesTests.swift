@@ -17,6 +17,54 @@ import Testing
   #expect(value.dictationMicrophoneUID == nil)
 }
 
+@Test func newPreferencesUseAvenirReadingDefaults() {
+  let value = AppPreferences()
+
+  #expect(value.fontFamily == "Avenir Next")
+  #expect(value.fontSize == 17)
+  #expect(value.editorTypographyVersion == AppPreferences.currentEditorTypographyVersion)
+}
+
+@Test func untouchedLegacyTypographyMigratesOnce() throws {
+  let data = Data(#"{"fontFamily":".AppleSystemUIFont","fontSize":15}"#.utf8)
+  let value = try JSONDecoder().decode(AppPreferences.self, from: data)
+
+  #expect(value.fontFamily == "Avenir Next")
+  #expect(value.fontSize == 17)
+  #expect(value.editorTypographyVersion == AppPreferences.currentEditorTypographyVersion)
+}
+
+@Test func legacyCustomTypographyIsPreserved() throws {
+  let family = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo","fontSize":15}"#.utf8)
+  )
+  let size = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":".AppleSystemUIFont","fontSize":19}"#.utf8)
+  )
+
+  #expect(family.fontFamily == "Menlo")
+  #expect(family.fontSize == 15)
+  #expect(size.fontFamily == ".AppleSystemUIFont")
+  #expect(size.fontSize == 19)
+}
+
+@Test func explicitSystemChoiceAfterMigrationRoundTrips() throws {
+  let value = AppPreferences(
+    fontFamily: ".AppleSystemUIFont",
+    fontSize: 15,
+    editorTypographyVersion: AppPreferences.currentEditorTypographyVersion
+  )
+  let decoded = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: JSONEncoder().encode(value)
+  )
+
+  #expect(decoded.fontFamily == ".AppleSystemUIFont")
+  #expect(decoded.fontSize == 15)
+}
+
 @Test func dictationModifierAndDockUsePersistentDefaults() throws {
   let value = AppPreferences()
   #expect(value.dictationModifierKey == .rightOption)
