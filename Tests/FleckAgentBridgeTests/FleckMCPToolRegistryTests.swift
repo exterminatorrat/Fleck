@@ -19,6 +19,7 @@ struct FleckMCPToolRegistryTests {
         "append_text",
         "insert_text",
         "replace_lines",
+        "delete_lines",
         "list_tasks",
         "add_task",
         "rename_task",
@@ -30,7 +31,7 @@ struct FleckMCPToolRegistryTests {
     )
   }
 
-  @Test func schemasDeclareExactRequiredFieldsAndRejectUnknownFields() {
+  @Test func schemasDeclareExactRequiredFieldsAndRejectUnknownFields() throws {
     let expectations: [(String, Set<String>, Set<String>)] = [
       ("list_shared_notes", [], []),
       ("read_note", ["note_id"], ["note_id", "start_line", "max_lines"]),
@@ -53,6 +54,17 @@ struct FleckMCPToolRegistryTests {
         [
           "note_id", "expected_revision", "operation_id", "start_line", "end_line",
           "expected_text_sha256", "text",
+        ]
+      ),
+      (
+        "delete_lines",
+        [
+          "note_id", "expected_revision", "operation_id", "start_line", "end_line",
+          "expected_text_sha256",
+        ],
+        [
+          "note_id", "expected_revision", "operation_id", "start_line", "end_line",
+          "expected_text_sha256",
         ]
       ),
       ("list_tasks", ["note_id"], ["note_id"]),
@@ -91,8 +103,10 @@ struct FleckMCPToolRegistryTests {
     ]
 
     for (name, required, properties) in expectations {
-      let schema = FleckMCPToolRegistry.tools.first { $0.name == name }!
-        .inputSchema.objectValue!
+      let tool = try #require(
+        FleckMCPToolRegistry.tools.first { $0.name == name }
+      )
+      let schema = try #require(tool.inputSchema.objectValue)
       #expect(schema["type"]?.stringValue == "object")
       #expect(schema["additionalProperties"]?.boolValue == false)
       #expect(
@@ -112,12 +126,12 @@ struct FleckMCPToolRegistryTests {
     ] {
       #expect(tools[name]?.description?.contains("65,536 UTF-8 bytes") == true)
     }
-    for name in ["insert_text", "replace_lines"] {
+    for name in ["insert_text", "replace_lines", "delete_lines"] {
       #expect(tools[name]?.description?.contains("one-based") == true)
     }
     for name in [
-      "append_text", "insert_text", "replace_lines", "add_task", "rename_task",
-      "set_task_state", "remove_task", "undo_agent_change",
+      "append_text", "insert_text", "replace_lines", "delete_lines", "add_task",
+      "rename_task", "set_task_state", "remove_task", "undo_agent_change",
     ] {
       #expect(tools[name]?.description?.contains("expected revision") == true)
       #expect(tools[name]?.description?.contains("operation ID") == true)
@@ -166,6 +180,23 @@ struct FleckMCPToolRegistryTests {
             endLine: 3,
             expectedTextSHA256: String(repeating: "a", count: 64),
             text: "hello"
+          )
+        )
+      ),
+      (
+        "delete_lines",
+        write.merging([
+          "start_line": 2,
+          "end_line": 3,
+          "expected_text_sha256": .string(String(repeating: "a", count: 64)),
+        ]) { _, new in new },
+        .replaceLines(
+          request: .init(
+            context: context,
+            startLine: 2,
+            endLine: 3,
+            expectedTextSHA256: String(repeating: "a", count: 64),
+            text: ""
           )
         )
       ),

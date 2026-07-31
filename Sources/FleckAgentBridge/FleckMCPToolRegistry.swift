@@ -61,6 +61,19 @@
           + ["start_line", "end_line", "expected_text_sha256", "text"]
       ),
       tool(
+        "delete_lines",
+        writeDescription("Delete an inclusive one-based line range."),
+        properties: writeProperties([
+          "start_line": positiveInteger("First one-based line to delete."),
+          "end_line": positiveInteger("Last one-based line to delete, inclusive."),
+          "expected_text_sha256": string(
+            "SHA-256 of the observed line range as 64 lowercase hexadecimal characters."
+          ),
+        ]),
+        required: writeRequired
+          + ["start_line", "end_line", "expected_text_sha256"]
+      ),
+      tool(
         "list_tasks",
         "List checklist tasks in a shared note.",
         properties: ["note_id": uuid("Stable note ID.")],
@@ -184,6 +197,27 @@
             endLine: endLine,
             expectedTextSHA256: hash,
             text: try input.boundedText("text")
+          )
+        )
+      case "delete_lines":
+        let context = try input.writeContext()
+        let startLine = try input.positiveInt("start_line")
+        let endLine = try input.positiveInt("end_line")
+        guard endLine >= startLine else { throw invalidPayload() }
+        let hash = try input.string("expected_text_sha256")
+        guard
+          hash.utf8.count == 64,
+          hash.allSatisfy({ $0.isHexDigit && !$0.isUppercase })
+        else {
+          throw invalidPayload()
+        }
+        command = .replaceLines(
+          request: .init(
+            context: context,
+            startLine: startLine,
+            endLine: endLine,
+            expectedTextSHA256: hash,
+            text: ""
           )
         )
       case "list_tasks":

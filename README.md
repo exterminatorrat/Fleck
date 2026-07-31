@@ -92,9 +92,11 @@ printf '%s' 'Follow up' | fleck note append NOTE_UUID --stdin \
 ```
 
 The MCP tools are `list_shared_notes`, `read_note`, `append_text`,
-`insert_text`, `replace_lines`, `list_tasks`, `add_task`, `rename_task`,
-`set_task_state`, `remove_task`, `list_agent_activity`, and
-`undo_agent_change`.
+`insert_text`, `replace_lines`, `delete_lines`, `list_tasks`, `add_task`,
+`rename_task`, `set_task_state`, `remove_task`, `list_agent_activity`, and
+`undo_agent_change`. `delete_lines` removes a verified one-based line range
+while preserving the same revision checks, activity record, and safe Undo as
+other agent writes.
 
 Every write requires the revision returned by the last read and a caller-owned
 operation UUID. On `revision_conflict`, reread before constructing a new
