@@ -53,6 +53,63 @@ import Testing
   #expect(result.outcome == .usedRaw)
 }
 
+@Test func FoundationModelDictationLocallyRemovesAdjacentRepeatedPhraseWhenModelIsUnavailable() async {
+  let raw =
+    "Finishing on clarifying all the  all the stuff like  trying to make to clean up better"
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 25 },
+    cleanupGenerator: { _ in "unused" },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = await dictation.cleanupResult(raw)
+
+  #expect(
+    result.text
+      == "Finishing on clarifying all the stuff like trying to make to clean up better"
+  )
+  #expect(result.outcome == .cleaned)
+}
+
+@Test func FoundationModelDictationAcceptsFaithfulModelCleanupOfAdjacentRepeatedPhrase() async {
+  let raw = "We should review all the all the release notes."
+  let result = await cleanupResult(
+    raw: raw,
+    modelOutput: "We should review all the release notes."
+  )
+
+  #expect(result.text == "We should review all the release notes.")
+  #expect(result.outcome == .cleaned)
+}
+
+@Test func FoundationModelDictationPreservesIntentionalSingleWordEmphasisWithoutModel() async {
+  let raw = "This is very very important."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 25 },
+    cleanupGenerator: { _ in "unused" },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = await dictation.cleanupResult(raw)
+
+  #expect(result.text == raw)
+  #expect(result.outcome == .usedRaw)
+}
+
+@Test func FoundationModelDictationLocallyRemovesExplicitFillerAndAdjacentIStutter() async {
+  let raw = "um, I I need to email Priya Shah about 3 invoices"
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 25 },
+    cleanupGenerator: { _ in "unused" },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = await dictation.cleanupResult(raw)
+
+  #expect(result.text == "I need to email Priya Shah about 3 invoices")
+  #expect(result.outcome == .cleaned)
+}
+
 @Test func FoundationModelDictationRejectsSummaryLoss() async {
   let raw = "The launch review covered timeline risks and budget."
   let result = await cleanupResult(raw: raw, modelOutput: "The launch review covered budget.")

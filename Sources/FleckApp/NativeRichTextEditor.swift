@@ -540,8 +540,6 @@
       }
       context.coordinator.fontFamily = fontFamily
       context.coordinator.fontSize = fontSize
-      context.coordinator.text = text
-      context.coordinator.richTextRTF = richTextRTF
     }
 
     @discardableResult
@@ -549,7 +547,20 @@
       to textView: NSTextView,
       coordinator: Coordinator
     ) -> Bool {
-      let modelChanged = coordinator.text != text || coordinator.richTextRTF != richTextRTF
+      if coordinator.text == text, coordinator.richTextRTF == richTextRTF {
+        coordinator.lastModelText = text
+        coordinator.lastModelRichTextRTF = richTextRTF
+        return false
+      }
+      if coordinator.hasPendingLocalEdit,
+        coordinator.lastModelText == text,
+        coordinator.lastModelRichTextRTF == richTextRTF
+      {
+        return false
+      }
+      let modelChanged =
+        coordinator.lastModelText != text
+        || coordinator.lastModelRichTextRTF != richTextRTF
       if modelChanged, commands.isFocusedDictationActive {
         commands.cancelFocusedDictation()
       }
@@ -563,6 +574,8 @@
       )
       coordinator.text = text
       coordinator.richTextRTF = richTextRTF
+      coordinator.lastModelText = text
+      coordinator.lastModelRichTextRTF = richTextRTF
       return true
     }
 
@@ -583,8 +596,10 @@
     }
 
     private func configuredFont() -> NSFont {
-      let systemFont = NSFont.systemFont(ofSize: fontSize)
-      return NSFontManager.shared.convert(systemFont, toFamily: fontFamily)
+      EditorTypography.bodyFont(
+        family: fontFamily,
+        size: fontSize
+      )
     }
 
     private func applyColors(to textView: NSTextView) {
@@ -598,8 +613,15 @@
     }
 
     private func applyTypingFont(to textView: NSTextView) {
-      let font = configuredFont()
-      textView.typingAttributes[.font] = font
+      var attributes = textView.typingAttributes
+      attributes.merge(
+        EditorTypography.defaultAttributes(
+          family: fontFamily,
+          size: fontSize
+        ),
+        uniquingKeysWith: { _, new in new }
+      )
+      textView.typingAttributes = attributes
     }
 
     private func applyDefaultFont(to textView: NSTextView) {
@@ -607,7 +629,13 @@
       applyTypingFont(to: textView)
       textView.font = font
       guard let storage = textView.textStorage, storage.length > 0 else { return }
-      storage.addAttribute(.font, value: font, range: NSRange(location: 0, length: storage.length))
+      storage.addAttributes(
+        EditorTypography.defaultAttributes(
+          family: fontFamily,
+          size: fontSize
+        ),
+        range: NSRange(location: 0, length: storage.length)
+      )
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -616,6 +644,11 @@
       var fontSize: Double
       var text: String
       var richTextRTF: Data?
+      var lastModelText: String
+      var lastModelRichTextRTF: Data?
+      var hasPendingLocalEdit: Bool {
+        text != lastModelText || richTextRTF != lastModelRichTextRTF
+      }
       @MainActor
       init(parent: NativeRichTextEditor) {
         self.parent = parent
@@ -623,6 +656,8 @@
         fontSize = parent.fontSize
         text = parent.text
         richTextRTF = parent.richTextRTF
+        lastModelText = parent.text
+        lastModelRichTextRTF = parent.richTextRTF
       }
 
       func textDidChange(_ notification: Notification) {

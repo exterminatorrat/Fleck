@@ -7,7 +7,7 @@ import Testing
 @Test func DictationAccessibilityMapsEveryStatusToVisibleAndVoiceOverText() {
   let cases: [(DictationCapsuleStatus, String?, String)] = [
     (.idle, nil, "Fleck dictation ready"),
-    (.listening, "Listening", "Dictation listening"),
+    (.listening, nil, "Dictation listening"),
     (.finalizing, "Finishing", "Finishing dictation"),
     (.cleaning, "Cleaning up", "Cleaning up dictation"),
     (.routing, "Finding note", "Finding a note for dictation"),
@@ -79,13 +79,31 @@ import Testing
   let left = DictationCapsuleController.frame(for: .left, in: visibleFrame)
   let right = DictationCapsuleController.frame(for: .right, in: visibleFrame)
 
-  #expect(bottom.size == DictationCapsuleController.idleSize)
+  #expect(DictationCapsuleController.idleSize == CGSize(width: 40, height: 26))
+  #expect(DictationCapsuleController.listeningSize == CGSize(width: 196, height: 32))
+  #expect(DictationCapsuleController.activeSize.height == 32)
+  #expect(bottom.size == CGSize(width: 40, height: 26))
   #expect(bottom.midX == visibleFrame.midX)
   #expect(bottom.minY > visibleFrame.minY)
   #expect(left.minX > visibleFrame.minX)
   #expect(left.midY == visibleFrame.midY)
   #expect(right.maxX < visibleFrame.maxX)
   #expect(right.midY == visibleFrame.midY)
+}
+
+@Test @MainActor func DictationAccessibilityKeepsEveryActiveStatusAtCompactThickness() {
+  #expect(DictationCapsuleController.size(for: .listening) == CGSize(width: 196, height: 32))
+  for status in [
+    DictationCapsuleStatus.finalizing,
+    .cleaning,
+    .routing,
+    .saved(destination: "Inbox"),
+    .savedWithoutCleanup(destination: "Inbox"),
+    .repairingModel,
+    .failed("Unavailable"),
+  ] {
+    #expect(DictationCapsuleController.size(for: status).height == 32)
+  }
 }
 
 @Test @MainActor func DictationAccessibilitySelectsTheNearestSupportedDock() {

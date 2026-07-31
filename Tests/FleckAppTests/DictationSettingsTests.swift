@@ -808,6 +808,25 @@ import Testing
   #expect(fixture.runtime.currentCapsuleStatus == .idle)
 }
 
+@Test @MainActor func DictationRuntimeForwardsLevelsOnlyToAnActiveVisibleCapsule() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: false)
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  fixture.engine.emitLevel(0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  fixture.engine.emitLevel(0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+
+  await fixture.runtime.cancel()
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+  fixture.engine.emitLevel(1)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+}
+
 @Test @MainActor func DictationRuntimeUsesCoordinatorEventsAndAppliesModifierAfterTerminal() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
   let replacement = DictationModifierKey.leftCommand
@@ -946,29 +965,36 @@ import Testing
   let fixture = try await RuntimeFixture(
     finalText: "saved",
     preferredModifier: .leftCommand,
-    monitorAccessGranted: false
+    monitorAccessGranted: false,
+    monitorRequestAccessResult: false
   )
   await fixture.runtime.awaitStartupAssessment()
 
-  #expect(fixture.monitor.requestCount == 0)
+  #expect(fixture.monitor.requestCount == 1)
   #expect(fixture.runtime.modifierMonitorState == .unauthorized)
   #expect(fixture.runtime.actualModifier == nil)
   #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
 
-  fixture.monitor.requestAccessResult = false
-  let denied = await fixture.runtime.retryModifierMonitoring()
-  #expect(!denied)
-  #expect(fixture.monitor.requestCount == 1)
-  #expect(fixture.runtime.modifierMonitorState == .unauthorized)
-  #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
-
-  fixture.monitor.requestAccessResult = true
-  let granted = await fixture.runtime.retryModifierMonitoring()
-  #expect(granted)
-  #expect(fixture.monitor.requestCount == 2)
+  fixture.monitor.accessGranted = true
+  fixture.runtime.applicationDidBecomeActive()
   #expect(fixture.runtime.modifierMonitorState == .running)
   #expect(fixture.runtime.actualModifier == .leftCommand)
   #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
+}
+
+@Test @MainActor func DictationRuntimeRequestsModifierMonitoringOnceAtStartup() async throws {
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    monitorAccessGranted: false,
+    monitorRequestAccessResult: true
+  )
+
+  await fixture.runtime.awaitStartupAssessment()
+  fixture.runtime.preferencesDidChange()
+
+  #expect(fixture.monitor.requestCount == 1)
+  #expect(fixture.runtime.modifierMonitorState == .running)
+  #expect(fixture.runtime.actualModifier == .rightOption)
 }
 
 @Test @MainActor func DictationRuntimeRunningMonitorChangesWithoutRestart()
@@ -1787,6 +1813,7 @@ private final class RuntimeFixture {
     waitForInitialLoadBeforeRuntime: Bool = true,
     blockInitialLoad: Bool = false,
     monitorAccessGranted: Bool = true,
+    monitorRequestAccessResult: Bool = true,
     enhancedReadyAtStartup: Bool = false,
     permissionController: DictationPermissionController = .init(),
     availability: DictationAvailability = .evaluate(.init(
@@ -1840,6 +1867,7 @@ private final class RuntimeFixture {
       appState.preferences = preferences
     }
     monitor.accessGranted = monitorAccessGranted
+    monitor.requestAccessResult = monitorRequestAccessResult
     enhancedReady.value = enhancedReadyAtStartup
     engine = RuntimeSpeechEngine(finalText: finalText, kind: preferredEngine)
     provider = RuntimeEngineProvider(engine: engine)
@@ -1992,6 +2020,7 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   var finishGate: DictationTestGate?
   var releaseGate: DictationTestGate?
   private(set) var releaseCount = 0
+  private var level: (@MainActor (Float) -> Void)?
 
   init(finalText: String?, kind: DictationSpeechEngine = .standard) {
     self.finalText = finalText
@@ -2001,7 +2030,9 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   func start(
     provisional: @escaping @MainActor (String) -> Void,
     level: @escaping @MainActor (Float) -> Void
-  ) async throws {}
+  ) async throws {
+    self.level = level
+  }
 
   func finish() async throws -> String? {
     if let finishGate { await finishGate.wait() }
@@ -2009,6 +2040,7 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   }
 
   func cancel() async {}
+  func emitLevel(_ value: Float) { level?(value) }
   func releaseResources() async {
     releaseCount += 1
     if let releaseGate { await releaseGate.wait() }

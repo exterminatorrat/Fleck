@@ -130,7 +130,7 @@
         in: range,
         with: NSAttributedString(
           string: draft.patch.afterText,
-          attributes: [.font: defaults.font]
+          attributes: defaults.attributes
         )
       )
       guard utf16Equal(result.string, draft.body) else {
@@ -146,7 +146,7 @@
       guard let richTextRTF = note.richTextRTF else {
         return NSAttributedString(
           string: note.body,
-          attributes: [.font: defaults.font]
+          attributes: defaults.attributes
         )
       }
       guard

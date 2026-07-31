@@ -38,8 +38,17 @@ import Testing
   let addedFont = try #require(
     decoded.attribute(.font, at: "Existing\n\n".utf16.count, effectiveRange: nil) as? NSFont
   )
+  let addedParagraph = try #require(
+    decoded.attribute(
+      .paragraphStyle,
+      at: "Existing\n\n".utf16.count,
+      effectiveRange: nil
+    ) as? NSParagraphStyle
+  )
   #expect(addedFont.familyName == "Menlo")
   #expect(addedFont.pointSize == 17)
+  #expect(addedParagraph.minimumLineHeight == 27)
+  #expect(addedParagraph.maximumLineHeight == 27)
 }
 
 @Test @MainActor func agentInsertionPreservesAttributedRunsOutsideExactRange() throws {
