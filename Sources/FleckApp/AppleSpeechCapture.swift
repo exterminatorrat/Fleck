@@ -532,11 +532,13 @@ enum CoreAudioMicrophone {
   }
 }
 
-private actor LegacyAppleSpeechSession: AppleSpeechSession {
-  private let recognizer: SFSpeechRecognizer?
-  private let audioEngine = AVAudioEngine()
+actor LegacyAppleSpeechSession: AppleSpeechSession {
+  private let makeAudioEngine: @Sendable () -> AVAudioEngine
+  private let makeRecognizer: @Sendable () -> SFSpeechRecognizer?
   private let microphoneUID: String?
   private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
+  private var recognizer: SFSpeechRecognizer?
+  private var audioEngine: AVAudioEngine?
   private var request: SFSpeechAudioBufferRecognitionRequest?
   private var recognitionTask: SFSpeechRecognitionTask?
   private var ingress: BoundedAudioIngress?
@@ -551,14 +553,20 @@ private actor LegacyAppleSpeechSession: AppleSpeechSession {
   private var terminationRequested = false
 
   var supportsOnDeviceRecognition: Bool {
-    recognizer?.supportsOnDeviceRecognition == true
+    prepareFrameworkObjects()
+    return recognizer?.supportsOnDeviceRecognition == true
   }
 
   init(
     microphoneUID: String?,
-    microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void
+    microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void,
+    makeAudioEngine: @escaping @Sendable () -> AVAudioEngine = { AVAudioEngine() },
+    makeRecognizer: @escaping @Sendable () -> SFSpeechRecognizer? = {
+      SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    }
   ) {
-    recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    self.makeAudioEngine = makeAudioEngine
+    self.makeRecognizer = makeRecognizer
     self.microphoneUID = microphoneUID
     self.microphoneSelectionChanged = microphoneSelectionChanged
   }
@@ -568,7 +576,8 @@ private actor LegacyAppleSpeechSession: AppleSpeechSession {
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws {
     guard !terminationRequested else { throw CancellationError() }
-    guard let recognizer, recognizer.supportsOnDeviceRecognition else {
+    prepareFrameworkObjects()
+    guard let audioEngine, let recognizer, recognizer.supportsOnDeviceRecognition else {
       throw DictationFailure.unavailable
     }
     let request = SFSpeechAudioBufferRecognitionRequest()
@@ -660,6 +669,8 @@ private actor LegacyAppleSpeechSession: AppleSpeechSession {
     }
     recognitionTask = nil
     request = nil
+    recognizer = nil
+    audioEngine = nil
     ingress = nil
     ingressWorker = nil
     provisional = nil
@@ -702,6 +713,7 @@ private actor LegacyAppleSpeechSession: AppleSpeechSession {
   }
 
   private func stopAudio() {
+    guard let audioEngine else { return }
     if tapInstalled {
       audioEngine.inputNode.removeTap(onBus: 0)
       tapInstalled = false
@@ -721,6 +733,12 @@ private actor LegacyAppleSpeechSession: AppleSpeechSession {
     guard !didCancelRecognition else { return }
     didCancelRecognition = true
     recognitionTask?.cancel()
+  }
+
+  private func prepareFrameworkObjects() {
+    guard !terminationRequested, audioEngine == nil else { return }
+    audioEngine = makeAudioEngine()
+    recognizer = makeRecognizer()
   }
 }
 
@@ -749,9 +767,9 @@ private struct ModernAnalyzerInputSequence: AsyncSequence, @unchecked Sendable {
 @available(macOS 26.0, *)
 private actor ModernAppleSpeechSession: AppleSpeechSession {
   private let locale = Locale(identifier: "en-US")
-  private let audioEngine = AVAudioEngine()
   private let microphoneUID: String?
   private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
+  private var audioEngine: AVAudioEngine?
   private var analyzer: SpeechAnalyzer?
   private var converter: AVAudioConverter?
   private var analyzerFormat: AVAudioFormat?
@@ -782,6 +800,8 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws {
     guard !terminationRequested else { throw CancellationError() }
+    let audioEngine = AVAudioEngine()
+    self.audioEngine = audioEngine
     let installedLocales = await DictationTranscriber.installedLocales
     guard !terminationRequested else { throw CancellationError() }
     guard AppleSpeechLocale.containsEquivalent(locale, in: installedLocales) else {
@@ -924,6 +944,7 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     resultsTask = nil
     ingress = nil
     analyzer = nil
+    audioEngine = nil
     converter = nil
     analyzerFormat = nil
     provisional = nil
@@ -960,6 +981,7 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
   }
 
   private func stopAudio() {
+    guard let audioEngine else { return }
     if tapInstalled {
       audioEngine.inputNode.removeTap(onBus: 0)
       tapInstalled = false

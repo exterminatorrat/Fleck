@@ -636,9 +636,11 @@ private final class PermissionProbe {
   let legacy = try #require(
     source.components(separatedBy: "@available(macOS 26.0, *)").first
   )
-  let modern = try #require(
-    source.components(separatedBy: "private final class ModernAudioConversion").last
+  let modernSections = source.components(
+    separatedBy: "private actor ModernAppleSpeechSession"
   )
+  #expect(modernSections.count == 2)
+  let modern = try #require(modernSections.last)
 
   #expect(legacy.contains("levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))"))
   #expect(!legacy.contains("self.level?(AudioBufferTools.normalizedRMS(buffer))"))
@@ -700,6 +702,38 @@ private final class PermissionProbe {
   #expect(observation.startRanOnMainThread == false)
   #expect(observation.heartbeatRanBeforeRelease)
   await capture.cancel()
+}
+
+@Test @MainActor func appleSpeechCaptureConstructsLegacyFrameworkObjectsOffMainActor() async {
+  let observation = FrameworkConstructionObservation()
+  let capture = AppleSpeechCapture(
+    requestPermission: { .granted },
+    makeSession: {
+      LegacyAppleSpeechSession(
+        microphoneUID: nil,
+        microphoneSelectionChanged: { _ in },
+        makeAudioEngine: {
+          let audioEngine = AVAudioEngine()
+          observation.recordAudioEngineConstruction(audioEngine)
+          return audioEngine
+        },
+        makeRecognizer: {
+          observation.recordRecognizerConstruction()
+          return nil
+        }
+      )
+    }
+  )
+
+  await #expect(throws: DictationFailure.unavailable) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+
+  #expect(observation.audioEngineConstructionCount == 1)
+  #expect(observation.recognizerConstructionCount == 1)
+  #expect(!observation.audioEngineConstructionRanOnMainThread)
+  #expect(!observation.recognizerConstructionRanOnMainThread)
+  #expect(observation.audioEngineWasReleased)
 }
 
 @Test func appleSpeechTranscriptAssemblerKeepsPauseSegmentsOnOneCleanLine() {
@@ -820,6 +854,34 @@ private final class PermissionProbe {
 
 private enum SpeechProbeError: Error {
   case failed
+}
+
+private final class FrameworkConstructionObservation: @unchecked Sendable {
+  private let lock = NSLock()
+  private var audioEngineThreads: [Bool] = []
+  private var recognizerThreads: [Bool] = []
+  private weak var audioEngine: AVAudioEngine?
+
+  var audioEngineConstructionCount: Int { lock.withLock { audioEngineThreads.count } }
+  var recognizerConstructionCount: Int { lock.withLock { recognizerThreads.count } }
+  var audioEngineConstructionRanOnMainThread: Bool {
+    lock.withLock { audioEngineThreads.contains(true) }
+  }
+  var recognizerConstructionRanOnMainThread: Bool {
+    lock.withLock { recognizerThreads.contains(true) }
+  }
+  var audioEngineWasReleased: Bool { lock.withLock { audioEngine == nil } }
+
+  func recordAudioEngineConstruction(_ audioEngine: AVAudioEngine) {
+    lock.withLock {
+      audioEngineThreads.append(Thread.isMainThread)
+      self.audioEngine = audioEngine
+    }
+  }
+
+  func recordRecognizerConstruction() {
+    lock.withLock { recognizerThreads.append(Thread.isMainThread) }
+  }
 }
 
 private final class BlockingStartObservation: @unchecked Sendable {
