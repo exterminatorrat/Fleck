@@ -198,8 +198,8 @@ final class CoalescingLevelRelay: @unchecked Sendable {
     lock.unlock()
 
     guard shouldSchedule else { return }
-    Task { @MainActor [weak self] in
-      await self?.deliverLatest()
+    Task { @MainActor in
+      await deliverLatest()
     }
   }
 
@@ -223,8 +223,8 @@ final class CoalescingLevelRelay: @unchecked Sendable {
     }
 
     guard shouldSchedule else { return }
-    Task { @MainActor [weak self] in
-      await self?.deliverLatest()
+    Task { @MainActor in
+      await deliverLatest()
     }
   }
 }

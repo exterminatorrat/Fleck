@@ -575,6 +575,18 @@ private final class PermissionProbe {
   #expect(await deliveries.waitFor([0.1, 0.9]))
 }
 
+@Test @MainActor func coalescingLevelRelayDeliversAfterItsExternalOwnerIsReleased() async {
+  let deliveries = LevelDeliveries()
+  var relay: CoalescingLevelRelay? = CoalescingLevelRelay { level in
+    await deliveries.append(level)
+  }
+
+  relay?.submit(0.7)
+  relay = nil
+
+  #expect(await deliveries.waitFor([0.7]))
+}
+
 @Test func appleSpeechLevelProducersSubmitToTheCoalescingRelay() throws {
   let source = try String(
     contentsOf: URL(fileURLWithPath: #filePath)
