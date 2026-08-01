@@ -1,5 +1,6 @@
 import BrainHologram from "./BrainHologram";
 import IdeasSection from "./IdeasSection";
+import JourneySection from "./JourneySection";
 import Navigation from "./Navigation";
 
 const APP_STORE_URL = import.meta.env.VITE_APP_STORE_URL?.trim();
@@ -59,6 +60,7 @@ export default function App() {
         </div>
       </section>
       <IdeasSection />
+      <JourneySection />
     </main>
   );
 }
