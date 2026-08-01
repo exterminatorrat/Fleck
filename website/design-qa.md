@@ -20,10 +20,13 @@ scope: the brain hologram only.
 - Spacing and layout rhythm: The brain fills the desktop hero at approximately
   the same visual scale as the source and remains centered without horizontal
   overflow at 390 px.
-- Colors and visual tokens: The hero uses only graphite and pale-violet canvas
-  geometry; no generated brain image is rendered behind it.
-- Network rendering: A deterministic canvas adds 560 desktop nodes and more
-  than two connections per node across two separated hemispheres.
+- Colors and visual tokens: The first render exposed a cyan-green chroma cast.
+  The final asset was recolored to the approved pale lavender and violet palette.
+- Image quality and asset fidelity: The 1536 × 1024 anatomical raster asset has
+  transparent corners, a clear bilateral silhouette, central fissure,
+  recognizable lobes, and restrained glowing nodes. A deterministic canvas
+  overlay adds 560 desktop nodes and more than two connections per node while
+  remaining lighter than the dense source reference.
 - Copy and content: No hero copy changed in this pass.
 - Responsive behavior: Desktop and mobile captures have no horizontal overflow.
 - Interaction: Moving the pointer across the brain gently displaces nearby nodes
@@ -36,14 +39,20 @@ scope: the brain hologram only.
 
 ## Comparison history
 
-1. Interaction revision: restored the earlier responsive dot-and-line behavior
+1. Initial implementation: recognizable brain, but the browser render showed a
+   green cast from chroma removal and excessive visual weight.
+2. Fix: recolored the raster asset to lavender/violet and reduced its visual
+   weight.
+3. Interaction revision: restored the earlier responsive dot-and-line behavior
    as a separate canvas, constrained its nodes to two brain-shaped hemispheres,
    and increased edge density without restoring the cursor signal.
-2. The generated anatomical background image was removed at the user's request,
-   leaving the original interactive canvas as the complete hero visual.
-3. Post-fix evidence: `design-qa-hero-desktop.png`,
-   `design-qa-hero-mobile.png`, and `design-qa-hero-comparison.png` show the
-   canvas-only treatment and readable copy.
+4. Compositing fix: moved the breathing scale to the shared layer so the raster
+   and canvas stay registered, then separated their opacity and z-index values
+   so the anatomical base remains visible.
+5. Post-fix evidence: `design-qa-hero-desktop.png`,
+   `design-qa-hero-mobile.png`, and `design-qa-hero-comparison.png` show a clear
+   brain silhouette, visible interactive network, approved white-violet
+   treatment, and readable copy.
 
 ## Focused comparison
 
@@ -52,7 +61,9 @@ region. No additional component crop was needed.
 
 ## Follow-up polish
 
-- P3: Node and edge opacity can be tuned after live user feedback.
+- P3: Node and edge opacity can be tuned after live user feedback; the current
+  hybrid intentionally sits between the old random web and the denser approved
+  concept.
 
 ## Final result
 

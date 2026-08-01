@@ -141,6 +141,13 @@ export default function BrainHologram() {
   return (
     <div className="brain-hologram" aria-hidden="true">
       <div className="brain-hologram-visual">
+        <img
+          src="/assets/fleck-brain-hologram.png"
+          alt=""
+          width="1536"
+          height="1024"
+          decoding="async"
+        />
         <canvas ref={canvasRef} className="brain-network" />
       </div>
     </div>

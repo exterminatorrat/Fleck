@@ -143,6 +143,7 @@ a {
   animation: brain-breathe 9s ease-in-out infinite;
 }
 
+.brain-hologram img,
 .brain-network {
   position: absolute;
   inset: 0;
@@ -151,7 +152,16 @@ a {
   height: 100%;
 }
 
+.brain-hologram img {
+  z-index: 0;
+  object-fit: contain;
+  opacity: 0.86;
+  filter: saturate(1.18) contrast(1.02);
+  mix-blend-mode: multiply;
+}
+
 .brain-network {
+  z-index: 1;
   opacity: 0.86;
 }
 
