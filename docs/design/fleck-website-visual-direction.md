@@ -8,8 +8,9 @@ The approved full-page reference is
 ## Locked direction
 
 - Warm-white editorial canvas with compact T3-like page insets and navigation.
-- The hero is intentionally free of background illustration, hologram, canvas,
-  nodes, or connections; typography and whitespace carry the opening screen.
+- The hero uses the lightweight interactive Sites canvas: graphite and violet
+  dots with short connections across two hemispheres. No generated brain image
+  is rendered behind it.
 - Violet is the sole accent; graphite typography stays dominant and readable.
 - The page tells one continuous story: fleeting idea, immediate capture, cleanup,
   deliberate Agent Access, agent collaboration, and finished work.

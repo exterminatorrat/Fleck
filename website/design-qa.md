@@ -7,8 +7,10 @@
 
 ## Findings
 
-- The hero contains no brain image, hologram, canvas, nodes, connections, or
-  decorative animation.
+- The hero contains the interactive dots-and-connections canvas used by the
+  Sites version, with no generated brain image behind it.
+- Pointer movement gently displaces nearby nodes and edges; touch interaction
+  stays disabled and reduced motion renders a static network.
 - Existing navigation, hero copy, and download/GitHub actions are unchanged.
 - The centered content remains readable at desktop and mobile breakpoints.
 - Mobile has no horizontal overflow.

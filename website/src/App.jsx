@@ -1,3 +1,4 @@
+import BrainHologram from "./BrainHologram";
 import Navigation from "./Navigation";
 
 const APP_STORE_URL = import.meta.env.VITE_APP_STORE_URL?.trim();
@@ -23,6 +24,8 @@ export default function App() {
     <main className="page">
       <Navigation downloadProps={downloadProps} />
       <section className="hero" aria-labelledby="hero-title">
+        <BrainHologram />
+
         <div className="hero-content">
           <h1 id="hero-title">Your panel for managing the noise.</h1>
           <p className="hero-motto">
