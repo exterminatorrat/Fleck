@@ -1,69 +1,18 @@
-# Fleck hero brain design QA
+# Fleck hero design QA
 
-- Source visual truth: `../docs/design/references/fleck-website-approved-direction-2026-08-01.png`
-- Implementation screenshot: `design-qa-hero-desktop.png`
+- Desktop screenshot: `design-qa-hero-desktop.png`
 - Mobile screenshot: `design-qa-hero-mobile.png`
-- Combined comparison: `design-qa-hero-comparison.png`
-- Source pixels: 724 × 2172; hero comparison crop: 724 × 430, normalized to 1440 × 855.
-- Desktop implementation: 1440 × 1000 px at a 1440 × 1000 CSS viewport and 1× capture density.
-- Mobile implementation: 390 × 844 px at a 390 × 844 CSS viewport and 1× capture density.
-- State: initial hero, light theme, idle and pointer-hover interaction checked.
+- Desktop viewport: 1440 × 1000 px.
+- Mobile viewport: 390 × 844 px.
 
 ## Findings
 
-No actionable P0, P1, or P2 differences remain within this iteration's approved
-scope: the brain hologram only.
-
-- Fonts and typography: Existing Outfit hierarchy and copy remain unchanged.
-  The brain's quiet center preserves headline and body contrast at both tested
-  breakpoints.
-- Spacing and layout rhythm: The brain fills the desktop hero at approximately
-  the same visual scale as the source and remains centered without horizontal
-  overflow at 390 px.
-- Colors and visual tokens: The first render exposed a cyan-green chroma cast.
-  The final asset was recolored to the approved pale lavender and violet palette.
-- Image quality and asset fidelity: The 1536 × 1024 anatomical raster asset has
-  transparent corners, a clear bilateral silhouette, central fissure,
-  recognizable lobes, and restrained glowing nodes. A deterministic canvas
-  overlay adds 560 desktop nodes and more than two connections per node while
-  remaining lighter than the dense source reference.
-- Copy and content: No hero copy changed in this pass.
-- Responsive behavior: Desktop and mobile captures have no horizontal overflow.
-- Interaction: Moving the pointer across the brain gently displaces nearby nodes
-  and their connected edges. No cursor-bound ring, radar arc, or signal graphic
-  is rendered.
-- Accessibility and motion: The complete hologram is decorative and hidden from
-  assistive technology. Breathing, drift, and pointer displacement are disabled
-  by `prefers-reduced-motion`; touch input does not activate pointer displacement.
-- Console: No errors or warnings were reported.
-
-## Comparison history
-
-1. Initial implementation: recognizable brain, but the browser render showed a
-   green cast from chroma removal and excessive visual weight.
-2. Fix: recolored the raster asset to lavender/violet and reduced its visual
-   weight.
-3. Interaction revision: restored the earlier responsive dot-and-line behavior
-   as a separate canvas, constrained its nodes to two brain-shaped hemispheres,
-   and increased edge density without restoring the cursor signal.
-4. Compositing fix: moved the breathing scale to the shared layer so the raster
-   and canvas stay registered, then separated their opacity and z-index values
-   so the anatomical base remains visible.
-5. Post-fix evidence: `design-qa-hero-desktop.png`,
-   `design-qa-hero-mobile.png`, and `design-qa-hero-comparison.png` show a clear
-   brain silhouette, visible interactive network, approved white-violet
-   treatment, and readable copy.
-
-## Focused comparison
-
-The entire current page is the hero, so the viewport capture is also the focused
-region. No additional component crop was needed.
-
-## Follow-up polish
-
-- P3: Node and edge opacity can be tuned after live user feedback; the current
-  hybrid intentionally sits between the old random web and the denser approved
-  concept.
+- The hero contains no brain image, hologram, canvas, nodes, connections, or
+  decorative animation.
+- Existing navigation, hero copy, and download/GitHub actions are unchanged.
+- The centered content remains readable at desktop and mobile breakpoints.
+- Mobile has no horizontal overflow.
+- The browser console reports no warnings or errors.
 
 ## Final result
 

@@ -8,10 +8,8 @@ The approved full-page reference is
 ## Locked direction
 
 - Warm-white editorial canvas with compact T3-like page insets and navigation.
-- A prominent, recognizable bilateral violet neural brain anchors the hero,
-  with an interactive canvas of dots and connections aligned to its silhouette.
-- The brain has fine filaments, nodes, translucent contour depth, and restrained
-  luminous clusters. It never follows the cursor or emits radar/signal arcs.
+- The hero is intentionally free of background illustration, hologram, canvas,
+  nodes, or connections; typography and whitespace carry the opening screen.
 - Violet is the sole accent; graphite typography stays dominant and readable.
 - The page tells one continuous story: fleeting idea, immediate capture, cleanup,
   deliberate Agent Access, agent collaboration, and finished work.
@@ -22,7 +20,7 @@ The approved full-page reference is
 
 ## Implementation order
 
-1. Hero brain hologram.
+1. Hero typography and calls to action.
 2. Problem narrative.
 3. Capture-to-finish flow using real Fleck UI.
 4. Lightweight feature details.
