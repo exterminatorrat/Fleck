@@ -8,75 +8,34 @@ function seededRandom(seed) {
   };
 }
 
-function geometry(side, width, height) {
-  return {
-    centerX: width * (side === -1 ? 0.35 : 0.65),
-    centerY: height * 0.49,
-    radiusX: width * 0.23,
-    radiusY: height * 0.45,
-  };
-}
-
-function edgeRadius(angle, side) {
-  return (
-    0.94 +
-    Math.cos(angle * 3 - side * 0.45) * 0.04 +
-    Math.cos(angle * 5 + side * 0.3) * 0.025
-  );
-}
-
-function pushNode(nodes, side, region, x, y, random, shape) {
-  nodes.push({
-    x: shape.centerX + x * shape.radiusX,
-    y: shape.centerY + y * shape.radiusY,
-    phase: random() * Math.PI * 2,
-    size: 0.55 + random() * 1.25,
-    violet: random() > 0.9,
-    side,
-    region,
-  });
-}
-
 function addHemisphere(nodes, side, target, width, height, random) {
-  const shape = geometry(side, width, height);
-  const start = nodes.length;
-  const outerTarget = Math.round(target * 0.38);
-  const fissureTarget = Math.round(target * 0.14);
+  const centerX = width * (side === -1 ? 0.35 : 0.65);
+  const centerY = height * 0.49;
+  const radiusX = width * 0.23;
+  const radiusY = height * 0.45;
 
-  let outerAdded = 0;
-  for (let attempts = 0; outerAdded < outerTarget && attempts < outerTarget * 20; attempts += 1) {
-    const angle = random() * Math.PI * 2;
-    const radius = edgeRadius(angle, side) * (0.94 + random() * 0.055);
-    const x = Math.cos(angle) * radius;
-    const y = Math.sin(angle) * radius;
-    const inward = side === -1 ? x : -x;
-    if (inward < 0.48 + Math.min(1, Math.abs(y) / 0.78) * 0.08) {
-      pushNode(nodes, side, "outer", x, y, random, shape);
-      outerAdded += 1;
-    }
-  }
-
-  for (let index = 0; index < fissureTarget; index += 1) {
-    const y = -0.76 + (index / Math.max(1, fissureTarget - 1)) * 1.52;
-    const inward = 0.46 + Math.abs(y) * 0.08 + (random() - 0.5) * 0.035;
-    pushNode(nodes, side, "fissure", -side * inward, y, random, shape);
-  }
-
-  for (let attempts = 0; nodes.length - start < target && attempts < target * 100; attempts += 1) {
+  for (let attempts = 0; nodes.length < target && attempts < target * 80; attempts += 1) {
     const x = random() * 2 - 1;
     const y = random() * 2 - 1;
     const angle = Math.atan2(y, x);
     const distance = Math.hypot(x, y);
+    const lobedEdge =
+      0.94 +
+      Math.cos(angle * 3 - side * 0.45) * 0.04 +
+      Math.cos(angle * 5 + side * 0.3) * 0.025;
     const inward = side === -1 ? x : -x;
     const fissureLimit = 0.47 + Math.min(1, Math.abs(y) / 0.78) * 0.08;
-    const worldX = shape.centerX + x * shape.radiusX;
-    const worldY = shape.centerY + y * shape.radiusY;
-    const inCopyArea =
-      Math.abs(worldX - width / 2) < width * 0.175 &&
-      Math.abs(worldY - height * 0.5) < height * 0.18;
 
-    if (distance > edgeRadius(angle, side) * 0.9 || inward > fissureLimit || inCopyArea) continue;
-    pushNode(nodes, side, "interior", x, y, random, shape);
+    if (distance > lobedEdge || inward > fissureLimit) continue;
+
+    nodes.push({
+      x: centerX + x * radiusX,
+      y: centerY + y * radiusY,
+      phase: random() * Math.PI * 2,
+      size: 0.55 + random() * 1.25,
+      violet: random() > 0.9,
+      side,
+    });
   }
 }
 
@@ -87,7 +46,7 @@ export function createBrainModel(width, height, requestedCount) {
   const half = Math.floor(count / 2);
 
   addHemisphere(nodes, -1, half, width, height, random);
-  addHemisphere(nodes, 1, count - half, width, height, random);
+  addHemisphere(nodes, 1, count, width, height, random);
 
   const edges = [];
   const seenEdges = new Set();
@@ -113,12 +72,8 @@ export function createBrainModel(width, height, requestedCount) {
       if (distance < threshold) nearest.push({ index: candidate, distance });
     }
 
-    nearest.sort((a, b) => a.distance - b.distance);
     nearest
-      .filter(({ index: candidate }) => nodes[candidate].region === node.region)
-      .slice(0, 2)
-      .forEach(({ index: candidate }) => addEdge(index, candidate));
-    nearest
+      .sort((a, b) => a.distance - b.distance)
       .slice(0, 5)
       .forEach(({ index: otherIndex }) => addEdge(index, otherIndex));
   });
