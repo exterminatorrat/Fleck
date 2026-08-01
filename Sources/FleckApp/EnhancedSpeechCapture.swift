@@ -687,8 +687,8 @@
     }
 
     func selectMicrophone(savedUID: String?) -> MicrophoneSelection {
-      guard let engine else { return .automatic }
-      return CoreAudioMicrophone.select(savedUID: savedUID, for: engine.inputNode)
+      guard engine != nil else { return .automatic }
+      return CoreAudioMicrophone.select(savedUID: savedUID)
     }
 
     func start(level: @escaping @MainActor (Float) -> Void) throws {

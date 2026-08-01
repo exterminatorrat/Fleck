@@ -362,40 +362,60 @@ private final class PermissionProbe {
   }
 }
 
-@Test @MainActor func microphoneSelectionUsesSavedUIDOrFallsBackToAutomatic() {
-  #expect(
-    CoreAudioMicrophone.resolveDevice(savedUID: nil) { _ in 42 }.selection == .automatic
+@Test @MainActor func systemDefaultSavedMicrophoneRemainsSelected() {
+  let selection = CoreAudioMicrophone.select(
+    savedUID: "built-in",
+    deviceIDForUID: { _ in 42 },
+    defaultInputDeviceID: { 42 }
   )
-  #expect(
-    CoreAudioMicrophone.resolveDevice(savedUID: "usb") { _ in 42 }.selection
-      == .selected(uid: "usb")
+
+  #expect(selection == .selected(uid: "built-in"))
+}
+
+@Test @MainActor func missingSavedMicrophoneFallsBackToAutomatic() {
+  let selection = CoreAudioMicrophone.select(
+    savedUID: "missing",
+    deviceIDForUID: { _ in nil },
+    defaultInputDeviceID: { 42 }
   )
+
   #expect(
-    CoreAudioMicrophone.resolveDevice(savedUID: "missing") { _ in nil }.selection
-      == .missingUsingAutomatic(
-        settingsCopy: "The saved microphone is unavailable. Using Automatic."
-      )
+    selection == .fallbackToAutomatic(
+      settingsCopy: "The saved microphone is unavailable. Using Automatic."
+    )
   )
 }
 
-@Test @MainActor func microphoneSelectionLooksUpOnlyTheSavedUID() {
-  var lookedUpUIDs: [String] = []
+@Test @MainActor func nonDefaultSavedMicrophoneFallsBackToAutomatic() {
+  let selection = CoreAudioMicrophone.select(
+    savedUID: "usb",
+    deviceIDForUID: { _ in 24 },
+    defaultInputDeviceID: { 42 }
+  )
 
-  let automatic = CoreAudioMicrophone.resolveDevice(savedUID: nil) { uid in
-    lookedUpUIDs.append(uid)
-    return 42
-  }
-  #expect(automatic.selection == .automatic)
-  #expect(automatic.deviceID == nil)
-  #expect(lookedUpUIDs.isEmpty)
+  #expect(
+    selection == .fallbackToAutomatic(
+      settingsCopy: "The saved microphone is unavailable. Using Automatic."
+    )
+  )
+}
 
-  let selected = CoreAudioMicrophone.resolveDevice(savedUID: "built-in") { uid in
-    lookedUpUIDs.append(uid)
-    return 42
-  }
-  #expect(selected.selection == .selected(uid: "built-in"))
-  #expect(selected.deviceID == 42)
-  #expect(lookedUpUIDs == ["built-in"])
+@Test @MainActor func automaticMicrophoneDoesNotPerformRoutingQueries() {
+  var queryCount = 0
+  let selection = CoreAudioMicrophone.select(
+    savedUID: nil,
+    deviceIDForUID: { _ in
+      queryCount += 1
+      return 42
+    },
+    defaultInputDeviceID: {
+      queryCount += 1
+      return 42
+    }
+  )
+
+  #expect(selection == .automatic)
+  #expect(queryCount == 0)
 }
 
 @Test func audioHelpersCopyBuffersAndNormalizeRMS() throws {

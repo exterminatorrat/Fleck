@@ -1,5 +1,4 @@
 @preconcurrency import AVFAudio
-import AudioToolbox
 import CoreAudio
 import Foundation
 import FleckCore
@@ -36,7 +35,7 @@ extension DictationFailure: LocalizedError {
 enum MicrophoneSelection: Equatable, Sendable {
   case automatic
   case selected(uid: String)
-  case missingUsingAutomatic(settingsCopy: String)
+  case fallbackToAutomatic(settingsCopy: String)
 }
 
 enum AudioBufferTools {
@@ -373,48 +372,34 @@ private extension String {
 
 @MainActor
 enum CoreAudioMicrophone {
-  static func select(
-    savedUID: String?,
-    for inputNode: AVAudioInputNode
-  ) -> MicrophoneSelection {
-    let resolved = resolveDevice(savedUID: savedUID) { uid in
-      guard let deviceID = deviceID(for: uid), hasInputChannels(deviceID) else { return nil }
-      return deviceID
-    }
-    guard case .selected = resolved.selection,
-          let deviceID = resolved.deviceID,
-          let audioUnit = inputNode.audioUnit
-    else { return resolved.selection }
-    var mutableDeviceID = deviceID
-    let status = AudioUnitSetProperty(
-      audioUnit,
-      kAudioOutputUnitProperty_CurrentDevice,
-      kAudioUnitScope_Global,
-      0,
-      &mutableDeviceID,
-      UInt32(MemoryLayout<AudioDeviceID>.size)
+  static func select(savedUID: String?) -> MicrophoneSelection {
+    select(
+      savedUID: savedUID,
+      deviceIDForUID: { uid in
+        guard let deviceID = deviceID(for: uid), hasInputChannels(deviceID) else { return nil }
+        return deviceID
+      },
+      defaultInputDeviceID: defaultInputDeviceID
     )
-    return status == noErr
-      ? resolved.selection
-      : .missingUsingAutomatic(
-        settingsCopy: "The saved microphone is unavailable. Using Automatic."
-      )
   }
 
-  static func resolveDevice(
+  static func select(
     savedUID: String?,
-    lookup: (String) -> AudioDeviceID?
-  ) -> (selection: MicrophoneSelection, deviceID: AudioDeviceID?) {
-    guard let savedUID else { return (.automatic, nil) }
-    guard let deviceID = lookup(savedUID), deviceID != kAudioObjectUnknown else {
-      return (
-        .missingUsingAutomatic(
-          settingsCopy: "The saved microphone is unavailable. Using Automatic."
-        ),
-        nil
-      )
+    deviceIDForUID: (String) -> AudioDeviceID?,
+    defaultInputDeviceID: () -> AudioDeviceID?
+  ) -> MicrophoneSelection {
+    guard let savedUID else { return .automatic }
+    if let savedDeviceID = deviceIDForUID(savedUID),
+       savedDeviceID != kAudioObjectUnknown,
+       let defaultDeviceID = defaultInputDeviceID(),
+       defaultDeviceID != kAudioObjectUnknown,
+       savedDeviceID == defaultDeviceID
+    {
+      return .selected(uid: savedUID)
     }
-    return (.selected(uid: savedUID), deviceID)
+    return .fallbackToAutomatic(
+      settingsCopy: "The saved microphone is unavailable. Using Automatic."
+    )
   }
 
   private static func deviceID(for uid: String) -> AudioDeviceID? {
@@ -436,6 +421,26 @@ enum CoreAudioMicrophone {
         &deviceID
       )
     }
+    guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+    return deviceID
+  }
+
+  private static func defaultInputDeviceID() -> AudioDeviceID? {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwarePropertyDefaultInputDevice,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    var deviceID = AudioDeviceID(kAudioObjectUnknown)
+    var byteCount = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let status = AudioObjectGetPropertyData(
+      AudioObjectID(kAudioObjectSystemObject),
+      &address,
+      0,
+      nil,
+      &byteCount,
+      &deviceID
+    )
     guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
     return deviceID
   }
@@ -515,7 +520,7 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
     didCancelRecognition = false
 
     let inputNode = audioEngine.inputNode
-    microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID, for: inputNode))
+    microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID))
     let inputFormat = inputNode.inputFormat(forBus: 0)
     let ingress = BoundedAudioIngress(capacity: 8)
     self.ingress = ingress
@@ -733,7 +738,7 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     }
 
     let inputNode = audioEngine.inputNode
-    microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID, for: inputNode))
+    microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID))
     let naturalFormat = inputNode.inputFormat(forBus: 0)
     let transcriber = DictationTranscriber(
       locale: locale,

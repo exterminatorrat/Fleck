@@ -281,7 +281,7 @@
           appState?.preferences.dictationMicrophoneUID
         },
         microphoneSelectionChanged: { [weak appState] selection in
-          guard case .missingUsingAutomatic = selection else { return }
+          guard case .fallbackToAutomatic = selection else { return }
           appState?.updatePreferences { $0.dictationMicrophoneUID = nil }
         },
         recommendStandard: { [weak appState] in
