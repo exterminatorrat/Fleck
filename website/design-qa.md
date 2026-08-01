@@ -61,3 +61,20 @@ final result: passed
 ## Final result
 
 final result: passed
+
+---
+
+# Fleck capture-through-finish section design QA
+
+- Reference: `docs/design/references/fleck-website-approved-direction-2026-08-01.png`.
+- Product image: the existing sanitized capture from the live Fleck macOS app.
+- Production deployment completed successfully with the new section.
+- The section contract, full website tests, production build, and diff check pass.
+- Automated visual comparison is blocked: the in-app browser rejected the local
+  preview URL and timed out while refreshing and capturing the authenticated
+  Sites page. No alternate browser surface was used.
+- Desktop and mobile screenshots were therefore not captured in this pass.
+
+## Final result
+
+final result: blocked
