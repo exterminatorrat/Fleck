@@ -1,4 +1,4 @@
-import AVFAudio
+@preconcurrency import AVFAudio
 import CoreAudio
 import Foundation
 import Testing
@@ -575,6 +575,43 @@ private final class PermissionProbe {
   #expect(await deliveries.waitFor([0.1, 0.9]))
 }
 
+@Test @MainActor func appleSpeechAudioPumpDrainsWhileMainActorLevelSinkIsSuspended()
+  async throws
+{
+  let format = try #require(
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: 16_000,
+      channels: 1,
+      interleaved: false
+    )
+  )
+  let gate = RelayGate()
+  let deliveries = LevelDeliveries()
+  let relay = CoalescingLevelRelay { level in
+    await deliveries.append(level)
+    await gate.wait()
+  }
+  let consumer = AudioPumpConsumerProbe(levelRelay: relay)
+  let ingress = BoundedAudioIngress(capacity: 2)
+  let worker = Task {
+    try await AppleSpeechAudioPump.drain(ingress) { buffer in
+      await consumer.consume(buffer)
+    }
+  }
+
+  #expect(ingress.yield(try speechBuffer(format: format, frames: 4)))
+  await gate.waitUntilWaiting()
+  #expect(ingress.yield(try speechBuffer(format: format, frames: 4)))
+  ingress.finish()
+
+  #expect(await consumer.waitForCount(2))
+  #expect(await deliveries.values == [0.25])
+  await gate.open()
+  try await worker.value
+  #expect(await deliveries.waitFor([0.25, 0.25]))
+}
+
 @Test @MainActor func coalescingLevelRelayDeliversAfterItsExternalOwnerIsReleased() async {
   let deliveries = LevelDeliveries()
   var relay: CoalescingLevelRelay? = CoalescingLevelRelay { level in
@@ -636,6 +673,33 @@ private final class PermissionProbe {
   #expect(session.finishCount == 1)
   #expect(session.cancelCount == 0)
   #expect(session.releaseCount == 1)
+}
+
+@Test @MainActor func appleSpeechCaptureBlockedStartYieldsMainActor() async throws {
+  let observation = BlockingStartObservation()
+  let session = BlockingAppleSpeechSessionProbe(observation: observation)
+  let capture = AppleSpeechCapture(
+    requestPermission: { .granted },
+    makeSession: { session }
+  )
+
+  let watchdog = Task.detached {
+    guard observation.waitUntilStart(timeout: .now() + 1) else {
+      observation.releaseStart()
+      return false
+    }
+    Task { @MainActor in observation.recordHeartbeat() }
+    observation.waitForHeartbeatWindow()
+    observation.releaseStart()
+    return true
+  }
+
+  try await capture.start(provisional: { _ in }, level: { _ in })
+
+  #expect(await watchdog.value)
+  #expect(observation.startRanOnMainThread == false)
+  #expect(observation.heartbeatRanBeforeRelease)
+  await capture.cancel()
 }
 
 @Test func appleSpeechTranscriptAssemblerKeepsPauseSegmentsOnOneCleanLine() {
@@ -756,6 +820,85 @@ private final class PermissionProbe {
 
 private enum SpeechProbeError: Error {
   case failed
+}
+
+private final class BlockingStartObservation: @unchecked Sendable {
+  private let condition = NSCondition()
+  private let startGate = DispatchSemaphore(value: 0)
+  private var didStart = false
+  private var didReleaseStart = false
+  private var _startRanOnMainThread = false
+  private var _heartbeatRanBeforeRelease = false
+
+  var startRanOnMainThread: Bool {
+    condition.withLock { _startRanOnMainThread }
+  }
+
+  var heartbeatRanBeforeRelease: Bool {
+    condition.withLock { _heartbeatRanBeforeRelease }
+  }
+
+  func blockStart() {
+    condition.withLock {
+      didStart = true
+      _startRanOnMainThread = Thread.isMainThread
+      condition.broadcast()
+    }
+    startGate.wait()
+  }
+
+  func waitUntilStart(timeout: DispatchTime) -> Bool {
+    condition.lock()
+    defer { condition.unlock() }
+    while !didStart {
+      guard condition.wait(until: Date(timeIntervalSinceNow: 0.01)) else {
+        if DispatchTime.now() >= timeout { return false }
+        continue
+      }
+    }
+    return true
+  }
+
+  func recordHeartbeat() {
+    condition.withLock {
+      _heartbeatRanBeforeRelease = !didReleaseStart
+    }
+  }
+
+  func waitForHeartbeatWindow() {
+    condition.lock()
+    _ = condition.wait(until: Date(timeIntervalSinceNow: 0.1))
+    condition.unlock()
+  }
+
+  func releaseStart() {
+    let shouldSignal = condition.withLock {
+      guard !didReleaseStart else { return false }
+      didReleaseStart = true
+      return true
+    }
+    if shouldSignal { startGate.signal() }
+  }
+}
+
+private actor BlockingAppleSpeechSessionProbe: AppleSpeechSession {
+  nonisolated let supportsOnDeviceRecognition = true
+  private let observation: BlockingStartObservation
+
+  init(observation: BlockingStartObservation) {
+    self.observation = observation
+  }
+
+  func start(
+    provisional _: @escaping @MainActor @Sendable (String) -> Void,
+    level _: @escaping @MainActor @Sendable (Float) -> Void
+  ) async throws {
+    observation.blockStart()
+  }
+
+  func finish() async throws -> String? { nil }
+  func cancel() async {}
+  func releaseResources() async {}
 }
 
 @MainActor
@@ -900,5 +1043,29 @@ private actor ProducerCompletion {
       await Task.yield()
     }
     return isComplete
+  }
+}
+
+private actor AudioPumpConsumerProbe {
+  private let levelRelay: CoalescingLevelRelay
+  private var count = 0
+
+  init(levelRelay: CoalescingLevelRelay) {
+    self.levelRelay = levelRelay
+  }
+
+  func consume(_ buffer: AVAudioPCMBuffer) {
+    count += 1
+    levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))
+  }
+
+  func waitForCount(_ expected: Int) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(1))
+    while clock.now < deadline {
+      if count == expected { return true }
+      await Task.yield()
+    }
+    return count == expected
   }
 }

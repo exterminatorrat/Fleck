@@ -18,8 +18,8 @@ protocol SpeechEngine: AnyObject {
   var kind: DictationSpeechEngine { get }
 
   func start(
-    provisional: @escaping @MainActor (String) -> Void,
-    level: @escaping @MainActor (Float) -> Void
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws
   func finish() async throws -> String?
   func cancel() async

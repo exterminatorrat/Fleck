@@ -1302,6 +1302,51 @@ private func waitForCompletion(
   await fixture.coordinator.cancel()
 }
 
+@Test @MainActor func cancelDuringSynchronousAppleSpeechStartPreventsListeningAndOverlap()
+  async throws
+{
+  let observation = CoordinatorBlockingStartObservation()
+  let session = CoordinatorBlockingAppleSpeechSession(observation: observation)
+  let engine = AppleSpeechCapture(
+    requestPermission: { .granted },
+    makeSession: { session }
+  )
+  let fixture = try Fixture()
+  fixture.provider.engines[.standard] = engine
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  let start = Task { @MainActor in
+    await fixture.coordinator.start(mode: .smartCapture)
+  }
+  let watchdog = Task.detached {
+    guard observation.waitUntilStart(timeout: .now() + 1) else {
+      observation.releaseStart()
+      return false
+    }
+    let cancellation = Task {
+      await fixture.coordinator.cancel()
+      await fixture.coordinator.start(mode: .smartCapture)
+      observation.recordCancellationAccepted()
+    }
+    observation.waitForCancellationWindow()
+    observation.releaseStart()
+    await cancellation.value
+    return true
+  }
+
+  await start.value
+  #expect(await watchdog.value)
+  await fixture.coordinator.waitForTerminal()
+
+  #expect(observation.cancellationWasAcceptedBeforeRelease)
+  #expect(!events.contains { if case .listening = $0.phase { true } else { false } })
+  #expect(await session.cancelCount == 1)
+  #expect(await session.releaseCount == 1)
+  #expect(fixture.provider.requestedKinds == [.standard])
+  #expect(fixture.coordinator.phase == .idle)
+}
+
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test @MainActor func EnhancedSpeechRejectsAnUnverifiedModelWithoutStartingAudio() async {
   let inference = EnhancedInferenceSpy()
@@ -1910,6 +1955,79 @@ private final class FakeEngineProvider: SpeechEngineProviding {
     guard requestedKinds.isEmpty else { return }
     await withCheckedContinuation { requestWaiters.append($0) }
   }
+}
+
+private final class CoordinatorBlockingStartObservation: @unchecked Sendable {
+  private let condition = NSCondition()
+  private let startGate = DispatchSemaphore(value: 0)
+  private var didStart = false
+  private var didReleaseStart = false
+  private var _cancellationWasAcceptedBeforeRelease = false
+
+  var cancellationWasAcceptedBeforeRelease: Bool {
+    condition.withLock { _cancellationWasAcceptedBeforeRelease }
+  }
+
+  func blockStart() {
+    condition.withLock {
+      didStart = true
+      condition.broadcast()
+    }
+    startGate.wait()
+  }
+
+  func waitUntilStart(timeout: DispatchTime) -> Bool {
+    condition.lock()
+    defer { condition.unlock() }
+    while !didStart {
+      _ = condition.wait(until: Date(timeIntervalSinceNow: 0.01))
+      if DispatchTime.now() >= timeout { return false }
+    }
+    return true
+  }
+
+  func waitForCancellationWindow() {
+    condition.lock()
+    _ = condition.wait(until: Date(timeIntervalSinceNow: 0.1))
+    condition.unlock()
+  }
+
+  func recordCancellationAccepted() {
+    condition.withLock {
+      _cancellationWasAcceptedBeforeRelease = !didReleaseStart
+    }
+  }
+
+  func releaseStart() {
+    let shouldSignal = condition.withLock {
+      guard !didReleaseStart else { return false }
+      didReleaseStart = true
+      return true
+    }
+    if shouldSignal { startGate.signal() }
+  }
+}
+
+private actor CoordinatorBlockingAppleSpeechSession: AppleSpeechSession {
+  nonisolated let supportsOnDeviceRecognition = true
+  private let observation: CoordinatorBlockingStartObservation
+  private(set) var cancelCount = 0
+  private(set) var releaseCount = 0
+
+  init(observation: CoordinatorBlockingStartObservation) {
+    self.observation = observation
+  }
+
+  func start(
+    provisional _: @escaping @MainActor @Sendable (String) -> Void,
+    level _: @escaping @MainActor @Sendable (Float) -> Void
+  ) async throws {
+    observation.blockStart()
+  }
+
+  func finish() async throws -> String? { "late result" }
+  func cancel() async { cancelCount += 1 }
+  func releaseResources() async { releaseCount += 1 }
 }
 
 private final class FakeCleaner: TranscriptCleaning, @unchecked Sendable {
