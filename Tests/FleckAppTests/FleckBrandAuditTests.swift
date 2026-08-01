@@ -65,6 +65,28 @@ import Testing
   )
 }
 
+@Test func packagedDevelopmentBuildUsesStableFleckCodeIdentity() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let buildScript = try String(
+    contentsOf: root.appendingPathComponent("Scripts/build-fleck-app.sh"),
+    encoding: .utf8
+  )
+  let validationScript = try String(
+    contentsOf: root.appendingPathComponent("Scripts/validate-macos.sh"),
+    encoding: .utf8
+  )
+
+  #expect(buildScript.contains(#"--identifier "$bundle_identifier""#))
+  #expect(buildScript.contains(#"designated => identifier \"$bundle_identifier\""#))
+  #expect(buildScript.contains(#"/usr/bin/codesign --verify --deep --strict "$staged_app""#))
+  #expect(!buildScript.contains("Built unsigned app bundle"))
+  #expect(validationScript.contains("signature identifier does not match bundle identifier"))
+  #expect(validationScript.contains("signature uses a build-specific code hash"))
+}
+
 private func sourceText(in root: URL) throws -> String {
   guard
     let enumerator = FileManager.default.enumerator(

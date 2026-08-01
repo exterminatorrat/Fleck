@@ -7,8 +7,9 @@ See the [product plan](PRODUCT_PLAN.md) for the complete vision, feature require
 ## Project status
 
 Fleck is implemented as native SwiftPM executables. `Scripts/build-fleck-app.sh`
-creates an unsigned `Fleck.app` with the agent helper packaged separately in
-`Contents/SharedSupport`; signing, notarization, and export remain pending.
+creates an ad-hoc development-signed `Fleck.app` with a stable local identity
+and the agent helper packaged separately in `Contents/SharedSupport`.
+Distribution signing, notarization, and export remain pending.
 
 Clean Dictation is implemented as a release-disabled candidate. **Enhanced
 Local is a non-shippable candidate:** it must not be included in a release

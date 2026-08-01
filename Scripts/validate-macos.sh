@@ -56,6 +56,26 @@ if [[ "$bundle_identifier" != "$expected_bundle_identifier" ]]; then
     "$bundle_identifier" >&2
   exit 1
 fi
+/usr/bin/codesign --verify --deep --strict "$app_bundle"
+signature_details="$(/usr/bin/codesign -dv --verbose=4 "$app_bundle" 2>&1)"
+signature_identifier="$(
+  /usr/bin/sed -n 's/^Identifier=//p' <<<"$signature_details"
+)"
+if [[ "$signature_identifier" != "$bundle_identifier" ]]; then
+  printf 'error: signature identifier does not match bundle identifier: %s\n' \
+    "$signature_identifier" >&2
+  exit 1
+fi
+signature_requirement="$(/usr/bin/codesign -d -r- "$app_bundle" 2>&1)"
+if /usr/bin/grep -F 'cdhash' <<<"$signature_requirement" >/dev/null; then
+  printf 'error: signature uses a build-specific code hash\n' >&2
+  exit 1
+fi
+if ! /usr/bin/grep -F "identifier \"$bundle_identifier\"" \
+  <<<"$signature_requirement" >/dev/null; then
+  printf 'error: signature requirement is missing the bundle identifier\n' >&2
+  exit 1
+fi
 if [[ "$(/usr/bin/plutil -extract CFBundlePackageType raw -o - \
   "$app_bundle/Contents/Info.plist")" != "APPL" ]]; then
   printf 'error: packaged Fleck is missing CFBundlePackageType=APPL\n' >&2

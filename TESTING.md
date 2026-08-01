@@ -52,8 +52,9 @@ macOS privacy permissions.
 For interactive UI and Agent Connector testing, use the packaged Terminal flow
 above. Xcode's Swift package runner is not a supported interactive launch. The
 source project is a Swift Package. `Scripts/build-fleck-app.sh` assembles an
-unsigned native `.app`, but no signed distributable exists. Launch-at-login must
-be validated later from the packaged and signed application.
+ad-hoc development-signed native `.app`, but no distribution-signed artifact
+exists. Launch-at-login must be validated later from the packaged and signed
+application.
 
 ## Agent workspace release gates
 
@@ -89,12 +90,12 @@ non-activating launch adapter, HTTP/TCP/listener APIs, direct Fleck storage
 paths, an altered MCP tool/handler surface, MCP-mode stdout prose, and
 credential-bearing snippets.
 
-`Scripts/validate-macos.sh` builds the native unsigned `Fleck.app`, verifies the
-bundle identifier and separately packaged helper, runs a bounded native launch
-smoke test, and runs the complete macOS test suite, including Keychain API
-contract tests. It does not prove a live Keychain round trip, third-party client
-compatibility, physical-device accessibility, signing, notarization, or
-distribution.
+`Scripts/validate-macos.sh` builds the native ad-hoc development-signed
+`Fleck.app`, verifies its stable code identity and separately packaged helper,
+runs a bounded native launch smoke test, and runs the complete macOS test suite,
+including Keychain API contract tests. It does not prove a live Keychain round
+trip, third-party client compatibility, physical-device accessibility,
+distribution signing, notarization, or distribution.
 
 ### Manual client, lifecycle, and accessibility gate
 

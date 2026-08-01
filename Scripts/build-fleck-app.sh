@@ -51,6 +51,20 @@ readonly staged_app="$staging_root/Fleck.app"
   "$staged_app/Contents/MacOS/Fleck" \
   "$staged_app/Contents/SharedSupport/fleck-agent"
 
+readonly bundle_identifier="$(
+  /usr/bin/plutil -extract CFBundleIdentifier raw -o - \
+    "$staged_app/Contents/Info.plist"
+)"
+readonly designated_requirement="=designated => identifier \"$bundle_identifier\""
+/usr/bin/codesign --force --sign - \
+  --identifier "$bundle_identifier.agent" \
+  "$staged_app/Contents/SharedSupport/fleck-agent"
+/usr/bin/codesign --force --sign - \
+  --identifier "$bundle_identifier" \
+  --requirements "$designated_requirement" \
+  "$staged_app"
+/usr/bin/codesign --verify --deep --strict "$staged_app"
+
 readonly swift_path="$(xcrun --find swift)"
 "$swift_path" -e '
   import Foundation
@@ -66,4 +80,4 @@ readonly swift_path="$(xcrun --find swift)"
   }
 ' "$staged_app" "$app_destination"
 
-printf 'Built unsigned app bundle: %s\n' "$app_destination"
+printf 'Built development-signed app bundle: %s\n' "$app_destination"
