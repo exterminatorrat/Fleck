@@ -2,6 +2,7 @@
 .build/
 .build-candidate/
 .swiftpm/
+.superpowers/brainstorm/
 .worktrees/
 DerivedData/
 *.xcuserstate
