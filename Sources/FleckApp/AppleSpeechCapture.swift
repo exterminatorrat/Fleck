@@ -183,7 +183,7 @@ final class BoundedAudioIngress: @unchecked Sendable {
 enum AppleSpeechAudioPump {
   static func drain(
     _ ingress: BoundedAudioIngress,
-    consume: @escaping @Sendable (AVAudioPCMBuffer) async -> Void
+    consume: @escaping @Sendable (sending AVAudioPCMBuffer) async -> Void
   ) async throws {
     for try await buffer in ingress.buffers {
       await consume(buffer)
@@ -683,7 +683,10 @@ private actor LegacyAppleSpeechSession: AppleSpeechSession {
     }
   }
 
-  private func consume(_ buffer: AVAudioPCMBuffer, levelRelay: CoalescingLevelRelay) {
+  private func consume(
+    _ buffer: sending AVAudioPCMBuffer,
+    levelRelay: CoalescingLevelRelay
+  ) {
     request?.append(buffer)
     levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))
   }

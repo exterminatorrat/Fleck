@@ -1054,7 +1054,7 @@ private actor AudioPumpConsumerProbe {
     self.levelRelay = levelRelay
   }
 
-  func consume(_ buffer: AVAudioPCMBuffer) {
+  func consume(_ buffer: sending AVAudioPCMBuffer) {
     count += 1
     levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))
   }
