@@ -8,38 +8,75 @@ function seededRandom(seed) {
   };
 }
 
-function addHemisphere(nodes, side, target, width, height, random) {
-  const mobile = width < 600;
-  const centerX = width * (side === -1 ? (mobile ? 0.19 : 0.34) : mobile ? 0.81 : 0.66);
-  const centerY = height * 0.52;
-  const radiusX = mobile
-    ? width * 0.48
-    : Math.min(width * 0.275, height * 0.43);
-  const radiusY = height * (mobile ? 0.39 : 0.43);
+function geometry(side, width, height) {
+  return {
+    centerX: width * (side === -1 ? 0.35 : 0.65),
+    centerY: height * 0.49,
+    radiusX: width * 0.23,
+    radiusY: height * 0.45,
+  };
+}
 
-  for (let attempts = 0; nodes.length < target && attempts < target * 80; attempts += 1) {
+function edgeRadius(angle, side) {
+  return (
+    0.94 +
+    Math.cos(angle * 3 - side * 0.45) * 0.04 +
+    Math.cos(angle * 5 + side * 0.3) * 0.025
+  );
+}
+
+function pushNode(nodes, side, region, x, y, random, shape) {
+  nodes.push({
+    x: shape.centerX + x * shape.radiusX,
+    y: shape.centerY + y * shape.radiusY,
+    phase: random() * Math.PI * 2,
+    size: 0.55 + random() * 1.25,
+    violet: random() > 0.9,
+    side,
+    region,
+  });
+}
+
+function addHemisphere(nodes, side, target, width, height, random) {
+  const shape = geometry(side, width, height);
+  const start = nodes.length;
+  const outerTarget = Math.round(target * 0.38);
+  const fissureTarget = Math.round(target * 0.14);
+
+  let outerAdded = 0;
+  for (let attempts = 0; outerAdded < outerTarget && attempts < outerTarget * 20; attempts += 1) {
+    const angle = random() * Math.PI * 2;
+    const radius = edgeRadius(angle, side) * (0.94 + random() * 0.055);
+    const x = Math.cos(angle) * radius;
+    const y = Math.sin(angle) * radius;
+    const inward = side === -1 ? x : -x;
+    if (inward < 0.48 + Math.min(1, Math.abs(y) / 0.78) * 0.08) {
+      pushNode(nodes, side, "outer", x, y, random, shape);
+      outerAdded += 1;
+    }
+  }
+
+  for (let index = 0; index < fissureTarget; index += 1) {
+    const y = -0.76 + (index / Math.max(1, fissureTarget - 1)) * 1.52;
+    const inward = 0.46 + Math.abs(y) * 0.08 + (random() - 0.5) * 0.035;
+    pushNode(nodes, side, "fissure", -side * inward, y, random, shape);
+  }
+
+  for (let attempts = 0; nodes.length - start < target && attempts < target * 100; attempts += 1) {
     const x = random() * 2 - 1;
     const y = random() * 2 - 1;
     const angle = Math.atan2(y, x);
     const distance = Math.hypot(x, y);
-    const lobedEdge =
-      0.94 +
-      Math.cos(angle * 3 - side * 0.45) * 0.035 +
-      Math.cos(angle * 5 + side * 0.3) * 0.02;
     const inward = side === -1 ? x : -x;
     const fissureLimit = 0.47 + Math.min(1, Math.abs(y) / 0.78) * 0.08;
+    const worldX = shape.centerX + x * shape.radiusX;
+    const worldY = shape.centerY + y * shape.radiusY;
+    const inCopyArea =
+      Math.abs(worldX - width / 2) < width * 0.175 &&
+      Math.abs(worldY - height * 0.5) < height * 0.18;
 
-    if (distance > lobedEdge) continue;
-    if (inward > fissureLimit) continue;
-
-    nodes.push({
-      x: centerX + x * radiusX,
-      y: centerY + y * radiusY,
-      phase: random() * Math.PI * 2,
-      size: 0.7 + random() * 1.65,
-      violet: random() > 0.91,
-      side,
-    });
+    if (distance > edgeRadius(angle, side) * 0.9 || inward > fissureLimit || inCopyArea) continue;
+    pushNode(nodes, side, "interior", x, y, random, shape);
   }
 }
 
@@ -50,11 +87,11 @@ export function createBrainModel(width, height, requestedCount) {
   const half = Math.floor(count / 2);
 
   addHemisphere(nodes, -1, half, width, height, random);
-  addHemisphere(nodes, 1, count, width, height, random);
+  addHemisphere(nodes, 1, count - half, width, height, random);
 
   const edges = [];
   const seenEdges = new Set();
-  const threshold = Math.min(width, height) * (width < 600 ? 0.15 : 0.135);
+  const threshold = Math.min(width, height) * 0.12;
   const addEdge = (fromIndex, toIndex) => {
     const from = Math.min(fromIndex, toIndex);
     const to = Math.max(fromIndex, toIndex);
@@ -71,37 +108,25 @@ export function createBrainModel(width, height, requestedCount) {
 
     for (let candidate = 0; candidate < nodes.length; candidate += 1) {
       const other = nodes[candidate];
-      if (candidate === index) continue;
-      if (node.side !== other.side) continue;
+      if (candidate === index || node.side !== other.side) continue;
       const distance = Math.hypot(node.x - other.x, node.y - other.y);
       if (distance < threshold) nearest.push({ index: candidate, distance });
     }
 
+    nearest.sort((a, b) => a.distance - b.distance);
     nearest
-      .sort((a, b) => a.distance - b.distance)
-      .slice(0, 4)
-      .forEach(({ index: otherIndex }) => {
-        addEdge(index, otherIndex);
-      });
-
-    const hemisphereStart = node.side === -1 ? 0 : half;
-    const hemisphereSize = node.side === -1 ? half : nodes.length - half;
-    const localIndex = index - hemisphereStart;
-    const chordIndex = hemisphereStart + ((localIndex + 17) % hemisphereSize);
-    const chord = nodes[chordIndex];
-
-    if (
-      index % 2 === 0 &&
-      Math.hypot(node.x - chord.x, node.y - chord.y) < threshold * 2.35
-    ) {
-      addEdge(index, chordIndex);
-    }
+      .filter(({ index: candidate }) => nodes[candidate].region === node.region)
+      .slice(0, 2)
+      .forEach(({ index: candidate }) => addEdge(index, candidate));
+    nearest
+      .slice(0, 5)
+      .forEach(({ index: otherIndex }) => addEdge(index, otherIndex));
   });
 
   const signals = new Set(
     edges
       .filter(([from, to]) => (from * 7 + to * 11) % 23 === 0)
-      .slice(0, 28)
+      .slice(0, 36)
       .map(([from, to]) => `${from}:${to}`),
   );
 

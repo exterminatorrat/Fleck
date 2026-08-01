@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { createBrainModel } from "./brainModel";
 
 const GRAPHITE = [23, 25, 31];
-const VIOLET = [103, 73, 255];
+const VIOLET = [116, 87, 246];
 
 function rgba([red, green, blue], alpha) {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
@@ -25,25 +25,25 @@ export default function BrainHologram() {
       const bounds = canvas.getBoundingClientRect();
       width = Math.max(1, bounds.width);
       height = Math.max(1, bounds.height);
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
 
       canvas.width = Math.round(width * ratio);
       canvas.height = Math.round(height * ratio);
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
 
-      const count = width < 600 ? 220 : width < 900 ? 330 : 470;
+      const count = window.innerWidth < 600 ? 340 : width < 1100 ? 440 : 560;
       model = createBrainModel(width, height, count);
     };
 
     const positionNodes = (time) => {
-      const radius = Math.min(width, height) * 0.17;
+      const radius = Math.min(width, height) * 0.14;
 
       model.nodes.forEach((node, index) => {
-        const ambient = reducedMotion.matches
+        const drift = reducedMotion.matches
           ? 0
-          : Math.sin(time * 0.00035 + node.phase) * 2.2;
-        let x = node.x + ambient * Math.cos(node.phase);
-        let y = node.y + ambient * Math.sin(node.phase);
+          : Math.sin(time * 0.00032 + node.phase) * 1.35;
+        let x = node.x + drift * Math.cos(node.phase);
+        let y = node.y + drift * Math.sin(node.phase);
 
         if (!reducedMotion.matches && pointer.active) {
           const dx = x - pointer.x;
@@ -51,7 +51,7 @@ export default function BrainHologram() {
           const distance = Math.hypot(dx, dy) || 1;
 
           if (distance < radius) {
-            const force = ((radius - distance) / radius) ** 2 * 34;
+            const force = ((radius - distance) / radius) ** 2 * 20;
             x += (dx / distance) * force;
             y += (dy / distance) * force;
           }
@@ -62,84 +62,40 @@ export default function BrainHologram() {
       });
     };
 
-    const drawContours = () => {
-      const mobile = width < 600;
-      const centerY = height * 0.52;
-      const radiusX = mobile
-        ? width * 0.48
-        : Math.min(width * 0.275, height * 0.43);
-      const radiusY = height * (mobile ? 0.39 : 0.43);
-
-      [-1, 1].forEach((side) => {
-        const centerX = width * (side === -1 ? (mobile ? 0.19 : 0.34) : mobile ? 0.81 : 0.66);
-
-        for (let line = -4; line <= 4; line += 1) {
-          const y = centerY + line * radiusY * 0.13;
-          const outerX = centerX + side * radiusX * 0.9;
-          const innerX = centerX - side * radiusX * 0.42;
-
-          context.beginPath();
-          context.moveTo(outerX, y);
-          context.bezierCurveTo(
-            centerX + side * radiusX * 0.48,
-            y - radiusY * 0.2,
-            centerX - side * radiusX * 0.08,
-            y + radiusY * 0.2,
-            innerX,
-            y,
-          );
-          context.strokeStyle = rgba(VIOLET, 0.055);
-          context.lineWidth = 0.8;
-          context.stroke();
-        }
-      });
-    };
-
     const draw = (time = 0) => {
       if (!model) resize();
 
       context.clearRect(0, 0, width, height);
       positionNodes(time);
-      drawContours();
 
       model.edges.forEach(([from, to]) => {
-        const key = `${from}:${to}`;
-        const signal = model.signals.has(key);
+        const signal = model.signals.has(`${from}:${to}`);
         context.beginPath();
         context.moveTo(model.positions[from * 2], model.positions[from * 2 + 1]);
         context.lineTo(model.positions[to * 2], model.positions[to * 2 + 1]);
         context.strokeStyle = signal
-          ? rgba(VIOLET, 0.26)
-          : rgba(GRAPHITE, 0.105);
-        context.lineWidth = signal ? 1.05 : 0.68;
+          ? rgba(VIOLET, 0.28)
+          : rgba(GRAPHITE, 0.13);
+        context.lineWidth = signal ? 0.95 : 0.58;
         context.stroke();
       });
 
       model.nodes.forEach((node, index) => {
+        const x = model.positions[index * 2];
+        const y = model.positions[index * 2 + 1];
+
         if (node.violet) {
           context.beginPath();
-          context.arc(
-            model.positions[index * 2],
-            model.positions[index * 2 + 1],
-            node.size * 4.5,
-            0,
-            Math.PI * 2,
-          );
-          context.fillStyle = rgba(VIOLET, 0.055);
+          context.arc(x, y, node.size * 4.4, 0, Math.PI * 2);
+          context.fillStyle = rgba(VIOLET, 0.07);
           context.fill();
         }
 
         context.beginPath();
-        context.arc(
-          model.positions[index * 2],
-          model.positions[index * 2 + 1],
-          node.size,
-          0,
-          Math.PI * 2,
-        );
+        context.arc(x, y, node.size, 0, Math.PI * 2);
         context.fillStyle = node.violet
-          ? rgba(VIOLET, 0.82)
-          : rgba(GRAPHITE, 0.68);
+          ? rgba(VIOLET, 0.72)
+          : rgba(GRAPHITE, 0.5);
         context.fill();
       });
 
@@ -151,14 +107,11 @@ export default function BrainHologram() {
       pointer.x = event.clientX - bounds.left;
       pointer.y = event.clientY - bounds.top;
       pointer.active =
+        event.pointerType !== "touch" &&
         pointer.x >= 0 &&
         pointer.x <= bounds.width &&
         pointer.y >= 0 &&
         pointer.y <= bounds.height;
-    };
-
-    const releaseTouch = (event) => {
-      if (event.pointerType === "touch") pointer.active = false;
     };
 
     const restart = () => {
@@ -173,8 +126,6 @@ export default function BrainHologram() {
 
     observer.observe(canvas);
     window.addEventListener("pointermove", updatePointer, { passive: true });
-    window.addEventListener("pointerdown", updatePointer, { passive: true });
-    window.addEventListener("pointerup", releaseTouch, { passive: true });
     reducedMotion.addEventListener("change", restart);
     resize();
     draw(0);
@@ -183,11 +134,15 @@ export default function BrainHologram() {
       observer.disconnect();
       window.cancelAnimationFrame(frame);
       window.removeEventListener("pointermove", updatePointer);
-      window.removeEventListener("pointerdown", updatePointer);
-      window.removeEventListener("pointerup", releaseTouch);
       reducedMotion.removeEventListener("change", restart);
     };
   }, []);
 
-  return <canvas ref={canvasRef} className="brain-hologram" aria-hidden="true" />;
+  return (
+    <div className="brain-hologram" aria-hidden="true">
+      <div className="brain-hologram-visual">
+        <canvas ref={canvasRef} className="brain-network" />
+      </div>
+    </div>
+  );
 }
