@@ -548,6 +548,55 @@ private final class PermissionProbe {
   #expect(drained == 1)
 }
 
+@Test func coalescingLevelRelayReturnsBeforeASuspendedMainActorSinkAndKeepsLatest() async {
+  let gate = RelayGate()
+  let deliveries = LevelDeliveries()
+  let relay = CoalescingLevelRelay { level in
+    await deliveries.append(level)
+    await gate.wait()
+  }
+
+  relay.submit(0.1)
+  await gate.waitUntilWaiting()
+
+  let producerFinished = ProducerCompletion()
+  Task.detached {
+    for level in [Float(0.2), 0.3, 0.9] {
+      relay.submit(level)
+    }
+    await producerFinished.complete()
+  }
+
+  #expect(await producerFinished.waitForCompletion())
+  await Task.yield()
+  #expect(await deliveries.values == [0.1])
+
+  await gate.open()
+  #expect(await deliveries.waitFor([0.1, 0.9]))
+}
+
+@Test func appleSpeechLevelProducersSubmitToTheCoalescingRelay() throws {
+  let source = try String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
+    encoding: .utf8
+  )
+  let legacy = try #require(
+    source.components(separatedBy: "@available(macOS 26.0, *)").first
+  )
+  let modern = try #require(
+    source.components(separatedBy: "private final class ModernAudioConversion").last
+  )
+
+  #expect(legacy.contains("levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))"))
+  #expect(!legacy.contains("self.level?(AudioBufferTools.normalizedRMS(buffer))"))
+  #expect(modern.contains("levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))"))
+  #expect(!modern.contains("await level(AudioBufferTools.normalizedRMS(buffer))"))
+}
+
 @Test @MainActor func appleSpeechCaptureEmitsProvisionalRetainsFinalAndReleases() async throws {
   let session = AppleSpeechSessionProbe()
   session.finishResult = .success("final words")
@@ -778,4 +827,66 @@ private func speechBuffer(format: AVAudioFormat, frames: AVAudioFrameCount) thro
     }
   }
   return buffer
+}
+
+private actor RelayGate {
+  private var isOpen = false
+  private var didStartWaiting = false
+  private var waiter: CheckedContinuation<Void, Never>?
+  private var startObserver: CheckedContinuation<Void, Never>?
+
+  func wait() async {
+    guard !isOpen else { return }
+    didStartWaiting = true
+    startObserver?.resume()
+    startObserver = nil
+    await withCheckedContinuation { waiter = $0 }
+  }
+
+  func waitUntilWaiting() async {
+    guard !didStartWaiting else { return }
+    await withCheckedContinuation { startObserver = $0 }
+  }
+
+  func open() {
+    isOpen = true
+    waiter?.resume()
+    waiter = nil
+  }
+}
+
+private actor LevelDeliveries {
+  private(set) var values: [Float] = []
+
+  func append(_ level: Float) {
+    values.append(level)
+  }
+
+  func waitFor(_ expected: [Float]) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(1))
+    while clock.now < deadline {
+      if values == expected { return true }
+      await Task.yield()
+    }
+    return values == expected
+  }
+}
+
+private actor ProducerCompletion {
+  private var isComplete = false
+
+  func complete() {
+    isComplete = true
+  }
+
+  func waitForCompletion() async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(1))
+    while clock.now < deadline {
+      if isComplete { return true }
+      await Task.yield()
+    }
+    return isComplete
+  }
 }

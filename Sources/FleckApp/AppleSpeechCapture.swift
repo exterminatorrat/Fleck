@@ -180,6 +180,55 @@ final class BoundedAudioIngress: @unchecked Sendable {
   }
 }
 
+final class CoalescingLevelRelay: @unchecked Sendable {
+  private let sink: @MainActor (Float) async -> Void
+  private let lock = NSLock()
+  private var latest: Float?
+  private var deliveryPending = false
+
+  init(sink: @escaping @MainActor (Float) async -> Void) {
+    self.sink = sink
+  }
+
+  func submit(_ level: Float) {
+    lock.lock()
+    latest = level
+    let shouldSchedule = !deliveryPending
+    deliveryPending = true
+    lock.unlock()
+
+    guard shouldSchedule else { return }
+    Task { @MainActor [weak self] in
+      await self?.deliverLatest()
+    }
+  }
+
+  @MainActor
+  private func deliverLatest() async {
+    let level = lock.withLock {
+      defer { latest = nil }
+      return latest
+    }
+
+    if let level {
+      await sink(level)
+    }
+
+    let shouldSchedule = lock.withLock {
+      let shouldSchedule = latest != nil
+      if !shouldSchedule {
+        deliveryPending = false
+      }
+      return shouldSchedule
+    }
+
+    guard shouldSchedule else { return }
+    Task { @MainActor [weak self] in
+      await self?.deliverLatest()
+    }
+  }
+}
+
 enum AudioTapIngress {
   static func makeHandler(for ingress: BoundedAudioIngress) -> AVAudioNodeTapBlock {
     { buffer, _ in
@@ -481,7 +530,7 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
   private var ingress: BoundedAudioIngress?
   private var ingressWorker: Task<Void, Never>?
   private var provisional: (@MainActor (String) -> Void)?
-  private var level: (@MainActor (Float) -> Void)?
+  private var levelRelay: CoalescingLevelRelay?
   private var terminal: Result<String?, Error>?
   private var finishContinuation: CheckedContinuation<String?, Error>?
   private var tapInstalled = false
@@ -514,7 +563,8 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
     request.taskHint = .dictation
     self.request = request
     self.provisional = provisional
-    self.level = level
+    let levelRelay = CoalescingLevelRelay(sink: level)
+    self.levelRelay = levelRelay
     terminal = nil
     didEndAudio = false
     didCancelRecognition = false
@@ -529,7 +579,7 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
         for try await buffer in ingress.buffers {
           guard let self else { return }
           self.request?.append(buffer)
-          self.level?(AudioBufferTools.normalizedRMS(buffer))
+          levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))
         }
       } catch {
         self?.resolve(.failure(error))
@@ -595,7 +645,7 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
     ingress = nil
     ingressWorker = nil
     provisional = nil
-    level = nil
+    levelRelay = nil
   }
 
   private func receive(result: SFSpeechRecognitionResult?, error: Error?) {
@@ -654,16 +704,16 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
 private final class ModernAudioConversion: @unchecked Sendable {
   private let converter: AVAudioConverter
   private let outputFormat: AVAudioFormat
-  private let level: @MainActor (Float) -> Void
+  private let levelRelay: CoalescingLevelRelay
 
   init(
     converter: AVAudioConverter,
     outputFormat: AVAudioFormat,
-    level: @escaping @MainActor (Float) -> Void
+    levelRelay: CoalescingLevelRelay
   ) {
     self.converter = converter
     self.outputFormat = outputFormat
-    self.level = level
+    self.levelRelay = levelRelay
   }
 
   func analyzerInput(for buffer: AVAudioPCMBuffer) async throws -> AnalyzerInput {
@@ -672,7 +722,7 @@ private final class ModernAudioConversion: @unchecked Sendable {
       using: converter,
       to: outputFormat
     )
-    await level(AudioBufferTools.normalizedRMS(buffer))
+    levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))
     return AnalyzerInput(buffer: converted)
   }
 }
@@ -711,7 +761,7 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
   private var analysisTask: Task<Void, Never>?
   private var resultsTask: Task<Void, Never>?
   private var provisional: (@MainActor (String) -> Void)?
-  private var level: (@MainActor (Float) -> Void)?
+  private var levelRelay: CoalescingLevelRelay?
   private var transcript = AppleSpeechTranscriptAssembler()
   private var terminalError: Error?
   private var tapInstalled = false
@@ -761,14 +811,19 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
       throw DictationFailure.unavailable
     }
     let ingress = BoundedAudioIngress(capacity: 8)
+    let levelRelay = CoalescingLevelRelay(sink: level)
     let inputs = ModernAnalyzerInputSequence(
       buffers: ingress.buffers,
-      conversion: .init(converter: converter, outputFormat: format, level: level)
+      conversion: .init(
+        converter: converter,
+        outputFormat: format,
+        levelRelay: levelRelay
+      )
     )
     self.analyzer = analyzer
     self.ingress = ingress
     self.provisional = provisional
-    self.level = level
+    self.levelRelay = levelRelay
     transcript = AppleSpeechTranscriptAssembler()
     terminalError = nil
     didFinalize = false
@@ -870,7 +925,7 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     ingress = nil
     analyzer = nil
     provisional = nil
-    level = nil
+    levelRelay = nil
     transcript = AppleSpeechTranscriptAssembler()
     terminalError = nil
   }
