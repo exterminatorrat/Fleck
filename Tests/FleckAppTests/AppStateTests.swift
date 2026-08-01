@@ -21,7 +21,11 @@ private enum AppStateTestError: Error {
 }
 
 @Test @MainActor func onboardingProgressPersistenceRollsBackAfterFailure() async {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
   let state = AppState(
+    store: LocalStore(rootURL: root),
     saveOperation: { _, _, _ in throw AppStateTestError.failed }
   )
   await state.waitUntilInitialLoad()
