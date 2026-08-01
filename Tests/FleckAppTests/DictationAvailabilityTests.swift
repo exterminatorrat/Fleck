@@ -1,4 +1,5 @@
 import AVFAudio
+import CoreAudio
 import Foundation
 import Testing
 @testable import FleckApp
@@ -361,21 +362,40 @@ private final class PermissionProbe {
   }
 }
 
-@Test func microphoneSelectionUsesSavedUIDOrFallsBackToAutomatic() {
+@Test @MainActor func microphoneSelectionUsesSavedUIDOrFallsBackToAutomatic() {
   #expect(
-    MicrophoneSelection.resolve(savedUID: nil, availableUIDs: ["built-in"])
-      == .automatic
+    CoreAudioMicrophone.resolveDevice(savedUID: nil) { _ in 42 }.selection == .automatic
   )
   #expect(
-    MicrophoneSelection.resolve(savedUID: "usb", availableUIDs: ["built-in", "usb"])
+    CoreAudioMicrophone.resolveDevice(savedUID: "usb") { _ in 42 }.selection
       == .selected(uid: "usb")
   )
   #expect(
-    MicrophoneSelection.resolve(savedUID: "missing", availableUIDs: ["built-in"])
+    CoreAudioMicrophone.resolveDevice(savedUID: "missing") { _ in nil }.selection
       == .missingUsingAutomatic(
         settingsCopy: "The saved microphone is unavailable. Using Automatic."
       )
   )
+}
+
+@Test @MainActor func microphoneSelectionLooksUpOnlyTheSavedUID() {
+  var lookedUpUIDs: [String] = []
+
+  let automatic = CoreAudioMicrophone.resolveDevice(savedUID: nil) { uid in
+    lookedUpUIDs.append(uid)
+    return 42
+  }
+  #expect(automatic.selection == .automatic)
+  #expect(automatic.deviceID == nil)
+  #expect(lookedUpUIDs.isEmpty)
+
+  let selected = CoreAudioMicrophone.resolveDevice(savedUID: "built-in") { uid in
+    lookedUpUIDs.append(uid)
+    return 42
+  }
+  #expect(selected.selection == .selected(uid: "built-in"))
+  #expect(selected.deviceID == 42)
+  #expect(lookedUpUIDs == ["built-in"])
 }
 
 @Test func audioHelpersCopyBuffersAndNormalizeRMS() throws {

@@ -37,16 +37,6 @@ enum MicrophoneSelection: Equatable, Sendable {
   case automatic
   case selected(uid: String)
   case missingUsingAutomatic(settingsCopy: String)
-
-  static func resolve(savedUID: String?, availableUIDs: [String]) -> Self {
-    guard let savedUID else { return .automatic }
-    guard availableUIDs.contains(savedUID) else {
-      return .missingUsingAutomatic(
-        settingsCopy: "The saved microphone is unavailable. Using Automatic."
-      )
-    }
-    return .selected(uid: savedUID)
-  }
 }
 
 enum AudioBufferTools {
@@ -387,15 +377,14 @@ enum CoreAudioMicrophone {
     savedUID: String?,
     for inputNode: AVAudioInputNode
   ) -> MicrophoneSelection {
-    let devices = inputDevices()
-    let selection = MicrophoneSelection.resolve(
-      savedUID: savedUID,
-      availableUIDs: devices.map(\.uid)
-    )
-    guard case .selected(let uid) = selection,
-          let deviceID = devices.first(where: { $0.uid == uid })?.id,
+    let resolved = resolveDevice(savedUID: savedUID) { uid in
+      guard let deviceID = deviceID(for: uid), hasInputChannels(deviceID) else { return nil }
+      return deviceID
+    }
+    guard case .selected = resolved.selection,
+          let deviceID = resolved.deviceID,
           let audioUnit = inputNode.audioUnit
-    else { return selection }
+    else { return resolved.selection }
     var mutableDeviceID = deviceID
     let status = AudioUnitSetProperty(
       audioUnit,
@@ -406,40 +395,49 @@ enum CoreAudioMicrophone {
       UInt32(MemoryLayout<AudioDeviceID>.size)
     )
     return status == noErr
-      ? selection
+      ? resolved.selection
       : .missingUsingAutomatic(
         settingsCopy: "The saved microphone is unavailable. Using Automatic."
       )
   }
 
-  private static func inputDevices() -> [(id: AudioDeviceID, uid: String)] {
+  static func resolveDevice(
+    savedUID: String?,
+    lookup: (String) -> AudioDeviceID?
+  ) -> (selection: MicrophoneSelection, deviceID: AudioDeviceID?) {
+    guard let savedUID else { return (.automatic, nil) }
+    guard let deviceID = lookup(savedUID), deviceID != kAudioObjectUnknown else {
+      return (
+        .missingUsingAutomatic(
+          settingsCopy: "The saved microphone is unavailable. Using Automatic."
+        ),
+        nil
+      )
+    }
+    return (.selected(uid: savedUID), deviceID)
+  }
+
+  private static func deviceID(for uid: String) -> AudioDeviceID? {
     var address = AudioObjectPropertyAddress(
-      mSelector: kAudioHardwarePropertyDevices,
+      mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
       mScope: kAudioObjectPropertyScopeGlobal,
       mElement: kAudioObjectPropertyElementMain
     )
-    var byteCount: UInt32 = 0
-    guard AudioObjectGetPropertyDataSize(
-      AudioObjectID(kAudioObjectSystemObject),
-      &address,
-      0,
-      nil,
-      &byteCount
-    ) == noErr else { return [] }
-    let count = Int(byteCount) / MemoryLayout<AudioDeviceID>.size
-    var ids = [AudioDeviceID](repeating: 0, count: count)
-    guard AudioObjectGetPropertyData(
-      AudioObjectID(kAudioObjectSystemObject),
-      &address,
-      0,
-      nil,
-      &byteCount,
-      &ids
-    ) == noErr else { return [] }
-    return ids.compactMap { id in
-      guard hasInputChannels(id), let uid = uid(for: id) else { return nil }
-      return (id, uid)
+    var deviceUID = uid as CFString
+    var deviceID = AudioDeviceID(kAudioObjectUnknown)
+    var byteCount = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let status = withUnsafePointer(to: &deviceUID) { deviceUIDPointer in
+      AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject),
+        &address,
+        UInt32(MemoryLayout<CFString>.size),
+        deviceUIDPointer,
+        &byteCount,
+        &deviceID
+      )
     }
+    guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+    return deviceID
   }
 
   private static func hasInputChannels(_ id: AudioDeviceID) -> Bool {
@@ -464,20 +462,6 @@ enum CoreAudioMicrophone {
       raw.assumingMemoryBound(to: AudioBufferList.self)
     )
     return buffers.contains { $0.mNumberChannels > 0 }
-  }
-
-  private static func uid(for id: AudioDeviceID) -> String? {
-    var address = AudioObjectPropertyAddress(
-      mSelector: kAudioDevicePropertyDeviceUID,
-      mScope: kAudioObjectPropertyScopeGlobal,
-      mElement: kAudioObjectPropertyElementMain
-    )
-    var uid: Unmanaged<CFString>?
-    var byteCount = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-    guard AudioObjectGetPropertyData(id, &address, 0, nil, &byteCount, &uid) == noErr else {
-      return nil
-    }
-    return uid?.takeUnretainedValue() as String?
   }
 }
 
