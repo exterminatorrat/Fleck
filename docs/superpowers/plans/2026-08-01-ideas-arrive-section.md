@@ -118,7 +118,7 @@ Add `src/ideasContent.test.js` to the existing `test` script in
 `website/package.json`:
 
 ```json
-"test": "node --test src/brainModel.test.js src/ideasContent.test.js worker/index.test.js"
+"test": "node --test src/ideasContent.test.js worker/index.test.js"
 ```
 
 - [ ] **Step 2: Run the focused test and confirm RED**
@@ -628,7 +628,7 @@ npm test
 npm run build
 ```
 
-Expected: 3 tests pass, 0 fail; Vite server and client builds succeed.
+Expected: 2 tests pass, 0 fail; Vite server and client builds succeed.
 
 ---
 
@@ -675,7 +675,7 @@ cd website && npm run build
 git diff --check
 ```
 
-Expected: 3 tests pass, both Vite builds succeed, and `git diff --check` has no
+Expected: 2 tests pass, both Vite builds succeed, and `git diff --check` has no
 output.
 
 - [ ] **Step 5: Commit only the section implementation**
