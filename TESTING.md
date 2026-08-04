@@ -64,7 +64,7 @@ application.
 Run from the repository root with `FLECK_ENHANCED_CANDIDATE` unset:
 
 ```sh
-swift test
+swift test --disable-automatic-resolution --no-parallel
 swift build
 swift build -c release
 Scripts/audit-agent-boundary.sh
@@ -72,14 +72,25 @@ Scripts/validate-macos.sh
 git diff --check
 ```
 
-CI also makes the product split explicit:
+CI runs the same locked ordinary graph and the complete product, audit, and
+candidate gates:
 
 ```sh
-swift test
+swift test --disable-automatic-resolution --no-parallel
 swift build -c release --product Fleck
 swift build -c release --product fleck-agent
 Scripts/audit-agent-boundary.sh
 Scripts/check-release-size.sh .build/release/Fleck
+Scripts/validate-macos.sh
+Scripts/test-enhanced-candidate-pin.sh
+Scripts/resolve-enhanced-candidate.sh .build-candidate \
+  swift test --disable-automatic-resolution --no-parallel \
+    --scratch-path .build-candidate
+git diff --exit-code -- Package.resolved
+Scripts/test-enhanced-candidate-lock-preservation.sh
+git diff --exit-code -- Package.resolved
+Scripts/check-candidate-release-rejected.sh
+git diff --exit-code -- Package.resolved
 ```
 
 The test suite probes private, unknown, Trash, and Dictation History UUIDs;
@@ -166,7 +177,7 @@ Run from the repository root:
 
 ```sh
 swift package resolve
-swift test
+swift test --disable-automatic-resolution --no-parallel
 swift build -c release
 Scripts/check-release-size.sh
 Scripts/validate-macos.sh
