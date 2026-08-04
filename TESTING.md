@@ -85,7 +85,7 @@ Scripts/check-release-size.sh .build/release/Fleck
 The test suite probes private, unknown, Trash, and Dictation History UUIDs;
 unshared activity; the closed command model; secret-free profile persistence
 and setup output; same-user IPC; revisions, retries, transaction recovery, and
-Undo; the exact twelve MCP tools; and tools-only MCP capabilities.
+Undo; the exact thirteen MCP tools; and tools-only MCP capabilities.
 `Scripts/audit-agent-boundary.sh` separately rejects helper AppKit outside the
 non-activating launch adapter, HTTP/TCP/listener APIs, direct Fleck storage
 paths, an altered MCP tool/handler surface, MCP-mode stdout prose, and
