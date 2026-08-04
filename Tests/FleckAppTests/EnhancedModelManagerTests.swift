@@ -244,7 +244,7 @@ struct EnhancedModelManagerTests {
     )
   }
 
-  @Test func resumeKeychainQueryUsesTheDataProtectionKeychain() {
+  @Test func resumeKeychainQueryUsesLoginKeychain() {
     let query = EnhancedModelManager.resumeAuthenticationKeychainBaseQuery()
 
     #expect(query[kSecClass] as? String == kSecClassGenericPassword as String)
@@ -252,7 +252,11 @@ struct EnhancedModelManagerTests {
       query[kSecAttrService] as? String
         == "com.harryjin.fleck.enhanced-model-resume"
     )
-    #expect(query[kSecUseDataProtectionKeychain] as? Bool == true)
+    #expect(query[kSecUseDataProtectionKeychain] == nil)
+    #expect(
+      query[kSecAttrAccessible] == nil,
+      "Accessibility belongs on additions, not lookup/update queries."
+    )
   }
 
   @Test func productionResumeTokenIsConsumedWhenIssued() throws {
