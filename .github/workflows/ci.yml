@@ -12,7 +12,7 @@ permissions:
 jobs:
   macos:
     name: macOS build and tests
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -20,10 +20,16 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
       - name: Test ordinary graph
         run: |
           unset FLECK_ENHANCED_CANDIDATE
-          swift test
+          swift test --disable-automatic-resolution --no-parallel
       - name: Build Fleck release product
         run: |
           unset FLECK_ENHANCED_CANDIDATE
@@ -43,7 +49,7 @@ jobs:
       - name: Test Enhanced Local candidate graph
         run: |
           Scripts/resolve-enhanced-candidate.sh .build-candidate \
-            swift test --disable-automatic-resolution \
+            swift test --disable-automatic-resolution --no-parallel \
               --scratch-path .build-candidate
           git diff --exit-code -- Package.resolved
       - name: Preserve ordinary lock from a foreign working directory

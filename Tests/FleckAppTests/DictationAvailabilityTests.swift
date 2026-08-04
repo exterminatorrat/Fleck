@@ -1,4 +1,4 @@
-import AVFAudio
+@preconcurrency import AVFAudio
 import CoreAudio
 import Foundation
 import Testing
@@ -362,40 +362,60 @@ private final class PermissionProbe {
   }
 }
 
-@Test @MainActor func microphoneSelectionUsesSavedUIDOrFallsBackToAutomatic() {
-  #expect(
-    CoreAudioMicrophone.resolveDevice(savedUID: nil) { _ in 42 }.selection == .automatic
+@Test @MainActor func systemDefaultSavedMicrophoneRemainsSelected() {
+  let selection = CoreAudioMicrophone.select(
+    savedUID: "built-in",
+    deviceIDForUID: { _ in 42 },
+    defaultInputDeviceID: { 42 }
   )
-  #expect(
-    CoreAudioMicrophone.resolveDevice(savedUID: "usb") { _ in 42 }.selection
-      == .selected(uid: "usb")
+
+  #expect(selection == .selected(uid: "built-in"))
+}
+
+@Test @MainActor func missingSavedMicrophoneFallsBackToAutomatic() {
+  let selection = CoreAudioMicrophone.select(
+    savedUID: "missing",
+    deviceIDForUID: { _ in nil },
+    defaultInputDeviceID: { 42 }
   )
+
   #expect(
-    CoreAudioMicrophone.resolveDevice(savedUID: "missing") { _ in nil }.selection
-      == .missingUsingAutomatic(
-        settingsCopy: "The saved microphone is unavailable. Using Automatic."
-      )
+    selection == .fallbackToAutomatic(
+      settingsCopy: "The saved microphone is unavailable. Using Automatic."
+    )
   )
 }
 
-@Test @MainActor func microphoneSelectionLooksUpOnlyTheSavedUID() {
-  var lookedUpUIDs: [String] = []
+@Test @MainActor func nonDefaultSavedMicrophoneFallsBackToAutomatic() {
+  let selection = CoreAudioMicrophone.select(
+    savedUID: "usb",
+    deviceIDForUID: { _ in 24 },
+    defaultInputDeviceID: { 42 }
+  )
 
-  let automatic = CoreAudioMicrophone.resolveDevice(savedUID: nil) { uid in
-    lookedUpUIDs.append(uid)
-    return 42
-  }
-  #expect(automatic.selection == .automatic)
-  #expect(automatic.deviceID == nil)
-  #expect(lookedUpUIDs.isEmpty)
+  #expect(
+    selection == .fallbackToAutomatic(
+      settingsCopy: "The saved microphone is unavailable. Using Automatic."
+    )
+  )
+}
 
-  let selected = CoreAudioMicrophone.resolveDevice(savedUID: "built-in") { uid in
-    lookedUpUIDs.append(uid)
-    return 42
-  }
-  #expect(selected.selection == .selected(uid: "built-in"))
-  #expect(selected.deviceID == 42)
-  #expect(lookedUpUIDs == ["built-in"])
+@Test @MainActor func automaticMicrophoneDoesNotPerformRoutingQueries() {
+  var queryCount = 0
+  let selection = CoreAudioMicrophone.select(
+    savedUID: nil,
+    deviceIDForUID: { _ in
+      queryCount += 1
+      return 42
+    },
+    defaultInputDeviceID: {
+      queryCount += 1
+      return 42
+    }
+  )
+
+  #expect(selection == .automatic)
+  #expect(queryCount == 0)
 }
 
 @Test func audioHelpersCopyBuffersAndNormalizeRMS() throws {
@@ -528,6 +548,106 @@ private final class PermissionProbe {
   #expect(drained == 1)
 }
 
+@Test func coalescingLevelRelayReturnsBeforeASuspendedMainActorSinkAndKeepsLatest() async {
+  let gate = RelayGate()
+  let deliveries = LevelDeliveries()
+  let relay = CoalescingLevelRelay { level in
+    await deliveries.append(level)
+    await gate.wait()
+  }
+
+  relay.submit(0.1)
+  await gate.waitUntilWaiting()
+
+  let producerFinished = ProducerCompletion()
+  Task.detached {
+    for level in [Float(0.2), 0.3, 0.9] {
+      relay.submit(level)
+    }
+    await producerFinished.complete()
+  }
+
+  #expect(await producerFinished.waitForCompletion())
+  await Task.yield()
+  #expect(await deliveries.values == [0.1])
+
+  await gate.open()
+  #expect(await deliveries.waitFor([0.1, 0.9]))
+}
+
+@Test @MainActor func appleSpeechAudioPumpDrainsWhileMainActorLevelSinkIsSuspended()
+  async throws
+{
+  let format = try #require(
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: 16_000,
+      channels: 1,
+      interleaved: false
+    )
+  )
+  let gate = RelayGate()
+  let deliveries = LevelDeliveries()
+  let relay = CoalescingLevelRelay { level in
+    await deliveries.append(level)
+    await gate.wait()
+  }
+  let consumer = AudioPumpConsumerProbe(levelRelay: relay)
+  let ingress = BoundedAudioIngress(capacity: 2)
+  let worker = Task {
+    try await AppleSpeechAudioPump.drain(ingress) { buffer in
+      await consumer.consume(buffer)
+    }
+  }
+
+  #expect(ingress.yield(try speechBuffer(format: format, frames: 4)))
+  await gate.waitUntilWaiting()
+  #expect(ingress.yield(try speechBuffer(format: format, frames: 4)))
+  ingress.finish()
+
+  #expect(await consumer.waitForCount(2))
+  #expect(await deliveries.values == [0.25])
+  await gate.open()
+  try await worker.value
+  #expect(await deliveries.waitFor([0.25, 0.25]))
+}
+
+@Test @MainActor func coalescingLevelRelayDeliversAfterItsExternalOwnerIsReleased() async {
+  let deliveries = LevelDeliveries()
+  var relay: CoalescingLevelRelay? = CoalescingLevelRelay { level in
+    await deliveries.append(level)
+  }
+
+  relay?.submit(0.7)
+  relay = nil
+
+  #expect(await deliveries.waitFor([0.7]))
+}
+
+@Test func appleSpeechLevelProducersSubmitToTheCoalescingRelay() throws {
+  let source = try String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
+    encoding: .utf8
+  )
+  let legacy = try #require(
+    source.components(separatedBy: "@available(macOS 26.0, *)").first
+  )
+  let modernSections = source.components(
+    separatedBy: "private actor ModernAppleSpeechSession"
+  )
+  #expect(modernSections.count == 2)
+  let modern = try #require(modernSections.last)
+
+  #expect(legacy.contains("levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))"))
+  #expect(!legacy.contains("self.level?(AudioBufferTools.normalizedRMS(buffer))"))
+  #expect(modern.contains("levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))"))
+  #expect(!modern.contains("await level(AudioBufferTools.normalizedRMS(buffer))"))
+}
+
 @Test @MainActor func appleSpeechCaptureEmitsProvisionalRetainsFinalAndReleases() async throws {
   let session = AppleSpeechSessionProbe()
   session.finishResult = .success("final words")
@@ -555,6 +675,65 @@ private final class PermissionProbe {
   #expect(session.finishCount == 1)
   #expect(session.cancelCount == 0)
   #expect(session.releaseCount == 1)
+}
+
+@Test @MainActor func appleSpeechCaptureBlockedStartYieldsMainActor() async throws {
+  let observation = BlockingStartObservation()
+  let session = BlockingAppleSpeechSessionProbe(observation: observation)
+  let capture = AppleSpeechCapture(
+    requestPermission: { .granted },
+    makeSession: { session }
+  )
+
+  let watchdog = Task.detached {
+    guard observation.waitUntilStart(timeout: .now() + 1) else {
+      observation.releaseStart()
+      return false
+    }
+    Task { @MainActor in observation.recordHeartbeat() }
+    observation.waitForHeartbeatWindow()
+    observation.releaseStart()
+    return true
+  }
+
+  try await capture.start(provisional: { _ in }, level: { _ in })
+
+  #expect(await watchdog.value)
+  #expect(observation.startRanOnMainThread == false)
+  #expect(observation.heartbeatRanBeforeRelease)
+  await capture.cancel()
+}
+
+@Test @MainActor func appleSpeechCaptureConstructsLegacyFrameworkObjectsOffMainActor() async {
+  let observation = FrameworkConstructionObservation()
+  let capture = AppleSpeechCapture(
+    requestPermission: { .granted },
+    makeSession: {
+      LegacyAppleSpeechSession(
+        microphoneUID: nil,
+        microphoneSelectionChanged: { _ in },
+        makeAudioEngine: {
+          let audioEngine = AVAudioEngine()
+          observation.recordAudioEngineConstruction(audioEngine)
+          return audioEngine
+        },
+        makeRecognizer: {
+          observation.recordRecognizerConstruction()
+          return nil
+        }
+      )
+    }
+  )
+
+  await #expect(throws: DictationFailure.unavailable) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+
+  #expect(observation.audioEngineConstructionCount == 1)
+  #expect(observation.recognizerConstructionCount == 1)
+  #expect(!observation.audioEngineConstructionRanOnMainThread)
+  #expect(!observation.recognizerConstructionRanOnMainThread)
+  #expect(observation.audioEngineWasReleased)
 }
 
 @Test func appleSpeechTranscriptAssemblerKeepsPauseSegmentsOnOneCleanLine() {
@@ -677,6 +856,113 @@ private enum SpeechProbeError: Error {
   case failed
 }
 
+private final class FrameworkConstructionObservation: @unchecked Sendable {
+  private let lock = NSLock()
+  private var audioEngineThreads: [Bool] = []
+  private var recognizerThreads: [Bool] = []
+  private weak var audioEngine: AVAudioEngine?
+
+  var audioEngineConstructionCount: Int { lock.withLock { audioEngineThreads.count } }
+  var recognizerConstructionCount: Int { lock.withLock { recognizerThreads.count } }
+  var audioEngineConstructionRanOnMainThread: Bool {
+    lock.withLock { audioEngineThreads.contains(true) }
+  }
+  var recognizerConstructionRanOnMainThread: Bool {
+    lock.withLock { recognizerThreads.contains(true) }
+  }
+  var audioEngineWasReleased: Bool { lock.withLock { audioEngine == nil } }
+
+  func recordAudioEngineConstruction(_ audioEngine: AVAudioEngine) {
+    lock.withLock {
+      audioEngineThreads.append(Thread.isMainThread)
+      self.audioEngine = audioEngine
+    }
+  }
+
+  func recordRecognizerConstruction() {
+    lock.withLock { recognizerThreads.append(Thread.isMainThread) }
+  }
+}
+
+private final class BlockingStartObservation: @unchecked Sendable {
+  private let condition = NSCondition()
+  private let startGate = DispatchSemaphore(value: 0)
+  private var didStart = false
+  private var didReleaseStart = false
+  private var _startRanOnMainThread = false
+  private var _heartbeatRanBeforeRelease = false
+
+  var startRanOnMainThread: Bool {
+    condition.withLock { _startRanOnMainThread }
+  }
+
+  var heartbeatRanBeforeRelease: Bool {
+    condition.withLock { _heartbeatRanBeforeRelease }
+  }
+
+  func blockStart() {
+    condition.withLock {
+      didStart = true
+      _startRanOnMainThread = Thread.isMainThread
+      condition.broadcast()
+    }
+    startGate.wait()
+  }
+
+  func waitUntilStart(timeout: DispatchTime) -> Bool {
+    condition.lock()
+    defer { condition.unlock() }
+    while !didStart {
+      guard condition.wait(until: Date(timeIntervalSinceNow: 0.01)) else {
+        if DispatchTime.now() >= timeout { return false }
+        continue
+      }
+    }
+    return true
+  }
+
+  func recordHeartbeat() {
+    condition.withLock {
+      _heartbeatRanBeforeRelease = !didReleaseStart
+    }
+  }
+
+  func waitForHeartbeatWindow() {
+    condition.lock()
+    _ = condition.wait(until: Date(timeIntervalSinceNow: 0.1))
+    condition.unlock()
+  }
+
+  func releaseStart() {
+    let shouldSignal = condition.withLock {
+      guard !didReleaseStart else { return false }
+      didReleaseStart = true
+      return true
+    }
+    if shouldSignal { startGate.signal() }
+  }
+}
+
+private actor BlockingAppleSpeechSessionProbe: AppleSpeechSession {
+  nonisolated let supportsOnDeviceRecognition = true
+  private let observation: BlockingStartObservation
+
+  init(observation: BlockingStartObservation) {
+    self.observation = observation
+  }
+
+  func start(
+    provisional _: @escaping @MainActor @Sendable (String) -> Void,
+    level _: @escaping @MainActor @Sendable (Float) -> Void
+  ) async throws {
+    observation.blockStart()
+  }
+
+  func finish() async throws -> String? { nil }
+  func cancel() async {}
+  func releaseResources() async {}
+}
+
 @MainActor
 private final class AppleSpeechSessionProbe: AppleSpeechSession {
   var supportsOnDeviceRecognition = true
@@ -758,4 +1044,90 @@ private func speechBuffer(format: AVAudioFormat, frames: AVAudioFrameCount) thro
     }
   }
   return buffer
+}
+
+private actor RelayGate {
+  private var isOpen = false
+  private var didStartWaiting = false
+  private var waiter: CheckedContinuation<Void, Never>?
+  private var startObserver: CheckedContinuation<Void, Never>?
+
+  func wait() async {
+    guard !isOpen else { return }
+    didStartWaiting = true
+    startObserver?.resume()
+    startObserver = nil
+    await withCheckedContinuation { waiter = $0 }
+  }
+
+  func waitUntilWaiting() async {
+    guard !didStartWaiting else { return }
+    await withCheckedContinuation { startObserver = $0 }
+  }
+
+  func open() {
+    isOpen = true
+    waiter?.resume()
+    waiter = nil
+  }
+}
+
+private actor LevelDeliveries {
+  private(set) var values: [Float] = []
+
+  func append(_ level: Float) {
+    values.append(level)
+  }
+
+  func waitFor(_ expected: [Float]) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(1))
+    while clock.now < deadline {
+      if values == expected { return true }
+      await Task.yield()
+    }
+    return values == expected
+  }
+}
+
+private actor ProducerCompletion {
+  private var isComplete = false
+
+  func complete() {
+    isComplete = true
+  }
+
+  func waitForCompletion() async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(1))
+    while clock.now < deadline {
+      if isComplete { return true }
+      await Task.yield()
+    }
+    return isComplete
+  }
+}
+
+private actor AudioPumpConsumerProbe {
+  private let levelRelay: CoalescingLevelRelay
+  private var count = 0
+
+  init(levelRelay: CoalescingLevelRelay) {
+    self.levelRelay = levelRelay
+  }
+
+  func consume(_ buffer: sending AVAudioPCMBuffer) {
+    count += 1
+    levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))
+  }
+
+  func waitForCount(_ expected: Int) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(1))
+    while clock.now < deadline {
+      if count == expected { return true }
+      await Task.yield()
+    }
+    return count == expected
+  }
 }

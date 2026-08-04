@@ -1,5 +1,4 @@
 @preconcurrency import AVFAudio
-import AudioToolbox
 import CoreAudio
 import Foundation
 import FleckCore
@@ -36,7 +35,7 @@ extension DictationFailure: LocalizedError {
 enum MicrophoneSelection: Equatable, Sendable {
   case automatic
   case selected(uid: String)
-  case missingUsingAutomatic(settingsCopy: String)
+  case fallbackToAutomatic(settingsCopy: String)
 }
 
 enum AudioBufferTools {
@@ -181,6 +180,66 @@ final class BoundedAudioIngress: @unchecked Sendable {
   }
 }
 
+enum AppleSpeechAudioPump {
+  static func drain(
+    _ ingress: BoundedAudioIngress,
+    consume: @escaping @Sendable (sending AVAudioPCMBuffer) async -> Void
+  ) async throws {
+    for try await buffer in ingress.buffers {
+      await consume(buffer)
+    }
+  }
+}
+
+final class CoalescingLevelRelay: @unchecked Sendable {
+  private let sink: @MainActor (Float) async -> Void
+  private let lock = NSLock()
+  private var latest: Float?
+  private var deliveryPending = false
+
+  init(sink: @escaping @MainActor (Float) async -> Void) {
+    self.sink = sink
+  }
+
+  func submit(_ level: Float) {
+    lock.lock()
+    latest = level
+    let shouldSchedule = !deliveryPending
+    deliveryPending = true
+    lock.unlock()
+
+    guard shouldSchedule else { return }
+    Task { @MainActor in
+      await deliverLatest()
+    }
+  }
+
+  @MainActor
+  private func deliverLatest() async {
+    let level = lock.withLock {
+      defer { latest = nil }
+      return latest
+    }
+
+    if let level {
+      await sink(level)
+    }
+
+    let shouldSchedule = lock.withLock {
+      let shouldSchedule = latest != nil
+      if !shouldSchedule {
+        deliveryPending = false
+      }
+      return shouldSchedule
+    }
+
+    guard shouldSchedule else { return }
+    Task { @MainActor in
+      await deliverLatest()
+    }
+  }
+}
+
 enum AudioTapIngress {
   static func makeHandler(for ingress: BoundedAudioIngress) -> AVAudioNodeTapBlock {
     { buffer, _ in
@@ -193,13 +252,12 @@ enum AudioTapIngress {
   }
 }
 
-@MainActor
-protocol AppleSpeechSession: AnyObject {
-  var supportsOnDeviceRecognition: Bool { get }
+protocol AppleSpeechSession: AnyObject, Sendable {
+  var supportsOnDeviceRecognition: Bool { get async }
 
   func start(
-    provisional: @escaping @MainActor (String) -> Void,
-    level: @escaping @MainActor (Float) -> Void
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws
   func finish() async throws -> String?
   func cancel() async
@@ -282,14 +340,15 @@ final class AppleSpeechCapture: SpeechEngine {
   }
 
   func start(
-    provisional: @escaping @MainActor (String) -> Void,
-    level: @escaping @MainActor (Float) -> Void
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws {
+    guard session == nil else { throw DictationFailure.unavailable }
     guard case .granted = await requestPermission() else {
       throw DictationFailure.permissionDenied
     }
     let session = try await makeSession()
-    guard session.supportsOnDeviceRecognition else {
+    guard await session.supportsOnDeviceRecognition else {
       await session.releaseResources()
       throw DictationFailure.unavailable
     }
@@ -298,6 +357,9 @@ final class AppleSpeechCapture: SpeechEngine {
     terminalCommandIssued = false
     do {
       try await session.start(provisional: provisional, level: level)
+      guard self.session === session, !terminalCommandIssued else {
+        throw CancellationError()
+      }
       interruptionObservationActive = true
       interruptions.start { [weak self] in
         Task { @MainActor [weak self] in
@@ -371,50 +433,35 @@ private extension String {
   var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
-@MainActor
 enum CoreAudioMicrophone {
-  static func select(
-    savedUID: String?,
-    for inputNode: AVAudioInputNode
-  ) -> MicrophoneSelection {
-    let resolved = resolveDevice(savedUID: savedUID) { uid in
-      guard let deviceID = deviceID(for: uid), hasInputChannels(deviceID) else { return nil }
-      return deviceID
-    }
-    guard case .selected = resolved.selection,
-          let deviceID = resolved.deviceID,
-          let audioUnit = inputNode.audioUnit
-    else { return resolved.selection }
-    var mutableDeviceID = deviceID
-    let status = AudioUnitSetProperty(
-      audioUnit,
-      kAudioOutputUnitProperty_CurrentDevice,
-      kAudioUnitScope_Global,
-      0,
-      &mutableDeviceID,
-      UInt32(MemoryLayout<AudioDeviceID>.size)
+  static func select(savedUID: String?) -> MicrophoneSelection {
+    select(
+      savedUID: savedUID,
+      deviceIDForUID: { uid in
+        guard let deviceID = deviceID(for: uid), hasInputChannels(deviceID) else { return nil }
+        return deviceID
+      },
+      defaultInputDeviceID: defaultInputDeviceID
     )
-    return status == noErr
-      ? resolved.selection
-      : .missingUsingAutomatic(
-        settingsCopy: "The saved microphone is unavailable. Using Automatic."
-      )
   }
 
-  static func resolveDevice(
+  static func select(
     savedUID: String?,
-    lookup: (String) -> AudioDeviceID?
-  ) -> (selection: MicrophoneSelection, deviceID: AudioDeviceID?) {
-    guard let savedUID else { return (.automatic, nil) }
-    guard let deviceID = lookup(savedUID), deviceID != kAudioObjectUnknown else {
-      return (
-        .missingUsingAutomatic(
-          settingsCopy: "The saved microphone is unavailable. Using Automatic."
-        ),
-        nil
-      )
+    deviceIDForUID: (String) -> AudioDeviceID?,
+    defaultInputDeviceID: () -> AudioDeviceID?
+  ) -> MicrophoneSelection {
+    guard let savedUID else { return .automatic }
+    if let savedDeviceID = deviceIDForUID(savedUID),
+       savedDeviceID != kAudioObjectUnknown,
+       let defaultDeviceID = defaultInputDeviceID(),
+       defaultDeviceID != kAudioObjectUnknown,
+       savedDeviceID == defaultDeviceID
+    {
+      return .selected(uid: savedUID)
     }
-    return (.selected(uid: savedUID), deviceID)
+    return .fallbackToAutomatic(
+      settingsCopy: "The saved microphone is unavailable. Using Automatic."
+    )
   }
 
   private static func deviceID(for uid: String) -> AudioDeviceID? {
@@ -436,6 +483,26 @@ enum CoreAudioMicrophone {
         &deviceID
       )
     }
+    guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+    return deviceID
+  }
+
+  private static func defaultInputDeviceID() -> AudioDeviceID? {
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwarePropertyDefaultInputDevice,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    var deviceID = AudioDeviceID(kAudioObjectUnknown)
+    var byteCount = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let status = AudioObjectGetPropertyData(
+      AudioObjectID(kAudioObjectSystemObject),
+      &address,
+      0,
+      nil,
+      &byteCount,
+      &deviceID
+    )
     guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
     return deviceID
   }
@@ -465,42 +532,52 @@ enum CoreAudioMicrophone {
   }
 }
 
-@MainActor
-private final class LegacyAppleSpeechSession: AppleSpeechSession {
-  private let recognizer: SFSpeechRecognizer?
-  private let audioEngine = AVAudioEngine()
+actor LegacyAppleSpeechSession: AppleSpeechSession {
+  private let makeAudioEngine: @Sendable () -> AVAudioEngine
+  private let makeRecognizer: @Sendable () -> SFSpeechRecognizer?
   private let microphoneUID: String?
   private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
+  private var recognizer: SFSpeechRecognizer?
+  private var audioEngine: AVAudioEngine?
   private var request: SFSpeechAudioBufferRecognitionRequest?
   private var recognitionTask: SFSpeechRecognitionTask?
   private var ingress: BoundedAudioIngress?
   private var ingressWorker: Task<Void, Never>?
-  private var provisional: (@MainActor (String) -> Void)?
-  private var level: (@MainActor (Float) -> Void)?
+  private var provisional: (@MainActor @Sendable (String) -> Void)?
+  private var levelRelay: CoalescingLevelRelay?
   private var terminal: Result<String?, Error>?
   private var finishContinuation: CheckedContinuation<String?, Error>?
   private var tapInstalled = false
   private var didEndAudio = false
   private var didCancelRecognition = false
+  private var terminationRequested = false
 
   var supportsOnDeviceRecognition: Bool {
-    recognizer?.supportsOnDeviceRecognition == true
+    prepareFrameworkObjects()
+    return recognizer?.supportsOnDeviceRecognition == true
   }
 
   init(
     microphoneUID: String?,
-    microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void
+    microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void,
+    makeAudioEngine: @escaping @Sendable () -> AVAudioEngine = { AVAudioEngine() },
+    makeRecognizer: @escaping @Sendable () -> SFSpeechRecognizer? = {
+      SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    }
   ) {
-    recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    self.makeAudioEngine = makeAudioEngine
+    self.makeRecognizer = makeRecognizer
     self.microphoneUID = microphoneUID
     self.microphoneSelectionChanged = microphoneSelectionChanged
   }
 
   func start(
-    provisional: @escaping @MainActor (String) -> Void,
-    level: @escaping @MainActor (Float) -> Void
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws {
-    guard let recognizer, recognizer.supportsOnDeviceRecognition else {
+    guard !terminationRequested else { throw CancellationError() }
+    prepareFrameworkObjects()
+    guard let audioEngine, let recognizer, recognizer.supportsOnDeviceRecognition else {
       throw DictationFailure.unavailable
     }
     let request = SFSpeechAudioBufferRecognitionRequest()
@@ -509,25 +586,25 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
     request.taskHint = .dictation
     self.request = request
     self.provisional = provisional
-    self.level = level
+    let levelRelay = CoalescingLevelRelay(sink: level)
+    self.levelRelay = levelRelay
     terminal = nil
     didEndAudio = false
     didCancelRecognition = false
 
     let inputNode = audioEngine.inputNode
-    microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID, for: inputNode))
+    await microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID))
+    guard !terminationRequested else { throw CancellationError() }
     let inputFormat = inputNode.inputFormat(forBus: 0)
     let ingress = BoundedAudioIngress(capacity: 8)
     self.ingress = ingress
-    ingressWorker = Task { @MainActor [weak self] in
+    ingressWorker = Task { [weak self] in
       do {
-        for try await buffer in ingress.buffers {
-          guard let self else { return }
-          self.request?.append(buffer)
-          self.level?(AudioBufferTools.normalizedRMS(buffer))
+        try await AppleSpeechAudioPump.drain(ingress) { [weak self] buffer in
+          await self?.consume(buffer, levelRelay: levelRelay)
         }
       } catch {
-        self?.resolve(.failure(error))
+        await self?.resolve(.failure(error))
       }
     }
     inputNode.installTap(
@@ -538,8 +615,11 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
     )
     tapInstalled = true
     recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-      Task { @MainActor [weak self] in
-        self?.receive(result: result, error: error)
+      let text = result?.bestTranscription.formattedString
+      let isFinal = result?.isFinal == true
+      let errorCode = (error as NSError?)?.code
+      Task { [weak self] in
+        await self?.receive(text: text, isFinal: isFinal, errorCode: errorCode)
       }
     }
     audioEngine.prepare()
@@ -570,6 +650,7 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
   }
 
   func cancel() async {
+    terminationRequested = true
     stopAudio()
     ingress?.finish()
     await ingressWorker?.value
@@ -578,6 +659,7 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
   }
 
   func releaseResources() async {
+    terminationRequested = true
     stopAudio()
     ingress?.finish()
     await ingressWorker?.value
@@ -587,29 +669,37 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
     }
     recognitionTask = nil
     request = nil
+    recognizer = nil
+    audioEngine = nil
     ingress = nil
     ingressWorker = nil
     provisional = nil
-    level = nil
+    levelRelay = nil
   }
 
-  private func receive(result: SFSpeechRecognitionResult?, error: Error?) {
-    if let result {
-      let text = result.bestTranscription.formattedString
-      if result.isFinal {
+  private func receive(text: String?, isFinal: Bool, errorCode: Int?) async {
+    if let text {
+      if isFinal {
         resolve(.success(text))
       } else {
-        provisional?(text)
+        await provisional?(text)
       }
     }
-    if let error {
-      let nsError = error as NSError
-      if nsError.code == 1_110 {
+    if let errorCode {
+      if errorCode == 1_110 {
         resolve(.success(nil))
       } else {
-        resolve(.failure(error))
+        resolve(.failure(DictationFailure.transcriptionFailed))
       }
     }
+  }
+
+  private func consume(
+    _ buffer: sending AVAudioPCMBuffer,
+    levelRelay: CoalescingLevelRelay
+  ) {
+    request?.append(buffer)
+    levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))
   }
 
   private func resolve(_ result: Result<String?, Error>) {
@@ -623,6 +713,7 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
   }
 
   private func stopAudio() {
+    guard let audioEngine else { return }
     if tapInstalled {
       audioEngine.inputNode.removeTap(onBus: 0)
       tapInstalled = false
@@ -643,32 +734,11 @@ private final class LegacyAppleSpeechSession: AppleSpeechSession {
     didCancelRecognition = true
     recognitionTask?.cancel()
   }
-}
 
-@available(macOS 26.0, *)
-private final class ModernAudioConversion: @unchecked Sendable {
-  private let converter: AVAudioConverter
-  private let outputFormat: AVAudioFormat
-  private let level: @MainActor (Float) -> Void
-
-  init(
-    converter: AVAudioConverter,
-    outputFormat: AVAudioFormat,
-    level: @escaping @MainActor (Float) -> Void
-  ) {
-    self.converter = converter
-    self.outputFormat = outputFormat
-    self.level = level
-  }
-
-  func analyzerInput(for buffer: AVAudioPCMBuffer) async throws -> AnalyzerInput {
-    let converted = try AudioBufferTools.convert(
-      buffer,
-      using: converter,
-      to: outputFormat
-    )
-    await level(AudioBufferTools.normalizedRMS(buffer))
-    return AnalyzerInput(buffer: converted)
+  private func prepareFrameworkObjects() {
+    guard !terminationRequested, audioEngine == nil else { return }
+    audioEngine = makeAudioEngine()
+    recognizer = makeRecognizer()
   }
 }
 
@@ -678,40 +748,42 @@ private struct ModernAnalyzerInputSequence: AsyncSequence, @unchecked Sendable {
 
   struct AsyncIterator: AsyncIteratorProtocol {
     var buffers: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Iterator
-    let conversion: ModernAudioConversion
+    let convert: @Sendable (AVAudioPCMBuffer) async throws -> AnalyzerInput
 
     mutating func next() async throws -> AnalyzerInput? {
       guard let buffer = try await buffers.next() else { return nil }
-      return try await conversion.analyzerInput(for: buffer)
+      return try await convert(buffer)
     }
   }
 
   let buffers: AsyncThrowingStream<AVAudioPCMBuffer, Error>
-  let conversion: ModernAudioConversion
+  let convert: @Sendable (AVAudioPCMBuffer) async throws -> AnalyzerInput
 
   func makeAsyncIterator() -> AsyncIterator {
-    .init(buffers: buffers.makeAsyncIterator(), conversion: conversion)
+    .init(buffers: buffers.makeAsyncIterator(), convert: convert)
   }
 }
 
 @available(macOS 26.0, *)
-@MainActor
-private final class ModernAppleSpeechSession: AppleSpeechSession {
+private actor ModernAppleSpeechSession: AppleSpeechSession {
   private let locale = Locale(identifier: "en-US")
-  private let audioEngine = AVAudioEngine()
   private let microphoneUID: String?
   private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
+  private var audioEngine: AVAudioEngine?
   private var analyzer: SpeechAnalyzer?
+  private var converter: AVAudioConverter?
+  private var analyzerFormat: AVAudioFormat?
   private var ingress: BoundedAudioIngress?
   private var analysisTask: Task<Void, Never>?
   private var resultsTask: Task<Void, Never>?
-  private var provisional: (@MainActor (String) -> Void)?
-  private var level: (@MainActor (Float) -> Void)?
+  private var provisional: (@MainActor @Sendable (String) -> Void)?
+  private var levelRelay: CoalescingLevelRelay?
   private var transcript = AppleSpeechTranscriptAssembler()
   private var terminalError: Error?
   private var tapInstalled = false
   private var didFinalize = false
   private var didCancelAnalyzer = false
+  private var terminationRequested = false
 
   var supportsOnDeviceRecognition: Bool { true }
 
@@ -724,16 +796,21 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
   }
 
   func start(
-    provisional: @escaping @MainActor (String) -> Void,
-    level: @escaping @MainActor (Float) -> Void
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws {
+    guard !terminationRequested else { throw CancellationError() }
+    let audioEngine = AVAudioEngine()
+    self.audioEngine = audioEngine
     let installedLocales = await DictationTranscriber.installedLocales
+    guard !terminationRequested else { throw CancellationError() }
     guard AppleSpeechLocale.containsEquivalent(locale, in: installedLocales) else {
       throw DictationFailure.unavailable
     }
 
     let inputNode = audioEngine.inputNode
-    microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID, for: inputNode))
+    await microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID))
+    guard !terminationRequested else { throw CancellationError() }
     let naturalFormat = inputNode.inputFormat(forBus: 0)
     let transcriber = DictationTranscriber(
       locale: locale,
@@ -746,51 +823,52 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     ) else {
       throw DictationFailure.unavailable
     }
+    guard !terminationRequested else { throw CancellationError() }
     let analyzer = SpeechAnalyzer(
       modules: modules,
       options: .init(priority: .userInitiated, modelRetention: .whileInUse)
     )
+    self.analyzer = analyzer
     try await analyzer.prepareToAnalyze(in: format)
+    guard !terminationRequested else { throw CancellationError() }
 
     guard let converter = AVAudioConverter(from: naturalFormat, to: format) else {
       throw DictationFailure.unavailable
     }
     let ingress = BoundedAudioIngress(capacity: 8)
-    let inputs = ModernAnalyzerInputSequence(
-      buffers: ingress.buffers,
-      conversion: .init(converter: converter, outputFormat: format, level: level)
-    )
-    self.analyzer = analyzer
+    let levelRelay = CoalescingLevelRelay(sink: level)
+    self.converter = converter
+    analyzerFormat = format
     self.ingress = ingress
     self.provisional = provisional
-    self.level = level
+    self.levelRelay = levelRelay
     transcript = AppleSpeechTranscriptAssembler()
     terminalError = nil
     didFinalize = false
     didCancelAnalyzer = false
+    let inputs = ModernAnalyzerInputSequence(
+      buffers: ingress.buffers,
+      convert: { [weak self] buffer in
+        guard let self else { throw CancellationError() }
+        return try await self.analyzerInput(for: buffer)
+      }
+    )
 
     analysisTask = Task { [weak self] in
       do {
         try await analyzer.start(inputSequence: inputs)
       } catch {
-        self?.terminalError = error
-        self?.stopAudio()
+        await self?.fail(error)
       }
     }
     resultsTask = Task { [weak self] in
       do {
         for try await result in transcriber.results {
-          guard let self else { return }
           let text = String(result.text.characters)
-          if result.isFinal {
-            self.transcript.appendFinal(text)
-            self.provisional?(self.transcript.displayText())
-          } else {
-            self.provisional?(self.transcript.displayText(provisional: text))
-          }
+          await self?.receive(text: text, isFinal: result.isFinal)
         }
       } catch {
-        self?.terminalError = error
+        await self?.fail(error)
       }
     }
 
@@ -838,6 +916,7 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
   }
 
   func cancel() async {
+    terminationRequested = true
     stopAudio()
     ingress?.finish()
     await cancelAnalyzerOnce()
@@ -848,6 +927,7 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
   }
 
   func releaseResources() async {
+    terminationRequested = true
     stopAudio()
     ingress?.finish()
     await analysisTask?.value
@@ -864,13 +944,44 @@ private final class ModernAppleSpeechSession: AppleSpeechSession {
     resultsTask = nil
     ingress = nil
     analyzer = nil
+    audioEngine = nil
+    converter = nil
+    analyzerFormat = nil
     provisional = nil
-    level = nil
+    levelRelay = nil
     transcript = AppleSpeechTranscriptAssembler()
     terminalError = nil
   }
 
+  private func analyzerInput(for buffer: AVAudioPCMBuffer) throws -> AnalyzerInput {
+    guard let converter, let analyzerFormat, let levelRelay else {
+      throw CancellationError()
+    }
+    let converted = try AudioBufferTools.convert(
+      buffer,
+      using: converter,
+      to: analyzerFormat
+    )
+    levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))
+    return AnalyzerInput(buffer: converted)
+  }
+
+  private func receive(text: String, isFinal: Bool) async {
+    if isFinal {
+      transcript.appendFinal(text)
+      await provisional?(transcript.displayText())
+    } else {
+      await provisional?(transcript.displayText(provisional: text))
+    }
+  }
+
+  private func fail(_ error: Error) {
+    terminalError = error
+    stopAudio()
+  }
+
   private func stopAudio() {
+    guard let audioEngine else { return }
     if tapInstalled {
       audioEngine.inputNode.removeTap(onBus: 0)
       tapInstalled = false

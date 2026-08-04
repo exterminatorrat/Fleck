@@ -86,7 +86,7 @@ fail_matches \
   '"[^"]*(\.md|\.rtf|workspace\.json|Dictation[[:space:]]*History)[^"]*"|"Trash"' \
   "$helper_root"
 
-# The MCP surface is the exact approved twelve tools, independent of whether
+# The MCP surface is the exact approved thirteen tools, independent of whether
 # registrations use one line or several.
 extract_tool_names() {
   perl -0777 -ne '
@@ -112,6 +112,7 @@ actual_tools="$(mktemp "${TMPDIR:-/tmp}/fleck-tools-actual.XXXXXX")"
 printf '%s\n' \
   add_task \
   append_text \
+  delete_lines \
   insert_text \
   list_agent_activity \
   list_shared_notes \
@@ -124,7 +125,7 @@ printf '%s\n' \
   undo_agent_change >"$expected_tools"
 extract_tool_names "$tool_registry" | LC_ALL=C sort >"$actual_tools"
 if ! diff -u "$expected_tools" "$actual_tools"; then
-  printf 'error: MCP tool registry differs from the approved twelve\n' >&2
+  printf 'error: MCP tool registry differs from the approved thirteen\n' >&2
   exit 1
 fi
 
@@ -206,4 +207,4 @@ if rg -ni '\b(token|credential|secret|base64)\b' \
   exit 1
 fi
 
-printf 'Agent boundary audit passed: local IPC, 12 MCP tools, no storage-path fallback.\n'
+printf 'Agent boundary audit passed: local IPC, 13 MCP tools, no storage-path fallback.\n'

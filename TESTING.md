@@ -8,9 +8,10 @@
 ## Requirements
 
 - A Mac running macOS 14 Sonoma or later.
-- Xcode 16.3 or later with Swift 6.1 or later, installed from Apple. This
-  release-validation toolchain requirement is separate from the macOS 14
-  deployment minimum.
+- Xcode 26 or later with the macOS 26 SDK or later, installed from Apple. The
+  current source references macOS 26 Speech APIs behind runtime-availability checks,
+  so it requires this compile toolchain even though macOS 14 remains the
+  deployment and runtime minimum.
 - The Xcode command-line tools selected with `xcode-select`.
 - A local checkout of this repository on the branch or pull request being tested.
 
@@ -63,7 +64,7 @@ application.
 Run from the repository root with `FLECK_ENHANCED_CANDIDATE` unset:
 
 ```sh
-swift test
+swift test --disable-automatic-resolution --no-parallel
 swift build
 swift build -c release
 Scripts/audit-agent-boundary.sh
@@ -71,20 +72,31 @@ Scripts/validate-macos.sh
 git diff --check
 ```
 
-CI also makes the product split explicit:
+CI runs the same locked ordinary graph and the complete product, audit, and
+candidate gates:
 
 ```sh
-swift test
+swift test --disable-automatic-resolution --no-parallel
 swift build -c release --product Fleck
 swift build -c release --product fleck-agent
 Scripts/audit-agent-boundary.sh
 Scripts/check-release-size.sh .build/release/Fleck
+Scripts/validate-macos.sh
+Scripts/test-enhanced-candidate-pin.sh
+Scripts/resolve-enhanced-candidate.sh .build-candidate \
+  swift test --disable-automatic-resolution --no-parallel \
+    --scratch-path .build-candidate
+git diff --exit-code -- Package.resolved
+Scripts/test-enhanced-candidate-lock-preservation.sh
+git diff --exit-code -- Package.resolved
+Scripts/check-candidate-release-rejected.sh
+git diff --exit-code -- Package.resolved
 ```
 
 The test suite probes private, unknown, Trash, and Dictation History UUIDs;
 unshared activity; the closed command model; secret-free profile persistence
 and setup output; same-user IPC; revisions, retries, transaction recovery, and
-Undo; the exact twelve MCP tools; and tools-only MCP capabilities.
+Undo; the exact thirteen MCP tools; and tools-only MCP capabilities.
 `Scripts/audit-agent-boundary.sh` separately rejects helper AppKit outside the
 non-activating launch adapter, HTTP/TCP/listener APIs, direct Fleck storage
 paths, an altered MCP tool/handler surface, MCP-mode stdout prose, and
@@ -165,7 +177,7 @@ Run from the repository root:
 
 ```sh
 swift package resolve
-swift test
+swift test --disable-automatic-resolution --no-parallel
 swift build -c release
 Scripts/check-release-size.sh
 Scripts/validate-macos.sh
@@ -314,10 +326,11 @@ conditions, and recursive parentheses/metatype `.self` wrappers. Forbidden
 false assignments and forbidden member accesses remain all-branch checks.
 
 Fix Round 6 models the two SwiftPM-generated app-target custom conditions and
-adds positive and negated fixtures for both. The gate now rejects toolchains
-older than Swift 6.1 and toolchains missing the host `SwiftSyntax`,
-`SwiftParser`, or `SwiftIfConfig` modules with an explicit Xcode 16.3+/Swift
-6.1+ prerequisite message.
+adds positive and negated fixtures for both. The gate rejects toolchains older
+than Swift 6.1 and toolchains missing the host `SwiftSyntax`, `SwiftParser`,
+or `SwiftIfConfig` modules. That inspector preflight does not make the full
+project buildable on Xcode 16.3: full compilation requires Xcode 26 or later
+with the macOS 26 SDK or later, as documented above.
 
 ### Manual release blockers
 
