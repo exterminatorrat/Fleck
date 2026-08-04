@@ -8,9 +8,10 @@
 ## Requirements
 
 - A Mac running macOS 14 Sonoma or later.
-- Xcode 16.3 or later with Swift 6.1 or later, installed from Apple. This
-  release-validation toolchain requirement is separate from the macOS 14
-  deployment minimum.
+- Xcode 26 or later with the macOS 26 SDK or later, installed from Apple. The
+  current source references macOS 26 Speech APIs behind runtime-availability checks,
+  so it requires this compile toolchain even though macOS 14 remains the
+  deployment and runtime minimum.
 - The Xcode command-line tools selected with `xcode-select`.
 - A local checkout of this repository on the branch or pull request being tested.
 
@@ -314,10 +315,11 @@ conditions, and recursive parentheses/metatype `.self` wrappers. Forbidden
 false assignments and forbidden member accesses remain all-branch checks.
 
 Fix Round 6 models the two SwiftPM-generated app-target custom conditions and
-adds positive and negated fixtures for both. The gate now rejects toolchains
-older than Swift 6.1 and toolchains missing the host `SwiftSyntax`,
-`SwiftParser`, or `SwiftIfConfig` modules with an explicit Xcode 16.3+/Swift
-6.1+ prerequisite message.
+adds positive and negated fixtures for both. The gate rejects toolchains older
+than Swift 6.1 and toolchains missing the host `SwiftSyntax`, `SwiftParser`,
+or `SwiftIfConfig` modules. That inspector preflight does not make the full
+project buildable on Xcode 16.3: full compilation requires Xcode 26 or later
+with the macOS 26 SDK or later, as documented above.
 
 ### Manual release blockers
 

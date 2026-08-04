@@ -1,0 +1,47 @@
+# Engineering and GitHub workflow
+
+## Sol Advisor is mandatory for change-producing work
+
+Use `$sol-advisor:orchestration` for every task that can modify product
+behavior, source or native code, configuration, tests, build systems,
+operational behavior, or reliability. Read-only orientation and explanation
+may remain in the primary Sol session.
+
+For covered work, the primary session must be GPT-5.6 Sol at High reasoning
+and must first run the orchestration exactness check and confirm the exact
+native routing roles are available. It writes a bounded five-part specification:
+
+1. Objective and success criteria.
+2. Owned files, interfaces, and constraints.
+3. Required implementation and explicit non-goals.
+4. Verification commands and expected evidence.
+5. Authority boundaries and the required handoff.
+
+Implementation is only through `sol_advisor_terra_implementer` (Terra, High).
+The implementation packet must identify ownership, preserve unrelated work,
+and require adaptation to concurrent edits. The primary Sol inspects the parent
+diff and reruns the required verification. A fresh
+`sol_advisor_sol_reviewer` (Sol, High) then reviews the actual diff and
+evidence. Do not call the work complete unless its verdict is `ship`.
+
+For `fix-first` or `rethink`, return a corrected bounded specification to the
+same implementation lane, repeat parent verification, and obtain a new fresh
+Sol review. Do not silently repair a child patch, substitute another agent,
+model, or reasoning level, or treat a worker report as verification.
+
+## GitHub branch, PR, merge, and sync workflow
+
+GitHub is the operational source of truth. For normal product work, begin by
+fetching and synchronizing local `main` with `origin/main`, then create a
+focused branch from that synchronized base. Never perform normal product work
+directly on `main`.
+
+Make intentional, focused commits and push checkpoints. Open or update the
+corresponding pull request. Before merge, require relevant local checks, green
+GitHub CI, and the final Sol `ship` verdict. Merge through GitHub, then fetch
+and fast-forward local `main` to `origin/main`; verify a clean worktree,
+ahead/behind state, unmerged entries, and no merge in progress.
+
+Never push, merge, open or close pull requests, or change GitHub/repository
+settings unless the current user has authorized those external writes. Preserve
+unrelated dirty, staged, untracked, and concurrent work throughout.
