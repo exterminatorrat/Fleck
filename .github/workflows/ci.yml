@@ -20,6 +20,12 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
       - name: Test ordinary graph
         run: |
           unset FLECK_ENHANCED_CANDIDATE
