@@ -778,9 +778,9 @@
     static func applyAccentAppearance(to textView: NSTextView, accentColorHex: String) {
       let accent = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.insertionPointColor = accent
-      textView.selectedTextAttributes = [
-        .backgroundColor: accent.withAlphaComponent(0.35)
-      ]
+      var selectionAttributes = textView.selectedTextAttributes
+      selectionAttributes[.backgroundColor] = accent.withAlphaComponent(0.35)
+      textView.selectedTextAttributes = selectionAttributes
     }
 
     private static func applyDefaultForegroundColor(_ color: NSColor, to textView: NSTextView) {
