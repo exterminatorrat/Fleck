@@ -510,6 +510,64 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   #expect(restored.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemYellow)
 }
 
+@Test @MainActor func fontFamilyAndSizePreserveTraitsUnderlineForegroundParagraphAndListAttributes() throws {
+  let targetFamily = try #require(NSFont(name: "Courier", size: 17)?.familyName)
+
+  let familyFixture = try richTextFormattingFixture()
+  familyFixture.commands.applyFontFamily(targetFamily)
+  #expect(familyFixture.recorder.count == 1)
+  #expect(familyFixture.textView.string == familyFixture.string)
+  let familyFont = try #require(familyFixture.font(at: 0))
+  #expect(familyFont.familyName == targetFamily)
+  #expect(familyFont.pointSize == familyFixture.font.pointSize)
+  #expect(fontTraits(familyFont) == fontTraits(familyFixture.font))
+  assertNonFontRichTextAttributes(in: familyFixture)
+
+  let sizeFixture = try richTextFormattingFixture()
+  #expect(sizeFixture.commands.applyFontSize(24))
+  #expect(sizeFixture.recorder.count == 1)
+  #expect(sizeFixture.textView.string == sizeFixture.string)
+  let sizeFont = try #require(sizeFixture.font(at: 0))
+  #expect(sizeFont.familyName == sizeFixture.font.familyName)
+  #expect(sizeFont.pointSize == 24)
+  #expect(fontTraits(sizeFont) == fontTraits(sizeFixture.font))
+  assertNonFontRichTextAttributes(in: sizeFixture)
+}
+
+@Test @MainActor func editorFormattingCommandsNotifyAndRoundTripRTF() throws {
+  let fixture = try richTextFormattingFixture()
+  let targetFamily = try #require(NSFont(name: "Courier", size: 17)?.familyName)
+
+  fixture.commands.applyFontFamily(targetFamily)
+  #expect(fixture.commands.applyFontSize(24))
+  fixture.commands.applyForegroundColor(.systemRed)
+  fixture.commands.applyBackgroundColor(.systemYellow)
+  #expect(fixture.recorder.count == 4)
+  #expect(fixture.textView.string == fixture.string)
+
+  let rtfData = try fixture.textView.textStorage?.data(
+    from: NSRange(location: 0, length: fixture.string.utf16.count),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let data = try #require(rtfData)
+  let restored = try NSAttributedString(
+    data: data,
+    options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  let attributes = restored.attributes(at: 0, effectiveRange: nil)
+  let font = try #require(attributes[.font] as? NSFont)
+
+  #expect(restored.string == fixture.string)
+  #expect(font.familyName == targetFamily)
+  #expect(font.pointSize == 24)
+  #expect(fontTraits(font) == fontTraits(fixture.font))
+  #expect(attributes[.underlineStyle] as? Int == NSUnderlineStyle.single.rawValue)
+  #expect(sRGB(attributes[.foregroundColor] as? NSColor) == sRGB(.systemRed))
+  #expect(sRGB(attributes[.backgroundColor] as? NSColor) == sRGB(.systemYellow))
+  #expect(textListMarker(in: attributes) == .disc)
+}
+
 @Test @MainActor func editorCommandsAddsAndRemovesForegroundColorForSelectionAndCaret() {
   let textView = NSTextView()
   let recorder = EditorChangeRecorder()
@@ -586,11 +644,99 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
 }
 
 @Test func fontSizeSubmissionRestoresInvalidInputAndSkipsAnUnchangedUniformSize() {
+  #expect(FontSizeSubmission.requestedSize(for: "1", currentSize: 18, isMixed: false) == 1)
+  #expect(FontSizeSubmission.requestedSize(for: "512", currentSize: 18, isMixed: false) == 512)
+  #expect(FontSizeSubmission.requestedSize(for: "0", currentSize: 18, isMixed: false) == nil)
   #expect(FontSizeSubmission.requestedSize(for: "", currentSize: 18, isMixed: false) == nil)
   #expect(FontSizeSubmission.requestedSize(for: "513", currentSize: 18, isMixed: false) == nil)
+  #expect(FontSizeSubmission.requestedSize(for: "not a number", currentSize: 18, isMixed: false) == nil)
+  #expect(FontSizeSubmission.requestedSize(for: "nan", currentSize: 18, isMixed: false) == nil)
+  #expect(FontSizeSubmission.requestedSize(for: "inf", currentSize: 18, isMixed: false) == nil)
   #expect(FontSizeSubmission.requestedSize(for: "18", currentSize: 18, isMixed: false) == nil)
   #expect(FontSizeSubmission.requestedSize(for: "18", currentSize: 18, isMixed: true) == 18)
   #expect(FontSizeSubmission.requestedSize(for: "24", currentSize: 18, isMixed: false) == 24)
+}
+
+@MainActor
+private struct RichTextFormattingFixture {
+  let textView: NSTextView
+  let recorder: EditorChangeRecorder
+  let commands: EditorCommands
+  let font: NSFont
+  let foregroundColor: NSColor
+  let backgroundColor: NSColor
+  let string: String
+
+  func font(at index: Int) -> NSFont? {
+    textView.textStorage?.attribute(.font, at: index, effectiveRange: nil) as? NSFont
+  }
+}
+
+@MainActor
+private func richTextFormattingFixture() throws -> RichTextFormattingFixture {
+  let textView = NSTextView()
+  let recorder = EditorChangeRecorder()
+  let font = try #require(NSFont(name: "Helvetica-BoldOblique", size: 17))
+  let foregroundColor = NSColor.systemBlue
+  let backgroundColor = NSColor.systemGreen
+  let list = NSTextList(markerFormat: .disc, options: 0)
+  let paragraph = NSMutableParagraphStyle()
+  paragraph.textLists = [list]
+  paragraph.firstLineHeadIndent = 18
+  let string = "AB"
+  let range = NSRange(location: 0, length: string.utf16.count)
+
+  textView.delegate = recorder
+  textView.string = string
+  textView.textStorage?.addAttributes(
+    [
+      .font: font,
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+      .foregroundColor: foregroundColor,
+      .backgroundColor: backgroundColor,
+      .paragraphStyle: paragraph,
+    ],
+    range: range
+  )
+  textView.setSelectedRange(range)
+  let commands = EditorCommands()
+  commands.textView = textView
+  return .init(
+    textView: textView,
+    recorder: recorder,
+    commands: commands,
+    font: font,
+    foregroundColor: foregroundColor,
+    backgroundColor: backgroundColor,
+    string: string
+  )
+}
+
+@MainActor
+private func assertNonFontRichTextAttributes(in fixture: RichTextFormattingFixture) {
+  let attributes = fixture.textView.textStorage?.attributes(at: 0, effectiveRange: nil)
+  #expect(attributes?[.underlineStyle] as? Int == NSUnderlineStyle.single.rawValue)
+  #expect((attributes?[.foregroundColor] as? NSColor)?.isEqual(fixture.foregroundColor) == true)
+  #expect((attributes?[.backgroundColor] as? NSColor)?.isEqual(fixture.backgroundColor) == true)
+  #expect(textListMarker(in: attributes ?? [:]) == .disc)
+}
+
+private func fontTraits(_ font: NSFont) -> NSFontTraitMask {
+  NSFontManager.shared.traits(of: font).intersection([.boldFontMask, .italicFontMask])
+}
+
+private func textListMarker(in attributes: [NSAttributedString.Key: Any]) -> NSTextList.MarkerFormat? {
+  (attributes[.paragraphStyle] as? NSParagraphStyle)?.textLists.first?.markerFormat
+}
+
+private func sRGB(_ color: NSColor?) -> [Int]? {
+  guard let color = color?.usingColorSpace(.sRGB) else { return nil }
+  return [
+    Int((color.redComponent * 255).rounded()),
+    Int((color.greenComponent * 255).rounded()),
+    Int((color.blueComponent * 255).rounded()),
+    Int((color.alphaComponent * 255).rounded()),
+  ]
 }
 
 @Test func formattingBarAnnouncesPaletteNamesAndMarksSpecialColorRows() throws {
