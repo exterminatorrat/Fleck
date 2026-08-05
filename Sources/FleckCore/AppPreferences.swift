@@ -112,9 +112,24 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       decodedTypographyVersion == nil
       && decodedFamily == ".AppleSystemUIFont"
       && decodedSize == 15
-    let decodedPanelWidth = try c.decodeIfPresent(Double.self, forKey: .panelWidth) ?? 520
-    let decodedPanelHeight = try c.decodeIfPresent(Double.self, forKey: .panelHeight) ?? 430
-    let decodedPanelSizingVersion = try c.decodeIfPresent(Int.self, forKey: .panelSizingVersion)
+    let decodedPanelWidth = Self.decodedSizingField(
+      Double.self,
+      from: c,
+      forKey: .panelWidth,
+      fallback: 520
+    )
+    let decodedPanelHeight = Self.decodedSizingField(
+      Double.self,
+      from: c,
+      forKey: .panelHeight,
+      fallback: 430
+    )
+    let decodedPanelSizingVersion = Self.decodedSizingField(
+      Int?.self,
+      from: c,
+      forKey: .panelSizingVersion,
+      fallback: nil
+    )
     let migratesUntouchedPanelSize =
       decodedPanelSizingVersion == nil
       && decodedPanelWidth == 520
@@ -134,10 +149,18 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       panelWidth: resolvedPanelWidth,
       panelHeight: resolvedPanelHeight,
       panelSizingVersion: decodedPanelSizingVersion ?? Self.currentPanelSizingVersion,
-      pinnedPanelWidth: try c.decodeIfPresent(Double.self, forKey: .pinnedPanelWidth)
-        ?? resolvedPanelWidth,
-      pinnedPanelHeight: try c.decodeIfPresent(Double.self, forKey: .pinnedPanelHeight)
-        ?? resolvedPanelHeight,
+      pinnedPanelWidth: Self.decodedSizingField(
+        Double.self,
+        from: c,
+        forKey: .pinnedPanelWidth,
+        fallback: 640
+      ),
+      pinnedPanelHeight: Self.decodedSizingField(
+        Double.self,
+        from: c,
+        forKey: .pinnedPanelHeight,
+        fallback: 430
+      ),
       showFormattingBar: try c.decodeIfPresent(Bool.self, forKey: .showFormattingBar) ?? true,
       automaticLists: try c.decodeIfPresent(Bool.self, forKey: .automaticLists) ?? true,
       launchAtLogin: try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false,
@@ -172,6 +195,15 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     guard value.isFinite else { return minimum }
     let clamped = max(value, minimum)
     return maximum.map { min(clamped, $0) } ?? clamped
+  }
+
+  private static func decodedSizingField<T: Decodable>(
+    _ type: T.Type,
+    from container: KeyedDecodingContainer<CodingKeys>,
+    forKey key: CodingKeys,
+    fallback: T
+  ) -> T {
+    (try? container.decodeIfPresent(type, forKey: key)) ?? fallback
   }
 }
 

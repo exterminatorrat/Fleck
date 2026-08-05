@@ -148,13 +148,35 @@ import Testing
   #expect(migrated.pinnedPanelHeight == 430)
 }
 
-@Test func customLegacyPanelSizeIsPreservedAndSeedsPinnedSize() throws {
+@Test func customLegacyPanelSizeIsPreservedAndUsesIndependentPinnedDefault() throws {
   let legacy = Data(#"{"panelWidth":700,"panelHeight":500}"#.utf8)
   let value = try JSONDecoder().decode(AppPreferences.self, from: legacy)
   #expect(value.panelWidth == 700)
   #expect(value.panelHeight == 500)
-  #expect(value.pinnedPanelWidth == 700)
-  #expect(value.pinnedPanelHeight == 500)
+  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelHeight == 430)
+}
+
+@Test func malformedPanelSizingFieldsFallBackWithoutDiscardingPreferences() throws {
+  let malformed = Data(
+    #"{"fontFamily":"Menlo","panelWidth":"wide","panelHeight":false,"panelSizingVersion":"current","pinnedPanelWidth":[],"pinnedPanelHeight":{}}"#.utf8
+  )
+  let value = try JSONDecoder().decode(AppPreferences.self, from: malformed)
+
+  #expect(value.fontFamily == "Menlo")
+  #expect(value.panelWidth == 640)
+  #expect(value.panelHeight == 430)
+  #expect(value.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
+  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelHeight == 430)
+}
+
+@Test func unrelatedMalformedPreferenceFieldStillThrows() {
+  let malformed = Data(#"{"panelWidth":"wide","showFormattingBar":"yes"}"#.utf8)
+
+  #expect(throws: (any Error).self) {
+    try JSONDecoder().decode(AppPreferences.self, from: malformed)
+  }
 }
 
 @Test func explicitLegacyWidthAfterSizingMigrationRoundTrips() throws {
