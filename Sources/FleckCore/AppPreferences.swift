@@ -6,6 +6,7 @@ public enum AppTheme: String, Codable, CaseIterable, Sendable {
 
 public struct AppPreferences: Codable, Equatable, Sendable {
   public static let currentEditorTypographyVersion = 1
+  public static let currentPanelSizingVersion = 1
 
   public var fontFamily: String
   public var fontSize: Double
@@ -17,6 +18,9 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var theme: AppTheme
   public var panelWidth: Double
   public var panelHeight: Double
+  public var panelSizingVersion: Int
+  public var pinnedPanelWidth: Double
+  public var pinnedPanelHeight: Double
   public var showFormattingBar: Bool
   public var automaticLists: Bool
   public var launchAtLogin: Bool
@@ -40,7 +44,9 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     editorTypographyVersion: Int = AppPreferences.currentEditorTypographyVersion,
     accentHex: String = "#7C6CF2", editorTextHex: String? = nil,
     editorBackgroundHex: String? = nil, panelOpacity: Double = 0.82,
-    theme: AppTheme = .system, panelWidth: Double = 520, panelHeight: Double = 430,
+    theme: AppTheme = .system, panelWidth: Double = 640, panelHeight: Double = 430,
+    panelSizingVersion: Int = AppPreferences.currentPanelSizingVersion,
+    pinnedPanelWidth: Double = 640, pinnedPanelHeight: Double = 430,
     showFormattingBar: Bool = true, automaticLists: Bool = true,
     launchAtLogin: Bool = false,
     shortcuts: [Shortcut] = Shortcut.defaults,
@@ -61,8 +67,11 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.editorBackgroundHex = editorBackgroundHex
     self.panelOpacity = panelOpacity
     self.theme = theme
-    self.panelWidth = panelWidth
-    self.panelHeight = panelHeight
+    self.panelWidth = Self.clampedPanelDimension(panelWidth, minimum: 380, maximum: 800)
+    self.panelHeight = Self.clampedPanelDimension(panelHeight, minimum: 300, maximum: 800)
+    self.panelSizingVersion = panelSizingVersion
+    self.pinnedPanelWidth = Self.clampedPanelDimension(pinnedPanelWidth, minimum: 480)
+    self.pinnedPanelHeight = Self.clampedPanelDimension(pinnedPanelHeight, minimum: 320)
     self.showFormattingBar = showFormattingBar
     self.automaticLists = automaticLists
     self.launchAtLogin = launchAtLogin
@@ -82,7 +91,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
 
   private enum CodingKeys: String, CodingKey {
     case fontFamily, fontSize, editorTypographyVersion, accentHex, editorTextHex,
-      editorBackgroundHex, panelOpacity, theme, panelWidth, panelHeight, showFormattingBar,
+      editorBackgroundHex, panelOpacity, theme, panelWidth, panelHeight, panelSizingVersion,
+      pinnedPanelWidth, pinnedPanelHeight, showFormattingBar,
       automaticLists, launchAtLogin, shortcuts, dictationSpeechEngine,
       legacyDictationShortcut = "dictationShortcut", dictationModifierKey,
       dictationCapsuleDock, dictationHistoryEnabled, dictationCapsuleEnabled,
@@ -102,6 +112,15 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       decodedTypographyVersion == nil
       && decodedFamily == ".AppleSystemUIFont"
       && decodedSize == 15
+    let decodedPanelWidth = try c.decodeIfPresent(Double.self, forKey: .panelWidth) ?? 520
+    let decodedPanelHeight = try c.decodeIfPresent(Double.self, forKey: .panelHeight) ?? 430
+    let decodedPanelSizingVersion = try c.decodeIfPresent(Int.self, forKey: .panelSizingVersion)
+    let migratesUntouchedPanelSize =
+      decodedPanelSizingVersion == nil
+      && decodedPanelWidth == 520
+      && decodedPanelHeight == 430
+    let resolvedPanelWidth = migratesUntouchedPanelSize ? 640 : decodedPanelWidth
+    let resolvedPanelHeight = decodedPanelHeight
     self.init(
       fontFamily: migratesUntouchedTypography ? "Avenir Next" : decodedFamily,
       fontSize: migratesUntouchedTypography ? 17 : decodedSize,
@@ -112,8 +131,13 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       editorBackgroundHex: try c.decodeIfPresent(String.self, forKey: .editorBackgroundHex),
       panelOpacity: try c.decodeIfPresent(Double.self, forKey: .panelOpacity) ?? 0.82,
       theme: try c.decodeIfPresent(AppTheme.self, forKey: .theme) ?? .system,
-      panelWidth: try c.decodeIfPresent(Double.self, forKey: .panelWidth) ?? 520,
-      panelHeight: try c.decodeIfPresent(Double.self, forKey: .panelHeight) ?? 430,
+      panelWidth: resolvedPanelWidth,
+      panelHeight: resolvedPanelHeight,
+      panelSizingVersion: decodedPanelSizingVersion ?? Self.currentPanelSizingVersion,
+      pinnedPanelWidth: try c.decodeIfPresent(Double.self, forKey: .pinnedPanelWidth)
+        ?? resolvedPanelWidth,
+      pinnedPanelHeight: try c.decodeIfPresent(Double.self, forKey: .pinnedPanelHeight)
+        ?? resolvedPanelHeight,
       showFormattingBar: try c.decodeIfPresent(Bool.self, forKey: .showFormattingBar) ?? true,
       automaticLists: try c.decodeIfPresent(Bool.self, forKey: .automaticLists) ?? true,
       launchAtLogin: try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false,
@@ -138,6 +162,16 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         OnboardingProgress.self,
         forKey: .onboardingProgress
       ))
+  }
+
+  private static func clampedPanelDimension(
+    _ value: Double,
+    minimum: Double,
+    maximum: Double? = nil
+  ) -> Double {
+    guard value.isFinite else { return minimum }
+    let clamped = max(value, minimum)
+    return maximum.map { min(clamped, $0) } ?? clamped
   }
 }
 

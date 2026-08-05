@@ -123,11 +123,72 @@ import Testing
     .data(using: .utf8)!
   let preferences = try JSONDecoder().decode(AppPreferences.self, from: old)
   #expect(preferences.theme == .system)
-  #expect(preferences.panelWidth == 520)
+  #expect(preferences.panelWidth == 640)
   #expect(preferences.panelHeight == 430)
   #expect(preferences.editorTextHex == nil)
   #expect(preferences.editorBackgroundHex == nil)
   #expect(!preferences.launchAtLogin)
+}
+
+@Test func newPreferencesUseBalancedIndependentPanelDefaults() {
+  let value = AppPreferences()
+  #expect(value.panelWidth == 640)
+  #expect(value.panelHeight == 430)
+  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelHeight == 430)
+  #expect(value.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
+}
+
+@Test func untouchedLegacyPanelSizeMigratesOnce() throws {
+  let legacy = Data(#"{"panelWidth":520,"panelHeight":430}"#.utf8)
+  let migrated = try JSONDecoder().decode(AppPreferences.self, from: legacy)
+  #expect(migrated.panelWidth == 640)
+  #expect(migrated.panelHeight == 430)
+  #expect(migrated.pinnedPanelWidth == 640)
+  #expect(migrated.pinnedPanelHeight == 430)
+}
+
+@Test func customLegacyPanelSizeIsPreservedAndSeedsPinnedSize() throws {
+  let legacy = Data(#"{"panelWidth":700,"panelHeight":500}"#.utf8)
+  let value = try JSONDecoder().decode(AppPreferences.self, from: legacy)
+  #expect(value.panelWidth == 700)
+  #expect(value.panelHeight == 500)
+  #expect(value.pinnedPanelWidth == 700)
+  #expect(value.pinnedPanelHeight == 500)
+}
+
+@Test func explicitLegacyWidthAfterSizingMigrationRoundTrips() throws {
+  let value = AppPreferences(panelWidth: 520, panelHeight: 430)
+  let decoded = try JSONDecoder().decode(AppPreferences.self, from: JSONEncoder().encode(value))
+  #expect(decoded.panelWidth == 520)
+  #expect(decoded.panelHeight == 430)
+}
+
+@Test func pinnedAndMenuPanelSizesRoundTripIndependently() throws {
+  let value = AppPreferences(
+    panelWidth: 640,
+    panelHeight: 430,
+    pinnedPanelWidth: 760,
+    pinnedPanelHeight: 540
+  )
+  let decoded = try JSONDecoder().decode(AppPreferences.self, from: JSONEncoder().encode(value))
+  #expect(decoded.panelWidth == 640)
+  #expect(decoded.panelHeight == 430)
+  #expect(decoded.pinnedPanelWidth == 760)
+  #expect(decoded.pinnedPanelHeight == 540)
+}
+
+@Test func panelDimensionsClampToTheirSupportedMinimumsAndMenuMaximums() {
+  let value = AppPreferences(
+    panelWidth: 12,
+    panelHeight: 9_000,
+    pinnedPanelWidth: 1,
+    pinnedPanelHeight: 2
+  )
+  #expect(value.panelWidth == 380)
+  #expect(value.panelHeight == 800)
+  #expect(value.pinnedPanelWidth == 480)
+  #expect(value.pinnedPanelHeight == 320)
 }
 
 @Test func shortcutsNormalizeAndDetectConflicts() {
