@@ -35,6 +35,9 @@
         let image = NSImage(contentsOf: resourceURL.appendingPathComponent("fleck-mark.png"))
       {
         image.isTemplate = template
+        if template {
+          image.size = NSSize(width: 18, height: 18)
+        }
         return .image(image)
       }
       guard !isPackagedApp,

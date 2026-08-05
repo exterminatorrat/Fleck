@@ -56,6 +56,40 @@ import Testing
   }
 }
 
+@Test @MainActor func fleckMarkUsesMenuBarLogicalSizeWithoutResizingHeaderMark() {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let canonicalAssetDirectory = root.appendingPathComponent("website/public")
+
+  switch FleckMark.load(
+    template: true,
+    resourceURL: canonicalAssetDirectory,
+    isPackagedApp: true
+  ) {
+  case .image(let image):
+    #expect(image.isTemplate)
+    #expect(image.size.width == 18)
+    #expect(image.size.height == 18)
+  case .missingPackagedResource:
+    Issue.record("The canonical Fleck mark should load for the menu bar")
+  }
+
+  switch FleckMark.load(
+    template: false,
+    resourceURL: canonicalAssetDirectory,
+    isPackagedApp: true
+  ) {
+  case .image(let image):
+    #expect(!image.isTemplate)
+    #expect(image.size.width == 340)
+    #expect(image.size.height == 340)
+  case .missingPackagedResource:
+    Issue.record("The canonical Fleck mark should load for the header")
+  }
+}
+
 @Test func agentConnectorDocumentationUsesPackagedLaunch() throws {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
