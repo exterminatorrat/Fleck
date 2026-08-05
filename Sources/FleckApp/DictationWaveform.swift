@@ -20,6 +20,9 @@
       {
         return
       }
+      if lastAcceptedLevelAt != nil {
+        energy = displayedEnergy(at: now)
+      }
       lastAcceptedLevelAt = now
       let normalized = min(max((CGFloat(level) - 0.015) / 0.24, 0), 1)
       let smoothing: CGFloat = normalized > energy ? 0.65 : 0.18

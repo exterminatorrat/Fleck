@@ -59,6 +59,25 @@ import Testing
   #expect(stale.allSatisfy { $0 == 0.05 })
 }
 
+@Test @MainActor func waveformResumesFromDisplayedRestInsteadOfStaleLoudEnergy() {
+  let start = Date(timeIntervalSince1970: 50)
+  let resumed = DictationWaveformModel()
+  let fresh = DictationWaveformModel()
+  resumed.beginListening(at: start)
+  resumed.receive(level: 0.20, now: start.addingTimeInterval(0.04))
+
+  let resumedAtRest = resumed.barLevels(at: start.addingTimeInterval(0.60), reduceMotion: false)
+  #expect(resumedAtRest.allSatisfy { $0 == 0.05 })
+
+  fresh.beginListening(at: start.addingTimeInterval(0.56))
+  resumed.receive(level: 0.05, now: start.addingTimeInterval(0.60))
+  fresh.receive(level: 0.05, now: start.addingTimeInterval(0.60))
+
+  let resumedLevels = resumed.barLevels(at: start.addingTimeInterval(0.61), reduceMotion: false)
+  let freshLevels = fresh.barLevels(at: start.addingTimeInterval(0.61), reduceMotion: false)
+  #expect(resumedLevels == freshLevels)
+}
+
 @Test @MainActor func waveformThrottlesAndResets() {
   let model = DictationWaveformModel()
   let start = Date(timeIntervalSince1970: 20)
