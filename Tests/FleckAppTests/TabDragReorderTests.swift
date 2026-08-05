@@ -3,6 +3,7 @@ import Testing
 import UniformTypeIdentifiers
 
 @testable import FleckApp
+import FleckCore
 
 @Test func tabStripAllocatesItsActualOverflowViewportAtSupportedWidths() throws {
   #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380) == 352)
@@ -171,48 +172,52 @@ import UniformTypeIdentifiers
 }
 
 @Test func liveTabDragRetainsIdentityAndCurrentOrderAcrossLeftAndRightHovers() {
-  let first = UUID()
-  let second = UUID()
-  let third = UUID()
-  var ids = [first, second, third]
-  let metadata = [first: "first", second: "second", third: "third"]
-  let selectedID = first
+  let first = Note(
+    title: "First", body: "first body", richTextRTF: Data([1]), tabColorHex: "#FF4245",
+    createdAt: .distantPast, modifiedAt: .distantPast, isPinned: true, agentAccess: true, revision: 1
+  )
+  let second = Note(
+    title: "Second", body: "second body", richTextRTF: Data([2]), tabColorHex: "#FFD600",
+    createdAt: .distantFuture, modifiedAt: .distantFuture, revision: 2
+  )
+  let third = Note(
+    title: "Third", body: "third body", richTextRTF: Data([3]), tabColorHex: "#0091FF",
+    createdAt: .now, modifiedAt: .now, agentAccess: true, revision: 3
+  )
+  var workspace = Workspace(notes: [first, second, third], selectedNoteID: first.id)
 
   func move(_ id: UUID, to destination: Int) {
-    let source = ids.firstIndex(of: id)!
-    ids.insert(ids.remove(at: source), at: destination)
+    workspace.moveNote(id: id, to: destination)
   }
 
   #expect(
     TabDragReorder.performLiveMove(
-      draggedID: first,
-      over: second,
-      currentNoteIDs: { ids },
+      draggedID: first.id,
+      over: second.id,
+      currentNoteIDs: { workspace.notes.map(\.id) },
       move: move
     )
   )
   #expect(
     TabDragReorder.performLiveMove(
-      draggedID: first,
-      over: third,
-      currentNoteIDs: { ids },
+      draggedID: first.id,
+      over: third.id,
+      currentNoteIDs: { workspace.notes.map(\.id) },
       move: move
     )
   )
   #expect(
     TabDragReorder.performLiveMove(
-      draggedID: third,
-      over: second,
-      currentNoteIDs: { ids },
+      draggedID: third.id,
+      over: second.id,
+      currentNoteIDs: { workspace.notes.map(\.id) },
       move: move
     )
   )
 
-  #expect(ids == [third, second, first])
-  #expect(metadata[first] == "first")
-  #expect(metadata[second] == "second")
-  #expect(metadata[third] == "third")
-  #expect(selectedID == first)
+  #expect(workspace.notes == [third, second, first])
+  #expect(workspace.notes.map(\.id) == [third.id, second.id, first.id])
+  #expect(workspace.selectedNoteID == first.id)
 }
 
 @Test func tabOverflowShowsOnlyWhenTrailingContentExceedsVisibleEdge() {

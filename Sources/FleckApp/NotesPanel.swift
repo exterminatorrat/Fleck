@@ -780,6 +780,30 @@
       return image
     }
 
+    static func matchesPaletteColor(_ color: NSColor?, hex: String) -> Bool {
+      guard let actual = sRGB8BitComponents(color),
+        let expected = sRGB8BitComponents(NSColor(Color(hex: hex)))
+      else { return false }
+      return zip(actual, expected).allSatisfy { abs($0 - $1) <= 1 }
+    }
+
+    static func paletteName(for color: NSColor?) -> String? {
+      all.first { option in
+        guard let hex = option.hex else { return false }
+        return matchesPaletteColor(color, hex: hex)
+      }?.name
+    }
+
+    private static func sRGB8BitComponents(_ color: NSColor?) -> [Int]? {
+      guard let color = color?.usingColorSpace(.sRGB) else { return nil }
+      return [
+        Int((color.redComponent * 255).rounded()),
+        Int((color.greenComponent * 255).rounded()),
+        Int((color.blueComponent * 255).rounded()),
+        Int((color.alphaComponent * 255).rounded()),
+      ]
+    }
+
     static let all = [
       TabColorOption(name: "None", hex: nil),
       TabColorOption(name: "Red", hex: "#FF4245"),
@@ -955,7 +979,7 @@
                 colorMenuLabel(
                   option,
                   isSelected: !commands.isForegroundColorMixed
-                    && matchesPaletteColor(commands.currentForegroundColor, hex: hex)
+                    && TabColorOption.matchesPaletteColor(commands.currentForegroundColor, hex: hex)
                 )
               }
             }
@@ -988,7 +1012,7 @@
                 colorMenuLabel(
                   option,
                   isSelected: !commands.isBackgroundColorMixed
-                    && matchesPaletteColor(commands.currentBackgroundColor, hex: hex)
+                    && TabColorOption.matchesPaletteColor(commands.currentBackgroundColor, hex: hex)
                 )
               }
             }
@@ -1108,15 +1132,7 @@
     ) -> String {
       guard !isMixed else { return "Mixed" }
       guard let color else { return emptyName }
-      return TabColorOption.all.first { option in
-        guard let hex = option.hex else { return false }
-        return matchesPaletteColor(color, hex: hex)
-      }?.name ?? "Custom"
-    }
-
-    private func matchesPaletteColor(_ color: NSColor?, hex: String) -> Bool {
-      guard let color = color?.usingColorSpace(.sRGB) else { return false }
-      return color.isEqual(NSColor(Color(hex: hex)).usingColorSpace(.sRGB))
+      return TabColorOption.paletteName(for: color) ?? "Custom"
     }
   }
 

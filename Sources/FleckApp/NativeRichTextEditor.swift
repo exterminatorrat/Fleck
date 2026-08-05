@@ -778,23 +778,12 @@
         return
       }
       let range = NSRange(location: 0, length: storage.length)
-      var automaticRanges: [NSRange] = []
-      storage.enumerateAttribute(.foregroundColor, in: range) { value, subrange, _ in
-        guard let runColor = value as? NSColor, runColor.isEqual(NSColor.textColor) else { return }
-        automaticRanges.append(subrange)
-      }
-      automaticRanges.forEach { storage.removeAttribute(.foregroundColor, range: $0) }
-
-      var typingAttributes = textView.typingAttributes
-      if let typingColor = typingAttributes[.foregroundColor] as? NSColor,
-        typingColor.isEqual(NSColor.textColor)
-      {
-        typingAttributes.removeValue(forKey: .foregroundColor)
-        textView.typingAttributes = typingAttributes
-      }
       layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
       storage.enumerateAttributes(in: range) { attributes, subrange, _ in
-        guard attributes[.foregroundColor] == nil else { return }
+        let foregroundColor = attributes[.foregroundColor] as? NSColor
+        guard foregroundColor == nil || foregroundColor?.isEqual(NSColor.textColor) == true else {
+          return
+        }
         layoutManager.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: subrange)
       }
     }

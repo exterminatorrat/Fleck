@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 
 @testable import FleckApp
@@ -487,27 +488,44 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   #expect(commands.currentBackgroundColor == nil)
 }
 
-@Test @MainActor func editorAppearancePreservesExplicitColorsAcrossDefaultRefreshReloadAndAutomaticTyping() throws {
+@Test @MainActor func editorAppearancePreservesExplicitSystemAndPaletteColorsWithoutUndoMutation() throws {
   let textView = NSTextView()
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
+    styleMask: .borderless,
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
   textView.string = "RGB"
   textView.textStorage?.addAttribute(
-    .foregroundColor, value: NSColor.systemRed, range: NSRange(location: 0, length: 1)
+    .foregroundColor, value: NSColor.textColor, range: NSRange(location: 0, length: 1)
   )
   textView.textStorage?.addAttribute(
-    .foregroundColor, value: NSColor.systemBlue, range: NSRange(location: 1, length: 1)
+    .foregroundColor, value: NSColor.systemRed, range: NSRange(location: 1, length: 1)
   )
+  textView.textStorage?.removeAttribute(.foregroundColor, range: NSRange(location: 2, length: 1))
   textView.setSelectedRange(NSRange(location: 2, length: 0))
-  textView.typingAttributes.removeValue(forKey: .foregroundColor)
+  textView.typingAttributes[.foregroundColor] = NSColor.textColor
+  let undoManager = try #require(window.undoManager)
+  undoManager.removeAllActions()
 
   NativeRichTextEditor.applyAppearance(
     to: textView,
     textColorHex: "#30D158",
     backgroundColorHex: nil
   )
-  #expect(textView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemRed)
-  #expect(textView.textStorage?.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemBlue)
+  #expect((textView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.isEqual(NSColor.textColor) == true)
+  #expect(textView.textStorage?.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemRed)
   #expect(textView.textStorage?.attribute(.foregroundColor, at: 2, effectiveRange: nil) == nil)
+  #expect((textView.typingAttributes[.foregroundColor] as? NSColor)?.isEqual(NSColor.textColor) == true)
   #expect(temporaryForegroundColor(in: textView, at: 2) == sRGB(NSColor(hex: "#30D158")))
+  #expect(!undoManager.canUndo)
+
+  textView.textStorage?.addAttribute(
+    .underlineStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 2, length: 1)
+  )
+  #expect(textView.textStorage?.attribute(.underlineStyle, at: 2, effectiveRange: nil) as? Int == NSUnderlineStyle.single.rawValue)
 
   let rtfData = try textView.textStorage?.data(
     from: NSRange(location: 0, length: 3),
@@ -520,28 +538,38 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   )
   let reloadedTextView = NSTextView()
   reloadedTextView.textStorage?.setAttributedString(restored)
-  reloadedTextView.setSelectedRange(NSRange(location: 3, length: 0))
-  reloadedTextView.typingAttributes.removeValue(forKey: .foregroundColor)
+  #expect((reloadedTextView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.isEqual(NSColor.textColor) == true)
+  #expect(reloadedTextView.textStorage?.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemRed)
+  #expect(reloadedTextView.textStorage?.attribute(.underlineStyle, at: 2, effectiveRange: nil) as? Int == NSUnderlineStyle.single.rawValue)
+}
 
-  NativeRichTextEditor.applyAppearance(
-    to: reloadedTextView,
-    textColorHex: "#FF9230",
-    backgroundColorHex: "#101010"
+@Test @MainActor func paletteRecognitionSurvivesRTFRoundTrip() throws {
+  let foreground = NSColor(Color(hex: "#FF4245"))
+  let background = NSColor(Color(hex: "#FFD600"))
+  let custom = NSColor(srgbRed: 0.12, green: 0.34, blue: 0.56, alpha: 1)
+  let attributed = NSMutableAttributedString(string: "RYC")
+  attributed.addAttribute(.foregroundColor, value: foreground, range: NSRange(location: 0, length: 1))
+  attributed.addAttribute(.backgroundColor, value: background, range: NSRange(location: 1, length: 1))
+  attributed.addAttribute(.foregroundColor, value: custom, range: NSRange(location: 2, length: 1))
+  let rtf = try attributed.data(
+    from: NSRange(location: 0, length: attributed.length),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
   )
-  #expect(reloadedTextView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemRed)
-  #expect(reloadedTextView.textStorage?.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemBlue)
-  #expect(reloadedTextView.textStorage?.attribute(.foregroundColor, at: 2, effectiveRange: nil) == nil)
-  #expect(temporaryForegroundColor(in: reloadedTextView, at: 2) == sRGB(NSColor(hex: "#FF9230")))
-  #expect(reloadedTextView.drawsBackground)
+  let restored = try NSAttributedString(
+    data: rtf,
+    options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  let restoredForeground = restored.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+  let restoredBackground = restored.attribute(.backgroundColor, at: 1, effectiveRange: nil) as? NSColor
+  let restoredCustom = restored.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor
 
-  reloadedTextView.insertText("A", replacementRange: reloadedTextView.selectedRange())
-  NativeRichTextEditor.applyAppearance(
-    to: reloadedTextView,
-    textColorHex: "#FF9230",
-    backgroundColorHex: "#101010"
-  )
-  #expect(reloadedTextView.textStorage?.attribute(.foregroundColor, at: 3, effectiveRange: nil) == nil)
-  #expect(temporaryForegroundColor(in: reloadedTextView, at: 3) == sRGB(NSColor(hex: "#FF9230")))
+  #expect(TabColorOption.matchesPaletteColor(restoredForeground, hex: "#FF4245"))
+  #expect(TabColorOption.paletteName(for: restoredForeground) == "Red")
+  #expect(TabColorOption.matchesPaletteColor(restoredBackground, hex: "#FFD600"))
+  #expect(TabColorOption.paletteName(for: restoredBackground) == "Yellow")
+  #expect(!TabColorOption.matchesPaletteColor(restoredCustom, hex: "#FF4245"))
+  #expect(TabColorOption.paletteName(for: restoredCustom) == nil)
 }
 
 @Test @MainActor func editorCommandsPersistsSelectedColorsInRTF() throws {
@@ -822,10 +850,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   let source = try notesPanelSource()
   let formattingBar = try #require(source.components(separatedBy: "private struct FormattingBar").last)
 
-  for width in [380, 520] {
-    #expect(width >= 380)
-    #expect(formattingBar.contains("ScrollView(.horizontal, showsIndicators: false)"))
-  }
+  #expect(formattingBar.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").count == 2)
   #expect(formattingBar.contains("accessibilityLabel(\"Formatting controls\")"))
   #expect(formattingBar.contains("ToolbarIconLabel(systemImage: \"trash\")"))
   #expect(!formattingBar.contains("ViewThatFits"))
