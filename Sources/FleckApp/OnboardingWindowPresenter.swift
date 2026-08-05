@@ -87,8 +87,10 @@
             coordinator: onboarding,
             dictationRuntime: dictationRuntime
           )
-        case .notes, .blocked:
-          NotesPanel(dictationRuntime: dictationRuntime, isPinned: true)
+        case .notes:
+          NotesPanel(dictationRuntime: dictationRuntime, isPinned: true, sizing: .container)
+        case .blocked:
+          NotesPanel(dictationRuntime: dictationRuntime, isPinned: true, sizing: .container)
         case .resumeOnboarding:
           EmptyView()
         }
@@ -97,9 +99,18 @@
         OnboardingWindowPresenter(
           gateState: onboarding.gateState,
           completedSize: NSSize(
-            width: appState.preferences.panelWidth,
-            height: appState.preferences.panelHeight
-          )
+            width: appState.preferences.pinnedPanelWidth,
+            height: appState.preferences.pinnedPanelHeight
+          ),
+          onCompletedResize: { size in
+            guard appState.preferences.pinnedPanelWidth != size.width
+              || appState.preferences.pinnedPanelHeight != size.height
+            else { return }
+            appState.updatePreferences {
+              $0.pinnedPanelWidth = size.width
+              $0.pinnedPanelHeight = size.height
+            }
+          }
         )
       )
       .task {
@@ -132,9 +143,21 @@
     nonisolated static let completedTitle = "Fleck"
     nonisolated static let defaultSize = NSSize(width: 1_080, height: 700)
     nonisolated static let minimumSize = NSSize(width: 760, height: 520)
+    nonisolated static let completedMinimumSize = NSSize(width: 480, height: 320)
 
     let gateState: OnboardingGateState
     let completedSize: NSSize
+    let onCompletedResize: (NSSize) -> Void
+
+    nonisolated static func clampedCompletedSize(
+      _ size: NSSize,
+      visibleFrame: NSRect
+    ) -> NSSize {
+      NSSize(
+        width: min(max(size.width, completedMinimumSize.width), visibleFrame.width),
+        height: min(max(size.height, completedMinimumSize.height), visibleFrame.height)
+      )
+    }
 
     func makeCoordinator() -> Coordinator {
       Coordinator()
@@ -149,21 +172,31 @@
         context.coordinator.apply(
           gateState: gateState,
           completedSize: completedSize,
+          onCompletedResize: onCompletedResize,
           to: view.window
         )
       }
     }
 
     @MainActor
-    final class Coordinator {
+    final class Coordinator: NSObject {
       private var appliedState: OnboardingGateState?
+      private weak var observedWindow: NSWindow?
+      private var onCompletedResize: ((NSSize) -> Void)?
+
+      isolated deinit {
+        NotificationCenter.default.removeObserver(self)
+      }
 
       func apply(
         gateState: OnboardingGateState,
         completedSize: NSSize,
+        onCompletedResize: @escaping (NSSize) -> Void,
         to window: NSWindow?
       ) {
-        guard let window, appliedState != gateState else { return }
+        guard let window else { return }
+        observe(window: window, onCompletedResize: onCompletedResize)
+        guard appliedState != gateState else { return }
         appliedState = gateState
         switch gateState {
         case .required:
@@ -173,12 +206,51 @@
           NSApp.activate(ignoringOtherApps: true)
           window.makeKeyAndOrderFront(nil)
         case .complete:
+          let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+            ?? NSRect(origin: .zero, size: completedSize)
+          let completedSize = OnboardingWindowPresenter.clampedCompletedSize(
+            completedSize,
+            visibleFrame: visibleFrame
+          )
           window.title = OnboardingWindowPresenter.completedTitle
-          window.contentMinSize = completedSize
+          window.contentMinSize = OnboardingWindowPresenter.completedMinimumSize
+          window.contentMaxSize = visibleFrame.size
+          window.styleMask.insert(.resizable)
           window.setContentSize(completedSize)
         case .loading, .blocked:
           break
         }
+      }
+
+      private func observe(
+        window: NSWindow,
+        onCompletedResize: @escaping (NSSize) -> Void
+      ) {
+        self.onCompletedResize = onCompletedResize
+        guard observedWindow !== window else { return }
+        if let observedWindow {
+          NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.didEndLiveResizeNotification,
+            object: observedWindow
+          )
+        }
+        observedWindow = window
+        appliedState = nil
+        NotificationCenter.default.addObserver(
+          self,
+          selector: #selector(handleLiveResize(_:)),
+          name: NSWindow.didEndLiveResizeNotification,
+          object: window
+        )
+      }
+
+      @objc private func handleLiveResize(_ notification: Notification) {
+        guard appliedState == .complete,
+          let resizedWindow = notification.object as? NSWindow,
+          let contentSize = resizedWindow.contentView?.bounds.size
+        else { return }
+        onCompletedResize?(contentSize)
       }
     }
   }
