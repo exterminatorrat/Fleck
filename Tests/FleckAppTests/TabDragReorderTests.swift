@@ -4,7 +4,10 @@ import UniformTypeIdentifiers
 
 @testable import FleckApp
 
-@Test func tabStripConstrainsItsOverflowViewport() throws {
+@Test func tabStripAllocatesItsActualOverflowViewportAtSupportedWidths() throws {
+  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380) == 352)
+  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 520) == 492)
+
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -13,11 +16,18 @@ import UniformTypeIdentifiers
     contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
     encoding: .utf8
   )
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var hasHiddenTrailingTabs").first
+  )
 
-  #expect(source.contains("TabViewportTrailingEdgePreferenceKey"))
-  #expect(source.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
-  #expect(source.contains("value: proxy.frame(in: .named(\"tab-strip\")).maxX"))
-  #expect(!source.contains("tabViewportTrailingEdge = proxy.size.width - 28"))
+  #expect(tabStrip.contains("TabViewportTrailingEdgePreferenceKey"))
+  #expect(tabStrip.contains("GeometryReader { proxy in"))
+  #expect(tabStrip.contains("TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)"))
+  #expect(tabStrip.contains(".frame(width: tabViewportWidth, alignment: .leading)"))
+  #expect(tabStrip.contains(".frame(height: 37)"))
+  #expect(tabStrip.contains("value: proxy.frame(in: .named(\"tab-strip\")).maxX"))
+  #expect(!tabStrip.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
 }
 
 @Test func liveTabDragResolvesLeftAndRightDestinations() {

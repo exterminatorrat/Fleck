@@ -67,6 +67,10 @@
   }
 
   enum TabOverflowPresentation {
+    static func tabViewportWidth(totalStripWidth: CGFloat) -> CGFloat {
+      max(0, totalStripWidth - 28)
+    }
+
     static func hasHiddenTrailingContent(
       contentTrailingEdge: CGFloat,
       visibleTrailingEdge: CGFloat
@@ -448,6 +452,8 @@
 
     private var tabStrip: some View {
       ScrollViewReader { scrollProxy in
+        GeometryReader { proxy in
+          let tabViewportWidth = TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)
         HStack(spacing: 0) {
           ZStack(alignment: .trailing) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -577,7 +583,7 @@
               .allowsHitTesting(false)
             }
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
+          .frame(width: tabViewportWidth, alignment: .leading)
           .background {
             GeometryReader { proxy in
               Color.clear.preference(
@@ -603,12 +609,16 @@
           .opacity(hasHiddenTrailingTabs ? 1 : 0)
         }
         .coordinateSpace(name: "tab-strip")
-        .onPreferenceChange(TabContentTrailingEdgePreferenceKey.self) {
-          tabContentTrailingEdge = $0
+        .onPreferenceChange(TabContentTrailingEdgePreferenceKey.self) { trailingEdge in
+          guard tabContentTrailingEdge != trailingEdge else { return }
+          tabContentTrailingEdge = trailingEdge
         }
-        .onPreferenceChange(TabViewportTrailingEdgePreferenceKey.self) {
-          tabViewportTrailingEdge = $0
+        .onPreferenceChange(TabViewportTrailingEdgePreferenceKey.self) { trailingEdge in
+          guard tabViewportTrailingEdge != trailingEdge else { return }
+          tabViewportTrailingEdge = trailingEdge
         }
+        }
+        .frame(height: 37)
       }
     }
 
