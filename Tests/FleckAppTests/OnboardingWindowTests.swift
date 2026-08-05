@@ -22,6 +22,32 @@ import Testing
   #expect(OnboardingWindowPresenter.minimumSize == NSSize(width: 760, height: 520))
 }
 
+@Test @MainActor func completedLiveResizeClampsAndPersistsTheContentMinimum() {
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled, .resizable],
+    backing: .buffered,
+    defer: false
+  )
+  let coordinator = OnboardingWindowPresenter.Coordinator()
+  var persistedSizes: [NSSize] = []
+  coordinator.apply(
+    gateState: .complete,
+    completedSize: NSSize(width: 640, height: 430),
+    onCompletedResize: { persistedSizes.append($0) },
+    to: window
+  )
+
+  window.contentView?.setFrameSize(NSSize(width: 300, height: 227))
+  NotificationCenter.default.post(
+    name: NSWindow.didEndLiveResizeNotification,
+    object: window
+  )
+
+  #expect(window.contentView?.bounds.size == OnboardingWindowPresenter.completedMinimumSize)
+  #expect(persistedSizes == [OnboardingWindowPresenter.completedMinimumSize])
+}
+
 @Test func OnboardingWindowSourceHasOneExistingScene() throws {
   let source = try String(
     contentsOf: appSourceURL(),

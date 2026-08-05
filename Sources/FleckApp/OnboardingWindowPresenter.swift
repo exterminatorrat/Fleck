@@ -250,7 +250,16 @@
           let resizedWindow = notification.object as? NSWindow,
           let contentSize = resizedWindow.contentView?.bounds.size
         else { return }
-        onCompletedResize?(contentSize)
+        let visibleFrame = resizedWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+          ?? NSRect(origin: .zero, size: contentSize)
+        let clampedSize = OnboardingWindowPresenter.clampedCompletedSize(
+          contentSize,
+          visibleFrame: visibleFrame
+        )
+        if contentSize != clampedSize {
+          resizedWindow.setContentSize(clampedSize)
+        }
+        onCompletedResize?(clampedSize)
       }
     }
   }
