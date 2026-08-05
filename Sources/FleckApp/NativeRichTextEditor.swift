@@ -33,6 +33,10 @@
     @Published private(set) var currentFontSize: CGFloat?
     @Published private(set) var isFontFamilyMixed = false
     @Published private(set) var isFontSizeMixed = false
+    @Published private(set) var currentForegroundColor: NSColor?
+    @Published private(set) var currentBackgroundColor: NSColor?
+    @Published private(set) var isForegroundColorMixed = false
+    @Published private(set) var isBackgroundColorMixed = false
 
     weak var textView: NSTextView? {
       didSet {
@@ -84,6 +88,14 @@
       refreshFormattingState()
     }
 
+    func applyForegroundColor(_ color: NSColor?) {
+      applyColor(color, key: .foregroundColor)
+    }
+
+    func applyBackgroundColor(_ color: NSColor?) {
+      applyColor(color, key: .backgroundColor)
+    }
+
     @discardableResult
     func applyFontSize(_ size: CGFloat) -> Bool {
       guard size.isFinite, (1...512).contains(size), let textView else { return false }
@@ -115,6 +127,10 @@
         currentFontSize = nil
         isFontFamilyMixed = false
         isFontSizeMixed = false
+        currentForegroundColor = nil
+        currentBackgroundColor = nil
+        isForegroundColorMixed = false
+        isBackgroundColorMixed = false
         return
       }
 
@@ -140,6 +156,10 @@
         currentFontSize = font?.pointSize
         isFontFamilyMixed = false
         isFontSizeMixed = false
+        currentForegroundColor = attributes[.foregroundColor] as? NSColor
+        currentBackgroundColor = attributes[.backgroundColor] as? NSColor
+        isForegroundColorMixed = false
+        isBackgroundColorMixed = false
         return
       }
 
@@ -147,6 +167,12 @@
       var size: CGFloat?
       var familyMixed = false
       var sizeMixed = false
+      var foreground: NSColor?
+      var background: NSColor?
+      var foregroundWasSet = false
+      var backgroundWasSet = false
+      var foregroundMixed = false
+      var backgroundMixed = false
       storage.enumerateAttributes(in: range) { attributes, _, _ in
         let runFont = attributes[.font] as? NSFont
         let runFamily = runFont?.familyName
@@ -161,11 +187,40 @@
         } else if size != runSize {
           sizeMixed = true
         }
+        let runForeground = attributes[.foregroundColor] as? NSColor
+        if !foregroundWasSet {
+          foreground = runForeground
+          foregroundWasSet = true
+        } else if !colorsMatch(foreground, runForeground) {
+          foregroundMixed = true
+        }
+        let runBackground = attributes[.backgroundColor] as? NSColor
+        if !backgroundWasSet {
+          background = runBackground
+          backgroundWasSet = true
+        } else if !colorsMatch(background, runBackground) {
+          backgroundMixed = true
+        }
       }
       currentFontFamily = familyMixed ? nil : family
       currentFontSize = sizeMixed ? nil : size
       isFontFamilyMixed = familyMixed
       isFontSizeMixed = sizeMixed
+      currentForegroundColor = foregroundMixed ? nil : foreground
+      currentBackgroundColor = backgroundMixed ? nil : background
+      isForegroundColorMixed = foregroundMixed
+      isBackgroundColorMixed = backgroundMixed
+    }
+
+    private func colorsMatch(_ lhs: NSColor?, _ rhs: NSColor?) -> Bool {
+      switch (lhs, rhs) {
+      case let (lhs?, rhs?):
+        return lhs.isEqual(rhs)
+      case (nil, nil):
+        return true
+      default:
+        return false
+      }
     }
 
     private func toggleFontTrait(_ trait: NSFontTraitMask) {
@@ -193,13 +248,52 @@
         return
       }
       textView.textStorage?.beginEditing()
+      let original = textView.textStorage?.attributedSubstring(from: range)
       textView.textStorage?.enumerateAttributes(in: range) { attributes, subrange, _ in
         let current = attributes[.font] as? NSFont ?? defaultValue
         textView.textStorage?.addAttribute(
           .font, value: transform(current, attributes), range: subrange)
       }
       textView.textStorage?.endEditing()
+      if let original { registerUndo(in: textView, range: range, replacement: original) }
       textView.didChangeText()
+    }
+
+    private func applyColor(_ color: NSColor?, key: NSAttributedString.Key) {
+      guard let textView else { return }
+      let range = textView.selectedRange()
+      if range.length == 0 {
+        textView.typingAttributes[key] = color
+        refreshFormattingState()
+        return
+      }
+      guard let storage = textView.textStorage else { return }
+      let original = storage.attributedSubstring(from: range)
+      if let color {
+        storage.addAttribute(key, value: color, range: range)
+      } else {
+        storage.removeAttribute(key, range: range)
+      }
+      registerUndo(in: textView, range: range, replacement: original)
+      textView.didChangeText()
+      refreshFormattingState()
+    }
+
+    private func registerUndo(in textView: NSTextView, range: NSRange, replacement: NSAttributedString) {
+      textView.undoManager?.registerUndo(withTarget: self) { [weak textView] commands in
+        guard let textView else { return }
+        commands.restoreAttributes(in: textView, range: range, replacement: replacement)
+      }
+    }
+
+    private func restoreAttributes(in textView: NSTextView, range: NSRange, replacement: NSAttributedString) {
+      guard let storage = textView.textStorage else { return }
+      let current = storage.attributedSubstring(from: range)
+      registerUndo(in: textView, range: range, replacement: current)
+      storage.replaceCharacters(in: range, with: replacement)
+      textView.setSelectedRange(range)
+      textView.didChangeText()
+      refreshFormattingState()
     }
 
     private func toggleAttribute(_ key: NSAttributedString.Key, enabledValue: Int) {

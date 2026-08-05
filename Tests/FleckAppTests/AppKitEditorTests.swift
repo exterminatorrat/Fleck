@@ -401,8 +401,10 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
 
 @Test @MainActor func editorCommandsCaretFontFormattingDoesNotNotifyUntilTyping() throws {
   let textView = NSTextView()
+  let recorder = EditorChangeRecorder()
   let font = try #require(NSFont(name: "Courier", size: 17))
   let family = try #require(font.familyName)
+  textView.delegate = recorder
   textView.string = "A"
   let commands = EditorCommands()
   commands.textView = textView
@@ -411,11 +413,153 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   commands.applyFontFamily(family)
   #expect(commands.applyFontSize(24))
   #expect(textView.string == "A")
+  #expect(recorder.count == 0)
 
   textView.insertText("B", replacementRange: textView.selectedRange())
   #expect(textView.string == "AB")
+  #expect(recorder.count == 1)
   #expect((textView.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.familyName == family)
   #expect((textView.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.pointSize == 24)
+}
+
+@Test @MainActor func editorFormattingCommandsUndoAndRedoSelectedAttributes() throws {
+  let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 320, height: 240), styleMask: [.titled], backing: .buffered, defer: false)
+  let textView = NSTextView()
+  let recorder = EditorChangeRecorder()
+  window.contentView = textView
+  textView.allowsUndo = true
+  textView.delegate = recorder
+  textView.string = "AB"
+  let original = try #require(textView.textStorage?.attributedSubstring(from: NSRange(location: 0, length: 2)))
+  let commands = EditorCommands()
+  commands.textView = textView
+  let family = try #require(NSFont(name: "Courier", size: 17)?.familyName)
+
+  for (operation, requestedAttributeIsRestored) in [
+    (
+      { commands.applyFontFamily(family) },
+      { (textView.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.familyName == family }
+    ),
+    (
+      { _ = commands.applyFontSize(24) },
+      { (textView.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 24 }
+    ),
+    (
+      { commands.applyForegroundColor(.systemRed) },
+      { textView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemRed }
+    ),
+    (
+      { commands.applyBackgroundColor(.systemYellow) },
+      { textView.textStorage?.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemYellow }
+    ),
+  ] {
+    textView.textStorage?.setAttributedString(original)
+    try #require(textView.undoManager).removeAllActions()
+    textView.setSelectedRange(NSRange(location: 0, length: 2))
+    recorder.count = 0
+    operation()
+    #expect(recorder.count == 1)
+    try #require(textView.undoManager).undo()
+    #expect(textView.string == "AB")
+    #expect(textView.textStorage?.attributedSubstring(from: NSRange(location: 0, length: 2)) == original)
+    try #require(textView.undoManager).redo()
+    #expect(textView.string == "AB")
+    #expect(requestedAttributeIsRestored())
+  }
+}
+
+@Test @MainActor func editorCommandsReportsMixedForegroundAndBackgroundColors() {
+  let textView = NSTextView()
+  textView.string = "AB"
+  textView.textStorage?.addAttribute(.foregroundColor, value: NSColor.systemRed, range: NSRange(location: 0, length: 1))
+  textView.textStorage?.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: NSRange(location: 1, length: 1))
+  textView.textStorage?.addAttribute(.backgroundColor, value: NSColor.systemYellow, range: NSRange(location: 0, length: 1))
+  textView.textStorage?.addAttribute(.backgroundColor, value: NSColor.systemGreen, range: NSRange(location: 1, length: 1))
+  textView.setSelectedRange(NSRange(location: 0, length: 2))
+  let commands = EditorCommands()
+  commands.textView = textView
+
+  commands.refreshFormattingState()
+
+  #expect(commands.isForegroundColorMixed)
+  #expect(commands.currentForegroundColor == nil)
+  #expect(commands.isBackgroundColorMixed)
+  #expect(commands.currentBackgroundColor == nil)
+}
+
+@Test @MainActor func editorCommandsPersistsSelectedColorsInRTF() throws {
+  let textView = NSTextView()
+  textView.string = "A"
+  textView.setSelectedRange(NSRange(location: 0, length: 1))
+  let commands = EditorCommands()
+  commands.textView = textView
+
+  commands.applyForegroundColor(.systemRed)
+  commands.applyBackgroundColor(.systemYellow)
+  let rtfData = try textView.textStorage?.data(
+    from: NSRange(location: 0, length: 1), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let data = try #require(rtfData)
+  let restored = try NSAttributedString(
+    data: data,
+    options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+
+  #expect(restored.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemRed)
+  #expect(restored.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemYellow)
+}
+
+@Test @MainActor func editorCommandsAddsAndRemovesForegroundColorForSelectionAndCaret() {
+  let textView = NSTextView()
+  let recorder = EditorChangeRecorder()
+  textView.delegate = recorder
+  textView.string = "A"
+  let commands = EditorCommands()
+  commands.textView = textView
+  textView.setSelectedRange(NSRange(location: 0, length: 1))
+  commands.applyForegroundColor(.systemRed)
+  #expect(recorder.count == 1)
+  #expect(textView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemRed)
+  commands.applyForegroundColor(nil)
+  #expect(textView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) == nil)
+  recorder.count = 0
+  textView.setSelectedRange(NSRange(location: 1, length: 0))
+  commands.applyForegroundColor(.systemBlue)
+  #expect(recorder.count == 0)
+  textView.insertText("B", replacementRange: textView.selectedRange())
+  #expect(recorder.count == 1)
+  #expect(textView.textStorage?.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemBlue)
+}
+
+@Test @MainActor func editorCommandsAddsAndRemovesHighlightForSelectionAndCaret() {
+  let textView = NSTextView()
+  let recorder = EditorChangeRecorder()
+  textView.delegate = recorder
+  textView.string = "A"
+  let commands = EditorCommands()
+  commands.textView = textView
+  textView.setSelectedRange(NSRange(location: 0, length: 1))
+  commands.applyBackgroundColor(.systemYellow)
+  #expect(recorder.count == 1)
+  #expect(textView.textStorage?.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemYellow)
+  commands.applyBackgroundColor(nil)
+  #expect(textView.textStorage?.attribute(.backgroundColor, at: 0, effectiveRange: nil) == nil)
+  recorder.count = 0
+  textView.setSelectedRange(NSRange(location: 1, length: 0))
+  commands.applyBackgroundColor(.systemGreen)
+  #expect(recorder.count == 0)
+  textView.insertText("B", replacementRange: textView.selectedRange())
+  #expect(recorder.count == 1)
+  #expect(textView.textStorage?.attribute(.backgroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemGreen)
+}
+
+private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
+  var count = 0
+
+  func textDidChange(_ notification: Notification) {
+    count += 1
+  }
 }
 
 @Test @MainActor func tabColorSwatchesAreNonTemplateImages() {
