@@ -329,6 +329,95 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   return restored
 }
 
+@Test @MainActor func editorCommandsReportsCaretAndUniformFontState() throws {
+  let textView = NSTextView()
+  let font = try #require(NSFont(name: "Avenir Next", size: 17))
+  textView.string = "Text"
+  textView.typingAttributes[.font] = font
+  textView.textStorage?.addAttribute(.font, value: font, range: NSRange(location: 0, length: 4))
+  let commands = EditorCommands()
+  commands.textView = textView
+
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  commands.refreshFormattingState()
+  #expect(commands.currentFontFamily == font.familyName)
+  #expect(commands.currentFontSize == font.pointSize)
+  #expect(!commands.isFontFamilyMixed)
+  #expect(!commands.isFontSizeMixed)
+
+  textView.setSelectedRange(NSRange(location: 0, length: 4))
+  commands.refreshFormattingState()
+  #expect(commands.currentFontFamily == font.familyName)
+  #expect(commands.currentFontSize == font.pointSize)
+}
+
+@Test @MainActor func editorCommandsReportsMixedFamilyAndSizeWithoutInventingAValue() throws {
+  let textView = NSTextView()
+  let first = try #require(NSFont(name: "Avenir Next", size: 17))
+  let second = try #require(NSFont(name: "Courier", size: 21))
+  textView.string = "AB"
+  textView.textStorage?.addAttribute(.font, value: first, range: NSRange(location: 0, length: 1))
+  textView.textStorage?.addAttribute(.font, value: second, range: NSRange(location: 1, length: 1))
+  let commands = EditorCommands()
+  commands.textView = textView
+  textView.setSelectedRange(NSRange(location: 0, length: 2))
+  commands.refreshFormattingState()
+
+  #expect(commands.currentFontFamily == nil)
+  #expect(commands.currentFontSize == nil)
+  #expect(commands.isFontFamilyMixed)
+  #expect(commands.isFontSizeMixed)
+}
+
+@Test @MainActor func editorCommandsAppliesValidSizeAtCaretAndSelection() {
+  let textView = NSTextView()
+  textView.string = "AB"
+  let commands = EditorCommands()
+  commands.textView = textView
+
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  #expect(commands.applyFontSize(18))
+  #expect((textView.typingAttributes[.font] as? NSFont)?.pointSize == 18)
+
+  textView.setSelectedRange(NSRange(location: 0, length: 2))
+  #expect(commands.applyFontSize(22))
+  #expect((textView.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 22)
+}
+
+@Test @MainActor func editorCommandsRejectsInvalidSizesWithoutChangingAttributes() {
+  let textView = NSTextView()
+  textView.string = "A"
+  let commands = EditorCommands()
+  commands.textView = textView
+  let original = textView.typingAttributes[.font] as? NSFont
+
+  #expect(!commands.applyFontSize(0))
+  #expect(!commands.applyFontSize(513))
+  #expect(!commands.applyFontSize(.nan))
+  #expect(!commands.applyFontSize(.infinity))
+  #expect((textView.typingAttributes[.font] as? NSFont) == original)
+  #expect(textView.string == "A")
+}
+
+@Test @MainActor func editorCommandsCaretFontFormattingDoesNotNotifyUntilTyping() throws {
+  let textView = NSTextView()
+  let font = try #require(NSFont(name: "Courier", size: 17))
+  let family = try #require(font.familyName)
+  textView.string = "A"
+  let commands = EditorCommands()
+  commands.textView = textView
+  textView.setSelectedRange(NSRange(location: 1, length: 0))
+
+  commands.applyFontFamily(family)
+  #expect(commands.applyFontSize(24))
+  #expect(textView.string == "A")
+
+  textView.insertText("B", replacementRange: textView.selectedRange())
+  #expect(textView.string == "AB")
+  #expect((textView.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.familyName == family)
+  #expect((textView.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.pointSize == 24)
+}
+
 @Test @MainActor func tabColorSwatchesAreNonTemplateImages() {
   for option in TabColorOption.all where option.hex != nil {
     #expect(option.swatchImage?.isTemplate == false)

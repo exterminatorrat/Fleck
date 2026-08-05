@@ -29,6 +29,10 @@
     @Published private(set) var isBold = false
     @Published private(set) var isItalic = false
     @Published private(set) var isUnderlined = false
+    @Published private(set) var currentFontFamily: String?
+    @Published private(set) var currentFontSize: CGFloat?
+    @Published private(set) var isFontFamilyMixed = false
+    @Published private(set) var isFontSizeMixed = false
 
     weak var textView: NSTextView? {
       didSet {
@@ -80,6 +84,17 @@
       refreshFormattingState()
     }
 
+    @discardableResult
+    func applyFontSize(_ size: CGFloat) -> Bool {
+      guard size.isFinite, (1...512).contains(size), let textView else { return false }
+      mutateSelection(defaultValue: NSFont.systemFont(ofSize: textView.font?.pointSize ?? 14)) {
+        font, _ in
+        NSFontManager.shared.convert(font, toSize: size)
+      }
+      refreshFormattingState()
+      return true
+    }
+
     func applyList(_ style: EditorListStyle) {
       (textView as? ListAwareTextView)?.toggleList(style)
     }
@@ -96,6 +111,10 @@
         isBold = false
         isItalic = false
         isUnderlined = false
+        currentFontFamily = nil
+        currentFontSize = nil
+        isFontFamilyMixed = false
+        isFontSizeMixed = false
         return
       }
 
@@ -115,6 +134,38 @@
       isBold = traits.contains(.boldFontMask)
       isItalic = traits.contains(.italicFontMask)
       isUnderlined = (attributes[.underlineStyle] as? Int ?? 0) != 0
+
+      guard range.length > 0, let storage = textView.textStorage, storage.length > 0 else {
+        currentFontFamily = font?.familyName
+        currentFontSize = font?.pointSize
+        isFontFamilyMixed = false
+        isFontSizeMixed = false
+        return
+      }
+
+      var family: String?
+      var size: CGFloat?
+      var familyMixed = false
+      var sizeMixed = false
+      storage.enumerateAttributes(in: range) { attributes, _, _ in
+        let runFont = attributes[.font] as? NSFont
+        let runFamily = runFont?.familyName
+        let runSize = runFont?.pointSize
+        if family == nil {
+          family = runFamily
+        } else if family != runFamily {
+          familyMixed = true
+        }
+        if size == nil {
+          size = runSize
+        } else if size != runSize {
+          sizeMixed = true
+        }
+      }
+      currentFontFamily = familyMixed ? nil : family
+      currentFontSize = sizeMixed ? nil : size
+      isFontFamilyMixed = familyMixed
+      isFontSizeMixed = sizeMixed
     }
 
     private func toggleFontTrait(_ trait: NSFontTraitMask) {
