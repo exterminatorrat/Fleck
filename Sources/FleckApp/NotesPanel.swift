@@ -358,10 +358,15 @@
     private var header: some View {
       HStack(spacing: 10) {
         HStack(spacing: 6) {
-          if let mark = FleckMark.image(template: false) {
+          switch FleckMark.load(template: false) {
+          case .image(let mark):
             Image(nsImage: mark)
               .resizable()
               .frame(width: 18, height: 18)
+          case .missingPackagedResource:
+            Text("!")
+              .foregroundStyle(.red)
+              .accessibilityLabel("Fleck mark missing")
           }
           Text("Fleck")
         }
@@ -843,7 +848,8 @@
     @FocusState private var isFontSizeFocused: Bool
 
     var body: some View {
-      HStack(spacing: 8) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 8) {
         Menu {
           Button("Cancel Dictation", role: .destructive) {
             Task { await dictationRuntime.cancel() }
@@ -1045,14 +1051,17 @@
         }
         .accessibilityLabel("Delete")
         .keyboardShortcut("w", modifiers: .command)
+        }
+        .buttonStyle(CrispToolbarButtonStyle(motion: motion))
+        .animation(motion.quick, value: commands.isBold)
+        .animation(motion.quick, value: commands.isItalic)
+        .animation(motion.quick, value: commands.isUnderlined)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
       }
-      .buttonStyle(CrispToolbarButtonStyle(motion: motion))
-      .animation(motion.quick, value: commands.isBold)
-      .animation(motion.quick, value: commands.isItalic)
-      .animation(motion.quick, value: commands.isUnderlined)
-      .padding(.horizontal, 16)
-      .padding(.vertical, 9)
+      .frame(maxWidth: .infinity)
       .background(.thinMaterial)
+      .accessibilityLabel("Formatting controls")
     }
 
     private var motion: AppMotion {

@@ -29,7 +29,7 @@ import Testing
     encoding: .utf8
   )
   #expect(appSource.contains("fleck-mark.png"))
-  #expect(appSource.contains("FleckMark.image(template: true)"))
+  #expect(appSource.contains("FleckMark.load(template: true)"))
   #expect(appSource.contains("MenuBarExtra"))
   #expect(appSource.contains("accessibilityLabel(\"Fleck\")"))
   #expect(appSource.contains(#"Window("Fleck""#))
@@ -37,7 +37,23 @@ import Testing
     contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
     encoding: .utf8
   )
-  #expect(notesPanelSource.contains("FleckMark.image(template: false)"))
+  #expect(notesPanelSource.contains("FleckMark.load(template: false)"))
+}
+
+@Test @MainActor func fleckMarkFailsLoudlyForMissingPackagedResourceButFallsBackInBareDevelopment() {
+  switch FleckMark.load(template: true, resourceURL: nil, isPackagedApp: true) {
+  case .missingPackagedResource:
+    break
+  case .image:
+    Issue.record("A packaged Fleck.app must not silently use a fallback mark")
+  }
+
+  switch FleckMark.load(template: true, resourceURL: nil, isPackagedApp: false) {
+  case .image(let image):
+    #expect(image.isTemplate)
+  case .missingPackagedResource:
+    Issue.record("Bare development should retain the explicit note-text fallback")
+  }
 }
 
 @Test func agentConnectorDocumentationUsesPackagedLaunch() throws {

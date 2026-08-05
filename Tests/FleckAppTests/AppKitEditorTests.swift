@@ -487,6 +487,63 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   #expect(commands.currentBackgroundColor == nil)
 }
 
+@Test @MainActor func editorAppearancePreservesExplicitColorsAcrossDefaultRefreshReloadAndAutomaticTyping() throws {
+  let textView = NSTextView()
+  textView.string = "RGB"
+  textView.textStorage?.addAttribute(
+    .foregroundColor, value: NSColor.systemRed, range: NSRange(location: 0, length: 1)
+  )
+  textView.textStorage?.addAttribute(
+    .foregroundColor, value: NSColor.systemBlue, range: NSRange(location: 1, length: 1)
+  )
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  textView.typingAttributes.removeValue(forKey: .foregroundColor)
+
+  NativeRichTextEditor.applyAppearance(
+    to: textView,
+    textColorHex: "#30D158",
+    backgroundColorHex: nil
+  )
+  #expect(textView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemRed)
+  #expect(textView.textStorage?.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemBlue)
+  #expect(textView.textStorage?.attribute(.foregroundColor, at: 2, effectiveRange: nil) == nil)
+  #expect(temporaryForegroundColor(in: textView, at: 2) == sRGB(NSColor(hex: "#30D158")))
+
+  let rtfData = try textView.textStorage?.data(
+    from: NSRange(location: 0, length: 3),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let restored = try NSAttributedString(
+    data: try #require(rtfData),
+    options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  let reloadedTextView = NSTextView()
+  reloadedTextView.textStorage?.setAttributedString(restored)
+  reloadedTextView.setSelectedRange(NSRange(location: 3, length: 0))
+  reloadedTextView.typingAttributes.removeValue(forKey: .foregroundColor)
+
+  NativeRichTextEditor.applyAppearance(
+    to: reloadedTextView,
+    textColorHex: "#FF9230",
+    backgroundColorHex: "#101010"
+  )
+  #expect(reloadedTextView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemRed)
+  #expect(reloadedTextView.textStorage?.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemBlue)
+  #expect(reloadedTextView.textStorage?.attribute(.foregroundColor, at: 2, effectiveRange: nil) == nil)
+  #expect(temporaryForegroundColor(in: reloadedTextView, at: 2) == sRGB(NSColor(hex: "#FF9230")))
+  #expect(reloadedTextView.drawsBackground)
+
+  reloadedTextView.insertText("A", replacementRange: reloadedTextView.selectedRange())
+  NativeRichTextEditor.applyAppearance(
+    to: reloadedTextView,
+    textColorHex: "#FF9230",
+    backgroundColorHex: "#101010"
+  )
+  #expect(reloadedTextView.textStorage?.attribute(.foregroundColor, at: 3, effectiveRange: nil) == nil)
+  #expect(temporaryForegroundColor(in: reloadedTextView, at: 3) == sRGB(NSColor(hex: "#FF9230")))
+}
+
 @Test @MainActor func editorCommandsPersistsSelectedColorsInRTF() throws {
   let textView = NSTextView()
   textView.string = "A"
@@ -739,6 +796,17 @@ private func sRGB(_ color: NSColor?) -> [Int]? {
   ]
 }
 
+@MainActor
+private func temporaryForegroundColor(in textView: NSTextView, at index: Int) -> [Int]? {
+  sRGB(
+    textView.layoutManager?.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: index,
+      effectiveRange: nil
+    ) as? NSColor
+  )
+}
+
 @Test func formattingBarAnnouncesPaletteNamesAndMarksSpecialColorRows() throws {
   let source = try notesPanelSource()
 
@@ -748,6 +816,19 @@ private func sRGB(_ color: NSColor?) -> [Int]? {
   #expect(source.contains("colorAccessibilityValue"))
   #expect(source.contains("\"Custom\""))
   #expect(source.contains("accessibilityHint(\"Enter a size from 1 through 512 points.\")"))
+}
+
+@Test func formattingBarKeepsOneReachableCommandSurfaceAtSupportedWidths() throws {
+  let source = try notesPanelSource()
+  let formattingBar = try #require(source.components(separatedBy: "private struct FormattingBar").last)
+
+  for width in [380, 520] {
+    #expect(width >= 380)
+    #expect(formattingBar.contains("ScrollView(.horizontal, showsIndicators: false)"))
+  }
+  #expect(formattingBar.contains("accessibilityLabel(\"Formatting controls\")"))
+  #expect(formattingBar.contains("ToolbarIconLabel(systemImage: \"trash\")"))
+  #expect(!formattingBar.contains("ViewThatFits"))
 }
 
 private func notesPanelSource() throws -> String {

@@ -676,8 +676,9 @@
       textView.automaticLists = automaticLists
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
+      let reloadedContent = applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator)
       applyColors(to: textView)
-      if !applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator),
+      if !reloadedContent,
         context.coordinator.fontFamily != fontFamily
         || context.coordinator.fontSize != fontSize
       {
@@ -748,12 +749,53 @@
     }
 
     private func applyColors(to textView: NSTextView) {
-      textView.textColor = NSColor(hex: textColorHex) ?? .textColor
+      Self.applyAppearance(
+        to: textView,
+        textColorHex: textColorHex,
+        backgroundColorHex: backgroundColorHex
+      )
+    }
+
+    static func applyAppearance(
+      to textView: NSTextView,
+      textColorHex: String?,
+      backgroundColorHex: String?
+    ) {
+      applyDefaultForegroundColor(
+        NSColor(hex: textColorHex) ?? .textColor,
+        to: textView
+      )
       if let background = NSColor(hex: backgroundColorHex) {
         textView.drawsBackground = true
         textView.backgroundColor = background
       } else {
         textView.drawsBackground = false
+      }
+    }
+
+    private static func applyDefaultForegroundColor(_ color: NSColor, to textView: NSTextView) {
+      guard let storage = textView.textStorage, let layoutManager = textView.layoutManager else {
+        return
+      }
+      let range = NSRange(location: 0, length: storage.length)
+      var automaticRanges: [NSRange] = []
+      storage.enumerateAttribute(.foregroundColor, in: range) { value, subrange, _ in
+        guard let runColor = value as? NSColor, runColor.isEqual(NSColor.textColor) else { return }
+        automaticRanges.append(subrange)
+      }
+      automaticRanges.forEach { storage.removeAttribute(.foregroundColor, range: $0) }
+
+      var typingAttributes = textView.typingAttributes
+      if let typingColor = typingAttributes[.foregroundColor] as? NSColor,
+        typingColor.isEqual(NSColor.textColor)
+      {
+        typingAttributes.removeValue(forKey: .foregroundColor)
+        textView.typingAttributes = typingAttributes
+      }
+      layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
+      storage.enumerateAttributes(in: range) { attributes, subrange, _ in
+        guard attributes[.foregroundColor] == nil else { return }
+        layoutManager.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: subrange)
       }
     }
 
@@ -807,6 +849,7 @@
 
       func textDidChange(_ notification: Notification) {
         guard let textView = notification.object as? NSTextView else { return }
+        parent.applyColors(to: textView)
         guard let snapshot = parent.commands.attributedBindingSnapshot(for: textView) else { return }
         let updatedRTF = try? snapshot.data(
           from: NSRange(location: 0, length: snapshot.length),

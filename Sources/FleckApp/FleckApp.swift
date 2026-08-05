@@ -21,13 +21,29 @@
   }
 
   enum FleckMark {
-    static func image(template: Bool) -> NSImage? {
-      guard
-        let resourceURL = Bundle.main.resourceURL,
+    enum LoadResult {
+      case image(NSImage)
+      case missingPackagedResource
+    }
+
+    static func load(
+      template: Bool,
+      resourceURL: URL? = Bundle.main.resourceURL,
+      isPackagedApp: Bool = Bundle.main.bundleURL.pathExtension.lowercased() == "app"
+    ) -> LoadResult {
+      if let resourceURL,
         let image = NSImage(contentsOf: resourceURL.appendingPathComponent("fleck-mark.png"))
-      else { return nil }
-      image.isTemplate = template
-      return image
+      {
+        image.isTemplate = template
+        return .image(image)
+      }
+      guard !isPackagedApp,
+        let fallback = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Fleck")
+      else {
+        return .missingPackagedResource
+      }
+      fallback.isTemplate = template
+      return .image(fallback)
     }
   }
 
@@ -108,10 +124,12 @@
       }
       label: {
         Group {
-          if let mark = FleckMark.image(template: true) {
+          switch FleckMark.load(template: true) {
+          case .image(let mark):
             Image(nsImage: mark)
-          } else {
-            Image(systemName: "note.text")
+          case .missingPackagedResource:
+            Text("!")
+              .accessibilityLabel("Fleck mark missing")
           }
         }
         .accessibilityLabel("Fleck")
