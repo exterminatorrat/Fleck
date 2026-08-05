@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 
 @testable import FleckApp
 
@@ -110,4 +111,65 @@ import Testing
   } else {
     Issue.record("Tab dragging must propose a move operation")
   }
+}
+
+@Test func beginningTabDragSelectsTheDraggedIdentityBeforeProvidingIt() {
+  let noteID = UUID()
+  let contentType = TabDragReorder.makeContentType()
+  var selectedIDs: [UUID] = []
+
+  let provider = TabDragReorder.beginDrag(
+    noteID: noteID,
+    contentType: contentType,
+    select: { selectedIDs.append($0) }
+  )
+
+  #expect(selectedIDs == [noteID])
+  #expect(provider.hasItemConformingToTypeIdentifier(contentType.identifier))
+  #expect(!provider.hasItemConformingToTypeIdentifier("public.text"))
+}
+
+@Test func liveTabDragRetainsIdentityAndCurrentOrderAcrossLeftAndRightHovers() {
+  let first = UUID()
+  let second = UUID()
+  let third = UUID()
+  var ids = [first, second, third]
+  let metadata = [first: "first", second: "second", third: "third"]
+  let selectedID = first
+
+  func move(_ id: UUID, to destination: Int) {
+    let source = ids.firstIndex(of: id)!
+    ids.insert(ids.remove(at: source), at: destination)
+  }
+
+  #expect(
+    TabDragReorder.performLiveMove(
+      draggedID: first,
+      over: second,
+      currentNoteIDs: { ids },
+      move: move
+    )
+  )
+  #expect(
+    TabDragReorder.performLiveMove(
+      draggedID: first,
+      over: third,
+      currentNoteIDs: { ids },
+      move: move
+    )
+  )
+  #expect(
+    TabDragReorder.performLiveMove(
+      draggedID: third,
+      over: second,
+      currentNoteIDs: { ids },
+      move: move
+    )
+  )
+
+  #expect(ids == [third, second, first])
+  #expect(metadata[first] == "first")
+  #expect(metadata[second] == "second")
+  #expect(metadata[third] == "third")
+  #expect(selectedID == first)
 }

@@ -38,6 +38,15 @@
       return provider
     }
 
+    static func beginDrag(
+      noteID: UUID,
+      contentType: UTType,
+      select: (UUID) -> Void
+    ) -> NSItemProvider {
+      select(noteID)
+      return itemProvider(for: noteID, contentType: contentType)
+    }
+
     @discardableResult
     static func performLiveMove(
       draggedID: UUID?,
@@ -425,7 +434,11 @@
             )
             .onDrag {
               draggedNoteID = note.id
-              return TabDragReorder.itemProvider(for: note.id, contentType: tabDragContentType)
+              return TabDragReorder.beginDrag(
+                noteID: note.id,
+                contentType: tabDragContentType,
+                select: appState.select
+              )
             }
             .onDrop(
               of: [tabDragContentType],
