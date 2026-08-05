@@ -560,6 +560,71 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   #expect(reloadedTextView.textStorage?.attribute(.underlineStyle, at: 2, effectiveRange: nil) as? Int == NSUnderlineStyle.single.rawValue)
 }
 
+@Test @MainActor func editorAccentAppearanceUpdatesCaretAndSelectionWithoutMutatingRichText() throws {
+  let textView = NSTextView()
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
+    styleMask: .borderless,
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  textView.allowsUndo = true
+  textView.string = "Accent"
+  textView.textStorage?.addAttribute(
+    .underlineStyle,
+    value: NSUnderlineStyle.single.rawValue,
+    range: NSRange(location: 0, length: textView.string.utf16.count)
+  )
+  textView.setSelectedRange(NSRange(location: 1, length: 4))
+  textView.typingAttributes[.font] = NSFont.systemFont(ofSize: 17)
+  let originalText = NSAttributedString(attributedString: try #require(textView.textStorage))
+  let originalRTF = try #require(
+    try textView.textStorage?.data(
+      from: NSRange(location: 0, length: textView.string.utf16.count),
+      documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+    )
+  )
+  let originalSelection = textView.selectedRange()
+  let originalTypingAttributes = NSDictionary(dictionary: textView.typingAttributes)
+  let undoManager = try #require(textView.undoManager)
+  undoManager.registerUndo(withTarget: textView) { _ in }
+  let originalCanUndo = undoManager.canUndo
+
+  NativeRichTextEditor.applyAccentAppearance(to: textView, accentColorHex: "#FFD600")
+  let yellow = try #require(NSColor(hex: "#FFD600"))
+  let yellowSelection = try #require(
+    textView.selectedTextAttributes[.backgroundColor] as? NSColor
+  )
+  let yellowComponents = try #require(sRGB(yellow))
+  let selectedYellowComponents = try #require(sRGB(yellowSelection))
+  #expect(sRGB(textView.insertionPointColor) == yellowComponents)
+  #expect(Array(selectedYellowComponents.prefix(3)) == Array(yellowComponents.prefix(3)))
+  #expect(selectedYellowComponents[3] < 255)
+
+  NativeRichTextEditor.applyAccentAppearance(to: textView, accentColorHex: "#30D158")
+  let green = try #require(NSColor(hex: "#30D158"))
+  let greenSelection = try #require(
+    textView.selectedTextAttributes[.backgroundColor] as? NSColor
+  )
+  let greenComponents = try #require(sRGB(green))
+  let selectedGreenComponents = try #require(sRGB(greenSelection))
+  #expect(sRGB(textView.insertionPointColor) == greenComponents)
+  #expect(Array(selectedGreenComponents.prefix(3)) == Array(greenComponents.prefix(3)))
+  #expect(selectedGreenComponents[3] < 255)
+
+  #expect(NSAttributedString(attributedString: try #require(textView.textStorage)) == originalText)
+  #expect(
+    try textView.textStorage?.data(
+      from: NSRange(location: 0, length: textView.string.utf16.count),
+      documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+    ) == originalRTF
+  )
+  #expect(textView.selectedRange() == originalSelection)
+  #expect(NSDictionary(dictionary: textView.typingAttributes).isEqual(to: originalTypingAttributes))
+  #expect(undoManager.canUndo == originalCanUndo)
+}
+
 @Test @MainActor func paletteRecognitionSurvivesRTFRoundTrip() throws {
   let foreground = NSColor(Color(hex: "#FF4245"))
   let background = NSColor(Color(hex: "#FFD600"))

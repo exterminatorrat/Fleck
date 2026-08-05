@@ -663,6 +663,7 @@
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
       applyColors(to: textView)
+      Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
       scrollView.documentView = textView
       commands.textView = textView
       commands.refreshFormattingState()
@@ -678,6 +679,7 @@
       textView.reduceMotion = reduceMotion
       let reloadedContent = applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator)
       applyColors(to: textView)
+      Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
       if !reloadedContent,
         context.coordinator.fontFamily != fontFamily
         || context.coordinator.fontSize != fontSize
@@ -771,6 +773,14 @@
       } else {
         textView.drawsBackground = false
       }
+    }
+
+    static func applyAccentAppearance(to textView: NSTextView, accentColorHex: String) {
+      let accent = NSColor(hex: accentColorHex) ?? .controlAccentColor
+      textView.insertionPointColor = accent
+      textView.selectedTextAttributes = [
+        .backgroundColor: accent.withAlphaComponent(0.35)
+      ]
     }
 
     private static func applyDefaultForegroundColor(_ color: NSColor, to textView: NSTextView) {

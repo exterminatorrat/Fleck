@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import UniformTypeIdentifiers
 
 @testable import FleckApp
 import FleckCore
@@ -9,14 +8,7 @@ import FleckCore
   #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380) == 352)
   #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 520) == 492)
 
-  let root = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-  let source = try String(
-    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
-    encoding: .utf8
-  )
+  let source = try tabNotesPanelSource()
   let tabStrip = try #require(
     source.components(separatedBy: "private var tabStrip").last?
       .components(separatedBy: "private var motion").first
@@ -40,75 +32,36 @@ import FleckCore
   #expect(tabContent.contains(".frame(width: 0, height: 0)"))
   #expect(tabContent.contains("value: proxy.frame(in: .named(\"tab-scroll-viewport\")).minX - 6"))
   #expect(!tabContent.contains("value: proxy.frame(in: .named(\"tab-scroll-viewport\")).maxX"))
-  #expect(!tabContent.contains("}\n              .background {\n                GeometryReader"))
   #expect(!tabStrip.contains("TabViewportTrailingEdgePreferenceKey"))
-  #expect(!tabStrip.contains(".coordinateSpace(name: \"tab-strip\")"))
+  #expect(tabStrip.contains(".coordinateSpace(name: \"tab-strip\")"))
   #expect(!tabStrip.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
 }
 
-@Test func liveTabDragResolvesLeftAndRightDestinations() {
-  let first = UUID()
-  let second = UUID()
-  let third = UUID()
-  let ids = [first, second, third]
+@Test func liveTabDragProductionPathUsesLocalHorizontalGestureAndCurrentFrames() throws {
+  let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
 
-  #expect(
-    TabDragReorder.destinationIndex(
-      draggedID: first,
-      over: third,
-      in: ids
-    ) == 2
-  )
-  #expect(
-    TabDragReorder.destinationIndex(
-      draggedID: third,
-      over: first,
-      in: ids
-    ) == 0
-  )
+  #expect(tabStrip.contains("DragGesture("))
+  #expect(tabStrip.contains("coordinateSpace: .named(\"tab-strip\")"))
+  #expect(tabStrip.contains("value.translation.width"))
+  #expect(tabStrip.contains("TabDragReorder.performLiveMove"))
+  #expect(tabStrip.contains("TabFramePreferenceKey"))
+  #expect(tabStrip.contains("proxy.frame(in: .named(\"tab-strip\"))"))
+  #expect(tabStrip.contains("appState.moveNote"))
+  #expect(!tabStrip.contains(".onDrag"))
+  #expect(!tabStrip.contains(".onDrop"))
+  #expect(!tabStrip.contains("TabDropDelegate"))
 }
 
-@Test func liveTabDragIgnoresInvalidAndSameTabTargets() {
-  let first = UUID()
-  let second = UUID()
-  let missing = UUID()
-  let ids = [first, second]
-
-  #expect(
-    TabDragReorder.destinationIndex(
-      draggedID: nil,
-      over: second,
-      in: ids
-    ) == nil
-  )
-  #expect(
-    TabDragReorder.destinationIndex(
-      draggedID: first,
-      over: first,
-      in: ids
-    ) == nil
-  )
-  #expect(
-    TabDragReorder.destinationIndex(
-      draggedID: missing,
-      over: second,
-      in: ids
-    ) == nil
-  )
-  #expect(
-    TabDragReorder.destinationIndex(
-      draggedID: first,
-      over: missing,
-      in: ids
-    ) == nil
-  )
-}
-
-@Test func liveTabDragResolvesEachHoverAgainstCurrentOrder() {
+@Test func liveTabDragMovesFirstAcrossSecondAndThirdUsingCurrentFrames() {
   let first = UUID()
   let second = UUID()
   let third = UUID()
   var ids = [first, second, third]
+  var lastDestinationID: UUID?
   var moves: [(UUID, Int)] = []
 
   func move(_ id: UUID, to destination: Int) {
@@ -117,107 +70,105 @@ import FleckCore
     ids.insert(ids.remove(at: source), at: destination)
   }
 
-  #expect(
-    TabDragReorder.performLiveMove(
+  func drag(_ locationX: CGFloat) -> TabDragReorder.LiveMoveResult {
+    let result = TabDragReorder.performLiveMove(
       draggedID: first,
-      over: second,
+      locationX: locationX,
       currentNoteIDs: { ids },
+      currentFrames: { tabFrames(for: ids) },
+      lastDestinationID: lastDestinationID,
       move: move
     )
-  )
-  #expect(ids == [second, first, third])
-
-  #expect(
-    TabDragReorder.performLiveMove(
-      draggedID: first,
-      over: third,
-      currentNoteIDs: { ids },
-      move: move
-    )
-  )
-  #expect(ids == [second, third, first])
-  #expect(moves.count == 2)
-}
-
-@Test func liveTabDragUsesPanelPrivateMoveOperation() {
-  let firstPanelType = TabDragReorder.makeContentType()
-  let secondPanelType = TabDragReorder.makeContentType()
-  let provider = TabDragReorder.itemProvider(for: UUID(), contentType: firstPanelType)
-
-  #expect(firstPanelType != secondPanelType)
-  #expect(provider.hasItemConformingToTypeIdentifier(firstPanelType.identifier))
-  #expect(!provider.hasItemConformingToTypeIdentifier(secondPanelType.identifier))
-  #expect(!provider.hasItemConformingToTypeIdentifier("public.text"))
-  if case .move = TabDragReorder.dropOperation {
-    // Expected native reorder operation.
-  } else {
-    Issue.record("Tab dragging must propose a move operation")
+    lastDestinationID = result.destinationID
+    return result
   }
+
+  #expect(drag(160).didMove)
+  #expect(ids == [second, first, third])
+  #expect(drag(160).didMove == false)
+  #expect(drag(270).didMove)
+  #expect(ids == [second, third, first])
+  #expect(drag(30).didMove)
+  #expect(ids == [first, second, third])
+  #expect(moves.map(\.0) == [first, first, first])
+  #expect(moves.map(\.1) == [1, 2, 0])
 }
 
-@Test func beginningTabDragSelectsTheDraggedIdentityBeforeProvidingIt() {
-  let noteID = UUID()
-  let contentType = TabDragReorder.makeContentType()
-  var selectedIDs: [UUID] = []
+@Test func liveTabDragIgnoresInvalidAndSameTabTargets() {
+  let first = UUID()
+  let second = UUID()
+  let missing = UUID()
+  let ids = [first, second]
+  let frames = tabFrames(for: ids)
 
-  let provider = TabDragReorder.beginDrag(
-    noteID: noteID,
-    contentType: contentType,
-    select: { selectedIDs.append($0) }
+  #expect(
+    TabDragReorder.destination(
+      draggedID: nil,
+      locationX: 150,
+      currentNoteIDs: ids,
+      currentFrames: frames
+    ) == nil
   )
-
-  #expect(selectedIDs == [noteID])
-  #expect(provider.hasItemConformingToTypeIdentifier(contentType.identifier))
-  #expect(!provider.hasItemConformingToTypeIdentifier("public.text"))
+  #expect(
+    TabDragReorder.destination(
+      draggedID: first,
+      locationX: 40,
+      currentNoteIDs: ids,
+      currentFrames: frames
+    ) == nil
+  )
+  #expect(
+    TabDragReorder.destination(
+      draggedID: missing,
+      locationX: 150,
+      currentNoteIDs: ids,
+      currentFrames: frames
+    ) == nil
+  )
+  #expect(
+    TabDragReorder.destination(
+      draggedID: first,
+      locationX: 150,
+      currentNoteIDs: ids,
+      currentFrames: [first: frames[first]!]
+    ) == nil
+  )
 }
 
-@Test func liveTabDragRetainsIdentityAndCurrentOrderAcrossLeftAndRightHovers() {
-  let first = Note(
-    title: "First", body: "first body", richTextRTF: Data([1]), tabColorHex: "#FF4245",
-    createdAt: .distantPast, modifiedAt: .distantPast, isPinned: true, agentAccess: true, revision: 1
-  )
-  let second = Note(
-    title: "Second", body: "second body", richTextRTF: Data([2]), tabColorHex: "#FFD600",
-    createdAt: .distantFuture, modifiedAt: .distantFuture, revision: 2
-  )
-  let third = Note(
-    title: "Third", body: "third body", richTextRTF: Data([3]), tabColorHex: "#0091FF",
-    createdAt: .now, modifiedAt: .now, agentAccess: true, revision: 3
-  )
-  var workspace = Workspace(notes: [first, second, third], selectedNoteID: first.id)
+@Test func liveTabDragUsesCurrentOrderAndFramesWhenMovingBackLeft() {
+  let first = UUID()
+  let second = UUID()
+  let third = UUID()
+  var ids = [first, second, third]
+  var lastDestinationID: UUID?
 
   func move(_ id: UUID, to destination: Int) {
-    workspace.moveNote(id: id, to: destination)
+    let source = ids.firstIndex(of: id)!
+    ids.insert(ids.remove(at: source), at: destination)
   }
 
-  #expect(
-    TabDragReorder.performLiveMove(
-      draggedID: first.id,
-      over: second.id,
-      currentNoteIDs: { workspace.notes.map(\.id) },
-      move: move
-    )
+  var result = TabDragReorder.performLiveMove(
+    draggedID: third,
+    locationX: 140,
+    currentNoteIDs: { ids },
+    currentFrames: { tabFrames(for: ids) },
+    lastDestinationID: lastDestinationID,
+    move: move
   )
-  #expect(
-    TabDragReorder.performLiveMove(
-      draggedID: first.id,
-      over: third.id,
-      currentNoteIDs: { workspace.notes.map(\.id) },
-      move: move
-    )
-  )
-  #expect(
-    TabDragReorder.performLiveMove(
-      draggedID: third.id,
-      over: second.id,
-      currentNoteIDs: { workspace.notes.map(\.id) },
-      move: move
-    )
-  )
+  lastDestinationID = result.destinationID
+  #expect(result.didMove)
+  #expect(ids == [first, third, second])
 
-  #expect(workspace.notes == [first, third, second])
-  #expect(workspace.notes.map(\.id) == [first.id, third.id, second.id])
-  #expect(workspace.selectedNoteID == first.id)
+  result = TabDragReorder.performLiveMove(
+    draggedID: third,
+    locationX: 30,
+    currentNoteIDs: { ids },
+    currentFrames: { tabFrames(for: ids) },
+    lastDestinationID: lastDestinationID,
+    move: move
+  )
+  #expect(result.didMove)
+  #expect(ids == [third, first, second])
 }
 
 @Test func liveTabDragClampsPinnedAndUnpinnedNotesAtTheirPartitionEdges() {
@@ -232,22 +183,58 @@ import FleckCore
     workspace.moveNote(id: id, to: destination)
   }
 
-  #expect(TabDragReorder.performLiveMove(
+  var lastDestinationID: UUID?
+  var result = TabDragReorder.performLiveMove(
     draggedID: pinned.id,
-    over: secondUnpinned.id,
+    locationX: 160,
     currentNoteIDs: { workspace.notes.map(\.id) },
+    currentFrames: { tabFrames(for: workspace.notes.map(\.id)) },
+    lastDestinationID: lastDestinationID,
     move: move
-  ))
+  )
+  lastDestinationID = result.destinationID
+  #expect(result.didMove)
   #expect(workspace.notes == [pinned, firstUnpinned, secondUnpinned])
 
-  #expect(TabDragReorder.performLiveMove(
-    draggedID: secondUnpinned.id,
-    over: pinned.id,
+  result = TabDragReorder.performLiveMove(
+    draggedID: pinned.id,
+    locationX: 160,
     currentNoteIDs: { workspace.notes.map(\.id) },
+    currentFrames: { tabFrames(for: workspace.notes.map(\.id)) },
+    lastDestinationID: lastDestinationID,
     move: move
-  ))
+  )
+  #expect(!result.didMove)
+
+  lastDestinationID = nil
+  result = TabDragReorder.performLiveMove(
+    draggedID: secondUnpinned.id,
+    locationX: 30,
+    currentNoteIDs: { workspace.notes.map(\.id) },
+    currentFrames: { tabFrames(for: workspace.notes.map(\.id)) },
+    lastDestinationID: lastDestinationID,
+    move: move
+  )
+  #expect(result.didMove)
   #expect(workspace.notes == [pinned, secondUnpinned, firstUnpinned])
   #expect(workspace.selectedNoteID == secondUnpinned.id)
+}
+
+private func tabFrames(for noteIDs: [UUID]) -> [UUID: CGRect] {
+  Dictionary(uniqueKeysWithValues: noteIDs.enumerated().map { index, id in
+    (id, CGRect(x: CGFloat(index) * 106, y: 0, width: 100, height: 36))
+  })
+}
+
+private func tabNotesPanelSource() throws -> String {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  return try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
 }
 
 @Test func tabOverflowShowsOnlyWhenTrailingContentExceedsVisibleEdge() {

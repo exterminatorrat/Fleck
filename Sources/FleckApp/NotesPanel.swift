@@ -2,67 +2,73 @@
   import AppKit
   import SwiftUI
   import FleckCore
-  import UniformTypeIdentifiers
 
   enum TabDragReorder {
-    static let dropOperation: DropOperation = .move
-
-    static func makeContentType(id: UUID = UUID()) -> UTType {
-      let token = id.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-      return UTType(exportedAs: "com.menubarnotes.tabdrag.session\(token)")
+    struct Destination: Equatable {
+      let id: UUID
+      let index: Int
     }
 
-    static func destinationIndex(
+    struct LiveMoveResult: Equatable {
+      let didMove: Bool
+      let destinationID: UUID?
+    }
+
+    static func destination(
       draggedID: UUID?,
-      over destinationID: UUID,
-      in noteIDs: [UUID]
-    ) -> Int? {
+      locationX: CGFloat,
+      currentNoteIDs: [UUID],
+      currentFrames: [UUID: CGRect]
+    ) -> Destination? {
       guard let draggedID,
-        draggedID != destinationID,
-        noteIDs.contains(draggedID),
-        let destination = noteIDs.firstIndex(of: destinationID)
+        let sourceIndex = currentNoteIDs.firstIndex(of: draggedID),
+        let draggedFrame = currentFrames[draggedID]
       else { return nil }
-      return destination
-    }
 
-    static func itemProvider(for noteID: UUID, contentType: UTType) -> NSItemProvider {
-      let provider = NSItemProvider()
-      let data = Data(noteID.uuidString.utf8)
-      provider.registerDataRepresentation(
-        forTypeIdentifier: contentType.identifier,
-        visibility: .ownProcess
-      ) { completion in
-        completion(data, nil)
-        return nil
+      let destinationID: UUID?
+      if locationX > draggedFrame.midX {
+        destinationID = currentNoteIDs.dropFirst(sourceIndex + 1).last { id in
+          guard let midpoint = currentFrames[id]?.midX else { return false }
+          return midpoint <= locationX
+        }
+      } else if locationX < draggedFrame.midX {
+        destinationID = currentNoteIDs.prefix(sourceIndex).first { id in
+          guard let midpoint = currentFrames[id]?.midX else { return false }
+          return midpoint >= locationX
+        }
+      } else {
+        destinationID = nil
       }
-      return provider
+
+      guard let destinationID,
+        let destinationIndex = currentNoteIDs.firstIndex(of: destinationID)
+      else { return nil }
+      return Destination(id: destinationID, index: destinationIndex)
     }
 
-    static func beginDrag(
-      noteID: UUID,
-      contentType: UTType,
-      select: (UUID) -> Void
-    ) -> NSItemProvider {
-      select(noteID)
-      return itemProvider(for: noteID, contentType: contentType)
-    }
-
-    @discardableResult
     static func performLiveMove(
       draggedID: UUID?,
-      over destinationID: UUID,
+      locationX: CGFloat,
       currentNoteIDs: () -> [UUID],
+      currentFrames: () -> [UUID: CGRect],
+      lastDestinationID: UUID?,
       move: (UUID, Int) -> Void
-    ) -> Bool {
+    ) -> LiveMoveResult {
       guard let draggedID,
-        let destination = destinationIndex(
+        let destination = destination(
           draggedID: draggedID,
-          over: destinationID,
-          in: currentNoteIDs()
+          locationX: locationX,
+          currentNoteIDs: currentNoteIDs(),
+          currentFrames: currentFrames()
         )
-      else { return false }
-      move(draggedID, destination)
-      return true
+      else {
+        return LiveMoveResult(didMove: false, destinationID: nil)
+      }
+      guard destination.id != lastDestinationID else {
+        return LiveMoveResult(didMove: false, destinationID: destination.id)
+      }
+      move(draggedID, destination.index)
+      return LiveMoveResult(didMove: true, destinationID: destination.id)
     }
   }
 
@@ -100,6 +106,14 @@
     }
   }
 
+  private struct TabFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [UUID: CGRect] = [:]
+
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+      value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+  }
+
   enum NotesPanelSizing: Equatable {
     case storedPreferences
     case container
@@ -126,7 +140,8 @@
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
     @State private var draggedNoteID: UUID?
-    @State private var tabDragContentType = TabDragReorder.makeContentType()
+    @State private var tabDragDestinationID: UUID?
+    @State private var tabFrames: [UUID: CGRect] = [:]
     @State private var tabContentTrailingEdge: CGFloat = 0
 
     init(
@@ -477,6 +492,7 @@
               HStack(spacing: 6) {
                 ForEach(appState.workspace.notes) { note in
             Button {
+              guard draggedNoteID == nil else { return }
               appState.select(note.id)
             } label: {
               HStack(spacing: 4) {
@@ -503,6 +519,14 @@
                     .fill(tabColor(for: note, opacity: 0.10))
                 }
               }
+              .background {
+                GeometryReader { proxy in
+                  Color.clear.preference(
+                    key: TabFramePreferenceKey.self,
+                    value: [note.id: proxy.frame(in: .named("tab-strip"))]
+                  )
+                }
+              }
             }
             .buttonStyle(.plain)
             .transition(
@@ -510,22 +534,30 @@
                 with: .offset(x: motion.offset)
               )
             )
-            .onDrag {
-              draggedNoteID = note.id
-              return TabDragReorder.beginDrag(
-                noteID: note.id,
-                contentType: tabDragContentType,
-                select: appState.select
-              )
-            }
-            .onDrop(
-              of: [tabDragContentType],
-              delegate: TabDropDelegate(
-                destinationID: note.id,
-                currentNoteIDs: { appState.workspace.notes.map(\.id) },
-                draggedNoteID: $draggedNoteID,
-                move: appState.moveNote
-              )
+            .simultaneousGesture(
+              DragGesture(minimumDistance: 2, coordinateSpace: .named("tab-strip"))
+                .onChanged { value in
+                  guard abs(value.translation.width) >= 2 else { return }
+                  if draggedNoteID == nil {
+                    draggedNoteID = note.id
+                    tabDragDestinationID = nil
+                    appState.select(note.id)
+                  }
+                  guard draggedNoteID == note.id else { return }
+                  let result = TabDragReorder.performLiveMove(
+                    draggedID: draggedNoteID,
+                    locationX: value.location.x,
+                    currentNoteIDs: { appState.workspace.notes.map(\.id) },
+                    currentFrames: { tabFrames },
+                    lastDestinationID: tabDragDestinationID,
+                    move: appState.moveNote
+                  )
+                  tabDragDestinationID = result.destinationID
+                }
+                .onEnded { _ in
+                  draggedNoteID = nil
+                  tabDragDestinationID = nil
+                }
             )
             .contextMenu {
               Button(
@@ -592,6 +624,7 @@
               .animation(motion.spatial, value: appState.workspace.notes.map(\.id))
             }
             .coordinateSpace(name: "tab-scroll-viewport")
+            .coordinateSpace(name: "tab-strip")
 
             if hasHiddenTrailingTabs {
               LinearGradient(
@@ -623,6 +656,9 @@
         .onPreferenceChange(TabContentTrailingEdgePreferenceKey.self) { trailingEdge in
           guard tabContentTrailingEdge != trailingEdge else { return }
           tabContentTrailingEdge = trailingEdge
+        }
+        .onPreferenceChange(TabFramePreferenceKey.self) { frames in
+          tabFrames = frames
         }
         }
         .frame(height: 37)
@@ -1198,31 +1234,6 @@
       .frame(width: 62, height: 22, alignment: .trailing)
       .animation(motion.quick, value: status)
       .accessibilityElement(children: .combine)
-    }
-  }
-
-  private struct TabDropDelegate: DropDelegate {
-    let destinationID: UUID
-    let currentNoteIDs: () -> [UUID]
-    @Binding var draggedNoteID: UUID?
-    let move: (UUID, Int) -> Void
-
-    func dropEntered(info: DropInfo) {
-      TabDragReorder.performLiveMove(
-        draggedID: draggedNoteID,
-        over: destinationID,
-        currentNoteIDs: currentNoteIDs,
-        move: move
-      )
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-      DropProposal(operation: TabDragReorder.dropOperation)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-      draggedNoteID = nil
-      return true
     }
   }
 
