@@ -553,14 +553,16 @@
               }
             }
                 }
-              }
-              .background {
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .background {
                 GeometryReader { proxy in
                   Color.clear.preference(
                     key: TabContentTrailingEdgePreferenceKey.self,
-                    value: proxy.frame(in: .named("tab-scroll-viewport")).maxX
+                    value: proxy.frame(in: .named("tab-scroll-viewport")).minX - 6
                   )
                 }
+              }
               }
               .padding(.horizontal, 12)
               .padding(.bottom, 9)
