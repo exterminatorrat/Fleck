@@ -585,6 +585,25 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
   #expect(source.contains("currentBackgroundColor"))
 }
 
+@Test func fontSizeSubmissionRestoresInvalidInputAndSkipsAnUnchangedUniformSize() {
+  #expect(FontSizeSubmission.requestedSize(for: "", currentSize: 18, isMixed: false) == nil)
+  #expect(FontSizeSubmission.requestedSize(for: "513", currentSize: 18, isMixed: false) == nil)
+  #expect(FontSizeSubmission.requestedSize(for: "18", currentSize: 18, isMixed: false) == nil)
+  #expect(FontSizeSubmission.requestedSize(for: "18", currentSize: 18, isMixed: true) == 18)
+  #expect(FontSizeSubmission.requestedSize(for: "24", currentSize: 18, isMixed: false) == 24)
+}
+
+@Test func formattingBarAnnouncesPaletteNamesAndMarksSpecialColorRows() throws {
+  let source = try notesPanelSource()
+
+  #expect(source.contains("specialColorMenuLabel("))
+  #expect(source.contains("\"Automatic\""))
+  #expect(source.contains("\"No Highlight\""))
+  #expect(source.contains("colorAccessibilityValue"))
+  #expect(source.contains("\"Custom\""))
+  #expect(source.contains("accessibilityHint(\"Enter a size from 1 through 512 points.\")"))
+}
+
 private func notesPanelSource() throws -> String {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()

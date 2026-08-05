@@ -107,11 +107,14 @@
           .preferredColorScheme(colorScheme)
       }
       label: {
-        if let mark = FleckMark.image(template: true) {
-          Image(nsImage: mark)
-        } else {
-          Image(systemName: "note.text")
+        Group {
+          if let mark = FleckMark.image(template: true) {
+            Image(nsImage: mark)
+          } else {
+            Image(systemName: "note.text")
+          }
         }
+        .accessibilityLabel("Fleck")
       }
       .menuBarExtraStyle(.window)
 

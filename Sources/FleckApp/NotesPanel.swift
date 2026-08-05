@@ -75,6 +75,19 @@
     }
   }
 
+  enum FontSizeSubmission {
+    static func requestedSize(
+      for text: String,
+      currentSize: CGFloat?,
+      isMixed: Bool
+    ) -> CGFloat? {
+      guard let size = Double(text), size.isFinite, (1...512).contains(size) else { return nil }
+      let requestedSize = CGFloat(size)
+      guard isMixed || requestedSize != currentSize else { return nil }
+      return requestedSize
+    }
+  }
+
   private struct TabContentTrailingEdgePreferenceKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
 
@@ -920,8 +933,16 @@
           .onSubmit { applyFontSizeText() }
           .accessibilityLabel("Font size")
           .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
+          .accessibilityHint("Enter a size from 1 through 512 points.")
         Menu {
-          Button("Automatic") { commands.applyForegroundColor(nil) }
+          Button {
+            commands.applyForegroundColor(nil)
+          } label: {
+            specialColorMenuLabel(
+              "Automatic",
+              isSelected: !commands.isForegroundColorMixed && commands.currentForegroundColor == nil
+            )
+          }
           ForEach(TabColorOption.all.filter { $0.hex != nil }) { option in
             if let hex = option.hex {
               Button {
@@ -930,7 +951,7 @@
                 colorMenuLabel(
                   option,
                   isSelected: !commands.isForegroundColorMixed
-                    && color(commands.currentForegroundColor, matches: hex)
+                    && matchesPaletteColor(commands.currentForegroundColor, hex: hex)
                 )
               }
             }
@@ -940,10 +961,21 @@
         }
         .accessibilityLabel("Font Color")
         .accessibilityValue(
-          commands.isForegroundColorMixed ? "Mixed" : commands.currentForegroundColor == nil ? "Automatic" : "Selected"
+          colorAccessibilityValue(
+            color: commands.currentForegroundColor,
+            isMixed: commands.isForegroundColorMixed,
+            emptyName: "Automatic"
+          )
         )
         Menu {
-          Button("No Highlight") { commands.applyBackgroundColor(nil) }
+          Button {
+            commands.applyBackgroundColor(nil)
+          } label: {
+            specialColorMenuLabel(
+              "No Highlight",
+              isSelected: !commands.isBackgroundColorMixed && commands.currentBackgroundColor == nil
+            )
+          }
           ForEach(TabColorOption.all.filter { $0.hex != nil }) { option in
             if let hex = option.hex {
               Button {
@@ -952,7 +984,7 @@
                 colorMenuLabel(
                   option,
                   isSelected: !commands.isBackgroundColorMixed
-                    && color(commands.currentBackgroundColor, matches: hex)
+                    && matchesPaletteColor(commands.currentBackgroundColor, hex: hex)
                 )
               }
             }
@@ -962,7 +994,11 @@
         }
         .accessibilityLabel("Highlight")
         .accessibilityValue(
-          commands.isBackgroundColorMixed ? "Mixed" : commands.currentBackgroundColor == nil ? "None" : "Selected"
+          colorAccessibilityValue(
+            color: commands.currentBackgroundColor,
+            isMixed: commands.isBackgroundColorMixed,
+            emptyName: "No Highlight"
+          )
         )
         Menu {
           Button("Disc (•)") { commands.applyList(.bullet(.disc)) }
@@ -1024,9 +1060,12 @@
     }
 
     private func applyFontSizeText() {
-      guard let size = Double(fontSizeText), size.isFinite, commands.applyFontSize(size) else {
-        syncFontSizeText()
-        return
+      if let size = FontSizeSubmission.requestedSize(
+        for: fontSizeText,
+        currentSize: commands.currentFontSize,
+        isMixed: commands.isFontSizeMixed
+      ) {
+        _ = commands.applyFontSize(size)
       }
       fontSizeText = fontSizeDisplay
     }
@@ -1046,7 +1085,29 @@
       }
     }
 
-    private func color(_ color: NSColor?, matches hex: String) -> Bool {
+    private func specialColorMenuLabel(_ name: String, isSelected: Bool) -> some View {
+      HStack {
+        Text(name)
+        if isSelected {
+          Image(systemName: "checkmark")
+        }
+      }
+    }
+
+    private func colorAccessibilityValue(
+      color: NSColor?,
+      isMixed: Bool,
+      emptyName: String
+    ) -> String {
+      guard !isMixed else { return "Mixed" }
+      guard let color else { return emptyName }
+      return TabColorOption.all.first { option in
+        guard let hex = option.hex else { return false }
+        return matchesPaletteColor(color, hex: hex)
+      }?.name ?? "Custom"
+    }
+
+    private func matchesPaletteColor(_ color: NSColor?, hex: String) -> Bool {
       guard let color = color?.usingColorSpace(.sRGB) else { return false }
       return color.isEqual(NSColor(Color(hex: hex)).usingColorSpace(.sRGB))
     }

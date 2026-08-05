@@ -31,6 +31,7 @@ import Testing
   #expect(appSource.contains("fleck-mark.png"))
   #expect(appSource.contains("FleckMark.image(template: true)"))
   #expect(appSource.contains("MenuBarExtra"))
+  #expect(appSource.contains("accessibilityLabel(\"Fleck\")"))
   #expect(appSource.contains(#"Window("Fleck""#))
   let notesPanelSource = try String(
     contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
