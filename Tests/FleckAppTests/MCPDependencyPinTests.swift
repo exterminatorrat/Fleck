@@ -1,6 +1,26 @@
 import Foundation
 import Testing
 
+@Test func enhancedCandidateManifestPinsReviewedSwiftSystemRelease() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let manifest = try String(
+    contentsOf: root.appendingPathComponent("Package.swift"),
+    encoding: .utf8
+  )
+  let candidateDependencies = try #require(
+    manifest.components(separatedBy: "if enhancedCandidateEnabled {").last
+  )
+
+  #expect(
+    candidateDependencies.contains(
+      #".package(url: "https://github.com/apple/swift-system.git", exact: "1.7.5")"#
+    )
+  )
+}
+
 @Test func mcpDependencyAndNoticeArePinned() throws {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
