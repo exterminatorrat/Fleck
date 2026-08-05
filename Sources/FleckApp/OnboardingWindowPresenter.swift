@@ -159,6 +159,23 @@
       )
     }
 
+    @MainActor static func maximumCompletedContentSize(
+      for window: NSWindow,
+      visibleFrame: NSRect
+    ) -> NSSize {
+      window.contentRect(forFrameRect: visibleFrame).size
+    }
+
+    nonisolated static func clampedCompletedSize(
+      _ size: NSSize,
+      maximumContentSize: NSSize
+    ) -> NSSize {
+      NSSize(
+        width: min(max(size.width, completedMinimumSize.width), maximumContentSize.width),
+        height: min(max(size.height, completedMinimumSize.height), maximumContentSize.height)
+      )
+    }
+
     func makeCoordinator() -> Coordinator {
       Coordinator()
     }
@@ -180,9 +197,18 @@
 
     @MainActor
     final class Coordinator: NSObject {
+      private let visibleFrameProvider: (NSWindow) -> NSRect
       private var appliedState: OnboardingGateState?
       private weak var observedWindow: NSWindow?
       private var onCompletedResize: ((NSSize) -> Void)?
+
+      init(
+        visibleFrameProvider: @escaping (NSWindow) -> NSRect = { window in
+          window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? window.frame
+        }
+      ) {
+        self.visibleFrameProvider = visibleFrameProvider
+      }
 
       isolated deinit {
         NotificationCenter.default.removeObserver(self)
@@ -206,17 +232,10 @@
           NSApp.activate(ignoringOtherApps: true)
           window.makeKeyAndOrderFront(nil)
         case .complete:
-          let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
-            ?? NSRect(origin: .zero, size: completedSize)
-          let completedSize = OnboardingWindowPresenter.clampedCompletedSize(
-            completedSize,
-            visibleFrame: visibleFrame
-          )
           window.title = OnboardingWindowPresenter.completedTitle
           window.contentMinSize = OnboardingWindowPresenter.completedMinimumSize
-          window.contentMaxSize = visibleFrame.size
           window.styleMask.insert(.resizable)
-          window.setContentSize(completedSize)
+          applyCompletedBounds(to: window, requestedSize: completedSize)
         case .loading, .blocked:
           break
         }
@@ -234,6 +253,11 @@
             name: NSWindow.didEndLiveResizeNotification,
             object: observedWindow
           )
+          NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.didChangeScreenNotification,
+            object: observedWindow
+          )
         }
         observedWindow = window
         appliedState = nil
@@ -243,6 +267,12 @@
           name: NSWindow.didEndLiveResizeNotification,
           object: window
         )
+        NotificationCenter.default.addObserver(
+          self,
+          selector: #selector(handleScreenChange(_:)),
+          name: NSWindow.didChangeScreenNotification,
+          object: window
+        )
       }
 
       @objc private func handleLiveResize(_ notification: Notification) {
@@ -250,16 +280,46 @@
           let resizedWindow = notification.object as? NSWindow,
           let contentSize = resizedWindow.contentView?.bounds.size
         else { return }
-        let visibleFrame = resizedWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
-          ?? NSRect(origin: .zero, size: contentSize)
-        let clampedSize = OnboardingWindowPresenter.clampedCompletedSize(
-          contentSize,
-          visibleFrame: visibleFrame
-        )
-        if contentSize != clampedSize {
-          resizedWindow.setContentSize(clampedSize)
-        }
+        let clampedSize = applyCompletedBounds(to: resizedWindow, requestedSize: contentSize)
         onCompletedResize?(clampedSize)
+      }
+
+      @objc private func handleScreenChange(_ notification: Notification) {
+        guard appliedState == .complete,
+          let window = notification.object as? NSWindow,
+          let contentSize = window.contentView?.bounds.size
+        else { return }
+        let clampedSize = applyCompletedBounds(to: window, requestedSize: contentSize)
+        guard contentSize != clampedSize else { return }
+        onCompletedResize?(clampedSize)
+      }
+
+      @discardableResult
+      private func applyCompletedBounds(
+        to window: NSWindow,
+        requestedSize: NSSize
+      ) -> NSSize {
+        let maximumContentSize = OnboardingWindowPresenter.maximumCompletedContentSize(
+          for: window,
+          visibleFrame: visibleFrameProvider(window)
+        )
+        let clampedSize = OnboardingWindowPresenter.clampedCompletedSize(
+          requestedSize,
+          maximumContentSize: maximumContentSize
+        )
+        window.contentMaxSize = maximumContentSize
+        if window.contentView?.bounds.size != clampedSize {
+          window.setContentSize(clampedSize)
+        }
+        fit(window: window, inside: visibleFrameProvider(window))
+        return clampedSize
+      }
+
+      private func fit(window: NSWindow, inside visibleFrame: NSRect) {
+        var frame = window.frame
+        frame.origin.x = min(max(frame.origin.x, visibleFrame.minX), visibleFrame.maxX - frame.width)
+        frame.origin.y = min(max(frame.origin.y, visibleFrame.minY), visibleFrame.maxY - frame.height)
+        window.setFrame(frame, display: true)
       }
     }
   }
