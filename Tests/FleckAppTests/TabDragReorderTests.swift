@@ -18,15 +18,22 @@ import UniformTypeIdentifiers
   )
   let tabStrip = try #require(
     source.components(separatedBy: "private var tabStrip").last?
-      .components(separatedBy: "private var hasHiddenTrailingTabs").first
+      .components(separatedBy: "private var motion").first
+  )
+  let scrollViewport = try #require(
+    tabStrip.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").last?
+      .components(separatedBy: "if hasHiddenTrailingTabs").first
   )
 
-  #expect(tabStrip.contains("TabViewportTrailingEdgePreferenceKey"))
   #expect(tabStrip.contains("GeometryReader { proxy in"))
   #expect(tabStrip.contains("TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)"))
   #expect(tabStrip.contains(".frame(width: tabViewportWidth, alignment: .leading)"))
   #expect(tabStrip.contains(".frame(height: 37)"))
-  #expect(tabStrip.contains("value: proxy.frame(in: .named(\"tab-strip\")).maxX"))
+  #expect(tabStrip.contains("visibleTrailingEdge: tabViewportWidth"))
+  #expect(scrollViewport.contains(".coordinateSpace(name: \"tab-scroll-viewport\")"))
+  #expect(scrollViewport.contains("value: proxy.frame(in: .named(\"tab-scroll-viewport\")).maxX"))
+  #expect(!tabStrip.contains("TabViewportTrailingEdgePreferenceKey"))
+  #expect(!tabStrip.contains(".coordinateSpace(name: \"tab-strip\")"))
   #expect(!tabStrip.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
 }
 

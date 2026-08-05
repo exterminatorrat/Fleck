@@ -100,14 +100,6 @@
     }
   }
 
-  private struct TabViewportTrailingEdgePreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-      value = nextValue()
-    }
-  }
-
   enum NotesPanelSizing: Equatable {
     case storedPreferences
     case container
@@ -136,7 +128,6 @@
     @State private var draggedNoteID: UUID?
     @State private var tabDragContentType = TabDragReorder.makeContentType()
     @State private var tabContentTrailingEdge: CGFloat = 0
-    @State private var tabViewportTrailingEdge: CGFloat = 0
 
     init(
       dictationRuntime: DictationRuntime,
@@ -454,6 +445,10 @@
       ScrollViewReader { scrollProxy in
         GeometryReader { proxy in
           let tabViewportWidth = TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)
+          let hasHiddenTrailingTabs = TabOverflowPresentation.hasHiddenTrailingContent(
+            contentTrailingEdge: tabContentTrailingEdge,
+            visibleTrailingEdge: tabViewportWidth
+          )
         HStack(spacing: 0) {
           ZStack(alignment: .trailing) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -563,7 +558,7 @@
                 GeometryReader { proxy in
                   Color.clear.preference(
                     key: TabContentTrailingEdgePreferenceKey.self,
-                    value: proxy.frame(in: .named("tab-strip")).maxX
+                    value: proxy.frame(in: .named("tab-scroll-viewport")).maxX
                   )
                 }
               }
@@ -572,6 +567,7 @@
               .animation(motion.spatial, value: appState.workspace.selectedNoteID)
               .animation(motion.spatial, value: appState.workspace.notes.map(\.id))
             }
+            .coordinateSpace(name: "tab-scroll-viewport")
 
             if hasHiddenTrailingTabs {
               LinearGradient(
@@ -584,14 +580,6 @@
             }
           }
           .frame(width: tabViewportWidth, alignment: .leading)
-          .background {
-            GeometryReader { proxy in
-              Color.clear.preference(
-                key: TabViewportTrailingEdgePreferenceKey.self,
-                value: proxy.frame(in: .named("tab-strip")).maxX
-              )
-            }
-          }
 
           Button {
             if let lastNoteID = appState.workspace.notes.last?.id {
@@ -608,25 +596,13 @@
           .disabled(!hasHiddenTrailingTabs)
           .opacity(hasHiddenTrailingTabs ? 1 : 0)
         }
-        .coordinateSpace(name: "tab-strip")
         .onPreferenceChange(TabContentTrailingEdgePreferenceKey.self) { trailingEdge in
           guard tabContentTrailingEdge != trailingEdge else { return }
           tabContentTrailingEdge = trailingEdge
         }
-        .onPreferenceChange(TabViewportTrailingEdgePreferenceKey.self) { trailingEdge in
-          guard tabViewportTrailingEdge != trailingEdge else { return }
-          tabViewportTrailingEdge = trailingEdge
-        }
         }
         .frame(height: 37)
       }
-    }
-
-    private var hasHiddenTrailingTabs: Bool {
-      TabOverflowPresentation.hasHiddenTrailingContent(
-        contentTrailingEdge: tabContentTrailingEdge,
-        visibleTrailingEdge: tabViewportTrailingEdge
-      )
     }
 
     private var motion: AppMotion {
