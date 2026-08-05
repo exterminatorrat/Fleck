@@ -562,6 +562,40 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
   }
 }
 
+@Test func formattingBarUsesCurrentCommandStateAndOnlyNumericSizeInput() throws {
+  let source = try notesPanelSource()
+
+  #expect(source.contains("currentFontFamily"))
+  #expect(source.contains("isFontFamilyMixed"))
+  #expect(source.contains("currentFontSize"))
+  #expect(source.contains("isFontSizeMixed"))
+  #expect(source.contains("applyFontSize"))
+  #expect(source.contains("commands.isFontSizeMixed ? \"Mixed\""))
+  #expect(!source.contains("Stepper"))
+  #expect(!source.contains("Font Size Presets"))
+}
+
+@Test func formattingBarUsesFleckPaletteForForegroundAndHighlight() throws {
+  let source = try notesPanelSource()
+
+  #expect(source.contains("Automatic"))
+  #expect(source.contains("No Highlight"))
+  #expect(source.contains("TabColorOption.all.filter { $0.hex != nil }"))
+  #expect(source.contains("currentForegroundColor"))
+  #expect(source.contains("currentBackgroundColor"))
+}
+
+private func notesPanelSource() throws -> String {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  return try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+}
+
 @Test @MainActor func tabColorSwatchesAreNonTemplateImages() {
   for option in TabColorOption.all where option.hex != nil {
     #expect(option.swatchImage?.isTemplate == false)

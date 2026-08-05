@@ -809,6 +809,8 @@
     @ObservedObject var commands: EditorCommands
     @ObservedObject var dictationRuntime: DictationRuntime
     let onDelete: () -> Void
+    @State private var fontSizeText = ""
+    @FocusState private var isFontSizeFocused: Bool
 
     var body: some View {
       HStack(spacing: 8) {
@@ -879,13 +881,82 @@
         .accessibilityLabel("Strikethrough")
         Menu {
           ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
-            Button(family) { commands.applyFontFamily(family) }
+            Button {
+              commands.applyFontFamily(family)
+            } label: {
+              HStack {
+                Text(family)
+                if !commands.isFontFamilyMixed, commands.currentFontFamily == family {
+                  Image(systemName: "checkmark")
+                }
+              }
+            }
           }
         } label: {
           ToolbarIconLabel(systemImage: "textformat")
         }
         .help("Font")
         .accessibilityLabel("Font")
+        .accessibilityValue(
+          commands.isFontFamilyMixed ? "Mixed" : commands.currentFontFamily ?? "Automatic"
+        )
+        TextField("Font size", text: $fontSizeText)
+          .textFieldStyle(.roundedBorder)
+          .frame(width: 48)
+          .focused($isFontSizeFocused)
+          .onAppear(perform: syncFontSizeText)
+          .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
+          .onChange(of: commands.isFontSizeMixed) { _, _ in syncFontSizeText() }
+          .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
+            if wasFocused && !isFocused { applyFontSizeText() }
+          }
+          .onSubmit { applyFontSizeText() }
+          .accessibilityLabel("Font size")
+          .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
+        Menu {
+          Button("Automatic") { commands.applyForegroundColor(nil) }
+          ForEach(TabColorOption.all.filter { $0.hex != nil }) { option in
+            if let hex = option.hex {
+              Button {
+                commands.applyForegroundColor(NSColor(Color(hex: hex)))
+              } label: {
+                colorMenuLabel(
+                  option,
+                  isSelected: !commands.isForegroundColorMixed
+                    && color(commands.currentForegroundColor, matches: hex)
+                )
+              }
+            }
+          }
+        } label: {
+          ToolbarIconLabel(systemImage: "paintpalette")
+        }
+        .accessibilityLabel("Font Color")
+        .accessibilityValue(
+          commands.isForegroundColorMixed ? "Mixed" : commands.currentForegroundColor == nil ? "Automatic" : "Selected"
+        )
+        Menu {
+          Button("No Highlight") { commands.applyBackgroundColor(nil) }
+          ForEach(TabColorOption.all.filter { $0.hex != nil }) { option in
+            if let hex = option.hex {
+              Button {
+                commands.applyBackgroundColor(NSColor(Color(hex: hex)))
+              } label: {
+                colorMenuLabel(
+                  option,
+                  isSelected: !commands.isBackgroundColorMixed
+                    && color(commands.currentBackgroundColor, matches: hex)
+                )
+              }
+            }
+          }
+        } label: {
+          ToolbarIconLabel(systemImage: "highlighter")
+        }
+        .accessibilityLabel("Highlight")
+        .accessibilityValue(
+          commands.isBackgroundColorMixed ? "Mixed" : commands.currentBackgroundColor == nil ? "None" : "Selected"
+        )
         Menu {
           Button("Disc (•)") { commands.applyList(.bullet(.disc)) }
           Button("Circle (◦)") { commands.applyList(.bullet(.circle)) }
@@ -933,6 +1004,44 @@
 
     private var motion: AppMotion {
       AppMotion(reduceMotion: reduceMotion)
+    }
+
+    private var fontSizeDisplay: String {
+      guard !commands.isFontSizeMixed, let size = commands.currentFontSize else { return "" }
+      return String(format: "%.2f", size).replacingOccurrences(of: #"\.00$"#, with: "", options: .regularExpression)
+    }
+
+    private func syncFontSizeText() {
+      guard !isFontSizeFocused else { return }
+      fontSizeText = fontSizeDisplay
+    }
+
+    private func applyFontSizeText() {
+      guard let size = Double(fontSizeText), size.isFinite, commands.applyFontSize(size) else {
+        syncFontSizeText()
+        return
+      }
+      fontSizeText = fontSizeDisplay
+    }
+
+    private func colorMenuLabel(_ option: TabColorOption, isSelected: Bool) -> some View {
+      HStack {
+        Label {
+          Text(option.name)
+        } icon: {
+          if let swatchImage = option.swatchImage {
+            Image(nsImage: swatchImage)
+          }
+        }
+        if isSelected {
+          Image(systemName: "checkmark")
+        }
+      }
+    }
+
+    private func color(_ color: NSColor?, matches hex: String) -> Bool {
+      guard let color = color?.usingColorSpace(.sRGB) else { return false }
+      return color.isEqual(NSColor(Color(hex: hex)).usingColorSpace(.sRGB))
     }
   }
 
