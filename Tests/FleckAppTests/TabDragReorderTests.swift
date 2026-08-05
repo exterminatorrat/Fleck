@@ -215,9 +215,39 @@ import FleckCore
     )
   )
 
-  #expect(workspace.notes == [third, second, first])
-  #expect(workspace.notes.map(\.id) == [third.id, second.id, first.id])
+  #expect(workspace.notes == [first, third, second])
+  #expect(workspace.notes.map(\.id) == [first.id, third.id, second.id])
   #expect(workspace.selectedNoteID == first.id)
+}
+
+@Test func liveTabDragClampsPinnedAndUnpinnedNotesAtTheirPartitionEdges() {
+  let pinned = Note(title: "Pinned", body: "A", richTextRTF: Data([1]), isPinned: true)
+  let firstUnpinned = Note(title: "First", body: "B", richTextRTF: Data([2]))
+  let secondUnpinned = Note(title: "Second", body: "C", richTextRTF: Data([3]))
+  var workspace = Workspace(
+    notes: [pinned, firstUnpinned, secondUnpinned], selectedNoteID: secondUnpinned.id
+  )
+
+  func move(_ id: UUID, to destination: Int) {
+    workspace.moveNote(id: id, to: destination)
+  }
+
+  #expect(TabDragReorder.performLiveMove(
+    draggedID: pinned.id,
+    over: secondUnpinned.id,
+    currentNoteIDs: { workspace.notes.map(\.id) },
+    move: move
+  ))
+  #expect(workspace.notes == [pinned, firstUnpinned, secondUnpinned])
+
+  #expect(TabDragReorder.performLiveMove(
+    draggedID: secondUnpinned.id,
+    over: pinned.id,
+    currentNoteIDs: { workspace.notes.map(\.id) },
+    move: move
+  ))
+  #expect(workspace.notes == [pinned, secondUnpinned, firstUnpinned])
+  #expect(workspace.selectedNoteID == secondUnpinned.id)
 }
 
 @Test func tabOverflowShowsOnlyWhenTrailingContentExceedsVisibleEdge() {

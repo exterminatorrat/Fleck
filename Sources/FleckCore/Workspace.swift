@@ -117,7 +117,10 @@ public struct Workspace: Codable, Equatable, Sendable {
   public mutating func moveNote(id: UUID, to destination: Int) {
     guard let source = notes.firstIndex(where: { $0.id == id }) else { return }
     let note = notes.remove(at: source)
-    notes.insert(note, at: min(max(0, destination), notes.count))
+    let pinnedCount = notes.filter(\.isPinned).count
+    let lowerBound = note.isPinned ? 0 : pinnedCount
+    let upperBound = note.isPinned ? pinnedCount : notes.count
+    notes.insert(note, at: min(max(lowerBound, destination), upperBound))
   }
 
   public mutating func togglePinned(id: UUID, now: Date = Date()) {

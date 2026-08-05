@@ -85,6 +85,28 @@ import Testing
   #expect(Set(workspace.notes.map(\.id)) == Set([first, second, third]))
 }
 
+@Test func movingNotesClampsToTheirPinnedPartition() {
+  let pinnedFirst = Note(title: "Pinned first", body: "A", richTextRTF: Data([1]), isPinned: true)
+  let pinnedSecond = Note(title: "Pinned second", body: "B", richTextRTF: Data([2]), isPinned: true)
+  let unpinnedFirst = Note(title: "Unpinned first", body: "C", richTextRTF: Data([3]))
+  let unpinnedSecond = Note(title: "Unpinned second", body: "D", richTextRTF: Data([4]))
+  var workspace = Workspace(
+    notes: [pinnedFirst, pinnedSecond, unpinnedFirst, unpinnedSecond],
+    selectedNoteID: unpinnedFirst.id
+  )
+
+  workspace.moveNote(id: pinnedFirst.id, to: 3)
+  #expect(workspace.notes == [pinnedSecond, pinnedFirst, unpinnedFirst, unpinnedSecond])
+
+  workspace.moveNote(id: unpinnedSecond.id, to: 0)
+  #expect(workspace.notes == [pinnedSecond, pinnedFirst, unpinnedSecond, unpinnedFirst])
+
+  workspace.moveNote(id: pinnedFirst.id, to: 0)
+  workspace.moveNote(id: unpinnedFirst.id, to: 2)
+  #expect(workspace.notes == [pinnedFirst, pinnedSecond, unpinnedFirst, unpinnedSecond])
+  #expect(workspace.selectedNoteID == unpinnedFirst.id)
+}
+
 @Test func workspaceSetsAndClearsTabColor() {
   let changedAt = Date(timeIntervalSince1970: 200)
   var workspace = Workspace()
