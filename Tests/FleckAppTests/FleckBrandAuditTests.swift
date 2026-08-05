@@ -37,7 +37,7 @@ import Testing
     contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
     encoding: .utf8
   )
-  #expect(notesPanelSource.contains("FleckMark.load(template: false)"))
+  #expect(notesPanelSource.contains("FleckMark.load(template: true)"))
 }
 
 @Test @MainActor func fleckMarkFailsLoudlyForMissingPackagedResourceButFallsBackInBareDevelopment() {
@@ -56,7 +56,7 @@ import Testing
   }
 }
 
-@Test @MainActor func fleckMarkUsesMenuBarLogicalSizeWithoutResizingHeaderMark() {
+@Test @MainActor func fleckMarkUsesCanonicalTemplateLogicalSizeForMenuBarAndHeader() {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -77,14 +77,14 @@ import Testing
   }
 
   switch FleckMark.load(
-    template: false,
+    template: true,
     resourceURL: canonicalAssetDirectory,
     isPackagedApp: true
   ) {
   case .image(let image):
-    #expect(!image.isTemplate)
-    #expect(image.size.width == 340)
-    #expect(image.size.height == 340)
+    #expect(image.isTemplate)
+    #expect(image.size.width == 18)
+    #expect(image.size.height == 18)
   case .missingPackagedResource:
     Issue.record("The canonical Fleck mark should load for the header")
   }

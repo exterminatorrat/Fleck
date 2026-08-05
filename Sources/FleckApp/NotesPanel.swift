@@ -355,7 +355,7 @@
     private var header: some View {
       HStack(spacing: 10) {
         HStack(spacing: 6) {
-          switch FleckMark.load(template: false) {
+          switch FleckMark.load(template: true) {
           case .image(let mark):
             Image(nsImage: mark)
               .resizable()

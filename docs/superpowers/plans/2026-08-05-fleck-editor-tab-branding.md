@@ -26,7 +26,7 @@
 
 | File | Responsibility in this implementation |
 | --- | --- |
-| `Sources/FleckApp/NotesPanel.swift` | Native drag-start selection, deterministic overflow presentation, tab fade/chevron, colored header mark, and formatting toolbar controls. |
+| `Sources/FleckApp/NotesPanel.swift` | Native drag-start selection, deterministic overflow presentation, tab fade/chevron, template header mark, and formatting toolbar controls. |
 | `Sources/FleckApp/NativeRichTextEditor.swift` | Explicit current-format properties and narrow `NSTextView` family, size, foreground, and background mutations. |
 | `Sources/FleckApp/FleckApp.swift` | Bundled-mark loading and template menu-bar label. |
 | `Sources/FleckApp/Info.plist` | `LSUIElement` bundle contract. |
@@ -251,9 +251,9 @@ No copied resource belongs in `Sources/FleckApp/Resources` for the ordinary app 
 **Interfaces:**
 
 - Consume: `website/public/fleck-mark.png`, the existing app-bundle staging path, current `MenuBarExtra`, current `NotesPanel.header`, and stable `com.harryjin.fleck` signing checks.
-- Produce: a module-local `FleckMark` loader in `FleckApp.swift` that resolves the bundled `fleck-mark.png`; its menu-bar image is template-rendered and its header image is non-template. A bare `swift run` development fallback may be explicit, but a packaged bundle receives no silent fallback.
+- Produce: a module-local `FleckMark` loader in `FleckApp.swift` that resolves the bundled `fleck-mark.png`; its menu-bar and header images are template-rendered. A bare `swift run` development fallback may be explicit, but a packaged bundle receives no silent fallback.
 
-- [ ] **Step 1: Write failing brand/package tests.** Extend `canonicalBundleAndVisibleIdentityAreFleck` to assert `Info.plist` has boolean `LSUIElement == true`, `FleckApp.swift` loads `fleck-mark.png` and marks the menu-bar image template, and `NotesPanel.swift` renders the same mark as non-template beside the textual Fleck header title. Extend `packagedDevelopmentBuildUsesStableFleckCodeIdentity` to assert the build script copies `website/public/fleck-mark.png` to `Contents/Resources/fleck-mark.png` before codesigning, and the validation script checks both the packaged resource and `LSUIElement` while retaining its identifier and designated-requirement checks.
+- [ ] **Step 1: Write failing brand/package tests.** Extend `canonicalBundleAndVisibleIdentityAreFleck` to assert `Info.plist` has boolean `LSUIElement == true`, `FleckApp.swift` loads `fleck-mark.png` and marks the menu-bar image template, and `NotesPanel.swift` renders the same mark as a template beside the textual Fleck header title. Extend `packagedDevelopmentBuildUsesStableFleckCodeIdentity` to assert the build script copies `website/public/fleck-mark.png` to `Contents/Resources/fleck-mark.png` before codesigning, and the validation script checks both the packaged resource and `LSUIElement` while retaining its identifier and designated-requirement checks.
 
 - [ ] **Step 2: Establish red evidence.** Run:
 
@@ -263,7 +263,7 @@ No copied resource belongs in `Sources/FleckApp/Resources` for the ordinary app 
 
   Expected red result: the plist has no `LSUIElement`, the source still uses the system `note.text` menu-bar image, and the build/validation scripts have no canonical-mark checks.
 
-- [ ] **Step 3: Implement the single asset path and reachability-preserving bundle behavior.** In `FleckApp.swift`, replace the system-image `MenuBarExtra` label with the bundled-mark template label while retaining the existing popover content. In `NotesPanel.header`, show the same bundled image with `isTemplate = false` next to the existing `Fleck` title. In `Info.plist`, add `LSUIElement` as a boolean true. In `build-fleck-app.sh`, create `Contents/Resources`, require the canonical website PNG, and copy it to `Contents/Resources/fleck-mark.png` before app signing. In `validate-macos.sh`, fail if the resource is absent/empty or differs from the canonical PNG, and fail unless `LSUIElement` reads as true. Preserve existing helper/app signing order and identifier checks. In `TESTING.md`, add the exact packaged manual checklist from Step 4 below; do not claim a SwiftPM process proves Dock, Command-Tab, or resource behavior.
+- [ ] **Step 3: Implement the single asset path and reachability-preserving bundle behavior.** In `FleckApp.swift`, replace the system-image `MenuBarExtra` label with the bundled-mark template label while retaining the existing popover content. In `NotesPanel.header`, show the same bundled image with `isTemplate = true` next to the existing `Fleck` title. In `Info.plist`, add `LSUIElement` as a boolean true. In `build-fleck-app.sh`, create `Contents/Resources`, require the canonical website PNG, and copy it to `Contents/Resources/fleck-mark.png` before app signing. In `validate-macos.sh`, fail if the resource is absent/empty or differs from the canonical PNG, and fail unless `LSUIElement` reads as true. Preserve existing helper/app signing order and identifier checks. In `TESTING.md`, add the exact packaged manual checklist from Step 4 below; do not claim a SwiftPM process proves Dock, Command-Tab, or resource behavior.
 
 - [ ] **Step 4: Establish green package evidence.** Run the focused brand tests, then:
 
@@ -327,7 +327,7 @@ No copied resource belongs in `Sources/FleckApp/Resources` for the ordinary app 
   2. Create enough disposable tabs to hide trailing tabs; the right fade and `Reveal hidden tabs` chevron appear only then, the chevron reveals the trailing tab without obscuring the visible final tab, and neither control remains once the trailing edge is visible.
   3. At a caret and a uniform selection, confirm the font menu checks the actual family; across a mixed-family selection it checks none. Enter a valid numeric size with Return and with focus loss; verify 1 and 512 apply. Enter 0, 513, empty input, and non-numeric input; verify the displayed current size restores and document content does not change.
   4. Apply Font Color, `Automatic`, Highlight, and `No Highlight` to a selection and a caret; type new text after caret commands; relaunch and verify rich text retains the intended attributes while Markdown/plain export remains text-only.
-  5. Confirm the menu bar uses the monochrome template mark and the `NotesPanel` header uses the colored mark next to `Fleck`.
+  5. Confirm the menu bar and `NotesPanel` header use the same monochrome template mark next to `Fleck`.
   6. Confirm Fleck is absent from Dock and Command-Tab while the menu bar, pinned notes window, Settings, onboarding entry, launch-at-login setting, dictation capsule, and Agent Connector remain reachable through their existing paths.
   7. With VoiceOver and Full Keyboard Access, confirm names, values, mixed-state announcements, and field focus for the chevron and formatting controls. With Reduce Motion enabled, confirm reordering remains immediate.
 

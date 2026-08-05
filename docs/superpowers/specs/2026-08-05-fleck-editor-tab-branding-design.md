@@ -111,7 +111,7 @@ The website mark is reused without redesign. Packaging copies
 `website/public/fleck-mark.png` into `Fleck.app/Contents/Resources`, and
 production code loads that bundled resource. The menu-bar image is rendered as
 a monochrome template mark. The `NotesPanel` header's top-left area shows the
-colored, non-template mark beside the `Fleck` title.
+same monochrome template mark beside the `Fleck` title.
 
 `LSUIElement` is `true` in the packaged app. Fleck therefore intentionally has
 no Dock or Command-Tab presence. This does not make its application windows
@@ -217,7 +217,7 @@ deterministic tests for overflow visibility decisions and live reorder where
 possible.
 
 Brand/package coverage verifies canonical asset copy, source-level template
-menu-bar and colored `NotesPanel` usage, `LSUIElement=true`, stable existing
+mark usage in the menu bar and `NotesPanel`, `LSUIElement=true`, stable existing
 signing requirements, and the packaged resource at
 `Contents/Resources/fleck-mark.png`. Extend `Scripts/validate-macos.sh` so any
 missing mark or `LSUIElement` contract fails validation.
@@ -232,8 +232,8 @@ Scripts/validate-macos.sh
 Run hosted CI after the branch is pushed. In a live packaged `.build/Fleck.app`,
 use disposable tabs and notes to verify dragging left and right, fade and
 chevron appearance/reveal, numeric size submission, font menu checkmark, text
-color and highlight persistence across relaunch, colored/header and template
-menu-bar marks, and absence from both Dock and Command-Tab. Never use or alter
+color and highlight persistence across relaunch, matching template marks in the
+header and menu bar, and absence from both Dock and Command-Tab. Never use or alter
 the leftmost personal tab; choose a testing tab to its right.
 
 `swift run` and source inspection are not evidence for packaged interaction,
@@ -274,7 +274,7 @@ resource, Dock, Command-Tab, signing, or privacy behavior.
    existing undo and persistence, preserves RTF through relaunch, and leaves
    Markdown/plain body text-only.
 6. The packaged app contains the canonical mark in `Contents/Resources`, uses
-   it as a template menu-bar mark and colored `NotesPanel` mark/title, and
+   it as a template mark in both the menu bar and `NotesPanel` header/title, and
    validation fails when that resource or its required source contract is
    absent.
 7. Packaged Info.plist has `LSUIElement=true`, Fleck is absent from Dock and

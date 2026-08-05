@@ -49,7 +49,7 @@ private notes, credentials, selection contents, or agent information.
 2. Create enough disposable tabs to hide trailing tabs; the right fade and `Reveal hidden tabs` chevron appear only then, the chevron reveals the trailing tab without obscuring the visible final tab, and neither control remains once the trailing edge is visible.
 3. At a caret and a uniform selection, confirm the font menu checks the actual family; across a mixed-family selection it checks none. Enter a valid numeric size with Return and with focus loss; verify 1 and 512 apply. Enter 0, 513, empty input, and non-numeric input; verify the displayed current size restores and document content does not change.
 4. Apply Font Color, `Automatic`, Highlight, and `No Highlight` to a selection and a caret; type new text after caret commands; relaunch and verify rich text retains the intended attributes while Markdown/plain export remains text-only.
-5. Confirm the menu bar uses the monochrome template mark and the `NotesPanel` header uses the colored mark next to `Fleck`.
+5. Confirm the menu bar and `NotesPanel` header use the same monochrome template mark next to `Fleck`.
 6. Confirm Fleck is absent from Dock and Command-Tab while the menu bar, pinned notes window, Settings, onboarding entry, launch-at-login setting, dictation capsule, and Agent Connector remain reachable through their existing paths.
 7. With VoiceOver and Full Keyboard Access, confirm names, values, mixed-state announcements, and field focus for the chevron and formatting controls. With Reduce Motion enabled, confirm reordering remains immediate.
 
