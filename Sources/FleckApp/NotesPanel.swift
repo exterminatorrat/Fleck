@@ -96,6 +96,14 @@
     }
   }
 
+  private struct TabViewportTrailingEdgePreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+      value = nextValue()
+    }
+  }
+
   enum NotesPanelSizing: Equatable {
     case storedPreferences
     case container
@@ -564,6 +572,15 @@
               .allowsHitTesting(false)
             }
           }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background {
+            GeometryReader { proxy in
+              Color.clear.preference(
+                key: TabViewportTrailingEdgePreferenceKey.self,
+                value: proxy.frame(in: .named("tab-strip")).maxX
+              )
+            }
+          }
 
           Button {
             if let lastNoteID = appState.workspace.notes.last?.id {
@@ -581,18 +598,11 @@
           .opacity(hasHiddenTrailingTabs ? 1 : 0)
         }
         .coordinateSpace(name: "tab-strip")
-        .background {
-          GeometryReader { proxy in
-            Color.clear.onAppear {
-              tabViewportTrailingEdge = proxy.size.width - 28
-            }
-            .onChange(of: proxy.size.width) { _, width in
-              tabViewportTrailingEdge = width - 28
-            }
-          }
-        }
         .onPreferenceChange(TabContentTrailingEdgePreferenceKey.self) {
           tabContentTrailingEdge = $0
+        }
+        .onPreferenceChange(TabViewportTrailingEdgePreferenceKey.self) {
+          tabViewportTrailingEdge = $0
         }
       }
     }

@@ -4,6 +4,22 @@ import UniformTypeIdentifiers
 
 @testable import FleckApp
 
+@Test func tabStripConstrainsItsOverflowViewport() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("TabViewportTrailingEdgePreferenceKey"))
+  #expect(source.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
+  #expect(source.contains("value: proxy.frame(in: .named(\"tab-strip\")).maxX"))
+  #expect(!source.contains("tabViewportTrailingEdge = proxy.size.width - 28"))
+}
+
 @Test func liveTabDragResolvesLeftAndRightDestinations() {
   let first = UUID()
   let second = UUID()
