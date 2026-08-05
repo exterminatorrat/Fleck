@@ -20,6 +20,17 @@
     }
   }
 
+  enum FleckMark {
+    static func image(template: Bool) -> NSImage? {
+      guard
+        let resourceURL = Bundle.main.resourceURL,
+        let image = NSImage(contentsOf: resourceURL.appendingPathComponent("fleck-mark.png"))
+      else { return nil }
+      image.isTemplate = template
+      return image
+    }
+  }
+
   @main
   struct FleckApp: App {
     @StateObject private var appState: AppState
@@ -87,13 +98,20 @@
     }
 
     var body: some Scene {
-      MenuBarExtra("Fleck", systemImage: "note.text") {
+      MenuBarExtra {
         FleckMenuBarRoot(
           onboarding: onboarding,
           dictationRuntime: dictationRuntime
         )
           .environmentObject(appState)
           .preferredColorScheme(colorScheme)
+      }
+      label: {
+        if let mark = FleckMark.image(template: true) {
+          Image(nsImage: mark)
+        } else {
+          Image(systemName: "note.text")
+        }
       }
       .menuBarExtraStyle(.window)
 

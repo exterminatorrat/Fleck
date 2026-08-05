@@ -21,14 +21,22 @@ import Testing
   #expect(plist["CFBundleExecutable"] as? String == "Fleck")
   #expect(plist["CFBundleIdentifier"] as? String == "com.harryjin.fleck")
   #expect(plist["CFBundleName"] as? String == "Fleck")
+  #expect(plist["LSUIElement"] as? Bool == true)
   #expect(StatusItemContextMenuController.quitTitle == "Quit Fleck")
 
   let appSource = try String(
     contentsOf: root.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
     encoding: .utf8
   )
-  #expect(appSource.contains(#"MenuBarExtra("Fleck""#))
+  #expect(appSource.contains("fleck-mark.png"))
+  #expect(appSource.contains("FleckMark.image(template: true)"))
+  #expect(appSource.contains("MenuBarExtra"))
   #expect(appSource.contains(#"Window("Fleck""#))
+  let notesPanelSource = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+  #expect(notesPanelSource.contains("FleckMark.image(template: false)"))
 }
 
 @Test func agentConnectorDocumentationUsesPackagedLaunch() throws {
@@ -83,8 +91,12 @@ import Testing
   #expect(buildScript.contains(#"designated => identifier \"$bundle_identifier\""#))
   #expect(buildScript.contains(#"/usr/bin/codesign --verify --deep --strict "$staged_app""#))
   #expect(!buildScript.contains("Built unsigned app bundle"))
+  #expect(buildScript.contains("website/public/fleck-mark.png"))
+  #expect(buildScript.contains("Contents/Resources/fleck-mark.png"))
   #expect(validationScript.contains("signature identifier does not match bundle identifier"))
   #expect(validationScript.contains("signature uses a build-specific code hash"))
+  #expect(validationScript.contains("Contents/Resources/fleck-mark.png"))
+  #expect(validationScript.contains("LSUIElement"))
 }
 
 private func sourceText(in root: URL) throws -> String {

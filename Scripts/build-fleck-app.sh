@@ -5,6 +5,7 @@ readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 readonly app_destination="$repo_root/.build/Fleck.app"
 readonly info_plist="$repo_root/Sources/FleckApp/Info.plist"
+readonly canonical_mark="$repo_root/website/public/fleck-mark.png"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   printf 'error: building Fleck.app requires macOS\n' >&2
@@ -24,7 +25,7 @@ swift build -c release --product fleck-agent --disable-automatic-resolution
 readonly release_directory="$repo_root/.build/release"
 readonly app_executable="$release_directory/Fleck"
 readonly helper_executable="$release_directory/fleck-agent"
-for required_file in "$app_executable" "$helper_executable" "$info_plist"; do
+for required_file in "$app_executable" "$helper_executable" "$info_plist" "$canonical_mark"; do
   if [[ ! -f "$required_file" ]]; then
     printf 'error: required release input not found: %s\n' "$required_file" >&2
     exit 2
@@ -43,10 +44,11 @@ cleanup() {
 trap cleanup EXIT
 
 readonly staged_app="$staging_root/Fleck.app"
-/bin/mkdir -p "$staged_app/Contents/MacOS" "$staged_app/Contents/SharedSupport"
+/bin/mkdir -p "$staged_app/Contents/MacOS" "$staged_app/Contents/SharedSupport" "$staged_app/Contents/Resources"
 /bin/cp "$app_executable" "$staged_app/Contents/MacOS/Fleck"
 /bin/cp "$helper_executable" "$staged_app/Contents/SharedSupport/fleck-agent"
 /bin/cp "$info_plist" "$staged_app/Contents/Info.plist"
+/bin/cp "$canonical_mark" "$staged_app/Contents/Resources/fleck-mark.png"
 /bin/chmod 755 \
   "$staged_app/Contents/MacOS/Fleck" \
   "$staged_app/Contents/SharedSupport/fleck-agent"

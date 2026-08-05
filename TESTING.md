@@ -38,6 +38,21 @@ macOS privacy permissions.
 
 `Scripts/validate-macos.sh` verifies the host OS, runs the complete test suite, creates a release build, checks the release executable against the 15 MB budget, and prints the exact executable path. It does not launch or terminate the app because visual testing should remain under the tester's control.
 
+## Packaged editor and branding checklist
+
+Build and launch only the packaged app with `Scripts/build-fleck-app.sh` and
+`/usr/bin/open -n .build/Fleck.app`. Use disposable tabs to the right of the
+leftmost personal tab. Record pass/fail without note text, screenshots of
+private notes, credentials, selection contents, or agent information.
+
+1. Drag a selected disposable tab over its immediate left neighbor and immediate right neighbor; neighboring tabs move live before release, the selected highlight follows, and final order persists after relaunch.
+2. Create enough disposable tabs to hide trailing tabs; the right fade and `Reveal hidden tabs` chevron appear only then, the chevron reveals the trailing tab without obscuring the visible final tab, and neither control remains once the trailing edge is visible.
+3. At a caret and a uniform selection, confirm the font menu checks the actual family; across a mixed-family selection it checks none. Enter a valid numeric size with Return and with focus loss; verify 1 and 512 apply. Enter 0, 513, empty input, and non-numeric input; verify the displayed current size restores and document content does not change.
+4. Apply Font Color, `Automatic`, Highlight, and `No Highlight` to a selection and a caret; type new text after caret commands; relaunch and verify rich text retains the intended attributes while Markdown/plain export remains text-only.
+5. Confirm the menu bar uses the monochrome template mark and the `NotesPanel` header uses the colored mark next to `Fleck`.
+6. Confirm Fleck is absent from Dock and Command-Tab while the menu bar, pinned notes window, Settings, onboarding entry, launch-at-login setting, dictation capsule, and Agent Connector remain reachable through their existing paths.
+7. With VoiceOver and Full Keyboard Access, confirm names, values, mixed-state announcements, and field focus for the chevron and formatting controls. With Reduce Motion enabled, confirm reordering remains immediate.
+
 ## Test from Xcode
 
 1. Open the package:

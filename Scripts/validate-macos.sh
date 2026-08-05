@@ -45,6 +45,8 @@ swift package clean
 readonly app_bundle="$repo_root/.build/Fleck.app"
 readonly app_binary="$app_bundle/Contents/MacOS/Fleck"
 readonly bundled_helper="$app_bundle/Contents/SharedSupport/fleck-agent"
+readonly bundled_mark="$app_bundle/Contents/Resources/fleck-mark.png"
+readonly canonical_mark="$repo_root/website/public/fleck-mark.png"
 readonly expected_bundle_identifier="com.harryjin.fleck"
 
 bundle_identifier="$(
@@ -54,6 +56,19 @@ bundle_identifier="$(
 if [[ "$bundle_identifier" != "$expected_bundle_identifier" ]]; then
   printf 'error: unexpected app bundle identifier: %s\n' \
     "$bundle_identifier" >&2
+  exit 1
+fi
+if [[ "$(/usr/bin/plutil -extract LSUIElement raw -o - \
+  "$app_bundle/Contents/Info.plist")" != "true" ]]; then
+  printf '%s\n' 'error: packaged Fleck must have LSUIElement=true' >&2
+  exit 1
+fi
+if [[ ! -s "$bundled_mark" ]]; then
+  printf 'error: bundled Fleck mark not found: %s\n' "$bundled_mark" >&2
+  exit 1
+fi
+if ! /usr/bin/cmp -s "$canonical_mark" "$bundled_mark"; then
+  printf '%s\n' 'error: bundled Fleck mark differs from website/public/fleck-mark.png' >&2
   exit 1
 fi
 /usr/bin/codesign --verify --deep --strict "$app_bundle"

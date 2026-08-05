@@ -336,7 +336,14 @@
 
     private var header: some View {
       HStack(spacing: 10) {
-        Label("Fleck", systemImage: "note.text")
+        HStack(spacing: 6) {
+          if let mark = FleckMark.image(template: false) {
+            Image(nsImage: mark)
+              .resizable()
+              .frame(width: 18, height: 18)
+          }
+          Text("Fleck")
+        }
           .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
