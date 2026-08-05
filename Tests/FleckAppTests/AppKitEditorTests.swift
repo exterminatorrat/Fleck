@@ -872,6 +872,22 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!formattingBar.contains("ViewThatFits"))
 }
 
+@Test func formattingBarCanAlwaysBeCollapsedAndRestoredFromTheHeader() throws {
+  let source = try notesPanelSource()
+
+  #expect(source.contains("Hide formatting controls"))
+  #expect(source.contains("Show formatting controls"))
+  #expect(source.contains("showFormattingBar.toggle()"))
+  #expect(source.contains("if appState.preferences.showFormattingBar"))
+  #expect(source.contains("\"chevron.up\""))
+  #expect(source.contains("\"chevron.down\""))
+
+  let editorCommands = try #require(source.range(of: "@StateObject private var editorCommands = EditorCommands()"))
+  let formattingBar = try #require(source.range(of: "if appState.preferences.showFormattingBar"))
+  #expect(editorCommands.lowerBound < formattingBar.lowerBound)
+  #expect(!source.contains(".id(appState.preferences.showFormattingBar)"))
+}
+
 private func notesPanelSource() throws -> String {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()

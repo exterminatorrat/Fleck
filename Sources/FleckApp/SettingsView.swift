@@ -338,10 +338,10 @@
         }
         HStack {
           Stepper(
-            "Width: \(Int(appState.preferences.panelWidth))",
+            "Menu width: \(Int(appState.preferences.panelWidth))",
             value: preferenceBinding(\.panelWidth), in: 380...800, step: 20)
           Stepper(
-            "Height: \(Int(appState.preferences.panelHeight))",
+            "Menu height: \(Int(appState.preferences.panelHeight))",
             value: preferenceBinding(\.panelHeight), in: 300...800, step: 20)
         }
       }

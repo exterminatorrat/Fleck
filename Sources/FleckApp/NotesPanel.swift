@@ -393,6 +393,26 @@
           .help("Pin notes on screen")
         }
 
+        Button {
+          appState.updatePreferences { $0.showFormattingBar.toggle() }
+        } label: {
+          Image(
+            systemName: appState.preferences.showFormattingBar
+              ? "chevron.up"
+              : "chevron.down"
+          )
+        }
+        .accessibilityLabel(
+          appState.preferences.showFormattingBar
+            ? "Hide formatting controls"
+            : "Show formatting controls"
+        )
+        .help(
+          appState.preferences.showFormattingBar
+            ? "Hide formatting controls"
+            : "Show formatting controls"
+        )
+
         Menu {
           Button("Import…", systemImage: "square.and.arrow.down") {
             isImporting = true
@@ -728,6 +748,8 @@
                 }
               }
             )
+            .transition(.opacity)
+            .animation(reduceMotion ? nil : motion.quick, value: appState.preferences.showFormattingBar)
           }
           TextField(
             "Note title",
