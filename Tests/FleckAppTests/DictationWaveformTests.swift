@@ -3,6 +3,25 @@ import Testing
 
 @testable import FleckApp
 
+@Test func reduceMotionWaveformRefreshCadenceKeepsStaleDecayObservable() {
+  #expect(DictationWaveformRefreshSchedule.interval(reduceMotion: true) <= 0.12)
+  #expect(DictationWaveformRefreshSchedule.interval(reduceMotion: false) <= 1 / 30)
+}
+
+@Test func waveformTimelineConsumesTheSharedTruthfulRefreshSchedule() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/DictationCapsule.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("TimelineView("))
+  #expect(source.contains("DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)"))
+}
+
 @Test @MainActor func waveformClampsSmoothsAndKeepsElevenBars() {
   let model = DictationWaveformModel()
   model.beginListening(at: Date(timeIntervalSince1970: 100))
@@ -54,9 +73,11 @@ import Testing
   model.receive(level: 0.20, now: start.addingTimeInterval(0.04))
 
   let active = model.barLevels(at: start.addingTimeInterval(0.05), reduceMotion: false)
-  let stale = model.barLevels(at: start.addingTimeInterval(0.60), reduceMotion: false)
+  let stale = model.barLevels(at: start.addingTimeInterval(0.49), reduceMotion: false)
+  let reducedStale = model.barLevels(at: start.addingTimeInterval(0.49), reduceMotion: true)
   #expect(active.max()! > 0.05)
   #expect(stale.allSatisfy { $0 == 0.05 })
+  #expect(reducedStale == stale)
 }
 
 @Test @MainActor func waveformResumesFromDisplayedRestInsteadOfStaleLoudEnergy() {
