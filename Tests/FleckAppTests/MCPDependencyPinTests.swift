@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@Test func enhancedCandidateManifestPinsReviewedSwiftSystemRelease() throws {
+@Test func enhancedCandidateManifestPinsReviewedTransitiveReleases() throws {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -17,6 +17,11 @@ import Testing
   #expect(
     candidateDependencies.contains(
       #".package(url: "https://github.com/apple/swift-system.git", exact: "1.7.5")"#
+    )
+  )
+  #expect(
+    candidateDependencies.contains(
+      #".package(url: "https://github.com/apple/swift-log.git", exact: "1.14.0")"#
     )
   )
 }
