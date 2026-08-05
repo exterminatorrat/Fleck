@@ -132,11 +132,13 @@
     init(
       dictationRuntime: DictationRuntime,
       isPinned: Bool = false,
-      sizing: NotesPanelSizing = .storedPreferences
+      sizing: NotesPanelSizing = .storedPreferences,
+      editorCommands: EditorCommands? = nil
     ) {
       self.dictationRuntime = dictationRuntime
       self.isPinned = isPinned
       self.sizing = sizing
+      _editorCommands = StateObject(wrappedValue: editorCommands ?? EditorCommands())
     }
 
     var body: some View {

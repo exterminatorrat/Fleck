@@ -1,4 +1,5 @@
 import AppKit
+import FleckCore
 import SwiftUI
 import Testing
 
@@ -886,6 +887,94 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   let formattingBar = try #require(source.range(of: "if appState.preferences.showFormattingBar"))
   #expect(editorCommands.lowerBound < formattingBar.lowerBound)
   #expect(!source.contains(".id(appState.preferences.showFormattingBar)"))
+}
+
+@Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  let text = "Keep this rich text"
+  let selectedRange = NSRange(location: 5, length: 4)
+  let boldFont = try #require(NSFont(name: "Helvetica-Bold", size: 18))
+  let rtfDocumentAttributes: [NSAttributedString.DocumentAttributeKey: Any] = [
+    .documentType: NSAttributedString.DocumentType.rtf
+  ]
+  let attributed = NSMutableAttributedString(string: text)
+  attributed.addAttributes(
+    [.font: boldFont, .foregroundColor: NSColor.systemRed],
+    range: NSRange(location: 0, length: text.utf16.count)
+  )
+  let rtf = try attributed.data(
+    from: NSRange(location: 0, length: attributed.length),
+    documentAttributes: rtfDocumentAttributes
+  )
+  state.updateSelected(body: text, richTextRTF: rtf)
+
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(
+    rootView: NotesPanel(dictationRuntime: runtime, editorCommands: commands)
+      .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  window.contentView = host
+  await settleHostedView(host)
+  let textView = try #require(hostedDescendant(in: host, as: ListAwareTextView.self))
+  textView.setSelectedRange(selectedRange)
+  textView.typingAttributes[NSAttributedString.Key.underlineStyle] = NSUnderlineStyle.single.rawValue
+  commands.refreshFormattingState()
+  commands.applyBackgroundColor(.systemYellow)
+  let expectedRTF = try textView.textStorage?.data(
+    from: NSRange(location: 0, length: text.utf16.count),
+    documentAttributes: rtfDocumentAttributes
+  )
+  let expectedTypingAttributes = textView.typingAttributes
+
+  #expect(commands.textView === textView)
+  #expect(commands.isBold)
+  #expect(textView.undoManager?.canUndo == true)
+
+  state.updatePreferences { $0.showFormattingBar = false }
+  await settleHostedView(host)
+  state.updatePreferences { $0.showFormattingBar = true }
+  await settleHostedView(host)
+
+  #expect(commands.textView === textView)
+  #expect(textView.string == text)
+  #expect(textView.selectedRange() == selectedRange)
+  #expect(
+    NSDictionary(dictionary: textView.typingAttributes)
+      .isEqual(to: expectedTypingAttributes)
+  )
+  let actualRTF = try textView.textStorage?.data(
+    from: NSRange(location: 0, length: text.utf16.count),
+    documentAttributes: rtfDocumentAttributes
+  )
+  #expect(actualRTF == expectedRTF)
+  #expect(commands.isBold)
+  #expect(textView.undoManager?.canUndo == true)
+}
+
+@MainActor
+private func hostedDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T? {
+  if let match = view as? T { return match }
+  for subview in view.subviews {
+    if let match = hostedDescendant(in: subview, as: type) { return match }
+  }
+  return nil
+}
+
+@MainActor
+private func settleHostedView(_ view: NSView) async {
+  for _ in 0..<5 {
+    view.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
 }
 
 private func notesPanelSource() throws -> String {
