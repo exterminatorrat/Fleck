@@ -507,6 +507,9 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   textView.textStorage?.removeAttribute(.foregroundColor, range: NSRange(location: 2, length: 1))
   textView.setSelectedRange(NSRange(location: 2, length: 0))
   textView.typingAttributes[.foregroundColor] = NSColor.textColor
+  let explicitSystemColor = try #require(
+    textView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+  )
   let undoManager = try #require(window.undoManager)
   undoManager.removeAllActions()
 
@@ -526,6 +529,15 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
     .underlineStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 2, length: 1)
   )
   #expect(textView.textStorage?.attribute(.underlineStyle, at: 2, effectiveRange: nil) as? Int == NSUnderlineStyle.single.rawValue)
+  undoManager.removeAllActions()
+  NativeRichTextEditor.applyAppearance(
+    to: textView,
+    textColorHex: "#30D158",
+    backgroundColorHex: nil
+  )
+  #expect((textView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.isEqual(NSColor.textColor) == true)
+  #expect((textView.typingAttributes[.foregroundColor] as? NSColor)?.isEqual(NSColor.textColor) == true)
+  #expect(!undoManager.canUndo)
 
   let rtfData = try textView.textStorage?.data(
     from: NSRange(location: 0, length: 3),
@@ -538,7 +550,11 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   )
   let reloadedTextView = NSTextView()
   reloadedTextView.textStorage?.setAttributedString(restored)
-  #expect((reloadedTextView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.isEqual(NSColor.textColor) == true)
+  let reloadedSystemColor = reloadedTextView.textStorage?.attribute(
+    .foregroundColor, at: 0, effectiveRange: nil
+  ) as? NSColor
+  #expect(reloadedSystemColor != nil)
+  #expect(sRGB(reloadedSystemColor) == sRGB(explicitSystemColor))
   #expect(reloadedTextView.textStorage?.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemRed)
   #expect(reloadedTextView.textStorage?.attribute(.underlineStyle, at: 2, effectiveRange: nil) as? Int == NSUnderlineStyle.single.rawValue)
 }
