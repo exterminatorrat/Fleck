@@ -66,6 +66,23 @@
     }
   }
 
+  enum TabOverflowPresentation {
+    static func hasHiddenTrailingContent(
+      contentTrailingEdge: CGFloat,
+      visibleTrailingEdge: CGFloat
+    ) -> Bool {
+      contentTrailingEdge > visibleTrailingEdge + 0.5
+    }
+  }
+
+  private struct TabContentTrailingEdgePreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+      value = nextValue()
+    }
+  }
+
   enum NotesPanelSizing: Equatable {
     case storedPreferences
     case container
@@ -93,6 +110,8 @@
     @State private var exportFilename = "Untitled.md"
     @State private var draggedNoteID: UUID?
     @State private var tabDragContentType = TabDragReorder.makeContentType()
+    @State private var tabContentTrailingEdge: CGFloat = 0
+    @State private var tabViewportTrailingEdge: CGFloat = 0
 
     init(
       dictationRuntime: DictationRuntime,
@@ -395,9 +414,12 @@
     }
 
     private var tabStrip: some View {
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 6) {
-          ForEach(appState.workspace.notes) { note in
+      ScrollViewReader { scrollProxy in
+        HStack(spacing: 0) {
+          ZStack(alignment: .trailing) {
+            ScrollView(.horizontal, showsIndicators: false) {
+              HStack(spacing: 6) {
+                ForEach(appState.workspace.notes) { note in
             Button {
               appState.select(note.id)
             } label: {
@@ -496,13 +518,70 @@
                 requestDeletion(note)
               }
             }
+                }
+              }
+              .background {
+                GeometryReader { proxy in
+                  Color.clear.preference(
+                    key: TabContentTrailingEdgePreferenceKey.self,
+                    value: proxy.frame(in: .named("tab-strip")).maxX
+                  )
+                }
+              }
+              .padding(.horizontal, 12)
+              .padding(.bottom, 9)
+              .animation(motion.spatial, value: appState.workspace.selectedNoteID)
+              .animation(motion.spatial, value: appState.workspace.notes.map(\.id))
+            }
+
+            if hasHiddenTrailingTabs {
+              LinearGradient(
+                colors: [.clear, Color(nsColor: .windowBackgroundColor)],
+                startPoint: .leading,
+                endPoint: .trailing
+              )
+              .frame(width: 18)
+              .allowsHitTesting(false)
+            }
+          }
+
+          Button {
+            if let lastNoteID = appState.workspace.notes.last?.id {
+              scrollProxy.scrollTo(lastNoteID, anchor: .trailing)
+            }
+          } label: {
+            Image(systemName: "chevron.right")
+              .font(.caption)
+              .frame(width: 28, height: 28)
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Reveal hidden tabs")
+          .accessibilityHidden(!hasHiddenTrailingTabs)
+          .disabled(!hasHiddenTrailingTabs)
+          .opacity(hasHiddenTrailingTabs ? 1 : 0)
+        }
+        .coordinateSpace(name: "tab-strip")
+        .background {
+          GeometryReader { proxy in
+            Color.clear.onAppear {
+              tabViewportTrailingEdge = proxy.size.width - 28
+            }
+            .onChange(of: proxy.size.width) { _, width in
+              tabViewportTrailingEdge = width - 28
+            }
           }
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 9)
-        .animation(motion.spatial, value: appState.workspace.selectedNoteID)
-        .animation(motion.spatial, value: appState.workspace.notes.map(\.id))
+        .onPreferenceChange(TabContentTrailingEdgePreferenceKey.self) {
+          tabContentTrailingEdge = $0
+        }
       }
+    }
+
+    private var hasHiddenTrailingTabs: Bool {
+      TabOverflowPresentation.hasHiddenTrailingContent(
+        contentTrailingEdge: tabContentTrailingEdge,
+        visibleTrailingEdge: tabViewportTrailingEdge
+      )
     }
 
     private var motion: AppMotion {

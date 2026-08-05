@@ -173,3 +173,33 @@ import UniformTypeIdentifiers
   #expect(metadata[third] == "third")
   #expect(selectedID == first)
 }
+
+@Test func tabOverflowShowsOnlyWhenTrailingContentExceedsVisibleEdge() {
+  #expect(
+    !TabOverflowPresentation.hasHiddenTrailingContent(
+      contentTrailingEdge: 100,
+      visibleTrailingEdge: 100
+    )
+  )
+  #expect(
+    !TabOverflowPresentation.hasHiddenTrailingContent(
+      contentTrailingEdge: 99,
+      visibleTrailingEdge: 100
+    )
+  )
+  #expect(
+    TabOverflowPresentation.hasHiddenTrailingContent(
+      contentTrailingEdge: 101,
+      visibleTrailingEdge: 100
+    )
+  )
+}
+
+@Test func tabOverflowDoesNotInferHiddenTrailingContentFromLeadingOffset() {
+  #expect(
+    !TabOverflowPresentation.hasHiddenTrailingContent(
+      contentTrailingEdge: 180,
+      visibleTrailingEdge: 180
+    )
+  )
+}
