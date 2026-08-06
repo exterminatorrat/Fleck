@@ -91,6 +91,42 @@ func WorkspaceSearchPresentationGuardsRacesAndPreservesUUIDAcrossReordering() as
 }
 
 @Test @MainActor
+func WorkspaceSearchPresentationInvalidatesResultsDuringRefresh() async throws {
+  let first = workspaceSearchTestNote("00000000-0000-0000-0000-000000000001", title: "First")
+  let second = workspaceSearchTestNote("00000000-0000-0000-0000-000000000002", title: "Second")
+  let notes = [first, second]
+  let operation: WorkspaceSearchController.SearchOperation = { query, _, _ in
+    if query == "new" {
+      try? await Task.sleep(for: .milliseconds(80))
+      return [workspaceSearchTestResult(second)]
+    }
+    return [workspaceSearchTestResult(first)]
+  }
+  let controller = WorkspaceSearchController(searchOperation: operation)
+
+  controller.present()
+  controller.setQuery("old", in: notes)
+  await settleWorkspaceSearch()
+  #expect(controller.results.map(\.noteID) == [first.id])
+
+  controller.setQuery("new", in: notes)
+  var activated: [UUID] = []
+  #expect(
+    !controller.activateResult(
+      first.id,
+      currentNoteIDs: Set(notes.map(\.id)),
+      activate: { activated.append($0) }
+    )
+  )
+  #expect(activated.isEmpty)
+  #expect(controller.isPresented)
+
+  try await Task.sleep(for: .milliseconds(100))
+  await settleWorkspaceSearch()
+  #expect(controller.results.map(\.noteID) == [second.id])
+}
+
+@Test @MainActor
 func WorkspaceSearchPresentationActivatesOnceAndRejectsDeletedResults() async {
   let first = workspaceSearchTestNote("00000000-0000-0000-0000-000000000001", title: "First")
   let second = workspaceSearchTestNote("00000000-0000-0000-0000-000000000002", title: "Second")

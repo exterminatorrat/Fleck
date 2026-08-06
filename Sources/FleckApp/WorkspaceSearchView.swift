@@ -25,6 +25,7 @@
     private let searchOperation: SearchOperation
     private var searchTask: Task<Void, Never>?
     private var searchGeneration: UInt64 = 0
+    private var resultGeneration: UInt64?
     private weak var hostingWindow: NSWindow?
     private var focusOrigin: WorkspaceSearchFocusOrigin?
     private var hasActivatedCurrentPresentation = false
@@ -53,6 +54,7 @@
       query = ""
       results = []
       highlightedNoteID = nil
+      resultGeneration = nil
       hasActivatedCurrentPresentation = false
       isPresented = true
     }
@@ -65,6 +67,7 @@
       query = ""
       results = []
       highlightedNoteID = nil
+      resultGeneration = nil
       hasActivatedCurrentPresentation = false
       let origin = focusOrigin
       focusOrigin = nil
@@ -92,6 +95,7 @@
       cancelSearch()
       searchGeneration &+= 1
       let generation = searchGeneration
+      resultGeneration = nil
       let requestQuery = query
       let trimmedQuery = requestQuery.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -112,7 +116,7 @@
         else {
           return
         }
-        self.apply(results)
+        self.apply(results, generation: generation)
       }
     }
 
@@ -151,7 +155,8 @@
       currentNoteIDs: Set<UUID>,
       activate: (UUID) -> Void
     ) -> Bool {
-      guard currentNoteIDs.contains(noteID),
+      guard resultGeneration == searchGeneration,
+        currentNoteIDs.contains(noteID),
         results.contains(where: { $0.noteID == noteID })
       else {
         return false
@@ -167,6 +172,7 @@
     ) -> Bool {
       guard isPresented,
         !hasActivatedCurrentPresentation,
+        resultGeneration == searchGeneration,
         let noteID = highlightedNoteID,
         currentNoteIDs.contains(noteID),
         results.contains(where: { $0.noteID == noteID })
@@ -204,10 +210,11 @@
       }
     }
 
-    private func apply(_ results: [WorkspaceSearchResult]) {
+    private func apply(_ results: [WorkspaceSearchResult], generation: UInt64) {
       let results = Array(results.prefix(50))
       let previousHighlight = highlightedNoteID
       self.results = results
+      resultGeneration = generation
       if let previousHighlight,
         results.contains(where: { $0.noteID == previousHighlight })
       {
@@ -286,6 +293,49 @@
     }
   }
 
+  @MainActor
+  final class WorkspaceSearchKeyResponder: NSView {
+    var noteID: UUID?
+    var onKeyDown: (UInt16) -> Bool
+
+    init(noteID: UUID?, onKeyDown: @escaping (UInt16) -> Bool) {
+      self.noteID = noteID
+      self.onKeyDown = onKeyDown
+      super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) {
+      fatalError("init(coder:) has not been implemented")
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func keyDown(with event: NSEvent) {
+      guard onKeyDown(event.keyCode) else {
+        super.keyDown(with: event)
+        return
+      }
+    }
+  }
+
+  struct WorkspaceSearchKeyResponderView: NSViewRepresentable {
+    let noteID: UUID?
+    let onKeyDown: (UInt16) -> Bool
+
+    func makeNSView(context: Context) -> WorkspaceSearchKeyResponder {
+      WorkspaceSearchKeyResponder(noteID: noteID, onKeyDown: onKeyDown)
+    }
+
+    func updateNSView(_ nsView: WorkspaceSearchKeyResponder, context: Context) {
+      nsView.noteID = noteID
+      nsView.onKeyDown = onKeyDown
+    }
+  }
+
   struct WorkspaceSearchView: View {
     @ObservedObject var controller: WorkspaceSearchController
     let notes: [Note]
@@ -352,6 +402,35 @@
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss search")
             .help("Dismiss search")
+            .onKeyPress(.upArrow) {
+              controller.moveHighlight(.up)
+              return .handled
+            }
+            .onKeyPress(.downArrow) {
+              controller.moveHighlight(.down)
+              return .handled
+            }
+            .onKeyPress(.escape) {
+              controller.dismiss()
+              return .handled
+            }
+            .background(
+              WorkspaceSearchKeyResponderView(noteID: nil) { keyCode in
+                switch keyCode {
+                case 126:
+                  controller.moveHighlight(.up)
+                  return true
+                case 125:
+                  controller.moveHighlight(.down)
+                  return true
+                case 53:
+                  controller.dismiss()
+                  return true
+                default:
+                  return false
+                }
+              }
+            )
           }
 
           Text(controller.resultCountAccessibilityValue)
@@ -369,37 +448,83 @@
               .foregroundStyle(.secondary)
               .padding(.vertical, 8)
           } else {
-            VStack(spacing: 2) {
-              ForEach(controller.results) { result in
-                let isSelected = controller.isHighlighted(result.noteID)
-                Button {
-                  _ = controller.activateResult(
-                    result.noteID,
-                    currentNoteIDs: currentNoteIDs(),
-                    activate: onActivate
-                  )
-                } label: {
-                  VStack(alignment: .leading, spacing: 2) {
-                    Text(result.displayTitle)
-                      .font(.body.weight(.semibold))
-                      .lineLimit(1)
-                    Text(result.snippet)
-                      .font(.caption)
-                      .foregroundStyle(.secondary)
-                      .lineLimit(2)
+            ScrollViewReader { scrollProxy in
+              ScrollView(.vertical) {
+                LazyVStack(spacing: 2) {
+                  ForEach(controller.results) { result in
+                    let isSelected = controller.isHighlighted(result.noteID)
+                    Button {
+                      _ = controller.activateResult(
+                        result.noteID,
+                        currentNoteIDs: currentNoteIDs(),
+                        activate: onActivate
+                      )
+                    } label: {
+                      VStack(alignment: .leading, spacing: 2) {
+                        Text(result.displayTitle)
+                          .font(.body.weight(.semibold))
+                          .lineLimit(1)
+                        Text(result.snippet)
+                          .font(.caption)
+                          .foregroundStyle(.secondary)
+                          .lineLimit(2)
+                      }
+                      .frame(maxWidth: .infinity, alignment: .leading)
+                      .padding(.horizontal, 8)
+                      .padding(.vertical, 6)
+                      .background(
+                        RoundedRectangle(cornerRadius: 6)
+                          .fill(isSelected ? Color.accentColor.opacity(0.14) : .clear)
+                      )
+                    }
+                    .buttonStyle(.plain)
+                    .focusable()
+                    .id(result.noteID)
+                    .accessibilityLabel("\(result.displayTitle), \(result.snippet)")
+                    .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .onKeyPress(.upArrow) {
+                      controller.moveHighlight(.up)
+                      return .handled
+                    }
+                    .onKeyPress(.downArrow) {
+                      controller.moveHighlight(.down)
+                      return .handled
+                    }
+                    .onKeyPress(.escape) {
+                      controller.dismiss()
+                      return .handled
+                    }
+                    .background(
+                      WorkspaceSearchKeyResponderView(noteID: result.noteID) { keyCode in
+                        switch keyCode {
+                        case 126:
+                          controller.moveHighlight(.up)
+                          return true
+                        case 125:
+                          controller.moveHighlight(.down)
+                          return true
+                        case 36:
+                          return controller.activateResult(
+                            result.noteID,
+                            currentNoteIDs: currentNoteIDs(),
+                            activate: onActivate
+                          )
+                        case 53:
+                          controller.dismiss()
+                          return true
+                        default:
+                          return false
+                        }
+                      }
+                    )
                   }
-                  .frame(maxWidth: .infinity, alignment: .leading)
-                  .padding(.horizontal, 8)
-                  .padding(.vertical, 6)
-                  .background(
-                    RoundedRectangle(cornerRadius: 6)
-                      .fill(isSelected ? Color.accentColor.opacity(0.14) : .clear)
-                  )
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(result.displayTitle), \(result.snippet)")
-                .accessibilityValue(isSelected ? "Selected" : "Not selected")
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
+              }
+              .frame(maxHeight: 220)
+              .onChange(of: controller.highlightedNoteID) { _, noteID in
+                guard let noteID else { return }
+                scrollProxy.scrollTo(noteID, anchor: .center)
               }
             }
           }
@@ -416,6 +541,19 @@
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
       .padding(.horizontal, 20)
       .padding(.top, 48)
+      .onMoveCommand { direction in
+        switch direction {
+        case .up:
+          controller.moveHighlight(.up)
+        case .down:
+          controller.moveHighlight(.down)
+        default:
+          break
+        }
+      }
+      .onExitCommand {
+        controller.dismiss()
+      }
       .onAppear {
         isQueryFocused = true
         controller.refresh(in: notes)

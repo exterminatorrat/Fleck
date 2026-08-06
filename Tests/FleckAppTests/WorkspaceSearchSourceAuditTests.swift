@@ -37,6 +37,11 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
     "Selected",
     "Not selected",
     "Set<UUID>",
+    "ScrollView",
+    "LazyVStack",
+    ".onMoveCommand",
+    ".onExitCommand",
+    "WorkspaceSearchKeyResponderView",
   ] {
     #expect(searchView.contains(required), Comment(rawValue: required))
   }

@@ -172,6 +172,118 @@ func WorkspaceSearchHostingReturnSelectsOnlyTheCurrentUUID() async throws {
   await runtime.shutdown()
 }
 
+@Test @MainActor
+func WorkspaceSearchHostingKeepsResultsScrollableAndPaletteKeysBeyondTheQueryField()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-palette-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  let originalID = try #require(state.selectedNote?.id)
+  for index in 0..<80 {
+    state.importNote(
+      Note(
+        title: "Result " + String(index),
+        body: "Scrollable result body " + String(index)
+      )
+    )
+  }
+  state.select(originalID)
+  #expect(state.workspace.notes.count == 81)
+
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController(searchOperation: { _, notes, limit in
+    notes.dropFirst().prefix(limit).map { note in
+      WorkspaceSearchResult(
+        noteID: note.id,
+        displayTitle: note.displayTitle,
+        snippet: note.body,
+        match: WorkspaceSearchMatch(field: .title, location: 0, length: 1),
+        score: 1
+      )
+    }
+  })
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+  let editor = try #require(hostedWorkspaceSearchDescendant(in: host, as: ListAwareTextView.self))
+  #expect(window.makeFirstResponder(editor))
+  #expect(window.firstResponder === editor)
+  let initialScrollViewCount = hostedWorkspaceSearchScrollViews(in: host).count
+
+  searchController.present()
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery("Result", in: state.workspace.notes)
+  await settleWorkspaceSearchHost(host)
+  try await Task.sleep(for: .milliseconds(20))
+  await settleWorkspaceSearchHost(host)
+  #expect(searchController.results.count == 50)
+
+  let scrollViews = hostedWorkspaceSearchScrollViews(in: host)
+  #expect(scrollViews.count > initialScrollViewCount)
+  let resultScrollView = try #require(scrollViews.first)
+  let firstResult = try #require(searchController.results.first)
+  let resultResponder = try #require(
+    hostedWorkspaceSearchKeyResponder(in: host, noteID: firstResult.noteID)
+  )
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { (400..<600).contains($0.frame.width) && $0.stringValue == "Result" }
+  )
+  #expect(window.makeFirstResponder(queryField))
+  #expect(window.firstResponder !== resultResponder)
+  #expect(window.makeFirstResponder(resultResponder))
+  #expect(window.firstResponder === resultResponder)
+
+  let firstBounds = resultScrollView.contentView.bounds
+  // NSHostingView's synthetic NSWindow.sendEvent promotes these test events to
+  // the window; exercise the focused production responder's native keyDown path.
+  for _ in 0..<12 {
+    resultResponder.keyDown(
+      with: try workspaceSearchKeyEvent(
+        keyCode: 125,
+        characters: "\u{F701}",
+        windowNumber: window.windowNumber
+      )
+    )
+    await settleWorkspaceSearchHost(host)
+  }
+  await settleWorkspaceSearchHost(host)
+  #expect(searchController.highlightedNoteID == searchController.results[12].noteID)
+  #expect(resultScrollView.contentView.bounds.origin.y > firstBounds.origin.y)
+
+  resultResponder.keyDown(
+    with: try workspaceSearchKeyEvent(
+      keyCode: 53,
+      characters: "\u{1B}",
+      windowNumber: window.windowNumber
+    )
+  )
+  await settleWorkspaceSearchHost(host)
+  #expect(!searchController.isPresented)
+  #expect(window.firstResponder === editor)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
 @MainActor
 private func hostedWorkspaceSearchDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T? {
   if let match = view as? T { return match }
@@ -179,6 +291,65 @@ private func hostedWorkspaceSearchDescendant<T: NSView>(in view: NSView, as type
     if let match = hostedWorkspaceSearchDescendant(in: subview, as: type) { return match }
   }
   return nil
+}
+
+@MainActor
+private func hostedWorkspaceSearchDescendants<T: NSView>(in view: NSView, as type: T.Type) -> [T] {
+  var matches: [T] = []
+  if let match = view as? T { matches.append(match) }
+  for subview in view.subviews {
+    matches.append(contentsOf: hostedWorkspaceSearchDescendants(in: subview, as: type))
+  }
+  return matches
+}
+
+@MainActor
+private func hostedWorkspaceSearchScrollViews(in view: NSView) -> [NSScrollView] {
+  var scrollViews: [NSScrollView] = []
+  if let scrollView = view as? NSScrollView {
+    scrollViews.append(scrollView)
+  }
+  for subview in view.subviews {
+    scrollViews.append(contentsOf: hostedWorkspaceSearchScrollViews(in: subview))
+  }
+  return scrollViews
+}
+
+@MainActor
+private func hostedWorkspaceSearchKeyResponder(
+  in view: NSView,
+  noteID: UUID
+) -> WorkspaceSearchKeyResponder? {
+  if let responder = view as? WorkspaceSearchKeyResponder, responder.noteID == noteID {
+    return responder
+  }
+  for subview in view.subviews {
+    if let responder = hostedWorkspaceSearchKeyResponder(in: subview, noteID: noteID) {
+      return responder
+    }
+  }
+  return nil
+}
+
+private func workspaceSearchKeyEvent(
+  keyCode: UInt16,
+  characters: String,
+  windowNumber: Int
+) throws -> NSEvent {
+  try #require(
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: windowNumber,
+      context: nil,
+      characters: characters,
+      charactersIgnoringModifiers: characters,
+      isARepeat: false,
+      keyCode: keyCode
+    )
+  )
 }
 
 @MainActor
