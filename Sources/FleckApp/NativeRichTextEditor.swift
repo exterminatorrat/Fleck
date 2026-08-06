@@ -866,20 +866,6 @@
     }
   }
 
-  extension NSColor {
-    convenience init?(hex: String?) {
-      guard let hex else { return nil }
-      let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-      guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return nil }
-      self.init(
-        calibratedRed: CGFloat((value >> 16) & 0xFF) / 255,
-        green: CGFloat((value >> 8) & 0xFF) / 255,
-        blue: CGFloat(value & 0xFF) / 255,
-        alpha: 1
-      )
-    }
-  }
-
   final class ListAwareTextView: NSTextView {
     var automaticLists = true
     var checklistAccentColor = NSColor.controlAccentColor {

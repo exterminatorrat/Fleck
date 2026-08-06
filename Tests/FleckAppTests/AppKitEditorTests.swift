@@ -638,8 +638,8 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
 }
 
 @Test @MainActor func paletteRecognitionSurvivesRTFRoundTrip() throws {
-  let foreground = NSColor(Color(hex: "#FF4245"))
-  let background = NSColor(Color(hex: "#FFD600"))
+  let foreground = try #require(NSColor(hex: "#FF4245"))
+  let background = try #require(NSColor(hex: "#FFD600"))
   let custom = NSColor(srgbRed: 0.12, green: 0.34, blue: 0.56, alpha: 1)
   let attributed = NSMutableAttributedString(string: "RYC")
   attributed.addAttribute(.foregroundColor, value: foreground, range: NSRange(location: 0, length: 1))
@@ -658,12 +658,12 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   let restoredBackground = restored.attribute(.backgroundColor, at: 1, effectiveRange: nil) as? NSColor
   let restoredCustom = restored.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor
 
-  #expect(TabColorOption.matchesPaletteColor(restoredForeground, hex: "#FF4245"))
-  #expect(TabColorOption.paletteName(for: restoredForeground) == "Red")
-  #expect(TabColorOption.matchesPaletteColor(restoredBackground, hex: "#FFD600"))
-  #expect(TabColorOption.paletteName(for: restoredBackground) == "Yellow")
-  #expect(!TabColorOption.matchesPaletteColor(restoredCustom, hex: "#FF4245"))
-  #expect(TabColorOption.paletteName(for: restoredCustom) == nil)
+  #expect(FleckPaletteOption.matchesPaletteColor(restoredForeground, hex: "#FF4245"))
+  #expect(FleckPaletteOption.paletteName(for: restoredForeground) == "Red")
+  #expect(FleckPaletteOption.matchesPaletteColor(restoredBackground, hex: "#FFD600"))
+  #expect(FleckPaletteOption.paletteName(for: restoredBackground) == "Yellow")
+  #expect(!FleckPaletteOption.matchesPaletteColor(restoredCustom, hex: "#FF4245"))
+  #expect(FleckPaletteOption.paletteName(for: restoredCustom) == nil)
 }
 
 @Test @MainActor func editorCommandsPersistsSelectedColorsInRTF() throws {
@@ -817,9 +817,10 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
 
   #expect(source.contains("Automatic"))
   #expect(source.contains("No Highlight"))
-  #expect(source.contains("TabColorOption.all.filter { $0.hex != nil }"))
+  #expect(source.contains("FleckColorPicker"))
   #expect(source.contains("currentForegroundColor"))
   #expect(source.contains("currentBackgroundColor"))
+  #expect(!source.contains("TabColorOption"))
 }
 
 @Test func fontSizeSubmissionRestoresInvalidInputAndSkipsAnUnchangedUniformSize() {
@@ -929,10 +930,12 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   )
 }
 
-@Test func formattingBarAnnouncesPaletteNamesAndMarksSpecialColorRows() throws {
+@Test func formattingBarAnnouncesPaletteNamesAndPickerResetContexts() throws {
   let source = try notesPanelSource()
 
-  #expect(source.contains("specialColorMenuLabel("))
+  #expect(source.contains("FleckColorPicker"))
+  #expect(source.contains("resetTitle: \"Automatic\""))
+  #expect(source.contains("resetTitle: \"No Highlight\""))
   #expect(source.contains("\"Automatic\""))
   #expect(source.contains("\"No Highlight\""))
   #expect(source.contains("colorAccessibilityValue"))
@@ -945,7 +948,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   let formattingBar = try #require(source.components(separatedBy: "private struct FormattingBar").last)
 
   #expect(formattingBar.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").count == 2)
-  #expect(formattingBar.contains("accessibilityLabel(\"Formatting controls\")"))
+  #expect(formattingBar.contains("accessibilityLabel(\"Editor toolbar\")"))
   #expect(formattingBar.contains("ToolbarIconLabel(systemImage: \"trash\")"))
   #expect(!formattingBar.contains("ViewThatFits"))
 }
@@ -953,8 +956,8 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 @Test func formattingBarCanAlwaysBeCollapsedAndRestoredFromTheHeader() throws {
   let source = try notesPanelSource()
 
-  #expect(source.contains("Hide formatting controls"))
-  #expect(source.contains("Show formatting controls"))
+  #expect(source.contains("Hide Editor toolbar"))
+  #expect(source.contains("Show Editor toolbar"))
   #expect(source.contains("showFormattingBar.toggle()"))
   #expect(source.contains("if appState.preferences.showFormattingBar"))
   #expect(source.contains("\"chevron.up\""))
@@ -1066,7 +1069,7 @@ private func notesPanelSource() throws -> String {
 }
 
 @Test @MainActor func tabColorSwatchesAreNonTemplateImages() {
-  for option in TabColorOption.all where option.hex != nil {
+  for option in FleckPaletteOption.all {
     #expect(option.swatchImage?.isTemplate == false)
   }
 }
@@ -1083,7 +1086,7 @@ private func notesPanelSource() throws -> String {
     "Gray": "#98989D",
   ]
 
-  for option in TabColorOption.all where option.hex != nil {
+  for option in FleckPaletteOption.all {
     #expect(option.hex == expectedHexByName[option.name])
   }
 }

@@ -310,51 +310,29 @@
             Text(theme.rawValue.capitalized).tag(theme)
           }
         }
-        ColorPicker(
-          "Accent color",
-          selection: colorPreferenceBinding(\.accentHex),
-          supportsOpacity: false
-        )
-        Picker("Font", selection: preferenceBinding(\.fontFamily)) {
-          Text("System").tag(".AppleSystemUIFont")
-          ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
-            Text(family).tag(family)
-          }
+        SettingsColorButton(
+          title: "Accent color",
+          currentHex: appState.preferences.accentHex,
+          fallbackColor: .controlAccentColor
+        ) { hex in
+          guard let hex else { return }
+          appState.updatePreferences { $0.accentHex = hex }
         }
-        Stepper(
-          "Font size: \(Int(appState.preferences.fontSize)) pt",
-          value: preferenceBinding(\.fontSize),
-          in: 10...36
-        )
-        HStack {
-          ColorPicker(
-            "Editor text color",
-            selection: optionalColorPreferenceBinding(
-              \.editorTextHex,
-              fallback: .labelColor
-            ),
-            supportsOpacity: false
-          )
-          if appState.preferences.editorTextHex != nil {
-            Button("Use System") {
-              appState.updatePreferences { $0.editorTextHex = nil }
-            }
-          }
+        SettingsColorButton(
+          title: "Editor text color",
+          currentHex: appState.preferences.editorTextHex,
+          resetTitle: "Use System",
+          fallbackColor: .labelColor
+        ) { hex in
+          appState.updatePreferences { $0.editorTextHex = hex }
         }
-        HStack {
-          ColorPicker(
-            "Editor background",
-            selection: optionalColorPreferenceBinding(
-              \.editorBackgroundHex,
-              fallback: .textBackgroundColor
-            ),
-            supportsOpacity: false
-          )
-          if appState.preferences.editorBackgroundHex != nil {
-            Button("Use System") {
-              appState.updatePreferences { $0.editorBackgroundHex = nil }
-            }
-          }
+        SettingsColorButton(
+          title: "Editor background",
+          currentHex: appState.preferences.editorBackgroundHex,
+          resetTitle: "Use System",
+          fallbackColor: .textBackgroundColor
+        ) { hex in
+          appState.updatePreferences { $0.editorBackgroundHex = hex }
         }
         Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
           Text("Glass opacity")
@@ -372,7 +350,6 @@
 
     private var editing: some View {
       Section("Behavior") {
-        Toggle("Show formatting bar", isOn: preferenceBinding(\.showFormattingBar))
         Toggle("Create lists automatically", isOn: preferenceBinding(\.automaticLists))
         Toggle(
           "Launch at login",
@@ -719,37 +696,6 @@
       )
     }
 
-    private func colorPreferenceBinding(
-      _ keyPath: WritableKeyPath<AppPreferences, String>
-    ) -> Binding<Color>
-    {
-      Binding(
-        get: { Color(hex: appState.preferences[keyPath: keyPath]) },
-        set: { color in
-          guard let hex = color.hexString else { return }
-          appState.updatePreferences { $0[keyPath: keyPath] = hex }
-        }
-      )
-    }
-
-    private func optionalColorPreferenceBinding(
-      _ keyPath: WritableKeyPath<AppPreferences, String?>,
-      fallback: NSColor
-    ) -> Binding<Color> {
-      Binding(
-        get: {
-          appState.preferences[keyPath: keyPath].map(Color.init(hex:))
-            ?? Color(nsColor: fallback)
-        },
-        set: { color in
-          guard let hex = color.hexString else { return }
-          appState.updatePreferences {
-            $0[keyPath: keyPath] = hex
-          }
-        }
-      )
-    }
-
     private func setShortcutEnabled(_ action: Shortcut.Action, enabled: Bool) {
       appState.updatePreferences { preferences in
         guard let index = preferences.shortcuts.firstIndex(where: { $0.action == action }) else {
@@ -776,6 +722,74 @@
         )
       }
       recordingSelection.cancel()
+    }
+  }
+
+  private struct SettingsColorButton: View {
+    let title: String
+    let currentHex: String?
+    let resetTitle: String?
+    let fallbackColor: NSColor
+    let onCommit: (String?) -> Void
+    @State private var isPresented = false
+
+    init(
+      title: String,
+      currentHex: String?,
+      resetTitle: String? = nil,
+      fallbackColor: NSColor,
+      onCommit: @escaping (String?) -> Void
+    ) {
+      self.title = title
+      self.currentHex = currentHex
+      self.resetTitle = resetTitle
+      self.fallbackColor = fallbackColor
+      self.onCommit = onCommit
+    }
+
+    var body: some View {
+      Button {
+        isPresented = true
+      } label: {
+        HStack(spacing: 10) {
+          Text(title)
+          Spacer()
+          RoundedRectangle(cornerRadius: 5)
+            .fill(currentColor)
+            .frame(width: 24, height: 18)
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
+          Text(currentValue)
+            .foregroundStyle(.secondary)
+        }
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(title)
+      .accessibilityValue(currentValue)
+      .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        FleckColorPicker(
+          currentHex: currentHex,
+          currentLabel: currentValue,
+          resetTitle: resetTitle,
+          fallbackHex: FleckColorHex.hex(from: fallbackColor) ?? "#7C6CF2",
+          onCommit: { value in
+            onCommit(value)
+            isPresented = false
+          },
+          onCancel: { isPresented = false }
+        )
+      }
+    }
+
+    private var currentColor: Color {
+      if let currentHex, let color = Color(hex: currentHex) {
+        return color
+      }
+      return Color(nsColor: fallbackColor)
+    }
+
+    private var currentValue: String {
+      guard let currentHex else { return resetTitle ?? "Automatic" }
+      return FleckPaletteOption.paletteName(for: NSColor(hex: currentHex)) ?? "Custom"
     }
   }
 
