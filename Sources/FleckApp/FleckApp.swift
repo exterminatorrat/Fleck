@@ -645,7 +645,9 @@
     }
 
     func applicationDidBecomeActive() {
-      synchronizePreferences()
+      FleckPerformanceSignposts.measureActivationPreferenceSynchronization {
+        synchronizePreferences()
+      }
     }
 
     func awaitStartupAssessment() async {

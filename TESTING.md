@@ -731,6 +731,21 @@ launches Fleck and never reads, copies, moves, or deletes the user's Fleck
 Application Support directory. If an isolated packaged launch is unavailable,
 leave launch and UI/runtime measurements unclaimed.
 
+For the panel-presentation timing loop, grant System Events Accessibility to
+the calling Terminal or agent in System Settings → Privacy & Security →
+Accessibility, launch the exact packaged Fleck app manually, and run:
+
+```sh
+bash -n Scripts/measure-fleck-panel-presentation.sh
+FLECK_PERFORMANCE_PID=PID Scripts/measure-fleck-panel-presentation.sh \
+  "/absolute/path/to/disposable-output"
+```
+
+The script performs one cold and 30 warm status-item opens, closes each panel
+with Escape, and fails if any app-side completion record is missing. It never
+launches or signals Fleck and never reads or writes Fleck Application Support
+or note data. Do not treat automation click wall-clock time as product latency.
+
 ## Accessibility checks
 
 - [ ] Use only the keyboard to create, select, edit, format, and close notes.

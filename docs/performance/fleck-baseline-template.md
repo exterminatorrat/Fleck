@@ -63,6 +63,32 @@ Use Instruments or another approved macOS measurement tool on the manually
 launched QA PID for logical disk writes. The script's aggregate disk sample is
 only context and must not be reported as Fleck-only logical writes.
 
+## Panel presentation measurement
+
+The packaged-app panel loop measures the interval from the real unconsumed left
+status-item mouse-down to the actual transient status-bar window becoming
+visible. It records one cold sample followed by 30 warm samples from an already
+running exact Fleck process, and reports raw samples plus p50, p95, minimum, and
+maximum values. It uses only the Fleck performance subsystem/category and never
+reads or writes Fleck Application Support or note data.
+
+Before running it, grant the calling Terminal or agent System Events
+Accessibility permission in System Settings → Privacy & Security →
+Accessibility, launch the exact packaged Fleck app manually, and record its PID.
+The script does not launch, terminate, rebuild, or signal Fleck. A missing
+app-side completion record fails the run; automation click wall-clock time is
+not product latency.
+
+```sh
+bash -n Scripts/measure-fleck-panel-presentation.sh
+FLECK_PERFORMANCE_PID=PID Scripts/measure-fleck-panel-presentation.sh \
+  "/absolute/path/to/disposable-output"
+```
+
+The output directory must already exist, be outside Fleck Application Support,
+and not be a symlink. Leave the packaged measurement as `[not captured]` until
+this exact loop has been run against the accepted QA artifact.
+
 ## Results
 
 Record median (p50), p95, and peak where applicable. Use the same run protocol
