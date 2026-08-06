@@ -675,6 +675,62 @@ Also inspect **Activity Monitor → Memory** and **Activity Monitor → CPU** af
 
 The current targets are at or below 15 MB for the release executable where practical and below 75 MB resident memory during an ordinary idle workflow. A SwiftPM executable-size result is not a substitute for measuring the eventual signed `.app` bundle.
 
+### Performance baseline — Wave 1A
+
+The reproducible baseline harness uses exactly 10-note, 100-note, and
+1,000-note synthetic workspaces. The fixture has stable UUIDs and dates and
+contains no personal note content. Automated coverage characterizes current
+LocalStore load/save behavior, records temporary-directory storage observations,
+and deliberately proves that the current save path rewrites an unchanged note
+body when another note changes. That rewrite assertion describes current
+baseline behavior, not a desired performance contract.
+
+Run the safe automated checks from the repository root:
+
+```sh
+swift test --disable-automatic-resolution --no-parallel --filter FleckPerformance
+bash -n Scripts/profile-fleck-performance.sh
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck Scripts/profile-fleck-performance.sh
+else
+  echo 'shellcheck not installed; not run'
+fi
+```
+
+For a profile artifact, choose an explicit disposable output directory outside
+`~/Library/Application Support/Fleck/` and run:
+
+```sh
+Scripts/profile-fleck-performance.sh "/absolute/path/to/disposable-output"
+```
+
+The script builds the release Fleck executable and records the machine, macOS,
+Xcode, Swift, commit, build configuration, executable size, and command
+metadata. If a QA Fleck process is already running, collect five idle RSS/CPU
+samples without allowing the script to launch or terminate it:
+
+```sh
+FLECK_PERFORMANCE_PID=PID Scripts/profile-fleck-performance.sh \
+  "/absolute/path/to/disposable-output"
+```
+
+The output also records an aggregate disk sample. Use Instruments File Activity
+or `fs_usage` on the caller-specified QA PID for logical disk writes; do not
+report aggregate device activity as Fleck-only writes. Record launch, panel
+presentation, note switching, typing, save duration, logical disk writes, idle
+CPU, resident memory, executable size, median/p50, p95, and peak results in
+`docs/performance/fleck-baseline-template.md`. Leave values as `[not captured]`
+when no measurement was taken; tests and a build do not create runtime
+evidence.
+
+The packaged-app boundary is manual. Build and launch the exact QA app with
+`Scripts/build-fleck-app.sh` and `/usr/bin/open -n .build/Fleck.app` only from
+a disposable macOS account or another isolated QA environment. Current
+production persistence has no safe test-root override, so the harness never
+launches Fleck and never reads, copies, moves, or deletes the user's Fleck
+Application Support directory. If an isolated packaged launch is unavailable,
+leave launch and UI/runtime measurements unclaimed.
+
 ## Accessibility checks
 
 - [ ] Use only the keyboard to create, select, edit, format, and close notes.
