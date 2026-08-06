@@ -13,7 +13,6 @@ import Testing
     "import OSLog",
     "internal enum FleckPerformanceSignposts",
     "OSSignposter",
-    "Logger",
     #"static let subsystem = "com.harryjin.fleck""#,
     #"static let category = "performance""#,
     #"static let launch = StaticString("launch")"#,
@@ -22,23 +21,17 @@ import Testing
     #"static let noteSwitch = StaticString("note-switch")"#,
     #"static let snapshotSave = StaticString("snapshot-save")"#,
     #"static let panelPresentation = StaticString("panel-presentation")"#,
-    #"static let activationPreferenceSynchronization = StaticString("activation-preference-sync")"#,
-    "panel_presentation elapsed_ms=",
-    "root_state=",
-    "activation_preference_sync elapsed_ms=",
   ] {
     #expect(source.contains(required), Comment(rawValue: required))
   }
 
   for forbidden in [
+    "beginInterval",
+    "endInterval",
+    "emitEvent",
     "OSLogStore",
     "import FleckCore",
     "import SwiftUI",
-    "note title",
-    "note body",
-    "Application Support",
-    "credential",
-    "profileID",
   ] {
     #expect(!source.contains(forbidden), Comment(rawValue: forbidden))
   }

@@ -1,195 +1,48 @@
 #if os(macOS)
-  import AppKit
   import Foundation
   import Testing
 
-  @testable import FleckApp
-
-  @Test @MainActor func FleckPanelPresentationMeasurementCompletesOnceWithInjectedMonotonicTime() {
-    var now: UInt64 = 1_000_000_000
-    var samples: [FleckPanelPresentationMeasurementSample] = []
-    let measurement = FleckPanelPresentationMeasurement(
-      now: { now },
-      completionSink: { samples.append($0) }
-    )
-
-    #expect(measurement.begin())
-    #expect(!measurement.begin())
-    now += 275_000_000
-    #expect(measurement.end(rootState: .notes))
-    #expect(!measurement.end(rootState: .notes))
-    #expect(samples == [
-      FleckPanelPresentationMeasurementSample(
-        elapsedMilliseconds: 275,
-        rootState: .notes
-      )
-    ])
-  }
-
-  @Test @MainActor func FleckPanelPresentationMeasurementIgnoresMissingEndsAndClearsCancelledIntervals() {
-    var now: UInt64 = 4_000_000_000
-    var samples: [FleckPanelPresentationMeasurementSample] = []
-    let measurement = FleckPanelPresentationMeasurement(
-      now: { now },
-      completionSink: { samples.append($0) }
-    )
-
-    #expect(!measurement.end(rootState: .loading))
-    #expect(measurement.begin())
-    #expect(measurement.cancel())
-    #expect(!measurement.end(rootState: .blocked))
-    #expect(measurement.begin())
-    now += 50_000_000
-    #expect(measurement.end(rootState: .resume))
-    #expect(samples.count == 1)
-    #expect(samples[0].rootState == .resume)
-  }
-
-  @Test func FleckMenuBarRootWiresOnlyTheActualStatusBarWindowProbe() throws {
-    let source = try String(
-      contentsOf: repositoryRoot().appendingPathComponent(
-        "Sources/FleckApp/OnboardingWindowPresenter.swift"
-      ),
-      encoding: .utf8
-    )
-    let rootStart = try #require(source.range(of: "struct FleckMenuBarRoot"))
-    let pinnedStart = try #require(source.range(of: "struct FleckPinnedNotesRoot"))
-    let rootSource = String(source[rootStart.lowerBound..<pinnedStart.lowerBound])
-
-    #expect(rootSource.contains("FleckMenuBarPresentationProbe"))
-    #expect(source.contains("NSWindow.didBecomeKeyNotification"))
-    #expect(source.contains("NSWindow.didBecomeMainNotification"))
-    #expect(source.contains("window.level == .statusBar"))
-    #expect(source.contains("window.isVisible"))
-    #expect(source.contains("FleckPanelPresentationMeasurement.shared"))
-    #expect(!rootSource.contains("makeKeyAndOrderFront"))
-    #expect(!rootSource.contains(".animation("))
-    #expect(!rootSource.contains("hitTest"))
-  }
-
-  @Test func FleckStatusItemMonitorConsumesOnlyRightClicks() throws {
-    let source = try String(
-      contentsOf: repositoryRoot().appendingPathComponent(
-        "Sources/FleckApp/StatusItemContextMenuController.swift"
-      ),
-      encoding: .utf8
-    )
-    #expect(source.contains("matching: [.rightMouseDown]"))
-    #expect(!source.contains(".leftMouseDown"))
-    #expect(!source.contains("FleckPanelPresentationMeasurement"))
-    #expect(source.contains("return event"))
-    #expect(source.contains("NSMenu.popUpContextMenu(menu, with: event, for: view)"))
-  }
-
-  @Test func FleckActivationPreferenceTimingIsWiredAroundTheExistingCall() throws {
-    let source = try String(
-      contentsOf: repositoryRoot().appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
-      encoding: .utf8
-    )
-    let methodStart = try #require(source.range(of: "func applicationDidBecomeActive()"))
-    let methodEnd = try #require(source.range(of: "func awaitStartupAssessment()", range: methodStart.upperBound..<source.endIndex))
-    let methodSource = String(source[methodStart.lowerBound..<methodEnd.lowerBound])
-
-    let panelBegin = try #require(methodSource.range(of: "FleckPanelPresentationMeasurement.shared.begin()"))
-    let preferenceMeasurement = try #require(
-      methodSource.range(of: "FleckPerformanceSignposts.measureActivationPreferenceSynchronization")
-    )
-    #expect(panelBegin.lowerBound < preferenceMeasurement.lowerBound)
-    #expect(methodSource.contains("measureActivationPreferenceSynchronization"))
-    #expect(methodSource.contains("synchronizePreferences()"))
-  }
-
-  @Test func FleckResignationCancelsAnUnmatchedPanelMeasurementAndOwnsItsObserver() throws {
-    let source = try String(
-      contentsOf: repositoryRoot().appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
-      encoding: .utf8
-    )
-    let methodStart = try #require(source.range(of: "func applicationDidResignActive()"))
-    let methodEnd = try #require(
-      source.range(of: "func awaitStartupAssessment()", range: methodStart.upperBound..<source.endIndex)
-    )
-    let methodSource = String(source[methodStart.lowerBound..<methodEnd.lowerBound])
-
-    #expect(methodSource.contains("FleckPanelPresentationMeasurement.shared.cancel()"))
-    #expect(source.contains("private var resignationObserver: ObserverToken?"))
-    #expect(source.contains("NSApplication.didResignActiveNotification"))
-    #expect(source.contains("self?.applicationDidResignActive()"))
-    #expect(source.contains("resignationObserver.value"))
-  }
-
-  @Test func FleckPanelMeasurementExecutesTheExactFleckMenuExtraLookup() throws {
-    let source = try String(
-      contentsOf: repositoryRoot().appendingPathComponent(
-        "Scripts/measure-fleck-panel-presentation.sh"
-      ),
-      encoding: .utf8
-    )
-    let functionStart = try #require(source.range(of: "click_status_item() {"))
-    let functionEnd = try #require(
-      source.range(of: "\n}\n", range: functionStart.upperBound..<source.endIndex)
-    )
-    let functionSource = String(source[functionStart.lowerBound..<functionEnd.upperBound])
-    _ = try #require(source.range(of: "run_accessibility_script() {"))
-
-    let result = try runShellCapture(
-      command: functionSource + "\nrun_accessibility_script() { cat; }\nclick_status_item",
-      arguments: []
-    )
-    #expect(result.status == 0)
-    #expect(result.stdout.contains("tell application process \"Fleck\""))
-    #expect(result.stdout.contains("repeat with menuBarRef in (menu bars)"))
-    #expect(result.stdout.contains("title of itemRef"))
-    #expect(result.stdout.contains("name of itemRef"))
-    #expect(result.stdout.contains("role of itemRef"))
-    #expect(result.stdout.contains("subrole of itemRef"))
-    #expect(result.stdout.contains("AXMenuBarItem"))
-    #expect(result.stdout.contains("AXMenuExtra"))
-    #expect(result.stdout.contains("perform action \"AXPress\" of itemRef"))
-    #expect(!result.stdout.contains("menu bar 1"))
-    #expect(!result.stdout.contains("ControlCenter"))
-    #expect(!result.stdout.contains("SystemUIServer"))
-  }
-
-  @Test func FleckPanelMeasurementScriptDeclaresAClosedSafeAccessibilityWorkflow() throws {
-    let source = try String(
-      contentsOf: repositoryRoot().appendingPathComponent(
-        "Scripts/measure-fleck-panel-presentation.sh"
-      ),
-      encoding: .utf8
-    )
+  @Test func FleckPanelPresentationScriptDeclaresTheAXPressMeasurementBoundary() throws {
+    let source = try measurementScriptSource()
+    let jxa = try measurementJXASource(from: source)
 
     for required in [
       "#!/bin/sh",
       "set -eu",
       "Darwin",
       "FLECK_PERFORMANCE_PID",
-      "ps -p",
-      "System Events",
-      "title of itemRef",
-      "name of itemRef",
-      "role of itemRef",
-      "subrole of itemRef",
-      "perform action \"AXPress\" of itemRef",
-      "key code 53",
-      "com.harryjin.fleck",
-      "category ==",
-      "panel_presentation elapsed_ms=",
-      "app-activation-to-visible",
+      "Fleck.app/Contents/MacOS/Fleck",
+      "Application Support/Fleck",
+      "[ -L",
+      "/usr/bin/osascript -l JavaScript -",
+      "Date.now",
       "AXMenuBarItem",
       "AXMenuExtra",
+      "AXWindow",
+      "AXSystemDialog",
+      "AXPress",
+      "AX-press-to-accessible-visible",
+      "31",
       "cold",
       "warm",
-      "warm_sample_count=30",
       "p50",
       "p95",
-      "output_dir",
-      "[ -L",
-      "Application Support/Fleck",
+      "min",
+      "max",
     ] {
       #expect(source.contains(required), Comment(rawValue: required))
     }
 
     for forbidden in [
+      "log show",
+      "--info",
+      "panel_presentation",
+      "activation_preference",
+      "FleckPanelPresentationMeasurement",
+      "didBecomeActive",
+      "didResignActive",
+      "key code 53",
+      "System Events Escape",
       "open ",
       "kill",
       "pkill",
@@ -197,137 +50,231 @@
       "rm -rf",
       "cp ",
       "mv ",
-      "body.md",
-      "workspace.json",
-      "preferences.json",
+      "entireContents",
+      "uiElements",
+      "note",
+      "body",
+      "profileID",
     ] {
       #expect(!source.contains(forbidden), Comment(rawValue: forbidden))
     }
+
+    #expect(!jxa.contains("Application Support"))
+    #expect(!jxa.contains("entireContents"))
+    #expect(!jxa.contains("uiElements"))
+    #expect(!jxa.contains("note"))
+    #expect(!jxa.contains("body"))
   }
 
-  @Test func FleckPanelPresentationMeasurementAcceptsOnlyThePackagedFleckExecutablePath() throws {
-    let source = try String(
-      contentsOf: repositoryRoot().appendingPathComponent(
-        "Scripts/measure-fleck-panel-presentation.sh"
-      ),
-      encoding: .utf8
-    )
-    let functionStart = try #require(source.range(of: "is_exact_fleck_command() {"))
-    let functionEnd = try #require(
-      source.range(of: "\n}\n", range: functionStart.upperBound..<source.endIndex)
-    )
-    let functionSource = String(source[functionStart.lowerBound..<functionEnd.upperBound])
-    let command = functionSource + "\nis_exact_fleck_command \"$1\""
-    let packagedPath = repositoryRoot()
-      .appendingPathComponent(".build/Fleck.app/Contents/MacOS/Fleck")
-      .path
-    let nonFleckPath = repositoryRoot()
-      .appendingPathComponent(".build/Other.app/Contents/MacOS/Other")
-      .path
+  @Test func FleckPanelPresentationJXAUsesFakeAXFixturesForClosedNormalizationAnd31Samples() throws {
+    let jxa = try measurementJXASource(from: measurementScriptSource())
+    let fixture = #"""
+function run(argv) {
+var state = { open: true, now: 1_000, actions: 0 };
+var panel = {
+  visible: function() { return state.open; },
+  role: function() { return "AXWindow"; },
+  subrole: function() { return "AXSystemDialog"; },
+  size: function() { return [520, 430]; }
+};
+var exactItem = {
+  title: function() { return "Fleck"; },
+  name: function() { return "Fleck"; },
+  role: function() { return "AXMenuBarItem"; },
+  subrole: function() { return "AXMenuExtra"; },
+  actions: {
+    byName: function(name) {
+      if (name !== "AXPress") throw new Error("unexpected action");
+      return { perform: function() { state.open = !state.open; state.now += 37; state.actions += 1; } };
+    }
+  }
+};
+var decoyItem = {
+  title: function() { return "Fleck"; },
+  name: function() { return "Fleck"; },
+  role: function() { return "AXMenuBarItem"; },
+  subrole: function() { return "AXMenuItem"; }
+};
+var fakeProcess = {
+  unixId: function() { return 42; },
+  name: function() { return "Fleck"; },
+  menuBars: function() { return [
+    { menuBarItems: function() { return [decoyItem]; } },
+    { menuBarItems: function() { return [exactItem]; } }
+  ]; },
+  windows: function() { return state.open ? [panel] : []; }
+};
+var menuExtra = findUniqueMenuExtra(fakeProcess);
+var samples = collectSamples(
+  fakeProcess,
+  menuExtra,
+  31,
+  function() { return state.now; },
+  function(milliseconds) { state.now += milliseconds; },
+  100
+);
+if (samples.length !== 31) throw new Error("sample count");
+if (samples[0].sampleLabel !== "cold" || samples[30].sampleLabel !== "warm") throw new Error("labels");
+if (samples.some(function(sample) { return sample.elapsedMilliseconds !== 37; })) throw new Error("elapsed");
+if (state.actions !== 63 || state.open) throw new Error("closed normalization or close verification");
+return JSON.stringify({ count: samples.length, actions: state.actions, elapsed: samples[0].elapsedMilliseconds });
+}
+"""#
+    let result = try runJXA(jxa + "\n" + fixture)
 
-    #expect(try runShell(command: command, arguments: ["--", packagedPath]) == 0)
-    #expect(try runShell(command: command, arguments: ["--", nonFleckPath]) != 0)
-    #expect(try runShell(command: command, arguments: ["--", "Fleck"]) != 0)
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
+    #expect(result.stdout.contains(#""count":31"#))
+    #expect(result.stdout.contains(#""actions":63"#))
+    #expect(result.stdout.contains(#""elapsed":37"#))
   }
 
-  @Test func FleckPanelPresentationUsesTheSupportedInfoLogOption() throws {
-    let source = try String(
-      contentsOf: repositoryRoot().appendingPathComponent(
-        "Scripts/measure-fleck-panel-presentation.sh"
-      ),
-      encoding: .utf8
-    )
-    let functionStart = try #require(source.range(of: "show_performance_logs() {"))
-    let functionEnd = try #require(
-      source.range(of: "\n}\n", range: functionStart.upperBound..<source.endIndex)
-    )
-    let functionSource = String(source[functionStart.lowerBound..<functionEnd.upperBound])
-    let temporaryDirectory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("fleck-log-option-" + UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(
-      at: temporaryDirectory,
-      withIntermediateDirectories: false
-    )
-    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+  @Test func FleckPanelPresentationJXAFailsClosedForAmbiguousMenuExtrasAndTimeouts() throws {
+    let jxa = try measurementJXASource(from: measurementScriptSource())
+    let ambiguousFixture = #"""
+function run(argv) {
+var item = { title: function() { return "Fleck"; }, name: function() { return "Fleck"; }, role: function() { return "AXMenuBarItem"; }, subrole: function() { return "AXMenuExtra"; } };
+var process = { menuBars: function() { return [{ menuBarItems: function() { return [item, item]; } }]; } };
+findUniqueMenuExtra(process);
+}
+"""#
+    let ambiguous = try runJXA(jxa + "\n" + ambiguousFixture)
+    #expect(ambiguous.status != 0)
+    #expect(ambiguous.stderr.contains("exactly one"))
 
-    let fakeLog = temporaryDirectory.appendingPathComponent("log")
-    try "#!/bin/sh\nprintf '%s\\n' \"$@\"\n".write(
-      to: fakeLog,
-      atomically: true,
-      encoding: .utf8
-    )
-    try FileManager.default.setAttributes(
-      [.posixPermissions: 0o755],
-      ofItemAtPath: fakeLog.path
-    )
+    let ambiguousWindowFixture = #"""
+function run(argv) {
+var panel = {
+  visible: function() { return true; },
+  role: function() { return "AXWindow"; },
+  subrole: function() { return "AXSystemDialog"; },
+  size: function() { return [520, 430]; }
+};
+var process = { windows: function() { return [panel, panel]; } };
+collectSamples(process, {}, 1, function() { return 1_000; }, function() {}, 30);
+}
+"""#
+    let ambiguousWindow = try runJXA(jxa + "\n" + ambiguousWindowFixture)
+    #expect(ambiguousWindow.status != 0)
+    #expect(ambiguousWindow.stderr.contains("ambiguous accessible-visible panel window"))
 
-    let command = """
-    metadata_predicate='processID == 69379 AND subsystem == "com.harryjin.fleck" AND category == "performance"'
-    \(functionSource)
-    show_performance_logs "$1"
-    """
-    let result = try runShellCapture(command: command, arguments: ["--", fakeLog.path])
-    let arguments = result.stdout.split(whereSeparator: \.isNewline).map(String.init)
-
-    #expect(result.status == 0)
-    #expect(arguments == [
-      "show",
-      "--last",
-      "5m",
-      "--style",
-      "compact",
-      "--info",
-      "--predicate",
-      "processID == 69379 AND subsystem == \"com.harryjin.fleck\" AND category == \"performance\""
-    ])
-    #expect(!result.stdout.contains("--level"))
-    #expect(!result.stdout.localizedCaseInsensitiveContains("note"))
+    let timeoutFixture = #"""
+function run(argv) {
+var state = { now: 1_000 };
+var item = {
+  title: function() { return "Fleck"; },
+  name: function() { return "Fleck"; },
+  role: function() { return "AXMenuBarItem"; },
+  subrole: function() { return "AXMenuExtra"; },
+  actions: { byName: function() { return { perform: function() {} }; } }
+};
+var process = {
+  windows: function() { return []; },
+  menuBars: function() { return [{ menuBarItems: function() { return [item]; } }]; }
+};
+collectSamples(process, item, 1, function() { return state.now; }, function(milliseconds) { state.now += milliseconds; }, 30);
+}
+"""#
+    let timeout = try runJXA(jxa + "\n" + timeoutFixture)
+    #expect(timeout.status != 0)
+    #expect(timeout.stderr.contains("accessible-visible panel timeout"))
   }
 
   @Test func FleckPanelMeasurementScriptFailsClosedForInvalidInputs() throws {
     let root = repositoryRoot()
     let script = root.appendingPathComponent("Scripts/measure-fleck-panel-presentation.sh")
     let temporaryDirectory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("fleck-panel-measurement-" + UUID().uuidString, isDirectory: true)
+      .appendingPathComponent("fleck-ax-measurement-" + UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(
       at: temporaryDirectory,
       withIntermediateDirectories: false
     )
     defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
 
-    let missingArguments = try run(
+    #expect(try run(script: script, arguments: []).status != 0)
+    #expect(try run(
       script: script,
-      arguments: []
-    )
-    #expect(missingArguments.status != 0)
-
-    let nonexistentDirectory = temporaryDirectory.appendingPathComponent("missing")
-    let nonexistent = try run(
-      script: script,
-      arguments: [nonexistentDirectory.path]
-    )
-    #expect(nonexistent.status != 0)
+      arguments: [temporaryDirectory.appendingPathComponent("missing").path]
+    ).status != 0)
 
     let symlink = temporaryDirectory.appendingPathComponent("output-link")
     try FileManager.default.createSymbolicLink(
       at: symlink,
       withDestinationURL: temporaryDirectory
     )
-    let symlinkResult = try run(
-      script: script,
-      arguments: [symlink.path]
-    )
-    #expect(symlinkResult.status != 0)
+    #expect(try run(script: script, arguments: [symlink.path]).status != 0)
 
-    let nonFleckPID = String(ProcessInfo.processInfo.processIdentifier)
     let nonFleck = try run(
       script: script,
       arguments: [temporaryDirectory.path],
-      environment: ["FLECK_PERFORMANCE_PID": nonFleckPID]
+      environment: ["FLECK_PERFORMANCE_PID": String(ProcessInfo.processInfo.processIdentifier)]
     )
     #expect(nonFleck.status != 0)
-    let remainingFiles = try FileManager.default.contentsOfDirectory(atPath: temporaryDirectory.path)
-    #expect(remainingFiles == ["output-link"])
+    #expect(try FileManager.default.contentsOfDirectory(atPath: temporaryDirectory.path) == ["output-link"])
+  }
+
+  @Test func FleckPanelMeasurementScriptAcceptsOnlyThePackagedFleckExecutableShape() throws {
+    let source = try measurementScriptSource()
+    let functionStart = try #require(source.range(of: "is_exact_fleck_command() {"))
+    let functionEnd = try #require(
+      source.range(of: "\n}\n", range: functionStart.upperBound..<source.endIndex)
+    )
+    let command = String(source[functionStart.lowerBound..<functionEnd.upperBound])
+      + "\nis_exact_fleck_command \"$1\""
+    let packagedPath = repositoryRoot()
+      .appendingPathComponent(".build/Fleck.app/Contents/MacOS/Fleck")
+      .path
+
+    #expect(try runShell(command, arguments: [packagedPath]).status == 0)
+    #expect(try runShell(command, arguments: ["/tmp/Fleck"]).status != 0)
+    #expect(try runShell(command, arguments: ["/tmp/Other.app/Contents/MacOS/Other"]).status != 0)
+  }
+
+  private struct ProcessResult {
+    let status: Int32
+    let stdout: String
+    let stderr: String
+  }
+
+  private func runJXA(_ source: String) throws -> ProcessResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    process.arguments = ["-l", "JavaScript", "-"]
+    let input = Pipe()
+    let output = Pipe()
+    let error = Pipe()
+    process.standardInput = input
+    process.standardOutput = output
+    process.standardError = error
+    try process.run()
+    input.fileHandleForWriting.write(Data(source.utf8))
+    input.fileHandleForWriting.closeFile()
+    let stdoutData = output.fileHandleForReading.readDataToEndOfFile()
+    let stderrData = error.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return ProcessResult(
+      status: process.terminationStatus,
+      stdout: String(data: stdoutData, encoding: .utf8) ?? "",
+      stderr: String(data: stderrData, encoding: .utf8) ?? ""
+    )
+  }
+
+  private func runShell(_ command: String, arguments: [String]) throws -> ProcessResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", command, "shell"] + arguments
+    let output = Pipe()
+    let error = Pipe()
+    process.standardOutput = output
+    process.standardError = error
+    try process.run()
+    let stdoutData = output.fileHandleForReading.readDataToEndOfFile()
+    let stderrData = error.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return ProcessResult(
+      status: process.terminationStatus,
+      stdout: String(data: stdoutData, encoding: .utf8) ?? "",
+      stderr: String(data: stderrData, encoding: .utf8) ?? ""
+    )
   }
 
   private struct CommandResult {
@@ -348,33 +295,21 @@
     return CommandResult(status: process.terminationStatus)
   }
 
-  private func runShell(command: String, arguments: [String]) throws -> Int32 {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = ["-c", command] + arguments
-    try process.run()
-    process.waitUntilExit()
-    return process.terminationStatus
-  }
-
-  private struct ShellResult {
-    let status: Int32
-    let stdout: String
-  }
-
-  private func runShellCapture(command: String, arguments: [String]) throws -> ShellResult {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = ["-c", command] + arguments
-    let output = Pipe()
-    process.standardOutput = output
-    try process.run()
-    process.waitUntilExit()
-    let stdout = String(
-      data: output.fileHandleForReading.readDataToEndOfFile(),
+  private func measurementScriptSource() throws -> String {
+    try String(
+      contentsOf: repositoryRoot().appendingPathComponent(
+        "Scripts/measure-fleck-panel-presentation.sh"
+      ),
       encoding: .utf8
-    ) ?? ""
-    return ShellResult(status: process.terminationStatus, stdout: stdout)
+    )
+  }
+
+  private func measurementJXASource(from source: String) throws -> String {
+    let begin = try #require(source.range(of: "// AX_MEASUREMENT_JXA_BEGIN\n"))
+    let end = try #require(
+      source.range(of: "\n// AX_MEASUREMENT_JXA_END", range: begin.upperBound..<source.endIndex)
+    )
+    return String(source[begin.upperBound..<end.lowerBound])
   }
 
   private func repositoryRoot() -> URL {

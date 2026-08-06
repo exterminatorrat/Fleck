@@ -29,7 +29,7 @@
     override init() {
       super.init()
       if let monitor = NSEvent.addLocalMonitorForEvents(
-        matching: [.rightMouseDown],
+        matching: .rightMouseDown,
         handler: { [weak self] event in
           self?.handle(event) ?? event
         }

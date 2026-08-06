@@ -40,7 +40,7 @@ esac
 
 if [ ! -d "$requested_output_dir" ] || [ -L "$requested_output_dir" ]; then
   printf '%s\n' \
-    'error: output directory must already exist and must not be a symlink' >&2
+    'error: output directory must be one existing non-symlink directory' >&2
   exit 2
 fi
 
@@ -54,18 +54,17 @@ case "$output_dir" in
     ;;
 esac
 
-raw_samples="$output_dir/app-activation-to-visible-raw.tsv"
-samples="$output_dir/app-activation-to-visible-samples.tsv"
-summary="$output_dir/app-activation-to-visible-summary.txt"
-metadata="$output_dir/app-activation-to-visible-metadata.txt"
-for output_file in "$raw_samples" "$samples" "$summary" "$metadata"; do
+raw_samples="$output_dir/ax-press-to-accessible-visible-raw.tsv"
+summary="$output_dir/ax-press-to-accessible-visible-summary.txt"
+metadata="$output_dir/ax-press-to-accessible-visible-metadata.txt"
+for output_file in "$raw_samples" "$summary" "$metadata"; do
   if [ -L "$output_file" ]; then
     printf 'error: refusing symlinked output: %s\n' "$output_file" >&2
     exit 2
   fi
 done
 
-for required_command in awk date log osascript ps sleep sort sw_vers uname wc; do
+for required_command in awk date osascript ps sort uname; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     printf 'error: required command not found: %s\n' "$required_command" >&2
     exit 2
@@ -111,216 +110,310 @@ if ! /usr/bin/osascript -e \
   exit 2
 fi
 
-metadata_predicate="processID == $profile_pid AND subsystem == \"com.harryjin.fleck\" AND category == \"performance\""
 readonly total_samples=31
 readonly warm_sample_count=30
 
-: > "$raw_samples"
-: > "$samples"
-: > "$summary"
-: > "$metadata"
-
-printf 'sample_label\tsample_number\telapsed_ms\troot_state\n' > "$raw_samples"
-printf 'sample_label\tsample_number\telapsed_ms\troot_state\n' > "$samples"
-
-show_performance_logs() {
-  "$1" show \
-    --last 5m \
-    --style compact \
-    --info \
-    --predicate "$metadata_predicate" 2>/dev/null
-}
-
-log_records() {
-  show_performance_logs /usr/bin/log |
-    awk '
-      /panel_presentation elapsed_ms=/ {
-        record = $0
-        sub(/^.*panel_presentation elapsed_ms=/, "", record)
-        split(record, fields, /[[:space:]]+/)
-        elapsed = fields[1]
-        root = fields[2]
-        sub(/^root_state=/, "", root)
-        if (elapsed ~ /^[0-9]+([.][0-9]+)?$/ && root ~ /^(loading|notes|blocked|resume)$/) {
-          print elapsed "\t" root
-        }
-      }
-    '
-}
-
-baseline_count=$(log_records | awk 'END { print NR + 0 }')
-
-capture_records() {
-  {
-    printf 'sample_label\tsample_number\telapsed_ms\troot_state\n'
-    log_records |
-      awk -v baseline="$baseline_count" -v maximum="$total_samples" '
-        NR > baseline && NR <= baseline + maximum {
-          print "unlabeled\t" NR - baseline "\t" $1 "\t" $2
-        }
-      '
-  } > "$raw_samples"
-  sample_count=$(awk 'END { print NR - 1 }' "$raw_samples")
-}
-
-wait_for_sample() {
-  expected_sample=$1
-  deadline=$(( $(date '+%s') + 8 ))
-  while :; do
-    capture_records
-    if [ "$sample_count" -ge "$expected_sample" ]; then
-      return 0
-    fi
-    if [ "$(date '+%s')" -ge "$deadline" ]; then
-      printf 'error: sample %s has no Fleck app-activation-to-visible completion record\n' "$expected_sample" >&2
-      return 1
-    fi
-    sleep 0.2
-  done
-}
-
-click_status_item() {
-  run_accessibility_script <<'APPLESCRIPT'
-tell application "System Events"
-  tell application process "Fleck"
-    repeat with menuBarRef in (menu bars)
-      repeat with itemRef in (menu bar items of menuBarRef)
-        set itemTitle to ""
-        set itemName to ""
-        set itemRole to ""
-        set itemSubrole to ""
-        try
-          set itemTitle to title of itemRef as text
-        end try
-        try
-          set itemName to name of itemRef as text
-        end try
-        try
-          set itemRole to role of itemRef as text
-        end try
-        try
-          set itemSubrole to subrole of itemRef as text
-        end try
-        if (itemTitle is "Fleck" or itemName is "Fleck") and itemRole is "AXMenuBarItem" and itemSubrole is "AXMenuExtra" then
-          perform action "AXPress" of itemRef
-          return "clicked"
-        end if
-      end repeat
-    end repeat
-  end tell
-end tell
-error "Fleck AXMenuExtra with accessible Fleck title or name was not found"
-APPLESCRIPT
-}
-
-run_accessibility_script() {
-  /usr/bin/osascript "$@"
-}
-
-close_panel() {
-  /usr/bin/osascript <<'APPLESCRIPT'
-tell application "System Events"
-  tell application process "Fleck"
-    key code 53
-  end tell
-end tell
-APPLESCRIPT
-}
-
-printf '%s\n' \
-  'captured_at_utc='"$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
-  'fleck_pid='"$profile_pid" \
-  'fleck_command='"$process_name" \
-  'subsystem=com.harryjin.fleck' \
-  'category=performance' \
-  'log_predicate='"$metadata_predicate" \
-  'measurement_name=app-activation-to-visible' \
-  'cold_sample_count=1' \
-  'warm_sample_count=30' \
-  'status_item_lookup=Fleck application process menu bars; title/name=Fleck; role=AXMenuBarItem; subrole=AXMenuExtra' \
-  'close_action=System Events Escape key code 53' \
-  'automation_click_wall_clock=not included in app-activation-to-visible or full perceived latency' \
-  'measurement_boundary=applicationDidBecomeActive to visible Fleck status-bar window' \
-  'data_boundary=no Fleck Application Support or note data read or written' \
-  'output_directory='"$output_dir" > "$metadata"
-
-if ! close_panel >/dev/null 2>&1; then
-  printf '%s\n' \
-    'error: could not send the non-destructive Escape action; verify System Events Accessibility' >&2
-  exit 2
-fi
-
-record_sample() {
-  sample_label=$1
-  sample_number=$2
-  elapsed=$(awk -F '\t' -v sample="$sample_number" 'NR == sample + 1 { print $3; exit }' "$raw_samples")
-  root_state=$(awk -F '\t' -v sample="$sample_number" 'NR == sample + 1 { print $4; exit }' "$raw_samples")
-  if [ -z "$elapsed" ] || [ -z "$root_state" ]; then
-    printf 'error: sample %s has no parsed app-side completion record\n' "$sample_number" >&2
-    exit 2
-  fi
-  printf '%s\t%s\t%s\t%s\n' \
-    "$sample_label" "$sample_number" "$elapsed" "$root_state" >> "$samples"
-  {
-    printf 'sample_label\tsample_number\telapsed_ms\troot_state\n'
-    awk -F '\t' 'NR > 1 { print }' "$samples"
-  } > "$raw_samples"
-}
-
-if ! click_status_item >/dev/null 2>&1; then
-  printf '%s\n' \
-    'error: could not identify the Fleck AXMenuExtra by accessible title or name' >&2
-  exit 2
-fi
-wait_for_sample 1
-record_sample cold 1
-if ! close_panel >/dev/null 2>&1; then
-  printf '%s\n' 'error: could not close the cold panel with Escape' >&2
-  exit 2
-fi
-
-warm_sample=1
-while [ "$warm_sample" -le "$warm_sample_count" ]; do
-  sample_number=$((warm_sample + 1))
-  if ! click_status_item >/dev/null 2>&1; then
-    printf 'error: could not identify Fleck status item for warm sample %s\n' "$warm_sample" >&2
-    exit 2
-  fi
-  wait_for_sample "$sample_number"
-  record_sample warm "$sample_number"
-  if ! close_panel >/dev/null 2>&1; then
-    printf 'error: could not close warm panel %s with Escape\n' "$warm_sample" >&2
-    exit 2
-  fi
-  warm_sample=$((warm_sample + 1))
-done
-
-stats=$(awk -F '\t' 'NR > 1 { print $3 }' "$samples" | sort -n | awk '
-  { values[NR] = $1; minimum = NR == 1 || $1 < minimum ? $1 : minimum; maximum = NR == 1 || $1 > maximum ? $1 : maximum }
-  END {
-    count = NR
-    p50 = values[int((count + 1) / 2)]
-    p95 = values[int((95 * count + 99) / 100)]
-    print count "\t" p50 "\t" p95 "\t" minimum "\t" maximum
+measurement_output=$(
+  /usr/bin/osascript -l JavaScript - "$profile_pid" "$total_samples" <<'JXA'
+// AX_MEASUREMENT_JXA_BEGIN
+function attribute(object, name) {
+  try {
+    return object[name]();
+  } catch (_) {
+    return null;
   }
-')
+}
+
+function stringAttribute(object, name) {
+  var value = attribute(object, name);
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function numberAttribute(object, name) {
+  var value = attribute(object, name);
+  return value === null || value === undefined ? NaN : Number(value);
+}
+
+function isVisible(object) {
+  var value = attribute(object, "visible");
+  return value === true || value === 1 || value === "true" || value === "1";
+}
+
+function findExactFleckProcess(systemEvents, targetPid) {
+  var matches = [];
+  var processes = systemEvents.applicationProcesses();
+  for (var index = 0; index < processes.length; index += 1) {
+    var process = processes[index];
+    if (
+      numberAttribute(process, "unixId") === targetPid &&
+      stringAttribute(process, "name") === "Fleck"
+    ) {
+      matches.push(process);
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error("expected exactly one Fleck process for PID");
+  }
+  return matches[0];
+}
+
+function findUniqueMenuExtra(process) {
+  var matches = [];
+  var menuBars = process.menuBars();
+  for (var barIndex = 0; barIndex < menuBars.length; barIndex += 1) {
+    var menuBarItems = menuBars[barIndex].menuBarItems();
+    for (var itemIndex = 0; itemIndex < menuBarItems.length; itemIndex += 1) {
+      var item = menuBarItems[itemIndex];
+      var title = stringAttribute(item, "title");
+      var name = stringAttribute(item, "name");
+      if (
+        (title === "Fleck" || name === "Fleck") &&
+        stringAttribute(item, "role") === "AXMenuBarItem" &&
+        stringAttribute(item, "subrole") === "AXMenuExtra"
+      ) {
+        matches.push(item);
+      }
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error("expected exactly one Fleck AXMenuExtra");
+  }
+  return matches[0];
+}
+
+function pressMenuExtra(menuExtra) {
+  var action = menuExtra.actions.byName("AXPress");
+  if (!action) {
+    throw new Error("Fleck AXMenuExtra has no AXPress action");
+  }
+  action.perform();
+}
+
+function isTransientPanelWindow(window) {
+  if (stringAttribute(window, "role") !== "AXWindow") {
+    return false;
+  }
+  var subrole = stringAttribute(window, "subrole");
+  if (subrole !== "AXSystemDialog" && subrole !== "AXDialog") {
+    return false;
+  }
+  var size = attribute(window, "size");
+  if (!size || size.length < 2) {
+    return false;
+  }
+  var width = Number(size[0]);
+  var height = Number(size[1]);
+  return (
+    isFinite(width) &&
+    isFinite(height) &&
+    width >= 200 &&
+    height >= 100 &&
+    width <= 2000 &&
+    height <= 1400
+  );
+}
+
+function visiblePanelWindows(process) {
+  var windows = process.windows();
+  var matches = [];
+  for (var index = 0; index < windows.length; index += 1) {
+    var window = windows[index];
+    if (isTransientPanelWindow(window) && isVisible(window)) {
+      matches.push(window);
+    }
+  }
+  return matches;
+}
+
+function waitForPanelState(process, expectedVisible, clock, sleep, timeoutMs) {
+  var deadline = clock() + timeoutMs;
+  while (clock() <= deadline) {
+    var panels = visiblePanelWindows(process);
+    if (panels.length > 1) {
+      throw new Error("ambiguous accessible-visible panel window");
+    }
+    if ((panels.length === 1) === expectedVisible) {
+      return panels.length === 1 ? panels[0] : null;
+    }
+    sleep(50);
+  }
+  throw new Error(
+    expectedVisible
+      ? "accessible-visible panel timeout"
+      : "panel did not normalize closed before timeout"
+  );
+}
+
+function normalizeClosed(process, menuExtra, clock, sleep, timeoutMs) {
+  var panels = visiblePanelWindows(process);
+  if (panels.length > 1) {
+    throw new Error("ambiguous accessible-visible panel window");
+  }
+  if (panels.length === 1) {
+    pressMenuExtra(menuExtra);
+    waitForPanelState(process, false, clock, sleep, timeoutMs);
+  }
+}
+
+function measureSample(process, menuExtra, sampleLabel, clock, sleep, timeoutMs) {
+  normalizeClosed(process, menuExtra, clock, sleep, timeoutMs);
+  var startedAt = clock();
+  pressMenuExtra(menuExtra);
+  waitForPanelState(process, true, clock, sleep, timeoutMs);
+  var elapsedMilliseconds = clock() - startedAt;
+  if (elapsedMilliseconds < 0) {
+    throw new Error("Date.now moved backwards during sample");
+  }
+  pressMenuExtra(menuExtra);
+  waitForPanelState(process, false, clock, sleep, timeoutMs);
+  return {
+    sampleLabel: sampleLabel,
+    elapsedMilliseconds: elapsedMilliseconds
+  };
+}
+
+function collectSamples(process, menuExtra, count, clock, sleep, timeoutMs) {
+  if (!isFinite(count) || count < 1 || count !== Math.floor(count)) {
+    throw new Error("invalid sample count");
+  }
+  var samples = [];
+  for (var index = 0; index < count; index += 1) {
+    samples.push(
+      measureSample(
+        process,
+        menuExtra,
+        index === 0 ? "cold" : "warm",
+        clock,
+        sleep,
+        timeoutMs
+      )
+    );
+  }
+  return samples;
+}
+// AX_MEASUREMENT_JXA_END
+
+function run(argv) {
+  var targetPid = Number(argv[0]);
+  var count = Number(argv[1]);
+  if (!isFinite(targetPid) || targetPid < 1 || targetPid !== Math.floor(targetPid)) {
+    throw new Error("invalid Fleck PID");
+  }
+  var systemEvents = Application("System Events");
+  var process = findExactFleckProcess(systemEvents, targetPid);
+  var menuExtra = findUniqueMenuExtra(process);
+  var samples = collectSamples(
+    process,
+    menuExtra,
+    count,
+    Date.now,
+    function(milliseconds) { delay(milliseconds / 1000); },
+    5000
+  );
+  var lines = ["sample_label\tsample_number\telapsed_ms"];
+  for (var index = 0; index < samples.length; index += 1) {
+    lines.push(
+      samples[index].sampleLabel +
+        "\t" +
+        (index + 1) +
+        "\t" +
+        samples[index].elapsedMilliseconds
+    );
+  }
+  console.log(lines.join("\n"));
+}
+JXA
+) || {
+  printf '%s\n' \
+    'error: AX-press-to-accessible-visible JXA failed; verify one exact AXMenuExtra, a closed panel, and one accessible transient window' >&2
+  exit 2
+}
+
+if ! printf '%s\n' "$measurement_output" | awk -F '\t' -v expected="$total_samples" '
+  BEGIN { valid = 1 }
+  NR == 1 {
+    if ($0 != "sample_label\tsample_number\telapsed_ms") valid = 0
+    next
+  }
+  {
+    if (
+      NF != 3 ||
+      ($1 != "cold" && $1 != "warm") ||
+      $2 !~ /^[0-9]+$/ ||
+      $3 !~ /^[0-9]+$/ ||
+      $2 != NR - 1
+    ) valid = 0
+    if ($1 == "cold") cold += 1
+    if ($1 == "warm") warm += 1
+  }
+  END {
+    if (NR != expected + 1 || cold != 1 || warm != expected - 1) valid = 0
+    exit(valid ? 0 : 1)
+  }
+'; then
+  printf '%s\n' 'error: JXA returned an invalid or incomplete 31-sample record set' >&2
+  exit 2
+fi
+
+printf '%s\n' "$measurement_output" > "$raw_samples"
+
+stats=$(awk -F '\t' 'NR > 1 { print $3 }' "$raw_samples" | sort -n | awk -v expected="$total_samples" '
+  {
+    values[NR] = $1
+    minimum = NR == 1 || $1 < minimum ? $1 : minimum
+    maximum = NR == 1 || $1 > maximum ? $1 : maximum
+  }
+  END {
+    if (NR != expected) exit 1
+    p50 = values[int((expected + 1) / 2)]
+    p95 = values[int((95 * expected + 99) / 100)]
+    printf "%s\t%s\t%s\t%s\t%s\n", NR, p50, p95, minimum, maximum
+  }
+') || {
+  printf '%s\n' 'error: could not calculate statistics for the complete sample set' >&2
+  exit 2
+}
+
 set -- $stats
-if [ "$1" -ne "$total_samples" ]; then
-  printf 'error: expected %s app-side completion records, found %s\n' "$total_samples" "$1" >&2
+if [ "$#" -ne 5 ] || [ "$1" -ne "$total_samples" ]; then
+  printf '%s\n' 'error: expected 31 completed samples for summary statistics' >&2
   exit 2
 fi
 
 {
-  printf '%s\n' 'Fleck app-activation-to-visible measurement summary'
+  printf '%s\n' 'Fleck AX-press-to-accessible-visible measurement summary'
   printf 'sample_count=%s\n' "$1"
   printf 'cold_sample_count=1\n'
-  printf 'warm_sample_count=30\n'
+  printf 'warm_sample_count=%s\n' "$warm_sample_count"
   printf 'p50_ms=%s\n' "$2"
   printf 'p95_ms=%s\n' "$3"
   printf 'min_ms=%s\n' "$4"
   printf 'max_ms=%s\n' "$5"
-  printf '%s\n' 'measurement_boundary=applicationDidBecomeActive to visible Fleck status-bar window'
-  printf '%s\n' 'automation_boundary=click wall-clock and full perceived latency are not measured'
+  printf '%s\n' 'measurement_boundary=AX-press-to-accessible-visible'
+  printf '%s\n' 'automation_boundary=not pixel-complete and not human click latency'
 } > "$summary"
 
-printf 'Wrote Fleck app-activation-to-visible samples and summary to %s\n' "$output_dir"
+{
+  printf 'captured_at_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  printf '%s\n' 'measurement_name=AX-press-to-accessible-visible'
+  printf 'sample_count=%s\n' "$1"
+  printf 'cold_sample_count=1\n'
+  printf 'warm_sample_count=%s\n' "$warm_sample_count"
+  printf '%s\n' \
+    'status_item_contract=exact Fleck title or name; role AXMenuBarItem; subrole AXMenuExtra; searched across all Fleck menu bars'
+  printf '%s\n' \
+    'panel_window_contract=Fleck process window; role AXWindow; subrole AXSystemDialog or AXDialog; visible=true; sane size'
+  printf '%s\n' \
+    'normalization=before every sample, toggle exact AXPress only when a matching panel is visible and verify no matching panel'
+  printf '%s\n' \
+    'timing=one JXA process using Date.now from AXPress invocation to first matching accessible-visible panel'
+  printf '%s\n' \
+    'boundary=AX-press-to-accessible-visible; not pixel-complete and not human click latency'
+  printf '%s\n' \
+    'data_boundary=no editor descendants or user data; no Fleck Application Support access'
+  printf '%s\n' \
+    'process_boundary=already-running exact packaged Fleck only; no launch, termination, rebuild, signal, or process mutation'
+} > "$metadata"
+
+printf 'Wrote 1 cold and %s warm AX-press-to-accessible-visible samples to %s\n' \
+  "$warm_sample_count" "$output_dir"

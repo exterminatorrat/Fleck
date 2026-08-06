@@ -65,23 +65,27 @@ only context and must not be reported as Fleck-only logical writes.
 
 ## Panel presentation measurement
 
-The packaged-app loop measures `app-activation-to-visible`: from Fleck's
-`applicationDidBecomeActive()` boundary immediately before its existing
-preference synchronization to the actual transient status-bar window becoming
-visible. This is not click wall-clock time or full perceived latency. It records
-one cold sample followed by 30 warm samples from an already-running exact Fleck
-process, and reports raw samples plus p50, p95, minimum, and maximum values. It
-uses only the Fleck performance subsystem/category and never reads or writes
-Fleck Application Support or note data.
+The packaged-app loop measures `AX-press-to-accessible-visible`: from the exact
+Fleck status-item `AXPress` invocation to the first matching transient panel
+window becoming accessibility-visible. This is not pixel-complete and is not
+human click latency. It records one cold sample followed by 30 warm samples
+from an already-running exact packaged Fleck process, and reports raw samples
+plus p50, p95, minimum, and maximum values. It does not use app-side log
+polling or activation timing, and never reads or writes Fleck Application
+Support or editor data.
 
 Before running it, grant the calling Terminal or agent System Events
 Accessibility permission in System Settings → Privacy & Security →
 Accessibility, launch the exact packaged Fleck app manually, and record its PID.
-The script locates only the real Fleck AXMenuExtra by iterating every menu bar
-of the Fleck application process and requiring title/name `Fleck`, role
-`AXMenuBarItem`, and subrole `AXMenuExtra`. It does not launch, terminate,
-rebuild, or signal Fleck. A missing app-side completion record fails the run;
-automation click wall-clock time and full perceived latency are not measured.
+The script locates exactly one real Fleck `AXMenuExtra` by iterating every menu
+bar of the Fleck application process and requiring title/name `Fleck`, role
+`AXMenuBarItem`, and subrole `AXMenuExtra`. Before every sample it checks for a
+matching accessible-visible transient window, toggles the exact item only when
+needed to normalize the panel closed, and verifies that it is closed. It then
+uses one JXA process and `Date.now` to wait for the first matching `AXWindow`
+with subrole `AXSystemDialog` or `AXDialog` and sane dimensions. Missing,
+ambiguous, or timed-out states fail closed. It does not launch, terminate,
+rebuild, signal, or otherwise mutate Fleck.
 
 ```sh
 bash -n Scripts/measure-fleck-panel-presentation.sh
@@ -90,8 +94,10 @@ FLECK_PERFORMANCE_PID=PID Scripts/measure-fleck-panel-presentation.sh \
 ```
 
 The output directory must already exist, be outside Fleck Application Support,
-and not be a symlink. Leave the packaged measurement as `[not captured]` until
-this exact loop has been run against the accepted QA artifact.
+and not be a symlink. The caller must grant System Events Accessibility to the
+Terminal or agent and supply the PID of the already-running exact packaged
+Fleck app. Leave the packaged measurement as `[not captured]` until this exact
+loop has been run against the accepted QA artifact.
 
 ## Results
 

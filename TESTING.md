@@ -741,10 +741,17 @@ FLECK_PERFORMANCE_PID=PID Scripts/measure-fleck-panel-presentation.sh \
   "/absolute/path/to/disposable-output"
 ```
 
-The script performs one cold and 30 warm status-item opens, closes each panel
-with Escape, and fails if any app-side completion record is missing. It never
-launches or signals Fleck and never reads or writes Fleck Application Support
-or note data. Do not treat automation click wall-clock time as product latency.
+The script measures the bounded `AX-press-to-accessible-visible` interval: one
+cold and 30 warm samples from the exact Fleck `AXMenuExtra` AXPress invocation
+to the first matching accessibility-visible transient panel window. It searches
+all Fleck menu bars and requires title/name `Fleck`, role `AXMenuBarItem`, and
+subrole `AXMenuExtra`; it normalizes the panel closed before every sample by
+toggling that exact item only when a matching window is visible, then verifies
+closed after each sample. It uses one JXA process and `Date.now`, writes raw
+TSV plus p50/p95/min/max and metadata, and fails closed on missing, ambiguous,
+or timed-out states. This is not pixel-complete or human click latency. It
+does not use app activation/log records, launch or signal Fleck, or read/write
+Fleck Application Support or editor data.
 
 ## Accessibility checks
 
