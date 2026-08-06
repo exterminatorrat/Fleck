@@ -376,12 +376,14 @@
             Image(nsImage: mark)
               .resizable()
               .frame(width: 18, height: 18)
+              .accessibilityHidden(true)
           case .missingPackagedResource:
             Text("!")
               .foregroundStyle(.red)
               .accessibilityLabel("Fleck mark missing")
           }
           Text("Fleck")
+            .accessibilityLabel("Fleck")
         }
           .font(.headline)
         Spacer()

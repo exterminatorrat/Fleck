@@ -40,6 +40,25 @@ import Testing
   #expect(notesPanelSource.contains("FleckMark.load(template: true)"))
 }
 
+@Test func notesPanelHeaderExposesOnlyTheFleckTitleAndMissingMarkWarning() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+  let header = try #require(source.components(separatedBy: "private var header: some View").dropFirst().first)
+  let titleArea = try #require(header.components(separatedBy: "Spacer()").first)
+  let mark = try #require(titleArea.range(of: "Image(nsImage: mark)"))
+  let title = try #require(titleArea.range(of: "Text(\"Fleck\")"))
+
+  #expect(titleArea[mark.upperBound...].contains(".accessibilityHidden(true)"))
+  #expect(titleArea[title.upperBound...].contains(".accessibilityLabel(\"Fleck\")"))
+  #expect(titleArea.contains(".accessibilityLabel(\"Fleck mark missing\")"))
+}
+
 @Test @MainActor func fleckMarkFailsLoudlyForMissingPackagedResourceButFallsBackInBareDevelopment() {
   switch FleckMark.load(template: true, resourceURL: nil, isPackagedApp: true) {
   case .missingPackagedResource:
