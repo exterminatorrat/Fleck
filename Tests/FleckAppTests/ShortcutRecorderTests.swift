@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import Foundation
   import FleckCore
   import Testing
 
@@ -24,6 +25,22 @@
         charactersIgnoringModifiers: charactersIgnoringModifiers,
         isARepeat: isARepeat,
         keyCode: keyCode
+      )
+    )
+  }
+
+  private func mouseEvent(type: NSEvent.EventType) throws -> NSEvent {
+    try #require(
+      NSEvent.mouseEvent(
+        with: type,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: 0,
+        context: nil,
+        eventNumber: 1,
+        clickCount: 1,
+        pressure: 1
       )
     )
   }
@@ -209,5 +226,120 @@
         shortcuts: [Shortcut(action: .nextNote, key: nil, modifiers: [])]
       ) == nil
     )
+  }
+
+  @Test @MainActor func captureCoordinatorCapturesOneValidEventAndConsumesLaterEvents() throws {
+    var captured: [ShortcutChord] = []
+    var cancellations = 0
+    let coordinator = ShortcutRecorder.CaptureBridge.Coordinator(
+      onCapture: { captured.append($0) },
+      onCancel: { cancellations += 1 }
+    )
+
+    coordinator.start()
+    coordinator.start()
+    #expect(coordinator.isMonitoring)
+
+    let first = try shortcutEvent(keyCode: 8)
+    #expect(coordinator.handle(first) == nil)
+    #expect(captured == [ShortcutChord(key: "n", modifiers: [])])
+    #expect(cancellations == 0)
+    #expect(!coordinator.isMonitoring)
+
+    let second = try shortcutEvent(keyCode: 9, characters: "m", charactersIgnoringModifiers: "m")
+    #expect(coordinator.handle(second) === second)
+    #expect(captured.count == 1)
+  }
+
+  @Test @MainActor func captureCoordinatorConsumesRepeatAndUnsupportedEventsWithoutSaving() throws {
+    var captured: [ShortcutChord] = []
+    let coordinator = ShortcutRecorder.CaptureBridge.Coordinator(
+      onCapture: { captured.append($0) },
+      onCancel: {}
+    )
+
+    coordinator.start()
+    let repeated = try shortcutEvent(keyCode: 8, isARepeat: true)
+    #expect(coordinator.handle(repeated) == nil)
+    #expect(coordinator.isMonitoring)
+
+    let unsupported = try shortcutEvent(
+      keyCode: 200,
+      characters: "",
+      charactersIgnoringModifiers: ""
+    )
+    #expect(coordinator.handle(unsupported) == nil)
+    #expect(coordinator.isMonitoring)
+    #expect(captured.isEmpty)
+
+    coordinator.stop()
+  }
+
+  @Test @MainActor func captureCoordinatorCancelsOnMouseDownAndReturnsTheMouseEvent() throws {
+    var cancellations = 0
+    let coordinator = ShortcutRecorder.CaptureBridge.Coordinator(
+      onCapture: { _ in },
+      onCancel: { cancellations += 1 }
+    )
+    coordinator.start()
+
+    let click = try mouseEvent(type: .leftMouseDown)
+    #expect(coordinator.handle(click) === click)
+    #expect(cancellations == 1)
+    #expect(!coordinator.isMonitoring)
+
+    let secondClick = try mouseEvent(type: .rightMouseDown)
+    #expect(coordinator.handle(secondClick) === secondClick)
+    #expect(cancellations == 1)
+  }
+
+  @Test @MainActor func captureCoordinatorStopAndDismantleAreIdempotent() {
+    let bridge = ShortcutRecorder.CaptureBridge(onCapture: { _ in }, onCancel: {})
+    let coordinator = bridge.makeCoordinator()
+    coordinator.start()
+    coordinator.stop()
+    coordinator.stop()
+    #expect(!coordinator.isMonitoring)
+
+    coordinator.start()
+    ShortcutRecorder.CaptureBridge.dismantleNSView(
+      NSView(frame: .zero),
+      coordinator: coordinator
+    )
+    #expect(!coordinator.isMonitoring)
+  }
+
+  @Test func settingsUsesTheCenteredNativeShortcutRecorderContract() throws {
+    let sourceRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let settingsSource = try String(
+      contentsOf: sourceRoot.appendingPathComponent("Sources/FleckApp/SettingsView.swift")
+    )
+    let recorderSource = try String(
+      contentsOf: sourceRoot.appendingPathComponent("Sources/FleckApp/ShortcutRecorder.swift")
+    )
+
+    #expect(!settingsSource.contains("TextField(\"Key\""))
+    #expect(!settingsSource.contains("shortcutKeyBinding"))
+    #expect(!settingsSource.contains("modifierBinding"))
+    #expect(settingsSource.contains("@State private var recordingShortcutAction: Shortcut.Action?"))
+    #expect(settingsSource.contains("ShortcutRecorder("))
+    #expect(
+      settingsSource.contains(
+        "This shortcut may replace normal typing or navigation while Fleck is active."
+      )
+    )
+    #expect(
+      settingsSource.contains(
+        "Click a shortcut and press the complete chord. Conflicting combinations are highlighted and disabled shortcuts can be restored at any time."
+      )
+    )
+    #expect(settingsSource.contains("setShortcutEnabled"))
+    #expect(recorderSource.contains(".frame(minWidth: 112"))
+    #expect(recorderSource.contains("Record shortcut for "))
+    #expect(recorderSource.contains("Press shortcut"))
+    #expect(!recorderSource.contains(".animation"))
   }
 #endif

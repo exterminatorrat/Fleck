@@ -138,6 +138,7 @@
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
+    @State private var recordingShortcutAction: Shortcut.Action?
     @Namespace private var selectedSectionHighlight
 
     init(runtime: DictationRuntime) {
@@ -374,18 +375,27 @@
             HStack {
               Text(action.title)
               Spacer()
-              TextField("Key", text: shortcutKeyBinding(action))
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 64)
-              Menu(shortcutLabel(shortcut)) {
-                ForEach(Shortcut.Modifier.allCases, id: \.self) { modifier in
-                  Toggle(
-                    modifier.rawValue.capitalized, isOn: modifierBinding(modifier, action: action))
-                }
-              }
+              ShortcutRecorder(
+                action: action,
+                shortcut: shortcut,
+                isRecording: recordingShortcutAction == action,
+                onBegin: { recordingShortcutAction = action },
+                onCapture: { chord in
+                  recordShortcut(action, chord: chord)
+                },
+                onCancel: { recordingShortcutAction = nil }
+              )
               Button(shortcut?.key == nil ? "Restore" : "Remove") {
+                recordingShortcutAction = nil
                 setShortcutEnabled(action, enabled: shortcut?.key == nil)
               }
+            }
+            if shortcut?.isEnabled == true, shortcut?.modifiers.isEmpty == true {
+              Text(
+                "This shortcut may replace normal typing or navigation while Fleck is active."
+              )
+              .font(.caption)
+              .foregroundStyle(.secondary)
             }
             if conflicts.contains(action) {
               Label("Conflicts with another shortcut", systemImage: "exclamationmark.triangle.fill")
@@ -394,7 +404,7 @@
           }
         }
         Text(
-          "Choose a key and one or more modifiers. Conflicting combinations are highlighted and disabled shortcuts can be restored at any time."
+          "Click a shortcut and press the complete chord. Conflicting combinations are highlighted and disabled shortcuts can be restored at any time."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -732,55 +742,18 @@
       }
     }
 
-    private func shortcutKeyBinding(_ action: Shortcut.Action) -> Binding<String> {
-      Binding(
-        get: {
-          appState.preferences.shortcuts.first(where: { $0.action == action })?.key ?? ""
-        },
-        set: { key in
-          appState.updatePreferences { preferences in
-            guard let index = preferences.shortcuts.firstIndex(where: { $0.action == action })
-            else { return }
-            let old = preferences.shortcuts[index]
-            preferences.shortcuts[index] = Shortcut(
-              action: action, key: key, modifiers: old.modifiers)
-          }
-        })
-    }
-
-    private func modifierBinding(_ modifier: Shortcut.Modifier, action: Shortcut.Action) -> Binding<
-      Bool
-    > {
-      Binding(
-        get: {
-          appState.preferences.shortcuts.first(where: { $0.action == action })?.modifiers.contains(
-            modifier.rawValue) == true
-        },
-        set: { enabled in
-          appState.updatePreferences { preferences in
-            guard let index = preferences.shortcuts.firstIndex(where: { $0.action == action })
-            else { return }
-            let old = preferences.shortcuts[index]
-            var modifiers = old.modifiers.filter { $0 != modifier.rawValue }
-            if enabled { modifiers.append(modifier.rawValue) }
-            preferences.shortcuts[index] = Shortcut(
-              action: action, key: old.key, modifiers: modifiers)
-          }
-        })
-    }
-
-    private func shortcutLabel(_ shortcut: Shortcut?) -> String {
-      guard let shortcut, let key = shortcut.key else { return "Not set" }
-      let symbols = shortcut.modifiers.map { modifier in
-        switch modifier {
-        case "command": "⌘"
-        case "shift": "⇧"
-        case "control": "⌃"
-        case "option": "⌥"
-        default: modifier
+    private func recordShortcut(_ action: Shortcut.Action, chord: ShortcutChord) {
+      appState.updatePreferences { preferences in
+        guard let index = preferences.shortcuts.firstIndex(where: { $0.action == action }) else {
+          return
         }
-      }.joined()
-      return symbols + key.uppercased()
+        preferences.shortcuts[index] = Shortcut(
+          action: action,
+          key: chord.key,
+          modifiers: chord.modifiers
+        )
+      }
+      recordingShortcutAction = nil
     }
   }
 
