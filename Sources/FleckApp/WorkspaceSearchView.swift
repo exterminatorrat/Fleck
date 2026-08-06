@@ -146,6 +146,21 @@
     }
 
     @discardableResult
+    func activateResult(
+      _ noteID: UUID,
+      currentNoteIDs: Set<UUID>,
+      activate: (UUID) -> Void
+    ) -> Bool {
+      guard currentNoteIDs.contains(noteID),
+        results.contains(where: { $0.noteID == noteID })
+      else {
+        return false
+      }
+      highlight(noteID)
+      return activateHighlighted(currentNoteIDs: currentNoteIDs, activate: activate)
+    }
+
+    @discardableResult
     func activateHighlighted(
       currentNoteIDs: Set<UUID>,
       activate: (UUID) -> Void
@@ -358,7 +373,11 @@
               ForEach(controller.results) { result in
                 let isSelected = controller.isHighlighted(result.noteID)
                 Button {
-                  controller.highlight(result.noteID)
+                  _ = controller.activateResult(
+                    result.noteID,
+                    currentNoteIDs: currentNoteIDs(),
+                    activate: onActivate
+                  )
                 } label: {
                   VStack(alignment: .leading, spacing: 2) {
                     Text(result.displayTitle)

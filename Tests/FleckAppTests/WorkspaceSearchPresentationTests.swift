@@ -132,6 +132,53 @@ func WorkspaceSearchPresentationActivatesOnceAndRejectsDeletedResults() async {
   #expect(controller.isPresented)
 }
 
+@Test @MainActor
+func WorkspaceSearchPresentationActivatesChosenResultExactlyOnceAndRejectsDeletedIDs() async {
+  let first = workspaceSearchTestNote("00000000-0000-0000-0000-000000000001", title: "First")
+  let second = workspaceSearchTestNote("00000000-0000-0000-0000-000000000002", title: "Second")
+  let third = workspaceSearchTestNote("00000000-0000-0000-0000-000000000003", title: "Third")
+  let notes = [first, second, third]
+  let controller = WorkspaceSearchController(searchOperation: { _, notes, _ in
+    notes.map(workspaceSearchTestResult)
+  })
+
+  controller.present()
+  controller.setQuery("anything", in: notes)
+  await settleWorkspaceSearch()
+
+  var activated: [UUID] = []
+  #expect(
+    controller.activateResult(
+      second.id,
+      currentNoteIDs: Set(notes.map(\.id)),
+      activate: { activated.append($0) }
+    )
+  )
+  #expect(activated == [second.id])
+  #expect(!controller.isPresented)
+  #expect(
+    !controller.activateResult(
+      second.id,
+      currentNoteIDs: Set(notes.map(\.id)),
+      activate: { activated.append($0) }
+    )
+  )
+  #expect(activated == [second.id])
+
+  controller.present()
+  controller.setQuery("anything", in: notes)
+  await settleWorkspaceSearch()
+  #expect(
+    !controller.activateResult(
+      second.id,
+      currentNoteIDs: Set([first.id, third.id]),
+      activate: { activated.append($0) }
+    )
+  )
+  #expect(activated == [second.id])
+  #expect(controller.isPresented)
+}
+
 private func workspaceSearchTestNote(_ id: String, title: String, body: String = "body") -> Note {
   Note(id: UUID(uuidString: id)!, title: title, body: body)
 }
