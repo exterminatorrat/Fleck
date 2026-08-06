@@ -147,6 +147,13 @@
       _historyController = ObservedObject(wrappedValue: runtime.historyController)
     }
 
+    static func recordingAction(
+      afterSelecting section: SettingsSection,
+      currentAction: Shortcut.Action?
+    ) -> Shortcut.Action? {
+      section == .shortcuts ? currentAction : nil
+    }
+
     var body: some View {
       ZStack {
         Form {
@@ -170,6 +177,13 @@
         .transition(.opacity)
       }
       .animation(motion.standard, value: selectedSection)
+      .onChange(of: selectedSection) { _, newSection in
+        recordingShortcutAction = Self.recordingAction(
+          afterSelecting: newSection,
+          currentAction: recordingShortcutAction
+        )
+      }
+      .onDisappear { recordingShortcutAction = nil }
       .task {
         await runtime.awaitStartupAssessment()
         recoveryActions = runtime.permissionRecoveryActions()

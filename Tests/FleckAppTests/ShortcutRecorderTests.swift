@@ -342,4 +342,34 @@
     #expect(recorderSource.contains("Press shortcut"))
     #expect(!recorderSource.contains(".animation"))
   }
+
+  @Test @MainActor func settingsSectionTransitionCancelsRecordingWithoutMutatingSavedChord() throws {
+    let savedShortcut = Shortcut(
+      action: .newNote,
+      key: "n",
+      modifiers: ["command"]
+    )
+    let savedKey = savedShortcut.key
+    let savedModifiers = savedShortcut.modifiers
+
+    #expect(
+      SettingsView.recordingAction(
+        afterSelecting: .appearance,
+        currentAction: .newNote
+      ) == nil
+    )
+    #expect(savedShortcut.key == savedKey)
+    #expect(savedShortcut.modifiers == savedModifiers)
+
+    let sourceRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let settingsSource = try String(
+      contentsOf: sourceRoot.appendingPathComponent("Sources/FleckApp/SettingsView.swift")
+    )
+    #expect(settingsSource.contains("recordingShortcutAction = Self.recordingAction("))
+    #expect(settingsSource.contains("afterSelecting: newSection"))
+    #expect(settingsSource.contains(".onDisappear { recordingShortcutAction = nil }"))
+  }
 #endif
