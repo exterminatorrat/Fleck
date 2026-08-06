@@ -22,6 +22,11 @@
       return String(format: "#%06X", number)
     }
 
+    static func normalizedUserInput(_ value: String) -> String? {
+      guard value.hasPrefix("#") else { return nil }
+      return normalized(value)
+    }
+
     static func nsColor(from value: String) -> NSColor? {
       guard let normalized = normalized(value),
         let number = UInt64(normalized.dropFirst(), radix: 16)
@@ -127,12 +132,12 @@
 
     var committedHex: String? {
       guard !isHexInvalid else { return nil }
-      return FleckColorHex.normalized(hexText)
+      return FleckColorHex.normalizedUserInput(hexText)
     }
 
     mutating func setHex(_ value: String) {
       hexText = value
-      guard let normalized = FleckColorHex.normalized(value),
+      guard let normalized = FleckColorHex.normalizedUserInput(value),
         let nextHSB = FleckColorHex.hsb(from: FleckColorHex.nsColor(from: normalized))
       else {
         isHexInvalid = true

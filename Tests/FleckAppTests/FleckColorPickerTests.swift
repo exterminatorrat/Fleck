@@ -14,13 +14,27 @@ import Testing
   ])
 }
 
-@Test func fleckHexNormalizationAcceptsOnlySixDigitRGB() {
+@Test func fleckHexNormalizationAcceptsHashedSixDigitRGB() {
   #expect(FleckColorHex.normalized("#ff4245") == "#FF4245")
-  #expect(FleckColorHex.normalized("0091ff") == "#0091FF")
+  #expect(FleckColorHex.normalized("#0091ff") == "#0091FF")
   #expect(FleckColorHex.normalized("#FF424500") == nil)
   #expect(FleckColorHex.normalized("#FFF") == nil)
   #expect(FleckColorHex.normalized("#GGGGGG") == nil)
   #expect(FleckColorHex.normalized("#12 3456") == nil)
+}
+
+@Test func userDraftRequiresHashAndCommitsNormalizedRGBHex() {
+  var draft = FleckColorDraft(hex: "#FF4245")
+
+  draft.setHex("0091ff")
+
+  #expect(draft.isHexInvalid)
+  #expect(draft.committedHex == nil)
+
+  draft.setHex("#0091ff")
+
+  #expect(!draft.isHexInvalid)
+  #expect(draft.committedHex == "#0091FF")
 }
 
 @Test func invalidDraftHexDoesNotProduceACommitValue() {
