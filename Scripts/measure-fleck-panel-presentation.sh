@@ -89,8 +89,15 @@ if [ "$profile_pid" -eq 0 ]; then
   exit 2
 fi
 
+is_exact_fleck_command() {
+  case "$1" in
+    */Fleck.app/Contents/MacOS/Fleck) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 process_name=$(ps -p "$profile_pid" -o comm= | awk '{gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}')
-if [ "$process_name" != "Fleck" ]; then
+if ! is_exact_fleck_command "$process_name"; then
   printf 'error: PID %s is not the exact Fleck command (found: %s)\n' \
     "$profile_pid" "${process_name:-missing}" >&2
   exit 2

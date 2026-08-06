@@ -170,6 +170,31 @@
     }
   }
 
+  @Test func FleckPanelPresentationMeasurementAcceptsOnlyThePackagedFleckExecutablePath() throws {
+    let source = try String(
+      contentsOf: repositoryRoot().appendingPathComponent(
+        "Scripts/measure-fleck-panel-presentation.sh"
+      ),
+      encoding: .utf8
+    )
+    let functionStart = try #require(source.range(of: "is_exact_fleck_command() {"))
+    let functionEnd = try #require(
+      source.range(of: "\n}\n", range: functionStart.upperBound..<source.endIndex)
+    )
+    let functionSource = String(source[functionStart.lowerBound..<functionEnd.upperBound])
+    let command = functionSource + "\nis_exact_fleck_command \"$1\""
+    let packagedPath = repositoryRoot()
+      .appendingPathComponent(".build/Fleck.app/Contents/MacOS/Fleck")
+      .path
+    let nonFleckPath = repositoryRoot()
+      .appendingPathComponent(".build/Other.app/Contents/MacOS/Other")
+      .path
+
+    #expect(try runShell(command: command, arguments: ["--", packagedPath]) == 0)
+    #expect(try runShell(command: command, arguments: ["--", nonFleckPath]) != 0)
+    #expect(try runShell(command: command, arguments: ["--", "Fleck"]) != 0)
+  }
+
   @Test func FleckPanelMeasurementScriptFailsClosedForInvalidInputs() throws {
     let root = repositoryRoot()
     let script = root.appendingPathComponent("Scripts/measure-fleck-panel-presentation.sh")
@@ -232,6 +257,15 @@
     try process.run()
     process.waitUntilExit()
     return CommandResult(status: process.terminationStatus)
+  }
+
+  private func runShell(command: String, arguments: [String]) throws -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", command] + arguments
+    try process.run()
+    process.waitUntilExit()
+    return process.terminationStatus
   }
 
   private func repositoryRoot() -> URL {
