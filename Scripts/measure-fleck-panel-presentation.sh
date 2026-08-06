@@ -54,10 +54,10 @@ case "$output_dir" in
     ;;
 esac
 
-raw_samples="$output_dir/panel-presentation-raw.tsv"
-samples="$output_dir/panel-presentation-samples.tsv"
-summary="$output_dir/panel-presentation-summary.txt"
-metadata="$output_dir/panel-presentation-metadata.txt"
+raw_samples="$output_dir/app-activation-to-visible-raw.tsv"
+samples="$output_dir/app-activation-to-visible-samples.tsv"
+summary="$output_dir/app-activation-to-visible-summary.txt"
+metadata="$output_dir/app-activation-to-visible-metadata.txt"
 for output_file in "$raw_samples" "$samples" "$summary" "$metadata"; do
   if [ -L "$output_file" ]; then
     printf 'error: refusing symlinked output: %s\n' "$output_file" >&2
@@ -172,7 +172,7 @@ wait_for_sample() {
       return 0
     fi
     if [ "$(date '+%s')" -ge "$deadline" ]; then
-      printf 'error: sample %s has no Fleck panel completion record\n' "$expected_sample" >&2
+      printf 'error: sample %s has no Fleck app-activation-to-visible completion record\n' "$expected_sample" >&2
       return 1
     fi
     sleep 0.2
@@ -180,32 +180,41 @@ wait_for_sample() {
 }
 
 click_status_item() {
-  /usr/bin/osascript <<'APPLESCRIPT'
+  run_accessibility_script <<'APPLESCRIPT'
 tell application "System Events"
-  set processNames to {"SystemUIServer", "ControlCenter", "Fleck"}
-  repeat with processName in processNames
-    try
-      tell application process (processName as text)
-        repeat with itemRef in (menu bar items of menu bar 1)
-          set itemTitle to ""
-          set itemDescription to ""
-          try
-            set itemTitle to title of itemRef as text
-          end try
-          try
-            set itemDescription to description of itemRef as text
-          end try
-          if itemTitle is "Fleck" or itemDescription is "Fleck" then
-            click itemRef
-            return "clicked"
-          end if
-        end repeat
-      end tell
-    end try
-  end repeat
+  tell application process "Fleck"
+    repeat with menuBarRef in (menu bars)
+      repeat with itemRef in (menu bar items of menuBarRef)
+        set itemTitle to ""
+        set itemName to ""
+        set itemRole to ""
+        set itemSubrole to ""
+        try
+          set itemTitle to title of itemRef as text
+        end try
+        try
+          set itemName to name of itemRef as text
+        end try
+        try
+          set itemRole to role of itemRef as text
+        end try
+        try
+          set itemSubrole to subrole of itemRef as text
+        end try
+        if (itemTitle is "Fleck" or itemName is "Fleck") and itemRole is "AXMenuBarItem" and itemSubrole is "AXMenuExtra" then
+          perform action "AXPress" of itemRef
+          return "clicked"
+        end if
+      end repeat
+    end repeat
+  end tell
 end tell
-error "Fleck status item with accessible Fleck label or description was not found"
+error "Fleck AXMenuExtra with accessible Fleck title or name was not found"
 APPLESCRIPT
+}
+
+run_accessibility_script() {
+  /usr/bin/osascript "$@"
 }
 
 close_panel() {
@@ -225,11 +234,13 @@ printf '%s\n' \
   'subsystem=com.harryjin.fleck' \
   'category=performance' \
   'log_predicate='"$metadata_predicate" \
+  'measurement_name=app-activation-to-visible' \
   'cold_sample_count=1' \
   'warm_sample_count=30' \
-  'status_item_lookup=System Events accessible Fleck label or description' \
+  'status_item_lookup=Fleck application process menu bars; title/name=Fleck; role=AXMenuBarItem; subrole=AXMenuExtra' \
   'close_action=System Events Escape key code 53' \
-  'automation_click_wall_clock=not included as product latency' \
+  'automation_click_wall_clock=not included in app-activation-to-visible or full perceived latency' \
+  'measurement_boundary=applicationDidBecomeActive to visible Fleck status-bar window' \
   'data_boundary=no Fleck Application Support or note data read or written' \
   'output_directory='"$output_dir" > "$metadata"
 
@@ -258,7 +269,7 @@ record_sample() {
 
 if ! click_status_item >/dev/null 2>&1; then
   printf '%s\n' \
-    'error: could not identify the Fleck status item by accessible label or description' >&2
+    'error: could not identify the Fleck AXMenuExtra by accessible title or name' >&2
   exit 2
 fi
 wait_for_sample 1
@@ -300,7 +311,7 @@ if [ "$1" -ne "$total_samples" ]; then
 fi
 
 {
-  printf '%s\n' 'Fleck panel presentation measurement summary'
+  printf '%s\n' 'Fleck app-activation-to-visible measurement summary'
   printf 'sample_count=%s\n' "$1"
   printf 'cold_sample_count=1\n'
   printf 'warm_sample_count=30\n'
@@ -308,8 +319,8 @@ fi
   printf 'p95_ms=%s\n' "$3"
   printf 'min_ms=%s\n' "$4"
   printf 'max_ms=%s\n' "$5"
-  printf '%s\n' 'measurement_boundary=app-side panel_presentation completion Logger records only'
-  printf '%s\n' 'automation_boundary=System Events click wall-clock time is not product latency'
+  printf '%s\n' 'measurement_boundary=applicationDidBecomeActive to visible Fleck status-bar window'
+  printf '%s\n' 'automation_boundary=click wall-clock and full perceived latency are not measured'
 } > "$summary"
 
-printf 'Wrote Fleck panel presentation samples and summary to %s\n' "$output_dir"
+printf 'Wrote Fleck app-activation-to-visible samples and summary to %s\n' "$output_dir"

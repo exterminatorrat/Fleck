@@ -291,6 +291,7 @@
     private var historyWindowController: NSWindowController?
     private var terminationObserver: ObserverToken?
     private var activationObserver: ObserverToken?
+    private var resignationObserver: ObserverToken?
     #if CLEAN_DICTATION_ENHANCED_CANDIDATE
       private var captureEngine: DictationSpeechEngine?
       private var captureReachedListening = false
@@ -466,6 +467,17 @@
         ) { [weak self] _ in
           Task { @MainActor [weak self] in
             self?.applicationDidBecomeActive()
+          }
+        }
+      )
+      resignationObserver = ObserverToken(
+        NotificationCenter.default.addObserver(
+          forName: NSApplication.didResignActiveNotification,
+          object: nil,
+          queue: .main
+        ) { [weak self] _ in
+          Task { @MainActor [weak self] in
+            self?.applicationDidResignActive()
           }
         }
       )
@@ -645,9 +657,14 @@
     }
 
     func applicationDidBecomeActive() {
+      FleckPanelPresentationMeasurement.shared.begin()
       FleckPerformanceSignposts.measureActivationPreferenceSynchronization {
         synchronizePreferences()
       }
+    }
+
+    func applicationDidResignActive() {
+      FleckPanelPresentationMeasurement.shared.cancel()
     }
 
     func awaitStartupAssessment() async {
@@ -740,6 +757,10 @@
       if let activationObserver {
         NotificationCenter.default.removeObserver(activationObserver.value)
         self.activationObserver = nil
+      }
+      if let resignationObserver {
+        NotificationCenter.default.removeObserver(resignationObserver.value)
+        self.resignationObserver = nil
       }
       let coordinator = coordinator
       let shortcutController = shortcutController
@@ -1300,6 +1321,9 @@
       }
       if let activationObserver {
         NotificationCenter.default.removeObserver(activationObserver.value)
+      }
+      if let resignationObserver {
+        NotificationCenter.default.removeObserver(resignationObserver.value)
       }
       guard shutdownCount == 0 else { return }
       let coordinator = coordinator

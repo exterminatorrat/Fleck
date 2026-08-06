@@ -65,19 +65,23 @@ only context and must not be reported as Fleck-only logical writes.
 
 ## Panel presentation measurement
 
-The packaged-app panel loop measures the interval from the real unconsumed left
-status-item mouse-down to the actual transient status-bar window becoming
-visible. It records one cold sample followed by 30 warm samples from an already
-running exact Fleck process, and reports raw samples plus p50, p95, minimum, and
-maximum values. It uses only the Fleck performance subsystem/category and never
-reads or writes Fleck Application Support or note data.
+The packaged-app loop measures `app-activation-to-visible`: from Fleck's
+`applicationDidBecomeActive()` boundary immediately before its existing
+preference synchronization to the actual transient status-bar window becoming
+visible. This is not click wall-clock time or full perceived latency. It records
+one cold sample followed by 30 warm samples from an already-running exact Fleck
+process, and reports raw samples plus p50, p95, minimum, and maximum values. It
+uses only the Fleck performance subsystem/category and never reads or writes
+Fleck Application Support or note data.
 
 Before running it, grant the calling Terminal or agent System Events
 Accessibility permission in System Settings → Privacy & Security →
 Accessibility, launch the exact packaged Fleck app manually, and record its PID.
-The script does not launch, terminate, rebuild, or signal Fleck. A missing
-app-side completion record fails the run; automation click wall-clock time is
-not product latency.
+The script locates only the real Fleck AXMenuExtra by iterating every menu bar
+of the Fleck application process and requiring title/name `Fleck`, role
+`AXMenuBarItem`, and subrole `AXMenuExtra`. It does not launch, terminate,
+rebuild, or signal Fleck. A missing app-side completion record fails the run;
+automation click wall-clock time and full perceived latency are not measured.
 
 ```sh
 bash -n Scripts/measure-fleck-panel-presentation.sh

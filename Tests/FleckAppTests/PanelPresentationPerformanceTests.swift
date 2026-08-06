@@ -45,34 +45,6 @@
     #expect(samples[0].rootState == .resume)
   }
 
-  @Test @MainActor func FleckPanelPresentationEventDiscriminationKeepsRightClickConsumptionSeparate() {
-    let handlesRightStatusBar = StatusItemContextMenuController.handles(
-      eventType: .rightMouseDown,
-      windowLevel: .statusBar
-    )
-    let handlesLeftStatusBar = StatusItemContextMenuController.handles(
-      eventType: .leftMouseDown,
-      windowLevel: .statusBar
-    )
-    let startsLeftStatusBar = StatusItemContextMenuController.startsPanelPresentationMeasurement(
-      eventType: .leftMouseDown,
-      windowLevel: .statusBar
-    )
-    let startsRightStatusBar = StatusItemContextMenuController.startsPanelPresentationMeasurement(
-      eventType: .rightMouseDown,
-      windowLevel: .statusBar
-    )
-    let startsLeftNormal = StatusItemContextMenuController.startsPanelPresentationMeasurement(
-      eventType: .leftMouseDown,
-      windowLevel: .normal
-    )
-    #expect(handlesRightStatusBar)
-    #expect(!handlesLeftStatusBar)
-    #expect(startsLeftStatusBar)
-    #expect(!startsRightStatusBar)
-    #expect(!startsLeftNormal)
-  }
-
   @Test func FleckMenuBarRootWiresOnlyTheActualStatusBarWindowProbe() throws {
     let source = try String(
       contentsOf: repositoryRoot().appendingPathComponent(
@@ -95,15 +67,16 @@
     #expect(!rootSource.contains("hitTest"))
   }
 
-  @Test func FleckStatusItemMonitorReturnsLeftClicksAndConsumesOnlyRightClicks() throws {
+  @Test func FleckStatusItemMonitorConsumesOnlyRightClicks() throws {
     let source = try String(
       contentsOf: repositoryRoot().appendingPathComponent(
         "Sources/FleckApp/StatusItemContextMenuController.swift"
       ),
       encoding: .utf8
     )
-    #expect(source.contains("matching: [.leftMouseDown, .rightMouseDown]"))
-    #expect(source.contains("FleckPanelPresentationMeasurement.shared.begin()"))
+    #expect(source.contains("matching: [.rightMouseDown]"))
+    #expect(!source.contains(".leftMouseDown"))
+    #expect(!source.contains("FleckPanelPresentationMeasurement"))
     #expect(source.contains("return event"))
     #expect(source.contains("NSMenu.popUpContextMenu(menu, with: event, for: view)"))
   }
@@ -117,8 +90,64 @@
     let methodEnd = try #require(source.range(of: "func awaitStartupAssessment()", range: methodStart.upperBound..<source.endIndex))
     let methodSource = String(source[methodStart.lowerBound..<methodEnd.lowerBound])
 
+    let panelBegin = try #require(methodSource.range(of: "FleckPanelPresentationMeasurement.shared.begin()"))
+    let preferenceMeasurement = try #require(
+      methodSource.range(of: "FleckPerformanceSignposts.measureActivationPreferenceSynchronization")
+    )
+    #expect(panelBegin.lowerBound < preferenceMeasurement.lowerBound)
     #expect(methodSource.contains("measureActivationPreferenceSynchronization"))
     #expect(methodSource.contains("synchronizePreferences()"))
+  }
+
+  @Test func FleckResignationCancelsAnUnmatchedPanelMeasurementAndOwnsItsObserver() throws {
+    let source = try String(
+      contentsOf: repositoryRoot().appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
+      encoding: .utf8
+    )
+    let methodStart = try #require(source.range(of: "func applicationDidResignActive()"))
+    let methodEnd = try #require(
+      source.range(of: "func awaitStartupAssessment()", range: methodStart.upperBound..<source.endIndex)
+    )
+    let methodSource = String(source[methodStart.lowerBound..<methodEnd.lowerBound])
+
+    #expect(methodSource.contains("FleckPanelPresentationMeasurement.shared.cancel()"))
+    #expect(source.contains("private var resignationObserver: ObserverToken?"))
+    #expect(source.contains("NSApplication.didResignActiveNotification"))
+    #expect(source.contains("self?.applicationDidResignActive()"))
+    #expect(source.contains("resignationObserver.value"))
+  }
+
+  @Test func FleckPanelMeasurementExecutesTheExactFleckMenuExtraLookup() throws {
+    let source = try String(
+      contentsOf: repositoryRoot().appendingPathComponent(
+        "Scripts/measure-fleck-panel-presentation.sh"
+      ),
+      encoding: .utf8
+    )
+    let functionStart = try #require(source.range(of: "click_status_item() {"))
+    let functionEnd = try #require(
+      source.range(of: "\n}\n", range: functionStart.upperBound..<source.endIndex)
+    )
+    let functionSource = String(source[functionStart.lowerBound..<functionEnd.upperBound])
+    _ = try #require(source.range(of: "run_accessibility_script() {"))
+
+    let result = try runShellCapture(
+      command: functionSource + "\nrun_accessibility_script() { cat; }\nclick_status_item",
+      arguments: []
+    )
+    #expect(result.status == 0)
+    #expect(result.stdout.contains("tell application process \"Fleck\""))
+    #expect(result.stdout.contains("repeat with menuBarRef in (menu bars)"))
+    #expect(result.stdout.contains("title of itemRef"))
+    #expect(result.stdout.contains("name of itemRef"))
+    #expect(result.stdout.contains("role of itemRef"))
+    #expect(result.stdout.contains("subrole of itemRef"))
+    #expect(result.stdout.contains("AXMenuBarItem"))
+    #expect(result.stdout.contains("AXMenuExtra"))
+    #expect(result.stdout.contains("perform action \"AXPress\" of itemRef"))
+    #expect(!result.stdout.contains("menu bar 1"))
+    #expect(!result.stdout.contains("ControlCenter"))
+    #expect(!result.stdout.contains("SystemUIServer"))
   }
 
   @Test func FleckPanelMeasurementScriptDeclaresAClosedSafeAccessibilityWorkflow() throws {
@@ -136,12 +165,18 @@
       "FLECK_PERFORMANCE_PID",
       "ps -p",
       "System Events",
-      "description of itemRef",
       "title of itemRef",
+      "name of itemRef",
+      "role of itemRef",
+      "subrole of itemRef",
+      "perform action \"AXPress\" of itemRef",
       "key code 53",
       "com.harryjin.fleck",
       "category ==",
       "panel_presentation elapsed_ms=",
+      "app-activation-to-visible",
+      "AXMenuBarItem",
+      "AXMenuExtra",
       "cold",
       "warm",
       "warm_sample_count=30",

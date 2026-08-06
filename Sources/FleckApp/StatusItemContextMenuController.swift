@@ -29,7 +29,7 @@
     override init() {
       super.init()
       if let monitor = NSEvent.addLocalMonitorForEvents(
-        matching: [.leftMouseDown, .rightMouseDown],
+        matching: [.rightMouseDown],
         handler: { [weak self] event in
           self?.handle(event) ?? event
         }
@@ -51,22 +51,7 @@
       eventType == .rightMouseDown && windowLevel == .statusBar
     }
 
-    static func startsPanelPresentationMeasurement(
-      eventType: NSEvent.EventType,
-      windowLevel: NSWindow.Level?
-    ) -> Bool {
-      eventType == .leftMouseDown && windowLevel == .statusBar
-    }
-
     private func handle(_ event: NSEvent) -> NSEvent? {
-      if Self.startsPanelPresentationMeasurement(
-        eventType: event.type,
-        windowLevel: event.window?.level
-      ) {
-        FleckPanelPresentationMeasurement.shared.begin()
-        return event
-      }
-
       guard
         Self.handles(
           eventType: event.type,
