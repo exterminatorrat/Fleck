@@ -32,6 +32,12 @@ var appTestSwiftSettings: [SwiftSetting] = []
 
 if enhancedCandidateEnabled {
     packageDependencies.append(
+        .package(url: "https://github.com/apple/swift-system.git", exact: "1.7.5")
+    )
+    packageDependencies.append(
+        .package(url: "https://github.com/apple/swift-log.git", exact: "1.14.0")
+    )
+    packageDependencies.append(
         .package(path: "Packages/FleckEnhancedCandidateDependencies")
     )
     appDependencies.append(

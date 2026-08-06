@@ -20,6 +20,36 @@
     }
   }
 
+  enum FleckMark {
+    enum LoadResult {
+      case image(NSImage)
+      case missingPackagedResource
+    }
+
+    static func load(
+      template: Bool,
+      resourceURL: URL? = Bundle.main.resourceURL,
+      isPackagedApp: Bool = Bundle.main.bundleURL.pathExtension.lowercased() == "app"
+    ) -> LoadResult {
+      if let resourceURL,
+        let image = NSImage(contentsOf: resourceURL.appendingPathComponent("fleck-mark.png"))
+      {
+        image.isTemplate = template
+        if template {
+          image.size = NSSize(width: 18, height: 18)
+        }
+        return .image(image)
+      }
+      guard !isPackagedApp,
+        let fallback = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Fleck")
+      else {
+        return .missingPackagedResource
+      }
+      fallback.isTemplate = template
+      return .image(fallback)
+    }
+  }
+
   @main
   struct FleckApp: App {
     @StateObject private var appState: AppState
@@ -87,13 +117,25 @@
     }
 
     var body: some Scene {
-      MenuBarExtra("Fleck", systemImage: "note.text") {
+      MenuBarExtra {
         FleckMenuBarRoot(
           onboarding: onboarding,
           dictationRuntime: dictationRuntime
         )
           .environmentObject(appState)
           .preferredColorScheme(colorScheme)
+      }
+      label: {
+        Group {
+          switch FleckMark.load(template: true) {
+          case .image(let mark):
+            Image(nsImage: mark)
+          case .missingPackagedResource:
+            Text("!")
+              .accessibilityLabel("Fleck mark missing")
+          }
+        }
+        .accessibilityLabel("Fleck")
       }
       .menuBarExtraStyle(.window)
 

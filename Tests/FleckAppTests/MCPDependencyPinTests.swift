@@ -1,6 +1,31 @@
 import Foundation
 import Testing
 
+@Test func enhancedCandidateManifestPinsReviewedTransitiveReleases() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let manifest = try String(
+    contentsOf: root.appendingPathComponent("Package.swift"),
+    encoding: .utf8
+  )
+  let candidateDependencies = try #require(
+    manifest.components(separatedBy: "if enhancedCandidateEnabled {").last
+  )
+
+  #expect(
+    candidateDependencies.contains(
+      #".package(url: "https://github.com/apple/swift-system.git", exact: "1.7.5")"#
+    )
+  )
+  #expect(
+    candidateDependencies.contains(
+      #".package(url: "https://github.com/apple/swift-log.git", exact: "1.14.0")"#
+    )
+  )
+}
+
 @Test func mcpDependencyAndNoticeArePinned() throws {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()

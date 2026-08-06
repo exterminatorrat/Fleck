@@ -3,6 +3,25 @@ import Testing
 
 @testable import FleckApp
 
+@Test func reduceMotionWaveformRefreshCadenceKeepsStaleDecayObservable() {
+  #expect(DictationWaveformRefreshSchedule.interval(reduceMotion: true) <= 0.12)
+  #expect(DictationWaveformRefreshSchedule.interval(reduceMotion: false) <= 1 / 30)
+}
+
+@Test func waveformTimelineConsumesTheSharedTruthfulRefreshSchedule() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/DictationCapsule.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("TimelineView("))
+  #expect(source.contains("DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)"))
+}
+
 @Test @MainActor func waveformClampsSmoothsAndKeepsElevenBars() {
   let model = DictationWaveformModel()
   model.beginListening(at: Date(timeIntervalSince1970: 100))
@@ -17,21 +36,67 @@ import Testing
   #expect(loud[5] > loud[0])
 }
 
-@Test @MainActor func waveformUsesAQuietMovingBaselineDuringSilence() {
+@Test @MainActor func waveformIsStaticAtMinimumDuringSilence() {
   let model = DictationWaveformModel()
   model.beginListening(at: Date(timeIntervalSince1970: 10))
-  let first = model.barLevels(
-    at: Date(timeIntervalSince1970: 10.1),
-    reduceMotion: false
-  )
-  let second = model.barLevels(
-    at: Date(timeIntervalSince1970: 10.2),
-    reduceMotion: false
-  )
+  let first = model.barLevels(at: Date(timeIntervalSince1970: 10.1), reduceMotion: false)
+  let second = model.barLevels(at: Date(timeIntervalSince1970: 10.3), reduceMotion: false)
+  let reduced = model.barLevels(at: Date(timeIntervalSince1970: 10.3), reduceMotion: true)
 
-  #expect(first != second)
-  #expect(first.max()! < 0.25)
-  #expect(second.max()! < 0.25)
+  #expect(first == second)
+  #expect(second == reduced)
+  #expect(Set(first).count == 1)
+  #expect(first.allSatisfy { $0 == 0.05 })
+}
+
+@Test @MainActor func waveformAmplitudeIncreasesWithRealInputLevel() {
+  let start = Date(timeIntervalSince1970: 30)
+  func peak(for level: Float) -> CGFloat {
+    let model = DictationWaveformModel()
+    model.beginListening(at: start)
+    model.receive(level: level, now: start.addingTimeInterval(0.04))
+    return model.barLevels(at: start.addingTimeInterval(0.05), reduceMotion: false).max()!
+  }
+
+  let quiet = peak(for: 0.01)
+  let soft = peak(for: 0.05)
+  let loud = peak(for: 0.20)
+  #expect(quiet == 0.05)
+  #expect(soft > quiet)
+  #expect(loud > soft)
+}
+
+@Test @MainActor func waveformDecaysToRestWhenLevelsStopArriving() {
+  let model = DictationWaveformModel()
+  let start = Date(timeIntervalSince1970: 40)
+  model.beginListening(at: start)
+  model.receive(level: 0.20, now: start.addingTimeInterval(0.04))
+
+  let active = model.barLevels(at: start.addingTimeInterval(0.05), reduceMotion: false)
+  let stale = model.barLevels(at: start.addingTimeInterval(0.49), reduceMotion: false)
+  let reducedStale = model.barLevels(at: start.addingTimeInterval(0.49), reduceMotion: true)
+  #expect(active.max()! > 0.05)
+  #expect(stale.allSatisfy { $0 == 0.05 })
+  #expect(reducedStale == stale)
+}
+
+@Test @MainActor func waveformResumesFromDisplayedRestInsteadOfStaleLoudEnergy() {
+  let start = Date(timeIntervalSince1970: 50)
+  let resumed = DictationWaveformModel()
+  let fresh = DictationWaveformModel()
+  resumed.beginListening(at: start)
+  resumed.receive(level: 0.20, now: start.addingTimeInterval(0.04))
+
+  let resumedAtRest = resumed.barLevels(at: start.addingTimeInterval(0.60), reduceMotion: false)
+  #expect(resumedAtRest.allSatisfy { $0 == 0.05 })
+
+  fresh.beginListening(at: start.addingTimeInterval(0.56))
+  resumed.receive(level: 0.05, now: start.addingTimeInterval(0.60))
+  fresh.receive(level: 0.05, now: start.addingTimeInterval(0.60))
+
+  let resumedLevels = resumed.barLevels(at: start.addingTimeInterval(0.61), reduceMotion: false)
+  let freshLevels = fresh.barLevels(at: start.addingTimeInterval(0.61), reduceMotion: false)
+  #expect(resumedLevels == freshLevels)
 }
 
 @Test @MainActor func waveformThrottlesAndResets() {

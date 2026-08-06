@@ -21,14 +21,92 @@ import Testing
   #expect(plist["CFBundleExecutable"] as? String == "Fleck")
   #expect(plist["CFBundleIdentifier"] as? String == "com.harryjin.fleck")
   #expect(plist["CFBundleName"] as? String == "Fleck")
+  #expect(plist["LSUIElement"] as? Bool == true)
   #expect(StatusItemContextMenuController.quitTitle == "Quit Fleck")
 
   let appSource = try String(
     contentsOf: root.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
     encoding: .utf8
   )
-  #expect(appSource.contains(#"MenuBarExtra("Fleck""#))
+  #expect(appSource.contains("fleck-mark.png"))
+  #expect(appSource.contains("FleckMark.load(template: true)"))
+  #expect(appSource.contains("MenuBarExtra"))
+  #expect(appSource.contains("accessibilityLabel(\"Fleck\")"))
   #expect(appSource.contains(#"Window("Fleck""#))
+  let notesPanelSource = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+  #expect(notesPanelSource.contains("FleckMark.load(template: true)"))
+}
+
+@Test func notesPanelHeaderExposesOnlyTheFleckTitleAndMissingMarkWarning() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+  let header = try #require(source.components(separatedBy: "private var header: some View").dropFirst().first)
+  let titleArea = try #require(header.components(separatedBy: "Spacer()").first)
+  let mark = try #require(titleArea.range(of: "Image(nsImage: mark)"))
+  let title = try #require(titleArea.range(of: "Text(\"Fleck\")"))
+
+  #expect(titleArea[mark.upperBound...].contains(".accessibilityHidden(true)"))
+  #expect(titleArea[title.upperBound...].contains(".accessibilityLabel(\"Fleck\")"))
+  #expect(titleArea.contains(".accessibilityLabel(\"Fleck mark missing\")"))
+}
+
+@Test @MainActor func fleckMarkFailsLoudlyForMissingPackagedResourceButFallsBackInBareDevelopment() {
+  switch FleckMark.load(template: true, resourceURL: nil, isPackagedApp: true) {
+  case .missingPackagedResource:
+    break
+  case .image:
+    Issue.record("A packaged Fleck.app must not silently use a fallback mark")
+  }
+
+  switch FleckMark.load(template: true, resourceURL: nil, isPackagedApp: false) {
+  case .image(let image):
+    #expect(image.isTemplate)
+  case .missingPackagedResource:
+    Issue.record("Bare development should retain the explicit note-text fallback")
+  }
+}
+
+@Test @MainActor func fleckMarkUsesCanonicalTemplateLogicalSizeForMenuBarAndHeader() {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let canonicalAssetDirectory = root.appendingPathComponent("website/public")
+
+  switch FleckMark.load(
+    template: true,
+    resourceURL: canonicalAssetDirectory,
+    isPackagedApp: true
+  ) {
+  case .image(let image):
+    #expect(image.isTemplate)
+    #expect(image.size.width == 18)
+    #expect(image.size.height == 18)
+  case .missingPackagedResource:
+    Issue.record("The canonical Fleck mark should load for the menu bar")
+  }
+
+  switch FleckMark.load(
+    template: true,
+    resourceURL: canonicalAssetDirectory,
+    isPackagedApp: true
+  ) {
+  case .image(let image):
+    #expect(image.isTemplate)
+    #expect(image.size.width == 18)
+    #expect(image.size.height == 18)
+  case .missingPackagedResource:
+    Issue.record("The canonical Fleck mark should load for the header")
+  }
 }
 
 @Test func agentConnectorDocumentationUsesPackagedLaunch() throws {
@@ -83,8 +161,12 @@ import Testing
   #expect(buildScript.contains(#"designated => identifier \"$bundle_identifier\""#))
   #expect(buildScript.contains(#"/usr/bin/codesign --verify --deep --strict "$staged_app""#))
   #expect(!buildScript.contains("Built unsigned app bundle"))
+  #expect(buildScript.contains("website/public/fleck-mark.png"))
+  #expect(buildScript.contains("Contents/Resources/fleck-mark.png"))
   #expect(validationScript.contains("signature identifier does not match bundle identifier"))
   #expect(validationScript.contains("signature uses a build-specific code hash"))
+  #expect(validationScript.contains("Contents/Resources/fleck-mark.png"))
+  #expect(validationScript.contains("LSUIElement"))
 }
 
 private func sourceText(in root: URL) throws -> String {

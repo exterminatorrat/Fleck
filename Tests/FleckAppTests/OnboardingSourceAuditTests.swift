@@ -1,5 +1,8 @@
+import AppKit
 import Foundation
 import Testing
+
+@testable import FleckApp
 
 @Test func OnboardingSourceAuditUsesRealFleckSurfaces() throws {
   let source = try String(
@@ -64,12 +67,58 @@ import Testing
   )
 }
 
+@Test func pinnedWindowUsesNativeCompletedSizingAndResizePersistence() throws {
+  let source = try String(contentsOf: presenterSourceURL(), encoding: .utf8)
+
+  #expect(source.contains("NotesPanel(dictationRuntime: dictationRuntime)"))
+  #expect(
+    source.contains(
+      "NotesPanel(dictationRuntime: dictationRuntime, isPinned: true, sizing: .container)"
+    )
+  )
+  for required in [
+    "pinnedPanelWidth",
+    "pinnedPanelHeight",
+    "completedMinimumSize = NSSize(width: 480, height: 320)",
+    "defaultSize = NSSize(width: 1_080, height: 700)",
+    "minimumSize = NSSize(width: 760, height: 520)",
+    "NSWindow.didEndLiveResizeNotification",
+    "appliedState == .complete",
+    "contentMinSize",
+    "contentMaxSize",
+    "styleMask.insert(.resizable)",
+  ] {
+    #expect(source.contains(required), Comment(rawValue: required))
+  }
+  #expect(!source.contains("DragGesture"))
+
+  let visibleFrame = NSRect(x: 0, y: 0, width: 800, height: 600)
+  #expect(
+    OnboardingWindowPresenter.clampedCompletedSize(
+      NSSize(width: 1, height: 2),
+      visibleFrame: visibleFrame
+    ) == NSSize(width: 480, height: 320)
+  )
+  #expect(
+    OnboardingWindowPresenter.clampedCompletedSize(
+      NSSize(width: 1_200, height: 900),
+      visibleFrame: visibleFrame
+    ) == NSSize(width: 800, height: 600)
+  )
+}
+
 private func onboardingSourceURL() -> URL {
   URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .appendingPathComponent("Sources/FleckApp/OnboardingView.swift")
+}
+
+private func presenterSourceURL() -> URL {
+  onboardingSourceURL()
+    .deletingLastPathComponent()
+    .appendingPathComponent("OnboardingWindowPresenter.swift")
 }
 
 private func onboardingSources() -> String {

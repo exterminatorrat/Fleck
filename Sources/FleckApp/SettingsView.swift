@@ -18,6 +18,24 @@
     var id: Self { self }
   }
 
+  struct SettingsShortcutRecordingState: Equatable {
+    private(set) var action: Shortcut.Action?
+
+    mutating func begin(_ action: Shortcut.Action) {
+      self.action = action
+    }
+
+    mutating func cancel() {
+      action = nil
+    }
+
+    mutating func transition(to section: SettingsSection) {
+      if section != .shortcuts {
+        cancel()
+      }
+    }
+  }
+
   #if CLEAN_DICTATION_ENHANCED_CANDIDATE
     enum DictationModelAction: Equatable {
     case download
@@ -138,6 +156,7 @@
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
+    @State private var recordingSelection = SettingsShortcutRecordingState()
     @Namespace private var selectedSectionHighlight
 
     init(runtime: DictationRuntime) {
@@ -169,6 +188,10 @@
         .transition(.opacity)
       }
       .animation(motion.standard, value: selectedSection)
+      .onChange(of: selectedSection) { _, newSection in
+        recordingSelection.transition(to: newSection)
+      }
+      .onDisappear { recordingSelection.cancel() }
       .task {
         await runtime.awaitStartupAssessment()
         recoveryActions = runtime.permissionRecoveryActions()
@@ -287,61 +310,39 @@
             Text(theme.rawValue.capitalized).tag(theme)
           }
         }
-        ColorPicker(
-          "Accent color",
-          selection: colorPreferenceBinding(\.accentHex),
-          supportsOpacity: false
-        )
-        Picker("Font", selection: preferenceBinding(\.fontFamily)) {
-          Text("System").tag(".AppleSystemUIFont")
-          ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
-            Text(family).tag(family)
-          }
+        SettingsColorButton(
+          title: "Accent color",
+          currentHex: appState.preferences.accentHex,
+          fallbackColor: .controlAccentColor
+        ) { hex in
+          guard let hex else { return }
+          appState.updatePreferences { $0.accentHex = hex }
         }
-        Stepper(
-          "Font size: \(Int(appState.preferences.fontSize)) pt",
-          value: preferenceBinding(\.fontSize),
-          in: 10...36
-        )
-        HStack {
-          ColorPicker(
-            "Editor text color",
-            selection: optionalColorPreferenceBinding(
-              \.editorTextHex,
-              fallback: .labelColor
-            ),
-            supportsOpacity: false
-          )
-          if appState.preferences.editorTextHex != nil {
-            Button("Use System") {
-              appState.updatePreferences { $0.editorTextHex = nil }
-            }
-          }
+        SettingsColorButton(
+          title: "Editor text color",
+          currentHex: appState.preferences.editorTextHex,
+          resetTitle: "Use System",
+          fallbackColor: .labelColor
+        ) { hex in
+          appState.updatePreferences { $0.editorTextHex = hex }
         }
-        HStack {
-          ColorPicker(
-            "Editor background",
-            selection: optionalColorPreferenceBinding(
-              \.editorBackgroundHex,
-              fallback: .textBackgroundColor
-            ),
-            supportsOpacity: false
-          )
-          if appState.preferences.editorBackgroundHex != nil {
-            Button("Use System") {
-              appState.updatePreferences { $0.editorBackgroundHex = nil }
-            }
-          }
+        SettingsColorButton(
+          title: "Editor background",
+          currentHex: appState.preferences.editorBackgroundHex,
+          resetTitle: "Use System",
+          fallbackColor: .textBackgroundColor
+        ) { hex in
+          appState.updatePreferences { $0.editorBackgroundHex = hex }
         }
         Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
           Text("Glass opacity")
         }
         HStack {
           Stepper(
-            "Width: \(Int(appState.preferences.panelWidth))",
+            "Menu width: \(Int(appState.preferences.panelWidth))",
             value: preferenceBinding(\.panelWidth), in: 380...800, step: 20)
           Stepper(
-            "Height: \(Int(appState.preferences.panelHeight))",
+            "Menu height: \(Int(appState.preferences.panelHeight))",
             value: preferenceBinding(\.panelHeight), in: 300...800, step: 20)
         }
       }
@@ -349,7 +350,6 @@
 
     private var editing: some View {
       Section("Behavior") {
-        Toggle("Show formatting bar", isOn: preferenceBinding(\.showFormattingBar))
         Toggle("Create lists automatically", isOn: preferenceBinding(\.automaticLists))
         Toggle(
           "Launch at login",
@@ -374,18 +374,27 @@
             HStack {
               Text(action.title)
               Spacer()
-              TextField("Key", text: shortcutKeyBinding(action))
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 64)
-              Menu(shortcutLabel(shortcut)) {
-                ForEach(Shortcut.Modifier.allCases, id: \.self) { modifier in
-                  Toggle(
-                    modifier.rawValue.capitalized, isOn: modifierBinding(modifier, action: action))
-                }
-              }
+              ShortcutRecorder(
+                action: action,
+                shortcut: shortcut,
+                isRecording: recordingSelection.action == action,
+                onBegin: { recordingSelection.begin(action) },
+                onCapture: { chord in
+                  recordShortcut(action, chord: chord)
+                },
+                onCancel: { recordingSelection.cancel() }
+              )
               Button(shortcut?.key == nil ? "Restore" : "Remove") {
+                recordingSelection.cancel()
                 setShortcutEnabled(action, enabled: shortcut?.key == nil)
               }
+            }
+            if shortcut?.isEnabled == true, shortcut?.modifiers.isEmpty == true {
+              Text(
+                "This shortcut may replace normal typing or navigation while Fleck is active."
+              )
+              .font(.caption)
+              .foregroundStyle(.secondary)
             }
             if conflicts.contains(action) {
               Label("Conflicts with another shortcut", systemImage: "exclamationmark.triangle.fill")
@@ -394,7 +403,7 @@
           }
         }
         Text(
-          "Choose a key and one or more modifiers. Conflicting combinations are highlighted and disabled shortcuts can be restored at any time."
+          "Click a shortcut and press the complete chord. Conflicting combinations are highlighted and disabled shortcuts can be restored at any time."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -687,37 +696,6 @@
       )
     }
 
-    private func colorPreferenceBinding(
-      _ keyPath: WritableKeyPath<AppPreferences, String>
-    ) -> Binding<Color>
-    {
-      Binding(
-        get: { Color(hex: appState.preferences[keyPath: keyPath]) },
-        set: { color in
-          guard let hex = color.hexString else { return }
-          appState.updatePreferences { $0[keyPath: keyPath] = hex }
-        }
-      )
-    }
-
-    private func optionalColorPreferenceBinding(
-      _ keyPath: WritableKeyPath<AppPreferences, String?>,
-      fallback: NSColor
-    ) -> Binding<Color> {
-      Binding(
-        get: {
-          appState.preferences[keyPath: keyPath].map(Color.init(hex:))
-            ?? Color(nsColor: fallback)
-        },
-        set: { color in
-          guard let hex = color.hexString else { return }
-          appState.updatePreferences {
-            $0[keyPath: keyPath] = hex
-          }
-        }
-      )
-    }
-
     private func setShortcutEnabled(_ action: Shortcut.Action, enabled: Bool) {
       appState.updatePreferences { preferences in
         guard let index = preferences.shortcuts.firstIndex(where: { $0.action == action }) else {
@@ -732,55 +710,86 @@
       }
     }
 
-    private func shortcutKeyBinding(_ action: Shortcut.Action) -> Binding<String> {
-      Binding(
-        get: {
-          appState.preferences.shortcuts.first(where: { $0.action == action })?.key ?? ""
-        },
-        set: { key in
-          appState.updatePreferences { preferences in
-            guard let index = preferences.shortcuts.firstIndex(where: { $0.action == action })
-            else { return }
-            let old = preferences.shortcuts[index]
-            preferences.shortcuts[index] = Shortcut(
-              action: action, key: key, modifiers: old.modifiers)
-          }
-        })
-    }
-
-    private func modifierBinding(_ modifier: Shortcut.Modifier, action: Shortcut.Action) -> Binding<
-      Bool
-    > {
-      Binding(
-        get: {
-          appState.preferences.shortcuts.first(where: { $0.action == action })?.modifiers.contains(
-            modifier.rawValue) == true
-        },
-        set: { enabled in
-          appState.updatePreferences { preferences in
-            guard let index = preferences.shortcuts.firstIndex(where: { $0.action == action })
-            else { return }
-            let old = preferences.shortcuts[index]
-            var modifiers = old.modifiers.filter { $0 != modifier.rawValue }
-            if enabled { modifiers.append(modifier.rawValue) }
-            preferences.shortcuts[index] = Shortcut(
-              action: action, key: old.key, modifiers: modifiers)
-          }
-        })
-    }
-
-    private func shortcutLabel(_ shortcut: Shortcut?) -> String {
-      guard let shortcut, let key = shortcut.key else { return "Not set" }
-      let symbols = shortcut.modifiers.map { modifier in
-        switch modifier {
-        case "command": "⌘"
-        case "shift": "⇧"
-        case "control": "⌃"
-        case "option": "⌥"
-        default: modifier
+    private func recordShortcut(_ action: Shortcut.Action, chord: ShortcutChord) {
+      appState.updatePreferences { preferences in
+        guard let index = preferences.shortcuts.firstIndex(where: { $0.action == action }) else {
+          return
         }
-      }.joined()
-      return symbols + key.uppercased()
+        preferences.shortcuts[index] = Shortcut(
+          action: action,
+          key: chord.key,
+          modifiers: chord.modifiers
+        )
+      }
+      recordingSelection.cancel()
+    }
+  }
+
+  private struct SettingsColorButton: View {
+    let title: String
+    let currentHex: String?
+    let resetTitle: String?
+    let fallbackColor: NSColor
+    let onCommit: (String?) -> Void
+    @State private var isPresented = false
+
+    init(
+      title: String,
+      currentHex: String?,
+      resetTitle: String? = nil,
+      fallbackColor: NSColor,
+      onCommit: @escaping (String?) -> Void
+    ) {
+      self.title = title
+      self.currentHex = currentHex
+      self.resetTitle = resetTitle
+      self.fallbackColor = fallbackColor
+      self.onCommit = onCommit
+    }
+
+    var body: some View {
+      Button {
+        isPresented = true
+      } label: {
+        HStack(spacing: 10) {
+          Text(title)
+          Spacer()
+          RoundedRectangle(cornerRadius: 5)
+            .fill(currentColor)
+            .frame(width: 24, height: 18)
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
+          Text(currentValue)
+            .foregroundStyle(.secondary)
+        }
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(title)
+      .accessibilityValue(currentValue)
+      .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        FleckColorPicker(
+          currentHex: currentHex,
+          currentLabel: currentValue,
+          resetTitle: resetTitle,
+          fallbackHex: FleckColorHex.hex(from: fallbackColor) ?? "#7C6CF2",
+          onCommit: { value in
+            onCommit(value)
+            isPresented = false
+          },
+          onCancel: { isPresented = false }
+        )
+      }
+    }
+
+    private var currentColor: Color {
+      if let currentHex, let color = Color(hex: currentHex) {
+        return color
+      }
+      return Color(nsColor: fallbackColor)
+    }
+
+    private var currentValue: String {
+      guard let currentHex else { return resetTitle ?? "Automatic" }
+      return FleckPaletteOption.paletteName(for: NSColor(hex: currentHex)) ?? "Custom"
     }
   }
 

@@ -29,6 +29,14 @@
     @Published private(set) var isBold = false
     @Published private(set) var isItalic = false
     @Published private(set) var isUnderlined = false
+    @Published private(set) var currentFontFamily: String?
+    @Published private(set) var currentFontSize: CGFloat?
+    @Published private(set) var isFontFamilyMixed = false
+    @Published private(set) var isFontSizeMixed = false
+    @Published private(set) var currentForegroundColor: NSColor?
+    @Published private(set) var currentBackgroundColor: NSColor?
+    @Published private(set) var isForegroundColorMixed = false
+    @Published private(set) var isBackgroundColorMixed = false
 
     weak var textView: NSTextView? {
       didSet {
@@ -80,6 +88,25 @@
       refreshFormattingState()
     }
 
+    func applyForegroundColor(_ color: NSColor?) {
+      applyColor(color, key: .foregroundColor)
+    }
+
+    func applyBackgroundColor(_ color: NSColor?) {
+      applyColor(color, key: .backgroundColor)
+    }
+
+    @discardableResult
+    func applyFontSize(_ size: CGFloat) -> Bool {
+      guard size.isFinite, (1...512).contains(size), let textView else { return false }
+      mutateSelection(defaultValue: NSFont.systemFont(ofSize: textView.font?.pointSize ?? 14)) {
+        font, _ in
+        NSFontManager.shared.convert(font, toSize: size)
+      }
+      refreshFormattingState()
+      return true
+    }
+
     func applyList(_ style: EditorListStyle) {
       (textView as? ListAwareTextView)?.toggleList(style)
     }
@@ -96,6 +123,14 @@
         isBold = false
         isItalic = false
         isUnderlined = false
+        currentFontFamily = nil
+        currentFontSize = nil
+        isFontFamilyMixed = false
+        isFontSizeMixed = false
+        currentForegroundColor = nil
+        currentBackgroundColor = nil
+        isForegroundColorMixed = false
+        isBackgroundColorMixed = false
         return
       }
 
@@ -115,6 +150,84 @@
       isBold = traits.contains(.boldFontMask)
       isItalic = traits.contains(.italicFontMask)
       isUnderlined = (attributes[.underlineStyle] as? Int ?? 0) != 0
+
+      guard range.length > 0, let storage = textView.textStorage, storage.length > 0 else {
+        currentFontFamily = font?.familyName
+        currentFontSize = font?.pointSize
+        isFontFamilyMixed = false
+        isFontSizeMixed = false
+        currentForegroundColor = attributes[.foregroundColor] as? NSColor
+        currentBackgroundColor = attributes[.backgroundColor] as? NSColor
+        isForegroundColorMixed = false
+        isBackgroundColorMixed = false
+        return
+      }
+
+      var family: String?
+      var size: CGFloat?
+      var familyMixed = false
+      var sizeMixed = false
+      var foreground: NSColor?
+      var background: NSColor?
+      var foregroundWasSet = false
+      var backgroundWasSet = false
+      var foregroundMixed = false
+      var backgroundMixed = false
+      storage.enumerateAttributes(in: range) { attributes, _, _ in
+        let runFont = attributes[.font] as? NSFont
+        let runFamily = runFont?.familyName
+        let runSize = runFont?.pointSize
+        if family == nil {
+          family = runFamily
+        } else if family != runFamily {
+          familyMixed = true
+        }
+        if size == nil {
+          size = runSize
+        } else if size != runSize {
+          sizeMixed = true
+        }
+        let runForeground = attributes[.foregroundColor] as? NSColor
+        if !foregroundWasSet {
+          foreground = runForeground
+          foregroundWasSet = true
+        } else if !colorsMatch(foreground, runForeground) {
+          foregroundMixed = true
+        }
+        let runBackground = attributes[.backgroundColor] as? NSColor
+        if !backgroundWasSet {
+          background = runBackground
+          backgroundWasSet = true
+        } else if !colorsMatch(background, runBackground) {
+          backgroundMixed = true
+        }
+      }
+      currentFontFamily = familyMixed ? nil : family
+      currentFontSize = sizeMixed ? nil : size
+      isFontFamilyMixed = familyMixed
+      isFontSizeMixed = sizeMixed
+      currentForegroundColor = foregroundMixed ? nil : foreground
+      currentBackgroundColor = backgroundMixed ? nil : background
+      isForegroundColorMixed = foregroundMixed
+      isBackgroundColorMixed = backgroundMixed
+    }
+
+    private func colorsMatch(_ lhs: NSColor?, _ rhs: NSColor?) -> Bool {
+      switch (lhs, rhs) {
+      case let (lhs?, rhs?):
+        if let lhs = lhs.usingColorSpace(.sRGB), let rhs = rhs.usingColorSpace(.sRGB) {
+          let tolerance: CGFloat = 0.0005
+          return abs(lhs.redComponent - rhs.redComponent) <= tolerance
+            && abs(lhs.greenComponent - rhs.greenComponent) <= tolerance
+            && abs(lhs.blueComponent - rhs.blueComponent) <= tolerance
+            && abs(lhs.alphaComponent - rhs.alphaComponent) <= tolerance
+        }
+        return lhs.isEqual(rhs)
+      case (nil, nil):
+        return true
+      default:
+        return false
+      }
     }
 
     private func toggleFontTrait(_ trait: NSFontTraitMask) {
@@ -142,13 +255,52 @@
         return
       }
       textView.textStorage?.beginEditing()
+      let original = textView.textStorage?.attributedSubstring(from: range)
       textView.textStorage?.enumerateAttributes(in: range) { attributes, subrange, _ in
         let current = attributes[.font] as? NSFont ?? defaultValue
         textView.textStorage?.addAttribute(
           .font, value: transform(current, attributes), range: subrange)
       }
       textView.textStorage?.endEditing()
+      if let original { registerUndo(in: textView, range: range, replacement: original) }
       textView.didChangeText()
+    }
+
+    private func applyColor(_ color: NSColor?, key: NSAttributedString.Key) {
+      guard let textView else { return }
+      let range = textView.selectedRange()
+      if range.length == 0 {
+        textView.typingAttributes[key] = color
+        refreshFormattingState()
+        return
+      }
+      guard let storage = textView.textStorage else { return }
+      let original = storage.attributedSubstring(from: range)
+      if let color {
+        storage.addAttribute(key, value: color, range: range)
+      } else {
+        storage.removeAttribute(key, range: range)
+      }
+      registerUndo(in: textView, range: range, replacement: original)
+      textView.didChangeText()
+      refreshFormattingState()
+    }
+
+    private func registerUndo(in textView: NSTextView, range: NSRange, replacement: NSAttributedString) {
+      textView.undoManager?.registerUndo(withTarget: self) { [weak textView] commands in
+        guard let textView else { return }
+        commands.restoreAttributes(in: textView, range: range, replacement: replacement)
+      }
+    }
+
+    private func restoreAttributes(in textView: NSTextView, range: NSRange, replacement: NSAttributedString) {
+      guard let storage = textView.textStorage else { return }
+      let current = storage.attributedSubstring(from: range)
+      registerUndo(in: textView, range: range, replacement: current)
+      storage.replaceCharacters(in: range, with: replacement)
+      textView.setSelectedRange(range)
+      textView.didChangeText()
+      refreshFormattingState()
     }
 
     private func toggleAttribute(_ key: NSAttributedString.Key, enabledValue: Int) {
@@ -518,6 +670,7 @@
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
       applyColors(to: textView)
+      Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
       scrollView.documentView = textView
       commands.textView = textView
       commands.refreshFormattingState()
@@ -531,8 +684,10 @@
       textView.automaticLists = automaticLists
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
+      let reloadedContent = applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator)
       applyColors(to: textView)
-      if !applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator),
+      Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
+      if !reloadedContent,
         context.coordinator.fontFamily != fontFamily
         || context.coordinator.fontSize != fontSize
       {
@@ -603,12 +758,50 @@
     }
 
     private func applyColors(to textView: NSTextView) {
-      textView.textColor = NSColor(hex: textColorHex) ?? .textColor
+      Self.applyAppearance(
+        to: textView,
+        textColorHex: textColorHex,
+        backgroundColorHex: backgroundColorHex
+      )
+    }
+
+    static func applyAppearance(
+      to textView: NSTextView,
+      textColorHex: String?,
+      backgroundColorHex: String?
+    ) {
+      applyDefaultForegroundColor(
+        NSColor(hex: textColorHex) ?? .textColor,
+        to: textView
+      )
       if let background = NSColor(hex: backgroundColorHex) {
         textView.drawsBackground = true
         textView.backgroundColor = background
       } else {
         textView.drawsBackground = false
+      }
+    }
+
+    static func applyAccentAppearance(to textView: NSTextView, accentColorHex: String) {
+      let accent = NSColor(hex: accentColorHex) ?? .controlAccentColor
+      textView.insertionPointColor = accent
+      var selectionAttributes = textView.selectedTextAttributes
+      selectionAttributes[.backgroundColor] = accent.withAlphaComponent(0.35)
+      textView.selectedTextAttributes = selectionAttributes
+    }
+
+    private static func applyDefaultForegroundColor(_ color: NSColor, to textView: NSTextView) {
+      guard let storage = textView.textStorage, let layoutManager = textView.layoutManager else {
+        return
+      }
+      let range = NSRange(location: 0, length: storage.length)
+      layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
+      storage.enumerateAttributes(in: range) { attributes, subrange, _ in
+        let foregroundColor = attributes[.foregroundColor] as? NSColor
+        guard foregroundColor == nil || foregroundColor?.isEqual(NSColor.textColor) == true else {
+          return
+        }
+        layoutManager.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: subrange)
       }
     }
 
@@ -662,6 +855,7 @@
 
       func textDidChange(_ notification: Notification) {
         guard let textView = notification.object as? NSTextView else { return }
+        parent.applyColors(to: textView)
         guard let snapshot = parent.commands.attributedBindingSnapshot(for: textView) else { return }
         let updatedRTF = try? snapshot.data(
           from: NSRange(location: 0, length: snapshot.length),
@@ -676,20 +870,6 @@
       func textViewDidChangeSelection(_ notification: Notification) {
         parent.commands.refreshFormattingState()
       }
-    }
-  }
-
-  extension NSColor {
-    convenience init?(hex: String?) {
-      guard let hex else { return nil }
-      let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-      guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return nil }
-      self.init(
-        calibratedRed: CGFloat((value >> 16) & 0xFF) / 255,
-        green: CGFloat((value >> 8) & 0xFF) / 255,
-        blue: CGFloat(value & 0xFF) / 255,
-        alpha: 1
-      )
     }
   }
 

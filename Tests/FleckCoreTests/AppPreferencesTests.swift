@@ -123,11 +123,94 @@ import Testing
     .data(using: .utf8)!
   let preferences = try JSONDecoder().decode(AppPreferences.self, from: old)
   #expect(preferences.theme == .system)
-  #expect(preferences.panelWidth == 520)
+  #expect(preferences.panelWidth == 640)
   #expect(preferences.panelHeight == 430)
   #expect(preferences.editorTextHex == nil)
   #expect(preferences.editorBackgroundHex == nil)
   #expect(!preferences.launchAtLogin)
+}
+
+@Test func newPreferencesUseBalancedIndependentPanelDefaults() {
+  let value = AppPreferences()
+  #expect(value.panelWidth == 640)
+  #expect(value.panelHeight == 430)
+  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelHeight == 430)
+  #expect(value.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
+}
+
+@Test func untouchedLegacyPanelSizeMigratesOnce() throws {
+  let legacy = Data(#"{"panelWidth":520,"panelHeight":430}"#.utf8)
+  let migrated = try JSONDecoder().decode(AppPreferences.self, from: legacy)
+  #expect(migrated.panelWidth == 640)
+  #expect(migrated.panelHeight == 430)
+  #expect(migrated.pinnedPanelWidth == 640)
+  #expect(migrated.pinnedPanelHeight == 430)
+}
+
+@Test func customLegacyPanelSizeIsPreservedAndUsesIndependentPinnedDefault() throws {
+  let legacy = Data(#"{"panelWidth":700,"panelHeight":500}"#.utf8)
+  let value = try JSONDecoder().decode(AppPreferences.self, from: legacy)
+  #expect(value.panelWidth == 700)
+  #expect(value.panelHeight == 500)
+  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelHeight == 430)
+}
+
+@Test func malformedPanelSizingFieldsFallBackWithoutDiscardingPreferences() throws {
+  let malformed = Data(
+    #"{"fontFamily":"Menlo","panelWidth":"wide","panelHeight":false,"panelSizingVersion":"current","pinnedPanelWidth":[],"pinnedPanelHeight":{}}"#.utf8
+  )
+  let value = try JSONDecoder().decode(AppPreferences.self, from: malformed)
+
+  #expect(value.fontFamily == "Menlo")
+  #expect(value.panelWidth == 640)
+  #expect(value.panelHeight == 430)
+  #expect(value.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
+  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelHeight == 430)
+}
+
+@Test func unrelatedMalformedPreferenceFieldStillThrows() {
+  let malformed = Data(#"{"panelWidth":"wide","showFormattingBar":"yes"}"#.utf8)
+
+  #expect(throws: (any Error).self) {
+    try JSONDecoder().decode(AppPreferences.self, from: malformed)
+  }
+}
+
+@Test func explicitLegacyWidthAfterSizingMigrationRoundTrips() throws {
+  let value = AppPreferences(panelWidth: 520, panelHeight: 430)
+  let decoded = try JSONDecoder().decode(AppPreferences.self, from: JSONEncoder().encode(value))
+  #expect(decoded.panelWidth == 520)
+  #expect(decoded.panelHeight == 430)
+}
+
+@Test func pinnedAndMenuPanelSizesRoundTripIndependently() throws {
+  let value = AppPreferences(
+    panelWidth: 640,
+    panelHeight: 430,
+    pinnedPanelWidth: 760,
+    pinnedPanelHeight: 540
+  )
+  let decoded = try JSONDecoder().decode(AppPreferences.self, from: JSONEncoder().encode(value))
+  #expect(decoded.panelWidth == 640)
+  #expect(decoded.panelHeight == 430)
+  #expect(decoded.pinnedPanelWidth == 760)
+  #expect(decoded.pinnedPanelHeight == 540)
+}
+
+@Test func panelDimensionsClampToTheirSupportedMinimumsAndMenuMaximums() {
+  let value = AppPreferences(
+    panelWidth: 12,
+    panelHeight: 9_000,
+    pinnedPanelWidth: 1,
+    pinnedPanelHeight: 2
+  )
+  #expect(value.panelWidth == 380)
+  #expect(value.panelHeight == 800)
+  #expect(value.pinnedPanelWidth == 480)
+  #expect(value.pinnedPanelHeight == 320)
 }
 
 @Test func shortcutsNormalizeAndDetectConflicts() {
@@ -138,7 +221,33 @@ import Testing
   #expect(Shortcut.conflicts(in: [first, second]) == [.newNote, .closeNote])
 }
 
-@Test func shortcutWithoutModifierIsInvalid() {
-  #expect(!Shortcut(action: .newNote, key: "t", modifiers: []).isValid)
+@Test func bareShortcutsAreValidAndDisabledShortcutsKeepTheirValidityRules() {
+  #expect(Shortcut(action: .nextNote, key: "tab", modifiers: []).isValid)
+  #expect(Shortcut(action: .closeNote, key: "backspace", modifiers: []).isValid)
   #expect(Shortcut(action: .newNote, key: nil, modifiers: []).isValid)
+  #expect(!Shortcut(action: .newNote, key: nil, modifiers: ["command"]).isValid)
+}
+
+@Test func bareAndModifiedShortcutConflictsRemainDistinct() {
+  let bare = Shortcut(action: .nextNote, key: "tab", modifiers: [])
+  let modified = Shortcut(action: .previousNote, key: "tab", modifiers: ["control"])
+  let duplicate = Shortcut(action: .newNote, key: "tab", modifiers: [])
+
+  #expect(Shortcut.conflicts(in: [bare, modified]) == [])
+  #expect(Shortcut.conflicts(in: [bare, duplicate]) == [.nextNote, .newNote])
+}
+
+@Test func specialShortcutRoundTripsItsNormalizedPersistedValue() throws {
+  let shortcut = Shortcut(
+    action: .closeNote,
+    key: "backspace",
+    modifiers: ["shift", "command"]
+  )
+
+  let decoded = try JSONDecoder().decode(
+    Shortcut.self,
+    from: JSONEncoder().encode(shortcut)
+  )
+
+  #expect(decoded == shortcut)
 }

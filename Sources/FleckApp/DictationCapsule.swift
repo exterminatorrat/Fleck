@@ -111,6 +111,12 @@
     }
   }
 
+  enum DictationWaveformRefreshSchedule {
+    static func interval(reduceMotion: Bool) -> TimeInterval {
+      reduceMotion ? 1 / 15 : 1 / 30
+    }
+  }
+
   enum DictationCapsuleAction: Equatable {
     case undo
     case copy
@@ -507,7 +513,12 @@
     }
 
     private var listeningContent: some View {
-      TimelineView(.periodic(from: .now, by: reduceMotion ? 1 : 1 / 30)) { context in
+      TimelineView(
+        .periodic(
+          from: .now,
+          by: DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)
+        )
+      ) { context in
         HStack(spacing: 9) {
           Circle()
             .fill(Color.accentColor)

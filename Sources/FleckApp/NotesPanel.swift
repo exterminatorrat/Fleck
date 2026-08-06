@@ -2,58 +2,115 @@
   import AppKit
   import SwiftUI
   import FleckCore
-  import UniformTypeIdentifiers
 
   enum TabDragReorder {
-    static let dropOperation: DropOperation = .move
-
-    static func makeContentType(id: UUID = UUID()) -> UTType {
-      let token = id.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-      return UTType(exportedAs: "com.menubarnotes.tabdrag.session\(token)")
+    struct Destination: Equatable {
+      let id: UUID
+      let index: Int
     }
 
-    static func destinationIndex(
+    struct LiveMoveResult: Equatable {
+      let didMove: Bool
+      let destinationID: UUID?
+    }
+
+    static func destination(
       draggedID: UUID?,
-      over destinationID: UUID,
-      in noteIDs: [UUID]
-    ) -> Int? {
+      locationX: CGFloat,
+      currentNoteIDs: [UUID],
+      currentFrames: [UUID: CGRect]
+    ) -> Destination? {
       guard let draggedID,
-        draggedID != destinationID,
-        noteIDs.contains(draggedID),
-        let destination = noteIDs.firstIndex(of: destinationID)
+        let sourceIndex = currentNoteIDs.firstIndex(of: draggedID),
+        let draggedFrame = currentFrames[draggedID]
       else { return nil }
-      return destination
-    }
 
-    static func itemProvider(for noteID: UUID, contentType: UTType) -> NSItemProvider {
-      let provider = NSItemProvider()
-      let data = Data(noteID.uuidString.utf8)
-      provider.registerDataRepresentation(
-        forTypeIdentifier: contentType.identifier,
-        visibility: .ownProcess
-      ) { completion in
-        completion(data, nil)
-        return nil
+      let destinationID: UUID?
+      if locationX > draggedFrame.midX {
+        destinationID = currentNoteIDs.dropFirst(sourceIndex + 1).last { id in
+          guard let midpoint = currentFrames[id]?.midX else { return false }
+          return midpoint <= locationX
+        }
+      } else if locationX < draggedFrame.midX {
+        destinationID = currentNoteIDs.prefix(sourceIndex).first { id in
+          guard let midpoint = currentFrames[id]?.midX else { return false }
+          return midpoint >= locationX
+        }
+      } else {
+        destinationID = nil
       }
-      return provider
+
+      guard let destinationID,
+        let destinationIndex = currentNoteIDs.firstIndex(of: destinationID)
+      else { return nil }
+      return Destination(id: destinationID, index: destinationIndex)
     }
 
-    @discardableResult
     static func performLiveMove(
       draggedID: UUID?,
-      over destinationID: UUID,
+      locationX: CGFloat,
       currentNoteIDs: () -> [UUID],
+      currentFrames: () -> [UUID: CGRect],
+      lastDestinationID: UUID?,
       move: (UUID, Int) -> Void
-    ) -> Bool {
+    ) -> LiveMoveResult {
       guard let draggedID,
-        let destination = destinationIndex(
+        let destination = destination(
           draggedID: draggedID,
-          over: destinationID,
-          in: currentNoteIDs()
+          locationX: locationX,
+          currentNoteIDs: currentNoteIDs(),
+          currentFrames: currentFrames()
         )
-      else { return false }
-      move(draggedID, destination)
-      return true
+      else {
+        return LiveMoveResult(didMove: false, destinationID: nil)
+      }
+      guard destination.id != lastDestinationID else {
+        return LiveMoveResult(didMove: false, destinationID: destination.id)
+      }
+      move(draggedID, destination.index)
+      return LiveMoveResult(didMove: true, destinationID: destination.id)
+    }
+  }
+
+  enum TabOverflowPresentation {
+    static func tabViewportWidth(totalStripWidth: CGFloat) -> CGFloat {
+      max(0, totalStripWidth - 28)
+    }
+
+    static func hasHiddenTrailingContent(
+      contentTrailingEdge: CGFloat,
+      visibleTrailingEdge: CGFloat
+    ) -> Bool {
+      contentTrailingEdge > visibleTrailingEdge + 0.5
+    }
+  }
+
+  enum FontSizeSubmission {
+    static func requestedSize(
+      for text: String,
+      currentSize: CGFloat?,
+      isMixed: Bool
+    ) -> CGFloat? {
+      guard let size = Double(text), size.isFinite, (1...512).contains(size) else { return nil }
+      let requestedSize = CGFloat(size)
+      guard isMixed || requestedSize != currentSize else { return nil }
+      return requestedSize
+    }
+  }
+
+  private struct TabContentTrailingEdgePreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+      value = nextValue()
+    }
+  }
+
+  private struct TabFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [UUID: CGRect] = [:]
+
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+      value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
   }
 
@@ -83,16 +140,21 @@
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
     @State private var draggedNoteID: UUID?
-    @State private var tabDragContentType = TabDragReorder.makeContentType()
+    @State private var tabDragDestinationID: UUID?
+    @State private var tabColorPickerNoteID: UUID?
+    @State private var tabFrames: [UUID: CGRect] = [:]
+    @State private var tabContentTrailingEdge: CGFloat = 0
 
     init(
       dictationRuntime: DictationRuntime,
       isPinned: Bool = false,
-      sizing: NotesPanelSizing = .storedPreferences
+      sizing: NotesPanelSizing = .storedPreferences,
+      editorCommands: EditorCommands? = nil
     ) {
       self.dictationRuntime = dictationRuntime
       self.isPinned = isPinned
       self.sizing = sizing
+      _editorCommands = StateObject(wrappedValue: editorCommands ?? EditorCommands())
     }
 
     var body: some View {
@@ -189,7 +251,7 @@
           .fill(.ultraThinMaterial)
           .opacity(appState.preferences.panelOpacity)
       }
-      .tint(Color(hex: appState.preferences.accentHex))
+      .tint(Color(hex: appState.preferences.accentHex) ?? .accentColor)
       .background(
         ShortcutMonitor(shortcuts: appState.preferences.shortcuts, action: performShortcut)
           .frame(width: 0, height: 0)
@@ -308,7 +370,21 @@
 
     private var header: some View {
       HStack(spacing: 10) {
-        Label("Fleck", systemImage: "note.text")
+        HStack(spacing: 6) {
+          switch FleckMark.load(template: true) {
+          case .image(let mark):
+            Image(nsImage: mark)
+              .resizable()
+              .frame(width: 18, height: 18)
+              .accessibilityHidden(true)
+          case .missingPackagedResource:
+            Text("!")
+              .foregroundStyle(.red)
+              .accessibilityLabel("Fleck mark missing")
+          }
+          Text("Fleck")
+            .accessibilityLabel("Fleck")
+        }
           .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
@@ -336,6 +412,26 @@
           }
           .help("Pin notes on screen")
         }
+
+        Button {
+          appState.updatePreferences { $0.showFormattingBar.toggle() }
+        } label: {
+          Image(
+            systemName: appState.preferences.showFormattingBar
+              ? "chevron.up"
+              : "chevron.down"
+          )
+        }
+        .accessibilityLabel(
+          appState.preferences.showFormattingBar
+            ? "Hide Editor toolbar"
+            : "Show Editor toolbar"
+        )
+        .help(
+          appState.preferences.showFormattingBar
+            ? "Hide Editor toolbar"
+            : "Show Editor toolbar"
+        )
 
         Menu {
           Button("Import…", systemImage: "square.and.arrow.down") {
@@ -386,10 +482,20 @@
     }
 
     private var tabStrip: some View {
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 6) {
-          ForEach(appState.workspace.notes) { note in
+      ScrollViewReader { scrollProxy in
+        GeometryReader { proxy in
+          let tabViewportWidth = TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)
+          let hasHiddenTrailingTabs = TabOverflowPresentation.hasHiddenTrailingContent(
+            contentTrailingEdge: tabContentTrailingEdge,
+            visibleTrailingEdge: tabViewportWidth
+          )
+        HStack(spacing: 0) {
+          ZStack(alignment: .trailing) {
+            ScrollView(.horizontal, showsIndicators: false) {
+              HStack(spacing: 6) {
+                ForEach(appState.workspace.notes) { note in
             Button {
+              guard draggedNoteID == nil else { return }
               appState.select(note.id)
             } label: {
               HStack(spacing: 4) {
@@ -416,6 +522,14 @@
                     .fill(tabColor(for: note, opacity: 0.10))
                 }
               }
+              .background {
+                GeometryReader { proxy in
+                  Color.clear.preference(
+                    key: TabFramePreferenceKey.self,
+                    value: [note.id: proxy.frame(in: .named("tab-strip"))]
+                  )
+                }
+              }
             }
             .buttonStyle(.plain)
             .transition(
@@ -423,18 +537,30 @@
                 with: .offset(x: motion.offset)
               )
             )
-            .onDrag {
-              draggedNoteID = note.id
-              return TabDragReorder.itemProvider(for: note.id, contentType: tabDragContentType)
-            }
-            .onDrop(
-              of: [tabDragContentType],
-              delegate: TabDropDelegate(
-                destinationID: note.id,
-                currentNoteIDs: { appState.workspace.notes.map(\.id) },
-                draggedNoteID: $draggedNoteID,
-                move: appState.moveNote
-              )
+            .simultaneousGesture(
+              DragGesture(minimumDistance: 2, coordinateSpace: .named("tab-strip"))
+                .onChanged { value in
+                  guard abs(value.translation.width) >= 2 else { return }
+                  if draggedNoteID == nil {
+                    draggedNoteID = note.id
+                    tabDragDestinationID = nil
+                    appState.select(note.id)
+                  }
+                  guard draggedNoteID == note.id else { return }
+                  let result = TabDragReorder.performLiveMove(
+                    draggedID: draggedNoteID,
+                    locationX: value.location.x,
+                    currentNoteIDs: { appState.workspace.notes.map(\.id) },
+                    currentFrames: { tabFrames },
+                    lastDestinationID: tabDragDestinationID,
+                    move: appState.moveNote
+                  )
+                  tabDragDestinationID = result.destinationID
+                }
+                .onEnded { _ in
+                  draggedNoteID = nil
+                  tabDragDestinationID = nil
+                }
             )
             .contextMenu {
               Button(
@@ -448,29 +574,10 @@
               Button("Move Right", systemImage: "arrow.right") {
                 move(note, offset: 1)
               }
-              Menu("Tab Color", systemImage: "paintpalette") {
-                ForEach(TabColorOption.all) { option in
-                  Button {
-                    appState.select(note.id)
-                    appState.setSelectedTabColor(option.hex)
-                  } label: {
-                    HStack {
-                      Label {
-                        Text(option.name)
-                      } icon: {
-                        if let swatchImage = option.swatchImage {
-                          Image(nsImage: swatchImage)
-                        } else {
-                          Image(systemName: "circle.slash")
-                        }
-                      }
-                      if note.tabColorHex == option.hex {
-                        Image(systemName: "checkmark")
-                      }
-                    }
-                  }
-                }
+              Button("Tab Color...", systemImage: "paintpalette") {
+                tabColorPickerNoteID = note.id
               }
+              .accessibilityValue(tabColorAccessibilityValue(for: note.tabColorHex))
               Toggle(
                 "Allow Agent Access",
                 isOn: Binding(
@@ -483,12 +590,71 @@
                 requestDeletion(note)
               }
             }
+            .popover(
+              isPresented: Binding(
+                get: { tabColorPickerNoteID == note.id },
+                set: { if !$0 { tabColorPickerNoteID = nil } }
+              ),
+              arrowEdge: .bottom
+            ) {
+              tabColorPicker(noteID: note.id)
+            }
+                }
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .background {
+                GeometryReader { proxy in
+                  Color.clear.preference(
+                    key: TabContentTrailingEdgePreferenceKey.self,
+                    value: proxy.frame(in: .named("tab-scroll-viewport")).minX - 6
+                  )
+                }
+              }
+              }
+              .padding(.horizontal, 12)
+              .padding(.bottom, 9)
+              .animation(motion.spatial, value: appState.workspace.selectedNoteID)
+              .animation(motion.spatial, value: appState.workspace.notes.map(\.id))
+            }
+            .coordinateSpace(name: "tab-scroll-viewport")
+            .coordinateSpace(name: "tab-strip")
+
+            if hasHiddenTrailingTabs {
+              LinearGradient(
+                colors: [.clear, Color(nsColor: .windowBackgroundColor)],
+                startPoint: .leading,
+                endPoint: .trailing
+              )
+              .frame(width: 18)
+              .allowsHitTesting(false)
+            }
           }
+          .frame(width: tabViewportWidth, alignment: .leading)
+
+          Button {
+            if let lastNoteID = appState.workspace.notes.last?.id {
+              scrollProxy.scrollTo(lastNoteID, anchor: .trailing)
+            }
+          } label: {
+            Image(systemName: "chevron.right")
+              .font(.caption)
+              .frame(width: 28, height: 28)
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Reveal hidden tabs")
+          .accessibilityHidden(!hasHiddenTrailingTabs)
+          .disabled(!hasHiddenTrailingTabs)
+          .opacity(hasHiddenTrailingTabs ? 1 : 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 9)
-        .animation(motion.spatial, value: appState.workspace.selectedNoteID)
-        .animation(motion.spatial, value: appState.workspace.notes.map(\.id))
+        .onPreferenceChange(TabContentTrailingEdgePreferenceKey.self) { trailingEdge in
+          guard tabContentTrailingEdge != trailingEdge else { return }
+          tabContentTrailingEdge = trailingEdge
+        }
+        .onPreferenceChange(TabFramePreferenceKey.self) { frames in
+          tabFrames = frames
+        }
+        }
+        .frame(height: 37)
       }
     }
 
@@ -504,7 +670,37 @@
       guard cleaned.count == 6, UInt64(cleaned, radix: 16) != nil else {
         return Color.accentColor.opacity(opacity)
       }
-      return Color(hex: hex).opacity(opacity)
+      return (Color(hex: hex) ?? .accentColor).opacity(opacity)
+    }
+
+    @ViewBuilder
+    private func tabColorPicker(noteID: UUID) -> some View {
+      if let note = appState.workspace.notes.first(where: { $0.id == noteID }) {
+        FleckColorPicker(
+          currentHex: note.tabColorHex,
+          currentLabel: tabColorAccessibilityValue(for: note.tabColorHex),
+          resetTitle: "None",
+          onCommit: { hex in commitTabColor(hex, for: noteID) },
+          onCancel: { tabColorPickerNoteID = nil }
+        )
+      } else {
+        EmptyView()
+      }
+    }
+
+    private func commitTabColor(_ hex: String?, for noteID: UUID) {
+      guard appState.workspace.notes.contains(where: { $0.id == noteID }) else {
+        tabColorPickerNoteID = nil
+        return
+      }
+      appState.select(noteID)
+      appState.setSelectedTabColor(hex)
+      tabColorPickerNoteID = nil
+    }
+
+    private func tabColorAccessibilityValue(for hex: String?) -> String {
+      guard let hex else { return "None" }
+      return FleckPaletteOption.paletteName(for: NSColor(hex: hex)) ?? "Custom"
     }
 
     private func performShortcut(_ action: Shortcut.Action) {
@@ -613,6 +809,8 @@
                 }
               }
             )
+            .transition(.opacity)
+            .animation(reduceMotion ? nil : motion.quick, value: appState.preferences.showFormattingBar)
           }
           TextField(
             "Note title",
@@ -646,36 +844,6 @@
         }
       }
     }
-  }
-
-  struct TabColorOption: Identifiable {
-    let name: String
-    let hex: String?
-
-    var id: String { hex ?? "none" }
-
-    var swatchImage: NSImage? {
-      guard let hex else { return nil }
-      let image = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { rect in
-        NSColor(Color(hex: hex)).setFill()
-        NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
-        return true
-      }
-      image.isTemplate = false
-      return image
-    }
-
-    static let all = [
-      TabColorOption(name: "None", hex: nil),
-      TabColorOption(name: "Red", hex: "#FF4245"),
-      TabColorOption(name: "Orange", hex: "#FF9230"),
-      TabColorOption(name: "Yellow", hex: "#FFD600"),
-      TabColorOption(name: "Green", hex: "#30D158"),
-      TabColorOption(name: "Blue", hex: "#0091FF"),
-      TabColorOption(name: "Purple", hex: "#DB34F2"),
-      TabColorOption(name: "Pink", hex: "#FF375F"),
-      TabColorOption(name: "Gray", hex: "#98989D"),
-    ]
   }
 
   private struct DeleteConfirmationOverlay: View {
@@ -717,9 +885,14 @@
     @ObservedObject var commands: EditorCommands
     @ObservedObject var dictationRuntime: DictationRuntime
     let onDelete: () -> Void
+    @State private var fontSizeText = ""
+    @FocusState private var isFontSizeFocused: Bool
+    @State private var isForegroundColorPickerPresented = false
+    @State private var isBackgroundColorPickerPresented = false
 
     var body: some View {
-      HStack(spacing: 8) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 8) {
         Menu {
           Button("Cancel Dictation", role: .destructive) {
             Task { await dictationRuntime.cancel() }
@@ -787,13 +960,102 @@
         .accessibilityLabel("Strikethrough")
         Menu {
           ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
-            Button(family) { commands.applyFontFamily(family) }
+            Button {
+              commands.applyFontFamily(family)
+            } label: {
+              HStack {
+                Text(family)
+                if !commands.isFontFamilyMixed, commands.currentFontFamily == family {
+                  Image(systemName: "checkmark")
+                }
+              }
+            }
           }
         } label: {
           ToolbarIconLabel(systemImage: "textformat")
         }
         .help("Font")
         .accessibilityLabel("Font")
+        .accessibilityValue(
+          commands.isFontFamilyMixed ? "Mixed" : commands.currentFontFamily ?? "Automatic"
+        )
+        TextField("Font size", text: $fontSizeText)
+          .textFieldStyle(.roundedBorder)
+          .frame(width: 48)
+          .focused($isFontSizeFocused)
+          .onAppear(perform: syncFontSizeText)
+          .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
+          .onChange(of: commands.isFontSizeMixed) { _, _ in syncFontSizeText() }
+          .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
+            if wasFocused && !isFocused { applyFontSizeText() }
+          }
+          .onSubmit { applyFontSizeText() }
+          .accessibilityLabel("Font size")
+          .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
+          .accessibilityHint("Enter a size from 1 through 512 points.")
+        Button {
+          isForegroundColorPickerPresented = true
+        } label: {
+          ToolbarIconLabel(systemImage: "paintpalette")
+        }
+        .accessibilityLabel("Font Color")
+        .accessibilityValue(
+          colorAccessibilityValue(
+            color: commands.currentForegroundColor,
+            isMixed: commands.isForegroundColorMixed,
+            emptyName: "Automatic"
+          )
+        )
+        .popover(isPresented: $isForegroundColorPickerPresented, arrowEdge: .bottom) {
+          FleckColorPicker(
+            currentHex: commands.isForegroundColorMixed
+              ? nil
+              : FleckColorHex.hex(from: commands.currentForegroundColor),
+            currentLabel: colorAccessibilityValue(
+              color: commands.currentForegroundColor,
+              isMixed: commands.isForegroundColorMixed,
+              emptyName: "Automatic"
+            ),
+            resetTitle: "Automatic",
+            onCommit: { hex in
+              commands.applyForegroundColor(hex.flatMap { NSColor(hex: $0) })
+              isForegroundColorPickerPresented = false
+            },
+            onCancel: { isForegroundColorPickerPresented = false }
+          )
+        }
+        Button {
+          isBackgroundColorPickerPresented = true
+        } label: {
+          ToolbarIconLabel(systemImage: "highlighter")
+        }
+        .accessibilityLabel("Highlight")
+        .accessibilityValue(
+          colorAccessibilityValue(
+            color: commands.currentBackgroundColor,
+            isMixed: commands.isBackgroundColorMixed,
+            emptyName: "No Highlight"
+          )
+        )
+        .popover(isPresented: $isBackgroundColorPickerPresented, arrowEdge: .bottom) {
+          FleckColorPicker(
+            currentHex: commands.isBackgroundColorMixed
+              ? nil
+              : FleckColorHex.hex(from: commands.currentBackgroundColor),
+            currentLabel: colorAccessibilityValue(
+              color: commands.currentBackgroundColor,
+              isMixed: commands.isBackgroundColorMixed,
+              emptyName: "No Highlight"
+            ),
+            resetTitle: "No Highlight",
+            fallbackHex: "#FFD600",
+            onCommit: { hex in
+              commands.applyBackgroundColor(hex.flatMap { NSColor(hex: $0) })
+              isBackgroundColorPickerPresented = false
+            },
+            onCancel: { isBackgroundColorPickerPresented = false }
+          )
+        }
         Menu {
           Button("Disc (•)") { commands.applyList(.bullet(.disc)) }
           Button("Circle (◦)") { commands.applyList(.bullet(.circle)) }
@@ -829,18 +1091,52 @@
         }
         .accessibilityLabel("Delete")
         .keyboardShortcut("w", modifiers: .command)
+        }
+        .buttonStyle(CrispToolbarButtonStyle(motion: motion))
+        .animation(motion.quick, value: commands.isBold)
+        .animation(motion.quick, value: commands.isItalic)
+        .animation(motion.quick, value: commands.isUnderlined)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
       }
-      .buttonStyle(CrispToolbarButtonStyle(motion: motion))
-      .animation(motion.quick, value: commands.isBold)
-      .animation(motion.quick, value: commands.isItalic)
-      .animation(motion.quick, value: commands.isUnderlined)
-      .padding(.horizontal, 16)
-      .padding(.vertical, 9)
+      .frame(maxWidth: .infinity)
       .background(.thinMaterial)
+      .accessibilityLabel("Editor toolbar")
     }
 
     private var motion: AppMotion {
       AppMotion(reduceMotion: reduceMotion)
+    }
+
+    private var fontSizeDisplay: String {
+      guard !commands.isFontSizeMixed, let size = commands.currentFontSize else { return "" }
+      return String(format: "%.2f", size).replacingOccurrences(of: #"\.00$"#, with: "", options: .regularExpression)
+    }
+
+    private func syncFontSizeText() {
+      guard !isFontSizeFocused else { return }
+      fontSizeText = fontSizeDisplay
+    }
+
+    private func applyFontSizeText() {
+      if let size = FontSizeSubmission.requestedSize(
+        for: fontSizeText,
+        currentSize: commands.currentFontSize,
+        isMixed: commands.isFontSizeMixed
+      ) {
+        _ = commands.applyFontSize(size)
+      }
+      fontSizeText = fontSizeDisplay
+    }
+
+    private func colorAccessibilityValue(
+      color: NSColor?,
+      isMixed: Bool,
+      emptyName: String
+    ) -> String {
+      guard !isMixed else { return "Mixed" }
+      guard let color else { return emptyName }
+      return FleckPaletteOption.paletteName(for: color) ?? "Custom"
     }
   }
 
@@ -885,31 +1181,6 @@
     }
   }
 
-  private struct TabDropDelegate: DropDelegate {
-    let destinationID: UUID
-    let currentNoteIDs: () -> [UUID]
-    @Binding var draggedNoteID: UUID?
-    let move: (UUID, Int) -> Void
-
-    func dropEntered(info: DropInfo) {
-      TabDragReorder.performLiveMove(
-        draggedID: draggedNoteID,
-        over: destinationID,
-        currentNoteIDs: currentNoteIDs,
-        move: move
-      )
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-      DropProposal(operation: TabDragReorder.dropOperation)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-      draggedNoteID = nil
-      return true
-    }
-  }
-
   private struct ToolbarIconLabel: View {
     let systemImage: String
     var isActive = false
@@ -925,25 +1196,4 @@
     }
   }
 
-  extension Color {
-    init(hex: String) {
-      let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-      let value = UInt64(cleaned, radix: 16) ?? 0x7C6CF2
-      self.init(
-        red: Double((value >> 16) & 0xFF) / 255,
-        green: Double((value >> 8) & 0xFF) / 255,
-        blue: Double(value & 0xFF) / 255
-      )
-    }
-
-    var hexString: String? {
-      guard let color = NSColor(self).usingColorSpace(.sRGB) else { return nil }
-      return String(
-        format: "#%02X%02X%02X",
-        Int((color.redComponent * 255).rounded()),
-        Int((color.greenComponent * 255).rounded()),
-        Int((color.blueComponent * 255).rounded())
-      )
-    }
-  }
 #endif
