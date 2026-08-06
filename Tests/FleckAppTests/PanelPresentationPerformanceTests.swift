@@ -195,6 +195,60 @@
     #expect(try runShell(command: command, arguments: ["--", "Fleck"]) != 0)
   }
 
+  @Test func FleckPanelPresentationUsesTheSupportedInfoLogOption() throws {
+    let source = try String(
+      contentsOf: repositoryRoot().appendingPathComponent(
+        "Scripts/measure-fleck-panel-presentation.sh"
+      ),
+      encoding: .utf8
+    )
+    let functionStart = try #require(source.range(of: "show_performance_logs() {"))
+    let functionEnd = try #require(
+      source.range(of: "\n}\n", range: functionStart.upperBound..<source.endIndex)
+    )
+    let functionSource = String(source[functionStart.lowerBound..<functionEnd.upperBound])
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("fleck-log-option-" + UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: temporaryDirectory,
+      withIntermediateDirectories: false
+    )
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+    let fakeLog = temporaryDirectory.appendingPathComponent("log")
+    try "#!/bin/sh\nprintf '%s\\n' \"$@\"\n".write(
+      to: fakeLog,
+      atomically: true,
+      encoding: .utf8
+    )
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755],
+      ofItemAtPath: fakeLog.path
+    )
+
+    let command = """
+    metadata_predicate='processID == 69379 AND subsystem == "com.harryjin.fleck" AND category == "performance"'
+    \(functionSource)
+    show_performance_logs "$1"
+    """
+    let result = try runShellCapture(command: command, arguments: ["--", fakeLog.path])
+    let arguments = result.stdout.split(whereSeparator: \.isNewline).map(String.init)
+
+    #expect(result.status == 0)
+    #expect(arguments == [
+      "show",
+      "--last",
+      "5m",
+      "--style",
+      "compact",
+      "--info",
+      "--predicate",
+      "processID == 69379 AND subsystem == \"com.harryjin.fleck\" AND category == \"performance\""
+    ])
+    #expect(!result.stdout.contains("--level"))
+    #expect(!result.stdout.localizedCaseInsensitiveContains("note"))
+  }
+
   @Test func FleckPanelMeasurementScriptFailsClosedForInvalidInputs() throws {
     let root = repositoryRoot()
     let script = root.appendingPathComponent("Scripts/measure-fleck-panel-presentation.sh")
@@ -266,6 +320,26 @@
     try process.run()
     process.waitUntilExit()
     return process.terminationStatus
+  }
+
+  private struct ShellResult {
+    let status: Int32
+    let stdout: String
+  }
+
+  private func runShellCapture(command: String, arguments: [String]) throws -> ShellResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", command] + arguments
+    let output = Pipe()
+    process.standardOutput = output
+    try process.run()
+    process.waitUntilExit()
+    let stdout = String(
+      data: output.fileHandleForReading.readDataToEndOfFile(),
+      encoding: .utf8
+    ) ?? ""
+    return ShellResult(status: process.terminationStatus, stdout: stdout)
   }
 
   private func repositoryRoot() -> URL {

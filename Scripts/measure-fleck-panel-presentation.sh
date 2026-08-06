@@ -123,12 +123,16 @@ readonly warm_sample_count=30
 printf 'sample_label\tsample_number\telapsed_ms\troot_state\n' > "$raw_samples"
 printf 'sample_label\tsample_number\telapsed_ms\troot_state\n' > "$samples"
 
-log_records() {
-  /usr/bin/log show \
+show_performance_logs() {
+  "$1" show \
     --last 5m \
     --style compact \
-    --level info \
-    --predicate "$metadata_predicate" 2>/dev/null |
+    --info \
+    --predicate "$metadata_predicate" 2>/dev/null
+}
+
+log_records() {
+  show_performance_logs /usr/bin/log |
     awk '
       /panel_presentation elapsed_ms=/ {
         record = $0
