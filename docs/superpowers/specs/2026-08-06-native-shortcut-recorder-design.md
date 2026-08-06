@@ -1,7 +1,7 @@
 # Fleck Native Shortcut Recorder Design
 
 Date: 2026-08-06
-Status: Approved interaction and architecture; awaiting written-spec review
+Status: Approved
 
 ## Objective
 
