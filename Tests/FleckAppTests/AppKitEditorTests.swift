@@ -489,6 +489,64 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   #expect(commands.currentBackgroundColor == nil)
 }
 
+@Test @MainActor func editorCommandsTreatsVisuallyIdenticalColorsAcrossConvertibleColorSpacesAsUniform() throws {
+  let textView = NSTextView()
+  let foreground = NSColor(srgbRed: 0.22, green: 0.44, blue: 0.66, alpha: 1)
+  let background = NSColor(srgbRed: 0.76, green: 0.58, blue: 0.34, alpha: 1)
+  let foregroundInDisplayP3 = try #require(foreground.usingColorSpace(.displayP3))
+  let backgroundInDisplayP3 = try #require(background.usingColorSpace(.displayP3))
+  textView.string = "AB"
+  textView.textStorage?.addAttributes(
+    [.foregroundColor: foreground, .backgroundColor: background],
+    range: NSRange(location: 0, length: 1)
+  )
+  textView.textStorage?.addAttributes(
+    [.foregroundColor: foregroundInDisplayP3, .backgroundColor: backgroundInDisplayP3],
+    range: NSRange(location: 1, length: 1)
+  )
+  textView.setSelectedRange(NSRange(location: 0, length: 2))
+  let commands = EditorCommands()
+  commands.textView = textView
+
+  commands.refreshFormattingState()
+
+  #expect(!commands.isForegroundColorMixed)
+  #expect(sRGB(commands.currentForegroundColor) == sRGB(foreground))
+  #expect(!commands.isBackgroundColorMixed)
+  #expect(sRGB(commands.currentBackgroundColor) == sRGB(background))
+}
+
+@Test @MainActor func editorCommandsReportsGenuinelyDifferentColorsAcrossColorSpacesAsMixed() throws {
+  let textView = NSTextView()
+  let firstForeground = NSColor(srgbRed: 0.9, green: 0.08, blue: 0.1, alpha: 1)
+  let secondForeground = try #require(
+    NSColor(srgbRed: 0.08, green: 0.1, blue: 0.9, alpha: 1).usingColorSpace(.displayP3)
+  )
+  let firstBackground = NSColor(srgbRed: 0.95, green: 0.82, blue: 0.06, alpha: 1)
+  let secondBackground = try #require(
+    NSColor(srgbRed: 0.08, green: 0.82, blue: 0.14, alpha: 1).usingColorSpace(.displayP3)
+  )
+  textView.string = "AB"
+  textView.textStorage?.addAttributes(
+    [.foregroundColor: firstForeground, .backgroundColor: firstBackground],
+    range: NSRange(location: 0, length: 1)
+  )
+  textView.textStorage?.addAttributes(
+    [.foregroundColor: secondForeground, .backgroundColor: secondBackground],
+    range: NSRange(location: 1, length: 1)
+  )
+  textView.setSelectedRange(NSRange(location: 0, length: 2))
+  let commands = EditorCommands()
+  commands.textView = textView
+
+  commands.refreshFormattingState()
+
+  #expect(commands.isForegroundColorMixed)
+  #expect(commands.currentForegroundColor == nil)
+  #expect(commands.isBackgroundColorMixed)
+  #expect(commands.currentBackgroundColor == nil)
+}
+
 @Test @MainActor func editorAppearancePreservesExplicitSystemAndPaletteColorsWithoutUndoMutation() throws {
   let textView = NSTextView()
   let window = NSWindow(

@@ -215,6 +215,13 @@
     private func colorsMatch(_ lhs: NSColor?, _ rhs: NSColor?) -> Bool {
       switch (lhs, rhs) {
       case let (lhs?, rhs?):
+        if let lhs = lhs.usingColorSpace(.sRGB), let rhs = rhs.usingColorSpace(.sRGB) {
+          let tolerance: CGFloat = 0.0005
+          return abs(lhs.redComponent - rhs.redComponent) <= tolerance
+            && abs(lhs.greenComponent - rhs.greenComponent) <= tolerance
+            && abs(lhs.blueComponent - rhs.blueComponent) <= tolerance
+            && abs(lhs.alphaComponent - rhs.alphaComponent) <= tolerance
+        }
         return lhs.isEqual(rhs)
       case (nil, nil):
         return true
