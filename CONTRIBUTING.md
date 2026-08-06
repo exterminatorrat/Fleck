@@ -1,5 +1,10 @@
 # Contributing to Fleck
 
+> [!IMPORTANT]
+> External code contributions and pull requests are not currently accepted.
+> Reproducible bug reports and product feedback are welcome. This document records
+> the maintainer workflow used to develop and release Fleck.
+
 ## Repository workflow
 
 GitHub is the source of truth for Fleck. Intentional changes to application code, tests, documentation, assets, configuration, and release metadata must be committed and pushed; project work should not exist only on a local machine.
