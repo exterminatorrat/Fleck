@@ -1,164 +1,207 @@
-# Fleck
+<p align="center">
+  <img src="website/public/fleck-mark.png" alt="Fleck mark" width="96">
+</p>
 
-Fleck is a lightweight, native macOS menu-bar app for keeping multiple quick notes in tabs. The goal is a fast, local-first editor with rich-text formatting, bullets, numbered lists, installed-font support, and low idle resource use.
+<h1 align="center">Fleck</h1>
 
-See the [product plan](PRODUCT_PLAN.md) for the complete vision, feature requirements, technical direction, performance goals, and delivery roadmap.
+<p align="center">A native, local-first macOS menu-bar notes workspace with on-device dictation and explicit per-note agent collaboration.</p>
+
+<p align="center">
+  <a href="https://developer.apple.com/macos/"><img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-111827?logo=apple&logoColor=white"></a>
+  <a href="Package.swift"><img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white"></a>
+  <a href="https://github.com/exterminatorrat/Fleck/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/exterminatorrat/Fleck/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="PolyForm Shield 1.0.0 · source-available" src="https://img.shields.io/badge/PolyForm%20Shield%201.0.0-source--available-4b5563"></a>
+</p>
 
 ## Project status
 
-Fleck is implemented as native SwiftPM executables. `Scripts/build-fleck-app.sh`
-creates an ad-hoc development-signed `Fleck.app` with a stable local identity
-and the agent helper packaged separately in `Contents/SharedSupport`.
-Distribution signing, notarization, and export remain pending.
+Fleck is under active development. The repository contains implemented local
+development paths for native notes, dictation, persistence, and the local Agent
+Connector. Build and test the packaged development app for macOS-specific
+behavior; the ordinary SwiftPM executable is not a substitute for that evidence.
 
-Clean Dictation is implemented as a release-disabled candidate. **Enhanced
-Local is a non-shippable candidate:** it must not be included in a release
-until the pinned model materially beats Standard on the privacy-safe
-real-device corpus and every device, accessibility, resource, legal,
-attribution, SBOM, signing/notarization, and Mac App Store gate in
-[TESTING.md](TESTING.md) has recorded evidence. A green build or CI run is not
-release approval. Until those gates pass, keep Enhanced Local out of release UI
-and do not describe it as shipping.
+Distribution signing and notarization, StoreKit access, and Mac App Store release
+remain pending. Enhanced Local is a release-disabled candidate, not a shipping
+feature. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) and
+[TESTING.md](TESTING.md) for the current boundaries.
 
-## Persistent Dictation Bar
+## Implemented capabilities
 
-When enabled in **Settings → Dictation**, Fleck keeps one small, non-activating
-status bar visible across Spaces. Its default trigger is **Right Option**. Hold
-the selected physical modifier for 180 ms to dictate until release, or tap it
-twice to start hands-free dictation; the next press finishes and Escape
-cancels. The bar contains no transcript or shortcut hint while idle.
+| Area | Current implementation |
+| --- | --- |
+| Native notes | Menu-bar and pinned-window surfaces; tabs, pinning, live reordering, import/export, 30-day Trash, and recovery. |
+| Native editor | A real AppKit `NSTextView` editor with Markdown-compatible bodies, optional RTF sidecars, undo/redo, inline bold/italic/underline/strikethrough, installed fonts and sizes, colors and highlights, bullets, numbering, and checklists. |
+| Dictation | Standard on-device speech with no cloud fallback, optional local cleanup, title-only Smart Capture routing, local 30-day history, and a persistent dictation capsule. |
+| Agent workspace | Explicit per-note opt-in, a local MCP/CLI helper, optimistic revisions, caller-owned operation IDs, visible activity, and safe Undo. |
+| Persistence and privacy | Readable local files, debounced atomic saves, a previous-generation recovery snapshot, Keychain credentials, and same-user Unix-socket IPC. |
+| Native product shell | First-launch onboarding, customization, panel-local shortcuts, launch-at-login integration in the packaged app, and an independently sized pinned window. |
 
-The trigger subscribes only to modifier `flagsChanged` transitions through macOS
-**Input Monitoring** and never observes ordinary keys. During an accepted
-capture, Fleck registers only Escape as a capture-scoped cancellation hot key,
-then unregisters it at terminal. Choose a different left/right modifier or Fn
-in Settings if needed. Fn is best-effort, and Command, Control, and Left Option
-can conflict with normal modifier use. If Input Monitoring is unavailable, use
-**Enable Input Monitoring** in Settings; after granting access, choose it again
-to recheck and activate the selected modifier.
+![Fleck ideas capture](website/public/assets/fleck-ideas-capture.png)
 
-Use **Show status capsule** to hide or restore the persistent bar, then drag it
-or use its menu to dock it at the bottom, left, or right edge. Dictation cleanup
-remains on-device. Smart Capture routes only against active note IDs and titles;
-ambiguous or failed routing saves to Inbox, never by reading note bodies.
+## Architecture
 
-## Agent workspace
+Fleck is a native SwiftPM project split into four primary modules. The detailed
+design and boundaries live in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Fleck can expose selected notes to local Codex, Claude Code, Kimi, or another
-MCP client. Access is off by default and granted per note: use **Allow Agent
-Access** in the note menu and accept the first-share confirmation. Turning the
-toggle off immediately removes that note and its activity from integration
-results.
+| Module | Responsibility |
+| --- | --- |
+| `FleckCore` | Portable note models, workspace mutations, preferences, persistence, recovery, transfer formats, dictation history, and activity. |
+| `FleckAgentProtocol` | Versioned typed messages and wire framing for the local agent boundary. |
+| `FleckApp` | Native macOS scenes, menu-bar and pinned-window UI, editor, dictation runtime, onboarding, settings, and the IPC service. |
+| `FleckAgentBridge` | Separately packaged MCP/CLI helper and same-user Unix-socket client. |
 
-In **Settings → Agents**, choose **Install Agent Connector**, add a separate
-profile for each client, and copy its profile UUID. The verified helper is
-installed at:
+The local agent path is deliberately narrow:
 
 ```text
-~/Library/Application Support/Fleck/AgentBridge/bin/fleck
+local MCP client or CLI
+  -> fleck-agent (stdio/CLI; credential in Keychain)
+  -> private AF_UNIX socket with same-user peer checks
+  -> explicit-share filter -> typed mutation
+  -> atomic LocalStore commit -> activity and retry records
 ```
 
-Use the absolute expanded helper path and profile UUID in one of these setup
-forms:
+## Privacy and security
+
+- Notes are stored locally as readable Markdown bodies, optional RTF sidecars,
+  JSON workspace/preferences data, and a previous-generation recovery snapshot.
+  Saves use atomic replacement and the local store serializes reads, writes, and
+  cleanup.
+- Standard speech uses Apple's on-device recognition when available and has no
+  cloud fallback. Microphone buffers and transcripts are not written as audio.
+  Optional cleanup, routing, notes, and history remain local; the Enhanced
+  candidate's explicit model download path is separate from ordinary notes.
+- Smart Capture receives candidate note identifiers and titles only. Note bodies
+  and other note content are excluded from routing prompts; low-confidence or
+  unavailable routing falls back to Inbox.
+- Agent access is off until explicitly enabled per note. Credentials use the
+  Keychain, and the helper communicates with Fleck over a private same-user Unix
+  socket. There is no HTTP/TCP listener, cloud bridge, or internet-facing port.
+- The ordinary notes path has no accounts, analytics, advertising, or mandatory
+  network dependency. This is a cooperative local-client boundary and does not
+  claim to protect against malicious software already running as the same user.
+
+## Repository layout
+
+```text
+Sources/
+├── FleckCore/          # Models, persistence, mutations, and activity
+├── FleckAgentProtocol/ # Typed local IPC messages and framing
+├── FleckApp/           # Native macOS app, editor, dictation, and UI
+└── FleckAgentBridge/   # Separate MCP/CLI helper and socket client
+Tests/
+├── FleckCoreTests/
+├── FleckAgentProtocolTests/
+├── FleckAppTests/
+└── FleckAgentBridgeTests/
+Scripts/                # Build, validation, release, and boundary checks
+Packages/               # Enhanced Local candidate dependency package
+docs/                   # Project and implementation documentation
+website/                # Vite website and its tests
+```
+
+## Build and test
+
+The deployment/runtime minimum is macOS 14. The current source requires Xcode 26
+or later with the macOS 26 SDK or later, and the package uses Swift tools version
+6.0. From the repository root, run the ordinary graph with automatic resolution
+disabled:
 
 ```sh
-codex mcp add fleck -- "/absolute/path/to/fleck" mcp --profile PROFILE_UUID
-claude mcp add --scope user fleck -- "/absolute/path/to/fleck" mcp --profile PROFILE_UUID
+swift test --disable-automatic-resolution --no-parallel
 ```
 
-Kimi configuration:
-
-```json
-{
-  "mcpServers": {
-    "fleck": {
-      "command": "/absolute/path/to/fleck",
-      "args": ["mcp", "--profile", "PROFILE_UUID"]
-    }
-  }
-}
-```
-
-The generic MCP configuration is the inner `command`/`args` object above. The
-helper also has a direct CLI; run `fleck --help`, then add `--profile
-PROFILE_UUID` to every command and `--json` when machine-readable output is
-needed. For example:
+The full macOS validation gate is:
 
 ```sh
-fleck notes list --profile PROFILE_UUID --json
-fleck note read NOTE_UUID --profile PROFILE_UUID --json
-printf '%s' 'Follow up' | fleck note append NOTE_UUID --stdin \
-  --revision REVISION --operation-id OPERATION_UUID \
-  --profile PROFILE_UUID --json
+Scripts/validate-macos.sh
 ```
 
-The MCP tools are `list_shared_notes`, `read_note`, `append_text`,
-`insert_text`, `replace_lines`, `delete_lines`, `list_tasks`, `add_task`,
-`rename_task`, `set_task_state`, `remove_task`, `list_agent_activity`, and
-`undo_agent_change`. `delete_lines` removes a verified one-based line range
-while preserving the same revision checks, activity record, and safe Undo as
-other agent writes.
-
-Every write requires the revision returned by the last read and a caller-owned
-operation UUID. On `revision_conflict`, reread before constructing a new
-request. If a response is lost or times out, retry the unchanged request with
-the same operation UUID; using a new UUID asks for a new mutation. Retry
-tombstones and visible activity expire after 30 days. Undo is offered only
-while the integration/profile scope, revision, note visibility, and exact text
-patch still make reversal safe.
-
-The Agent Connector uses a private Unix-domain socket and Keychain credentials.
-It has no cloud service, HTTP listener, or internet-facing port. This protects
-private notes from cooperative integrations, not from malicious software
-already running as the same macOS user. Integrations cannot reach unshared
-notes, Trash, Dictation History, settings, sharing controls, note deletion, a
-shell, arbitrary paths, or direct note files.
-
-Revoke each profile in **Settings → Agents** before removing a client
-configuration; revocation takes effect in Fleck even if helper-Keychain cleanup
-needs a retry. There is not yet a helper-removal button. After quitting Fleck
-and connected clients, the verified install can be removed without touching
-notes:
+Enhanced Local checks use a separate candidate dependency graph and scratch path;
+they are not part of ordinary validation or release approval:
 
 ```sh
-rm -- "$HOME/Library/Application Support/Fleck/AgentBridge/bin/fleck" \
-  "$HOME/Library/Application Support/Fleck/AgentBridge/install-receipt.json"
+Scripts/resolve-enhanced-candidate.sh .build-candidate \
+  swift test --disable-automatic-resolution --no-parallel \
+    --scratch-path .build-candidate
 ```
 
-Settings can reinstall those two bridge-owned files. Do not remove the broader
-`Fleck` Application Support directory; it contains notes and history.
+See [TESTING.md](TESTING.md) for the complete candidate, privacy, accessibility,
+resource, signing, and distribution gates.
 
-## Development workflow
+## Packaged development app
 
-GitHub is the source of truth for this project. Changes should be made on a focused branch, committed with a descriptive message, pushed to GitHub, and submitted through a pull request. Keep application changes, relevant tests, and documentation together so the repository always reflects the current state of the product.
-
-Build and launch the packaged development app so macOS associates microphone
-and Speech permissions with Fleck:
+Build and launch the packaged app when testing native macOS behavior:
 
 ```sh
 Scripts/build-fleck-app.sh
 /usr/bin/open -n .build/Fleck.app
 ```
 
-Do not use `swift run Fleck` for interactive testing. It launches a bare
-executable without the app-bundle privacy identity required by dictation.
+`swift run Fleck` launches a bare executable without the app-bundle privacy
+identity. It is not valid evidence for interactive dictation, Input Monitoring,
+signing, or native UI behavior. The packaged app is also the development path for
+the embedded Agent Connector.
 
-Ordinary package resolution includes the MCP Swift SDK and its transitive
-dependencies, all pinned by the root `Package.resolved`; none are linked into
-Fleck. Ordinary builds also exclude the Enhanced Local SDK, implementation,
-manifest, and resources. The exact FluidAudio pin lives in the resolver-only
-`Packages/FleckEnhancedCandidateDependencies` package. To compile and run the
-developer-only Enhanced candidate tests from the repository root, use the
-lock-preservation wrapper with a separate scratch directory:
+## Agent connector development
+
+The separately packaged `fleck-agent` helper provides the direct JSON CLI and MCP
+surface for explicitly shared notes. Create a profile in **Settings → Agents**,
+then use its profile UUID in a client configuration. For example:
 
 ```sh
-Scripts/resolve-enhanced-candidate.sh .build-candidate \
-  swift test --disable-automatic-resolution \
-    --scratch-path .build-candidate
+codex mcp add fleck -- "/absolute/path/to/fleck" mcp --profile PROFILE_UUID
 ```
 
-Never set that variable for release validation; `Scripts/validate-macos.sh` and
-`Scripts/check-release-size.sh` fail closed when it is present. A requested
-candidate release is also rejected at compile time before linking.
+The trust boundary, supported operations, revision/idempotency rules, and client
+setup forms are documented in [ARCHITECTURE.md](ARCHITECTURE.md#agent-workspace-trust-and-data-flow)
+and [TESTING.md](TESTING.md#agent-workspace-release-gates).
 
-Do not commit credentials, signing keys, provisioning profiles, local configuration containing secrets, or generated build output.
+## Website development
+
+From the repository root:
+
+```sh
+cd website
+npm test
+npm run build
+npm run dev
+```
+
+## Enhanced Local candidate
+
+Enhanced Local is release-disabled and non-shippable until every gate in
+[TESTING.md](TESTING.md) has evidence. The candidate is isolated behind its own
+dependency and model paths; a green build or CI run does not approve its quality,
+privacy, resource, legal, accessibility, signing, or store readiness.
+
+## Known limitations
+
+- Distribution signing and notarization are pending.
+- Mac App Store release is pending.
+- StoreKit access is deliberately unavailable; no purchase or entitlement path is
+  presented here.
+- Enhanced Local remains a candidate awaiting real-device quality and release-gate
+  evidence.
+- Manual device, accessibility, performance, lifecycle, client-compatibility, and
+  remaining interaction checks are not automated successes.
+- Configurable show/hide shortcuts are currently panel-local; system-wide
+  activation remains release work.
+
+## Reporting issues
+
+Reproducible bug reports and product feedback are welcome. Please include the
+commit, macOS/Xcode/Swift versions, reproduction steps, and whether the packaged
+app or ordinary SwiftPM path was used. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+the maintainer workflow. External code contributions and pull requests are not
+currently accepted.
+
+## License
+
+Fleck is source-available under the [PolyForm Shield License 1.0.0](LICENSE), with
+Harry Jin as licensor and copyright holder. Its noncompete condition protects Fleck
+and official products from competing source or binary distributions; the operative
+terms are only in `LICENSE`.
+
+See [NOTICE](NOTICE) for the required copyright and brand notice, and
+[Sources/FleckApp/Resources/ThirdPartyNotices.md](Sources/FleckApp/Resources/ThirdPartyNotices.md)
+for third-party software notices. Dependencies retain their own license terms.
