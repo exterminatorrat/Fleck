@@ -104,6 +104,13 @@ import Testing
   #expect(!notes.contains("TabColorOption"))
 }
 
+@Test func tabColorTriggerAnnouncesTheCurrentNoteColor() throws {
+  let source = try fleckSource("Sources/FleckApp/NotesPanel.swift")
+  let trigger = try #require(source.components(separatedBy: "Button(\"Tab Color...\"").dropFirst().first)
+
+  #expect(trigger.contains("accessibilityValue(tabColorAccessibilityValue(for: note.tabColorHex))"))
+}
+
 private func fleckSource(_ relativePath: String) throws -> String {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()

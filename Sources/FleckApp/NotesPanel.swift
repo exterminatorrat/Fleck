@@ -575,6 +575,7 @@
               Button("Tab Color...", systemImage: "paintpalette") {
                 tabColorPickerNoteID = note.id
               }
+              .accessibilityValue(tabColorAccessibilityValue(for: note.tabColorHex))
               Toggle(
                 "Allow Agent Access",
                 isOn: Binding(
