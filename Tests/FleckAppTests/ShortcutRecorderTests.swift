@@ -275,22 +275,192 @@
     coordinator.stop()
   }
 
-  @Test @MainActor func captureCoordinatorCancelsOnMouseDownAndReturnsTheMouseEvent() throws {
+  @Test @MainActor func captureCoordinatorCancelsOnEveryMouseDownAndReturnsTheMouseEvent() throws {
+    for mouseType in [
+      NSEvent.EventType.leftMouseDown,
+      NSEvent.EventType.rightMouseDown,
+      NSEvent.EventType.otherMouseDown,
+    ] {
+      var cancellations = 0
+      let coordinator = ShortcutRecorder.CaptureBridge.Coordinator(
+        onCapture: { _ in },
+        onCancel: { cancellations += 1 }
+      )
+      coordinator.start()
+
+      let click = try mouseEvent(type: mouseType)
+      #expect(coordinator.handle(click) === click)
+      #expect(cancellations == 1)
+      #expect(!coordinator.isMonitoring)
+      #expect(coordinator.lifecycleObserverCount == 0)
+
+      let secondClick = try mouseEvent(type: mouseType)
+      #expect(coordinator.handle(secondClick) === secondClick)
+      #expect(cancellations == 1)
+    }
+  }
+
+  @Test @MainActor func captureCoordinatorCancelsExactlyOnceOnFocusLoss() throws {
+    for notificationName in [
+      NSApplication.didResignActiveNotification,
+      NSWindow.didResignKeyNotification,
+    ] {
+      let notificationCenter = NotificationCenter()
+      var captured: [ShortcutChord] = []
+      var cancellations = 0
+      let coordinator = ShortcutRecorder.CaptureBridge.Coordinator(
+        onCapture: { captured.append($0) },
+        onCancel: { cancellations += 1 },
+        notificationCenter: notificationCenter
+      )
+
+      coordinator.start()
+      #expect(coordinator.lifecycleObserverCount == 2)
+      #expect(ShortcutCaptureGate.isActive)
+
+      notificationCenter.post(name: notificationName, object: nil)
+      #expect(cancellations == 1)
+      #expect(captured.isEmpty)
+      #expect(!coordinator.isMonitoring)
+      #expect(coordinator.lifecycleObserverCount == 0)
+      #expect(!ShortcutCaptureGate.isActive)
+
+      notificationCenter.post(name: notificationName, object: nil)
+      #expect(cancellations == 1)
+      #expect(captured.isEmpty)
+    }
+  }
+
+  @Test @MainActor func captureCoordinatorStopsAndDismantlesWithoutObserverLeaks() throws {
+    let notificationCenter = NotificationCenter()
     var cancellations = 0
     let coordinator = ShortcutRecorder.CaptureBridge.Coordinator(
       onCapture: { _ in },
-      onCancel: { cancellations += 1 }
+      onCancel: { cancellations += 1 },
+      notificationCenter: notificationCenter
     )
+
     coordinator.start()
-
-    let click = try mouseEvent(type: .leftMouseDown)
-    #expect(coordinator.handle(click) === click)
-    #expect(cancellations == 1)
+    coordinator.start()
+    #expect(coordinator.lifecycleObserverCount == 2)
+    coordinator.stop()
+    coordinator.stop()
     #expect(!coordinator.isMonitoring)
+    #expect(coordinator.lifecycleObserverCount == 0)
+    #expect(!ShortcutCaptureGate.isActive)
 
-    let secondClick = try mouseEvent(type: .rightMouseDown)
-    #expect(coordinator.handle(secondClick) === secondClick)
-    #expect(cancellations == 1)
+    notificationCenter.post(
+      name: NSApplication.didResignActiveNotification,
+      object: nil
+    )
+    notificationCenter.post(
+      name: NSWindow.didResignKeyNotification,
+      object: nil
+    )
+    #expect(cancellations == 0)
+
+    coordinator.start()
+    ShortcutRecorder.CaptureBridge.dismantleNSView(
+      NSView(frame: .zero),
+      coordinator: coordinator
+    )
+    #expect(!coordinator.isMonitoring)
+    #expect(coordinator.lifecycleObserverCount == 0)
+    #expect(!ShortcutCaptureGate.isActive)
+
+    notificationCenter.post(
+      name: NSApplication.didResignActiveNotification,
+      object: nil
+    )
+    notificationCenter.post(
+      name: NSWindow.didResignKeyNotification,
+      object: nil
+    )
+    #expect(cancellations == 0)
+  }
+
+  @Test @MainActor func activeRecorderCoordinatesWithTheProductionShortcutMonitor() throws {
+    var actions: [Shortcut.Action] = []
+    let runtimeCoordinator = ShortcutMonitor.Coordinator { actions.append($0) }
+    runtimeCoordinator.install(
+      shortcuts: [Shortcut(action: .newNote, key: "n", modifiers: ["command"])]
+    )
+    defer { runtimeCoordinator.uninstall() }
+
+    var captured: [ShortcutChord] = []
+    let recorderCoordinator = ShortcutRecorder.CaptureBridge.Coordinator(
+      onCapture: { captured.append($0) },
+      onCancel: {}
+    )
+    recorderCoordinator.start()
+
+    let event = try shortcutEvent(
+      keyCode: 8,
+      modifierFlags: [.command]
+    )
+    #expect(runtimeCoordinator.handle(event) === event)
+    #expect(actions.isEmpty)
+    #expect(recorderCoordinator.handle(event) == nil)
+    #expect(
+      captured == [ShortcutChord(key: "n", modifiers: ["command"])]
+    )
+    #expect(!ShortcutCaptureGate.isActive)
+
+    let nextEvent = try shortcutEvent(
+      keyCode: 8,
+      modifierFlags: [.command]
+    )
+    #expect(runtimeCoordinator.handle(nextEvent) == nil)
+    #expect(actions == [.newNote])
+  }
+
+  @Test @MainActor func recorderFirstStillPreventsRuntimeShortcutMatch() throws {
+    var actions: [Shortcut.Action] = []
+    let runtimeCoordinator = ShortcutMonitor.Coordinator { actions.append($0) }
+    runtimeCoordinator.install(
+      shortcuts: [Shortcut(action: .newNote, key: "n", modifiers: ["command"])]
+    )
+    defer { runtimeCoordinator.uninstall() }
+
+    var captured: [ShortcutChord] = []
+    let recorderCoordinator = ShortcutRecorder.CaptureBridge.Coordinator(
+      onCapture: { captured.append($0) },
+      onCancel: {}
+    )
+    recorderCoordinator.start()
+    defer { recorderCoordinator.stop() }
+
+    let event = try shortcutEvent(
+      keyCode: 8,
+      modifierFlags: [.command]
+    )
+    #expect(recorderCoordinator.handle(event) == nil)
+    #expect(runtimeCoordinator.handle(event) === event)
+    #expect(
+      captured == [ShortcutChord(key: "n", modifiers: ["command"])]
+    )
+    #expect(actions.isEmpty)
+  }
+
+  @Test @MainActor func staleRecorderTeardownCannotClearNewCaptureOwner() {
+    let first = ShortcutRecorder.CaptureBridge.Coordinator(
+      onCapture: { _ in },
+      onCancel: {}
+    )
+    let second = ShortcutRecorder.CaptureBridge.Coordinator(
+      onCapture: { _ in },
+      onCancel: {}
+    )
+
+    first.start()
+    second.start()
+    #expect(ShortcutCaptureGate.isActive)
+
+    first.stop()
+    #expect(ShortcutCaptureGate.isActive)
+
+    second.stop()
+    #expect(!ShortcutCaptureGate.isActive)
   }
 
   @Test @MainActor func captureCoordinatorStopAndDismantleAreIdempotent() {
@@ -324,7 +494,7 @@
     #expect(!settingsSource.contains("TextField(\"Key\""))
     #expect(!settingsSource.contains("shortcutKeyBinding"))
     #expect(!settingsSource.contains("modifierBinding"))
-    #expect(settingsSource.contains("@State private var recordingShortcutAction: Shortcut.Action?"))
+    #expect(settingsSource.contains("@State private var recordingSelection = SettingsShortcutRecordingState()"))
     #expect(settingsSource.contains("ShortcutRecorder("))
     #expect(
       settingsSource.contains(
@@ -343,23 +513,25 @@
     #expect(!recorderSource.contains(".animation"))
   }
 
-  @Test @MainActor func settingsSectionTransitionCancelsRecordingWithoutMutatingSavedChord() throws {
-    let savedShortcut = Shortcut(
-      action: .newNote,
-      key: "n",
-      modifiers: ["command"]
-    )
-    let savedKey = savedShortcut.key
-    let savedModifiers = savedShortcut.modifiers
+  @Test @MainActor func settingsRecordingSelectionIsEphemeralAndProductionWired() throws {
+    var selection = SettingsShortcutRecordingState()
+    #expect(selection.action == nil)
 
-    #expect(
-      SettingsView.recordingAction(
-        afterSelecting: .appearance,
-        currentAction: .newNote
-      ) == nil
-    )
-    #expect(savedShortcut.key == savedKey)
-    #expect(savedShortcut.modifiers == savedModifiers)
+    selection.begin(.newNote)
+    #expect(selection.action == .newNote)
+
+    selection.begin(.closeNote)
+    #expect(selection.action == .closeNote)
+
+    selection.transition(to: .shortcuts)
+    #expect(selection.action == .closeNote)
+
+    selection.transition(to: .appearance)
+    #expect(selection.action == nil)
+
+    selection.begin(.previousNote)
+    selection.cancel()
+    #expect(selection.action == nil)
 
     let sourceRoot = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
@@ -368,8 +540,8 @@
     let settingsSource = try String(
       contentsOf: sourceRoot.appendingPathComponent("Sources/FleckApp/SettingsView.swift")
     )
-    #expect(settingsSource.contains("recordingShortcutAction = Self.recordingAction("))
-    #expect(settingsSource.contains("afterSelecting: newSection"))
-    #expect(settingsSource.contains(".onDisappear { recordingShortcutAction = nil }"))
+    #expect(settingsSource.contains("@State private var recordingSelection = SettingsShortcutRecordingState()"))
+    #expect(settingsSource.contains("recordingSelection.transition(to: newSection)"))
+    #expect(settingsSource.contains(".onDisappear { recordingSelection.cancel() }"))
   }
 #endif

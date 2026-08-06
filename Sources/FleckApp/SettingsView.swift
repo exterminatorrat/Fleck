@@ -18,6 +18,24 @@
     var id: Self { self }
   }
 
+  struct SettingsShortcutRecordingState: Equatable {
+    private(set) var action: Shortcut.Action?
+
+    mutating func begin(_ action: Shortcut.Action) {
+      self.action = action
+    }
+
+    mutating func cancel() {
+      action = nil
+    }
+
+    mutating func transition(to section: SettingsSection) {
+      if section != .shortcuts {
+        cancel()
+      }
+    }
+  }
+
   #if CLEAN_DICTATION_ENHANCED_CANDIDATE
     enum DictationModelAction: Equatable {
     case download
@@ -138,20 +156,13 @@
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
-    @State private var recordingShortcutAction: Shortcut.Action?
+    @State private var recordingSelection = SettingsShortcutRecordingState()
     @Namespace private var selectedSectionHighlight
 
     init(runtime: DictationRuntime) {
       self.runtime = runtime
       _modelManager = ObservedObject(wrappedValue: runtime.modelManager)
       _historyController = ObservedObject(wrappedValue: runtime.historyController)
-    }
-
-    static func recordingAction(
-      afterSelecting section: SettingsSection,
-      currentAction: Shortcut.Action?
-    ) -> Shortcut.Action? {
-      section == .shortcuts ? currentAction : nil
     }
 
     var body: some View {
@@ -178,12 +189,9 @@
       }
       .animation(motion.standard, value: selectedSection)
       .onChange(of: selectedSection) { _, newSection in
-        recordingShortcutAction = Self.recordingAction(
-          afterSelecting: newSection,
-          currentAction: recordingShortcutAction
-        )
+        recordingSelection.transition(to: newSection)
       }
-      .onDisappear { recordingShortcutAction = nil }
+      .onDisappear { recordingSelection.cancel() }
       .task {
         await runtime.awaitStartupAssessment()
         recoveryActions = runtime.permissionRecoveryActions()
@@ -392,15 +400,15 @@
               ShortcutRecorder(
                 action: action,
                 shortcut: shortcut,
-                isRecording: recordingShortcutAction == action,
-                onBegin: { recordingShortcutAction = action },
+                isRecording: recordingSelection.action == action,
+                onBegin: { recordingSelection.begin(action) },
                 onCapture: { chord in
                   recordShortcut(action, chord: chord)
                 },
-                onCancel: { recordingShortcutAction = nil }
+                onCancel: { recordingSelection.cancel() }
               )
               Button(shortcut?.key == nil ? "Restore" : "Remove") {
-                recordingShortcutAction = nil
+                recordingSelection.cancel()
                 setShortcutEnabled(action, enabled: shortcut?.key == nil)
               }
             }
@@ -767,7 +775,7 @@
           modifiers: chord.modifiers
         )
       }
-      recordingShortcutAction = nil
+      recordingSelection.cancel()
     }
   }
 

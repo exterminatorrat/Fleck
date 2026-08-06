@@ -8,6 +8,94 @@
     let modifiers: [String]
   }
 
+  enum ShortcutCaptureGate {
+    private static let state = State()
+
+    static var isActive: Bool { state.isActive }
+
+    static func begin() -> UUID { state.begin() }
+
+    static func end(_ owner: UUID) {
+      state.end(owner)
+    }
+
+    static func owns(_ owner: UUID) -> Bool {
+      state.owns(owner)
+    }
+
+    static func markConsumed(_ event: NSEvent, owner: UUID) {
+      state.markConsumed(event, owner: owner)
+    }
+
+    static func wasConsumed(_ event: NSEvent) -> Bool {
+      state.wasConsumed(event)
+    }
+
+    private final class State: @unchecked Sendable {
+      private let lock = NSLock()
+      private var owner: UUID?
+      private var consumedEventID: ObjectIdentifier?
+
+      var isActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return owner != nil
+      }
+
+      func begin() -> UUID {
+        let newOwner = UUID()
+        lock.lock()
+        owner = newOwner
+        consumedEventID = nil
+        lock.unlock()
+        return newOwner
+      }
+
+      func end(_ owner: UUID) {
+        lock.lock()
+        if self.owner == owner {
+          self.owner = nil
+        }
+        lock.unlock()
+      }
+
+      func owns(_ owner: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return self.owner == owner
+      }
+
+      func markConsumed(_ event: NSEvent, owner: UUID) {
+        lock.lock()
+        guard self.owner == owner else {
+          lock.unlock()
+          return
+        }
+        consumedEventID = ObjectIdentifier(event)
+        lock.unlock()
+
+        let eventID = ObjectIdentifier(event)
+        DispatchQueue.main.async { [weak self] in
+          self?.clearConsumed(eventID)
+        }
+      }
+
+      func wasConsumed(_ event: NSEvent) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return consumedEventID == ObjectIdentifier(event)
+      }
+
+      private func clearConsumed(_ eventID: ObjectIdentifier) {
+        lock.lock()
+        if consumedEventID == eventID {
+          consumedEventID = nil
+        }
+        lock.unlock()
+      }
+    }
+  }
+
   enum ShortcutEventNormalizer {
     private static let specialKeys: [UInt16: (key: String, display: String)] = [
       48: ("tab", "⇥"),
@@ -145,23 +233,48 @@
         coordinator.stop()
       }
 
-      final class Coordinator {
+      // NSViewRepresentable callbacks, NSEvent local-monitor callbacks, and NotificationCenter observers (queue: .main) are main-thread confined.
+      final class Coordinator: @unchecked Sendable {
         var onCapture: (ShortcutChord) -> Void
         var onCancel: () -> Void
+        private let notificationCenter: NotificationCenter
         private var monitor: Any?
+        private var captureOwner: UUID?
+        private var lifecycleObservers: [NSObjectProtocol] = []
 
         var isMonitoring: Bool { monitor != nil }
+        var lifecycleObserverCount: Int { lifecycleObservers.count }
 
         init(
           onCapture: @escaping (ShortcutChord) -> Void,
-          onCancel: @escaping () -> Void
+          onCancel: @escaping () -> Void,
+          notificationCenter: NotificationCenter = .default
         ) {
           self.onCapture = onCapture
           self.onCancel = onCancel
+          self.notificationCenter = notificationCenter
         }
 
         func start() {
           guard monitor == nil else { return }
+          let owner = ShortcutCaptureGate.begin()
+          captureOwner = owner
+          lifecycleObservers = [
+            notificationCenter.addObserver(
+              forName: NSApplication.didResignActiveNotification,
+              object: nil,
+              queue: .main
+            ) { [weak self] _ in
+              self?.cancel()
+            },
+            notificationCenter.addObserver(
+              forName: NSWindow.didResignKeyNotification,
+              object: nil,
+              queue: .main
+            ) { [weak self] _ in
+              self?.cancel()
+            },
+          ]
           monitor = NSEvent.addLocalMonitorForEvents(
             matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
           ) { [weak self] event in
@@ -174,19 +287,40 @@
             NSEvent.removeMonitor(monitor)
           }
           monitor = nil
+          for observer in lifecycleObservers {
+            notificationCenter.removeObserver(observer)
+          }
+          lifecycleObservers.removeAll()
+          if let captureOwner {
+            ShortcutCaptureGate.end(captureOwner)
+          }
+          captureOwner = nil
+        }
+
+        func cancel() {
+          guard isMonitoring else { return }
+          let shouldNotify = captureOwner.map(ShortcutCaptureGate.owns) ?? false
+          stop()
+          if shouldNotify {
+            onCancel()
+          }
         }
 
         @discardableResult
         func handle(_ event: NSEvent) -> NSEvent? {
           guard isMonitoring else { return event }
+          guard let captureOwner, ShortcutCaptureGate.owns(captureOwner) else {
+            stop()
+            return event
+          }
           switch event.type {
           case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            stop()
-            onCancel()
+            cancel()
             return event
           case .keyDown:
             guard !event.isARepeat else { return nil }
             guard let chord = ShortcutEventNormalizer.chord(for: event) else { return nil }
+            ShortcutCaptureGate.markConsumed(event, owner: captureOwner)
             stop()
             onCapture(chord)
             return nil

@@ -38,15 +38,22 @@
       func install(shortcuts: [Shortcut]) {
         self.shortcuts = shortcuts
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-          guard let self, let command = self.match(event) else { return event }
-          self.action(command)
-          return nil
+          self?.handle(event) ?? event
         }
       }
 
       func uninstall() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+      }
+
+      func handle(_ event: NSEvent) -> NSEvent? {
+        guard !ShortcutCaptureGate.isActive, !ShortcutCaptureGate.wasConsumed(event) else {
+          return event
+        }
+        guard let command = match(event) else { return event }
+        action(command)
+        return nil
       }
 
       private func match(_ event: NSEvent) -> Shortcut.Action? {
