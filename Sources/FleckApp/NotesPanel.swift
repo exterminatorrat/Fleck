@@ -128,6 +128,7 @@
     let isPinned: Bool
     let sizing: NotesPanelSizing
     @StateObject private var editorCommands = EditorCommands()
+    @StateObject private var searchController: WorkspaceSearchController
     @Namespace private var selectedTabHighlight
     @State private var isImporting = false
     @State private var isExporting = false
@@ -149,12 +150,16 @@
       dictationRuntime: DictationRuntime,
       isPinned: Bool = false,
       sizing: NotesPanelSizing = .storedPreferences,
-      editorCommands: EditorCommands? = nil
+      editorCommands: EditorCommands? = nil,
+      searchController: WorkspaceSearchController? = nil
     ) {
       self.dictationRuntime = dictationRuntime
       self.isPinned = isPinned
       self.sizing = sizing
       _editorCommands = StateObject(wrappedValue: editorCommands ?? EditorCommands())
+      _searchController = StateObject(
+        wrappedValue: searchController ?? WorkspaceSearchController()
+      )
     }
 
     var body: some View {
@@ -256,6 +261,10 @@
         ShortcutMonitor(shortcuts: appState.preferences.shortcuts, action: performShortcut)
           .frame(width: 0, height: 0)
       )
+      .background(
+        WorkspaceSearchWindowReader(controller: searchController)
+          .frame(width: 0, height: 0)
+      )
       .fileImporter(
         isPresented: $isImporting,
         allowedContentTypes: [.plainText, NoteFileDocument.markdownContentType],
@@ -330,6 +339,24 @@
         }
         .animation(motion.standard, value: notePendingDeletion?.id)
       }
+      .overlay {
+        if searchController.isPresented {
+          WorkspaceSearchView(
+            controller: searchController,
+            notes: appState.workspace.notes,
+            currentNoteIDs: {
+              Set(appState.workspace.notes.map(\.id))
+            },
+            onActivate: { noteID in
+              guard appState.workspace.notes.contains(where: { $0.id == noteID }) else {
+                return
+              }
+              appState.select(noteID)
+            }
+          )
+          .zIndex(2)
+        }
+      }
     }
 
     private var modifierRecoveryPresentation: DictationModifierSettingsPresentation {
@@ -388,6 +415,15 @@
           .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
+        Button {
+          searchController.present()
+        } label: {
+          Image(systemName: "magnifyingglass")
+        }
+        .keyboardShortcut("f", modifiers: .command)
+        .accessibilityLabel("Search notes")
+        .accessibilityHint("Search note titles and bodies")
+        .help("Search notes (⌘F)")
         Button {
           appState.addNote()
         } label: {

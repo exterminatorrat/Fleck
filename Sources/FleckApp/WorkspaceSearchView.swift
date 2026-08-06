@@ -1,0 +1,415 @@
+#if os(macOS)
+  import AppKit
+  import Combine
+  import FleckCore
+  import SwiftUI
+
+  @MainActor
+  final class WorkspaceSearchController: ObservableObject {
+    typealias SearchOperation = @MainActor (
+      String,
+      [Note],
+      Int
+    ) async -> [WorkspaceSearchResult]
+
+    enum HighlightDirection {
+      case up
+      case down
+    }
+
+    @Published private(set) var isPresented = false
+    @Published var query = ""
+    @Published private(set) var results: [WorkspaceSearchResult] = []
+    @Published private(set) var highlightedNoteID: UUID?
+
+    private let searchOperation: SearchOperation
+    private var searchTask: Task<Void, Never>?
+    private var searchGeneration: UInt64 = 0
+    private weak var hostingWindow: NSWindow?
+    private var focusOrigin: WorkspaceSearchFocusOrigin?
+    private var hasActivatedCurrentPresentation = false
+
+    init(
+      searchOperation: @escaping SearchOperation = { query, notes, limit in
+        await WorkspaceSearchEngine().search(query: query, in: notes, limit: limit)
+      }
+    ) {
+      self.searchOperation = searchOperation
+    }
+
+    var resultCountAccessibilityValue: String {
+      switch results.count {
+      case 0: "No results"
+      case 1: "1 result"
+      default: "\(results.count) results"
+      }
+    }
+
+    func present() {
+      guard !isPresented else { return }
+      cancelSearch()
+      searchGeneration &+= 1
+      focusOrigin = WorkspaceSearchFocusOrigin.capture(preferredWindow: hostingWindow)
+      query = ""
+      results = []
+      highlightedNoteID = nil
+      hasActivatedCurrentPresentation = false
+      isPresented = true
+    }
+
+    func dismiss() {
+      guard isPresented || focusOrigin != nil else { return }
+      cancelSearch()
+      searchGeneration &+= 1
+      isPresented = false
+      query = ""
+      results = []
+      highlightedNoteID = nil
+      hasActivatedCurrentPresentation = false
+      let origin = focusOrigin
+      focusOrigin = nil
+      origin?.restore()
+      if let origin {
+        Task { @MainActor in
+          for _ in 0..<3 {
+            await Task.yield()
+          }
+          origin.restore()
+        }
+      }
+    }
+
+    func setHostingWindow(_ window: NSWindow?) {
+      hostingWindow = window
+    }
+
+    func setQuery(_ query: String, in notes: [Note]) {
+      self.query = query
+      refresh(in: notes)
+    }
+
+    func refresh(in notes: [Note]) {
+      cancelSearch()
+      searchGeneration &+= 1
+      let generation = searchGeneration
+      let requestQuery = query
+      let trimmedQuery = requestQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+
+      guard isPresented, !trimmedQuery.isEmpty else {
+        results = []
+        highlightedNoteID = nil
+        return
+      }
+
+      let operation = searchOperation
+      searchTask = Task { @MainActor [weak self] in
+        let results = await operation(requestQuery, notes, 50)
+        guard let self,
+          !Task.isCancelled,
+          self.isPresented,
+          self.searchGeneration == generation,
+          self.query == requestQuery
+        else {
+          return
+        }
+        self.apply(results)
+      }
+    }
+
+    func moveHighlight(_ direction: HighlightDirection) {
+      guard !results.isEmpty else { return }
+
+      guard let highlightedNoteID,
+        let currentIndex = results.firstIndex(where: { $0.noteID == highlightedNoteID })
+      else {
+        self.highlightedNoteID = direction == .up ? results.last?.noteID : results.first?.noteID
+        return
+      }
+
+      let nextIndex: Int
+      switch direction {
+      case .up:
+        nextIndex = max(0, currentIndex - 1)
+      case .down:
+        nextIndex = min(results.count - 1, currentIndex + 1)
+      }
+      self.highlightedNoteID = results[nextIndex].noteID
+    }
+
+    func highlight(_ noteID: UUID) {
+      guard results.contains(where: { $0.noteID == noteID }) else { return }
+      highlightedNoteID = noteID
+    }
+
+    func isHighlighted(_ noteID: UUID) -> Bool {
+      highlightedNoteID == noteID
+    }
+
+    @discardableResult
+    func activateHighlighted(
+      currentNoteIDs: Set<UUID>,
+      activate: (UUID) -> Void
+    ) -> Bool {
+      guard isPresented,
+        !hasActivatedCurrentPresentation,
+        let noteID = highlightedNoteID,
+        currentNoteIDs.contains(noteID),
+        results.contains(where: { $0.noteID == noteID })
+      else {
+        return false
+      }
+
+      hasActivatedCurrentPresentation = true
+      activate(noteID)
+      dismiss()
+      return true
+    }
+
+    @discardableResult
+    func handleKey(
+      _ key: KeyEquivalent,
+      currentNoteIDs: Set<UUID> = [],
+      activate: (UUID) -> Void = { _ in }
+    ) -> Bool {
+      switch key {
+      case .upArrow:
+        moveHighlight(.up)
+        return true
+      case .downArrow:
+        moveHighlight(.down)
+        return true
+      case .return:
+        _ = activateHighlighted(currentNoteIDs: currentNoteIDs, activate: activate)
+        return true
+      case .escape:
+        dismiss()
+        return true
+      default:
+        return false
+      }
+    }
+
+    private func apply(_ results: [WorkspaceSearchResult]) {
+      let results = Array(results.prefix(50))
+      let previousHighlight = highlightedNoteID
+      self.results = results
+      if let previousHighlight,
+        results.contains(where: { $0.noteID == previousHighlight })
+      {
+        highlightedNoteID = previousHighlight
+      } else {
+        highlightedNoteID = results.first?.noteID
+      }
+    }
+
+    private func cancelSearch() {
+      searchTask?.cancel()
+      searchTask = nil
+    }
+
+    deinit {
+      searchTask?.cancel()
+    }
+  }
+
+  @MainActor
+  private final class WorkspaceSearchFocusOrigin {
+    weak var window: NSWindow?
+    weak var responder: NSResponder?
+
+    init(window: NSWindow, responder: NSResponder) {
+      self.window = window
+      self.responder = responder
+    }
+
+    static func capture(preferredWindow: NSWindow?) -> WorkspaceSearchFocusOrigin? {
+      guard let window = preferredWindow ?? NSApp?.keyWindow ?? NSApp?.mainWindow,
+        let responder = window.firstResponder
+      else {
+        return nil
+      }
+      return WorkspaceSearchFocusOrigin(window: window, responder: responder)
+    }
+
+    func restore() {
+      guard let window, let responder else { return }
+      if let view = responder as? NSView, view.window !== window { return }
+      _ = window.makeFirstResponder(responder)
+    }
+  }
+
+  @MainActor
+  final class WorkspaceSearchWindowObserver: NSView {
+    let onWindowChange: (NSWindow?) -> Void
+
+    init(onWindowChange: @escaping (NSWindow?) -> Void) {
+      self.onWindowChange = onWindowChange
+      super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) {
+      fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      onWindowChange(window)
+    }
+  }
+
+  struct WorkspaceSearchWindowReader: NSViewRepresentable {
+    let controller: WorkspaceSearchController
+
+    func makeNSView(context: Context) -> WorkspaceSearchWindowObserver {
+      WorkspaceSearchWindowObserver { window in
+        controller.setHostingWindow(window)
+      }
+    }
+
+    func updateNSView(_ nsView: WorkspaceSearchWindowObserver, context: Context) {
+      controller.setHostingWindow(nsView.window)
+    }
+  }
+
+  struct WorkspaceSearchView: View {
+    @ObservedObject var controller: WorkspaceSearchController
+    let notes: [Note]
+    let currentNoteIDs: () -> Set<UUID>
+    let onActivate: (UUID) -> Void
+    @FocusState private var isQueryFocused: Bool
+
+    var body: some View {
+      ZStack(alignment: .top) {
+        Color.clear
+          .contentShape(Rectangle())
+          .onTapGesture {
+            controller.dismiss()
+          }
+
+        VStack(alignment: .leading, spacing: 8) {
+          HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+              .foregroundStyle(.secondary)
+              .accessibilityHidden(true)
+            TextField("Search notes", text: $controller.query)
+              .textFieldStyle(.roundedBorder)
+              .focused($isQueryFocused)
+              .accessibilityLabel("Search notes")
+              .accessibilityHint("Search note titles and bodies")
+              .onKeyPress(.upArrow) {
+                _ = controller.handleKey(
+                  .upArrow,
+                  currentNoteIDs: currentNoteIDs(),
+                  activate: onActivate
+                )
+                return .handled
+              }
+              .onKeyPress(.downArrow) {
+                _ = controller.handleKey(
+                  .downArrow,
+                  currentNoteIDs: currentNoteIDs(),
+                  activate: onActivate
+                )
+                return .handled
+              }
+              .onKeyPress(.return) {
+                _ = controller.handleKey(
+                  .return,
+                  currentNoteIDs: currentNoteIDs(),
+                  activate: onActivate
+                )
+                return .handled
+              }
+              .onKeyPress(.escape) {
+                _ = controller.handleKey(
+                  .escape,
+                  currentNoteIDs: currentNoteIDs(),
+                  activate: onActivate
+                )
+                return .handled
+              }
+
+            Button {
+              controller.dismiss()
+            } label: {
+              Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss search")
+            .help("Dismiss search")
+          }
+
+          Text(controller.resultCountAccessibilityValue)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Search result count")
+            .accessibilityValue(controller.resultCountAccessibilityValue)
+
+          if controller.results.isEmpty {
+            Text(controller.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              ? "Type to search notes"
+              : "No matching notes")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+              .padding(.vertical, 8)
+          } else {
+            VStack(spacing: 2) {
+              ForEach(controller.results) { result in
+                let isSelected = controller.isHighlighted(result.noteID)
+                Button {
+                  controller.highlight(result.noteID)
+                } label: {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text(result.displayTitle)
+                      .font(.body.weight(.semibold))
+                      .lineLimit(1)
+                    Text(result.snippet)
+                      .font(.caption)
+                      .foregroundStyle(.secondary)
+                      .lineLimit(2)
+                  }
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .padding(.horizontal, 8)
+                  .padding(.vertical, 6)
+                  .background(
+                    RoundedRectangle(cornerRadius: 6)
+                      .fill(isSelected ? Color.accentColor.opacity(0.14) : .clear)
+                  )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(result.displayTitle), \(result.snippet)")
+                .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+              }
+            }
+          }
+        }
+        .padding(12)
+        .frame(maxWidth: 560, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+          RoundedRectangle(cornerRadius: 12)
+            .strokeBorder(.quaternary)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      .padding(.horizontal, 20)
+      .padding(.top, 48)
+      .onAppear {
+        isQueryFocused = true
+        controller.refresh(in: notes)
+      }
+      .onChange(of: controller.query) { _, newQuery in
+        controller.setQuery(newQuery, in: notes)
+      }
+      .onChange(of: notes) { _, newNotes in
+        controller.refresh(in: newNotes)
+      }
+      .onDisappear {
+        controller.dismiss()
+      }
+    }
+  }
+#endif
