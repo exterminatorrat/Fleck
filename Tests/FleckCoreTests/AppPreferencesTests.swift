@@ -221,7 +221,33 @@ import Testing
   #expect(Shortcut.conflicts(in: [first, second]) == [.newNote, .closeNote])
 }
 
-@Test func shortcutWithoutModifierIsInvalid() {
-  #expect(!Shortcut(action: .newNote, key: "t", modifiers: []).isValid)
+@Test func bareShortcutsAreValidAndDisabledShortcutsKeepTheirValidityRules() {
+  #expect(Shortcut(action: .nextNote, key: "tab", modifiers: []).isValid)
+  #expect(Shortcut(action: .closeNote, key: "backspace", modifiers: []).isValid)
   #expect(Shortcut(action: .newNote, key: nil, modifiers: []).isValid)
+  #expect(!Shortcut(action: .newNote, key: nil, modifiers: ["command"]).isValid)
+}
+
+@Test func bareAndModifiedShortcutConflictsRemainDistinct() {
+  let bare = Shortcut(action: .nextNote, key: "tab", modifiers: [])
+  let modified = Shortcut(action: .previousNote, key: "tab", modifiers: ["control"])
+  let duplicate = Shortcut(action: .newNote, key: "tab", modifiers: [])
+
+  #expect(Shortcut.conflicts(in: [bare, modified]) == [])
+  #expect(Shortcut.conflicts(in: [bare, duplicate]) == [.nextNote, .newNote])
+}
+
+@Test func specialShortcutRoundTripsItsNormalizedPersistedValue() throws {
+  let shortcut = Shortcut(
+    action: .closeNote,
+    key: "backspace",
+    modifiers: ["shift", "command"]
+  )
+
+  let decoded = try JSONDecoder().decode(
+    Shortcut.self,
+    from: JSONEncoder().encode(shortcut)
+  )
+
+  #expect(decoded == shortcut)
 }

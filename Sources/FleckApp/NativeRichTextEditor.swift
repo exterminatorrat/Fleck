@@ -215,6 +215,13 @@
     private func colorsMatch(_ lhs: NSColor?, _ rhs: NSColor?) -> Bool {
       switch (lhs, rhs) {
       case let (lhs?, rhs?):
+        if let lhs = lhs.usingColorSpace(.sRGB), let rhs = rhs.usingColorSpace(.sRGB) {
+          let tolerance: CGFloat = 0.0005
+          return abs(lhs.redComponent - rhs.redComponent) <= tolerance
+            && abs(lhs.greenComponent - rhs.greenComponent) <= tolerance
+            && abs(lhs.blueComponent - rhs.blueComponent) <= tolerance
+            && abs(lhs.alphaComponent - rhs.alphaComponent) <= tolerance
+        }
         return lhs.isEqual(rhs)
       case (nil, nil):
         return true
@@ -863,20 +870,6 @@
       func textViewDidChangeSelection(_ notification: Notification) {
         parent.commands.refreshFormattingState()
       }
-    }
-  }
-
-  extension NSColor {
-    convenience init?(hex: String?) {
-      guard let hex else { return nil }
-      let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-      guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return nil }
-      self.init(
-        calibratedRed: CGFloat((value >> 16) & 0xFF) / 255,
-        green: CGFloat((value >> 8) & 0xFF) / 255,
-        blue: CGFloat(value & 0xFF) / 255,
-        alpha: 1
-      )
     }
   }
 

@@ -141,6 +141,7 @@
     @State private var exportFilename = "Untitled.md"
     @State private var draggedNoteID: UUID?
     @State private var tabDragDestinationID: UUID?
+    @State private var tabColorPickerNoteID: UUID?
     @State private var tabFrames: [UUID: CGRect] = [:]
     @State private var tabContentTrailingEdge: CGFloat = 0
 
@@ -250,7 +251,7 @@
           .fill(.ultraThinMaterial)
           .opacity(appState.preferences.panelOpacity)
       }
-      .tint(Color(hex: appState.preferences.accentHex))
+      .tint(Color(hex: appState.preferences.accentHex) ?? .accentColor)
       .background(
         ShortcutMonitor(shortcuts: appState.preferences.shortcuts, action: performShortcut)
           .frame(width: 0, height: 0)
@@ -375,12 +376,14 @@
             Image(nsImage: mark)
               .resizable()
               .frame(width: 18, height: 18)
+              .accessibilityHidden(true)
           case .missingPackagedResource:
             Text("!")
               .foregroundStyle(.red)
               .accessibilityLabel("Fleck mark missing")
           }
           Text("Fleck")
+            .accessibilityLabel("Fleck")
         }
           .font(.headline)
         Spacer()
@@ -421,13 +424,13 @@
         }
         .accessibilityLabel(
           appState.preferences.showFormattingBar
-            ? "Hide formatting controls"
-            : "Show formatting controls"
+            ? "Hide Editor toolbar"
+            : "Show Editor toolbar"
         )
         .help(
           appState.preferences.showFormattingBar
-            ? "Hide formatting controls"
-            : "Show formatting controls"
+            ? "Hide Editor toolbar"
+            : "Show Editor toolbar"
         )
 
         Menu {
@@ -571,29 +574,10 @@
               Button("Move Right", systemImage: "arrow.right") {
                 move(note, offset: 1)
               }
-              Menu("Tab Color", systemImage: "paintpalette") {
-                ForEach(TabColorOption.all) { option in
-                  Button {
-                    appState.select(note.id)
-                    appState.setSelectedTabColor(option.hex)
-                  } label: {
-                    HStack {
-                      Label {
-                        Text(option.name)
-                      } icon: {
-                        if let swatchImage = option.swatchImage {
-                          Image(nsImage: swatchImage)
-                        } else {
-                          Image(systemName: "circle.slash")
-                        }
-                      }
-                      if note.tabColorHex == option.hex {
-                        Image(systemName: "checkmark")
-                      }
-                    }
-                  }
-                }
+              Button("Tab Color...", systemImage: "paintpalette") {
+                tabColorPickerNoteID = note.id
               }
+              .accessibilityValue(tabColorAccessibilityValue(for: note.tabColorHex))
               Toggle(
                 "Allow Agent Access",
                 isOn: Binding(
@@ -605,6 +589,15 @@
               Button("Move to Trash", systemImage: "trash", role: .destructive) {
                 requestDeletion(note)
               }
+            }
+            .popover(
+              isPresented: Binding(
+                get: { tabColorPickerNoteID == note.id },
+                set: { if !$0 { tabColorPickerNoteID = nil } }
+              ),
+              arrowEdge: .bottom
+            ) {
+              tabColorPicker(noteID: note.id)
             }
                 }
                 Color.clear
@@ -677,7 +670,37 @@
       guard cleaned.count == 6, UInt64(cleaned, radix: 16) != nil else {
         return Color.accentColor.opacity(opacity)
       }
-      return Color(hex: hex).opacity(opacity)
+      return (Color(hex: hex) ?? .accentColor).opacity(opacity)
+    }
+
+    @ViewBuilder
+    private func tabColorPicker(noteID: UUID) -> some View {
+      if let note = appState.workspace.notes.first(where: { $0.id == noteID }) {
+        FleckColorPicker(
+          currentHex: note.tabColorHex,
+          currentLabel: tabColorAccessibilityValue(for: note.tabColorHex),
+          resetTitle: "None",
+          onCommit: { hex in commitTabColor(hex, for: noteID) },
+          onCancel: { tabColorPickerNoteID = nil }
+        )
+      } else {
+        EmptyView()
+      }
+    }
+
+    private func commitTabColor(_ hex: String?, for noteID: UUID) {
+      guard appState.workspace.notes.contains(where: { $0.id == noteID }) else {
+        tabColorPickerNoteID = nil
+        return
+      }
+      appState.select(noteID)
+      appState.setSelectedTabColor(hex)
+      tabColorPickerNoteID = nil
+    }
+
+    private func tabColorAccessibilityValue(for hex: String?) -> String {
+      guard let hex else { return "None" }
+      return FleckPaletteOption.paletteName(for: NSColor(hex: hex)) ?? "Custom"
     }
 
     private func performShortcut(_ action: Shortcut.Action) {
@@ -823,60 +846,6 @@
     }
   }
 
-  struct TabColorOption: Identifiable {
-    let name: String
-    let hex: String?
-
-    var id: String { hex ?? "none" }
-
-    var swatchImage: NSImage? {
-      guard let hex else { return nil }
-      let image = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { rect in
-        NSColor(Color(hex: hex)).setFill()
-        NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1)).fill()
-        return true
-      }
-      image.isTemplate = false
-      return image
-    }
-
-    static func matchesPaletteColor(_ color: NSColor?, hex: String) -> Bool {
-      guard let actual = sRGB8BitComponents(color),
-        let expected = sRGB8BitComponents(NSColor(Color(hex: hex)))
-      else { return false }
-      return zip(actual, expected).allSatisfy { abs($0 - $1) <= 1 }
-    }
-
-    static func paletteName(for color: NSColor?) -> String? {
-      all.first { option in
-        guard let hex = option.hex else { return false }
-        return matchesPaletteColor(color, hex: hex)
-      }?.name
-    }
-
-    private static func sRGB8BitComponents(_ color: NSColor?) -> [Int]? {
-      guard let color = color?.usingColorSpace(.sRGB) else { return nil }
-      return [
-        Int((color.redComponent * 255).rounded()),
-        Int((color.greenComponent * 255).rounded()),
-        Int((color.blueComponent * 255).rounded()),
-        Int((color.alphaComponent * 255).rounded()),
-      ]
-    }
-
-    static let all = [
-      TabColorOption(name: "None", hex: nil),
-      TabColorOption(name: "Red", hex: "#FF4245"),
-      TabColorOption(name: "Orange", hex: "#FF9230"),
-      TabColorOption(name: "Yellow", hex: "#FFD600"),
-      TabColorOption(name: "Green", hex: "#30D158"),
-      TabColorOption(name: "Blue", hex: "#0091FF"),
-      TabColorOption(name: "Purple", hex: "#DB34F2"),
-      TabColorOption(name: "Pink", hex: "#FF375F"),
-      TabColorOption(name: "Gray", hex: "#98989D"),
-    ]
-  }
-
   private struct DeleteConfirmationOverlay: View {
     let note: Note
     let onCancel: () -> Void
@@ -918,6 +887,8 @@
     let onDelete: () -> Void
     @State private var fontSizeText = ""
     @FocusState private var isFontSizeFocused: Bool
+    @State private var isForegroundColorPickerPresented = false
+    @State private var isBackgroundColorPickerPresented = false
 
     var body: some View {
       ScrollView(.horizontal, showsIndicators: false) {
@@ -1022,28 +993,8 @@
           .accessibilityLabel("Font size")
           .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
           .accessibilityHint("Enter a size from 1 through 512 points.")
-        Menu {
-          Button {
-            commands.applyForegroundColor(nil)
-          } label: {
-            specialColorMenuLabel(
-              "Automatic",
-              isSelected: !commands.isForegroundColorMixed && commands.currentForegroundColor == nil
-            )
-          }
-          ForEach(TabColorOption.all.filter { $0.hex != nil }) { option in
-            if let hex = option.hex {
-              Button {
-                commands.applyForegroundColor(NSColor(Color(hex: hex)))
-              } label: {
-                colorMenuLabel(
-                  option,
-                  isSelected: !commands.isForegroundColorMixed
-                    && TabColorOption.matchesPaletteColor(commands.currentForegroundColor, hex: hex)
-                )
-              }
-            }
-          }
+        Button {
+          isForegroundColorPickerPresented = true
         } label: {
           ToolbarIconLabel(systemImage: "paintpalette")
         }
@@ -1055,28 +1006,26 @@
             emptyName: "Automatic"
           )
         )
-        Menu {
-          Button {
-            commands.applyBackgroundColor(nil)
-          } label: {
-            specialColorMenuLabel(
-              "No Highlight",
-              isSelected: !commands.isBackgroundColorMixed && commands.currentBackgroundColor == nil
-            )
-          }
-          ForEach(TabColorOption.all.filter { $0.hex != nil }) { option in
-            if let hex = option.hex {
-              Button {
-                commands.applyBackgroundColor(NSColor(Color(hex: hex)))
-              } label: {
-                colorMenuLabel(
-                  option,
-                  isSelected: !commands.isBackgroundColorMixed
-                    && TabColorOption.matchesPaletteColor(commands.currentBackgroundColor, hex: hex)
-                )
-              }
-            }
-          }
+        .popover(isPresented: $isForegroundColorPickerPresented, arrowEdge: .bottom) {
+          FleckColorPicker(
+            currentHex: commands.isForegroundColorMixed
+              ? nil
+              : FleckColorHex.hex(from: commands.currentForegroundColor),
+            currentLabel: colorAccessibilityValue(
+              color: commands.currentForegroundColor,
+              isMixed: commands.isForegroundColorMixed,
+              emptyName: "Automatic"
+            ),
+            resetTitle: "Automatic",
+            onCommit: { hex in
+              commands.applyForegroundColor(hex.flatMap { NSColor(hex: $0) })
+              isForegroundColorPickerPresented = false
+            },
+            onCancel: { isForegroundColorPickerPresented = false }
+          )
+        }
+        Button {
+          isBackgroundColorPickerPresented = true
         } label: {
           ToolbarIconLabel(systemImage: "highlighter")
         }
@@ -1088,6 +1037,25 @@
             emptyName: "No Highlight"
           )
         )
+        .popover(isPresented: $isBackgroundColorPickerPresented, arrowEdge: .bottom) {
+          FleckColorPicker(
+            currentHex: commands.isBackgroundColorMixed
+              ? nil
+              : FleckColorHex.hex(from: commands.currentBackgroundColor),
+            currentLabel: colorAccessibilityValue(
+              color: commands.currentBackgroundColor,
+              isMixed: commands.isBackgroundColorMixed,
+              emptyName: "No Highlight"
+            ),
+            resetTitle: "No Highlight",
+            fallbackHex: "#FFD600",
+            onCommit: { hex in
+              commands.applyBackgroundColor(hex.flatMap { NSColor(hex: $0) })
+              isBackgroundColorPickerPresented = false
+            },
+            onCancel: { isBackgroundColorPickerPresented = false }
+          )
+        }
         Menu {
           Button("Disc (•)") { commands.applyList(.bullet(.disc)) }
           Button("Circle (◦)") { commands.applyList(.bullet(.circle)) }
@@ -1133,7 +1101,7 @@
       }
       .frame(maxWidth: .infinity)
       .background(.thinMaterial)
-      .accessibilityLabel("Formatting controls")
+      .accessibilityLabel("Editor toolbar")
     }
 
     private var motion: AppMotion {
@@ -1161,30 +1129,6 @@
       fontSizeText = fontSizeDisplay
     }
 
-    private func colorMenuLabel(_ option: TabColorOption, isSelected: Bool) -> some View {
-      HStack {
-        Label {
-          Text(option.name)
-        } icon: {
-          if let swatchImage = option.swatchImage {
-            Image(nsImage: swatchImage)
-          }
-        }
-        if isSelected {
-          Image(systemName: "checkmark")
-        }
-      }
-    }
-
-    private func specialColorMenuLabel(_ name: String, isSelected: Bool) -> some View {
-      HStack {
-        Text(name)
-        if isSelected {
-          Image(systemName: "checkmark")
-        }
-      }
-    }
-
     private func colorAccessibilityValue(
       color: NSColor?,
       isMixed: Bool,
@@ -1192,7 +1136,7 @@
     ) -> String {
       guard !isMixed else { return "Mixed" }
       guard let color else { return emptyName }
-      return TabColorOption.paletteName(for: color) ?? "Custom"
+      return FleckPaletteOption.paletteName(for: color) ?? "Custom"
     }
   }
 
@@ -1252,25 +1196,4 @@
     }
   }
 
-  extension Color {
-    init(hex: String) {
-      let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-      let value = UInt64(cleaned, radix: 16) ?? 0x7C6CF2
-      self.init(
-        red: Double((value >> 16) & 0xFF) / 255,
-        green: Double((value >> 8) & 0xFF) / 255,
-        blue: Double(value & 0xFF) / 255
-      )
-    }
-
-    var hexString: String? {
-      guard let color = NSColor(self).usingColorSpace(.sRGB) else { return nil }
-      return String(
-        format: "#%02X%02X%02X",
-        Int((color.redComponent * 255).rounded()),
-        Int((color.greenComponent * 255).rounded()),
-        Int((color.blueComponent * 255).rounded())
-      )
-    }
-  }
 #endif

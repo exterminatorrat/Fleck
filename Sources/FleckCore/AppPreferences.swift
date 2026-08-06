@@ -237,7 +237,7 @@ public struct Shortcut: Identifiable, Codable, Equatable, Sendable {
   public var isEnabled: Bool { key != nil }
   public var isValid: Bool {
     guard let key else { return modifiers.isEmpty }
-    return !key.isEmpty && !modifiers.isEmpty
+    return !key.isEmpty
   }
   public static func normalizedModifiers(_ values: [String]) -> [String] {
     Modifier.allCases.map(\.rawValue).filter { values.contains($0) }

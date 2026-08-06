@@ -38,9 +38,7 @@
       func install(shortcuts: [Shortcut]) {
         self.shortcuts = shortcuts
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-          guard let self, let command = self.match(event) else { return event }
-          self.action(command)
-          return nil
+          self?.handle(event) ?? event
         }
       }
 
@@ -49,37 +47,33 @@
         monitor = nil
       }
 
+      func handle(_ event: NSEvent) -> NSEvent? {
+        guard !ShortcutCaptureGate.isActive, !ShortcutCaptureGate.wasConsumed(event) else {
+          return event
+        }
+        guard let command = match(event) else { return event }
+        action(command)
+        return nil
+      }
+
       private func match(_ event: NSEvent) -> Shortcut.Action? {
-        let key = eventKey(event)
-        let acceptedModifiers: NSEvent.ModifierFlags = [.command, .shift, .control, .option]
-        let modifiers = event.modifierFlags.intersection(acceptedModifiers)
-        let conflicts = Shortcut.conflicts(in: shortcuts)
-        return shortcuts.first { shortcut in
-          guard shortcut.isValid, !conflicts.contains(shortcut.action), shortcut.key == key else {
-            return false
-          }
-          return eventModifiers(shortcut.modifiers) == modifiers
-        }?.action
+        ShortcutMonitor.action(for: event, shortcuts: shortcuts)
       }
+    }
 
-      private func eventKey(_ event: NSEvent) -> String {
-        switch event.keyCode {
-        case 48: return "tab"
-        default: return event.charactersIgnoringModifiers?.lowercased() ?? ""
+    nonisolated static func action(for event: NSEvent, shortcuts: [Shortcut]) -> Shortcut.Action? {
+      guard let chord = ShortcutEventNormalizer.chord(for: event) else { return nil }
+      let conflicts = Shortcut.conflicts(in: shortcuts)
+      return shortcuts.first { shortcut in
+        guard shortcut.isValid,
+          shortcut.isEnabled,
+          !conflicts.contains(shortcut.action),
+          shortcut.key == chord.key
+        else {
+          return false
         }
-      }
-
-      private func eventModifiers(_ values: [String]) -> NSEvent.ModifierFlags {
-        values.reduce(into: NSEvent.ModifierFlags()) { result, value in
-          switch value {
-          case "command": result.insert(.command)
-          case "shift": result.insert(.shift)
-          case "control": result.insert(.control)
-          case "option": result.insert(.option)
-          default: break
-          }
-        }
-      }
+        return Shortcut.normalizedModifiers(shortcut.modifiers) == chord.modifiers
+      }?.action
     }
   }
 #endif
