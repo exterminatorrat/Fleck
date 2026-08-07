@@ -145,6 +145,36 @@ function run(argv) { return productionEntry(argv); }
     #expect(result.stdout.contains("production-entry-used-only-argv"))
   }
 
+  @Test func FleckPanelProductionAWKAcceptsCompleteTSVAndRejectsIncompleteTSV() throws {
+    let programs = try measurementAWKPrograms()
+    var rows = ["sample_label\tsample_number\telapsed_ms", "cold\t1\t1"]
+    rows += (2...31).map { "warm\t\($0)\t\($0)" }
+    let validFixture = rows.joined(separator: "\n") + "\n"
+    let incompleteFixture = rows.dropLast().joined(separator: "\n") + "\n"
+
+    let valid = try runAWK(
+      programs.validation,
+      arguments: ["-F", "\t", "-v", "expected=31"],
+      input: validFixture
+    )
+    #expect(valid.status == 0, Comment(rawValue: valid.stderr))
+
+    let incomplete = try runAWK(
+      programs.validation,
+      arguments: ["-F", "\t", "-v", "expected=31"],
+      input: incompleteFixture
+    )
+    #expect(incomplete.status != 0)
+
+    let statistics = try runAWK(
+      programs.statistics,
+      arguments: ["-v", "expected=31"],
+      input: (1...31).map(String.init).joined(separator: "\n") + "\n"
+    )
+    #expect(statistics.status == 0, Comment(rawValue: statistics.stderr))
+    #expect(statistics.stdout == "31\t16\t30\t1\t31\n")
+  }
+
   @Test func FleckPanelPresentationJXAUsesFakeAXFixturesForClosedNormalizationAnd31Samples() throws {
     let jxa = try measurementJXASource(from: measurementScriptSource())
     let fixture = #"""
@@ -428,6 +458,33 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     )
   }
 
+  private func runAWK(
+    _ program: String,
+    arguments: [String],
+    input: String
+  ) throws -> ProcessResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/awk")
+    process.arguments = arguments + [program]
+    let stdin = Pipe()
+    let output = Pipe()
+    let error = Pipe()
+    process.standardInput = stdin
+    process.standardOutput = output
+    process.standardError = error
+    try process.run()
+    stdin.fileHandleForWriting.write(Data(input.utf8))
+    stdin.fileHandleForWriting.closeFile()
+    let stdoutData = output.fileHandleForReading.readDataToEndOfFile()
+    let stderrData = error.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return ProcessResult(
+      status: process.terminationStatus,
+      stdout: String(data: stdoutData, encoding: .utf8) ?? "",
+      stderr: String(data: stderrData, encoding: .utf8) ?? ""
+    )
+  }
+
   private struct CommandResult {
     let status: Int32
   }
@@ -472,6 +529,32 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
       )
     )
     return String(source[begin.upperBound..<end.lowerBound])
+  }
+
+  private func measurementAWKPrograms() throws -> (validation: String, statistics: String) {
+    let source = try measurementScriptSource()
+    let validationStart = try #require(
+      source.range(of: "awk -F '\\t' -v expected=\"$total_samples\" '\n")
+    )
+    let validationEnd = try #require(
+      source.range(
+        of: "\n'; then",
+        range: validationStart.upperBound..<source.endIndex
+      )
+    )
+    let statisticsStart = try #require(
+      source.range(of: "sort -n | awk -v expected=\"$total_samples\" '\n")
+    )
+    let statisticsEnd = try #require(
+      source.range(
+        of: "\n') ||",
+        range: statisticsStart.upperBound..<source.endIndex
+      )
+    )
+    return (
+      validation: String(source[validationStart.upperBound..<validationEnd.lowerBound]),
+      statistics: String(source[statisticsStart.upperBound..<statisticsEnd.lowerBound])
+    )
   }
 
   private func repositoryRoot() -> URL {

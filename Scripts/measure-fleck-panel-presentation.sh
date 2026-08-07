@@ -362,13 +362,7 @@ if ! printf '%s\n' "$measurement_output" | awk -F '\t' -v expected="$total_sampl
     next
   }
   {
-    if (
-      NF != 3 ||
-      ($1 != "cold" && $1 != "warm") ||
-      $2 !~ /^[0-9]+$/ ||
-      $3 !~ /^[0-9]+$/ ||
-      $2 != NR - 1
-    ) valid = 0
+    if (NF != 3 || ($1 != "cold" && $1 != "warm") || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ || $2 != NR - 1) valid = 0
     if ($1 == "cold") cold += 1
     if ($1 == "warm") warm += 1
   }
