@@ -21,7 +21,7 @@
 | Cleanup preference | Benchmark Qwen3.5-0.8B Q4_0 through llama.cpp |
 | Cleanup control | Benchmark Qwen3-0.6B Q8 through llama.cpp and retain cleanup Off |
 | Dictionary | Use ASR context where supported, deterministic post-ASR resolution, protected cleanup spans, and validation fallback |
-| Packaging | Present one curated Enhanced Dictation bundle while managing ASR and cleanup artifacts independently underneath |
+| Packaging | Ship signed runtime code inside Fleck and present one curated, data-only Enhanced Dictation model bundle |
 | Resource policy | ASR and cleanup never require simultaneous large-model residency on the M1/8 GB target |
 | Release rule | No model ships unless it beats the locked baseline and passes privacy, semantic, resource, reliability, license, and packaging gates |
 
@@ -53,8 +53,8 @@ ASR and cleanup components stay behind the product boundary.
    cleanup exactly when marked protected.
 8. Cancellation inserts nothing and releases capture, ASR, and cleanup work
    within the locked latency and memory bounds.
-9. The complete pack, native libraries, licenses, signing behavior, and
-   packaged-app lifecycle pass on the base M1/8 GB release target.
+9. The complete data pack, in-app native libraries, licenses, signing behavior,
+   and packaged-app lifecycle pass on the base M1/8 GB release target.
 
 ## Non-goals
 
@@ -315,7 +315,7 @@ and inserts the dictionary baseline.
 
 ## Model bundle and installation architecture
 
-### One user-facing bundle, independent internal components
+### One user-facing bundle, data-only downloadable components
 
 The installed bundle has one product version and contains independently
 identified components:
@@ -323,18 +323,28 @@ identified components:
 ```text
 EnhancedDictationBundle
   manifest
-  ASR runtime library
   ASR model artifacts
-  cleanup runtime library
   cleanup model artifact, when selected
   tokenizer/configuration
   LICENSES and NOTICE
 ```
 
+Selected ASR and cleanup runtime code ships inside the signed Fleck application
+and changes only through an app update. The downloaded bundle is data-only: it
+must not contain a dynamic library, executable, script, shader compiler, Python
+package, plug-in, or other executable code. This keeps model installation on
+the safe side of [App Review Guideline 2.5.2](https://developer.apple.com/app-store/review/guidelines/)
+and avoids disabling Apple's
+[library validation](https://developer.apple.com/documentation/BundleResources/Entitlements/com.apple.security.cs.disable-library-validation).
+
+The model manifest declares the minimum compatible Fleck runtime ABI. An app
+that does not contain that ABI cannot activate the pack and must request an app
+update rather than downloading code.
+
 Each component records:
 
 - stable component ID and capability role;
-- model and runtime revision;
+- model revision and required in-app runtime ABI;
 - artifact byte count and SHA-256;
 - quantization and conversion recipe;
 - platform and architecture requirements;
@@ -352,7 +362,7 @@ install action
   -> compatibility and capacity preflight
   -> authenticated resumable download into staging
   -> byte-count, path, manifest-signature, and SHA-256 verification
-  -> native-library/signing compatibility assessment
+  -> data-only content and runtime-ABI compatibility assessment
   -> atomic activation of the complete bundle
   -> retain last verified bundle until activation succeeds
   -> select Enhanced Dictation
@@ -389,6 +399,8 @@ CDN/object-storage path rather than claiming maintenance is free.
 
 - Inference loads only explicit local paths from a verified active bundle.
 - The runtime must not auto-download weights, tokenizers, adapters, or telemetry.
+- Runtime libraries and executable code load only from the signed Fleck app
+  bundle; model installation never adds executable code to Application Support.
 - Pack download is the only model-related network operation.
 - Audio remains memory-only and is released after capture/cancellation under
   the existing dictation contract.
@@ -411,6 +423,16 @@ Before generating real candidate evidence, the CLI must reject unknown JSON
 keys at every schema level. The current `JSONDecoder` accepts unknown keys even
 though the checked-in schemas use exact field contracts. Benchmark evidence is
 not admissible until CLI behavior matches the schema contract.
+
+The release evidence schema must also be upgraded before benchmarking. It must
+record separate ASR and cleanup component identities, first-partial timing,
+partial-update interval and instability when streaming is claimed, final ASR
+latency, cleanup latency, stop-to-insertion latency, cancellation latency,
+pre-load memory, ready-idle delta, peak memory, unload duration, post-unload
+delta, and installed/download bytes by component. Reports must compute
+fail-closed gates for every table row below and for every locked corpus category
+plus both mixed-language directions. Existing schema-v1 runs remain synthetic
+or diagnostic only and cannot satisfy a release gate.
 
 ### Stage 1: ten-case runtime admission
 
@@ -489,8 +511,9 @@ The next implementation is deliberately split into evidence and product phases.
    adapter protocol, admission fixtures, reproducible benchmark commands, and
    signed selection report. This phase must not change Fleck's root package or
    production runtime.
-2. **Selected runtime core:** pin the winning runtime/model pair, add native
-   adapters, bundle manifest/catalog, resource leasing, and focused tests.
+2. **Selected runtime core:** pin the winning runtime/model pair, package its
+   native adapters inside the signed Fleck app, add the data-only model manifest
+   and catalog, resource leasing, and focused tests.
 3. **Production integration:** inject the dictionary store/resolver, selected
    engine and cleaner, installation service, and history identity through the
    existing coordinator boundaries.

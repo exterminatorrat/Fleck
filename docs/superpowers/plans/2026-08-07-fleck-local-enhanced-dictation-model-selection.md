@@ -17,6 +17,9 @@
 - The first cleanup matrix is Off, Qwen3-0.6B Q8, and Qwen3.5-0.8B Q4_0.
 - The first ASR matrix is whisper.cpp `small`, whisper.cpp `large-v3-turbo-q5_0`, Nemotron 3.5 ASR 0.6B Q8 through NeMo-Speech.cpp, and one admitted Qwen3-ASR-0.6B Apple route.
 - No inference request may access the network or auto-download a model, tokenizer, or runtime.
+- Selected runtime libraries and executable code ship inside the signed Fleck
+  app. The one-click downloadable pack contains data-only weights,
+  tokenizer/configuration, manifests, and license notices.
 - The combined installed pack target is at most 2.0 GB and the hard stop is 3.0 GB without a new product decision.
 - Protected terms, numbers, units, paths, identifiers, and negations must pass their locked semantic gates.
 - Candidate dependencies must not be added to root `Package.swift` or `Package.resolved` during selection.
@@ -60,6 +63,8 @@ No task in this plan enables Enhanced Dictation in a release build.
 - `Tests/Fixtures/local-dictation-adapter-event-v1.jsonl` — checked-in event stream example.
 - `Tests/Fixtures/local-dictation-admission-v1.json` — ten-case admission manifest with exact expected categories.
 - `Tests/Fixtures/local-dictation-admission-v1.schema.json` — fail-closed schema for admission metadata.
+- `Tests/Fixtures/local-dictation-run-sample-v2.json` — complete synthetic example for every release-evidence field.
+- `Tests/Fixtures/local-dictation-run-v2.schema.json` — strict combined-component and lifecycle evidence schema.
 - `Scripts/test-local-dictation-candidate-adapters.sh` — deterministic package and fixture gate.
 - `Scripts/run-local-dictation-candidate.sh` — one candidate invocation that records commands and hashes without downloading at inference time.
 - `docs/dictation/local-runtime-admission.md` — reproducible operator runbook.
@@ -67,8 +72,13 @@ No task in this plan enables Enhanced Dictation in a release build.
 
 ### Existing files modified by this plan
 
-- `Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluationCLI/main.swift` — requires a schema path and performs strict schema-key validation before decoding corpus, run, and gate JSON.
+- `Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluation/EvaluationModels.swift` — adds schema-v2 component, streaming, latency, memory, cancellation, unload, and capability evidence.
+- `Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluation/EvaluationValidation.swift` — makes schema v2 mandatory for release evidence and validates complete lifecycle measurements.
+- `Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluation/EvaluationReport.swift` — adds fail-closed lifecycle and per-slice release gates.
+- `Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluationCLI/main.swift` — requires a schema path and performs strict schema-key validation before decoding corpus and run JSON; `EvaluationGate` keeps its existing strict custom decoder.
+- `Tools/LocalDictationEvaluation/Tests/LocalDictationEvaluationTests/EvaluationReportTests.swift` — covers all new hard gates and slice regressions.
 - `Tools/LocalDictationEvaluation/Tests/LocalDictationEvaluationTests/EvaluationValidationTests.swift` — CLI-facing regression cases for unknown keys.
+- `Tests/Fixtures/local-dictation-run-v1.schema.json` — remains a diagnostic compatibility schema and is explicitly ineligible for release evidence.
 - `Scripts/test-local-dictation-evaluation.sh` — exercises strict decoding through the public command.
 - `docs/dictation/local-model-evaluation.md` — records strict-decoding prerequisite and adapter evidence provenance.
 - `TESTING.md` — adds the isolated candidate-adapter verification command if the file is free; otherwise stop and coordinate before editing it.
@@ -89,7 +99,7 @@ No task in this plan enables Enhanced Dictation in a release build.
 - Produces: `public struct StrictJSONIssue: Equatable, Sendable { let path: String; let key: String }`.
 - The validator implements only the checked-in schema subset: object
   `properties`, `additionalProperties: false`, array `items`, local
-  local references whose strings start with `#/$defs/`, and `anyOf` selection
+  references whose strings start with `#/$defs/`, and `anyOf` selection
   for object versus null.
 - Codable and `EvaluationValidator` remain responsible for value types,
   required fields, enums, ranges, and semantic validation.
@@ -319,7 +329,318 @@ git add \
 git commit -m "fix: enforce strict local dictation schemas"
 ```
 
-## Task 3: Define the candidate adapter wire protocol
+## Task 3: Upgrade release evidence to cover every hard gate
+
+**Files:**
+
+- Modify: `Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluation/EvaluationModels.swift`
+- Modify: `Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluation/EvaluationValidation.swift`
+- Modify: `Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluation/EvaluationReport.swift`
+- Modify: `Tools/LocalDictationEvaluation/Tests/LocalDictationEvaluationTests/EvaluationValidationTests.swift`
+- Modify: `Tools/LocalDictationEvaluation/Tests/LocalDictationEvaluationTests/EvaluationReportTests.swift`
+- Create: `Tests/Fixtures/local-dictation-run-sample-v2.json`
+- Create: `Tests/Fixtures/local-dictation-run-v2.schema.json`
+- Modify: `docs/dictation/local-model-evaluation.md`
+
+**Interfaces:**
+
+- Produces: `CandidateComponentIdentity` with exact ASR or cleanup role,
+  model/runtime revisions, quantization, artifact hash, download bytes,
+  installed bytes, license review, and required runtime ABI.
+- Produces: `CandidateCapability` with `provisionalResults` as the first
+  capability. No runtime may claim streaming solely by emitting a final result.
+- Produces: schema-v2 `CandidateRun.components` containing exactly one ASR
+  component and zero or one cleanup component.
+- Produces: `ProvisionalMeasurement`, expanded `LatencyMeasurement`, expanded
+  `ResourceMeasurement`, expanded `UnloadEvidence`, and
+  `ReliabilityEvidence`.
+- Produces: schema-v2 `StandardBaselineEvidence.sliceMetrics` so category and
+  mixed-direction regressions compare like-for-like rather than against a
+  language-wide aggregate.
+- Produces: `EvaluationSliceGate` entries for every locked corpus category and
+  both required mixed-direction tags `mixed-en-zh` and `mixed-zh-en`.
+- Existing schema-v1 runs remain decodable for diagnostics but are never
+  eligible when `releaseEvidence == true`.
+
+- [ ] **Step 1: Write schema-v2 validation tests first**
+
+Add a complete v2 fixture and tests that independently remove or invalidate
+each required release field. The representative assertions are:
+
+```swift
+@Test func releaseEvidenceRequiresSchemaV2AndExactComponents() throws {
+  let corpus = try decodeCorpus()
+  var run = try decodeV2Run()
+  run.schemaVersion = 1
+  #expect(EvaluationValidator.validate(run: run, against: corpus).contains {
+    $0.code == "release_schema_version" && $0.path == "/schemaVersion"
+  })
+
+  run = try decodeV2Run()
+  run.components.append(run.components[0])
+  #expect(EvaluationValidator.validate(run: run, against: corpus).contains {
+    $0.code == "component_roles" && $0.path == "/components"
+  })
+}
+
+@Test func claimedStreamingRequiresCompleteProvisionalEvidence() throws {
+  let corpus = try decodeCorpus()
+  var run = try decodeV2Run()
+  run.claimedCapabilities = [.provisionalResults]
+  run.results[0].provisional = nil
+  #expect(EvaluationValidator.validate(run: run, against: corpus).contains {
+    $0.code == "missing_provisional_evidence"
+      && $0.path == "/results/0/provisional"
+  })
+}
+```
+
+Also cover duplicate component roles, malformed SHA-256, component byte totals,
+negative timing, missing cancellation timing, missing unload duration, post-
+unload memory below zero, ready-idle delta inconsistent with absolute memory,
+missing baseline slice metrics, missing category gates, missing mixed direction,
+nonzero crash/hang/OOM/corruption-acceptance counts, and a schema-v1 run
+attempting `releaseEvidence: true`.
+
+- [ ] **Step 2: Run focused tests and verify current contracts cannot compile**
+
+Run:
+
+```bash
+swift test --package-path Tools/LocalDictationEvaluation \
+  --filter EvaluationValidationTests
+```
+
+Expected: build failure because the v2 component and lifecycle evidence types
+do not exist.
+
+- [ ] **Step 3: Add exact component and capability types**
+
+Add these public contracts without replacing the existing combined display
+identity:
+
+```swift
+public enum CandidateComponentRole: String, Codable, Sendable {
+  case asr
+  case cleanup
+}
+
+public enum CandidateCapability: String, Codable, Sendable {
+  case provisionalResults
+}
+
+public struct CandidateComponentIdentity: Codable, Equatable, Sendable {
+  public var role: CandidateComponentRole
+  public var componentID: String
+  public var modelID: String
+  public var modelRevision: String
+  public var runtimeName: String
+  public var runtimeRevision: String
+  public var runtimeABI: String
+  public var quantization: String
+  public var artifactSHA256: String
+  public var downloadBytes: Int64
+  public var installedBytes: Int64
+  public var licenseReview: String
+}
+
+public struct EvaluationSliceMetric: Codable, Equatable, Sendable {
+  public var sliceID: String
+  public var metric: EvaluationMetricKind
+  public var value: Double
+}
+
+public struct ReliabilityEvidence: Codable, Equatable, Sendable {
+  public var repeatedRunCount: Int
+  public var crashCount: Int
+  public var hangCount: Int
+  public var metalOOMCount: Int
+  public var corruptedModelAcceptedCount: Int
+}
+```
+
+`CandidateRun` gains `components` and `claimedCapabilities`. Its custom decoder
+defaults those collections to empty only for schema-v1 diagnostic input; schema
+v2 requires them in JSON. A cleanup-Off run contains no cleanup component. A
+combined run contains exactly one ASR and one cleanup component. Totals in every
+observation must match the sum of component bytes so one component cannot
+disappear from size gates.
+
+`StandardBaselineEvidence` gains `sliceMetrics: [EvaluationSliceMetric]`,
+defaulted to an empty array only for schema-v1 diagnostics. `CandidateRun`
+gains `reliability: ReliabilityEvidence?`; schema v2 and release validation
+require it.
+
+- [ ] **Step 4: Add lifecycle measurements**
+
+Retain the existing schema-v1 properties for diagnostic decoding and add the
+following schema-v2 fields. New lifecycle fields are optional in the Swift
+in-memory type only so old synthetic runs decode; the v2 schema and release
+validator require every applicable value.
+
+```swift
+public struct ProvisionalMeasurement: Codable, Equatable, Sendable {
+  public var firstPartialMilliseconds: Double
+  public var updateIntervalP95Milliseconds: Double
+  public var emittedPartialCount: Int
+  public var revisedPartialCount: Int
+  public var instabilityRate: Double
+}
+
+public struct LatencyMeasurement: Codable, Equatable, Sendable {
+  public var coldLoadMilliseconds: Double?
+  public var asrMilliseconds: Double
+  public var cleanupMilliseconds: Double
+  public var endToEndMilliseconds: Double
+  public var finalASRMilliseconds: Double?
+  public var stopToInsertionMilliseconds: Double?
+  public var cancellationMilliseconds: Double?
+
+  public init(
+    coldLoadMilliseconds: Double?,
+    asrMilliseconds: Double,
+    cleanupMilliseconds: Double,
+    endToEndMilliseconds: Double,
+    finalASRMilliseconds: Double? = nil,
+    stopToInsertionMilliseconds: Double? = nil,
+    cancellationMilliseconds: Double? = nil
+  ) {
+    self.coldLoadMilliseconds = coldLoadMilliseconds
+    self.asrMilliseconds = asrMilliseconds
+    self.cleanupMilliseconds = cleanupMilliseconds
+    self.endToEndMilliseconds = endToEndMilliseconds
+    self.finalASRMilliseconds = finalASRMilliseconds
+    self.stopToInsertionMilliseconds = stopToInsertionMilliseconds
+    self.cancellationMilliseconds = cancellationMilliseconds
+  }
+}
+
+public struct ResourceMeasurement: Codable, Equatable, Sendable {
+  public var peakMemoryBytes: Int64
+  public var idleMemoryBytes: Int64
+  public var thermalState: ThermalState
+  public var energyImpact: Double
+  public var modelDownloadBytes: Int64
+  public var modelInstalledBytes: Int64
+  public var preLoadMemoryBytes: Int64?
+  public var readyIdleMemoryBytes: Int64?
+  public var readyIdleDeltaBytes: Int64?
+}
+
+public struct UnloadEvidence: Codable, Equatable, Sendable {
+  public var unloadAttempted: Bool
+  public var unloadSucceeded: Bool
+  public var memoryAfterUnloadBytes: Int64
+  public var observedAt: String
+  public var preLoadMemoryBytes: Int64?
+  public var postUnloadDeltaBytes: Int64?
+  public var unloadMilliseconds: Double?
+}
+```
+
+The existing `cleanupMilliseconds`, `peakMemoryBytes`, energy, thermal,
+download bytes, installed bytes, and absolute post-unload memory fields remain
+and gain explicit v2 gates. Custom decoders reject unknown keys for both
+versions; they do not invent release measurements from schema-v1 aggregate
+values.
+
+Each `UtteranceResult` gains `provisional: ProvisionalMeasurement?`. A run that
+claims `.provisionalResults` requires provisional evidence on every ordinary
+speech case. A final-only candidate must omit the capability and the field.
+Cancellation evidence records p95-ready raw observations rather than a prose
+claim.
+
+- [ ] **Step 5: Define fail-closed slice and lifecycle gates**
+
+Extend the strict `EvaluationGate` decoder with schema version 2 and these
+required fields:
+
+```swift
+public struct EvaluationSliceGate: Codable, Equatable, Sendable {
+  public var sliceID: String
+  public var metric: EvaluationMetricKind
+  public var maximumCandidateValue: Double
+  public var maximumRegressionFromStandard: Double
+}
+
+public var sliceGates: [EvaluationSliceGate]
+public var maxFirstPartialMilliseconds: Double
+public var maxProvisionalUpdateIntervalMilliseconds: Double
+public var maxProvisionalInstabilityRate: Double
+public var maxFinalASRMilliseconds: Double
+public var maxCleanupMilliseconds: Double
+public var maxStopToInsertionMilliseconds: Double
+public var maxCancellationMilliseconds: Double
+public var maxReadyIdleDeltaBytes: Int64
+public var maxPostUnloadDeltaBytes: Int64
+public var maxUnloadMilliseconds: Double
+```
+
+The report derives `category:<category>` slices from the existing corpus
+`categories` field. A release corpus with mixed cases must contain and gate
+`category:mixed-en-zh` and `category:mixed-zh-en`. Every category present in the
+release corpus needs one gate for each applicable metric; `(sliceID, metric)`
+pairs must be unique. An absent, duplicate, or uncomputable slice fails closed.
+
+When provisional results are claimed, all three provisional limits are hard
+gates. When they are not claimed, the report labels those three gates not
+applicable and never describes the candidate as streaming. Final ASR, cleanup,
+stop-to-insertion, cancellation, ready-idle delta, peak memory, unload duration,
+post-unload delta, storage, semantic safety, offline evidence, and category
+gates always receive explicit outcomes.
+
+- [ ] **Step 6: Add report tests for every design threshold**
+
+Build one passing v2 report, then mutate exactly one measurement per test and
+assert the corresponding stable gate ID fails:
+
+```swift
+let expectedGateIDs: Set<String> = [
+  "english-wer", "mandarin-cer", "mixed-language",
+  "protected-terms", "numbers", "negations", "silence-noise",
+  "first-partial", "partial-interval", "partial-instability",
+  "final-asr-latency", "cleanup-latency", "stop-to-insertion",
+  "cancellation-latency", "peak-memory", "ready-idle-delta",
+  "unload-duration", "post-unload-delta", "energy", "thermal",
+  "download-size", "installed-size", "offline", "reliability",
+  "failure-cancellation"
+]
+#expect(expectedGateIDs.isSubset(of: Set(report.gateOutcomes.map(\.id))))
+```
+
+Assert category gate IDs are deterministically prefixed `slice:` and that one
+English technical category regression plus each mixed direction can fail
+without being hidden by a good aggregate score.
+
+- [ ] **Step 7: Run the full evaluator gate**
+
+Run:
+
+```bash
+Scripts/test-local-dictation-evaluation.sh
+swift test --package-path Tools/LocalDictationEvaluation
+```
+
+Expected: schema-v1 diagnostic fixtures still validate as non-release evidence,
+the complete v2 fixture passes, every missing v2 field fails closed, and every
+design threshold has an explicit gate outcome.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add \
+  Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluation/EvaluationModels.swift \
+  Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluation/EvaluationValidation.swift \
+  Tools/LocalDictationEvaluation/Sources/LocalDictationEvaluation/EvaluationReport.swift \
+  Tools/LocalDictationEvaluation/Tests/LocalDictationEvaluationTests/EvaluationValidationTests.swift \
+  Tools/LocalDictationEvaluation/Tests/LocalDictationEvaluationTests/EvaluationReportTests.swift \
+  Tests/Fixtures/local-dictation-run-sample-v2.json \
+  Tests/Fixtures/local-dictation-run-v2.schema.json \
+  docs/dictation/local-model-evaluation.md
+git commit -m "feat: gate complete local dictation lifecycle evidence"
+```
+
+## Task 4: Define the candidate adapter wire protocol
 
 **Files:**
 
@@ -433,7 +754,7 @@ git add Tools/LocalDictationCandidateAdapters \
 git commit -m "feat: define local dictation adapter protocol"
 ```
 
-## Task 4: Add fail-closed subprocess lifecycle control
+## Task 5: Add fail-closed subprocess lifecycle control
 
 **Files:**
 
@@ -502,7 +823,7 @@ git add Tools/LocalDictationCandidateAdapters
 git commit -m "feat: isolate local dictation candidate processes"
 ```
 
-## Task 5: Add the ten-case admission manifest and runner CLI
+## Task 6: Add the ten-case admission manifest and runner CLI
 
 **Files:**
 
@@ -579,7 +900,7 @@ git add \
 git commit -m "feat: add local dictation runtime admission gate"
 ```
 
-## Task 6: Implement runtime-specific admission helpers in isolated tasks
+## Task 7: Implement runtime-specific admission helpers in isolated tasks
 
 **Files:**
 
@@ -679,7 +1000,7 @@ git commit -m "test: admit qwen local dictation candidate"
 git commit -m "test: admit qwen cleanup candidates"
 ```
 
-## Task 7: Run the locked ASR and cleanup matrices
+## Task 8: Run the locked ASR and cleanup matrices
 
 **Files:**
 
@@ -690,8 +1011,8 @@ git commit -m "test: admit qwen cleanup candidates"
 
 **Interfaces:**
 
-- Consumes the existing `EvaluationCorpus`, `CandidateRun`, and
-  `EvaluationGate` contracts.
+- Consumes the existing `EvaluationCorpus` plus the schema-v2 `CandidateRun`
+  and `EvaluationGate` contracts produced by Task 3.
 - Produces one immutable run document per ASR-only, cleanup-only, and combined
   candidate.
 - Produces one selection record linking run hashes and report results without
@@ -734,7 +1055,7 @@ Scripts/evaluate-local-dictation.sh \
   --corpus "$corpus_path" \
   --corpus-schema Tests/Fixtures/local-dictation-evaluation-v1.schema.json \
   --run "$run_path" \
-  --run-schema Tests/Fixtures/local-dictation-run-v1.schema.json \
+  --run-schema Tests/Fixtures/local-dictation-run-v2.schema.json \
   --gate "$gate_path" \
   --output "$report_path"
 ```
@@ -753,7 +1074,7 @@ failed result is not a ship selection.
 - license and redistribution disposition;
 - rejected candidates and reasons;
 - macOS floor;
-- native library/package strategy;
+- signed in-app runtime library/package strategy and runtime ABI;
 - one-click bundle composition and download-origin requirement;
 - the exact next production file allowlist.
 
@@ -767,7 +1088,7 @@ git commit -m "docs: select Fleck local dictation runtime"
 Do not add private audio, transcript-bearing raw runs, unsigned binaries,
 downloaded weights, or local measurement directories.
 
-## Task 8: Final verification and production-plan handoff
+## Task 9: Final verification and production-plan handoff
 
 **Files:**
 
@@ -822,7 +1143,7 @@ cover, in this order:
 
 1. selected in-process ASR and cleanup adapters;
 2. shared inference resource lease;
-3. signed bundle catalog and atomic ASR/cleanup installation;
+3. signed data-only bundle catalog and atomic ASR/cleanup model installation;
 4. production dictionary-store/resolver injection;
 5. coordinated onboarding and Settings one-click UI;
 6. packaged offline, signing, update, rollback, removal, and regional-download
@@ -833,13 +1154,14 @@ integration file it names.
 
 ## Post-selection PR sequence
 
-This is the expected review topology after Task 8, not permission to skip the
+This is the expected review topology after Task 9, not permission to skip the
 selection gate:
 
-1. **Runtime Core PR:** selected native adapter(s), generic cleanup safety,
-   resource lease, no shared UI.
-2. **Bundle Manager PR:** signed catalog, transactional install/update/resume,
-   component manifests, rollback/removal, distribution-origin abstraction.
+1. **Runtime Core PR:** selected native adapter(s) packaged and signed inside
+   Fleck, generic cleanup safety, resource lease, no shared UI.
+2. **Bundle Manager PR:** signed data-only catalog, transactional
+   install/update/resume, component manifests, runtime-ABI compatibility,
+   rollback/removal, distribution-origin abstraction.
 3. **Runtime Integration PR:** coordinator/provider/dictionary injection and
    history identity, coordinated against current shared-file ownership.
 4. **Onboarding and Settings PR:** one user-facing Install action, native
