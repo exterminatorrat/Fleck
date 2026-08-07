@@ -61,14 +61,6 @@ public enum PersonalDictionaryCodec {
     return sorted(snapshot)
   }
 
-  public static func encode(_ snapshot: PersonalDictionarySnapshot) throws -> Data {
-    try encodeJSON(snapshot)
-  }
-
-  public static func decode(_ data: Data) throws -> PersonalDictionarySnapshot {
-    try decodeJSON(data)
-  }
-
   public static func exportCSV(_ entries: [PersonalDictionaryEntry]) throws -> String {
     let snapshot = PersonalDictionarySnapshot(entries: entries)
     try validate(snapshot)
@@ -92,10 +84,6 @@ public enum PersonalDictionaryCodec {
       output += fields.map(escapeCSVField).joined(separator: ",") + "\r\n"
     }
     return output
-  }
-
-  public static func encodeCSV(_ entries: [PersonalDictionaryEntry]) throws -> String {
-    try exportCSV(entries)
   }
 
   public static func importCSV(_ csv: String) throws -> [PersonalDictionaryEntry] {
@@ -149,10 +137,6 @@ public enum PersonalDictionaryCodec {
     let snapshot = PersonalDictionarySnapshot(entries: entries)
     try validate(snapshot)
     return sorted(snapshot).entries
-  }
-
-  public static func decodeCSV(_ csv: String) throws -> [PersonalDictionaryEntry] {
-    try importCSV(csv)
   }
 
   static func sorted(_ snapshot: PersonalDictionarySnapshot) -> PersonalDictionarySnapshot {
