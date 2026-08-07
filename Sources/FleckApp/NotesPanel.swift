@@ -56,6 +56,23 @@
     }
   }
 
+  enum FolderNavigatorFocus {
+    static func nextIndex(
+      currentIndex: Int,
+      direction: MoveCommandDirection,
+      count: Int
+    ) -> Int {
+      guard count > 0 else { return 0 }
+      let offset: Int
+      switch direction {
+      case .up: offset = -1
+      case .down: offset = 1
+      default: return currentIndex
+      }
+      return min(max(currentIndex + offset, 0), count - 1)
+    }
+  }
+
   enum TabDragReorder {
     struct Destination: Equatable {
       let id: UUID
@@ -1302,8 +1319,13 @@
         + [.trash]
       guard !rows.isEmpty else { return }
       let currentIndex = focusedRow.flatMap { rows.firstIndex(of: $0) } ?? 0
-      let offset = direction == .up ? -1 : 1
-      focusedRow = rows[min(max(currentIndex + offset, 0), rows.count - 1)]
+      focusedRow = rows[
+        FolderNavigatorFocus.nextIndex(
+          currentIndex: currentIndex,
+          direction: direction,
+          count: rows.count
+        )
+      ]
     }
 
     private func isF2(_ press: KeyPress) -> Bool {

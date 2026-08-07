@@ -589,7 +589,23 @@ private func waitForSaveCount(
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
   defer { try? FileManager.default.removeItem(at: root) }
   let work = try folder(named: "Work")
-  let note = Note(title: "Note", body: "Keep editor", folderID: nil)
+  let title = "Focus title"
+  let text = "Keep editor rich text"
+  let selectedRange = NSRange(location: 5, length: 6)
+  let boldFont = try #require(NSFont(name: "Helvetica-Bold", size: 18))
+  let rtfDocumentAttributes: [NSAttributedString.DocumentAttributeKey: Any] = [
+    .documentType: NSAttributedString.DocumentType.rtf
+  ]
+  let attributed = NSMutableAttributedString(string: text)
+  attributed.addAttributes(
+    [.font: boldFont, .foregroundColor: NSColor.systemRed],
+    range: NSRange(location: 0, length: text.utf16.count)
+  )
+  let rtf = try attributed.data(
+    from: NSRange(location: 0, length: attributed.length),
+    documentAttributes: rtfDocumentAttributes
+  )
+  let note = Note(title: title, body: text, richTextRTF: rtf, folderID: nil)
   let state = await folderedState(
     workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [work])
   )
@@ -604,22 +620,61 @@ private func waitForSaveCount(
     styleMask: [.titled], backing: .buffered, defer: false
   )
   window.contentView = host
-  for _ in 0..<5 {
-    host.layoutSubtreeIfNeeded()
-    await Task.yield()
-  }
+  window.makeKeyAndOrderFront(nil)
+  await settleHostedFolderView(host)
   let editor = try #require(hostedFolderEditor(in: host))
+  let titleField = try #require(hostedFolderTextField(with: title, in: host))
+
+  editor.setSelectedRange(selectedRange)
+  editor.typingAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+  commands.refreshFormattingState()
+  commands.applyBackgroundColor(.systemYellow)
+  let expectedText = editor.string
+  let expectedSelection = editor.selectedRange()
+  let expectedTypingAttributes = NSDictionary(dictionary: editor.typingAttributes)
+  let expectedRTF = try editor.textStorage?.data(
+    from: NSRange(location: 0, length: expectedText.utf16.count),
+    documentAttributes: rtfDocumentAttributes
+  )
+  let undoManager = try #require(editor.undoManager)
+  let expectedUndoAvailability = undoManager.canUndo
+
+  #expect(expectedSelection == selectedRange)
+  #expect(expectedUndoAvailability)
+  #expect(commands.textView === editor)
+  #expect(commands.isBold)
+  #expect(window.makeFirstResponder(editor))
+  #expect(window.firstResponder === editor)
+  #expect(titleField.stringValue == title)
 
   var scoped = state.workspace
   scoped.notes[0].folderID = work.id
   state.workspace = scoped
-  await Task.yield()
+  await settleHostedFolderView(host)
+  #expect(!state.workspace.notes(inFolderID: nil).contains(where: { $0.id == note.id }))
+
   scoped.notes[0].folderID = nil
   state.workspace = scoped
-  await Task.yield()
+  await settleHostedFolderView(host)
 
   #expect(hostedFolderEditor(in: host) === editor)
   #expect(commands.textView === editor)
+  #expect(editor.string == expectedText)
+  #expect(editor.selectedRange() == expectedSelection)
+  #expect(
+    NSDictionary(dictionary: editor.typingAttributes)
+      .isEqual(to: expectedTypingAttributes)
+  )
+  let actualRTF = try editor.textStorage?.data(
+    from: NSRange(location: 0, length: expectedText.utf16.count),
+    documentAttributes: rtfDocumentAttributes
+  )
+  #expect(actualRTF == expectedRTF)
+  #expect(editor.undoManager === undoManager)
+  #expect(editor.undoManager?.canUndo == expectedUndoAvailability)
+  #expect(commands.isBold)
+  #expect(window.firstResponder === editor)
+  #expect(titleField.stringValue == title)
 }
 
 @MainActor
@@ -629,4 +684,52 @@ private func hostedFolderEditor(in view: NSView) -> ListAwareTextView? {
     if let editor = hostedFolderEditor(in: subview) { return editor }
   }
   return nil
+}
+
+@MainActor
+private func hostedFolderTextField(with value: String, in view: NSView) -> NSTextField? {
+  if let field = view as? NSTextField, field.stringValue == value {
+    return field
+  }
+  for subview in view.subviews {
+    if let field = hostedFolderTextField(with: value, in: subview) { return field }
+  }
+  return nil
+}
+
+@MainActor
+private func settleHostedFolderView(_ view: NSView) async {
+  for _ in 0..<5 {
+    view.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+}
+
+@Test @MainActor func AppStateFolderDropPayloadRejectionsAreNoOpsAndDoNotSave() async throws {
+  let recorder = SaveRecorder()
+  let source = try folder(named: "Source")
+  let target = try folder(named: "Target")
+  let note = Note(title: "Move me", folderID: source.id)
+  let state = await folderedState(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [source, target]),
+    recorder: recorder
+  )
+  let before = state.workspace
+
+  #expect(
+    !state.moveNote(
+      note.id,
+      fromFolderID: UUID(),
+      toFolderID: target.id,
+      activeFolderID: source.id
+    )
+  )
+  #expect(state.workspace == before)
+  #expect(FolderDragPayload.noteValue(from: Data("not-json".utf8)) == nil)
+  #expect(FolderDragPayload.noteValue(from: Data("{\"unknown\":true}".utf8)) == nil)
+  #expect(FolderDragPayload.folderID(from: Data("{\"unknown\":true}".utf8)) == nil)
+  #expect(state.workspace == before)
+
+  try await Task.sleep(for: .milliseconds(150))
+  #expect(recorder.generations.isEmpty)
 }

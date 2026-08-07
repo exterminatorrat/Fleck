@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import FleckApp
@@ -282,6 +283,51 @@ import FleckCore
   #expect(navigator.range(of: "Divider()")!.lowerBound < navigator.range(of: "name: \"Trash\"")!.lowerBound)
   #expect(!navigator.contains("All Notes"))
   #expect(!navigator.contains("Inbox"))
+}
+
+@Test func FolderNavigatorFocusMovesOnlyVertically() {
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 1,
+      direction: .up,
+      count: 4
+    ) == 0
+  )
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 1,
+      direction: .down,
+      count: 4
+    ) == 2
+  )
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 1,
+      direction: .left,
+      count: 4
+    ) == 1
+  )
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 1,
+      direction: .right,
+      count: 4
+    ) == 1
+  )
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 0,
+      direction: .up,
+      count: 4
+    ) == 0
+  )
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 3,
+      direction: .down,
+      count: 4
+    ) == 3
+  )
 }
 
 private func tabFrames(for noteIDs: [UUID]) -> [UUID: CGRect] {
