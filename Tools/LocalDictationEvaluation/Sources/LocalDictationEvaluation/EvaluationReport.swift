@@ -905,10 +905,7 @@ public enum EvaluationReportBuilder {
         for result in observations {
           let selected = selectedTranscript(result)
           for expectation in item.protectedExpectations {
-            let source = result.metricHypothesisSlices.first(where: {
-              $0.language == expectation.language
-            })?.text ?? selected
-            if matches(expectation, in: source) {
+            if matches(expectation, in: selected) {
               passed += 1
             } else {
               failed += 1

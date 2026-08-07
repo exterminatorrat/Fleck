@@ -399,6 +399,44 @@ struct EvaluationReportTests {
   #expect(failing.gateOutcomes.contains { $0.id == "energy" && !$0.passed })
 }
 
+@Test func protectedGatesUseSelectedTranscriptNotMetricSlices() throws {
+  let corpus = admitted(try reportCorpus())
+  var run = try reportRun()
+  run.syntheticSample = false
+  run.releaseEvidence = true
+  for index in run.results.indices where run.results[index].caseID == "english-developer-command" {
+    run.results[index].cleanedResult = "Please run swift test."
+  }
+  let report = try EvaluationReportBuilder.build(
+    corpus: corpus,
+    run: run,
+    gate: reportGate()
+  )
+  guard let englishProtected = report.protectedExpectations.first(where: {
+    $0.scope == .english
+  }) else {
+    Issue.record("Missing English protected expectation summary")
+    return
+  }
+  #expect(englishProtected.failed == 12)
+  #expect(englishProtected.numberFailures == 2)
+  #expect(englishProtected.negationFailures == 2)
+  guard let standardProtected = report.standardComparison.metrics.first(where: {
+    $0.scope == .english && $0.metric == .protectedTermAccuracy
+  }) else {
+    Issue.record("Missing English Standard protected accuracy")
+    return
+  }
+  #expect(standardProtected.candidateValue == 0)
+  #expect(standardProtected.improvement == -1)
+  #expect(report.gateOutcomes.contains {
+    $0.id == "protected-terms" && !$0.passed
+  })
+  #expect(report.gateOutcomes.contains {
+    $0.id == "standard-improvement-english" && !$0.passed
+  })
+}
+
 @Test func unverifiedFailureOrCancellationFailsReleaseGate() throws {
   let corpus = admitted(try reportCorpus())
   var run = try reportRun()
