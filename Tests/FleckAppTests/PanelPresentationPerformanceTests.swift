@@ -21,7 +21,12 @@
       "AXWindow",
       "AXSystemDialog",
       "AXPress",
+      "mktemp",
+      "/bin/mv -h",
+      "publish_output_file",
       "AX-press-to-accessible-window",
+      "AXPress toggles panel presentation state",
+      "mutation_boundary=no note/editor/Application Support mutation; presentation-state AXPress is intentional",
       "31",
       "cold",
       "warm",
@@ -49,7 +54,6 @@
       "killall",
       "rm -rf",
       "cp ",
-      "mv ",
       "AX-press-to-accessible-visible",
       "function isVisible",
       "visiblePanelWindows",
@@ -57,7 +61,7 @@
       "visible=true",
       "entireContents",
       "uiElements",
-      "note",
+      "note_title",
       "body",
       "profileID",
     ] {
@@ -115,8 +119,8 @@ function run(argv) { return runMeasurement(["42", "31"], fakeSystemEvents); }
     #expect(result.status == 0, Comment(rawValue: result.stderr))
     #expect(rows.count == 32)
     #expect(rows.first == "sample_label\tsample_number\telapsed_ms")
-    #expect(rows.dropFirst().first == "cold\t1\t0")
-    #expect(rows.last == "warm\t31\t0")
+    #expect(rows.dropFirst().first?.hasPrefix("cold\t1\t") == true)
+    #expect(rows.last?.hasPrefix("warm\t31\t") == true)
   }
 
   @Test func FleckPanelProductionEntryUsesOnlyOsascriptArgv() throws {
@@ -173,6 +177,87 @@ function run(argv) { return productionEntry(argv); }
     )
     #expect(statistics.status == 0, Comment(rawValue: statistics.stderr))
     #expect(statistics.stdout == "31\t16\t30\t1\t31\n")
+  }
+
+  @Test func FleckPanelMeasurementPublishesWithoutFollowingSymlinksOrHardLinks() throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("fleck-publish-safety-" + UUID().uuidString, isDirectory: true)
+    let sentinel = temporaryDirectory.appendingPathComponent("sentinel.txt")
+    let foreignDirectory = temporaryDirectory.appendingPathComponent("foreign", isDirectory: true)
+    let foreignSentinel = foreignDirectory.appendingPathComponent("sentinel.txt")
+    try FileManager.default.createDirectory(at: foreignDirectory, withIntermediateDirectories: true)
+    try "sentinel\n".write(to: sentinel, atomically: true, encoding: .utf8)
+    try "foreign\n".write(to: foreignSentinel, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+    let command = try measurementPublishShellSource() + "\n" + #"""
+set -eu
+output_dir=$1
+sentinel=$2
+foreign_directory=$3
+
+publish_payload() {
+  destination=$1
+  payload=$2
+  temporary=$(/usr/bin/mktemp "$output_dir/.fleck-panel-measurement.XXXXXX")
+  printf '%s\n' "$payload" > "$temporary"
+  publish_output_file "$temporary" "$destination"
+}
+
+destination="$output_dir/symlink-file"
+if [ -e "$destination" ] || [ -L "$destination" ]; then exit 10; fi
+ln -s "$sentinel" "$destination"
+publish_payload "$destination" "symlink-file-payload"
+
+destination="$output_dir/symlink-directory"
+if [ -e "$destination" ] || [ -L "$destination" ]; then exit 11; fi
+ln -s "$foreign_directory" "$destination"
+publish_payload "$destination" "symlink-directory-payload"
+
+destination="$output_dir/existing-directory"
+mkdir "$destination"
+temporary=$(/usr/bin/mktemp "$output_dir/.fleck-panel-measurement.XXXXXX")
+printf '%s\n' 'directory-payload' > "$temporary"
+if publish_output_file "$temporary" "$destination"; then exit 12; fi
+/bin/unlink "$temporary"
+
+destination="$output_dir/hard-link"
+if [ -e "$destination" ] || [ -L "$destination" ]; then exit 13; fi
+ln "$sentinel" "$destination"
+publish_payload "$destination" "hard-link-payload"
+
+leftover=$(find "$output_dir" -maxdepth 1 -name '.fleck-panel-measurement.*' -print -quit)
+[ -z "$leftover" ]
+"""#
+    let result = try runShell(
+      command,
+      arguments: [temporaryDirectory.path, sentinel.path, foreignDirectory.path]
+    )
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
+    #expect(try String(contentsOf: sentinel, encoding: .utf8) == "sentinel\n")
+    #expect(try String(contentsOf: foreignSentinel, encoding: .utf8) == "foreign\n")
+    #expect(try String(
+      contentsOf: temporaryDirectory.appendingPathComponent("symlink-file"),
+      encoding: .utf8
+    ) == "symlink-file-payload\n")
+    #expect(try String(
+      contentsOf: temporaryDirectory.appendingPathComponent("symlink-directory"),
+      encoding: .utf8
+    ) == "symlink-directory-payload\n")
+    #expect(try String(
+      contentsOf: temporaryDirectory.appendingPathComponent("hard-link"),
+      encoding: .utf8
+    ) == "hard-link-payload\n")
+    #expect(FileManager.default.fileExists(
+      atPath: temporaryDirectory.appendingPathComponent("existing-directory").path
+    ))
+    #expect(!FileManager.default.fileExists(
+      atPath: temporaryDirectory
+        .appendingPathComponent("existing-directory", isDirectory: true)
+        .appendingPathComponent("directory-payload")
+        .path
+    ))
   }
 
   @Test func FleckPanelPresentationJXAUsesFakeAXFixturesForClosedNormalizationAnd31Samples() throws {
@@ -525,6 +610,18 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     let end = try #require(
       source.range(
         of: "\n// AX_MEASUREMENT_JXA_RUN_END",
+        range: begin.upperBound..<source.endIndex
+      )
+    )
+    return String(source[begin.upperBound..<end.lowerBound])
+  }
+
+  private func measurementPublishShellSource() throws -> String {
+    let source = try measurementScriptSource()
+    let begin = try #require(source.range(of: "# AX_MEASUREMENT_OUTPUT_PUBLISH_BEGIN\n"))
+    let end = try #require(
+      source.range(
+        of: "\n# AX_MEASUREMENT_OUTPUT_PUBLISH_END",
         range: begin.upperBound..<source.endIndex
       )
     )

@@ -754,7 +754,12 @@ p50/p95/min/max and metadata, and fails closed on missing, ambiguous, or
 timed-out states. A failed AX transition receives a bounded best-effort close
 attempt without masking the original error. This is not pixel-complete or
 human click latency. It does not use app activation/log records, launch or
-signal Fleck, or read/write Fleck Application Support or editor data.
+signal Fleck, or read/write Fleck Application Support or editor data. It
+intentionally toggles panel presentation state with AXPress; it does not
+terminate, rebuild, or otherwise control Fleck's process lifecycle, and does
+not mutate note/editor or Application Support data. Each payload is built in a
+same-directory temporary regular file and atomically published with `mv -h`;
+directory destinations fail closed.
 
 The PID guard checks only the packaged executable path shape
 `Fleck.app/Contents/MacOS/Fleck`; it does not prove the process is the accepted

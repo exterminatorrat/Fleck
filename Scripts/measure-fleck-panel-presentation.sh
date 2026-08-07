@@ -62,14 +62,44 @@ esac
 raw_samples="$output_dir/ax-press-to-accessible-window-raw.tsv"
 summary="$output_dir/ax-press-to-accessible-window-summary.txt"
 metadata="$output_dir/ax-press-to-accessible-window-metadata.txt"
+
+# AX_MEASUREMENT_OUTPUT_PUBLISH_BEGIN
+validate_output_destination() {
+  destination=$1
+  if [ -d "$destination" ] && [ ! -L "$destination" ]; then
+    printf '%s\n' 'error: refusing directory output destination' >&2
+    return 1
+  fi
+}
+
+publish_output_file() {
+  source_file=$1
+  destination=$2
+  if [ ! -f "$source_file" ] || [ -L "$source_file" ]; then
+    printf '%s\n' 'error: output payload must be one regular non-symlink file' >&2
+    return 1
+  fi
+  if ! validate_output_destination "$destination"; then
+    return 1
+  fi
+  if ! /bin/mv -h "$source_file" "$destination"; then
+    printf '%s\n' 'error: atomic output publication failed' >&2
+    return 1
+  fi
+}
+# AX_MEASUREMENT_OUTPUT_PUBLISH_END
+
 for output_file in "$raw_samples" "$summary" "$metadata"; do
   if [ -L "$output_file" ]; then
     printf 'error: refusing symlinked output: %s\n' "$output_file" >&2
     exit 2
   fi
+  if ! validate_output_destination "$output_file"; then
+    exit 2
+  fi
 done
 
-for required_command in awk date osascript ps sort uname; do
+for required_command in awk date mktemp osascript ps sort uname; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     printf 'error: required command not found: %s\n' "$required_command" >&2
     exit 2
@@ -117,6 +147,37 @@ fi
 
 readonly total_samples=31
 readonly warm_sample_count=30
+
+raw_temp=
+summary_temp=
+metadata_temp=
+
+cleanup_output_temp() {
+  temp_file=$1
+  if [ -n "$temp_file" ] && { [ -f "$temp_file" ] || [ -L "$temp_file" ]; }; then
+    /bin/unlink "$temp_file" 2>/dev/null || :
+  fi
+}
+
+cleanup_temporary_files() {
+  exit_status=$?
+  trap - EXIT
+  cleanup_output_temp "$raw_temp"
+  cleanup_output_temp "$summary_temp"
+  cleanup_output_temp "$metadata_temp"
+  exit "$exit_status"
+}
+
+create_output_temp() {
+  temp_file=$(/usr/bin/mktemp "$output_dir/.fleck-panel-measurement.XXXXXX") || return 1
+  if [ ! -f "$temp_file" ] || [ -L "$temp_file" ]; then
+    /bin/unlink "$temp_file" 2>/dev/null || :
+    return 1
+  fi
+  printf '%s\n' "$temp_file"
+}
+
+trap cleanup_temporary_files EXIT
 
 measurement_output=$(
   /usr/bin/osascript -l JavaScript - "$profile_pid" "$total_samples" <<'JXA'
@@ -375,9 +436,13 @@ if ! printf '%s\n' "$measurement_output" | awk -F '\t' -v expected="$total_sampl
   exit 2
 fi
 
-printf '%s\n' "$measurement_output" > "$raw_samples"
+raw_temp=$(create_output_temp) || {
+  printf '%s\n' 'error: could not create a raw-sample temporary file' >&2
+  exit 2
+}
+printf '%s\n' "$measurement_output" > "$raw_temp"
 
-stats=$(awk -F '\t' 'NR > 1 { print $3 }' "$raw_samples" | sort -n | awk -v expected="$total_samples" '
+stats=$(awk -F '\t' 'NR > 1 { print $3 }' "$raw_temp" | sort -n | awk -v expected="$total_samples" '
   {
     values[NR] = $1
     minimum = NR == 1 || $1 < minimum ? $1 : minimum
@@ -400,6 +465,10 @@ if [ "$#" -ne 5 ] || [ "$1" -ne "$total_samples" ]; then
   exit 2
 fi
 
+summary_temp=$(create_output_temp) || {
+  printf '%s\n' 'error: could not create a summary temporary file' >&2
+  exit 2
+}
 {
   printf '%s\n' 'Fleck AX-press-to-accessible-window measurement summary'
   printf 'sample_count=%s\n' "$1"
@@ -411,8 +480,12 @@ fi
   printf 'max_ms=%s\n' "$5"
   printf '%s\n' 'measurement_boundary=AX-press-to-accessible-window'
   printf '%s\n' 'automation_boundary=not pixel-complete and not human click latency'
-} > "$summary"
+} > "$summary_temp"
 
+metadata_temp=$(create_output_temp) || {
+  printf '%s\n' 'error: could not create metadata temporary file' >&2
+  exit 2
+}
 {
   printf 'captured_at_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   printf '%s\n' 'measurement_name=AX-press-to-accessible-window'
@@ -432,8 +505,30 @@ fi
   printf '%s\n' \
     'data_boundary=no editor descendants or user data; no Fleck Application Support access'
   printf '%s\n' \
-    'process_boundary=already-running Fleck only; PID guard checks packaged executable path shape, not exact build identity; no launch, termination, rebuild, signal, or process mutation'
-} > "$metadata"
+    'process_boundary=already-running Fleck only; AXPress toggles panel presentation state; no launch, termination, rebuild, signal, or process-lifecycle control'
+  printf '%s\n' \
+    'mutation_boundary=no note/editor/Application Support mutation; presentation-state AXPress is intentional'
+} > "$metadata_temp"
+
+if ! validate_output_destination "$raw_samples" || \
+  ! validate_output_destination "$summary" || \
+  ! validate_output_destination "$metadata"; then
+  printf '%s\n' 'error: refusing to publish into a directory output destination' >&2
+  exit 2
+fi
+
+if ! publish_output_file "$raw_temp" "$raw_samples"; then
+  exit 2
+fi
+raw_temp=
+if ! publish_output_file "$summary_temp" "$summary"; then
+  exit 2
+fi
+summary_temp=
+if ! publish_output_file "$metadata_temp" "$metadata"; then
+  exit 2
+fi
+metadata_temp=
 
 printf 'Wrote 1 cold and %s warm AX-press-to-accessible-window samples to %s\n' \
   "$warm_sample_count" "$output_dir"

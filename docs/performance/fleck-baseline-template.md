@@ -91,7 +91,11 @@ wait for the first matching `AXWindow` with subrole `AXSystemDialog` or
 `AXDialog` and sane dimensions. Missing, ambiguous, or timed-out states fail
 closed; a failed AX transition receives a bounded best-effort close attempt
 without replacing the original error. It does not launch, terminate, rebuild,
-signal, or otherwise mutate Fleck.
+signal, or otherwise control Fleck's process lifecycle. It intentionally toggles
+panel presentation state with AXPress, but does not mutate note/editor or Fleck
+Application Support data. Each payload is built in a same-directory temporary
+regular file and atomically published with `mv -h`; directory destinations fail
+closed.
 
 ```sh
 bash -n Scripts/measure-fleck-panel-presentation.sh
