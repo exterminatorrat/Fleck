@@ -315,13 +315,12 @@ function collectSamples(process, menuExtra, count, clock, sleep, timeoutMs) {
 // AX_MEASUREMENT_JXA_END
 
 // AX_MEASUREMENT_JXA_RUN_BEGIN
-function run(argv, systemEventsOverride) {
+function runMeasurement(argv, systemEvents) {
   var targetPid = Number(argv[0]);
   var count = Number(argv[1]);
   if (!isFinite(targetPid) || targetPid < 1 || targetPid !== Math.floor(targetPid)) {
     throw new Error("invalid Fleck PID");
   }
-  var systemEvents = systemEventsOverride || Application("System Events");
   var process = findExactFleckProcess(systemEvents, targetPid);
   var menuExtra = findUniqueMenuExtra(process);
   var samples = collectSamples(
@@ -343,6 +342,10 @@ function run(argv, systemEventsOverride) {
     );
   }
   return lines.join("\n");
+}
+
+function run(argv) {
+  return runMeasurement(argv, Application("System Events"));
 }
 // AX_MEASUREMENT_JXA_RUN_END
 JXA

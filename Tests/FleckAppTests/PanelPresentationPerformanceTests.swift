@@ -76,12 +76,9 @@
     let source = try measurementScriptSource()
     let jxa = try measurementJXASource(from: source)
     let run = try measurementRunJXASource(from: source)
-    let productionRun = run.replacingOccurrences(
-      of: "function run(argv, systemEventsOverride)",
-      with: "function productionRun(argv, systemEventsOverride)",
-      options: [],
-      range: run.startIndex..<run.endIndex
-    )
+    let helperStart = try #require(run.range(of: "function runMeasurement(argv, systemEvents)"))
+    let productionHelper = String(run[helperStart.lowerBound..<run.endIndex])
+      .components(separatedBy: "\nfunction run(argv)").first ?? ""
     let fixture = #"""
 var state = { open: false, actions: 0 };
 var panel = {
@@ -110,9 +107,9 @@ var fakeProcess = {
 var fakeSystemEvents = {
   applicationProcesses: function() { return [fakeProcess]; }
 };
-function run(argv) { return productionRun(["42", "31"], fakeSystemEvents); }
+function run(argv) { return runMeasurement(["42", "31"], fakeSystemEvents); }
 """#
-    let result = try runJXA(jxa + "\n" + productionRun + "\n" + fixture)
+    let result = try runJXA(jxa + "\n" + productionHelper + "\n" + fixture)
     let rows = result.stdout.split(whereSeparator: \.isNewline)
 
     #expect(result.status == 0, Comment(rawValue: result.stderr))
@@ -120,6 +117,32 @@ function run(argv) { return productionRun(["42", "31"], fakeSystemEvents); }
     #expect(rows.first == "sample_label\tsample_number\telapsed_ms")
     #expect(rows.dropFirst().first == "cold\t1\t0")
     #expect(rows.last == "warm\t31\t0")
+  }
+
+  @Test func FleckPanelProductionEntryUsesOnlyOsascriptArgv() throws {
+    let run = try measurementRunJXASource(from: measurementScriptSource())
+
+    #expect(run.contains("function run(argv)"))
+    #expect(!run.contains("function run(argv, systemEventsOverride)"))
+    #expect(!run.contains("systemEventsOverride"))
+
+    let entryStart = try #require(run.range(of: "function run(argv)"))
+    let productionEntry = String(run[entryStart.lowerBound..<run.endIndex])
+      .replacingOccurrences(of: "function run(argv)", with: "function productionEntry(argv)")
+      .replacingOccurrences(of: "Application(\"System Events\")", with: "fakeSystemEvents")
+    let fixture = #"""
+var fakeSystemEvents = {};
+function runMeasurement(argv, systemEvents) {
+  if (argv.length !== 2 || argv[0] !== "one" || argv[1] !== "two") throw new Error("argv mismatch");
+  if (systemEvents !== fakeSystemEvents) throw new Error("hidden context was used");
+  return "production-entry-used-only-argv";
+}
+function run(argv) { return productionEntry(argv); }
+"""#
+    let result = try runJXA(productionEntry + "\n" + fixture, arguments: ["one", "two"])
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
+    #expect(result.stdout.contains("production-entry-used-only-argv"))
   }
 
   @Test func FleckPanelPresentationJXAUsesFakeAXFixturesForClosedNormalizationAnd31Samples() throws {
@@ -363,10 +386,10 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     let stderr: String
   }
 
-  private func runJXA(_ source: String) throws -> ProcessResult {
+  private func runJXA(_ source: String, arguments: [String] = []) throws -> ProcessResult {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    process.arguments = ["-l", "JavaScript", "-"]
+    process.arguments = ["-l", "JavaScript", "-"] + arguments
     let input = Pipe()
     let output = Pipe()
     let error = Pipe()
