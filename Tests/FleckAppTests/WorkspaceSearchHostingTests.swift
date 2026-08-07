@@ -7,6 +7,67 @@ import Testing
 @testable import FleckApp
 
 @Test @MainActor
+func WorkspaceSearchHostingHighlightsVisibleTitleAndSnippetMatchesWithInheritedAccent()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-highlight-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  let accentHex = "#E64A19"
+  state.updatePreferences { $0.accentHex = accentHex }
+  state.updateSelected(title: "Café cafe CAFE — untouched", body: "No body match")
+  let titleNoteID = try #require(state.selectedNote?.id)
+
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  searchController.present()
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery("cafe", in: state.workspace.notes)
+  await settleWorkspaceSearchHost(host)
+
+  #expect(searchController.results.map(\.noteID) == [titleNoteID])
+  let initialResult = try #require(searchController.results.first)
+  #expect(initialResult.displayTitle == "Café cafe CAFE — untouched")
+  #expect(initialResult.snippet == initialResult.displayTitle)
+
+  state.updatePreferences { $0.accentHex = "#007AFF" }
+  await settleWorkspaceSearchHost(host)
+  #expect(searchController.results.first?.displayTitle == initialResult.displayTitle)
+  #expect(searchController.results.first?.snippet == initialResult.snippet)
+  #expect(state.selectedNote?.title == "Café cafe CAFE — untouched")
+  #expect(state.selectedNote?.body == "No body match")
+
+  searchController.setQuery("   \n", in: state.workspace.notes)
+  await settleWorkspaceSearchHost(host)
+  #expect(searchController.results.isEmpty)
+
+  searchController.dismiss()
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
 func WorkspaceSearchHostingRestoresTheRealEditorStateAfterEscape() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent("workspace-search-\(UUID().uuidString)", isDirectory: true)

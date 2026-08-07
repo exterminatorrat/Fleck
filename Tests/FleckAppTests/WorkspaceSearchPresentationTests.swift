@@ -1,8 +1,58 @@
 import Foundation
 import FleckCore
+import SwiftUI
 import Testing
 
 @testable import FleckApp
+
+@Test
+func WorkspaceSearchHighlightedTextMatchesTitleAndSnippetRuns() {
+  let accent = Color(red: 0.9, green: 0.2, blue: 0.1)
+  let titleSource = "Café cafe CAFE — untouched"
+  let title = workspaceSearchHighlightedAttributedString(
+    titleSource,
+    query: "cafe",
+    accent: accent
+  )
+  #expect(String(title.characters) == titleSource)
+  #expect(highlightedSearchSubstrings(title, accent: accent) == ["Café", "cafe", "CAFE"])
+
+  let snippetSource = "prefix cafe, Café, CAFE suffix"
+  let snippet = workspaceSearchHighlightedAttributedString(
+    snippetSource,
+    query: "cafe",
+    accent: accent
+  )
+  #expect(String(snippet.characters) == snippetSource)
+  #expect(highlightedSearchSubstrings(snippet, accent: accent) == ["cafe", "Café", "CAFE"])
+
+  let unicodeSource = "📝 Café cafe"
+  let unicode = workspaceSearchHighlightedAttributedString(
+    unicodeSource,
+    query: "CAFE",
+    accent: accent
+  )
+  #expect(String(unicode.characters) == unicodeSource)
+  #expect(highlightedSearchSubstrings(unicode, accent: accent) == ["Café", "cafe"])
+
+  let whitespace = workspaceSearchHighlightedAttributedString(
+    snippetSource,
+    query: " \n\t",
+    accent: accent
+  )
+  #expect(String(whitespace.characters) == snippetSource)
+  #expect(highlightedSearchSubstrings(whitespace, accent: accent).isEmpty)
+
+  let updatedAccent = Color(red: 0.0, green: 0.48, blue: 1.0)
+  let updated = workspaceSearchHighlightedAttributedString(
+    titleSource,
+    query: "CAFE",
+    accent: updatedAccent
+  )
+  #expect(String(updated.characters) == titleSource)
+  #expect(highlightedSearchSubstrings(updated, accent: updatedAccent) == ["Café", "cafe", "CAFE"])
+  #expect(highlightedSearchSubstrings(updated, accent: accent).isEmpty)
+}
 
 @Test @MainActor
 func WorkspaceSearchPresentationRejectsWhitespaceAndKeepsSelectionOutOfRecomputation() async {
@@ -229,6 +279,16 @@ private func workspaceSearchTestResult(_ note: Note) -> WorkspaceSearchResult {
     match: WorkspaceSearchMatch(field: .title, location: 0, length: 1),
     score: 1
   )
+}
+
+private func highlightedSearchSubstrings(
+  _ value: AttributedString,
+  accent: Color
+) -> [String] {
+  value.runs.compactMap { run in
+    guard run.foregroundColor == accent else { return nil }
+    return String(value[run.range].characters)
+  }
 }
 
 @MainActor

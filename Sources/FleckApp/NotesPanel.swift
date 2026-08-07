@@ -349,6 +349,7 @@
           WorkspaceSearchView(
             controller: searchController,
             notes: appState.workspace.notes,
+            accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
             currentNoteIDs: {
               Set(appState.workspace.notes.map(\.id))
             },

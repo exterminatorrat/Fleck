@@ -4,6 +4,65 @@
   import FleckCore
   import SwiftUI
 
+  func workspaceSearchHighlightedAttributedString(
+    _ text: String,
+    query: String,
+    accent: Color
+  ) -> AttributedString {
+    let ranges = workspaceSearchHighlightRanges(in: text, query: query)
+    guard !ranges.isEmpty else { return AttributedString(text) }
+
+    var highlighted = AttributedString()
+    var cursor = text.startIndex
+    for range in ranges {
+      if cursor < range.lowerBound {
+        highlighted.append(AttributedString(String(text[cursor..<range.lowerBound])))
+      }
+      var match = AttributedString(String(text[range]))
+      match.foregroundColor = accent
+      highlighted.append(match)
+      cursor = range.upperBound
+    }
+    if cursor < text.endIndex {
+      highlighted.append(AttributedString(String(text[cursor...])))
+    }
+    return highlighted
+  }
+
+  private func workspaceSearchHighlightRanges(
+    in text: String,
+    query: String
+  ) -> [Range<String.Index>] {
+    let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !query.isEmpty, !text.isEmpty else { return [] }
+
+    let source = text as NSString
+    var searchRange = NSRange(location: 0, length: source.length)
+    var ranges: [Range<String.Index>] = []
+    while searchRange.length > 0 {
+      let match = source.range(
+        of: query,
+        options: [.caseInsensitive, .diacriticInsensitive],
+        range: searchRange,
+        locale: Locale(identifier: "en_US_POSIX")
+      )
+      guard match.location != NSNotFound,
+        match.length > 0,
+        let range = Range(match, in: text)
+      else {
+        break
+      }
+      ranges.append(range)
+      let nextLocation = match.location + match.length
+      guard nextLocation < source.length else { break }
+      searchRange = NSRange(
+        location: nextLocation,
+        length: source.length - nextLocation
+      )
+    }
+    return ranges
+  }
+
   @MainActor
   final class WorkspaceSearchController: ObservableObject {
     typealias SearchOperation = @MainActor (
@@ -476,6 +535,7 @@
   struct WorkspaceSearchView: View {
     @ObservedObject var controller: WorkspaceSearchController
     let notes: [Note]
+    let accent: Color
     let currentNoteIDs: () -> Set<UUID>
     let onActivate: (UUID) -> Void
     @FocusState private var isQueryFocused: Bool
@@ -582,10 +642,22 @@
                       )
                     } label: {
                       VStack(alignment: .leading, spacing: 2) {
-                        Text(result.displayTitle)
+                        Text(
+                          workspaceSearchHighlightedAttributedString(
+                            result.displayTitle,
+                            query: controller.query,
+                            accent: accent
+                          )
+                        )
                           .font(.body.weight(.semibold))
                           .lineLimit(1)
-                        Text(result.snippet)
+                        Text(
+                          workspaceSearchHighlightedAttributedString(
+                            result.snippet,
+                            query: controller.query,
+                            accent: accent
+                          )
+                        )
                           .font(.caption)
                           .foregroundStyle(.secondary)
                           .lineLimit(2)

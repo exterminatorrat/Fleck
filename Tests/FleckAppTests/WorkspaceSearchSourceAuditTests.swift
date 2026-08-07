@@ -21,6 +21,7 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
   for required in [
     "WorkspaceSearchView(",
     "searchController.present(for: appState.workspace.selectedNoteID)",
+    "accent: Color(hex: appState.preferences.accentHex) ?? .accentColor",
     ".keyboardShortcut(\"f\", modifiers: .command)",
     ".accessibilityLabel(\"Search notes\")",
     ".help(\"Search notes",
@@ -48,6 +49,15 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
   ] {
     #expect(searchView.contains(required), Comment(rawValue: required))
   }
+  #expect(
+    searchView.components(
+      separatedBy: "Text(\n                          workspaceSearchHighlightedAttributedString("
+    ).count - 1 == 2
+  )
+  #expect(searchView.components(separatedBy: "accent: accent").count - 1 == 2)
+  #expect(
+    searchView.contains(#".accessibilityLabel("\(result.displayTitle), \(result.snippet)")"#)
+  )
   #expect(!searchView.contains(".sheet("))
   #expect(!searchView.contains("NativeRichTextEditor("))
   #expect(!searchView.contains("WorkspaceSearchKeyResponder"))
