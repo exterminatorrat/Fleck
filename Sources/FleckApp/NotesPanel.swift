@@ -431,7 +431,7 @@
               Set(appState.workspace.notes.map(\.id))
             },
             onActivate: { noteID in
-              guard isNoteVisible(noteID), activateNoteAndScope(noteID) else { return }
+              guard activateNoteAndScope(noteID) else { return }
             }
           )
           .zIndex(2)

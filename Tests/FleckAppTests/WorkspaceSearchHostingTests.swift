@@ -565,6 +565,202 @@ func WorkspaceSearchHostingKeepsResultsScrollableInProductionOverlay()
   await runtime.shutdown()
 }
 
+@Test @MainActor
+func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-folder-activation-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let work = try Folder(
+    id: UUID(uuidString: "00000000-0000-0000-0000-0000000000b1")!,
+    name: "Work"
+  )
+  let unfiled = Note(
+    id: UUID(uuidString: "00000000-0000-0000-0000-0000000000b2")!,
+    title: "Unfiled note",
+    body: "Unfiled body"
+  )
+  var target = Note(
+    id: UUID(uuidString: "00000000-0000-0000-0000-0000000000b3")!,
+    title: "Named folder target",
+    body: "Folder body"
+  )
+  target.folderID = work.id
+
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _, _ in .committed })
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(
+    notes: [unfiled, target],
+    selectedNoteID: unfiled.id,
+    folders: [work]
+  )
+
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      editorCommands: commands,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let unfiledEditor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == unfiled.body }
+  )
+  #expect(window.makeFirstResponder(unfiledEditor))
+  commands.textView?.setSelectedRange(NSRange(location: 0, length: 0))
+  commands.refreshFormattingState()
+
+  searchController.present(for: unfiled.id)
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery(target.title, in: state.workspace.notes)
+  await settleWorkspaceSearchHost(host)
+  #expect(searchController.results.map(\.noteID) == [target.id])
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  #expect(window.makeFirstResponder(queryField))
+  let returnEvent = try #require(
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      characters: "\r",
+      charactersIgnoringModifiers: "\r",
+      isARepeat: false,
+      keyCode: 36
+    )
+  )
+  window.sendEvent(returnEvent)
+  await settleWorkspaceSearchHost(host)
+
+  #expect(state.workspace.selectedNoteID == target.id)
+  #expect(state.folderID(for: target.id) == work.id)
+  #expect(!searchController.isPresented)
+  let targetEditor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == target.body }
+  )
+  #expect(commands.textView === targetEditor)
+  #expect(window.firstResponder === targetEditor)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingDismissPreservesFocusScopeWorkspaceAndSaveGeneration()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-dismiss-state-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let work = try Folder(id: UUID(), name: "Work")
+  let note = Note(title: "Focus note", body: "Keep this body", folderID: work.id)
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _, _ in .committed })
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [note], selectedNoteID: note.id, folders: [work])
+
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      editorCommands: commands,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let editor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == note.body }
+  )
+  #expect(window.makeFirstResponder(editor))
+  let bodySelection = NSRange(location: 2, length: 4)
+  editor.setSelectedRange(bodySelection)
+  editor.typingAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+  commands.refreshFormattingState()
+  let expectedTypingAttributes = NSDictionary(dictionary: editor.typingAttributes)
+  let expectedWorkspace = state.workspace
+  let expectedGeneration = state.persistenceGeneration
+  let expectedScope = state.folderScopeForSelectedNote()
+
+  searchController.present(for: note.id)
+  await settleWorkspaceSearchHost(host)
+  searchController.dismiss()
+  await settleWorkspaceSearchHost(host)
+
+  #expect(state.workspace == expectedWorkspace)
+  #expect(state.persistenceGeneration == expectedGeneration)
+  #expect(state.folderScopeForSelectedNote() == expectedScope)
+  #expect(state.workspace.selectedNoteID == note.id)
+  #expect(commands.textView === editor)
+  #expect(editor.selectedRange() == bodySelection)
+  #expect(NSDictionary(dictionary: editor.typingAttributes).isEqual(to: expectedTypingAttributes))
+  #expect(window.firstResponder === editor)
+
+  let titleField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.stringValue == note.title && $0.frame.width > 200 }
+  )
+  #expect(window.makeFirstResponder(titleField))
+  let titleEditor = try #require(window.firstResponder as? NSTextView)
+  let titleSelection = NSRange(location: 1, length: 3)
+  titleEditor.setSelectedRange(titleSelection)
+  let expectedTitle = titleField.stringValue
+
+  searchController.present(for: note.id)
+  await settleWorkspaceSearchHost(host)
+  searchController.dismiss()
+  await settleWorkspaceSearchHost(host)
+
+  #expect(state.workspace == expectedWorkspace)
+  #expect(state.persistenceGeneration == expectedGeneration)
+  #expect(state.folderScopeForSelectedNote() == expectedScope)
+  #expect(titleField.stringValue == expectedTitle)
+  let restoredTitleEditor = try #require(window.firstResponder as? NSTextView)
+  #expect(restoredTitleEditor === titleEditor)
+  #expect(restoredTitleEditor.selectedRange() == titleSelection)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
 @MainActor
 private func hostedWorkspaceSearchDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T? {
   if let match = view as? T { return match }
