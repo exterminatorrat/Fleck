@@ -1010,26 +1010,33 @@
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .onChange(of: isEditorVisible) { _, isVisible in
         if isVisible {
-          guard restoreEditorFocusAfterHide else { return }
+          let restoreBodyFocus = restoreEditorFocusAfterHide
           restoreEditorFocusAfterHide = false
           DispatchQueue.main.async {
             guard self.isEditorVisible,
               let textView = self.editorCommands.textView,
               let window = textView.window
             else { return }
-            _ = window.makeFirstResponder(textView)
+            self.editorCommands.refreshFormattingState()
+            if restoreBodyFocus {
+              _ = window.makeFirstResponder(textView)
+            }
           }
         } else {
-          guard let textView = editorCommands.textView,
-            let window = textView.window
-          else {
-            restoreEditorFocusAfterHide = false
-            return
-          }
-          restoreEditorFocusAfterHide = window.firstResponder === textView
-          _ = window.makeFirstResponder(nil)
+          let textView = editorCommands.textView
+          restoreEditorFocusAfterHide = textView?.window?.firstResponder === textView
+          neutralizeHiddenEditor()
         }
       }
+    }
+
+    private func neutralizeHiddenEditor() {
+      let textView = editorCommands.textView
+      editorCommands.cancelFocusedDictation()
+      if let window = textView?.window {
+        _ = window.makeFirstResponder(nil)
+      }
+      editorCommands.textView = nil
     }
 
     @ViewBuilder
@@ -1040,6 +1047,7 @@
             FormattingBar(
               commands: editorCommands,
               dictationRuntime: dictationRuntime,
+              isEditorVisible: isEditorVisible,
               onDelete: {
                 if let note = visibleSelectedNote {
                   requestDeletion(note)
@@ -1080,10 +1088,50 @@
             automaticLists: appState.preferences.automaticLists,
             commands: editorCommands
           )
+          .background(
+            EditorCommandVisibilityBoundary(
+              appState: appState,
+              dictationRuntime: dictationRuntime,
+              commands: editorCommands,
+              isVisible: isEditorVisible
+            )
+            .frame(width: 0, height: 0)
+          )
           .id(note.id)
           .padding(.vertical, 10)
         }
       }
+    }
+  }
+
+  private struct EditorCommandVisibilityBoundary: NSViewRepresentable {
+    @ObservedObject var appState: AppState
+    @ObservedObject var dictationRuntime: DictationRuntime
+    let commands: EditorCommands
+    let isVisible: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+      NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+      context.coordinator.isVisible = isVisible
+      guard !isVisible else { return }
+      DispatchQueue.main.async {
+        guard !context.coordinator.isVisible else { return }
+        let textView = commands.textView
+        commands.cancelFocusedDictation()
+        if let window = textView?.window {
+          _ = window.makeFirstResponder(nil)
+        }
+        commands.textView = nil
+      }
+    }
+
+    final class Coordinator {
+      var isVisible = true
     }
   }
 
@@ -1523,6 +1571,7 @@
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var commands: EditorCommands
     @ObservedObject var dictationRuntime: DictationRuntime
+    let isEditorVisible: Bool
     let onDelete: () -> Void
     @State private var fontSizeText = ""
     @FocusState private var isFontSizeFocused: Bool
@@ -1534,6 +1583,7 @@
         HStack(spacing: 8) {
         Menu {
           Button("Cancel Dictation", role: .destructive) {
+            guard isEditorVisible else { return }
             Task { await dictationRuntime.cancel() }
           }
           .disabled(!dictationRuntime.canCancel)
@@ -1543,16 +1593,20 @@
             isActive: dictationRuntime.isListening
           )
         } primaryAction: {
-          guard dictationRuntime.toolbarPresentation.primaryAction != nil else { return }
+          guard isEditorVisible,
+            dictationRuntime.toolbarPresentation.primaryAction != nil
+          else { return }
           Task { await dictationRuntime.toggle() }
         }
         .accessibilityLabel(dictationRuntime.microphoneHelp)
         .accessibilityAction(named: Text("Cancel Dictation")) {
+          guard isEditorVisible else { return }
           Task { await dictationRuntime.cancel() }
         }
         .help(dictationRuntime.microphoneHelp)
         Divider().frame(height: 15)
         Button {
+          guard isEditorVisible else { return }
           commands.undo()
         } label: {
           ToolbarIconLabel(systemImage: "arrow.uturn.backward")
@@ -1560,6 +1614,7 @@
         .accessibilityLabel("Undo")
           .keyboardShortcut("z", modifiers: .command)
         Button {
+          guard isEditorVisible else { return }
           commands.redo()
         } label: {
           ToolbarIconLabel(systemImage: "arrow.uturn.forward")
@@ -1568,6 +1623,7 @@
           .keyboardShortcut("z", modifiers: [.command, .shift])
         Divider().frame(height: 15)
         Button {
+          guard isEditorVisible else { return }
           commands.toggleBold()
         } label: {
           ToolbarIconLabel(systemImage: "bold", isActive: commands.isBold)
@@ -1576,6 +1632,7 @@
           .keyboardShortcut("b", modifiers: .command)
           .accessibilityValue(commands.isBold ? "On" : "Off")
         Button {
+          guard isEditorVisible else { return }
           commands.toggleItalic()
         } label: {
           ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
@@ -1584,6 +1641,7 @@
           .keyboardShortcut("i", modifiers: .command)
           .accessibilityValue(commands.isItalic ? "On" : "Off")
         Button {
+          guard isEditorVisible else { return }
           commands.toggleUnderline()
         } label: {
           ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
@@ -1592,6 +1650,7 @@
           .keyboardShortcut("u", modifiers: .command)
           .accessibilityValue(commands.isUnderlined ? "On" : "Off")
         Button {
+          guard isEditorVisible else { return }
           commands.toggleStrikethrough()
         } label: {
           ToolbarIconLabel(systemImage: "strikethrough")
@@ -1600,6 +1659,7 @@
         Menu {
           ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
             Button {
+              guard isEditorVisible else { return }
               commands.applyFontFamily(family)
             } label: {
               HStack {
@@ -1633,6 +1693,7 @@
           .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
           .accessibilityHint("Enter a size from 1 through 512 points.")
         Button {
+          guard isEditorVisible else { return }
           isForegroundColorPickerPresented = true
         } label: {
           ToolbarIconLabel(systemImage: "paintpalette")
@@ -1657,6 +1718,10 @@
             ),
             resetTitle: "Automatic",
             onCommit: { hex in
+              guard isEditorVisible else {
+                isForegroundColorPickerPresented = false
+                return
+              }
               commands.applyForegroundColor(hex.flatMap { NSColor(hex: $0) })
               isForegroundColorPickerPresented = false
             },
@@ -1664,6 +1729,7 @@
           )
         }
         Button {
+          guard isEditorVisible else { return }
           isBackgroundColorPickerPresented = true
         } label: {
           ToolbarIconLabel(systemImage: "highlighter")
@@ -1689,6 +1755,10 @@
             resetTitle: "No Highlight",
             fallbackHex: "#FFD600",
             onCommit: { hex in
+              guard isEditorVisible else {
+                isBackgroundColorPickerPresented = false
+                return
+              }
               commands.applyBackgroundColor(hex.flatMap { NSColor(hex: $0) })
               isBackgroundColorPickerPresented = false
             },
@@ -1696,27 +1766,51 @@
           )
         }
         Menu {
-          Button("Disc (•)") { commands.applyList(.bullet(.disc)) }
-          Button("Circle (◦)") { commands.applyList(.bullet(.circle)) }
-          Button("Square (▪)") { commands.applyList(.bullet(.square)) }
-          Button("Dash (–)") { commands.applyList(.bullet(.dash)) }
+          Button("Disc (•)") {
+            guard isEditorVisible else { return }
+            commands.applyList(.bullet(.disc))
+          }
+          Button("Circle (◦)") {
+            guard isEditorVisible else { return }
+            commands.applyList(.bullet(.circle))
+          }
+          Button("Square (▪)") {
+            guard isEditorVisible else { return }
+            commands.applyList(.bullet(.square))
+          }
+          Button("Dash (–)") {
+            guard isEditorVisible else { return }
+            commands.applyList(.bullet(.dash))
+          }
         } label: {
           ToolbarIconLabel(systemImage: "list.bullet")
         } primaryAction: {
+          guard isEditorVisible else { return }
           commands.applyAutomaticList(.bullets)
         }
         .accessibilityLabel("Bullets")
         Menu {
-          Button("Decimal (1.)") { commands.applyList(.number(.decimal)) }
-          Button("Alphabetic (a.)") { commands.applyList(.number(.alphabetic)) }
-          Button("Roman (i.)") { commands.applyList(.number(.roman)) }
+          Button("Decimal (1.)") {
+            guard isEditorVisible else { return }
+            commands.applyList(.number(.decimal))
+          }
+          Button("Alphabetic (a.)") {
+            guard isEditorVisible else { return }
+            commands.applyList(.number(.alphabetic))
+          }
+          Button("Roman (i.)") {
+            guard isEditorVisible else { return }
+            commands.applyList(.number(.roman))
+          }
         } label: {
           ToolbarIconLabel(systemImage: "list.number")
         } primaryAction: {
+          guard isEditorVisible else { return }
           commands.applyAutomaticList(.numbers)
         }
         .accessibilityLabel("Numbers")
         Button {
+          guard isEditorVisible else { return }
           commands.applyList(.checklist)
         } label: {
           ToolbarIconLabel(systemImage: "checklist")
@@ -1724,6 +1818,7 @@
         .accessibilityLabel("Checklist")
         Spacer()
         Button(role: .destructive) {
+          guard isEditorVisible else { return }
           onDelete()
         } label: {
           ToolbarIconLabel(systemImage: "trash")
@@ -1740,7 +1835,9 @@
       }
       .frame(maxWidth: .infinity)
       .background(.thinMaterial)
+      .disabled(!isEditorVisible)
       .accessibilityLabel("Editor toolbar")
+      .accessibilityHidden(!isEditorVisible)
     }
 
     private var motion: AppMotion {
@@ -1758,6 +1855,7 @@
     }
 
     private func applyFontSizeText() {
+      guard isEditorVisible else { return }
       if let size = FontSizeSubmission.requestedSize(
         for: fontSizeText,
         currentSize: commands.currentFontSize,
