@@ -1362,6 +1362,97 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   commands.cancelFocusedDictation()
 }
 
+@Test @MainActor func hostedNotesPanelStaleHiddenBoundaryCannotDetachNewVisibleEditor() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let work = try Folder(id: UUID(), name: "Work")
+  let firstText = "First note remains unchanged"
+  let secondText = "Second note remains usable"
+  let first = Note(
+    title: "First",
+    body: firstText,
+    richTextRTF: try hostedPanelRTF(text: firstText),
+    folderID: nil
+  )
+  let second = Note(
+    title: "Second",
+    body: secondText,
+    richTextRTF: try hostedPanelRTF(text: secondText),
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(
+      notes: [first, second],
+      selectedNoteID: first.id,
+      folders: [work]
+    )
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let firstEditor = try #require(hostedPanelEditor(in: host))
+  let firstWorkspace = state.workspace
+  #expect(commands.textView === firstEditor)
+  #expect(window.makeFirstResponder(firstEditor))
+
+  var secondEditor: ListAwareTextView?
+  var secondFocusWasSet = false
+  await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    DispatchQueue.main.async {
+      setHostedPanelNoteFolder(state, noteID: first.id, folderID: work.id)
+      forceHostedViewUpdate(host)
+    }
+    DispatchQueue.main.async {
+      setHostedPanelSelectedNote(state, noteID: second.id)
+      forceHostedViewUpdate(host)
+      if let candidate = hostedPanelEditor(in: host), candidate.string == secondText {
+        secondEditor = candidate
+        secondFocusWasSet = window.makeFirstResponder(candidate)
+      }
+      DispatchQueue.main.async {
+        continuation.resume()
+      }
+    }
+  }
+
+  let visibleEditor = try #require(secondEditor)
+  let secondWorkspace = state.workspace
+  let secondAttributed = NSAttributedString(attributedString: try #require(visibleEditor.textStorage))
+  let secondRTF = try visibleEditor.textStorage?.data(
+    from: NSRange(location: 0, length: secondText.utf16.count),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+
+  #expect(visibleEditor !== firstEditor)
+  #expect(secondFocusWasSet)
+  #expect(window.firstResponder === visibleEditor)
+  #expect(commands.textView === visibleEditor)
+  #expect(visibleEditor.string == secondText)
+  #expect(state.workspace.notes.first(where: { $0.id == first.id })?.body == firstText)
+  #expect(state.workspace.notes.first(where: { $0.id == second.id })?.body == secondText)
+  #expect(state.workspace.notes.first(where: { $0.id == first.id })?.richTextRTF == firstWorkspace.notes.first?.richTextRTF)
+  #expect(state.workspace == secondWorkspace)
+
+  visibleEditor.setSelectedRange(NSRange(location: 1, length: 6))
+  commands.toggleItalic()
+  #expect(
+    fontTraits(try #require(visibleEditor.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont))
+      .contains(.italicFontMask)
+  )
+  commands.undo()
+  #expect(NSAttributedString(attributedString: try #require(visibleEditor.textStorage)).isEqual(to: secondAttributed))
+  #expect(try visibleEditor.textStorage?.data(
+    from: NSRange(location: 0, length: secondText.utf16.count),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  ) == secondRTF)
+  #expect(commands.canBeginFocusedDictation)
+  #expect(commands.beginFocusedDictation())
+  commands.cancelFocusedDictation()
+}
+
 @MainActor
 private func hostedDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T? {
   if let match = view as? T { return match }
@@ -1377,6 +1468,12 @@ private func settleHostedView(_ view: NSView) async {
     view.layoutSubtreeIfNeeded()
     await Task.yield()
   }
+}
+
+@MainActor
+private func forceHostedViewUpdate(_ view: NSView) {
+  view.layoutSubtreeIfNeeded()
+  view.displayIfNeeded()
 }
 
 private func notesPanelSource() throws -> String {
@@ -1465,6 +1562,13 @@ private func setHostedPanelNoteFolder(_ state: AppState, noteID: UUID, folderID:
   var workspace = state.workspace
   guard let index = workspace.notes.firstIndex(where: { $0.id == noteID }) else { return }
   workspace.notes[index].folderID = folderID
+  state.workspace = workspace
+}
+
+@MainActor
+private func setHostedPanelSelectedNote(_ state: AppState, noteID: UUID) {
+  var workspace = state.workspace
+  workspace.selectedNoteID = noteID
   state.workspace = workspace
 }
 

@@ -1113,14 +1113,18 @@
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSView {
-      NSView(frame: .zero)
+      context.coordinator.isActive = true
+      return NSView(frame: .zero)
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-      context.coordinator.isVisible = isVisible
+      let generation = context.coordinator.beginUpdate(isVisible: isVisible)
       guard !isVisible else { return }
       DispatchQueue.main.async {
-        guard !context.coordinator.isVisible else { return }
+        guard context.coordinator.isActive,
+          context.coordinator.generation == generation,
+          !context.coordinator.isVisible
+        else { return }
         let textView = commands.textView
         commands.cancelFocusedDictation()
         if let window = textView?.window {
@@ -1130,8 +1134,21 @@
       }
     }
 
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+      coordinator.isActive = false
+      coordinator.generation &+= 1
+    }
+
     final class Coordinator {
       var isVisible = true
+      var isActive = true
+      var generation: UInt64 = 0
+
+      func beginUpdate(isVisible: Bool) -> UInt64 {
+        generation &+= 1
+        self.isVisible = isVisible
+        return generation
+      }
     }
   }
 
