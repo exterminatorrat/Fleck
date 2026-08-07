@@ -21,7 +21,7 @@
       "AXWindow",
       "AXSystemDialog",
       "AXPress",
-      "AX-press-to-accessible-visible",
+      "AX-press-to-accessible-window",
       "31",
       "cold",
       "warm",
@@ -50,6 +50,11 @@
       "rm -rf",
       "cp ",
       "mv ",
+      "AX-press-to-accessible-visible",
+      "function isVisible",
+      "visiblePanelWindows",
+      "attribute(window, \"visible\")",
+      "visible=true",
       "entireContents",
       "uiElements",
       "note",
@@ -64,6 +69,57 @@
     #expect(!jxa.contains("uiElements"))
     #expect(!jxa.contains("note"))
     #expect(!jxa.contains("body"))
+    #expect(!jxa.contains("AXVisible"))
+  }
+
+  @Test func FleckPanelProductionJXARunReturnsTheTSVToItsShellCaller() throws {
+    let source = try measurementScriptSource()
+    let jxa = try measurementJXASource(from: source)
+    let run = try measurementRunJXASource(from: source)
+    let productionRun = run.replacingOccurrences(
+      of: "function run(argv, systemEventsOverride)",
+      with: "function productionRun(argv, systemEventsOverride)",
+      options: [],
+      range: run.startIndex..<run.endIndex
+    )
+    let fixture = #"""
+var state = { open: false, actions: 0 };
+var panel = {
+  role: function() { return "AXWindow"; },
+  subrole: function() { return "AXSystemDialog"; },
+  size: function() { return [520, 430]; }
+};
+var exactItem = {
+  title: function() { return "Fleck"; },
+  name: function() { return "Fleck"; },
+  role: function() { return "AXMenuBarItem"; },
+  subrole: function() { return "AXMenuExtra"; },
+  actions: {
+    byName: function(name) {
+      if (name !== "AXPress") throw new Error("unexpected action");
+      return { perform: function() { state.open = !state.open; state.actions += 1; } };
+    }
+  }
+};
+var fakeProcess = {
+  unixId: function() { return 42; },
+  name: function() { return "Fleck"; },
+  menuBars: function() { return [{ menuBarItems: function() { return [exactItem]; } }]; },
+  windows: function() { return state.open ? [panel] : []; }
+};
+var fakeSystemEvents = {
+  applicationProcesses: function() { return [fakeProcess]; }
+};
+function run(argv) { return productionRun(["42", "31"], fakeSystemEvents); }
+"""#
+    let result = try runJXA(jxa + "\n" + productionRun + "\n" + fixture)
+    let rows = result.stdout.split(whereSeparator: \.isNewline)
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
+    #expect(rows.count == 32)
+    #expect(rows.first == "sample_label\tsample_number\telapsed_ms")
+    #expect(rows.dropFirst().first == "cold\t1\t0")
+    #expect(rows.last == "warm\t31\t0")
   }
 
   @Test func FleckPanelPresentationJXAUsesFakeAXFixturesForClosedNormalizationAnd31Samples() throws {
@@ -72,7 +128,6 @@
 function run(argv) {
 var state = { open: true, now: 1_000, actions: 0 };
 var panel = {
-  visible: function() { return state.open; },
   role: function() { return "AXWindow"; },
   subrole: function() { return "AXSystemDialog"; },
   size: function() { return [520, 430]; }
@@ -128,6 +183,56 @@ return JSON.stringify({ count: samples.length, actions: state.actions, elapsed: 
     #expect(result.stdout.contains(#""elapsed":37"#))
   }
 
+  @Test func FleckPanelPresentationJXACleansUpAfterAXPressThrowsAfterOpening() throws {
+    let jxa = try measurementJXASource(from: measurementScriptSource())
+    let fixture = #"""
+function run(argv) {
+var state = { open: false, now: 1_000, actions: 0, throwAfterOpen: true };
+var panel = {
+  role: function() { return "AXWindow"; },
+  subrole: function() { return "AXSystemDialog"; },
+  size: function() { return [520, 430]; }
+};
+var item = {
+  title: function() { return "Fleck"; },
+  name: function() { return "Fleck"; },
+  role: function() { return "AXMenuBarItem"; },
+  subrole: function() { return "AXMenuExtra"; },
+  actions: {
+    byName: function(name) {
+      return { perform: function() {
+        if (name !== "AXPress") throw new Error("unexpected action");
+        state.open = !state.open;
+        state.actions += 1;
+        if (state.open && state.throwAfterOpen) {
+          state.throwAfterOpen = false;
+          throw new Error("synthetic post-press failure");
+        }
+      } };
+    }
+  }
+};
+var process = {
+  windows: function() { return state.open ? [panel] : []; }
+};
+var failure = "";
+try {
+  collectSamples(process, item, 1, function() { return state.now; }, function(milliseconds) { state.now += milliseconds; }, 100);
+} catch (error) {
+  failure = String(error);
+}
+if (failure.indexOf("synthetic post-press failure") < 0) throw new Error("original error was masked");
+if (state.open) throw new Error("panel remained open after failed sample");
+return JSON.stringify({ open: state.open, actions: state.actions });
+}
+"""#
+    let result = try runJXA(jxa + "\n" + fixture)
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
+    #expect(result.stdout.contains(#""open":false"#))
+    #expect(result.stdout.contains(#""actions":2"#))
+  }
+
   @Test func FleckPanelPresentationJXAFailsClosedForAmbiguousMenuExtrasAndTimeouts() throws {
     let jxa = try measurementJXASource(from: measurementScriptSource())
     let ambiguousFixture = #"""
@@ -144,7 +249,6 @@ findUniqueMenuExtra(process);
     let ambiguousWindowFixture = #"""
 function run(argv) {
 var panel = {
-  visible: function() { return true; },
   role: function() { return "AXWindow"; },
   subrole: function() { return "AXSystemDialog"; },
   size: function() { return [520, 430]; }
@@ -155,7 +259,7 @@ collectSamples(process, {}, 1, function() { return 1_000; }, function() {}, 30);
 """#
     let ambiguousWindow = try runJXA(jxa + "\n" + ambiguousWindowFixture)
     #expect(ambiguousWindow.status != 0)
-    #expect(ambiguousWindow.stderr.contains("ambiguous accessible-visible panel window"))
+    #expect(ambiguousWindow.stderr.contains("ambiguous accessible panel window"))
 
     let timeoutFixture = #"""
 function run(argv) {
@@ -176,7 +280,7 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
 """#
     let timeout = try runJXA(jxa + "\n" + timeoutFixture)
     #expect(timeout.status != 0)
-    #expect(timeout.stderr.contains("accessible-visible panel timeout"))
+    #expect(timeout.stderr.contains("accessible panel window timeout"))
   }
 
   @Test func FleckPanelMeasurementScriptFailsClosedForInvalidInputs() throws {
@@ -214,12 +318,12 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
 
   @Test func FleckPanelMeasurementScriptAcceptsOnlyThePackagedFleckExecutableShape() throws {
     let source = try measurementScriptSource()
-    let functionStart = try #require(source.range(of: "is_exact_fleck_command() {"))
+    let functionStart = try #require(source.range(of: "is_packaged_fleck_path_shape() {"))
     let functionEnd = try #require(
       source.range(of: "\n}\n", range: functionStart.upperBound..<source.endIndex)
     )
     let command = String(source[functionStart.lowerBound..<functionEnd.upperBound])
-      + "\nis_exact_fleck_command \"$1\""
+      + "\nis_packaged_fleck_path_shape \"$1\""
     let packagedPath = repositoryRoot()
       .appendingPathComponent(".build/Fleck.app/Contents/MacOS/Fleck")
       .path
@@ -227,6 +331,30 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     #expect(try runShell(command, arguments: [packagedPath]).status == 0)
     #expect(try runShell(command, arguments: ["/tmp/Fleck"]).status != 0)
     #expect(try runShell(command, arguments: ["/tmp/Other.app/Contents/MacOS/Other"]).status != 0)
+  }
+
+  @Test func FleckPanelMeasurementRejectsCanonicalFleckApplicationSupportWithLexicalHome() throws {
+    let root = repositoryRoot()
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("fleck-home-canonicalization-" + UUID().uuidString, isDirectory: true)
+    let homeDirectory = temporaryDirectory.appendingPathComponent("home", isDirectory: true)
+    let homeChild = homeDirectory.appendingPathComponent("child", isDirectory: true)
+    let applicationSupport = homeDirectory
+      .appendingPathComponent("Library", isDirectory: true)
+      .appendingPathComponent("Application Support", isDirectory: true)
+      .appendingPathComponent("Fleck", isDirectory: true)
+    try FileManager.default.createDirectory(at: homeChild, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: applicationSupport, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+    let lexicalHome = homeChild.appendingPathComponent("..", isDirectory: true).path
+    let result = try run(
+      script: root.appendingPathComponent("Scripts/measure-fleck-panel-presentation.sh"),
+      arguments: [applicationSupport.path],
+      environment: ["HOME": lexicalHome]
+    )
+
+    #expect(result.status != 0)
   }
 
   private struct ProcessResult {
@@ -308,6 +436,17 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     let begin = try #require(source.range(of: "// AX_MEASUREMENT_JXA_BEGIN\n"))
     let end = try #require(
       source.range(of: "\n// AX_MEASUREMENT_JXA_END", range: begin.upperBound..<source.endIndex)
+    )
+    return String(source[begin.upperBound..<end.lowerBound])
+  }
+
+  private func measurementRunJXASource(from source: String) throws -> String {
+    let begin = try #require(source.range(of: "// AX_MEASUREMENT_JXA_RUN_BEGIN\n"))
+    let end = try #require(
+      source.range(
+        of: "\n// AX_MEASUREMENT_JXA_RUN_END",
+        range: begin.upperBound..<source.endIndex
+      )
     )
     return String(source[begin.upperBound..<end.lowerBound])
   }

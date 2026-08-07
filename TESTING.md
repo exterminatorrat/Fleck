@@ -741,17 +741,25 @@ FLECK_PERFORMANCE_PID=PID Scripts/measure-fleck-panel-presentation.sh \
   "/absolute/path/to/disposable-output"
 ```
 
-The script measures the bounded `AX-press-to-accessible-visible` interval: one
+The script measures the bounded `AX-press-to-accessible-window` interval: one
 cold and 30 warm samples from the exact Fleck `AXMenuExtra` AXPress invocation
-to the first matching accessibility-visible transient panel window. It searches
-all Fleck menu bars and requires title/name `Fleck`, role `AXMenuBarItem`, and
-subrole `AXMenuExtra`; it normalizes the panel closed before every sample by
-toggling that exact item only when a matching window is visible, then verifies
-closed after each sample. It uses one JXA process and `Date.now`, writes raw
-TSV plus p50/p95/min/max and metadata, and fails closed on missing, ambiguous,
-or timed-out states. This is not pixel-complete or human click latency. It
-does not use app activation/log records, launch or signal Fleck, or read/write
-Fleck Application Support or editor data.
+to the first matching sane-size transient `AXWindow` exposed in Fleck's
+process window list. Window-list membership is the observed criterion; the
+script does not require `AXVisible`. It searches all Fleck menu bars and
+requires title/name `Fleck`, role `AXMenuBarItem`, and subrole `AXMenuExtra`;
+it normalizes the panel closed before every sample by toggling that exact item
+only when a matching window is present, then verifies that it disappears after
+each sample. It uses one JXA process and `Date.now`, writes raw TSV plus
+p50/p95/min/max and metadata, and fails closed on missing, ambiguous, or
+timed-out states. A failed AX transition receives a bounded best-effort close
+attempt without masking the original error. This is not pixel-complete or
+human click latency. It does not use app activation/log records, launch or
+signal Fleck, or read/write Fleck Application Support or editor data.
+
+The PID guard checks only the packaged executable path shape
+`Fleck.app/Contents/MacOS/Fleck`; it does not prove the process is the accepted
+build. The caller owns the exact artifact identity and the disposable output
+directory.
 
 ## Accessibility checks
 

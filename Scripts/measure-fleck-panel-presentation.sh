@@ -22,6 +22,11 @@ if [ -z "$home_dir" ]; then
   exit 2
 fi
 
+home_dir=$(CDPATH= cd -- "$home_dir" 2>/dev/null && pwd -P) || {
+  printf '%s\n' 'error: HOME must resolve to an existing directory to protect Fleck Application Support' >&2
+  exit 2
+}
+
 case "$requested_output_dir" in
   -*)
     printf '%s\n' 'error: output directory must not begin with -' >&2
@@ -54,9 +59,9 @@ case "$output_dir" in
     ;;
 esac
 
-raw_samples="$output_dir/ax-press-to-accessible-visible-raw.tsv"
-summary="$output_dir/ax-press-to-accessible-visible-summary.txt"
-metadata="$output_dir/ax-press-to-accessible-visible-metadata.txt"
+raw_samples="$output_dir/ax-press-to-accessible-window-raw.tsv"
+summary="$output_dir/ax-press-to-accessible-window-summary.txt"
+metadata="$output_dir/ax-press-to-accessible-window-metadata.txt"
 for output_file in "$raw_samples" "$summary" "$metadata"; do
   if [ -L "$output_file" ]; then
     printf 'error: refusing symlinked output: %s\n' "$output_file" >&2
@@ -74,7 +79,7 @@ done
 profile_pid=${FLECK_PERFORMANCE_PID:-}
 if [ -z "$profile_pid" ]; then
   printf '%s\n' \
-    'error: FLECK_PERFORMANCE_PID is required for an already-running exact packaged Fleck app' >&2
+    'error: FLECK_PERFORMANCE_PID is required for an already-running Fleck process' >&2
   exit 2
 fi
 case "$profile_pid" in
@@ -88,7 +93,7 @@ if [ "$profile_pid" -eq 0 ]; then
   exit 2
 fi
 
-is_exact_fleck_command() {
+is_packaged_fleck_path_shape() {
   case "$1" in
     */Fleck.app/Contents/MacOS/Fleck) return 0 ;;
     *) return 1 ;;
@@ -96,8 +101,8 @@ is_exact_fleck_command() {
 }
 
 process_name=$(ps -p "$profile_pid" -o comm= | awk '{gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}')
-if ! is_exact_fleck_command "$process_name"; then
-  printf 'error: PID %s is not the exact Fleck command (found: %s)\n' \
+if ! is_packaged_fleck_path_shape "$process_name"; then
+  printf 'error: PID %s is not a packaged Fleck executable path shape (found: %s)\n' \
     "$profile_pid" "${process_name:-missing}" >&2
   exit 2
 fi
@@ -132,11 +137,6 @@ function stringAttribute(object, name) {
 function numberAttribute(object, name) {
   var value = attribute(object, name);
   return value === null || value === undefined ? NaN : Number(value);
-}
-
-function isVisible(object) {
-  var value = attribute(object, "visible");
-  return value === true || value === 1 || value === "true" || value === "1";
 }
 
 function findExactFleckProcess(systemEvents, targetPid) {
@@ -213,41 +213,57 @@ function isTransientPanelWindow(window) {
   );
 }
 
-function visiblePanelWindows(process) {
+function accessiblePanelWindows(process) {
   var windows = process.windows();
   var matches = [];
   for (var index = 0; index < windows.length; index += 1) {
     var window = windows[index];
-    if (isTransientPanelWindow(window) && isVisible(window)) {
+    if (isTransientPanelWindow(window)) {
       matches.push(window);
     }
   }
   return matches;
 }
 
-function waitForPanelState(process, expectedVisible, clock, sleep, timeoutMs) {
+function waitForPanelState(process, expectedPresent, clock, sleep, timeoutMs) {
   var deadline = clock() + timeoutMs;
   while (clock() <= deadline) {
-    var panels = visiblePanelWindows(process);
+    var panels = accessiblePanelWindows(process);
     if (panels.length > 1) {
-      throw new Error("ambiguous accessible-visible panel window");
+      throw new Error("ambiguous accessible panel window");
     }
-    if ((panels.length === 1) === expectedVisible) {
+    if ((panels.length === 1) === expectedPresent) {
       return panels.length === 1 ? panels[0] : null;
     }
     sleep(50);
   }
   throw new Error(
-    expectedVisible
-      ? "accessible-visible panel timeout"
+    expectedPresent
+      ? "accessible panel window timeout"
       : "panel did not normalize closed before timeout"
   );
 }
 
+function closePanelBestEffort(process, menuExtra, clock, sleep, timeoutMs) {
+  try {
+    var panels = accessiblePanelWindows(process);
+    if (panels.length > 1) {
+      return false;
+    }
+    if (panels.length === 1) {
+      pressMenuExtra(menuExtra);
+      waitForPanelState(process, false, clock, sleep, timeoutMs);
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function normalizeClosed(process, menuExtra, clock, sleep, timeoutMs) {
-  var panels = visiblePanelWindows(process);
+  var panels = accessiblePanelWindows(process);
   if (panels.length > 1) {
-    throw new Error("ambiguous accessible-visible panel window");
+    throw new Error("ambiguous accessible panel window");
   }
   if (panels.length === 1) {
     pressMenuExtra(menuExtra);
@@ -256,20 +272,25 @@ function normalizeClosed(process, menuExtra, clock, sleep, timeoutMs) {
 }
 
 function measureSample(process, menuExtra, sampleLabel, clock, sleep, timeoutMs) {
-  normalizeClosed(process, menuExtra, clock, sleep, timeoutMs);
-  var startedAt = clock();
-  pressMenuExtra(menuExtra);
-  waitForPanelState(process, true, clock, sleep, timeoutMs);
-  var elapsedMilliseconds = clock() - startedAt;
-  if (elapsedMilliseconds < 0) {
-    throw new Error("Date.now moved backwards during sample");
+  try {
+    normalizeClosed(process, menuExtra, clock, sleep, timeoutMs);
+    var startedAt = clock();
+    pressMenuExtra(menuExtra);
+    waitForPanelState(process, true, clock, sleep, timeoutMs);
+    var elapsedMilliseconds = clock() - startedAt;
+    if (elapsedMilliseconds < 0) {
+      throw new Error("Date.now moved backwards during sample");
+    }
+    pressMenuExtra(menuExtra);
+    waitForPanelState(process, false, clock, sleep, timeoutMs);
+    return {
+      sampleLabel: sampleLabel,
+      elapsedMilliseconds: elapsedMilliseconds
+    };
+  } catch (error) {
+    closePanelBestEffort(process, menuExtra, clock, sleep, timeoutMs);
+    throw error;
   }
-  pressMenuExtra(menuExtra);
-  waitForPanelState(process, false, clock, sleep, timeoutMs);
-  return {
-    sampleLabel: sampleLabel,
-    elapsedMilliseconds: elapsedMilliseconds
-  };
 }
 
 function collectSamples(process, menuExtra, count, clock, sleep, timeoutMs) {
@@ -293,13 +314,14 @@ function collectSamples(process, menuExtra, count, clock, sleep, timeoutMs) {
 }
 // AX_MEASUREMENT_JXA_END
 
-function run(argv) {
+// AX_MEASUREMENT_JXA_RUN_BEGIN
+function run(argv, systemEventsOverride) {
   var targetPid = Number(argv[0]);
   var count = Number(argv[1]);
   if (!isFinite(targetPid) || targetPid < 1 || targetPid !== Math.floor(targetPid)) {
     throw new Error("invalid Fleck PID");
   }
-  var systemEvents = Application("System Events");
+  var systemEvents = systemEventsOverride || Application("System Events");
   var process = findExactFleckProcess(systemEvents, targetPid);
   var menuExtra = findUniqueMenuExtra(process);
   var samples = collectSamples(
@@ -320,12 +342,13 @@ function run(argv) {
         samples[index].elapsedMilliseconds
     );
   }
-  console.log(lines.join("\n"));
+  return lines.join("\n");
 }
+// AX_MEASUREMENT_JXA_RUN_END
 JXA
 ) || {
   printf '%s\n' \
-    'error: AX-press-to-accessible-visible JXA failed; verify one exact AXMenuExtra, a closed panel, and one accessible transient window' >&2
+    'error: AX-press-to-accessible-window JXA failed; verify one exact AXMenuExtra, a closed panel, and one accessible transient window' >&2
   exit 2
 }
 
@@ -381,7 +404,7 @@ if [ "$#" -ne 5 ] || [ "$1" -ne "$total_samples" ]; then
 fi
 
 {
-  printf '%s\n' 'Fleck AX-press-to-accessible-visible measurement summary'
+  printf '%s\n' 'Fleck AX-press-to-accessible-window measurement summary'
   printf 'sample_count=%s\n' "$1"
   printf 'cold_sample_count=1\n'
   printf 'warm_sample_count=%s\n' "$warm_sample_count"
@@ -389,31 +412,31 @@ fi
   printf 'p95_ms=%s\n' "$3"
   printf 'min_ms=%s\n' "$4"
   printf 'max_ms=%s\n' "$5"
-  printf '%s\n' 'measurement_boundary=AX-press-to-accessible-visible'
+  printf '%s\n' 'measurement_boundary=AX-press-to-accessible-window'
   printf '%s\n' 'automation_boundary=not pixel-complete and not human click latency'
 } > "$summary"
 
 {
   printf 'captured_at_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  printf '%s\n' 'measurement_name=AX-press-to-accessible-visible'
+  printf '%s\n' 'measurement_name=AX-press-to-accessible-window'
   printf 'sample_count=%s\n' "$1"
   printf 'cold_sample_count=1\n'
   printf 'warm_sample_count=%s\n' "$warm_sample_count"
   printf '%s\n' \
     'status_item_contract=exact Fleck title or name; role AXMenuBarItem; subrole AXMenuExtra; searched across all Fleck menu bars'
   printf '%s\n' \
-    'panel_window_contract=Fleck process window; role AXWindow; subrole AXSystemDialog or AXDialog; visible=true; sane size'
+    'panel_window_contract=one Fleck process window; role AXWindow; subrole AXSystemDialog or AXDialog; sane size; exposed by window-list membership'
   printf '%s\n' \
-    'normalization=before every sample, toggle exact AXPress only when a matching panel is visible and verify no matching panel'
+    'normalization=before every sample, toggle exact AXPress only when a matching panel window is exposed and verify no matching panel window'
   printf '%s\n' \
-    'timing=one JXA process using Date.now from AXPress invocation to first matching accessible-visible panel'
+    'timing=one JXA process using Date.now from AXPress invocation to first matching accessible-exposed panel window'
   printf '%s\n' \
-    'boundary=AX-press-to-accessible-visible; not pixel-complete and not human click latency'
+    'boundary=AX-press-to-accessible-window; window-list exposure is the observed criterion; not pixel-complete and not human click latency'
   printf '%s\n' \
     'data_boundary=no editor descendants or user data; no Fleck Application Support access'
   printf '%s\n' \
-    'process_boundary=already-running exact packaged Fleck only; no launch, termination, rebuild, signal, or process mutation'
+    'process_boundary=already-running Fleck only; PID guard checks packaged executable path shape, not exact build identity; no launch, termination, rebuild, signal, or process mutation'
 } > "$metadata"
 
-printf 'Wrote 1 cold and %s warm AX-press-to-accessible-visible samples to %s\n' \
+printf 'Wrote 1 cold and %s warm AX-press-to-accessible-window samples to %s\n' \
   "$warm_sample_count" "$output_dir"
