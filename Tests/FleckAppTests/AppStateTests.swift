@@ -730,6 +730,6 @@ private func settleHostedFolderView(_ view: NSView) async {
   #expect(FolderDragPayload.folderID(from: Data("{\"unknown\":true}".utf8)) == nil)
   #expect(state.workspace == before)
 
-  try await Task.sleep(for: .milliseconds(150))
+  try await Task.sleep(for: .milliseconds(500))
   #expect(recorder.generations.isEmpty)
 }
