@@ -315,6 +315,7 @@ final class AppleSpeechCapture: SpeechEngine {
   }
 
   convenience init(
+    recognitionContext: DictationRecognitionContext = .englishDefault,
     microphoneUID: String? = nil,
     permissions: DictationPermissionController = .init(),
     microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void = { _ in }
@@ -327,12 +328,17 @@ final class AppleSpeechCapture: SpeechEngine {
         if #available(macOS 26.0, *) {
           return ModernAppleSpeechSession(
             microphoneUID: microphoneUID,
-            microphoneSelectionChanged: microphoneSelectionChanged
+            microphoneSelectionChanged: microphoneSelectionChanged,
+            recognitionContext: recognitionContext
           )
         }
         return LegacyAppleSpeechSession(
           microphoneUID: microphoneUID,
-          microphoneSelectionChanged: microphoneSelectionChanged
+          microphoneSelectionChanged: microphoneSelectionChanged,
+          recognitionContext: recognitionContext,
+          makeRecognizer: {
+            SFSpeechRecognizer(locale: recognitionContext.locale)
+          }
         )
       },
       interruptions: SystemAppleSpeechInterruptionSource()
@@ -535,6 +541,7 @@ enum CoreAudioMicrophone {
 actor LegacyAppleSpeechSession: AppleSpeechSession {
   private let makeAudioEngine: @Sendable () -> AVAudioEngine
   private let makeRecognizer: @Sendable () -> SFSpeechRecognizer?
+  private let recognitionContext: DictationRecognitionContext
   private let microphoneUID: String?
   private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
   private var recognizer: SFSpeechRecognizer?
@@ -560,6 +567,7 @@ actor LegacyAppleSpeechSession: AppleSpeechSession {
   init(
     microphoneUID: String?,
     microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void,
+    recognitionContext: DictationRecognitionContext = .englishDefault,
     makeAudioEngine: @escaping @Sendable () -> AVAudioEngine = { AVAudioEngine() },
     makeRecognizer: @escaping @Sendable () -> SFSpeechRecognizer? = {
       SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -567,6 +575,7 @@ actor LegacyAppleSpeechSession: AppleSpeechSession {
   ) {
     self.makeAudioEngine = makeAudioEngine
     self.makeRecognizer = makeRecognizer
+    self.recognitionContext = recognitionContext
     self.microphoneUID = microphoneUID
     self.microphoneSelectionChanged = microphoneSelectionChanged
   }
@@ -582,6 +591,7 @@ actor LegacyAppleSpeechSession: AppleSpeechSession {
     }
     let request = SFSpeechAudioBufferRecognitionRequest()
     request.requiresOnDeviceRecognition = true
+    request.contextualStrings = recognitionContext.contextualStrings
     request.shouldReportPartialResults = true
     request.taskHint = .dictation
     self.request = request
@@ -766,7 +776,7 @@ private struct ModernAnalyzerInputSequence: AsyncSequence, @unchecked Sendable {
 
 @available(macOS 26.0, *)
 private actor ModernAppleSpeechSession: AppleSpeechSession {
-  private let locale = Locale(identifier: "en-US")
+  private let recognitionContext: DictationRecognitionContext
   private let microphoneUID: String?
   private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
   private var audioEngine: AVAudioEngine?
@@ -789,10 +799,12 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
 
   init(
     microphoneUID: String?,
-    microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void
+    microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void,
+    recognitionContext: DictationRecognitionContext = .englishDefault
   ) {
     self.microphoneUID = microphoneUID
     self.microphoneSelectionChanged = microphoneSelectionChanged
+    self.recognitionContext = recognitionContext
   }
 
   func start(
@@ -804,7 +816,7 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     self.audioEngine = audioEngine
     let installedLocales = await DictationTranscriber.installedLocales
     guard !terminationRequested else { throw CancellationError() }
-    guard AppleSpeechLocale.containsEquivalent(locale, in: installedLocales) else {
+    guard AppleSpeechLocale.containsEquivalent(recognitionContext.locale, in: installedLocales) else {
       throw DictationFailure.unavailable
     }
 
@@ -813,7 +825,7 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     guard !terminationRequested else { throw CancellationError() }
     let naturalFormat = inputNode.inputFormat(forBus: 0)
     let transcriber = DictationTranscriber(
-      locale: locale,
+      locale: recognitionContext.locale,
       preset: .progressiveShortDictation
     )
     let modules: [any SpeechModule] = [transcriber]
@@ -828,6 +840,9 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
       modules: modules,
       options: .init(priority: .userInitiated, modelRetention: .whileInUse)
     )
+    let analysisContext = AnalysisContext()
+    analysisContext.contextualStrings[.general] = recognitionContext.contextualStrings
+    try await analyzer.setContext(analysisContext)
     self.analyzer = analyzer
     try await analyzer.prepareToAnalyze(in: format)
     guard !terminationRequested else { throw CancellationError() }

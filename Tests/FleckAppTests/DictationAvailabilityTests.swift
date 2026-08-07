@@ -648,6 +648,45 @@ private final class PermissionProbe {
   #expect(!modern.contains("await level(AudioBufferTools.normalizedRMS(buffer))"))
 }
 
+@Test func dictationRecognitionContextDeduplicatesAndCapsContextualStrings() {
+  let terms = (0..<101).map { "term\($0)" } + ["term0", "", "   "]
+  let context = DictationRecognitionContext(
+    locale: Locale(identifier: "zh-CN"),
+    contextualStrings: terms
+  )
+
+  #expect(context.locale.identifier == "zh-CN")
+  #expect(context.contextualStrings.count == 100)
+  #expect(context.contextualStrings.first == "term0")
+  #expect(context.contextualStrings.last == "term99")
+  #expect(Set(context.contextualStrings).count == 100)
+}
+
+@Test func dictationRecognitionContextKeepsTheDefaultEnglishEmpty() {
+  #expect(DictationRecognitionContext.englishDefault.locale.identifier == "en-US")
+  #expect(DictationRecognitionContext.englishDefault.contextualStrings.isEmpty)
+}
+
+@Test func appleSpeechConstructionPropagatesLocaleAndContextToBothSDKPaths() throws {
+  let source = try String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("recognitionContext: DictationRecognitionContext = .englishDefault"))
+  #expect(source.contains("SFSpeechRecognizer(locale: recognitionContext.locale)"))
+  #expect(source.contains("request.contextualStrings = recognitionContext.contextualStrings"))
+  #expect(source.contains("request.requiresOnDeviceRecognition = true"))
+  #expect(source.contains("let analysisContext = AnalysisContext()"))
+  #expect(source.contains("analysisContext.contextualStrings[.general] = recognitionContext.contextualStrings"))
+  #expect(source.contains("try await analyzer.setContext(analysisContext)"))
+  #expect(!source.contains("URLSession"))
+}
+
 @Test @MainActor func appleSpeechCaptureEmitsProvisionalRetainsFinalAndReleases() async throws {
   let session = AppleSpeechSessionProbe()
   session.finishResult = .success("final words")
