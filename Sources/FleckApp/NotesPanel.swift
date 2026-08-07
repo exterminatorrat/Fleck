@@ -421,7 +421,7 @@
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
         Button {
-          searchController.present()
+          searchController.present(for: appState.workspace.selectedNoteID)
         } label: {
           Image(systemName: "magnifyingglass")
         }

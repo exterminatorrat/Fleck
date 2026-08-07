@@ -53,11 +53,14 @@
       resultGeneration == searchGeneration
     }
 
-    func present() {
+    func present(for noteID: UUID? = nil) {
       guard !isPresented else { return }
       cancelSearch()
       searchGeneration &+= 1
-      focusOrigin = WorkspaceSearchFocusOrigin.capture(preferredWindow: hostingWindow)
+      focusOrigin = WorkspaceSearchFocusOrigin.capture(
+        preferredWindow: hostingWindow,
+        noteID: noteID
+      )
       query = ""
       results = []
       highlightedNoteID = nil
@@ -81,10 +84,10 @@
       origin?.restore()
       if let origin {
         Task { @MainActor in
-          for _ in 0..<3 {
+          for _ in 0..<12 {
             await Task.yield()
+            if origin.restore() { break }
           }
-          origin.restore()
         }
       }
     }
@@ -188,6 +191,7 @@
       }
 
       hasActivatedCurrentPresentation = true
+      focusOrigin?.markActivated(noteID)
       activate(noteID)
       dismiss()
       return true
@@ -243,58 +247,178 @@
 
   @MainActor
   private final class WorkspaceSearchFocusOrigin {
+    private enum Surface: Equatable {
+      case editor
+      case title
+      case unknown
+    }
+
     weak var window: NSWindow?
     weak var responder: NSResponder?
     weak var fieldEditorOwner: NSView?
     let fieldEditorSelection: NSRange?
+    let originalFieldEditorText: String?
+    private let surface: Surface
+    let noteID: UUID?
+    private var activatedNoteID: UUID?
 
-    init(
+    private init(
       window: NSWindow,
       responder: NSResponder,
       fieldEditorOwner: NSView? = nil,
-      fieldEditorSelection: NSRange? = nil
+      fieldEditorSelection: NSRange? = nil,
+      originalFieldEditorText: String? = nil,
+      surface: Surface = .unknown,
+      noteID: UUID? = nil
     ) {
       self.window = window
       self.responder = responder
       self.fieldEditorOwner = fieldEditorOwner
       self.fieldEditorSelection = fieldEditorSelection
+      self.originalFieldEditorText = originalFieldEditorText
+      self.surface = surface
+      self.noteID = noteID
     }
 
-    static func capture(preferredWindow: NSWindow?) -> WorkspaceSearchFocusOrigin? {
+    static func capture(
+      preferredWindow: NSWindow?,
+      noteID: UUID?
+    ) -> WorkspaceSearchFocusOrigin? {
       guard let window = preferredWindow ?? NSApp?.keyWindow ?? NSApp?.mainWindow,
         let responder = window.firstResponder
       else {
         return nil
       }
+      if responder is ListAwareTextView {
+        return WorkspaceSearchFocusOrigin(
+          window: window,
+          responder: responder,
+          surface: .editor,
+          noteID: noteID
+        )
+      }
       guard let fieldEditor = responder as? NSTextView else {
-        return WorkspaceSearchFocusOrigin(window: window, responder: responder)
+        return WorkspaceSearchFocusOrigin(
+          window: window,
+          responder: responder,
+          surface: .unknown,
+          noteID: noteID
+        )
       }
       let fieldEditorOwner = (fieldEditor.delegate as? NSView)
         ?? fieldEditorOwner(for: fieldEditor, in: window.contentView)
+      let surface: Surface =
+        (fieldEditorOwner as? NSTextField)?.frame.width ?? 0 > 200
+          ? .title
+          : .unknown
       return WorkspaceSearchFocusOrigin(
         window: window,
         responder: responder,
         fieldEditorOwner: fieldEditorOwner,
-        fieldEditorSelection: fieldEditor.selectedRange()
+        fieldEditorSelection: fieldEditor.selectedRange(),
+        originalFieldEditorText: (fieldEditorOwner as? NSTextField)?.stringValue,
+        surface: surface,
+        noteID: noteID
       )
     }
 
-    func restore() {
-      guard let window else { return }
-      if let fieldEditorOwner,
-        fieldEditorOwner.window === window,
-        window.makeFirstResponder(fieldEditorOwner)
-      {
-        if let fieldEditor = window.firstResponder as? NSTextView,
-          let fieldEditorSelection
-        {
-          fieldEditor.setSelectedRange(fieldEditorSelection)
-        }
-        return
+    func markActivated(_ noteID: UUID) {
+      activatedNoteID = noteID
+    }
+
+    @discardableResult
+    func restore() -> Bool {
+      guard let window else { return false }
+      let noteChanged = if let noteID, let activatedNoteID {
+        noteID != activatedNoteID
+      } else {
+        false
       }
-      guard let responder else { return }
-      if let view = responder as? NSView, view.window !== window { return }
-      _ = window.makeFirstResponder(responder)
+      let titleChanged = if surface == .title,
+        let fieldEditorOwner = fieldEditorOwner as? NSTextField,
+        let originalFieldEditorText
+      {
+        fieldEditorOwner.stringValue != originalFieldEditorText
+      } else {
+        false
+      }
+      if noteChanged || titleChanged {
+        return restoreSemanticSurface(in: window)
+      }
+      if let fieldEditorOwner,
+        fieldEditorOwner.window === window
+      {
+        if window.makeFirstResponder(fieldEditorOwner) {
+          if let control = fieldEditorOwner as? NSControl {
+            guard let fieldEditor = control.currentEditor() as? NSTextView,
+              window.firstResponder === fieldEditor
+            else {
+              return restoreSemanticSurface(in: window)
+            }
+            if let fieldEditorSelection {
+              fieldEditor.setSelectedRange(fieldEditorSelection)
+            }
+            return true
+          }
+          if window.firstResponder === fieldEditorOwner { return true }
+        }
+      }
+      if surface == .title {
+        return restoreSemanticSurface(in: window)
+      }
+      if let responder {
+        if let view = responder as? NSView, view.window !== window {
+          return restoreSemanticSurface(in: window)
+        }
+        if window.makeFirstResponder(responder), window.firstResponder === responder {
+          return true
+        }
+      }
+      return restoreSemanticSurface(in: window)
+    }
+
+    private func restoreSemanticSurface(in window: NSWindow) -> Bool {
+      let responder: NSResponder?
+      switch surface {
+      case .editor:
+        responder = descendant(in: window.contentView) { view in
+          guard let editor = view as? ListAwareTextView,
+            editor !== self.responder
+          else { return nil }
+          return editor
+        }
+      case .title:
+        responder = descendant(in: window.contentView) { view in
+          guard let field = view as? NSTextField,
+            field.placeholderString == "Note title"
+          else {
+            return nil
+          }
+          return field
+        }
+      case .unknown:
+        responder = nil
+      }
+      guard let responder else { return false }
+      guard window.makeFirstResponder(responder) else { return false }
+      if let control = responder as? NSControl {
+        return control.currentEditor().map { window.firstResponder === $0 } ?? false
+      }
+      return window.firstResponder === responder
+    }
+
+    private func descendant<T: NSView>(
+      in view: NSView?,
+      matching: (NSView) -> T?
+    ) -> T? {
+      guard let view else { return nil }
+      if let match = matching(view) { return match }
+      for subview in view.subviews {
+        if let match = descendant(in: subview, matching: matching) {
+          return match
+        }
+      }
+      return nil
     }
 
     private static func fieldEditorOwner(

@@ -20,6 +20,7 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
 
   for required in [
     "WorkspaceSearchView(",
+    "searchController.present(for: appState.workspace.selectedNoteID)",
     ".keyboardShortcut(\"f\", modifiers: .command)",
     ".accessibilityLabel(\"Search notes\")",
     ".help(\"Search notes",

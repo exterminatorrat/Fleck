@@ -110,6 +110,170 @@ func WorkspaceSearchHostingRestoresTheRealEditorStateAfterEscape() async throws 
 }
 
 @Test @MainActor
+func WorkspaceSearchHostingRestoresTheTargetEditorAfterCrossNoteActivation()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-cross-note-editor-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  state.updateSelected(title: "Original title", body: "Original body")
+  let originalID = try #require(state.selectedNote?.id)
+  let target = Note(
+    id: UUID(uuidString: "00000000-0000-0000-0000-0000000000a1")!,
+    title: "Target title",
+    body: "Target body"
+  )
+  state.importNote(target)
+  state.select(originalID)
+
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let originalEditor = try #require(
+    hostedWorkspaceSearchDescendant(in: host, as: ListAwareTextView.self)
+  )
+  #expect(originalEditor.string == "Original body")
+  #expect(window.makeFirstResponder(originalEditor))
+  searchController.present(for: originalID)
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery("Target", in: state.workspace.notes)
+  await settleWorkspaceSearchHost(host)
+  #expect(searchController.results.map(\.noteID) == [target.id])
+
+  var activations: [UUID] = []
+  #expect(
+    searchController.activateResult(
+      target.id,
+      currentNoteIDs: Set(state.workspace.notes.map(\.id)),
+      activate: { noteID in
+        activations.append(noteID)
+        state.select(noteID)
+      }
+    )
+  )
+  await settleWorkspaceSearchHost(host)
+
+  #expect(activations == [target.id])
+  #expect(state.workspace.selectedNoteID == target.id)
+  #expect(!searchController.isPresented)
+  let targetEditor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == target.body }
+  )
+  #expect(targetEditor !== originalEditor)
+  #expect(window.firstResponder === targetEditor)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingRestoresTheTargetTitleFieldAfterCrossNoteActivation()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-cross-note-title-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  state.updateSelected(title: "Original title", body: "Original body")
+  let originalID = try #require(state.selectedNote?.id)
+  let target = Note(
+    id: UUID(uuidString: "00000000-0000-0000-0000-0000000000a2")!,
+    title: "Goal",
+    body: "Target body"
+  )
+  state.importNote(target)
+  state.select(originalID)
+
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let originalTitleField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.stringValue == "Original title" && $0.frame.width > 200 }
+  )
+  #expect(window.makeFirstResponder(originalTitleField))
+  let originalFieldEditor = try #require(window.firstResponder as? NSTextView)
+  let originalSelection = NSRange(location: 2, length: 5)
+  originalFieldEditor.setSelectedRange(originalSelection)
+  #expect(originalTitleField.currentEditor() === originalFieldEditor)
+
+  searchController.present(for: originalID)
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery("Goal", in: state.workspace.notes)
+  await settleWorkspaceSearchHost(host)
+  #expect(searchController.results.map(\.noteID) == [target.id])
+
+  var activations: [UUID] = []
+  #expect(
+    searchController.activateResult(
+      target.id,
+      currentNoteIDs: Set(state.workspace.notes.map(\.id)),
+      activate: { noteID in
+        activations.append(noteID)
+        state.select(noteID)
+      }
+    )
+  )
+  await settleWorkspaceSearchHost(host)
+
+  #expect(activations == [target.id])
+  #expect(state.workspace.selectedNoteID == target.id)
+  #expect(!searchController.isPresented)
+  let targetTitleField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.stringValue == target.title && $0.frame.width > 200 }
+  )
+  let targetFieldEditor = try #require(targetTitleField.currentEditor() as? NSTextView)
+  #expect(window.firstResponder === targetFieldEditor)
+  #expect(targetFieldEditor.selectedRange() != originalSelection)
+  #expect(NSMaxRange(targetFieldEditor.selectedRange()) <= target.title.utf16.count)
+  #expect(targetTitleField.stringValue == target.title)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
 func WorkspaceSearchHostingRestoresTitleFieldEditorAndIsolatesUnderlyingControls()
   async throws
 {
