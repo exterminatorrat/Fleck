@@ -93,9 +93,10 @@ closed; a failed AX transition receives a bounded best-effort close attempt
 without replacing the original error. It does not launch, terminate, rebuild,
 signal, or otherwise control Fleck's process lifecycle. It intentionally toggles
 panel presentation state with AXPress, but does not mutate note/editor or Fleck
-Application Support data. Each payload is built in a same-directory temporary
-regular file and atomically published with `mv -h`; directory destinations fail
-closed.
+Application Support data. Each payload is written through its securely opened
+same-directory temporary regular-file handle and atomically published with a
+same-directory `rename(2)`-equivalent; directory destinations fail closed,
+including a directory substituted immediately before publication.
 
 ```sh
 bash -n Scripts/measure-fleck-panel-presentation.sh

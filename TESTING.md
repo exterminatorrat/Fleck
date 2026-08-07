@@ -757,9 +757,11 @@ human click latency. It does not use app activation/log records, launch or
 signal Fleck, or read/write Fleck Application Support or editor data. It
 intentionally toggles panel presentation state with AXPress; it does not
 terminate, rebuild, or otherwise control Fleck's process lifecycle, and does
-not mutate note/editor or Application Support data. Each payload is built in a
-same-directory temporary regular file and atomically published with `mv -h`;
-directory destinations fail closed.
+not mutate note/editor or Application Support data. Each payload is written
+through its securely opened same-directory temporary regular-file handle and
+atomically published with a same-directory `rename(2)`-equivalent; directory
+destinations fail closed, including a directory substituted immediately before
+publication.
 
 The PID guard checks only the packaged executable path shape
 `Fleck.app/Contents/MacOS/Fleck`; it does not prove the process is the accepted

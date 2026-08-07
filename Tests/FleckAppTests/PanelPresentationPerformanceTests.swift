@@ -21,8 +21,12 @@
       "AXWindow",
       "AXSystemDialog",
       "AXPress",
-      "mktemp",
-      "/bin/mv -h",
+      "/usr/bin/perl",
+      "File::Temp",
+      "rename",
+      "# AX_MEASUREMENT_OUTPUT_HELPERS_BEGIN",
+      "# AX_MEASUREMENT_PERL_BEGIN",
+      "measurement_output_helper",
       "publish_output_file",
       "AX-press-to-accessible-window",
       "AXPress toggles panel presentation state",
@@ -54,6 +58,11 @@
       "killall",
       "rm -rf",
       "cp ",
+      "/bin/mv -h",
+      "mktemp \"$output_dir",
+      "> \"$raw_temp\"",
+      "> \"$summary_temp\"",
+      "> \"$metadata_temp\"",
       "AX-press-to-accessible-visible",
       "function isVisible",
       "visiblePanelWindows",
@@ -119,8 +128,19 @@ function run(argv) { return runMeasurement(["42", "31"], fakeSystemEvents); }
     #expect(result.status == 0, Comment(rawValue: result.stderr))
     #expect(rows.count == 32)
     #expect(rows.first == "sample_label\tsample_number\telapsed_ms")
-    #expect(rows.dropFirst().first?.hasPrefix("cold\t1\t") == true)
-    #expect(rows.last?.hasPrefix("warm\t31\t") == true)
+    for (offset, row) in rows.dropFirst().enumerated() {
+      let fields = row.split(separator: "\t", omittingEmptySubsequences: false)
+      #expect(fields.count == 3)
+      guard fields.count == 3 else { continue }
+      #expect(String(fields[0]) == (offset == 0 ? "cold" : "warm"))
+      #expect(Int(String(fields[1])) == offset + 1)
+      #expect(
+        String(fields[2]).range(
+          of: #"^[0-9]+([.][0-9]+)?$"#,
+          options: .regularExpression
+        ) != nil
+      )
+    }
   }
 
   @Test func FleckPanelProductionEntryUsesOnlyOsascriptArgv() throws {
@@ -170,6 +190,13 @@ function run(argv) { return productionEntry(argv); }
     )
     #expect(incomplete.status != 0)
 
+    let malformedElapsed = try runAWK(
+      programs.validation,
+      arguments: ["-F", "\t", "-v", "expected=31"],
+      input: validFixture.replacingOccurrences(of: "warm\t2\t2", with: "warm\t2\t")
+    )
+    #expect(malformedElapsed.status != 0)
+
     let statistics = try runAWK(
       programs.statistics,
       arguments: ["-v", "expected=31"],
@@ -190,17 +217,28 @@ function run(argv) { return productionEntry(argv); }
     try "foreign\n".write(to: foreignSentinel, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
 
-    let command = try measurementPublishShellSource() + "\n" + #"""
+    let publishHook = temporaryDirectory.appendingPathComponent("make-directory.sh")
+    try "#!/bin/sh\nset -eu\nmkdir \"$1\"\n".write(
+      to: publishHook,
+      atomically: true,
+      encoding: .utf8
+    )
+    try FileManager.default.setAttributes(
+      [.posixPermissions: NSNumber(value: 0o755)],
+      ofItemAtPath: publishHook.path
+    )
+
+    let command = try measurementOutputHelpersShellSource() + "\n" + #"""
 set -eu
 output_dir=$1
 sentinel=$2
 foreign_directory=$3
+publish_hook=$4
 
 publish_payload() {
   destination=$1
   payload=$2
-  temporary=$(/usr/bin/mktemp "$output_dir/.fleck-panel-measurement.XXXXXX")
-  printf '%s\n' "$payload" > "$temporary"
+  temporary=$(printf '%s\n' "$payload" | measurement_output_helper create "$output_dir")
   publish_output_file "$temporary" "$destination"
 }
 
@@ -216,10 +254,20 @@ publish_payload "$destination" "symlink-directory-payload"
 
 destination="$output_dir/existing-directory"
 mkdir "$destination"
-temporary=$(/usr/bin/mktemp "$output_dir/.fleck-panel-measurement.XXXXXX")
-printf '%s\n' 'directory-payload' > "$temporary"
+temporary=$(printf '%s\n' 'directory-payload' | measurement_output_helper create "$output_dir")
 if publish_output_file "$temporary" "$destination"; then exit 12; fi
-/bin/unlink "$temporary"
+cleanup_output_temp "$temporary"
+
+destination="$output_dir/raced-directory"
+temporary=$(printf '%s\n' 'raced-directory-payload' | measurement_output_helper create "$output_dir")
+export FLECK_MEASUREMENT_PUBLISH_HOOK="$publish_hook"
+if publish_output_file "$temporary" "$destination"; then exit 14; fi
+unset FLECK_MEASUREMENT_PUBLISH_HOOK
+[ -d "$destination" ]
+[ -f "$temporary" ] && [ ! -L "$temporary" ]
+cleanup_output_temp "$temporary"
+[ ! -e "$temporary" ]
+[ ! -e "$destination/raced-directory-payload" ]
 
 destination="$output_dir/hard-link"
 if [ -e "$destination" ] || [ -L "$destination" ]; then exit 13; fi
@@ -231,7 +279,12 @@ leftover=$(find "$output_dir" -maxdepth 1 -name '.fleck-panel-measurement.*' -pr
 """#
     let result = try runShell(
       command,
-      arguments: [temporaryDirectory.path, sentinel.path, foreignDirectory.path]
+      arguments: [
+        temporaryDirectory.path,
+        sentinel.path,
+        foreignDirectory.path,
+        publishHook.path,
+      ]
     )
 
     #expect(result.status == 0, Comment(rawValue: result.stderr))
@@ -249,8 +302,14 @@ leftover=$(find "$output_dir" -maxdepth 1 -name '.fleck-panel-measurement.*' -pr
       contentsOf: temporaryDirectory.appendingPathComponent("hard-link"),
       encoding: .utf8
     ) == "hard-link-payload\n")
+    #expect(!FileManager.default.fileExists(
+      atPath: foreignDirectory.appendingPathComponent("symlink-directory-payload").path
+    ))
     #expect(FileManager.default.fileExists(
       atPath: temporaryDirectory.appendingPathComponent("existing-directory").path
+    ))
+    #expect(FileManager.default.fileExists(
+      atPath: temporaryDirectory.appendingPathComponent("raced-directory").path
     ))
     #expect(!FileManager.default.fileExists(
       atPath: temporaryDirectory
@@ -258,6 +317,51 @@ leftover=$(find "$output_dir" -maxdepth 1 -name '.fleck-panel-measurement.*' -pr
         .appendingPathComponent("directory-payload")
         .path
     ))
+  }
+
+  @Test func FleckPanelMeasurementTempWriteSurvivesPathSymlinkSubstitution() throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("fleck-temp-write-safety-" + UUID().uuidString, isDirectory: true)
+    let sentinel = temporaryDirectory.appendingPathComponent("sentinel.txt")
+    let hook = temporaryDirectory.appendingPathComponent("replace-temp.sh")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    try "sentinel\n".write(to: sentinel, atomically: true, encoding: .utf8)
+    try "#!/bin/sh\nset -eu\n/bin/unlink \"$1\"\n/bin/ln -s \"$FLECK_MEASUREMENT_TEST_SENTINEL\" \"$1\"\n".write(
+      to: hook,
+      atomically: true,
+      encoding: .utf8
+    )
+    try FileManager.default.setAttributes(
+      [.posixPermissions: NSNumber(value: 0o755)],
+      ofItemAtPath: hook.path
+    )
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+    let command = try measurementOutputHelpersShellSource() + "\n" + #"""
+set -eu
+output_dir=$1
+sentinel=$2
+hook=$3
+export FLECK_MEASUREMENT_TEMP_HOOK="$hook"
+export FLECK_MEASUREMENT_TEST_SENTINEL="$sentinel"
+if printf '%s\n' 'payload' | measurement_output_helper create "$output_dir"; then exit 10; fi
+[ "$(/usr/bin/sed -n '1p' "$sentinel")" = sentinel ]
+leftover=$(find "$output_dir" -maxdepth 1 -name '.fleck-panel-measurement.*' -print -quit)
+[ -z "$leftover" ]
+"""#
+    let result = try runShell(
+      command,
+      arguments: [temporaryDirectory.path, sentinel.path, hook.path]
+    )
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
+    #expect(try String(contentsOf: sentinel, encoding: .utf8) == "sentinel\n")
+  }
+
+  @Test func FleckPanelMeasurementEmbeddedPerlHelperCompiles() throws {
+    let result = try runPerl(try measurementOutputHelperPerlSource())
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
   }
 
   @Test func FleckPanelPresentationJXAUsesFakeAXFixturesForClosedNormalizationAnd31Samples() throws {
@@ -543,6 +647,25 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     )
   }
 
+  private func runPerl(_ source: String) throws -> ProcessResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+    process.arguments = ["-MFile::Temp", "-c", "-e", source]
+    let output = Pipe()
+    let error = Pipe()
+    process.standardOutput = output
+    process.standardError = error
+    try process.run()
+    let stdoutData = output.fileHandleForReading.readDataToEndOfFile()
+    let stderrData = error.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return ProcessResult(
+      status: process.terminationStatus,
+      stdout: String(data: stdoutData, encoding: .utf8) ?? "",
+      stderr: String(data: stderrData, encoding: .utf8) ?? ""
+    )
+  }
+
   private func runAWK(
     _ program: String,
     arguments: [String],
@@ -616,12 +739,24 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     return String(source[begin.upperBound..<end.lowerBound])
   }
 
-  private func measurementPublishShellSource() throws -> String {
+  private func measurementOutputHelpersShellSource() throws -> String {
     let source = try measurementScriptSource()
-    let begin = try #require(source.range(of: "# AX_MEASUREMENT_OUTPUT_PUBLISH_BEGIN\n"))
+    let begin = try #require(source.range(of: "# AX_MEASUREMENT_OUTPUT_HELPERS_BEGIN\n"))
     let end = try #require(
       source.range(
-        of: "\n# AX_MEASUREMENT_OUTPUT_PUBLISH_END",
+        of: "\n# AX_MEASUREMENT_OUTPUT_HELPERS_END",
+        range: begin.upperBound..<source.endIndex
+      )
+    )
+    return String(source[begin.upperBound..<end.lowerBound])
+  }
+
+  private func measurementOutputHelperPerlSource() throws -> String {
+    let source = try measurementScriptSource()
+    let begin = try #require(source.range(of: "# AX_MEASUREMENT_PERL_BEGIN\n"))
+    let end = try #require(
+      source.range(
+        of: "\n# AX_MEASUREMENT_PERL_END",
         range: begin.upperBound..<source.endIndex
       )
     )
