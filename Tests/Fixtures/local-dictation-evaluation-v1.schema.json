@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fleck.local/schemas/local-dictation-evaluation-v1.schema.json",
+  "title": "Fleck local dictation evaluation corpus v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "corpusID", "revision", "provenance", "cases"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "corpusID": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "provenance": {"$ref": "#/$defs/CorpusProvenance"},
+    "cases": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/EvaluationCase"}}
+  },
+  "$defs": {
+    "EvaluationLanguageMode": {"type": "string", "enum": ["english", "mandarin", "mixed"]},
+    "ProtectedMatchMode": {"type": "string", "enum": ["exactCase", "caseInsensitive", "numericExact", "negationExact"]},
+    "ProtectedExpectation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "term", "mode", "language"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "term": {"type": "string", "minLength": 1},
+        "mode": {"$ref": "#/$defs/ProtectedMatchMode"},
+        "language": {"$ref": "#/$defs/EvaluationLanguageMode"}
+      }
+    },
+    "AudioProvenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["assetSHA256", "source", "license", "approved", "speakerLanguage", "speakerAccent", "privacyReview", "revocationProcess"],
+      "properties": {
+        "assetSHA256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+        "source": {"type": "string", "minLength": 1},
+        "license": {"type": "string", "minLength": 1},
+        "approved": {"type": "boolean"},
+        "speakerLanguage": {"type": "string", "minLength": 1},
+        "speakerAccent": {"type": ["string", "null"]},
+        "privacyReview": {"type": "string", "minLength": 1},
+        "revocationProcess": {"type": "string", "minLength": 1}
+      }
+    },
+    "AudioConsent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "recordID", "reviewer", "reviewedAt"],
+      "properties": {
+        "status": {"type": "string", "enum": ["approved", "revoked", "pending"]},
+        "recordID": {"type": "string", "minLength": 1},
+        "reviewer": {"type": ["string", "null"]},
+        "reviewedAt": {"type": ["string", "null"]}
+      }
+    },
+    "CorpusProvenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sourceType", "createdAt", "owner", "privacyReview", "audioPolicy"],
+      "properties": {
+        "sourceType": {"type": "string", "minLength": 1},
+        "createdAt": {"type": "string", "minLength": 1},
+        "owner": {"type": "string", "minLength": 1},
+        "privacyReview": {"type": "string", "minLength": 1},
+        "audioPolicy": {"type": "string", "minLength": 1}
+      }
+    },
+    "EvaluationTextSlice": {
+      "type": "object", "additionalProperties": false,
+      "required": ["language", "text"],
+      "properties": {
+        "language": {"$ref": "#/$defs/EvaluationLanguageMode"},
+        "text": {"type": "string", "minLength": 1}
+      }
+    },
+    "EvaluationCase": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "language", "categories", "referenceText", "spokenText", "audioAsset", "audioProvenance", "audioConsent", "conditions", "protectedExpectations", "metricReferenceSlices"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "language": {"$ref": "#/$defs/EvaluationLanguageMode"},
+        "categories": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "referenceText": {"type": "string", "minLength": 1},
+        "spokenText": {"type": "string", "minLength": 1},
+        "audioAsset": {
+          "type": ["string", "null"],
+          "description": "May be null for synthetic text-contract data; Swift validation requires admitted audio for every non-synthetic run regardless of releaseEvidence."
+        },
+        "audioProvenance": {"anyOf": [{"$ref": "#/$defs/AudioProvenance"}, {"type": "null"}]},
+        "audioConsent": {"anyOf": [{"$ref": "#/$defs/AudioConsent"}, {"type": "null"}]},
+        "conditions": {"type": "array", "items": {"type": "string"}},
+        "protectedExpectations": {"type": "array", "items": {"$ref": "#/$defs/ProtectedExpectation"}},
+        "metricReferenceSlices": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/EvaluationTextSlice"}}
+      }
+    }
+  }
+}

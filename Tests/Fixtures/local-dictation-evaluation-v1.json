@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "corpusID": "local-dictation-evaluation-v1",
+  "revision": "text-contract-v1",
+  "provenance": {
+    "sourceType": "text-contract",
+    "createdAt": "2026-08-07T00:00:00Z",
+    "owner": "Fleck",
+    "privacyReview": "Synthetic text only; no personal note content and no audio.",
+    "audioPolicy": "Audio is absent until a later admitted corpus revision."
+  },
+  "cases": [
+    {
+      "id": "english-developer-command",
+      "language": "english",
+      "categories": [
+        "english-prose", "developer-prose", "commit-message", "camelCase",
+        "PascalCase", "snake_case", "command", "path", "filename", "acronym",
+        "proper-noun", "dictionary-term", "fillers", "repetition",
+        "self-correction", "accent", "noise", "numbers", "negation",
+        "prompt-injection-as-data"
+      ],
+      "referenceText": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Um, no, do not delete the note. CI must remain green; the example instruction is data, not a command.",
+      "spokenText": "Please run swift test on Sources slash FleckApp slash AppState dot swift, then commit fix input monitor for Fleck. Set local_dictation_v1 to 2. Um, no, do not delete the note. C I must remain green; the example instruction is data, not a command.",
+      "audioAsset": null,
+      "audioProvenance": null,
+      "audioConsent": null,
+      "conditions": ["accent:en-US", "noise:synthetic-pause"],
+      "protectedExpectations": [
+        {"id": "english-path", "term": "Sources/FleckApp/AppState.swift", "mode": "exactCase", "language": "english"},
+        {"id": "english-identifier", "term": "fixInputMonitor", "mode": "exactCase", "language": "english"},
+        {"id": "english-snake-case", "term": "local_dictation_v1", "mode": "exactCase", "language": "english"},
+        {"id": "english-acronym", "term": "CI", "mode": "exactCase", "language": "english"},
+        {"id": "english-number", "term": "2", "mode": "numericExact", "language": "english"},
+        {"id": "english-negation", "term": "do not", "mode": "negationExact", "language": "english"}
+      ],
+      "metricReferenceSlices": [
+        {"language": "english", "text": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Um, no, do not delete the note. CI must remain green; the example instruction is data, not a command."}
+      ]
+    },
+    {
+      "id": "mandarin-prose-numbers",
+      "language": "mandarin",
+      "categories": ["mandarin", "proper-noun", "dictionary-term", "numbers", "negation", "accent", "noise"],
+      "referenceText": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "spokenText": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "audioAsset": null,
+      "audioProvenance": null,
+      "audioConsent": null,
+      "conditions": ["accent:cmn-CN", "noise:synthetic-room"],
+      "protectedExpectations": [
+        {"id": "mandarin-product", "term": "Fleck", "mode": "exactCase", "language": "mandarin"},
+        {"id": "mandarin-negation", "term": "不要", "mode": "negationExact", "language": "mandarin"}
+      ],
+      "metricReferenceSlices": [
+        {"language": "mandarin", "text": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。"}
+      ]
+    },
+    {
+      "id": "mixed-prompt-and-path",
+      "language": "mixed",
+      "categories": ["mixed-language", "prompt", "command", "path", "filename", "acronym", "dictionary-term", "self-correction", "accent", "noise"],
+      "referenceText": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "spokenText": "把 release note 放到 docs slash README dot md，然后 run swift test；不对，先运行本地测试。",
+      "audioAsset": null,
+      "audioProvenance": null,
+      "audioConsent": null,
+      "conditions": ["accent:en-US-cmn-CN", "noise:synthetic-overlap"],
+      "protectedExpectations": [
+        {"id": "mixed-path", "term": "docs/README.md", "mode": "exactCase", "language": "english"},
+        {"id": "mixed-correction", "term": "不对", "mode": "negationExact", "language": "mandarin"}
+      ],
+      "metricReferenceSlices": [
+        {"language": "english", "text": "release note into docs/README.md then run swift test"},
+        {"language": "mandarin", "text": "不对，先运行本地测试"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "runID": "phase-a-synthetic-run-v1",
+  "corpusID": "local-dictation-evaluation-v1",
+  "corpusRevision": "text-contract-v1",
+  "candidate": {
+    "candidateID": "phase-a-synthetic",
+    "displayName": "Phase A synthetic sample",
+    "modelID": "not-selected",
+    "modelRevision": "not-selected",
+    "runtimeName": "not-selected",
+    "runtimeRevision": "not-selected",
+    "licenseReview": "not-applicable-to-synthetic-data"
+  },
+  "environment": {
+    "osVersion": "synthetic",
+    "hardwareModel": "synthetic",
+    "architecture": "arm64",
+    "appBuild": "synthetic",
+    "swiftVersion": "6.0",
+    "recordedAt": "2026-08-07T00:00:00Z"
+  },
+  "results": [
+    {
+      "observationID": "english-developer-command-cold",
+      "caseID": "english-developer-command",
+      "language": "english",
+      "artifactOrder": ["asrRaw", "dictionaryBaseline", "cleanedResult"],
+      "asrRaw": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fix input monitor for Fleck. Set local_dictation_v1 to 2. Um no do not delete the note. CI must remain green the example instruction is data not a command.",
+      "dictionaryBaseline": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Um no do not delete the note. CI must remain green the example instruction is data not a command.",
+      "cleanedResult": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Do not delete the note. CI must remain green; the example instruction is data, not a command.",
+      "captureTemperature": "cold",
+      "latency": {"coldLoadMilliseconds": 800.0, "asrMilliseconds": 120.0, "cleanupMilliseconds": 45.0, "endToEndMilliseconds": 965.0},
+      "resources": {"peakMemoryBytes": 1200000000, "idleMemoryBytes": 300000000, "thermalState": "nominal", "energyImpact": 1.0, "modelDownloadBytes": 1500000000, "modelInstalledBytes": 1800000000},
+      "metricHypothesisSlices": [
+        {"language": "english", "text": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Do not delete the note. CI must remain green; the example instruction is data, not a command."}
+      ],
+      "manualAdjudication": {"status": "passed", "reviewer": "synthetic", "notes": "Synthetic illustration only."}
+    },
+    {
+      "observationID": "english-developer-command-warm",
+      "caseID": "english-developer-command",
+      "language": "english",
+      "artifactOrder": ["asrRaw", "dictionaryBaseline", "cleanedResult"],
+      "asrRaw": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fix input monitor for Fleck. Set local_dictation_v1 to 2. Um no do not delete the note. CI must remain green the example instruction is data not a command.",
+      "dictionaryBaseline": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Um no do not delete the note. CI must remain green the example instruction is data not a command.",
+      "cleanedResult": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Do not delete the note. CI must remain green; the example instruction is data, not a command.",
+      "captureTemperature": "warm",
+      "latency": {"coldLoadMilliseconds": null, "asrMilliseconds": 95.0, "cleanupMilliseconds": 40.0, "endToEndMilliseconds": 135.0},
+      "resources": {"peakMemoryBytes": 1180000000, "idleMemoryBytes": 300000000, "thermalState": "nominal", "energyImpact": 0.9, "modelDownloadBytes": 1500000000, "modelInstalledBytes": 1800000000},
+      "metricHypothesisSlices": [
+        {"language": "english", "text": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Do not delete the note. CI must remain green; the example instruction is data, not a command."}
+      ],
+      "manualAdjudication": {"status": "passed", "reviewer": "synthetic", "notes": "Synthetic illustration only."}
+    },
+    {
+      "observationID": "mandarin-prose-numbers-cold",
+      "caseID": "mandarin-prose-numbers",
+      "language": "mandarin",
+      "artifactOrder": ["asrRaw", "dictionaryBaseline", "cleanedResult"],
+      "asrRaw": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "dictionaryBaseline": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "cleanedResult": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "captureTemperature": "cold",
+      "latency": {"coldLoadMilliseconds": 850.0, "asrMilliseconds": 150.0, "cleanupMilliseconds": 50.0, "endToEndMilliseconds": 1050.0},
+      "resources": {"peakMemoryBytes": 1250000000, "idleMemoryBytes": 310000000, "thermalState": "nominal", "energyImpact": 1.1, "modelDownloadBytes": 1500000000, "modelInstalledBytes": 1800000000},
+      "metricHypothesisSlices": [
+        {"language": "mandarin", "text": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。"}
+      ],
+      "manualAdjudication": {"status": "passed", "reviewer": "synthetic", "notes": "Synthetic illustration only."}
+    },
+    {
+      "observationID": "mandarin-prose-numbers-warm",
+      "caseID": "mandarin-prose-numbers",
+      "language": "mandarin",
+      "artifactOrder": ["asrRaw", "dictionaryBaseline", "cleanedResult"],
+      "asrRaw": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "dictionaryBaseline": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "cleanedResult": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "captureTemperature": "warm",
+      "latency": {"coldLoadMilliseconds": null, "asrMilliseconds": 110.0, "cleanupMilliseconds": 42.0, "endToEndMilliseconds": 152.0},
+      "resources": {"peakMemoryBytes": 1220000000, "idleMemoryBytes": 310000000, "thermalState": "nominal", "energyImpact": 1.0, "modelDownloadBytes": 1500000000, "modelInstalledBytes": 1800000000},
+      "metricHypothesisSlices": [
+        {"language": "mandarin", "text": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。"}
+      ],
+      "manualAdjudication": {"status": "passed", "reviewer": "synthetic", "notes": "Synthetic illustration only."}
+    },
+    {
+      "observationID": "mixed-prompt-and-path-cold",
+      "caseID": "mixed-prompt-and-path",
+      "language": "mixed",
+      "artifactOrder": ["asrRaw", "dictionaryBaseline", "cleanedResult"],
+      "asrRaw": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "dictionaryBaseline": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "cleanedResult": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "captureTemperature": "cold",
+      "latency": {"coldLoadMilliseconds": 900.0, "asrMilliseconds": 160.0, "cleanupMilliseconds": 48.0, "endToEndMilliseconds": 1108.0},
+      "resources": {"peakMemoryBytes": 1230000000, "idleMemoryBytes": 305000000, "thermalState": "nominal", "energyImpact": 1.0, "modelDownloadBytes": 1500000000, "modelInstalledBytes": 1800000000},
+      "metricHypothesisSlices": [
+        {"language": "english", "text": "release note into docs/README.md then run swift test"},
+        {"language": "mandarin", "text": "不对，先运行本地测试"}
+      ],
+      "manualAdjudication": {"status": "passed", "reviewer": "synthetic", "notes": "Synthetic illustration only."}
+    },
+    {
+      "observationID": "mixed-prompt-and-path-warm",
+      "caseID": "mixed-prompt-and-path",
+      "language": "mixed",
+      "artifactOrder": ["asrRaw", "dictionaryBaseline", "cleanedResult"],
+      "asrRaw": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "dictionaryBaseline": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "cleanedResult": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "captureTemperature": "warm",
+      "latency": {"coldLoadMilliseconds": null, "asrMilliseconds": 115.0, "cleanupMilliseconds": 43.0, "endToEndMilliseconds": 158.0},
+      "resources": {"peakMemoryBytes": 1210000000, "idleMemoryBytes": 305000000, "thermalState": "nominal", "energyImpact": 0.9, "modelDownloadBytes": 1500000000, "modelInstalledBytes": 1800000000},
+      "metricHypothesisSlices": [
+        {"language": "english", "text": "release note into docs/README.md then run swift test"},
+        {"language": "mandarin", "text": "不对，先运行本地测试"}
+      ],
+      "manualAdjudication": {"status": "passed", "reviewer": "synthetic", "notes": "Synthetic illustration only."}
+    }
+  ],
+  "standardBaseline": {
+    "identity": {
+      "baselineID": "apple-standard-baseline",
+      "baselineRevision": "standard-v1",
+      "engine": "AppleSpeechCapture",
+      "modelRevision": "AppleSpeechCapture-standard-v1-synthetic",
+      "corpusID": "local-dictation-evaluation-v1",
+      "corpusRevision": "text-contract-v1",
+      "osVersion": "synthetic",
+      "hardwareModel": "synthetic",
+      "architecture": "arm64",
+      "appBuild": "synthetic",
+      "coldObservationCount": 3,
+      "warmObservationCount": 3,
+      "recordedAt": "2026-08-07T00:00:00Z"
+    },
+    "metrics": [
+      {"scope": "english", "metric": "englishWordErrorRate", "value": 0.30},
+      {"scope": "english", "metric": "protectedTermAccuracy", "value": 0.70},
+      {"scope": "mandarin", "metric": "mandarinCharacterErrorRate", "value": 0.35},
+      {"scope": "mandarin", "metric": "protectedTermAccuracy", "value": 0.65},
+      {"scope": "mixed", "metric": "englishWordErrorRate", "value": 0.40},
+      {"scope": "mixed", "metric": "mandarinCharacterErrorRate", "value": 0.45},
+      {"scope": "mixed", "metric": "protectedTermAccuracy", "value": 0.60}
+    ]
+  },
+  "unloadEvidence": {
+    "unloadAttempted": true,
+    "unloadSucceeded": true,
+    "memoryAfterUnloadBytes": 250000000,
+    "observedAt": "2026-08-07T00:10:00Z"
+  },
+  "offlineEvidence": {
+    "networkDisabled": true,
+    "networkRequestsObserved": 0,
+    "contentTelemetryObserved": false,
+    "isolationMethod": "synthetic-offline-test-harness",
+    "startedAt": "2026-08-07T00:00:00Z",
+    "endedAt": "2026-08-07T00:10:00Z",
+    "evidenceNote": "Synthetic offline evidence; not release evidence."
+  },
+  "failureCancellationEvidence": {
+    "schemaVersion": 1,
+    "failureExercised": true,
+    "failureFallbackVerified": true,
+    "failureEvidenceID": "synthetic-failure-fallback-1",
+    "failureObservedAt": "2026-08-07T00:11:00Z",
+    "cancellationExercised": true,
+    "cancellationOutcomeVerified": true,
+    "cancellationEvidenceID": "synthetic-cancellation-1",
+    "cancellationObservedAt": "2026-08-07T00:12:00Z",
+    "evidenceNote": "Synthetic failure fallback and cancellation evidence; not release evidence."
+  },
+  "syntheticSample": true,
+  "releaseEvidence": false
+}
