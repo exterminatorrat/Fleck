@@ -198,6 +198,7 @@
     let isPinned: Bool
     let sizing: NotesPanelSizing
     @StateObject private var editorCommands = EditorCommands()
+    @StateObject private var searchController: WorkspaceSearchController
     @Namespace private var selectedTabHighlight
     @State private var isImporting = false
     @State private var isExporting = false
@@ -221,97 +222,106 @@
       dictationRuntime: DictationRuntime,
       isPinned: Bool = false,
       sizing: NotesPanelSizing = .storedPreferences,
-      editorCommands: EditorCommands? = nil
+      editorCommands: EditorCommands? = nil,
+      searchController: WorkspaceSearchController? = nil
     ) {
       self.dictationRuntime = dictationRuntime
       self.isPinned = isPinned
       self.sizing = sizing
       _editorCommands = StateObject(wrappedValue: editorCommands ?? EditorCommands())
+      _searchController = StateObject(
+        wrappedValue: searchController ?? WorkspaceSearchController()
+      )
     }
 
     var body: some View {
-      VStack(spacing: 0) {
-        if let migrationError = appState.startupMigrationError {
-          migrationFailure(migrationError)
-        } else {
-          header
-          folderNavigator
-          tabStrip
-          Divider().opacity(0.35)
-          if let title = modifierRecoveryPresentation.recoveryButtonTitle {
-            HStack(spacing: 8) {
-              Label(modifierRecoveryPresentation.statusCopy, systemImage: "keyboard.badge.ellipsis")
-                .font(.caption)
-              Spacer()
-              Button(title) {
-                Task { @MainActor in
-                  guard let settings = await dictationRuntime.recoverModifierMonitoring() else {
-                    return
+      ZStack {
+        VStack(spacing: 0) {
+          if let migrationError = appState.startupMigrationError {
+            migrationFailure(migrationError)
+          } else {
+            header
+            folderNavigator
+            tabStrip
+            Divider().opacity(0.35)
+            if let title = modifierRecoveryPresentation.recoveryButtonTitle {
+              HStack(spacing: 8) {
+                Label(modifierRecoveryPresentation.statusCopy, systemImage: "keyboard.badge.ellipsis")
+                  .font(.caption)
+                Spacer()
+                Button(title) {
+                  Task { @MainActor in
+                    guard let settings = await dictationRuntime.recoverModifierMonitoring() else {
+                      return
+                    }
+                    dictationRuntime.openSystemSettings(settings)
                   }
-                  dictationRuntime.openSystemSettings(settings)
+                }
+                .accessibilityLabel(title)
+              }
+              .padding(.horizontal, 10)
+              .padding(.vertical, 7)
+              .background(.quaternary.opacity(0.35))
+              .accessibilityElement(children: .contain)
+              .accessibilityLabel("Dictation shortcut unavailable")
+            }
+            if let failure = dictationRuntime.captureFailure {
+              HStack(spacing: 8) {
+                Label(failure.message, systemImage: "exclamationmark.triangle")
+                  .font(.caption)
+                Spacer()
+                ForEach(failure.actions, id: \.pane) { action in
+                  Button(action.title) {
+                    dictationRuntime.openSystemSettings(action)
+                  }
+                  .accessibilityLabel(action.title)
                 }
               }
-              .accessibilityLabel(title)
+              .padding(.horizontal, 10)
+              .padding(.vertical, 7)
+              .background(.quaternary.opacity(0.35))
+              .accessibilityElement(children: .contain)
+              .accessibilityLabel("Dictation unavailable")
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(.quaternary.opacity(0.35))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Dictation shortcut unavailable")
-          }
-          if let failure = dictationRuntime.captureFailure {
-            HStack(spacing: 8) {
-              Label(failure.message, systemImage: "exclamationmark.triangle")
-                .font(.caption)
-              Spacer()
-              ForEach(failure.actions, id: \.pane) { action in
-                Button(action.title) {
-                  dictationRuntime.openSystemSettings(action)
+            if let recoveryAction = dictationRuntime.recoveryAction {
+              HStack(spacing: 8) {
+                Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
+                  .font(.caption)
+                Spacer()
+                Button(recoveryAction.title) {
+                  Task { await dictationRuntime.performRecoveryAction() }
                 }
-                .accessibilityLabel(action.title)
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(!dictationRuntime.recoveryCommand.isEnabled)
+                .accessibilityLabel(recoveryAction.accessibilityLabel)
               }
+              .padding(.horizontal, 10)
+              .padding(.vertical, 7)
+              .background(.quaternary.opacity(0.35))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(.quaternary.opacity(0.35))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Dictation unavailable")
-          }
-          if let recoveryAction = dictationRuntime.recoveryAction {
-            HStack(spacing: 8) {
-              Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
+            if let banner = appState.agentBannerPresentation {
+              AgentChangeBanner(
+                presentation: banner,
+                motion: motion,
+                onUndo: { Task { await appState.undoLatestAgentChange() } }
+              )
+              .animation(motion.quick, value: banner)
+            }
+            scopedEditor
+              .frame(minHeight: 80)
+              .layoutPriority(1)
+            if let error = appState.saveError {
+              Text("Could not save: \(error)")
                 .font(.caption)
-              Spacer()
-              Button(recoveryAction.title) {
-                Task { await dictationRuntime.performRecoveryAction() }
-              }
-              .keyboardShortcut("r", modifiers: [.command, .shift])
-              .disabled(!dictationRuntime.recoveryCommand.isEnabled)
-              .accessibilityLabel(recoveryAction.accessibilityLabel)
+                .foregroundStyle(.red)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(.quaternary.opacity(0.35))
-          }
-          if let banner = appState.agentBannerPresentation {
-            AgentChangeBanner(
-              presentation: banner,
-              motion: motion,
-              onUndo: { Task { await appState.undoLatestAgentChange() } }
-            )
-            .animation(motion.quick, value: banner)
-          }
-          scopedEditor
-            .frame(minHeight: 80)
-            .layoutPriority(1)
-          if let error = appState.saveError {
-            Text("Could not save: \(error)")
-              .font(.caption)
-              .foregroundStyle(.red)
-              .padding(8)
-              .frame(maxWidth: .infinity, alignment: .leading)
           }
         }
+        .allowsHitTesting(!searchController.isPresented)
+        .disabled(searchController.isPresented)
+        .accessibilityHidden(searchController.isPresented)
       }
       .frame(
         width: sizing == .storedPreferences ? appState.preferences.panelWidth : nil,
@@ -329,6 +339,10 @@
       .tint(Color(hex: appState.preferences.accentHex) ?? .accentColor)
       .background(
         ShortcutMonitor(shortcuts: appState.preferences.shortcuts, action: performShortcut)
+          .frame(width: 0, height: 0)
+      )
+      .background(
+        WorkspaceSearchWindowReader(controller: searchController)
           .frame(width: 0, height: 0)
       )
       .fileImporter(
@@ -407,6 +421,22 @@
         }
         .animation(motion.standard, value: notePendingDeletion?.id)
       }
+      .overlay {
+        if searchController.isPresented {
+          WorkspaceSearchView(
+            controller: searchController,
+            notes: appState.workspace.notes,
+            accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
+            currentNoteIDs: {
+              Set(appState.workspace.notes.map(\.id))
+            },
+            onActivate: { noteID in
+              guard isNoteVisible(noteID), activateNoteAndScope(noteID) else { return }
+            }
+          )
+          .zIndex(2)
+        }
+      }
       .task {
         await appState.waitUntilInitialLoad()
         guard !Task.isCancelled else { return }
@@ -484,6 +514,15 @@
           .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
+        Button {
+          searchController.present(for: appState.workspace.selectedNoteID)
+        } label: {
+          Image(systemName: "magnifyingglass")
+        }
+        .keyboardShortcut("f", modifiers: .command)
+        .accessibilityLabel("Search notes")
+        .accessibilityHint("Search note titles and bodies")
+        .help("Search notes (⌘F)")
         Button {
           appState.addNote(inFolderID: activeFolderID)
         } label: {
