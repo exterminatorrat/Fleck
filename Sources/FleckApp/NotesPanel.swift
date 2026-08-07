@@ -2,6 +2,59 @@
   import AppKit
   import SwiftUI
   import FleckCore
+  import UniformTypeIdentifiers
+
+  enum FolderDragPayload {
+    static let noteType = UTType(exportedAs: "com.harryjin.fleck.local-note")
+    static let folderType = UTType(exportedAs: "com.harryjin.fleck.local-folder")
+
+    private struct NoteValue: Codable {
+      let noteID: UUID
+      let sourceFolderID: UUID?
+    }
+
+    private struct FolderValue: Codable {
+      let folderID: UUID
+    }
+
+    static func noteProvider(noteID: UUID, sourceFolderID: UUID?) -> NSItemProvider {
+      provider(
+        type: noteType,
+        value: NoteValue(noteID: noteID, sourceFolderID: sourceFolderID)
+      )
+    }
+
+    static func folderProvider(folderID: UUID) -> NSItemProvider {
+      provider(type: folderType, value: FolderValue(folderID: folderID))
+    }
+
+    static func noteValue(from data: Data) -> (noteID: UUID, sourceFolderID: UUID?)? {
+      guard let value = try? JSONDecoder().decode(NoteValue.self, from: data) else {
+        return nil
+      }
+      return (value.noteID, value.sourceFolderID)
+    }
+
+    static func folderID(from data: Data) -> UUID? {
+      try? JSONDecoder().decode(FolderValue.self, from: data).folderID
+    }
+
+    private static func provider<Value: Encodable>(
+      type: UTType,
+      value: Value
+    ) -> NSItemProvider {
+      let data = try! JSONEncoder().encode(value)
+      let provider = NSItemProvider()
+      provider.registerDataRepresentation(
+        forTypeIdentifier: type.identifier,
+        visibility: .ownProcess
+      ) { completion in
+        completion(data, nil)
+        return nil
+      }
+      return provider
+    }
+  }
 
   enum TabDragReorder {
     struct Destination: Equatable {
@@ -144,6 +197,7 @@
     @State private var tabColorPickerNoteID: UUID?
     @State private var tabFrames: [UUID: CGRect] = [:]
     @State private var tabContentTrailingEdge: CGFloat = 0
+    @State private var activeFolderID: UUID?
 
     init(
       dictationRuntime: DictationRuntime,
@@ -163,6 +217,7 @@
           migrationFailure(migrationError)
         } else {
           header
+          folderNavigator
           tabStrip
           Divider().opacity(0.35)
           if let title = modifierRecoveryPresentation.recoveryButtonTitle {
@@ -228,7 +283,7 @@
             )
             .animation(motion.quick, value: banner)
           }
-          editor
+          scopedEditor
           if let error = appState.saveError {
             Text("Could not save: \(error)")
               .font(.caption)
@@ -330,6 +385,17 @@
         }
         .animation(motion.standard, value: notePendingDeletion?.id)
       }
+      .task {
+        await appState.waitUntilInitialLoad()
+        guard !Task.isCancelled else { return }
+        activeFolderID = appState.folderScopeForSelectedNote()
+      }
+      .onChange(of: appState.workspace.folders) { _, folders in
+        guard let activeFolderID,
+          !folders.contains(where: { $0.id == activeFolderID })
+        else { return }
+        self.activeFolderID = nil
+      }
     }
 
     private var modifierRecoveryPresentation: DictationModifierSettingsPresentation {
@@ -389,7 +455,7 @@
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
         Button {
-          appState.addNote()
+          appState.addNote(inFolderID: activeFolderID)
         } label: {
           Image(systemName: "plus")
         }
@@ -481,6 +547,42 @@
       .padding(.vertical, 11)
     }
 
+    private var folderNavigator: some View {
+      FolderNavigator(
+        activeFolderID: activeFolderID,
+        onSelect: selectFolder,
+        onDelete: deleteFolder,
+        onOpenTrash: { isShowingTrash = true }
+      )
+      .environmentObject(appState)
+    }
+
+    private func selectFolder(_ folderID: UUID?) {
+      guard folderID == nil || appState.workspace.folders.contains(where: { $0.id == folderID })
+      else { return }
+      activeFolderID = folderID
+      let visible = appState.visibleNotes(in: folderID)
+      guard !visible.contains(where: { $0.id == appState.workspace.selectedNoteID }),
+        let first = visible.first
+      else { return }
+      appState.select(first.id)
+    }
+
+    private func deleteFolder(_ folderID: UUID) {
+      let currentFolderID = activeFolderID
+      if currentFolderID == folderID {
+        activeFolderID = nil
+      }
+      do {
+        try appState.deleteFolder(id: folderID, activeFolderID: currentFolderID)
+      } catch {
+        if currentFolderID == folderID {
+          activeFolderID = folderID
+        }
+        appState.saveError = "Could not update folder: \(String(describing: error))"
+      }
+    }
+
     private var tabStrip: some View {
       ScrollViewReader { scrollProxy in
         GeometryReader { proxy in
@@ -493,7 +595,7 @@
           ZStack(alignment: .trailing) {
             ScrollView(.horizontal, showsIndicators: false) {
               HStack(spacing: 6) {
-                ForEach(appState.workspace.notes) { note in
+                ForEach(visibleNotes) { note in
             Button {
               guard draggedNoteID == nil else { return }
               appState.select(note.id)
@@ -532,6 +634,12 @@
               }
             }
             .buttonStyle(.plain)
+            .onDrag {
+              FolderDragPayload.noteProvider(
+                noteID: note.id,
+                sourceFolderID: note.folderID
+              )
+            }
             .transition(
               .opacity.combined(
                 with: .offset(x: motion.offset)
@@ -550,10 +658,16 @@
                   let result = TabDragReorder.performLiveMove(
                     draggedID: draggedNoteID,
                     locationX: value.location.x,
-                    currentNoteIDs: { appState.workspace.notes.map(\.id) },
+                    currentNoteIDs: { visibleNotes.map(\.id) },
                     currentFrames: { tabFrames },
                     lastDestinationID: tabDragDestinationID,
-                    move: appState.moveNote
+                    move: { id, destination in
+                      _ = appState.moveNote(
+                        id,
+                        inFolderID: activeFolderID,
+                        toVisibleIndex: destination
+                      )
+                    }
                   )
                   tabDragDestinationID = result.destinationID
                 }
@@ -614,7 +728,7 @@
               .padding(.horizontal, 12)
               .padding(.bottom, 9)
               .animation(motion.spatial, value: appState.workspace.selectedNoteID)
-              .animation(motion.spatial, value: appState.workspace.notes.map(\.id))
+              .animation(motion.spatial, value: visibleNotes.map(\.id))
             }
             .coordinateSpace(name: "tab-scroll-viewport")
             .coordinateSpace(name: "tab-strip")
@@ -632,7 +746,7 @@
           .frame(width: tabViewportWidth, alignment: .leading)
 
           Button {
-            if let lastNoteID = appState.workspace.notes.last?.id {
+            if let lastNoteID = visibleNotes.last?.id {
               scrollProxy.scrollTo(lastNoteID, anchor: .trailing)
             }
           } label: {
@@ -708,15 +822,15 @@
       case .togglePanel:
         NSApp.keyWindow?.orderOut(nil)
       case .newNote:
-        appState.addNote()
+        appState.addNote(inFolderID: activeFolderID)
       case .closeNote:
         if let note = appState.selectedNote {
           requestDeletion(note)
         }
       case .nextNote:
-        appState.selectAdjacentNote(forward: true)
+        appState.selectAdjacentNote(forward: true, inFolderID: activeFolderID)
       case .previousNote:
-        appState.selectAdjacentNote(forward: false)
+        appState.selectAdjacentNote(forward: false, inFolderID: activeFolderID)
       }
     }
 
@@ -759,10 +873,14 @@
     }
 
     private func move(_ note: Note, offset: Int) {
-      guard let index = appState.workspace.notes.firstIndex(where: { $0.id == note.id }) else {
+      guard let index = visibleNotes.firstIndex(where: { $0.id == note.id }) else {
         return
       }
-      appState.moveNote(note.id, to: index + offset)
+      _ = appState.moveNote(
+        note.id,
+        inFolderID: activeFolderID,
+        toVisibleIndex: index + offset
+      )
     }
 
     private func startExport(_ format: NoteExportFormat) {
@@ -787,12 +905,51 @@
             from: Data(contentsOf: url),
             filename: url.lastPathComponent
           )
-          appState.importNote(note)
+          appState.importNote(note, intoFolderID: activeFolderID)
         }
         appState.saveError = nil
       } catch {
         appState.saveError = "Import failed: \(error.localizedDescription)"
       }
+    }
+
+    private var visibleNotes: [Note] {
+      appState.visibleNotes(in: activeFolderID)
+    }
+
+    private var isEditorVisible: Bool {
+      guard let selectedID = appState.workspace.selectedNoteID else { return false }
+      return visibleNotes.contains(where: { $0.id == selectedID })
+    }
+
+    @ViewBuilder
+    private var scopedEditor: some View {
+      ZStack {
+        editor
+          .opacity(isEditorVisible ? 1 : 0)
+          .allowsHitTesting(isEditorVisible)
+          .accessibilityHidden(!isEditorVisible)
+
+        if visibleNotes.isEmpty {
+          VStack(spacing: 10) {
+            ContentUnavailableView(
+              activeFolderID == nil ? "Unfiled is Empty" : "Folder is Empty",
+              systemImage: activeFolderID == nil ? "tray" : "folder",
+              description: Text("Create a note here to get started.")
+            )
+            Button("New note") {
+              appState.addNote(inFolderID: activeFolderID)
+            }
+            .keyboardShortcut("t", modifiers: .command)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel(
+            activeFolderID == nil ? "Unfiled is empty" : "Folder is empty"
+          )
+        }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -843,6 +1000,388 @@
           .padding(.vertical, 10)
         }
       }
+    }
+  }
+
+  private struct FolderNavigator: View {
+    private enum FocusedRow: Hashable {
+      case unfiled
+      case folder(UUID)
+      case trash
+      case newFolder
+    }
+
+    @EnvironmentObject private var appState: AppState
+    @FocusState private var focusedRow: FocusedRow?
+    @State private var editingFolderID: UUID?
+    @State private var isCreatingFolder = false
+    @State private var folderNameDraft = ""
+    @State private var folderPendingDeletion: Folder?
+
+    let activeFolderID: UUID?
+    let onSelect: (UUID?) -> Void
+    let onDelete: (UUID) -> Void
+    let onOpenTrash: () -> Void
+
+    var body: some View {
+      VStack(spacing: 3) {
+        if isCreatingFolder {
+          folderEditor(label: "New folder", focus: .newFolder)
+        }
+
+        rootRow
+
+        ForEach(appState.workspace.folders, id: \.id) { folder in
+          folderRow(folder)
+        }
+
+        Button {
+          beginNewFolder()
+        } label: {
+          Label("New Folder", systemImage: "folder.badge.plus")
+            .font(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 2)
+        .accessibilityLabel("New folder")
+        .onDrop(of: [FolderDragPayload.folderType], isTargeted: nil) { providers, _ in
+          handleFolderDrop(providers, beforeFolderID: nil)
+        }
+
+        Divider()
+          .padding(.vertical, 2)
+
+        Button {
+          onOpenTrash()
+        } label: {
+          rowLabel(
+            name: "Trash",
+            systemImage: "trash",
+            count: appState.trashedNotes.count,
+            isSelected: false,
+            isEmpty: appState.trashedNotes.isEmpty
+          )
+        }
+        .buttonStyle(.plain)
+        .focused($focusedRow, equals: .trash)
+        .focusable()
+        .accessibilityLabel("Trash")
+        .accessibilityValue(
+          appState.trashedNotes.isEmpty
+            ? "Empty"
+            : "\(appState.trashedNotes.count) notes"
+        )
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 5)
+      .onMoveCommand { direction in
+        moveFocus(direction)
+      }
+      .onDeleteCommand {
+        guard case .folder(let id) = focusedRow,
+          let folder = appState.workspace.folders.first(where: { $0.id == id })
+        else { return }
+        folderPendingDeletion = folder
+      }
+      .onExitCommand {
+        cancelFolderEditing()
+      }
+      .onKeyPress(phases: .down) { press in
+        guard isF2(press), beginRename() else { return .ignored }
+        return .handled
+      }
+      .onKeyPress(keys: [.return, .space], phases: .down) { _ in
+        activateFocusedRow()
+        return .handled
+      }
+      .confirmationDialog(
+        "Delete folder?",
+        isPresented: Binding(
+          get: { folderPendingDeletion != nil },
+          set: { if !$0 { folderPendingDeletion = nil } }
+        ),
+        titleVisibility: .visible
+      ) {
+        Button("Delete Folder", role: .destructive) {
+          guard let folderPendingDeletion else { return }
+          self.folderPendingDeletion = nil
+          onDelete(folderPendingDeletion.id)
+        }
+        Button("Cancel", role: .cancel) {
+          folderPendingDeletion = nil
+        }
+      } message: {
+        Text("Notes in this folder move to Unfiled. No notes are deleted.")
+      }
+    }
+
+    private var rootRow: some View {
+      Button {
+        onSelect(nil)
+      } label: {
+        rowLabel(
+          name: "Unfiled",
+          systemImage: "tray",
+          count: appState.visibleNotes(in: nil).count,
+          isSelected: activeFolderID == nil,
+          isEmpty: appState.visibleNotes(in: nil).isEmpty
+        )
+      }
+      .buttonStyle(.plain)
+      .focused($focusedRow, equals: .unfiled)
+      .focusable()
+      .onDrop(of: [FolderDragPayload.noteType], isTargeted: nil) { providers, _ in
+        handleNoteDrop(providers, targetFolderID: nil)
+      }
+      .accessibilityLabel("Unfiled")
+      .accessibilityValue(
+        "\(appState.visibleNotes(in: nil).count) notes"
+          + (activeFolderID == nil ? ", Selected" : "")
+          + (appState.visibleNotes(in: nil).isEmpty ? ", Empty" : "")
+      )
+      .accessibilityAddTraits(activeFolderID == nil ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private func folderRow(_ folder: Folder) -> some View {
+      if editingFolderID == folder.id {
+        folderEditor(label: "Folder name", focus: .folder(folder.id))
+      } else {
+        Button {
+          onSelect(folder.id)
+        } label: {
+          rowLabel(
+            name: folder.name,
+            systemImage: "folder",
+            count: appState.visibleNotes(in: folder.id).count,
+            isSelected: activeFolderID == folder.id,
+            isEmpty: appState.visibleNotes(in: folder.id).isEmpty
+          )
+        }
+        .buttonStyle(.plain)
+        .focused($focusedRow, equals: .folder(folder.id))
+        .focusable()
+        .onDrag { FolderDragPayload.folderProvider(folderID: folder.id) }
+        .onDrop(
+          of: [FolderDragPayload.noteType, FolderDragPayload.folderType],
+          isTargeted: nil
+        ) { providers, _ in
+          handleDrop(
+            providers,
+            noteTargetFolderID: folder.id,
+            folderBeforeID: folder.id
+          )
+        }
+        .contextMenu {
+          Button("Rename", systemImage: "pencil") {
+            _ = beginRename(folderID: folder.id)
+          }
+          Button("Delete", systemImage: "trash", role: .destructive) {
+            folderPendingDeletion = folder
+          }
+        }
+        .accessibilityLabel(folder.name)
+        .accessibilityValue(
+          "\(appState.visibleNotes(in: folder.id).count) notes"
+            + (activeFolderID == folder.id ? ", Selected" : "")
+            + (appState.visibleNotes(in: folder.id).isEmpty ? ", Empty" : "")
+        )
+        .accessibilityAddTraits(activeFolderID == folder.id ? .isSelected : [])
+      }
+    }
+
+    @ViewBuilder
+    private func folderEditor(label: String, focus: FocusedRow) -> some View {
+      HStack(spacing: 5) {
+        TextField(label, text: $folderNameDraft)
+          .textFieldStyle(.roundedBorder)
+          .focused($focusedRow, equals: focus)
+          .onSubmit { commitFolderEditing() }
+          .onExitCommand { cancelFolderEditing() }
+        Button("Save") { commitFolderEditing() }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Save folder name")
+        Button("Cancel", role: .cancel) { cancelFolderEditing() }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Cancel folder name")
+      }
+      .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private func rowLabel(
+      name: String,
+      systemImage: String,
+      count: Int,
+      isSelected: Bool,
+      isEmpty: Bool
+    ) -> some View {
+      HStack(spacing: 7) {
+        Image(systemName: systemImage)
+          .frame(width: 18)
+        Text(name)
+          .lineLimit(1)
+        Spacer(minLength: 4)
+        Text(count, format: .number)
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(.secondary)
+      }
+      .padding(.horizontal, 8)
+      .padding(.vertical, 5)
+      .background(
+        isSelected ? Color.accentColor.opacity(0.18) : .clear,
+        in: RoundedRectangle(cornerRadius: 6)
+      )
+      .contentShape(RoundedRectangle(cornerRadius: 6))
+      .accessibilityHint(isEmpty ? "Empty folder" : "")
+    }
+
+    private func beginNewFolder() {
+      editingFolderID = nil
+      isCreatingFolder = true
+      folderNameDraft = ""
+      focusedRow = .newFolder
+    }
+
+    private func beginRename(folderID: UUID? = nil) -> Bool {
+      let id: UUID?
+      if let folderID {
+        id = folderID
+      } else if case .folder(let focusedID) = focusedRow {
+        id = focusedID
+      } else {
+        id = nil
+      }
+      guard let id,
+        let folder = appState.workspace.folders.first(where: { $0.id == id })
+      else { return false }
+      isCreatingFolder = false
+      editingFolderID = id
+      folderNameDraft = folder.name
+      focusedRow = .folder(id)
+      return true
+    }
+
+    private func commitFolderEditing() {
+      do {
+        if isCreatingFolder {
+          _ = try appState.createFolder(named: folderNameDraft)
+        } else if let editingFolderID {
+          try appState.renameFolder(id: editingFolderID, name: folderNameDraft)
+        }
+        cancelFolderEditing()
+      } catch {
+        appState.saveError = "Could not update folder: \(String(describing: error))"
+      }
+    }
+
+    private func cancelFolderEditing() {
+      editingFolderID = nil
+      isCreatingFolder = false
+      folderNameDraft = ""
+      focusedRow = nil
+    }
+
+    private func activateFocusedRow() {
+      switch focusedRow {
+      case .unfiled:
+        onSelect(nil)
+      case .folder(let id):
+        onSelect(id)
+      case .trash:
+        onOpenTrash()
+      case .newFolder, nil:
+        break
+      }
+    }
+
+    private func moveFocus(_ direction: MoveCommandDirection) {
+      let rows: [FocusedRow] = [.unfiled]
+        + appState.workspace.folders.map { .folder($0.id) }
+        + [.trash]
+      guard !rows.isEmpty else { return }
+      let currentIndex = focusedRow.flatMap { rows.firstIndex(of: $0) } ?? 0
+      let offset = direction == .up ? -1 : 1
+      focusedRow = rows[min(max(currentIndex + offset, 0), rows.count - 1)]
+    }
+
+    private func isF2(_ press: KeyPress) -> Bool {
+      press.characters.unicodeScalars.contains { $0.value == UInt32(NSF2FunctionKey) }
+    }
+
+    private func handleDrop(
+      _ providers: [NSItemProvider],
+      noteTargetFolderID: UUID?,
+      folderBeforeID: UUID?
+    ) -> Bool {
+      if let provider = providers.first(where: {
+        $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
+      }) {
+        return handleNoteDrop([provider], targetFolderID: noteTargetFolderID)
+      }
+      if let provider = providers.first(where: {
+        $0.registeredTypeIdentifiers.contains(FolderDragPayload.folderType.identifier)
+      }) {
+        return handleFolderDrop([provider], beforeFolderID: folderBeforeID)
+      }
+      return false
+    }
+
+    private func handleNoteDrop(
+      _ providers: [NSItemProvider],
+      targetFolderID: UUID?
+    ) -> Bool {
+      guard let provider = providers.first(where: {
+        $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
+      }) else { return false }
+      provider.loadDataRepresentation(forTypeIdentifier: FolderDragPayload.noteType.identifier) {
+        data, _ in
+        guard let data, let payload = FolderDragPayload.noteValue(from: data) else { return }
+        Task { @MainActor in
+          guard let note = appState.workspace.notes.first(where: { $0.id == payload.noteID }),
+            note.folderID == payload.sourceFolderID
+          else { return }
+          _ = appState.moveNote(
+            payload.noteID,
+            fromFolderID: payload.sourceFolderID,
+            toFolderID: targetFolderID,
+            activeFolderID: activeFolderID
+          )
+        }
+      }
+      return true
+    }
+
+    private func handleFolderDrop(
+      _ providers: [NSItemProvider],
+      beforeFolderID targetFolderID: UUID?
+    ) -> Bool {
+      guard let provider = providers.first(where: {
+        $0.registeredTypeIdentifiers.contains(FolderDragPayload.folderType.identifier)
+      }) else { return false }
+      provider.loadDataRepresentation(forTypeIdentifier: FolderDragPayload.folderType.identifier) {
+        data, _ in
+        guard let data, let sourceFolderID = FolderDragPayload.folderID(from: data) else {
+          return
+        }
+        Task { @MainActor in
+          guard let sourceIndex = appState.workspace.folders.firstIndex(where: { $0.id == sourceFolderID })
+          else { return }
+          let destination: Int
+          if let targetFolderID,
+            let targetIndex = appState.workspace.folders.firstIndex(where: { $0.id == targetFolderID })
+          {
+            destination = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
+          } else if targetFolderID == nil {
+            destination = appState.workspace.folders.count - 1
+          } else {
+            return
+          }
+          try? appState.reorderFolder(id: sourceFolderID, to: destination)
+        }
+      }
+      return true
     }
   }
 

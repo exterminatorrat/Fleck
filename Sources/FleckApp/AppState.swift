@@ -150,6 +150,17 @@
       return workspace.notes.first(where: { $0.id == id })
     }
 
+    func visibleNotes(in folderID: UUID?) -> [Note] {
+      workspace.notes(inFolderID: folderID)
+    }
+
+    func folderScopeForSelectedNote() -> UUID? {
+      guard let folderID = selectedNote?.folderID,
+        workspace.folders.contains(where: { $0.id == folderID })
+      else { return nil }
+      return folderID
+    }
+
     func activeDestinations() -> [DictationDestination] {
       workspace.notes.map {
         DictationDestination(noteID: $0.id, title: $0.displayTitle)
@@ -287,13 +298,168 @@
     }
 
     func addNote() {
-      workspace.addNote()
+      _ = addNote(inFolderID: nil)
+    }
+
+    @discardableResult
+    func addNote(inFolderID targetFolderID: UUID?) -> UUID {
+      let folderID = validFolderIDOrUnfiled(targetFolderID)
+      let note = Note(folderID: folderID)
+      workspace.addNote(note)
       scheduleSave()
+      return note.id
     }
 
     func importNote(_ note: Note) {
-      workspace.addNote(note)
+      importNote(note, intoFolderID: nil)
+    }
+
+    func importNote(_ note: Note, intoFolderID targetFolderID: UUID?) {
+      var imported = note
+      if workspace.notes.contains(where: { $0.id == imported.id }) {
+        imported = Note(
+          id: UUID(),
+          title: imported.title,
+          body: imported.body,
+          richTextRTF: imported.richTextRTF,
+          tabColorHex: imported.tabColorHex,
+          createdAt: imported.createdAt,
+          modifiedAt: imported.modifiedAt,
+          isPinned: imported.isPinned,
+          agentAccess: imported.agentAccess,
+          revision: imported.revision,
+          folderID: imported.folderID
+        )
+      }
+      imported.folderID = validFolderIDOrUnfiled(targetFolderID)
+      workspace.addNote(imported)
       scheduleSave()
+    }
+
+    @discardableResult
+    func createFolder(named name: String) throws -> Folder {
+      var updated = workspace
+      let folder = try updated.createFolder(name: name)
+      workspace = updated
+      scheduleSave()
+      return folder
+    }
+
+    func renameFolder(id: UUID, name: String) throws {
+      var updated = workspace
+      try updated.renameFolder(id: id, name: name)
+      guard updated != workspace else { return }
+      workspace = updated
+      scheduleSave()
+    }
+
+    func reorderFolder(id: UUID, to postRemovalIndex: Int) throws {
+      var updated = workspace
+      try updated.reorderFolder(id: id, to: postRemovalIndex)
+      guard updated != workspace else { return }
+      workspace = updated
+      scheduleSave()
+    }
+
+    func deleteFolder(id: UUID, activeFolderID: UUID? = nil) throws {
+      let selectedID = workspace.selectedNoteID
+      let selectedWasMember = workspace.notes.contains {
+        $0.id == selectedID && $0.folderID == id
+      }
+      var updated = workspace
+      try updated.deleteFolder(id: id)
+
+      guard activeFolderID == id else {
+        guard updated != workspace else { return }
+        workspace = updated
+        scheduleSave()
+        return
+      }
+
+      if selectedWasMember, let selectedID {
+        updated.selectedNoteID = selectedID
+      } else if let firstUnfiled = updated.notes(inFolderID: nil).first {
+        updated.selectedNoteID = firstUnfiled.id
+      } else if let selectedID,
+        updated.notes.contains(where: { $0.id == selectedID })
+      {
+        updated.selectedNoteID = selectedID
+      } else {
+        updated.ensureNoteExists()
+      }
+
+      guard updated != workspace else { return }
+      workspace = updated
+      scheduleSave()
+    }
+
+    @discardableResult
+    func moveNote(
+      _ id: UUID,
+      fromFolderID sourceFolderID: UUID?,
+      toFolderID targetFolderID: UUID?,
+      activeFolderID: UUID? = nil
+    ) -> Bool {
+      guard let note = workspace.notes.first(where: { $0.id == id }),
+        note.folderID == sourceFolderID
+      else { return false }
+      return moveNote(
+        id,
+        toFolderID: targetFolderID,
+        activeFolderID: activeFolderID
+      )
+    }
+
+    @discardableResult
+    func moveNote(
+      _ id: UUID,
+      toFolderID targetFolderID: UUID?,
+      activeFolderID: UUID? = nil
+    ) -> Bool {
+      guard let note = workspace.notes.first(where: { $0.id == id }),
+        targetFolderID == nil
+          || workspace.folders.contains(where: { $0.id == targetFolderID })
+      else { return false }
+      guard note.folderID != targetFolderID else { return false }
+
+      let sourceFolderID = note.folderID
+      let sourceVisibleNotes = workspace.notes(inFolderID: sourceFolderID)
+      var updated = workspace
+      guard (try? updated.moveNote(id: id, toFolderID: targetFolderID)) != nil else {
+        return false
+      }
+
+      if activeFolderID == sourceFolderID, updated.selectedNoteID == id,
+        let movingIndex = sourceVisibleNotes.firstIndex(where: { $0.id == id })
+      {
+        let remaining = sourceVisibleNotes.filter { $0.id != id }
+        if let nearest = remaining.dropFirst(movingIndex).first ?? remaining.last {
+          updated.selectedNoteID = nearest.id
+        }
+      }
+
+      workspace = updated
+      scheduleSave()
+      return true
+    }
+
+    @discardableResult
+    func moveNote(
+      _ id: UUID,
+      inFolderID folderID: UUID?,
+      toVisibleIndex destination: Int
+    ) -> Bool {
+      var updated = workspace
+      guard (try? updated.reorderNote(
+        id: id,
+        inFolderID: folderID,
+        toVisibleIndex: destination
+      )) != nil, updated != workspace else {
+        return false
+      }
+      workspace = updated
+      scheduleSave()
+      return true
     }
 
     func moveToTrash(_ id: UUID) {
@@ -305,6 +471,22 @@
 
     func selectAdjacentNote(forward: Bool) {
       workspace.selectAdjacent(forward: forward)
+      scheduleSave()
+    }
+
+    func selectAdjacentNote(forward: Bool, inFolderID folderID: UUID?) {
+      let visible = workspace.notes(inFolderID: folderID)
+      guard !visible.isEmpty else { return }
+      let currentIndex = visible.firstIndex(where: { $0.id == workspace.selectedNoteID })
+      let targetIndex: Int
+      if let currentIndex {
+        targetIndex = (currentIndex + (forward ? 1 : visible.count - 1)) % visible.count
+      } else {
+        targetIndex = forward ? 0 : visible.count - 1
+      }
+      let targetID = visible[targetIndex].id
+      guard workspace.selectedNoteID != targetID else { return }
+      workspace.selectedNoteID = targetID
       scheduleSave()
     }
 
@@ -449,7 +631,7 @@
       pendingTrashNotes.removeValue(forKey: trashedNote.id)
       trashedNotes.removeAll { $0.id == trashedNote.id }
       let originalWorkspace = workspace
-      workspace.addNote(trashedNote.note)
+      workspace.addRestoredNote(trashedNote.note)
       let optimisticWorkspace = workspace
       let preferences = preferences
       let generation = persistenceGeneration
@@ -919,6 +1101,11 @@
     private func resetSaveStatus() {
       saveStatusResetTask?.cancel()
       saveStatus = .idle
+    }
+
+    private func validFolderIDOrUnfiled(_ folderID: UUID?) -> UUID? {
+      guard let folderID else { return nil }
+      return workspace.folders.contains(where: { $0.id == folderID }) ? folderID : nil
     }
   }
 

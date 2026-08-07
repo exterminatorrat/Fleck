@@ -1027,6 +1027,17 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!source.contains(".id(appState.preferences.showFormattingBar)"))
 }
 
+@Test func AppKitEditorFolderScopeDoesNotDuplicateEditor() throws {
+  let source = try notesPanelSource()
+  #expect(source.contains("FolderNavigator"))
+  #expect(source.contains("visibleNotes"))
+  #expect(source.contains("isEditorVisible"))
+  #expect(source.contains(".opacity(isEditorVisible ? 1 : 0)"))
+  #expect(source.components(separatedBy: "NativeRichTextEditor(").count - 1 == 1)
+  #expect(!source.contains(".id(activeFolderID)"))
+  #expect(!source.contains("folder-specific NSTextView"))
+}
+
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
