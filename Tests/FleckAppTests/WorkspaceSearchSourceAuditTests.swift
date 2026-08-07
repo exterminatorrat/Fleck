@@ -24,6 +24,9 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
     ".accessibilityLabel(\"Search notes\")",
     ".help(\"Search notes",
     ".overlay",
+    ".allowsHitTesting(!searchController.isPresented)",
+    ".disabled(searchController.isPresented)",
+    ".accessibilityHidden(searchController.isPresented)",
   ] {
     #expect(notesPanel.contains(required), Comment(rawValue: required))
   }
@@ -41,11 +44,11 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
     "LazyVStack",
     ".onMoveCommand",
     ".onExitCommand",
-    "WorkspaceSearchKeyResponderView",
   ] {
     #expect(searchView.contains(required), Comment(rawValue: required))
   }
   #expect(!searchView.contains(".sheet("))
   #expect(!searchView.contains("NativeRichTextEditor("))
+  #expect(!searchView.contains("WorkspaceSearchKeyResponder"))
   #expect(!searchView.contains("WorkspaceSearchEngine.search(query: query, in: notes, limit: 50)"))
 }

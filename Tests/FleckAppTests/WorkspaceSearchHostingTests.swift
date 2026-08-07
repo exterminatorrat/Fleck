@@ -110,6 +110,83 @@ func WorkspaceSearchHostingRestoresTheRealEditorStateAfterEscape() async throws 
 }
 
 @Test @MainActor
+func WorkspaceSearchHostingRestoresTitleFieldEditorAndIsolatesUnderlyingControls()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-title-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  state.updateSelected(title: "Editable title")
+
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let editor = try #require(hostedWorkspaceSearchDescendant(in: host, as: ListAwareTextView.self))
+  let titleField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.stringValue == "Editable title" && $0.frame.width > 200 }
+  )
+  #expect(window.makeFirstResponder(titleField))
+  let originalFieldEditor = try #require(window.firstResponder as? NSTextView)
+  let selectedRange = NSRange(location: 2, length: 6)
+  originalFieldEditor.setSelectedRange(selectedRange)
+  #expect(titleField.currentEditor() === originalFieldEditor)
+
+  searchController.present()
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery("Editable", in: state.workspace.notes)
+  await settleWorkspaceSearchHost(host)
+
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  #expect(hostedWorkspaceSearchDescendant(in: host, as: ListAwareTextView.self) === editor)
+  #expect(!titleField.isEnabled)
+  #expect(!titleField.isAccessibilityElement())
+  #expect(window.makeFirstResponder(queryField))
+  for _ in 0..<12 {
+    window.selectNextKeyView(nil)
+    #expect(window.firstResponder !== titleField)
+    #expect(window.firstResponder !== editor)
+    #expect((window.firstResponder as? NSTextView)?.delegate !== titleField)
+  }
+  #expect(searchController.isPresented)
+
+  searchController.dismiss()
+  await settleWorkspaceSearchHost(host)
+  let restoredFieldEditor = try #require(window.firstResponder as? NSTextView)
+  #expect(restoredFieldEditor === originalFieldEditor)
+  #expect(titleField.currentEditor() === originalFieldEditor)
+  #expect(restoredFieldEditor.selectedRange() == selectedRange)
+  #expect(titleField.stringValue == "Editable title")
+  #expect(window.firstResponder !== editor)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
 func WorkspaceSearchHostingReturnSelectsOnlyTheCurrentUUID() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent("workspace-search-return-\(UUID().uuidString)", isDirectory: true)
@@ -173,7 +250,7 @@ func WorkspaceSearchHostingReturnSelectsOnlyTheCurrentUUID() async throws {
 }
 
 @Test @MainActor
-func WorkspaceSearchHostingKeepsResultsScrollableAndPaletteKeysBeyondTheQueryField()
+func WorkspaceSearchHostingKeepsResultsScrollableInProductionOverlay()
   async throws
 {
   let root = FileManager.default.temporaryDirectory
@@ -225,7 +302,8 @@ func WorkspaceSearchHostingKeepsResultsScrollableAndPaletteKeysBeyondTheQueryFie
   let editor = try #require(hostedWorkspaceSearchDescendant(in: host, as: ListAwareTextView.self))
   #expect(window.makeFirstResponder(editor))
   #expect(window.firstResponder === editor)
-  let initialScrollViewCount = hostedWorkspaceSearchScrollViews(in: host).count
+  let initialScrollViews = hostedWorkspaceSearchScrollViews(in: host)
+  let initialScrollViewIDs = Set(initialScrollViews.map { ObjectIdentifier($0) })
 
   searchController.present()
   await settleWorkspaceSearchHost(host)
@@ -236,45 +314,23 @@ func WorkspaceSearchHostingKeepsResultsScrollableAndPaletteKeysBeyondTheQueryFie
   #expect(searchController.results.count == 50)
 
   let scrollViews = hostedWorkspaceSearchScrollViews(in: host)
-  #expect(scrollViews.count > initialScrollViewCount)
-  let resultScrollView = try #require(scrollViews.first)
-  let firstResult = try #require(searchController.results.first)
-  let resultResponder = try #require(
-    hostedWorkspaceSearchKeyResponder(in: host, noteID: firstResult.noteID)
-  )
-  let queryField = try #require(
-    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
-      .first { (400..<600).contains($0.frame.width) && $0.stringValue == "Result" }
-  )
-  #expect(window.makeFirstResponder(queryField))
-  #expect(window.firstResponder !== resultResponder)
-  #expect(window.makeFirstResponder(resultResponder))
-  #expect(window.firstResponder === resultResponder)
+  #expect(scrollViews.count == initialScrollViews.count + 1)
+  let newPaletteScrollViews = scrollViews.filter {
+    !initialScrollViewIDs.contains(ObjectIdentifier($0))
+  }
+  #expect(newPaletteScrollViews.count == 1)
+  let resultScrollView = try #require(newPaletteScrollViews.first)
 
   let firstBounds = resultScrollView.contentView.bounds
-  // NSHostingView's synthetic NSWindow.sendEvent promotes these test events to
-  // the window; exercise the focused production responder's native keyDown path.
   for _ in 0..<12 {
-    resultResponder.keyDown(
-      with: try workspaceSearchKeyEvent(
-        keyCode: 125,
-        characters: "\u{F701}",
-        windowNumber: window.windowNumber
-      )
-    )
+    searchController.moveHighlight(.down)
     await settleWorkspaceSearchHost(host)
   }
   await settleWorkspaceSearchHost(host)
   #expect(searchController.highlightedNoteID == searchController.results[12].noteID)
   #expect(resultScrollView.contentView.bounds.origin.y > firstBounds.origin.y)
 
-  resultResponder.keyDown(
-    with: try workspaceSearchKeyEvent(
-      keyCode: 53,
-      characters: "\u{1B}",
-      windowNumber: window.windowNumber
-    )
-  )
+  searchController.dismiss()
   await settleWorkspaceSearchHost(host)
   #expect(!searchController.isPresented)
   #expect(window.firstResponder === editor)
@@ -313,43 +369,6 @@ private func hostedWorkspaceSearchScrollViews(in view: NSView) -> [NSScrollView]
     scrollViews.append(contentsOf: hostedWorkspaceSearchScrollViews(in: subview))
   }
   return scrollViews
-}
-
-@MainActor
-private func hostedWorkspaceSearchKeyResponder(
-  in view: NSView,
-  noteID: UUID
-) -> WorkspaceSearchKeyResponder? {
-  if let responder = view as? WorkspaceSearchKeyResponder, responder.noteID == noteID {
-    return responder
-  }
-  for subview in view.subviews {
-    if let responder = hostedWorkspaceSearchKeyResponder(in: subview, noteID: noteID) {
-      return responder
-    }
-  }
-  return nil
-}
-
-private func workspaceSearchKeyEvent(
-  keyCode: UInt16,
-  characters: String,
-  windowNumber: Int
-) throws -> NSEvent {
-  try #require(
-    NSEvent.keyEvent(
-      with: .keyDown,
-      location: .zero,
-      modifierFlags: [],
-      timestamp: 0,
-      windowNumber: windowNumber,
-      context: nil,
-      characters: characters,
-      charactersIgnoringModifiers: characters,
-      isARepeat: false,
-      keyCode: keyCode
-    )
-  )
 }
 
 @MainActor

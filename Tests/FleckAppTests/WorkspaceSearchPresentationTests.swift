@@ -110,6 +110,7 @@ func WorkspaceSearchPresentationInvalidatesResultsDuringRefresh() async throws {
   #expect(controller.results.map(\.noteID) == [first.id])
 
   controller.setQuery("new", in: notes)
+  #expect(!controller.resultsAreCurrent)
   var activated: [UUID] = []
   #expect(
     !controller.activateResult(
@@ -123,6 +124,7 @@ func WorkspaceSearchPresentationInvalidatesResultsDuringRefresh() async throws {
 
   try await Task.sleep(for: .milliseconds(100))
   await settleWorkspaceSearch()
+  #expect(controller.resultsAreCurrent)
   #expect(controller.results.map(\.noteID) == [second.id])
 }
 

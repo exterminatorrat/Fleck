@@ -163,85 +163,90 @@
     }
 
     var body: some View {
-      VStack(spacing: 0) {
-        if let migrationError = appState.startupMigrationError {
-          migrationFailure(migrationError)
-        } else {
-          header
-          tabStrip
-          Divider().opacity(0.35)
-          if let title = modifierRecoveryPresentation.recoveryButtonTitle {
-            HStack(spacing: 8) {
-              Label(modifierRecoveryPresentation.statusCopy, systemImage: "keyboard.badge.ellipsis")
-                .font(.caption)
-              Spacer()
-              Button(title) {
-                Task { @MainActor in
-                  guard let settings = await dictationRuntime.recoverModifierMonitoring() else {
-                    return
+      ZStack {
+        VStack(spacing: 0) {
+          if let migrationError = appState.startupMigrationError {
+            migrationFailure(migrationError)
+          } else {
+            header
+            tabStrip
+            Divider().opacity(0.35)
+            if let title = modifierRecoveryPresentation.recoveryButtonTitle {
+              HStack(spacing: 8) {
+                Label(modifierRecoveryPresentation.statusCopy, systemImage: "keyboard.badge.ellipsis")
+                  .font(.caption)
+                Spacer()
+                Button(title) {
+                  Task { @MainActor in
+                    guard let settings = await dictationRuntime.recoverModifierMonitoring() else {
+                      return
+                    }
+                    dictationRuntime.openSystemSettings(settings)
                   }
-                  dictationRuntime.openSystemSettings(settings)
+                }
+                .accessibilityLabel(title)
+              }
+              .padding(.horizontal, 10)
+              .padding(.vertical, 7)
+              .background(.quaternary.opacity(0.35))
+              .accessibilityElement(children: .contain)
+              .accessibilityLabel("Dictation shortcut unavailable")
+            }
+            if let failure = dictationRuntime.captureFailure {
+              HStack(spacing: 8) {
+                Label(failure.message, systemImage: "exclamationmark.triangle")
+                  .font(.caption)
+                Spacer()
+                ForEach(failure.actions, id: \.pane) { action in
+                  Button(action.title) {
+                    dictationRuntime.openSystemSettings(action)
+                  }
+                  .accessibilityLabel(action.title)
                 }
               }
-              .accessibilityLabel(title)
+              .padding(.horizontal, 10)
+              .padding(.vertical, 7)
+              .background(.quaternary.opacity(0.35))
+              .accessibilityElement(children: .contain)
+              .accessibilityLabel("Dictation unavailable")
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(.quaternary.opacity(0.35))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Dictation shortcut unavailable")
-          }
-          if let failure = dictationRuntime.captureFailure {
-            HStack(spacing: 8) {
-              Label(failure.message, systemImage: "exclamationmark.triangle")
-                .font(.caption)
-              Spacer()
-              ForEach(failure.actions, id: \.pane) { action in
-                Button(action.title) {
-                  dictationRuntime.openSystemSettings(action)
+            if let recoveryAction = dictationRuntime.recoveryAction {
+              HStack(spacing: 8) {
+                Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
+                  .font(.caption)
+                Spacer()
+                Button(recoveryAction.title) {
+                  Task { await dictationRuntime.performRecoveryAction() }
                 }
-                .accessibilityLabel(action.title)
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(!dictationRuntime.recoveryCommand.isEnabled)
+                .accessibilityLabel(recoveryAction.accessibilityLabel)
               }
+              .padding(.horizontal, 10)
+              .padding(.vertical, 7)
+              .background(.quaternary.opacity(0.35))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(.quaternary.opacity(0.35))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Dictation unavailable")
-          }
-          if let recoveryAction = dictationRuntime.recoveryAction {
-            HStack(spacing: 8) {
-              Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
+            if let banner = appState.agentBannerPresentation {
+              AgentChangeBanner(
+                presentation: banner,
+                motion: motion,
+                onUndo: { Task { await appState.undoLatestAgentChange() } }
+              )
+              .animation(motion.quick, value: banner)
+            }
+            editor
+            if let error = appState.saveError {
+              Text("Could not save: \(error)")
                 .font(.caption)
-              Spacer()
-              Button(recoveryAction.title) {
-                Task { await dictationRuntime.performRecoveryAction() }
-              }
-              .keyboardShortcut("r", modifiers: [.command, .shift])
-              .disabled(!dictationRuntime.recoveryCommand.isEnabled)
-              .accessibilityLabel(recoveryAction.accessibilityLabel)
+                .foregroundStyle(.red)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(.quaternary.opacity(0.35))
-          }
-          if let banner = appState.agentBannerPresentation {
-            AgentChangeBanner(
-              presentation: banner,
-              motion: motion,
-              onUndo: { Task { await appState.undoLatestAgentChange() } }
-            )
-            .animation(motion.quick, value: banner)
-          }
-          editor
-          if let error = appState.saveError {
-            Text("Could not save: \(error)")
-              .font(.caption)
-              .foregroundStyle(.red)
-              .padding(8)
-              .frame(maxWidth: .infinity, alignment: .leading)
           }
         }
+        .allowsHitTesting(!searchController.isPresented)
+        .disabled(searchController.isPresented)
+        .accessibilityHidden(searchController.isPresented)
       }
       .frame(
         width: sizing == .storedPreferences ? appState.preferences.panelWidth : nil,

@@ -39,11 +39,18 @@
     }
 
     var resultCountAccessibilityValue: String {
+      let countDescription: String
       switch results.count {
-      case 0: "No results"
-      case 1: "1 result"
-      default: "\(results.count) results"
+      case 0: countDescription = "No results"
+      case 1: countDescription = "1 result"
+      default: countDescription = "\(results.count) results"
       }
+      guard !results.isEmpty, !resultsAreCurrent else { return countDescription }
+      return "Updating search results; \(countDescription)"
+    }
+
+    var resultsAreCurrent: Bool {
+      resultGeneration == searchGeneration
     }
 
     func present() {
@@ -238,10 +245,19 @@
   private final class WorkspaceSearchFocusOrigin {
     weak var window: NSWindow?
     weak var responder: NSResponder?
+    weak var fieldEditorOwner: NSView?
+    let fieldEditorSelection: NSRange?
 
-    init(window: NSWindow, responder: NSResponder) {
+    init(
+      window: NSWindow,
+      responder: NSResponder,
+      fieldEditorOwner: NSView? = nil,
+      fieldEditorSelection: NSRange? = nil
+    ) {
       self.window = window
       self.responder = responder
+      self.fieldEditorOwner = fieldEditorOwner
+      self.fieldEditorSelection = fieldEditorSelection
     }
 
     static func capture(preferredWindow: NSWindow?) -> WorkspaceSearchFocusOrigin? {
@@ -250,13 +266,53 @@
       else {
         return nil
       }
-      return WorkspaceSearchFocusOrigin(window: window, responder: responder)
+      guard let fieldEditor = responder as? NSTextView else {
+        return WorkspaceSearchFocusOrigin(window: window, responder: responder)
+      }
+      let fieldEditorOwner = (fieldEditor.delegate as? NSView)
+        ?? fieldEditorOwner(for: fieldEditor, in: window.contentView)
+      return WorkspaceSearchFocusOrigin(
+        window: window,
+        responder: responder,
+        fieldEditorOwner: fieldEditorOwner,
+        fieldEditorSelection: fieldEditor.selectedRange()
+      )
     }
 
     func restore() {
-      guard let window, let responder else { return }
+      guard let window else { return }
+      if let fieldEditorOwner,
+        fieldEditorOwner.window === window,
+        window.makeFirstResponder(fieldEditorOwner)
+      {
+        if let fieldEditor = window.firstResponder as? NSTextView,
+          let fieldEditorSelection
+        {
+          fieldEditor.setSelectedRange(fieldEditorSelection)
+        }
+        return
+      }
+      guard let responder else { return }
       if let view = responder as? NSView, view.window !== window { return }
       _ = window.makeFirstResponder(responder)
+    }
+
+    private static func fieldEditorOwner(
+      for fieldEditor: NSTextView,
+      in view: NSView?
+    ) -> NSView? {
+      guard let view else { return nil }
+      if let control = view as? NSControl,
+        view.window?.fieldEditor(false, for: control) === fieldEditor
+      {
+        return control
+      }
+      for subview in view.subviews {
+        if let owner = fieldEditorOwner(for: fieldEditor, in: subview) {
+          return owner
+        }
+      }
+      return nil
     }
   }
 
@@ -290,49 +346,6 @@
 
     func updateNSView(_ nsView: WorkspaceSearchWindowObserver, context: Context) {
       controller.setHostingWindow(nsView.window)
-    }
-  }
-
-  @MainActor
-  final class WorkspaceSearchKeyResponder: NSView {
-    var noteID: UUID?
-    var onKeyDown: (UInt16) -> Bool
-
-    init(noteID: UUID?, onKeyDown: @escaping (UInt16) -> Bool) {
-      self.noteID = noteID
-      self.onKeyDown = onKeyDown
-      super.init(frame: .zero)
-    }
-
-    required init?(coder: NSCoder) {
-      fatalError("init(coder:) has not been implemented")
-    }
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func becomeFirstResponder() -> Bool { true }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func keyDown(with event: NSEvent) {
-      guard onKeyDown(event.keyCode) else {
-        super.keyDown(with: event)
-        return
-      }
-    }
-  }
-
-  struct WorkspaceSearchKeyResponderView: NSViewRepresentable {
-    let noteID: UUID?
-    let onKeyDown: (UInt16) -> Bool
-
-    func makeNSView(context: Context) -> WorkspaceSearchKeyResponder {
-      WorkspaceSearchKeyResponder(noteID: noteID, onKeyDown: onKeyDown)
-    }
-
-    func updateNSView(_ nsView: WorkspaceSearchKeyResponder, context: Context) {
-      nsView.noteID = noteID
-      nsView.onKeyDown = onKeyDown
     }
   }
 
@@ -414,23 +427,6 @@
               controller.dismiss()
               return .handled
             }
-            .background(
-              WorkspaceSearchKeyResponderView(noteID: nil) { keyCode in
-                switch keyCode {
-                case 126:
-                  controller.moveHighlight(.up)
-                  return true
-                case 125:
-                  controller.moveHighlight(.down)
-                  return true
-                case 53:
-                  controller.dismiss()
-                  return true
-                default:
-                  return false
-                }
-              }
-            )
           }
 
           Text(controller.resultCountAccessibilityValue)
@@ -448,6 +444,7 @@
               .foregroundStyle(.secondary)
               .padding(.vertical, 8)
           } else {
+            let resultsAreCurrent = controller.resultsAreCurrent
             ScrollViewReader { scrollProxy in
               ScrollView(.vertical) {
                 LazyVStack(spacing: 2) {
@@ -483,6 +480,9 @@
                     .accessibilityLabel("\(result.displayTitle), \(result.snippet)")
                     .accessibilityValue(isSelected ? "Selected" : "Not selected")
                     .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .accessibilityHint(resultsAreCurrent ? "" : "Updating search results")
+                    .disabled(!resultsAreCurrent)
+                    .opacity(resultsAreCurrent ? 1 : 0.65)
                     .onKeyPress(.upArrow) {
                       controller.moveHighlight(.up)
                       return .handled
@@ -495,29 +495,6 @@
                       controller.dismiss()
                       return .handled
                     }
-                    .background(
-                      WorkspaceSearchKeyResponderView(noteID: result.noteID) { keyCode in
-                        switch keyCode {
-                        case 126:
-                          controller.moveHighlight(.up)
-                          return true
-                        case 125:
-                          controller.moveHighlight(.down)
-                          return true
-                        case 36:
-                          return controller.activateResult(
-                            result.noteID,
-                            currentNoteIDs: currentNoteIDs(),
-                            activate: onActivate
-                          )
-                        case 53:
-                          controller.dismiss()
-                          return true
-                        default:
-                          return false
-                        }
-                      }
-                    )
                   }
                 }
               }
