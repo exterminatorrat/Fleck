@@ -349,11 +349,12 @@ git commit -m "fix: enforce strict local dictation schemas"
   installed bytes, license review, and required runtime ABI.
 - Produces: `CandidateCapability` with `provisionalResults` as the first
   capability. No runtime may claim streaming solely by emitting a final result.
-- Produces: schema-v2 `CandidateRun.components` containing exactly one ASR
-  component and zero or one cleanup component.
+- Produces: `CandidateRunStage` so ASR-only, cleanup-only, and combined evidence
+  have truthful component cardinalities and stage-specific applicable gates.
 - Produces: `ProvisionalMeasurement`, expanded `LatencyMeasurement`, expanded
   `ResourceMeasurement`, expanded `UnloadEvidence`, and
-  `ReliabilityEvidence`.
+  `ReliabilityEvidence`, `CancellationResourceEvidence`, and structured
+  `SupplyChainEvidence`.
 - Produces: schema-v2 `StandardBaselineEvidence.sliceMetrics` so category and
   mixed-direction regressions compare like-for-like rather than against a
   language-wide aggregate.
@@ -399,7 +400,11 @@ Also cover duplicate component roles, malformed SHA-256, component byte totals,
 negative timing, missing cancellation timing, missing unload duration, post-
 unload memory below zero, ready-idle delta inconsistent with absolute memory,
 missing baseline slice metrics, missing category gates, missing mixed direction,
-nonzero crash/hang/OOM/corruption-acceptance counts, and a schema-v1 run
+run-stage/component-cardinality mismatches, a prompt-leaked or otherwise
+non-meaningful first partial, cancellation insertion or post-cancel unload
+regressions, too few repeated runs, nonzero crash/hang/OOM/corruption-acceptance
+counts, missing or malformed conversion recipe, provenance, runtime-binary,
+redistribution, attribution, removal, or rollback evidence, and a schema-v1 run
 attempting `releaseEvidence: true`.
 
 - [ ] **Step 2: Run focused tests and verify current contracts cannot compile**
@@ -425,6 +430,12 @@ public enum CandidateComponentRole: String, Codable, Sendable {
   case cleanup
 }
 
+public enum CandidateRunStage: String, Codable, Sendable {
+  case asrOnly
+  case cleanupOnly
+  case combined
+}
+
 public enum CandidateCapability: String, Codable, Sendable {
   case provisionalResults
 }
@@ -439,9 +450,38 @@ public struct CandidateComponentIdentity: Codable, Equatable, Sendable {
   public var runtimeABI: String
   public var quantization: String
   public var artifactSHA256: String
+  public var conversionRecipeSHA256: String
+  public var provenanceRecordSHA256: String
   public var downloadBytes: Int64
   public var installedBytes: Int64
   public var licenseReview: String
+}
+
+public enum RuntimeBinaryDistribution: String, Codable, Sendable {
+  case evaluationHelper
+  case signedInApp
+}
+
+public struct RuntimeBinaryIdentity: Codable, Equatable, Sendable {
+  public var binaryID: String
+  public var sourceRevision: String
+  public var buildRecipeSHA256: String
+  public var binarySHA256: String
+  public var distribution: RuntimeBinaryDistribution
+}
+
+public enum RedistributionDecision: String, Codable, Sendable {
+  case approved
+  case rejected
+  case pending
+}
+
+public struct SupplyChainEvidence: Codable, Equatable, Sendable {
+  public var runtimeBinaries: [RuntimeBinaryIdentity]
+  public var redistributionDecision: RedistributionDecision
+  public var attributionNoticeSHA256: String
+  public var removalPlanRevision: String
+  public var rollbackPlanRevision: String
 }
 
 public struct EvaluationSliceMetric: Codable, Equatable, Sendable {
@@ -457,14 +497,33 @@ public struct ReliabilityEvidence: Codable, Equatable, Sendable {
   public var metalOOMCount: Int
   public var corruptedModelAcceptedCount: Int
 }
+
+public struct CancellationResourceEvidence: Codable, Equatable, Sendable {
+  public var observationID: String
+  public var requestToControlMilliseconds: Double
+  public var insertionOccurred: Bool
+  public var preCancelMemoryBytes: Int64
+  public var memoryAfterCancelUnloadBytes: Int64
+  public var postCancelUnloadDeltaBytes: Int64
+  public var cancelUnloadMilliseconds: Double
+}
 ```
 
-`CandidateRun` gains `components` and `claimedCapabilities`. Its custom decoder
-defaults those collections to empty only for schema-v1 diagnostic input; schema
-v2 requires them in JSON. A cleanup-Off run contains no cleanup component. A
-combined run contains exactly one ASR and one cleanup component. Totals in every
-observation must match the sum of component bytes so one component cannot
-disappear from size gates.
+`CandidateRun` gains `stage`, `components`, `claimedCapabilities`,
+`cancellationResourceEvidence`, and `supplyChain`. Its custom decoder defaults
+new collections only for schema-v1 diagnostic input; schema v2 requires the
+stage and all applicable evidence.
+
+Component cardinality is exact:
+
+- `.asrOnly`: exactly one ASR component and no cleanup component;
+- `.cleanupOnly`: exactly one cleanup component and no ASR component;
+- `.combined`: exactly one ASR and one cleanup component.
+
+Cleanup Off is represented by the corresponding `.asrOnly` run, not by a fake
+cleanup component. Combined confirmation reuses that ASR-only result as its Off
+comparison. Component byte totals in every observation must match the sum of
+the stage's components so one model cannot disappear from size gates.
 
 `StandardBaselineEvidence` gains `sliceMetrics: [EvaluationSliceMetric]`,
 defaulted to an empty array only for schema-v1 diagnostics. `CandidateRun`
@@ -480,7 +539,7 @@ validator require every applicable value.
 
 ```swift
 public struct ProvisionalMeasurement: Codable, Equatable, Sendable {
-  public var firstPartialMilliseconds: Double
+  public var firstMeaningfulPartialMilliseconds: Double
   public var updateIntervalP95Milliseconds: Double
   public var emittedPartialCount: Int
   public var revisedPartialCount: Int
@@ -547,8 +606,21 @@ values.
 Each `UtteranceResult` gains `provisional: ProvisionalMeasurement?`. A run that
 claims `.provisionalResults` requires provisional evidence on every ordinary
 speech case. A final-only candidate must omit the capability and the field.
-Cancellation evidence records p95-ready raw observations rather than a prose
-claim.
+
+The timing origin for `firstMeaningfulPartialMilliseconds` is the monotonic
+instant when the first audio sample is accepted by the runtime stream. A
+partial is meaningful only when, after NFKC normalization and removal of
+whitespace, punctuation-only output, language tags, and runtime control tokens,
+it contains at least one English word, number, or Han character also present in
+the final transcript. Context-prompt text emitted during the silence/noise case
+is never meaningful. Wrong/retracted units contribute to `instabilityRate` and
+cannot satisfy the first-meaningful-partial gate.
+
+Cancellation timing begins when the runner sends the cancel request and ends
+when control is returned with no active decode. The linked
+`CancellationResourceEvidence.observationID` must identify the cancellation
+case, `insertionOccurred` must be false, and post-cancel unload duration and
+memory delta must pass the same fail-closed resource bounds as normal unload.
 
 - [ ] **Step 5: Define fail-closed slice and lifecycle gates**
 
@@ -564,7 +636,7 @@ public struct EvaluationSliceGate: Codable, Equatable, Sendable {
 }
 
 public var sliceGates: [EvaluationSliceGate]
-public var maxFirstPartialMilliseconds: Double
+public var maxFirstMeaningfulPartialMilliseconds: Double
 public var maxProvisionalUpdateIntervalMilliseconds: Double
 public var maxProvisionalInstabilityRate: Double
 public var maxFinalASRMilliseconds: Double
@@ -574,6 +646,7 @@ public var maxCancellationMilliseconds: Double
 public var maxReadyIdleDeltaBytes: Int64
 public var maxPostUnloadDeltaBytes: Int64
 public var maxUnloadMilliseconds: Double
+public var minimumRepeatedRunCount: Int
 ```
 
 The report derives `category:<category>` slices from the existing corpus
@@ -582,12 +655,33 @@ The report derives `category:<category>` slices from the existing corpus
 release corpus needs one gate for each applicable metric; `(sliceID, metric)`
 pairs must be unique. An absent, duplicate, or uncomputable slice fails closed.
 
-When provisional results are claimed, all three provisional limits are hard
+Gate applicability is determined by `CandidateRunStage`:
+
+- `.asrOnly` evaluates ASR quality/latency, streaming when claimed, dictionary,
+  semantic, resource, cancellation, offline, reliability, and supply-chain
+  identity; cleanup gates are not applicable.
+- `.cleanupOnly` evaluates cleanup fidelity/latency, protected content,
+  resource, cancellation, offline, reliability, and supply-chain identity; ASR
+  and streaming gates are not applicable.
+- `.combined` evaluates every ASR and cleanup gate plus handoff and
+  stop-to-insertion latency.
+
+Not-applicable outcomes are explicit and are never counted as passes. When
+provisional results are claimed, all three provisional limits are hard
 gates. When they are not claimed, the report labels those three gates not
 applicable and never describes the candidate as streaming. Final ASR, cleanup,
 stop-to-insertion, cancellation, ready-idle delta, peak memory, unload duration,
 post-unload delta, storage, semantic safety, offline evidence, and category
-gates always receive explicit outcomes.
+gates receive explicit applicable or not-applicable outcomes for the stage.
+
+The checked-in gate sets `minimumRepeatedRunCount` to 50. The reliability gate
+requires `repeatedRunCount >= minimumRepeatedRunCount` and zero crashes, hangs,
+Metal OOMs, or accepted corrupted models. Supply-chain
+validation requires at least one uniquely identified runtime binary, valid
+artifact/build/recipe/provenance/NOTICE hashes, an approved redistribution
+decision, and nonblank versioned removal and rollback plans. A selection-stage
+binary may be `.evaluationHelper`; the later packaged release run must replace
+that identity with `.signedInApp` before release approval.
 
 - [ ] **Step 6: Add report tests for every design threshold**
 
@@ -598,11 +692,14 @@ assert the corresponding stable gate ID fails:
 let expectedGateIDs: Set<String> = [
   "english-wer", "mandarin-cer", "mixed-language",
   "protected-terms", "numbers", "negations", "silence-noise",
-  "first-partial", "partial-interval", "partial-instability",
+  "first-meaningful-partial", "partial-interval", "partial-instability",
   "final-asr-latency", "cleanup-latency", "stop-to-insertion",
   "cancellation-latency", "peak-memory", "ready-idle-delta",
   "unload-duration", "post-unload-delta", "energy", "thermal",
-  "download-size", "installed-size", "offline", "reliability",
+  "download-size", "installed-size", "offline", "reliability-repetition",
+  "reliability-failures", "cancellation-no-insertion",
+  "cancellation-post-unload", "supply-chain-identity",
+  "supply-chain-redistribution", "supply-chain-removal-rollback",
   "failure-cancellation"
 ]
 #expect(expectedGateIDs.isSubset(of: Set(report.gateOutcomes.map(\.id))))
@@ -1035,11 +1132,13 @@ or memory gates and the license/provenance gate has been resolved.
 Run cleanup Off, Qwen3-0.6B Q8, and Qwen3.5-0.8B Q4_0. Add Qwen3.5 Q8 only if
 Q4 fails fidelity and Q8 remains within resource limits.
 
-- [ ] **Step 4: Run only four combined confirmations**
+- [ ] **Step 4: Compare four final configurations with two new combined runs**
 
-Cross the top two admitted ASR candidates with cleanup Off and the single best
-cleanup candidate. Confirm sequential resource handoff and combined
-stop-to-insertion-equivalent latency.
+Reuse the two winning `.asrOnly` cleanup-Off results as the Off baselines. Run
+only two new `.combined` rows by crossing those ASR candidates with the single
+best cleanup candidate. The final comparison therefore contains four rows but
+does not fabricate combined evidence for cleanup Off. The two actual combined
+runs confirm sequential resource handoff and stop-to-insertion latency.
 
 - [ ] **Step 5: Generate and verify reports**
 
@@ -1060,8 +1159,10 @@ Scripts/evaluate-local-dictation.sh \
   --output "$report_path"
 ```
 
-Expected: the selected pair passes every hard gate. A `reviewRequired` or
-failed result is not a ship selection.
+Expected: each selected run passes every hard gate applicable to its declared
+run stage. A `reviewRequired` or failed result is not a selection. Passing this
+candidate-selection matrix does not approve the packaged Fleck release; that
+requires later `.signedInApp` runtime evidence.
 
 - [ ] **Step 6: Write the selection record**
 
@@ -1069,13 +1170,16 @@ failed result is not a ship selection.
 
 - selected ASR model/runtime/revision/quantization;
 - selected cleanup model/runtime or cleanup Off;
-- exact hashes and sizes;
+- exact artifact, conversion recipe, provenance record, runtime source/build,
+  and evaluation-helper binary hashes plus download and installed sizes;
 - measured metrics and gate decisions by language/category;
-- license and redistribution disposition;
+- stage-specific applicable, not-applicable, and failed gate outcomes;
+- license, attribution, and structured redistribution disposition;
 - rejected candidates and reasons;
 - macOS floor;
 - signed in-app runtime library/package strategy and runtime ABI;
 - one-click bundle composition and download-origin requirement;
+- versioned removal and rollback procedures;
 - the exact next production file allowlist.
 
 - [ ] **Step 7: Commit only non-private evidence**
@@ -1148,6 +1252,13 @@ cover, in this order:
 5. coordinated onboarding and Settings one-click UI;
 6. packaged offline, signing, update, rollback, removal, and regional-download
    validation.
+
+The packaged validation must replace every selection-stage
+`.evaluationHelper` identity with the exact `.signedInApp` runtime binary
+identity. It must prove that bundle removal deletes only model/data artifacts,
+that no insertion occurs after cancellation, that post-cancel unload satisfies
+the declared bounds, and that rollback reactivates only a previously verified
+data pack. Candidate-selection reports alone cannot satisfy this release gate.
 
 Do not begin that plan until the shared-file owner explicitly releases every
 integration file it names.

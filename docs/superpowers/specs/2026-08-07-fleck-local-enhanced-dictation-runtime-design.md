@@ -425,7 +425,8 @@ though the checked-in schemas use exact field contracts. Benchmark evidence is
 not admissible until CLI behavior matches the schema contract.
 
 The release evidence schema must also be upgraded before benchmarking. It must
-record separate ASR and cleanup component identities, first-partial timing,
+record separate ASR and cleanup component identities,
+first-meaningful-partial timing,
 partial-update interval and instability when streaming is claimed, final ASR
 latency, cleanup latency, stop-to-insertion latency, cancellation latency,
 pre-load memory, ready-idle delta, peak memory, unload duration, post-unload
@@ -458,9 +459,10 @@ unload.
 
 ### Stage 4: combined confirmation
 
-Run only the top two admitted ASR candidates crossed with cleanup Off and the
-single best cleanup candidate. This confirms resource handoff without an
-uninformative full Cartesian matrix.
+Reuse the top two admitted ASR-only results as the cleanup-Off baselines, then
+run those two ASR candidates with the single best cleanup candidate. This gives
+four comparable rows with only two new combined runs and confirms resource
+handoff without an uninformative full Cartesian matrix.
 
 ## Proposed M1/8 GB release gates
 
@@ -481,8 +483,14 @@ gate manifest before running candidates.
 | Unload | Return within 256 MB of pre-load baseline within 10 seconds |
 | Storage | Target at or below 2.0 GB; hard stop at 3.0 GB without a separate product decision |
 | Cancellation | User control within 250 ms p95, no insertion, normal unload bound within 10 seconds |
-| Reliability | No crash, hang, Metal OOM, corrupted-pack acceptance, or serious/critical thermal state in the prescribed suite |
-| Supply chain | Exact revisions, hashes, recipe, provenance, redistribution decision, attribution, removal, and rollback recorded |
+| Reliability | At least 50 load/infer/unload cycles with no crash, hang, Metal OOM, corrupted-pack acceptance, or serious/critical thermal state |
+| Supply chain | Exact model/runtime revisions, artifact/conversion/provenance/build/runtime-binary hashes, redistribution decision, attribution, removal, and rollback recorded |
+
+The streaming clock starts when the runtime accepts the first audio sample. A
+partial is meaningful only when normalized content includes an English word,
+number, or Han character that survives into the final transcript; prompt text,
+punctuation-only output, tags, and control tokens do not qualify. Cancellation
+must additionally prove no insertion and the normal post-cancel unload bound.
 
 If no candidate passes, the result is a failed release gate. Do not redefine a
 slow or unsafe result as acceptable after observing it.
@@ -538,8 +546,9 @@ folder/UI lane. This specification itself authorizes no such shared-file edit.
   new version loads successfully or according to a bounded retention policy.
 - A bad runtime/model release is revoked by a newer signed catalog. Fleck falls
   back to the prior verified bundle when compatible, otherwise Apple Standard.
-- Removing Enhanced removes its model packs and runtime artifacts but preserves
-  the user's personal dictionary unless the user separately deletes it.
+- Removing Enhanced removes only its downloaded model/data-pack artifacts. The
+  signed in-app runtime remains part of Fleck, and the user's personal
+  dictionary remains unless the user separately deletes it.
 
 ## Final decision rule
 
