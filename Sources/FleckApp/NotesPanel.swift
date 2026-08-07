@@ -899,6 +899,7 @@
     }
 
     private func performShortcut(_ action: Shortcut.Action) {
+      guard !searchController.isPresented else { return }
       switch action {
       case .togglePanel:
         NSApp.keyWindow?.orderOut(nil)

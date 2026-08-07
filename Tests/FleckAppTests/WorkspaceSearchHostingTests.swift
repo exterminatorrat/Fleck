@@ -664,6 +664,138 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
   #expect(commands.textView === targetEditor)
   #expect(window.firstResponder === targetEditor)
 
+  let newNoteEvent = try #require(
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [.command],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      characters: "t",
+      charactersIgnoringModifiers: "t",
+      isARepeat: false,
+      keyCode: 17
+    )
+  )
+  NSApp.sendEvent(newNoteEvent)
+  await settleWorkspaceSearchHost(host)
+  let createdNoteID = try #require(state.workspace.selectedNoteID)
+  let createdNote = try #require(
+    state.workspace.notes.first { $0.id == createdNoteID }
+  )
+  #expect(createdNote.id != target.id)
+  #expect(createdNote.folderID == work.id)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingBlocksEveryShortcutWhilePresented() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-shortcuts-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let work = try Folder(id: UUID(), name: "Work")
+  let first = Note(title: "First", body: "First body")
+  let second = Note(title: "Second", body: "Second body")
+  let hidden = Note(title: "Hidden", body: "Hidden body", folderID: work.id)
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _, _ in .committed })
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(
+    notes: [first, second, hidden],
+    selectedNoteID: first.id,
+    folders: [work]
+  )
+  state.updatePreferences {
+    $0.shortcuts = [
+      Shortcut(action: .togglePanel, key: "p", modifiers: ["command", "shift"]),
+      Shortcut(action: .newNote, key: "n", modifiers: ["command"]),
+      Shortcut(action: .closeNote, key: "w", modifiers: ["command"]),
+      Shortcut(action: .nextNote, key: "tab", modifiers: ["control"]),
+      Shortcut(action: .previousNote, key: "tab", modifiers: ["control", "shift"]),
+    ]
+  }
+
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let expectedWorkspace = state.workspace
+  let expectedSelectedNoteID = state.workspace.selectedNoteID
+  let expectedScope = state.folderScopeForSelectedNote()
+  let expectedGeneration = state.persistenceGeneration
+  searchController.present(for: first.id)
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery("First", in: state.workspace.notes)
+  await settleWorkspaceSearchHost(host)
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  #expect(window.makeFirstResponder(queryField))
+  let queryFieldEditor = try #require(window.firstResponder as? NSTextView)
+  #expect(queryField.currentEditor() === queryFieldEditor)
+
+  let shortcuts: [(keyCode: UInt16, characters: String, modifiers: NSEvent.ModifierFlags)] = [
+    (45, "n", [.command]),
+    (13, "w", [.command]),
+    (48, "\t", [.control]),
+    (48, "\t", [.control, .shift]),
+    (35, "p", [.command, .shift]),
+  ]
+  for shortcut in shortcuts {
+    let event = try #require(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: shortcut.modifiers,
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: shortcut.characters,
+        charactersIgnoringModifiers: shortcut.characters,
+        isARepeat: false,
+        keyCode: shortcut.keyCode
+      )
+    )
+    NSApp.sendEvent(event)
+    await settleWorkspaceSearchHost(host)
+  }
+
+  #expect(searchController.isPresented)
+  #expect(searchController.query == "First")
+  #expect(window.firstResponder === queryFieldEditor)
+  #expect(queryField.currentEditor() === queryFieldEditor)
+  #expect(state.workspace == expectedWorkspace)
+  #expect(state.workspace.selectedNoteID == expectedSelectedNoteID)
+  #expect(state.folderScopeForSelectedNote() == expectedScope)
+  #expect(state.persistenceGeneration == expectedGeneration)
+  #expect(window.isVisible)
+  #expect(
+    !hostedWorkspaceSearchDescendants(in: host, as: NSButton.self)
+      .contains { $0.title == "Confirm" }
+  )
+
+  searchController.dismiss()
   window.contentView = nil
   window.orderOut(nil)
   await runtime.shutdown()
