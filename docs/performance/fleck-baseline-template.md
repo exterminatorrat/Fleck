@@ -172,10 +172,9 @@ performance budgets.
 | 100 | 100 | 1 | 36.551 | 29.819 | 11.267 | 11.597 | 85.387 | 47.379 |
 | 1,000 | 1,000 | 1 | 336.557 | 321.573 | 182.947 | 108.480 | 762.680 | 473.637 |
 
-In this single synthetic run, the measured initial-save, load, and
-changed-note-save timings were lower at every tested scale; the live-root write
-count is the deterministic regression signal. This does not claim that all
-filesystem writes disappear: valid-root recovery copying,
+In this single synthetic run, measured timings varied by operation and scale;
+the live-root write count is the deterministic regression signal. This does not
+claim that all filesystem writes disappear: valid-root recovery copying,
 preferences/manifest replacement, and post-commit maintenance remain separate
 work.
 
