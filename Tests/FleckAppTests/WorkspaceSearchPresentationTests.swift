@@ -6,6 +6,33 @@ import Testing
 @testable import FleckApp
 
 @Test
+func WorkspaceSearchHighlightedTextExpandsPartialModifierAndZWJGraphemeMatches() {
+  let accent = Color(red: 0.9, green: 0.2, blue: 0.1)
+  let source = "before 👩🏽‍💻👩🏽‍💻 after"
+  let highlighted = workspaceSearchHighlightedAttributedString(
+    source,
+    query: "👩",
+    accent: accent
+  )
+
+  #expect(String(highlighted.characters) == source)
+  #expect(
+    highlightedSearchSubstrings(highlighted, accent: accent)
+      == ["👩🏽‍💻👩🏽‍💻"]
+  )
+
+  let separated = workspaceSearchHighlightedAttributedString(
+    "before 👩🏽‍💻 👩🏽‍💻 after",
+    query: "🏽",
+    accent: accent
+  )
+  #expect(
+    highlightedSearchSubstrings(separated, accent: accent)
+      == ["👩🏽‍💻", "👩🏽‍💻"]
+  )
+}
+
+@Test
 func WorkspaceSearchHighlightedTextMatchesTitleAndSnippetRuns() {
   let accent = Color(red: 0.9, green: 0.2, blue: 0.1)
   let titleSource = "Café cafe CAFE — untouched"

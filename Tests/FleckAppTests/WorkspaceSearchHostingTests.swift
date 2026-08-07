@@ -7,7 +7,7 @@ import Testing
 @testable import FleckApp
 
 @Test @MainActor
-func WorkspaceSearchHostingHighlightsVisibleTitleAndSnippetMatchesWithInheritedAccent()
+func WorkspaceSearchHostingPreservesSearchResultsAndNoteStateAcrossAccentUpdates()
   async throws
 {
   let root = FileManager.default.temporaryDirectory

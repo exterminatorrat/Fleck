@@ -14,7 +14,8 @@
 
     var highlighted = AttributedString()
     var cursor = text.startIndex
-    for range in ranges {
+    for nsRange in ranges {
+      guard let range = Range(nsRange, in: text) else { continue }
       if cursor < range.lowerBound {
         highlighted.append(AttributedString(String(text[cursor..<range.lowerBound])))
       }
@@ -32,13 +33,13 @@
   private func workspaceSearchHighlightRanges(
     in text: String,
     query: String
-  ) -> [Range<String.Index>] {
+  ) -> [NSRange] {
     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !query.isEmpty, !text.isEmpty else { return [] }
 
     let source = text as NSString
     var searchRange = NSRange(location: 0, length: source.length)
-    var ranges: [Range<String.Index>] = []
+    var ranges: [NSRange] = []
     while searchRange.length > 0 {
       let match = source.range(
         of: query,
@@ -47,11 +48,11 @@
         locale: Locale(identifier: "en_US_POSIX")
       )
       guard match.location != NSNotFound,
-        match.length > 0,
-        let range = Range(match, in: text)
+        match.length > 0
       else {
         break
       }
+      let range = source.rangeOfComposedCharacterSequences(for: match)
       ranges.append(range)
       let nextLocation = match.location + match.length
       guard nextLocation < source.length else { break }
@@ -60,7 +61,19 @@
         length: source.length - nextLocation
       )
     }
-    return ranges
+    var coalesced: [NSRange] = []
+    for range in ranges {
+      guard let last = coalesced.last else {
+        coalesced.append(range)
+        continue
+      }
+      if range.location <= NSMaxRange(last) {
+        coalesced[coalesced.count - 1] = NSUnionRange(last, range)
+      } else {
+        coalesced.append(range)
+      }
+    }
+    return coalesced
   }
 
   @MainActor
