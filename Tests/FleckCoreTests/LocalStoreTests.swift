@@ -408,12 +408,35 @@ import Testing
       generation: 2
     ) == .committed
   )
+  let observedURLs = [
+    noteFileURL(root: root, noteID: newer.id),
+    root.appendingPathComponent("preferences.json"),
+    root.appendingPathComponent("workspace.json"),
+  ]
+  for url in observedURLs {
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1)],
+      ofItemAtPath: url.path
+    )
+  }
+  let before = try Dictionary(
+    uniqueKeysWithValues: observedURLs.map { url in
+      (url.lastPathComponent, try fileObservation(at: url))
+    }
+  )
   #expect(
     try writer.save(
       workspace: Workspace(notes: [older], selectedNoteID: older.id),
       preferences: .init(),
       generation: 1
     ) == .superseded
+  )
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: observedURLs.map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == before
   )
   #expect(try writer.loadSnapshot().workspace.notes.map(\.title) == ["Newer"])
 }
@@ -483,6 +506,645 @@ import Testing
   #expect(
     try writer.save(workspace: workspace, preferences: .init(), generation: 3)
       == .committed
+  )
+}
+
+@Test func contentEditRewritesOnlyChangedBodyAndRichTextFiles() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let first = Note(
+    title: "First",
+    body: "first body",
+    richTextRTF: Data("{\\rtf1 first}".utf8)
+  )
+  let second = Note(
+    title: "Second",
+    body: "second body",
+    richTextRTF: Data("{\\rtf1 second}".utf8)
+  )
+  let initialWorkspace = Workspace(
+    notes: [first, second],
+    selectedNoteID: first.id
+  )
+  try await store.save(
+    workspace: initialWorkspace,
+    preferences: .init(),
+    generation: 1
+  )
+
+  let secondBodyURL = noteFileURL(root: root, noteID: second.id)
+  let secondRTFURL = rtfFileURL(root: root, noteID: second.id)
+  let sentinelDate = Date(timeIntervalSince1970: 1)
+  for url in [secondBodyURL, secondRTFURL] {
+    try FileManager.default.setAttributes(
+      [.modificationDate: sentinelDate],
+      ofItemAtPath: url.path
+    )
+  }
+  let secondBodyBefore = try fileObservation(at: secondBodyURL)
+  let secondRTFBefore = try fileObservation(at: secondRTFURL)
+
+  var changedWorkspace = initialWorkspace
+  changedWorkspace.updateContent(
+    id: first.id,
+    body: "first body updated",
+    rtf: Data("{\\rtf1 first updated}".utf8),
+    now: Date(timeIntervalSince1970: 2)
+  )
+  try await store.save(
+    workspace: changedWorkspace,
+    preferences: .init(),
+    generation: 2
+  )
+
+  #expect(try fileObservation(at: secondBodyURL) == secondBodyBefore)
+  #expect(try fileObservation(at: secondRTFURL) == secondRTFBefore)
+  #expect(
+    try Data(contentsOf: noteFileURL(root: root, noteID: first.id))
+      == Data("first body updated".utf8)
+  )
+  #expect(
+    try Data(contentsOf: rtfFileURL(root: root, noteID: first.id))
+      == Data("{\\rtf1 first updated}".utf8)
+  )
+}
+
+@Test func richTextOnlyEditRewritesOnlyTheChangedRichTextFile() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let first = Note(
+    title: "First",
+    body: "same body",
+    richTextRTF: Data("{\\rtf1 first}".utf8)
+  )
+  let second = Note(
+    title: "Second",
+    body: "second body",
+    richTextRTF: Data("{\\rtf1 second}".utf8)
+  )
+  let workspace = Workspace(
+    notes: [first, second],
+    selectedNoteID: first.id
+  )
+  try await store.save(workspace: workspace, preferences: .init(), generation: 1)
+
+  let firstBodyURL = noteFileURL(root: root, noteID: first.id)
+  let firstRTFURL = rtfFileURL(root: root, noteID: first.id)
+  let secondBodyURL = noteFileURL(root: root, noteID: second.id)
+  let secondRTFURL = rtfFileURL(root: root, noteID: second.id)
+  let contentURLs = [firstBodyURL, firstRTFURL, secondBodyURL, secondRTFURL]
+  for url in contentURLs {
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1)],
+      ofItemAtPath: url.path
+    )
+  }
+  let before = try Dictionary(
+    uniqueKeysWithValues: contentURLs.map { url in
+      (url.lastPathComponent, try fileObservation(at: url))
+    }
+  )
+
+  var changedWorkspace = workspace
+  changedWorkspace.updateContent(
+    id: first.id,
+    body: first.body,
+    rtf: Data("{\\rtf1 first changed}".utf8),
+    now: Date(timeIntervalSince1970: 2)
+  )
+  try await store.save(
+    workspace: changedWorkspace,
+    preferences: .init(),
+    generation: 2
+  )
+  let after = try Dictionary(
+    uniqueKeysWithValues: contentURLs.map { url in
+      (url.lastPathComponent, try fileObservation(at: url))
+    }
+  )
+  #expect(after[firstBodyURL.lastPathComponent] == before[firstBodyURL.lastPathComponent])
+  #expect(after[secondBodyURL.lastPathComponent] == before[secondBodyURL.lastPathComponent])
+  #expect(after[secondRTFURL.lastPathComponent] == before[secondRTFURL.lastPathComponent])
+  #expect(after[firstRTFURL.lastPathComponent] != before[firstRTFURL.lastPathComponent])
+  #expect(try Data(contentsOf: firstBodyURL) == Data(first.body.utf8))
+  #expect(try Data(contentsOf: firstRTFURL) == Data("{\\rtf1 first changed}".utf8))
+}
+
+@Test func metadataOnlySavesLeaveAllContentFilesUntouched() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let first = Note(
+    title: "First",
+    body: "first body",
+    richTextRTF: Data("{\\rtf1 first}".utf8),
+    createdAt: date,
+    modifiedAt: date
+  )
+  let second = Note(
+    title: "Second",
+    body: "second body",
+    richTextRTF: Data("{\\rtf1 second}".utf8),
+    createdAt: date,
+    modifiedAt: date
+  )
+  var workspace = Workspace(
+    notes: [first, second],
+    selectedNoteID: first.id
+  )
+  try await store.save(
+    workspace: workspace,
+    preferences: .init(),
+    generation: 1
+  )
+
+  let contentURLs = workspace.notes.flatMap { note in
+    [noteFileURL(root: root, noteID: note.id), rtfFileURL(root: root, noteID: note.id)]
+  }
+  let sentinelDate = Date(timeIntervalSince1970: 1)
+  for url in contentURLs {
+    try FileManager.default.setAttributes(
+      [.modificationDate: sentinelDate],
+      ofItemAtPath: url.path
+    )
+  }
+  let before = try Dictionary(
+    uniqueKeysWithValues: contentURLs.map { url in
+      (url.lastPathComponent, try fileObservation(at: url))
+    }
+  )
+
+  workspace.updateNote(
+    id: first.id,
+    title: "Renamed",
+    now: date.addingTimeInterval(1)
+  )
+  try await store.save(workspace: workspace, preferences: .init(), generation: 2)
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: contentURLs.map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == before
+  )
+
+  workspace.moveNote(id: first.id, to: 1)
+  try await store.save(workspace: workspace, preferences: .init(), generation: 3)
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: contentURLs.map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == before
+  )
+
+  workspace.togglePinned(id: first.id, now: date.addingTimeInterval(2))
+  try await store.save(workspace: workspace, preferences: .init(), generation: 4)
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: contentURLs.map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == before
+  )
+
+  workspace.selectAdjacent(forward: true)
+  try await store.save(workspace: workspace, preferences: .init(), generation: 5)
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: contentURLs.map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == before
+  )
+
+  workspace.setAgentAccess(
+    id: first.id,
+    enabled: true,
+    now: date.addingTimeInterval(3)
+  )
+  try await store.save(workspace: workspace, preferences: .init(), generation: 6)
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: contentURLs.map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == before
+  )
+  let loaded = try await store.loadSnapshot()
+  #expect(loaded.workspace.notes.map(\.id) == workspace.notes.map(\.id))
+  #expect(loaded.workspace.selectedNoteID == workspace.selectedNoteID)
+  #expect(loaded.workspace.notes.first?.title == "Renamed")
+  #expect(loaded.workspace.notes.first?.isPinned == workspace.notes.first?.isPinned)
+  #expect(loaded.workspace.notes.first?.agentAccess == true)
+  #expect(loaded.workspace.notes.first?.revision == 2)
+}
+
+@Test func richTextRemovalWaitsForManifestCommit() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(
+    title: "Formatted",
+    body: "body",
+    richTextRTF: Data("{\\rtf1 body}".utf8)
+  )
+  let workspace = Workspace(notes: [note], selectedNoteID: note.id)
+  let initialWriter = LocalStoreSnapshotWriter(rootURL: root)
+  _ = try initialWriter.save(
+    workspace: workspace,
+    preferences: .init(),
+    generation: 1
+  )
+
+  let rtfURL = rtfFileURL(root: root, noteID: note.id)
+  try FileManager.default.setAttributes(
+    [.modificationDate: Date(timeIntervalSince1970: 1)],
+    ofItemAtPath: rtfURL.path
+  )
+  let beforeFailure = try fileObservation(at: rtfURL)
+  var plainWorkspace = workspace
+  plainWorkspace.updateContent(
+    id: note.id,
+    body: note.body,
+    rtf: nil,
+    now: Date(timeIntervalSince1970: 2)
+  )
+  let failure = SnapshotFailureController(failingGeneration: 2)
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(beforeManifestCommit: { generation in
+      try failure.failOnce(generation)
+    })
+  )
+
+  #expect(throws: SnapshotTestError.failed) {
+    try writer.save(
+      workspace: plainWorkspace,
+      preferences: .init(),
+      generation: 2
+    )
+  }
+  #expect(try fileObservation(at: rtfURL) == beforeFailure)
+  #expect(try writer.loadSnapshot().source == .root)
+  #expect(try writer.loadSnapshot().workspace.notes.first?.richTextRTF != nil)
+
+  #expect(
+    try writer.save(
+      workspace: plainWorkspace,
+      preferences: .init(),
+      generation: 2
+    ) == .committed
+  )
+  #expect(!FileManager.default.fileExists(atPath: rtfURL.path))
+  #expect(try writer.loadSnapshot().workspace.notes.first?.richTextRTF == nil)
+}
+
+@Test func preferenceOnlySavesWriteOnlyChangedPreferences() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let note = Note(
+    title: "Content",
+    body: "body",
+    richTextRTF: Data("{\\rtf1 body}".utf8)
+  )
+  let workspace = Workspace(notes: [note], selectedNoteID: note.id)
+  let initialPreferences = AppPreferences(fontFamily: "Menlo")
+  try await store.save(
+    workspace: workspace,
+    preferences: initialPreferences,
+    generation: 1
+  )
+
+  let preferencesURL = root.appendingPathComponent("preferences.json")
+  let bodyURL = noteFileURL(root: root, noteID: note.id)
+  let rtfURL = rtfFileURL(root: root, noteID: note.id)
+  let sentinelDate = Date(timeIntervalSince1970: 1)
+  for url in [preferencesURL, bodyURL, rtfURL] {
+    try FileManager.default.setAttributes(
+      [.modificationDate: sentinelDate],
+      ofItemAtPath: url.path
+    )
+  }
+  let before = try Dictionary(
+    uniqueKeysWithValues: [preferencesURL, bodyURL, rtfURL].map { url in
+      (url.lastPathComponent, try fileObservation(at: url))
+    }
+  )
+
+  var bodyChanged = workspace
+  bodyChanged.updateContent(
+    id: note.id,
+    body: "changed body",
+    rtf: note.richTextRTF,
+    now: Date(timeIntervalSince1970: 2)
+  )
+  try await store.save(
+    workspace: bodyChanged,
+    preferences: initialPreferences,
+    generation: 2
+  )
+  let afterBodySave = try Dictionary(
+    uniqueKeysWithValues: [preferencesURL, bodyURL, rtfURL].map { url in
+      (url.lastPathComponent, try fileObservation(at: url))
+    }
+  )
+  #expect(
+    afterBodySave[preferencesURL.lastPathComponent]
+      == before[preferencesURL.lastPathComponent]
+  )
+  #expect(afterBodySave[rtfURL.lastPathComponent] == before[rtfURL.lastPathComponent])
+
+  let beforeSamePreferences = afterBodySave
+  try await store.save(
+    workspace: bodyChanged,
+    preferences: initialPreferences,
+    generation: 3
+  )
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: [preferencesURL, bodyURL, rtfURL].map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == beforeSamePreferences
+  )
+
+  let changedPreferences = AppPreferences(fontFamily: "Avenir")
+  try await store.save(
+    workspace: bodyChanged,
+    preferences: changedPreferences,
+    generation: 4
+  )
+  let afterPreferencesChange = try Dictionary(
+    uniqueKeysWithValues: [preferencesURL, bodyURL, rtfURL].map { url in
+      (url.lastPathComponent, try fileObservation(at: url))
+    }
+  )
+  #expect(
+    afterPreferencesChange[preferencesURL.lastPathComponent]
+      != beforeSamePreferences[preferencesURL.lastPathComponent]
+  )
+  #expect(
+    afterPreferencesChange[bodyURL.lastPathComponent]
+      == beforeSamePreferences[bodyURL.lastPathComponent]
+  )
+  #expect(
+    afterPreferencesChange[rtfURL.lastPathComponent]
+      == beforeSamePreferences[rtfURL.lastPathComponent]
+  )
+  #expect(try await store.loadPreferences() == changedPreferences)
+}
+
+@Test func agentCommitProofOnlySaveLeavesContentFilesUntouched() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(
+    title: "Shared",
+    body: "body",
+    richTextRTF: Data("{\\rtf1 body}".utf8),
+    agentAccess: true,
+    revision: 2
+  )
+  let workspace = Workspace(notes: [note], selectedNoteID: note.id)
+  let writer = LocalStoreSnapshotWriter(rootURL: root)
+  _ = try writer.save(
+    workspace: workspace,
+    preferences: .init(),
+    generation: 1
+  )
+
+  let contentURLs = [
+    noteFileURL(root: root, noteID: note.id),
+    rtfFileURL(root: root, noteID: note.id),
+  ]
+  for url in contentURLs {
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1)],
+      ofItemAtPath: url.path
+    )
+  }
+  let before = try Dictionary(
+    uniqueKeysWithValues: contentURLs.map { url in
+      (url.lastPathComponent, try fileObservation(at: url))
+    }
+  )
+  let proof = AgentWorkspaceCommitProof(
+    changeID: UUID(),
+    noteID: note.id,
+    resultingRevision: note.revision,
+    bodySHA256: "body-hash",
+    actor: .localUser,
+    operationID: UUID(),
+    expiresAt: Date(timeIntervalSince1970: 1_900_000_000)
+  )
+
+  #expect(
+    try writer.save(
+      workspace: workspace,
+      preferences: .init(),
+      generation: 2,
+      commitProof: proof
+    ) == .committed
+  )
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: contentURLs.map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == before
+  )
+  #expect(try writer.loadSnapshot().commitProofs == [proof])
+}
+
+@Test func deletedContentCleanupWaitsForManifestCommitAndRestoreReusesExistingFiles()
+  async throws
+{
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let remaining = Note(
+    title: "Remaining",
+    body: "keep me",
+    richTextRTF: Data("{\\rtf1 keep me}".utf8)
+  )
+  let deleted = Note(
+    title: "Deleted",
+    body: "restore me",
+    richTextRTF: Data("{\\rtf1 restore me}".utf8)
+  )
+  let initialWorkspace = Workspace(
+    notes: [remaining, deleted],
+    selectedNoteID: remaining.id
+  )
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: initialWorkspace,
+    preferences: .init(),
+    generation: 1
+  )
+
+  let remainingURLs = [
+    noteFileURL(root: root, noteID: remaining.id),
+    rtfFileURL(root: root, noteID: remaining.id),
+  ]
+  for url in remainingURLs {
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1)],
+      ofItemAtPath: url.path
+    )
+  }
+  let remainingBefore = try Dictionary(
+    uniqueKeysWithValues: remainingURLs.map { url in
+      (url.lastPathComponent, try fileObservation(at: url))
+    }
+  )
+  let reducedWorkspace = Workspace(
+    notes: [remaining],
+    selectedNoteID: remaining.id
+  )
+  let failure = SnapshotFailureController(failingGeneration: 2)
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(beforeManifestCommit: { generation in
+      try failure.failOnce(generation)
+    })
+  )
+
+  #expect(throws: SnapshotTestError.failed) {
+    try writer.save(
+      workspace: reducedWorkspace,
+      preferences: .init(),
+      generation: 2,
+      trashedNotes: [deleted]
+    )
+  }
+  #expect(
+    FileManager.default.fileExists(
+      atPath: noteFileURL(root: root, noteID: deleted.id).path
+    )
+  )
+  #expect(
+    FileManager.default.fileExists(
+      atPath: rtfFileURL(root: root, noteID: deleted.id).path
+    )
+  )
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: remainingURLs.map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == remainingBefore
+  )
+  let failedSnapshot = try writer.loadSnapshot()
+  #expect(failedSnapshot.source == .root)
+  #expect(failedSnapshot.workspace.notes.map(\.id) == initialWorkspace.notes.map(\.id))
+
+  #expect(
+    try writer.save(
+      workspace: reducedWorkspace,
+      preferences: .init(),
+      generation: 2,
+      trashedNotes: [deleted]
+    ) == .committed
+  )
+  #expect(
+    !FileManager.default.fileExists(
+      atPath: noteFileURL(root: root, noteID: deleted.id).path
+    )
+  )
+  #expect(
+    !FileManager.default.fileExists(
+      atPath: rtfFileURL(root: root, noteID: deleted.id).path
+    )
+  )
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: remainingURLs.map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == remainingBefore
+  )
+
+  let restoredStore = LocalStore(rootURL: root)
+  let trashedNote = try #require(await restoredStore.loadTrash().first)
+  let restoredWorkspace = try await restoredStore.restore(
+    trashedNote,
+    into: reducedWorkspace,
+    preferences: .init(),
+    generation: 3
+  )
+  #expect(restoredWorkspace.notes.map(\.id) == [remaining.id, deleted.id])
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: remainingURLs.map { url in
+        (url.lastPathComponent, try fileObservation(at: url))
+      }
+    ) == remainingBefore
+  )
+  #expect(
+    FileManager.default.fileExists(
+      atPath: noteFileURL(root: root, noteID: deleted.id).path
+    )
+  )
+  #expect(try await restoredStore.loadTrash().isEmpty)
+}
+
+@Test func invalidRootSaveRewritesContentInsteadOfReusingUnvalidatedFiles() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let first = Note(title: "First", body: "first")
+  let second = Note(title: "Second", body: "second")
+  let initialWorkspace = Workspace(
+    notes: [first, second],
+    selectedNoteID: first.id
+  )
+  let writer = LocalStoreSnapshotWriter(rootURL: root)
+  _ = try writer.save(
+    workspace: initialWorkspace,
+    preferences: .init(),
+    generation: 1
+  )
+  _ = try writer.save(
+    workspace: initialWorkspace,
+    preferences: .init(),
+    generation: 2
+  )
+
+  let secondURL = noteFileURL(root: root, noteID: second.id)
+  try FileManager.default.setAttributes(
+    [.modificationDate: Date(timeIntervalSince1970: 1)],
+    ofItemAtPath: secondURL.path
+  )
+  let before = try fileObservation(at: secondURL)
+  try Data("corrupt root".utf8).write(
+    to: noteFileURL(root: root, noteID: first.id)
+  )
+
+  var requestedWorkspace = initialWorkspace
+  requestedWorkspace.updateContent(
+    id: first.id,
+    body: "new first",
+    rtf: nil,
+    now: Date(timeIntervalSince1970: 3)
+  )
+  _ = try writer.save(
+    workspace: requestedWorkspace,
+    preferences: .init(),
+    generation: 3
+  )
+
+  #expect(try fileObservation(at: secondURL) != before)
+  #expect(try writer.loadSnapshot().source == .root)
+  #expect(try writer.loadSnapshot().workspace.notes.map(\.body) == ["new first", "second"])
+  #expect(
+    try String(
+      contentsOf: root.appendingPathComponent(
+        "Recovery/\(second.id.uuidString.lowercased()).md"
+      ),
+      encoding: .utf8
+    ) == "second"
   )
 }
 
@@ -935,6 +1597,29 @@ import Testing
   #expect(snapshot.source == .root)
   #expect(snapshot.workspace.notes.first?.body == "Body")
   #expect(snapshot.workspace.notes.first?.richTextRTF == nil)
+}
+
+private struct FileObservation: Equatable {
+  let bytes: Data
+  let modificationDate: Date
+  let fileNumber: UInt64?
+}
+
+private func fileObservation(at url: URL) throws -> FileObservation {
+  let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+  return FileObservation(
+    bytes: try Data(contentsOf: url),
+    modificationDate: try #require(attributes[.modificationDate] as? Date),
+    fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
+  )
+}
+
+private func noteFileURL(root: URL, noteID: UUID) -> URL {
+  root.appendingPathComponent("\(noteID.uuidString.lowercased()).md")
+}
+
+private func rtfFileURL(root: URL, noteID: UUID) -> URL {
+  root.appendingPathComponent("\(noteID.uuidString.lowercased()).rtf")
 }
 
 private func temporaryStoreURL() -> URL {

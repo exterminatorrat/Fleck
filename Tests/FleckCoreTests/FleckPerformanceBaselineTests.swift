@@ -62,7 +62,7 @@ import Testing
   }
 }
 
-@Test func FleckPerformanceCurrentBaselineSaveRewritesUnchangedNoteBodies() async throws {
+@Test func FleckPerformanceSaveLeavesUnchangedNoteBodiesUntouched() async throws {
   let root = temporaryPerformanceStoreURL(noteCount: 10)
   defer { try? FileManager.default.removeItem(at: root) }
 
@@ -84,6 +84,7 @@ import Testing
     [.modificationDate: sentinelDate],
     ofItemAtPath: unchangedBodyURL.path
   )
+  let before = try fileObservation(at: unchangedBodyURL)
 
   var changedWorkspace = initialWorkspace
   changedWorkspace.updateContent(
@@ -98,19 +99,64 @@ import Testing
     generation: 2
   )
 
-  let attributes = try fileManager.attributesOfItem(atPath: unchangedBodyURL.path)
-  let modificationDate = try #require(
-    attributes[.modificationDate] as? Date
-  )
-  #expect(
-    try Data(contentsOf: unchangedBodyURL) == Data(unchangedNote.body.utf8)
-  )
-  #expect(modificationDate > sentinelDate)
+  let after = try fileObservation(at: unchangedBodyURL)
+  #expect(after == before)
 
   print(
-    "FleckPerformanceBaseline current_save_rewrites_unchanged_body=true "
+    "FleckPerformanceBaseline unchanged_body_untouched=true "
       + "note_count=10"
   )
+}
+
+@Test func FleckPerformanceOptimizedSaveCountsChangedLiveRootContentFiles()
+  async throws
+{
+  for noteCount in FleckPerformanceBaselineFixture.requiredNoteCounts {
+    let root = temporaryPerformanceStoreURL(noteCount: noteCount)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let workspace = FleckPerformanceBaselineFixture.workspace(noteCount: noteCount)
+    let store = LocalStore(rootURL: root)
+    try await store.save(
+      workspace: workspace,
+      preferences: .init(),
+      generation: 1
+    )
+    let contentURLs = workspace.notes.map { note in
+      root.appendingPathComponent("\(note.id.uuidString.lowercased()).md")
+    }
+    for url in contentURLs {
+      try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSince1970: 1)],
+        ofItemAtPath: url.path
+      )
+    }
+    let before = try contentURLs.map { try fileObservation(at: $0) }
+
+    var changedWorkspace = workspace
+    changedWorkspace.updateContent(
+      id: workspace.notes[0].id,
+      body: "Synthetic body changed for measurement",
+      rtf: nil,
+      now: FleckPerformanceBaselineFixture.baseDate.addingTimeInterval(10_001)
+    )
+    let saveStart = DispatchTime.now().uptimeNanoseconds
+    try await store.save(
+      workspace: changedWorkspace,
+      preferences: .init(),
+      generation: 2
+    )
+    let after = try contentURLs.map { try fileObservation(at: $0) }
+    let changedContentFileCount = zip(before, after).filter { $0.0 != $0.1 }.count
+
+    #expect(changedContentFileCount == 1)
+    print(
+      "FleckPerformance optimized_save note_count=\(noteCount) "
+        + "live_root_content_writes=\(changedContentFileCount) "
+        + "save_ms=\(elapsedMilliseconds(since: saveStart)) "
+        + "recovery_copy_activity=present"
+    )
+  }
 }
 
 private enum FleckPerformanceBaselineFixture {
@@ -144,4 +190,19 @@ private func temporaryPerformanceStoreURL(noteCount: Int) -> URL {
 private func elapsedMilliseconds(since start: UInt64) -> String {
   let elapsedNanoseconds = DispatchTime.now().uptimeNanoseconds - start
   return String(format: "%.3f", Double(elapsedNanoseconds) / 1_000_000)
+}
+
+private struct FileObservation: Equatable {
+  let bytes: Data
+  let modificationDate: Date
+  let fileNumber: UInt64?
+}
+
+private func fileObservation(at url: URL) throws -> FileObservation {
+  let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+  return FileObservation(
+    bytes: try Data(contentsOf: url),
+    modificationDate: try #require(attributes[.modificationDate] as? Date),
+    fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
+  )
 }

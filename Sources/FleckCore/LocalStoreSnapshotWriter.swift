@@ -165,24 +165,54 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       }
 
       let preferencesData = try encoder().encode(preferences)
-      try preferencesData.write(
-        to: rootURL.appendingPathComponent("preferences.json"),
-        options: .atomic
+      let preferencesHash = sha256(preferencesData)
+      let canReusePreferences = canReuse(
+        hash: preferencesHash,
+        expectedHash: validRoot?.manifest.preferencesSHA256,
+        root: validRoot
       )
+      if !canReusePreferences {
+        try preferencesData.write(
+          to: rootURL.appendingPathComponent("preferences.json"),
+          options: .atomic
+        )
+      }
 
       var markdownHashes: [String: String] = [:]
       var rtfHashes: [String: String] = [:]
       for note in workspace.notes {
         let key = note.id.uuidString.lowercased()
         let bodyData = Data(note.body.utf8)
-        try bodyData.write(to: noteURL(note.id, in: rootURL), options: .atomic)
-        markdownHashes[key] = sha256(bodyData)
+        let bodyHash = sha256(bodyData)
+        let canReuseBody = canReuse(
+          hash: bodyHash,
+          expectedHash: validRoot?.manifest.markdownSHA256?[key],
+          root: validRoot
+        )
+        if !canReuseBody {
+          try bodyData.write(to: noteURL(note.id, in: rootURL), options: .atomic)
+        }
+        if canReuseBody, let expectedHash = validRoot?.manifest.markdownSHA256?[key] {
+          markdownHashes[key] = expectedHash
+        } else {
+          markdownHashes[key] = bodyHash
+        }
         let richTextURL = rtfURL(note.id, in: rootURL)
         if let richTextRTF = note.richTextRTF {
-          try richTextRTF.write(to: richTextURL, options: .atomic)
-          rtfHashes[key] = sha256(richTextRTF)
-        } else if fileManager.fileExists(atPath: richTextURL.path) {
-          try fileManager.removeItem(at: richTextURL)
+          let richTextHash = sha256(richTextRTF)
+          let canReuseRichText = canReuse(
+            hash: richTextHash,
+            expectedHash: validRoot?.manifest.rtfSHA256?[key],
+            root: validRoot
+          )
+          if !canReuseRichText {
+            try richTextRTF.write(to: richTextURL, options: .atomic)
+          }
+          if canReuseRichText, let expectedHash = validRoot?.manifest.rtfSHA256?[key] {
+            rtfHashes[key] = expectedHash
+          } else {
+            rtfHashes[key] = richTextHash
+          }
         }
       }
 
@@ -207,6 +237,9 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
           .prefix(Self.maximumCommitProofs)
       )
 
+      let manifestPreferencesHash = canReusePreferences
+        ? validRoot?.manifest.preferencesSHA256 ?? preferencesHash
+        : preferencesHash
       let manifest = Manifest(
         formatVersion: Self.formatVersion,
         noteOrder: workspace.notes.map(\.id),
@@ -231,7 +264,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         snapshotIntegrityVersion: Self.integrityVersion,
         markdownSHA256: markdownHashes,
         rtfSHA256: rtfHashes,
-        preferencesSHA256: sha256(preferencesData),
+        preferencesSHA256: manifestPreferencesHash,
         agentCommitProofs: proofs
       )
       try hooks.beforeManifestCommit(generation)
@@ -483,10 +516,10 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
   private func cleanupOrphans(workspace: Workspace) {
     let live = Set(
       workspace.notes.flatMap {
-        [
-          noteURL($0.id, in: rootURL).lastPathComponent,
-          rtfURL($0.id, in: rootURL).lastPathComponent,
-        ]
+        [noteURL($0.id, in: rootURL).lastPathComponent]
+          + ($0.richTextRTF == nil
+            ? []
+            : [rtfURL($0.id, in: rootURL).lastPathComponent])
       }
     )
     guard
@@ -619,6 +652,16 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     SHA256.hash(data: data)
       .map { String(format: "%02x", $0) }
       .joined()
+  }
+
+  private func canReuse(
+    hash: String,
+    expectedHash: String?,
+    root: LoadedCandidate?
+  ) -> Bool {
+    // loadCandidate has already validated the root bytes against expectedHash.
+    root?.manifest.snapshotIntegrityVersion == Self.integrityVersion
+      && expectedHash == hash
   }
 
   private func encoder() -> JSONEncoder {

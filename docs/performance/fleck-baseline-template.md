@@ -1,8 +1,9 @@
 # Fleck performance baseline
 
-Status: **TEMPLATE — no baseline measurement captured yet.** Replace bracketed
-fields only with observations from the exact QA build and machine. Do not
-invent timing, memory, CPU, or disk-write values.
+Status: **Synthetic Phase 2 persistence observations captured; packaged-app
+measurements remain unrecorded.** Replace bracketed fields only with
+observations from the exact QA build and machine. Do not invent timing, memory,
+CPU, or disk-write values.
 
 ## Scope and safety
 
@@ -10,8 +11,10 @@ invent timing, memory, CPU, or disk-write values.
 - Fixture note IDs and dates are deterministic; titles and bodies contain only
   synthetic text.
 - Automated tests use temporary directories and remove them after each run.
-- The baseline describes current behavior. It does not optimize saving,
-  debounce, hashing, atomicity, recovery, UI, or launch behavior.
+- The baseline describes current behavior. The Phase 2 synthetic section below
+  characterizes measured live-root content writes before and after the narrowly
+  scoped persistence optimization. It does not replace packaged-app evidence
+  or optimize debounce, UI, or launch behavior.
 - Do not open, copy, or include user note contents. The profile output must not
   be inside `~/Library/Application Support/Fleck/`.
 
@@ -19,14 +22,14 @@ invent timing, memory, CPU, or disk-write values.
 
 | Field | Value |
 | --- | --- |
-| Measurement status | `[not captured]` |
-| Machine/model | `[record machine]` |
-| Architecture | `[arm64 / x86_64]` |
-| macOS version/build | `[record]` |
-| Xcode version | `[record]` |
-| Swift version | `[record]` |
-| Commit | `[record full SHA]` |
-| Build configuration | `Release` |
+| Measurement status | Synthetic persistence before/after captured; packaged-app measurements not captured |
+| Machine/model | MacBookPro17,1 |
+| Architecture | arm64 |
+| macOS version/build | 26.2 / 25C56 |
+| Xcode version | Xcode 26.6 / 17F113 |
+| Swift version | Apple Swift 6.3.3 / swift-driver 1.148.6 |
+| Commit | `675d0909ee1585820ac270baceae92e22a5f9f2f` plus uncommitted Phase 2 changes |
+| Build configuration | Debug SwiftPM tests for synthetic observations |
 | QA app/artifact path | `[record exact path]` |
 | Output directory | `[record; disposable and outside Fleck Application Support]` |
 
@@ -147,14 +150,43 @@ design.
 | QA app signed/packaged | `[not captured]` |
 | Logical disk-write tool/output | `[not captured]` |
 
+## Phase 2 persistence optimization: synthetic before/after
+
+This is a deterministic SwiftPM test protocol, not a packaged-app or
+host-wide-I/O measurement. It uses the exact 10-, 100-, and 1,000-note
+synthetic fixtures, temporary roots outside Fleck Application Support, and one
+body-only edit after an initial save. A live-root content write is counted when
+the `.md` or `.rtf` file's bytes, modification date, or file identity changes.
+`Recovery` copy activity is intentionally excluded and remains present on each
+save that has a valid root. No user note content is used.
+
+The before run used exact base `675d0909ee1585820ac270baceae92e22a5f9f2f` in a
+disposable archive. The after run used the Phase 2 working tree at the same
+base plus its uncommitted changes. These are single-run observations in Debug
+SwiftPM tests, so they are comparisons for this fixture/protocol rather than
+performance budgets.
+
+| Notes | Before live-root content writes | After live-root content writes | Before initial save ms | After initial save ms | Before initial load ms | After initial load ms | Before changed save ms | After changed save ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 10 | 1 | 8.919 | 8.499 | 2.782 | 2.223 | 9.768 | 6.579 |
+| 100 | 100 | 1 | 36.551 | 29.819 | 11.267 | 11.597 | 85.387 | 47.379 |
+| 1,000 | 1,000 | 1 | 336.557 | 321.573 | 182.947 | 108.480 | 762.680 | 473.637 |
+
+The observed protocol reduced live-root logical content writes from one per
+note to one changed body, while the single-run initial save/load observations
+showed no material regression. It does not claim that all filesystem writes
+disappear: valid-root recovery copying, preferences/manifest replacement, and
+post-commit maintenance remain separate work.
+
 ## Current persistence characterization
 
-`FleckPerformanceCurrentBaselineSaveRewritesUnchangedNoteBodies` records the
-current save path rewriting an unchanged `.md` body when another note changes.
-This is baseline behavior, not a desired invariant. A later persistence
-optimization may deliberately invert this regression test only under a
-separately authorized packet and with before/after correctness and performance
-evidence.
+`FleckPerformanceSaveLeavesUnchangedNoteBodiesUntouched` records the new
+invariant: a valid-root save that changes another note leaves an unchanged
+`.md` body byte-, inode-, and mtime-identical. The base behavior was captured by
+the red test before this regression was inverted. `LocalStoreTests` extends the
+same observation to changed RTF, RTF removal ordering, metadata-only and
+preference-only saves, agent proof saves, deletion/restore, recovery, and
+superseded generations.
 
 ## Limitations and evidence links
 
