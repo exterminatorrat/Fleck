@@ -49,8 +49,13 @@ public enum PersonalDictionaryResolver {
     }
 
     let candidates = claims.values
-      .filter { $0.count == 1 }
-      .compactMap(\.first)
+      .flatMap { claim in
+        claim.map { candidate in
+          var candidate = candidate
+          candidate.isAmbiguous = claim.count > 1
+          return candidate
+        }
+      }
       .sorted { lhs, rhs in
         let leftLength = lhs.alias.unicodeScalars.count
         let rightLength = rhs.alias.unicodeScalars.count
@@ -77,6 +82,11 @@ public enum PersonalDictionaryResolver {
         candidates: candidates
       ) else {
         index = rawTranscript.index(after: index)
+        continue
+      }
+
+      if match.candidate.isAmbiguous {
+        index = match.range.upperBound
         continue
       }
 
@@ -274,6 +284,7 @@ public enum PersonalDictionaryResolver {
     let normalized: String
     let preferredForm: String
     let entryID: UUID
+    var isAmbiguous = false
   }
 
   private struct AliasMatch {

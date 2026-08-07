@@ -53,6 +53,37 @@ import Testing
   #expect(result.protectedForms == ["camelCase", "小明"])
 }
 
+@Test func resolverLeavesShorterUniqueAliasInsideAmbiguousLongerAliasUnchanged() throws {
+  let entries = [
+    dictionaryEntry(preferredForm: "NewYork", aliases: ["new york"]),
+    dictionaryEntry(preferredForm: "NewYorkAlt", aliases: ["NEW YORK"]),
+    dictionaryEntry(preferredForm: "York", aliases: ["york"]),
+  ]
+
+  let result = try PersonalDictionaryResolver.resolve("new york", entries: entries)
+
+  #expect(result.baseline == "new york")
+  #expect(result.replacements == 0)
+  #expect(result.protectedForms.isEmpty)
+}
+
+@Test func resolverReplacesUniqueAliasOutsideAmbiguousLongerAliasSpan() throws {
+  let entries = [
+    dictionaryEntry(preferredForm: "NewYork", aliases: ["new york"]),
+    dictionaryEntry(preferredForm: "NewYorkAlt", aliases: ["NEW YORK"]),
+    dictionaryEntry(preferredForm: "York", aliases: ["york"]),
+  ]
+
+  let result = try PersonalDictionaryResolver.resolve(
+    "new york then york",
+    entries: entries
+  )
+
+  #expect(result.baseline == "new york then York")
+  #expect(result.replacements == 1)
+  #expect(result.protectedForms == ["York"])
+}
+
 @Test func resolverProtectsAlreadyCorrectPreferredFormsWithoutReplacements() throws {
   let result = try PersonalDictionaryResolver.resolve(
     "Ship FleckApp today",
