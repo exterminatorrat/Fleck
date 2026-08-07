@@ -366,6 +366,31 @@ private func waitForCompletion(
   #expect(record.insertionOutcome == .saved)
 }
 
+@Test @MainActor func dictionaryBaselineIsResolvedBeforeCleanupAndRawRemainsExact() async throws {
+  let resolver = FakeDictionaryResolver(
+    result: .init(
+      baseline: "FleckApp",
+      protectedForms: ["FleckApp"],
+      replacements: 1
+    )
+  )
+  let fixture = try Fixture(dictionaryResolver: resolver)
+  fixture.standard.finalText = "fleck app"
+  fixture.cleaner.result = "FleckApp ships"
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(resolver.inputs == ["fleck app"])
+  #expect(fixture.cleaner.inputs == ["FleckApp"])
+  #expect(fixture.saver.savedTexts == ["FleckApp ships"])
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.rawTranscript == "fleck app")
+  #expect(record.dictionaryBaseline == "FleckApp")
+  #expect(record.dictionaryOutcome == .resolved)
+  #expect(record.insertedArtifact == .cleanedResult)
+}
+
 @Test @MainActor func cleanupFailureUsesRawTranscript() async throws {
   let fixture = try Fixture()
   fixture.standard.finalText = "Do not cancel 2 meetings"
@@ -378,6 +403,81 @@ private func waitForCompletion(
   let record = try #require(await fixture.history.list().first)
   #expect(record.cleanedTranscript == nil)
   #expect(record.cleanupOutcome == .usedRaw)
+}
+
+@Test @MainActor func cleanupFailureUsesDictionaryBaselineAndProtectsPreferredForm() async throws {
+  let fixture = try Fixture(
+    dictionaryResolver: FakeDictionaryResolver(
+      result: .init(
+        baseline: "FleckApp",
+        protectedForms: ["FleckApp"],
+        replacements: 1
+      )
+    )
+  )
+  fixture.standard.finalText = "fleck app"
+  fixture.cleaner.error = TestError.failed
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.saver.savedTexts == ["FleckApp"])
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.dictionaryBaseline == "FleckApp")
+  #expect(record.insertedArtifact == .dictionaryBaseline)
+  #expect(record.cleanedTranscript == nil)
+}
+
+@Test @MainActor func emptyOrProtectedTermLosingCleanupUsesDictionaryBaseline() async throws {
+  for result in ["  ", "Fleck App"] {
+    let fixture = try Fixture(
+      dictionaryResolver: FakeDictionaryResolver(
+        result: .init(
+          baseline: "FleckApp",
+          protectedForms: ["FleckApp"],
+          replacements: 1
+        )
+      )
+    )
+    fixture.standard.finalText = "fleck app"
+    fixture.cleaner.result = result
+
+    await fixture.coordinator.start(mode: .smartCapture)
+    await fixture.coordinator.finish()
+
+    #expect(fixture.saver.savedTexts == ["FleckApp"])
+    let record = try #require(await fixture.history.list().first)
+    #expect(record.insertedArtifact == .dictionaryBaseline)
+  }
+}
+
+@Test @MainActor func dictionaryResolutionFailureUsesRawAndRecordsSkippedResolution() async throws {
+  let fixture = try Fixture(
+    dictionaryResolver: FakeDictionaryResolver(error: TestError.failed)
+  )
+  fixture.standard.finalText = "fleck app"
+  fixture.cleaner.result = "This cleanup must not run"
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.saver.savedTexts == ["fleck app"])
+  #expect(fixture.cleaner.inputs.isEmpty)
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.dictionaryBaseline == nil)
+  #expect(record.dictionaryOutcome == .skipped)
+  #expect(record.insertedArtifact == .asrRaw)
+}
+
+@Test @MainActor func historyDisabledCaptureDoesNotPersistTranscriptArtifacts() async throws {
+  let fixture = try Fixture(historyEnabled: false)
+  fixture.standard.finalText = "Private dictation"
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.saver.savedTexts == ["Private dictation"])
+  #expect(try await fixture.history.list().isEmpty)
 }
 
 @Test @MainActor func coordinatorObserverPublishesEveryProcessingPhaseAndCleanedSmartOutcome()
@@ -1792,6 +1892,7 @@ private final class Fixture {
   let standard = FakeSpeechEngine(kind: .standard)
   let enhanced = FakeSpeechEngine(kind: .enhancedLocal)
   let provider: FakeEngineProvider
+  let dictionaryResolver: any TranscriptDictionaryResolving
   let cleaner = FakeCleaner()
   let router = FakeRouter()
   let saver: FakeSaver
@@ -1806,10 +1907,12 @@ private final class Fixture {
     historySaveError: Error? = nil,
     historyFinalSaveGate: Gate? = nil,
     historyDeleteError: Error? = nil,
+    dictionaryResolver: any TranscriptDictionaryResolving = PassthroughTranscriptDictionaryResolver(),
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { _ in }
   ) throws {
     preference = PreferenceBox(value: preferred)
     provider = FakeEngineProvider()
+    self.dictionaryResolver = dictionaryResolver
     saver = FakeSaver()
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1839,6 +1942,7 @@ private final class Fixture {
       saver: saver,
       historyController: historyController,
       historyEnabled: { historyEnabled },
+      dictionaryResolver: dictionaryResolver,
       holdSleeper: holdSleeper
     )
   }
@@ -2035,12 +2139,31 @@ private final class FakeCleaner: TranscriptCleaning, @unchecked Sendable {
   var error: Error?
   var onClean: (() async throws -> String)?
   var gate: Gate?
+  private(set) var inputs: [String] = []
 
   func clean(_ rawTranscript: String) async throws -> String {
+    inputs.append(rawTranscript)
     if let gate { await gate.wait() }
     if let onClean { return try await onClean() }
     if let error { throw error }
     return result ?? rawTranscript
+  }
+}
+
+private final class FakeDictionaryResolver: TranscriptDictionaryResolving, @unchecked Sendable {
+  let result: PersonalDictionaryResolution?
+  let error: Error?
+  private(set) var inputs: [String] = []
+
+  init(result: PersonalDictionaryResolution? = nil, error: Error? = nil) {
+    self.result = result
+    self.error = error
+  }
+
+  func resolve(_ rawTranscript: String) async throws -> PersonalDictionaryResolution {
+    inputs.append(rawTranscript)
+    if let error { throw error }
+    return result ?? .init(baseline: rawTranscript, protectedForms: [], replacements: 0)
   }
 }
 

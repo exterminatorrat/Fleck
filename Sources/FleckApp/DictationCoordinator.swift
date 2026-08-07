@@ -31,6 +31,10 @@ struct DictationShortcutSession: Equatable, Hashable, Sendable {
   let id: UUID
 }
 
+private enum DictationDictionaryResolutionError: Error {
+  case invalidBaseline
+}
+
 enum DictationRecoveryAction: Equatable {
   case undo
   case copy
@@ -73,6 +77,7 @@ final class DictationCoordinator {
   private let saver: any DictationSaving
   private let historyController: DictationHistoryController
   private let historyEnabled: @MainActor () -> Bool
+  private let dictionaryResolver: any TranscriptDictionaryResolving
   private let holdThreshold: Duration
   private let holdSleeper: @Sendable (Duration) async -> Void
 
@@ -106,6 +111,7 @@ final class DictationCoordinator {
     saver: any DictationSaving,
     historyStore: DictationHistoryStore,
     historyEnabled: @escaping @MainActor () -> Bool,
+    dictionaryResolver: any TranscriptDictionaryResolving = PassthroughTranscriptDictionaryResolver(),
     holdThreshold: Duration = .milliseconds(180),
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
@@ -118,6 +124,7 @@ final class DictationCoordinator {
     self.saver = saver
     historyController = DictationHistoryController(store: historyStore)
     self.historyEnabled = historyEnabled
+    self.dictionaryResolver = dictionaryResolver
     self.holdThreshold = holdThreshold
     self.holdSleeper = holdSleeper
   }
@@ -130,6 +137,7 @@ final class DictationCoordinator {
     saver: any DictationSaving,
     historyController: DictationHistoryController,
     historyEnabled: @escaping @MainActor () -> Bool,
+    dictionaryResolver: any TranscriptDictionaryResolving = PassthroughTranscriptDictionaryResolver(),
     holdThreshold: Duration = .milliseconds(180),
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
@@ -142,6 +150,7 @@ final class DictationCoordinator {
     self.saver = saver
     self.historyController = historyController
     self.historyEnabled = historyEnabled
+    self.dictionaryResolver = dictionaryResolver
     self.holdThreshold = holdThreshold
     self.holdSleeper = holdSleeper
   }
@@ -417,23 +426,83 @@ final class DictationCoordinator {
       enabled: savesHistory
     ) else { return }
 
-    setPhase(.cleaning)
-    let cleanedText: String
+    let resolution: PersonalDictionaryResolution
     do {
-      cleanedText = try await cleaner.clean(rawText)
-      guard await continueCapture(capture.id) else { return }
-      record.cleanedTranscript = cleanedText
-      record.cleanupOutcome = .cleaned
+      let candidate = try await dictionaryResolver.resolve(rawText)
+      guard nonempty(candidate.baseline) != nil,
+        PersonalDictionaryResolver.cleanupPreserves(
+          candidate.protectedForms,
+          in: candidate.baseline
+        )
+      else {
+        throw DictationDictionaryResolutionError.invalidBaseline
+      }
+      resolution = candidate
+      record.dictionaryBaseline = candidate.baseline
+      record.dictionaryOutcome = candidate.replacements == 0 ? .unchanged : .resolved
+      guard await updateHistory(record, captureID: capture.id, enabled: savesHistory) != nil else {
+        return
+      }
     } catch {
       guard await continueCapture(capture.id) else { return }
-      cleanedText = rawText
+      record.dictionaryOutcome = .skipped
+      record.insertedArtifact = .asrRaw
       record.cleanupOutcome = .usedRaw
+      guard await updateHistory(record, captureID: capture.id, enabled: savesHistory) != nil else {
+        return
+      }
+      if capture.mode == .focused {
+        await finishFocused(
+          capture.id,
+          text: rawText,
+          record: record,
+          savesHistory: savesHistory,
+          historyIsDurable: historyIsDurable
+        )
+      } else {
+        await finishSmart(
+          capture.id,
+          text: rawText,
+          record: record,
+          savesHistory: savesHistory,
+          historyIsDurable: historyIsDurable
+        )
+      }
+      return
+    }
+
+    setPhase(.cleaning)
+    let cleanedCandidate: String?
+    do {
+      cleanedCandidate = try await cleaner.clean(resolution.baseline)
+    } catch {
+      cleanedCandidate = nil
+    }
+    guard await continueCapture(capture.id) else { return }
+
+    let insertedText: String
+    if let cleanedCandidate,
+      let cleanedText = nonempty(cleanedCandidate),
+      PersonalDictionaryResolver.cleanupPreserves(
+        resolution.protectedForms,
+        in: cleanedText
+      )
+    {
+      insertedText = cleanedText
+      record.cleanedTranscript = cleanedText
+      record.cleanupOutcome = .cleaned
+      record.insertedArtifact = .cleanedResult
+    } else {
+      insertedText = resolution.baseline
+      record.cleanedTranscript = nil
+      record.cleanupOutcome = .usedRaw
+      record.insertedArtifact = .dictionaryBaseline
     }
 
     if capture.mode == .focused {
       await finishFocused(
         capture.id,
-        text: cleanedText,
+        text: insertedText,
         record: record,
         savesHistory: savesHistory,
         historyIsDurable: historyIsDurable
@@ -441,7 +510,7 @@ final class DictationCoordinator {
     } else {
       await finishSmart(
         capture.id,
-        text: cleanedText,
+        text: insertedText,
         record: record,
         savesHistory: savesHistory,
         historyIsDurable: historyIsDurable

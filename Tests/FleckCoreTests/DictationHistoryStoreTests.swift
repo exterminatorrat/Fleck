@@ -82,6 +82,31 @@ import Testing
   #expect(try await store.list() == [record])
 }
 
+@Test func dictationHistoryStoreDecodesRecordsWithoutPhaseBDictionaryFields() async throws {
+  let root = temporaryHistoryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let record = historyRecord()
+  let encoder = JSONEncoder()
+  encoder.dateEncodingStrategy = .iso8601
+  let data = try encoder.encode(record)
+  let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  #expect(object["dictionaryBaseline"] == nil)
+  #expect(object["dictionaryOutcome"] == nil)
+  #expect(object["insertedArtifact"] == nil)
+
+  let historyURL = root.appendingPathComponent("DictationHistory", isDirectory: true)
+  try FileManager.default.createDirectory(at: historyURL, withIntermediateDirectories: true)
+  try data.write(
+    to: historyURL.appendingPathComponent("\(record.id.uuidString.lowercased()).json"),
+    options: .atomic
+  )
+
+  let store = DictationHistoryStore(rootURL: root, now: { record.completedAt })
+  let decoded = try await store.list()
+  #expect(decoded == [record])
+}
+
 @Test func dictationHistoryStoreDeletesRecordsIdempotently() async throws {
   let root = temporaryHistoryStoreURL()
   defer { try? FileManager.default.removeItem(at: root) }

@@ -29,6 +29,18 @@ public enum DictationCleanupOutcome: String, Codable, Sendable {
   case failed
 }
 
+public enum DictationTranscriptArtifact: String, Codable, Sendable {
+  case asrRaw
+  case dictionaryBaseline
+  case cleanedResult
+}
+
+public enum DictationDictionaryOutcome: String, Codable, Sendable {
+  case resolved
+  case unchanged
+  case skipped
+}
+
 public enum DictationInsertionOutcome: String, Codable, Sendable {
   case pending
   case saved
@@ -92,8 +104,11 @@ public struct DictationHistoryRecord: Identifiable, Codable, Equatable, Sendable
   public let startedAt: Date
   public var completedAt: Date
   public var rawTranscript: String
+  public var dictionaryBaseline: String?
+  public var dictionaryOutcome: DictationDictionaryOutcome?
   public var cleanedTranscript: String?
   public var cleanupOutcome: DictationCleanupOutcome
+  public var insertedArtifact: DictationTranscriptArtifact?
   public var destination: DictationDestination?
   public var insertionOutcome: DictationInsertionOutcome
 
@@ -104,8 +119,11 @@ public struct DictationHistoryRecord: Identifiable, Codable, Equatable, Sendable
     startedAt: Date,
     completedAt: Date,
     rawTranscript: String,
+    dictionaryBaseline: String? = nil,
+    dictionaryOutcome: DictationDictionaryOutcome? = nil,
     cleanedTranscript: String? = nil,
     cleanupOutcome: DictationCleanupOutcome,
+    insertedArtifact: DictationTranscriptArtifact? = nil,
     destination: DictationDestination? = nil,
     insertionOutcome: DictationInsertionOutcome
   ) {
@@ -115,8 +133,11 @@ public struct DictationHistoryRecord: Identifiable, Codable, Equatable, Sendable
     self.startedAt = startedAt
     self.completedAt = completedAt
     self.rawTranscript = rawTranscript
+    self.dictionaryBaseline = dictionaryBaseline
+    self.dictionaryOutcome = dictionaryOutcome
     self.cleanedTranscript = cleanedTranscript
     self.cleanupOutcome = cleanupOutcome
+    self.insertedArtifact = insertedArtifact
     self.destination = destination
     self.insertionOutcome = insertionOutcome
   }

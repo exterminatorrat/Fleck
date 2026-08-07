@@ -1,6 +1,40 @@
 import Foundation
 import FleckCore
 
+struct DictationRecognitionContext: Equatable, Sendable {
+  let locale: Locale
+  let contextualStrings: [String]
+
+  init(locale: Locale, contextualStrings: [String] = []) {
+    self.locale = locale
+    var unique: [String] = []
+    var seen = Set<String>()
+    for value in contextualStrings
+    where !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      guard seen.insert(value).inserted else { continue }
+      unique.append(value)
+      if unique.count == 100 { break }
+    }
+    self.contextualStrings = unique
+  }
+
+  static let englishDefault = Self(locale: Locale(identifier: "en-US"))
+}
+
+protocol TranscriptDictionaryResolving: Sendable {
+  func resolve(_ rawTranscript: String) async throws -> PersonalDictionaryResolution
+}
+
+struct PassthroughTranscriptDictionaryResolver: TranscriptDictionaryResolving {
+  func resolve(_ rawTranscript: String) async throws -> PersonalDictionaryResolution {
+    PersonalDictionaryResolution(
+      baseline: rawTranscript,
+      protectedForms: [],
+      replacements: 0
+    )
+  }
+}
+
 struct FocusedDictationCommitReceipt: Equatable, Hashable, Sendable {
   let id: UUID
 
