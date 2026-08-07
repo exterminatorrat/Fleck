@@ -12,7 +12,7 @@ import Testing
   let result = try PersonalDictionaryResolver.resolve("acme ACME", entries: entries)
 
   #expect(result.baseline == "acme ACME")
-  #expect(result.protectedForms.isEmpty)
+  #expect(result.protectedForms == ["ACME"])
   #expect(result.replacements == 0)
 }
 
@@ -33,7 +33,7 @@ import Testing
       == "New York York App.App application _app app_ app2 (App)"
   )
   #expect(result.replacements == 5)
-  #expect(result.protectedForms == ["New York", "York", "App"])
+  #expect(result.protectedForms == ["New York", "York", "York", "App", "App", "App"])
 }
 
 @Test func resolverHandlesIdentifierCasingMandarinAndDisabledEntries() throws {
@@ -51,6 +51,39 @@ import Testing
   #expect(result.baseline == "camelCase 小明 disabled")
   #expect(result.replacements == 2)
   #expect(result.protectedForms == ["camelCase", "小明"])
+}
+
+@Test func resolverProtectsAlreadyCorrectPreferredFormsWithoutReplacements() throws {
+  let result = try PersonalDictionaryResolver.resolve(
+    "Ship FleckApp today",
+    entries: [dictionaryEntry(preferredForm: "FleckApp", aliases: ["fleck app"])]
+  )
+
+  #expect(result.baseline == "Ship FleckApp today")
+  #expect(result.replacements == 0)
+  #expect(result.protectedForms == ["FleckApp"])
+}
+
+@Test func resolverProtectsEachRepeatedPreferredOccurrence() throws {
+  let result = try PersonalDictionaryResolver.resolve(
+    "fleck app and fleck app",
+    entries: [dictionaryEntry(preferredForm: "FleckApp", aliases: ["fleck app"])]
+  )
+
+  #expect(result.baseline == "FleckApp and FleckApp")
+  #expect(result.protectedForms == ["FleckApp", "FleckApp"])
+  #expect(!PersonalDictionaryResolver.cleanupPreserves(result.protectedForms, in: "FleckApp"))
+  #expect(PersonalDictionaryResolver.cleanupPreserves(result.protectedForms, in: result.baseline))
+}
+
+@Test func resolverProtectsOnlySafeExactPreferredOccurrences() throws {
+  let result = try PersonalDictionaryResolver.resolve(
+    "myFleckApp FleckApp FleckAppish",
+    entries: [dictionaryEntry(preferredForm: "FleckApp", aliases: ["fleck app"])]
+  )
+
+  #expect(result.baseline == "myFleckApp FleckApp FleckAppish")
+  #expect(result.protectedForms == ["FleckApp"])
 }
 
 @Test func resolverProtectedFormsRequireExactSafeSpelling() {

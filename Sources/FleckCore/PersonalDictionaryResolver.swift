@@ -30,10 +30,12 @@ public enum PersonalDictionaryResolver {
     }
 
     var claims: [String: [AliasCandidate]] = [:]
+    var preferredForms = Set<String>()
     for entry in entries where entry.isEnabled {
       guard entry.validationIssues.isEmpty else {
         throw PersonalDictionaryResolverError.invalidEntries
       }
+      preferredForms.insert(entry.preferredForm)
       for alias in entry.aliases {
         claims[PersonalDictionaryText.normalized(alias), default: []].append(
           AliasCandidate(
@@ -62,18 +64,8 @@ public enum PersonalDictionaryResolver {
         return lhs.entryID.uuidString < rhs.entryID.uuidString
       }
 
-    guard !candidates.isEmpty else {
-      return PersonalDictionaryResolution(
-        baseline: rawTranscript,
-        protectedForms: [],
-        replacements: 0
-      )
-    }
-
     var baseline = String()
     baseline.reserveCapacity(rawTranscript.utf8.count)
-    var protectedForms: [String] = []
-    var protectedSet = Set<String>()
     var replacements = 0
     var index = rawTranscript.startIndex
     var copiedThrough = rawTranscript.startIndex
@@ -93,15 +85,16 @@ public enum PersonalDictionaryResolver {
       copiedThrough = match.range.upperBound
       index = match.range.upperBound
       replacements += 1
-      if protectedSet.insert(match.candidate.preferredForm).inserted {
-        protectedForms.append(match.candidate.preferredForm)
-      }
     }
 
     baseline += rawTranscript[copiedThrough..<rawTranscript.endIndex]
     if replacements == 0 {
       baseline = rawTranscript
     }
+    let protectedForms = protectedOccurrences(
+      in: baseline,
+      preferredForms: preferredForms
+    )
     return PersonalDictionaryResolution(
       baseline: baseline,
       protectedForms: protectedForms,
@@ -113,23 +106,16 @@ public enum PersonalDictionaryResolver {
     _ protectedForms: [String],
     in candidate: String
   ) -> Bool {
-    protectedForms.allSatisfy { form in
-      guard !form.isEmpty else { return true }
-      var start = candidate.startIndex
-      while start < candidate.endIndex,
-        let range = candidate.range(
-          of: form,
-          options: [],
-          range: start..<candidate.endIndex,
-          locale: nil
-        )
-      {
-        if hasSafeBoundaries(in: candidate, range: range) { return true }
-        guard range.upperBound < candidate.endIndex else { break }
-        start = candidate.index(after: range.lowerBound)
-      }
-      return false
+    var requiredCounts: [String: Int] = [:]
+    for form in protectedForms where !form.isEmpty {
+      requiredCounts[form, default: 0] += 1
     }
+    for (form, count) in requiredCounts {
+      guard safeOccurrenceCount(of: form, in: candidate) >= count else {
+        return false
+      }
+    }
+    return true
   }
 
   public static func contextualStrings(
@@ -229,6 +215,58 @@ public enum PersonalDictionaryResolver {
       return false
     }
     return true
+  }
+
+  private static func protectedOccurrences(
+    in text: String,
+    preferredForms: Set<String>
+  ) -> [String] {
+    let forms = preferredForms
+      .filter { !$0.isEmpty }
+      .sorted { lhs, rhs in
+        if lhs.unicodeScalars.count != rhs.unicodeScalars.count {
+          return lhs.unicodeScalars.count > rhs.unicodeScalars.count
+        }
+        return PersonalDictionaryText.stableStringLess(lhs, rhs)
+      }
+    var result: [String] = []
+    var index = text.startIndex
+    while index < text.endIndex {
+      for form in forms {
+        guard let range = text.range(
+          of: form,
+          options: [],
+          range: index..<text.endIndex,
+          locale: nil
+        ), range.lowerBound == index,
+          hasSafeBoundaries(in: text, range: range)
+        else { continue }
+        result.append(form)
+      }
+      index = text.index(after: index)
+    }
+    return result
+  }
+
+  private static func safeOccurrenceCount(of form: String, in text: String) -> Int {
+    guard !form.isEmpty else { return 0 }
+    var count = 0
+    var start = text.startIndex
+    while start < text.endIndex,
+      let range = text.range(
+        of: form,
+        options: [],
+        range: start..<text.endIndex,
+        locale: nil
+      )
+    {
+      if hasSafeBoundaries(in: text, range: range) {
+        count += 1
+      }
+      guard range.upperBound < text.endIndex else { break }
+      start = text.index(after: range.lowerBound)
+    }
+    return count
   }
 
   private struct AliasCandidate {

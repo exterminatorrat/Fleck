@@ -448,6 +448,10 @@ private func waitForCompletion(
     #expect(fixture.saver.savedTexts == ["FleckApp"])
     let record = try #require(await fixture.history.list().first)
     #expect(record.insertedArtifact == .dictionaryBaseline)
+    #expect(
+      record.cleanedTranscript
+        == (result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : result)
+    )
   }
 }
 

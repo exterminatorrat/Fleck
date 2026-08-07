@@ -362,6 +362,15 @@ private final class PermissionProbe {
   }
 }
 
+@available(macOS 26.0, *)
+private actor SpeechContextApplicationProbe {
+  private(set) var applications: [[String]] = []
+
+  func record(_ strings: [String]) {
+    applications.append(strings)
+  }
+}
+
 @Test @MainActor func systemDefaultSavedMicrophoneRemainsSelected() {
   let selection = CoreAudioMicrophone.select(
     savedUID: "built-in",
@@ -667,6 +676,35 @@ private final class PermissionProbe {
   #expect(DictationRecognitionContext.englishDefault.contextualStrings.isEmpty)
 }
 
+@Test @available(macOS 26.0, *) func appleSpeechContextConfigurationSkipsEmptyContext() async throws {
+  let probe = SpeechContextApplicationProbe()
+  let configuration = AppleSpeechContextConfiguration(
+    contextualStrings: [],
+    applyContext: { strings in await probe.record(strings) }
+  )
+
+  try await configuration.apply()
+
+  #expect(await probe.applications.isEmpty)
+}
+
+@Test @available(macOS 26.0, *) func appleSpeechContextConfigurationAppliesBoundedContextOnce() async throws {
+  let probe = SpeechContextApplicationProbe()
+  let context = DictationRecognitionContext(
+    locale: Locale(identifier: "en-US"),
+    contextualStrings: (0..<101).map { "term\($0)" }
+  )
+  let configuration = AppleSpeechContextConfiguration(
+    contextualStrings: context.contextualStrings,
+    applyContext: { strings in await probe.record(strings) }
+  )
+
+  try await configuration.apply()
+
+  #expect(await probe.applications.count == 1)
+  #expect(await probe.applications.first == Array((0..<100).map { "term\($0)" }))
+}
+
 @Test func appleSpeechConstructionPropagatesLocaleAndContextToBothSDKPaths() throws {
   let source = try String(
     contentsOf: URL(fileURLWithPath: #filePath)
@@ -682,8 +720,9 @@ private final class PermissionProbe {
   #expect(source.contains("request.contextualStrings = recognitionContext.contextualStrings"))
   #expect(source.contains("request.requiresOnDeviceRecognition = true"))
   #expect(source.contains("let analysisContext = AnalysisContext()"))
-  #expect(source.contains("analysisContext.contextualStrings[.general] = recognitionContext.contextualStrings"))
+  #expect(source.contains("analysisContext.contextualStrings[.general] = strings"))
   #expect(source.contains("try await analyzer.setContext(analysisContext)"))
+  #expect(source.contains("try await contextConfiguration.apply()"))
   #expect(!source.contains("URLSession"))
 }
 

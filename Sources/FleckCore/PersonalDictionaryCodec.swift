@@ -44,12 +44,10 @@ public enum PersonalDictionaryCodec {
   }
 
   public static func decodeJSON(_ data: Data) throws -> PersonalDictionarySnapshot {
-    guard let object = try? JSONSerialization.jsonObject(with: data),
-      let dictionary = object as? [String: Any],
-      Set(dictionary.keys) == ["schemaVersion", "entries", "suggestions"]
-    else {
+    guard let object = try? JSONSerialization.jsonObject(with: data) else {
       throw PersonalDictionaryCodecError.invalidJSON
     }
+    try validateJSONEnvelope(object)
 
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
@@ -171,6 +169,60 @@ public enum PersonalDictionaryCodec {
     }
     guard snapshot.validationIssues.isEmpty else {
       throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+  }
+
+  private static func validateJSONEnvelope(_ object: Any) throws {
+    let rootKeys: Set<String> = ["schemaVersion", "entries", "suggestions"]
+    let entryKeys: Set<String> = [
+      "id",
+      "preferredForm",
+      "aliases",
+      "localeIdentifier",
+      "isPriority",
+      "isEnabled",
+      "origin",
+      "usage",
+    ]
+    let usageKeysWithoutDate: Set<String> = ["useCount"]
+    let usageKeysWithDate: Set<String> = ["useCount", "lastUsedAt"]
+    let suggestionKeys: Set<String> = [
+      "id",
+      "preferredForm",
+      "observedForms",
+      "localeIdentifier",
+      "observationCount",
+      "lastObservedAt",
+    ]
+
+    guard let root = object as? [String: Any],
+      Set(root.keys) == rootKeys,
+      let entries = root["entries"] as? [Any],
+      let suggestions = root["suggestions"] as? [Any]
+    else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+
+    for value in entries {
+      guard let entry = value as? [String: Any],
+        Set(entry.keys) == entryKeys,
+        let usage = entry["usage"] as? [String: Any]
+      else {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
+      guard Set(usage.keys) == usageKeysWithoutDate
+        || Set(usage.keys) == usageKeysWithDate
+      else {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
+    }
+
+    for value in suggestions {
+      guard let suggestion = value as? [String: Any],
+        Set(suggestion.keys) == suggestionKeys
+      else {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
     }
   }
 

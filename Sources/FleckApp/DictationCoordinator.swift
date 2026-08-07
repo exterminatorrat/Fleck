@@ -480,9 +480,9 @@ final class DictationCoordinator {
     }
     guard await continueCapture(capture.id) else { return }
 
+    let nonemptyCandidate = cleanedCandidate.flatMap { nonempty($0) }
     let insertedText: String
-    if let cleanedCandidate,
-      let cleanedText = nonempty(cleanedCandidate),
+    if let cleanedText = nonemptyCandidate,
       PersonalDictionaryResolver.cleanupPreserves(
         resolution.protectedForms,
         in: cleanedText
@@ -494,7 +494,7 @@ final class DictationCoordinator {
       record.insertedArtifact = .cleanedResult
     } else {
       insertedText = resolution.baseline
-      record.cleanedTranscript = nil
+      record.cleanedTranscript = nonemptyCandidate
       record.cleanupOutcome = .usedRaw
       record.insertedArtifact = .dictionaryBaseline
     }

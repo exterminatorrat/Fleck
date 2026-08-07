@@ -27,6 +27,29 @@ import Testing
   }
 }
 
+@Test func personalDictionaryJSONRejectsUnknownNestedKeys() throws {
+  let entryID = "00000000-0000-0000-0000-000000000011"
+  let suggestionID = "00000000-0000-0000-0000-000000000012"
+  let entry = "\"id\":\"\(entryID)\",\"preferredForm\":\"Fleck\",\"aliases\":[],\"localeIdentifier\":\"en-US\",\"isPriority\":false,\"isEnabled\":true,\"origin\":\"manual\",\"usage\":{\"useCount\":0}"
+  let suggestion = "\"id\":\"\(suggestionID)\",\"preferredForm\":\"Fleck\",\"observedForms\":[],\"localeIdentifier\":\"en-US\",\"observationCount\":0,\"lastObservedAt\":\"2023-11-14T22:13:20Z\""
+
+  let unknownEntryKey = Data(
+    "{\"schemaVersion\":1,\"entries\":[{\(entry),\"unexpected\":true}],\"suggestions\":[]}".utf8
+  )
+  let unknownUsageKey = Data(
+    "{\"schemaVersion\":1,\"entries\":[{\(entry.replacingOccurrences(of: "\"usage\":{\"useCount\":0}", with: "\"usage\":{\"useCount\":0,\"unexpected\":true}"))}],\"suggestions\":[]}".utf8
+  )
+  let unknownSuggestionKey = Data(
+    "{\"schemaVersion\":1,\"entries\":[],\"suggestions\":[{\(suggestion),\"unexpected\":true}]}".utf8
+  )
+
+  for data in [unknownEntryKey, unknownUsageKey, unknownSuggestionKey] {
+    #expect(throws: PersonalDictionaryCodecError.invalidJSON) {
+      try PersonalDictionaryCodec.decodeJSON(data)
+    }
+  }
+}
+
 @Test func personalDictionaryCSVPreservesQuotedMultilineAndMultilingualFields() throws {
   let entry = PersonalDictionaryEntry(
     id: UUID(uuidString: "00000000-0000-0000-0000-000000000007")!,

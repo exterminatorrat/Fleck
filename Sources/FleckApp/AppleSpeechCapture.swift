@@ -775,6 +775,25 @@ private struct ModernAnalyzerInputSequence: AsyncSequence, @unchecked Sendable {
 }
 
 @available(macOS 26.0, *)
+struct AppleSpeechContextConfiguration: Sendable {
+  private let contextualStrings: [String]
+  private let applyContext: @Sendable ([String]) async throws -> Void
+
+  init(
+    contextualStrings: [String],
+    applyContext: @escaping @Sendable ([String]) async throws -> Void
+  ) {
+    self.contextualStrings = contextualStrings
+    self.applyContext = applyContext
+  }
+
+  func apply() async throws {
+    guard !contextualStrings.isEmpty else { return }
+    try await applyContext(contextualStrings)
+  }
+}
+
+@available(macOS 26.0, *)
 private actor ModernAppleSpeechSession: AppleSpeechSession {
   private let recognitionContext: DictationRecognitionContext
   private let microphoneUID: String?
@@ -840,9 +859,15 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
       modules: modules,
       options: .init(priority: .userInitiated, modelRetention: .whileInUse)
     )
-    let analysisContext = AnalysisContext()
-    analysisContext.contextualStrings[.general] = recognitionContext.contextualStrings
-    try await analyzer.setContext(analysisContext)
+    let contextConfiguration = AppleSpeechContextConfiguration(
+      contextualStrings: recognitionContext.contextualStrings,
+      applyContext: { strings in
+        let analysisContext = AnalysisContext()
+        analysisContext.contextualStrings[.general] = strings
+        try await analyzer.setContext(analysisContext)
+      }
+    )
+    try await contextConfiguration.apply()
     self.analyzer = analyzer
     try await analyzer.prepareToAnalyze(in: format)
     guard !terminationRequested else { throw CancellationError() }
