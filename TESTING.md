@@ -681,9 +681,12 @@ The reproducible baseline harness uses exactly 10-note, 100-note, and
 1,000-note synthetic workspaces. The fixture has stable UUIDs and dates and
 contains no personal note content. Automated coverage characterizes current
 LocalStore load/save behavior, records temporary-directory storage observations,
-and deliberately proves that the current save path rewrites an unchanged note
-body when another note changes. That rewrite assertion describes current
-baseline behavior, not a desired performance contract.
+and uses the `FleckPerformanceSaveLeavesUnchangedNoteBodiesUntouched` regression
+to verify the persistence invariant: when the existing root is a valid
+integrity-v1 snapshot and its manifest hash matches the newly encoded
+preferences, note body, or RTF bytes, unchanged content is reused rather than
+atomically rewritten. Invalid, hashless, legacy, or changed content follows the
+full write path.
 
 Run the safe automated checks from the repository root:
 
