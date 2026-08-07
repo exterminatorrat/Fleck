@@ -826,6 +826,28 @@ private func settleHostedFolderView(_ view: NSView) async {
   #expect(recorder.generations.count == 1)
 }
 
+@Test @MainActor func AppStateFolderLegacyTrashRemainsGlobalWhileExplicitUnfiledUsesNearestVisible() async throws {
+  let work = try folder(named: "Work")
+  let unfiledFirst = Note(title: "Unfiled A")
+  let hidden = Note(title: "Work X", folderID: work.id)
+  let unfiledNext = Note(title: "Unfiled B")
+  let workspace = Workspace(
+    notes: [unfiledFirst, hidden, unfiledNext],
+    selectedNoteID: unfiledFirst.id,
+    folders: [work]
+  )
+  let globalState = await folderedState(workspace: workspace)
+
+  globalState.moveToTrash(unfiledFirst.id)
+
+  #expect(globalState.workspace.selectedNoteID == hidden.id)
+
+  let explicitState = await folderedState(workspace: workspace)
+  explicitState.moveToTrash(unfiledFirst.id, activeFolderID: nil)
+
+  #expect(explicitState.workspace.selectedNoteID == unfiledNext.id)
+}
+
 @Test @MainActor func AppStateFolderNoteScopeActivationResolvesExistingOrUnfiledFolder() async throws {
   let work = try folder(named: "Work")
   let inWork = Note(title: "Work note", folderID: work.id)

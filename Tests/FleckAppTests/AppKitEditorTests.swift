@@ -1063,6 +1063,17 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(folderScroll.lowerBound < trashIdentifier.lowerBound)
 }
 
+@Test func NotesPanelFolderContextActionsUseConcreteVisibleNotes() throws {
+  let source = try notesPanelSource()
+
+  #expect(source.contains("private func isNoteVisible(_ noteID: UUID)"))
+  #expect(source.contains("guard isNoteVisible(note.id) else { return }"))
+  #expect(source.contains("guard isNoteVisible(noteID), activateNoteAndScope(noteID) else"))
+  #expect(source.contains("if activateNoteAndScope(noteID)"))
+  #expect(source.contains("appState.setSelectedTabColor(hex)"))
+  #expect(source.contains("guard let note = visibleSelectedNote else { return }"))
+}
+
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)

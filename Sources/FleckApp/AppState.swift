@@ -468,7 +468,10 @@
     }
 
     func moveToTrash(_ id: UUID) {
-      moveToTrash(id, activeFolderID: nil)
+      guard let note = workspace.notes.first(where: { $0.id == id }) else { return }
+      pendingTrashNotes[id] = note
+      workspace.deleteNote(id: id)
+      saveNow()
     }
 
     func moveToTrash(_ id: UUID, activeFolderID: UUID?) {

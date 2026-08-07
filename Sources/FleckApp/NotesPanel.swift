@@ -375,7 +375,7 @@
         Button("Allow Agent Access") {
           guard let note = notePendingAgentShare else { return }
           notePendingAgentShare = nil
-          guard visibleSelectedNote?.id == note.id else { return }
+          guard isNoteVisible(note.id) else { return }
           appState.confirmFirstAgentShare(noteID: note.id)
         }
         Button("Cancel", role: .cancel) {
@@ -721,7 +721,7 @@
               Button(
                 note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin"
               ) {
-                guard visibleSelectedNote?.id == note.id else { return }
+                guard isNoteVisible(note.id) else { return }
                 appState.togglePinned(note.id)
               }
               Button("Move Left", systemImage: "arrow.left") {
@@ -731,7 +731,7 @@
                 move(note, offset: 1)
               }
               Button("Tab Color...", systemImage: "paintpalette") {
-                guard visibleSelectedNote?.id == note.id else { return }
+                guard isNoteVisible(note.id) else { return }
                 tabColorPickerNoteID = note.id
               }
               .accessibilityValue(tabColorAccessibilityValue(for: note.tabColorHex))
@@ -846,7 +846,7 @@
     }
 
     private func commitTabColor(_ hex: String?, for noteID: UUID) {
-      guard visibleSelectedNote?.id == noteID else {
+      guard isNoteVisible(noteID), activateNoteAndScope(noteID) else {
         tabColorPickerNoteID = nil
         return
       }
@@ -877,12 +877,12 @@
     }
 
     private func requestDeletion(_ note: Note) {
-      guard visibleSelectedNote?.id == note.id else { return }
+      guard isNoteVisible(note.id) else { return }
       notePendingDeletion = note
     }
 
     private func requestAgentAccess(_ note: Note, enabled: Bool) {
-      guard visibleSelectedNote?.id == note.id else { return }
+      guard isNoteVisible(note.id) else { return }
       guard enabled else {
         appState.setAgentAccess(noteID: note.id, enabled: false)
         return
@@ -898,7 +898,7 @@
     }
 
     private func confirmDeletion(_ note: Note) {
-      guard visibleSelectedNote?.id == note.id else {
+      guard isNoteVisible(note.id) else {
         notePendingDeletion = nil
         return
       }
@@ -921,7 +921,7 @@
     }
 
     private func move(_ note: Note, offset: Int) {
-      guard visibleSelectedNote?.id == note.id else { return }
+      guard isNoteVisible(note.id) else { return }
       guard let index = visibleNotes.firstIndex(where: { $0.id == note.id }) else {
         return
       }
@@ -969,6 +969,10 @@
     private var visibleSelectedNote: Note? {
       guard let selectedID = appState.workspace.selectedNoteID else { return nil }
       return visibleNotes.first(where: { $0.id == selectedID })
+    }
+
+    private func isNoteVisible(_ noteID: UUID) -> Bool {
+      visibleNotes.contains(where: { $0.id == noteID })
     }
 
     private var isEditorVisible: Bool {
