@@ -1,8 +1,11 @@
 # Fleck Local Enhanced Dictation Runtime Design
 
-**Date:** 2026-08-07  
-**Status:** Approved product direction; production model selection remains benchmark-gated  
-**Scope:** Entirely local Enhanced Dictation, optional local transcript cleanup, personal vocabulary, and one-click model installation  
+**Date:** 2026-08-07
+
+**Status:** Approved product direction; production model selection remains benchmark-gated
+
+**Scope:** Entirely local Enhanced Dictation, optional local transcript cleanup, personal vocabulary, and one-click model installation
+
 **Accepted foundation:** `27f7a44e93e8395d8d9c3d952064a28c87b1768d`
 
 ## Spec sheet
@@ -75,10 +78,14 @@ ASR and cleanup components stay behind the product boundary.
 
 Supported Apple-silicon Macs show one card:
 
-> **Enhanced Dictation**  
-> More accurate dictation for technical writing, code, English, and Mandarin.  
-> Runs entirely on your Mac after a one-time download.  
-> **Install Enhanced Dictation**  
+> **Enhanced Dictation**
+>
+> More accurate dictation for technical writing, code, English, and Mandarin.
+>
+> Runs entirely on your Mac after a one-time download.
+>
+> **Install Enhanced Dictation**
+>
 > Download: the exact size from the verified bundle manifest
 
 `Not Now` remains a subordinate action. Skipping installation never blocks the
