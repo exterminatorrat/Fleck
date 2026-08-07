@@ -27,6 +27,13 @@ home_dir=$(CDPATH= cd -- "$home_dir" 2>/dev/null && pwd -P) || {
   exit 2
 }
 
+for required_command in awk date osascript perl ps sort uname; do
+  if ! command -v "$required_command" >/dev/null 2>&1; then
+    printf 'error: required command not found: %s\n' "$required_command" >&2
+    exit 2
+  fi
+done
+
 case "$requested_output_dir" in
   -*)
     printf '%s\n' 'error: output directory must not begin with -' >&2
@@ -34,22 +41,53 @@ case "$requested_output_dir" in
     ;;
 esac
 
-case "$requested_output_dir" in
-  "$home_dir/Library/Application Support/Fleck"|\
-  "$home_dir/Library/Application Support/Fleck"/*)
-    printf '%s\n' \
-      'error: output directory cannot be Fleck Application Support or a child of it' >&2
-    exit 2
-    ;;
-esac
+# AX_MEASUREMENT_DIRECTORY_RECORD_BEGIN
+measurement_output_directory_record() {
+  /usr/bin/perl -MCwd=abs_path -e '
+use strict;
+use warnings;
 
-if [ ! -d "$requested_output_dir" ] || [ -L "$requested_output_dir" ]; then
-  printf '%s\n' \
-    'error: output directory must be one existing non-symlink directory' >&2
+my $requested = shift @ARGV;
+if (!defined($requested) || $requested =~ /[\t\r\n]/) {
+  print STDERR "error: output directory path contains tab, carriage return, or line feed\n";
+  exit 2;
+}
+my $requested_lstat_path = $requested;
+$requested_lstat_path =~ s{/+\z}{};
+$requested_lstat_path = "/" if $requested_lstat_path eq "";
+my @requested_stat = lstat($requested_lstat_path);
+unless (@requested_stat && -d _ && !-l _) {
+  print STDERR "error: output directory must be one existing non-symlink directory\n";
+  exit 2;
+}
+my $canonical = abs_path($requested);
+if (!defined($canonical) || $canonical =~ /[\t\r\n]/) {
+  print STDERR "error: output directory path contains tab, carriage return, or line feed\n";
+  exit 2;
+}
+my @canonical_stat = lstat($canonical);
+unless (
+  @canonical_stat &&
+  -d _ &&
+  !-l _ &&
+  $canonical_stat[0] == $requested_stat[0] &&
+  $canonical_stat[1] == $requested_stat[1]
+) {
+  print STDERR "error: output directory must resolve to one existing non-symlink directory\n";
+  exit 2;
+}
+print $canonical, "\t", $canonical_stat[0], "\t", $canonical_stat[1], "\n" or exit 2;
+' "$1"
+}
+# AX_MEASUREMENT_DIRECTORY_RECORD_END
+
+output_directory_record=$(measurement_output_directory_record "$requested_output_dir") || exit 2
+output_dir=$(printf '%s\n' "$output_directory_record" | awk -F '\t' 'NF == 3 { print $1 }')
+if [ -z "$output_dir" ]; then
+  printf '%s\n' 'error: could not resolve output directory identity' >&2
   exit 2
 fi
 
-output_dir=$(CDPATH= cd -- "$requested_output_dir" && pwd -P) || exit 2
 case "$output_dir" in
   "$home_dir/Library/Application Support/Fleck"|\
   "$home_dir/Library/Application Support/Fleck"/*)
@@ -59,15 +97,16 @@ case "$output_dir" in
     ;;
 esac
 
-raw_samples="$output_dir/ax-press-to-accessible-window-raw.tsv"
-summary="$output_dir/ax-press-to-accessible-window-summary.txt"
-metadata="$output_dir/ax-press-to-accessible-window-metadata.txt"
+raw_basename=ax-press-to-accessible-window-raw.tsv
+summary_basename=ax-press-to-accessible-window-summary.txt
+metadata_basename=ax-press-to-accessible-window-metadata.txt
 
 # AX_MEASUREMENT_OUTPUT_HELPERS_BEGIN
 cleanup_output_temp() {
-  temp_record=$1
-  if [ -n "$temp_record" ]; then
-    measurement_output_helper cleanup "$temp_record" || :
+  cleanup_directory_record=$1
+  cleanup_temp_record=$2
+  if [ -n "$cleanup_temp_record" ]; then
+    measurement_output_helper cleanup "$cleanup_directory_record" "$cleanup_temp_record" || :
   fi
 }
 
@@ -76,44 +115,80 @@ measurement_output_helper() {
 # AX_MEASUREMENT_PERL_BEGIN
 use strict;
 use warnings;
+use Cwd qw(getcwd);
 
-sub cleanup_created_path {
-  my ($path, $created) = @_;
-  return unless @$created >= 2;
-  my @current = lstat($path);
-  return unless @current && -f _ && !-l _;
-  return unless $current[0] == $created->[0] && $current[1] == $created->[1];
-  unlink($path);
-}
-
-sub record_parts {
+sub directory_record_parts {
   my ($record) = @_;
   return unless defined($record);
   my @parts = split(/\t/, $record, -1);
   return unless @parts == 3;
-  return unless length($parts[0]) && $parts[1] =~ /^\d+$/ && $parts[2] =~ /^\d+$/;
+  return unless length($parts[0]) && $parts[0] !~ /[\t\r\n]/;
+  return unless $parts[1] =~ /^\d+$/ && $parts[2] =~ /^\d+$/;
+  return @parts;
+}
+
+sub enter_directory {
+  my ($record) = @_;
+  my ($path, $device, $inode) = directory_record_parts($record);
+  return unless defined($path);
+  return unless chdir($path);
+  my @current = stat(".");
+  return unless @current && -d _;
+  return unless $current[0] == $device && $current[1] == $inode;
+  return ($path, $device, $inode);
+}
+
+sub safe_basename {
+  my ($basename) = @_;
+  return defined($basename)
+    && $basename =~ /^[A-Za-z0-9._-]+$/
+    && $basename ne "."
+    && $basename ne "..";
+}
+
+sub cleanup_created_path {
+  my ($basename, $created) = @_;
+  return unless @$created >= 2;
+  return unless safe_basename($basename);
+  my @current = lstat($basename);
+  return unless @current && -f _ && !-l _;
+  return unless $current[0] == $created->[0] && $current[1] == $created->[1];
+  unlink($basename);
+}
+
+sub file_record_parts {
+  my ($record) = @_;
+  return unless defined($record);
+  my @parts = split(/\t/, $record, -1);
+  return unless @parts == 3;
+  return unless safe_basename($parts[0]);
+  return unless $parts[1] =~ /^\d+$/ && $parts[2] =~ /^\d+$/;
   return @parts;
 }
 
 sub matches_created_file {
-  my ($path, $device, $inode) = @_;
-  my @current = lstat($path);
+  my ($basename, $device, $inode) = @_;
+  return 0 unless safe_basename($basename);
+  my @current = lstat($basename);
   return 0 unless @current && -f _ && !-l _;
   return $current[0] == $device && $current[1] == $inode;
 }
 
 my $operation = shift @ARGV;
 if ($operation eq "create") {
-  my $directory = shift @ARGV;
+  my $directory_record = shift @ARGV;
+  exit 2 unless enter_directory($directory_record);
   my ($handle, $path);
   eval {
     ($handle, $path) = File::Temp::tempfile(
       ".fleck-panel-measurement.XXXXXX",
-      DIR => $directory,
+      DIR => ".",
       UNLINK => 0
     );
     1;
   } or exit 2;
+  $path =~ s{^\./}{};
+  exit 2 unless safe_basename($path);
   my @created = stat($handle);
   unless (@created && binmode(STDIN) && binmode($handle)) {
     close($handle);
@@ -123,7 +198,7 @@ if ($operation eq "create") {
   my $hook = defined($ENV{"FLECK_MEASUREMENT_TEMP_HOOK"})
     ? $ENV{"FLECK_MEASUREMENT_TEMP_HOOK"} : "";
   if ($hook ne "") {
-    my $status = system($hook, $path);
+    my $status = system($hook, getcwd() . "/" . $path);
     unless ($status == 0) {
       close($handle);
       cleanup_created_path($path, \@created);
@@ -162,24 +237,46 @@ if ($operation eq "create") {
   exit 0;
 }
 if ($operation eq "cleanup") {
-  my ($source, $device, $inode) = record_parts(shift @ARGV);
+  my $directory_record = shift @ARGV;
+  exit 2 unless enter_directory($directory_record);
+  my ($source, $device, $inode) = file_record_parts(shift @ARGV);
   exit 2 unless defined($source) && matches_created_file($source, $device, $inode);
   exit(unlink($source) ? 0 : 2);
 }
 if ($operation eq "publish") {
-  my ($source, $device, $inode) = record_parts(shift @ARGV);
+  my $directory_record = shift @ARGV;
+  exit 2 unless enter_directory($directory_record);
+  my ($source, $device, $inode) = file_record_parts(shift @ARGV);
   my $destination = shift @ARGV;
-  exit 2 unless defined($source) && defined($destination);
+  exit 2 unless defined($source) && safe_basename($destination);
   exit 2 unless matches_created_file($source, $device, $inode);
   exit 2 if -d($destination) && !-l($destination);
   my $hook = defined($ENV{"FLECK_MEASUREMENT_PUBLISH_HOOK"})
     ? $ENV{"FLECK_MEASUREMENT_PUBLISH_HOOK"} : "";
   if ($hook ne "") {
-    my $status = system($hook, $destination);
+    my $status = system($hook, getcwd() . "/" . $destination);
     exit 2 unless $status == 0;
   }
   exit 2 unless matches_created_file($source, $device, $inode);
-  exit(rename($source, $destination) ? 0 : 2);
+  exit 2 unless rename($source, $destination);
+  print $destination, "\t", $device, "\t", $inode, "\n" or exit 2;
+  exit 0;
+}
+if ($operation eq "rollback") {
+  my $directory_record = shift @ARGV;
+  exit 2 unless enter_directory($directory_record);
+  my ($destination, $device, $inode) = file_record_parts(shift @ARGV);
+  exit 2 unless defined($destination) && matches_created_file($destination, $device, $inode);
+  exit(unlink($destination) ? 0 : 2);
+}
+if ($operation eq "absent") {
+  my $directory_record = shift @ARGV;
+  exit 2 unless enter_directory($directory_record);
+  my $destination = shift @ARGV;
+  exit 2 unless safe_basename($destination);
+  my @existing = lstat($destination);
+  exit 2 if @existing;
+  exit 0;
 }
 exit 2;
 # AX_MEASUREMENT_PERL_END
@@ -187,24 +284,28 @@ exit 2;
 }
 
 publish_output_file() {
-  measurement_output_helper publish "$1" "$2"
+  publish_directory_record=$1
+  publish_temp_record=$2
+  publish_destination=$3
+  published_record=
+  published_record=$(measurement_output_helper publish \
+    "$publish_directory_record" "$publish_temp_record" "$publish_destination")
+}
+
+rollback_output_file() {
+  rollback_directory_record=$1
+  rollback_published_record=$2
+  if [ -n "$rollback_published_record" ]; then
+    measurement_output_helper rollback \
+      "$rollback_directory_record" "$rollback_published_record" || :
+  fi
 }
 # AX_MEASUREMENT_OUTPUT_HELPERS_END
 
-for output_file in "$raw_samples" "$summary" "$metadata"; do
-  if [ -L "$output_file" ]; then
-    printf 'error: refusing symlinked output: %s\n' "$output_file" >&2
-    exit 2
-  fi
-  if [ -d "$output_file" ]; then
-    printf 'error: refusing directory output: %s\n' "$output_file" >&2
-    exit 2
-  fi
-done
-
-for required_command in awk date osascript perl ps sort uname; do
-  if ! command -v "$required_command" >/dev/null 2>&1; then
-    printf 'error: required command not found: %s\n' "$required_command" >&2
+for output_basename in "$raw_basename" "$summary_basename" "$metadata_basename"; do
+  if ! measurement_output_helper absent "$output_directory_record" "$output_basename"; then
+    printf 'error: output destination must be absent in the approved directory: %s\n' \
+      "$output_basename" >&2
     exit 2
   fi
 done
@@ -254,13 +355,26 @@ readonly warm_sample_count=30
 raw_temp=
 summary_temp=
 metadata_temp=
+published_raw=
+published_summary=
+published_metadata=
+measurement_succeeded=0
+
+rollback_published_outputs() {
+  rollback_output_file "$output_directory_record" "$published_metadata"
+  rollback_output_file "$output_directory_record" "$published_summary"
+  rollback_output_file "$output_directory_record" "$published_raw"
+}
 
 cleanup_temporary_files() {
   exit_status=$?
   trap - EXIT
-  cleanup_output_temp "$raw_temp"
-  cleanup_output_temp "$summary_temp"
-  cleanup_output_temp "$metadata_temp"
+  if [ "$measurement_succeeded" -eq 0 ]; then
+    rollback_published_outputs
+  fi
+  cleanup_output_temp "$output_directory_record" "$raw_temp"
+  cleanup_output_temp "$output_directory_record" "$summary_temp"
+  cleanup_output_temp "$output_directory_record" "$metadata_temp"
   exit "$exit_status"
 }
 
@@ -526,7 +640,7 @@ fi
 
 raw_temp=$(
   printf '%s\n' "$measurement_output" |
-    measurement_output_helper create "$output_dir"
+    measurement_output_helper create "$output_directory_record"
 ) || {
   printf '%s\n' 'error: could not create a raw-sample temporary file' >&2
   exit 2
@@ -573,7 +687,7 @@ summary_temp=$(
     printf 'max_ms=%s\n' "$5"
     printf '%s\n' 'measurement_boundary=AX-press-to-accessible-window'
     printf '%s\n' 'automation_boundary=not pixel-complete and not human click latency'
-  } | measurement_output_helper create "$output_dir"
+  } | measurement_output_helper create "$output_directory_record"
 ) || {
   printf '%s\n' 'error: could not create a summary temporary file' >&2
   exit 2
@@ -602,24 +716,28 @@ metadata_temp=$(
       'process_boundary=already-running Fleck only; AXPress toggles panel presentation state; no launch, termination, rebuild, signal, or process-lifecycle control'
     printf '%s\n' \
       'mutation_boundary=no note/editor/Application Support mutation; presentation-state AXPress is intentional'
-  } | measurement_output_helper create "$output_dir"
+  } | measurement_output_helper create "$output_directory_record"
 ) || {
   printf '%s\n' 'error: could not create metadata temporary file' >&2
   exit 2
 }
 
-if ! publish_output_file "$raw_temp" "$raw_samples"; then
+if ! publish_output_file "$output_directory_record" "$raw_temp" "$raw_basename"; then
   exit 2
 fi
+published_raw=$published_record
 raw_temp=
-if ! publish_output_file "$summary_temp" "$summary"; then
+if ! publish_output_file "$output_directory_record" "$summary_temp" "$summary_basename"; then
   exit 2
 fi
+published_summary=$published_record
 summary_temp=
-if ! publish_output_file "$metadata_temp" "$metadata"; then
+if ! publish_output_file "$output_directory_record" "$metadata_temp" "$metadata_basename"; then
   exit 2
 fi
+published_metadata=$published_record
 metadata_temp=
+measurement_succeeded=1
 
 printf 'Wrote 1 cold and %s warm AX-press-to-accessible-window samples to %s\n' \
   "$warm_sample_count" "$output_dir"

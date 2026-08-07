@@ -13,7 +13,7 @@
       "FLECK_PERFORMANCE_PID",
       "Fleck.app/Contents/MacOS/Fleck",
       "Application Support/Fleck",
-      "[ -L",
+      "lstat($requested_lstat_path)",
       "/usr/bin/osascript -l JavaScript -",
       "Date.now",
       "AXMenuBarItem",
@@ -25,11 +25,17 @@
       "File::Temp",
       "rename",
       "# AX_MEASUREMENT_OUTPUT_HELPERS_BEGIN",
+      "# AX_MEASUREMENT_DIRECTORY_RECORD_BEGIN",
       "# AX_MEASUREMENT_PERL_BEGIN",
       "measurement_output_helper",
+      "measurement_output_directory_record",
+      "rollback_output_file",
+      "measurement_succeeded",
       "publish_output_file",
+      "measurement_output_helper absent",
       "device",
       "inode",
+      "tab, carriage return, or line feed",
       "cleanup",
       "AX-press-to-accessible-window",
       "AXPress toggles panel presentation state",
@@ -239,12 +245,14 @@ output_dir=$1
 sentinel=$2
 foreign_directory=$3
 publish_hook=$4
+directory_record=$(measurement_output_directory_record "$output_dir")
 
 publish_payload() {
   destination=$1
   payload=$2
-  temporary=$(printf '%s\n' "$payload" | measurement_output_helper create "$output_dir")
-  publish_output_file "$temporary" "$destination"
+  destination_basename=${destination##*/}
+  temporary=$(printf '%s\n' "$payload" | measurement_output_helper create "$directory_record")
+  publish_output_file "$directory_record" "$temporary" "$destination_basename"
 }
 
 destination="$output_dir/symlink-file"
@@ -259,21 +267,21 @@ publish_payload "$destination" "symlink-directory-payload"
 
 destination="$output_dir/existing-directory"
 mkdir "$destination"
-temporary=$(printf '%s\n' 'directory-payload' | measurement_output_helper create "$output_dir")
-temporary_path=$(printf '%s\n' "$temporary" | /usr/bin/cut -f1)
-if publish_output_file "$temporary" "$destination"; then exit 12; fi
-cleanup_output_temp "$temporary"
+temporary=$(printf '%s\n' 'directory-payload' | measurement_output_helper create "$directory_record")
+temporary_path="$output_dir/$(printf '%s\n' "$temporary" | /usr/bin/cut -f1)"
+if publish_output_file "$directory_record" "$temporary" existing-directory; then exit 12; fi
+cleanup_output_temp "$directory_record" "$temporary"
 [ ! -e "$temporary_path" ]
 
 destination="$output_dir/raced-directory"
-temporary=$(printf '%s\n' 'raced-directory-payload' | measurement_output_helper create "$output_dir")
-temporary_path=$(printf '%s\n' "$temporary" | /usr/bin/cut -f1)
+temporary=$(printf '%s\n' 'raced-directory-payload' | measurement_output_helper create "$directory_record")
+temporary_path="$output_dir/$(printf '%s\n' "$temporary" | /usr/bin/cut -f1)"
 export FLECK_MEASUREMENT_PUBLISH_HOOK="$publish_hook"
-if publish_output_file "$temporary" "$destination"; then exit 14; fi
+if publish_output_file "$directory_record" "$temporary" raced-directory; then exit 14; fi
 unset FLECK_MEASUREMENT_PUBLISH_HOOK
 [ -d "$destination" ]
 [ -f "$temporary_path" ] && [ ! -L "$temporary_path" ]
-cleanup_output_temp "$temporary"
+cleanup_output_temp "$directory_record" "$temporary"
 [ ! -e "$temporary_path" ]
 [ ! -e "$destination/raced-directory-payload" ]
 
@@ -352,10 +360,11 @@ output_dir=$1
 sentinel=$2
 hook=$3
 path_file=$4
+directory_record=$(measurement_output_directory_record "$output_dir")
 export FLECK_MEASUREMENT_TEMP_HOOK="$hook"
 export FLECK_MEASUREMENT_TEST_SENTINEL="$sentinel"
 export FLECK_MEASUREMENT_TEST_PATH_FILE="$path_file"
-if printf '%s\n' 'payload' | measurement_output_helper create "$output_dir"; then exit 10; fi
+if printf '%s\n' 'payload' | measurement_output_helper create "$directory_record"; then exit 10; fi
 replaced_path=$(/bin/cat "$path_file")
 [ -L "$replaced_path" ]
 [ "$(/usr/bin/sed -n '1p' "$sentinel")" = sentinel ]
@@ -392,9 +401,10 @@ set -eu
 output_dir=$1
 caller_owned=$2
 destination=$3
+directory_record=$(measurement_output_directory_record "$output_dir")
 
-record=$(printf '%s\n' 'payload' | measurement_output_helper create "$output_dir")
-path=$(printf '%s\n' "$record" | /usr/bin/cut -f1)
+record=$(printf '%s\n' 'payload' | measurement_output_helper create "$directory_record")
+path="$output_dir/$(printf '%s\n' "$record" | /usr/bin/cut -f1)"
 printf '%s\n' "$record" | /usr/bin/awk -F '\t' 'NF == 3 && $1 != "" && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { found = 1 } END { exit(found ? 0 : 1) }'
 printf '%s\n' 'caller-owned' > "$caller_owned"
 /bin/unlink "$path"
@@ -402,14 +412,14 @@ printf '%s\n' 'caller-substitute' > "$path"
 printf '%s\n' 'destination-original' > "$destination"
 
 cleanup_ok=1
-cleanup_output_temp "$record"
+cleanup_output_temp "$directory_record" "$record"
 if [ ! -e "$path" ]; then
   cleanup_ok=0
   printf '%s\n' 'caller-substitute' > "$path"
 fi
 
 publish_ok=1
-if publish_output_file "$record" "$destination"; then
+if publish_output_file "$directory_record" "$record" destination.txt; then
   publish_ok=0
 fi
 [ "$publish_ok" -eq 1 ]
@@ -418,21 +428,21 @@ fi
 [ "$(/bin/cat "$caller_owned")" = caller-owned ]
 [ "$(/bin/cat "$destination")" = destination-original ]
 [ "$cleanup_ok" -eq 1 ]
-cleanup_output_temp "$record"
+cleanup_output_temp "$directory_record" "$record"
 [ -e "$path" ]
 
-hard_record=$(printf '%s\n' 'hard-payload' | measurement_output_helper create "$output_dir")
-hard_path=$(printf '%s\n' "$hard_record" | /usr/bin/cut -f1)
+hard_record=$(printf '%s\n' 'hard-payload' | measurement_output_helper create "$directory_record")
+hard_path="$output_dir/$(printf '%s\n' "$hard_record" | /usr/bin/cut -f1)"
 hard_caller="$output_dir/hard-caller.txt"
 hard_destination="$output_dir/hard-destination.txt"
 printf '%s\n' 'hard-caller' > "$hard_caller"
 /bin/unlink "$hard_path"
 /bin/ln "$hard_caller" "$hard_path"
 printf '%s\n' 'hard-destination-original' > "$hard_destination"
-cleanup_output_temp "$hard_record"
+cleanup_output_temp "$directory_record" "$hard_record"
 [ -e "$hard_path" ]
 [ "$(/bin/cat "$hard_caller")" = hard-caller ]
-if publish_output_file "$hard_record" "$hard_destination"; then exit 12; fi
+if publish_output_file "$directory_record" "$hard_record" hard-destination.txt; then exit 12; fi
 [ -e "$hard_path" ]
 [ "$(/bin/cat "$hard_caller")" = hard-caller ]
 [ "$(/bin/cat "$hard_destination")" = hard-destination-original ]
@@ -491,20 +501,21 @@ output_dir=$1
 hook=$2
 caller_owned=$3
 destination=$4
+directory_record=$(measurement_output_directory_record "$output_dir")
 
-record=$(printf '%s\n' 'payload' | measurement_output_helper create "$output_dir")
-source_path=$(printf '%s\n' "$record" | /usr/bin/cut -f1)
+record=$(printf '%s\n' 'payload' | measurement_output_helper create "$directory_record")
+source_path="$output_dir/$(printf '%s\n' "$record" | /usr/bin/cut -f1)"
 printf '%s\n' 'caller-owned' > "$caller_owned"
 printf '%s\n' 'destination-original' > "$destination"
 export FLECK_MEASUREMENT_PUBLISH_HOOK="$hook"
 export FLECK_MEASUREMENT_TEST_SOURCE_PATH="$source_path"
-if publish_output_file "$record" "$destination"; then exit 10; fi
+if publish_output_file "$directory_record" "$record" destination.txt; then exit 10; fi
 unset FLECK_MEASUREMENT_PUBLISH_HOOK
 [ -e "$source_path" ]
 [ "$(/bin/cat "$source_path")" = hook-substitute ]
 [ "$(/bin/cat "$caller_owned")" = caller-owned ]
 [ "$(/bin/cat "$destination")" = destination-original ]
-cleanup_output_temp "$record"
+cleanup_output_temp "$directory_record" "$record"
 [ -e "$source_path" ]
 """#
     let result = try runShell(
@@ -515,6 +526,142 @@ cleanup_output_temp "$record"
     #expect(result.status == 0, Comment(rawValue: result.stderr))
     #expect(try String(contentsOf: callerOwned, encoding: .utf8) == "caller-owned\n")
     #expect(try String(contentsOf: destination, encoding: .utf8) == "destination-original\n")
+  }
+
+  @Test func FleckPanelMeasurementPinsOutputDirectoryAcrossPathReplacement() throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("fleck-output-directory-pin-" + UUID().uuidString, isDirectory: true)
+    let approvedDirectory = temporaryDirectory.appendingPathComponent("approved", isDirectory: true)
+    let foreignDirectory = temporaryDirectory.appendingPathComponent("foreign", isDirectory: true)
+    let approvedAside = temporaryDirectory.appendingPathComponent("approved-aside", isDirectory: true)
+    let foreignSentinel = foreignDirectory.appendingPathComponent("sentinel.txt")
+    try FileManager.default.createDirectory(at: approvedDirectory, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: foreignDirectory, withIntermediateDirectories: true)
+    try "foreign\n".write(to: foreignSentinel, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+    let command = try measurementOutputHelpersShellSource() + "\n" + #"""
+set -eu
+approved=$1
+foreign=$2
+approved_aside=$3
+
+directory_record=$(measurement_output_directory_record "$approved")
+/bin/mv "$approved" "$approved_aside"
+/bin/ln -s "$foreign" "$approved"
+if printf '%s\n' 'symlink-target-must-not-receive-this' | measurement_output_helper create "$directory_record"; then
+  exit 10
+fi
+[ "$(/bin/cat "$foreign/sentinel.txt")" = foreign ]
+leftover=$(find "$foreign" -maxdepth 1 -name '.fleck-panel-measurement.*' -print -quit)
+[ -z "$leftover" ]
+/bin/unlink "$approved"
+/bin/mv "$approved_aside" "$approved"
+
+/bin/mv "$approved" "$approved_aside"
+/bin/mkdir "$approved"
+if printf '%s\n' 'replacement-target-must-not-receive-this' | measurement_output_helper create "$directory_record"; then
+  exit 11
+fi
+leftover=$(find "$approved" -maxdepth 1 -name '.fleck-panel-measurement.*' -print -quit)
+[ -z "$leftover" ]
+/bin/rmdir "$approved"
+/bin/mv "$approved_aside" "$approved"
+"""#
+    let result = try runShell(
+      command,
+      arguments: [approvedDirectory.path, foreignDirectory.path, approvedAside.path]
+    )
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
+    #expect(try String(contentsOf: foreignSentinel, encoding: .utf8) == "foreign\n")
+  }
+
+  @Test func FleckPanelMeasurementRejectsControlCharactersInOutputDirectoryBeforePIDWork() throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("fleck-output-directory-serialization-" + UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+    let paths = [
+      temporaryDirectory.appendingPathComponent("tab\toutput", isDirectory: true),
+      temporaryDirectory.appendingPathComponent("carriage\routput", isDirectory: true),
+      temporaryDirectory.appendingPathComponent("trailing-newline\n", isDirectory: true),
+    ]
+    for path in paths {
+      try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
+      let result = try run(
+        script: repositoryRoot().appendingPathComponent("Scripts/measure-fleck-panel-presentation.sh"),
+        arguments: [path.path],
+        environment: ["FLECK_PERFORMANCE_PID": "0"]
+      )
+      #expect(result.status != 0)
+      #expect(result.stderr.contains("tab, carriage return, or line feed"), Comment(rawValue: result.stderr))
+    }
+
+    let resolvedParent = temporaryDirectory.appendingPathComponent("resolved\nparent", isDirectory: true)
+    let resolvedChild = resolvedParent.appendingPathComponent("output", isDirectory: true)
+    let alias = temporaryDirectory.appendingPathComponent("alias", isDirectory: true)
+    try FileManager.default.createDirectory(at: resolvedChild, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: resolvedParent)
+    let resolvedResult = try run(
+      script: repositoryRoot().appendingPathComponent("Scripts/measure-fleck-panel-presentation.sh"),
+      arguments: [alias.appendingPathComponent("output", isDirectory: true).path],
+      environment: ["FLECK_PERFORMANCE_PID": "0"]
+    )
+    #expect(resolvedResult.status != 0)
+    #expect(
+      resolvedResult.stderr.contains("tab, carriage return, or line feed"),
+      Comment(rawValue: resolvedResult.stderr)
+    )
+  }
+
+  @Test func FleckPanelMeasurementRollsBackEarlierPublicationOnLaterFailure() throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("fleck-output-publication-rollback-" + UUID().uuidString, isDirectory: true)
+    let outputDirectory = temporaryDirectory.appendingPathComponent("output", isDirectory: true)
+    let publishHook = temporaryDirectory.appendingPathComponent("make-foreign-directory.sh")
+    try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+    try "#!/bin/sh\nset -eu\nmkdir \"$1\"\nprintf '%s\\n' 'caller-owned' > \"$1/caller-owned.txt\"\n".write(
+      to: publishHook,
+      atomically: true,
+      encoding: .utf8
+    )
+    try FileManager.default.setAttributes(
+      [.posixPermissions: NSNumber(value: 0o755)],
+      ofItemAtPath: publishHook.path
+    )
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+    let command = try measurementOutputHelpersShellSource() + "\n" + #"""
+set -eu
+output_dir=$1
+publish_hook=$2
+directory_record=$(measurement_output_directory_record "$output_dir")
+raw_record=$(printf '%s\n' raw | measurement_output_helper create "$directory_record")
+summary_record=$(printf '%s\n' summary | measurement_output_helper create "$directory_record")
+metadata_record=$(printf '%s\n' metadata | measurement_output_helper create "$directory_record")
+
+if ! publish_output_file "$directory_record" "$raw_record" raw.tsv; then exit 10; fi
+published_raw=$published_record
+export FLECK_MEASUREMENT_PUBLISH_HOOK="$publish_hook"
+if publish_output_file "$directory_record" "$summary_record" summary.txt; then exit 11; fi
+unset FLECK_MEASUREMENT_PUBLISH_HOOK
+
+rollback_output_file "$directory_record" "$published_raw"
+cleanup_output_temp "$directory_record" "$raw_record"
+cleanup_output_temp "$directory_record" "$summary_record"
+cleanup_output_temp "$directory_record" "$metadata_record"
+[ ! -e "$output_dir/raw.tsv" ]
+[ -d "$output_dir/summary.txt" ]
+[ "$(/bin/cat "$output_dir/summary.txt/caller-owned.txt")" = caller-owned ]
+[ ! -e "$output_dir/metadata.txt" ]
+leftover=$(find "$output_dir" -maxdepth 1 -name '.fleck-panel-measurement.*' -print -quit)
+[ -z "$leftover" ]
+"""#
+    let result = try runShell(command, arguments: [outputDirectory.path, publishHook.path])
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
   }
 
   @Test func FleckPanelPresentationJXAUsesFakeAXFixturesForClosedNormalizationAnd31Samples() throws {
@@ -848,6 +995,7 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
 
   private struct CommandResult {
     let status: Int32
+    let stderr: String
   }
 
   private func run(
@@ -859,9 +1007,27 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
     process.arguments = [script.path] + arguments
     process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+    let error = Pipe()
+    process.standardError = error
     try process.run()
+    let stderrData = error.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
-    return CommandResult(status: process.terminationStatus)
+    return CommandResult(
+      status: process.terminationStatus,
+      stderr: String(data: stderrData, encoding: .utf8) ?? ""
+    )
+  }
+
+  private func measurementOutputDirectoryRecordShellSource() throws -> String {
+    let source = try measurementScriptSource()
+    let begin = try #require(source.range(of: "# AX_MEASUREMENT_DIRECTORY_RECORD_BEGIN\n"))
+    let end = try #require(
+      source.range(
+        of: "\n# AX_MEASUREMENT_DIRECTORY_RECORD_END",
+        range: begin.upperBound..<source.endIndex
+      )
+    )
+    return String(source[begin.upperBound..<end.lowerBound])
   }
 
   private func measurementScriptSource() throws -> String {
@@ -901,7 +1067,9 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
         range: begin.upperBound..<source.endIndex
       )
     )
-    return String(source[begin.upperBound..<end.lowerBound])
+    return try measurementOutputDirectoryRecordShellSource()
+      + "\n"
+      + String(source[begin.upperBound..<end.lowerBound])
   }
 
   private func measurementOutputHelperPerlSource() throws -> String {
