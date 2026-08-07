@@ -647,11 +647,51 @@ private func waitForSaveCount(
   #expect(window.firstResponder === editor)
   #expect(titleField.stringValue == title)
 
+  let hiddenText = editor.string
+  let hiddenSelection = editor.selectedRange()
+  let hiddenTypingAttributes = NSDictionary(dictionary: editor.typingAttributes)
+  let hiddenRTF = try editor.textStorage?.data(
+    from: NSRange(location: 0, length: hiddenText.utf16.count),
+    documentAttributes: rtfDocumentAttributes
+  )
+  let hiddenUndoAvailability = editor.undoManager?.canUndo
+
   var scoped = state.workspace
   scoped.notes[0].folderID = work.id
   state.workspace = scoped
   await settleHostedFolderView(host)
   #expect(!state.workspace.notes(inFolderID: nil).contains(where: { $0.id == note.id }))
+  #expect(window.firstResponder !== editor)
+
+  let hiddenKeyEvent = try #require(
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      characters: "x",
+      charactersIgnoringModifiers: "x",
+      isARepeat: false,
+      keyCode: 7
+    )
+  )
+  window.sendEvent(hiddenKeyEvent)
+  await settleHostedFolderView(host)
+  #expect(editor.string == hiddenText)
+  #expect(editor.selectedRange() == hiddenSelection)
+  #expect(
+    NSDictionary(dictionary: editor.typingAttributes)
+      .isEqual(to: hiddenTypingAttributes)
+  )
+  let hiddenActualRTF = try editor.textStorage?.data(
+    from: NSRange(location: 0, length: hiddenText.utf16.count),
+    documentAttributes: rtfDocumentAttributes
+  )
+  #expect(hiddenActualRTF == hiddenRTF)
+  #expect(editor.undoManager?.canUndo == hiddenUndoAvailability)
+  #expect(state.selectedNote?.body == hiddenText)
 
   scoped.notes[0].folderID = nil
   state.workspace = scoped
@@ -732,4 +772,187 @@ private func settleHostedFolderView(_ view: NSView) async {
 
   try await Task.sleep(for: .milliseconds(500))
   #expect(recorder.generations.isEmpty)
+}
+
+@Test @MainActor func AppStateFolderAwareTrashDeletionSelectsNearestVisibleMemberAndSavesOnce() async throws {
+  let recorder = SaveRecorder()
+  let work = try folder(named: "Work")
+  let other = try folder(named: "Other")
+  let first = Note(title: "Work A", folderID: work.id)
+  let hidden = Note(title: "Other X", folderID: other.id)
+  let next = Note(title: "Work B", folderID: work.id)
+  let state = await folderedState(
+    workspace: Workspace(
+      notes: [first, hidden, next],
+      selectedNoteID: first.id,
+      folders: [work, other]
+    ),
+    recorder: recorder
+  )
+
+  state.moveToTrash(first.id, activeFolderID: work.id)
+
+  #expect(state.workspace.selectedNoteID == next.id)
+  #expect(state.workspace.notes(inFolderID: work.id).map(\.id) == [next.id])
+  #expect(state.workspace.notes(inFolderID: other.id).map(\.id) == [hidden.id])
+  #expect(!state.workspace.notes.contains(where: { $0.id == first.id }))
+  try await waitForSaveCount(recorder, 1)
+  try await Task.sleep(for: .milliseconds(100))
+  #expect(recorder.generations.count == 1)
+}
+
+@Test @MainActor func AppStateFolderAwareTrashDeletionKeepsValidGlobalSelectionWhenScopeEmpties() async throws {
+  let recorder = SaveRecorder()
+  let work = try folder(named: "Work")
+  let other = try folder(named: "Other")
+  let deleted = Note(title: "Work A", folderID: work.id)
+  let hidden = Note(title: "Other X", folderID: other.id)
+  let state = await folderedState(
+    workspace: Workspace(
+      notes: [deleted, hidden],
+      selectedNoteID: deleted.id,
+      folders: [work, other]
+    ),
+    recorder: recorder
+  )
+
+  state.moveToTrash(deleted.id, activeFolderID: work.id)
+
+  #expect(state.workspace.notes(inFolderID: work.id).isEmpty)
+  #expect(state.workspace.selectedNoteID == hidden.id)
+  #expect(state.workspace.notes.count == 1)
+  try await waitForSaveCount(recorder, 1)
+  try await Task.sleep(for: .milliseconds(100))
+  #expect(recorder.generations.count == 1)
+}
+
+@Test @MainActor func AppStateFolderNoteScopeActivationResolvesExistingOrUnfiledFolder() async throws {
+  let work = try folder(named: "Work")
+  let inWork = Note(title: "Work note", folderID: work.id)
+  let unfiled = Note(title: "Unfiled note")
+  let stale = Note(title: "Stale note", folderID: UUID())
+  let state = await folderedState(
+    workspace: Workspace(
+      notes: [inWork, unfiled, stale],
+      selectedNoteID: inWork.id,
+      folders: [work]
+    )
+  )
+
+  #expect(state.folderID(for: inWork.id) == work.id)
+  #expect(state.folderID(for: unfiled.id) == nil)
+  #expect(state.folderID(for: stale.id) == nil)
+  #expect(state.folderID(for: UUID()) == nil)
+}
+
+@Test @MainActor func AppStateFolderRestoreChangesSelectionWithoutExtraSaveAndResolvesScope() async throws {
+  let work = try folder(named: "Work")
+  let existing = Note(title: "Existing", folderID: work.id)
+  let restored = Note(title: "Restored", body: "body", folderID: work.id)
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [existing], selectedNoteID: existing.id, folders: [work]),
+    preferences: .init(),
+    trashedNotes: [restored]
+  )
+  let recorder = SaveRecorder()
+  let state = AppState(
+    store: store,
+    saveOperation: { _, _, _, generation in
+      recorder.record(generation: generation)
+      return .committed
+    }
+  )
+  await state.waitUntilInitialLoad()
+  await state.refreshTrash()
+  let row = try #require(state.trashedNotes.first)
+
+  state.restore(row)
+
+  #expect(state.workspace.selectedNoteID == restored.id)
+  #expect(state.folderID(for: restored.id) == work.id)
+  #expect(recorder.generations.isEmpty)
+  let deadline = ContinuousClock.now + .seconds(3)
+  while !state.workspace.notes.contains(where: { $0.id == restored.id }),
+    ContinuousClock.now < deadline
+  {
+    try await Task.sleep(for: .milliseconds(25))
+  }
+  #expect(state.workspace.notes.contains(where: { $0.id == existing.id }))
+  #expect(state.workspace.notes.contains(where: { $0.id == restored.id }))
+  #expect(recorder.generations.isEmpty)
+}
+
+@Test @MainActor func NotesPanelFolderNavigatorBoundsFoldersAtCompactAndRegularHeights() async throws {
+  for height in [CGFloat(300), CGFloat(430)] {
+    let metrics = try await hostedFolderPanelMetrics(height: height)
+    // At the supported 300-point compact height, 48 points is the smallest
+    // hosted clip viewport that still leaves the real editor usable.
+    #expect(metrics.editorViewportHeight >= 48)
+    #expect(metrics.folderNavigatorScrollHeight > 0)
+  }
+}
+
+@MainActor
+private func hostedFolderPanelMetrics(
+  height: CGFloat
+) async throws -> (
+  editorDocumentHeight: CGFloat,
+  folderNavigatorScrollHeight: CGFloat,
+  hostedPanelHeight: CGFloat,
+  editorScrollViewHeight: CGFloat,
+  editorViewportHeight: CGFloat
+) {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folders = try (0..<24).map { index in
+    try folder(named: "Folder \(index)")
+  }
+  let note = Note(title: "Editor", body: "Usable editor", folderID: nil)
+  let state = await folderedState(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: folders)
+  )
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: height),
+    styleMask: [.borderless], backing: .buffered, defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleHostedFolderView(host)
+  let editor = try #require(hostedFolderEditor(in: host))
+  let scrollView = try #require(editor.enclosingScrollView)
+  let folderScrollView = try #require(
+    hostedFolderScrollViews(in: host).first(where: { $0 !== scrollView })
+  )
+  return (
+    editor.frame.height,
+    folderScrollView.frame.height,
+    host.bounds.height,
+    scrollView.frame.height,
+    scrollView.contentView.bounds.height
+  )
+}
+
+@MainActor
+private func hostedFolderScrollViews(in view: NSView) -> [NSScrollView] {
+  var result: [NSScrollView] = []
+  if let scrollView = view as? NSScrollView {
+    result.append(scrollView)
+  }
+  for subview in view.subviews {
+    result.append(contentsOf: hostedFolderScrollViews(in: subview))
+  }
+  return result
 }

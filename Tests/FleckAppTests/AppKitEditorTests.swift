@@ -1038,6 +1038,31 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!source.contains("folder-specific NSTextView"))
 }
 
+@Test func NotesPanelFolderScopeGatesActionsAndBoundsTheNavigator() throws {
+  let source = try notesPanelSource()
+
+  #expect(source.contains("visibleSelectedNote"))
+  #expect(source.contains("activateNoteAndScope"))
+  #expect(source.contains("onChange(of: appState.workspace.selectedNoteID)"))
+  #expect(source.contains("guard isShowingTrash"))
+  #expect(source.contains("ScrollView(.horizontal"))
+  #expect(source.contains(".accessibilityIdentifier(\"folder-unfiled\")"))
+  #expect(source.contains(".accessibilityIdentifier(\"folder-trash\")"))
+  #expect(source.contains("folderNavigatorMaxHeight"))
+  #expect(source.contains(".frame(maxHeight: folderNavigatorMaxHeight)"))
+  #expect(source.contains("guard visibleSelectedNote?.id == note.id else { return }"))
+
+  let navigator = try #require(source.components(separatedBy: "private struct FolderNavigator").last)
+  let bodyStart = try #require(navigator.range(of: "var body: some View"))
+  let rootDefinition = try #require(navigator.range(of: "private var rootRow"))
+  let body = String(navigator[bodyStart.upperBound..<rootDefinition.lowerBound])
+  let rootUse = try #require(body.range(of: "rootRow"))
+  let folderScroll = try #require(body.range(of: "ScrollView(.horizontal"))
+  let trashIdentifier = try #require(body.range(of: ".accessibilityIdentifier(\"folder-trash\")"))
+  #expect(rootUse.lowerBound < folderScroll.lowerBound)
+  #expect(folderScroll.lowerBound < trashIdentifier.lowerBound)
+}
+
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)

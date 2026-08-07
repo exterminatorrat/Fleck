@@ -155,7 +155,12 @@
     }
 
     func folderScopeForSelectedNote() -> UUID? {
-      guard let folderID = selectedNote?.folderID,
+      guard let selectedID = workspace.selectedNoteID else { return nil }
+      return folderID(for: selectedID)
+    }
+
+    func folderID(for noteID: UUID) -> UUID? {
+      guard let folderID = workspace.notes.first(where: { $0.id == noteID })?.folderID,
         workspace.folders.contains(where: { $0.id == folderID })
       else { return nil }
       return folderID
@@ -463,9 +468,26 @@
     }
 
     func moveToTrash(_ id: UUID) {
+      moveToTrash(id, activeFolderID: nil)
+    }
+
+    func moveToTrash(_ id: UUID, activeFolderID: UUID?) {
       guard let note = workspace.notes.first(where: { $0.id == id }) else { return }
+      let sourceFolderID = note.folderID
+      let sourceVisibleNotes = workspace.notes(inFolderID: sourceFolderID)
+      let selectedWasDeleted = workspace.selectedNoteID == id
       pendingTrashNotes[id] = note
-      workspace.deleteNote(id: id)
+      var updated = workspace
+      updated.deleteNote(id: id)
+      if selectedWasDeleted, activeFolderID == sourceFolderID,
+        let movingIndex = sourceVisibleNotes.firstIndex(where: { $0.id == id })
+      {
+        let remaining = sourceVisibleNotes.filter { $0.id != id }
+        if let nearest = remaining.dropFirst(movingIndex).first ?? remaining.last {
+          updated.selectedNoteID = nearest.id
+        }
+      }
+      workspace = updated
       saveNow()
     }
 
