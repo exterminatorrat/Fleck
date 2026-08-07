@@ -759,13 +759,16 @@ intentionally toggles panel presentation state with AXPress; it does not
 terminate, rebuild, or otherwise control Fleck's process lifecycle, and does
 not mutate note/editor or Application Support data. Each payload is written
 through its securely opened same-directory temporary regular-file handle and
-atomically published with a same-directory `rename(2)`-equivalent; directory
-destinations fail closed, including a directory substituted immediately before
-publication. The caller must provide a fresh existing disposable directory with
+atomically committed with an exclusive same-directory `link(2)` followed by
+unlink of the source; every existing destination, including a directory
+substituted immediately before publication, fails closed. The caller must provide a fresh existing disposable directory with
 the three final names absent; the harness canonicalizes and pins that directory
 by device/inode, rejects tab, carriage-return, and line-feed characters in its
 lexical or resolved path, and rolls back earlier app-owned publications if a
-later publication fails while preserving caller-owned substitutions.
+later publication fails while preserving caller-owned substitutions. The live
+directory binding remains authoritative if the caller renames or replaces the
+approved pathname: operations continue in the original directory, and a
+successful transaction's files remain there rather than being redirected.
 
 The PID guard checks only the packaged executable path shape
 `Fleck.app/Contents/MacOS/Fleck`; it does not prove the process is the accepted

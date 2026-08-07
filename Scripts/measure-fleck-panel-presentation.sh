@@ -46,8 +46,10 @@ measurement_output_directory_record() {
   /usr/bin/perl -MCwd=abs_path -e '
 use strict;
 use warnings;
+use File::Spec;
 
 my $requested = shift @ARGV;
+my $protected = shift @ARGV;
 if (!defined($requested) || $requested =~ /[\t\r\n]/) {
   print STDERR "error: output directory path contains tab, carriage return, or line feed\n";
   exit 2;
@@ -76,26 +78,45 @@ unless (
   print STDERR "error: output directory must resolve to one existing non-symlink directory\n";
   exit 2;
 }
+sub has_protected_ancestor {
+  my ($path, $device, $inode) = @_;
+  my $candidate = File::Spec->rootdir;
+  for my $part (File::Spec->splitdir($path)) {
+    next unless length($part);
+    $candidate = File::Spec->catdir($candidate, $part);
+    my @current = stat($candidate);
+    return 1 if @current && $current[0] == $device && $current[1] == $inode;
+  }
+  return 0;
+}
+if (defined($protected) && length($protected)) {
+  my @protected_stat = stat($protected);
+  if (@protected_stat && -d _ && has_protected_ancestor($canonical, $protected_stat[0], $protected_stat[1])) {
+    print STDERR "error: output directory cannot be Fleck Application Support or a child of it\n";
+    exit 2;
+  }
+}
 print $canonical, "\t", $canonical_stat[0], "\t", $canonical_stat[1], "\n" or exit 2;
-' "$1"
+' "$1" "${2-}"
+}
+bind_measurement_output_directory() {
+  exec 9<"$1"
 }
 # AX_MEASUREMENT_DIRECTORY_RECORD_END
 
-output_directory_record=$(measurement_output_directory_record "$requested_output_dir") || exit 2
+protected_output_dir="$home_dir/Library/Application Support/Fleck"
+output_directory_record=$(measurement_output_directory_record \
+  "$requested_output_dir" "$protected_output_dir") || exit 2
 output_dir=$(printf '%s\n' "$output_directory_record" | awk -F '\t' 'NF == 3 { print $1 }')
 if [ -z "$output_dir" ]; then
   printf '%s\n' 'error: could not resolve output directory identity' >&2
   exit 2
 fi
 
-case "$output_dir" in
-  "$home_dir/Library/Application Support/Fleck"|\
-  "$home_dir/Library/Application Support/Fleck"/*)
-    printf '%s\n' \
-      'error: resolved output directory cannot be Fleck Application Support or a child of it' >&2
-    exit 2
-    ;;
-esac
+bind_measurement_output_directory "$output_dir" || {
+  printf '%s\n' 'error: could not bind the approved output directory' >&2
+  exit 2
+}
 
 raw_basename=ax-press-to-accessible-window-raw.tsv
 summary_basename=ax-press-to-accessible-window-summary.txt
@@ -131,10 +152,15 @@ sub enter_directory {
   my ($record) = @_;
   my ($path, $device, $inode) = directory_record_parts($record);
   return unless defined($path);
-  return unless chdir($path);
+  open(my $directory, "<&=9") or return;
+  my @bound = stat($directory);
+  return unless @bound && -d _;
+  return unless $bound[0] == $device && $bound[1] == $inode;
+  return unless syscall(13, 9) == 0;
   my @current = stat(".");
   return unless @current && -d _;
   return unless $current[0] == $device && $current[1] == $inode;
+  close($directory);
   return ($path, $device, $inode);
 }
 
@@ -258,7 +284,19 @@ if ($operation eq "publish") {
     exit 2 unless $status == 0;
   }
   exit 2 unless matches_created_file($source, $device, $inode);
-  exit 2 unless rename($source, $destination);
+  exit 2 unless link($source, $destination);
+  unless (matches_created_file($destination, $device, $inode)) {
+    exit 2;
+  }
+  unless (matches_created_file($source, $device, $inode)) {
+    unlink($destination) if matches_created_file($destination, $device, $inode);
+    exit 2;
+  }
+  unless (unlink($source)) {
+    unlink($destination) if matches_created_file($destination, $device, $inode);
+    exit 2;
+  }
+  exit 2 unless matches_created_file($destination, $device, $inode);
   print $destination, "\t", $device, "\t", $inode, "\n" or exit 2;
   exit 0;
 }
@@ -296,8 +334,10 @@ rollback_output_file() {
   rollback_directory_record=$1
   rollback_published_record=$2
   if [ -n "$rollback_published_record" ]; then
-    measurement_output_helper rollback \
-      "$rollback_directory_record" "$rollback_published_record" || :
+    if ! measurement_output_helper rollback \
+      "$rollback_directory_record" "$rollback_published_record"; then
+      rollback_failed=1
+    fi
   fi
 }
 # AX_MEASUREMENT_OUTPUT_HELPERS_END
@@ -359,6 +399,7 @@ published_raw=
 published_summary=
 published_metadata=
 measurement_succeeded=0
+rollback_failed=0
 
 rollback_published_outputs() {
   rollback_output_file "$output_directory_record" "$published_metadata"
@@ -371,6 +412,9 @@ cleanup_temporary_files() {
   trap - EXIT
   if [ "$measurement_succeeded" -eq 0 ]; then
     rollback_published_outputs
+    if [ "$rollback_failed" -ne 0 ]; then
+      exit_status=2
+    fi
   fi
   cleanup_output_temp "$output_directory_record" "$raw_temp"
   cleanup_output_temp "$output_directory_record" "$summary_temp"

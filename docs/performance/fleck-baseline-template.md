@@ -95,13 +95,17 @@ signal, or otherwise control Fleck's process lifecycle. It intentionally toggles
 panel presentation state with AXPress, but does not mutate note/editor or Fleck
 Application Support data. Each payload is written through its securely opened
 same-directory temporary regular-file handle and atomically published with a
-same-directory `rename(2)`-equivalent; directory destinations fail closed,
-including a directory substituted immediately before publication. Use a fresh
+same-directory exclusive `link(2)` followed by unlink of the source; every
+existing destination, including a directory substituted immediately before
+publication, fails closed. Use a fresh
 existing disposable output directory with all three final names absent; the
 harness pins its canonical device/inode identity, rejects tab, carriage-return,
 and line-feed characters in lexical or resolved paths, and rolls back earlier
 app-owned publications if a later publication fails without removing a
-caller-owned substitute.
+caller-owned substitute. Its live directory binding remains authoritative if
+the caller renames or replaces the approved pathname: operations continue in
+the original directory, and successful outputs remain there rather than being
+redirected.
 
 ```sh
 bash -n Scripts/measure-fleck-panel-presentation.sh
