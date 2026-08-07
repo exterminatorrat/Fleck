@@ -159,6 +159,43 @@ import Testing
   }
 }
 
+@Test func FleckPerformanceBaselineFolderMetadataSavePreservesValidatedByteReuse()
+  async throws
+{
+  let root = temporaryPerformanceStoreURL(noteCount: 10)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = try Folder(name: "Work")
+  let base = FleckPerformanceBaselineFixture.workspace(noteCount: 10)
+  let workspace = Workspace(
+    notes: base.notes.map { note in
+      var note = note
+      note.folderID = folder.id
+      return note
+    },
+    selectedNoteID: base.selectedNoteID,
+    folders: [folder]
+  )
+  let store = LocalStore(rootURL: root)
+  try await store.save(workspace: workspace, preferences: .init(), generation: 1)
+
+  let observedURLs = workspace.notes.map { noteFileURL(root: root, noteID: $0.id) }
+    + [root.appendingPathComponent("preferences.json")]
+  for url in observedURLs {
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1)],
+      ofItemAtPath: url.path
+    )
+  }
+  let before = try observedURLs.map { try fileObservation(at: $0) }
+
+  var renamed = workspace
+  try renamed.renameFolder(id: folder.id, name: "Renamed")
+  try await store.save(workspace: renamed, preferences: .init(), generation: 2)
+
+  #expect(try observedURLs.map { try fileObservation(at: $0) } == before)
+  #expect(try await store.loadSnapshot().workspace.folders.first?.name == "Renamed")
+}
+
 private enum FleckPerformanceBaselineFixture {
   static let requiredNoteCounts = [10, 100, 1_000]
   static let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
@@ -179,6 +216,10 @@ private enum FleckPerformanceBaselineFixture {
     }
     return Workspace(notes: notes, selectedNoteID: notes.first?.id)
   }
+}
+
+private func noteFileURL(root: URL, noteID: UUID) -> URL {
+  root.appendingPathComponent("\(noteID.uuidString.lowercased()).md")
 }
 
 private func temporaryPerformanceStoreURL(noteCount: Int) -> URL {

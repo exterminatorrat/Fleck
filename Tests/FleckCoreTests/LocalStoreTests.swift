@@ -129,7 +129,7 @@ import Testing
   let object = try JSONSerialization.jsonObject(
     with: Data(contentsOf: root.appendingPathComponent("workspace.json")))
   let manifest = try #require(object as? [String: Any])
-  #expect(manifest["formatVersion"] as? Int == 1)
+  #expect(manifest["formatVersion"] as? Int == 2)
 }
 
 @Test func oldManifestDefaultsAgentFields() async throws {
@@ -244,16 +244,36 @@ import Testing
     encoding: .utf8
   )
 
-  let note = try #require(
-    await LocalStore(
-      rootURL: root,
-      now: { Date(timeIntervalSince1970: 86_401) }
-    ).loadTrash().first?.note
+  let store = LocalStore(
+    rootURL: root,
+    now: { Date(timeIntervalSince1970: 86_401) }
   )
+  let trashed = try #require(await store.loadTrash().first)
+  let note = trashed.note
 
   #expect(note.id == id)
   #expect(note.agentAccess == false)
   #expect(note.revision == 0)
+  #expect(note.folderID == nil)
+
+  let remaining = Note(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
+    title: "Remaining",
+    body: "Keep this note"
+  )
+  let restored = try await store.restore(
+    trashed,
+    into: Workspace(notes: [remaining], selectedNoteID: remaining.id),
+    preferences: .init(),
+    generation: 1
+  )
+
+  #expect(restored.notes.map(\.id) == [remaining.id, id])
+  #expect(restored.notes.first == remaining)
+  #expect(restored.notes.last?.folderID == nil)
+  #expect(restored.notes.last?.title == "Legacy trash")
+  #expect(restored.notes.last?.body == "Legacy trash body")
+  #expect(try await store.loadTrash().isEmpty)
 }
 
 @Test func trashRetainsEntriesUntilThirtyDaysThenPurgesThem() async throws {
@@ -360,7 +380,8 @@ import Testing
   )
 
   #expect(restoredWorkspace.selectedNoteID == deleted.id)
-  #expect(restoredWorkspace.notes.last == deleted)
+  #expect(restoredWorkspace.notes.first == deleted)
+  #expect(restoredWorkspace.notes.last == remaining)
   #expect(try await store.loadWorkspace() == restoredWorkspace)
   #expect(try await store.loadPreferences() == preferences)
   #expect(
@@ -1559,6 +1580,8 @@ import Testing
   )
   let store = LocalStore(rootURL: root)
   let snapshot = try await store.loadSnapshot()
+  #expect(snapshot.workspace.folders.isEmpty)
+  #expect(snapshot.workspace.notes.first?.folderID == nil)
 
   _ = try await store.save(
     workspace: snapshot.workspace,
@@ -1572,6 +1595,8 @@ import Testing
     ) as? [String: Any]
   )
   #expect(manifest["snapshotIntegrityVersion"] as? Int == 1)
+  #expect(manifest["formatVersion"] as? Int == 2)
+  #expect((manifest["folders"] as? [[String: Any]])?.isEmpty == true)
   #expect(manifest["markdownSHA256"] as? [String: String] != nil)
   #expect(manifest["preferencesSHA256"] as? String != nil)
 }
@@ -1597,6 +1622,766 @@ import Testing
   #expect(snapshot.source == .root)
   #expect(snapshot.workspace.notes.first?.body == "Body")
   #expect(snapshot.workspace.notes.first?.richTextRTF == nil)
+}
+
+@Test func LocalStoreFolderMigrationRepairsFolderOnlyCorruption() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let firstFolderID = UUID(uuidString: "00000000-0000-0000-0000-000000000101")!
+  let secondFolderID = UUID(uuidString: "00000000-0000-0000-0000-000000000102")!
+  let reservedFolderID = UUID(uuidString: "00000000-0000-0000-0000-000000000103")!
+  let firstFolder = try Folder(id: firstFolderID, name: "Work")
+  let secondFolder = try Folder(id: secondFolderID, name: "Other")
+  let firstNote = Note(title: "First", folderID: firstFolderID)
+  let secondNote = Note(title: "Second", folderID: secondFolderID)
+  let store = LocalStore(rootURL: root)
+  let workspace = Workspace(
+    notes: [firstNote, secondNote],
+    selectedNoteID: firstNote.id,
+    folders: [firstFolder, secondFolder]
+  )
+  try await store.save(workspace: workspace, preferences: .init(), generation: 1)
+
+  try updateFolderManifest(at: root) { object in
+    object["folders"] = [
+      ["id": firstFolderID.uuidString, "name": "Work"],
+      ["id": secondFolderID.uuidString, "name": " work "],
+      ["id": reservedFolderID.uuidString, "name": "Trash"],
+    ]
+    var metadata = object["metadata"] as! [Any]
+    let metadataKeyIndex = try! #require(
+      metadata.indices.first {
+        ($0 % 2 == 0)
+          && (metadata[$0] as? String)?.caseInsensitiveCompare(secondNote.id.uuidString)
+            == .orderedSame
+      }
+    )
+    var malformedNote = metadata[metadataKeyIndex + 1] as! [String: Any]
+    malformedNote["folderID"] = ["not": "a UUID"]
+    metadata[metadataKeyIndex + 1] = malformedNote
+    object["metadata"] = metadata
+  }
+
+  let repaired = try await store.loadSnapshot()
+  #expect(repaired.source == .root)
+  #expect(repaired.workspace.folders.map(\.id) == [firstFolderID, secondFolderID])
+  #expect(repaired.workspace.folders.map(\.name) == ["Work", "Work (2)"])
+  #expect(repaired.workspace.notes[0].folderID == firstFolderID)
+  #expect(repaired.workspace.notes[1].folderID == nil)
+  #expect(repaired.folderMigrationWarnings == [
+    .duplicateFolderName("work"),
+    .reservedFolderName("Trash"),
+    .malformedNoteFolderID(secondNote.id),
+  ])
+
+  _ = try await store.save(
+    workspace: repaired.workspace,
+    preferences: repaired.preferences,
+    generation: repaired.generation + 1
+  )
+  let normalized = try await store.loadSnapshot()
+  #expect(normalized.folderMigrationWarnings.isEmpty)
+  let manifest = try #require(
+    try JSONSerialization.jsonObject(
+      with: Data(contentsOf: root.appendingPathComponent("workspace.json"))
+    ) as? [String: Any]
+  )
+  #expect(manifest["formatVersion"] as? Int == 2)
+  #expect((manifest["folders"] as? [[String: Any]])?.count == 2)
+}
+
+@Test func LocalStoreFolderMalformedCollectionPreservesUnrelatedSnapshotData() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Keep", body: "Keep body")
+  let preferences = AppPreferences(fontFamily: "Menlo")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: preferences,
+    generation: 1
+  )
+
+  try updateFolderManifest(at: root) { object in
+    object["folders"] = ["not": "a folder record collection"]
+  }
+
+  let repaired = try await store.loadSnapshot()
+  #expect(repaired.workspace.notes.first?.body == "Keep body")
+  #expect(repaired.preferences == preferences)
+  #expect(repaired.workspace.folders.isEmpty)
+  #expect(repaired.folderMigrationWarnings == [.malformedFolderCollection])
+}
+
+@Test func LocalStoreFolderMissingCollectionDefaultsButExplicitNullWarns() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Keep", body: "Keep body")
+  let preferences = AppPreferences(fontFamily: "Menlo")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: preferences,
+    generation: 1
+  )
+
+  try updateFolderManifest(at: root) { object in
+    object.removeValue(forKey: "folders")
+  }
+
+  let missing = try await store.loadSnapshot()
+  #expect(missing.workspace.folders.isEmpty)
+  #expect(missing.folderMigrationWarnings.isEmpty)
+  #expect(missing.workspace.notes.first?.body == "Keep body")
+  #expect(missing.preferences == preferences)
+
+  _ = try await store.save(
+    workspace: missing.workspace,
+    preferences: missing.preferences,
+    generation: 2
+  )
+  try updateFolderManifest(at: root) { object in
+    object["folders"] = NSNull()
+  }
+
+  let explicitNull = try await store.loadSnapshot()
+  #expect(explicitNull.workspace.folders.isEmpty)
+  #expect(explicitNull.folderMigrationWarnings == [.malformedFolderCollection])
+  #expect(explicitNull.workspace.notes.first?.body == "Keep body")
+  #expect(explicitNull.preferences == preferences)
+}
+
+@Test func LocalStoreFolderRecordRepairWarningsAndOrderAreExact() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000000111")!
+  let secondID = UUID(uuidString: "00000000-0000-0000-0000-000000000112")!
+  let first = try Folder(id: firstID, name: "First")
+  let second = try Folder(id: secondID, name: "Second")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(folders: [first, second]),
+    preferences: .init(),
+    generation: 1
+  )
+
+  try updateFolderManifest(at: root) { object in
+    object["folders"] = [
+      ["id": firstID.uuidString, "name": "First"],
+      ["id": firstID.uuidString, "name": "Duplicate"],
+      "scalar record",
+      ["id": secondID.uuidString],
+      ["id": secondID.uuidString, "name": "Second"],
+    ]
+  }
+
+  let repaired = try await store.loadSnapshot()
+  #expect(repaired.workspace.folders == [first, second])
+  #expect(repaired.folderMigrationWarnings == [
+    .duplicateFolderID(firstID),
+    .invalidFolderRecord,
+    .invalidFolderRecord,
+  ])
+}
+
+@Test func LocalStoreFolderDuplicateIDsRetainFirstRecordDeterministically() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folderID = UUID(uuidString: "00000000-0000-0000-0000-000000000121")!
+  let first = try Folder(id: folderID, name: "First")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(folders: [first]),
+    preferences: .init(),
+    generation: 1
+  )
+
+  try updateFolderManifest(at: root) { object in
+    object["folders"] = [
+      ["id": folderID.uuidString, "name": "First"],
+      ["id": folderID.uuidString, "name": "Second"],
+    ]
+  }
+
+  let repaired = try await store.loadSnapshot()
+  #expect(repaired.workspace.folders == [first])
+  #expect(repaired.folderMigrationWarnings == [.duplicateFolderID(folderID)])
+}
+
+@Test func LocalStoreFolderDuplicateCaseFoldedNamesRepairDeterministically() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000000131")!
+  let secondID = UUID(uuidString: "00000000-0000-0000-0000-000000000132")!
+  let first = try Folder(id: firstID, name: "Straße")
+  let second = try Folder(id: secondID, name: "Other")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(folders: [first, second]),
+    preferences: .init(),
+    generation: 1
+  )
+
+  try updateFolderManifest(at: root) { object in
+    object["folders"] = [
+      ["id": firstID.uuidString, "name": "Straße"],
+      ["id": secondID.uuidString, "name": "STRASSE"],
+    ]
+  }
+
+  let repaired = try await store.loadSnapshot()
+  #expect(repaired.workspace.folders.map(\.id) == [firstID, secondID])
+  #expect(repaired.workspace.folders.map(\.name) == ["Straße", "Straße (2)"])
+  #expect(repaired.folderMigrationWarnings == [.duplicateFolderName("STRASSE")])
+}
+
+@Test func LocalStoreFolderDiacriticDistinctAndCanonicalDuplicateRepair() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let cafeID = UUID(uuidString: "00000000-0000-0000-0000-000000000181")!
+  let plainID = UUID(uuidString: "00000000-0000-0000-0000-000000000182")!
+  let duplicateID = UUID(uuidString: "00000000-0000-0000-0000-000000000183")!
+  let cafe = try Folder(id: cafeID, name: "Café")
+  let plain = try Folder(id: plainID, name: "CAFE")
+  let other = try Folder(id: duplicateID, name: "Other")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(folders: [cafe, plain, other]),
+    preferences: .init(),
+    generation: 1
+  )
+
+  try updateFolderManifest(at: root) { object in
+    object["folders"] = [
+      ["id": cafeID.uuidString, "name": "Café"],
+      ["id": plainID.uuidString, "name": "CAFE"],
+      ["id": duplicateID.uuidString, "name": "Cafe\u{301}"],
+    ]
+  }
+
+  let repaired = try await store.loadSnapshot()
+  #expect(repaired.workspace.folders.map(\.id) == [cafeID, plainID, duplicateID])
+  #expect(repaired.workspace.folders.map(\.name) == ["Café", "CAFE", "Café (2)"])
+  #expect(repaired.folderMigrationWarnings == [.duplicateFolderName("Café")])
+}
+
+@Test func LocalStoreFolderReservedNameWarningIsExact() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folderID = UUID(uuidString: "00000000-0000-0000-0000-000000000141")!
+  let folder = try Folder(id: folderID, name: "Work")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(folders: [folder]),
+    preferences: .init(),
+    generation: 1
+  )
+
+  try updateFolderManifest(at: root) { object in
+    object["folders"] = [["id": folderID.uuidString, "name": " tRaSh "]]
+  }
+
+  let repaired = try await store.loadSnapshot()
+  #expect(repaired.workspace.folders.isEmpty)
+  #expect(repaired.folderMigrationWarnings == [.reservedFolderName(" tRaSh ")])
+}
+
+@Test func LocalStoreFolderNoteReferenceWarningsAreExact() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folderID = UUID(uuidString: "00000000-0000-0000-0000-000000000151")!
+  let orphanID = UUID(uuidString: "00000000-0000-0000-0000-000000000152")!
+  let folder = try Folder(id: folderID, name: "Work")
+  let malformed = Note(title: "Malformed")
+  let orphan = Note(title: "Orphan", folderID: orphanID)
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(
+      notes: [malformed, orphan],
+      selectedNoteID: malformed.id,
+      folders: [folder]
+    ),
+    preferences: .init(),
+    generation: 1
+  )
+
+  try updateFolderManifest(at: root) { object in
+    var metadata = object["metadata"] as! [Any]
+    let malformedIndex = metadata.firstIndex {
+      ($0 as? String)?.caseInsensitiveCompare(malformed.id.uuidString) == .orderedSame
+    }!
+    var malformedRecord = metadata[malformedIndex + 1] as! [String: Any]
+    malformedRecord["folderID"] = ["not": "a UUID"]
+    metadata[malformedIndex + 1] = malformedRecord
+    object["metadata"] = metadata
+  }
+
+  let repaired = try await store.loadSnapshot()
+  #expect(repaired.workspace.notes.map(\.folderID) == [nil, nil])
+  #expect(repaired.folderMigrationWarnings == [
+    .malformedNoteFolderID(malformed.id),
+    .orphanNoteFolderID(noteID: orphan.id, folderID: orphanID),
+  ])
+}
+
+@Test func LocalStoreUnknownFutureVersionRejectsFolderBearingCandidate() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = try Folder(name: "Future")
+  let note = Note(title: "Keep", body: "Body", folderID: folder.id)
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [folder]),
+    preferences: .init(),
+    generation: 1
+  )
+  try updateFolderManifest(at: root) { object in
+    object["formatVersion"] = 3
+  }
+
+  await #expect(throws: LocalStore.StoreError.invalidSnapshot) {
+    try await store.loadSnapshot()
+  }
+}
+
+@Test func LocalStoreFolderRepairDoesNotHideUnrelatedRequiredCorruption() async throws {
+  let mutations: [(String, (URL) throws -> Void)] = [
+    ("metadata", { root in
+      try updateFolderManifest(at: root) { object in
+        var metadata = object["metadata"] as! [Any]
+        metadata[1] = ["title": ["wrong"]]
+        object["metadata"] = metadata
+      }
+    }),
+    ("body", { root in
+      let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000161")!
+      try Data("wrong body".utf8).write(to: noteFileURL(root: root, noteID: noteID))
+    }),
+    ("rtf", { root in
+      let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000161")!
+      try Data("wrong rtf".utf8).write(to: rtfFileURL(root: root, noteID: noteID))
+    }),
+    ("preferences", { root in
+      try Data("wrong preferences".utf8).write(
+        to: root.appendingPathComponent("preferences.json")
+      )
+    }),
+    ("integrity", { root in
+      try updateFolderManifest(at: root) { object in
+        object["markdownSHA256"] = [
+          "00000000-0000-0000-0000-000000000161": "not-the-hash"
+        ]
+      }
+    }),
+  ]
+
+  for (_, mutate) in mutations {
+    let root = temporaryStoreURL()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let folder = try Folder(name: "Strict")
+    let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000161")!
+    let note = Note(
+      id: noteID,
+      title: "Keep",
+      body: "Body",
+      richTextRTF: Data("{\\rtf1 Body}".utf8),
+      folderID: folder.id
+    )
+    let store = LocalStore(rootURL: root)
+    try await store.save(
+      workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [folder]),
+      preferences: AppPreferences(fontFamily: "Menlo"),
+      generation: 1
+    )
+    try mutate(root)
+
+    do {
+      _ = try await store.loadSnapshot()
+      Issue.record("Expected unrelated corruption to invalidate the candidate")
+    } catch let error as LocalStore.StoreError {
+      #expect(error == .invalidSnapshot)
+    }
+  }
+}
+
+@Test func LocalStoreFolderMetadataSaveReusesValidatedContent() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = try Folder(name: "Work")
+  let note = Note(
+    title: "Formatted",
+    body: "unchanged body",
+    richTextRTF: Data("{\\rtf1 unchanged}".utf8),
+    folderID: folder.id
+  )
+  var workspace = Workspace(notes: [note], selectedNoteID: note.id, folders: [folder])
+  let store = LocalStore(rootURL: root)
+  let preferences = AppPreferences(fontFamily: "Menlo")
+  try await store.save(workspace: workspace, preferences: preferences, generation: 1)
+
+  let contentURLs = [
+    noteFileURL(root: root, noteID: note.id),
+    rtfFileURL(root: root, noteID: note.id),
+    root.appendingPathComponent("preferences.json"),
+  ]
+  for url in contentURLs {
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date(timeIntervalSince1970: 1)],
+      ofItemAtPath: url.path
+    )
+  }
+  let before = try Dictionary(
+    uniqueKeysWithValues: contentURLs.map { ($0.lastPathComponent, try fileObservation(at: $0)) }
+  )
+
+  try workspace.renameFolder(id: folder.id, name: "Renamed")
+  try await store.save(workspace: workspace, preferences: preferences, generation: 2)
+
+  #expect(
+    try Dictionary(
+      uniqueKeysWithValues: contentURLs.map { ($0.lastPathComponent, try fileObservation(at: $0)) }
+    ) == before
+  )
+  #expect(try await store.loadSnapshot().workspace.folders.first?.name == "Renamed")
+}
+
+@Test func LocalStoreFolderRecoverySelectsCompleteGeneration() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let firstFolder = try Folder(name: "First")
+  let secondFolder = try Folder(name: "Second")
+  let first = Note(
+    title: "First",
+    body: "safe",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: firstFolder.id
+  )
+  let second = Note(
+    title: "Second",
+    body: "new",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: secondFolder.id
+  )
+  let writer = LocalStoreSnapshotWriter(rootURL: root)
+  _ = try writer.save(
+    workspace: Workspace(notes: [first], selectedNoteID: first.id, folders: [firstFolder]),
+    preferences: .init(),
+    generation: 1
+  )
+  _ = try writer.save(
+    workspace: Workspace(notes: [second], selectedNoteID: second.id, folders: [secondFolder]),
+    preferences: .init(),
+    generation: 2
+  )
+  try Data("corrupt root body".utf8).write(to: noteFileURL(root: root, noteID: second.id))
+  try updateFolderManifest(at: root.appendingPathComponent("Recovery")) { object in
+    object["folders"] = [
+      ["id": firstFolder.id.uuidString, "name": firstFolder.name],
+      ["id": secondFolder.id.uuidString, "name": "FIRST"],
+    ]
+  }
+
+  let snapshot = try writer.loadSnapshot()
+  #expect(snapshot.source == .recovery)
+  #expect(snapshot.generation == 1)
+  #expect(snapshot.workspace.folders.map(\.name) == ["First", "First (2)"])
+  #expect(snapshot.workspace.notes == [first])
+  #expect(snapshot.folderMigrationWarnings == [.duplicateFolderName("FIRST")])
+}
+
+@Test func LocalStoreV2MissingIntegrityVersionRejectsRootAndSelectsRecovery() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let firstFolder = try Folder(name: "First")
+  let secondFolder = try Folder(name: "Second")
+  let first = Note(
+    title: "First",
+    body: "safe",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: firstFolder.id
+  )
+  let second = Note(
+    title: "Second",
+    body: "new",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: secondFolder.id
+  )
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [first], selectedNoteID: first.id, folders: [firstFolder]),
+    preferences: .init(),
+    generation: 1
+  )
+  try await store.save(
+    workspace: Workspace(notes: [second], selectedNoteID: second.id, folders: [secondFolder]),
+    preferences: .init(),
+    generation: 2
+  )
+
+  try updateFolderManifest(at: root) { object in
+    object.removeValue(forKey: "snapshotIntegrityVersion")
+    object["folders"] = [
+      ["id": secondFolder.id.uuidString, "name": "First"],
+      ["id": firstFolder.id.uuidString, "name": " first "],
+    ]
+  }
+
+  let snapshot = try await store.loadSnapshot()
+  #expect(snapshot.source == .recovery)
+  #expect(snapshot.generation == 1)
+  #expect(snapshot.workspace == Workspace(
+    notes: [first],
+    selectedNoteID: first.id,
+    folders: [firstFolder]
+  ))
+  #expect(snapshot.folderMigrationWarnings.isEmpty)
+}
+
+@Test func LocalStoreV2NullIntegrityVersionRejectsRootAndSelectsRecovery() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let firstFolder = try Folder(name: "First")
+  let secondFolder = try Folder(name: "Second")
+  let first = Note(
+    title: "First",
+    body: "safe",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: firstFolder.id
+  )
+  let second = Note(
+    title: "Second",
+    body: "new",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: secondFolder.id
+  )
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [first], selectedNoteID: first.id, folders: [firstFolder]),
+    preferences: .init(),
+    generation: 1
+  )
+  try await store.save(
+    workspace: Workspace(notes: [second], selectedNoteID: second.id, folders: [secondFolder]),
+    preferences: .init(),
+    generation: 2
+  )
+
+  try updateFolderManifest(at: root) { object in
+    object["snapshotIntegrityVersion"] = NSNull()
+    object["folders"] = [
+      ["id": secondFolder.id.uuidString, "name": "First"],
+      ["id": firstFolder.id.uuidString, "name": " first "],
+    ]
+  }
+
+  let snapshot = try await store.loadSnapshot()
+  #expect(snapshot.source == .recovery)
+  #expect(snapshot.generation == 1)
+  #expect(snapshot.workspace == Workspace(
+    notes: [first],
+    selectedNoteID: first.id,
+    folders: [firstFolder]
+  ))
+  #expect(snapshot.folderMigrationWarnings.isEmpty)
+}
+
+@Test func LocalStoreFolderBeforeManifestFailureReopensPreviousGeneration() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let failure = SnapshotFailureController(failingGeneration: 2)
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(beforeManifestCommit: { generation in
+      try failure.failOnce(generation)
+    })
+  )
+  let firstFolder = try Folder(name: "First")
+  let secondFolder = try Folder(name: "Second")
+  let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000171")!
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let first = Note(
+    id: noteID,
+    title: "First",
+    body: "old",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: firstFolder.id
+  )
+  let second = Note(
+    id: noteID,
+    title: "Second",
+    body: "new",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: secondFolder.id
+  )
+
+  #expect(
+    try writer.save(
+      workspace: Workspace(notes: [first], selectedNoteID: noteID, folders: [firstFolder]),
+      preferences: .init(),
+      generation: 1
+    ) == .committed
+  )
+  #expect(throws: SnapshotTestError.failed) {
+    try writer.save(
+      workspace: Workspace(notes: [second], selectedNoteID: noteID, folders: [secondFolder]),
+      preferences: .init(),
+      generation: 2
+    )
+  }
+
+  let reopened = try LocalStoreSnapshotWriter(rootURL: root).loadSnapshot()
+  #expect(reopened.source == .recovery)
+  #expect(reopened.generation == 1)
+  #expect(reopened.workspace == Workspace(
+    notes: [first],
+    selectedNoteID: noteID,
+    folders: [firstFolder]
+  ))
+}
+
+@Test func LocalStoreFolderAfterManifestFailureReopensCommittedGeneration() throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let writer = LocalStoreSnapshotWriter(
+    rootURL: root,
+    hooks: .init(afterManifestCommit: { generation in
+      if generation == 2 { throw SnapshotTestError.failed }
+    })
+  )
+  let firstFolder = try Folder(name: "First")
+  let secondFolder = try Folder(name: "Second")
+  let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000172")!
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let first = Note(
+    id: noteID,
+    title: "First",
+    body: "old",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: firstFolder.id
+  )
+  let second = Note(
+    id: noteID,
+    title: "Second",
+    body: "new",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: secondFolder.id
+  )
+
+  #expect(
+    try writer.save(
+      workspace: Workspace(notes: [first], selectedNoteID: noteID, folders: [firstFolder]),
+      preferences: .init(),
+      generation: 1
+    ) == .committed
+  )
+  #expect(
+    try writer.save(
+      workspace: Workspace(notes: [second], selectedNoteID: noteID, folders: [secondFolder]),
+      preferences: .init(),
+      generation: 2
+    ) == .committed
+  )
+
+  let reopened = try LocalStoreSnapshotWriter(rootURL: root).loadSnapshot()
+  #expect(reopened.source == .root)
+  #expect(reopened.generation == 2)
+  #expect(reopened.workspace == Workspace(
+    notes: [second],
+    selectedNoteID: noteID,
+    folders: [secondFolder]
+  ))
+}
+
+@Test func LocalStoreFolderTrashRestoreResolvesFolderOrUnfiled() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let folder = try Folder(name: "Work")
+  let pinned = Note(
+    title: "P1",
+    createdAt: date,
+    modifiedAt: date,
+    isPinned: true,
+    folderID: folder.id
+  )
+  let unpinned = Note(
+    title: "U1",
+    createdAt: date,
+    modifiedAt: date,
+    folderID: folder.id
+  )
+  let restoredPinned = Note(
+    title: "P2",
+    body: "preserve me",
+    richTextRTF: Data("{\\rtf1 preserve me}".utf8),
+    createdAt: date,
+    modifiedAt: date,
+    isPinned: true,
+    agentAccess: true,
+    revision: 7,
+    folderID: folder.id
+  )
+  let active = Workspace(
+    notes: [pinned, unpinned],
+    selectedNoteID: unpinned.id,
+    folders: [folder]
+  )
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: active,
+    preferences: .init(),
+    trashedNotes: [restoredPinned],
+    generation: 1
+  )
+  let trashEntry = trashEntryURL(root: root, noteID: restoredPinned.id)
+  let trashMetadata = try #require(
+    try JSONSerialization.jsonObject(
+      with: Data(contentsOf: trashEntry.appendingPathComponent("metadata.json"))
+    ) as? [String: Any]
+  )
+  #expect(trashMetadata["folderID"] as? String == folder.id.uuidString)
+
+  let trashed = try #require(await store.loadTrash().first)
+  let restored = try await store.restore(
+    trashed,
+    into: active,
+    preferences: .init(),
+    generation: 2
+  )
+  #expect(restored.notes.map(\.title) == ["P1", "P2", "U1"])
+  #expect(restored.notes[1] == restoredPinned)
+
+  let later = Note(title: "U2", folderID: folder.id)
+  var deletedFolderWorkspace = restored
+  try deletedFolderWorkspace.deleteFolder(id: folder.id)
+  try await store.save(
+    workspace: deletedFolderWorkspace,
+    preferences: .init(),
+    trashedNotes: [later],
+    generation: 3
+  )
+  let orphaned = try #require(await store.loadTrash().first)
+  let fallback = try await store.restore(
+    orphaned,
+    into: deletedFolderWorkspace,
+    preferences: .init(),
+    generation: 4
+  )
+  #expect(fallback.notes.last?.id == later.id)
+  #expect(fallback.notes.last?.folderID == nil)
 }
 
 private struct FileObservation: Equatable {
@@ -1663,4 +2448,19 @@ private func trashEntryURL(root: URL, noteID: UUID) -> URL {
   root
     .appendingPathComponent("Trash", isDirectory: true)
     .appendingPathComponent(noteID.uuidString.lowercased(), isDirectory: true)
+}
+
+private func updateFolderManifest(
+  at root: URL,
+  mutate: (inout [String: Any]) -> Void
+) throws {
+  let manifestURL = root.appendingPathComponent("workspace.json")
+  var object = try #require(
+    JSONSerialization.jsonObject(
+      with: Data(contentsOf: manifestURL)
+    ) as? [String: Any]
+  )
+  mutate(&object)
+  try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    .write(to: manifestURL, options: .atomic)
 }

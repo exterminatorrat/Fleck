@@ -1,6 +1,16 @@
 import CryptoKit
 import Foundation
 
+public enum LocalStoreFolderMigrationWarning: Equatable, Sendable {
+  case malformedFolderCollection
+  case invalidFolderRecord
+  case duplicateFolderID(UUID)
+  case reservedFolderName(String)
+  case duplicateFolderName(String)
+  case malformedNoteFolderID(UUID)
+  case orphanNoteFolderID(noteID: UUID, folderID: UUID)
+}
+
 struct LocalStoreTrashMetadata: Codable {
   var id: UUID
   var title: String
@@ -11,6 +21,7 @@ struct LocalStoreTrashMetadata: Codable {
   var deletedAt: Date
   var agentAccess: Bool?
   var revision: UInt64?
+  var folderID: UUID?
 }
 
 public enum LocalStoreSnapshotSource: Equatable, Sendable {
@@ -25,19 +36,22 @@ public struct LocalStoreSnapshot: Equatable, Sendable {
   public let commitProofs: [AgentWorkspaceCommitProof]
   public let source: LocalStoreSnapshotSource
   public let generation: UInt64
+  public let folderMigrationWarnings: [LocalStoreFolderMigrationWarning]
 
   public init(
     workspace: Workspace,
     preferences: AppPreferences,
     commitProofs: [AgentWorkspaceCommitProof],
     source: LocalStoreSnapshotSource,
-    generation: UInt64 = 0
+    generation: UInt64 = 0,
+    folderMigrationWarnings: [LocalStoreFolderMigrationWarning] = []
   ) {
     self.workspace = workspace
     self.preferences = preferences
     self.commitProofs = commitProofs
     self.source = source
     self.generation = generation
+    self.folderMigrationWarnings = folderMigrationWarnings
   }
 }
 
@@ -65,12 +79,148 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     var noteOrder: [UUID]
     var selectedNoteID: UUID?
     var metadata: [UUID: Metadata]
+    var folders: FolderCollection?
     var snapshotGeneration: UInt64?
     var snapshotIntegrityVersion: Int?
     var markdownSHA256: [String: String]?
     var rtfSHA256: [String: String]?
     var preferencesSHA256: String?
     var agentCommitProofs: [AgentWorkspaceCommitProof]?
+
+    init(
+      formatVersion: Int?,
+      noteOrder: [UUID],
+      selectedNoteID: UUID?,
+      metadata: [UUID: Metadata],
+      folders: FolderCollection?,
+      snapshotGeneration: UInt64?,
+      snapshotIntegrityVersion: Int?,
+      markdownSHA256: [String: String]?,
+      rtfSHA256: [String: String]?,
+      preferencesSHA256: String?,
+      agentCommitProofs: [AgentWorkspaceCommitProof]?
+    ) {
+      self.formatVersion = formatVersion
+      self.noteOrder = noteOrder
+      self.selectedNoteID = selectedNoteID
+      self.metadata = metadata
+      self.folders = folders
+      self.snapshotGeneration = snapshotGeneration
+      self.snapshotIntegrityVersion = snapshotIntegrityVersion
+      self.markdownSHA256 = markdownSHA256
+      self.rtfSHA256 = rtfSHA256
+      self.preferencesSHA256 = preferencesSHA256
+      self.agentCommitProofs = agentCommitProofs
+    }
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      formatVersion = try container.decodeIfPresent(Int.self, forKey: .formatVersion)
+      noteOrder = try container.decode([UUID].self, forKey: .noteOrder)
+      selectedNoteID = try container.decodeIfPresent(UUID.self, forKey: .selectedNoteID)
+      metadata = try container.decode([UUID: Metadata].self, forKey: .metadata)
+      if container.contains(.folders) {
+        folders = try container.decodeNil(forKey: .folders)
+          ? FolderCollection(malformed: true)
+          : container.decode(FolderCollection.self, forKey: .folders)
+      } else {
+        folders = nil
+      }
+      snapshotGeneration = try container.decodeIfPresent(UInt64.self, forKey: .snapshotGeneration)
+      snapshotIntegrityVersion = try container.decodeIfPresent(
+        Int.self,
+        forKey: .snapshotIntegrityVersion
+      )
+      markdownSHA256 = try container.decodeIfPresent(
+        [String: String].self,
+        forKey: .markdownSHA256
+      )
+      rtfSHA256 = try container.decodeIfPresent([String: String].self, forKey: .rtfSHA256)
+      preferencesSHA256 = try container.decodeIfPresent(String.self, forKey: .preferencesSHA256)
+      agentCommitProofs = try container.decodeIfPresent(
+        [AgentWorkspaceCommitProof].self,
+        forKey: .agentCommitProofs
+      )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case formatVersion
+      case noteOrder
+      case selectedNoteID
+      case metadata
+      case folders
+      case snapshotGeneration
+      case snapshotIntegrityVersion
+      case markdownSHA256
+      case rtfSHA256
+      case preferencesSHA256
+      case agentCommitProofs
+    }
+  }
+
+  private struct FolderRecord: Codable {
+    let id: UUID?
+    let name: String?
+
+    init(id: UUID, name: String) {
+      self.id = id
+      self.name = name
+    }
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      id = try? container.decode(UUID.self, forKey: .id)
+      name = try? container.decode(String.self, forKey: .name)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case id
+      case name
+    }
+  }
+
+  private struct FolderCollection: Codable {
+    let elements: [FolderRecord?]
+    let isMalformed: Bool
+
+    init(records: [FolderRecord]) {
+      elements = records.map(Optional.some)
+      isMalformed = false
+    }
+
+    init(malformed: Bool) {
+      elements = []
+      isMalformed = malformed
+    }
+
+    init(from decoder: Decoder) throws {
+      do {
+        var container = try decoder.unkeyedContainer()
+        var elements: [FolderRecord?] = []
+        while !container.isAtEnd {
+          let element = try container.superDecoder()
+          if let record = try? FolderRecord(from: element) {
+            elements.append(record)
+          } else {
+            elements.append(nil)
+          }
+        }
+        self.elements = elements
+        isMalformed = false
+      } catch {
+        elements = []
+        isMalformed = true
+      }
+    }
+
+    func encode(to encoder: Encoder) throws {
+      var container = encoder.unkeyedContainer()
+      for element in elements {
+        if let record = element {
+          try container.encode(record)
+        }
+      }
+    }
   }
 
   private struct Metadata: Codable {
@@ -81,6 +231,74 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     var isPinned: Bool
     var agentAccess: Bool?
     var revision: UInt64?
+    var folderID: UUID?
+    var folderIDWasMalformed = false
+
+    init(
+      title: String,
+      tabColorHex: String?,
+      createdAt: Date,
+      modifiedAt: Date,
+      isPinned: Bool,
+      agentAccess: Bool?,
+      revision: UInt64?,
+      folderID: UUID?
+    ) {
+      self.title = title
+      self.tabColorHex = tabColorHex
+      self.createdAt = createdAt
+      self.modifiedAt = modifiedAt
+      self.isPinned = isPinned
+      self.agentAccess = agentAccess
+      self.revision = revision
+      self.folderID = folderID
+    }
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      title = try container.decode(String.self, forKey: .title)
+      tabColorHex = try container.decodeIfPresent(String.self, forKey: .tabColorHex)
+      createdAt = try container.decode(Date.self, forKey: .createdAt)
+      modifiedAt = try container.decode(Date.self, forKey: .modifiedAt)
+      isPinned = try container.decode(Bool.self, forKey: .isPinned)
+      agentAccess = try container.decodeIfPresent(Bool.self, forKey: .agentAccess)
+      revision = try container.decodeIfPresent(UInt64.self, forKey: .revision)
+      if container.contains(.folderID) {
+        if try container.decodeNil(forKey: .folderID) {
+          folderID = nil
+        } else if let decoded = try? container.decode(UUID.self, forKey: .folderID) {
+          folderID = decoded
+        } else {
+          folderID = nil
+          folderIDWasMalformed = true
+        }
+      } else {
+        folderID = nil
+      }
+    }
+
+    func encode(to encoder: Encoder) throws {
+      var container = encoder.container(keyedBy: CodingKeys.self)
+      try container.encode(title, forKey: .title)
+      try container.encodeIfPresent(tabColorHex, forKey: .tabColorHex)
+      try container.encode(createdAt, forKey: .createdAt)
+      try container.encode(modifiedAt, forKey: .modifiedAt)
+      try container.encode(isPinned, forKey: .isPinned)
+      try container.encodeIfPresent(agentAccess, forKey: .agentAccess)
+      try container.encodeIfPresent(revision, forKey: .revision)
+      try container.encodeIfPresent(folderID, forKey: .folderID)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+      case title
+      case tabColorHex
+      case createdAt
+      case modifiedAt
+      case isPinned
+      case agentAccess
+      case revision
+      case folderID
+    }
   }
 
   private struct LoadedCandidate {
@@ -89,7 +307,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     let directory: URL
   }
 
-  private static let formatVersion = 1
+  private static let formatVersion = 2
   private static let integrityVersion = 1
   private static let maximumCommitProofs = 256
   private static let trashLifetime: TimeInterval = 30 * 24 * 60 * 60
@@ -255,10 +473,14 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
                 modifiedAt: note.modifiedAt,
                 isPinned: note.isPinned,
                 agentAccess: note.agentAccess,
-                revision: note.revision
+                revision: note.revision,
+                folderID: note.folderID
               )
             )
           }
+        ),
+        folders: FolderCollection(
+          records: workspace.folders.map { FolderRecord(id: $0.id, name: $0.name) }
         ),
         snapshotGeneration: generation,
         snapshotIntegrityVersion: Self.integrityVersion,
@@ -345,6 +567,73 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     highestAdmittedGeneration = highestCommittedGeneration
   }
 
+  private func repairFolders(
+    _ collection: FolderCollection?
+  ) -> (
+    folders: [Folder],
+    warnings: [LocalStoreFolderMigrationWarning]
+  ) {
+    guard let collection else { return ([], []) }
+
+    var warnings: [LocalStoreFolderMigrationWarning] = []
+    if collection.isMalformed {
+      warnings.append(.malformedFolderCollection)
+    }
+
+    var folders: [Folder] = []
+    var folderIDs = Set<UUID>()
+    var folderNameKeys = Set<String>()
+    for element in collection.elements {
+      guard let record = element else {
+        warnings.append(.invalidFolderRecord)
+        continue
+      }
+      guard let id = record.id, let rawName = record.name else {
+        warnings.append(.invalidFolderRecord)
+        continue
+      }
+      guard !folderIDs.contains(id) else {
+        warnings.append(.duplicateFolderID(id))
+        continue
+      }
+
+      let normalizedName: String
+      do {
+        normalizedName = try Folder.normalizedName(rawName)
+      } catch let error as FolderError where error == .reservedName {
+        warnings.append(.reservedFolderName(rawName))
+        continue
+      } catch {
+        warnings.append(.invalidFolderRecord)
+        continue
+      }
+
+      var repairedName = normalizedName
+      if folderNameKeys.contains(Folder.nameKey(repairedName)) {
+        let baseName = folders.first {
+          Folder.nameKey($0.name) == Folder.nameKey(repairedName)
+        }?.name ?? repairedName
+        var suffixNumber = 2
+        repeat {
+          let suffix = " (\(suffixNumber))"
+          let prefixLimit = max(1, 80 - suffix.count)
+          repairedName = String(baseName.prefix(prefixLimit)) + suffix
+          suffixNumber += 1
+        } while folderNameKeys.contains(Folder.nameKey(repairedName))
+        warnings.append(.duplicateFolderName(normalizedName))
+      }
+
+      guard let folder = try? Folder(id: id, name: repairedName) else {
+        warnings.append(.invalidFolderRecord)
+        continue
+      }
+      folders.append(folder)
+      folderIDs.insert(id)
+      folderNameKeys.insert(Folder.nameKey(folder.name))
+    }
+    return (folders, warnings)
+  }
+
   private func loadCandidate(
     in directory: URL,
     source: LocalStoreSnapshotSource
@@ -355,8 +644,14 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       ),
       let manifest = try? decoder().decode(Manifest.self, from: manifestData),
       manifest.formatVersion == nil
+        || manifest.formatVersion == 1
         || manifest.formatVersion == Self.formatVersion
     else {
+      return nil
+    }
+    if manifest.formatVersion == Self.formatVersion,
+      manifest.snapshotIntegrityVersion != Self.integrityVersion
+    {
       return nil
     }
 
@@ -405,6 +700,9 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       return nil
     }
 
+    let folderRepair = repairFolders(manifest.folders)
+    var folderMigrationWarnings = folderRepair.warnings
+    let validFolderIDs = Set(folderRepair.folders.map(\.id))
     let notes = manifest.noteOrder.compactMap { id -> Note? in
       guard
         let metadata = manifest.metadata[id],
@@ -423,6 +721,22 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         shouldLoadRTF
         ? try? Data(contentsOf: rtfURL(id, in: directory))
         : nil
+      let folderID: UUID?
+      if metadata.folderIDWasMalformed {
+        folderID = nil
+        folderMigrationWarnings.append(.malformedNoteFolderID(id))
+      } else if let metadataFolderID = metadata.folderID {
+        if validFolderIDs.contains(metadataFolderID) {
+          folderID = metadataFolderID
+        } else {
+          folderID = nil
+          folderMigrationWarnings.append(
+            .orphanNoteFolderID(noteID: id, folderID: metadataFolderID)
+          )
+        }
+      } else {
+        folderID = nil
+      }
       return Note(
         id: id,
         title: metadata.title,
@@ -433,7 +747,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         modifiedAt: metadata.modifiedAt,
         isPinned: metadata.isPinned,
         agentAccess: metadata.agentAccess ?? false,
-        revision: metadata.revision ?? 0
+        revision: metadata.revision ?? 0,
+        folderID: folderID
       )
     }
     if manifest.snapshotIntegrityVersion != nil,
@@ -443,7 +758,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     }
     var workspace = Workspace(
       notes: notes,
-      selectedNoteID: manifest.selectedNoteID
+      selectedNoteID: manifest.selectedNoteID,
+      folders: folderRepair.folders
     )
     workspace.ensureNoteExists()
     return LoadedCandidate(
@@ -453,7 +769,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         commitProofs: (manifest.agentCommitProofs ?? [])
           .filter { $0.expiresAt > now() },
         source: source,
-        generation: manifest.snapshotGeneration ?? 0
+        generation: manifest.snapshotGeneration ?? 0,
+        folderMigrationWarnings: folderMigrationWarnings
       ),
       manifest: manifest,
       directory: directory
@@ -572,7 +889,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         isPinned: note.isPinned,
         deletedAt: now(),
         agentAccess: note.agentAccess,
-        revision: note.revision
+        revision: note.revision,
+        folderID: note.folderID
       )
       try encoder().encode(metadata).write(
         to: stagingURL.appendingPathComponent("metadata.json"),

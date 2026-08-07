@@ -12,6 +12,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
   public var isPinned: Bool
   public var agentAccess: Bool
   public var revision: UInt64
+  public var folderID: UUID?
 
   public init(
     id: UUID = UUID(),
@@ -23,7 +24,8 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     modifiedAt: Date = Date(),
     isPinned: Bool = false,
     agentAccess: Bool = false,
-    revision: UInt64 = 0
+    revision: UInt64 = 0,
+    folderID: UUID? = nil
   ) {
     self.id = id
     self.title = title
@@ -35,6 +37,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     self.isPinned = isPinned
     self.agentAccess = agentAccess
     self.revision = revision
+    self.folderID = folderID
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -48,6 +51,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     case isPinned
     case agentAccess
     case revision
+    case folderID
   }
 
   public init(from decoder: Decoder) throws {
@@ -62,6 +66,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     isPinned = try container.decode(Bool.self, forKey: .isPinned)
     agentAccess = try container.decodeIfPresent(Bool.self, forKey: .agentAccess) ?? false
     revision = try container.decodeIfPresent(UInt64.self, forKey: .revision) ?? 0
+    folderID = try container.decodeIfPresent(UUID.self, forKey: .folderID)
   }
 
   public var displayTitle: String {

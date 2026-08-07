@@ -90,7 +90,7 @@ public actor LocalStore {
     }
 
     var restoredWorkspace = workspace
-    restoredWorkspace.addNote(trashedNote.note)
+    restoredWorkspace.addRestoredNote(trashedNote.note)
     let result = try snapshotWriter.save(
       workspace: restoredWorkspace,
       preferences: preferences,
@@ -151,7 +151,8 @@ public actor LocalStore {
         modifiedAt: metadata.modifiedAt,
         isPinned: metadata.isPinned,
         agentAccess: metadata.agentAccess ?? false,
-        revision: metadata.revision ?? 0
+        revision: metadata.revision ?? 0,
+        folderID: metadata.folderID
       ),
       deletedAt: metadata.deletedAt
     )
