@@ -65,9 +65,9 @@ metadata="$output_dir/ax-press-to-accessible-window-metadata.txt"
 
 # AX_MEASUREMENT_OUTPUT_HELPERS_BEGIN
 cleanup_output_temp() {
-  temp_file=$1
-  if [ -n "$temp_file" ] && { [ -f "$temp_file" ] || [ -L "$temp_file" ]; }; then
-    /bin/unlink "$temp_file" 2>/dev/null || :
+  temp_record=$1
+  if [ -n "$temp_record" ]; then
+    measurement_output_helper cleanup "$temp_record" || :
   fi
 }
 
@@ -79,13 +79,27 @@ use warnings;
 
 sub cleanup_created_path {
   my ($path, $created) = @_;
+  return unless @$created >= 2;
   my @current = lstat($path);
-  return unless @current;
-  my $same_inode =
-    @$created &&
-    $current[0] == $created->[0] &&
-    $current[1] == $created->[1];
-  unlink($path) if -l _ || $same_inode;
+  return unless @current && -f _ && !-l _;
+  return unless $current[0] == $created->[0] && $current[1] == $created->[1];
+  unlink($path);
+}
+
+sub record_parts {
+  my ($record) = @_;
+  return unless defined($record);
+  my @parts = split(/\t/, $record, -1);
+  return unless @parts == 3;
+  return unless length($parts[0]) && $parts[1] =~ /^\d+$/ && $parts[2] =~ /^\d+$/;
+  return @parts;
+}
+
+sub matches_created_file {
+  my ($path, $device, $inode) = @_;
+  my @current = lstat($path);
+  return 0 unless @current && -f _ && !-l _;
+  return $current[0] == $device && $current[1] == $inode;
 }
 
 my $operation = shift @ARGV;
@@ -144,14 +158,19 @@ if ($operation eq "create") {
     cleanup_created_path($path, \@created);
     exit 2;
   }
-  print $path or exit 2;
+  print $path, "\t", $created[0], "\t", $created[1], "\n" or exit 2;
   exit 0;
 }
+if ($operation eq "cleanup") {
+  my ($source, $device, $inode) = record_parts(shift @ARGV);
+  exit 2 unless defined($source) && matches_created_file($source, $device, $inode);
+  exit(unlink($source) ? 0 : 2);
+}
 if ($operation eq "publish") {
-  my ($source, $destination) = @ARGV;
+  my ($source, $device, $inode) = record_parts(shift @ARGV);
+  my $destination = shift @ARGV;
   exit 2 unless defined($source) && defined($destination);
-  my @source = lstat($source);
-  exit 2 unless @source && -f _ && !-l _;
+  exit 2 unless matches_created_file($source, $device, $inode);
   exit 2 if -d($destination) && !-l($destination);
   my $hook = defined($ENV{"FLECK_MEASUREMENT_PUBLISH_HOOK"})
     ? $ENV{"FLECK_MEASUREMENT_PUBLISH_HOOK"} : "";
@@ -182,7 +201,7 @@ for output_file in "$raw_samples" "$summary" "$metadata"; do
   fi
 done
 
-for required_command in awk date osascript perl ps sort uname; do
+for required_command in awk cut date osascript perl ps sort uname; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     printf 'error: required command not found: %s\n' "$required_command" >&2
     exit 2
@@ -234,6 +253,7 @@ readonly warm_sample_count=30
 raw_temp=
 summary_temp=
 metadata_temp=
+raw_temp_path=
 
 cleanup_temporary_files() {
   exit_status=$?
@@ -511,8 +531,12 @@ raw_temp=$(
   printf '%s\n' 'error: could not create a raw-sample temporary file' >&2
   exit 2
 }
+raw_temp_path=$(printf '%s\n' "$raw_temp" | /usr/bin/cut -f1) || {
+  printf '%s\n' 'error: invalid raw-sample temporary ownership record' >&2
+  exit 2
+}
 
-stats=$(awk -F '\t' 'NR > 1 { print $3 }' "$raw_temp" | sort -n | awk -v expected="$total_samples" '
+stats=$(awk -F '\t' 'NR > 1 { print $3 }' "$raw_temp_path" | sort -n | awk -v expected="$total_samples" '
   {
     values[NR] = $1
     minimum = NR == 1 || $1 < minimum ? $1 : minimum
@@ -586,6 +610,7 @@ if ! publish_output_file "$raw_temp" "$raw_samples"; then
   exit 2
 fi
 raw_temp=
+raw_temp_path=
 if ! publish_output_file "$summary_temp" "$summary"; then
   exit 2
 fi

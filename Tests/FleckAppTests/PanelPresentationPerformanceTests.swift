@@ -28,6 +28,9 @@
       "# AX_MEASUREMENT_PERL_BEGIN",
       "measurement_output_helper",
       "publish_output_file",
+      "device",
+      "inode",
+      "cleanup",
       "AX-press-to-accessible-window",
       "AXPress toggles panel presentation state",
       "mutation_boundary=no note/editor/Application Support mutation; presentation-state AXPress is intentional",
@@ -63,6 +66,8 @@
       "> \"$raw_temp\"",
       "> \"$summary_temp\"",
       "> \"$metadata_temp\"",
+      "[ -f \"$temp_file\" ]",
+      "[ -L \"$temp_file\" ]",
       "AX-press-to-accessible-visible",
       "function isVisible",
       "visiblePanelWindows",
@@ -255,18 +260,21 @@ publish_payload "$destination" "symlink-directory-payload"
 destination="$output_dir/existing-directory"
 mkdir "$destination"
 temporary=$(printf '%s\n' 'directory-payload' | measurement_output_helper create "$output_dir")
+temporary_path=$(printf '%s\n' "$temporary" | /usr/bin/cut -f1)
 if publish_output_file "$temporary" "$destination"; then exit 12; fi
 cleanup_output_temp "$temporary"
+[ ! -e "$temporary_path" ]
 
 destination="$output_dir/raced-directory"
 temporary=$(printf '%s\n' 'raced-directory-payload' | measurement_output_helper create "$output_dir")
+temporary_path=$(printf '%s\n' "$temporary" | /usr/bin/cut -f1)
 export FLECK_MEASUREMENT_PUBLISH_HOOK="$publish_hook"
 if publish_output_file "$temporary" "$destination"; then exit 14; fi
 unset FLECK_MEASUREMENT_PUBLISH_HOOK
 [ -d "$destination" ]
-[ -f "$temporary" ] && [ ! -L "$temporary" ]
+[ -f "$temporary_path" ] && [ ! -L "$temporary_path" ]
 cleanup_output_temp "$temporary"
-[ ! -e "$temporary" ]
+[ ! -e "$temporary_path" ]
 [ ! -e "$destination/raced-directory-payload" ]
 
 destination="$output_dir/hard-link"
@@ -324,9 +332,10 @@ leftover=$(find "$output_dir" -maxdepth 1 -name '.fleck-panel-measurement.*' -pr
       .appendingPathComponent("fleck-temp-write-safety-" + UUID().uuidString, isDirectory: true)
     let sentinel = temporaryDirectory.appendingPathComponent("sentinel.txt")
     let hook = temporaryDirectory.appendingPathComponent("replace-temp.sh")
+    let replacedPathFile = temporaryDirectory.appendingPathComponent("replaced-path.txt")
     try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
     try "sentinel\n".write(to: sentinel, atomically: true, encoding: .utf8)
-    try "#!/bin/sh\nset -eu\n/bin/unlink \"$1\"\n/bin/ln -s \"$FLECK_MEASUREMENT_TEST_SENTINEL\" \"$1\"\n".write(
+    try "#!/bin/sh\nset -eu\n/bin/unlink \"$1\"\n/bin/ln -s \"$FLECK_MEASUREMENT_TEST_SENTINEL\" \"$1\"\nprintf '%s\\n' \"$1\" > \"$FLECK_MEASUREMENT_TEST_PATH_FILE\"\n".write(
       to: hook,
       atomically: true,
       encoding: .utf8
@@ -342,16 +351,22 @@ set -eu
 output_dir=$1
 sentinel=$2
 hook=$3
+path_file=$4
 export FLECK_MEASUREMENT_TEMP_HOOK="$hook"
 export FLECK_MEASUREMENT_TEST_SENTINEL="$sentinel"
+export FLECK_MEASUREMENT_TEST_PATH_FILE="$path_file"
 if printf '%s\n' 'payload' | measurement_output_helper create "$output_dir"; then exit 10; fi
+replaced_path=$(/bin/cat "$path_file")
+[ -L "$replaced_path" ]
 [ "$(/usr/bin/sed -n '1p' "$sentinel")" = sentinel ]
+/bin/unlink "$replaced_path"
+[ ! -e "$replaced_path" ]
 leftover=$(find "$output_dir" -maxdepth 1 -name '.fleck-panel-measurement.*' -print -quit)
 [ -z "$leftover" ]
 """#
     let result = try runShell(
       command,
-      arguments: [temporaryDirectory.path, sentinel.path, hook.path]
+      arguments: [temporaryDirectory.path, sentinel.path, hook.path, replacedPathFile.path]
     )
 
     #expect(result.status == 0, Comment(rawValue: result.stderr))
@@ -362,6 +377,74 @@ leftover=$(find "$output_dir" -maxdepth 1 -name '.fleck-panel-measurement.*' -pr
     let result = try runPerl(try measurementOutputHelperPerlSource())
 
     #expect(result.status == 0, Comment(rawValue: result.stderr))
+  }
+
+  @Test func FleckPanelMeasurementRejectsSubstitutedTempIdentityForCleanupAndPublication() throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("fleck-temp-identity-safety-" + UUID().uuidString, isDirectory: true)
+    let callerOwned = temporaryDirectory.appendingPathComponent("caller-owned.txt")
+    let destination = temporaryDirectory.appendingPathComponent("destination.txt")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+    let command = try measurementOutputHelpersShellSource() + "\n" + #"""
+set -eu
+output_dir=$1
+caller_owned=$2
+destination=$3
+
+record=$(printf '%s\n' 'payload' | measurement_output_helper create "$output_dir")
+path=$(printf '%s\n' "$record" | /usr/bin/cut -f1)
+printf '%s\n' "$record" | /usr/bin/awk -F '\t' 'NF == 3 && $1 != "" && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { found = 1 } END { exit(found ? 0 : 1) }'
+printf '%s\n' 'caller-owned' > "$caller_owned"
+/bin/unlink "$path"
+printf '%s\n' 'caller-substitute' > "$path"
+printf '%s\n' 'destination-original' > "$destination"
+
+cleanup_ok=1
+cleanup_output_temp "$record"
+if [ ! -e "$path" ]; then
+  cleanup_ok=0
+  printf '%s\n' 'caller-substitute' > "$path"
+fi
+
+publish_ok=1
+if publish_output_file "$record" "$destination"; then
+  publish_ok=0
+fi
+[ "$publish_ok" -eq 1 ]
+[ -e "$path" ]
+[ "$(/bin/cat "$path")" = caller-substitute ]
+[ "$(/bin/cat "$caller_owned")" = caller-owned ]
+[ "$(/bin/cat "$destination")" = destination-original ]
+[ "$cleanup_ok" -eq 1 ]
+cleanup_output_temp "$record"
+[ -e "$path" ]
+
+hard_record=$(printf '%s\n' 'hard-payload' | measurement_output_helper create "$output_dir")
+hard_path=$(printf '%s\n' "$hard_record" | /usr/bin/cut -f1)
+hard_caller="$output_dir/hard-caller.txt"
+hard_destination="$output_dir/hard-destination.txt"
+printf '%s\n' 'hard-caller' > "$hard_caller"
+/bin/unlink "$hard_path"
+/bin/ln "$hard_caller" "$hard_path"
+printf '%s\n' 'hard-destination-original' > "$hard_destination"
+cleanup_output_temp "$hard_record"
+[ -e "$hard_path" ]
+[ "$(/bin/cat "$hard_caller")" = hard-caller ]
+if publish_output_file "$hard_record" "$hard_destination"; then exit 12; fi
+[ -e "$hard_path" ]
+[ "$(/bin/cat "$hard_caller")" = hard-caller ]
+[ "$(/bin/cat "$hard_destination")" = hard-destination-original ]
+"""#
+    let result = try runShell(
+      command,
+      arguments: [temporaryDirectory.path, callerOwned.path, destination.path]
+    )
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
+    #expect(try String(contentsOf: callerOwned, encoding: .utf8) == "caller-owned\n")
+    #expect(try String(contentsOf: destination, encoding: .utf8) == "destination-original\n")
   }
 
   @Test func FleckPanelPresentationJXAUsesFakeAXFixturesForClosedNormalizationAnd31Samples() throws {
