@@ -447,6 +447,76 @@ if publish_output_file "$hard_record" "$hard_destination"; then exit 12; fi
     #expect(try String(contentsOf: destination, encoding: .utf8) == "destination-original\n")
   }
 
+  @Test func FleckPanelMeasurementStatisticsUseOnlyInMemoryTSV() throws {
+    let source = try measurementScriptSource()
+    #expect(!source.contains("raw_temp_path"))
+    #expect(!source.contains("cut -f1"))
+
+    let rows = ["sample_label\tsample_number\telapsed_ms", "cold\t1\t1"]
+      + (2...31).map { "warm\t\($0)\t\($0)" }
+    let fixture = rows.joined(separator: "\n")
+    let command = try measurementStatisticsShellSource() + "\n" + #"""
+set -eu
+total_samples=31
+measurement_output=$1
+stats=$(calculate_measurement_statistics "$measurement_output")
+[ "$stats" = "$(printf '31\t16\t30\t1\t31')" ]
+"""#
+    let result = try runShell(command, arguments: [fixture])
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
+  }
+
+  @Test func FleckPanelMeasurementRejectsHookTimeSourceSubstitution() throws {
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("fleck-hook-source-safety-" + UUID().uuidString, isDirectory: true)
+    let hook = temporaryDirectory.appendingPathComponent("replace-source.sh")
+    let callerOwned = temporaryDirectory.appendingPathComponent("caller-owned.txt")
+    let destination = temporaryDirectory.appendingPathComponent("destination.txt")
+    try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+    try "#!/bin/sh\nset -eu\n/bin/unlink \"$FLECK_MEASUREMENT_TEST_SOURCE_PATH\"\nprintf '%s\\n' 'hook-substitute' > \"$FLECK_MEASUREMENT_TEST_SOURCE_PATH\"\n".write(
+      to: hook,
+      atomically: true,
+      encoding: .utf8
+    )
+    try FileManager.default.setAttributes(
+      [.posixPermissions: NSNumber(value: 0o755)],
+      ofItemAtPath: hook.path
+    )
+    defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+    let command = try measurementOutputHelpersShellSource() + "\n" + #"""
+set -eu
+output_dir=$1
+hook=$2
+caller_owned=$3
+destination=$4
+
+record=$(printf '%s\n' 'payload' | measurement_output_helper create "$output_dir")
+source_path=$(printf '%s\n' "$record" | /usr/bin/cut -f1)
+printf '%s\n' 'caller-owned' > "$caller_owned"
+printf '%s\n' 'destination-original' > "$destination"
+export FLECK_MEASUREMENT_PUBLISH_HOOK="$hook"
+export FLECK_MEASUREMENT_TEST_SOURCE_PATH="$source_path"
+if publish_output_file "$record" "$destination"; then exit 10; fi
+unset FLECK_MEASUREMENT_PUBLISH_HOOK
+[ -e "$source_path" ]
+[ "$(/bin/cat "$source_path")" = hook-substitute ]
+[ "$(/bin/cat "$caller_owned")" = caller-owned ]
+[ "$(/bin/cat "$destination")" = destination-original ]
+cleanup_output_temp "$record"
+[ -e "$source_path" ]
+"""#
+    let result = try runShell(
+      command,
+      arguments: [temporaryDirectory.path, hook.path, callerOwned.path, destination.path]
+    )
+
+    #expect(result.status == 0, Comment(rawValue: result.stderr))
+    #expect(try String(contentsOf: callerOwned, encoding: .utf8) == "caller-owned\n")
+    #expect(try String(contentsOf: destination, encoding: .utf8) == "destination-original\n")
+  }
+
   @Test func FleckPanelPresentationJXAUsesFakeAXFixturesForClosedNormalizationAnd31Samples() throws {
     let jxa = try measurementJXASource(from: measurementScriptSource())
     let fixture = #"""
@@ -846,6 +916,18 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     return String(source[begin.upperBound..<end.lowerBound])
   }
 
+  private func measurementStatisticsShellSource() throws -> String {
+    let source = try measurementScriptSource()
+    let begin = try #require(source.range(of: "# AX_MEASUREMENT_STATS_BEGIN\n"))
+    let end = try #require(
+      source.range(
+        of: "\n# AX_MEASUREMENT_STATS_END",
+        range: begin.upperBound..<source.endIndex
+      )
+    )
+    return String(source[begin.upperBound..<end.lowerBound])
+  }
+
   private func measurementAWKPrograms() throws -> (validation: String, statistics: String) {
     let source = try measurementScriptSource()
     let validationStart = try #require(
@@ -862,7 +944,7 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     )
     let statisticsEnd = try #require(
       source.range(
-        of: "\n') ||",
+        of: "\n'\n}",
         range: statisticsStart.upperBound..<source.endIndex
       )
     )
