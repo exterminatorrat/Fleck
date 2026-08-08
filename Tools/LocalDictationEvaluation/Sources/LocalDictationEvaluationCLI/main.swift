@@ -12,21 +12,53 @@ struct LocalDictationEvaluationCLI {
     do {
       let command = try Command.parse(arguments)
       switch command {
-      case .validateCorpus(let path):
-        let corpus = try read(EvaluationCorpus.self, path: path)
+      case .validateCorpus(let corpusPath, let corpusSchemaPath):
+        let corpus = try read(
+          EvaluationCorpus.self,
+          path: corpusPath,
+          schemaPath: corpusSchemaPath
+        )
         let issues = EvaluationValidator.validate(corpus: corpus)
         printIssues(issues)
         return issues.isEmpty ? 0 : 2
-      case .validateRun(let corpusPath, let runPath):
-        let corpus = try read(EvaluationCorpus.self, path: corpusPath)
-        let run = try read(CandidateRun.self, path: runPath)
+      case .validateRun(
+        let corpusPath,
+        let corpusSchemaPath,
+        let runPath,
+        let runSchemaPath
+      ):
+        let corpus = try read(
+          EvaluationCorpus.self,
+          path: corpusPath,
+          schemaPath: corpusSchemaPath
+        )
+        let run = try read(
+          CandidateRun.self,
+          path: runPath,
+          schemaPath: runSchemaPath
+        )
         let issues = EvaluationValidator.validate(run: run, against: corpus)
         printIssues(issues)
         return issues.isEmpty ? 0 : 2
-      case .report(let corpusPath, let runPath, let gatePath, let outputPath):
-        let corpus = try read(EvaluationCorpus.self, path: corpusPath)
-        let run = try read(CandidateRun.self, path: runPath)
-        let gate = try read(EvaluationGate.self, path: gatePath)
+      case .report(
+        let corpusPath,
+        let corpusSchemaPath,
+        let runPath,
+        let runSchemaPath,
+        let gatePath,
+        let outputPath
+      ):
+        let corpus = try read(
+          EvaluationCorpus.self,
+          path: corpusPath,
+          schemaPath: corpusSchemaPath
+        )
+        let run = try read(
+          CandidateRun.self,
+          path: runPath,
+          schemaPath: runSchemaPath
+        )
+        let gate = try readGate(path: gatePath)
         let report = try EvaluationReportBuilder.build(
           corpus: corpus,
           run: run,
@@ -72,18 +104,45 @@ struct LocalDictationEvaluationCLI {
 
   private static func read<T: Decodable>(
     _ type: T.Type,
-    path: String
+    path: String,
+    schemaPath: String
   ) throws -> T {
-    let data: Data
+    let data = try readData(path: path)
+    let schema = try readData(path: schemaPath)
     do {
-      data = try Data(contentsOf: URL(fileURLWithPath: path))
+      let issues = try StrictJSONSchema.unknownKeyIssues(
+        instanceData: data,
+        schemaData: schema
+      )
+      if let issue = issues.first {
+        throw InputError(path: path, kind: "unknown-key:\(issue.path)")
+      }
+    } catch let error as InputError {
+      throw error
     } catch {
-      throw FileError(path: path, kind: "read-failed")
+      throw InputError(path: path, kind: "invalid-json-or-schema")
     }
     do {
       return try JSONDecoder().decode(T.self, from: data)
     } catch {
       throw InputError(path: path, kind: "invalid-json-or-schema")
+    }
+  }
+
+  private static func readGate(path: String) throws -> EvaluationGate {
+    let data = try readData(path: path)
+    do {
+      return try JSONDecoder().decode(EvaluationGate.self, from: data)
+    } catch {
+      throw InputError(path: path, kind: "invalid-json-or-schema")
+    }
+  }
+
+  private static func readData(path: String) throws -> Data {
+    do {
+      return try Data(contentsOf: URL(fileURLWithPath: path))
+    } catch {
+      throw FileError(path: path, kind: "read-failed")
     }
   }
 
@@ -95,9 +154,21 @@ struct LocalDictationEvaluationCLI {
 }
 
 private enum Command {
-  case validateCorpus(String)
-  case validateRun(String, String)
-  case report(String, String, String, String)
+  case validateCorpus(corpus: String, corpusSchema: String)
+  case validateRun(
+    corpus: String,
+    corpusSchema: String,
+    run: String,
+    runSchema: String
+  )
+  case report(
+    corpus: String,
+    corpusSchema: String,
+    run: String,
+    runSchema: String,
+    gate: String,
+    output: String
+  )
 
   static func parse(_ arguments: [String]) throws -> Command {
     guard let name = arguments.first else {
@@ -130,13 +201,31 @@ private enum Command {
     }
     switch name {
     case "validate-corpus":
-      return .validateCorpus(try require(["--corpus"])[0])
+      let values = try require(["--corpus", "--corpus-schema"])
+      return .validateCorpus(corpus: values[0], corpusSchema: values[1])
     case "validate-run":
-      let values = try require(["--corpus", "--run"])
-      return .validateRun(values[0], values[1])
+      let values = try require([
+        "--corpus", "--corpus-schema", "--run", "--run-schema"
+      ])
+      return .validateRun(
+        corpus: values[0],
+        corpusSchema: values[1],
+        run: values[2],
+        runSchema: values[3]
+      )
     case "report":
-      let values = try require(["--corpus", "--run", "--gate", "--output"])
-      return .report(values[0], values[1], values[2], values[3])
+      let values = try require([
+        "--corpus", "--corpus-schema", "--run", "--run-schema",
+        "--gate", "--output"
+      ])
+      return .report(
+        corpus: values[0],
+        corpusSchema: values[1],
+        run: values[2],
+        runSchema: values[3],
+        gate: values[4],
+        output: values[5]
+      )
     default:
       throw CommandError("unknown command")
     }

@@ -7,14 +7,18 @@ cd "$repo_root"
 
 swift test --package-path Tools/LocalDictationEvaluation --no-parallel
 
-corpus_path="Tests/Fixtures/local-dictation-evaluation-v1.json"
-run_path="Tests/Fixtures/local-dictation-run-sample-v1.json"
-gate_path=$(mktemp "${TMPDIR:-/tmp}/fleck-local-dictation-gate.XXXXXX")
-report_path=$(mktemp "${TMPDIR:-/tmp}/fleck-local-dictation-report.XXXXXX")
-invalid_path=$(mktemp "${TMPDIR:-/tmp}/fleck-local-dictation-invalid.XXXXXX")
-stderr_path=$(mktemp "${TMPDIR:-/tmp}/fleck-local-dictation-stderr.XXXXXX")
+corpus_path="$repo_root/Tests/Fixtures/local-dictation-evaluation-v1.json"
+corpus_schema_path="$repo_root/Tests/Fixtures/local-dictation-evaluation-v1.schema.json"
+run_path="$repo_root/Tests/Fixtures/local-dictation-run-sample-v1.json"
+run_schema_path="$repo_root/Tests/Fixtures/local-dictation-run-v1.schema.json"
+temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/fleck-local-dictation.XXXXXX")
+gate_path="$temporary_dir/gate.json"
+report_path="$temporary_dir/report.md"
+invalid_path="$temporary_dir/invalid.json"
+unknown_run_path="$temporary_dir/unknown-run.json"
+stderr_path="$temporary_dir/stderr.txt"
 cleanup() {
-  rm -f "$gate_path" "$report_path" "$invalid_path" "$stderr_path"
+  rm -rf "$temporary_dir"
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -43,13 +47,18 @@ cat > "$gate_path" <<'JSON'
 JSON
 
 Scripts/evaluate-local-dictation.sh validate-corpus \
-  --corpus "$corpus_path"
+  --corpus "$corpus_path" \
+  --corpus-schema "$corpus_schema_path"
 Scripts/evaluate-local-dictation.sh validate-run \
   --corpus "$corpus_path" \
-  --run "$run_path"
+  --corpus-schema "$corpus_schema_path" \
+  --run "$run_path" \
+  --run-schema "$run_schema_path"
 Scripts/evaluate-local-dictation.sh report \
   --corpus "$corpus_path" \
+  --corpus-schema "$corpus_schema_path" \
   --run "$run_path" \
+  --run-schema "$run_schema_path" \
   --gate "$gate_path" \
   --output "$report_path"
 grep -F -x 'SAMPLE DATA — NOT MODEL EVIDENCE' "$report_path" >/dev/null
@@ -59,8 +68,30 @@ if grep -F 'fixInputMonitor' "$report_path" >/dev/null; then
   exit 1
 fi
 
+sed '1,/"latency": {/s/"latency": {/&"mysteryMilliseconds": 1,/' \
+  "$run_path" > "$unknown_run_path"
+if Scripts/evaluate-local-dictation.sh validate-run \
+  --corpus "$corpus_path" \
+  --corpus-schema "$corpus_schema_path" \
+  --run "$unknown_run_path" \
+  --run-schema "$run_schema_path" \
+  > /dev/null 2> "$stderr_path"
+then
+  printf '%s\n' 'unknown run key unexpectedly passed' >&2
+  exit 1
+else
+  status=$?
+  if [ "$status" -ne 2 ]; then
+    printf 'unknown run key returned %s\n' "$status" >&2
+    exit 1
+  fi
+fi
+grep -F -x \
+  "input error: $unknown_run_path unknown-key:/results/0/latency/mysteryMilliseconds" \
+  "$stderr_path" >/dev/null
+
 if Scripts/evaluate-local-dictation.sh validate-corpus \
-  --corpus --run > /dev/null 2> "$stderr_path"
+  --corpus --corpus-schema "$corpus_schema_path" > /dev/null 2> "$stderr_path"
 then
   printf '%s\n' 'flag-looking value unexpectedly passed' >&2
   exit 1
@@ -79,7 +110,8 @@ fi
 
 printf '%s\n' '{"schemaVersion":0}' > "$invalid_path"
 if Scripts/evaluate-local-dictation.sh validate-corpus \
-  --corpus "$invalid_path" > /dev/null 2> "$stderr_path"
+  --corpus "$invalid_path" \
+  --corpus-schema "$corpus_schema_path" > /dev/null 2> "$stderr_path"
 then
   printf '%s\n' 'invalid corpus unexpectedly passed' >&2
   exit 1

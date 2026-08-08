@@ -8,6 +8,8 @@ measurement gate, not a model selector. Phase A contains only the
 dependency-free text contracts, deterministic metrics, strict validation,
 synthetic sample report, and operator procedure. The checked-in corpus has no
 audio, the checked-in run is synthetic, and neither is release evidence.
+Every corpus/run validation or report command requires an explicit checked-in
+JSON schema path; the CLI never infers a schema from the current directory.
 
 Phase A does not run ASR or cleanup inference, record real or personal audio,
 choose Whisper/whisper.cpp, SenseVoice/Paraformer, Qwen3-ASR, Qwen3.5,
@@ -173,8 +175,10 @@ corpus case order and use observationID as the deterministic tie-breaker.
    evidence IDs, timestamps, and a note. A real ASR benchmark fails validation
    unless every case has admitted audio and provenance, independently of
    releaseEvidence.
-6. Run validate-corpus and validate-run. Fix the data or stop; do not bypass a
-   validation error and do not print transcript text in diagnostics.
+6. Run validate-corpus and validate-run with the checked-in corpus and run
+   schemas. Fix the data or stop; do not bypass a validation error and do not
+   print transcript text in diagnostics. Unknown JSON keys are rejected before
+   Codable decoding.
 7. Run the report command with the predeclared gate. Treat the report's
    English WER, Mandarin CER, separate mixed-language English WER and Mandarin
    CER, protected-term counts, number/negation failures, cleanup preservation
@@ -220,10 +224,13 @@ From the repository root:
 swift test --package-path Tools/LocalDictationEvaluation --no-parallel
 Scripts/test-local-dictation-evaluation.sh
 Scripts/evaluate-local-dictation.sh validate-corpus \
-  --corpus Tests/Fixtures/local-dictation-evaluation-v1.json
+  --corpus Tests/Fixtures/local-dictation-evaluation-v1.json \
+  --corpus-schema Tests/Fixtures/local-dictation-evaluation-v1.schema.json
 Scripts/evaluate-local-dictation.sh validate-run \
   --corpus Tests/Fixtures/local-dictation-evaluation-v1.json \
-  --run Tests/Fixtures/local-dictation-run-sample-v1.json
+  --corpus-schema Tests/Fixtures/local-dictation-evaluation-v1.schema.json \
+  --run Tests/Fixtures/local-dictation-run-sample-v1.json \
+  --run-schema Tests/Fixtures/local-dictation-run-v1.schema.json
 ~~~
 
 The nested tests and wrapper return 0 for valid text-contract/sample data. The
@@ -238,7 +245,9 @@ For the future admitted run, use:
 ~~~sh
 Scripts/evaluate-local-dictation.sh report \
   --corpus PATH \
+  --corpus-schema Tests/Fixtures/local-dictation-evaluation-v1.schema.json \
   --run PATH \
+  --run-schema Tests/Fixtures/local-dictation-run-v1.schema.json \
   --gate PATH \
   --output PATH
 ~~~
