@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import FleckCore
   import SwiftUI
 
   /// The small command surface shared by the SwiftUI toolbar and the AppKit editor.
@@ -117,6 +118,48 @@
 
     func undo() { textView?.undoManager?.undo() }
     func redo() { textView?.undoManager?.redo() }
+
+    @discardableResult
+    func insertNoteLink(
+      replacing range: NSRange,
+      label: String,
+      targetNoteID: UUID
+    ) -> Bool {
+      guard let textView,
+        range.location != NSNotFound,
+        range.location >= 0,
+        NSMaxRange(range) <= (textView.string as NSString).length
+      else {
+        return false
+      }
+
+      let replacement = NoteLinkFormatter.markdown(label: label, targetNoteID: targetNoteID)
+      textView.insertText(replacement, replacementRange: range)
+      textView.setSelectedRange(
+        NSRange(location: range.location + replacement.utf16.count, length: 0)
+      )
+      return true
+    }
+
+    func noteLinkAtSelection() -> NoteLink? {
+      guard let textView else { return nil }
+      let selection = textView.selectedRange()
+      guard selection.location != NSNotFound,
+        selection.location >= 0,
+        NSMaxRange(selection) <= (textView.string as NSString).length
+      else {
+        return nil
+      }
+      if selection.length == 0 {
+        return NoteLinkParser.link(
+          atUTF16Location: selection.location,
+          in: textView.string
+        )
+      }
+      return NoteLinkParser.links(in: textView.string).first {
+        NSIntersectionRange($0.range, selection).length > 0
+      }
+    }
 
     func refreshFormattingState() {
       guard let textView else {
@@ -632,6 +675,44 @@
     let reduceMotion: Bool
     let automaticLists: Bool
     let commands: EditorCommands
+    let liveNoteIDs: Set<UUID>
+    let onRequestNoteLink: ((NSRange) -> Void)?
+    let onOpenNoteLink: ((UUID) -> Void)?
+    let onUnavailableNoteLink: (() -> Void)?
+
+    init(
+      text: String,
+      richTextRTF: Data?,
+      onChange: @escaping (String, Data?) -> Void,
+      fontFamily: String,
+      fontSize: Double,
+      textColorHex: String?,
+      backgroundColorHex: String?,
+      accentColorHex: String,
+      reduceMotion: Bool,
+      automaticLists: Bool,
+      commands: EditorCommands,
+      liveNoteIDs: Set<UUID> = [],
+      onRequestNoteLink: ((NSRange) -> Void)? = nil,
+      onOpenNoteLink: ((UUID) -> Void)? = nil,
+      onUnavailableNoteLink: (() -> Void)? = nil
+    ) {
+      self.text = text
+      self.richTextRTF = richTextRTF
+      self.onChange = onChange
+      self.fontFamily = fontFamily
+      self.fontSize = fontSize
+      self.textColorHex = textColorHex
+      self.backgroundColorHex = backgroundColorHex
+      self.accentColorHex = accentColorHex
+      self.reduceMotion = reduceMotion
+      self.automaticLists = automaticLists
+      self.commands = commands
+      self.liveNoteIDs = liveNoteIDs
+      self.onRequestNoteLink = onRequestNoteLink
+      self.onOpenNoteLink = onOpenNoteLink
+      self.onUnavailableNoteLink = onUnavailableNoteLink
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -671,6 +752,7 @@
       textView.reduceMotion = reduceMotion
       applyColors(to: textView)
       Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
+      configureNoteLinks(on: textView)
       scrollView.documentView = textView
       commands.textView = textView
       commands.refreshFormattingState()
@@ -687,6 +769,7 @@
       let reloadedContent = applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator)
       applyColors(to: textView)
       Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
+      configureNoteLinks(on: textView)
       if !reloadedContent,
         context.coordinator.fontFamily != fontFamily
         || context.coordinator.fontSize != fontSize
@@ -695,6 +778,17 @@
       }
       context.coordinator.fontFamily = fontFamily
       context.coordinator.fontSize = fontSize
+    }
+
+    private func configureNoteLinks(on textView: ListAwareTextView) {
+      textView.liveNoteIDs = liveNoteIDs
+      textView.onRequestNoteLink = onRequestNoteLink
+      textView.onOpenNoteLink = onOpenNoteLink
+      textView.onUnavailableNoteLink = onUnavailableNoteLink
+      textView.refreshNoteLinks(
+        accentColorHex: accentColorHex,
+        liveNoteIDs: liveNoteIDs
+      )
     }
 
     @discardableResult
@@ -831,6 +925,7 @@
       )
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
       var parent: NativeRichTextEditor
       var fontFamily: String
@@ -839,6 +934,7 @@
       var richTextRTF: Data?
       var lastModelText: String
       var lastModelRichTextRTF: Data?
+      private var lastReportedNoteLinkTrigger: (text: String, range: NSRange)?
       var hasPendingLocalEdit: Bool {
         text != lastModelText || richTextRTF != lastModelRichTextRTF
       }
@@ -863,23 +959,104 @@
         )
         text = snapshot.string
         richTextRTF = updatedRTF
+        if let linkTextView = textView as? ListAwareTextView {
+          linkTextView.refreshNoteLinks(
+            accentColorHex: parent.accentColorHex,
+            liveNoteIDs: parent.liveNoteIDs
+          )
+        }
         parent.onChange(snapshot.string, updatedRTF)
         parent.commands.refreshFormattingState()
+
+        if let trigger = noteLinkTrigger(in: textView) {
+          if lastReportedNoteLinkTrigger?.text != snapshot.string
+            || lastReportedNoteLinkTrigger?.range != trigger
+          {
+            lastReportedNoteLinkTrigger = (snapshot.string, trigger)
+            parent.onRequestNoteLink?(trigger)
+          }
+        } else {
+          lastReportedNoteLinkTrigger = nil
+        }
       }
 
       func textViewDidChangeSelection(_ notification: Notification) {
+        guard let textView = notification.object as? NSTextView else { return }
+        if noteLinkTrigger(in: textView) == nil {
+          lastReportedNoteLinkTrigger = nil
+        }
         parent.commands.refreshFormattingState()
+      }
+
+      private func noteLinkTrigger(in textView: NSTextView) -> NSRange? {
+        guard !textView.hasMarkedText(), textView.selectedRange().length == 0 else {
+          return nil
+        }
+        let cursor = textView.selectedRange().location
+        guard cursor >= 2, cursor <= (textView.string as NSString).length else { return nil }
+        let trigger = NSRange(location: cursor - 2, length: 2)
+        return (textView.string as NSString).substring(with: trigger) == "[[" ? trigger : nil
       }
     }
   }
 
   final class ListAwareTextView: NSTextView {
     var automaticLists = true
+    var liveNoteIDs: Set<UUID> = []
+    var onRequestNoteLink: ((NSRange) -> Void)?
+    var onOpenNoteLink: ((UUID) -> Void)?
+    var onUnavailableNoteLink: (() -> Void)?
     var checklistAccentColor = NSColor.controlAccentColor {
       didSet { needsDisplay = true }
     }
     var reduceMotion = false
     private weak var checklistCompletionOverlay: ChecklistCompletionOverlay?
+    private var temporaryNoteLinkRanges: [NSRange] = []
+
+    func refreshNoteLinks(accentColorHex: String, liveNoteIDs: Set<UUID>) {
+      self.liveNoteIDs = liveNoteIDs
+      guard let layoutManager, let textContainer else { return }
+      let textLength = (string as NSString).length
+      for range in temporaryNoteLinkRanges {
+        guard range.location < textLength else { continue }
+        let safeRange = NSRange(
+          location: range.location,
+          length: min(range.length, textLength - range.location)
+        )
+        layoutManager.removeTemporaryAttribute(
+          .foregroundColor,
+          forCharacterRange: safeRange
+        )
+        layoutManager.removeTemporaryAttribute(
+          .underlineStyle,
+          forCharacterRange: safeRange
+        )
+      }
+      temporaryNoteLinkRanges = []
+
+      let links = NoteLinkParser.links(in: string)
+      guard !links.isEmpty, textLength > 0 else {
+        needsDisplay = true
+        return
+      }
+      layoutManager.ensureLayout(for: textContainer)
+      let accent = NSColor(hex: accentColorHex) ?? .controlAccentColor
+      for link in links {
+        let color = liveNoteIDs.contains(link.targetNoteID) ? accent : .systemOrange
+        layoutManager.addTemporaryAttribute(
+          .foregroundColor,
+          value: color,
+          forCharacterRange: link.range
+        )
+        layoutManager.addTemporaryAttribute(
+          .underlineStyle,
+          value: NSUnderlineStyle.single.rawValue,
+          forCharacterRange: link.range
+        )
+        temporaryNoteLinkRanges.append(link.range)
+      }
+      needsDisplay = true
+    }
 
     var checklistCompletionOverlayCount: Int {
       subviews.filter { $0 is ChecklistCompletionOverlay }.count
@@ -1118,6 +1295,75 @@
       }
     }
 
+    @objc func requestNoteLinkFromMenu(_ sender: Any?) {
+      onRequestNoteLink?(selectedRange())
+    }
+
+    @objc func openNoteLinkFromMenu(_ sender: Any?) {
+      guard let link = noteLinkAtSelection() else { return }
+      if liveNoteIDs.contains(link.targetNoteID) {
+        onOpenNoteLink?(link.targetNoteID)
+      } else {
+        onUnavailableNoteLink?()
+      }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+      let menu = super.menu(for: event) ?? NSMenu()
+      menu.addItem(.separator())
+      menu.addItem(
+        withTitle: "Link to Note…",
+        action: #selector(requestNoteLinkFromMenu(_:)),
+        keyEquivalent: ""
+      ).target = self
+      if noteLinkAtSelection() != nil {
+        menu.addItem(
+          withTitle: "Open Note Link",
+          action: #selector(openNoteLinkFromMenu(_:)),
+          keyEquivalent: ""
+        ).target = self
+      }
+      return menu
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+      switch menuItem.action {
+      case #selector(requestNoteLinkFromMenu(_:)):
+        return isEditable
+      case #selector(openNoteLinkFromMenu(_:)):
+        return noteLinkAtSelection() != nil
+      default:
+        return super.validateMenuItem(menuItem)
+      }
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+      switch item.action {
+      case #selector(requestNoteLinkFromMenu(_:)):
+        return isEditable
+      case #selector(openNoteLinkFromMenu(_:)):
+        return noteLinkAtSelection() != nil
+      default:
+        return super.validateUserInterfaceItem(item)
+      }
+    }
+
+    private func noteLinkAtSelection() -> NoteLink? {
+      let selection = selectedRange()
+      guard selection.location != NSNotFound,
+        selection.location >= 0,
+        NSMaxRange(selection) <= (string as NSString).length
+      else {
+        return nil
+      }
+      if selection.length == 0 {
+        return NoteLinkParser.link(atUTF16Location: selection.location, in: string)
+      }
+      return NoteLinkParser.links(in: string).first {
+        NSIntersectionRange($0.range, selection).length > 0
+      }
+    }
+
     override func mouseDown(with event: NSEvent) {
       guard let layoutManager, let textContainer else {
         super.mouseDown(with: event)
@@ -1139,6 +1385,17 @@
       let ns = string as NSString
       guard characterIndex < ns.length else {
         super.mouseDown(with: event)
+        return
+      }
+
+      if event.modifierFlags.contains(.command),
+        let link = NoteLinkParser.link(atUTF16Location: characterIndex, in: string)
+      {
+        if liveNoteIDs.contains(link.targetNoteID) {
+          onOpenNoteLink?(link.targetNoteID)
+        } else {
+          onUnavailableNoteLink?()
+        }
         return
       }
 

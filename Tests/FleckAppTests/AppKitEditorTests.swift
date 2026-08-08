@@ -27,6 +27,25 @@ import Testing
   )
 }
 
+@Test @MainActor func appKitLinkPresentationDoesNotWriteLinkAttributes() throws {
+  let target = UUID()
+  let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
+  textView.string = "Before \(token) after"
+  textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
+  let link = try #require(NoteLinkParser.links(in: textView.string).first)
+
+  #expect(textView.textStorage?.attribute(.link, at: link.range.location, effectiveRange: nil) == nil)
+  #expect(
+    textView.layoutManager?.temporaryAttribute(
+      .underlineStyle,
+      atCharacterIndex: link.range.location,
+      effectiveRange: nil
+    ) as? Int == NSUnderlineStyle.single.rawValue
+  )
+  #expect(textView.string == "Before \(token) after")
+}
+
 @Test @MainActor func checklistCompletionUndoRestoresMarkerAndStrikethrough() throws {
   let textView = ListAwareTextView(frame: .zero)
   let window = NSWindow(
