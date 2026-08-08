@@ -40,7 +40,14 @@ struct AgentCapabilityStoreTests {
     for profileID in [firstProfileID, secondProfileID] {
       let profile = try #require(migrated.profiles[profileID])
       #expect(profile.grantRevision == 1)
-      #expect(profile.allowedCapabilities == Set(AgentCapability.allCases))
+      #expect(
+        profile.allowedCapabilities == Set([
+          .listNotes,
+          .readNotes,
+          .writeNotes,
+          .undoChanges,
+        ])
+      )
       #expect(profile.grants.count == 1)
       #expect(
         profile.grants[0].scope == AgentGrantScope.note(noteID: sharedID)
@@ -139,7 +146,12 @@ struct AgentCapabilityStoreTests {
     let staleReplacement = AgentProfileCapabilities(
       profileID: profileID,
       grantRevision: current.grantRevision + 1,
-      allowedCapabilities: Set(AgentCapability.allCases),
+      allowedCapabilities: Set([
+        .listNotes,
+        .readNotes,
+        .writeNotes,
+        .undoChanges,
+      ]),
       grants: []
     )
     await #expect(throws: AgentWorkspaceError(code: .revisionConflict)) {
@@ -284,6 +296,323 @@ struct AgentCapabilityStoreTests {
     #expect(!json.localizedCaseInsensitiveContains("verifier"))
     #expect(!json.contains("agentAccess"))
   }
+
+  @Test func UnknownTopLevelCapabilityDocumentKeysAreRejected() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [],
+      workspace: Workspace()
+    )
+
+    var document = try fixture.readDocument()
+    document["unexpected"] = true
+    try fixture.writeDocument(document)
+
+    let reloaded = fixture.reloadedStore()
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await reloaded.currentState()
+    }
+  }
+
+  @Test func UnknownProfileKeysAreRejected() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [testUUID("00000000-0000-0000-0000-000000000191")],
+      workspace: Workspace()
+    )
+
+    var document = try fixture.readDocument()
+    var profiles = try fixture.dictionaryArray(document["profiles"])
+    var profile = try fixture.dictionary(profiles[0])
+    profile["unexpected"] = true
+    profiles[0] = profile
+    document["profiles"] = profiles
+    try fixture.writeDocument(document)
+
+    let reloaded = fixture.reloadedStore()
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await reloaded.currentState()
+    }
+  }
+
+  @Test func UnknownGrantKeysAreRejected() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [testUUID("00000000-0000-0000-0000-000000000192")],
+      workspace: Workspace(notes: [
+        Note(
+          id: testUUID("00000000-0000-0000-0000-000000000193"),
+          agentAccess: true
+        )
+      ])
+    )
+
+    var document = try fixture.readDocument()
+    var profiles = try fixture.dictionaryArray(document["profiles"])
+    var profile = try fixture.dictionary(profiles[0])
+    var grants = try fixture.dictionaryArray(profile["grants"])
+    grants[0]["unexpected"] = true
+    profile["grants"] = grants
+    profiles[0] = profile
+    document["profiles"] = profiles
+    try fixture.writeDocument(document)
+
+    let reloaded = fixture.reloadedStore()
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await reloaded.currentState()
+    }
+  }
+
+  @Test func UnknownScopeKeysAreRejected() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [testUUID("00000000-0000-0000-0000-000000000194")],
+      workspace: Workspace(notes: [
+        Note(
+          id: testUUID("00000000-0000-0000-0000-000000000195"),
+          agentAccess: true
+        )
+      ])
+    )
+
+    var document = try fixture.readDocument()
+    var profiles = try fixture.dictionaryArray(document["profiles"])
+    var profile = try fixture.dictionary(profiles[0])
+    var grants = try fixture.dictionaryArray(profile["grants"])
+    var scope = try fixture.dictionary(grants[0]["scope"])
+    scope["unexpected"] = true
+    grants[0]["scope"] = scope
+    profile["grants"] = grants
+    profiles[0] = profile
+    document["profiles"] = profiles
+    try fixture.writeDocument(document)
+
+    let reloaded = fixture.reloadedStore()
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await reloaded.currentState()
+    }
+  }
+
+  @Test func ScopeKindRequiresExactlyItsMatchingTarget() async throws {
+    for contradictoryScope in [false, true] {
+      let fixture = try CapabilityStoreFixture()
+      defer { fixture.remove() }
+      _ = try await fixture.store.loadOrMigrate(
+        activeProfileIDs: [testUUID("00000000-0000-0000-0000-000000000196")],
+        workspace: Workspace(notes: [
+          Note(
+            id: testUUID("00000000-0000-0000-0000-000000000197"),
+            agentAccess: true
+          )
+        ])
+      )
+
+      var document = try fixture.readDocument()
+      var profiles = try fixture.dictionaryArray(document["profiles"])
+      var profile = try fixture.dictionary(profiles[0])
+      var grants = try fixture.dictionaryArray(profile["grants"])
+      var scope = try fixture.dictionary(grants[0]["scope"])
+      if contradictoryScope {
+        scope["folderID"] = testUUID(
+          "00000000-0000-0000-0000-000000000198"
+        ).uuidString
+      } else {
+        scope.removeValue(forKey: "noteID")
+      }
+      grants[0]["scope"] = scope
+      profile["grants"] = grants
+      profiles[0] = profile
+      document["profiles"] = profiles
+      try fixture.writeDocument(document)
+
+      let reloaded = fixture.reloadedStore()
+      await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+        _ = try await reloaded.currentState()
+      }
+    }
+  }
+
+  @Test func DuplicateProfileIDsAreRejected() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [
+        testUUID("00000000-0000-0000-0000-000000000201"),
+        testUUID("00000000-0000-0000-0000-000000000202"),
+      ],
+      workspace: Workspace()
+    )
+
+    var document = try fixture.readDocument()
+    var profiles = try fixture.dictionaryArray(document["profiles"])
+    let firstProfileID = try fixture.string(profiles[0]["profileID"])
+    profiles[1]["profileID"] = firstProfileID
+    document["profiles"] = profiles
+    try fixture.writeDocument(document)
+
+    let reloaded = fixture.reloadedStore()
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await reloaded.currentState()
+    }
+  }
+
+  @Test func DuplicateGrantIDsAreRejected() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [testUUID("00000000-0000-0000-0000-000000000203")],
+      workspace: Workspace(notes: [
+        Note(
+          id: testUUID("00000000-0000-0000-0000-000000000204"),
+          agentAccess: true
+        ),
+        Note(
+          id: testUUID("00000000-0000-0000-0000-000000000205"),
+          agentAccess: true
+        ),
+      ])
+    )
+
+    var document = try fixture.readDocument()
+    var profiles = try fixture.dictionaryArray(document["profiles"])
+    var profile = try fixture.dictionary(profiles[0])
+    var grants = try fixture.dictionaryArray(profile["grants"])
+    grants[1]["id"] = try fixture.string(grants[0]["id"])
+    profile["grants"] = grants
+    profiles[0] = profile
+    document["profiles"] = profiles
+    try fixture.writeDocument(document)
+
+    let reloaded = fixture.reloadedStore()
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await reloaded.currentState()
+    }
+  }
+
+  @Test func DuplicateUnassignedNoteIDsAreRejected() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [],
+      workspace: Workspace(notes: [
+        Note(
+          id: testUUID("00000000-0000-0000-0000-000000000206"),
+          agentAccess: true
+        ),
+        Note(
+          id: testUUID("00000000-0000-0000-0000-000000000207"),
+          agentAccess: true
+        ),
+      ])
+    )
+
+    var document = try fixture.readDocument()
+    var unassigned = try fixture.stringArray(
+      document["unassignedLegacyNoteIDs"]
+    )
+    unassigned.append(try fixture.string(unassigned[0]))
+    document["unassignedLegacyNoteIDs"] = unassigned
+    try fixture.writeDocument(document)
+
+    let reloaded = fixture.reloadedStore()
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await reloaded.currentState()
+    }
+  }
+
+  @Test func DuplicateAllowedCapabilityIDsAreRejected() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [testUUID("00000000-0000-0000-0000-000000000208")],
+      workspace: Workspace()
+    )
+
+    var document = try fixture.readDocument()
+    var profiles = try fixture.dictionaryArray(document["profiles"])
+    var profile = try fixture.dictionary(profiles[0])
+    var capabilities = try fixture.stringArray(profile["allowedCapabilities"])
+    capabilities.append(capabilities[0])
+    profile["allowedCapabilities"] = capabilities
+    profiles[0] = profile
+    document["profiles"] = profiles
+    try fixture.writeDocument(document)
+
+    let reloaded = fixture.reloadedStore()
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await reloaded.currentState()
+    }
+  }
+
+  @Test func DuplicateGrantIDsCannotBePersistedByReplaceProfile() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    let profileID = testUUID("00000000-0000-0000-0000-000000000209")
+    let initial = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [profileID],
+      workspace: Workspace(notes: [
+        Note(
+          id: testUUID("00000000-0000-0000-0000-000000000210"),
+          agentAccess: true
+        ),
+        Note(
+          id: testUUID("00000000-0000-0000-0000-000000000211"),
+          agentAccess: true
+        ),
+      ])
+    )
+    let current = try #require(initial.profiles[profileID])
+    let replacement = AgentProfileCapabilities(
+      profileID: profileID,
+      grantRevision: current.grantRevision + 1,
+      allowedCapabilities: current.allowedCapabilities,
+      grants: [current.grants[0], current.grants[0]]
+    )
+    let before = try Data(contentsOf: fixture.capabilitiesURL)
+
+    await #expect(throws: AgentWorkspaceError(code: .invalidPayload)) {
+      _ = try await fixture.store.replaceProfile(
+        replacement,
+        expectedGrantRevision: current.grantRevision
+      )
+    }
+    #expect(try Data(contentsOf: fixture.capabilitiesURL) == before)
+    #expect(try await fixture.store.currentState() == initial)
+  }
+
+  @Test func LegacyMigrationUsesOnlyTheFrozenCapabilitySet() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    let profileID = testUUID("00000000-0000-0000-0000-000000000212")
+    let state = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [profileID],
+      workspace: Workspace()
+    )
+    let profile = try #require(state.profiles[profileID])
+    #expect(
+      profile.allowedCapabilities == Set([
+        .listNotes,
+        .readNotes,
+        .writeNotes,
+        .undoChanges,
+      ])
+    )
+
+    let sourceRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp")
+    let source = try String(
+      contentsOf: sourceRoot.appendingPathComponent("AgentCapabilityStore.swift"),
+      encoding: .utf8
+    )
+    #expect(!source.contains("AgentCapability.allCases"))
+  }
 }
 
 private struct CapabilityStoreFixture {
@@ -317,8 +646,64 @@ private struct CapabilityStoreFixture {
   func remove() {
     try? FileManager.default.removeItem(at: rootURL)
   }
+
+  func reloadedStore() -> AgentCapabilityStore {
+    AgentCapabilityStore(
+      capabilitiesURL: capabilitiesURL,
+      previousCapabilitiesURL: previousCapabilitiesURL
+    )
+  }
+
+  func readDocument() throws -> [String: Any] {
+    guard let document = try JSONSerialization.jsonObject(
+      with: Data(contentsOf: capabilitiesURL)
+    ) as? [String: Any] else {
+      throw CapabilityStoreTestError.invalidDocument
+    }
+    return document
+  }
+
+  func writeDocument(_ document: [String: Any]) throws {
+    let data = try JSONSerialization.data(
+      withJSONObject: document,
+      options: [.prettyPrinted, .sortedKeys]
+    )
+    try data.write(to: capabilitiesURL)
+  }
+
+  func dictionary(_ value: Any?) throws -> [String: Any] {
+    guard let dictionary = value as? [String: Any] else {
+      throw CapabilityStoreTestError.invalidDocument
+    }
+    return dictionary
+  }
+
+  func dictionaryArray(_ value: Any?) throws -> [[String: Any]] {
+    guard let dictionaries = value as? [[String: Any]] else {
+      throw CapabilityStoreTestError.invalidDocument
+    }
+    return dictionaries
+  }
+
+  func string(_ value: Any?) throws -> String {
+    guard let string = value as? String else {
+      throw CapabilityStoreTestError.invalidDocument
+    }
+    return string
+  }
+
+  func stringArray(_ value: Any?) throws -> [String] {
+    guard let strings = value as? [String] else {
+      throw CapabilityStoreTestError.invalidDocument
+    }
+    return strings
+  }
 }
 
 private func testUUID(_ value: String) -> UUID {
   UUID(uuidString: value)!
+}
+
+private enum CapabilityStoreTestError: Error {
+  case invalidDocument
 }
