@@ -85,13 +85,6 @@ enum BridgeCommand: Equatable {
     case "mcp":
       try arguments.requireEmpty()
       return .mcp(profileID: profileID)
-    case "capabilities":
-      try arguments.requireEmpty()
-      return .workspace(
-        profileID: profileID,
-        command: .getCapabilities,
-        json: json
-      )
     case "notes":
       guard arguments.takeFirst() == "list" else {
         throw BridgeParseError("Expected 'notes list'.")
@@ -359,7 +352,6 @@ enum BridgeOutput {
   static let help = """
     Usage: fleck-agent <command> --profile <uuid> [--json]
 
-      capabilities
       notes list
       note read <note-id> [--start-line <line>] [--max-lines <count>]
       note append <note-id> --revision <revision> --operation-id <uuid> --stdin
