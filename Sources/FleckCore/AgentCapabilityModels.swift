@@ -95,7 +95,7 @@ public struct AgentProfileCapabilities: Codable, Equatable, Sendable {
     self.profileID = profileID
     self.grantRevision = grantRevision
     self.allowedCapabilities = allowedCapabilities
-    self.grants = grants
+    self.grants = Self.sortedGrants(grants)
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -112,7 +112,9 @@ public struct AgentProfileCapabilities: Codable, Equatable, Sendable {
     allowedCapabilities = Set(
       try container.decode([AgentCapability].self, forKey: .allowedCapabilities)
     )
-    grants = try container.decode([AgentResourceGrant].self, forKey: .grants)
+    grants = Self.sortedGrants(
+      try container.decode([AgentResourceGrant].self, forKey: .grants)
+    )
   }
 
   public func encode(to encoder: Encoder) throws {

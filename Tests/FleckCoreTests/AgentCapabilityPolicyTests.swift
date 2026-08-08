@@ -104,6 +104,15 @@ import Testing
   encoder.outputFormatting = [.sortedKeys]
 
   #expect(try encoder.encode(first) == encoder.encode(second))
+  #expect(first == second)
+
+  let decoder = JSONDecoder()
+  #expect(
+    try decoder.decode(
+      AgentProfileCapabilities.self,
+      from: encoder.encode(first)
+    ) == first
+  )
 }
 
 @Test func DirectNoteGrantSurvivesFolderMoves() throws {
@@ -264,6 +273,13 @@ import Testing
   #expect(result.proposableNoteIDs == Set([overlapping.id, proposable.id]))
   #expect(result.writableNoteIDs == [overlapping.id])
   #expect(result.availableCapabilities == Set(AgentCapability.allCases))
+
+  let reversedProfile = makeProfile(grants: Array(profile.grants.reversed()))
+  let reversedResult = AgentCapabilityPolicy.authorizationSnapshot(
+    for: reversedProfile,
+    workspace: Workspace(notes: [overlapping, proposable, readable], folders: [folder])
+  )
+  #expect(result == reversedResult)
 }
 
 @Test func CapabilitiesRequireAllowedCapabilityAndEffectiveAuthority() {
@@ -285,6 +301,30 @@ import Testing
   #expect(result.readableNoteIDs == [note.id])
   #expect(result.writableNoteIDs.isEmpty)
   #expect(result.availableCapabilities.isEmpty)
+}
+
+@Test func ProposeOnlyNoteGrantExposesReadCapabilitiesWithoutWriteCapabilities() {
+  let note = Note(id: testUUID("00000000-0000-0000-0000-000000000062"))
+  let profile = AgentProfileCapabilities(
+    profileID: testUUID("00000000-0000-0000-0000-000000000063"),
+    grantRevision: 3,
+    allowedCapabilities: Set(AgentCapability.allCases),
+    grants: [
+      AgentResourceGrant(scope: .note(noteID: note.id), authority: .propose),
+    ]
+  )
+
+  let result = AgentCapabilityPolicy.authorizationSnapshot(
+    for: profile,
+    workspace: Workspace(notes: [note])
+  )
+
+  #expect(result.readableNoteIDs == [note.id])
+  #expect(result.proposableNoteIDs == [note.id])
+  #expect(result.writableNoteIDs.isEmpty)
+  #expect(result.availableCapabilities == Set([.listNotes, .readNotes]))
+  #expect(!result.availableCapabilities.contains(.writeNotes))
+  #expect(!result.availableCapabilities.contains(.undoChanges))
 }
 
 @Test func EmptyOrUnknownScopesProduceNoAccess() {
