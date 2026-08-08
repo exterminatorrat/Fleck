@@ -1212,6 +1212,7 @@
             reduceMotion: reduceMotion,
             automaticLists: appState.preferences.automaticLists,
             commands: editorCommands,
+            isVisible: isEditorVisible,
             liveNoteIDs: Set(appState.workspace.notes.map(\.id)),
             onRequestNoteLink: { range in
               guard !isBlockingOverlayPresented, visibleSelectedNote?.id == note.id else { return }

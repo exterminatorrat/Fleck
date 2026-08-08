@@ -675,6 +675,7 @@
     let reduceMotion: Bool
     let automaticLists: Bool
     let commands: EditorCommands
+    let isVisible: Bool
     let liveNoteIDs: Set<UUID>
     let onRequestNoteLink: ((NSRange) -> Void)?
     let onOpenNoteLink: ((UUID) -> Void)?
@@ -692,6 +693,7 @@
       reduceMotion: Bool,
       automaticLists: Bool,
       commands: EditorCommands,
+      isVisible: Bool = true,
       liveNoteIDs: Set<UUID> = [],
       onRequestNoteLink: ((NSRange) -> Void)? = nil,
       onOpenNoteLink: ((UUID) -> Void)? = nil,
@@ -708,6 +710,7 @@
       self.reduceMotion = reduceMotion
       self.automaticLists = automaticLists
       self.commands = commands
+      self.isVisible = isVisible
       self.liveNoteIDs = liveNoteIDs
       self.onRequestNoteLink = onRequestNoteLink
       self.onOpenNoteLink = onOpenNoteLink
@@ -754,15 +757,21 @@
       Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
       configureNoteLinks(on: textView)
       scrollView.documentView = textView
-      commands.textView = textView
-      commands.refreshFormattingState()
+      if isVisible {
+        commands.textView = textView
+        commands.refreshFormattingState()
+      }
       return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
       guard let textView = scrollView.documentView as? ListAwareTextView else { return }
       context.coordinator.parent = self
-      commands.textView = textView
+      if isVisible {
+        commands.textView = textView
+      } else if commands.textView === textView {
+        commands.textView = nil
+      }
       textView.automaticLists = automaticLists
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
