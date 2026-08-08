@@ -10,7 +10,7 @@
     let onOpen: (UUID) -> Void
 
     var body: some View {
-      VStack(alignment: .leading, spacing: 4) {
+      VStack(alignment: .leading, spacing: 0) {
         BacklinksDisclosureButton(
           title: "Linked from \(entries.count)",
           isExpanded: isExpanded,
@@ -74,7 +74,6 @@
       }
       .accessibilityElement(children: .contain)
       .padding(.horizontal, 16)
-      .padding(.vertical, 6)
     }
   }
 
