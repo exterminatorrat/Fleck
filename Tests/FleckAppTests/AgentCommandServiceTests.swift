@@ -493,6 +493,7 @@ import Testing
     state: state,
     profileStore: FixedAgentAuthorizer(profile: profile),
     activityStore: activity,
+    capabilityAuthority: LegacyTestCapabilityAuthorizer(),
     taskHandleCodec: AgentTaskHandleCodec(
       signingKeyProvider: FixedAgentSigningKeyProvider()
     ),
@@ -776,6 +777,7 @@ import Testing
     state: state,
     profileStore: FixedAgentAuthorizer(profile: profile),
     activityStore: activity,
+    capabilityAuthority: LegacyTestCapabilityAuthorizer(),
     taskHandleCodec: AgentTaskHandleCodec(
       signingKeyProvider: FixedAgentSigningKeyProvider()
     )
@@ -953,6 +955,7 @@ import Testing
       state: state,
       profileStore: FixedAgentAuthorizer(profile: profile),
       activityStore: activity,
+      capabilityAuthority: LegacyTestCapabilityAuthorizer(),
       taskHandleCodec: AgentTaskHandleCodec(
         signingKeyProvider: FixedAgentSigningKeyProvider()
       )
@@ -1049,7 +1052,8 @@ import Testing
       workspace: Workspace(notes: [note], selectedNoteID: note.id)
     ),
     profileStore: FixedAgentAuthorizer(profile: profile),
-    activityStore: AgentActivityStore(rootURL: root)
+    activityStore: AgentActivityStore(rootURL: root),
+    capabilityAuthority: LegacyTestCapabilityAuthorizer()
   )
 
   let firstPage = try await service.execute(
@@ -1111,6 +1115,7 @@ import Testing
     ),
     profileStore: FixedAgentAuthorizer(profile: profile),
     activityStore: AgentActivityStore(rootURL: root),
+    capabilityAuthority: LegacyTestCapabilityAuthorizer(),
     taskHandleCodec: codec
   )
   let response = try await service.execute(
@@ -1152,6 +1157,446 @@ import Testing
   }
 }
 
+@Test @MainActor func ReadOnlyProfileCannotInvokeCachedWriteTool() async throws {
+  let profileID = UUID()
+  let note = Note(title: "Read only", body: "Original", revision: 3)
+  let fixture = AgentServiceFixture(
+    profileID: profileID,
+    note: note,
+    capabilityAuthorizer: FixedCapabilityAuthorizer(
+      snapshotValue: AgentAuthorizationSnapshot(
+        profileID: profileID,
+        grantRevision: 4,
+        availableCapabilities: [.listNotes, .readNotes],
+        readableNoteIDs: [note.id],
+        proposableNoteIDs: [],
+        writableNoteIDs: []
+      )
+    )
+  )
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await fixture.execute(
+      .appendText(
+        request: .init(
+          context: .init(
+            noteID: note.id,
+            expectedRevision: note.revision,
+            operationID: UUID()
+          ),
+          text: "Must not write"
+        )
+      )
+    )
+  }
+  #expect(fixture.state.workspace.notes[0] == note)
+  #expect(fixture.state.commitCount == 0)
+  #expect(
+    fixture.activityStore.list(
+      profileID: profileID,
+      visibleNoteIDs: [note.id]
+    ).isEmpty
+  )
+}
+
+@Test @MainActor func GrantChangeBeforeCommitRejectsWithoutMutation() async throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "AgentCommandServiceTests-\(UUID().uuidString)",
+    isDirectory: true
+  )
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Shared", body: "Original", agentAccess: true)
+  let workspace = Workspace(notes: [note], selectedNoteID: note.id)
+  let profileID = UUID()
+  let capabilityStore = AgentCapabilityStore(
+    capabilitiesURL: root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("capabilities.json"),
+    previousCapabilitiesURL: root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("capabilities.previous.json")
+  )
+  let initial = try await capabilityStore.loadOrMigrate(
+    activeProfileIDs: [profileID],
+    workspace: workspace
+  )
+  let current = try #require(initial.profiles[profileID])
+  let pausingAuthority = PausingCapabilityAuthorizer(
+    base: AgentCapabilityAuthority(store: capabilityStore)
+  )
+  let state = FakeAgentWorkspaceState(workspace: workspace)
+  let activityStore = AgentActivityStore(rootURL: root)
+  let profile = AgentIntegrationProfile(
+    id: profileID,
+    displayName: "Codex",
+    createdAt: Date(),
+    lastConnectedAt: nil,
+    revokedAt: nil
+  )
+  let service = AgentCommandService(
+    state: state,
+    profileStore: FixedAgentAuthorizer(profile: profile),
+    activityStore: activityStore,
+    capabilityAuthority: pausingAuthority,
+    taskHandleCodec: AgentTaskHandleCodec(
+      signingKeyProvider: FixedAgentSigningKeyProvider()
+    )
+  )
+  let operationID = UUID()
+  let task = Task { @MainActor in
+    try await service.execute(
+      profileID: profileID,
+      credential: Data(),
+      command: .appendText(
+        request: .init(
+          context: .init(
+            noteID: note.id,
+            expectedRevision: note.revision,
+            operationID: operationID
+          ),
+          text: "Must not commit"
+        )
+      )
+    )
+  }
+
+  await pausingAuthority.waitUntilCommitAssertionStarted()
+  let revoked = AgentProfileCapabilities(
+    profileID: profileID,
+    grantRevision: current.grantRevision + 1,
+    allowedCapabilities: [],
+    grants: []
+  )
+  _ = try await capabilityStore.replaceProfile(
+    revoked,
+    expectedGrantRevision: current.grantRevision
+  )
+  await pausingAuthority.resumeAssertion()
+
+  do {
+    _ = try await task.value
+    Issue.record("Expected capability denial after grant replacement")
+  } catch let error as AgentWorkspaceError {
+    #expect(error == AgentWorkspaceError(code: .capabilityDenied))
+  }
+  #expect(state.workspace == workspace)
+  #expect(state.commitCount == 0)
+  #expect(state.latestFeedback == nil)
+  #expect(
+    activityStore.list(
+      profileID: profileID,
+      visibleNoteIDs: [note.id]
+    ).isEmpty
+  )
+}
+
+@Test @MainActor func MigratedWriteProfilePreservesRetryAndUndo() async throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "AgentCommandServiceTests-\(UUID().uuidString)",
+    isDirectory: true
+  )
+  defer { try? FileManager.default.removeItem(at: root) }
+  let profileID = UUID()
+  let note = Note(
+    title: "Migrated",
+    body: "Original",
+    agentAccess: true,
+    revision: 3
+  )
+  let workspace = Workspace(notes: [note], selectedNoteID: note.id)
+  let capabilityStore = AgentCapabilityStore(
+    capabilitiesURL: root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("capabilities.json"),
+    previousCapabilitiesURL: root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("capabilities.previous.json")
+  )
+  let state = try await capabilityStore.loadOrMigrate(
+    activeProfileIDs: [profileID],
+    workspace: workspace
+  )
+  let profileCapabilities = try #require(state.profiles[profileID])
+  let profile = AgentIntegrationProfile(
+    id: profileID,
+    displayName: "Migrated Codex",
+    createdAt: Date(),
+    lastConnectedAt: nil,
+    revokedAt: nil
+  )
+  let workspaceState = FakeAgentWorkspaceState(workspace: workspace)
+  let activityStore = AgentActivityStore(rootURL: root)
+  let service = AgentCommandService(
+    state: workspaceState,
+    profileStore: FixedAgentAuthorizer(profile: profile),
+    activityStore: activityStore,
+    capabilityAuthority: AgentCapabilityAuthority(store: capabilityStore),
+    taskHandleCodec: AgentTaskHandleCodec(
+      signingKeyProvider: FixedAgentSigningKeyProvider()
+    )
+  )
+  let operationID = UUID()
+  let command = AgentWorkspaceCommand.appendText(
+    request: .init(
+      context: .init(
+        noteID: note.id,
+        expectedRevision: note.revision,
+        operationID: operationID
+      ),
+      text: "Once"
+    )
+  )
+
+  let first = try await service.execute(
+    profileID: profileID,
+    credential: Data(),
+    command: command
+  )
+  let retry = try await service.execute(
+    profileID: profileID,
+    credential: Data(),
+    command: command
+  )
+  guard case .write(let receipt) = first else {
+    Issue.record("Expected write receipt")
+    return
+  }
+  #expect(first == retry)
+  #expect(receipt.resultingRevision == 4)
+  #expect(workspaceState.commitCount == 1)
+
+  let undone = try await service.execute(
+    profileID: profileID,
+    credential: Data(),
+    command: .undoChange(
+      request: .init(
+        changeID: receipt.changeID,
+        expectedRevision: receipt.resultingRevision,
+        operationID: UUID()
+      )
+    )
+  )
+  guard case .undo = undone else {
+    Issue.record("Expected undo receipt")
+    return
+  }
+  #expect(workspaceState.workspace.notes[0].body == "Original")
+  #expect(
+    activityStore.list(
+      profileID: profileID,
+      visibleNoteIDs: [note.id]
+    ).count == 2
+  )
+  #expect(profileCapabilities.allowedCapabilities.contains(.writeNotes))
+}
+
+@Test @MainActor func OutOfScopePriorReceiptRetriesRemainContentFreeNoteNotFound()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "AgentCommandServiceTests-\(UUID().uuidString)",
+    isDirectory: true
+  )
+  defer { try? FileManager.default.removeItem(at: root) }
+  let profileID = UUID()
+  let note = Note(
+    title: "Original",
+    body: "Original",
+    agentAccess: true,
+    revision: 3
+  )
+  let otherNote = Note(
+    title: "Other",
+    body: "Other",
+    agentAccess: true,
+    revision: 1
+  )
+  let workspace = Workspace(
+    notes: [note, otherNote],
+    selectedNoteID: note.id
+  )
+  let capabilityStore = AgentCapabilityStore(
+    capabilitiesURL: root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("capabilities.json"),
+    previousCapabilitiesURL: root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("capabilities.previous.json")
+  )
+  let initial = try await capabilityStore.loadOrMigrate(
+    activeProfileIDs: [profileID],
+    workspace: workspace
+  )
+  let current = try #require(initial.profiles[profileID])
+  let profile = AgentIntegrationProfile(
+    id: profileID,
+    displayName: "Retry Codex",
+    createdAt: Date(),
+    lastConnectedAt: nil,
+    revokedAt: nil
+  )
+  let workspaceState = FakeAgentWorkspaceState(workspace: workspace)
+  let activityStore = AgentActivityStore(rootURL: root)
+  let service = AgentCommandService(
+    state: workspaceState,
+    profileStore: FixedAgentAuthorizer(profile: profile),
+    activityStore: activityStore,
+    capabilityAuthority: AgentCapabilityAuthority(store: capabilityStore)
+  )
+  let writeOperationID = UUID()
+  let writeCommand = AgentWorkspaceCommand.appendText(
+    request: .init(
+      context: .init(
+        noteID: note.id,
+        expectedRevision: note.revision,
+        operationID: writeOperationID
+      ),
+      text: "Once"
+    )
+  )
+  let writeResponse = try await service.execute(
+    profileID: profileID,
+    credential: Data(),
+    command: writeCommand
+  )
+  guard case .write(let writeReceipt) = writeResponse else {
+    Issue.record("Expected write receipt")
+    return
+  }
+  let undoCommand = AgentWorkspaceCommand.undoChange(
+    request: .init(
+      changeID: writeReceipt.changeID,
+      expectedRevision: writeReceipt.resultingRevision,
+      operationID: UUID()
+    )
+  )
+  let undoResponse = try await service.execute(
+    profileID: profileID,
+    credential: Data(),
+    command: undoCommand
+  )
+  guard case .undo = undoResponse else {
+    Issue.record("Expected undo receipt")
+    return
+  }
+  let commitCount = workspaceState.commitCount
+  let activityCount = activityStore.list(
+    profileID: profileID,
+    visibleNoteIDs: [note.id, otherNote.id]
+  ).count
+  let feedback = workspaceState.latestFeedback
+  let replacement = AgentProfileCapabilities(
+    profileID: profileID,
+    grantRevision: current.grantRevision + 1,
+    allowedCapabilities: [.writeNotes, .undoChanges],
+    grants: [
+      AgentResourceGrant(
+        scope: .note(noteID: otherNote.id),
+        authority: .write
+      )
+    ]
+  )
+  _ = try await capabilityStore.replaceProfile(
+    replacement,
+    expectedGrantRevision: current.grantRevision
+  )
+
+  let expectedError = AgentWorkspaceError(code: .noteNotFound)
+  let expectedJSON = try JSONEncoder().encode(expectedError)
+  for command in [writeCommand, undoCommand] {
+    do {
+      _ = try await service.execute(
+        profileID: profileID,
+        credential: Data(),
+        command: command
+      )
+      Issue.record("Expected an out-of-scope receipt retry to be hidden")
+    } catch let error as AgentWorkspaceError {
+      #expect(error == expectedError)
+      #expect(try JSONEncoder().encode(error) == expectedJSON)
+    }
+  }
+  #expect(workspaceState.commitCount == commitCount)
+  #expect(
+    activityStore.list(
+      profileID: profileID,
+      visibleNoteIDs: [note.id, otherNote.id]
+    ).count == activityCount
+  )
+  #expect(workspaceState.latestFeedback == feedback)
+}
+
+@Test @MainActor func CapabilitySummaryContainsNoResourceIdentifiers() async throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "AgentCommandServiceTests-\(UUID().uuidString)",
+    isDirectory: true
+  )
+  defer { try? FileManager.default.removeItem(at: root) }
+  let profileID = UUID()
+  let note = Note(title: "Summary", agentAccess: true)
+  let workspace = Workspace(notes: [note], selectedNoteID: note.id)
+  let capabilityStore = AgentCapabilityStore(
+    capabilitiesURL: root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("capabilities.json"),
+    previousCapabilitiesURL: root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("capabilities.previous.json")
+  )
+  let state = try await capabilityStore.loadOrMigrate(
+    activeProfileIDs: [profileID],
+    workspace: workspace
+  )
+  let current = try #require(state.profiles[profileID])
+  let replacement = AgentProfileCapabilities(
+    profileID: profileID,
+    grantRevision: current.grantRevision + 1,
+    allowedCapabilities: [.listNotes, .readNotes],
+    grants: [
+      AgentResourceGrant(
+        scope: .note(noteID: note.id),
+        authority: .read
+      )
+    ]
+  )
+  _ = try await capabilityStore.replaceProfile(
+    replacement,
+    expectedGrantRevision: current.grantRevision
+  )
+  let profile = AgentIntegrationProfile(
+    id: profileID,
+    displayName: "Summary Codex",
+    createdAt: Date(),
+    lastConnectedAt: nil,
+    revokedAt: nil
+  )
+  let service = AgentCommandService(
+    state: FakeAgentWorkspaceState(workspace: workspace),
+    profileStore: FixedAgentAuthorizer(profile: profile),
+    activityStore: AgentActivityStore(rootURL: root),
+    capabilityAuthority: AgentCapabilityAuthority(store: capabilityStore)
+  )
+
+  let response = try await service.execute(
+    profileID: profileID,
+    credential: Data(),
+    command: .getCapabilities
+  )
+  guard case .capabilities(let summary) = response else {
+    Issue.record("Expected capability summary")
+    return
+  }
+  #expect(summary.grantRevision == replacement.grantRevision)
+  #expect(summary.availableCapabilities == [.listNotes, .readNotes])
+  let encoded = String(
+    decoding: try JSONEncoder().encode(summary),
+    as: UTF8.self
+  )
+  #expect(!encoded.contains(note.id.uuidString))
+  #expect(!encoded.contains("grants"))
+  #expect(!encoded.contains("folder"))
+}
+
 @MainActor
 private final class AgentServiceFixture {
   let note: Note
@@ -1162,10 +1607,12 @@ private final class AgentServiceFixture {
   private let root: URL
 
   init(
+    profileID: UUID = UUID(),
     shared: Bool = true,
     note providedNote: Note? = nil,
     folders: [Folder] = [],
     authorizer: (any AgentProfileAuthorizing)? = nil,
+    capabilityAuthorizer: (any AgentCapabilityAuthorizing)? = nil,
     signingKeyProvider: any AgentSigningKeyProviding =
       FixedAgentSigningKeyProvider()
   ) {
@@ -1182,7 +1629,7 @@ private final class AgentServiceFixture {
         revision: 3
       )
     profile = AgentIntegrationProfile(
-      id: UUID(),
+      id: profileID,
       displayName: "Codex",
       createdAt: Date(timeIntervalSince1970: 100),
       lastConnectedAt: nil,
@@ -1203,6 +1650,8 @@ private final class AgentServiceFixture {
       state: state,
       profileStore: authorizer ?? FixedAgentAuthorizer(profile: profile),
       activityStore: activityStore,
+      capabilityAuthority: capabilityAuthorizer
+        ?? LegacyTestCapabilityAuthorizer(),
       taskHandleCodec: AgentTaskHandleCodec(
         signingKeyProvider: signingKeyProvider
       ),
@@ -1220,6 +1669,77 @@ private final class AgentServiceFixture {
       credential: Data("credential".utf8),
       command: command
     )
+  }
+}
+
+private struct FixedCapabilityAuthorizer: AgentCapabilityAuthorizing {
+  let snapshotValue: AgentAuthorizationSnapshot
+
+  func snapshot(
+    profileID: UUID,
+    workspace: Workspace
+  ) async throws -> AgentAuthorizationSnapshot {
+    snapshotValue
+  }
+
+  func assertCurrent(profileID: UUID, grantRevision: UInt64) async throws {}
+}
+
+private struct LegacyTestCapabilityAuthorizer: AgentCapabilityAuthorizing {
+  func snapshot(
+    profileID: UUID,
+    workspace: Workspace
+  ) async throws -> AgentAuthorizationSnapshot {
+    let noteIDs = Set(workspace.notes.filter(\.agentAccess).map(\.id))
+    return AgentAuthorizationSnapshot(
+      profileID: profileID,
+      grantRevision: 1,
+      availableCapabilities: Set(AgentCapability.allCases),
+      readableNoteIDs: noteIDs,
+      proposableNoteIDs: noteIDs,
+      writableNoteIDs: noteIDs
+    )
+  }
+
+  func assertCurrent(profileID: UUID, grantRevision: UInt64) async throws {}
+}
+
+private actor PausingCapabilityAuthorizer: AgentCapabilityAuthorizing {
+  private let base: AgentCapabilityAuthority
+  private var assertionCount = 0
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  init(base: AgentCapabilityAuthority) {
+    self.base = base
+  }
+
+  func snapshot(
+    profileID: UUID,
+    workspace: Workspace
+  ) async throws -> AgentAuthorizationSnapshot {
+    try await base.snapshot(profileID: profileID, workspace: workspace)
+  }
+
+  func assertCurrent(profileID: UUID, grantRevision: UInt64) async throws {
+    assertionCount += 1
+    if assertionCount == 3 {
+      await withCheckedContinuation { continuation = $0 }
+    }
+    try await base.assertCurrent(
+      profileID: profileID,
+      grantRevision: grantRevision
+    )
+  }
+
+  func waitUntilCommitAssertionStarted() async {
+    while assertionCount < 3 {
+      await Task.yield()
+    }
+  }
+
+  func resumeAssertion() {
+    continuation?.resume()
+    continuation = nil
   }
 }
 

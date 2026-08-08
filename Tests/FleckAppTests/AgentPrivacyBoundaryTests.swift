@@ -143,6 +143,83 @@ struct AgentPrivacyBoundaryTests {
     #expect(fixture.activity.lastVisibleNoteIDs == [])
   }
 
+  @Test @MainActor
+  func UnauthorizedAndUnknownReadsRemainIdentical() async throws {
+    let authorized = Note(title: "Authorized", body: "Visible")
+    let unauthorized = Note(title: "Unauthorized", body: "Secret")
+    let profileID = UUID()
+    let fixture = AgentPrivacyFixture(
+      profileID: profileID,
+      notes: [authorized, unauthorized],
+      capabilityAuthorizer: ScopedPrivacyCapabilityAuthorizer(
+        snapshot: AgentAuthorizationSnapshot(
+          profileID: profileID,
+          grantRevision: 8,
+          availableCapabilities: [.readNotes],
+          readableNoteIDs: [authorized.id],
+          proposableNoteIDs: [],
+          writableNoteIDs: []
+        )
+      )
+    )
+    var failures: [Data] = []
+
+    for noteID in [unauthorized.id, UUID()] {
+      do {
+        _ = try await fixture.execute(
+          .readNote(request: .init(noteID: noteID))
+        )
+        Issue.record("Expected note-not-found")
+      } catch let error as AgentWorkspaceError {
+        #expect(error == AgentWorkspaceError(code: .noteNotFound))
+        failures.append(try JSONEncoder().encode(error))
+      }
+    }
+
+    #expect(failures.count == 2)
+    #expect(failures[0] == failures[1])
+  }
+
+  @Test @MainActor
+  func ListAndActivityContainOnlyAuthorizedNotes() async throws {
+    let authorized = Note(title: "Authorized", body: "Visible")
+    let unauthorized = Note(title: "Unauthorized", body: "Hidden")
+    let profileID = UUID()
+    let fixture = AgentPrivacyFixture(
+      profileID: profileID,
+      notes: [authorized, unauthorized],
+      capabilityAuthorizer: ScopedPrivacyCapabilityAuthorizer(
+        snapshot: AgentAuthorizationSnapshot(
+          profileID: profileID,
+          grantRevision: 9,
+          availableCapabilities: [.listNotes, .readNotes],
+          readableNoteIDs: [authorized.id],
+          proposableNoteIDs: [],
+          writableNoteIDs: []
+        )
+      )
+    )
+    fixture.activity.records = [
+      makePrivacyActivityRecord(note: authorized, profileID: profileID),
+      makePrivacyActivityRecord(note: unauthorized, profileID: profileID),
+    ]
+
+    let notes = try await fixture.execute(.listSharedNotes)
+    guard case .sharedNotes(let summaries) = notes else {
+      Issue.record("Expected shared-note summaries")
+      return
+    }
+    #expect(summaries.map(\.noteID) == [authorized.id])
+
+    let activity = try await fixture.execute(.listActivity)
+    guard case .activity(let entries) = activity else {
+      Issue.record("Expected activity summaries")
+      return
+    }
+    #expect(entries.map(\.noteID) == [authorized.id])
+    #expect(fixture.activity.lastVisibleNoteIDs == [authorized.id])
+  }
+
   @Test
   func closedWireCommandHasAnExhaustiveReviewedAllowlist() throws {
     let noteID = UUID()
@@ -271,25 +348,32 @@ struct AgentPrivacyBoundaryTests {
 @MainActor
 private final class AgentPrivacyFixture {
   let credential = Data(repeating: 7, count: 32)
-  let profile = AgentIntegrationProfile(
-    id: UUID(),
-    displayName: "Privacy test",
-    createdAt: Date(),
-    lastConnectedAt: nil,
-    revokedAt: nil
-  )
+  let profile: AgentIntegrationProfile
   let state: PrivacyWorkspaceState
   let activity = PrivacyActivityStore()
   let service: AgentCommandService
 
-  init(notes: [Note]) {
+  init(
+    profileID: UUID = UUID(),
+    notes: [Note],
+    capabilityAuthorizer: (any AgentCapabilityAuthorizing)? = nil
+  ) {
+    profile = AgentIntegrationProfile(
+      id: profileID,
+      displayName: "Privacy test",
+      createdAt: Date(),
+      lastConnectedAt: nil,
+      revokedAt: nil
+    )
     state = PrivacyWorkspaceState(
       workspace: Workspace(notes: notes, selectedNoteID: notes.first?.id)
     )
     service = AgentCommandService(
       state: state,
       profileStore: PrivacyAuthorizer(profile: profile),
-      activityStore: activity
+      activityStore: activity,
+      capabilityAuthority: capabilityAuthorizer
+        ?? LegacyPrivacyCapabilityAuthorizer()
     )
   }
 
@@ -302,6 +386,81 @@ private final class AgentPrivacyFixture {
       command: command
     )
   }
+}
+
+private struct ScopedPrivacyCapabilityAuthorizer: AgentCapabilityAuthorizing {
+  let snapshotValue: AgentAuthorizationSnapshot
+
+  init(snapshot: AgentAuthorizationSnapshot) {
+    snapshotValue = snapshot
+  }
+
+  func snapshot(
+    profileID: UUID,
+    workspace: Workspace
+  ) async throws -> AgentAuthorizationSnapshot {
+    snapshotValue
+  }
+
+  func assertCurrent(profileID: UUID, grantRevision: UInt64) async throws {}
+}
+
+private struct LegacyPrivacyCapabilityAuthorizer: AgentCapabilityAuthorizing {
+  func snapshot(
+    profileID: UUID,
+    workspace: Workspace
+  ) async throws -> AgentAuthorizationSnapshot {
+    let noteIDs = Set(workspace.notes.filter(\.agentAccess).map(\.id))
+    return AgentAuthorizationSnapshot(
+      profileID: profileID,
+      grantRevision: 1,
+      availableCapabilities: Set(AgentCapability.allCases),
+      readableNoteIDs: noteIDs,
+      proposableNoteIDs: noteIDs,
+      writableNoteIDs: noteIDs
+    )
+  }
+
+  func assertCurrent(profileID: UUID, grantRevision: UInt64) async throws {}
+}
+
+private func makePrivacyActivityRecord(
+  note: Note,
+  profileID: UUID
+) -> AgentActivityRecord {
+  let changeID = UUID()
+  let actor = AgentActivityActor.integration(
+    profileID: profileID,
+    displayName: "Privacy test"
+  )
+  let transaction = PreparedAgentTransaction(
+    changeID: changeID,
+    noteID: note.id,
+    noteTitle: note.displayTitle,
+    actor: actor,
+    operationID: UUID(),
+    createdAt: Date(),
+    operation: .appendText,
+    patch: AgentTextPatch(
+      beforeText: note.body,
+      afterText: note.body + " after",
+      range: NSRange(location: 0, length: 0),
+      prefixContext: "",
+      suffixContext: ""
+    ),
+    previousRevision: note.revision,
+    resultingRevision: note.revision + 1,
+    resultingBodySHA256: String(repeating: "0", count: 64)
+  )
+  return AgentActivityRecord(
+    transaction: transaction,
+    receipt: AgentWriteReceipt(
+      changeID: changeID,
+      noteID: note.id,
+      previousRevision: note.revision,
+      resultingRevision: note.revision + 1
+    )
+  )
 }
 
 private func reviewedWireCommandName(
