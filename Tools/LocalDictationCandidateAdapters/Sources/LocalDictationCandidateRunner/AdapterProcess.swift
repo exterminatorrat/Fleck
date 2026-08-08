@@ -299,6 +299,12 @@ public actor AdapterProcess {
     do {
       try await waitForTerminal(shutdownRequestID, timeout: timeout)
       shutdownAcknowledged = true
+      await waitForExit(timeout: .seconds(1))
+      if process?.isRunning == true {
+        forceTerminate()
+        await waitForExit(timeout: .seconds(1))
+        return .forcedTermination
+      }
       return .cooperativeShutdown
     } catch let error as AdapterProcessError {
       if case .timeout = error {
@@ -568,12 +574,20 @@ public actor AdapterProcess {
     )
     let iterations = max(1, milliseconds / 5)
     for _ in 0..<iterations {
-      guard process?.isRunning == true else { return }
+      guard let process, process.isRunning else {
+        if let process {
+          childExitStatus = process.terminationStatus
+        }
+        return
+      }
       do {
         try await clock.sleep(for: .milliseconds(5))
       } catch {
         return
       }
+    }
+    if let process, !process.isRunning {
+      childExitStatus = process.terminationStatus
     }
   }
 

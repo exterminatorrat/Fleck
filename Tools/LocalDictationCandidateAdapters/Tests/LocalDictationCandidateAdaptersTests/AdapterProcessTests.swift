@@ -147,6 +147,8 @@ struct AdapterProcessTests {
     let diagnostics = await process.diagnostics()
     #expect(diagnostics.cancelAcknowledged)
     #expect(diagnostics.shutdownAcknowledged)
+    #expect(!diagnostics.childIsRunning)
+    #expect(diagnostics.childExitStatus == 0)
   }
 
   @Test func eofBeforeShutdownAcknowledgementFailsClosed() async throws {
