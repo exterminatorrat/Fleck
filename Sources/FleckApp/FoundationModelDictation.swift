@@ -37,6 +37,8 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
   typealias CleanupGenerator = @Sendable (FoundationModelCleanupPrompt) async throws -> String
   typealias RoutingGenerator = @Sendable (String, [DictationDestination]) async throws -> FoundationModelRouteDecision
 
+  static let defaultRoutingDeadline = Duration.seconds(20)
+
   private struct CorrectionSignal {
     let index: Int
     let permitsRestart: Bool
@@ -54,8 +56,80 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     let correctionPermitsRestart: Bool?
   }
 
+  private final class RoutingRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+    private var continuation: CheckedContinuation<FoundationModelRouteDecision?, Never>?
+    private var operationTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
+
+    func start(
+      operation: @escaping @Sendable () async -> FoundationModelRouteDecision,
+      deadline: Duration,
+      continuation: CheckedContinuation<FoundationModelRouteDecision?, Never>
+    ) {
+      lock.lock()
+      guard !finished else {
+        lock.unlock()
+        continuation.resume(returning: nil)
+        return
+      }
+      self.continuation = continuation
+      lock.unlock()
+
+      let operationTask = Task {
+        let result = await operation()
+        self.complete(result)
+      }
+      let timeoutTask = Task {
+        do {
+          try await Task.sleep(for: deadline)
+        } catch {
+          return
+        }
+        self.complete(nil)
+      }
+
+      lock.lock()
+      self.operationTask = operationTask
+      self.timeoutTask = timeoutTask
+      let wasFinished = finished
+      lock.unlock()
+
+      if wasFinished {
+        operationTask.cancel()
+        timeoutTask.cancel()
+      }
+    }
+
+    func cancel() {
+      complete(nil)
+    }
+
+    private func complete(_ result: FoundationModelRouteDecision?) {
+      lock.lock()
+      guard !finished else {
+        lock.unlock()
+        return
+      }
+      finished = true
+      let continuation = self.continuation
+      self.continuation = nil
+      let operationTask = self.operationTask
+      self.operationTask = nil
+      let timeoutTask = self.timeoutTask
+      self.timeoutTask = nil
+      lock.unlock()
+
+      operationTask?.cancel()
+      timeoutTask?.cancel()
+      continuation?.resume(returning: result)
+    }
+  }
+
   private let osMajorVersion: @Sendable () -> Int
   private let cleanupGenerator: CleanupGenerator
+  private let routingDeadline: Duration
   private let routingGenerator: RoutingGenerator
 
   init(
@@ -63,10 +137,12 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
       ProcessInfo.processInfo.operatingSystemVersion.majorVersion
     },
     cleanupGenerator: @escaping CleanupGenerator = FoundationModelDictation.generateCleanup,
+    routingDeadline: Duration = FoundationModelDictation.defaultRoutingDeadline,
     routingGenerator: @escaping RoutingGenerator = FoundationModelDictation.generateRoute
   ) {
     self.osMajorVersion = osMajorVersion
     self.cleanupGenerator = cleanupGenerator
+    self.routingDeadline = routingDeadline
     self.routingGenerator = routingGenerator
   }
 
@@ -104,16 +180,41 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     let eligible = Self.eligibleDestinations(from: candidates)
     guard !eligible.isEmpty else { return inboxID }
 
-    do {
-      switch try await routingGenerator(transcript, eligible) {
-      case .match(let noteID, .high) where eligible.contains(where: { $0.noteID == noteID }):
-        return noteID
-      default:
-        return inboxID
+    let generator = routingGenerator
+    guard let decision = await Self.routeWithDeadline(deadline: routingDeadline, operation: {
+      do {
+        return try await generator(transcript, eligible)
+      } catch {
+        return .inbox
       }
-    } catch {
+    }) else {
       return inboxID
     }
+
+    switch decision {
+    case .match(let noteID, .high) where eligible.contains(where: { $0.noteID == noteID }):
+      return noteID
+    default:
+      return inboxID
+    }
+  }
+
+  private static func routeWithDeadline(
+    deadline: Duration,
+    operation: @escaping @Sendable () async -> FoundationModelRouteDecision
+  ) async -> FoundationModelRouteDecision? {
+    let race = RoutingRace()
+    return await withTaskCancellationHandler(operation: {
+      await withCheckedContinuation { continuation in
+        race.start(
+          operation: operation,
+          deadline: deadline,
+          continuation: continuation
+        )
+      }
+    }, onCancel: {
+      race.cancel()
+    })
   }
 
   private static let cleanupInstructions = """

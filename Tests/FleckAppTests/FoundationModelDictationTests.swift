@@ -347,6 +347,83 @@ import Testing
   #expect(request.candidates == [project])
 }
 
+@Test func FoundationModelDictationUsesTwentySecondProductionRoutingDeadline() {
+  #expect(FoundationModelDictation.defaultRoutingDeadline == .seconds(20))
+}
+
+@Test func FoundationModelDictationFallsBackToInboxWhenRoutingExceedsInjectedDeadline() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let project = DictationDestination(noteID: UUID(), title: "Project Delta")
+  let gate = RoutingGate()
+  let completions = RouteCompletionRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _ in "unused" },
+    routingDeadline: .milliseconds(20),
+    routingGenerator: { _, _ in
+      await gate.wait()
+      return .match(noteID: project.noteID, confidence: .high)
+    }
+  )
+
+  let routeTask = Task {
+    let destination = await dictation.route(
+      transcript: "Project Delta",
+      candidates: [inbox, project],
+      inboxID: inbox.noteID
+    )
+    await completions.record(destination)
+  }
+
+  await gate.waitUntilWaiting()
+  #expect(await completions.waitForCount(1, within: .seconds(1)))
+  #expect(await completions.results == [inbox.noteID])
+
+  await gate.release()
+  await routeTask.value
+}
+
+@Test func FoundationModelDictationIgnoresLateRouteAfterInjectedDeadline() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let project = DictationDestination(noteID: UUID(), title: "Project Delta")
+  let gate = RoutingGate()
+  let completions = RouteCompletionRecorder()
+  let lateResults = RouteCompletionRecorder()
+  let cancellations = RouteCancellationRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _ in "unused" },
+    routingDeadline: .milliseconds(20),
+    routingGenerator: { _, _ in
+      await gate.wait()
+      await cancellations.record(Task.isCancelled)
+      await lateResults.record(project.noteID)
+      return .match(noteID: project.noteID, confidence: .high)
+    }
+  )
+
+  let routeTask = Task {
+    let destination = await dictation.route(
+      transcript: "Project Delta",
+      candidates: [inbox, project],
+      inboxID: inbox.noteID
+    )
+    await completions.record(destination)
+  }
+
+  await gate.waitUntilWaiting()
+  #expect(await completions.waitForCount(1, within: .seconds(1)))
+  #expect(await completions.results == [inbox.noteID])
+
+  await gate.release()
+  await routeTask.value
+  #expect(await lateResults.waitForCount(1, within: .seconds(1)))
+  #expect(await lateResults.results == [project.noteID])
+  #expect(await cancellations.waitForCount(1, within: .seconds(1)))
+  #expect(await cancellations.values == [true])
+  #expect(await completions.results == [inbox.noteID])
+}
+
 @Test func FoundationModelDictationRoutesLowConfidenceInvalidOrFailedResponsesToInbox() async {
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let project = DictationDestination(noteID: UUID(), title: "Project Delta")
@@ -503,4 +580,64 @@ private final class CallRecorder: @unchecked Sendable {
 
 private final class ResponseIndex: @unchecked Sendable {
   var value = 0
+}
+
+private actor RoutingGate {
+  private var isWaiting = false
+  private var isReleased = false
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  func wait() async {
+    isWaiting = true
+    guard !isReleased else { return }
+    await withCheckedContinuation { continuation in
+      self.continuation = continuation
+    }
+  }
+
+  func waitUntilWaiting() async {
+    while !isWaiting {
+      await Task.yield()
+    }
+  }
+
+  func release() {
+    isReleased = true
+    continuation?.resume()
+    continuation = nil
+  }
+}
+
+private actor RouteCompletionRecorder {
+  private(set) var results: [UUID?] = []
+
+  func record(_ result: UUID?) {
+    results.append(result)
+  }
+
+  func waitForCount(_ expected: Int, within timeout: Duration) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while results.count < expected, clock.now < deadline {
+      try? await Task.sleep(for: .milliseconds(1))
+    }
+    return results.count >= expected
+  }
+}
+
+private actor RouteCancellationRecorder {
+  private(set) var values: [Bool] = []
+
+  func record(_ value: Bool) {
+    values.append(value)
+  }
+
+  func waitForCount(_ expected: Int, within timeout: Duration) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while values.count < expected, clock.now < deadline {
+      try? await Task.sleep(for: .milliseconds(1))
+    }
+    return values.count >= expected
+  }
 }
