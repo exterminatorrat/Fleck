@@ -11,12 +11,20 @@
 
     var body: some View {
       VStack(alignment: .leading, spacing: 0) {
-        BacklinksDisclosureButton(
-          title: "Linked from \(entries.count)",
-          isExpanded: isExpanded,
-          onToggle: onToggle
-        )
+        Button(action: onToggle) {
+          HStack(spacing: 6) {
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+              .accessibilityHidden(true)
+            Text("Linked from \(entries.count)")
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
         .frame(height: 22)
+        .accessibilityLabel("Linked from \(entries.count)")
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        .accessibilityHint("Show or hide notes linking here")
 
         if isExpanded {
           if entries.isEmpty {
@@ -47,7 +55,7 @@
                         }
                         Spacer(minLength: 0)
                         if entry.referenceCount > 1 {
-                        Text(String(entry.referenceCount) + " references")
+                          Text(String(entry.referenceCount) + " references")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                         }
@@ -74,47 +82,6 @@
       }
       .accessibilityElement(children: .contain)
       .padding(.horizontal, 16)
-    }
-  }
-
-  private struct BacklinksDisclosureButton: NSViewRepresentable {
-    let title: String
-    let isExpanded: Bool
-    let onToggle: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-      Coordinator(onToggle: onToggle)
-    }
-
-    func makeNSView(context: Context) -> NSButton {
-      let button = NSButton(title: title, target: context.coordinator, action: #selector(Coordinator.toggle))
-      button.setButtonType(.momentaryPushIn)
-      button.bezelStyle = .inline
-      button.alignment = .left
-      button.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-      button.isBordered = false
-      button.setAccessibilityLabel(title)
-      button.setAccessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-      return button
-    }
-
-    func updateNSView(_ button: NSButton, context: Context) {
-      context.coordinator.onToggle = onToggle
-      button.title = title
-      button.setAccessibilityLabel(title)
-      button.setAccessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-    }
-
-    final class Coordinator: NSObject {
-      var onToggle: () -> Void
-
-      init(onToggle: @escaping () -> Void) {
-        self.onToggle = onToggle
-      }
-
-      @objc func toggle() {
-        onToggle()
-      }
     }
   }
 #endif

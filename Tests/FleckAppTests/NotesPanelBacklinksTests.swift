@@ -140,31 +140,76 @@ func NotesPanelBacklinksDisclosurePreservesExactEditorState() async throws {
   let editor = try #require(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self))
   #expect(window.makeFirstResponder(editor))
   editor.setSelectedRange(NSRange(location: 2, length: 4))
-  editor.typingAttributes[.foregroundColor] = NSColor.systemBlue
-  editor.undoManager?.registerUndo(withTarget: editor) { _ in }
+  editor.typingAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+  commands.refreshFormattingState()
+  commands.applyBackgroundColor(.systemYellow)
+  await settleBacklinksHost(host)
+
+  let rtfAttributes: [NSAttributedString.DocumentAttributeKey: Any] = [
+    .documentType: NSAttributedString.DocumentType.rtf
+  ]
+  let originalString = editor.string
+  let originalAttributed = NSAttributedString(
+    attributedString: try #require(editor.textStorage)
+  )
+  let originalRTF = try #require(
+    try editor.textStorage?.data(
+      from: NSRange(location: 0, length: editor.textStorage?.length ?? 0),
+      documentAttributes: rtfAttributes
+    )
+  )
+  let undoManager = try #require(editor.undoManager)
   let originalSelection = editor.selectedRange()
   let originalTypingAttributes = NSDictionary(dictionary: editor.typingAttributes)
+  let originalCanUndo = undoManager.canUndo
+  let originalCanRedo = undoManager.canRedo
   let originalWorkspace = state.workspace
   let originalGeneration = state.persistenceGeneration
   let originalEditor = editor
-  let disclosure = try #require(
-    hostedBacklinksDescendants(in: host, as: NSButton.self)
-      .first { $0.title.contains("Linked from") }
-  )
-
-  disclosure.performClick(nil)
+  let originalCommandsTextView = commands.textView
+  let originalCommandsActiveState = commands.isFocusedDictationActive
+  #expect(originalCanUndo)
+  #expect(originalCommandsTextView === originalEditor)
+  backlinks.toggleDisclosure()
   await settleBacklinksHost(host)
+  #expect(backlinks.isExpanded)
   #expect(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self) === originalEditor)
+  #expect(editor.string == originalString)
+  #expect(NSAttributedString(attributedString: try #require(editor.textStorage)).isEqual(to: originalAttributed))
+  #expect(
+    try editor.textStorage?.data(
+      from: NSRange(location: 0, length: editor.textStorage?.length ?? 0),
+      documentAttributes: rtfAttributes
+    ) == originalRTF
+  )
   #expect(editor.selectedRange() == originalSelection)
   #expect(NSDictionary(dictionary: editor.typingAttributes).isEqual(to: originalTypingAttributes))
+  #expect(editor.undoManager === undoManager)
+  #expect(editor.undoManager?.canUndo == originalCanUndo)
+  #expect(editor.undoManager?.canRedo == originalCanRedo)
+  #expect(commands.textView === originalCommandsTextView)
+  #expect(commands.isFocusedDictationActive == originalCommandsActiveState)
   #expect(state.workspace == originalWorkspace)
   #expect(state.persistenceGeneration == originalGeneration)
 
-  disclosure.performClick(nil)
+  backlinks.toggleDisclosure()
   await settleBacklinksHost(host)
+  #expect(!backlinks.isExpanded)
   #expect(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self) === originalEditor)
+  #expect(editor.string == originalString)
+  #expect(NSAttributedString(attributedString: try #require(editor.textStorage)).isEqual(to: originalAttributed))
+  #expect(
+    try editor.textStorage?.data(
+      from: NSRange(location: 0, length: editor.textStorage?.length ?? 0),
+      documentAttributes: rtfAttributes
+    ) == originalRTF
+  )
   #expect(editor.selectedRange() == originalSelection)
-
+  #expect(NSDictionary(dictionary: editor.typingAttributes).isEqual(to: originalTypingAttributes))
+  #expect(editor.undoManager === undoManager)
+  #expect(editor.undoManager?.canUndo == originalCanUndo)
+  #expect(editor.undoManager?.canRedo == originalCanRedo)
+  #expect(commands.textView === originalCommandsTextView)
   window.contentView = nil
   window.orderOut(nil)
   await runtime.shutdown()
@@ -205,7 +250,6 @@ func NotesPanelSearchAndLinkPickerAreMutuallyExclusiveAndInert() async throws {
   window.contentView = host
   window.makeKeyAndOrderFront(nil)
   await settleBacklinksHost(host)
-
   searchController.present(for: source.id)
   await settleBacklinksHost(host)
   #expect(searchController.isPresented)

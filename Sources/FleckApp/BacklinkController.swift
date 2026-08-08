@@ -7,6 +7,7 @@ final class BacklinkController: ObservableObject {
   typealias Build = @Sendable ([Note]) async -> BacklinkIndex
 
   @Published private(set) var index = BacklinkIndex()
+  @Published private(set) var isExpanded = false
 
   private let build: Build
   private var task: Task<Void, Never>?
@@ -41,6 +42,10 @@ final class BacklinkController: ObservableObject {
 
   func incoming(to noteID: UUID?) -> [BacklinkSource] {
     noteID.map(index.incoming(to:)) ?? []
+  }
+
+  func toggleDisclosure() {
+    isExpanded.toggle()
   }
 
   func cancel() {

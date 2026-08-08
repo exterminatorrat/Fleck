@@ -219,7 +219,6 @@
     @State private var tabContentTrailingEdge: CGFloat = 0
     @State private var activeFolderID: UUID?
     @State private var restoreEditorFocusAfterHide = false
-    @State private var isBacklinksExpanded = false
 
     init(
       dictationRuntime: DictationRuntime,
@@ -1233,8 +1232,8 @@
           BacklinksView(
             entries: backlinkController.incoming(to: note.id),
             foldersByID: folderNamesByID,
-            isExpanded: isBacklinksExpanded,
-            onToggle: { isBacklinksExpanded.toggle() },
+            isExpanded: backlinkController.isExpanded,
+            onToggle: backlinkController.toggleDisclosure,
             onOpen: openNoteLink
           )
         }
