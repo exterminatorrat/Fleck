@@ -157,6 +157,22 @@
           .keyboardShortcut("r", modifiers: [.command, .shift])
           .disabled(!dictationRuntime.recoveryCommand.isEnabled)
         }
+        CommandMenu("Editor") {
+          Button("Link to Note…") {
+            NSApp.sendAction(
+              #selector(ListAwareTextView.requestNoteLinkFromMenu(_:)),
+              to: nil,
+              from: nil
+            )
+          }
+          Button("Open Note Link") {
+            NSApp.sendAction(
+              #selector(ListAwareTextView.openNoteLinkFromMenu(_:)),
+              to: nil,
+              from: nil
+            )
+          }
+        }
       }
 
       Settings {

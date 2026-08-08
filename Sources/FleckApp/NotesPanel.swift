@@ -199,6 +199,8 @@
     let sizing: NotesPanelSizing
     @StateObject private var editorCommands = EditorCommands()
     @StateObject private var searchController: WorkspaceSearchController
+    @StateObject private var noteLinkPickerController: NoteLinkPickerController
+    @StateObject private var backlinkController: BacklinkController
     @Namespace private var selectedTabHighlight
     @State private var isImporting = false
     @State private var isExporting = false
@@ -217,21 +219,27 @@
     @State private var tabContentTrailingEdge: CGFloat = 0
     @State private var activeFolderID: UUID?
     @State private var restoreEditorFocusAfterHide = false
+    @State private var isBacklinksExpanded = false
 
     init(
       dictationRuntime: DictationRuntime,
       isPinned: Bool = false,
       sizing: NotesPanelSizing = .storedPreferences,
       editorCommands: EditorCommands? = nil,
-      searchController: WorkspaceSearchController? = nil
+      searchController: WorkspaceSearchController? = nil,
+      noteLinkPickerController: NoteLinkPickerController? = nil,
+      backlinkController: BacklinkController? = nil
     ) {
+      let searchController = searchController ?? WorkspaceSearchController()
+      let noteLinkPickerController = noteLinkPickerController ?? NoteLinkPickerController()
       self.dictationRuntime = dictationRuntime
       self.isPinned = isPinned
       self.sizing = sizing
       _editorCommands = StateObject(wrappedValue: editorCommands ?? EditorCommands())
-      _searchController = StateObject(
-        wrappedValue: searchController ?? WorkspaceSearchController()
-      )
+      _searchController = StateObject(wrappedValue: searchController)
+      _noteLinkPickerController = StateObject(wrappedValue: noteLinkPickerController)
+      _backlinkController = StateObject(wrappedValue: backlinkController ?? BacklinkController())
+      noteLinkPickerController.setPresentationGuard { !searchController.isPresented }
     }
 
     var body: some View {
@@ -319,9 +327,9 @@
             }
           }
         }
-        .allowsHitTesting(!searchController.isPresented)
-        .disabled(searchController.isPresented)
-        .accessibilityHidden(searchController.isPresented)
+        .allowsHitTesting(!isBlockingOverlayPresented)
+        .disabled(isBlockingOverlayPresented)
+        .accessibilityHidden(isBlockingOverlayPresented)
       }
       .frame(
         width: sizing == .storedPreferences ? appState.preferences.panelWidth : nil,
@@ -343,6 +351,10 @@
       )
       .background(
         WorkspaceSearchWindowReader(controller: searchController)
+          .frame(width: 0, height: 0)
+      )
+      .background(
+        NoteLinkPickerWindowReader(controller: noteLinkPickerController)
           .frame(width: 0, height: 0)
       )
       .fileImporter(
@@ -422,7 +434,7 @@
         .animation(motion.standard, value: notePendingDeletion?.id)
       }
       .overlay {
-        if searchController.isPresented {
+        if searchController.isPresented && !noteLinkPickerController.isPresented {
           WorkspaceSearchView(
             controller: searchController,
             notes: appState.workspace.notes,
@@ -437,10 +449,37 @@
           .zIndex(2)
         }
       }
+      .overlay {
+        if noteLinkPickerController.isPresented {
+          NoteLinkPickerView(
+            controller: noteLinkPickerController,
+            notes: appState.workspace.notes,
+            foldersByID: folderNamesByID,
+            accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
+            currentNoteIDs: { Set(appState.workspace.notes.map(\.id)) },
+            onChoose: insertNoteLink
+          )
+          .zIndex(3)
+        }
+      }
       .task {
         await appState.waitUntilInitialLoad()
         guard !Task.isCancelled else { return }
         activeFolderID = appState.folderScopeForSelectedNote()
+        backlinkController.refresh(liveNotes: appState.workspace.notes)
+      }
+      .onChange(of: appState.workspace.notes) { _, notes in
+        backlinkController.refresh(liveNotes: notes)
+      }
+      .onChange(of: searchController.isPresented) { _, isPresented in
+        if isPresented, noteLinkPickerController.isPresented {
+          searchController.dismiss()
+        }
+      }
+      .onChange(of: noteLinkPickerController.isPresented) { _, isPresented in
+        if isPresented, searchController.isPresented {
+          searchController.dismiss()
+        }
       }
       .onChange(of: appState.workspace.folders) { _, folders in
         guard let activeFolderID,
@@ -515,6 +554,7 @@
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
         Button {
+          guard !noteLinkPickerController.isPresented else { return }
           searchController.present(for: appState.workspace.selectedNoteID)
         } label: {
           Image(systemName: "magnifyingglass")
@@ -899,7 +939,7 @@
     }
 
     private func performShortcut(_ action: Shortcut.Action) {
-      guard !searchController.isPresented else { return }
+      guard !isBlockingOverlayPresented else { return }
       switch action {
       case .togglePanel:
         NSApp.keyWindow?.orderOut(nil)
@@ -999,6 +1039,49 @@
         appState.saveError = nil
       } catch {
         appState.saveError = "Import failed: \(error.localizedDescription)"
+      }
+    }
+
+    private var isBlockingOverlayPresented: Bool {
+      searchController.isPresented || noteLinkPickerController.isPresented
+    }
+
+    private var folderNamesByID: [UUID: String] {
+      Dictionary(uniqueKeysWithValues: appState.workspace.folders.map { ($0.id, $0.name) })
+    }
+
+    private func insertNoteLink(targetID: UUID, replacing range: NSRange) {
+      guard !searchController.isPresented,
+        let sourceID = noteLinkPickerController.presentedSourceNoteID,
+        let selectedNote = visibleSelectedNote,
+        selectedNote.id == sourceID,
+        let target = appState.workspace.notes.first(where: { $0.id == targetID }),
+        let textView = editorCommands.textView,
+        range.location >= 0,
+        NSMaxRange(range) <= (textView.string as NSString).length
+      else {
+        noteLinkPickerController.dismiss()
+        return
+      }
+
+      guard editorCommands.insertNoteLink(
+        replacing: range,
+        label: target.displayTitle,
+        targetNoteID: target.id
+      ) else {
+        noteLinkPickerController.dismiss()
+        return
+      }
+    }
+
+    private func openNoteLink(_ noteID: UUID) {
+      guard appState.workspace.notes.contains(where: { $0.id == noteID }) else {
+        appState.saveError = "Note unavailable"
+        return
+      }
+      guard activateNoteAndScope(noteID) else {
+        appState.saveError = "Note unavailable"
+        return
       }
     }
 
@@ -1126,7 +1209,14 @@
             accentColorHex: appState.preferences.accentHex,
             reduceMotion: reduceMotion,
             automaticLists: appState.preferences.automaticLists,
-            commands: editorCommands
+            commands: editorCommands,
+            liveNoteIDs: Set(appState.workspace.notes.map(\.id)),
+            onRequestNoteLink: { range in
+              guard !isBlockingOverlayPresented, visibleSelectedNote?.id == note.id else { return }
+              noteLinkPickerController.present(sourceNoteID: note.id, replacementRange: range)
+            },
+            onOpenNoteLink: openNoteLink,
+            onUnavailableNoteLink: { appState.saveError = "Note unavailable" }
           )
           .background(
             EditorCommandVisibilityBoundary(
@@ -1139,6 +1229,14 @@
           )
           .id(note.id)
           .padding(.vertical, 10)
+
+          BacklinksView(
+            entries: backlinkController.incoming(to: note.id),
+            foldersByID: folderNamesByID,
+            isExpanded: isBacklinksExpanded,
+            onToggle: { isBacklinksExpanded.toggle() },
+            onOpen: openNoteLink
+          )
         }
       }
     }
