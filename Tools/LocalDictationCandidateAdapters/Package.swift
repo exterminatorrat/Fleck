@@ -10,6 +10,10 @@ let package = Package(
       name: "LocalDictationCandidateProtocol",
       targets: ["LocalDictationCandidateProtocol"]
     ),
+    .executable(
+      name: "local-dictation-candidate",
+      targets: ["LocalDictationCandidateCLI"]
+    ),
   ],
   targets: [
     .target(name: "LocalDictationCandidateProtocol"),
@@ -17,11 +21,19 @@ let package = Package(
       name: "LocalDictationCandidateRunner",
       dependencies: ["LocalDictationCandidateProtocol"]
     ),
+    .executableTarget(
+      name: "LocalDictationCandidateCLI",
+      dependencies: [
+        "LocalDictationCandidateProtocol",
+        "LocalDictationCandidateRunner",
+      ]
+    ),
     .testTarget(
       name: "LocalDictationCandidateAdaptersTests",
       dependencies: [
         "LocalDictationCandidateProtocol",
         "LocalDictationCandidateRunner",
+        "LocalDictationCandidateCLI",
       ]
     ),
   ]

@@ -1,0 +1,154 @@
+{
+  "audioAdmission" : {
+    "consentRecord" : "pending-real-audio-admission",
+    "provenance" : "Checked-in case paths are placeholders; no real audio is admitted.",
+    "status" : "synthetic-only"
+  },
+  "cases" : [
+    {
+      "audioPath" : "/fixtures/local-dictation-admission/case-01.wav",
+      "audioSHA256" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "cancellationPoint" : "not-applicable",
+      "captureTemperature" : "cold",
+      "claimsPartials" : true,
+      "contextPhrases" : [
+        "Fleck",
+        "SwiftUI"
+      ],
+      "expectedCategory" : "technical-prose",
+      "expectedLanguage" : "english",
+      "id" : "english-technical-prose",
+      "role" : "english-technical-prose"
+    },
+    {
+      "audioPath" : "/fixtures/local-dictation-admission/case-02.wav",
+      "audioSHA256" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "cancellationPoint" : "not-applicable",
+      "captureTemperature" : "cold",
+      "claimsPartials" : true,
+      "contextPhrases" : [
+        "Package.swift",
+        "/Users/harryjin"
+      ],
+      "expectedCategory" : "developer-command",
+      "expectedLanguage" : "english",
+      "id" : "english-developer-command",
+      "role" : "english-developer-command"
+    },
+    {
+      "audioPath" : "/fixtures/local-dictation-admission/case-03.wav",
+      "audioSHA256" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "cancellationPoint" : "not-applicable",
+      "captureTemperature" : "warm",
+      "claimsPartials" : true,
+      "contextPhrases" : [
+        "16 kHz",
+        "GB"
+      ],
+      "expectedCategory" : "prose-numbers-units",
+      "expectedLanguage" : "mandarin",
+      "id" : "mandarin-prose-numbers-units",
+      "role" : "mandarin-prose-numbers-units"
+    },
+    {
+      "audioPath" : "/fixtures/local-dictation-admission/case-04.wav",
+      "audioSHA256" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "cancellationPoint" : "not-applicable",
+      "captureTemperature" : "warm",
+      "claimsPartials" : true,
+      "contextPhrases" : [
+        "SwiftUI",
+        "Metal"
+      ],
+      "expectedCategory" : "technical-terms",
+      "expectedLanguage" : "mandarin",
+      "id" : "mandarin-technical-terms",
+      "role" : "mandarin-technical-terms"
+    },
+    {
+      "audioPath" : "/fixtures/local-dictation-admission/case-05.wav",
+      "audioSHA256" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "cancellationPoint" : "not-applicable",
+      "captureTemperature" : "cold",
+      "claimsPartials" : true,
+      "contextPhrases" : [
+        "Fleck",
+        "本地"
+      ],
+      "expectedCategory" : "english-mandarin-switch",
+      "expectedLanguage" : "mixed",
+      "id" : "english-mandarin-switch",
+      "role" : "english-mandarin-switch"
+    },
+    {
+      "audioPath" : "/fixtures/local-dictation-admission/case-06.wav",
+      "audioSHA256" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "cancellationPoint" : "not-applicable",
+      "captureTemperature" : "warm",
+      "claimsPartials" : true,
+      "contextPhrases" : [
+        "Swift",
+        "语音"
+      ],
+      "expectedCategory" : "mandarin-english-switch",
+      "expectedLanguage" : "mixed",
+      "id" : "mandarin-english-switch",
+      "role" : "mandarin-english-switch"
+    },
+    {
+      "audioPath" : "/fixtures/local-dictation-admission/case-07.wav",
+      "audioSHA256" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "cancellationPoint" : "not-applicable",
+      "captureTemperature" : "warm",
+      "claimsPartials" : true,
+      "contextPhrases" : [
+        "Fleck",
+        "canonical"
+      ],
+      "expectedCategory" : "personal-dictionary",
+      "expectedLanguage" : "mixed",
+      "id" : "personal-dictionary-aliases",
+      "role" : "personal-dictionary-aliases"
+    },
+    {
+      "audioPath" : "/fixtures/local-dictation-admission/case-08.wav",
+      "audioSHA256" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "cancellationPoint" : "not-applicable",
+      "captureTemperature" : "cold",
+      "claimsPartials" : false,
+      "contextPhrases" : [],
+      "expectedCategory" : "silence-noise-hallucination",
+      "expectedLanguage" : "mixed",
+      "id" : "silence-noise-hallucination",
+      "role" : "silence-noise-hallucination"
+    },
+    {
+      "audioPath" : "/fixtures/local-dictation-admission/case-09.wav",
+      "audioSHA256" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "cancellationPoint" : "during-active-decode",
+      "captureTemperature" : "cold",
+      "claimsPartials" : true,
+      "contextPhrases" : [],
+      "expectedCategory" : "cancellation-active-decode",
+      "expectedLanguage" : "mixed",
+      "id" : "cancellation-active-decode",
+      "role" : "cancellation-active-decode"
+    },
+    {
+      "audioPath" : "/fixtures/local-dictation-admission/case-10.wav",
+      "audioSHA256" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "cancellationPoint" : "not-applicable",
+      "captureTemperature" : "warm",
+      "claimsPartials" : true,
+      "contextPhrases" : [],
+      "expectedCategory" : "repeated-load-inference-unload-reload",
+      "expectedLanguage" : "mixed",
+      "id" : "repeated-load-inference-unload-reload",
+      "role" : "repeated-load-inference-unload-reload"
+    }
+  ],
+  "immutable" : true,
+  "manifestID" : "fleck-local-dictation-admission-v1",
+  "revision" : "admission-v1-2026-08-07",
+  "schemaVersion" : 1
+}

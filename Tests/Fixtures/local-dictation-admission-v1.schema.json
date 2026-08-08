@@ -1,0 +1,121 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties" : false,
+  "properties" : {
+    "audioAdmission" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "consentRecord" : {
+          "type" : "string"
+        },
+        "provenance" : {
+          "type" : "string"
+        },
+        "status" : {
+          "enum" : [
+            "admitted",
+            "synthetic-only"
+          ],
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "status",
+        "provenance",
+        "consentRecord"
+      ],
+      "type" : "object"
+    },
+    "cases" : {
+      "items" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "audioPath" : {
+            "type" : "string"
+          },
+          "audioSHA256" : {
+            "pattern" : "^[A-Fa-f0-9]{64}$",
+            "type" : "string"
+          },
+          "cancellationPoint" : {
+            "enum" : [
+              "not-applicable",
+              "after-first-partial",
+              "during-active-decode"
+            ],
+            "type" : "string"
+          },
+          "captureTemperature" : {
+            "enum" : [
+              "cold",
+              "warm"
+            ],
+            "type" : "string"
+          },
+          "claimsPartials" : {
+            "type" : "boolean"
+          },
+          "contextPhrases" : {
+            "items" : {
+              "type" : "string"
+            },
+            "maxItems" : 100,
+            "type" : "array"
+          },
+          "expectedCategory" : {
+            "type" : "string"
+          },
+          "expectedLanguage" : {
+            "type" : "string"
+          },
+          "id" : {
+            "type" : "string"
+          },
+          "role" : {
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "id",
+          "role",
+          "expectedLanguage",
+          "expectedCategory",
+          "audioPath",
+          "audioSHA256",
+          "contextPhrases",
+          "cancellationPoint",
+          "captureTemperature",
+          "claimsPartials"
+        ],
+        "type" : "object"
+      },
+      "minItems" : 10,
+      "maxItems" : 10,
+      "type" : "array"
+    },
+    "immutable" : {
+      "const" : true,
+      "type" : "boolean"
+    },
+    "manifestID" : {
+      "type" : "string"
+    },
+    "revision" : {
+      "type" : "string"
+    },
+    "schemaVersion" : {
+      "const" : 1,
+      "type" : "integer"
+    }
+  },
+  "required" : [
+    "schemaVersion",
+    "manifestID",
+    "revision",
+    "immutable",
+    "audioAdmission",
+    "cases"
+  ],
+  "title" : "Fleck local dictation admission manifest v1",
+  "type" : "object"
+}
