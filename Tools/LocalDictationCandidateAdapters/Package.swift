@@ -13,9 +13,16 @@ let package = Package(
   ],
   targets: [
     .target(name: "LocalDictationCandidateProtocol"),
+    .target(
+      name: "LocalDictationCandidateRunner",
+      dependencies: ["LocalDictationCandidateProtocol"]
+    ),
     .testTarget(
       name: "LocalDictationCandidateAdaptersTests",
-      dependencies: ["LocalDictationCandidateProtocol"]
+      dependencies: [
+        "LocalDictationCandidateProtocol",
+        "LocalDictationCandidateRunner",
+      ]
     ),
   ]
 )
