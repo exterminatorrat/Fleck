@@ -68,3 +68,18 @@ import Testing
   #expect(imported.body == note.body)
   #expect(imported.richTextRTF == nil)
 }
+
+@Test func NoteTransferPreservesVisibleInternalLinkInMarkdownAndPlainText() throws {
+  let target = UUID()
+  let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
+  let note = Note(body: "Before " + token + " after")
+
+  #expect(
+    String(decoding: NoteExport(note: note, format: .markdown).data, as: UTF8.self)
+      == note.body
+  )
+  #expect(
+    String(decoding: NoteExport(note: note, format: .plainText).data, as: UTF8.self)
+      == note.body
+  )
+}
