@@ -326,8 +326,11 @@
             }
           }
         }
+        .allowsHitTesting(!searchController.isPresented)
         .allowsHitTesting(!isBlockingOverlayPresented)
+        .disabled(searchController.isPresented)
         .disabled(isBlockingOverlayPresented)
+        .accessibilityHidden(searchController.isPresented)
         .accessibilityHidden(isBlockingOverlayPresented)
       }
       .frame(
