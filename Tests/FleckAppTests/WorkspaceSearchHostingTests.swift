@@ -68,6 +68,70 @@ func WorkspaceSearchHostingPreservesSearchResultsAndNoteStateAcrossAccentUpdates
 }
 
 @Test @MainActor
+func WorkspaceSearchHostingLinkPickerIsIndependentAndBlocksTheOtherOverlay() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-link-picker-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  let sourceID = try #require(state.workspace.selectedNoteID)
+
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let picker = NoteLinkPickerController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController,
+      noteLinkPickerController: picker
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let sourceRevision = try #require(state.workspace.notes.first { $0.id == sourceID }?.revision)
+  picker.present(
+    sourceNoteID: sourceID,
+    replacementRange: NSRange(location: 0, length: 0),
+    sourceRevision: sourceRevision
+  )
+  await settleWorkspaceSearchHost(host)
+  #expect(picker.isPresented)
+  searchController.present(for: sourceID)
+  await settleWorkspaceSearchHost(host)
+  #expect(picker.isPresented)
+  #expect(!searchController.isPresented)
+
+  picker.dismiss()
+  await settleWorkspaceSearchHost(host)
+  searchController.present(for: sourceID)
+  await settleWorkspaceSearchHost(host)
+  #expect(searchController.isPresented)
+  picker.present(
+    sourceNoteID: sourceID,
+    replacementRange: NSRange(location: 0, length: 0),
+    sourceRevision: sourceRevision
+  )
+  await settleWorkspaceSearchHost(host)
+  #expect(searchController.isPresented)
+  #expect(!picker.isPresented)
+
+  searchController.dismiss()
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
 func WorkspaceSearchHostingRestoresTheRealEditorStateAfterEscape() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent("workspace-search-\(UUID().uuidString)", isDirectory: true)

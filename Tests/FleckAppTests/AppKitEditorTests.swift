@@ -27,6 +27,99 @@ import Testing
   )
 }
 
+@Test @MainActor func appKitLinkPresentationDoesNotWriteLinkAttributes() throws {
+  let target = UUID()
+  let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
+  textView.string = "Before \(token) after"
+  textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
+  let link = try #require(NoteLinkParser.links(in: textView.string).first)
+
+  #expect(textView.textStorage?.attribute(.link, at: link.range.location, effectiveRange: nil) == nil)
+  #expect(
+    textView.layoutManager?.temporaryAttribute(
+      .underlineStyle,
+      atCharacterIndex: link.range.location,
+      effectiveRange: nil
+    ) as? Int == NSUnderlineStyle.single.rawValue
+  )
+  #expect(textView.string == "Before \(token) after")
+}
+
+@Test @MainActor func nativeEditorDismantleRemovesOnlyItsTextSystemUndoActions() throws {
+  let commands = EditorCommands()
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let scrollView = NSScrollView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = scrollView
+  scrollView.documentView = textView
+  textView.allowsUndo = true
+
+  let undoManager = try #require(textView.undoManager)
+  let storage = try #require(textView.textStorage)
+  undoManager.removeAllActions()
+  var dismantledTextViewActionInvoked = false
+  var dismantledStorageActionInvoked = false
+  var unrelatedActionInvoked = false
+  let unrelatedTarget = NSObject()
+  undoManager.registerUndo(withTarget: textView) { _ in
+    dismantledTextViewActionInvoked = true
+  }
+  undoManager.registerUndo(withTarget: storage) { _ in
+    dismantledStorageActionInvoked = true
+  }
+  undoManager.registerUndo(withTarget: unrelatedTarget) { _ in
+    unrelatedActionInvoked = true
+  }
+
+  let delegate = EditorDelegateProbe()
+  textView.delegate = delegate
+  textView.onRequestNoteLink = { _ in }
+  textView.onOpenNoteLink = { _ in }
+  textView.onUnavailableNoteLink = {}
+  commands.textView = textView
+  let editor = NativeRichTextEditor(
+    text: "",
+    richTextRTF: nil,
+    onChange: { _, _ in },
+    fontFamily: "Helvetica",
+    fontSize: 14,
+    textColorHex: nil,
+    backgroundColorHex: nil,
+    accentColorHex: "#FFD600",
+    reduceMotion: false,
+    automaticLists: true,
+    commands: commands
+  )
+
+  NativeRichTextEditor.dismantleNSView(
+    scrollView,
+    coordinator: editor.makeCoordinator()
+  )
+
+  #expect(commands.textView == nil)
+  #expect(textView.delegate == nil)
+  #expect(textView.onRequestNoteLink == nil)
+  #expect(textView.onOpenNoteLink == nil)
+  #expect(textView.onUnavailableNoteLink == nil)
+  #expect(undoManager.canUndo)
+  undoManager.undo()
+  #expect(unrelatedActionInvoked)
+  #expect(!undoManager.canUndo)
+  #expect(!dismantledTextViewActionInvoked)
+  #expect(!dismantledStorageActionInvoked)
+}
+
+@MainActor
+private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
+
 @Test @MainActor func checklistCompletionUndoRestoresMarkerAndStrikethrough() throws {
   let textView = ListAwareTextView(frame: .zero)
   let window = NSWindow(
@@ -263,8 +356,14 @@ import Testing
   let hitRect = try #require(
     textView.checklistHitRect(for: NSRange(location: 0, length: 1))
   )
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let paddedPoint = NSPoint(x: markerRect.minX - 1, y: markerRect.midY)
+  #expect(hitRect.contains(paddedPoint))
+  #expect(!markerRect.contains(paddedPoint))
   let windowPoint = textView.convert(
-    NSPoint(x: hitRect.midX, y: hitRect.midY),
+    paddedPoint,
     to: nil
   )
   let event = try #require(
