@@ -395,18 +395,30 @@ public actor AdapterProcess {
   }
 
   private func installReaders(output: FileHandle, error: FileHandle) {
+    let stdoutQueue = DispatchQueue(
+      label: "LocalDictationCandidateRunner.AdapterProcess.stdout",
+      qos: .utility
+    )
     let stdoutSource = DispatchSource.makeReadSource(
       fileDescriptor: output.fileDescriptor,
-      queue: DispatchQueue.global(qos: .utility)
+      queue: stdoutQueue
     )
     stdoutSource.setEventHandler { [weak self] in
       let data = output.availableData
-      if data.isEmpty {
-        stdoutSource.cancel()
-        Task { await self?.handleStdoutEOF() }
-      } else {
-        Task { await self?.consumeStdout(data) }
+      let completion = DispatchSemaphore(value: 0)
+      Task { [weak self] in
+        defer { completion.signal() }
+        guard let self else { return }
+        if data.isEmpty {
+          stdoutSource.cancel()
+          await self.handleStdoutEOF()
+        } else {
+          await self.consumeStdout(data)
+        }
       }
+      // Backpressure the dedicated source queue so data and EOF stay ordered.
+      // Only this queue waits; the Swift cooperative executor remains unblocked.
+      completion.wait()
     }
     stdoutSource.setCancelHandler {
       output.closeFile()

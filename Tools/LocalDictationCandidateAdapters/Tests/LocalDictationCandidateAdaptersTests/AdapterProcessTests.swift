@@ -43,6 +43,17 @@ private func startProcess(_ mode: String) async throws -> AdapterProcess {
   return process
 }
 
+private func waitForForcedTermination(_ process: AdapterProcess, timeout: Duration) async throws {
+  let deadline = ContinuousClock.now + timeout
+  while ContinuousClock.now < deadline {
+    if (await process.diagnostics()).forcedTermination {
+      return
+    }
+    try await Task.sleep(for: .milliseconds(10))
+  }
+  throw NSError(domain: "AdapterProcessTests", code: 1)
+}
+
 @Suite("AdapterProcessTests")
 struct AdapterProcessTests {
 
@@ -134,7 +145,7 @@ struct AdapterProcessTests {
       environment: ["PATH": "/usr/bin:/bin"]
     )
     try await process.send(request("load-1", operation: .load))
-    try await Task.sleep(for: .milliseconds(100))
+    try await waitForForcedTermination(process, timeout: .seconds(2))
     let failure = Task {
       do {
         for try await _ in stream { }
