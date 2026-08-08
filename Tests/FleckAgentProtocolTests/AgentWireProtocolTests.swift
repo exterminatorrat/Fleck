@@ -639,6 +639,10 @@ struct AgentWireProtocolV2Tests {
             .key("originatingActor"), .key("integration"),
           ],
           [.key("activity"), .key("entries"), .index(0), .key("patch")],
+          [
+            .key("activity"), .key("entries"), .index(0), .key("patch"),
+            .key("range"), .appendUnknown,
+          ],
         ]
       ),
       (
@@ -790,6 +794,7 @@ struct AgentWireProtocolV2Tests {
 private enum JSONPathComponent {
   case key(String)
   case index(Int)
+  case appendUnknown
 }
 
 private enum StrictDecodingTestError: Error {
@@ -841,6 +846,12 @@ private func addUnknownField(
     var child = array[index]
     try addUnknownField(to: &child, path: path.dropFirst())
     array[index] = child
+    value = array
+  case .appendUnknown:
+    guard var array = value as? [Any], path.dropFirst().isEmpty else {
+      throw StrictDecodingTestError.invalidJSONPath
+    }
+    array.append(["unexpected": true])
     value = array
   }
 }

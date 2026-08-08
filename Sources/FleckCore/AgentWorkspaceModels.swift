@@ -954,10 +954,34 @@ private func validateActivityActor(from decoder: any Decoder) throws {
 }
 
 private func validateTextPatch(from decoder: any Decoder) throws {
-  _ = try strictObject(
+  let container = try strictObject(
     from: decoder,
     required: ["beforeText", "afterText", "range", "prefixContext", "suffixContext"]
   )
+  try validateNSRange(
+    from: container.superDecoder(forKey: AgentWorkspaceCodingKey("range"))
+  )
+}
+
+private func validateNSRange(from decoder: any Decoder) throws {
+  if let container = try? decoder.container(
+    keyedBy: AgentWorkspaceCodingKey.self
+  ) {
+    try container.requireExactKeys(["location", "length"])
+    return
+  }
+
+  var container = try decoder.unkeyedContainer()
+  guard container.count == 2 else {
+    throw DecodingError.dataCorrupted(
+      DecodingError.Context(
+        codingPath: decoder.codingPath,
+        debugDescription: "Range must contain exactly location and length."
+      )
+    )
+  }
+  _ = try container.decode(Int.self)
+  _ = try container.decode(Int.self)
 }
 
 public enum AgentWorkspaceErrorCode: String, Codable, CaseIterable, Sendable {
