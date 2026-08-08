@@ -244,6 +244,29 @@ private let clientProfileID = UUID(
   #expect(try client.send(request) == .capabilities(summary: summary))
 }
 
+@Test func clientRejectsCapabilityResultForV1Request() throws {
+  let request = request(protocolVersion: 1, command: .listSharedNotes)
+  var reads = [
+    try AgentWireFraming.encode(
+      AgentWireResponse.success(
+        protocolVersion: 1,
+        requestID: requestID,
+        result: .capabilities(
+          summary: AgentCapabilitySummary(
+            grantRevision: 4,
+            availableCapabilities: [.listNotes]
+          )
+        )
+      )
+    )
+  ]
+  let client = testClient { _, _ in reads.removeFirst() }
+
+  #expect(throws: AgentIPCClientError.invalidFrame) {
+    _ = try client.send(request)
+  }
+}
+
 private func request(
   protocolVersion: Int = AgentWireRequest.currentProtocolVersion,
   command: AgentWorkspaceCommand = .listSharedNotes

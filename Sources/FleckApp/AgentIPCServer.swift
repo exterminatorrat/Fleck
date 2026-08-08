@@ -308,14 +308,21 @@
 
       let response: AgentWireResponse
       do {
+        let result = try await execute(
+          request.profileID,
+          credential,
+          request.command
+        )
+        guard result.isSupported(wireVersion: request.protocolVersion) else {
+          throw AgentWorkspaceError(
+            code: .protocolVersionUnsupported,
+            recoveryAction: "Please update Fleck and the helper, then try again."
+          )
+        }
         response = .success(
           protocolVersion: request.protocolVersion,
           requestID: request.requestID,
-          result: try await execute(
-            request.profileID,
-            credential,
-            request.command
-          )
+          result: result
         )
       } catch let error as AgentWorkspaceError {
         response = .failure(

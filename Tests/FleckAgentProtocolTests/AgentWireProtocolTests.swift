@@ -225,6 +225,22 @@ struct AgentWireProtocolV2Tests {
     #expect(AgentWorkspaceCommand.getCapabilities.isSupported(wireVersion: 2))
   }
 
+  @Test func capabilityResponseIsV2Only() {
+    let capabilities = AgentWorkspaceResponse.capabilities(
+      summary: AgentCapabilitySummary(
+        grantRevision: 4,
+        availableCapabilities: [.listNotes]
+      )
+    )
+
+    #expect(!capabilities.isSupported(wireVersion: 1))
+    #expect(capabilities.isSupported(wireVersion: 2))
+    #expect(
+      AgentWorkspaceResponse.sharedNotes(notes: [])
+        .isSupported(wireVersion: 1)
+    )
+  }
+
   @Test(arguments: [1, 2])
   func responsesEchoAcceptedRequestVersion(_ version: Int) {
     let requestID = UUID()

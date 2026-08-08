@@ -416,6 +416,14 @@ public enum AgentWorkspaceResponse: Codable, Equatable, Sendable {
   case undo(receipt: AgentWriteReceipt)
   case capabilities(summary: AgentCapabilitySummary)
 
+  public func isSupported(wireVersion: Int) -> Bool {
+    guard wireVersion == 1 || wireVersion == 2 else { return false }
+    if case .capabilities = self {
+      return wireVersion == 2
+    }
+    return true
+  }
+
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: AgentWorkspaceCodingKey.self)
     guard container.allKeys.count == 1, let key = container.allKeys.first else {

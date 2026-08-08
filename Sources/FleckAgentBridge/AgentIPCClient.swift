@@ -101,6 +101,9 @@
             guard let result = response.result else {
               throw AgentIPCClientError.invalidFrame
             }
+            guard result.isSupported(wireVersion: request.protocolVersion) else {
+              throw AgentIPCClientError.invalidFrame
+            }
             return result
           }
         } catch let error as AgentIPCClientError {

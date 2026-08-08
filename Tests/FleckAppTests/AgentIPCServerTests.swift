@@ -96,6 +96,35 @@ import Testing
   #expect(response.error == nil)
 }
 
+@Test @MainActor func agentIPCRejectsV2ResponseForV1Request() async {
+  let requestID = UUID()
+  let server = AgentIPCServer(
+    endpointURL: temporarySocketURL(),
+    execute: { _, _, _ in
+      .capabilities(
+        summary: AgentCapabilitySummary(
+          grantRevision: 4,
+          availableCapabilities: [.listNotes]
+        )
+      )
+    }
+  )
+  let response = await server.response(
+    to: AgentWireRequest(
+      protocolVersion: 1,
+      requestID: requestID,
+      profileID: UUID(),
+      credentialBase64: Data(repeating: 0, count: 32).base64EncodedString(),
+      command: .listSharedNotes
+    )
+  )
+
+  #expect(response.requestID == requestID)
+  #expect(response.protocolVersion == 1)
+  #expect(response.error?.code == .protocolVersionUnsupported)
+  #expect(response.result == nil)
+}
+
 @Test @MainActor func agentIPCCanonicalCredentialGatePrecedesService() async {
   let calls = LockedCounter()
   let server = AgentIPCServer(
