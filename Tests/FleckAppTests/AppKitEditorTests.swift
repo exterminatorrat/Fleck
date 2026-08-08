@@ -27,6 +27,99 @@ import Testing
   )
 }
 
+@Test @MainActor func appKitLinkPresentationDoesNotWriteLinkAttributes() throws {
+  let target = UUID()
+  let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
+  textView.string = "Before \(token) after"
+  textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
+  let link = try #require(NoteLinkParser.links(in: textView.string).first)
+
+  #expect(textView.textStorage?.attribute(.link, at: link.range.location, effectiveRange: nil) == nil)
+  #expect(
+    textView.layoutManager?.temporaryAttribute(
+      .underlineStyle,
+      atCharacterIndex: link.range.location,
+      effectiveRange: nil
+    ) as? Int == NSUnderlineStyle.single.rawValue
+  )
+  #expect(textView.string == "Before \(token) after")
+}
+
+@Test @MainActor func nativeEditorDismantleRemovesOnlyItsTextSystemUndoActions() throws {
+  let commands = EditorCommands()
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let scrollView = NSScrollView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = scrollView
+  scrollView.documentView = textView
+  textView.allowsUndo = true
+
+  let undoManager = try #require(textView.undoManager)
+  let storage = try #require(textView.textStorage)
+  undoManager.removeAllActions()
+  var dismantledTextViewActionInvoked = false
+  var dismantledStorageActionInvoked = false
+  var unrelatedActionInvoked = false
+  let unrelatedTarget = NSObject()
+  undoManager.registerUndo(withTarget: textView) { _ in
+    dismantledTextViewActionInvoked = true
+  }
+  undoManager.registerUndo(withTarget: storage) { _ in
+    dismantledStorageActionInvoked = true
+  }
+  undoManager.registerUndo(withTarget: unrelatedTarget) { _ in
+    unrelatedActionInvoked = true
+  }
+
+  let delegate = EditorDelegateProbe()
+  textView.delegate = delegate
+  textView.onRequestNoteLink = { _ in }
+  textView.onOpenNoteLink = { _ in }
+  textView.onUnavailableNoteLink = {}
+  commands.textView = textView
+  let editor = NativeRichTextEditor(
+    text: "",
+    richTextRTF: nil,
+    onChange: { _, _ in },
+    fontFamily: "Helvetica",
+    fontSize: 14,
+    textColorHex: nil,
+    backgroundColorHex: nil,
+    accentColorHex: "#FFD600",
+    reduceMotion: false,
+    automaticLists: true,
+    commands: commands
+  )
+
+  NativeRichTextEditor.dismantleNSView(
+    scrollView,
+    coordinator: editor.makeCoordinator()
+  )
+
+  #expect(commands.textView == nil)
+  #expect(textView.delegate == nil)
+  #expect(textView.onRequestNoteLink == nil)
+  #expect(textView.onOpenNoteLink == nil)
+  #expect(textView.onUnavailableNoteLink == nil)
+  #expect(undoManager.canUndo)
+  undoManager.undo()
+  #expect(unrelatedActionInvoked)
+  #expect(!undoManager.canUndo)
+  #expect(!dismantledTextViewActionInvoked)
+  #expect(!dismantledStorageActionInvoked)
+}
+
+@MainActor
+private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
+
 @Test @MainActor func checklistCompletionUndoRestoresMarkerAndStrikethrough() throws {
   let textView = ListAwareTextView(frame: .zero)
   let window = NSWindow(
@@ -263,8 +356,14 @@ import Testing
   let hitRect = try #require(
     textView.checklistHitRect(for: NSRange(location: 0, length: 1))
   )
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let paddedPoint = NSPoint(x: markerRect.minX - 1, y: markerRect.midY)
+  #expect(hitRect.contains(paddedPoint))
+  #expect(!markerRect.contains(paddedPoint))
   let windowPoint = textView.convert(
-    NSPoint(x: hitRect.midX, y: hitRect.midY),
+    paddedPoint,
     to: nil
   )
   let event = try #require(
@@ -1027,6 +1126,53 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!source.contains(".id(appState.preferences.showFormattingBar)"))
 }
 
+@Test func AppKitEditorFolderScopeDoesNotDuplicateEditor() throws {
+  let source = try notesPanelSource()
+  #expect(source.contains("FolderNavigator"))
+  #expect(source.contains("visibleNotes"))
+  #expect(source.contains("isEditorVisible"))
+  #expect(source.contains(".opacity(isEditorVisible ? 1 : 0)"))
+  #expect(source.components(separatedBy: "NativeRichTextEditor(").count - 1 == 1)
+  #expect(!source.contains(".id(activeFolderID)"))
+  #expect(!source.contains("folder-specific NSTextView"))
+}
+
+@Test func NotesPanelFolderScopeGatesActionsAndBoundsTheNavigator() throws {
+  let source = try notesPanelSource()
+
+  #expect(source.contains("visibleSelectedNote"))
+  #expect(source.contains("activateNoteAndScope"))
+  #expect(source.contains("onChange(of: appState.workspace.selectedNoteID)"))
+  #expect(source.contains("guard isShowingTrash"))
+  #expect(source.contains("ScrollView(.horizontal"))
+  #expect(source.contains(".accessibilityIdentifier(\"folder-unfiled\")"))
+  #expect(source.contains(".accessibilityIdentifier(\"folder-trash\")"))
+  #expect(source.contains("folderNavigatorMaxHeight"))
+  #expect(source.contains(".frame(maxHeight: folderNavigatorMaxHeight)"))
+  #expect(source.contains("guard visibleSelectedNote?.id == note.id else { return }"))
+
+  let navigator = try #require(source.components(separatedBy: "private struct FolderNavigator").last)
+  let bodyStart = try #require(navigator.range(of: "var body: some View"))
+  let rootDefinition = try #require(navigator.range(of: "private var rootRow"))
+  let body = String(navigator[bodyStart.upperBound..<rootDefinition.lowerBound])
+  let rootUse = try #require(body.range(of: "rootRow"))
+  let folderScroll = try #require(body.range(of: "ScrollView(.horizontal"))
+  let trashIdentifier = try #require(body.range(of: ".accessibilityIdentifier(\"folder-trash\")"))
+  #expect(rootUse.lowerBound < folderScroll.lowerBound)
+  #expect(folderScroll.lowerBound < trashIdentifier.lowerBound)
+}
+
+@Test func NotesPanelFolderContextActionsUseConcreteVisibleNotes() throws {
+  let source = try notesPanelSource()
+
+  #expect(source.contains("private func isNoteVisible(_ noteID: UUID)"))
+  #expect(source.contains("guard isNoteVisible(note.id) else { return }"))
+  #expect(source.contains("guard isNoteVisible(noteID), activateNoteAndScope(noteID) else"))
+  #expect(source.contains("if activateNoteAndScope(noteID)"))
+  #expect(source.contains("appState.setSelectedTabColor(hex)"))
+  #expect(source.contains("guard let note = visibleSelectedNote else { return }"))
+}
+
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1098,6 +1244,314 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(textView.undoManager?.canUndo == true)
 }
 
+@Test @MainActor func hostedNotesPanelEvacuatesTitleFocusWithoutRestoringBody() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let work = try Folder(id: UUID(), name: "Work")
+  let text = "Title focus stays inert"
+  let note = Note(
+    title: "Title focus",
+    body: text,
+    richTextRTF: try hostedPanelRTF(text: text),
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [work])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let editor = try #require(hostedPanelEditor(in: host))
+  let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+  let expectedRTF = try editor.textStorage?.data(
+    from: NSRange(location: 0, length: text.utf16.count),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let expectedSelection = editor.selectedRange()
+
+  #expect(window.makeFirstResponder(titleField))
+  let titleResponder = try #require(window.firstResponder)
+  #expect(titleResponder !== editor)
+
+  setHostedPanelNoteFolder(state, noteID: note.id, folderID: work.id)
+  await settleHostedView(host)
+
+  #expect(window.firstResponder !== titleResponder)
+  #expect(window.firstResponder !== editor)
+  #expect(editor.string == text)
+  #expect(editor.selectedRange() == expectedSelection)
+  #expect(state.workspace.notes.first?.body == text)
+  #expect(state.workspace.notes.first?.richTextRTF == expectedRTF)
+
+  setHostedPanelNoteFolder(state, noteID: note.id, folderID: nil)
+  await settleHostedView(host)
+
+  #expect(hostedPanelEditor(in: host) === editor)
+  #expect(commands.textView === editor)
+  #expect(window.firstResponder !== editor)
+  #expect(window.firstResponder !== titleResponder)
+  #expect(editor.string == text)
+  #expect(state.workspace.notes.first?.richTextRTF == expectedRTF)
+}
+
+@Test @MainActor func hostedNotesPanelHiddenFormattingAndUndoRemainInertAcrossRefresh() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let work = try Folder(id: UUID(), name: "Work")
+  let text = "Formatting remains unchanged"
+  let note = Note(
+    title: "Formatting",
+    body: text,
+    richTextRTF: try hostedPanelRTF(text: text),
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [work])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let editor = try #require(hostedPanelEditor(in: host))
+  editor.setSelectedRange(NSRange(location: 2, length: 9))
+  editor.typingAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+  commands.applyBackgroundColor(.systemYellow)
+  let expectedAttributed = NSAttributedString(attributedString: try #require(editor.textStorage))
+  let expectedText = editor.string
+  let expectedSelection = editor.selectedRange()
+  let expectedTypingAttributes = NSDictionary(dictionary: editor.typingAttributes)
+  let expectedRTF = try editor.textStorage?.data(
+    from: NSRange(location: 0, length: expectedText.utf16.count),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let expectedCanUndo = try #require(editor.undoManager).canUndo
+  let expectedCanRedo = editor.undoManager?.canRedo ?? false
+  #expect(expectedCanUndo)
+  #expect(window.makeFirstResponder(editor))
+
+  setHostedPanelNoteFolder(state, noteID: note.id, folderID: work.id)
+  await settleHostedView(host)
+  let hiddenWorkspace = state.workspace
+
+  try sendHostedKeyEquivalent("b", keyCode: 11, modifiers: [.command], to: window)
+  try sendHostedKeyEquivalent("z", keyCode: 6, modifiers: [.command], to: window)
+  commands.toggleBold()
+  commands.undo()
+
+  #expect(commands.textView == nil)
+  #expect(state.workspace == hiddenWorkspace)
+  #expect(editor.string == expectedText)
+  #expect(editor.selectedRange() == expectedSelection)
+  #expect(NSAttributedString(attributedString: try #require(editor.textStorage)).isEqual(to: expectedAttributed))
+  #expect(
+    NSDictionary(dictionary: editor.typingAttributes)
+      .isEqual(to: expectedTypingAttributes)
+  )
+  let hiddenRTF = try editor.textStorage?.data(
+    from: NSRange(location: 0, length: expectedText.utf16.count),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  #expect(hiddenRTF == expectedRTF)
+  #expect(editor.undoManager?.canUndo == expectedCanUndo)
+  #expect(editor.undoManager?.canRedo == expectedCanRedo)
+
+  state.saveError = "unrelated refresh"
+  await settleHostedView(host)
+  try sendHostedKeyEquivalent("b", keyCode: 11, modifiers: [.command], to: window)
+  commands.toggleBold()
+  commands.undo()
+
+  #expect(commands.textView == nil)
+  #expect(state.workspace == hiddenWorkspace)
+  #expect(NSAttributedString(attributedString: try #require(editor.textStorage)).isEqual(to: expectedAttributed))
+  #expect(editor.selectedRange() == expectedSelection)
+  #expect(editor.undoManager?.canUndo == expectedCanUndo)
+  #expect(editor.undoManager?.canRedo == expectedCanRedo)
+
+  setHostedPanelNoteFolder(state, noteID: note.id, folderID: nil)
+  await settleHostedView(host)
+  #expect(hostedPanelEditor(in: host) === editor)
+  #expect(commands.textView === editor)
+  #expect(window.firstResponder === editor)
+  commands.toggleItalic()
+  #expect(
+    fontTraits(try #require(editor.textStorage?.attribute(.font, at: 2, effectiveRange: nil) as? NSFont))
+      .contains(.italicFontMask)
+  )
+  commands.undo()
+  #expect(NSAttributedString(attributedString: try #require(editor.textStorage)).isEqual(to: expectedAttributed))
+}
+
+@Test @MainActor func hostedNotesPanelCancelsFocusedDictationAtHiddenScopeBoundary() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let work = try Folder(id: UUID(), name: "Work")
+  let text = "Focused dictation remains scoped"
+  let note = Note(title: "Dictation", body: text, folderID: nil)
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [work])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+  let editor = try #require(hostedPanelEditor(in: host))
+  editor.setSelectedRange(NSRange(location: 8, length: 0))
+  let originalAttributed = NSAttributedString(attributedString: try #require(editor.textStorage))
+  let originalSelection = editor.selectedRange()
+  let originalTypingAttributes = NSDictionary(dictionary: editor.typingAttributes)
+  let originalRTF = try editor.textStorage?.data(
+    from: NSRange(location: 0, length: text.utf16.count),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  #expect(window.makeFirstResponder(editor))
+
+  #expect(commands.beginFocusedDictation())
+  #expect(commands.isFocusedDictationActive)
+  setHostedPanelNoteFolder(state, noteID: note.id, folderID: work.id)
+  await settleHostedView(host)
+
+  #expect(!commands.isFocusedDictationActive)
+  #expect(commands.textView == nil)
+  commands.updateFocusedDictation(provisionalText: "late provisional")
+  #expect(commands.commitFocusedDictation(text: "late commit") == nil)
+  #expect(editor.string == text)
+  #expect(editor.selectedRange() == originalSelection)
+  #expect(NSAttributedString(attributedString: try #require(editor.textStorage)).isEqual(to: originalAttributed))
+  #expect(
+    NSDictionary(dictionary: editor.typingAttributes)
+      .isEqual(to: originalTypingAttributes)
+  )
+  let hiddenRTF = try editor.textStorage?.data(
+    from: NSRange(location: 0, length: text.utf16.count),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  #expect(hiddenRTF == originalRTF)
+
+  setHostedPanelNoteFolder(state, noteID: note.id, folderID: nil)
+  await settleHostedView(host)
+  #expect(commands.textView === editor)
+  #expect(commands.canBeginFocusedDictation)
+  #expect(commands.beginFocusedDictation())
+  commands.updateFocusedDictation(provisionalText: "temporary provisional")
+  #expect(editor.string != text)
+
+  setHostedPanelNoteFolder(state, noteID: note.id, folderID: work.id)
+  await settleHostedView(host)
+
+  #expect(!commands.isFocusedDictationActive)
+  #expect(commands.textView == nil)
+  commands.updateFocusedDictation(provisionalText: "late replacement")
+  #expect(commands.commitFocusedDictation(text: "late commit") == nil)
+  #expect(editor.string == text)
+  #expect(editor.selectedRange() == originalSelection)
+  #expect(NSAttributedString(attributedString: try #require(editor.textStorage)).isEqual(to: originalAttributed))
+
+  setHostedPanelNoteFolder(state, noteID: note.id, folderID: nil)
+  await settleHostedView(host)
+  #expect(commands.textView === editor)
+  #expect(commands.canBeginFocusedDictation)
+  #expect(commands.beginFocusedDictation())
+  commands.cancelFocusedDictation()
+}
+
+@Test @MainActor func hostedNotesPanelStaleHiddenBoundaryCannotDetachNewVisibleEditor() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let work = try Folder(id: UUID(), name: "Work")
+  let firstText = "First note remains unchanged"
+  let secondText = "Second note remains usable"
+  let first = Note(
+    title: "First",
+    body: firstText,
+    richTextRTF: try hostedPanelRTF(text: firstText),
+    folderID: nil
+  )
+  let second = Note(
+    title: "Second",
+    body: secondText,
+    richTextRTF: try hostedPanelRTF(text: secondText),
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(
+      notes: [first, second],
+      selectedNoteID: first.id,
+      folders: [work]
+    )
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let firstEditor = try #require(hostedPanelEditor(in: host))
+  let firstWorkspace = state.workspace
+  #expect(commands.textView === firstEditor)
+  #expect(window.makeFirstResponder(firstEditor))
+
+  var secondEditor: ListAwareTextView?
+  var secondFocusWasSet = false
+  await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    DispatchQueue.main.async {
+      setHostedPanelNoteFolder(state, noteID: first.id, folderID: work.id)
+      forceHostedViewUpdate(host)
+    }
+    DispatchQueue.main.async {
+      setHostedPanelSelectedNote(state, noteID: second.id)
+      forceHostedViewUpdate(host)
+      if let candidate = hostedPanelEditor(in: host), candidate.string == secondText {
+        secondEditor = candidate
+        secondFocusWasSet = window.makeFirstResponder(candidate)
+      }
+      DispatchQueue.main.async {
+        continuation.resume()
+      }
+    }
+  }
+
+  let visibleEditor = try #require(secondEditor)
+  let secondWorkspace = state.workspace
+  let secondAttributed = NSAttributedString(attributedString: try #require(visibleEditor.textStorage))
+  let secondRTF = try visibleEditor.textStorage?.data(
+    from: NSRange(location: 0, length: secondText.utf16.count),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+
+  #expect(visibleEditor !== firstEditor)
+  #expect(secondFocusWasSet)
+  #expect(window.firstResponder === visibleEditor)
+  #expect(commands.textView === visibleEditor)
+  #expect(visibleEditor.string == secondText)
+  #expect(state.workspace.notes.first(where: { $0.id == first.id })?.body == firstText)
+  #expect(state.workspace.notes.first(where: { $0.id == second.id })?.body == secondText)
+  #expect(state.workspace.notes.first(where: { $0.id == first.id })?.richTextRTF == firstWorkspace.notes.first?.richTextRTF)
+  #expect(state.workspace == secondWorkspace)
+
+  visibleEditor.setSelectedRange(NSRange(location: 1, length: 6))
+  commands.toggleItalic()
+  #expect(
+    fontTraits(try #require(visibleEditor.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont))
+      .contains(.italicFontMask)
+  )
+  commands.undo()
+  #expect(NSAttributedString(attributedString: try #require(visibleEditor.textStorage)).isEqual(to: secondAttributed))
+  #expect(try visibleEditor.textStorage?.data(
+    from: NSRange(location: 0, length: secondText.utf16.count),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  ) == secondRTF)
+  #expect(commands.canBeginFocusedDictation)
+  #expect(commands.beginFocusedDictation())
+  commands.cancelFocusedDictation()
+}
+
 @MainActor
 private func hostedDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T? {
   if let match = view as? T { return match }
@@ -1115,6 +1569,12 @@ private func settleHostedView(_ view: NSView) async {
   }
 }
 
+@MainActor
+private func forceHostedViewUpdate(_ view: NSView) {
+  view.layoutSubtreeIfNeeded()
+  view.displayIfNeeded()
+}
+
 private func notesPanelSource() throws -> String {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
@@ -1124,6 +1584,115 @@ private func notesPanelSource() throws -> String {
     contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
     encoding: .utf8
   )
+}
+
+@MainActor
+private func hostedPanelState(root: URL, workspace: Workspace) async -> AppState {
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = workspace
+  return state
+}
+
+@MainActor
+private func hostedPanel(
+  root: URL,
+  state: AppState,
+  commands: EditorCommands
+) -> (NSWindow, NSHostingView<AnyView>) {
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(
+    rootView: AnyView(
+      NotesPanel(dictationRuntime: runtime, editorCommands: commands)
+        .environmentObject(state)
+    )
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  return (window, host)
+}
+
+@MainActor
+private func hostedPanelEditor(in view: NSView) -> ListAwareTextView? {
+  if let editor = view as? ListAwareTextView { return editor }
+  for subview in view.subviews {
+    if let editor = hostedPanelEditor(in: subview) { return editor }
+  }
+  return nil
+}
+
+@MainActor
+private func hostedPanelTitleField(with value: String, in view: NSView) -> NSTextField? {
+  if let field = view as? NSTextField,
+    field.stringValue == value,
+    field.placeholderString == "Note title"
+  {
+    return field
+  }
+  for subview in view.subviews {
+    if let field = hostedPanelTitleField(with: value, in: subview) { return field }
+  }
+  return nil
+}
+
+@MainActor
+private func hostedPanelRTF(text: String) throws -> Data {
+  let attributed = NSMutableAttributedString(string: text)
+  let range = NSRange(location: 0, length: text.utf16.count)
+  attributed.addAttributes(
+    [.font: try #require(NSFont(name: "Helvetica-Bold", size: 18)), .foregroundColor: NSColor.systemRed],
+    range: range
+  )
+  return try attributed.data(
+    from: range,
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+}
+
+@MainActor
+private func setHostedPanelNoteFolder(_ state: AppState, noteID: UUID, folderID: UUID?) {
+  var workspace = state.workspace
+  guard let index = workspace.notes.firstIndex(where: { $0.id == noteID }) else { return }
+  workspace.notes[index].folderID = folderID
+  state.workspace = workspace
+}
+
+@MainActor
+private func setHostedPanelSelectedNote(_ state: AppState, noteID: UUID) {
+  var workspace = state.workspace
+  workspace.selectedNoteID = noteID
+  state.workspace = workspace
+}
+
+@MainActor
+private func sendHostedKeyEquivalent(
+  _ characters: String,
+  keyCode: UInt16,
+  modifiers: NSEvent.ModifierFlags,
+  to window: NSWindow
+) throws {
+  let event = try #require(
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: modifiers,
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      characters: characters,
+      charactersIgnoringModifiers: characters,
+      isARepeat: false,
+      keyCode: keyCode
+    )
+  )
+  _ = window.performKeyEquivalent(with: event)
 }
 
 @Test @MainActor func tabColorSwatchesAreNonTemplateImages() {

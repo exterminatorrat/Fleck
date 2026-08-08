@@ -63,3 +63,23 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
   #expect(!searchView.contains("WorkspaceSearchKeyResponder"))
   #expect(!searchView.contains("WorkspaceSearchEngine.search(query: query, in: notes, limit: 50)"))
 }
+
+@Test
+func WorkspaceSearchSourceAuditRetainsFolderAwareUnderlayAndNewNoteRouting() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("folderNavigator"))
+  #expect(source.contains("scopedEditor"))
+  #expect(source.contains(".allowsHitTesting(!searchController.isPresented)"))
+  #expect(source.contains(".accessibilityHidden(searchController.isPresented)"))
+  #expect(source.contains("appState.addNote(inFolderID: activeFolderID)"))
+  #expect(source.contains("currentNoteIDs:"))
+  #expect(source.contains("activateNoteAndScope"))
+}

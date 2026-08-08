@@ -40,6 +40,46 @@ import Testing
   #expect(receipt.canonicalPath == canonical.path)
 }
 
+@Test func FleckProductMigrationFolderBearingSnapshotRoundTrip() throws {
+  let parent = migrationTestDirectory()
+  defer { try? FileManager.default.removeItem(at: parent) }
+  let legacy = legacyMigrationURL(in: parent)
+  let canonical = canonicalMigrationURL(in: parent)
+  let folder = try Folder(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000301")!,
+    name: "Migrated"
+  )
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let note = Note(
+    title: "Foldered",
+    body: "Keep folder metadata",
+    createdAt: date,
+    modifiedAt: date,
+    agentAccess: true,
+    revision: 4,
+    folderID: folder.id
+  )
+  let workspace = Workspace(
+    notes: [note],
+    selectedNoteID: note.id,
+    folders: [folder]
+  )
+  _ = try LocalStoreSnapshotWriter(rootURL: legacy).save(
+    workspace: workspace,
+    preferences: AppPreferences(accentHex: "#123456"),
+    generation: 7
+  )
+
+  #expect(
+    FleckProductMigration(applicationSupportParent: parent).prepare()
+      == .migrated(canonical)
+  )
+  let migrated = try LocalStoreSnapshotWriter(rootURL: canonical).loadSnapshot()
+  #expect(migrated.workspace == workspace)
+  #expect(migrated.workspace.folders == [folder])
+  #expect(migrated.workspace.notes.first?.folderID == folder.id)
+}
+
 @Test func repeatedMigrationUsesCanonicalRootWithoutRewritingIt() throws {
   let parent = migrationTestDirectory()
   defer { try? FileManager.default.removeItem(at: parent) }
@@ -294,6 +334,49 @@ func recreatedLegacyWorkspaceFailsClosedWhenItIsNotExactlyDisposable(
   )
   #expect(FileManager.default.fileExists(atPath: legacy.path))
   #expect(!FileManager.default.fileExists(atPath: canonical.path))
+}
+
+@Test func folderBearingMigrationValidationFailurePreservesLegacySnapshot() throws {
+  let parent = migrationTestDirectory()
+  defer { try? FileManager.default.removeItem(at: parent) }
+  let legacy = legacyMigrationURL(in: parent)
+  let canonical = canonicalMigrationURL(in: parent)
+  let folder = try Folder(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000321")!,
+    name: "Legacy Folder"
+  )
+  let note = Note(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000322")!,
+    title: "Foldered",
+    body: "Original",
+    folderID: folder.id
+  )
+  _ = try LocalStoreSnapshotWriter(rootURL: legacy).save(
+    workspace: Workspace(
+      notes: [note],
+      selectedNoteID: note.id,
+      folders: [folder]
+    ),
+    preferences: AppPreferences(fontFamily: "Menlo"),
+    generation: 1
+  )
+  try Data("corrupt body".utf8).write(
+    to: legacy.appendingPathComponent("\(note.id.uuidString.lowercased()).md")
+  )
+  let expectedLegacy = try migrationFileContents(at: legacy)
+
+  #expect(
+    FleckProductMigration(applicationSupportParent: parent).prepare()
+      == .failed(canonical, .invalidMigratedWorkspace)
+  )
+  #expect(try migrationFileContents(at: legacy) == expectedLegacy)
+  #expect(!FileManager.default.fileExists(atPath: canonical.path))
+  let manifest = try #require(
+    try JSONSerialization.jsonObject(
+      with: Data(contentsOf: legacy.appendingPathComponent("workspace.json"))
+    ) as? [String: Any]
+  )
+  #expect((manifest["folders"] as? [[String: Any]])?.count == 1)
 }
 
 @Test func failedRollbackReportsBothPreservedPaths() throws {

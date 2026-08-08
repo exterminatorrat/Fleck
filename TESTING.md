@@ -675,6 +675,109 @@ Also inspect **Activity Monitor → Memory** and **Activity Monitor → CPU** af
 
 The current targets are at or below 15 MB for the release executable where practical and below 75 MB resident memory during an ordinary idle workflow. A SwiftPM executable-size result is not a substitute for measuring the eventual signed `.app` bundle.
 
+### Performance baseline — Wave 1A
+
+The reproducible baseline harness uses exactly 10-note, 100-note, and
+1,000-note synthetic workspaces. The fixture has stable UUIDs and dates and
+contains no personal note content. Automated coverage characterizes current
+LocalStore load/save behavior, records temporary-directory storage observations,
+and uses the `FleckPerformanceSaveLeavesUnchangedNoteBodiesUntouched` regression
+to verify the persistence invariant: when the existing root is a valid
+integrity-v1 snapshot and its manifest hash matches the newly encoded
+preferences, note body, or RTF bytes, unchanged content is reused rather than
+atomically rewritten. Invalid, hashless, legacy, or changed content follows the
+full write path.
+
+Run the safe automated checks from the repository root:
+
+```sh
+swift test --disable-automatic-resolution --no-parallel --filter FleckPerformance
+bash -n Scripts/profile-fleck-performance.sh
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck Scripts/profile-fleck-performance.sh
+else
+  echo 'shellcheck not installed; not run'
+fi
+```
+
+For a profile artifact, choose an explicit disposable output directory outside
+`~/Library/Application Support/Fleck/` and run:
+
+```sh
+Scripts/profile-fleck-performance.sh "/absolute/path/to/disposable-output"
+```
+
+The script builds the release Fleck executable and records the machine, macOS,
+Xcode, Swift, commit, build configuration, executable size, and command
+metadata. If a QA Fleck process is already running, collect five idle RSS/CPU
+samples without allowing the script to launch or terminate it:
+
+```sh
+FLECK_PERFORMANCE_PID=PID Scripts/profile-fleck-performance.sh \
+  "/absolute/path/to/disposable-output"
+```
+
+The output also records an aggregate disk sample. Use Instruments File Activity
+or `fs_usage` on the caller-specified QA PID for logical disk writes; do not
+report aggregate device activity as Fleck-only writes. Record launch, panel
+presentation, note switching, typing, save duration, logical disk writes, idle
+CPU, resident memory, executable size, median/p50, p95, and peak results in
+`docs/performance/fleck-baseline-template.md`. Leave values as `[not captured]`
+when no measurement was taken; tests and a build do not create runtime
+evidence.
+
+The packaged-app boundary is manual. Build and launch the exact QA app with
+`Scripts/build-fleck-app.sh` and `/usr/bin/open -n .build/Fleck.app` only from
+a disposable macOS account or another isolated QA environment. Current
+production persistence has no safe test-root override, so the harness never
+launches Fleck and never reads, copies, moves, or deletes the user's Fleck
+Application Support directory. If an isolated packaged launch is unavailable,
+leave launch and UI/runtime measurements unclaimed.
+
+For the panel-presentation timing loop, grant System Events Accessibility to
+the calling Terminal or agent in System Settings → Privacy & Security →
+Accessibility, launch the exact packaged Fleck app manually, and run:
+
+```sh
+bash -n Scripts/measure-fleck-panel-presentation.sh
+FLECK_PERFORMANCE_PID=PID Scripts/measure-fleck-panel-presentation.sh \
+  "/absolute/path/to/disposable-output"
+```
+
+The script measures the bounded `AX-press-to-accessible-window` interval: one
+cold and 30 warm samples from the exact Fleck `AXMenuExtra` AXPress invocation
+to the first matching sane-size transient `AXWindow` exposed in Fleck's
+process window list. Window-list membership is the observed criterion; the
+script does not require `AXVisible`. It searches all Fleck menu bars and
+requires title/name `Fleck`, role `AXMenuBarItem`, and subrole `AXMenuExtra`;
+it normalizes the panel closed before every sample by toggling that exact item
+only when a matching window is present, then verifies that it disappears after
+each sample. It uses one JXA process and `Date.now`, writes raw TSV plus
+p50/p95/min/max and metadata, and fails closed on missing, ambiguous, or
+timed-out states. A failed AX transition receives a bounded best-effort close
+attempt without masking the original error. This is not pixel-complete or
+human click latency. It does not use app activation/log records, launch or
+signal Fleck, or read/write Fleck Application Support or editor data. It
+intentionally toggles panel presentation state with AXPress; it does not
+terminate, rebuild, or otherwise control Fleck's process lifecycle, and does
+not mutate note/editor or Application Support data. Each payload is written
+through its securely opened same-directory temporary regular-file handle and
+atomically committed with an exclusive same-directory `link(2)` followed by
+unlink of the source; every existing destination, including a directory
+substituted immediately before publication, fails closed. The caller must provide a fresh existing disposable directory with
+the three final names absent; the harness canonicalizes and pins that directory
+by device/inode, rejects tab, carriage-return, and line-feed characters in its
+lexical or resolved path, and rolls back earlier app-owned publications if a
+later publication fails while preserving caller-owned substitutions. The live
+directory binding remains authoritative if the caller renames or replaces the
+approved pathname: operations continue in the original directory, and a
+successful transaction's files remain there rather than being redirected.
+
+The PID guard checks only the packaged executable path shape
+`Fleck.app/Contents/MacOS/Fleck`; it does not prove the process is the accepted
+build. The caller owns the exact artifact identity and the disposable output
+directory.
+
 ## Accessibility checks
 
 - [ ] Use only the keyboard to create, select, edit, format, and close notes.

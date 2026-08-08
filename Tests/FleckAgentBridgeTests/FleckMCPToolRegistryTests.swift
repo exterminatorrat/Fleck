@@ -31,6 +31,15 @@ struct FleckMCPToolRegistryTests {
     )
   }
 
+  @Test func FleckMCPToolRegistryKeepsFolderUnawareSurface() {
+    #expect(FleckMCPToolRegistry.tools.count == 13)
+    #expect(
+      FleckMCPToolRegistry.tools.allSatisfy {
+        !$0.name.localizedCaseInsensitiveContains("folder")
+      }
+    )
+  }
+
   @Test func schemasDeclareExactRequiredFieldsAndRejectUnknownFields() throws {
     let expectations: [(String, Set<String>, Set<String>)] = [
       ("list_shared_notes", [], []),

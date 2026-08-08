@@ -142,6 +142,33 @@ import Testing
   #expect(note.revision == 0)
 }
 
+@Test func oldWorkspaceJSONDefaultsFoldersAndNoteFolderID() throws {
+  let data = Data(
+    """
+    {
+      "notes": [
+        {
+          "id":"00000000-0000-0000-0000-000000000011",
+          "title":"Legacy",
+          "body":"Body",
+          "createdAt":0,
+          "modifiedAt":0,
+          "isPinned":false
+        }
+      ],
+      "selectedNoteID":"00000000-0000-0000-0000-000000000011"
+    }
+    """.utf8
+  )
+  let decoder = JSONDecoder()
+  decoder.dateDecodingStrategy = .secondsSince1970
+
+  let workspace = try decoder.decode(Workspace.self, from: data)
+
+  #expect(workspace.folders.isEmpty)
+  #expect(workspace.notes.first?.folderID == nil)
+}
+
 @Test func contentAndSharingChangesIncrementRevisionOnce() {
   let id = UUID()
   let changedAt = Date(timeIntervalSince1970: 300)
@@ -195,4 +222,311 @@ import Testing
   )
   #expect(workspace.notes[0].revision == 1)
   #expect(workspace.notes[0].modifiedAt == changedAt)
+}
+
+@Test func WorkspaceFolderNameNormalizationAndReservedVariants() throws {
+  let invalidNames = [
+    "",
+    "one/two",
+    String(repeating: "a", count: 81),
+    "Inbox",
+    " inbox ",
+    "INBOX",
+    "Trash",
+    " trash ",
+  ]
+  for name in invalidNames {
+    #expect(throws: FolderError.self) {
+      try Folder(name: name)
+    }
+  }
+
+  for controlName in [
+    "one\t two",
+    "one\ntwo",
+    "one\rtwo",
+    "one\u{0000}two",
+    "one\u{0001}two",
+    "one\u{2028}two",
+  ] {
+    #expect(throws: FolderError.controlCharacter) {
+      try Folder(name: controlName)
+    }
+  }
+
+  let normalized = try Folder(name: "  Team\u{00A0}\u{2003}  Notes  ")
+  #expect(normalized.name == "Team Notes")
+  #expect(try Folder(name: "Cafe\u{301}").name == "Café")
+
+  var workspace = Workspace()
+  let folder = try workspace.createFolder(name: "  Team\u{00A0}\u{2003}Notes ")
+  #expect(workspace.folders == [folder])
+  #expect(throws: FolderError.self) {
+    try workspace.createFolder(name: "team notes")
+  }
+}
+
+@Test func WorkspaceFolderNameKeyFoldsUnicodeWithoutRemovingDiacritics() throws {
+  var workspace = Workspace()
+  let cafe = try workspace.createFolder(name: "Café")
+  let plain = try workspace.createFolder(name: "CAFE")
+
+  #expect(workspace.folders == [cafe, plain])
+  #expect(cafe.id != plain.id)
+
+  #expect(throws: FolderError.duplicateName) {
+    try workspace.createFolder(name: "Cafe\u{301}")
+  }
+  #expect(throws: FolderError.duplicateName) {
+    try workspace.renameFolder(id: plain.id, name: "Cafe\u{301}")
+  }
+  #expect(workspace.folders == [cafe, plain])
+
+  try workspace.renameFolder(id: plain.id, name: "CAFE Notes")
+  #expect(workspace.folders[1].id == plain.id)
+  #expect(workspace.folders[1].name == "CAFE Notes")
+
+  var sharpSWorkspace = Workspace()
+  _ = try sharpSWorkspace.createFolder(name: "Straße")
+  #expect(throws: FolderError.duplicateName) {
+    try sharpSWorkspace.createFolder(name: "STRASSE")
+  }
+
+  #expect(throws: FolderError.reservedName) {
+    try Folder(name: "INBOX")
+  }
+  #expect(throws: FolderError.reservedName) {
+    try Folder(name: " trASH ")
+  }
+}
+
+@Test func WorkspaceFolderRenameRetainsIdentityAndValidatesTargets() throws {
+  let first = try Folder(name: "First")
+  let second = try Folder(name: "Second")
+  var workspace = Workspace(folders: [first, second])
+
+  try workspace.renameFolder(id: first.id, name: "Renamed")
+  #expect(workspace.folders[0].id == first.id)
+  #expect(workspace.folders[0].name == "Renamed")
+  #expect(throws: FolderError.duplicateName) {
+    try workspace.renameFolder(id: first.id, name: " second ")
+  }
+  #expect(throws: FolderError.reservedName) {
+    try workspace.renameFolder(id: first.id, name: "INBOX")
+  }
+  #expect(throws: FolderError.invalidTarget) {
+    try workspace.renameFolder(id: UUID(), name: "Nope")
+  }
+}
+
+@Test func WorkspaceFolderMovePreservesNoteDataAndOrganizationTimestamps() throws {
+  let firstFolder = try Folder(name: "First")
+  let secondFolder = try Folder(name: "Second")
+  let createdAt = Date(timeIntervalSince1970: 10)
+  let modifiedAt = Date(timeIntervalSince1970: 20)
+  let note = Note(
+    title: "Formatted",
+    body: "Body",
+    richTextRTF: Data("{\\rtf1 Body}".utf8),
+    tabColorHex: "#123456",
+    createdAt: createdAt,
+    modifiedAt: modifiedAt,
+    isPinned: true,
+    agentAccess: true,
+    revision: 9,
+    folderID: firstFolder.id
+  )
+  var workspace = Workspace(
+    notes: [note],
+    selectedNoteID: note.id,
+    folders: [firstFolder, secondFolder]
+  )
+
+  try workspace.moveNote(id: note.id, toFolderID: secondFolder.id)
+  var expected = note
+  expected.folderID = secondFolder.id
+  #expect(workspace.notes == [expected])
+  #expect(workspace.notes[0].createdAt == createdAt)
+  #expect(workspace.notes[0].modifiedAt == modifiedAt)
+  #expect(workspace.notes[0].revision == 9)
+
+  let beforeInvalidMove = workspace.notes
+  #expect(throws: FolderError.invalidTarget) {
+    try workspace.moveNote(id: note.id, toFolderID: UUID())
+  }
+  #expect(workspace.notes == beforeInvalidMove)
+}
+
+@Test func WorkspaceFolderDeletionMovesMembersToUnfiled() throws {
+  let folder = try Folder(name: "Work")
+  let other = try Folder(name: "Other")
+  let first = Note(
+    title: "First",
+    body: "Body",
+    richTextRTF: Data("{\\rtf1 Body}".utf8),
+    createdAt: Date(timeIntervalSince1970: 10),
+    modifiedAt: Date(timeIntervalSince1970: 20),
+    isPinned: true,
+    agentAccess: true,
+    revision: 4,
+    folderID: folder.id
+  )
+  let second = Note(title: "Second", folderID: folder.id)
+  let untouched = Note(title: "Untouched", folderID: other.id)
+  var workspace = Workspace(
+    notes: [first, second, untouched],
+    selectedNoteID: first.id,
+    folders: [folder, other]
+  )
+  let before = workspace.notes
+
+  try workspace.deleteFolder(id: folder.id)
+
+  #expect(workspace.folders == [other])
+  #expect(workspace.notes.map(\.id) == before.map(\.id))
+  #expect(workspace.notes[0].folderID == nil)
+  #expect(workspace.notes[1].folderID == nil)
+  #expect(workspace.notes[2] == untouched)
+  #expect(workspace.notes[0].richTextRTF == first.richTextRTF)
+  #expect(workspace.notes[0].revision == first.revision)
+  #expect(workspace.notes[0].modifiedAt == first.modifiedAt)
+  #expect(workspace.selectedNoteID == first.id)
+}
+
+@Test func WorkspaceFolderReorderUsesPostRemovalInsertionIndex() throws {
+  let folders = try ["A", "B", "C", "D"].map { try Folder(name: $0) }
+  var workspace = Workspace(folders: folders)
+
+  try workspace.reorderFolder(id: folders[2].id, to: 0)
+  #expect(workspace.folders.map(\.name) == ["C", "A", "B", "D"])
+
+  try workspace.reorderFolder(id: folders[0].id, to: 2)
+  #expect(workspace.folders.map(\.name) == ["C", "B", "A", "D"])
+
+  try workspace.reorderFolder(id: folders[0].id, to: 3)
+  #expect(workspace.folders.map(\.name) == ["C", "B", "D", "A"])
+  let beforeNoOp = workspace.folders
+  try workspace.reorderFolder(id: folders[0].id, to: 99)
+  #expect(workspace.folders == beforeNoOp)
+  try workspace.reorderFolder(id: UUID(), to: 0)
+  #expect(workspace.folders == beforeNoOp)
+}
+
+@Test func WorkspaceFolderReorderPreservesInterleavedHiddenNotes() throws {
+  let selected = try Folder(name: "Selected")
+  let other = try Folder(name: "Other")
+  let a = Note(title: "A", isPinned: true, folderID: selected.id)
+  let h1 = Note(title: "H1", isPinned: true, folderID: other.id)
+  let b = Note(title: "B", isPinned: true, folderID: selected.id)
+  let h2 = Note(title: "H2", isPinned: true, folderID: other.id)
+  let c = Note(title: "C", isPinned: true, folderID: selected.id)
+  var workspace = Workspace(
+    notes: [a, h1, b, h2, c],
+    selectedNoteID: a.id,
+    folders: [selected, other]
+  )
+
+  try workspace.reorderNote(
+    id: a.id,
+    inFolderID: selected.id,
+    toVisibleIndex: 1
+  )
+  #expect(workspace.notes.map(\.title) == ["H1", "B", "H2", "A", "C"])
+
+  try workspace.reorderNote(
+    id: a.id,
+    inFolderID: selected.id,
+    toVisibleIndex: 2
+  )
+  #expect(workspace.notes.map(\.title) == ["H1", "B", "H2", "C", "A"])
+
+  workspace = Workspace(
+    notes: [a, h1, b, h2, c],
+    selectedNoteID: a.id,
+    folders: [selected, other]
+  )
+  try workspace.reorderNote(
+    id: c.id,
+    inFolderID: selected.id,
+    toVisibleIndex: 0
+  )
+  #expect(workspace.notes.map(\.title) == ["C", "A", "H1", "B", "H2"])
+}
+
+@Test func WorkspaceFolderRestoreUsesPinnedPartition() throws {
+  let folder = try Folder(name: "Work")
+  let pinned = Note(title: "P1", isPinned: true, folderID: folder.id)
+  let unpinned = Note(title: "U1", folderID: folder.id)
+  let restoredPinned = Note(title: "P2", isPinned: true, folderID: folder.id)
+  let restoredUnpinned = Note(title: "U2", folderID: folder.id)
+  var workspace = Workspace(
+    notes: [pinned, unpinned],
+    selectedNoteID: unpinned.id,
+    folders: [folder]
+  )
+
+  workspace.addRestoredNote(restoredPinned)
+  #expect(workspace.notes.map(\.title) == ["P1", "P2", "U1"])
+  workspace.addRestoredNote(restoredUnpinned)
+  #expect(workspace.notes.map(\.title) == ["P1", "P2", "U1", "U2"])
+}
+
+@Test func WorkspaceFolderReorderPreservesPinnedUnpinnedAndHiddenOrder() throws {
+  let selected = try Folder(name: "Selected")
+  let other = try Folder(name: "Other")
+  let pinnedA = Note(title: "PA", isPinned: true, folderID: selected.id)
+  let pinnedHidden1 = Note(title: "PH1", isPinned: true, folderID: other.id)
+  let pinnedB = Note(title: "PB", isPinned: true, folderID: selected.id)
+  let pinnedHidden2 = Note(title: "PH2", isPinned: true, folderID: other.id)
+  let pinnedC = Note(title: "PC", isPinned: true, folderID: selected.id)
+  let unpinnedA = Note(title: "UA", folderID: selected.id)
+  let unpinnedHidden1 = Note(title: "UH1", folderID: other.id)
+  let unpinnedB = Note(title: "UB", folderID: selected.id)
+  let unpinnedHidden2 = Note(title: "UH2", folderID: other.id)
+  let unpinnedC = Note(title: "UC", folderID: selected.id)
+  var workspace = Workspace(
+    notes: [
+      pinnedA, pinnedHidden1, pinnedB, pinnedHidden2, pinnedC,
+      unpinnedA, unpinnedHidden1, unpinnedB, unpinnedHidden2, unpinnedC,
+    ],
+    selectedNoteID: pinnedA.id,
+    folders: [selected, other]
+  )
+
+  try workspace.reorderNote(
+    id: pinnedA.id,
+    inFolderID: selected.id,
+    toVisibleIndex: 2
+  )
+  try workspace.reorderNote(
+    id: unpinnedA.id,
+    inFolderID: selected.id,
+    toVisibleIndex: 2
+  )
+
+  #expect(workspace.notes.map(\.title) == [
+    "PH1", "PB", "PH2", "PC", "PA",
+    "UH1", "UB", "UH2", "UC", "UA",
+  ])
+  #expect(workspace.notes.prefix(5).allSatisfy { $0.isPinned })
+  #expect(workspace.notes.dropFirst(5).allSatisfy { !$0.isPinned })
+  #expect(workspace.notes.filter { $0.folderID == other.id }.map(\.title) == [
+    "PH1", "PH2", "UH1", "UH2",
+  ])
+
+  let beforeOutOfRange = workspace.notes
+  try workspace.reorderNote(
+    id: pinnedA.id,
+    inFolderID: selected.id,
+    toVisibleIndex: 99
+  )
+  #expect(workspace.notes == beforeOutOfRange)
+  #expect(throws: FolderError.invalidTarget) {
+    try workspace.reorderNote(
+      id: pinnedA.id,
+      inFolderID: UUID(),
+      toVisibleIndex: 0
+    )
+  }
+  #expect(workspace.notes == beforeOutOfRange)
 }

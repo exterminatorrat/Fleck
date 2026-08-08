@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import FleckApp
@@ -51,7 +52,7 @@ import FleckCore
   #expect(tabStrip.contains("TabFramePreferenceKey"))
   #expect(tabStrip.contains("proxy.frame(in: .named(\"tab-strip\"))"))
   #expect(tabStrip.contains("appState.moveNote"))
-  #expect(!tabStrip.contains(".onDrag"))
+  #expect(tabStrip.contains(".onDrag"))
   #expect(!tabStrip.contains(".onDrop"))
   #expect(!tabStrip.contains("TabDropDelegate"))
 }
@@ -218,6 +219,115 @@ import FleckCore
   #expect(result.didMove)
   #expect(workspace.notes == [pinned, secondUnpinned, firstUnpinned])
   #expect(workspace.selectedNoteID == secondUnpinned.id)
+}
+
+@Test func TabDragReorderFolderScopePreservesGlobalOrder() throws {
+  let folder = try Folder(name: "Visible")
+  let other = try Folder(name: "Other")
+  let pinnedA = Note(title: "A", isPinned: true, folderID: folder.id)
+  let pinnedHidden = Note(title: "H1", isPinned: true, folderID: other.id)
+  let pinnedB = Note(title: "B", isPinned: true, folderID: folder.id)
+  let pinnedHiddenTwo = Note(title: "H2", isPinned: true, folderID: other.id)
+  let pinnedC = Note(title: "C", isPinned: true, folderID: folder.id)
+  var workspace = Workspace(
+    notes: [pinnedA, pinnedHidden, pinnedB, pinnedHiddenTwo, pinnedC],
+    selectedNoteID: pinnedA.id,
+    folders: [folder, other]
+  )
+
+  try workspace.reorderNote(id: pinnedA.id, inFolderID: folder.id, toVisibleIndex: 1)
+  #expect(workspace.notes.map(\.id) == [pinnedHidden.id, pinnedB.id, pinnedHiddenTwo.id, pinnedA.id, pinnedC.id])
+  #expect(workspace.notes(inFolderID: folder.id).map(\.id) == [pinnedB.id, pinnedA.id, pinnedC.id])
+
+  var movedToFront = Workspace(
+    notes: [pinnedA, pinnedHidden, pinnedB, pinnedHiddenTwo, pinnedC],
+    selectedNoteID: pinnedA.id,
+    folders: [folder, other]
+  )
+  try movedToFront.reorderNote(id: pinnedC.id, inFolderID: folder.id, toVisibleIndex: 0)
+  #expect(movedToFront.notes.map(\.id) == [pinnedC.id, pinnedA.id, pinnedHidden.id, pinnedB.id, pinnedHiddenTwo.id])
+}
+
+@Test func TabDragReorderFolderOrderUsesPostRemovalInsertionIndex() throws {
+  let folders = try ["A", "B", "C", "D"].map { try Folder(name: $0) }
+  var workspace = Workspace(folders: folders)
+
+  try workspace.reorderFolder(id: folders[2].id, to: 0)
+  #expect(workspace.folders.map(\.name) == ["C", "A", "B", "D"])
+  try workspace.reorderFolder(id: workspace.folders[2].id, to: 2)
+  #expect(workspace.folders.map(\.name) == ["C", "A", "B", "D"])
+  try workspace.reorderFolder(id: workspace.folders[2].id, to: 3)
+  #expect(workspace.folders.map(\.name) == ["C", "A", "D", "B"])
+  try workspace.reorderFolder(id: UUID(), to: 0)
+  #expect(workspace.folders.map(\.name) == ["C", "A", "D", "B"])
+}
+
+@Test func TabDragReorderFolderNavigatorUsesLocalPayloadsAndKeyboardContracts() throws {
+  let source = try tabNotesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+
+  #expect(source.contains("com.harryjin.fleck.local-note"))
+  #expect(source.contains("com.harryjin.fleck.local-folder"))
+  #expect(navigator.contains("loadDataRepresentation"))
+  #expect(navigator.contains("onDrop"))
+  #expect(navigator.contains("onDrag"))
+  #expect(navigator.contains("onMoveCommand"))
+  #expect(navigator.contains("onDeleteCommand"))
+  #expect(navigator.contains("onExitCommand"))
+  #expect(navigator.contains("NSF2FunctionKey"))
+  #expect(navigator.contains("name: \"Unfiled\""))
+  #expect(navigator.contains("name: \"Trash\""))
+  #expect(navigator.range(of: "rootRow")!.lowerBound < navigator.range(of: "Divider()")!.lowerBound)
+  #expect(navigator.range(of: "Divider()")!.lowerBound < navigator.range(of: "name: \"Trash\"")!.lowerBound)
+  #expect(!navigator.contains("All Notes"))
+  #expect(!navigator.contains("Inbox"))
+}
+
+@Test func FolderNavigatorFocusMovesOnlyVertically() {
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 1,
+      direction: .up,
+      count: 4
+    ) == 0
+  )
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 1,
+      direction: .down,
+      count: 4
+    ) == 2
+  )
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 1,
+      direction: .left,
+      count: 4
+    ) == 1
+  )
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 1,
+      direction: .right,
+      count: 4
+    ) == 1
+  )
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 0,
+      direction: .up,
+      count: 4
+    ) == 0
+  )
+  #expect(
+    FolderNavigatorFocus.nextIndex(
+      currentIndex: 3,
+      direction: .down,
+      count: 4
+    ) == 3
+  )
 }
 
 private func tabFrames(for noteIDs: [UUID]) -> [UUID: CGRect] {

@@ -129,6 +129,55 @@ import Testing
   #expect(fixture.state.workspace.notes[0].body == "Original\n\nOnce")
 }
 
+@Test @MainActor func AgentFolderedNotePreservesRevisionIdempotencyAndUndo() async throws {
+  let folderID = UUID(uuidString: "00000000-0000-0000-0000-000000000401")!
+  let folder = try Folder(id: folderID, name: "Agent Folder")
+  let fixture = AgentServiceFixture(
+    note: Note(
+      title: "Foldered",
+      body: "Original",
+      agentAccess: true,
+      revision: 3,
+      folderID: folderID
+    ),
+    folders: [folder]
+  )
+  let operationID = UUID()
+  let command = AgentWorkspaceCommand.appendText(
+    request: .init(
+      context: .init(
+        noteID: fixture.note.id,
+        expectedRevision: fixture.note.revision,
+        operationID: operationID
+      ),
+      text: "Once"
+    )
+  )
+
+  let first = try await fixture.execute(command)
+  let second = try await fixture.execute(command)
+  guard case .write(let writeReceipt) = first else {
+    Issue.record("Expected write receipt")
+    return
+  }
+  #expect(first == second)
+  #expect(fixture.state.commitCount == 1)
+  #expect(fixture.state.workspace.notes[0].folderID == folderID)
+  #expect(fixture.state.workspace.notes[0].revision == 4)
+
+  let undone = try await fixture.service.executeLocalUndo(
+    changeID: writeReceipt.changeID,
+    expectedRevision: writeReceipt.resultingRevision,
+    operationID: UUID()
+  )
+  guard case .undo = undone else {
+    Issue.record("Expected undo receipt")
+    return
+  }
+  #expect(fixture.state.workspace.notes[0].body == "Original")
+  #expect(fixture.state.workspace.notes[0].folderID == folderID)
+}
+
 @Test @MainActor func commitFailureAbortsPreparationAndPublishesNothing() async throws {
   let fixture = AgentServiceFixture()
   fixture.state.commitError = AgentWorkspaceError(code: .internalSaveFailure)
@@ -1115,6 +1164,7 @@ private final class AgentServiceFixture {
   init(
     shared: Bool = true,
     note providedNote: Note? = nil,
+    folders: [Folder] = [],
     authorizer: (any AgentProfileAuthorizing)? = nil,
     signingKeyProvider: any AgentSigningKeyProviding =
       FixedAgentSigningKeyProvider()
@@ -1139,7 +1189,11 @@ private final class AgentServiceFixture {
       revokedAt: nil
     )
     state = FakeAgentWorkspaceState(
-      workspace: Workspace(notes: [note], selectedNoteID: note.id)
+      workspace: Workspace(
+        notes: [note],
+        selectedNoteID: note.id,
+        folders: folders
+      )
     )
     activityStore = AgentActivityStore(
       rootURL: root,
