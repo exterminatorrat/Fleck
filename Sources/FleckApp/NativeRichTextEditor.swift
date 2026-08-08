@@ -769,8 +769,6 @@
       context.coordinator.parent = self
       if isVisible {
         commands.textView = textView
-      } else if commands.textView === textView {
-        commands.textView = nil
       }
       textView.automaticLists = automaticLists
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
