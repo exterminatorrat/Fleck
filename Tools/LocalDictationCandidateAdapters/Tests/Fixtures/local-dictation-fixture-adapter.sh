@@ -38,6 +38,22 @@ while IFS= read -r line; do
       done
       exit 0
       ;;
+    flood-events:load)
+      i=0
+      while [ "$i" -lt 512 ]; do
+        emit "{\"event\":\"measurement\",\"name\":\"fixture-$i\",\"requestID\":\"$request_id\",\"schemaVersion\":1,\"unit\":\"count\",\"value\":$i}"
+        i=$((i + 1))
+      done
+      sleep 5
+      exit 0
+      ;;
+    failure:transcribe)
+      emit "{\"code\":\"fixture-failure\",\"event\":\"failure\",\"message\":\"candidate failed\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+      sleep 5
+      ;;
+    silent:transcribe)
+      sleep 5
+      ;;
     stuck:load)
       emit "{\"event\":\"ready\",\"modelRevision\":\"fixture\",\"requestID\":\"$request_id\",\"runtimeVersion\":\"fixture\",\"schemaVersion\":1}"
       ;;

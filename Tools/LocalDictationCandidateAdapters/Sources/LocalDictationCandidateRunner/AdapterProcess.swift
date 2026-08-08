@@ -153,11 +153,17 @@ public actor AdapterProcess {
     if let eventStream {
       return eventStream
     }
-    let pair = AsyncThrowingStream<CandidateAdapterEvent, Error>.makeStream()
+    let pair = AsyncThrowingStream<CandidateAdapterEvent, Error>.makeStream(
+      bufferingPolicy: .bufferingOldest(256)
+    )
     eventStream = pair.stream
     eventContinuation = pair.continuation
-    for event in pendingEvents {
-      _ = pair.continuation.yield(event)
+    if let terminalError {
+      pair.continuation.finish(throwing: terminalError)
+    } else {
+      for event in pendingEvents {
+        _ = pair.continuation.yield(event)
+      }
     }
     pendingEvents.removeAll(keepingCapacity: false)
     return pair.stream
@@ -336,6 +342,11 @@ public actor AdapterProcess {
     forceTerminate()
   }
 
+  public func terminate() async {
+    forceTerminate()
+    await waitForExit(timeout: .seconds(1))
+  }
+
   private func consumeStdout(_ data: Data) {
     guard terminalError == nil else { return }
     stdoutByteCount += data.count
@@ -360,10 +371,11 @@ public actor AdapterProcess {
             fail(.stdoutFlood)
           }
         } else {
-          pendingEvents.append(event)
-          if pendingEvents.count > 256 {
-            pendingEvents.removeFirst()
+          if pendingEvents.count >= 256 {
+            fail(.stdoutFlood)
+            return
           }
+          pendingEvents.append(event)
         }
       } catch let error as CandidateAdapterProtocolError {
         fail(.stdoutProtocol(error))

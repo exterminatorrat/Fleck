@@ -85,7 +85,7 @@ struct AdapterProcessTests {
       }
       try await process.send(request("load-1", operation: .load))
       #expect(await failure.value)
-      await process.terminateForTesting()
+      await process.terminate()
     }
   }
 
@@ -102,7 +102,7 @@ struct AdapterProcessTests {
     }
     try await process.send(request("transcribe-1", operation: .transcribe))
     #expect(await failure.value)
-    await process.terminateForTesting()
+    await process.terminate()
   }
 
   @Test func boundsStdoutAndStderrAndRedactsConfiguredRoots() async throws {
@@ -122,7 +122,33 @@ struct AdapterProcessTests {
     #expect(diagnostics.stderrByteCount <= 1_048_576)
     #expect(diagnostics.stderr.contains("<redacted-path>"))
     #expect(!diagnostics.stderr.contains("/private/model-root"))
-    await process.terminateForTesting()
+    await process.terminate()
+  }
+
+  @Test func boundedEventBufferOverflowFailsClosed() async throws {
+    let process = AdapterProcess()
+    let stream = await process.events()
+    try await process.start(
+      executableURL: URL(fileURLWithPath: "/bin/sh"),
+      arguments: [fixtureAdapterScript().path, "flood-events"],
+      environment: ["PATH": "/usr/bin:/bin"]
+    )
+    try await process.send(request("load-1", operation: .load))
+    try await Task.sleep(for: .milliseconds(100))
+    let failure = Task {
+      do {
+        for try await _ in stream { }
+        return nil as AdapterProcessError?
+      } catch let error as AdapterProcessError {
+        return error
+      } catch {
+        return nil
+      }
+    }
+    let result = await failure.value
+    #expect(result == .stdoutFlood, "received \(String(describing: result))")
+    #expect(!(await process.diagnostics()).childIsRunning)
+    await process.terminate()
   }
 
   @Test func timeoutCancelsThenForciblyTerminatesExactChild() async throws {

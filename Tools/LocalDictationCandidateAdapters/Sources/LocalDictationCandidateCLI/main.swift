@@ -10,7 +10,10 @@ struct LocalDictationCandidateCLI {
     exit(await run(Array(CommandLine.arguments.dropFirst())))
   }
 
-  static func run(_ arguments: [String]) async -> Int32 {
+  static func run(
+    _ arguments: [String],
+    eventTimeout: Duration = .seconds(30)
+  ) async -> Int32 {
     do {
       switch try Command.parse(arguments) {
       case .validateAdmission(let manifest, let schema):
@@ -34,7 +37,8 @@ struct LocalDictationCandidateCLI {
           manifest: value,
           adapterURL: adapterURL,
           modelRootURL: modelRootURL,
-          manifestPath: manifest
+          manifestPath: manifest,
+          eventTimeout: eventTimeout
         )
         try writeExclusive(report, to: output)
         print("candidate run recorded: \(output)")
@@ -110,7 +114,7 @@ private enum Command {
   }
 }
 
-private enum CLIError: Error, CustomStringConvertible {
+enum CLIError: Error, Equatable, CustomStringConvertible {
   case argument(String)
   case file(String, String)
   case invalidManifest(String)
@@ -373,7 +377,7 @@ private enum AdmissionSchema {
   }
 }
 
-private struct MeasurementArtifact: Codable, Sendable {
+struct MeasurementArtifact: Codable, Sendable {
   let name: String
   let value: Double
   let unit: String
@@ -499,7 +503,8 @@ private func runCandidate(
   manifest: AdmissionManifest,
   adapterURL: URL,
   modelRootURL: URL,
-  manifestPath: String
+  manifestPath: String,
+  eventTimeout: Duration
 ) async throws -> AdmissionRunReport {
   let startedAt = timestamp(Date())
   let process = AdapterProcess(redactedRoots: [modelRootURL, URL(fileURLWithPath: manifestPath).deletingLastPathComponent()])
@@ -510,13 +515,20 @@ private func runCandidate(
     environment: ["PATH": "/usr/bin:/bin", "LC_ALL": "C"]
   )
 
+  do {
+
   var runtimeRevision = "unreported"
   var modelRevision = "unreported"
   var results: [AdmissionCaseResult] = []
 
   let loadID = "load-initial"
   try await process.send(request(id: loadID, operation: .load))
-  let loadResult = try await nextEvent(stream, requestID: loadID, matching: { $0.kind == .ready })
+  let loadResult = try await nextEvent(
+    stream,
+    requestID: loadID,
+    timeout: eventTimeout,
+    matching: { $0.kind == .ready }
+  )
   if case .ready(_, let runtime, let model) = loadResult.event {
     runtimeRevision = runtime
     modelRevision = model
@@ -544,7 +556,12 @@ private func runCandidate(
         )
       )
     } else {
-      let caseResult = try await nextEvent(stream, requestID: requestID, matching: { $0.kind == .final })
+      let caseResult = try await nextEvent(
+        stream,
+        requestID: requestID,
+        timeout: eventTimeout,
+        matching: { $0.kind == .final }
+      )
       results.append(
         AdmissionCaseResult(
           caseID: item.id,
@@ -558,10 +575,20 @@ private func runCandidate(
     if item.role == "repeated-load-inference-unload-reload" {
       let unloadID = "unload-\(item.id)"
       try await process.send(request(id: unloadID, operation: .unload))
-      _ = try await nextEvent(stream, requestID: unloadID, matching: { $0.kind == .unloaded })
+      _ = try await nextEvent(
+        stream,
+        requestID: unloadID,
+        timeout: eventTimeout,
+        matching: { $0.kind == .unloaded }
+      )
       let reloadID = "reload-\(item.id)"
       try await process.send(request(id: reloadID, operation: .load))
-      _ = try await nextEvent(stream, requestID: reloadID, matching: { $0.kind == .ready })
+      _ = try await nextEvent(
+        stream,
+        requestID: reloadID,
+        timeout: eventTimeout,
+        matching: { $0.kind == .ready }
+      )
       let reloadTranscribeID = "reload-transcribe-\(item.id)"
       try await process.send(
         request(
@@ -572,10 +599,20 @@ private func runCandidate(
           contextPhrases: item.contextPhrases
         )
       )
-      _ = try await nextEvent(stream, requestID: reloadTranscribeID, matching: { $0.kind == .final })
+      _ = try await nextEvent(
+        stream,
+        requestID: reloadTranscribeID,
+        timeout: eventTimeout,
+        matching: { $0.kind == .final }
+      )
       let finalUnloadID = "final-unload-\(item.id)"
       try await process.send(request(id: finalUnloadID, operation: .unload))
-      _ = try await nextEvent(stream, requestID: finalUnloadID, matching: { $0.kind == .unloaded })
+      _ = try await nextEvent(
+        stream,
+        requestID: finalUnloadID,
+        timeout: eventTimeout,
+        matching: { $0.kind == .unloaded }
+      )
     }
   }
 
@@ -600,6 +637,10 @@ private func runCandidate(
     childExitStatus: diagnostics.childExitStatus,
     cases: results
   )
+  } catch {
+    await process.terminate()
+    throw error
+  }
 }
 
 private func request(
@@ -623,27 +664,69 @@ private func request(
   )
 }
 
-private func nextEvent(
-  _ stream: AsyncThrowingStream<CandidateAdapterEvent, Error>,
-  requestID: String,
-  matching: (CandidateAdapterEvent) -> Bool
-) async throws -> EventWaitResult {
-  var measurements: [MeasurementArtifact] = []
-  for try await event in stream {
-    if case .measurement(let eventRequestID, let name, let value, let unit) = event,
-      eventRequestID == requestID {
-      measurements.append(MeasurementArtifact(name: name, value: value, unit: unit))
-      continue
-    }
-    guard event.requestID == requestID else { continue }
-    if matching(event) {
-      return EventWaitResult(event: event, measurements: measurements)
-    }
-  }
-  throw CLIError.lifecycle("event-stream-ended")
+private enum EventWaitError: Error, Sendable {
+  case timeout
+  case failure
+  case ended
 }
 
-private struct EventWaitResult {
+func nextEvent(
+  _ stream: AsyncThrowingStream<CandidateAdapterEvent, Error>,
+  requestID: String,
+  timeout: Duration,
+  matching: @Sendable @escaping (CandidateAdapterEvent) -> Bool
+) async throws -> EventWaitResult {
+  do {
+    return try await withThrowingTaskGroup(of: EventWaitResult.self) { group in
+      group.addTask {
+        var measurements: [MeasurementArtifact] = []
+        do {
+          for try await event in stream {
+            if case .measurement(let eventRequestID, let name, let value, let unit) = event,
+              eventRequestID == requestID {
+              measurements.append(MeasurementArtifact(name: name, value: value, unit: unit))
+              continue
+            }
+            guard event.requestID == requestID else { continue }
+            if case .failure = event {
+              throw EventWaitError.failure
+            }
+            if matching(event) {
+              return EventWaitResult(event: event, measurements: measurements)
+            }
+          }
+        } catch let error as EventWaitError {
+          throw error
+        } catch {
+          throw EventWaitError.ended
+        }
+        throw EventWaitError.ended
+      }
+      group.addTask {
+        try await Task.sleep(for: timeout)
+        throw EventWaitError.timeout
+      }
+      guard let result = try await group.next() else {
+        throw EventWaitError.ended
+      }
+      group.cancelAll()
+      return result
+    }
+  } catch let error as EventWaitError {
+    switch error {
+    case .timeout:
+      throw CLIError.lifecycle("event-timeout")
+    case .failure:
+      throw CLIError.lifecycle("adapter-failure")
+    case .ended:
+      throw CLIError.lifecycle("event-stream-ended")
+    }
+  } catch {
+    throw error
+  }
+}
+
+struct EventWaitResult: Sendable {
   let event: CandidateAdapterEvent
   let measurements: [MeasurementArtifact]
 }
