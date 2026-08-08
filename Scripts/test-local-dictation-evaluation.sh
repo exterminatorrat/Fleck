@@ -11,9 +11,13 @@ corpus_path="$repo_root/Tests/Fixtures/local-dictation-evaluation-v1.json"
 corpus_schema_path="$repo_root/Tests/Fixtures/local-dictation-evaluation-v1.schema.json"
 run_path="$repo_root/Tests/Fixtures/local-dictation-run-sample-v1.json"
 run_schema_path="$repo_root/Tests/Fixtures/local-dictation-run-v1.schema.json"
+v2_run_path="$repo_root/Tests/Fixtures/local-dictation-run-sample-v2.json"
+v2_run_schema_path="$repo_root/Tests/Fixtures/local-dictation-run-v2.schema.json"
 temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/fleck-local-dictation.XXXXXX")
 gate_path="$temporary_dir/gate.json"
+v2_gate_path="$temporary_dir/gate-v2.json"
 report_path="$temporary_dir/report.md"
+v2_report_path="$temporary_dir/report-v2.md"
 invalid_path="$temporary_dir/invalid.json"
 unknown_run_path="$temporary_dir/unknown-run.json"
 stderr_path="$temporary_dir/stderr.txt"
@@ -46,6 +50,27 @@ cat > "$gate_path" <<'JSON'
 }
 JSON
 
+jq --slurpfile sample "$v2_run_path" '
+  .schemaVersion = 2
+  | .sliceGates = ($sample[0].standardBaseline.sliceMetrics | map({
+      sliceID,
+      metric,
+      maximumCandidateValue: 1.0,
+      maximumRegressionFromStandard: 1.0
+    }))
+  | .maxFirstMeaningfulPartialMilliseconds = 500
+  | .maxProvisionalUpdateIntervalMilliseconds = 500
+  | .maxProvisionalInstabilityRate = 0.50
+  | .maxFinalASRMilliseconds = 500
+  | .maxCleanupMilliseconds = 500
+  | .maxStopToInsertionMilliseconds = 2000
+  | .maxCancellationMilliseconds = 500
+  | .maxReadyIdleDeltaBytes = 500000000
+  | .maxPostUnloadDeltaBytes = 2000000000
+  | .maxUnloadMilliseconds = 500
+  | .minimumRepeatedRunCount = 50
+' "$gate_path" > "$v2_gate_path"
+
 Scripts/evaluate-local-dictation.sh validate-corpus \
   --corpus "$corpus_path" \
   --corpus-schema "$corpus_schema_path"
@@ -67,6 +92,21 @@ if grep -F 'fixInputMonitor' "$report_path" >/dev/null; then
   printf '%s\n' 'sample report leaked transcript content' >&2
   exit 1
 fi
+
+Scripts/evaluate-local-dictation.sh validate-run \
+  --corpus "$corpus_path" \
+  --corpus-schema "$corpus_schema_path" \
+  --run "$v2_run_path" \
+  --run-schema "$v2_run_schema_path"
+Scripts/evaluate-local-dictation.sh report \
+  --corpus "$corpus_path" \
+  --corpus-schema "$corpus_schema_path" \
+  --run "$v2_run_path" \
+  --run-schema "$v2_run_schema_path" \
+  --gate "$v2_gate_path" \
+  --output "$v2_report_path"
+grep -F 'first-meaningful-partial' "$v2_report_path" >/dev/null
+grep -F 'slice:category:' "$v2_report_path" >/dev/null
 
 sed '1,/"latency": {/s/"latency": {/&"mysteryMilliseconds": 1,/' \
   "$run_path" > "$unknown_run_path"

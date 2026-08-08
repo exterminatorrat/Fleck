@@ -216,6 +216,44 @@ corpus case order and use observationID as the deterministic tie-breaker.
    representative M1/8 GB evidence pass. Phase A itself never signs or
    selects a model/runtime.
 
+## Schema v2 lifecycle and supply-chain evidence
+
+Schema v1 remains decodable for diagnostics only. A v1 run with
+`releaseEvidence: true` is rejected and can never become release evidence.
+Release validation uses schema v2 and declares one stage:
+
+- `asrOnly`: exactly one ASR component and no cleanup component. Cleanup Off
+  reuses this evidence.
+- `cleanupOnly`: exactly one cleanup component and no ASR component. ASR and
+  streaming gates are explicitly not applicable.
+- `combined`: exactly one ASR and one cleanup component, including the
+  stop-to-insertion handoff.
+
+Each component records its immutable model/runtime identity, ABI, quantization,
+artifact, conversion-recipe, provenance, byte, and license-review evidence.
+Supply-chain evidence separately records runtime source/build/binary hashes,
+redistribution approval, attribution, and versioned removal and rollback
+plans. `evaluationHelper` identifies selection-stage evidence; a later
+packaged release run must replace it with `signedInApp`. This task does not
+approve a packaged release or integrate a model runtime.
+
+When provisional output is claimed, the run records first-meaningful-partial
+timing from the first accepted audio sample, update-interval p95, emitted and
+revised counts, and instability. Meaningful output excludes prompt leakage,
+punctuation-only output, language tags, and control tokens, and must survive
+into the final transcript. Final ASR, cleanup, stop-to-insertion,
+cancellation, ready-idle, peak-memory, unload, post-unload, download,
+installed-size, offline, category, language-direction, failure, and semantic
+gates emit explicit `applicable` outcomes for the declared stage.
+
+Release evidence also requires category baseline slices and matching unique
+`sliceGates`, at least 50 repeated runs, and zero crashes, hangs, Metal OOMs,
+or accepted corrupted models. Cancellation evidence links an observed
+`observationID`, proves `insertionOccurred: false`, and carries post-cancel
+unload duration and memory bounds. The checked-in v2 run is synthetic and is
+provided to exercise schema and report behavior only; it is not model or
+packaged-release evidence.
+
 ## Stable commands and expected outcomes
 
 From the repository root:
@@ -231,6 +269,12 @@ Scripts/evaluate-local-dictation.sh validate-run \
   --corpus-schema Tests/Fixtures/local-dictation-evaluation-v1.schema.json \
   --run Tests/Fixtures/local-dictation-run-sample-v1.json \
   --run-schema Tests/Fixtures/local-dictation-run-v1.schema.json
+
+Scripts/evaluate-local-dictation.sh validate-run \
+  --corpus Tests/Fixtures/local-dictation-evaluation-v1.json \
+  --corpus-schema Tests/Fixtures/local-dictation-evaluation-v1.schema.json \
+  --run Tests/Fixtures/local-dictation-run-sample-v2.json \
+  --run-schema Tests/Fixtures/local-dictation-run-v2.schema.json
 ~~~
 
 The nested tests and wrapper return 0 for valid text-contract/sample data. The

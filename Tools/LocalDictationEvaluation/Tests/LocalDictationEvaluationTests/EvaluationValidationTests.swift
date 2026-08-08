@@ -31,6 +31,13 @@ private func decodeSampleRun() throws -> CandidateRun {
   )
 }
 
+private func decodeV2Run() throws -> CandidateRun {
+  try JSONDecoder().decode(
+    CandidateRun.self,
+    from: fixture("local-dictation-run-sample-v2.json")
+  )
+}
+
 @Suite("EvaluationValidationTests")
 struct EvaluationValidationTests {
 
@@ -414,6 +421,148 @@ struct EvaluationValidationTests {
   #expect(issues.contains {
     $0.code == "content_telemetry"
       && $0.path == "/offlineEvidence/contentTelemetryObserved"
+  })
+}
+
+@Test func releaseEvidenceRequiresSchemaV2AndExactComponents() throws {
+  let corpus = try decodeCorpus()
+  var run = try decodeV2Run()
+  run.schemaVersion = 1
+  run.releaseEvidence = true
+  #expect(EvaluationValidator.validate(run: run, against: corpus).contains {
+    $0.code == "release_schema_version" && $0.path == "/schemaVersion"
+  })
+
+  run = try decodeV2Run()
+  run.releaseEvidence = true
+  run.components.append(run.components[0])
+  #expect(EvaluationValidator.validate(run: run, against: corpus).contains {
+    $0.code == "component_roles" && $0.path == "/components"
+  })
+}
+
+@Test func releaseEvidenceRequiresExactStageComponentCardinality() throws {
+  let corpus = try decodeCorpus()
+  var run = try decodeV2Run()
+  run.releaseEvidence = true
+  run.stage = .asrOnly
+  #expect(EvaluationValidator.validate(run: run, against: corpus).contains {
+    $0.code == "component_roles" && $0.path == "/components"
+  })
+
+  run = try decodeV2Run()
+  run.releaseEvidence = true
+  run.stage = .cleanupOnly
+  #expect(EvaluationValidator.validate(run: run, against: corpus).contains {
+    $0.code == "component_roles" && $0.path == "/components"
+  })
+}
+
+@Test func claimedStreamingRequiresCompleteProvisionalEvidence() throws {
+  let corpus = try decodeCorpus()
+  var run = try decodeV2Run()
+  run.releaseEvidence = true
+  run.claimedCapabilities = [.provisionalResults]
+  run.results[0].provisional = nil
+  #expect(EvaluationValidator.validate(run: run, against: corpus).contains {
+    $0.code == "missing_provisional_evidence"
+      && $0.path == "/results/0/provisional"
+  })
+}
+
+@Test func v2ValidationRejectsMalformedLifecycleAndSupplyChainEvidence() throws {
+  let corpus = try decodeCorpus()
+  var run = try decodeV2Run()
+  run.releaseEvidence = true
+  run.components[0].artifactSHA256 = "not-a-sha"
+  run.results[0].resources.modelDownloadBytes += 1
+  run.results[0].resources.readyIdleDeltaBytes = 1
+  run.unloadEvidence.unloadMilliseconds = nil
+  run.reliability?.repeatedRunCount = 49
+  run.supplyChain?.redistributionDecision = .pending
+  let issues = EvaluationValidator.validate(run: run, against: corpus)
+  #expect(issues.contains {
+    $0.code == "invalid_component_hash" && $0.path == "/components/0/artifactSHA256"
+  })
+  #expect(issues.contains {
+    $0.code == "ready_idle_delta_mismatch"
+      && $0.path == "/results/0/resources/readyIdleDeltaBytes"
+  })
+  #expect(issues.contains {
+    $0.code == "component_byte_totals"
+      && $0.path == "/results/0/resources/modelDownloadBytes"
+  })
+  #expect(issues.contains {
+    $0.code == "missing_unload_duration"
+      && $0.path == "/unloadEvidence/unloadMilliseconds"
+  })
+  #expect(issues.contains {
+    $0.code == "reliability_repetition_count"
+      && $0.path == "/reliability/repeatedRunCount"
+  })
+  #expect(issues.contains {
+    $0.code == "redistribution_not_approved"
+      && $0.path == "/supplyChain/redistributionDecision"
+  })
+}
+
+@Test func cancellationEvidenceMustLinkObservationAndProveNonInsertion() throws {
+  let corpus = try decodeCorpus()
+  var run = try decodeV2Run()
+  run.releaseEvidence = true
+  run.cancellationResourceEvidence?.observationID = "not-an-observation"
+  run.cancellationResourceEvidence?.insertionOccurred = true
+  let issues = EvaluationValidator.validate(run: run, against: corpus)
+  #expect(issues.contains {
+    $0.code == "cancellation_observation" && $0.path == "/cancellationResourceEvidence/observationID"
+  })
+  #expect(issues.contains {
+    $0.code == "cancellation_insertion" && $0.path == "/cancellationResourceEvidence/insertionOccurred"
+  })
+}
+
+@Test func cancellationEvidenceRequiresTimingAndConsistentMemoryDelta() throws {
+  let corpus = try decodeCorpus()
+  var run = try decodeV2Run()
+  run.releaseEvidence = true
+  run.results[0].latency.cancellationMilliseconds = nil
+  run.cancellationResourceEvidence?.postCancelUnloadDeltaBytes = 1
+  let issues = EvaluationValidator.validate(run: run, against: corpus)
+  #expect(issues.contains {
+    $0.code == "missing_cancellation_timing"
+      && $0.path == "/results/0/latency/cancellationMilliseconds"
+  })
+  #expect(issues.contains {
+    $0.code == "cancellation_memory_delta_mismatch"
+      && $0.path == "/cancellationResourceEvidence/postCancelUnloadDeltaBytes"
+  })
+}
+
+@Test func releaseEvidenceRequiresBothMixedDirectionSliceMetrics() throws {
+  let corpus = try decodeCorpus()
+  var completeRun = try decodeV2Run()
+  completeRun.releaseEvidence = true
+  #expect(EvaluationValidator.validate(run: completeRun, against: corpus).contains {
+    $0.code == "missing_mixed_direction_category"
+  })
+
+  var run = completeRun
+  run.standardBaseline.sliceMetrics.removeAll {
+    $0.sliceID == "category:mixed-en-zh"
+  }
+  let issues = EvaluationValidator.validate(run: run, against: corpus)
+  #expect(issues.contains {
+    $0.code == "missing_baseline_slice_metric"
+      && $0.message.contains("category:mixed-en-zh")
+  })
+}
+
+@Test func schemaV1ReleaseEvidenceIsNeverEligible() throws {
+  var run = try decodeSampleRun()
+  run.releaseEvidence = true
+  let issues = EvaluationValidator.validate(run: run, against: try decodeCorpus())
+  #expect(issues.contains {
+    $0.code == "release_schema_version" && $0.path == "/schemaVersion"
   })
 }
 }

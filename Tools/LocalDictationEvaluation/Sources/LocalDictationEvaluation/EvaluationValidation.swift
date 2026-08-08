@@ -98,9 +98,13 @@ public enum EvaluationValidator {
     requireID(run.environment.swiftVersion,
       "/environment/swiftVersion", &issues)
     requireID(run.environment.recordedAt, "/environment/recordedAt", &issues)
-    if run.schemaVersion != 1 {
+    if run.schemaVersion != 1 && run.schemaVersion != 2 {
       issue(&issues, "unsupported_schema_version", "/schemaVersion",
-        "Run schemaVersion must be 1.")
+        "Run schemaVersion must be 1 or 2.")
+    }
+    if run.releaseEvidence && run.schemaVersion != 2 {
+      issue(&issues, "release_schema_version", "/schemaVersion",
+        "Release evidence requires run schemaVersion 2.")
     }
     if run.corpusID != corpus.corpusID {
       issue(&issues, "corpus_run_mismatch", "/corpusID",
@@ -252,7 +256,572 @@ public enum EvaluationValidator {
           "Release evidence requires verified unload behavior.")
       }
     }
+    if run.schemaVersion == 2 {
+      validateSchemaV2(run: run, against: corpus, issues: &issues)
+    }
     return sorted(issues)
+  }
+
+  private static func validateSchemaV2(
+    run: CandidateRun,
+    against corpus: EvaluationCorpus,
+    issues: inout [EvaluationIssue]
+  ) {
+    validateComponents(run, issues: &issues)
+    let stage = run.stage
+    let claimsProvisional = run.claimedCapabilities.contains(.provisionalResults)
+    for (index, result) in run.results.enumerated() {
+      let path = "/results/\(index)"
+      validateV2Measurements(
+        result,
+        path: path,
+        stage: stage,
+        claimsProvisional: claimsProvisional,
+        issues: &issues
+      )
+      validateComponentTotals(
+        result.resources,
+        components: run.components,
+        path: path,
+        issues: &issues
+      )
+    }
+    if run.releaseEvidence {
+      guard let stage else {
+        issue(&issues, "missing_run_stage", "/stage",
+          "Release evidence requires a declared run stage.")
+        return
+      }
+      validateStageArtifacts(run, stage: stage, issues: &issues)
+      validateSliceMetrics(
+        run.standardBaseline.sliceMetrics,
+        corpus: corpus,
+        issues: &issues
+      )
+      validateReliability(run.reliability, issues: &issues)
+      validateCancellationResourceEvidence(
+        run.cancellationResourceEvidence,
+        results: run.results,
+        issues: &issues
+      )
+      validateSupplyChain(run.supplyChain, issues: &issues)
+      validateUnloadV2(run.unloadEvidence, issues: &issues)
+      if stage == .asrOnly || stage == .combined {
+        for (index, result) in run.results.enumerated()
+          where result.latency.finalASRMilliseconds == nil
+        {
+          issue(&issues, "missing_final_asr_latency",
+            "/results/\(index)/latency/finalASRMilliseconds",
+            "ASR stages require final ASR latency evidence.")
+        }
+      }
+      if stage == .combined {
+        for (index, result) in run.results.enumerated()
+          where result.latency.stopToInsertionMilliseconds == nil
+        {
+          issue(&issues, "missing_stop_to_insertion_latency",
+            "/results/\(index)/latency/stopToInsertionMilliseconds",
+            "Combined stages require stop-to-insertion latency evidence.")
+        }
+      }
+      for (index, result) in run.results.enumerated() {
+        let resourcePath = "/results/\(index)/resources"
+        if result.resources.preLoadMemoryBytes == nil {
+          issue(&issues, "missing_ready_idle_evidence",
+            "\(resourcePath)/preLoadMemoryBytes",
+            "Release evidence requires pre-load memory for ready-idle comparison.")
+        }
+        if result.resources.readyIdleMemoryBytes == nil {
+          issue(&issues, "missing_ready_idle_evidence",
+            "\(resourcePath)/readyIdleMemoryBytes",
+            "Release evidence requires ready-idle memory evidence.")
+        }
+        if result.resources.readyIdleDeltaBytes == nil {
+          issue(&issues, "missing_ready_idle_evidence",
+            "\(resourcePath)/readyIdleDeltaBytes",
+            "Release evidence requires ready-idle delta evidence.")
+        }
+      }
+    }
+  }
+
+  private static func validateComponents(
+    _ run: CandidateRun,
+    issues: inout [EvaluationIssue]
+  ) {
+    var roles: Set<CandidateComponentRole> = []
+    for (index, component) in run.components.enumerated() {
+      let path = "/components/\(index)"
+      if !roles.insert(component.role).inserted {
+        issue(&issues, "component_roles", "/components",
+          "Each component role must occur at most once.")
+      }
+      requireID(component.componentID, "\(path)/componentID", &issues)
+      requireID(component.modelID, "\(path)/modelID", &issues)
+      requireID(component.modelRevision, "\(path)/modelRevision", &issues)
+      requireID(component.runtimeName, "\(path)/runtimeName", &issues)
+      requireID(component.runtimeRevision, "\(path)/runtimeRevision", &issues)
+      requireID(component.runtimeABI, "\(path)/runtimeABI", &issues)
+      requireID(component.quantization, "\(path)/quantization", &issues)
+      requireID(component.licenseReview, "\(path)/licenseReview", &issues)
+      for (field, value) in [
+        ("artifactSHA256", component.artifactSHA256),
+        ("conversionRecipeSHA256", component.conversionRecipeSHA256),
+        ("provenanceRecordSHA256", component.provenanceRecordSHA256)
+      ] where value.range(
+        of: "^[A-Fa-f0-9]{64}$",
+        options: .regularExpression
+      ) == nil {
+        issue(&issues, "invalid_component_hash", "\(path)/\(field)",
+          "Component evidence requires a SHA-256 hash.")
+      }
+      if component.downloadBytes < 0 {
+        issue(&issues, "negative_component_bytes", "\(path)/downloadBytes",
+          "Component download bytes must not be negative.")
+      }
+      if component.installedBytes < 0 {
+        issue(&issues, "negative_component_bytes", "\(path)/installedBytes",
+          "Component installed bytes must not be negative.")
+      }
+    }
+    guard let stage = run.stage else {
+      if run.releaseEvidence {
+        issue(&issues, "missing_run_stage", "/stage",
+          "Release evidence requires a declared run stage.")
+      }
+      return
+    }
+    let asrCount = run.components.filter { $0.role == .asr }.count
+    let cleanupCount = run.components.filter { $0.role == .cleanup }.count
+    let valid: Bool
+    switch stage {
+    case .asrOnly:
+      valid = asrCount == 1 && cleanupCount == 0
+    case .cleanupOnly:
+      valid = asrCount == 0 && cleanupCount == 1
+    case .combined:
+      valid = asrCount == 1 && cleanupCount == 1
+    }
+    if !valid {
+      issue(&issues, "component_roles", "/components",
+        "Component cardinality must match the declared run stage.")
+    }
+  }
+
+  private static func validateV2Measurements(
+    _ result: UtteranceResult,
+    path: String,
+    stage: CandidateRunStage?,
+    claimsProvisional: Bool,
+    issues: inout [EvaluationIssue]
+  ) {
+    let optionalLatency: [(String, Double?)] = [
+      ("finalASRMilliseconds", result.latency.finalASRMilliseconds),
+      ("stopToInsertionMilliseconds", result.latency.stopToInsertionMilliseconds),
+      ("cancellationMilliseconds", result.latency.cancellationMilliseconds)
+    ]
+    for (name, value) in optionalLatency {
+      if let value {
+        validateFiniteNonnegative(
+          value,
+          path: "\(path)/latency/\(name)",
+          issues: &issues
+        )
+      }
+    }
+    let optionalMemory: [(String, Int64?)] = [
+      ("preLoadMemoryBytes", result.resources.preLoadMemoryBytes),
+      ("readyIdleMemoryBytes", result.resources.readyIdleMemoryBytes),
+      ("readyIdleDeltaBytes", result.resources.readyIdleDeltaBytes)
+    ]
+    for (name, value) in optionalMemory {
+      if let value, value < 0 {
+        issue(&issues, "negative_measurement",
+          "\(path)/resources/\(name)",
+          "Measurement must not be negative.")
+      }
+    }
+    if let preLoad = result.resources.preLoadMemoryBytes,
+      let readyIdle = result.resources.readyIdleMemoryBytes,
+      let delta = result.resources.readyIdleDeltaBytes,
+      readyIdle - preLoad != delta
+    {
+      issue(&issues, "ready_idle_delta_mismatch",
+        "\(path)/resources/readyIdleDeltaBytes",
+        "Ready-idle delta must equal ready-idle memory minus pre-load memory.")
+    }
+    if claimsProvisional {
+      guard let provisional = result.provisional else {
+        issue(&issues, "missing_provisional_evidence", "\(path)/provisional",
+          "A provisional-results claim requires provisional evidence.")
+        return
+      }
+      validateFiniteNonnegative(
+        provisional.firstMeaningfulPartialMilliseconds,
+        path: "\(path)/provisional/firstMeaningfulPartialMilliseconds",
+        issues: &issues
+      )
+      validateFiniteNonnegative(
+        provisional.updateIntervalP95Milliseconds,
+        path: "\(path)/provisional/updateIntervalP95Milliseconds",
+        issues: &issues
+      )
+      if provisional.firstMeaningfulPartialMilliseconds <= 0
+        || provisional.emittedPartialCount <= 0
+      {
+        issue(&issues, "non_meaningful_partial",
+          "\(path)/provisional/firstMeaningfulPartialMilliseconds",
+          "The first partial must contain meaningful final-surviving content.")
+      }
+      if provisional.revisedPartialCount < 0 {
+        issue(&issues, "negative_provisional_count",
+          "\(path)/provisional/revisedPartialCount",
+          "Revised partial count must not be negative.")
+      }
+      if !provisional.instabilityRate.isFinite
+        || !(0...1).contains(provisional.instabilityRate)
+      {
+        issue(&issues, "invalid_provisional_instability",
+          "\(path)/provisional/instabilityRate",
+          "Provisional instability must be within 0 and 1.")
+      }
+    } else if result.provisional != nil {
+      issue(&issues, "unclaimed_provisional_evidence", "\(path)/provisional",
+        "Provisional evidence requires the provisional-results capability claim.")
+    }
+    if let stage, stage == .asrOnly, result.cleanedResult != nil {
+      issue(&issues, "stage_cleanup_artifact", "\(path)/cleanedResult",
+        "ASR-only evidence must not contain a cleanup artifact.")
+    }
+  }
+
+  private static func validateComponentTotals(
+    _ resources: ResourceMeasurement,
+    components: [CandidateComponentIdentity],
+    path: String,
+    issues: inout [EvaluationIssue]
+  ) {
+    var download = Int64(0)
+    var installed = Int64(0)
+    for component in components {
+      let (nextDownload, downloadOverflow) = download.addingReportingOverflow(
+        component.downloadBytes
+      )
+      let (nextInstalled, installedOverflow) = installed.addingReportingOverflow(
+        component.installedBytes
+      )
+      if downloadOverflow || installedOverflow {
+        issue(&issues, "component_byte_totals", "/components",
+          "Component byte totals overflow Int64.")
+        return
+      }
+      download = nextDownload
+      installed = nextInstalled
+    }
+    if resources.modelDownloadBytes != download {
+      issue(&issues, "component_byte_totals",
+        "\(path)/resources/modelDownloadBytes",
+        "Model download bytes must equal the component total.")
+    }
+    if resources.modelInstalledBytes != installed {
+      issue(&issues, "component_byte_totals",
+        "\(path)/resources/modelInstalledBytes",
+        "Model installed bytes must equal the component total.")
+    }
+  }
+
+  private static func validateStageArtifacts(
+    _ run: CandidateRun,
+    stage: CandidateRunStage,
+    issues: inout [EvaluationIssue]
+  ) {
+    for (index, result) in run.results.enumerated() {
+      switch stage {
+      case .asrOnly:
+        if result.cleanedResult != nil {
+          issue(&issues, "stage_cleanup_artifact", "/results/\(index)/cleanedResult",
+            "ASR-only evidence must not contain a cleanup artifact.")
+        }
+      case .cleanupOnly, .combined:
+        if result.cleanedResult == nil {
+          issue(&issues, "missing_cleanup_result", "/results/\(index)/cleanedResult",
+            "Cleanup stages require a cleaned result for every observation.")
+        }
+      }
+    }
+  }
+
+  private static func validateSliceMetrics(
+    _ metrics: [EvaluationSliceMetric],
+    corpus: EvaluationCorpus,
+    issues: inout [EvaluationIssue]
+  ) {
+    if metrics.isEmpty {
+      issue(&issues, "missing_baseline_slice_metrics", "/standardBaseline/sliceMetrics",
+        "Release evidence requires category baseline slice metrics.")
+      return
+    }
+    var seen: Set<String> = []
+    for (index, metric) in metrics.enumerated() {
+      let path = "/standardBaseline/sliceMetrics/\(index)"
+      let key = "\(metric.sliceID):\(metric.metric.rawValue)"
+      if !seen.insert(key).inserted {
+        issue(&issues, "duplicate_baseline_slice_metric", path,
+          "Baseline slice metric pairs must be unique.")
+      }
+      requireID(metric.sliceID, "\(path)/sliceID", &issues)
+      if !metric.value.isFinite || metric.value < 0
+        || (metric.metric == .protectedTermAccuracy && metric.value > 1)
+      {
+        issue(&issues, "invalid_baseline_slice_metric", "\(path)/value",
+          "Baseline slice metric is outside its valid range.")
+      }
+    }
+    let required = requiredSliceKeys(corpus)
+    for key in required where !seen.contains(key) {
+      issue(&issues, "missing_baseline_slice_metric",
+        "/standardBaseline/sliceMetrics",
+        "Missing baseline slice metric \(key).")
+    }
+    let mixedCategories = Set(corpus.cases.filter { $0.language == .mixed }
+      .flatMap(\.categories))
+    for direction in ["mixed-en-zh", "mixed-zh-en"]
+      where corpus.cases.contains(where: { $0.language == .mixed })
+        && !mixedCategories.contains(direction)
+    {
+      issue(&issues, "missing_mixed_direction_category", "/cases/categories",
+        "Mixed-language release evidence requires category:\(direction).")
+    }
+  }
+
+  private static func requiredSliceKeys(
+    _ corpus: EvaluationCorpus
+  ) -> Set<String> {
+    var keys: Set<String> = []
+    for item in corpus.cases {
+      for category in item.categories {
+        let prefix = "category:\(category):"
+        switch item.language {
+        case .english:
+          keys.insert(prefix + EvaluationMetricKind.englishWordErrorRate.rawValue)
+          keys.insert(prefix + EvaluationMetricKind.protectedTermAccuracy.rawValue)
+        case .mandarin:
+          keys.insert(prefix + EvaluationMetricKind.mandarinCharacterErrorRate.rawValue)
+          keys.insert(prefix + EvaluationMetricKind.protectedTermAccuracy.rawValue)
+        case .mixed:
+          keys.insert(prefix + EvaluationMetricKind.englishWordErrorRate.rawValue)
+          keys.insert(prefix + EvaluationMetricKind.mandarinCharacterErrorRate.rawValue)
+          keys.insert(prefix + EvaluationMetricKind.protectedTermAccuracy.rawValue)
+        }
+      }
+    }
+    if corpus.cases.contains(where: { $0.language == .mixed }) {
+      for category in ["mixed-en-zh", "mixed-zh-en"] {
+        let prefix = "category:\(category):"
+        keys.insert(prefix + EvaluationMetricKind.englishWordErrorRate.rawValue)
+        keys.insert(prefix + EvaluationMetricKind.mandarinCharacterErrorRate.rawValue)
+        keys.insert(prefix + EvaluationMetricKind.protectedTermAccuracy.rawValue)
+      }
+    }
+    return keys
+  }
+
+  private static func validateReliability(
+    _ reliability: ReliabilityEvidence?,
+    issues: inout [EvaluationIssue]
+  ) {
+    guard let reliability else {
+      issue(&issues, "missing_reliability", "/reliability",
+        "Release evidence requires repeated lifecycle reliability evidence.")
+      return
+    }
+    let values: [(String, Int)] = [
+      ("repeatedRunCount", reliability.repeatedRunCount),
+      ("crashCount", reliability.crashCount),
+      ("hangCount", reliability.hangCount),
+      ("metalOOMCount", reliability.metalOOMCount),
+      ("corruptedModelAcceptedCount", reliability.corruptedModelAcceptedCount)
+    ]
+    for (field, value) in values where value < 0 {
+      issue(&issues, "negative_reliability_count", "/reliability/\(field)",
+        "Reliability counts must not be negative.")
+    }
+    if reliability.repeatedRunCount < 50 {
+      issue(&issues, "reliability_repetition_count", "/reliability/repeatedRunCount",
+        "Reliability evidence requires at least 50 repeated runs.")
+    }
+    if reliability.crashCount != 0 || reliability.hangCount != 0
+      || reliability.metalOOMCount != 0
+      || reliability.corruptedModelAcceptedCount != 0
+    {
+      issue(&issues, "reliability_failures", "/reliability",
+        "Reliability evidence requires zero crashes, hangs, Metal OOMs, and corrupted-model acceptance.")
+    }
+  }
+
+  private static func validateCancellationResourceEvidence(
+    _ evidence: CancellationResourceEvidence?,
+    results: [UtteranceResult],
+    issues: inout [EvaluationIssue]
+  ) {
+    guard let evidence else {
+      issue(&issues, "missing_cancellation_resource_evidence",
+        "/cancellationResourceEvidence",
+        "Release evidence requires linked cancellation resource evidence.")
+      return
+    }
+    requireID(evidence.observationID,
+      "/cancellationResourceEvidence/observationID", &issues)
+    let observationIndex = results.firstIndex(where: {
+      $0.observationID == evidence.observationID
+    })
+    if let observationIndex {
+      if results[observationIndex].latency.cancellationMilliseconds == nil {
+        issue(&issues, "missing_cancellation_timing",
+          "/results/\(observationIndex)/latency/cancellationMilliseconds",
+          "The linked cancellation observation requires cancellation timing.")
+      }
+    } else {
+      issue(&issues, "cancellation_observation",
+        "/cancellationResourceEvidence/observationID",
+        "Cancellation evidence must link an observed result.")
+    }
+    if evidence.insertionOccurred {
+      issue(&issues, "cancellation_insertion",
+        "/cancellationResourceEvidence/insertionOccurred",
+        "Cancellation evidence must prove that no insertion occurred.")
+    }
+    validateFiniteNonnegative(
+      evidence.requestToControlMilliseconds,
+      path: "/cancellationResourceEvidence/requestToControlMilliseconds",
+      issues: &issues
+    )
+    validateFiniteNonnegative(
+      evidence.cancelUnloadMilliseconds,
+      path: "/cancellationResourceEvidence/cancelUnloadMilliseconds",
+      issues: &issues
+    )
+    for (field, value) in [
+      ("preCancelMemoryBytes", evidence.preCancelMemoryBytes),
+      ("memoryAfterCancelUnloadBytes", evidence.memoryAfterCancelUnloadBytes),
+      ("postCancelUnloadDeltaBytes", evidence.postCancelUnloadDeltaBytes)
+    ] where value < 0 {
+      issue(&issues, "negative_cancellation_memory",
+        "/cancellationResourceEvidence/\(field)",
+        "Cancellation memory evidence must not be negative.")
+    }
+    if evidence.preCancelMemoryBytes - evidence.memoryAfterCancelUnloadBytes
+      != evidence.postCancelUnloadDeltaBytes
+    {
+      issue(&issues, "cancellation_memory_delta_mismatch",
+        "/cancellationResourceEvidence/postCancelUnloadDeltaBytes",
+        "Post-cancel unload delta must equal pre-cancel memory minus memory after unload.")
+    }
+  }
+
+  private static func validateSupplyChain(
+    _ supplyChain: SupplyChainEvidence?,
+    issues: inout [EvaluationIssue]
+  ) {
+    guard let supplyChain else {
+      issue(&issues, "missing_supply_chain", "/supplyChain",
+        "Release evidence requires structured supply-chain evidence.")
+      return
+    }
+    if supplyChain.runtimeBinaries.isEmpty {
+      issue(&issues, "supply_chain_identity", "/supplyChain/runtimeBinaries",
+        "At least one runtime binary identity is required.")
+    }
+    var seen: Set<String> = []
+    for (index, binary) in supplyChain.runtimeBinaries.enumerated() {
+      let path = "/supplyChain/runtimeBinaries/\(index)"
+      requireID(binary.binaryID, "\(path)/binaryID", &issues)
+      requireID(binary.sourceRevision, "\(path)/sourceRevision", &issues)
+      if !seen.insert(binary.binaryID).inserted {
+        issue(&issues, "supply_chain_identity", "\(path)/binaryID",
+          "Runtime binary identities must be unique.")
+      }
+      for field in ["buildRecipeSHA256", "binarySHA256"] {
+        let value = field == "buildRecipeSHA256"
+          ? binary.buildRecipeSHA256
+          : binary.binarySHA256
+        if value.range(
+          of: "^[A-Fa-f0-9]{64}$",
+          options: .regularExpression
+        ) == nil {
+          issue(&issues, "supply_chain_identity", "\(path)/\(field)",
+            "Runtime binary identity requires a SHA-256 hash.")
+        }
+      }
+    }
+    if supplyChain.redistributionDecision != .approved {
+      issue(&issues, "redistribution_not_approved",
+        "/supplyChain/redistributionDecision",
+        "Redistribution must be explicitly approved.")
+    }
+    if supplyChain.attributionNoticeSHA256.range(
+      of: "^[A-Fa-f0-9]{64}$",
+      options: .regularExpression
+    ) == nil {
+      issue(&issues, "supply_chain_identity",
+        "/supplyChain/attributionNoticeSHA256",
+        "Attribution evidence requires a SHA-256 hash.")
+    }
+    requireID(supplyChain.removalPlanRevision,
+      "/supplyChain/removalPlanRevision", &issues)
+    requireID(supplyChain.rollbackPlanRevision,
+      "/supplyChain/rollbackPlanRevision", &issues)
+  }
+
+  private static func validateUnloadV2(
+    _ evidence: UnloadEvidence,
+    issues: inout [EvaluationIssue]
+  ) {
+    if let value = evidence.preLoadMemoryBytes, value < 0 {
+      issue(&issues, "negative_unload_memory",
+        "/unloadEvidence/preLoadMemoryBytes",
+        "Pre-load memory must not be negative.")
+    }
+    if let value = evidence.postUnloadDeltaBytes, value < 0 {
+      issue(&issues, "negative_unload_memory",
+        "/unloadEvidence/postUnloadDeltaBytes",
+        "Post-unload memory delta must not be negative.")
+    }
+    if let value = evidence.unloadMilliseconds {
+      validateFiniteNonnegative(
+        value,
+        path: "/unloadEvidence/unloadMilliseconds",
+        issues: &issues
+      )
+    } else {
+      issue(&issues, "missing_unload_duration",
+        "/unloadEvidence/unloadMilliseconds",
+        "Release evidence requires unload duration.")
+    }
+    if evidence.preLoadMemoryBytes == nil {
+      issue(&issues, "missing_unload_memory_delta",
+        "/unloadEvidence/preLoadMemoryBytes",
+        "Release evidence requires pre-load memory for unload comparison.")
+    }
+    if evidence.postUnloadDeltaBytes == nil {
+      issue(&issues, "missing_unload_memory_delta",
+        "/unloadEvidence/postUnloadDeltaBytes",
+        "Release evidence requires post-unload memory delta.")
+    }
+  }
+
+  private static func validateFiniteNonnegative(
+    _ value: Double,
+    path: String,
+    issues: inout [EvaluationIssue]
+  ) {
+    if !value.isFinite {
+      issue(&issues, "non_finite_measurement", path,
+        "Measurement must be finite.")
+    } else if value < 0 {
+      issue(&issues, "negative_measurement", path,
+        "Measurement must not be negative.")
+    }
   }
 
   private static func validateProtectedExpectations(

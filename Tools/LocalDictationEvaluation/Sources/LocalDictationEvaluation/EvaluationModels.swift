@@ -91,6 +91,209 @@ public enum EvaluationMetricKind: String, Codable, CaseIterable, Hashable, Equat
   case protectedTermAccuracy
 }
 
+public enum CandidateComponentRole: String, Codable, Sendable {
+  case asr
+  case cleanup
+}
+
+public enum CandidateRunStage: String, Codable, Sendable {
+  case asrOnly
+  case cleanupOnly
+  case combined
+}
+
+public enum CandidateCapability: String, Codable, Sendable {
+  case provisionalResults
+}
+
+public struct CandidateComponentIdentity: Codable, Equatable, Sendable {
+  public var role: CandidateComponentRole
+  public var componentID: String
+  public var modelID: String
+  public var modelRevision: String
+  public var runtimeName: String
+  public var runtimeRevision: String
+  public var runtimeABI: String
+  public var quantization: String
+  public var artifactSHA256: String
+  public var conversionRecipeSHA256: String
+  public var provenanceRecordSHA256: String
+  public var downloadBytes: Int64
+  public var installedBytes: Int64
+  public var licenseReview: String
+
+  public init(
+    role: CandidateComponentRole,
+    componentID: String,
+    modelID: String,
+    modelRevision: String,
+    runtimeName: String,
+    runtimeRevision: String,
+    runtimeABI: String,
+    quantization: String,
+    artifactSHA256: String,
+    conversionRecipeSHA256: String,
+    provenanceRecordSHA256: String,
+    downloadBytes: Int64,
+    installedBytes: Int64,
+    licenseReview: String
+  ) {
+    self.role = role
+    self.componentID = componentID
+    self.modelID = modelID
+    self.modelRevision = modelRevision
+    self.runtimeName = runtimeName
+    self.runtimeRevision = runtimeRevision
+    self.runtimeABI = runtimeABI
+    self.quantization = quantization
+    self.artifactSHA256 = artifactSHA256
+    self.conversionRecipeSHA256 = conversionRecipeSHA256
+    self.provenanceRecordSHA256 = provenanceRecordSHA256
+    self.downloadBytes = downloadBytes
+    self.installedBytes = installedBytes
+    self.licenseReview = licenseReview
+  }
+}
+
+public enum RuntimeBinaryDistribution: String, Codable, Sendable {
+  case evaluationHelper
+  case signedInApp
+}
+
+public struct RuntimeBinaryIdentity: Codable, Equatable, Sendable {
+  public var binaryID: String
+  public var sourceRevision: String
+  public var buildRecipeSHA256: String
+  public var binarySHA256: String
+  public var distribution: RuntimeBinaryDistribution
+
+  public init(
+    binaryID: String,
+    sourceRevision: String,
+    buildRecipeSHA256: String,
+    binarySHA256: String,
+    distribution: RuntimeBinaryDistribution
+  ) {
+    self.binaryID = binaryID
+    self.sourceRevision = sourceRevision
+    self.buildRecipeSHA256 = buildRecipeSHA256
+    self.binarySHA256 = binarySHA256
+    self.distribution = distribution
+  }
+}
+
+public enum RedistributionDecision: String, Codable, Sendable {
+  case approved
+  case rejected
+  case pending
+}
+
+public struct SupplyChainEvidence: Codable, Equatable, Sendable {
+  public var runtimeBinaries: [RuntimeBinaryIdentity]
+  public var redistributionDecision: RedistributionDecision
+  public var attributionNoticeSHA256: String
+  public var removalPlanRevision: String
+  public var rollbackPlanRevision: String
+
+  public init(
+    runtimeBinaries: [RuntimeBinaryIdentity],
+    redistributionDecision: RedistributionDecision,
+    attributionNoticeSHA256: String,
+    removalPlanRevision: String,
+    rollbackPlanRevision: String
+  ) {
+    self.runtimeBinaries = runtimeBinaries
+    self.redistributionDecision = redistributionDecision
+    self.attributionNoticeSHA256 = attributionNoticeSHA256
+    self.removalPlanRevision = removalPlanRevision
+    self.rollbackPlanRevision = rollbackPlanRevision
+  }
+}
+
+public struct EvaluationSliceMetric: Codable, Equatable, Sendable {
+  public var sliceID: String
+  public var metric: EvaluationMetricKind
+  public var value: Double
+
+  public init(sliceID: String, metric: EvaluationMetricKind, value: Double) {
+    self.sliceID = sliceID
+    self.metric = metric
+    self.value = value
+  }
+}
+
+public struct ReliabilityEvidence: Codable, Equatable, Sendable {
+  public var repeatedRunCount: Int
+  public var crashCount: Int
+  public var hangCount: Int
+  public var metalOOMCount: Int
+  public var corruptedModelAcceptedCount: Int
+
+  public init(
+    repeatedRunCount: Int,
+    crashCount: Int,
+    hangCount: Int,
+    metalOOMCount: Int,
+    corruptedModelAcceptedCount: Int
+  ) {
+    self.repeatedRunCount = repeatedRunCount
+    self.crashCount = crashCount
+    self.hangCount = hangCount
+    self.metalOOMCount = metalOOMCount
+    self.corruptedModelAcceptedCount = corruptedModelAcceptedCount
+  }
+}
+
+public struct CancellationResourceEvidence: Codable, Equatable, Sendable {
+  public var observationID: String
+  public var requestToControlMilliseconds: Double
+  public var insertionOccurred: Bool
+  public var preCancelMemoryBytes: Int64
+  public var memoryAfterCancelUnloadBytes: Int64
+  public var postCancelUnloadDeltaBytes: Int64
+  public var cancelUnloadMilliseconds: Double
+
+  public init(
+    observationID: String,
+    requestToControlMilliseconds: Double,
+    insertionOccurred: Bool,
+    preCancelMemoryBytes: Int64,
+    memoryAfterCancelUnloadBytes: Int64,
+    postCancelUnloadDeltaBytes: Int64,
+    cancelUnloadMilliseconds: Double
+  ) {
+    self.observationID = observationID
+    self.requestToControlMilliseconds = requestToControlMilliseconds
+    self.insertionOccurred = insertionOccurred
+    self.preCancelMemoryBytes = preCancelMemoryBytes
+    self.memoryAfterCancelUnloadBytes = memoryAfterCancelUnloadBytes
+    self.postCancelUnloadDeltaBytes = postCancelUnloadDeltaBytes
+    self.cancelUnloadMilliseconds = cancelUnloadMilliseconds
+  }
+}
+
+public struct ProvisionalMeasurement: Codable, Equatable, Sendable {
+  public var firstMeaningfulPartialMilliseconds: Double
+  public var updateIntervalP95Milliseconds: Double
+  public var emittedPartialCount: Int
+  public var revisedPartialCount: Int
+  public var instabilityRate: Double
+
+  public init(
+    firstMeaningfulPartialMilliseconds: Double,
+    updateIntervalP95Milliseconds: Double,
+    emittedPartialCount: Int,
+    revisedPartialCount: Int,
+    instabilityRate: Double
+  ) {
+    self.firstMeaningfulPartialMilliseconds = firstMeaningfulPartialMilliseconds
+    self.updateIntervalP95Milliseconds = updateIntervalP95Milliseconds
+    self.emittedPartialCount = emittedPartialCount
+    self.revisedPartialCount = revisedPartialCount
+    self.instabilityRate = instabilityRate
+  }
+}
+
 public struct EvaluationTextSlice: Codable, Equatable, Sendable {
   public var language: EvaluationLanguageMode
   public var text: String
@@ -235,13 +438,38 @@ public struct StandardBaselineMetric: Codable, Equatable, Sendable {
 public struct StandardBaselineEvidence: Codable, Equatable, Sendable {
   public var identity: StandardBaselineIdentity
   public var metrics: [StandardBaselineMetric]
+  public var sliceMetrics: [EvaluationSliceMetric]
 
   public init(
     identity: StandardBaselineIdentity,
-    metrics: [StandardBaselineMetric]
+    metrics: [StandardBaselineMetric],
+    sliceMetrics: [EvaluationSliceMetric] = []
   ) {
     self.identity = identity
     self.metrics = metrics
+    self.sliceMetrics = sliceMetrics
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case identity
+    case metrics
+    case sliceMetrics
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.identity = try container.decode(
+      StandardBaselineIdentity.self,
+      forKey: .identity
+    )
+    self.metrics = try container.decode(
+      [StandardBaselineMetric].self,
+      forKey: .metrics
+    )
+    self.sliceMetrics = try container.decodeIfPresent(
+      [EvaluationSliceMetric].self,
+      forKey: .sliceMetrics
+    ) ?? []
   }
 }
 
@@ -250,17 +478,26 @@ public struct UnloadEvidence: Codable, Equatable, Sendable {
   public var unloadSucceeded: Bool
   public var memoryAfterUnloadBytes: Int64
   public var observedAt: String
+  public var preLoadMemoryBytes: Int64?
+  public var postUnloadDeltaBytes: Int64?
+  public var unloadMilliseconds: Double?
 
   public init(
     unloadAttempted: Bool,
     unloadSucceeded: Bool,
     memoryAfterUnloadBytes: Int64,
-    observedAt: String
+    observedAt: String,
+    preLoadMemoryBytes: Int64? = nil,
+    postUnloadDeltaBytes: Int64? = nil,
+    unloadMilliseconds: Double? = nil
   ) {
     self.unloadAttempted = unloadAttempted
     self.unloadSucceeded = unloadSucceeded
     self.memoryAfterUnloadBytes = memoryAfterUnloadBytes
     self.observedAt = observedAt
+    self.preLoadMemoryBytes = preLoadMemoryBytes
+    self.postUnloadDeltaBytes = postUnloadDeltaBytes
+    self.unloadMilliseconds = unloadMilliseconds
   }
 }
 
@@ -406,17 +643,26 @@ public struct LatencyMeasurement: Codable, Equatable, Sendable {
   public var asrMilliseconds: Double
   public var cleanupMilliseconds: Double
   public var endToEndMilliseconds: Double
+  public var finalASRMilliseconds: Double?
+  public var stopToInsertionMilliseconds: Double?
+  public var cancellationMilliseconds: Double?
 
   public init(
     coldLoadMilliseconds: Double?,
     asrMilliseconds: Double,
     cleanupMilliseconds: Double,
-    endToEndMilliseconds: Double
+    endToEndMilliseconds: Double,
+    finalASRMilliseconds: Double? = nil,
+    stopToInsertionMilliseconds: Double? = nil,
+    cancellationMilliseconds: Double? = nil
   ) {
     self.coldLoadMilliseconds = coldLoadMilliseconds
     self.asrMilliseconds = asrMilliseconds
     self.cleanupMilliseconds = cleanupMilliseconds
     self.endToEndMilliseconds = endToEndMilliseconds
+    self.finalASRMilliseconds = finalASRMilliseconds
+    self.stopToInsertionMilliseconds = stopToInsertionMilliseconds
+    self.cancellationMilliseconds = cancellationMilliseconds
   }
 }
 
@@ -427,6 +673,9 @@ public struct ResourceMeasurement: Codable, Equatable, Sendable {
   public var energyImpact: Double
   public var modelDownloadBytes: Int64
   public var modelInstalledBytes: Int64
+  public var preLoadMemoryBytes: Int64?
+  public var readyIdleMemoryBytes: Int64?
+  public var readyIdleDeltaBytes: Int64?
 
   public init(
     peakMemoryBytes: Int64,
@@ -434,7 +683,10 @@ public struct ResourceMeasurement: Codable, Equatable, Sendable {
     thermalState: ThermalState,
     energyImpact: Double,
     modelDownloadBytes: Int64,
-    modelInstalledBytes: Int64
+    modelInstalledBytes: Int64,
+    preLoadMemoryBytes: Int64? = nil,
+    readyIdleMemoryBytes: Int64? = nil,
+    readyIdleDeltaBytes: Int64? = nil
   ) {
     self.peakMemoryBytes = peakMemoryBytes
     self.idleMemoryBytes = idleMemoryBytes
@@ -442,6 +694,9 @@ public struct ResourceMeasurement: Codable, Equatable, Sendable {
     self.energyImpact = energyImpact
     self.modelDownloadBytes = modelDownloadBytes
     self.modelInstalledBytes = modelInstalledBytes
+    self.preLoadMemoryBytes = preLoadMemoryBytes
+    self.readyIdleMemoryBytes = readyIdleMemoryBytes
+    self.readyIdleDeltaBytes = readyIdleDeltaBytes
   }
 }
 
@@ -539,6 +794,7 @@ public struct UtteranceResult: Codable, Equatable, Sendable {
   public var resources: ResourceMeasurement
   public var metricHypothesisSlices: [EvaluationTextSlice]
   public var manualAdjudication: ManualAdjudication?
+  public var provisional: ProvisionalMeasurement?
 
   public init(
     observationID: String,
@@ -552,7 +808,8 @@ public struct UtteranceResult: Codable, Equatable, Sendable {
     latency: LatencyMeasurement,
     resources: ResourceMeasurement,
     metricHypothesisSlices: [EvaluationTextSlice],
-    manualAdjudication: ManualAdjudication?
+    manualAdjudication: ManualAdjudication?,
+    provisional: ProvisionalMeasurement? = nil
   ) {
     self.observationID = observationID
     self.caseID = caseID
@@ -566,6 +823,7 @@ public struct UtteranceResult: Codable, Equatable, Sendable {
     self.resources = resources
     self.metricHypothesisSlices = metricHypothesisSlices
     self.manualAdjudication = manualAdjudication
+    self.provisional = provisional
   }
 }
 
@@ -583,6 +841,12 @@ public struct CandidateRun: Codable, Equatable, Sendable {
   public var failureCancellationEvidence: FailureCancellationEvidence
   public var syntheticSample: Bool
   public var releaseEvidence: Bool
+  public var stage: CandidateRunStage?
+  public var components: [CandidateComponentIdentity]
+  public var claimedCapabilities: [CandidateCapability]
+  public var cancellationResourceEvidence: CancellationResourceEvidence?
+  public var supplyChain: SupplyChainEvidence?
+  public var reliability: ReliabilityEvidence?
 
   public init(
     schemaVersion: Int,
@@ -597,7 +861,13 @@ public struct CandidateRun: Codable, Equatable, Sendable {
     offlineEvidence: OfflineEvidence,
     failureCancellationEvidence: FailureCancellationEvidence,
     syntheticSample: Bool,
-    releaseEvidence: Bool
+    releaseEvidence: Bool,
+    stage: CandidateRunStage? = nil,
+    components: [CandidateComponentIdentity] = [],
+    claimedCapabilities: [CandidateCapability] = [],
+    cancellationResourceEvidence: CancellationResourceEvidence? = nil,
+    supplyChain: SupplyChainEvidence? = nil,
+    reliability: ReliabilityEvidence? = nil
   ) {
     self.schemaVersion = schemaVersion
     self.runID = runID
@@ -612,5 +882,77 @@ public struct CandidateRun: Codable, Equatable, Sendable {
     self.failureCancellationEvidence = failureCancellationEvidence
     self.syntheticSample = syntheticSample
     self.releaseEvidence = releaseEvidence
+    self.stage = stage
+    self.components = components
+    self.claimedCapabilities = claimedCapabilities
+    self.cancellationResourceEvidence = cancellationResourceEvidence
+    self.supplyChain = supplyChain
+    self.reliability = reliability
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion
+    case runID
+    case corpusID
+    case corpusRevision
+    case candidate
+    case environment
+    case standardBaseline
+    case unloadEvidence
+    case results
+    case offlineEvidence
+    case failureCancellationEvidence
+    case syntheticSample
+    case releaseEvidence
+    case stage
+    case components
+    case claimedCapabilities
+    case cancellationResourceEvidence
+    case supplyChain
+    case reliability
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    self.runID = try container.decode(String.self, forKey: .runID)
+    self.corpusID = try container.decode(String.self, forKey: .corpusID)
+    self.corpusRevision = try container.decode(String.self, forKey: .corpusRevision)
+    self.candidate = try container.decode(CandidateIdentity.self, forKey: .candidate)
+    self.environment = try container.decode(RunEnvironment.self, forKey: .environment)
+    self.standardBaseline = try container.decode(
+      StandardBaselineEvidence.self,
+      forKey: .standardBaseline
+    )
+    self.unloadEvidence = try container.decode(UnloadEvidence.self, forKey: .unloadEvidence)
+    self.results = try container.decode([UtteranceResult].self, forKey: .results)
+    self.offlineEvidence = try container.decode(OfflineEvidence.self, forKey: .offlineEvidence)
+    self.failureCancellationEvidence = try container.decode(
+      FailureCancellationEvidence.self,
+      forKey: .failureCancellationEvidence
+    )
+    self.syntheticSample = try container.decode(Bool.self, forKey: .syntheticSample)
+    self.releaseEvidence = try container.decode(Bool.self, forKey: .releaseEvidence)
+    self.stage = try container.decodeIfPresent(CandidateRunStage.self, forKey: .stage)
+    self.components = try container.decodeIfPresent(
+      [CandidateComponentIdentity].self,
+      forKey: .components
+    ) ?? []
+    self.claimedCapabilities = try container.decodeIfPresent(
+      [CandidateCapability].self,
+      forKey: .claimedCapabilities
+    ) ?? []
+    self.cancellationResourceEvidence = try container.decodeIfPresent(
+      CancellationResourceEvidence.self,
+      forKey: .cancellationResourceEvidence
+    )
+    self.supplyChain = try container.decodeIfPresent(
+      SupplyChainEvidence.self,
+      forKey: .supplyChain
+    )
+    self.reliability = try container.decodeIfPresent(
+      ReliabilityEvidence.self,
+      forKey: .reliability
+    )
   }
 }

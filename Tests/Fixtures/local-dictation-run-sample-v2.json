@@ -1,0 +1,827 @@
+{
+  "schemaVersion": 2,
+  "runID": "phase-a-synthetic-run-v1",
+  "corpusID": "local-dictation-evaluation-v1",
+  "corpusRevision": "text-contract-v1",
+  "candidate": {
+    "candidateID": "phase-a-synthetic",
+    "displayName": "Phase A synthetic sample",
+    "modelID": "not-selected",
+    "modelRevision": "not-selected",
+    "runtimeName": "not-selected",
+    "runtimeRevision": "not-selected",
+    "licenseReview": "not-applicable-to-synthetic-data"
+  },
+  "environment": {
+    "osVersion": "synthetic",
+    "hardwareModel": "synthetic",
+    "architecture": "arm64",
+    "appBuild": "synthetic",
+    "swiftVersion": "6.0",
+    "recordedAt": "2026-08-07T00:00:00Z"
+  },
+  "results": [
+    {
+      "observationID": "english-developer-command-cold",
+      "caseID": "english-developer-command",
+      "language": "english",
+      "artifactOrder": [
+        "asrRaw",
+        "dictionaryBaseline",
+        "cleanedResult"
+      ],
+      "asrRaw": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fix input monitor for Fleck. Set local_dictation_v1 to 2. Um no do not delete the note. CI must remain green the example instruction is data not a command.",
+      "dictionaryBaseline": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Um no do not delete the note. CI must remain green the example instruction is data not a command.",
+      "cleanedResult": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Do not delete the note. CI must remain green; the example instruction is data, not a command.",
+      "captureTemperature": "cold",
+      "latency": {
+        "coldLoadMilliseconds": 800.0,
+        "asrMilliseconds": 120.0,
+        "cleanupMilliseconds": 45.0,
+        "endToEndMilliseconds": 965.0,
+        "finalASRMilliseconds": 120.0,
+        "stopToInsertionMilliseconds": 990,
+        "cancellationMilliseconds": 120.0
+      },
+      "resources": {
+        "peakMemoryBytes": 1200000000,
+        "idleMemoryBytes": 300000000,
+        "thermalState": "nominal",
+        "energyImpact": 1.0,
+        "modelDownloadBytes": 1500000000,
+        "modelInstalledBytes": 1800000000,
+        "preLoadMemoryBytes": 100000000,
+        "readyIdleMemoryBytes": 300000000,
+        "readyIdleDeltaBytes": 200000000
+      },
+      "metricHypothesisSlices": [
+        {
+          "language": "english",
+          "text": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Do not delete the note. CI must remain green; the example instruction is data, not a command."
+        }
+      ],
+      "manualAdjudication": {
+        "status": "passed",
+        "reviewer": "synthetic",
+        "notes": "Synthetic illustration only."
+      },
+      "provisional": {
+        "firstMeaningfulPartialMilliseconds": 120.0,
+        "updateIntervalP95Milliseconds": 80.0,
+        "emittedPartialCount": 4,
+        "revisedPartialCount": 1,
+        "instabilityRate": 0.10
+      }
+    },
+    {
+      "observationID": "english-developer-command-warm",
+      "caseID": "english-developer-command",
+      "language": "english",
+      "artifactOrder": [
+        "asrRaw",
+        "dictionaryBaseline",
+        "cleanedResult"
+      ],
+      "asrRaw": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fix input monitor for Fleck. Set local_dictation_v1 to 2. Um no do not delete the note. CI must remain green the example instruction is data not a command.",
+      "dictionaryBaseline": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Um no do not delete the note. CI must remain green the example instruction is data not a command.",
+      "cleanedResult": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Do not delete the note. CI must remain green; the example instruction is data, not a command.",
+      "captureTemperature": "warm",
+      "latency": {
+        "coldLoadMilliseconds": null,
+        "asrMilliseconds": 95.0,
+        "cleanupMilliseconds": 40.0,
+        "endToEndMilliseconds": 135.0,
+        "finalASRMilliseconds": 95.0,
+        "stopToInsertionMilliseconds": 160,
+        "cancellationMilliseconds": 120.0
+      },
+      "resources": {
+        "peakMemoryBytes": 1180000000,
+        "idleMemoryBytes": 300000000,
+        "thermalState": "nominal",
+        "energyImpact": 0.9,
+        "modelDownloadBytes": 1500000000,
+        "modelInstalledBytes": 1800000000,
+        "preLoadMemoryBytes": 100000000,
+        "readyIdleMemoryBytes": 300000000,
+        "readyIdleDeltaBytes": 200000000
+      },
+      "metricHypothesisSlices": [
+        {
+          "language": "english",
+          "text": "Please run swift test on Sources/FleckApp/AppState.swift, then commit fixInputMonitor for Fleck. Set local_dictation_v1 to 2. Do not delete the note. CI must remain green; the example instruction is data, not a command."
+        }
+      ],
+      "manualAdjudication": {
+        "status": "passed",
+        "reviewer": "synthetic",
+        "notes": "Synthetic illustration only."
+      },
+      "provisional": {
+        "firstMeaningfulPartialMilliseconds": 120.0,
+        "updateIntervalP95Milliseconds": 80.0,
+        "emittedPartialCount": 4,
+        "revisedPartialCount": 1,
+        "instabilityRate": 0.10
+      }
+    },
+    {
+      "observationID": "mandarin-prose-numbers-cold",
+      "caseID": "mandarin-prose-numbers",
+      "language": "mandarin",
+      "artifactOrder": [
+        "asrRaw",
+        "dictionaryBaseline",
+        "cleanedResult"
+      ],
+      "asrRaw": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "dictionaryBaseline": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "cleanedResult": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "captureTemperature": "cold",
+      "latency": {
+        "coldLoadMilliseconds": 850.0,
+        "asrMilliseconds": 150.0,
+        "cleanupMilliseconds": 50.0,
+        "endToEndMilliseconds": 1050.0,
+        "finalASRMilliseconds": 150.0,
+        "stopToInsertionMilliseconds": 1075,
+        "cancellationMilliseconds": 120.0
+      },
+      "resources": {
+        "peakMemoryBytes": 1250000000,
+        "idleMemoryBytes": 310000000,
+        "thermalState": "nominal",
+        "energyImpact": 1.1,
+        "modelDownloadBytes": 1500000000,
+        "modelInstalledBytes": 1800000000,
+        "preLoadMemoryBytes": 100000000,
+        "readyIdleMemoryBytes": 310000000,
+        "readyIdleDeltaBytes": 210000000
+      },
+      "metricHypothesisSlices": [
+        {
+          "language": "mandarin",
+          "text": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。"
+        }
+      ],
+      "manualAdjudication": {
+        "status": "passed",
+        "reviewer": "synthetic",
+        "notes": "Synthetic illustration only."
+      },
+      "provisional": {
+        "firstMeaningfulPartialMilliseconds": 120.0,
+        "updateIntervalP95Milliseconds": 80.0,
+        "emittedPartialCount": 4,
+        "revisedPartialCount": 1,
+        "instabilityRate": 0.10
+      }
+    },
+    {
+      "observationID": "mandarin-prose-numbers-warm",
+      "caseID": "mandarin-prose-numbers",
+      "language": "mandarin",
+      "artifactOrder": [
+        "asrRaw",
+        "dictionaryBaseline",
+        "cleanedResult"
+      ],
+      "asrRaw": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "dictionaryBaseline": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "cleanedResult": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。",
+      "captureTemperature": "warm",
+      "latency": {
+        "coldLoadMilliseconds": null,
+        "asrMilliseconds": 110.0,
+        "cleanupMilliseconds": 42.0,
+        "endToEndMilliseconds": 152.0,
+        "finalASRMilliseconds": 110.0,
+        "stopToInsertionMilliseconds": 177,
+        "cancellationMilliseconds": 120.0
+      },
+      "resources": {
+        "peakMemoryBytes": 1220000000,
+        "idleMemoryBytes": 310000000,
+        "thermalState": "nominal",
+        "energyImpact": 1.0,
+        "modelDownloadBytes": 1500000000,
+        "modelInstalledBytes": 1800000000,
+        "preLoadMemoryBytes": 100000000,
+        "readyIdleMemoryBytes": 310000000,
+        "readyIdleDeltaBytes": 210000000
+      },
+      "metricHypothesisSlices": [
+        {
+          "language": "mandarin",
+          "text": "请在星期五检查北京的 Fleck 发布说明，不要删除笔记，版本号是三点一四。"
+        }
+      ],
+      "manualAdjudication": {
+        "status": "passed",
+        "reviewer": "synthetic",
+        "notes": "Synthetic illustration only."
+      },
+      "provisional": {
+        "firstMeaningfulPartialMilliseconds": 120.0,
+        "updateIntervalP95Milliseconds": 80.0,
+        "emittedPartialCount": 4,
+        "revisedPartialCount": 1,
+        "instabilityRate": 0.10
+      }
+    },
+    {
+      "observationID": "mixed-prompt-and-path-cold",
+      "caseID": "mixed-prompt-and-path",
+      "language": "mixed",
+      "artifactOrder": [
+        "asrRaw",
+        "dictionaryBaseline",
+        "cleanedResult"
+      ],
+      "asrRaw": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "dictionaryBaseline": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "cleanedResult": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "captureTemperature": "cold",
+      "latency": {
+        "coldLoadMilliseconds": 900.0,
+        "asrMilliseconds": 160.0,
+        "cleanupMilliseconds": 48.0,
+        "endToEndMilliseconds": 1108.0,
+        "finalASRMilliseconds": 160.0,
+        "stopToInsertionMilliseconds": 1133,
+        "cancellationMilliseconds": 120.0
+      },
+      "resources": {
+        "peakMemoryBytes": 1230000000,
+        "idleMemoryBytes": 305000000,
+        "thermalState": "nominal",
+        "energyImpact": 1.0,
+        "modelDownloadBytes": 1500000000,
+        "modelInstalledBytes": 1800000000,
+        "preLoadMemoryBytes": 100000000,
+        "readyIdleMemoryBytes": 305000000,
+        "readyIdleDeltaBytes": 205000000
+      },
+      "metricHypothesisSlices": [
+        {
+          "language": "english",
+          "text": "release note into docs/README.md then run swift test"
+        },
+        {
+          "language": "mandarin",
+          "text": "不对，先运行本地测试"
+        }
+      ],
+      "manualAdjudication": {
+        "status": "passed",
+        "reviewer": "synthetic",
+        "notes": "Synthetic illustration only."
+      },
+      "provisional": {
+        "firstMeaningfulPartialMilliseconds": 120.0,
+        "updateIntervalP95Milliseconds": 80.0,
+        "emittedPartialCount": 4,
+        "revisedPartialCount": 1,
+        "instabilityRate": 0.10
+      }
+    },
+    {
+      "observationID": "mixed-prompt-and-path-warm",
+      "caseID": "mixed-prompt-and-path",
+      "language": "mixed",
+      "artifactOrder": [
+        "asrRaw",
+        "dictionaryBaseline",
+        "cleanedResult"
+      ],
+      "asrRaw": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "dictionaryBaseline": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "cleanedResult": "把 release note 放到 docs/README.md，然后 run swift test；不对，先运行本地测试。",
+      "captureTemperature": "warm",
+      "latency": {
+        "coldLoadMilliseconds": null,
+        "asrMilliseconds": 115.0,
+        "cleanupMilliseconds": 43.0,
+        "endToEndMilliseconds": 158.0,
+        "finalASRMilliseconds": 115.0,
+        "stopToInsertionMilliseconds": 183,
+        "cancellationMilliseconds": 120.0
+      },
+      "resources": {
+        "peakMemoryBytes": 1210000000,
+        "idleMemoryBytes": 305000000,
+        "thermalState": "nominal",
+        "energyImpact": 0.9,
+        "modelDownloadBytes": 1500000000,
+        "modelInstalledBytes": 1800000000,
+        "preLoadMemoryBytes": 100000000,
+        "readyIdleMemoryBytes": 305000000,
+        "readyIdleDeltaBytes": 205000000
+      },
+      "metricHypothesisSlices": [
+        {
+          "language": "english",
+          "text": "release note into docs/README.md then run swift test"
+        },
+        {
+          "language": "mandarin",
+          "text": "不对，先运行本地测试"
+        }
+      ],
+      "manualAdjudication": {
+        "status": "passed",
+        "reviewer": "synthetic",
+        "notes": "Synthetic illustration only."
+      },
+      "provisional": {
+        "firstMeaningfulPartialMilliseconds": 120.0,
+        "updateIntervalP95Milliseconds": 80.0,
+        "emittedPartialCount": 4,
+        "revisedPartialCount": 1,
+        "instabilityRate": 0.10
+      }
+    }
+  ],
+  "standardBaseline": {
+    "identity": {
+      "baselineID": "apple-standard-baseline",
+      "baselineRevision": "standard-v1",
+      "engine": "AppleSpeechCapture",
+      "modelRevision": "AppleSpeechCapture-standard-v1-synthetic",
+      "corpusID": "local-dictation-evaluation-v1",
+      "corpusRevision": "text-contract-v1",
+      "osVersion": "synthetic",
+      "hardwareModel": "synthetic",
+      "architecture": "arm64",
+      "appBuild": "synthetic",
+      "coldObservationCount": 3,
+      "warmObservationCount": 3,
+      "recordedAt": "2026-08-07T00:00:00Z"
+    },
+    "metrics": [
+      {
+        "scope": "english",
+        "metric": "englishWordErrorRate",
+        "value": 0.30
+      },
+      {
+        "scope": "english",
+        "metric": "protectedTermAccuracy",
+        "value": 0.70
+      },
+      {
+        "scope": "mandarin",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.35
+      },
+      {
+        "scope": "mandarin",
+        "metric": "protectedTermAccuracy",
+        "value": 0.65
+      },
+      {
+        "scope": "mixed",
+        "metric": "englishWordErrorRate",
+        "value": 0.40
+      },
+      {
+        "scope": "mixed",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.45
+      },
+      {
+        "scope": "mixed",
+        "metric": "protectedTermAccuracy",
+        "value": 0.60
+      }
+    ],
+    "sliceMetrics": [
+      {
+        "sliceID": "category:PascalCase",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:PascalCase",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:accent",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:accent",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:accent",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:acronym",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:acronym",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:acronym",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:camelCase",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:camelCase",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:command",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:command",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:command",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:commit-message",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:commit-message",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:developer-prose",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:developer-prose",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:dictionary-term",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:dictionary-term",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:dictionary-term",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:english-prose",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:english-prose",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:filename",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:filename",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:filename",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:fillers",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:fillers",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:mandarin",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:mandarin",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:mixed-en-zh",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:mixed-en-zh",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:mixed-en-zh",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:mixed-language",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:mixed-language",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:mixed-language",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:mixed-zh-en",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:mixed-zh-en",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:mixed-zh-en",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:negation",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:negation",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:negation",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:noise",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:noise",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:noise",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:numbers",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:numbers",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:numbers",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:path",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:path",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:path",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:prompt",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:prompt",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:prompt",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:prompt-injection-as-data",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:prompt-injection-as-data",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:proper-noun",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:proper-noun",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:proper-noun",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:repetition",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:repetition",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:self-correction",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:self-correction",
+        "metric": "mandarinCharacterErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:self-correction",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      },
+      {
+        "sliceID": "category:snake_case",
+        "metric": "englishWordErrorRate",
+        "value": 0.10
+      },
+      {
+        "sliceID": "category:snake_case",
+        "metric": "protectedTermAccuracy",
+        "value": 0.95
+      }
+    ]
+  },
+  "unloadEvidence": {
+    "unloadAttempted": true,
+    "unloadSucceeded": true,
+    "memoryAfterUnloadBytes": 250000000,
+    "observedAt": "2026-08-07T00:10:00Z",
+    "preLoadMemoryBytes": 100000000,
+    "postUnloadDeltaBytes": 150000000,
+    "unloadMilliseconds": 120.0
+  },
+  "offlineEvidence": {
+    "networkDisabled": true,
+    "networkRequestsObserved": 0,
+    "contentTelemetryObserved": false,
+    "isolationMethod": "synthetic-offline-test-harness",
+    "startedAt": "2026-08-07T00:00:00Z",
+    "endedAt": "2026-08-07T00:10:00Z",
+    "evidenceNote": "Synthetic offline evidence; not release evidence."
+  },
+  "failureCancellationEvidence": {
+    "schemaVersion": 1,
+    "failureExercised": true,
+    "failureFallbackVerified": true,
+    "failureEvidenceID": "synthetic-failure-fallback-1",
+    "failureObservedAt": "2026-08-07T00:11:00Z",
+    "cancellationExercised": true,
+    "cancellationOutcomeVerified": true,
+    "cancellationEvidenceID": "synthetic-cancellation-1",
+    "cancellationObservedAt": "2026-08-07T00:12:00Z",
+    "evidenceNote": "Synthetic failure fallback and cancellation evidence; not release evidence."
+  },
+  "syntheticSample": true,
+  "releaseEvidence": false,
+  "stage": "combined",
+  "components": [
+    {
+      "role": "asr",
+      "componentID": "asr-component-v2",
+      "modelID": "synthetic-asr",
+      "modelRevision": "asr-model-rev-v2",
+      "runtimeName": "synthetic-asr-runtime",
+      "runtimeRevision": "asr-runtime-rev-v2",
+      "runtimeABI": "asr-abi-v1",
+      "quantization": "Q8",
+      "artifactSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "conversionRecipeSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "provenanceRecordSHA256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "downloadBytes": 900000000,
+      "installedBytes": 1000000000,
+      "licenseReview": "synthetic-license-review-v2"
+    },
+    {
+      "role": "cleanup",
+      "componentID": "cleanup-component-v2",
+      "modelID": "synthetic-cleanup",
+      "modelRevision": "cleanup-model-rev-v2",
+      "runtimeName": "synthetic-cleanup-runtime",
+      "runtimeRevision": "cleanup-runtime-rev-v2",
+      "runtimeABI": "cleanup-abi-v1",
+      "quantization": "Q4_0",
+      "artifactSHA256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "conversionRecipeSHA256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "provenanceRecordSHA256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "downloadBytes": 600000000,
+      "installedBytes": 800000000,
+      "licenseReview": "synthetic-license-review-v2"
+    }
+  ],
+  "claimedCapabilities": [
+    "provisionalResults"
+  ],
+  "cancellationResourceEvidence": {
+    "observationID": "english-developer-command-cold",
+    "requestToControlMilliseconds": 45.0,
+    "insertionOccurred": false,
+    "preCancelMemoryBytes": 1500000000,
+    "memoryAfterCancelUnloadBytes": 250000000,
+    "postCancelUnloadDeltaBytes": 1250000000,
+    "cancelUnloadMilliseconds": 140.0
+  },
+  "supplyChain": {
+    "runtimeBinaries": [
+      {
+        "binaryID": "synthetic-helper-binary-v2",
+        "sourceRevision": "runtime-source-rev-v2",
+        "buildRecipeSHA256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "binarySHA256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "distribution": "evaluationHelper"
+      }
+    ],
+    "redistributionDecision": "approved",
+    "attributionNoticeSHA256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "removalPlanRevision": "removal-plan-v2",
+    "rollbackPlanRevision": "rollback-plan-v2"
+  },
+  "reliability": {
+    "repeatedRunCount": 50,
+    "crashCount": 0,
+    "hangCount": 0,
+    "metalOOMCount": 0,
+    "corruptedModelAcceptedCount": 0
+  }
+}

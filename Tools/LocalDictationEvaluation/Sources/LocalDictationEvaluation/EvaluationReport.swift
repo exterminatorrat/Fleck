@@ -1,5 +1,24 @@
 import Foundation
 
+public struct EvaluationSliceGate: Codable, Equatable, Sendable {
+  public var sliceID: String
+  public var metric: EvaluationMetricKind
+  public var maximumCandidateValue: Double
+  public var maximumRegressionFromStandard: Double
+
+  public init(
+    sliceID: String,
+    metric: EvaluationMetricKind,
+    maximumCandidateValue: Double,
+    maximumRegressionFromStandard: Double
+  ) {
+    self.sliceID = sliceID
+    self.metric = metric
+    self.maximumCandidateValue = maximumCandidateValue
+    self.maximumRegressionFromStandard = maximumRegressionFromStandard
+  }
+}
+
 public struct EvaluationGate: Codable, Equatable, Sendable {
   public var schemaVersion: Int
   public var maxEnglishWordErrorRate: Double
@@ -20,6 +39,18 @@ public struct EvaluationGate: Codable, Equatable, Sendable {
   public var maxModelInstalledBytes: Int64
   public var minimumStandardMaterialImprovement: Double
   public var allowedThermalStates: [ThermalState]
+  public var sliceGates: [EvaluationSliceGate]
+  public var maxFirstMeaningfulPartialMilliseconds: Double
+  public var maxProvisionalUpdateIntervalMilliseconds: Double
+  public var maxProvisionalInstabilityRate: Double
+  public var maxFinalASRMilliseconds: Double
+  public var maxCleanupMilliseconds: Double
+  public var maxStopToInsertionMilliseconds: Double
+  public var maxCancellationMilliseconds: Double
+  public var maxReadyIdleDeltaBytes: Int64
+  public var maxPostUnloadDeltaBytes: Int64
+  public var maxUnloadMilliseconds: Double
+  public var minimumRepeatedRunCount: Int
 
   public init(
     schemaVersion: Int,
@@ -40,7 +71,19 @@ public struct EvaluationGate: Codable, Equatable, Sendable {
     maxModelDownloadBytes: Int64,
     maxModelInstalledBytes: Int64,
     minimumStandardMaterialImprovement: Double,
-    allowedThermalStates: [ThermalState]
+    allowedThermalStates: [ThermalState],
+    sliceGates: [EvaluationSliceGate] = [],
+    maxFirstMeaningfulPartialMilliseconds: Double = 0,
+    maxProvisionalUpdateIntervalMilliseconds: Double = 0,
+    maxProvisionalInstabilityRate: Double = 0,
+    maxFinalASRMilliseconds: Double = 0,
+    maxCleanupMilliseconds: Double = 0,
+    maxStopToInsertionMilliseconds: Double = 0,
+    maxCancellationMilliseconds: Double = 0,
+    maxReadyIdleDeltaBytes: Int64 = 0,
+    maxPostUnloadDeltaBytes: Int64 = 0,
+    maxUnloadMilliseconds: Double = 0,
+    minimumRepeatedRunCount: Int = 50
   ) {
     self.schemaVersion = schemaVersion
     self.maxEnglishWordErrorRate = maxEnglishWordErrorRate
@@ -61,6 +104,18 @@ public struct EvaluationGate: Codable, Equatable, Sendable {
     self.maxModelInstalledBytes = maxModelInstalledBytes
     self.minimumStandardMaterialImprovement = minimumStandardMaterialImprovement
     self.allowedThermalStates = allowedThermalStates
+    self.sliceGates = sliceGates
+    self.maxFirstMeaningfulPartialMilliseconds = maxFirstMeaningfulPartialMilliseconds
+    self.maxProvisionalUpdateIntervalMilliseconds = maxProvisionalUpdateIntervalMilliseconds
+    self.maxProvisionalInstabilityRate = maxProvisionalInstabilityRate
+    self.maxFinalASRMilliseconds = maxFinalASRMilliseconds
+    self.maxCleanupMilliseconds = maxCleanupMilliseconds
+    self.maxStopToInsertionMilliseconds = maxStopToInsertionMilliseconds
+    self.maxCancellationMilliseconds = maxCancellationMilliseconds
+    self.maxReadyIdleDeltaBytes = maxReadyIdleDeltaBytes
+    self.maxPostUnloadDeltaBytes = maxPostUnloadDeltaBytes
+    self.maxUnloadMilliseconds = maxUnloadMilliseconds
+    self.minimumRepeatedRunCount = minimumRepeatedRunCount
   }
 }
 
@@ -100,6 +155,18 @@ extension EvaluationGate {
     case maxModelInstalledBytes
     case minimumStandardMaterialImprovement
     case allowedThermalStates
+    case sliceGates
+    case maxFirstMeaningfulPartialMilliseconds
+    case maxProvisionalUpdateIntervalMilliseconds
+    case maxProvisionalInstabilityRate
+    case maxFinalASRMilliseconds
+    case maxCleanupMilliseconds
+    case maxStopToInsertionMilliseconds
+    case maxCancellationMilliseconds
+    case maxReadyIdleDeltaBytes
+    case maxPostUnloadDeltaBytes
+    case maxUnloadMilliseconds
+    case minimumRepeatedRunCount
   }
 
   public init(from decoder: Decoder) throws {
@@ -116,8 +183,9 @@ extension EvaluationGate {
       )
     }
     let container = try decoder.container(keyedBy: CodingKeys.self)
+    let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
     self.init(
-      schemaVersion: try container.decode(Int.self, forKey: .schemaVersion),
+      schemaVersion: schemaVersion,
       maxEnglishWordErrorRate: try container.decode(
         Double.self, forKey: .maxEnglishWordErrorRate
       ),
@@ -171,8 +239,89 @@ extension EvaluationGate {
       ),
       allowedThermalStates: try container.decode(
         [ThermalState].self, forKey: .allowedThermalStates
+      ),
+      sliceGates: try container.decodeIfPresent(
+        [EvaluationSliceGate].self, forKey: .sliceGates
+      ) ?? [],
+      maxFirstMeaningfulPartialMilliseconds: try Self.decodeV2(
+        .maxFirstMeaningfulPartialMilliseconds,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: 0.0
+      ),
+      maxProvisionalUpdateIntervalMilliseconds: try Self.decodeV2(
+        .maxProvisionalUpdateIntervalMilliseconds,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: 0.0
+      ),
+      maxProvisionalInstabilityRate: try Self.decodeV2(
+        .maxProvisionalInstabilityRate,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: 0.0
+      ),
+      maxFinalASRMilliseconds: try Self.decodeV2(
+        .maxFinalASRMilliseconds,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: 0.0
+      ),
+      maxCleanupMilliseconds: try Self.decodeV2(
+        .maxCleanupMilliseconds,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: 0.0
+      ),
+      maxStopToInsertionMilliseconds: try Self.decodeV2(
+        .maxStopToInsertionMilliseconds,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: 0.0
+      ),
+      maxCancellationMilliseconds: try Self.decodeV2(
+        .maxCancellationMilliseconds,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: 0.0
+      ),
+      maxReadyIdleDeltaBytes: try Self.decodeV2(
+        .maxReadyIdleDeltaBytes,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: Int64(0)
+      ),
+      maxPostUnloadDeltaBytes: try Self.decodeV2(
+        .maxPostUnloadDeltaBytes,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: Int64(0)
+      ),
+      maxUnloadMilliseconds: try Self.decodeV2(
+        .maxUnloadMilliseconds,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: 0.0
+      ),
+      minimumRepeatedRunCount: try Self.decodeV2(
+        .minimumRepeatedRunCount,
+        from: container,
+        schemaVersion: schemaVersion,
+        defaultValue: 50
       )
     )
+  }
+
+  private static func decodeV2<T: Decodable>(
+    _ key: CodingKeys,
+    from container: KeyedDecodingContainer<CodingKeys>,
+    schemaVersion: Int,
+    defaultValue: T
+  ) throws -> T {
+    if schemaVersion == 2 {
+      return try container.decode(T.self, forKey: key)
+    }
+    return defaultValue
   }
 }
 
@@ -386,6 +535,7 @@ public struct GateOutcome: Codable, Equatable, Sendable {
   public var id: String
   public var passed: Bool
   public var reviewRequired: Bool
+  public var applicable: Bool
   public var observed: String
   public var limit: String
   public var detail: String
@@ -394,6 +544,7 @@ public struct GateOutcome: Codable, Equatable, Sendable {
     id: String,
     passed: Bool,
     reviewRequired: Bool,
+    applicable: Bool = true,
     observed: String,
     limit: String,
     detail: String
@@ -401,6 +552,7 @@ public struct GateOutcome: Codable, Equatable, Sendable {
     self.id = id
     self.passed = passed
     self.reviewRequired = reviewRequired
+    self.applicable = applicable
     self.observed = observed
     self.limit = limit
     self.detail = detail
@@ -632,7 +784,7 @@ public enum EvaluationReportBuilder {
     run: CandidateRun,
     gate: EvaluationGate
   ) throws -> EvaluationReport {
-    try validate(gate: gate)
+    try validate(gate: gate, run: run)
     let issues = EvaluationValidator.validate(run: run, against: corpus)
     if !issues.isEmpty {
       throw EvaluationReportError.invalid(issues)
@@ -691,21 +843,42 @@ public enum EvaluationReportBuilder {
       protected: protected,
       gate: gate
     )
-    let outcomes = buildOutcomes(
-      gate: gate,
-      languageMetrics: languageMetrics,
-      protected: protected,
-      cleanup: cleanup,
-      latency: latency,
-      resources: resources,
-      standard: standard,
-      run: run
-    )
+    if run.schemaVersion == 2 && run.releaseEvidence {
+      let sliceIssues = validateV2SliceGates(gate, corpus: corpus)
+      if !sliceIssues.isEmpty {
+        throw EvaluationReportError.invalid(sliceIssues)
+      }
+    }
+    let outcomes: [GateOutcome]
+    if run.schemaVersion == 2 {
+      outcomes = buildV2Outcomes(
+        corpus: corpus,
+        gate: gate,
+        languageMetrics: languageMetrics,
+        protected: protected,
+        cleanup: cleanup,
+        latency: latency,
+        resources: resources,
+        standard: standard,
+        run: run
+      )
+    } else {
+      outcomes = buildOutcomes(
+        gate: gate,
+        languageMetrics: languageMetrics,
+        protected: protected,
+        cleanup: cleanup,
+        latency: latency,
+        resources: resources,
+        standard: standard,
+        run: run
+      )
+    }
     let hasFailure = cleanup.manualFailures > 0 || outcomes.contains {
-      !$0.passed && !$0.reviewRequired
+      $0.applicable && !$0.passed && !$0.reviewRequired
     }
     let hasReview = cleanup.summary.manualReviewRequired > 0
-      || outcomes.contains { $0.reviewRequired }
+      || outcomes.contains { $0.applicable && $0.reviewRequired }
     let releaseDecision: ReleaseDecision
     if run.syntheticSample || !run.releaseEvidence {
       releaseDecision = .notEligible
@@ -750,9 +923,9 @@ public enum EvaluationReportBuilder {
     )
   }
 
-  private static func validate(gate: EvaluationGate) throws {
+  private static func validate(gate: EvaluationGate, run: CandidateRun) throws {
     let fields: [(String, Bool)] = [
-      ("schemaVersion", gate.schemaVersion == 1),
+      ("schemaVersion", gate.schemaVersion == 1 || gate.schemaVersion == 2),
       ("maxEnglishWordErrorRate", gate.maxEnglishWordErrorRate.isFinite),
       ("maxMandarinCharacterErrorRate", gate.maxMandarinCharacterErrorRate.isFinite),
       ("maxMixedEnglishWordErrorRate", gate.maxMixedEnglishWordErrorRate.isFinite),
@@ -772,6 +945,9 @@ public enum EvaluationReportBuilder {
       ("minimumStandardMaterialImprovement", gate.minimumStandardMaterialImprovement.isFinite),
       ("allowedThermalStates", !gate.allowedThermalStates.isEmpty)
     ]
+    if run.schemaVersion == 2 && run.releaseEvidence && gate.schemaVersion != 2 {
+      throw EvaluationReportError.invalidGate("schemaVersion")
+    }
     if let invalid = fields.first(where: { !$0.1 }) {
       throw EvaluationReportError.invalidGate(invalid.0)
     }
@@ -796,6 +972,41 @@ public enum EvaluationReportBuilder {
     ]
     if let invalid = nonnegative.first(where: { !$0.1 }) {
       throw EvaluationReportError.invalidGate(invalid.0)
+    }
+    if gate.schemaVersion == 2 {
+      let v2Fields: [(String, Bool)] = [
+        ("maxFirstMeaningfulPartialMilliseconds", gate.maxFirstMeaningfulPartialMilliseconds.isFinite),
+        ("maxProvisionalUpdateIntervalMilliseconds", gate.maxProvisionalUpdateIntervalMilliseconds.isFinite),
+        ("maxProvisionalInstabilityRate", gate.maxProvisionalInstabilityRate.isFinite),
+        ("maxFinalASRMilliseconds", gate.maxFinalASRMilliseconds.isFinite),
+        ("maxCleanupMilliseconds", gate.maxCleanupMilliseconds.isFinite),
+        ("maxStopToInsertionMilliseconds", gate.maxStopToInsertionMilliseconds.isFinite),
+        ("maxCancellationMilliseconds", gate.maxCancellationMilliseconds.isFinite),
+        ("maxReadyIdleDeltaBytes", gate.maxReadyIdleDeltaBytes >= 0),
+        ("maxPostUnloadDeltaBytes", gate.maxPostUnloadDeltaBytes >= 0),
+        ("maxUnloadMilliseconds", gate.maxUnloadMilliseconds.isFinite),
+        ("minimumRepeatedRunCount", gate.minimumRepeatedRunCount >= 50),
+        ("maxProvisionalInstabilityRate", (0...1).contains(gate.maxProvisionalInstabilityRate)),
+        ("sliceGates", !gate.sliceGates.isEmpty)
+      ]
+      if let invalid = v2Fields.first(where: { !$0.1 }) {
+        throw EvaluationReportError.invalidGate(invalid.0)
+      }
+      var seen: Set<String> = []
+      for gate in gate.sliceGates {
+        let key = "\(gate.sliceID):\(gate.metric.rawValue)"
+        if !seen.insert(key).inserted {
+          throw EvaluationReportError.invalidGate("sliceGates")
+        }
+        if gate.sliceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          || !gate.maximumCandidateValue.isFinite
+          || gate.maximumCandidateValue < 0
+          || !gate.maximumRegressionFromStandard.isFinite
+          || gate.maximumRegressionFromStandard < 0
+        {
+          throw EvaluationReportError.invalidGate("sliceGates")
+        }
+      }
     }
   }
 
@@ -1375,6 +1586,698 @@ public enum EvaluationReportBuilder {
     return outcomes
   }
 
+  private static func buildV2Outcomes(
+    corpus: EvaluationCorpus,
+    gate: EvaluationGate,
+    languageMetrics: [LanguageMetricSummary],
+    protected: ProtectedBuild,
+    cleanup: CleanupBuild,
+    latency: LatencySummary,
+    resources: ResourceSummary,
+    standard: StandardBuild,
+    run: CandidateRun
+  ) -> [GateOutcome] {
+    let stage = run.stage ?? .asrOnly
+    let asrApplicable = stage == .asrOnly || stage == .combined
+    let cleanupApplicable = stage == .cleanupOnly || stage == .combined
+    var outcomes: [GateOutcome] = []
+
+    let english = languageMetrics.first(where: {
+      $0.scope == .english && $0.language == .english
+        && $0.metric == .wordErrorRate
+    })?.errorRate
+    let mandarin = languageMetrics.first(where: {
+      $0.scope == .mandarin && $0.language == .mandarin
+        && $0.metric == .characterErrorRate
+    })?.errorRate
+    let mixedEnglish = languageMetrics.first(where: {
+      $0.scope == .mixed && $0.language == .english
+        && $0.metric == .wordErrorRate
+    })?.errorRate
+    let mixedMandarin = languageMetrics.first(where: {
+      $0.scope == .mixed && $0.language == .mandarin
+        && $0.metric == .characterErrorRate
+    })?.errorRate
+
+    outcomes.append(v2ThresholdOutcome(
+      id: "english-wer",
+      value: english,
+      limit: gate.maxEnglishWordErrorRate,
+      applicable: asrApplicable,
+      detail: "English word error rate must not exceed the declared gate."
+    ))
+    outcomes.append(v2ThresholdOutcome(
+      id: "mandarin-cer",
+      value: mandarin,
+      limit: gate.maxMandarinCharacterErrorRate,
+      applicable: asrApplicable,
+      detail: "Mandarin character error rate must not exceed the declared gate."
+    ))
+    outcomes.append(v2CompoundOutcome(
+      id: "mixed-language",
+      values: [mixedEnglish, mixedMandarin],
+      limits: [gate.maxMixedEnglishWordErrorRate, gate.maxMixedMandarinCharacterErrorRate],
+      applicable: asrApplicable,
+      detail: "Mixed language requires both English WER and Mandarin CER to pass."
+    ))
+
+    let protectedApplicable = asrApplicable || cleanupApplicable
+    if protected.total == 0 {
+      outcomes.append(v2ReviewOrNotApplicable(
+        id: "protected-terms",
+        applicable: protectedApplicable,
+        observed: "no expectation occurrences",
+        limit: format(gate.minimumProtectedTermAccuracy),
+        detail: "Protected-term evidence is required."
+      ))
+    } else {
+      let accuracy = Double(protected.total - protected.summaries.reduce(0) {
+        $0 + $1.failed
+      }) / Double(protected.total)
+      let passed = protected.summaries.filter { $0.total > 0 }.allSatisfy {
+        $0.accuracy >= gate.minimumProtectedTermAccuracy
+      }
+      outcomes.append(GateOutcome(
+        id: "protected-terms",
+        passed: protectedApplicable && passed,
+        reviewRequired: false,
+        applicable: protectedApplicable,
+        observed: format(accuracy),
+        limit: format(gate.minimumProtectedTermAccuracy),
+        detail: "Protected-term accuracy is measured per scope."
+      ))
+    }
+    outcomes.append(v2CountOutcome(
+      id: "numbers",
+      value: protected.totalNumberFailures,
+      limit: gate.maximumNumberFailures,
+      applicable: protectedApplicable,
+      detail: "Number failures must not exceed the declared gate."
+    ))
+    outcomes.append(v2CountOutcome(
+      id: "negations",
+      value: protected.totalNegationFailures,
+      limit: gate.maximumNegationFailures,
+      applicable: protectedApplicable,
+      detail: "Negation failures must not exceed the declared gate."
+    ))
+
+    let hasSilenceOrNoise = corpus.cases.contains { item in
+      item.categories.contains { category in
+        category.localizedCaseInsensitiveContains("silence")
+          || category.localizedCaseInsensitiveContains("noise")
+      } || item.conditions.contains { condition in
+        condition.localizedCaseInsensitiveContains("silence")
+          || condition.localizedCaseInsensitiveContains("noise")
+      }
+    }
+    outcomes.append(v2BooleanOutcome(
+      id: "silence-noise",
+      passed: hasSilenceOrNoise && !run.results.isEmpty,
+      applicable: hasSilenceOrNoise,
+      observed: hasSilenceOrNoise ? "observed" : "not-applicable",
+      limit: "case evidence present",
+      detail: "Silence and noise cases must remain free of prompt leakage."
+    ))
+
+    let claimsProvisional = run.claimedCapabilities.contains(.provisionalResults)
+    let provisionalApplicable = claimsProvisional && asrApplicable
+    let provisional = run.results.compactMap(\.provisional)
+    outcomes.append(v2ThresholdOutcome(
+      id: "first-meaningful-partial",
+      value: provisional.count == run.results.count
+        ? provisional.map(\.firstMeaningfulPartialMilliseconds).max()
+        : nil,
+      limit: gate.maxFirstMeaningfulPartialMilliseconds,
+      applicable: provisionalApplicable,
+      detail: "The first meaningful partial is measured from first accepted audio."
+    ))
+    outcomes.append(v2ThresholdOutcome(
+      id: "partial-interval",
+      value: provisional.count == run.results.count
+        ? provisional.map(\.updateIntervalP95Milliseconds).max()
+        : nil,
+      limit: gate.maxProvisionalUpdateIntervalMilliseconds,
+      applicable: provisionalApplicable,
+      detail: "Provisional update interval p95 must remain within the declared gate."
+    ))
+    outcomes.append(v2ThresholdOutcome(
+      id: "partial-instability",
+      value: provisional.count == run.results.count
+        ? provisional.map(\.instabilityRate).max()
+        : nil,
+      limit: gate.maxProvisionalInstabilityRate,
+      applicable: provisionalApplicable,
+      detail: "Provisional instability must remain within the declared gate."
+    ))
+
+    outcomes.append(v2ThresholdOutcome(
+      id: "final-asr-latency",
+      value: maximumOptional(run.results.map(\.latency.finalASRMilliseconds)),
+      limit: gate.maxFinalASRMilliseconds,
+      applicable: asrApplicable,
+      detail: "Final ASR latency must remain within the declared gate."
+    ))
+    outcomes.append(v2ThresholdOutcome(
+      id: "cleanup-latency",
+      value: run.results.map { $0.latency.cleanupMilliseconds }.max(),
+      limit: gate.maxCleanupMilliseconds,
+      applicable: cleanupApplicable,
+      detail: "Cleanup latency must remain within the declared gate."
+    ))
+    outcomes.append(v2ThresholdOutcome(
+      id: "stop-to-insertion",
+      value: maximumOptional(run.results.map(\.latency.stopToInsertionMilliseconds)),
+      limit: gate.maxStopToInsertionMilliseconds,
+      applicable: stage == .combined,
+      detail: "Combined stop-to-insertion latency must remain within the declared gate."
+    ))
+    outcomes.append(v2ThresholdOutcome(
+      id: "cancellation-latency",
+      value: run.cancellationResourceEvidence?.requestToControlMilliseconds,
+      limit: gate.maxCancellationMilliseconds,
+      applicable: true,
+      detail: "Cancellation must return control within the declared gate."
+    ))
+
+    outcomes.append(v2Int64Outcome(
+      id: "peak-memory",
+      value: resources.maximumPeakMemoryBytes,
+      limit: gate.maxPeakMemoryBytes,
+      applicable: true,
+      detail: "Peak memory must not exceed the declared gate."
+    ))
+    outcomes.append(v2Int64Outcome(
+      id: "ready-idle-delta",
+      value: maximumOptional(run.results.map(\.resources.readyIdleDeltaBytes)),
+      limit: gate.maxReadyIdleDeltaBytes,
+      applicable: true,
+      detail: "Ready-idle memory delta must not exceed the declared gate."
+    ))
+    outcomes.append(v2ThresholdOutcome(
+      id: "unload-duration",
+      value: run.unloadEvidence.unloadMilliseconds,
+      limit: gate.maxUnloadMilliseconds,
+      applicable: true,
+      detail: "Unload duration must remain within the declared gate."
+    ))
+    outcomes.append(v2Int64Outcome(
+      id: "post-unload-delta",
+      value: run.unloadEvidence.postUnloadDeltaBytes,
+      limit: gate.maxPostUnloadDeltaBytes,
+      applicable: true,
+      detail: "Post-unload memory delta must remain within the declared gate."
+    ))
+    outcomes.append(v2ThresholdOutcome(
+      id: "energy",
+      value: resources.maximumEnergyImpact,
+      limit: gate.maxEnergyImpact,
+      applicable: true,
+      detail: "Energy impact must not exceed the declared gate."
+    ))
+    let thermalPassed = !resources.thermalStates.isEmpty
+      && resources.thermalStates.allSatisfy { gate.allowedThermalStates.contains($0) }
+    outcomes.append(v2BooleanOutcome(
+      id: "thermal",
+      passed: thermalPassed,
+      applicable: true,
+      observed: resources.thermalStates.map(\.rawValue).joined(separator: ","),
+      limit: gate.allowedThermalStates.map(\.rawValue).joined(separator: ","),
+      detail: "Every observed thermal state must be explicitly allowed."
+    ))
+    outcomes.append(v2Int64Outcome(
+      id: "download-size",
+      value: resources.maximumModelDownloadBytes,
+      limit: gate.maxModelDownloadBytes,
+      applicable: true,
+      detail: "Model download size must not exceed the declared gate."
+    ))
+    outcomes.append(v2Int64Outcome(
+      id: "installed-size",
+      value: resources.maximumModelInstalledBytes,
+      limit: gate.maxModelInstalledBytes,
+      applicable: true,
+      detail: "Installed model size must not exceed the declared gate."
+    ))
+    outcomes.append(v2BooleanOutcome(
+      id: "offline",
+      passed: run.offlineEvidence.networkDisabled
+        && run.offlineEvidence.networkRequestsObserved == 0
+        && !run.offlineEvidence.contentTelemetryObserved,
+      applicable: true,
+      observed: "networkDisabled=\(run.offlineEvidence.networkDisabled), requests=\(run.offlineEvidence.networkRequestsObserved), contentTelemetry=\(run.offlineEvidence.contentTelemetryObserved)",
+      limit: "networkDisabled=true, requests=0, contentTelemetry=false",
+      detail: "Inference evidence must remain local and content-telemetry-free."
+    ))
+
+    let reliability = run.reliability
+    outcomes.append(v2CountAtLeastOutcome(
+      id: "reliability-repetition",
+      value: reliability?.repeatedRunCount,
+      minimum: gate.minimumRepeatedRunCount,
+      applicable: true,
+      detail: "Reliability requires at least the declared repeated-run count."
+    ))
+    let reliabilityFailures = reliability.map {
+      $0.crashCount + $0.hangCount + $0.metalOOMCount
+        + $0.corruptedModelAcceptedCount
+    }
+    outcomes.append(v2CountOutcome(
+      id: "reliability-failures",
+      value: reliabilityFailures ?? 0,
+      limit: 0,
+      applicable: true,
+      detail: "Reliability requires zero crash, hang, OOM, or corrupted-model acceptance failures."
+    ))
+    let cancellation = run.cancellationResourceEvidence
+    outcomes.append(v2BooleanOutcome(
+      id: "cancellation-no-insertion",
+      passed: cancellation != nil && cancellation?.insertionOccurred == false,
+      applicable: true,
+      observed: cancellation.map { "insertionOccurred=\($0.insertionOccurred)" } ?? "missing",
+      limit: "insertionOccurred=false",
+      detail: "Cancellation must prove that no insertion occurred."
+    ))
+    let cancellationWithinBounds = cancellation.map {
+      $0.postCancelUnloadDeltaBytes <= gate.maxPostUnloadDeltaBytes
+        && $0.cancelUnloadMilliseconds <= gate.maxUnloadMilliseconds
+        && $0.memoryAfterCancelUnloadBytes >= 0
+    } ?? false
+    outcomes.append(v2BooleanOutcome(
+      id: "cancellation-post-unload",
+      passed: cancellationWithinBounds,
+      applicable: true,
+      observed: cancellation.map {
+        "delta=\($0.postCancelUnloadDeltaBytes), milliseconds=\($0.cancelUnloadMilliseconds)"
+      } ?? "missing",
+      limit: "delta<=\(gate.maxPostUnloadDeltaBytes), milliseconds<=\(format(gate.maxUnloadMilliseconds))",
+      detail: "Cancellation unload must satisfy post-cancel resource bounds."
+    ))
+
+    let supplyChain = run.supplyChain
+    let hasSupplyIdentity = supplyChain?.runtimeBinaries.isEmpty == false
+      && supplyChain?.runtimeBinaries.allSatisfy {
+        !$0.binaryID.isEmpty && !$0.sourceRevision.isEmpty
+      } == true
+    outcomes.append(v2BooleanOutcome(
+      id: "supply-chain-identity",
+      passed: hasSupplyIdentity,
+      applicable: true,
+      observed: hasSupplyIdentity ? "identified" : "missing",
+      limit: "runtime binary identity present",
+      detail: "Runtime source, build, and binary identities must be recorded."
+    ))
+    outcomes.append(v2BooleanOutcome(
+      id: "supply-chain-redistribution",
+      passed: supplyChain?.redistributionDecision == .approved,
+      applicable: true,
+      observed: supplyChain?.redistributionDecision.rawValue ?? "missing",
+      limit: RedistributionDecision.approved.rawValue,
+      detail: "Redistribution must be explicitly approved."
+    ))
+    let removalRollback = supplyChain?.removalPlanRevision.isEmpty == false
+      && supplyChain?.rollbackPlanRevision.isEmpty == false
+    outcomes.append(v2BooleanOutcome(
+      id: "supply-chain-removal-rollback",
+      passed: removalRollback,
+      applicable: true,
+      observed: removalRollback ? "versioned" : "missing",
+      limit: "removal and rollback revisions present",
+      detail: "Removal and rollback procedures must be versioned."
+    ))
+
+    let failureCancellationPassed = run.failureCancellationEvidence.failureExercised
+      && run.failureCancellationEvidence.failureFallbackVerified
+      && run.failureCancellationEvidence.cancellationExercised
+      && run.failureCancellationEvidence.cancellationOutcomeVerified
+    outcomes.append(v2BooleanOutcome(
+      id: "failure-cancellation",
+      passed: failureCancellationPassed,
+      applicable: true,
+      observed: "failure=\(run.failureCancellationEvidence.failureExercised && run.failureCancellationEvidence.failureFallbackVerified), cancellation=\(run.failureCancellationEvidence.cancellationExercised && run.failureCancellationEvidence.cancellationOutcomeVerified)",
+      limit: "failure=true, cancellation=true",
+      detail: "Both failure fallback and cancellation behavior must be exercised and verified."
+    ))
+
+    outcomes.append(cleanupApplicable
+      ? GateOutcome(
+        id: "cleanup-preservation",
+        passed: cleanup.summary.preservationFailures <= gate.maximumCleanupPreservationFailures
+          && cleanup.manualFailures == 0
+          && cleanup.summary.manualReviewRequired == 0,
+        reviewRequired: cleanup.manualFailures == 0
+          && cleanup.summary.manualReviewRequired > 0,
+        observed: "failures=\(cleanup.summary.preservationFailures), review=\(cleanup.summary.manualReviewRequired)",
+        limit: "failures<=\(gate.maximumCleanupPreservationFailures)",
+        detail: "Cleaned output must preserve protected baseline terms and receive manual review."
+      )
+      : notApplicableOutcome(
+        id: "cleanup-preservation",
+        detail: "Cleanup preservation is not applicable to an ASR-only run."
+      ))
+
+    if asrApplicable {
+      outcomes.append(standardOutcome(
+        id: "standard-improvement-english",
+        keys: [
+          metricKey(scope: .english, metric: .englishWordErrorRate),
+          metricKey(scope: .english, metric: .protectedTermAccuracy)
+        ],
+        standard: standard,
+        minimum: gate.minimumStandardMaterialImprovement
+      ))
+      outcomes.append(standardOutcome(
+        id: "standard-improvement-mandarin",
+        keys: [
+          metricKey(scope: .mandarin, metric: .mandarinCharacterErrorRate),
+          metricKey(scope: .mandarin, metric: .protectedTermAccuracy)
+        ],
+        standard: standard,
+        minimum: gate.minimumStandardMaterialImprovement
+      ))
+      outcomes.append(standardOutcome(
+        id: "standard-improvement-mixed",
+        keys: [
+          metricKey(scope: .mixed, metric: .englishWordErrorRate),
+          metricKey(scope: .mixed, metric: .mandarinCharacterErrorRate),
+          metricKey(scope: .mixed, metric: .protectedTermAccuracy)
+        ],
+        standard: standard,
+        minimum: gate.minimumStandardMaterialImprovement
+      ))
+    } else {
+      for id in [
+        "standard-improvement-english",
+        "standard-improvement-mandarin",
+        "standard-improvement-mixed"
+      ] {
+        outcomes.append(notApplicableOutcome(
+          id: id,
+          detail: "ASR baseline comparison is not applicable to a cleanup-only run."
+        ))
+      }
+    }
+
+    let sortedSliceGates = gate.sliceGates.sorted {
+      let left = "\($0.sliceID):\($0.metric.rawValue)"
+      let right = "\($1.sliceID):\($1.metric.rawValue)"
+      return left < right
+    }
+    for sliceGate in sortedSliceGates {
+      let id = "slice:\(sliceGate.sliceID):\(sliceGate.metric.rawValue)"
+      let sliceApplicable: Bool
+      switch sliceGate.metric {
+      case .englishWordErrorRate, .mandarinCharacterErrorRate:
+        sliceApplicable = asrApplicable
+      case .protectedTermAccuracy:
+        sliceApplicable = true
+      }
+      guard sliceApplicable else {
+        outcomes.append(notApplicableOutcome(
+          id: id,
+          detail: "ASR category slices are not applicable to a cleanup-only run."
+        ))
+        continue
+      }
+      let candidate = candidateSliceMetric(
+        corpus: corpus,
+        results: run.results,
+        sliceID: sliceGate.sliceID,
+        metric: sliceGate.metric
+      )
+      let baseline = run.standardBaseline.sliceMetrics.first {
+        $0.sliceID == sliceGate.sliceID && $0.metric == sliceGate.metric
+      }?.value
+      guard let candidate, let baseline else {
+        outcomes.append(reviewOutcome(
+          id: id,
+          observed: "missing",
+          limit: format(sliceGate.maximumCandidateValue),
+          detail: "Category slice candidate and baseline metrics are both required."
+        ))
+        continue
+      }
+      let regression: Double
+      switch sliceGate.metric {
+      case .protectedTermAccuracy:
+        regression = baseline - candidate
+      case .englishWordErrorRate, .mandarinCharacterErrorRate:
+        regression = candidate - baseline
+      }
+      outcomes.append(GateOutcome(
+        id: id,
+        passed: candidate <= sliceGate.maximumCandidateValue
+          && regression <= sliceGate.maximumRegressionFromStandard,
+        reviewRequired: false,
+        observed: "candidate=\(format(candidate)), regression=\(format(regression))",
+        limit: "candidate<=\(format(sliceGate.maximumCandidateValue)), regression<=\(format(sliceGate.maximumRegressionFromStandard))",
+        detail: "Category slice gates prevent aggregate scores from hiding regressions."
+      ))
+    }
+    return outcomes
+  }
+
+  private static func validateV2SliceGates(
+    _ gate: EvaluationGate,
+    corpus: EvaluationCorpus
+  ) -> [EvaluationIssue] {
+    var issues: [EvaluationIssue] = []
+    let actual = Set(gate.sliceGates.map {
+      "\($0.sliceID):\($0.metric.rawValue)"
+    })
+    for key in requiredV2SliceKeys(corpus) where !actual.contains(key) {
+      issues.append(EvaluationIssue(
+        code: "missing_slice_gate",
+        path: "/sliceGates",
+        message: "Missing category slice gate \(key)."
+      ))
+    }
+    return issues
+  }
+
+  private static func requiredV2SliceKeys(
+    _ corpus: EvaluationCorpus
+  ) -> Set<String> {
+    var keys: Set<String> = []
+    for item in corpus.cases {
+      for category in item.categories {
+        let prefix = "category:\(category):"
+        switch item.language {
+        case .english:
+          keys.insert(prefix + EvaluationMetricKind.englishWordErrorRate.rawValue)
+          keys.insert(prefix + EvaluationMetricKind.protectedTermAccuracy.rawValue)
+        case .mandarin:
+          keys.insert(prefix + EvaluationMetricKind.mandarinCharacterErrorRate.rawValue)
+          keys.insert(prefix + EvaluationMetricKind.protectedTermAccuracy.rawValue)
+        case .mixed:
+          keys.insert(prefix + EvaluationMetricKind.englishWordErrorRate.rawValue)
+          keys.insert(prefix + EvaluationMetricKind.mandarinCharacterErrorRate.rawValue)
+          keys.insert(prefix + EvaluationMetricKind.protectedTermAccuracy.rawValue)
+        }
+      }
+    }
+    if corpus.cases.contains(where: { $0.language == .mixed }) {
+      for category in ["mixed-en-zh", "mixed-zh-en"] {
+        let prefix = "category:\(category):"
+        keys.insert(prefix + EvaluationMetricKind.englishWordErrorRate.rawValue)
+        keys.insert(prefix + EvaluationMetricKind.mandarinCharacterErrorRate.rawValue)
+        keys.insert(prefix + EvaluationMetricKind.protectedTermAccuracy.rawValue)
+      }
+    }
+    return keys
+  }
+
+  private static func candidateSliceMetric(
+    corpus: EvaluationCorpus,
+    results: [UtteranceResult],
+    sliceID: String,
+    metric: EvaluationMetricKind
+  ) -> Double? {
+    let prefix = "category:"
+    guard sliceID.hasPrefix(prefix) else { return nil }
+    let category = String(sliceID.dropFirst(prefix.count))
+    let cases = corpus.cases.filter { $0.categories.contains(category) }
+    guard !cases.isEmpty else { return nil }
+    switch metric {
+    case .englishWordErrorRate, .mandarinCharacterErrorRate:
+      let rates = cases.compactMap { item -> Double? in
+        let observations = results.filter { $0.caseID == item.id }
+        guard let reference = item.metricReferenceSlices.first(where: {
+          $0.language == (metric == .englishWordErrorRate ? .english : .mandarin)
+        }), !observations.isEmpty else { return nil }
+        var counts = EditCounts(
+          substitutions: 0, deletions: 0, insertions: 0, referenceUnits: 0
+        )
+        for result in observations {
+          let hypothesis = result.metricHypothesisSlices.first(where: {
+            $0.language == reference.language
+          })?.text ?? ""
+          let next: EditCounts
+          switch metric {
+          case .englishWordErrorRate:
+            next = TranscriptMetrics.englishWordErrorRate(
+              reference: reference.text,
+              hypothesis: hypothesis
+            )
+          case .mandarinCharacterErrorRate:
+            next = TranscriptMetrics.mandarinCharacterErrorRate(
+              reference: reference.text,
+              hypothesis: hypothesis
+            )
+          case .protectedTermAccuracy:
+            return nil
+          }
+          counts = counts.adding(next)
+        }
+        return counts.errorRate
+      }
+      return rates.isEmpty ? nil : rates.reduce(0, +) / Double(rates.count)
+    case .protectedTermAccuracy:
+      var passed = 0
+      var total = 0
+      for item in cases {
+        for result in results where result.caseID == item.id {
+          let selected = selectedTranscript(result)
+          for expectation in item.protectedExpectations {
+            total += 1
+            if matches(expectation, in: selected) { passed += 1 }
+          }
+        }
+      }
+      return total == 0 ? nil : Double(passed) / Double(total)
+    }
+  }
+
+  private static func maximumOptional(_ values: [Double?]) -> Double? {
+    guard values.allSatisfy({ $0 != nil }) else { return nil }
+    return values.compactMap { $0 }.max()
+  }
+
+  private static func maximumOptional(_ values: [Int64?]) -> Int64? {
+    guard values.allSatisfy({ $0 != nil }) else { return nil }
+    return values.compactMap { $0 }.max()
+  }
+
+  private static func v2ThresholdOutcome(
+    id: String,
+    value: Double?,
+    limit: Double,
+    applicable: Bool,
+    detail: String
+  ) -> GateOutcome {
+    guard applicable else { return notApplicableOutcome(id: id, detail: detail) }
+    return thresholdOutcome(id: id, value: value, limit: limit, detail: detail)
+  }
+
+  private static func v2Int64Outcome(
+    id: String,
+    value: Int64?,
+    limit: Int64,
+    applicable: Bool,
+    detail: String
+  ) -> GateOutcome {
+    guard applicable else { return notApplicableOutcome(id: id, detail: detail) }
+    guard let value else {
+      return reviewOutcome(
+        id: id,
+        observed: "missing",
+        limit: String(limit),
+        detail: detail
+      )
+    }
+    return int64Outcome(id: id, value: value, limit: limit, detail: detail)
+  }
+
+  private static func v2CountOutcome(
+    id: String,
+    value: Int,
+    limit: Int,
+    applicable: Bool,
+    detail: String
+  ) -> GateOutcome {
+    guard applicable else { return notApplicableOutcome(id: id, detail: detail) }
+    return countOutcome(id: id, value: value, limit: limit, detail: detail)
+  }
+
+  private static func v2CountAtLeastOutcome(
+    id: String,
+    value: Int?,
+    minimum: Int,
+    applicable: Bool,
+    detail: String
+  ) -> GateOutcome {
+    guard applicable else { return notApplicableOutcome(id: id, detail: detail) }
+    guard let value else {
+      return reviewOutcome(
+        id: id, observed: "missing", limit: ">=\(minimum)", detail: detail
+      )
+    }
+    return GateOutcome(
+      id: id,
+      passed: value >= minimum,
+      reviewRequired: false,
+      observed: String(value),
+      limit: ">=\(minimum)",
+      detail: detail
+    )
+  }
+
+  private static func v2CompoundOutcome(
+    id: String,
+    values: [Double?],
+    limits: [Double],
+    applicable: Bool,
+    detail: String
+  ) -> GateOutcome {
+    guard applicable else { return notApplicableOutcome(id: id, detail: detail) }
+    return compoundOutcome(id: id, values: values, limits: limits, detail: detail)
+  }
+
+  private static func v2BooleanOutcome(
+    id: String,
+    passed: Bool,
+    applicable: Bool,
+    observed: String,
+    limit: String,
+    detail: String
+  ) -> GateOutcome {
+    guard applicable else { return notApplicableOutcome(id: id, detail: detail) }
+    return GateOutcome(
+      id: id,
+      passed: passed,
+      reviewRequired: false,
+      observed: observed,
+      limit: limit,
+      detail: detail
+    )
+  }
+
+  private static func v2ReviewOrNotApplicable(
+    id: String,
+    applicable: Bool,
+    observed: String,
+    limit: String,
+    detail: String
+  ) -> GateOutcome {
+    guard applicable else { return notApplicableOutcome(id: id, detail: detail) }
+    return reviewOutcome(id: id, observed: observed, limit: limit, detail: detail)
+  }
+
+  private static func notApplicableOutcome(
+    id: String,
+    detail: String
+  ) -> GateOutcome {
+    GateOutcome(
+      id: id,
+      passed: false,
+      reviewRequired: false,
+      applicable: false,
+      observed: "not-applicable",
+      limit: "not-applicable",
+      detail: detail
+    )
+  }
+
   private static func thresholdOutcome(
     id: String,
     value: Double?,
@@ -1637,6 +2540,10 @@ public enum EvaluationReportBuilder {
     lines.append("- runID: \(run.runID)")
     lines.append("- syntheticSample: \(run.syntheticSample)")
     lines.append("- releaseEvidence: \(run.releaseEvidence)")
+    lines.append("- stage: \(run.stage?.rawValue ?? "missing")")
+    lines.append(
+      "- claimedCapabilities: \(run.claimedCapabilities.map(\.rawValue).sorted().joined(separator: ","))"
+    )
     lines.append("")
     lines.append("## Language Metrics")
     lines.append("")
@@ -1746,7 +2653,7 @@ public enum EvaluationReportBuilder {
     lines.append("")
     for outcome in outcomes {
       lines.append(
-        "- \(outcome.id): passed=\(outcome.passed), reviewRequired=\(outcome.reviewRequired), observed=\(outcome.observed), limit=\(outcome.limit), detail=\(outcome.detail)"
+        "- \(outcome.id): applicable=\(outcome.applicable), passed=\(outcome.passed), reviewRequired=\(outcome.reviewRequired), observed=\(outcome.observed), limit=\(outcome.limit), detail=\(outcome.detail)"
       )
     }
     lines.append("")

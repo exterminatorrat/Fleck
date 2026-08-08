@@ -1,0 +1,1089 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fleck.local/schemas/local-dictation-run-v2.schema.json",
+  "title": "Fleck local dictation candidate run v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runID",
+    "corpusID",
+    "corpusRevision",
+    "candidate",
+    "environment",
+    "standardBaseline",
+    "unloadEvidence",
+    "results",
+    "offlineEvidence",
+    "failureCancellationEvidence",
+    "syntheticSample",
+    "releaseEvidence",
+    "stage",
+    "components",
+    "claimedCapabilities",
+    "cancellationResourceEvidence",
+    "supplyChain",
+    "reliability"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "runID": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusID": {
+      "type": "string",
+      "minLength": 1
+    },
+    "corpusRevision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidate": {
+      "$ref": "#/$defs/CandidateIdentity"
+    },
+    "environment": {
+      "$ref": "#/$defs/RunEnvironment"
+    },
+    "standardBaseline": {
+      "$ref": "#/$defs/StandardBaselineEvidence"
+    },
+    "unloadEvidence": {
+      "$ref": "#/$defs/UnloadEvidence"
+    },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/UtteranceResult"
+      }
+    },
+    "offlineEvidence": {
+      "$ref": "#/$defs/OfflineEvidence"
+    },
+    "failureCancellationEvidence": {
+      "$ref": "#/$defs/FailureCancellationEvidence"
+    },
+    "syntheticSample": {
+      "type": "boolean"
+    },
+    "releaseEvidence": {
+      "type": "boolean"
+    },
+    "stage": {
+      "$ref": "#/$defs/CandidateRunStage"
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/CandidateComponentIdentity"
+      }
+    },
+    "claimedCapabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CandidateCapability"
+      }
+    },
+    "cancellationResourceEvidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CancellationResourceEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "supplyChain": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SupplyChainEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reliability": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReliabilityEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "EvaluationLanguageMode": {
+      "type": "string",
+      "enum": [
+        "english",
+        "mandarin",
+        "mixed"
+      ]
+    },
+    "TranscriptArtifactKind": {
+      "type": "string",
+      "enum": [
+        "asrRaw",
+        "dictionaryBaseline",
+        "cleanedResult"
+      ]
+    },
+    "CaptureTemperature": {
+      "type": "string",
+      "enum": [
+        "cold",
+        "warm"
+      ]
+    },
+    "ThermalState": {
+      "type": "string",
+      "enum": [
+        "nominal",
+        "fair",
+        "serious",
+        "critical"
+      ]
+    },
+    "ManualAdjudicationStatus": {
+      "type": "string",
+      "enum": [
+        "notRequired",
+        "pending",
+        "passed",
+        "failed"
+      ]
+    },
+    "EvaluationMetricKind": {
+      "type": "string",
+      "enum": [
+        "englishWordErrorRate",
+        "mandarinCharacterErrorRate",
+        "protectedTermAccuracy"
+      ]
+    },
+    "EvaluationTextSlice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "language",
+        "text"
+      ],
+      "properties": {
+        "language": {
+          "$ref": "#/$defs/EvaluationLanguageMode"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "CandidateIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateID",
+        "displayName",
+        "modelID",
+        "modelRevision",
+        "runtimeName",
+        "runtimeRevision",
+        "licenseReview"
+      ],
+      "properties": {
+        "candidateID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "licenseReview": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "RunEnvironment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "osVersion",
+        "hardwareModel",
+        "architecture",
+        "appBuild",
+        "swiftVersion",
+        "recordedAt"
+      ],
+      "properties": {
+        "osVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hardwareModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "type": "string",
+          "minLength": 1
+        },
+        "appBuild": {
+          "type": "string",
+          "minLength": 1
+        },
+        "swiftVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recordedAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "StandardBaselineIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baselineID",
+        "baselineRevision",
+        "engine",
+        "modelRevision",
+        "corpusID",
+        "corpusRevision",
+        "osVersion",
+        "hardwareModel",
+        "architecture",
+        "appBuild",
+        "coldObservationCount",
+        "warmObservationCount",
+        "recordedAt"
+      ],
+      "properties": {
+        "baselineID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baselineRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "engine": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "corpusID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "corpusRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "osVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hardwareModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "type": "string",
+          "minLength": 1
+        },
+        "appBuild": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coldObservationCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "warmObservationCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "recordedAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "StandardBaselineMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "metric",
+        "value"
+      ],
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/EvaluationLanguageMode"
+        },
+        "metric": {
+          "$ref": "#/$defs/EvaluationMetricKind"
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "StandardBaselineEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "metrics",
+        "sliceMetrics"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/StandardBaselineIdentity"
+        },
+        "metrics": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/StandardBaselineMetric"
+          }
+        },
+        "sliceMetrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvaluationSliceMetric"
+          }
+        }
+      }
+    },
+    "UnloadEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unloadAttempted",
+        "unloadSucceeded",
+        "memoryAfterUnloadBytes",
+        "observedAt",
+        "preLoadMemoryBytes",
+        "postUnloadDeltaBytes",
+        "unloadMilliseconds"
+      ],
+      "properties": {
+        "unloadAttempted": {
+          "type": "boolean"
+        },
+        "unloadSucceeded": {
+          "type": "boolean"
+        },
+        "memoryAfterUnloadBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "observedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "preLoadMemoryBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "postUnloadDeltaBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "unloadMilliseconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "LatencyMeasurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coldLoadMilliseconds",
+        "asrMilliseconds",
+        "cleanupMilliseconds",
+        "endToEndMilliseconds",
+        "finalASRMilliseconds",
+        "stopToInsertionMilliseconds",
+        "cancellationMilliseconds"
+      ],
+      "properties": {
+        "coldLoadMilliseconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "asrMilliseconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cleanupMilliseconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "endToEndMilliseconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "finalASRMilliseconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "stopToInsertionMilliseconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cancellationMilliseconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "ResourceMeasurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "peakMemoryBytes",
+        "idleMemoryBytes",
+        "thermalState",
+        "energyImpact",
+        "modelDownloadBytes",
+        "modelInstalledBytes",
+        "preLoadMemoryBytes",
+        "readyIdleMemoryBytes",
+        "readyIdleDeltaBytes"
+      ],
+      "properties": {
+        "peakMemoryBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "idleMemoryBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "thermalState": {
+          "$ref": "#/$defs/ThermalState"
+        },
+        "energyImpact": {
+          "type": "number",
+          "minimum": 0
+        },
+        "modelDownloadBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modelInstalledBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "preLoadMemoryBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "readyIdleMemoryBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "readyIdleDeltaBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "OfflineEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "networkDisabled",
+        "networkRequestsObserved",
+        "contentTelemetryObserved",
+        "isolationMethod",
+        "startedAt",
+        "endedAt",
+        "evidenceNote"
+      ],
+      "properties": {
+        "networkDisabled": {
+          "type": "boolean"
+        },
+        "networkRequestsObserved": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "contentTelemetryObserved": {
+          "type": "boolean"
+        },
+        "isolationMethod": {
+          "type": "string",
+          "minLength": 1
+        },
+        "startedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "endedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidenceNote": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "FailureCancellationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "failureExercised",
+        "failureFallbackVerified",
+        "failureEvidenceID",
+        "failureObservedAt",
+        "cancellationExercised",
+        "cancellationOutcomeVerified",
+        "cancellationEvidenceID",
+        "cancellationObservedAt",
+        "evidenceNote"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "failureExercised": {
+          "type": "boolean"
+        },
+        "failureFallbackVerified": {
+          "type": "boolean"
+        },
+        "failureEvidenceID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failureObservedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cancellationExercised": {
+          "type": "boolean"
+        },
+        "cancellationOutcomeVerified": {
+          "type": "boolean"
+        },
+        "cancellationEvidenceID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cancellationObservedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidenceNote": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ManualAdjudication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reviewer",
+        "notes"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/ManualAdjudicationStatus"
+        },
+        "reviewer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "UtteranceResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observationID",
+        "caseID",
+        "language",
+        "artifactOrder",
+        "asrRaw",
+        "dictionaryBaseline",
+        "cleanedResult",
+        "captureTemperature",
+        "latency",
+        "resources",
+        "metricHypothesisSlices",
+        "manualAdjudication",
+        "provisional"
+      ],
+      "properties": {
+        "observationID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caseID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "language": {
+          "$ref": "#/$defs/EvaluationLanguageMode"
+        },
+        "artifactOrder": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/TranscriptArtifactKind"
+          }
+        },
+        "asrRaw": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dictionaryBaseline": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cleanedResult": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "captureTemperature": {
+          "$ref": "#/$defs/CaptureTemperature"
+        },
+        "latency": {
+          "$ref": "#/$defs/LatencyMeasurement"
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourceMeasurement"
+        },
+        "metricHypothesisSlices": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/EvaluationTextSlice"
+          }
+        },
+        "manualAdjudication": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManualAdjudication"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provisional": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProvisionalMeasurement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "CandidateComponentRole": {
+      "type": "string",
+      "enum": [
+        "asr",
+        "cleanup"
+      ]
+    },
+    "CandidateRunStage": {
+      "type": "string",
+      "enum": [
+        "asrOnly",
+        "cleanupOnly",
+        "combined"
+      ]
+    },
+    "CandidateCapability": {
+      "type": "string",
+      "enum": [
+        "provisionalResults"
+      ]
+    },
+    "RuntimeBinaryDistribution": {
+      "type": "string",
+      "enum": [
+        "evaluationHelper",
+        "signedInApp"
+      ]
+    },
+    "RedistributionDecision": {
+      "type": "string",
+      "enum": [
+        "approved",
+        "rejected",
+        "pending"
+      ]
+    },
+    "CandidateComponentIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "componentID",
+        "modelID",
+        "modelRevision",
+        "runtimeName",
+        "runtimeRevision",
+        "runtimeABI",
+        "quantization",
+        "artifactSHA256",
+        "conversionRecipeSHA256",
+        "provenanceRecordSHA256",
+        "downloadBytes",
+        "installedBytes",
+        "licenseReview"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/CandidateComponentRole"
+        },
+        "componentID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeABI": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quantization": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifactSHA256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "conversionRecipeSHA256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "provenanceRecordSHA256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "downloadBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "installedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "licenseReview": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "RuntimeBinaryIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binaryID",
+        "sourceRevision",
+        "buildRecipeSHA256",
+        "binarySHA256",
+        "distribution"
+      ],
+      "properties": {
+        "binaryID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "buildRecipeSHA256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "binarySHA256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "distribution": {
+          "$ref": "#/$defs/RuntimeBinaryDistribution"
+        }
+      }
+    },
+    "SupplyChainEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtimeBinaries",
+        "redistributionDecision",
+        "attributionNoticeSHA256",
+        "removalPlanRevision",
+        "rollbackPlanRevision"
+      ],
+      "properties": {
+        "runtimeBinaries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/RuntimeBinaryIdentity"
+          }
+        },
+        "redistributionDecision": {
+          "$ref": "#/$defs/RedistributionDecision"
+        },
+        "attributionNoticeSHA256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "removalPlanRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rollbackPlanRevision": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "EvaluationSliceMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sliceID",
+        "metric",
+        "value"
+      ],
+      "properties": {
+        "sliceID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metric": {
+          "$ref": "#/$defs/EvaluationMetricKind"
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "ReliabilityEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repeatedRunCount",
+        "crashCount",
+        "hangCount",
+        "metalOOMCount",
+        "corruptedModelAcceptedCount"
+      ],
+      "properties": {
+        "repeatedRunCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "crashCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hangCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "metalOOMCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "corruptedModelAcceptedCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "CancellationResourceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observationID",
+        "requestToControlMilliseconds",
+        "insertionOccurred",
+        "preCancelMemoryBytes",
+        "memoryAfterCancelUnloadBytes",
+        "postCancelUnloadDeltaBytes",
+        "cancelUnloadMilliseconds"
+      ],
+      "properties": {
+        "observationID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestToControlMilliseconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "insertionOccurred": {
+          "type": "boolean"
+        },
+        "preCancelMemoryBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "memoryAfterCancelUnloadBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "postCancelUnloadDeltaBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cancelUnloadMilliseconds": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "ProvisionalMeasurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "firstMeaningfulPartialMilliseconds",
+        "updateIntervalP95Milliseconds",
+        "emittedPartialCount",
+        "revisedPartialCount",
+        "instabilityRate"
+      ],
+      "properties": {
+        "firstMeaningfulPartialMilliseconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "updateIntervalP95Milliseconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "emittedPartialCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "revisedPartialCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "instabilityRate": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

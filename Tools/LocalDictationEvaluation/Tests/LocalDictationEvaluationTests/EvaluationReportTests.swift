@@ -31,6 +31,21 @@ private func reportRun() throws -> CandidateRun {
   )
 }
 
+private func reportV2Run() throws -> CandidateRun {
+  try JSONDecoder().decode(
+    CandidateRun.self,
+    from: reportFixture("local-dictation-run-sample-v2.json")
+  )
+}
+
+private func reportV2Corpus() throws -> EvaluationCorpus {
+  var corpus = try reportCorpus()
+  for index in corpus.cases.indices where corpus.cases[index].language == .mixed {
+    corpus.cases[index].categories.append(contentsOf: ["mixed-en-zh", "mixed-zh-en"])
+  }
+  return corpus
+}
+
 private func reportGate(
   maxEnglish: Double = 0.25,
   maxMandarin: Double = 0.25,
@@ -97,6 +112,49 @@ private func admitted(_ source: EvaluationCorpus) -> EvaluationCorpus {
     )
   }
   return corpus
+}
+
+private func reportV2Gate(for run: CandidateRun) -> EvaluationGate {
+  EvaluationGate(
+    schemaVersion: 2,
+    maxEnglishWordErrorRate: 0.50,
+    maxMandarinCharacterErrorRate: 0.50,
+    maxMixedEnglishWordErrorRate: 0.50,
+    maxMixedMandarinCharacterErrorRate: 0.50,
+    minimumProtectedTermAccuracy: 0.50,
+    maximumNumberFailures: 10,
+    maximumNegationFailures: 10,
+    maximumCleanupPreservationFailures: 0,
+    maxColdLatencyMilliseconds: 2_000,
+    maxWarmLatencyMilliseconds: 500,
+    maxPeakMemoryBytes: 2_000_000_000,
+    maxIdleMemoryBytes: 500_000_000,
+    maxPostUnloadMemoryBytes: 500_000_000,
+    maxEnergyImpact: 2.0,
+    maxModelDownloadBytes: 2_000_000_000,
+    maxModelInstalledBytes: 2_000_000_000,
+    minimumStandardMaterialImprovement: 0.0,
+    allowedThermalStates: [.nominal, .fair],
+    sliceGates: run.standardBaseline.sliceMetrics.map {
+      EvaluationSliceGate(
+        sliceID: $0.sliceID,
+        metric: $0.metric,
+        maximumCandidateValue: 1.0,
+        maximumRegressionFromStandard: 1.0
+      )
+    },
+    maxFirstMeaningfulPartialMilliseconds: 500,
+    maxProvisionalUpdateIntervalMilliseconds: 500,
+    maxProvisionalInstabilityRate: 0.50,
+    maxFinalASRMilliseconds: 500,
+    maxCleanupMilliseconds: 500,
+    maxStopToInsertionMilliseconds: 2_000,
+    maxCancellationMilliseconds: 500,
+    maxReadyIdleDeltaBytes: 500_000_000,
+    maxPostUnloadDeltaBytes: 2_000_000_000,
+    maxUnloadMilliseconds: 500,
+    minimumRepeatedRunCount: 50
+  )
 }
 
 @Suite("EvaluationReportTests")
@@ -362,46 +420,51 @@ struct EvaluationReportTests {
 }
 
 @Test func gatePassAndFailAreExplicitAndHaveNoThresholdDefaults() throws {
-  let corpus = admitted(try reportCorpus())
-  var run = try reportRun()
+  let corpus = admitted(try reportV2Corpus())
+  var run = try reportV2Run()
   run.syntheticSample = false
   run.releaseEvidence = true
+  var gate = reportV2Gate(for: run)
   let passing = try EvaluationReportBuilder.build(
     corpus: corpus,
     run: run,
-    gate: reportGate()
+    gate: gate
   )
   #expect(passing.gateOutcomes.contains { $0.id == "english-wer" && $0.passed })
   #expect(passing.gateOutcomes.contains { $0.id == "mixed-language" && $0.passed })
   #expect(passing.gateOutcomes.contains { $0.id == "peak-memory" && $0.passed })
-  #expect(passing.gateOutcomes.contains { $0.id == "idle-memory" && $0.passed })
+  #expect(passing.gateOutcomes.contains { $0.id == "ready-idle-delta" && $0.passed })
   #expect(passing.gateOutcomes.contains { $0.id == "energy" && $0.passed })
   #expect(passing.gateOutcomes.contains {
-    $0.id == "model-download-size" && $0.passed
+    $0.id == "download-size" && $0.passed
   })
   #expect(passing.gateOutcomes.contains {
     $0.id == "standard-improvement-mixed" && $0.passed
   })
-  #expect(passing.gateOutcomes.contains { $0.id == "unload-behavior" && $0.passed })
+  #expect(passing.gateOutcomes.contains { $0.id == "unload-duration" && $0.passed })
   #expect(passing.gateOutcomes.contains {
-    $0.id == "failure-cancellation-behavior" && $0.passed
+    $0.id == "failure-cancellation" && $0.passed
   })
 
+  gate.maxEnglishWordErrorRate = 0
+  gate.maxPeakMemoryBytes = 1
+  gate.maxReadyIdleDeltaBytes = 1
+  gate.maxEnergyImpact = 0
   let failing = try EvaluationReportBuilder.build(
     corpus: corpus,
     run: run,
-    gate: reportGate(maxEnglish: 0, maxPeak: 1, maxIdle: 1, maxEnergy: 0)
+    gate: gate
   )
   #expect(failing.releaseDecision == .failed)
   #expect(failing.gateOutcomes.contains { $0.id == "english-wer" && !$0.passed })
   #expect(failing.gateOutcomes.contains { $0.id == "peak-memory" && !$0.passed })
-  #expect(failing.gateOutcomes.contains { $0.id == "idle-memory" && !$0.passed })
+  #expect(failing.gateOutcomes.contains { $0.id == "ready-idle-delta" && !$0.passed })
   #expect(failing.gateOutcomes.contains { $0.id == "energy" && !$0.passed })
 }
 
 @Test func protectedGatesUseSelectedTranscriptNotMetricSlices() throws {
-  let corpus = admitted(try reportCorpus())
-  var run = try reportRun()
+  let corpus = admitted(try reportV2Corpus())
+  var run = try reportV2Run()
   run.syntheticSample = false
   run.releaseEvidence = true
   for index in run.results.indices where run.results[index].caseID == "english-developer-command" {
@@ -410,7 +473,7 @@ struct EvaluationReportTests {
   let report = try EvaluationReportBuilder.build(
     corpus: corpus,
     run: run,
-    gate: reportGate()
+    gate: reportV2Gate(for: run)
   )
   guard let englishProtected = report.protectedExpectations.first(where: {
     $0.scope == .english
@@ -438,42 +501,42 @@ struct EvaluationReportTests {
 }
 
 @Test func unverifiedFailureOrCancellationFailsReleaseGate() throws {
-  let corpus = admitted(try reportCorpus())
-  var run = try reportRun()
+  let corpus = admitted(try reportV2Corpus())
+  var run = try reportV2Run()
   run.syntheticSample = false
   run.releaseEvidence = true
   run.failureCancellationEvidence.failureExercised = false
   run.failureCancellationEvidence.failureFallbackVerified = false
   let failure = try EvaluationReportBuilder.build(
-    corpus: corpus, run: run, gate: reportGate()
+    corpus: corpus, run: run, gate: reportV2Gate(for: run)
   )
   #expect(failure.releaseDecision == .failed)
   #expect(failure.gateOutcomes.contains {
-    $0.id == "failure-cancellation-behavior" && !$0.passed
+    $0.id == "failure-cancellation" && !$0.passed
   })
 
   run.failureCancellationEvidence.failureFallbackVerified = true
   run.failureCancellationEvidence.cancellationExercised = false
   run.failureCancellationEvidence.cancellationOutcomeVerified = false
   let cancellation = try EvaluationReportBuilder.build(
-    corpus: corpus, run: run, gate: reportGate()
+    corpus: corpus, run: run, gate: reportV2Gate(for: run)
   )
   #expect(cancellation.releaseDecision == .failed)
   #expect(cancellation.gateOutcomes.contains {
-    $0.id == "failure-cancellation-behavior" && !$0.passed
+    $0.id == "failure-cancellation" && !$0.passed
   })
 }
 
 @Test func absentManualAdjudicationRequiresReviewAndNeverProvesMeaning() throws {
-  let corpus = admitted(try reportCorpus())
-  var run = try reportRun()
+  let corpus = admitted(try reportV2Corpus())
+  var run = try reportV2Run()
   run.syntheticSample = false
   run.releaseEvidence = true
   run.results[0].manualAdjudication = nil
   let report = try EvaluationReportBuilder.build(
     corpus: corpus,
     run: run,
-    gate: reportGate()
+    gate: reportV2Gate(for: run)
   )
   #expect(report.cleanupPreservation.manualReviewRequired > 0)
   #expect(report.releaseDecision == .reviewRequired)
@@ -482,8 +545,8 @@ struct EvaluationReportTests {
 }
 
 @Test func pendingAndFailedCleanupAdjudicationHaveDistinctPrecedence() throws {
-  let corpus = admitted(try reportCorpus())
-  var pendingRun = try reportRun()
+  let corpus = admitted(try reportV2Corpus())
+  var pendingRun = try reportV2Run()
   pendingRun.syntheticSample = false
   pendingRun.releaseEvidence = true
   pendingRun.results[0].manualAdjudication = ManualAdjudication(
@@ -492,7 +555,7 @@ struct EvaluationReportTests {
     notes: nil
   )
   let pending = try EvaluationReportBuilder.build(
-    corpus: corpus, run: pendingRun, gate: reportGate()
+    corpus: corpus, run: pendingRun, gate: reportV2Gate(for: pendingRun)
   )
   #expect(pending.releaseDecision == .reviewRequired)
 
@@ -503,7 +566,7 @@ struct EvaluationReportTests {
     notes: "meaning changed"
   )
   let failed = try EvaluationReportBuilder.build(
-    corpus: corpus, run: failedRun, gate: reportGate()
+    corpus: corpus, run: failedRun, gate: reportV2Gate(for: failedRun)
   )
   #expect(failed.releaseDecision == .failed)
 }
@@ -635,5 +698,108 @@ struct EvaluationReportTests {
   #expect(
     String(data: try Data(contentsOf: target), encoding: .utf8) == "new report"
   )
+}
+
+@Test func v2ReportEmitsCompleteStageAwareGateOutcomes() throws {
+  let run = try reportV2Run()
+  let report = try EvaluationReportBuilder.build(
+    corpus: try reportV2Corpus(),
+    run: run,
+    gate: reportV2Gate(for: run)
+  )
+  let expectedGateIDs: Set<String> = [
+    "english-wer", "mandarin-cer", "mixed-language",
+    "protected-terms", "numbers", "negations", "silence-noise",
+    "first-meaningful-partial", "partial-interval", "partial-instability",
+    "final-asr-latency", "cleanup-latency", "stop-to-insertion",
+    "cancellation-latency", "peak-memory", "ready-idle-delta",
+    "unload-duration", "post-unload-delta", "energy", "thermal",
+    "download-size", "installed-size", "offline", "reliability-repetition",
+    "reliability-failures", "cancellation-no-insertion",
+    "cancellation-post-unload", "supply-chain-identity",
+    "supply-chain-redistribution", "supply-chain-removal-rollback",
+    "failure-cancellation"
+  ]
+  #expect(expectedGateIDs.isSubset(of: Set(report.gateOutcomes.map(\.id))))
+  #expect(report.gateOutcomes.contains { $0.id == "cleanup-latency" && $0.applicable })
+  #expect(report.gateOutcomes.contains { $0.id.hasPrefix("slice:category:") })
+}
+
+@Test func v2ReportMarksStageSpecificGatesNotApplicable() throws {
+  var run = try reportV2Run()
+  run.stage = .asrOnly
+  run.components = [run.components[0]]
+  run.claimedCapabilities = []
+  for index in run.results.indices {
+    run.results[index].provisional = nil
+    run.results[index].cleanedResult = nil
+    run.results[index].artifactOrder = [.asrRaw, .dictionaryBaseline]
+    run.results[index].manualAdjudication = nil
+    run.results[index].resources.modelDownloadBytes = run.components[0].downloadBytes
+    run.results[index].resources.modelInstalledBytes = run.components[0].installedBytes
+  }
+  let report = try EvaluationReportBuilder.build(
+    corpus: try reportV2Corpus(),
+    run: run,
+    gate: reportV2Gate(for: run)
+  )
+  #expect(report.gateOutcomes.contains {
+    $0.id == "cleanup-latency" && !$0.applicable && !$0.passed
+  })
+  #expect(report.gateOutcomes.contains {
+    $0.id == "stop-to-insertion" && !$0.applicable && !$0.passed
+  })
+  #expect(report.gateOutcomes.contains {
+    $0.id == "first-meaningful-partial" && !$0.applicable && !$0.passed
+  })
+}
+
+@Test func v2ReleaseRequiresEveryCategoryGate() throws {
+  var run = try reportV2Run()
+  run.syntheticSample = false
+  run.releaseEvidence = true
+  var gate = reportV2Gate(for: run)
+  gate.sliceGates.removeAll {
+    $0.sliceID == "category:mixed-en-zh"
+  }
+  #expect(throws: EvaluationReportError.self) {
+    _ = try EvaluationReportBuilder.build(
+      corpus: admitted(try reportV2Corpus()),
+      run: run,
+      gate: gate
+    )
+  }
+}
+
+@Test func v2ReportFailsIndependentLifecycleAndCategoryThresholds() throws {
+  let corpus = admitted(try reportV2Corpus())
+  var run = try reportV2Run()
+  run.syntheticSample = false
+  run.releaseEvidence = true
+  var gate = reportV2Gate(for: run)
+  gate.maxFirstMeaningfulPartialMilliseconds = 100
+  gate.maxStopToInsertionMilliseconds = 100
+  gate.sliceGates = gate.sliceGates.map { gate in
+    guard gate.sliceID == "category:english-prose",
+      gate.metric == .englishWordErrorRate else { return gate }
+    var changed = gate
+    changed.maximumCandidateValue = 0
+    return changed
+  }
+  let report = try EvaluationReportBuilder.build(
+    corpus: corpus,
+    run: run,
+    gate: gate
+  )
+  #expect(report.releaseDecision == .failed)
+  #expect(report.gateOutcomes.contains {
+    $0.id == "first-meaningful-partial" && !$0.passed
+  })
+  #expect(report.gateOutcomes.contains {
+    $0.id == "stop-to-insertion" && !$0.passed
+  })
+  #expect(report.gateOutcomes.contains {
+    $0.id == "slice:category:english-prose:englishWordErrorRate" && !$0.passed
+  })
 }
 }
