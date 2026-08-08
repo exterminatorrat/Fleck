@@ -355,7 +355,7 @@ import Testing
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let project = DictationDestination(noteID: UUID(), title: "Project Delta")
   let gate = RoutingGate()
-  let completions = RouteCompletionRecorder()
+  let completions = RoutingProbe<UUID?>()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
     cleanupGenerator: { _ in "unused" },
@@ -375,9 +375,9 @@ import Testing
     await completions.record(destination)
   }
 
-  await gate.waitUntilWaiting()
+  #expect(await gate.waitUntilWaiting())
   #expect(await completions.waitForCount(1, within: .seconds(1)))
-  #expect(await completions.results == [inbox.noteID])
+  #expect(await completions.values == [inbox.noteID])
 
   await gate.release()
   await routeTask.value
@@ -387,9 +387,9 @@ import Testing
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let project = DictationDestination(noteID: UUID(), title: "Project Delta")
   let gate = RoutingGate()
-  let completions = RouteCompletionRecorder()
-  let lateResults = RouteCompletionRecorder()
-  let cancellations = RouteCancellationRecorder()
+  let completions = RoutingProbe<UUID?>()
+  let lateResults = RoutingProbe<UUID>()
+  let cancellations = RoutingProbe<Bool>()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
     cleanupGenerator: { _ in "unused" },
@@ -411,17 +411,17 @@ import Testing
     await completions.record(destination)
   }
 
-  await gate.waitUntilWaiting()
+  #expect(await gate.waitUntilWaiting())
   #expect(await completions.waitForCount(1, within: .seconds(1)))
-  #expect(await completions.results == [inbox.noteID])
+  #expect(await completions.values == [inbox.noteID])
 
   await gate.release()
   await routeTask.value
   #expect(await lateResults.waitForCount(1, within: .seconds(1)))
-  #expect(await lateResults.results == [project.noteID])
+  #expect(await lateResults.values == [project.noteID])
   #expect(await cancellations.waitForCount(1, within: .seconds(1)))
   #expect(await cancellations.values == [true])
-  #expect(await completions.results == [inbox.noteID])
+  #expect(await completions.values == [inbox.noteID])
 }
 
 @Test func FoundationModelDictationRoutesLowConfidenceInvalidOrFailedResponsesToInbox() async {
@@ -595,10 +595,13 @@ private actor RoutingGate {
     }
   }
 
-  func waitUntilWaiting() async {
-    while !isWaiting {
+  func waitUntilWaiting(within timeout: Duration = .seconds(1)) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !isWaiting, clock.now < deadline {
       await Task.yield()
     }
+    return isWaiting
   }
 
   func release() {
@@ -608,27 +611,10 @@ private actor RoutingGate {
   }
 }
 
-private actor RouteCompletionRecorder {
-  private(set) var results: [UUID?] = []
+private actor RoutingProbe<Value: Sendable> {
+  private(set) var values: [Value] = []
 
-  func record(_ result: UUID?) {
-    results.append(result)
-  }
-
-  func waitForCount(_ expected: Int, within timeout: Duration) async -> Bool {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: timeout)
-    while results.count < expected, clock.now < deadline {
-      try? await Task.sleep(for: .milliseconds(1))
-    }
-    return results.count >= expected
-  }
-}
-
-private actor RouteCancellationRecorder {
-  private(set) var values: [Bool] = []
-
-  func record(_ value: Bool) {
+  func record(_ value: Value) {
     values.append(value)
   }
 

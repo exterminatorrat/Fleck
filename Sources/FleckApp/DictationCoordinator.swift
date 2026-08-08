@@ -561,14 +561,15 @@ final class DictationCoordinator {
         destinationID: destinationID
       )
       record.insertionOutcome = .saved
-      record.destination = candidates.first { $0.noteID == receipt.noteID }
+      let savedDestinations = saver.activeDestinations()
+      record.destination = savedDestinations.first { $0.noteID == receipt.noteID }
       if isCancellationRequested(id) {
         await cancelCommittedSmartCapture(
           id,
           record: record,
           text: text,
           receipt: receipt,
-          candidates: candidates,
+          candidates: savedDestinations,
           savesHistory: savesHistory
         )
         return
@@ -585,7 +586,7 @@ final class DictationCoordinator {
           record: record,
           text: text,
           receipt: receipt,
-          candidates: candidates,
+          candidates: savedDestinations,
           savesHistory: savesHistory
         )
         return

@@ -960,7 +960,12 @@ import Testing
     if finalText == nil {
       #expect(fixture.runtime.phase == .failed("No speech detected."))
     } else {
-      #expect(fixture.runtime.phase == .idle)
+      let inbox = try #require(
+        fixture.appState.activeDestinations().first {
+          $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
+        }
+      )
+      #expect(fixture.runtime.phase == .saved(inbox))
     }
   }
 }

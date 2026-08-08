@@ -466,6 +466,36 @@ private func waitForCompletion(
   #expect(fixture.coordinator.phase == .saved(fixture.inbox))
 }
 
+@Test @MainActor func smartCaptureResolvesCreatedInboxFromPostSaveDestinations() async throws {
+  let fixture = try Fixture()
+  let createdInbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  fixture.standard.finalText = "Create the Inbox"
+  fixture.saver.destinations = []
+  fixture.saver.destinationCreatedDuringSave = createdInbox
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.saver.destinationIDs == [nil])
+  #expect(fixture.saver.savedTexts == ["Create the Inbox"])
+  #expect(fixture.saver.destinations == [createdInbox])
+  #expect(fixture.coordinator.phase == .saved(createdInbox))
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.cleanedTranscript == "Create the Inbox")
+  #expect(record.destination == createdInbox)
+  #expect(record.insertionOutcome == .saved)
+  #expect(events.last == DictationCoordinatorEvent(
+    phase: .saved(createdInbox),
+    terminal: .saved(
+      mode: .smartCapture,
+      cleanup: .cleaned,
+      destination: createdInbox
+    )
+  ))
+}
+
 @Test @MainActor func saveFailureIsRecordedAsUnsavedWhenHistoryIsEnabled() async throws {
   let fixture = try Fixture()
   fixture.standard.finalText = "Keep this"
@@ -2059,6 +2089,7 @@ private final class FakeRouter: DestinationRouting, @unchecked Sendable {
 @MainActor
 private final class FakeSaver: DictationSaving {
   var destinations: [DictationDestination] = []
+  var destinationCreatedDuringSave: DictationDestination?
   var saveError: Error?
   var saveGate: Gate?
   var flushGate: Gate?
@@ -2078,6 +2109,14 @@ private final class FakeSaver: DictationSaving {
     savedTexts.append(text)
     destinationIDs.append(destinationID)
     if let saveError { throw saveError }
+    if let destinationCreatedDuringSave, destinationID == nil {
+      destinations.append(destinationCreatedDuringSave)
+      return DictationInsertionReceipt(
+        captureID: captureID,
+        noteID: destinationCreatedDuringSave.noteID,
+        insertedSuffix: text
+      )
+    }
     let noteID = destinationID ?? UUID()
     return DictationInsertionReceipt(captureID: captureID, noteID: noteID, insertedSuffix: text)
   }
