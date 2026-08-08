@@ -762,6 +762,9 @@
       Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
       configureNoteLinks(on: textView)
       scrollView.documentView = textView
+      if let undoManager = textView.undoManager {
+        context.coordinator.undoManager = undoManager
+      }
       if isVisible {
         commands.textView = textView
         commands.refreshFormattingState()
@@ -769,9 +772,31 @@
       return scrollView
     }
 
+    static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+      guard let textView = nsView.documentView as? ListAwareTextView else { return }
+      let commands = coordinator.parent.commands
+      textView.clearNoteLinkPresentation()
+      textView.onRequestNoteLink = nil
+      textView.onOpenNoteLink = nil
+      textView.onUnavailableNoteLink = nil
+      textView.delegate = nil
+      let undoManager = textView.undoManager ?? coordinator.undoManager
+      undoManager?.removeAllActions(withTarget: textView)
+      if let storage = textView.textStorage {
+        undoManager?.removeAllActions(withTarget: storage)
+      }
+      coordinator.undoManager = nil
+      if commands.textView === textView {
+        commands.textView = nil
+      }
+    }
+
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
       guard let textView = scrollView.documentView as? ListAwareTextView else { return }
       context.coordinator.parent = self
+      if let undoManager = textView.undoManager {
+        context.coordinator.undoManager = undoManager
+      }
       if isVisible {
         commands.textView = textView
       }
@@ -942,6 +967,7 @@
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
       var parent: NativeRichTextEditor
+      weak var undoManager: UndoManager?
       var fontFamily: String
       var fontSize: Double
       var text: String
@@ -965,6 +991,9 @@
 
       func textDidChange(_ notification: Notification) {
         guard let textView = notification.object as? NSTextView else { return }
+        if let undoManager = textView.undoManager {
+          self.undoManager = undoManager
+        }
         (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
         parent.applyColors(to: textView)
         guard let snapshot = parent.commands.attributedBindingSnapshot(for: textView) else { return }

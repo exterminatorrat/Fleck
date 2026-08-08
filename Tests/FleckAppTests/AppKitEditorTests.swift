@@ -46,6 +46,80 @@ import Testing
   #expect(textView.string == "Before \(token) after")
 }
 
+@Test @MainActor func nativeEditorDismantleRemovesOnlyItsTextSystemUndoActions() throws {
+  let commands = EditorCommands()
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let scrollView = NSScrollView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = scrollView
+  scrollView.documentView = textView
+  textView.allowsUndo = true
+
+  let undoManager = try #require(textView.undoManager)
+  let storage = try #require(textView.textStorage)
+  undoManager.removeAllActions()
+  var dismantledTextViewActionInvoked = false
+  var dismantledStorageActionInvoked = false
+  var unrelatedActionInvoked = false
+  let unrelatedTarget = NSObject()
+  undoManager.registerUndo(withTarget: textView) { _ in
+    dismantledTextViewActionInvoked = true
+  }
+  undoManager.registerUndo(withTarget: storage) { _ in
+    dismantledStorageActionInvoked = true
+  }
+  undoManager.registerUndo(withTarget: unrelatedTarget) { _ in
+    unrelatedActionInvoked = true
+  }
+
+  let delegate = EditorDelegateProbe()
+  textView.delegate = delegate
+  textView.onRequestNoteLink = { _ in }
+  textView.onOpenNoteLink = { _ in }
+  textView.onUnavailableNoteLink = {}
+  commands.textView = textView
+  let editor = NativeRichTextEditor(
+    text: "",
+    richTextRTF: nil,
+    onChange: { _, _ in },
+    fontFamily: "Helvetica",
+    fontSize: 14,
+    textColorHex: nil,
+    backgroundColorHex: nil,
+    accentColorHex: "#FFD600",
+    reduceMotion: false,
+    automaticLists: true,
+    commands: commands
+  )
+
+  NativeRichTextEditor.dismantleNSView(
+    scrollView,
+    coordinator: editor.makeCoordinator()
+  )
+
+  #expect(commands.textView == nil)
+  #expect(textView.delegate == nil)
+  #expect(textView.onRequestNoteLink == nil)
+  #expect(textView.onOpenNoteLink == nil)
+  #expect(textView.onUnavailableNoteLink == nil)
+  #expect(undoManager.canUndo)
+  undoManager.undo()
+  #expect(unrelatedActionInvoked)
+  #expect(!undoManager.canUndo)
+  #expect(!dismantledTextViewActionInvoked)
+  #expect(!dismantledStorageActionInvoked)
+}
+
+@MainActor
+private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
+
 @Test @MainActor func checklistCompletionUndoRestoresMarkerAndStrikethrough() throws {
   let textView = ListAwareTextView(frame: .zero)
   let window = NSWindow(
