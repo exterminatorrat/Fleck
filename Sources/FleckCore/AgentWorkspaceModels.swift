@@ -162,11 +162,23 @@ public enum AgentWorkspaceCommand: Codable, Equatable, Sendable {
   case getCapabilities
 
   public func isSupported(wireVersion: Int) -> Bool {
-    guard wireVersion == 1 || wireVersion == 2 else { return false }
-    if case .getCapabilities = self {
+    switch self {
+    case .listSharedNotes,
+      .readNote,
+      .appendText,
+      .insertText,
+      .replaceLines,
+      .listTasks,
+      .addTask,
+      .renameTask,
+      .setTaskState,
+      .removeTask,
+      .listActivity,
+      .undoChange:
+      return wireVersion == 1 || wireVersion == 2
+    case .getCapabilities:
       return wireVersion == 2
     }
-    return true
   }
 
   public init(from decoder: any Decoder) throws {
@@ -191,14 +203,7 @@ public enum AgentWorkspaceCommand: Codable, Equatable, Sendable {
         )
       )
     }
-    let requestCases = [
-      "readNote", "appendText", "insertText", "replaceLines", "listTasks",
-      "addTask", "renameTask", "setTaskState", "removeTask", "undoChange",
-    ]
-    try container.requireNestedKeys(
-      forKey: key,
-      expected: requestCases.contains(key.stringValue) ? ["request"] : []
-    )
+    try validateCommandPayload(from: container, caseKey: key)
     self = try LegacyAgentWorkspaceCommand(from: decoder).command
   }
 
@@ -417,11 +422,17 @@ public enum AgentWorkspaceResponse: Codable, Equatable, Sendable {
   case capabilities(summary: AgentCapabilitySummary)
 
   public func isSupported(wireVersion: Int) -> Bool {
-    guard wireVersion == 1 || wireVersion == 2 else { return false }
-    if case .capabilities = self {
+    switch self {
+    case .sharedNotes,
+      .note,
+      .tasks,
+      .write,
+      .activity,
+      .undo:
+      return wireVersion == 1 || wireVersion == 2
+    case .capabilities:
       return wireVersion == 2
     }
-    return true
   }
 
   public init(from decoder: any Decoder) throws {
@@ -434,27 +445,11 @@ public enum AgentWorkspaceResponse: Codable, Equatable, Sendable {
         )
       )
     }
-    guard key.stringValue == "capabilities" else {
-      let expected: Set<String>
-      switch key.stringValue {
-      case "sharedNotes": expected = ["notes"]
-      case "note": expected = ["page"]
-      case "tasks": expected = ["tasks"]
-      case "write", "undo": expected = ["receipt"]
-      case "activity": expected = ["entries"]
-      default:
-        throw DecodingError.dataCorrupted(
-          DecodingError.Context(
-            codingPath: container.codingPath,
-            debugDescription: "Unknown response case."
-          )
-        )
-      }
-      try container.requireNestedKeys(forKey: key, expected: expected)
+    switch key.stringValue {
+    case "sharedNotes", "note", "tasks", "write", "activity", "undo":
+      try validateResponsePayload(from: container, caseKey: key)
       self = try LegacyAgentWorkspaceResponse(from: decoder).response
-      return
-    }
-    do {
+    case "capabilities":
       let payload = try container.nestedContainer(
         keyedBy: AgentWorkspaceCodingKey.self,
         forKey: key
@@ -486,6 +481,13 @@ public enum AgentWorkspaceResponse: Codable, Equatable, Sendable {
             forKey: AgentWorkspaceCodingKey("grantRevision")
           ),
           availableCapabilities: Set(rawCapabilities)
+        )
+      )
+    default:
+      throw DecodingError.dataCorrupted(
+        DecodingError.Context(
+          codingPath: container.codingPath,
+          debugDescription: "Unknown response case."
         )
       )
     }
@@ -565,6 +567,397 @@ private extension KeyedDecodingContainer where Key == AgentWorkspaceCodingKey {
       )
     }
   }
+
+  func requireKeys(
+    required: Set<String>,
+    optional: Set<String> = []
+  ) throws {
+    let actual = Set(allKeys.map(\.stringValue))
+    let allowed = required.union(optional)
+    guard required.isSubset(of: actual), actual.isSubset(of: allowed) else {
+      throw DecodingError.dataCorrupted(
+        DecodingError.Context(
+          codingPath: codingPath,
+          debugDescription: "Unexpected or missing response fields."
+        )
+      )
+    }
+  }
+}
+
+private func strictObject(
+  from decoder: any Decoder,
+  required: Set<String>,
+  optional: Set<String> = []
+) throws -> KeyedDecodingContainer<AgentWorkspaceCodingKey> {
+  let container = try decoder.container(
+    keyedBy: AgentWorkspaceCodingKey.self
+  )
+  try container.requireKeys(required: required, optional: optional)
+  return container
+}
+
+private func validateCommandPayload(
+  from container: KeyedDecodingContainer<AgentWorkspaceCodingKey>,
+  caseKey: AgentWorkspaceCodingKey
+) throws {
+  switch caseKey.stringValue {
+  case "listSharedNotes", "listActivity", "getCapabilities":
+    try container.requireNestedKeys(forKey: caseKey, expected: [])
+  case "readNote":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: validateReadNoteRequest
+    )
+  case "appendText":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: validateAppendTextRequest
+    )
+  case "insertText":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: validateInsertTextRequest
+    )
+  case "replaceLines":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: validateReplaceLinesRequest
+    )
+  case "listTasks":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: validateListTasksRequest
+    )
+  case "addTask":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: validateAddTaskRequest
+    )
+  case "renameTask":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: validateRenameTaskRequest
+    )
+  case "setTaskState":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: validateSetTaskStateRequest
+    )
+  case "removeTask":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: validateRemoveTaskRequest
+    )
+  case "undoChange":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: validateUndoChangeRequest
+    )
+  default:
+    throw DecodingError.dataCorrupted(
+      DecodingError.Context(
+        codingPath: container.codingPath,
+        debugDescription: "Unknown command case."
+      )
+    )
+  }
+}
+
+private func validateCommandRequest(
+  from container: KeyedDecodingContainer<AgentWorkspaceCodingKey>,
+  caseKey: AgentWorkspaceCodingKey,
+  validator: (any Decoder) throws -> Void
+) throws {
+  let payload = try container.nestedContainer(
+    keyedBy: AgentWorkspaceCodingKey.self,
+    forKey: caseKey
+  )
+  try payload.requireExactKeys(["request"])
+  try validator(
+    payload.superDecoder(forKey: AgentWorkspaceCodingKey("request"))
+  )
+}
+
+private func validateReadNoteRequest(from decoder: any Decoder) throws {
+  _ = try strictObject(
+    from: decoder,
+    required: ["noteID"],
+    optional: ["startLine", "maxLines"]
+  )
+}
+
+private func validateWriteContext(from decoder: any Decoder) throws {
+  _ = try strictObject(
+    from: decoder,
+    required: ["noteID", "expectedRevision", "operationID"]
+  )
+}
+
+private func validateAppendTextRequest(from decoder: any Decoder) throws {
+  let container = try strictObject(
+    from: decoder,
+    required: ["context", "text"]
+  )
+  try validateWriteContext(
+    from: container.superDecoder(forKey: AgentWorkspaceCodingKey("context"))
+  )
+}
+
+private func validateInsertTextRequest(from decoder: any Decoder) throws {
+  let container = try strictObject(
+    from: decoder,
+    required: ["context", "beforeLine", "text"]
+  )
+  try validateWriteContext(
+    from: container.superDecoder(forKey: AgentWorkspaceCodingKey("context"))
+  )
+}
+
+private func validateReplaceLinesRequest(from decoder: any Decoder) throws {
+  let container = try strictObject(
+    from: decoder,
+    required: [
+      "context", "startLine", "endLine", "expectedTextSHA256", "text",
+    ]
+  )
+  try validateWriteContext(
+    from: container.superDecoder(forKey: AgentWorkspaceCodingKey("context"))
+  )
+}
+
+private func validateListTasksRequest(from decoder: any Decoder) throws {
+  _ = try strictObject(from: decoder, required: ["noteID"])
+}
+
+private func validateAddTaskRequest(from decoder: any Decoder) throws {
+  let container = try strictObject(
+    from: decoder,
+    required: ["context", "text"],
+    optional: ["afterTaskHandle"]
+  )
+  try validateWriteContext(
+    from: container.superDecoder(forKey: AgentWorkspaceCodingKey("context"))
+  )
+}
+
+private func validateRenameTaskRequest(from decoder: any Decoder) throws {
+  let container = try strictObject(
+    from: decoder,
+    required: ["context", "taskHandle", "text"]
+  )
+  try validateWriteContext(
+    from: container.superDecoder(forKey: AgentWorkspaceCodingKey("context"))
+  )
+}
+
+private func validateSetTaskStateRequest(from decoder: any Decoder) throws {
+  let container = try strictObject(
+    from: decoder,
+    required: ["context", "taskHandle", "completed"]
+  )
+  try validateWriteContext(
+    from: container.superDecoder(forKey: AgentWorkspaceCodingKey("context"))
+  )
+}
+
+private func validateRemoveTaskRequest(from decoder: any Decoder) throws {
+  let container = try strictObject(
+    from: decoder,
+    required: ["context", "taskHandle"]
+  )
+  try validateWriteContext(
+    from: container.superDecoder(forKey: AgentWorkspaceCodingKey("context"))
+  )
+}
+
+private func validateUndoChangeRequest(from decoder: any Decoder) throws {
+  _ = try strictObject(
+    from: decoder,
+    required: ["changeID", "expectedRevision", "operationID"]
+  )
+}
+
+private func validateResponsePayload(
+  from container: KeyedDecodingContainer<AgentWorkspaceCodingKey>,
+  caseKey: AgentWorkspaceCodingKey
+) throws {
+  let payload = try container.nestedContainer(
+    keyedBy: AgentWorkspaceCodingKey.self,
+    forKey: caseKey
+  )
+  switch caseKey.stringValue {
+  case "sharedNotes":
+    try payload.requireExactKeys(["notes"])
+    try validateArray(
+      in: payload,
+      forKey: "notes",
+      validator: validateNoteSummary
+    )
+  case "note":
+    try payload.requireExactKeys(["page"])
+    try validateNotePage(
+      from: payload.superDecoder(forKey: AgentWorkspaceCodingKey("page"))
+    )
+  case "tasks":
+    try payload.requireExactKeys(["tasks"])
+    try validateArray(
+      in: payload,
+      forKey: "tasks",
+      validator: validateTaskSummary
+    )
+  case "write", "undo":
+    try payload.requireExactKeys(["receipt"])
+    try validateWriteReceipt(
+      from: payload.superDecoder(forKey: AgentWorkspaceCodingKey("receipt"))
+    )
+  case "activity":
+    try payload.requireExactKeys(["entries"])
+    try validateArray(
+      in: payload,
+      forKey: "entries",
+      validator: validateActivitySummary
+    )
+  default:
+    throw DecodingError.dataCorrupted(
+      DecodingError.Context(
+        codingPath: container.codingPath,
+        debugDescription: "Unknown response case."
+      )
+    )
+  }
+}
+
+private func validateArray(
+  in container: KeyedDecodingContainer<AgentWorkspaceCodingKey>,
+  forKey key: String,
+  validator: (any Decoder) throws -> Void
+) throws {
+  var elements = try container.nestedUnkeyedContainer(
+    forKey: AgentWorkspaceCodingKey(key)
+  )
+  while !elements.isAtEnd {
+    try validator(elements.superDecoder())
+  }
+}
+
+private func validateNoteSummary(from decoder: any Decoder) throws {
+  _ = try strictObject(
+    from: decoder,
+    required: ["noteID", "title", "revision", "modifiedAt"]
+  )
+}
+
+private func validateNotePage(from decoder: any Decoder) throws {
+  _ = try strictObject(
+    from: decoder,
+    required: [
+      "noteID", "title", "revision", "body", "startLine", "endLine",
+      "totalLineCount", "modifiedAt",
+    ],
+    optional: ["nextLine"]
+  )
+}
+
+private func validateTaskSummary(from decoder: any Decoder) throws {
+  _ = try strictObject(
+    from: decoder,
+    required: ["taskHandle", "text", "completed", "line", "indentation"]
+  )
+}
+
+private func validateWriteReceipt(from decoder: any Decoder) throws {
+  _ = try strictObject(
+    from: decoder,
+    required: ["changeID", "noteID", "previousRevision", "resultingRevision"],
+    optional: ["taskHandle"]
+  )
+}
+
+private func validateActivitySummary(from decoder: any Decoder) throws {
+  let container = try strictObject(
+    from: decoder,
+    required: [
+      "changeID", "noteID", "noteTitle", "actor", "createdAt", "operation",
+      "patch", "previousRevision", "resultingRevision", "canUndo",
+    ],
+    optional: ["originatingActor"]
+  )
+  try validateActivityActor(
+    from: container.superDecoder(forKey: AgentWorkspaceCodingKey("actor"))
+  )
+  try validateOptionalNestedObject(
+    in: container,
+    forKey: "originatingActor",
+    validator: validateActivityActor
+  )
+  try validateTextPatch(
+    from: container.superDecoder(forKey: AgentWorkspaceCodingKey("patch"))
+  )
+}
+
+private func validateOptionalNestedObject(
+  in container: KeyedDecodingContainer<AgentWorkspaceCodingKey>,
+  forKey key: String,
+  validator: (any Decoder) throws -> Void
+) throws {
+  let key = AgentWorkspaceCodingKey(key)
+  guard container.contains(key), try !container.decodeNil(forKey: key) else {
+    return
+  }
+  try validator(container.superDecoder(forKey: key))
+}
+
+private func validateActivityActor(from decoder: any Decoder) throws {
+  let container = try decoder.container(
+    keyedBy: AgentWorkspaceCodingKey.self
+  )
+  guard container.allKeys.count == 1, let key = container.allKeys.first else {
+    throw DecodingError.dataCorrupted(
+      DecodingError.Context(
+        codingPath: container.codingPath,
+        debugDescription: "Activity actor must contain exactly one case."
+      )
+    )
+  }
+  switch key.stringValue {
+  case "integration":
+    let payload = try container.nestedContainer(
+      keyedBy: AgentWorkspaceCodingKey.self,
+      forKey: key
+    )
+    try payload.requireExactKeys(["profileID", "displayName"])
+  case "localUser":
+    let payload = try container.nestedContainer(
+      keyedBy: AgentWorkspaceCodingKey.self,
+      forKey: key
+    )
+    try payload.requireExactKeys([])
+  default:
+    throw DecodingError.dataCorrupted(
+      DecodingError.Context(
+        codingPath: container.codingPath,
+        debugDescription: "Unknown activity actor case."
+      )
+    )
+  }
+}
+
+private func validateTextPatch(from decoder: any Decoder) throws {
+  _ = try strictObject(
+    from: decoder,
+    required: ["beforeText", "afterText", "range", "prefixContext", "suffixContext"]
+  )
 }
 
 public enum AgentWorkspaceErrorCode: String, Codable, CaseIterable, Sendable {
