@@ -153,6 +153,7 @@ struct AgentPrivacyBoundaryTests {
       operationID: operationID
     )
     let commands: [AgentWorkspaceCommand] = [
+      .getCapabilities,
       .listSharedNotes,
       .readNote(request: .init(noteID: noteID, startLine: 2, maxLines: 5)),
       .appendText(request: .init(context: context, text: "Append")),
@@ -186,6 +187,7 @@ struct AgentPrivacyBoundaryTests {
         == Set([
           "addTask",
           "appendText",
+          "getCapabilities",
           "insertText",
           "listActivity",
           "listSharedNotes",
@@ -207,6 +209,12 @@ struct AgentPrivacyBoundaryTests {
         ) == command
       )
     }
+    let discoveryJSON = String(
+      decoding: try JSONEncoder().encode(AgentWorkspaceCommand.getCapabilities),
+      as: UTF8.self
+    )
+    #expect(!discoveryJSON.contains(noteID.uuidString))
+    #expect(!discoveryJSON.contains("body"))
 
     let unknown = Data(
       #"{"deleteNote":{"request":{"noteID":"00000000-0000-0000-0000-000000000000"}}}"#.utf8)
@@ -300,6 +308,8 @@ private func reviewedWireCommandName(
   _ command: AgentWorkspaceCommand
 ) -> String {
   switch command {
+  case .getCapabilities:
+    "getCapabilities"
   case .listSharedNotes:
     "listSharedNotes"
   case .readNote:

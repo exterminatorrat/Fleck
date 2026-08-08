@@ -160,7 +160,7 @@ private let clientProfileID = UUID(
   }
 
   var mismatchedVersion = [
-    try responseFrame(requestID: requestID, protocolVersion: 2)
+    try responseFrame(requestID: requestID, protocolVersion: 1)
   ]
   let versionClient = testClient { _, _ in mismatchedVersion.removeFirst() }
   #expect(throws: AgentIPCClientError.protocolMismatch) {
@@ -175,7 +175,11 @@ private let clientProfileID = UUID(
   )
   var reads = [
     try AgentWireFraming.encode(
-      AgentWireResponse.failure(requestID: requestID, error: error)
+      AgentWireResponse.failure(
+        protocolVersion: 2,
+        requestID: requestID,
+        error: error
+      )
     )
   ]
   let client = testClient { _, _ in reads.removeFirst() }
@@ -202,12 +206,54 @@ private let clientProfileID = UUID(
   }
 }
 
-private func request() -> AgentWireRequest {
+@Test func clientComparesResponseVersionWithRequestVersion() throws {
+  let request = request(protocolVersion: 2, command: .getCapabilities)
+  var reads = [
+    try AgentWireFraming.encode(
+      AgentWireResponse.success(
+        protocolVersion: 1,
+        requestID: requestID,
+        result: .sharedNotes(notes: [])
+      )
+    )
+  ]
+  let client = testClient { _, _ in reads.removeFirst() }
+
+  #expect(throws: AgentIPCClientError.protocolMismatch) {
+    _ = try client.send(request)
+  }
+}
+
+@Test func clientReturnsV2CapabilitySummary() throws {
+  let request = request(protocolVersion: 2, command: .getCapabilities)
+  let summary = AgentCapabilitySummary(
+    grantRevision: 4,
+    availableCapabilities: [.listNotes, .readNotes]
+  )
+  var reads = [
+    try AgentWireFraming.encode(
+      AgentWireResponse.success(
+        protocolVersion: 2,
+        requestID: requestID,
+        result: .capabilities(summary: summary)
+      )
+    )
+  ]
+  let client = testClient { _, _ in reads.removeFirst() }
+
+  #expect(try client.send(request) == .capabilities(summary: summary))
+}
+
+private func request(
+  protocolVersion: Int = AgentWireRequest.currentProtocolVersion,
+  command: AgentWorkspaceCommand = .listSharedNotes
+) -> AgentWireRequest {
   AgentWireRequest(
+    protocolVersion: protocolVersion,
     requestID: requestID,
     profileID: clientProfileID,
     credentialBase64: Data(repeating: 1, count: 32).base64EncodedString(),
-    command: .listSharedNotes
+    command: command
   )
 }
 
@@ -228,6 +274,7 @@ private func responseFrame(
   protocolVersion: Int = AgentWireResponse.currentProtocolVersion
 ) throws -> Data {
   let response = AgentWireResponse.success(
+    protocolVersion: protocolVersion,
     requestID: requestID,
     result: .sharedNotes(notes: [])
   )

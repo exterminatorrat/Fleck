@@ -9,13 +9,17 @@ import Testing
 
 @Test @MainActor func agentIPCRejectsUnsupportedVersionWithCorrelation() async throws {
   let requestID = UUID()
+  let calls = LockedCounter()
   let server = AgentIPCServer(
     endpointURL: temporarySocketURL(),
-    execute: { _, _, _ in .sharedNotes(notes: []) }
+    execute: { _, _, _ in
+      calls.increment()
+      return .sharedNotes(notes: [])
+    }
   )
   let response = await server.response(
     to: AgentWireRequest(
-      protocolVersion: 2,
+      protocolVersion: 3,
       requestID: requestID,
       profileID: UUID(),
       credentialBase64: Data(repeating: 0, count: 32).base64EncodedString(),
@@ -24,8 +28,72 @@ import Testing
   )
 
   #expect(response.requestID == requestID)
-  #expect(response.error?.code == .invalidPayload)
+  #expect(response.protocolVersion == AgentWireResponse.currentProtocolVersion)
+  #expect(response.error?.code == .protocolVersionUnsupported)
   #expect(response.error?.recoveryAction?.contains("update Fleck") == true)
+  #expect(calls.value == 0)
+}
+
+@Test @MainActor func agentIPCv1RejectsCapabilityDiscoveryBeforeCredentialOrService()
+  async
+{
+  let calls = LockedCounter()
+  let server = AgentIPCServer(
+    endpointURL: temporarySocketURL(),
+    execute: { _, _, _ in
+      calls.increment()
+      return .sharedNotes(notes: [])
+    }
+  )
+  let response = await server.response(
+    to: AgentWireRequest(
+      protocolVersion: 1,
+      requestID: UUID(),
+      profileID: UUID(),
+      credentialBase64: "not-base64",
+      command: .getCapabilities
+    )
+  )
+
+  #expect(response.protocolVersion == 1)
+  #expect(response.error?.code == .protocolVersionUnsupported)
+  #expect(calls.value == 0)
+}
+
+@Test(arguments: [1, 2])
+@MainActor func agentIPCAcceptsSupportedVersionsAndEchoesThem(_ version: Int)
+  async
+{
+  let requestID = UUID()
+  let server = AgentIPCServer(
+    endpointURL: temporarySocketURL(),
+    execute: { _, _, command in
+      switch command {
+      case .getCapabilities:
+        return .capabilities(
+          summary: AgentCapabilitySummary(
+            grantRevision: 4,
+            availableCapabilities: [.listNotes]
+          )
+        )
+      default:
+        return .sharedNotes(notes: [])
+      }
+    }
+  )
+  let response = await server.response(
+    to: AgentWireRequest(
+      protocolVersion: version,
+      requestID: requestID,
+      profileID: UUID(),
+      credentialBase64: Data(repeating: 0, count: 32).base64EncodedString(),
+      command: version == 1 ? .listSharedNotes : .getCapabilities
+    )
+  )
+
+  #expect(response.protocolVersion == version)
+  #expect(response.requestID == requestID)
+  #expect(response.error == nil)
 }
 
 @Test @MainActor func agentIPCCanonicalCredentialGatePrecedesService() async {

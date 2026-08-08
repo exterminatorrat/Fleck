@@ -53,7 +53,7 @@ enum BridgeCommand: Equatable {
       return request.context.operationID
     case .undoChange(let request):
       return request.operationID
-    case .listSharedNotes, .readNote, .listTasks, .listActivity:
+    case .getCapabilities, .listSharedNotes, .readNote, .listTasks, .listActivity:
       return nil
     }
   }
@@ -85,6 +85,13 @@ enum BridgeCommand: Equatable {
     case "mcp":
       try arguments.requireEmpty()
       return .mcp(profileID: profileID)
+    case "capabilities":
+      try arguments.requireEmpty()
+      return .workspace(
+        profileID: profileID,
+        command: .getCapabilities,
+        json: json
+      )
     case "notes":
       guard arguments.takeFirst() == "list" else {
         throw BridgeParseError("Expected 'notes list'.")
@@ -352,6 +359,7 @@ enum BridgeOutput {
   static let help = """
     Usage: fleck-agent <command> --profile <uuid> [--json]
 
+      capabilities
       notes list
       note read <note-id> [--start-line <line>] [--max-lines <count>]
       note append <note-id> --revision <revision> --operation-id <uuid> --stdin
@@ -400,6 +408,12 @@ enum BridgeOutput {
       return entries.map {
         "\($0.changeID.uuidString)\t\($0.operation.rawValue)\t\($0.noteTitle)"
       }.joined(separator: "\n")
+    case .capabilities(let summary):
+      let capabilities = summary.availableCapabilities
+        .sorted { $0.rawValue < $1.rawValue }
+        .map(\.rawValue)
+        .joined(separator: ", ")
+      return "Grant revision \(summary.grantRevision)\nCapabilities: \(capabilities)"
     }
   }
 

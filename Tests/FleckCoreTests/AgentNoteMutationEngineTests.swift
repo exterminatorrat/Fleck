@@ -13,6 +13,7 @@ import Testing
     operationID: operationID
   )
   let commands: [(String, AgentWorkspaceCommand)] = [
+    ("getCapabilities", .getCapabilities),
     ("listSharedNotes", .listSharedNotes),
     (
       "readNote",
@@ -87,6 +88,11 @@ import Testing
     )
     #expect(Set(object.keys) == [caseName])
     #expect(try decoder.decode(AgentWorkspaceCommand.self, from: data) == command)
+    if case .getCapabilities = command {
+      let text = String(decoding: data, as: UTF8.self)
+      #expect(!text.contains(noteID.uuidString))
+      #expect(!text.contains("body"))
+    }
   }
 }
 
@@ -110,6 +116,12 @@ import Testing
     suffixContext: "S"
   )
   let responses: [AgentWorkspaceResponse] = [
+    .capabilities(
+      summary: AgentCapabilitySummary(
+        grantRevision: 4,
+        availableCapabilities: [.listNotes, .readNotes]
+      )
+    ),
     .sharedNotes(
       notes: [
         .init(
@@ -186,6 +198,8 @@ import Testing
       "invalid_operation",
       "invalid_payload",
       "internal_save_failure",
+      "capability_denied",
+      "protocol_version_unsupported",
     ]
   )
 }

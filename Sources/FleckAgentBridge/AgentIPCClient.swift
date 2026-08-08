@@ -91,7 +91,7 @@
             }
             guard
               response.protocolVersion
-                == AgentWireRequest.currentProtocolVersion
+                == request.protocolVersion
             else {
               throw AgentIPCClientError.protocolMismatch
             }

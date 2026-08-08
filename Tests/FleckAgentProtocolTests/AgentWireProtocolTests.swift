@@ -38,6 +38,7 @@ func agentWireRequestCarriesUnsupportedVersionsForServerRejection(
 
 @Test func agentWireResponseCarriesVersionForClientValidation() throws {
   let response = AgentWireResponse.success(
+    protocolVersion: 1,
     requestID: UUID(),
     result: .sharedNotes(notes: [])
   )
@@ -59,10 +60,12 @@ func agentWireRequestCarriesUnsupportedVersionsForServerRejection(
 @Test func agentWireResponseFactoriesCorrelateExclusivePayloads() throws {
   let requestID = UUID()
   let success = AgentWireResponse.success(
+    protocolVersion: 1,
     requestID: requestID,
     result: .sharedNotes(notes: [])
   )
   let failure = AgentWireResponse.failure(
+    protocolVersion: 1,
     requestID: requestID,
     error: AgentWorkspaceError(code: .invalidPayload)
   )
@@ -78,6 +81,7 @@ func agentWireRequestCarriesUnsupportedVersionsForServerRejection(
 
 @Test func agentWireFramingCanonicalizesEquivalentFailureBytes() async throws {
   let response = AgentWireResponse.failure(
+    protocolVersion: 1,
     requestID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
     error: AgentWorkspaceError(code: .noteNotFound)
   )
@@ -180,11 +184,130 @@ func invalidDeclaredFrameLengthsAreRejectedImmediately(_ length: Int) {
   #expect(socket == support + "/AgentBridge/fleck.sock")
 }
 
-private func makeRequest(requestID: UUID = UUID()) -> AgentWireRequest {
+private func makeRequest(
+  requestID: UUID = UUID(),
+  protocolVersion: Int = 1
+) -> AgentWireRequest {
   AgentWireRequest(
+    protocolVersion: protocolVersion,
     requestID: requestID,
     profileID: UUID(),
     credentialBase64: Data(repeating: 7, count: 32).base64EncodedString(),
     command: .listSharedNotes
   )
+}
+
+@Suite("AgentWireProtocolV2Tests")
+struct AgentWireProtocolV2Tests {
+  @Test(arguments: [1, 2])
+  func supportedVersionsRoundTrip(_ version: Int) throws {
+    let request = AgentWireRequest(
+      protocolVersion: version,
+      requestID: UUID(),
+      profileID: UUID(),
+      credentialBase64: Data(repeating: 7, count: 32).base64EncodedString(),
+      command: version == 1 ? .listSharedNotes : .getCapabilities
+    )
+    var frame = try AgentWireFraming.encode(request)
+
+    #expect(
+      try AgentWireFraming.decodeFrame(
+        AgentWireRequest.self,
+        from: &frame
+      ) == request
+    )
+  }
+
+  @Test func capabilityDiscoveryIsV2Only() {
+    #expect(AgentWorkspaceCommand.listSharedNotes.isSupported(wireVersion: 1))
+    #expect(AgentWorkspaceCommand.listSharedNotes.isSupported(wireVersion: 2))
+    #expect(!AgentWorkspaceCommand.getCapabilities.isSupported(wireVersion: 1))
+    #expect(AgentWorkspaceCommand.getCapabilities.isSupported(wireVersion: 2))
+  }
+
+  @Test(arguments: [1, 2])
+  func responsesEchoAcceptedRequestVersion(_ version: Int) {
+    let requestID = UUID()
+    let success = AgentWireResponse.success(
+      protocolVersion: version,
+      requestID: requestID,
+      result: version == 2
+        ? .capabilities(
+          summary: AgentCapabilitySummary(
+            grantRevision: 4,
+            availableCapabilities: [.listNotes]
+          )
+        )
+        : .sharedNotes(notes: [])
+    )
+    let failure = AgentWireResponse.failure(
+      protocolVersion: version,
+      requestID: requestID,
+      error: AgentWorkspaceError(code: .invalidPayload)
+    )
+
+    #expect(success.protocolVersion == version)
+    #expect(failure.protocolVersion == version)
+  }
+
+  @Test func capabilitySummaryEncodingIsSortedAndRejectsDuplicates() throws {
+    let summary = AgentCapabilitySummary(
+      grantRevision: 4,
+      availableCapabilities: [.writeNotes, .listNotes]
+    )
+    let encoded = try AgentWireFraming.encode(
+      AgentWireResponse.success(
+        protocolVersion: 2,
+        requestID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+        result: .capabilities(summary: summary)
+      )
+    )
+    let json = String(decoding: encoded.dropFirst(4), as: UTF8.self)
+    #expect(json.contains(#"["notes.list","notes.write"]"#))
+
+    let duplicate = Data(
+      #"{"protocolVersion":2,"requestID":"00000000-0000-0000-0000-000000000001","result":{"capabilities":{"summary":{"grantRevision":4,"availableCapabilities":["notes.list","notes.list"]}}}}"#.utf8
+    )
+    var frame = withLengthPrefix(duplicate)
+    #expect(throws: (any Error).self) {
+      _ = try AgentWireFraming.decodeFrame(
+        AgentWireResponse.self,
+        from: &frame
+      )
+    }
+  }
+
+  @Test func strictDecodingRejectsUnknownEnvelopeAndCaseFields() throws {
+    let requestData = try JSONEncoder().encode(
+      AgentWireRequest(
+        protocolVersion: 2,
+        requestID: UUID(),
+        profileID: UUID(),
+        credentialBase64: Data(repeating: 7, count: 32).base64EncodedString(),
+        command: .getCapabilities
+      )
+    )
+    var requestObject = try #require(
+      JSONSerialization.jsonObject(with: requestData) as? [String: Any]
+    )
+    requestObject["unexpected"] = true
+    #expect(throws: (any Error).self) {
+      try JSONDecoder().decode(
+        AgentWireRequest.self,
+        from: JSONSerialization.data(withJSONObject: requestObject)
+      )
+    }
+
+    let command = Data(#"{"getCapabilities":{"unexpected":{}}}"#.utf8)
+    #expect(throws: (any Error).self) {
+      try JSONDecoder().decode(AgentWorkspaceCommand.self, from: command)
+    }
+  }
+
+  private func withLengthPrefix(_ payload: Data) -> Data {
+    var length = UInt32(payload.count).bigEndian
+    var frame = withUnsafeBytes(of: &length) { Data($0) }
+    frame.append(payload)
+    return frame
+  }
 }
