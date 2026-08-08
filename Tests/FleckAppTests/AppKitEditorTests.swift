@@ -282,8 +282,14 @@ import Testing
   let hitRect = try #require(
     textView.checklistHitRect(for: NSRange(location: 0, length: 1))
   )
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let paddedPoint = NSPoint(x: markerRect.minX - 1, y: markerRect.midY)
+  #expect(hitRect.contains(paddedPoint))
+  #expect(!markerRect.contains(paddedPoint))
   let windowPoint = textView.convert(
-    NSPoint(x: hitRect.midX, y: hitRect.midY),
+    paddedPoint,
     to: nil
   )
   let event = try #require(

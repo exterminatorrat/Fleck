@@ -9,6 +9,19 @@
     let onToggle: () -> Void
     let onOpen: (UUID) -> Void
 
+    static func accessibilityLabel(for entry: BacklinkSource, folderName: String?) -> String {
+      [
+        entry.sourceDisplayTitle,
+        folderName,
+        entry.excerpt,
+        entry.referenceCount == 1
+          ? "1 reference"
+          : "\(entry.referenceCount) references",
+      ]
+      .compactMap { $0 }
+      .joined(separator: ", ")
+    }
+
     var body: some View {
       VStack(alignment: .leading, spacing: 0) {
         Button(action: onToggle) {
@@ -37,6 +50,7 @@
             ScrollView(.vertical) {
               LazyVStack(alignment: .leading, spacing: 4) {
                 ForEach(entries) { entry in
+                  let folderName = entry.sourceFolderID.flatMap { foldersByID[$0] }
                   Button {
                     onOpen(entry.sourceNoteID)
                   } label: {
@@ -71,7 +85,7 @@
                     .contentShape(Rectangle())
                   }
                   .buttonStyle(.plain)
-                  .accessibilityLabel(entry.sourceDisplayTitle + ", " + entry.excerpt)
+                  .accessibilityLabel(Self.accessibilityLabel(for: entry, folderName: folderName))
                   .accessibilityHint("Open linked note")
                 }
               }

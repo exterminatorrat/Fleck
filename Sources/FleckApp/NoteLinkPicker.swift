@@ -29,6 +29,7 @@
     private weak var hostingWindow: NSWindow?
     private var focusOrigin: NoteLinkPickerFocusOrigin?
     private(set) var sourceNoteID: UUID?
+    private(set) var sourceRevision: UInt64?
     private(set) var replacementRange: NSRange?
     private var canPresent: @MainActor () -> Bool = { true }
     private var hasActivatedCurrentPresentation = false
@@ -56,6 +57,7 @@
     }
 
     var presentedSourceNoteID: UUID? { sourceNoteID }
+    var presentedSourceRevision: UInt64? { sourceRevision }
     var presentedReplacementRange: NSRange? { replacementRange }
 
     func setPresentationGuard(_ presentationGuard: @escaping @MainActor () -> Bool) {
@@ -66,12 +68,17 @@
       hostingWindow = window
     }
 
-    func present(sourceNoteID: UUID, replacementRange: NSRange) {
+    func present(
+      sourceNoteID: UUID,
+      replacementRange: NSRange,
+      sourceRevision: UInt64
+    ) {
       guard !isPresented, canPresent() else { return }
       cancelSearch()
       searchGeneration &+= 1
       focusOrigin = NoteLinkPickerFocusOrigin.capture(preferredWindow: hostingWindow)
       self.sourceNoteID = sourceNoteID
+      self.sourceRevision = sourceRevision
       self.replacementRange = replacementRange
       query = ""
       results = []
@@ -91,6 +98,7 @@
       highlightedNoteID = nil
       resultGeneration = nil
       sourceNoteID = nil
+      sourceRevision = nil
       replacementRange = nil
       hasActivatedCurrentPresentation = false
       let origin = focusOrigin
@@ -172,6 +180,8 @@
     @discardableResult
     func activateHighlighted(
       currentNoteIDs: Set<UUID>,
+      currentSourceNoteID: UUID?,
+      currentSourceRevision: UInt64?,
       activate: (UUID, NSRange) -> Void
     ) -> Bool {
       guard isPresented,
@@ -183,6 +193,13 @@
         results.contains(where: { $0.noteID == noteID })
       else { return false }
 
+      guard sourceNoteID == currentSourceNoteID,
+        sourceRevision == currentSourceRevision
+      else {
+        dismiss()
+        return false
+      }
+
       hasActivatedCurrentPresentation = true
       activate(noteID, replacementRange)
       dismiss()
@@ -193,6 +210,8 @@
     func activateResult(
       _ noteID: UUID,
       currentNoteIDs: Set<UUID>,
+      currentSourceNoteID: UUID?,
+      currentSourceRevision: UInt64?,
       activate: (UUID, NSRange) -> Void
     ) -> Bool {
       guard resultGeneration == searchGeneration,
@@ -200,13 +219,20 @@
         results.contains(where: { $0.noteID == noteID })
       else { return false }
       highlight(noteID)
-      return activateHighlighted(currentNoteIDs: currentNoteIDs, activate: activate)
+      return activateHighlighted(
+        currentNoteIDs: currentNoteIDs,
+        currentSourceNoteID: currentSourceNoteID,
+        currentSourceRevision: currentSourceRevision,
+        activate: activate
+      )
     }
 
     @discardableResult
     func handleKey(
       _ key: KeyEquivalent,
       currentNoteIDs: Set<UUID> = [],
+      currentSourceNoteID: UUID? = nil,
+      currentSourceRevision: UInt64? = nil,
       activate: (UUID, NSRange) -> Void = { _, _ in }
     ) -> Bool {
       switch key {
@@ -217,7 +243,12 @@
         moveHighlight(.down)
         return true
       case .return:
-        _ = activateHighlighted(currentNoteIDs: currentNoteIDs, activate: activate)
+        _ = activateHighlighted(
+          currentNoteIDs: currentNoteIDs,
+          currentSourceNoteID: currentSourceNoteID,
+          currentSourceRevision: currentSourceRevision,
+          activate: activate
+        )
         return true
       case .escape:
         dismiss()
@@ -358,8 +389,18 @@
     let foldersByID: [UUID: String]
     let accent: Color
     let currentNoteIDs: () -> Set<UUID>
+    let currentSource: () -> (UUID, UInt64)?
     let onChoose: (UUID, NSRange) -> Void
     @FocusState private var isQueryFocused: Bool
+
+    static func accessibilityLabel(
+      for result: WorkspaceSearchResult,
+      folderName: String?
+    ) -> String {
+      [result.displayTitle, folderName, result.snippet]
+        .compactMap { $0 }
+        .joined(separator: ", ")
+    }
 
     var body: some View {
       ZStack(alignment: .top) {
@@ -385,9 +426,12 @@
                 return .handled
               }
               .onKeyPress(.return) {
+                let source = currentSource()
                 _ = controller.handleKey(
                   .return,
                   currentNoteIDs: currentNoteIDs(),
+                  currentSourceNoteID: source?.0,
+                  currentSourceRevision: source?.1,
                   activate: onChoose
                 )
                 return .handled
@@ -427,10 +471,15 @@
                 LazyVStack(spacing: 2) {
                   ForEach(controller.results) { result in
                     let selected = controller.isHighlighted(result.noteID)
+                    let folderName = notes.first(where: { $0.id == result.noteID })?.folderID
+                      .flatMap { foldersByID[$0] }
                     Button {
+                      let source = currentSource()
                       _ = controller.activateResult(
                         result.noteID,
                         currentNoteIDs: currentNoteIDs(),
+                        currentSourceNoteID: source?.0,
+                        currentSourceRevision: source?.1,
                         activate: onChoose
                       )
                     } label: {
@@ -439,7 +488,7 @@
                           .font(.body.weight(.semibold))
                           .lineLimit(1)
                         HStack(spacing: 5) {
-                          if let folderName = foldersByID[notes.first(where: { $0.id == result.noteID })?.folderID ?? UUID()] {
+                          if let folderName {
                             Text(folderName)
                               .font(.caption2)
                               .foregroundStyle(accent)
@@ -461,7 +510,7 @@
                     .buttonStyle(.plain)
                     .focusable()
                     .id(result.noteID)
-                    .accessibilityLabel(result.displayTitle + ", " + result.snippet)
+                    .accessibilityLabel(Self.accessibilityLabel(for: result, folderName: folderName))
                     .accessibilityValue(selected ? "Selected" : "Not selected")
                     .accessibilityAddTraits(selected ? .isSelected : [])
                   }

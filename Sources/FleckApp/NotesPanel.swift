@@ -459,6 +459,10 @@
             foldersByID: folderNamesByID,
             accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
             currentNoteIDs: { Set(appState.workspace.notes.map(\.id)) },
+            currentSource: {
+              guard let source = visibleSelectedNote else { return nil }
+              return (source.id, source.revision)
+            },
             onChoose: insertNoteLink
           )
           .zIndex(3)
@@ -1055,8 +1059,10 @@
     private func insertNoteLink(targetID: UUID, replacing range: NSRange) {
       guard !searchController.isPresented,
         let sourceID = noteLinkPickerController.presentedSourceNoteID,
+        let sourceRevision = noteLinkPickerController.presentedSourceRevision,
         let selectedNote = visibleSelectedNote,
         selectedNote.id == sourceID,
+        selectedNote.revision == sourceRevision,
         let target = appState.workspace.notes.first(where: { $0.id == targetID }),
         let textView = editorCommands.textView,
         range.location >= 0,
@@ -1084,6 +1090,13 @@
       guard activateNoteAndScope(noteID) else {
         appState.saveError = "Note unavailable"
         return
+      }
+      DispatchQueue.main.async {
+        guard self.visibleSelectedNote?.id == noteID,
+          let textView = self.editorCommands.textView,
+          let window = textView.window
+        else { return }
+        _ = window.makeFirstResponder(textView)
       }
     }
 
@@ -1215,8 +1228,15 @@
             isVisible: isEditorVisible,
             liveNoteIDs: Set(appState.workspace.notes.map(\.id)),
             onRequestNoteLink: { range in
-              guard !isBlockingOverlayPresented, visibleSelectedNote?.id == note.id else { return }
-              noteLinkPickerController.present(sourceNoteID: note.id, replacementRange: range)
+              guard !isBlockingOverlayPresented,
+                let source = visibleSelectedNote,
+                source.id == note.id
+              else { return }
+              noteLinkPickerController.present(
+                sourceNoteID: source.id,
+                replacementRange: range,
+                sourceRevision: source.revision
+              )
             },
             onOpenNoteLink: openNoteLink,
             onUnavailableNoteLink: { appState.saveError = "Note unavailable" }

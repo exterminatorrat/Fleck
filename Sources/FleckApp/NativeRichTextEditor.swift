@@ -291,6 +291,7 @@
       transform: (NSFont, [NSAttributedString.Key: Any]) -> NSFont
     ) {
       guard let textView else { return }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
         let current = textView.typingAttributes[.font] as? NSFont ?? defaultValue
@@ -311,6 +312,7 @@
 
     private func applyColor(_ color: NSColor?, key: NSAttributedString.Key) {
       guard let textView else { return }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
         textView.typingAttributes[key] = color
@@ -338,6 +340,7 @@
 
     private func restoreAttributes(in textView: NSTextView, range: NSRange, replacement: NSAttributedString) {
       guard let storage = textView.textStorage else { return }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let current = storage.attributedSubstring(from: range)
       registerUndo(in: textView, range: range, replacement: current)
       storage.replaceCharacters(in: range, with: replacement)
@@ -348,6 +351,7 @@
 
     private func toggleAttribute(_ key: NSAttributedString.Key, enabledValue: Int) {
       guard let textView else { return }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
         let isEnabled = (textView.typingAttributes[key] as? Int ?? 0) != 0
@@ -452,6 +456,7 @@
     }
 
     private func withoutUndoRegistration(_ textView: NSTextView, _ changes: () -> Void) {
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let undoManager = textView.undoManager
       undoManager?.disableUndoRegistration()
       changes()
@@ -773,6 +778,7 @@
       textView.automaticLists = automaticLists
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
+      textView.clearNoteLinkPresentation()
       let reloadedContent = applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator)
       applyColors(to: textView)
       Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
@@ -871,6 +877,7 @@
       textColorHex: String?,
       backgroundColorHex: String?
     ) {
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       applyDefaultForegroundColor(
         NSColor(hex: textColorHex) ?? .textColor,
         to: textView
@@ -958,6 +965,7 @@
 
       func textDidChange(_ notification: Notification) {
         guard let textView = notification.object as? NSTextView else { return }
+        (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
         parent.applyColors(to: textView)
         guard let snapshot = parent.commands.attributedBindingSnapshot(for: textView) else { return }
         let updatedRTF = try? snapshot.data(
@@ -1008,6 +1016,10 @@
   }
 
   final class ListAwareTextView: NSTextView {
+    private static let noteLinkSeparatorMenuTag = 0xF1EC
+    private static let noteLinkRequestMenuTag = 0xF1ED
+    private static let noteLinkOpenMenuTag = 0xF1EE
+
     var automaticLists = true
     var liveNoteIDs: Set<UUID> = []
     var onRequestNoteLink: ((NSRange) -> Void)?
@@ -1018,28 +1030,36 @@
     }
     var reduceMotion = false
     private weak var checklistCompletionOverlay: ChecklistCompletionOverlay?
-    private var temporaryNoteLinkRanges: [NSRange] = []
+    private struct TemporaryAttributeSlice {
+      let range: NSRange
+      let value: Any?
+    }
+
+    private struct TemporaryNoteLinkPresentation {
+      let foregroundColor: [TemporaryAttributeSlice]
+      let underlineStyle: [TemporaryAttributeSlice]
+    }
+
+    private var temporaryNoteLinkPresentations: [TemporaryNoteLinkPresentation] = []
+
+    func clearNoteLinkPresentation() {
+      guard let layoutManager else {
+        temporaryNoteLinkPresentations = []
+        return
+      }
+      restoreTemporaryNoteLinkPresentations(
+        in: layoutManager,
+        textLength: (string as NSString).length
+      )
+      temporaryNoteLinkPresentations = []
+      needsDisplay = true
+    }
 
     func refreshNoteLinks(accentColorHex: String, liveNoteIDs: Set<UUID>) {
       self.liveNoteIDs = liveNoteIDs
+      clearNoteLinkPresentation()
       guard let layoutManager, let textContainer else { return }
       let textLength = (string as NSString).length
-      for range in temporaryNoteLinkRanges {
-        guard range.location < textLength else { continue }
-        let safeRange = NSRange(
-          location: range.location,
-          length: min(range.length, textLength - range.location)
-        )
-        layoutManager.removeTemporaryAttribute(
-          .foregroundColor,
-          forCharacterRange: safeRange
-        )
-        layoutManager.removeTemporaryAttribute(
-          .underlineStyle,
-          forCharacterRange: safeRange
-        )
-      }
-      temporaryNoteLinkRanges = []
 
       let links = NoteLinkParser.links(in: string)
       guard !links.isEmpty, textLength > 0 else {
@@ -1049,6 +1069,18 @@
       layoutManager.ensureLayout(for: textContainer)
       let accent = NSColor(hex: accentColorHex) ?? .controlAccentColor
       for link in links {
+        let presentation = TemporaryNoteLinkPresentation(
+          foregroundColor: temporaryAttributeSlices(
+            .foregroundColor,
+            in: link.range,
+            layoutManager: layoutManager
+          ),
+          underlineStyle: temporaryAttributeSlices(
+            .underlineStyle,
+            in: link.range,
+            layoutManager: layoutManager
+          )
+        )
         let color = liveNoteIDs.contains(link.targetNoteID) ? accent : .systemOrange
         layoutManager.addTemporaryAttribute(
           .foregroundColor,
@@ -1057,12 +1089,83 @@
         )
         layoutManager.addTemporaryAttribute(
           .underlineStyle,
-          value: NSUnderlineStyle.single.rawValue,
+          value: liveNoteIDs.contains(link.targetNoteID)
+            ? NSUnderlineStyle.single.rawValue
+            : NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue,
           forCharacterRange: link.range
         )
-        temporaryNoteLinkRanges.append(link.range)
+        temporaryNoteLinkPresentations.append(presentation)
       }
       needsDisplay = true
+    }
+
+    private func temporaryAttributeSlices(
+      _ key: NSAttributedString.Key,
+      in range: NSRange,
+      layoutManager: NSLayoutManager
+    ) -> [TemporaryAttributeSlice] {
+      guard range.length > 0 else { return [] }
+      var slices: [TemporaryAttributeSlice] = []
+      var location = range.location
+      let end = NSMaxRange(range)
+      while location < end {
+        var effectiveRange = NSRange(location: location, length: 0)
+        let value = layoutManager.temporaryAttribute(
+          key,
+          atCharacterIndex: location,
+          effectiveRange: &effectiveRange
+        )
+        let effectiveEnd = max(location + 1, min(end, NSMaxRange(effectiveRange)))
+        slices.append(
+          TemporaryAttributeSlice(
+            range: NSRange(location: location, length: effectiveEnd - location),
+            value: value
+          )
+        )
+        location = effectiveEnd
+      }
+      return slices
+    }
+
+    private func restoreTemporaryNoteLinkPresentations(
+      in layoutManager: NSLayoutManager,
+      textLength: Int
+    ) {
+      for presentation in temporaryNoteLinkPresentations {
+        restoreTemporaryAttributeSlices(
+          presentation.foregroundColor,
+          key: .foregroundColor,
+          in: layoutManager,
+          textLength: textLength
+        )
+        restoreTemporaryAttributeSlices(
+          presentation.underlineStyle,
+          key: .underlineStyle,
+          in: layoutManager,
+          textLength: textLength
+        )
+      }
+    }
+
+    private func restoreTemporaryAttributeSlices(
+      _ slices: [TemporaryAttributeSlice],
+      key: NSAttributedString.Key,
+      in layoutManager: NSLayoutManager,
+      textLength: Int
+    ) {
+      for slice in slices {
+        guard slice.range.location < textLength else { continue }
+        let range = NSRange(
+          location: slice.range.location,
+          length: min(slice.range.length, textLength - slice.range.location)
+        )
+        guard range.length > 0 else { continue }
+        if let value = slice.value {
+          layoutManager.addTemporaryAttribute(key, value: value, forCharacterRange: range)
+        } else {
+          layoutManager.removeTemporaryAttribute(key, forCharacterRange: range)
+        }
+      }
     }
 
     var checklistCompletionOverlayCount: Int {
@@ -1317,18 +1420,32 @@
 
     override func menu(for event: NSEvent) -> NSMenu? {
       let menu = super.menu(for: event) ?? NSMenu()
-      menu.addItem(.separator())
-      menu.addItem(
+      menu.items
+        .filter {
+          $0.tag == Self.noteLinkSeparatorMenuTag
+            || $0.tag == Self.noteLinkRequestMenuTag
+            || $0.tag == Self.noteLinkOpenMenuTag
+        }
+        .forEach(menu.removeItem)
+
+      let separator = NSMenuItem.separator()
+      separator.tag = Self.noteLinkSeparatorMenuTag
+      menu.addItem(separator)
+      let requestItem = menu.addItem(
         withTitle: "Link to Note…",
         action: #selector(requestNoteLinkFromMenu(_:)),
         keyEquivalent: ""
-      ).target = self
+      )
+      requestItem.tag = Self.noteLinkRequestMenuTag
+      requestItem.target = self
       if noteLinkAtSelection() != nil {
-        menu.addItem(
+        let openItem = menu.addItem(
           withTitle: "Open Note Link",
           action: #selector(openNoteLinkFromMenu(_:)),
           keyEquivalent: ""
-        ).target = self
+        )
+        openItem.tag = Self.noteLinkOpenMenuTag
+        openItem.target = self
       }
       return menu
     }
@@ -1338,7 +1455,8 @@
       case #selector(requestNoteLinkFromMenu(_:)):
         return isEditable
       case #selector(openNoteLinkFromMenu(_:)):
-        return noteLinkAtSelection() != nil
+        guard let link = noteLinkAtSelection() else { return false }
+        return liveNoteIDs.contains(link.targetNoteID)
       default:
         return super.validateMenuItem(menuItem)
       }
@@ -1349,7 +1467,8 @@
       case #selector(requestNoteLinkFromMenu(_:)):
         return isEditable
       case #selector(openNoteLinkFromMenu(_:)):
-        return noteLinkAtSelection() != nil
+        guard let link = noteLinkAtSelection() else { return false }
+        return liveNoteIDs.contains(link.targetNoteID)
       default:
         return super.validateUserInterfaceItem(item)
       }
@@ -1371,6 +1490,48 @@
       }
     }
 
+    override func shouldChangeText(
+      in affectedCharRange: NSRange,
+      replacementString: String?
+    ) -> Bool {
+      guard super.shouldChangeText(
+        in: affectedCharRange,
+        replacementString: replacementString
+      ) else {
+        return false
+      }
+      clearNoteLinkPresentation()
+      return true
+    }
+
+    func noteLinkTarget(atViewPoint point: NSPoint) -> UUID? {
+      guard let layoutManager, let textContainer,
+        point.x >= textContainerOrigin.x,
+        point.y >= textContainerOrigin.y,
+        layoutManager.numberOfGlyphs > 0
+      else {
+        return nil
+      }
+      let textPoint = NSPoint(
+        x: point.x - textContainerOrigin.x,
+        y: point.y - textContainerOrigin.y
+      )
+      let glyphIndex = layoutManager.glyphIndex(for: textPoint, in: textContainer)
+      guard glyphIndex < layoutManager.numberOfGlyphs,
+        layoutManager
+          .boundingRect(
+            forGlyphRange: NSRange(location: glyphIndex, length: 1),
+            in: textContainer
+          )
+          .contains(textPoint)
+      else {
+        return nil
+      }
+      let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+      guard characterIndex < (string as NSString).length else { return nil }
+      return NoteLinkParser.link(atUTF16Location: characterIndex, in: string)?.targetNoteID
+    }
+
     override func mouseDown(with event: NSEvent) {
       guard let layoutManager, let textContainer else {
         super.mouseDown(with: event)
@@ -1388,6 +1549,10 @@
       }
 
       let glyphIndex = layoutManager.glyphIndex(for: textPoint, in: textContainer)
+      guard glyphIndex < layoutManager.numberOfGlyphs else {
+        super.mouseDown(with: event)
+        return
+      }
       let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
       let ns = string as NSString
       guard characterIndex < ns.length else {
@@ -1396,10 +1561,10 @@
       }
 
       if event.modifierFlags.contains(.command),
-        let link = NoteLinkParser.link(atUTF16Location: characterIndex, in: string)
+        let targetNoteID = noteLinkTarget(atViewPoint: point)
       {
-        if liveNoteIDs.contains(link.targetNoteID) {
-          onOpenNoteLink?(link.targetNoteID)
+        if liveNoteIDs.contains(targetNoteID) {
+          onOpenNoteLink?(targetNoteID)
         } else {
           onUnavailableNoteLink?()
         }

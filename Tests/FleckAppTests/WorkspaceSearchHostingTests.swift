@@ -98,7 +98,12 @@ func WorkspaceSearchHostingLinkPickerIsIndependentAndBlocksTheOtherOverlay() asy
   window.makeKeyAndOrderFront(nil)
   await settleWorkspaceSearchHost(host)
 
-  picker.present(sourceNoteID: sourceID, replacementRange: NSRange(location: 0, length: 0))
+  let sourceRevision = try #require(state.workspace.notes.first { $0.id == sourceID }?.revision)
+  picker.present(
+    sourceNoteID: sourceID,
+    replacementRange: NSRange(location: 0, length: 0),
+    sourceRevision: sourceRevision
+  )
   await settleWorkspaceSearchHost(host)
   #expect(picker.isPresented)
   searchController.present(for: sourceID)
@@ -111,7 +116,11 @@ func WorkspaceSearchHostingLinkPickerIsIndependentAndBlocksTheOtherOverlay() asy
   searchController.present(for: sourceID)
   await settleWorkspaceSearchHost(host)
   #expect(searchController.isPresented)
-  picker.present(sourceNoteID: sourceID, replacementRange: NSRange(location: 0, length: 0))
+  picker.present(
+    sourceNoteID: sourceID,
+    replacementRange: NSRange(location: 0, length: 0),
+    sourceRevision: sourceRevision
+  )
   await settleWorkspaceSearchHost(host)
   #expect(searchController.isPresented)
   #expect(!picker.isPresented)
