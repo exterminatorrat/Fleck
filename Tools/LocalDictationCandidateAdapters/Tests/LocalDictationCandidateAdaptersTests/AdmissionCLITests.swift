@@ -250,11 +250,83 @@ struct AdmissionCLITests {
     #expect(!(await process.diagnostics()).childIsRunning)
   }
 
+  @Test func drainingMeasurementEvidenceHasBoundedStorage() async throws {
+    let process = AdapterProcess()
+    let stream = await process.events()
+    try await process.start(
+      executableURL: fixtureAdapterURL(),
+      arguments: ["flood-measurements"],
+      environment: ["PATH": "/usr/bin:/bin"]
+    )
+    try await process.send(
+      CandidateAdapterRequest(
+        schemaVersion: 1,
+        requestID: "load-1",
+        operation: .load,
+        audioPath: nil,
+        sampleRate: nil,
+        localeIdentifier: nil,
+        contextPhrases: [],
+        transcript: nil,
+        protectedForms: [],
+        cleanupMode: nil
+      )
+    )
+    _ = try await nextEvent(
+      stream,
+      requestID: "load-1",
+      timeout: .seconds(2),
+      matching: { $0.kind == .ready }
+    )
+    try await process.send(
+      CandidateAdapterRequest(
+        schemaVersion: 1,
+        requestID: "transcribe-1",
+        operation: .transcribe,
+        audioPath: "/fixtures/mixed.wav",
+        sampleRate: 16_000,
+        localeIdentifier: "auto",
+        contextPhrases: [],
+        transcript: nil,
+        protectedForms: [],
+        cleanupMode: nil
+      )
+    )
+    var reason: CLIError?
+    do {
+      _ = try await nextEvent(
+        stream,
+        requestID: "transcribe-1",
+        timeout: .seconds(5),
+        matching: { $0.kind == .final }
+      )
+    } catch let error as CLIError {
+      reason = error
+    }
+    #expect(reason == .lifecycle("measurement-overflow"))
+    await process.terminate()
+    #expect(!(await process.diagnostics()).childIsRunning)
+  }
+
   @Test func runnerTimeoutCleansUpExactChild() async throws {
     let directory = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let (task, box, pid) = try await launchCLI(
       mode: "silent",
+      eventTimeout: .seconds(5),
+      in: directory
+    )
+    let completed = try await waitForCLI(task, box: box, pid: pid, timeout: .seconds(7))
+    #expect(completed)
+    #expect(await box.value() == 2)
+    #expect(kill(pid, 0) != 0)
+  }
+
+  @Test func runnerMeasurementFloodCleansUpExactChild() async throws {
+    let directory = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let (task, box, pid) = try await launchCLI(
+      mode: "flood-measurements",
       eventTimeout: .seconds(5),
       in: directory
     )

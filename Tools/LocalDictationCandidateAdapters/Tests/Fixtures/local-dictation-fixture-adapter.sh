@@ -47,6 +47,26 @@ while IFS= read -r line; do
       sleep 5
       exit 0
       ;;
+    flood-measurements:transcribe)
+      i=0
+      while [ "$i" -lt 20000 ]; do
+        emit "{\"event\":\"measurement\",\"name\":\"fixture-$i\",\"requestID\":\"$request_id\",\"schemaVersion\":1,\"unit\":\"count\",\"value\":$i}"
+        i=$((i + 1))
+      done
+      sleep 2
+      exit 0
+      ;;
+    cancel-failure:cancel)
+      emit "{\"code\":\"fixture-failure\",\"event\":\"failure\",\"message\":\"candidate failed\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+      sleep 5
+      ;;
+    shutdown-failure:shutdown)
+      emit "{\"code\":\"fixture-failure\",\"event\":\"failure\",\"message\":\"candidate failed\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+      sleep 5
+      ;;
+    cancel-wrong-terminal:cancel)
+      emit "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+      ;;
     failure:transcribe)
       emit "{\"code\":\"fixture-failure\",\"event\":\"failure\",\"message\":\"candidate failed\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
       sleep 5

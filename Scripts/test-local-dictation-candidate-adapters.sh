@@ -51,6 +51,7 @@ jq -e '
   .schemaVersion == 1
   and .audioAdmissionStatus == "synthetic-only"
   and .releaseEvidenceStatus == "refused-no-admitted-real-audio"
+  and .networkIsolationMethod == "not-enforced-by-harness"
   and (.cases | length) == 10
   and ([.cases[].status] | index("cancelled")) != null
   and .childExitStatus == 0

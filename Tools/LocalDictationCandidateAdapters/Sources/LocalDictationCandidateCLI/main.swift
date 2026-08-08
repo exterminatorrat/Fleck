@@ -631,7 +631,7 @@ private func runCandidate(
     commandLine: [adapterURL.path],
     operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
     hardwareIdentity: hardwareIdentity(),
-    networkIsolationMethod: "no-network-request-or-download",
+    networkIsolationMethod: "not-enforced-by-harness",
     startedAt: startedAt,
     endedAt: timestamp(Date()),
     childExitStatus: diagnostics.childExitStatus,
@@ -668,7 +668,11 @@ private enum EventWaitError: Error, Sendable {
   case timeout
   case failure
   case ended
+  case measurementOverflow
+  case stdoutOverflow
 }
+
+private let maximumMeasurementArtifacts = 256
 
 func nextEvent(
   _ stream: AsyncThrowingStream<CandidateAdapterEvent, Error>,
@@ -684,6 +688,9 @@ func nextEvent(
           for try await event in stream {
             if case .measurement(let eventRequestID, let name, let value, let unit) = event,
               eventRequestID == requestID {
+              guard measurements.count < maximumMeasurementArtifacts else {
+                throw EventWaitError.measurementOverflow
+              }
               measurements.append(MeasurementArtifact(name: name, value: value, unit: unit))
               continue
             }
@@ -697,6 +704,11 @@ func nextEvent(
           }
         } catch let error as EventWaitError {
           throw error
+        } catch let error as AdapterProcessError {
+          if case .stdoutFlood = error {
+            throw EventWaitError.stdoutOverflow
+          }
+          throw EventWaitError.ended
         } catch {
           throw EventWaitError.ended
         }
@@ -720,6 +732,10 @@ func nextEvent(
       throw CLIError.lifecycle("adapter-failure")
     case .ended:
       throw CLIError.lifecycle("event-stream-ended")
+    case .measurementOverflow:
+      throw CLIError.lifecycle("measurement-overflow")
+    case .stdoutOverflow:
+      throw CLIError.lifecycle("stdout-overflow")
     }
   } catch {
     throw error

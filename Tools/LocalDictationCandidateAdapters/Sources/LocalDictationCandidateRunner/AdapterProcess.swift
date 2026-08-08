@@ -29,6 +29,10 @@ public enum AdapterProcessError: Error, Equatable, Sendable, CustomStringConvert
   case stdoutFlood
   case stdoutReadFailed
   case unexpectedEOF
+  case unexpectedAcknowledgement(
+    expected: CandidateAdapterEventKind,
+    received: CandidateAdapterEventKind
+  )
   case shutdownAcknowledgementMissing
   case timeout(String)
 
@@ -49,6 +53,7 @@ public enum AdapterProcessError: Error, Equatable, Sendable, CustomStringConvert
     case .stdoutFlood: return "stdout flood"
     case .stdoutReadFailed: return "stdout read failed"
     case .unexpectedEOF: return "unexpected adapter EOF"
+    case .unexpectedAcknowledgement: return "unexpected acknowledgement"
     case .shutdownAcknowledgementMissing: return "shutdown acknowledgement missing"
     case .timeout(let operation): return "timeout: \(operation)"
     }
@@ -116,6 +121,7 @@ public actor AdapterProcess {
     "METAL_DEBUG_ERROR_MODE",
     "METAL_DEVICE_WRAPPER_TYPE",
   ]
+  private static let maximumStdoutBytes = JSONLinesCodec.maximumLineBytes
 
   private let clock: any AdapterProcessClock
   private var stderrOutput: BoundedOutput
@@ -133,6 +139,7 @@ public actor AdapterProcess {
   private var stdoutByteCount = 0
   private var requestStates: [String: RequestState] = [:]
   private var terminalRequestIDs = Set<String>()
+  private var terminalEventKinds: [String: CandidateAdapterEventKind] = [:]
   private var waiters: [String: [CheckedContinuation<Void, Error>]] = [:]
   private var terminalError: AdapterProcessError?
   private var childExitStatus: Int32?
@@ -262,7 +269,11 @@ public actor AdapterProcess {
       )
     )
     do {
-      try await waitForTerminal(cancelRequestID, timeout: timeout)
+      try await waitForTerminal(
+        cancelRequestID,
+        expectedKind: .cancelled,
+        timeout: timeout
+      )
       cancelAcknowledged = true
       return .cooperativeCancellation
     } catch let error as AdapterProcessError {
@@ -303,7 +314,11 @@ public actor AdapterProcess {
       )
     )
     do {
-      try await waitForTerminal(shutdownRequestID, timeout: timeout)
+      try await waitForTerminal(
+        shutdownRequestID,
+        expectedKind: .unloaded,
+        timeout: timeout
+      )
       shutdownAcknowledged = true
       await waitForExit(timeout: .seconds(1))
       if process?.isRunning == true {
@@ -349,6 +364,12 @@ public actor AdapterProcess {
 
   private func consumeStdout(_ data: Data) {
     guard terminalError == nil else { return }
+    guard stdoutByteCount <= Self.maximumStdoutBytes,
+      data.count <= Self.maximumStdoutBytes - stdoutByteCount
+    else {
+      fail(.stdoutFlood)
+      return
+    }
     stdoutByteCount += data.count
     stdoutLineBuffer.append(data)
     guard stdoutLineBuffer.count <= JSONLinesCodec.maximumLineBytes else {
@@ -472,6 +493,14 @@ public actor AdapterProcess {
       throw AdapterProcessError.unexpectedRequestID(event.requestID)
     }
     var state = initialState
+    if let expectedKind = Self.expectedAcknowledgementKind(for: state.operation),
+      Self.isTerminalEvent(event.kind), event.kind != .failure, event.kind != expectedKind
+    {
+      throw AdapterProcessError.unexpectedAcknowledgement(
+        expected: expectedKind,
+        received: event.kind
+      )
+    }
     switch event {
     case .ready:
       guard state.operation == .load, !state.ready, !state.terminal else {
@@ -521,6 +550,7 @@ public actor AdapterProcess {
     requestStates[event.requestID] = state
     if state.terminal {
       terminalRequestIDs.insert(event.requestID)
+      terminalEventKinds[event.requestID] = event.kind
       let continuations = waiters.removeValue(forKey: event.requestID) ?? []
       for continuation in continuations {
         continuation.resume()
@@ -528,8 +558,13 @@ public actor AdapterProcess {
     }
   }
 
-  private func waitForTerminal(_ requestID: String, timeout: Duration) async throws {
+  private func waitForTerminal(
+    _ requestID: String,
+    expectedKind: CandidateAdapterEventKind,
+    timeout: Duration
+  ) async throws {
     if terminalRequestIDs.contains(requestID) {
+      try validateTerminal(requestID, expectedKind: expectedKind)
       return
     }
     if let terminalError {
@@ -547,6 +582,22 @@ public actor AdapterProcess {
         }
       }
     }
+    try validateTerminal(requestID, expectedKind: expectedKind)
+  }
+
+  private func validateTerminal(
+    _ requestID: String,
+    expectedKind: CandidateAdapterEventKind
+  ) throws {
+    guard let receivedKind = terminalEventKinds[requestID], receivedKind != expectedKind else {
+      return
+    }
+    let error = AdapterProcessError.unexpectedAcknowledgement(
+      expected: expectedKind,
+      received: receivedKind
+    )
+    fail(error)
+    throw error
   }
 
   private func timeoutWaiter(_ requestID: String) {
@@ -555,6 +606,28 @@ public actor AdapterProcess {
     }
     for continuation in continuations {
       continuation.resume(throwing: AdapterProcessError.timeout(requestID))
+    }
+  }
+
+  private static func expectedAcknowledgementKind(
+    for operation: CandidateAdapterOperation
+  ) -> CandidateAdapterEventKind? {
+    switch operation {
+    case .cancel:
+      return .cancelled
+    case .unload, .shutdown:
+      return .unloaded
+    case .load, .transcribe, .clean:
+      return nil
+    }
+  }
+
+  private static func isTerminalEvent(_ kind: CandidateAdapterEventKind) -> Bool {
+    switch kind {
+    case .final, .cancelled, .unloaded, .failure:
+      return true
+    case .ready, .partial, .measurement:
+      return false
     }
   }
 

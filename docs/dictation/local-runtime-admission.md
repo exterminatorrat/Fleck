@@ -57,7 +57,8 @@ Scripts/run-local-dictation-candidate.sh \
   --output "/absolute/path/to/new-admission-report.json"
 ```
 
-The process boundary is offline and fail-closed:
+The process boundary is fail-closed for paths, protocol, output, and lifecycle,
+but the harness does not enforce network isolation:
 
 - adapter requests and events are deterministic JSON-lines, one object per
   line, with strict version, key, request-ID, and event-order checks;
@@ -65,10 +66,16 @@ The process boundary is offline and fail-closed:
   inherited secret-bearing environment;
 - stdout is protocol-only and bounded; stderr is retained in a bounded 1 MiB
   ring with fixture/model paths redacted;
+- cumulative protocol stdout is capped at 1 MiB and each event wait retains at
+  most 256 measurement artifacts; either overflow fails closed;
 - cancellation and shutdown use bounded cooperative timeouts followed by
   exact-child forced termination when required;
 - model-root symlink escapes, download URLs, arbitrary shell commands,
   auto-downloads, and pre-existing output paths are rejected;
+- reports record `networkIsolationMethod` as `not-enforced-by-harness`; the
+  harness does not provide a macOS network sandbox or prove offline behavior;
+- each candidate adapter must be separately verified with network access
+  disabled before any later packaged release admission;
 - reports contain case status and raw measurement artifacts, but never
   transcript content.
 

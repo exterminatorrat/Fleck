@@ -54,6 +54,17 @@ private func waitForForcedTermination(_ process: AdapterProcess, timeout: Durati
   throw NSError(domain: "AdapterProcessTests", code: 1)
 }
 
+private func waitForChildExit(_ process: AdapterProcess, timeout: Duration) async throws {
+  let deadline = ContinuousClock.now + timeout
+  while ContinuousClock.now < deadline {
+    if !(await process.diagnostics()).childIsRunning {
+      return
+    }
+    try await Task.sleep(for: .milliseconds(10))
+  }
+  throw NSError(domain: "AdapterProcessTests", code: 2)
+}
+
 @Suite("AdapterProcessTests")
 struct AdapterProcessTests {
 
@@ -116,6 +127,51 @@ struct AdapterProcessTests {
     await process.terminate()
   }
 
+  @Test func cancelFailureCannotBeAcknowledged() async throws {
+    let process = try await startProcess("cancel-failure")
+    try await process.send(request("load-1", operation: .load))
+    var capturedError: AdapterProcessError?
+    do {
+      _ = try await process.cancel(requestID: "load-1", timeout: .seconds(1))
+    } catch let error as AdapterProcessError {
+      capturedError = error
+    }
+    #expect(capturedError == .unexpectedAcknowledgement(expected: .cancelled, received: .failure))
+    try await waitForChildExit(process, timeout: .seconds(2))
+    #expect(!(await process.diagnostics()).childIsRunning)
+    await process.terminate()
+  }
+
+  @Test func shutdownFailureCannotBeAcknowledged() async throws {
+    let process = try await startProcess("shutdown-failure")
+    try await process.send(request("load-1", operation: .load))
+    var capturedError: AdapterProcessError?
+    do {
+      _ = try await process.shutdown(timeout: .seconds(1))
+    } catch let error as AdapterProcessError {
+      capturedError = error
+    }
+    #expect(capturedError == .unexpectedAcknowledgement(expected: .unloaded, received: .failure))
+    try await waitForChildExit(process, timeout: .seconds(2))
+    #expect(!(await process.diagnostics()).childIsRunning)
+    await process.terminate()
+  }
+
+  @Test func wrongTerminalKindCannotSatisfyCancellationWaiter() async throws {
+    let process = try await startProcess("cancel-wrong-terminal")
+    try await process.send(request("load-1", operation: .load))
+    var capturedError: AdapterProcessError?
+    do {
+      _ = try await process.cancel(requestID: "load-1", timeout: .seconds(1))
+    } catch let error as AdapterProcessError {
+      capturedError = error
+    }
+    #expect(capturedError == .unexpectedAcknowledgement(expected: .cancelled, received: .unloaded))
+    try await waitForChildExit(process, timeout: .seconds(2))
+    #expect(!(await process.diagnostics()).childIsRunning)
+    await process.terminate()
+  }
+
   @Test func boundsStdoutAndStderrAndRedactsConfiguredRoots() async throws {
     let process = try await startProcess("flood-both")
     let stream = await process.events()
@@ -158,7 +214,33 @@ struct AdapterProcessTests {
     }
     let result = await failure.value
     #expect(result == .stdoutFlood, "received \(String(describing: result))")
-    #expect(!(await process.diagnostics()).childIsRunning)
+    try await waitForChildExit(process, timeout: .seconds(2))
+    let diagnostics = await process.diagnostics()
+    #expect(diagnostics.stdoutByteCount <= 1_048_576)
+    #expect(!diagnostics.childIsRunning)
+    await process.terminate()
+  }
+
+  @Test func drainingMeasurementFloodFailsClosed() async throws {
+    let process = try await startProcess("flood-measurements")
+    let stream = await process.events()
+    let failure = Task {
+      do {
+        for try await _ in stream { }
+        return nil as AdapterProcessError?
+      } catch let error as AdapterProcessError {
+        return error
+      } catch {
+        return nil
+      }
+    }
+    try await process.send(request("transcribe-1", operation: .transcribe))
+    let result = await failure.value
+    #expect(result == .stdoutFlood, "received \(String(describing: result))")
+    try await waitForChildExit(process, timeout: .seconds(2))
+    let diagnostics = await process.diagnostics()
+    #expect(diagnostics.stdoutByteCount <= 1_048_576)
+    #expect(!diagnostics.childIsRunning)
     await process.terminate()
   }
 
