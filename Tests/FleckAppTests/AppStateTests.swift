@@ -1006,6 +1006,40 @@ private func settleHostedFolderView(_ view: NSView) async {
   #expect(recorder.generations.isEmpty)
 }
 
+@Test @MainActor func folderMovesUseOneSaveAndRejectStaleOrSameFolderRequests() async throws {
+  let recorder = SaveRecorder()
+  let source = try folder(named: "Source")
+  let target = try folder(named: "Target")
+  let unfiled = Note(title: "Unfiled", folderID: nil)
+  let filed = Note(title: "Filed", folderID: source.id)
+  let state = await folderedState(
+    workspace: Workspace(
+      notes: [unfiled, filed],
+      selectedNoteID: filed.id,
+      folders: [source, target]
+    ),
+    recorder: recorder
+  )
+
+  #expect(state.moveNote(unfiled.id, fromFolderID: nil, toFolderID: source.id, activeFolderID: nil))
+  try await waitForSaveCount(recorder, 1)
+  #expect(state.workspace.notes.first(where: { $0.id == unfiled.id })?.folderID == source.id)
+
+  #expect(state.moveNote(filed.id, fromFolderID: source.id, toFolderID: target.id, activeFolderID: source.id))
+  try await waitForSaveCount(recorder, 2)
+  #expect(state.workspace.notes.first(where: { $0.id == filed.id })?.folderID == target.id)
+  #expect(state.workspace.selectedNoteID == unfiled.id)
+
+  #expect(state.moveNote(filed.id, fromFolderID: target.id, toFolderID: nil, activeFolderID: target.id))
+  try await waitForSaveCount(recorder, 3)
+  #expect(state.workspace.notes.first(where: { $0.id == filed.id })?.folderID == nil)
+
+  #expect(!state.moveNote(filed.id, fromFolderID: source.id, toFolderID: target.id, activeFolderID: nil))
+  #expect(!state.moveNote(filed.id, fromFolderID: nil, toFolderID: nil, activeFolderID: nil))
+  try await Task.sleep(for: .milliseconds(500))
+  #expect(recorder.generations.count == 3)
+}
+
 @Test @MainActor func AppStateFolderAwareTrashDeletionSelectsNearestVisibleMemberAndSavesOnce() async throws {
   let recorder = SaveRecorder()
   let work = try folder(named: "Work")

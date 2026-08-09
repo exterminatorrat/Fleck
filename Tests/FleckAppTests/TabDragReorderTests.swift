@@ -57,6 +57,22 @@ import FleckCore
   #expect(!tabStrip.contains("TabDropDelegate"))
 }
 
+@Test func tabContextMenuExposesCurrentFolderMoveDestinations() throws {
+  let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
+
+  #expect(tabStrip.contains("Move to Folder"))
+  #expect(tabStrip.contains("Unfiled"))
+  #expect(tabStrip.contains("appState.workspace.folders"))
+  #expect(tabStrip.contains("fromFolderID"))
+  #expect(tabStrip.contains("toFolderID"))
+  #expect(tabStrip.contains(".disabled"))
+  #expect(tabStrip.contains("checkmark"))
+}
+
 @Test func liveTabDragMovesFirstAcrossSecondAndThirdUsingCurrentFrames() {
   let first = UUID()
   let second = UUID()

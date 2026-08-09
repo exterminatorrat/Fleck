@@ -805,6 +805,45 @@
               Button("Move Right", systemImage: "arrow.right") {
                 move(note, offset: 1)
               }
+              let moveToFolder: (UUID?) -> Void = { destinationFolderID in
+                guard isNoteVisible(note.id),
+                  let currentNote = appState.workspace.notes.first(where: { $0.id == note.id })
+                else { return }
+                _ = appState.moveNote(
+                  note.id,
+                  fromFolderID: currentNote.folderID,
+                  toFolderID: destinationFolderID,
+                  activeFolderID: activeFolderID
+                )
+              }
+              Menu("Move to Folder", systemImage: "folder") {
+                Button {
+                  moveToFolder(nil)
+                } label: {
+                  HStack {
+                    Text("Unfiled")
+                    if note.folderID == nil {
+                      Spacer()
+                      Image(systemName: "checkmark")
+                    }
+                  }
+                }
+                .disabled(note.folderID == nil)
+                ForEach(appState.workspace.folders, id: \.id) { folder in
+                  Button {
+                    moveToFolder(folder.id)
+                  } label: {
+                    HStack {
+                      Text(folder.name)
+                      if note.folderID == folder.id {
+                        Spacer()
+                        Image(systemName: "checkmark")
+                      }
+                    }
+                  }
+                  .disabled(note.folderID == folder.id)
+                }
+              }
               Button("Tab Color...", systemImage: "paintpalette") {
                 guard isNoteVisible(note.id) else { return }
                 tabColorPickerNoteID = note.id
