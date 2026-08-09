@@ -315,6 +315,53 @@
       }
     }
 
+    private func relevantCapabilityGrants(
+      for profile: AgentProfileCapabilities?,
+      noteID: UUID
+    ) -> [AgentResourceGrant] {
+      guard let profile,
+        let note = workspace.notes.first(where: { $0.id == noteID })
+      else { return [] }
+      return profile.grants.filter { grant in
+        switch grant.scope {
+        case let .note(grantedNoteID):
+          return grantedNoteID == noteID
+        case let .folderIncludingFutureNotes(folderID):
+          return note.folderID == folderID
+        }
+      }
+      .sorted { $0.id.uuidString < $1.id.uuidString }
+    }
+
+    private func capabilityMutationAffectsPendingRestoreNote(
+      _ replacements: [
+        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+      ]
+    ) -> Bool {
+      replacements.contains { replacement in
+        let current = agentCapabilityState.profiles[replacement.profile.profileID]
+        return pendingRestoreNoteIDs.contains { noteID in
+          let currentGrants = relevantCapabilityGrants(
+            for: current,
+            noteID: noteID
+          )
+          let replacementGrants = relevantCapabilityGrants(
+            for: replacement.profile,
+            noteID: noteID
+          )
+          if currentGrants != replacementGrants {
+            return true
+          }
+          return current?.allowedCapabilities != replacement.profile.allowedCapabilities
+            && (!currentGrants.isEmpty || !replacementGrants.isEmpty)
+        }
+      }
+    }
+
+    private func rejectPendingRestoreCapabilityMutation() {
+      agentCleanupError = AgentCapabilityPresentation.conflictMessage
+    }
+
     func activeDestinations() -> [DictationDestination] {
       workspace.notes.map {
         DictationDestination(noteID: $0.id, title: $0.displayTitle)
@@ -368,6 +415,9 @@
       guard !pendingRestoreNoteIDs.contains(noteID) else {
         return .contextChanged
       }
+      guard !capabilityMutationAffectsPendingRestoreNote(replacements) else {
+        return .contextChanged
+      }
       guard
         capturedContext.noteID == noteID,
         capturedContext.noteExists,
@@ -413,6 +463,15 @@
       _ replacement: AgentProfileCapabilities,
       expectedGrantRevision: UInt64
     ) async -> AgentCapabilitySaveResult {
+      guard !capabilityMutationAffectsPendingRestoreNote([
+        (
+          profile: replacement,
+          expectedGrantRevision: expectedGrantRevision
+        )
+      ]) else {
+        rejectPendingRestoreCapabilityMutation()
+        return .revisionConflict
+      }
       do {
         agentCapabilityState = try await agentCapabilityStore.replaceProfile(
           replacement,
@@ -435,6 +494,10 @@
         (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
       ]
     ) async -> AgentCapabilitySaveResult {
+      guard !capabilityMutationAffectsPendingRestoreNote(replacements) else {
+        rejectPendingRestoreCapabilityMutation()
+        return .revisionConflict
+      }
       do {
         agentCapabilityState = try await agentCapabilityStore.replaceProfiles(replacements)
         agentCleanupError = nil
@@ -455,6 +518,10 @@
       ],
       expectedGrantRevisions: [UUID: UInt64]
     ) async -> AgentCapabilitySaveResult {
+      guard !capabilityMutationAffectsPendingRestoreNote(replacements) else {
+        rejectPendingRestoreCapabilityMutation()
+        return .revisionConflict
+      }
       do {
         agentCapabilityState = try await agentCapabilityStore.replaceProfiles(
           replacements,
@@ -477,6 +544,10 @@
       to profileID: UUID,
       expectedGrantRevision: UInt64
     ) async -> AgentCapabilitySaveResult {
+      guard pendingRestoreNoteIDs.isDisjoint(with: noteIDs) else {
+        rejectPendingRestoreCapabilityMutation()
+        return .revisionConflict
+      }
       do {
         agentCapabilityState = try await agentCapabilityStore.assignUnassignedLegacyNotes(
           noteIDs,
@@ -969,13 +1040,14 @@
       resetSaveStatus()
       pendingTrashNotes.removeValue(forKey: trashedNote.id)
       trashedNotes.removeAll { $0.id == trashedNote.id }
-      let originalWorkspace = workspace
+      let originalNote = workspace.notes.first(where: { $0.id == trashedNote.id })
+      let originalSelectedNoteID = workspace.selectedNoteID
       workspace.addRestoredNote(trashedNote.note)
       let optimisticWorkspace = workspace
       let preferences = preferences
       let generation = persistenceGeneration
-      let store = store
       let restoreOperation = self.restoreOperation
+      let loadTrashOperation = self.loadTrashOperation
       return Task { @MainActor in
         defer { pendingRestoreNoteIDs.remove(trashedNote.id) }
         do {
@@ -985,15 +1057,29 @@
             preferences,
             generation
           )
-          trashedNotes = try await store.loadTrash()
-          saveError = nil
         } catch {
-          if workspace == optimisticWorkspace {
-            workspace = originalWorkspace
+          var rolledBackWorkspace = workspace
+          if originalNote == nil {
+            rolledBackWorkspace.notes.removeAll { $0.id == trashedNote.id }
+            if rolledBackWorkspace.selectedNoteID == trashedNote.id {
+              rolledBackWorkspace.selectedNoteID = originalSelectedNoteID
+              rolledBackWorkspace.ensureNoteExists()
+            }
+          } else if rolledBackWorkspace.selectedNoteID == trashedNote.id {
+            rolledBackWorkspace.selectedNoteID = originalSelectedNoteID
           }
-          if let refreshedTrash = try? await store.loadTrash() {
+          workspace = rolledBackWorkspace
+          if let refreshedTrash = try? await loadTrashOperation() {
             trashedNotes = refreshedTrash
           }
+          saveError = error.localizedDescription
+          return
+        }
+
+        do {
+          trashedNotes = try await loadTrashOperation()
+          saveError = nil
+        } catch {
           saveError = error.localizedDescription
         }
       }
