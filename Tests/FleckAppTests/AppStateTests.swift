@@ -276,6 +276,146 @@ private func waitForSaveCount(
   #expect(contents.contains("agentActivityStore: agentActivityStore"))
   #expect(contents.contains("profileStore: agentProfileStore"))
   #expect(contents.contains("activityStore: agentActivityStore"))
+  #expect(contents.components(separatedBy: "AgentCapabilityStore(").count - 1 == 1)
+  #expect(
+    contents.components(
+      separatedBy: "AgentCapabilityAuthority(store: agentCapabilityStore)"
+    ).count - 1 == 1
+  )
+  #expect(contents.contains("agentCapabilityStore: agentCapabilityStore"))
+  #expect(contents.contains("agentCapabilityAuthority: agentCapabilityAuthority"))
+  #expect(contents.contains("capabilityAuthority: agentCapabilityAuthority"))
+}
+
+@Test @MainActor
+func capabilityMigrationRunsAfterWorkspaceAndActiveProfilesLoad() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("AppStateCapabilityTests-\(UUID())", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Migrated", body: "Body", agentAccess: true)
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: .init()
+  )
+  let profile = AgentIntegrationProfile(
+    id: UUID(),
+    displayName: "Codex",
+    createdAt: Date(timeIntervalSince1970: 100),
+    lastConnectedAt: nil,
+    revokedAt: nil
+  )
+  let profilesURL = root
+    .appendingPathComponent("AgentIntegrations", isDirectory: true)
+    .appendingPathComponent("profiles.json")
+  try FileManager.default.createDirectory(
+    at: profilesURL.deletingLastPathComponent(),
+    withIntermediateDirectories: true
+  )
+  try JSONEncoder().encode([profile]).write(to: profilesURL)
+  let state = AppState(
+    store: store,
+    agentProfileStore: AgentProfileStore(profilesURL: profilesURL),
+    agentCapabilityStore: appStateCapabilityStore(root: root)
+  )
+
+  await state.waitUntilInitialLoad()
+
+  let capabilities = try #require(state.capabilityProfile(profile.id))
+  #expect(
+    capabilities.grants.contains {
+      $0.scope == .note(noteID: note.id) && $0.authority == .write
+    }
+  )
+  #expect(state.selectedNote?.body == "Body")
+  #expect(state.hasFinishedInitialLoad)
+  #expect(state.isAgentWorkspaceAvailable)
+}
+
+@Test @MainActor
+func malformedCapabilityGenerationsKeepNotesUsableAndAgentWorkspaceUnavailable()
+  async throws
+{
+  for previous in [false, true] {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AppStateMalformedCapabilityTests-\(UUID())", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Still usable", body: "Keep this")
+    let localStore = LocalStore(rootURL: root)
+    try await localStore.save(
+      workspace: Workspace(notes: [note], selectedNoteID: note.id),
+      preferences: .init()
+    )
+    let malformedURL = previous
+      ? root.appendingPathComponent("AgentIntegrations/capabilities.previous.json")
+      : root.appendingPathComponent("AgentIntegrations/capabilities.json")
+    try FileManager.default.createDirectory(
+      at: malformedURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try Data("not-json".utf8).write(to: malformedURL)
+    let state = AppState(
+      store: localStore,
+      agentProfileStore: appStateProfileStore(root: root),
+      agentCapabilityStore: appStateCapabilityStore(root: root)
+    )
+
+    await state.waitUntilInitialLoad()
+
+    #expect(state.hasFinishedInitialLoad)
+    #expect(state.selectedNote?.body == "Keep this")
+    #expect(!state.isAgentWorkspaceAvailable)
+    #expect(state.saveError == nil)
+    #expect(
+      state.agentCleanupError
+        == "Agent workspace is unavailable. Reopen Fleck after resolving capability storage."
+    )
+    #expect(!(state.agentCleanupError ?? "").contains("not-json"))
+    #expect(!(state.agentCleanupError ?? "").contains(root.path))
+  }
+}
+
+@Test @MainActor
+func appStateKeepsUnassignedLegacySharesUnassigned() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("AppStateUnassignedCapabilityTests-\(UUID())", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Legacy share", agentAccess: true)
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: .init()
+  )
+  let state = AppState(
+    store: store,
+    agentProfileStore: appStateProfileStore(root: root),
+    agentCapabilityStore: appStateCapabilityStore(root: root)
+  )
+
+  await state.waitUntilInitialLoad()
+
+  #expect(state.agentCapabilityState.unassignedLegacyNoteIDs == [note.id])
+  #expect(state.agentCapabilityState.profiles.isEmpty)
+  #expect(state.profilesWithReadAccess(to: note.id).isEmpty)
+  #expect(!state.isSharedWithAnyActiveProfile(note.id))
+}
+
+private func appStateCapabilityStore(root: URL) -> AgentCapabilityStore {
+  let directory = root.appendingPathComponent("AgentIntegrations", isDirectory: true)
+  return AgentCapabilityStore(
+    capabilitiesURL: directory.appendingPathComponent("capabilities.json"),
+    previousCapabilitiesURL: directory.appendingPathComponent(
+      "capabilities.previous.json"
+    )
+  )
+}
+
+private func appStateProfileStore(root: URL) -> AgentProfileStore {
+  AgentProfileStore(
+    profilesURL: root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("profiles.json")
+  )
 }
 
 @Test @MainActor func AppStateFolderDeleteMovesActiveSelectionToUnfiled() async throws {

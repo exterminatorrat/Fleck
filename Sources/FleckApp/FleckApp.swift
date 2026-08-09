@@ -76,16 +76,31 @@
           .appendingPathComponent("profiles.json")
       )
       let agentActivityStore = AgentActivityStore(rootURL: appSupport)
+      let capabilityDirectory = appSupport
+        .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      let agentCapabilityStore = AgentCapabilityStore(
+        capabilitiesURL: capabilityDirectory.appendingPathComponent(
+          "capabilities.json"
+        ),
+        previousCapabilitiesURL: capabilityDirectory.appendingPathComponent(
+          "capabilities.previous.json"
+        )
+      )
+      let agentCapabilityAuthority: any AgentCapabilityAuthorizing =
+        AgentCapabilityAuthority(store: agentCapabilityStore)
       let appState = AppState(
         store: LocalStore(rootURL: appSupport),
         agentProfileStore: agentProfileStore,
         agentActivityStore: agentActivityStore,
+        agentCapabilityStore: agentCapabilityStore,
+        agentCapabilityAuthority: agentCapabilityAuthority,
         startupMigrationError: startup.migrationError
       )
       let agentService = AgentCommandService(
         state: appState,
         profileStore: agentProfileStore,
-        activityStore: agentActivityStore
+        activityStore: agentActivityStore,
+        capabilityAuthority: agentCapabilityAuthority
       )
       let agentServer = AgentIPCServer(
         endpointURL: appSupport

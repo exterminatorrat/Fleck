@@ -21,6 +21,10 @@
         [Note]
       ) async throws -> Void
     typealias LoadTrashOperation = @Sendable () async throws -> [TrashedNote]
+    typealias AgentProfileProvisionOperation =
+      @Sendable (UUID, Data) async throws -> Void
+    typealias AgentProfileDisconnectOperation =
+      @Sendable (UUID) async throws -> Void
 
     enum SaveStatus: Equatable {
       case idle
@@ -52,6 +56,10 @@
     @Published private(set) var agentActivity: [AgentActivityRecord] = []
     @Published private(set) var agentBannerPresentation: AgentBannerPresentation?
     @Published private(set) var isAgentConnectorInstalled = false
+    @Published private(set) var agentCapabilityState = AgentCapabilityState(
+      profiles: [:],
+      unassignedLegacyNoteIDs: []
+    )
     @Published var agentCleanupError: String?
     private(set) var persistenceGeneration: UInt64 = 0
     private(set) var hasFinishedInitialLoad = false
@@ -65,6 +73,10 @@
     private let loadTrashOperation: LoadTrashOperation
     let agentProfileStore: AgentProfileStore
     let agentActivityStore: AgentActivityStore
+    let agentCapabilityStore: AgentCapabilityStore
+    let agentCapabilityAuthority: any AgentCapabilityAuthorizing
+    private let agentProfileProvisionOperation: AgentProfileProvisionOperation
+    private let agentProfileDisconnectOperation: AgentProfileDisconnectOperation
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
     private var awaitedSaveWaiters: [CheckedContinuation<Void, Never>] = []
@@ -85,6 +97,10 @@
       loadTrashOperation: LoadTrashOperation? = nil,
       agentProfileStore: AgentProfileStore? = nil,
       agentActivityStore: AgentActivityStore? = nil,
+      agentCapabilityStore: AgentCapabilityStore? = nil,
+      agentCapabilityAuthority: (any AgentCapabilityAuthorizing)? = nil,
+      provisionAgentProfile: AgentProfileProvisionOperation? = nil,
+      disconnectAgentProfile: AgentProfileDisconnectOperation? = nil,
       startupMigrationError: FleckProductMigrationError? = nil
     ) {
       let appSupport = FileManager.default.urls(
@@ -115,6 +131,32 @@
       self.agentActivityStore =
         agentActivityStore
         ?? AgentActivityStore(rootURL: canonicalRoot)
+      let capabilityStore =
+        agentCapabilityStore
+        ?? AgentCapabilityStore(
+          capabilitiesURL: canonicalRoot
+            .appendingPathComponent("AgentIntegrations", isDirectory: true)
+            .appendingPathComponent("capabilities.json"),
+          previousCapabilitiesURL: canonicalRoot
+            .appendingPathComponent("AgentIntegrations", isDirectory: true)
+            .appendingPathComponent("capabilities.previous.json")
+        )
+      self.agentCapabilityStore = capabilityStore
+      self.agentCapabilityAuthority =
+        agentCapabilityAuthority ?? AgentCapabilityAuthority(store: capabilityStore)
+      self.agentProfileProvisionOperation =
+        provisionAgentProfile ?? { profileID, credential in
+          try await AgentBridgeInstaller.live().provisionAsync(
+            profileID: profileID,
+            token: credential
+          )
+        }
+      self.agentProfileDisconnectOperation =
+        disconnectAgentProfile ?? { profileID in
+          try await AgentBridgeInstaller.live().disconnectAsync(
+            profileID: profileID
+          )
+        }
       self.startupMigrationError = startupMigrationError
       workspace.ensureNoteExists()
       Task {
@@ -124,9 +166,27 @@
           finishInitialLoad()
           return
         }
-        await load()
-        await refreshAgentProfiles()
+        guard await load() else {
+          finishInitialLoad()
+          return
+        }
+        guard await refreshAgentProfiles() else {
+          finishInitialLoad()
+          return
+        }
+        do {
+          agentCapabilityState = try await self.agentCapabilityStore.loadOrMigrate(
+            activeProfileIDs: agentProfiles.map(\.id),
+            workspace: workspace
+          )
+          isAgentWorkspaceAvailable = true
+          agentCleanupError = nil
+        } catch {
+          isAgentWorkspaceAvailable = false
+          agentCleanupError = Self.agentCapabilityFailureMessage
+        }
         refreshAgentActivity()
+        finishInitialLoad()
       }
     }
 
@@ -169,6 +229,41 @@
     func activeDestinations() -> [DictationDestination] {
       workspace.notes.map {
         DictationDestination(noteID: $0.id, title: $0.displayTitle)
+      }
+    }
+
+    func capabilityProfile(_ profileID: UUID) -> AgentProfileCapabilities? {
+      agentCapabilityState.profiles[profileID]
+    }
+
+    func profilesWithReadAccess(to noteID: UUID) -> [AgentIntegrationProfile] {
+      agentProfiles.filter { profile in
+        guard let capabilities = agentCapabilityState.profiles[profile.id] else {
+          return false
+        }
+        return AgentCapabilityPolicy.authorizationSnapshot(
+          for: capabilities,
+          workspace: workspace
+        ).readableNoteIDs.contains(noteID)
+      }
+    }
+
+    func isSharedWithAnyActiveProfile(_ noteID: UUID) -> Bool {
+      !profilesWithReadAccess(to: noteID).isEmpty
+    }
+
+    func updateAgentCapabilities(
+      _ replacement: AgentProfileCapabilities,
+      expectedGrantRevision: UInt64
+    ) async {
+      do {
+        agentCapabilityState = try await agentCapabilityStore.replaceProfile(
+          replacement,
+          expectedGrantRevision: expectedGrantRevision
+        )
+        agentCleanupError = nil
+      } catch {
+        agentCleanupError = "Could not update Agent capabilities. Try again."
       }
     }
 
@@ -683,8 +778,7 @@
       }
     }
 
-    private func load() async {
-      defer { finishInitialLoad() }
+    private func load() async -> Bool {
       do {
         let snapshot = try await store.loadSnapshot()
         workspace = snapshot.workspace
@@ -696,11 +790,12 @@
         )
         agentCommitProofs = snapshot.commitProofs
         trashedNotes = try await store.loadTrash()
-        isAgentWorkspaceAvailable = true
         saveError = nil
+        return true
       } catch {
         isAgentWorkspaceAvailable = false
         saveError = error.localizedDescription
+        return false
       }
     }
 
@@ -755,6 +850,9 @@
           + "access and available space, then reopen Fleck."
       }
     }
+
+    private static let agentCapabilityFailureMessage =
+      "Agent workspace is unavailable. Reopen Fleck after resolving capability storage."
 
     private typealias SaveSnapshot = (
       workspace: Workspace,
@@ -921,12 +1019,24 @@
       do {
         let provisioning = try await agentProfileStore.create(name: name)
         do {
-          try await AgentBridgeInstaller.live().provisionAsync(
-            profileID: provisioning.profile.id,
-            token: provisioning.credential
+          try await agentProfileProvisionOperation(
+            provisioning.profile.id,
+            provisioning.credential
+          )
+          agentCapabilityState = try await agentCapabilityStore.registerEmptyProfile(
+            provisioning.profile.id
           )
         } catch {
-          try? await agentProfileStore.revoke(profileID: provisioning.profile.id)
+          do {
+            try await agentProfileStore.revoke(profileID: provisioning.profile.id)
+          } catch {
+            try? await agentProfileStore.revoke(profileID: provisioning.profile.id)
+          }
+          do {
+            try await agentProfileDisconnectOperation(provisioning.profile.id)
+          } catch {
+            try? await agentProfileDisconnectOperation(provisioning.profile.id)
+          }
           throw error
         }
         await refreshAgentProfiles()
@@ -948,7 +1058,7 @@
       await refreshAgentProfiles()
       guard !agentProfiles.contains(where: { $0.id == profile.id }) else { return }
       do {
-        try await AgentBridgeInstaller.live().disconnectAsync(profileID: profile.id)
+        try await agentProfileDisconnectOperation(profile.id)
         if !localCleanupFailed {
           agentCleanupError = nil
         }
@@ -959,11 +1069,14 @@
       }
     }
 
-    func refreshAgentProfiles() async {
+    @discardableResult
+    func refreshAgentProfiles() async -> Bool {
       do {
         agentProfiles = try await agentProfileStore.activeProfiles()
+        return true
       } catch {
         agentCleanupError = "Could not load agent profiles: \(error.localizedDescription)"
+        return false
       }
     }
 
@@ -989,7 +1102,8 @@
       let service = AgentCommandService(
         state: self,
         profileStore: agentProfileStore,
-        activityStore: agentActivityStore
+        activityStore: agentActivityStore,
+        capabilityAuthority: agentCapabilityAuthority
       )
       do {
         _ = try await service.executeLocalUndo(

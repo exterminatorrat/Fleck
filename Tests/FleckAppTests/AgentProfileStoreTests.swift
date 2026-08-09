@@ -280,6 +280,185 @@ struct AgentProfileStoreTests {
       )
     )
   }
+
+  @Test @MainActor
+  func successfulProvisioningRegistersAnEmptyCapabilityProfile() async throws {
+    let fixture = try ProfileFixture()
+    defer { fixture.remove() }
+    let capabilityStore = profileCapabilityStore(root: fixture.rootURL)
+    let provisions = CallCounter()
+    let state = AppState(
+      store: LocalStore(rootURL: fixture.rootURL),
+      agentProfileStore: fixture.store,
+      agentCapabilityStore: capabilityStore,
+      provisionAgentProfile: { _, _ in provisions.increment() }
+    )
+
+    await state.waitUntilInitialLoad()
+    await state.addAgentProfile(named: "Codex")
+
+    let profile = try #require(await fixture.store.activeProfiles().first)
+    let capabilities = try #require(
+      await capabilityStore.currentState().profiles[profile.id]
+    )
+    #expect(provisions.value == 1)
+    #expect(
+      capabilities
+        == AgentProfileCapabilities(
+          profileID: profile.id,
+          grantRevision: 0,
+          allowedCapabilities: [],
+          grants: []
+        )
+    )
+    #expect(state.capabilityProfile(profile.id) == capabilities)
+  }
+
+  @Test @MainActor
+  func failedProvisioningRevokesProfileAndDisconnectsHelperCredential()
+    async throws
+  {
+    let fixture = try ProfileFixture()
+    defer { fixture.remove() }
+    let capabilityStore = profileCapabilityStore(root: fixture.rootURL)
+    let disconnects = CallCounter()
+    let state = AppState(
+      store: LocalStore(rootURL: fixture.rootURL),
+      agentProfileStore: fixture.store,
+      agentCapabilityStore: capabilityStore,
+      provisionAgentProfile: { _, _ in
+        throw AgentWorkspaceError(code: .internalSaveFailure)
+      },
+      disconnectAgentProfile: { _ in disconnects.increment() }
+    )
+
+    await state.waitUntilInitialLoad()
+    await state.addAgentProfile(named: "Failed")
+
+    #expect(try await fixture.store.activeProfiles().isEmpty)
+    #expect(fixture.secrets.entries.isEmpty)
+    #expect(disconnects.value == 1)
+    #expect(try await capabilityStore.currentState().profiles.isEmpty)
+  }
+
+  @Test @MainActor
+  func failedCapabilityRegistrationRevokesProfileAndDisconnectsHelperCredential()
+    async throws
+  {
+    let fixture = try ProfileFixture()
+    defer { fixture.remove() }
+    let capabilityStore = profileCapabilityStore(root: fixture.rootURL)
+    try FileManager.default.createDirectory(
+      at: fixture.rootURL.appendingPathComponent("AgentIntegrations"),
+      withIntermediateDirectories: true
+    )
+    try Data("not-json".utf8).write(
+      to: fixture.rootURL.appendingPathComponent(
+        "AgentIntegrations/capabilities.json"
+      )
+    )
+    let disconnects = CallCounter()
+    let state = AppState(
+      store: LocalStore(rootURL: fixture.rootURL),
+      agentProfileStore: fixture.store,
+      agentCapabilityStore: capabilityStore,
+      provisionAgentProfile: { _, _ in },
+      disconnectAgentProfile: { _ in disconnects.increment() }
+    )
+
+    await state.waitUntilInitialLoad()
+    #expect(!state.isAgentWorkspaceAvailable)
+    await state.addAgentProfile(named: "Unregistered")
+
+    #expect(try await fixture.store.activeProfiles().isEmpty)
+    #expect(fixture.secrets.entries.isEmpty)
+    #expect(disconnects.value == 1)
+  }
+
+  @Test @MainActor
+  func capabilityReplacementPublishesOnlyCurrentRevision() async throws {
+    let fixture = try ProfileFixture()
+    defer { fixture.remove() }
+    let capabilityStore = profileCapabilityStore(root: fixture.rootURL)
+    _ = try await fixture.store.create(name: "Codex")
+    let state = AppState(
+      store: LocalStore(rootURL: fixture.rootURL),
+      agentProfileStore: fixture.store,
+      agentCapabilityStore: capabilityStore,
+      disconnectAgentProfile: { _ in }
+    )
+    await state.waitUntilInitialLoad()
+    let profileID = try #require(state.agentProfiles.first?.id)
+    let current = try #require(state.capabilityProfile(profileID))
+    let replacement = AgentProfileCapabilities(
+      profileID: profileID,
+      grantRevision: current.grantRevision + 1,
+      allowedCapabilities: [.readNotes],
+      grants: []
+    )
+
+    await state.updateAgentCapabilities(
+      replacement,
+      expectedGrantRevision: current.grantRevision
+    )
+    #expect(state.capabilityProfile(profileID) == replacement)
+
+    let stale = AgentProfileCapabilities(
+      profileID: profileID,
+      grantRevision: replacement.grantRevision + 1,
+      allowedCapabilities: [.writeNotes],
+      grants: []
+    )
+    await state.updateAgentCapabilities(
+      stale,
+      expectedGrantRevision: current.grantRevision
+    )
+    #expect(state.capabilityProfile(profileID) == replacement)
+  }
+
+  @Test @MainActor
+  func revocationRemovesEffectiveSharingWhilePersistedGrantRemains() async throws {
+    let fixture = try ProfileFixture()
+    defer { fixture.remove() }
+    let provisioning = try await fixture.store.create(name: "Codex")
+    let note = Note(title: "Shared", agentAccess: false)
+    let localStore = LocalStore(rootURL: fixture.rootURL)
+    try await localStore.save(
+      workspace: Workspace(notes: [note], selectedNoteID: note.id),
+      preferences: .init()
+    )
+    let capabilityStore = profileCapabilityStore(root: fixture.rootURL)
+    let legacyWorkspace = Workspace(
+      notes: [Note(id: note.id, title: note.title, agentAccess: true)],
+      selectedNoteID: note.id
+    )
+    _ = try await capabilityStore.loadOrMigrate(
+      activeProfileIDs: [provisioning.profile.id],
+      workspace: legacyWorkspace
+    )
+    let state = AppState(
+      store: localStore,
+      agentProfileStore: fixture.store,
+      agentCapabilityStore: capabilityStore,
+      disconnectAgentProfile: { _ in }
+    )
+
+    await state.waitUntilInitialLoad()
+    #expect(
+      state.profilesWithReadAccess(to: note.id).map(\.id)
+        == [provisioning.profile.id]
+    )
+    #expect(state.isSharedWithAnyActiveProfile(note.id))
+
+    await state.revokeAgentProfile(provisioning.profile)
+
+    #expect(state.profilesWithReadAccess(to: note.id).isEmpty)
+    #expect(!state.isSharedWithAnyActiveProfile(note.id))
+    #expect(
+      try await capabilityStore.currentState().profiles[provisioning.profile.id]
+        != nil
+    )
+  }
 }
 
 private func permissionRevokedError(
@@ -400,5 +579,26 @@ private final class DateSequence: @unchecked Sendable {
       }
       return values.removeFirst()
     }
+  }
+}
+
+private func profileCapabilityStore(root: URL) -> AgentCapabilityStore {
+  let directory = root.appendingPathComponent("AgentIntegrations", isDirectory: true)
+  return AgentCapabilityStore(
+    capabilitiesURL: directory.appendingPathComponent("capabilities.json"),
+    previousCapabilitiesURL: directory.appendingPathComponent(
+      "capabilities.previous.json"
+    )
+  )
+}
+
+private final class CallCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var count = 0
+
+  var value: Int { lock.withLock { count } }
+
+  func increment() {
+    lock.withLock { count += 1 }
   }
 }

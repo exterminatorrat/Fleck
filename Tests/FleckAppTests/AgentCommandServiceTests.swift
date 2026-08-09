@@ -314,6 +314,45 @@ import Testing
   )
 }
 
+@Test @MainActor
+func localUndoUsesNoProfileCapabilityAuthority() async throws {
+  let fixture = AgentServiceFixture()
+  let write = try await fixture.execute(
+    .appendText(
+      request: .init(
+        context: .init(
+          noteID: fixture.note.id,
+          expectedRevision: fixture.note.revision,
+          operationID: UUID()
+        ),
+        text: "Undo locally"
+      )
+    )
+  )
+  guard case .write(let receipt) = write else {
+    Issue.record("Expected write")
+    return
+  }
+  let localService = AgentCommandService(
+    state: fixture.state,
+    profileStore: FixedAgentAuthorizer(profile: fixture.profile),
+    activityStore: fixture.activityStore,
+    capabilityAuthority: DenyingCapabilityAuthorizer()
+  )
+
+  let response = try await localService.executeLocalUndo(
+    changeID: receipt.changeID,
+    expectedRevision: receipt.resultingRevision,
+    operationID: UUID()
+  )
+
+  guard case .undo = response else {
+    Issue.record("Expected local undo")
+    return
+  }
+  #expect(fixture.state.workspace.notes[0].body == "Original")
+}
+
 @Test @MainActor func authorizedUndoActivityReturnsOriginatingIntegration()
   async throws
 {
@@ -760,7 +799,24 @@ import Testing
   )
   defer { try? FileManager.default.removeItem(at: root) }
   let store = LocalStore(rootURL: root)
-  let state = AppState(store: store)
+  let capabilityDirectory = root.appendingPathComponent(
+    "AgentIntegrations",
+    isDirectory: true
+  )
+  let state = AppState(
+    store: store,
+    agentProfileStore: AgentProfileStore(
+      profilesURL: capabilityDirectory.appendingPathComponent("profiles.json")
+    ),
+    agentCapabilityStore: AgentCapabilityStore(
+      capabilitiesURL: capabilityDirectory.appendingPathComponent(
+        "capabilities.json"
+      ),
+      previousCapabilitiesURL: capabilityDirectory.appendingPathComponent(
+        "capabilities.previous.json"
+      )
+    )
+  )
   await state.waitUntilInitialLoad()
   state.setSelectedAgentAccess(true)
   try await state.flushPendingPersistenceForAgent()
@@ -1683,6 +1739,19 @@ private struct FixedCapabilityAuthorizer: AgentCapabilityAuthorizing {
   }
 
   func assertCurrent(profileID: UUID, grantRevision: UInt64) async throws {}
+}
+
+private struct DenyingCapabilityAuthorizer: AgentCapabilityAuthorizing {
+  func snapshot(
+    profileID: UUID,
+    workspace: Workspace
+  ) async throws -> AgentAuthorizationSnapshot {
+    throw AgentWorkspaceError(code: .capabilityDenied)
+  }
+
+  func assertCurrent(profileID: UUID, grantRevision: UInt64) async throws {
+    throw AgentWorkspaceError(code: .capabilityDenied)
+  }
 }
 
 private struct LegacyTestCapabilityAuthorizer: AgentCapabilityAuthorizing {
