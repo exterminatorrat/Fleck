@@ -1040,6 +1040,39 @@ private func settleHostedFolderView(_ view: NSView) async {
   #expect(recorder.generations.count == 3)
 }
 
+@Test @MainActor func manualFolderReorderSavesOnceAndRejectsInvalidOrSamePositionRequests() async throws {
+  let recorder = SaveRecorder()
+  let manualFolder = try folder(named: "Manual")
+  let otherFolder = try folder(named: "Other")
+  let pinned = Note(title: "Pinned", isPinned: true, folderID: manualFolder.id)
+  let first = Note(title: "First", folderID: manualFolder.id)
+  let second = Note(title: "Second", folderID: manualFolder.id)
+  let third = Note(title: "Third", folderID: manualFolder.id)
+  let hidden = Note(title: "Hidden", folderID: otherFolder.id)
+  let state = await folderedState(
+    workspace: Workspace(
+      notes: [pinned, first, second, third, hidden],
+      selectedNoteID: first.id,
+      folders: [manualFolder, otherFolder]
+    ),
+    recorder: recorder
+  )
+
+  #expect(state.moveNote(first.id, inFolderID: manualFolder.id, toVisibleIndex: 2))
+  try await waitForSaveCount(recorder, 1)
+  #expect(state.workspace.notes(inFolderID: manualFolder.id).map(\.id) == [pinned.id, second.id, third.id, first.id])
+  #expect(state.workspace.notes.map(\.id) == [pinned.id, second.id, third.id, first.id, hidden.id])
+
+  #expect(!state.moveNote(first.id, inFolderID: manualFolder.id, toVisibleIndex: 2))
+  #expect(!state.moveNote(first.id, inFolderID: manualFolder.id, toVisibleIndex: 99))
+  #expect(!state.moveNote(first.id, inFolderID: otherFolder.id, toVisibleIndex: 0))
+
+  state.updateSelected(title: "First edited")
+  #expect(state.workspace.notes(inFolderID: manualFolder.id).map(\.id) == [pinned.id, second.id, third.id, first.id])
+  try await Task.sleep(for: .milliseconds(500))
+  #expect(recorder.generations.count == 2)
+}
+
 @Test @MainActor func AppStateFolderAwareTrashDeletionSelectsNearestVisibleMemberAndSavesOnce() async throws {
   let recorder = SaveRecorder()
   let work = try folder(named: "Work")

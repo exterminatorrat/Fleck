@@ -750,6 +750,7 @@
               }
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("note-tab-\(note.id.uuidString)")
             .onDrag {
               FolderDragPayload.noteProvider(
                 noteID: note.id,
@@ -1553,6 +1554,7 @@
           }
         }
         .accessibilityLabel(folder.name)
+        .accessibilityIdentifier("folder-\(folder.id.uuidString)")
         .accessibilityValue(
           "\(appState.visibleNotes(in: folder.id).count) notes"
             + (activeFolderID == folder.id ? ", Selected" : "")

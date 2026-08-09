@@ -321,6 +321,20 @@ import FleckCore
   #expect(!navigator.contains("of: [FolderDragPayload.noteType, FolderDragPayload.folderType]"))
 }
 
+@Test func tabStripKeepsManualOrderAndPinnedPartitionWithoutRecencySorting() throws {
+  let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
+
+  #expect(tabStrip.contains("visibleNotes.map(\\.id)"))
+  #expect(tabStrip.contains("inFolderID: activeFolderID"))
+  #expect(tabStrip.contains("toVisibleIndex: destination"))
+  #expect(!tabStrip.contains("modifiedAt"))
+  #expect(!tabStrip.contains("sorted("))
+}
+
 @Test func FolderNavigatorFocusMovesOnlyVertically() {
   #expect(
     FolderNavigatorFocus.nextIndex(
