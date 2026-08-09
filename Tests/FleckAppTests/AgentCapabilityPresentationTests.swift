@@ -354,6 +354,174 @@ struct AgentCapabilityPresentationTests {
     )
   }
 
+  @Test func CapabilityDraftPreservesDirectAndFolderGrantIdentityOnNoOp() throws {
+    let folder = try Folder(
+      id: testUUID("00000000-0000-0000-0000-000000000310"),
+      name: "Projects"
+    )
+    let note = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000311"),
+      folderID: folder.id
+    )
+    let authorities: [AgentAuthority] = [.read, .propose, .write]
+
+    for (index, authority) in authorities.enumerated() {
+      let directGrant = AgentResourceGrant(
+        id: testUUID(
+          "00000000-0000-0000-0000-00000000031\(index + 1)"
+        ),
+        scope: .note(noteID: note.id),
+        authority: authority
+      )
+      let futureGrant = AgentResourceGrant(
+        id: testUUID(
+          "00000000-0000-0000-0000-00000000032\(index + 1)"
+        ),
+        scope: .folderIncludingFutureNotes(folderID: folder.id),
+        authority: authority
+      )
+      let profile = AgentProfileCapabilities(
+        profileID: UUID(),
+        grantRevision: 7,
+        allowedCapabilities: [.readNotes, .writeNotes],
+        grants: [directGrant, futureGrant]
+      )
+      let directLevel: AgentNoteAccessLevel = authority.allows(.write)
+        ? .write
+        : .read
+      let replacement = AgentCapabilityPresentation.capabilityReplacement(
+        baseline: profile,
+        allowedCapabilities: profile.allowedCapabilities,
+        expectedGrantRevision: profile.grantRevision,
+        directAccess: [note.id: directLevel],
+        folderAccess: [folder.id: .includingFutureNotes]
+      )
+
+      #expect(replacement.grants == profile.grants)
+      #expect(
+        AgentCapabilityPresentation.capabilityReplacementIfChanged(
+          baseline: profile,
+          allowedCapabilities: profile.allowedCapabilities,
+          expectedGrantRevision: profile.grantRevision,
+          directAccess: [note.id: directLevel],
+          folderAccess: [folder.id: .includingFutureNotes]
+        ) == nil
+      )
+    }
+  }
+
+  @Test func ConfirmedFutureFolderTransitionCreatesOneWriteGrant() throws {
+    let folder = try Folder(
+      id: testUUID("00000000-0000-0000-0000-000000000313"),
+      name: "Projects"
+    )
+    let profile = AgentProfileCapabilities(
+      profileID: UUID(),
+      grantRevision: 0,
+      allowedCapabilities: [.writeNotes],
+      grants: []
+    )
+
+    let replacement = try #require(
+      AgentCapabilityPresentation.capabilityReplacementIfChanged(
+        baseline: profile,
+        allowedCapabilities: profile.allowedCapabilities,
+        expectedGrantRevision: profile.grantRevision,
+        directAccess: [:],
+        folderAccess: [folder.id: .includingFutureNotes]
+      )
+    )
+    #expect(replacement.grants.count == 1)
+    #expect(
+      replacement.grants.first?.scope
+        == .folderIncludingFutureNotes(folderID: folder.id)
+    )
+    #expect(replacement.grants.first?.authority == .write)
+  }
+
+  @Test func NoteAccessRowsDistinguishEditableInheritedAndUnavailableStates() throws {
+    let folder = try Folder(
+      id: testUUID("00000000-0000-0000-0000-000000000314"),
+      name: "Projects"
+    )
+    let note = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000315"),
+      folderID: folder.id
+    )
+    let inherited = AgentProfileCapabilities(
+      profileID: UUID(),
+      grantRevision: 1,
+      allowedCapabilities: [.readNotes],
+      grants: [
+        AgentResourceGrant(
+          scope: .folderIncludingFutureNotes(folderID: folder.id),
+          authority: .read
+        )
+      ]
+    )
+    let direct = AgentProfileCapabilities(
+      profileID: inherited.profileID,
+      grantRevision: 2,
+      allowedCapabilities: [.readNotes],
+      grants: [
+        AgentResourceGrant(
+          scope: .note(noteID: note.id),
+          authority: .read
+        )
+      ]
+    )
+    let workspace = Workspace(notes: [note], folders: [folder])
+
+    #expect(
+      AgentCapabilityPresentation.noteAccessRowState(
+        for: note.id,
+        profileID: inherited.profileID,
+        baselineCapabilities: [inherited.profileID: inherited],
+        workspace: workspace
+      ) == .inheritedFolder
+    )
+    #expect(
+      AgentCapabilityPresentation.noteAccessRowState(
+        for: note.id,
+        profileID: inherited.profileID,
+        baselineCapabilities: [inherited.profileID: direct],
+        workspace: workspace
+      ) == .editable
+    )
+    #expect(
+      AgentCapabilityPresentation.noteAccessRowState(
+        for: note.id,
+        profileID: UUID(),
+        baselineCapabilities: [:],
+        workspace: workspace
+      ) == .unavailable
+    )
+    #expect(
+      AgentCapabilityPresentation.unavailableAccessMessage
+        == "Capability profile unavailable. Close and reopen this sheet."
+    )
+    let displayed = AgentCapabilityPresentation.snapshotActiveProfiles([
+      AgentIntegrationProfile(
+        id: inherited.profileID,
+        displayName: "Codex",
+        createdAt: Date(timeIntervalSince1970: 1),
+        lastConnectedAt: nil,
+        revokedAt: nil
+      )
+    ])
+    let liveAdded = displayed + [
+      AgentIntegrationProfile(
+        id: UUID(),
+        displayName: "Claude",
+        createdAt: Date(timeIntervalSince1970: 2),
+        lastConnectedAt: nil,
+        revokedAt: nil
+      )
+    ]
+    #expect(displayed.count == 1)
+    #expect(liveAdded.count == 2)
+  }
+
   @Test func DirectAndFutureFolderDraftsRoundTripWithoutDuplicateScopes() throws {
     let folder = try Folder(
       id: testUUID("00000000-0000-0000-0000-000000000306"),

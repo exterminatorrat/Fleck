@@ -321,6 +321,29 @@
     }
 
     @discardableResult
+    func updateAgentCapabilities(
+      _ replacements: [
+        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+      ],
+      expectedGrantRevisions: [UUID: UInt64]
+    ) async -> AgentCapabilitySaveResult {
+      do {
+        agentCapabilityState = try await agentCapabilityStore.replaceProfiles(
+          replacements,
+          expectedGrantRevisions: expectedGrantRevisions
+        )
+        agentCleanupError = nil
+        return .succeeded
+      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
+        agentCleanupError = AgentCapabilityPresentation.conflictMessage
+        return .revisionConflict
+      } catch {
+        agentCleanupError = "Could not update Agent access. Try again."
+        return .failed
+      }
+    }
+
+    @discardableResult
     func assignUnassignedLegacyNotes(
       _ noteIDs: Set<UUID>,
       to profileID: UUID,

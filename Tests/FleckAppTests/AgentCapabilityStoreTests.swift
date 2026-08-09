@@ -754,6 +754,131 @@ struct AgentCapabilityStoreTests {
 
     _ = initial
   }
+
+  @Test func FullDisplayedRevisionSnapshotRejectsStaleUnchangedProfile() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    let firstID = testUUID("00000000-0000-0000-0000-000000000241")
+    let secondID = testUUID("00000000-0000-0000-0000-000000000242")
+    let initial = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [firstID, secondID],
+      workspace: Workspace()
+    )
+    let first = try #require(initial.profiles[firstID])
+    let second = try #require(initial.profiles[secondID])
+    let secondUpdated = AgentProfileCapabilities(
+      profileID: secondID,
+      grantRevision: second.grantRevision + 1,
+      allowedCapabilities: [.readNotes],
+      grants: []
+    )
+    let current = try await fixture.store.replaceProfile(
+      secondUpdated,
+      expectedGrantRevision: second.grantRevision
+    )
+    let beforeBytes = try Data(contentsOf: fixture.capabilitiesURL)
+    let editedFirst = AgentProfileCapabilities(
+      profileID: firstID,
+      grantRevision: first.grantRevision + 1,
+      allowedCapabilities: [.writeNotes],
+      grants: []
+    )
+
+    await #expect(throws: AgentWorkspaceError(code: .revisionConflict)) {
+      _ = try await fixture.store.replaceProfiles(
+        [
+          (
+            profile: editedFirst,
+            expectedGrantRevision: first.grantRevision
+          )
+        ],
+        expectedGrantRevisions: [
+          firstID: first.grantRevision,
+          secondID: second.grantRevision,
+        ]
+      )
+    }
+    #expect(try Data(contentsOf: fixture.capabilitiesURL) == beforeBytes)
+    #expect(try await fixture.store.currentState() == current)
+  }
+
+  @Test func AssigningLegacySharesNormalizesOverlappingDirectGrants() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    let firstNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000243"),
+      agentAccess: true
+    )
+    let secondNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000244"),
+      agentAccess: true
+    )
+    let thirdNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000245"),
+      agentAccess: true
+    )
+    let unrelatedNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000246")
+    )
+    let profileID = testUUID("00000000-0000-0000-0000-000000000247")
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [],
+      workspace: Workspace(
+        notes: [firstNote, secondNote, thirdNote, unrelatedNote]
+      )
+    )
+    let registered = try await fixture.store.registerEmptyProfile(profileID)
+    let current = try #require(registered.profiles[profileID])
+    let seeded = AgentProfileCapabilities(
+      profileID: profileID,
+      grantRevision: current.grantRevision + 1,
+      allowedCapabilities: current.allowedCapabilities,
+      grants: [
+        AgentResourceGrant(
+          scope: .note(noteID: firstNote.id),
+          authority: .read
+        ),
+        AgentResourceGrant(
+          scope: .note(noteID: secondNote.id),
+          authority: .propose
+        ),
+        AgentResourceGrant(
+          scope: .note(noteID: thirdNote.id),
+          authority: .write
+        ),
+        AgentResourceGrant(
+          scope: .note(noteID: unrelatedNote.id),
+          authority: .read
+        ),
+      ]
+    )
+    let seededState = try await fixture.store.replaceProfile(
+      seeded,
+      expectedGrantRevision: current.grantRevision
+    )
+
+    let assigned = try await fixture.store.assignUnassignedLegacyNotes(
+      [firstNote.id, secondNote.id, thirdNote.id],
+      to: profileID,
+      expectedGrantRevision: seeded.grantRevision
+    )
+    let assignedProfile = try #require(assigned.profiles[profileID])
+    #expect(assigned.unassignedLegacyNoteIDs.isEmpty)
+    #expect(
+      assignedProfile.grants.contains {
+        $0.scope == .note(noteID: unrelatedNote.id) && $0.authority == .read
+      }
+    )
+    for noteID in [firstNote.id, secondNote.id, thirdNote.id] {
+      let selectedGrants = assignedProfile.grants.filter {
+        $0.scope == .note(noteID: noteID)
+      }
+      #expect(selectedGrants.count == 1)
+      #expect(selectedGrants.first?.authority == .write)
+    }
+    #expect(assignedProfile.grants.count == 4)
+    #expect(seededState.profiles[profileID]?.grantRevision == seeded.grantRevision)
+  }
 }
 
 private struct CapabilityStoreFixture {

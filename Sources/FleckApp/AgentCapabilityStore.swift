@@ -126,6 +126,58 @@ actor AgentCapabilityStore {
     return state
   }
 
+  func replaceProfiles(
+    _ replacements: [
+      (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+    ],
+    expectedGrantRevisions: [UUID: UInt64]
+  ) throws -> AgentCapabilityState {
+    var state = try loadPersistedState()
+    guard Set(replacements.map { $0.profile.profileID }).count == replacements.count else {
+      throw AgentWorkspaceError(code: .invalidPayload)
+    }
+
+    for (profileID, expectedGrantRevision) in expectedGrantRevisions {
+      guard let current = state.profiles[profileID] else {
+        throw AgentWorkspaceError(code: .revisionConflict)
+      }
+      guard current.grantRevision == expectedGrantRevision else {
+        throw AgentWorkspaceError(code: .revisionConflict)
+      }
+    }
+
+    for replacement in replacements {
+      guard let current = state.profiles[replacement.profile.profileID] else {
+        throw AgentWorkspaceError(code: .invalidPayload)
+      }
+      guard
+        expectedGrantRevisions[replacement.profile.profileID]
+          == replacement.expectedGrantRevision,
+        current.grantRevision == replacement.expectedGrantRevision
+      else {
+        throw AgentWorkspaceError(code: .revisionConflict)
+      }
+      guard
+        current.grantRevision < UInt64.max,
+        replacement.profile.grantRevision == current.grantRevision + 1
+      else {
+        throw AgentWorkspaceError(code: .invalidPayload)
+      }
+    }
+
+    guard !replacements.isEmpty else { return state }
+    for replacement in replacements {
+      state.profiles[replacement.profile.profileID] = replacement.profile
+    }
+    do {
+      try validateCapabilityState(state)
+    } catch {
+      throw AgentWorkspaceError(code: .invalidPayload)
+    }
+    try save(state)
+    return state
+  }
+
   func assignUnassignedLegacyNotes(
     _ noteIDs: Set<UUID>,
     to profileID: UUID,
@@ -146,13 +198,11 @@ actor AgentCapabilityStore {
       throw AgentWorkspaceError(code: .invalidPayload)
     }
 
-    let existingNoteIDs = Set(
-      current.grants.compactMap { grant -> UUID? in
-        guard case let .note(noteID) = grant.scope else { return nil }
-        return noteID
-      }
-    )
-    let newGrants = noteIDs.subtracting(existingNoteIDs).map { noteID in
+    let retainedGrants = current.grants.filter { grant in
+      guard case let .note(noteID) = grant.scope else { return true }
+      return !noteIDs.contains(noteID)
+    }
+    let newGrants = noteIDs.sorted { $0.uuidString < $1.uuidString }.map { noteID in
       AgentResourceGrant(
         scope: .note(noteID: noteID),
         authority: .write
@@ -162,7 +212,7 @@ actor AgentCapabilityStore {
       profileID: current.profileID,
       grantRevision: current.grantRevision + 1,
       allowedCapabilities: current.allowedCapabilities,
-      grants: current.grants + newGrants
+      grants: retainedGrants + newGrants
     )
     state.unassignedLegacyNoteIDs.subtract(noteIDs)
     do {

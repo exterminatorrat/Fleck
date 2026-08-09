@@ -38,6 +38,12 @@
     }
   }
 
+  enum AgentNoteAccessRowState: Equatable, Sendable {
+    case editable
+    case inheritedFolder
+    case unavailable
+  }
+
   enum AgentCapabilityPresentation {
     static let noToolsOrNotesGranted = "No tools or notes granted"
     static let manageAgentAccessTitle = "Manage Agent Access…"
@@ -49,6 +55,8 @@
       "This capability profile changed. Reload it before saving."
     static let inheritedAccessMessage =
       "Access is inherited from a folder. Edit the profile to change it."
+    static let unavailableAccessMessage =
+      "Capability profile unavailable. Close and reopen this sheet."
 
     struct ProfileSummary: Equatable, Sendable {
       let summary: String
@@ -220,28 +228,48 @@
       folderAccess: [UUID: AgentFolderAccessLevel]
     ) -> AgentProfileCapabilities {
       var grants = baseline.grants
-      let directNoteIDs = Set(directAccess.keys)
-      let folderIDs = Set(folderAccess.keys)
-      grants.removeAll { grant in
-        switch grant.scope {
-        case let .note(noteID): directNoteIDs.contains(noteID)
-        case let .folderIncludingFutureNotes(folderID): folderIDs.contains(folderID)
+      for noteID in directAccess.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+        let draftLevel = directAccess[noteID] ?? .off
+        guard draftLevel != explicitNoteAccess(for: noteID, profile: baseline) else {
+          continue
+        }
+        grants.removeAll { grant in
+          if case let .note(grantedNoteID) = grant.scope {
+            return grantedNoteID == noteID
+          }
+          return false
+        }
+        if let authority = draftLevel.authority {
+          grants.append(
+            AgentResourceGrant(scope: .note(noteID: noteID), authority: authority)
+          )
         }
       }
-      for noteID in directAccess.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
-        guard let authority = directAccess[noteID]?.authority else { continue }
-        grants.append(
-          AgentResourceGrant(scope: .note(noteID: noteID), authority: authority)
-        )
-      }
       for folderID in folderAccess.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
-        guard folderAccess[folderID] == .includingFutureNotes else { continue }
-        grants.append(
-          AgentResourceGrant(
-            scope: .folderIncludingFutureNotes(folderID: folderID),
-            authority: .write
+        let draftIncludesFutureNotes =
+          folderAccess[folderID] == .includingFutureNotes
+        let baselineIncludesFutureNotes = baseline.grants.contains { grant in
+          guard case let .folderIncludingFutureNotes(grantedFolderID) = grant.scope
+          else { return false }
+          return grantedFolderID == folderID && grant.authority.allows(.read)
+        }
+        guard draftIncludesFutureNotes != baselineIncludesFutureNotes else {
+          continue
+        }
+        grants.removeAll { grant in
+          if case let .folderIncludingFutureNotes(grantedFolderID) = grant.scope {
+            return grantedFolderID == folderID
+          }
+          return false
+        }
+        if draftIncludesFutureNotes {
+          grants.append(
+            AgentResourceGrant(
+              scope: .folderIncludingFutureNotes(folderID: folderID),
+              authority: .write
+            )
           )
-        )
+        }
       }
       return AgentProfileCapabilities(
         profileID: baseline.profileID,
@@ -249,6 +277,27 @@
         allowedCapabilities: allowedCapabilities,
         grants: grants
       )
+    }
+
+    static func capabilityReplacementIfChanged(
+      baseline: AgentProfileCapabilities,
+      allowedCapabilities: Set<AgentCapability>,
+      expectedGrantRevision: UInt64,
+      directAccess: [UUID: AgentNoteAccessLevel],
+      folderAccess: [UUID: AgentFolderAccessLevel]
+    ) -> AgentProfileCapabilities? {
+      let replacement = capabilityReplacement(
+        baseline: baseline,
+        allowedCapabilities: allowedCapabilities,
+        expectedGrantRevision: expectedGrantRevision,
+        directAccess: directAccess,
+        folderAccess: folderAccess
+      )
+      guard
+        replacement.allowedCapabilities != baseline.allowedCapabilities
+          || replacement.grants != baseline.grants
+      else { return nil }
+      return replacement
     }
 
     static func noteAccessReplacement(
@@ -304,18 +353,40 @@
       )
     }
 
+    static func noteAccessRowState(
+      for noteID: UUID,
+      profileID: UUID,
+      baselineCapabilities: [UUID: AgentProfileCapabilities],
+      workspace: Workspace
+    ) -> AgentNoteAccessRowState {
+      guard let baseline = baselineCapabilities[profileID] else {
+        return .unavailable
+      }
+      return isNoteAccessInherited(
+        for: noteID,
+        profile: baseline,
+        workspace: workspace
+      ) ? .inheritedFolder : .editable
+    }
+
     static func canEditNoteAccess(
       for noteID: UUID,
       profileID: UUID,
       baselineCapabilities: [UUID: AgentProfileCapabilities],
       workspace: Workspace
     ) -> Bool {
-      guard let baseline = baselineCapabilities[profileID] else { return false }
-      return canEditNoteAccess(
+      noteAccessRowState(
         for: noteID,
-        profile: baseline,
+        profileID: profileID,
+        baselineCapabilities: baselineCapabilities,
         workspace: workspace
-      )
+      ) == .editable
+    }
+
+    static func snapshotActiveProfiles(
+      _ profiles: [AgentIntegrationProfile]
+    ) -> [AgentIntegrationProfile] {
+      profiles.filter { !$0.isRevoked }
     }
 
     static func noteAccessReplacementIfEditable(
@@ -377,6 +448,7 @@
     let profile: AgentIntegrationProfile
     let capabilities: AgentProfileCapabilities
     @State private var allowedCapabilities: Set<AgentCapability>
+    @State private var baselineCapabilities: AgentProfileCapabilities
     @State private var expectedGrantRevision: UInt64
     @State private var directAccess: [UUID: AgentNoteAccessLevel] = [:]
     @State private var folderAccess: [UUID: AgentFolderAccessLevel] = [:]
@@ -389,6 +461,7 @@
       self.profile = profile
       self.capabilities = capabilities
       _allowedCapabilities = State(initialValue: capabilities.allowedCapabilities)
+      _baselineCapabilities = State(initialValue: capabilities)
       _expectedGrantRevision = State(initialValue: capabilities.grantRevision)
     }
 
@@ -585,23 +658,23 @@
       for note in appState.workspace.notes {
         let level = AgentCapabilityPresentation.explicitNoteAccess(
           for: note.id,
-          profile: capabilities
+          profile: baselineCapabilities
         )
         if level != .off { directAccess[note.id] = level }
       }
       for folder in appState.workspace.folders {
         let level = AgentCapabilityPresentation.folderAccess(
           for: folder.id,
-          profile: capabilities,
+          profile: baselineCapabilities,
           workspace: appState.workspace
         )
         if level != .off { folderAccess[folder.id] = level }
       }
     }
 
-    private func replacement() -> AgentProfileCapabilities {
-      AgentCapabilityPresentation.capabilityReplacement(
-        baseline: capabilities,
+    private func replacement() -> AgentProfileCapabilities? {
+      AgentCapabilityPresentation.capabilityReplacementIfChanged(
+        baseline: baselineCapabilities,
         allowedCapabilities: allowedCapabilities,
         expectedGrantRevision: expectedGrantRevision,
         directAccess: directAccess,
@@ -611,7 +684,10 @@
 
     private func save() {
       errorMessage = nil
-      let replacement = replacement()
+      guard let replacement = replacement() else {
+        dismiss()
+        return
+      }
       Task { @MainActor in
         switch await appState.updateAgentCapabilities(
           replacement,
@@ -632,11 +708,14 @@
       Task { @MainActor in
         switch await appState.assignUnassignedLegacyNotes(
           selected,
-          to: capabilities.profileID,
+          to: baselineCapabilities.profileID,
           expectedGrantRevision: expectedGrantRevision
         ) {
         case .succeeded:
-          expectedGrantRevision += 1
+          if let updated = appState.capabilityProfile(baselineCapabilities.profileID) {
+            baselineCapabilities = updated
+            expectedGrantRevision = updated.grantRevision
+          }
           for noteID in selected {
             directAccess[noteID] = .write
           }
