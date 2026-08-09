@@ -938,6 +938,89 @@ struct AgentCapabilityPresentationTests {
   }
 
   @Test @MainActor
+  func FailedRestoreReinsertsOriginalTrashRowWhenCompensatingRefreshFails()
+    async throws
+  {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(
+        "RestoreTrashFallback-\(UUID().uuidString)",
+        isDirectory: true
+      )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let existing = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000376"),
+      title: "Existing"
+    )
+    let restored = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000377"),
+      title: "Restored"
+    )
+    let other = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000378"),
+      title: "Other trash"
+    )
+    let store = LocalStore(rootURL: root)
+    let restoredTrash = TrashedNote(note: restored, deletedAt: Date())
+    let otherTrash = TrashedNote(note: other, deletedAt: Date().addingTimeInterval(-1))
+    try await store.save(
+      workspace: Workspace(notes: [existing], selectedNoteID: existing.id),
+      preferences: .init(),
+      trashedNotes: [restored, other]
+    )
+
+    let restoreGate = PausableAgentCapabilitySaveGate()
+    let trashRefresh = TrashRefreshSequence(successfulRows: [otherTrash])
+    let restoreOperation: AppState.RestoreOperation = {
+      _, optimisticWorkspace, _, _ in
+      let entry = await restoreGate.markEntered()
+      let failing = await restoreGate.waitForRelease(entry: entry)
+      if failing {
+        throw RestoreTestError.restoreFailed
+      }
+      return optimisticWorkspace
+    }
+    let state = AppState(
+      store: store,
+      saveOperation: { _, _, _, _ in .committed },
+      loadTrashOperation: { try await trashRefresh.next() },
+      restoreOperation: restoreOperation
+    )
+    await state.waitUntilInitialLoad()
+
+    let task = try #require(state.restore(restoredTrash))
+    let entry = await restoreGate.waitUntilEntered(after: 0)
+    state.select(existing.id)
+    state.updateSelected(title: "Edited while restore is pending")
+    #expect(!state.trashedNotes.contains(where: { $0.id == restored.id }))
+    #expect(state.trashedNotes.filter { $0.id == other.id }.count == 1)
+
+    await restoreGate.release(entry: entry, failing: true)
+    await task.value
+
+    #expect(!state.workspace.notes.contains(where: { $0.id == restored.id }))
+    #expect(
+      state.workspace.notes.first(where: { $0.id == existing.id })?.title
+        == "Edited while restore is pending"
+    )
+    #expect(state.trashedNotes.filter { $0.id == restored.id }.count == 1)
+    #expect(state.trashedNotes.filter { $0.id == other.id }.count == 1)
+    #expect(state.saveError == "restore failed")
+
+    let retryRow = try #require(
+      state.trashedNotes.first(where: { $0.id == restored.id })
+    )
+    let retry = try #require(state.restore(retryRow))
+    let retryEntry = await restoreGate.waitUntilEntered(after: entry)
+    await restoreGate.release(entry: retryEntry, failing: false)
+    await retry.value
+
+    #expect(state.workspace.notes.contains(where: { $0.id == restored.id }))
+    #expect(!state.trashedNotes.contains(where: { $0.id == restored.id }))
+    #expect(state.trashedNotes.filter { $0.id == other.id }.count == 1)
+    #expect(state.saveError == nil)
+  }
+
+  @Test @MainActor
   func SuccessfulRestoreKeepsCommittedWorkspaceWhenTrashRefreshFails()
     async throws
   {
@@ -1530,12 +1613,31 @@ struct AgentCapabilityPresentationTests {
 private enum RestoreTestError: Error, LocalizedError, Sendable {
   case restoreFailed
   case trashRefreshFailed
+  case compensatingRefreshFailed
 
   var errorDescription: String? {
     switch self {
     case .restoreFailed: "restore failed"
     case .trashRefreshFailed: "trash refresh failed"
+    case .compensatingRefreshFailed: "compensating refresh failed"
     }
+  }
+}
+
+private actor TrashRefreshSequence {
+  private let successfulRows: [TrashedNote]
+  private var hasFailedCompensatingRefresh = false
+
+  init(successfulRows: [TrashedNote]) {
+    self.successfulRows = successfulRows
+  }
+
+  func next() throws -> [TrashedNote] {
+    if !hasFailedCompensatingRefresh {
+      hasFailedCompensatingRefresh = true
+      throw RestoreTestError.compensatingRefreshFailed
+    }
+    return successfulRows
   }
 }
 

@@ -1058,6 +1058,7 @@
             generation
           )
         } catch {
+          let restoreError = error
           var rolledBackWorkspace = workspace
           if originalNote == nil {
             rolledBackWorkspace.notes.removeAll { $0.id == trashedNote.id }
@@ -1069,10 +1070,15 @@
             rolledBackWorkspace.selectedNoteID = originalSelectedNoteID
           }
           workspace = rolledBackWorkspace
-          if let refreshedTrash = try? await loadTrashOperation() {
+          do {
+            let refreshedTrash = try await loadTrashOperation()
             trashedNotes = refreshedTrash
+          } catch {
+            if !trashedNotes.contains(where: { $0.id == trashedNote.id }) {
+              trashedNotes.append(trashedNote)
+            }
           }
-          saveError = error.localizedDescription
+          saveError = restoreError.localizedDescription
           return
         }
 
