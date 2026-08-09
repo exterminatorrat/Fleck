@@ -352,6 +352,10 @@
       Section("Behavior") {
         Toggle("Create lists automatically", isOn: preferenceBinding(\.automaticLists))
         Toggle(
+          "Confirm before moving notes to Trash",
+          isOn: preferenceBinding(\.confirmBeforeMovingNotesToTrash)
+        )
+        Toggle(
           "Launch at login",
           isOn: Binding(
             get: { appState.preferences.launchAtLogin },

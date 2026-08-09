@@ -208,6 +208,7 @@
     @State private var isShowingDictationHistory = false
     @State private var isShowingAgentActivity = false
     @State private var notePendingDeletion: Note?
+    @State private var dontAskAgainForDeletion = false
     @State private var notePendingAgentShare: Note?
     @State private var exportDocument: NoteFileDocument?
     @State private var exportType = NoteFileDocument.markdownContentType
@@ -408,7 +409,11 @@
           if let notePendingDeletion {
             DeleteConfirmationOverlay(
               note: notePendingDeletion,
-              onCancel: { self.notePendingDeletion = nil },
+              dontAskAgain: $dontAskAgainForDeletion,
+              onCancel: {
+                self.notePendingDeletion = nil
+                self.dontAskAgainForDeletion = false
+              },
               onConfirm: { confirmDeletion(notePendingDeletion) }
             )
             .transition(
@@ -991,15 +996,26 @@
 
     private func requestDeletion(_ note: Note) {
       guard isNoteVisible(note.id) else { return }
-      notePendingDeletion = note
+      if appState.preferences.confirmBeforeMovingNotesToTrash {
+        dontAskAgainForDeletion = false
+        notePendingDeletion = note
+      } else {
+        appState.moveToTrash(note.id, activeFolderID: activeFolderID)
+      }
     }
 
     private func confirmDeletion(_ note: Note) {
       guard isNoteVisible(note.id) else {
         notePendingDeletion = nil
+        dontAskAgainForDeletion = false
         return
       }
+      let shouldSuppressConfirmation = dontAskAgainForDeletion
       notePendingDeletion = nil
+      dontAskAgainForDeletion = false
+      if shouldSuppressConfirmation {
+        appState.updatePreferences { $0.confirmBeforeMovingNotesToTrash = false }
+      }
       appState.moveToTrash(note.id, activeFolderID: activeFolderID)
     }
 
@@ -1845,6 +1861,7 @@
 
   private struct DeleteConfirmationOverlay: View {
     let note: Note
+    @Binding var dontAskAgain: Bool
     let onCancel: () -> Void
     let onConfirm: () -> Void
 
@@ -1861,6 +1878,9 @@
               .font(.callout)
               .foregroundStyle(.secondary)
           }
+
+          Toggle("Don't ask me again", isOn: $dontAskAgain)
+            .toggleStyle(.checkbox)
 
           HStack {
             Spacer()
