@@ -1265,6 +1265,51 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!style.lowercased().contains("stroke"))
 }
 
+@Test func folderNoteDropTargetsDoNotNavigateOrSpringOpen() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+
+  #expect(navigator.contains("NoteDropTarget"))
+  #expect(navigator.contains("noteDropTargetBinding"))
+  #expect(navigator.contains("Color.accentColor.opacity"))
+  #expect(navigator.contains(".contentShape"))
+  #expect(navigator.contains("accessibilityAction"))
+  #expect(navigator.contains("noteDropTarget = nil"))
+  #expect(!navigator.contains("spring"))
+  #expect(!navigator.contains("onSelect(targetFolderID)"))
+}
+
+@Test func compactUnfiledKeepsSelectionDropAndAccessibilityContracts() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+
+  #expect(navigator.contains("isUnfiledCompact"))
+  #expect(navigator.contains("updatePreferences"))
+  #expect(navigator.contains("isUnfiledHovered"))
+  #expect(navigator.contains("focusedRow == .unfiled"))
+  #expect(navigator.contains(".accessibilityLabel(\"Unfiled\")"))
+  #expect(navigator.contains(".accessibilityAction"))
+  #expect(navigator.contains("FolderDragPayload.noteType"))
+  #expect(navigator.contains("count:"))
+}
+
+@Test func compactUnfiledDoesNotChangeNamedFolderOrTrashRowLabels() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+
+  #expect(navigator.contains("name: \"Trash\""))
+  #expect(navigator.contains("name: \"Unfiled\""))
+  #expect(navigator.contains("ForEach(appState.workspace.folders"))
+  #expect(!navigator.contains("All Notes"))
+  #expect(!navigator.contains("Inbox"))
+}
+
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)

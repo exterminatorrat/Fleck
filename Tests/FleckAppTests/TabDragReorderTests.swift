@@ -301,6 +301,26 @@ import FleckCore
   #expect(!navigator.contains("Inbox"))
 }
 
+@Test func folderNoteDropsUseTypeSpecificTransientAccentTargets() throws {
+  let source = try tabNotesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+
+  #expect(navigator.contains("private enum NoteDropTarget"))
+  #expect(navigator.contains("@State private var noteDropTarget"))
+  #expect(navigator.contains("noteDropTargetBinding"))
+  #expect(navigator.contains("isTargeted: noteDropTargetBinding"))
+  #expect(navigator.contains("Color.accentColor.opacity"))
+  #expect(navigator.contains("noteDropTarget = nil"))
+  #expect(navigator.contains("sourceFolderID"))
+  #expect(navigator.contains("targetFolderID"))
+  #expect(navigator.contains("workspace.folders.contains"))
+  #expect(navigator.contains("of: [FolderDragPayload.noteType]"))
+  #expect(navigator.contains("of: [FolderDragPayload.folderType]"))
+  #expect(!navigator.contains("of: [FolderDragPayload.noteType, FolderDragPayload.folderType]"))
+}
+
 @Test func FolderNavigatorFocusMovesOnlyVertically() {
   #expect(
     FolderNavigatorFocus.nextIndex(

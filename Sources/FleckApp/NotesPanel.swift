@@ -1266,6 +1266,8 @@
             .frame(width: 0, height: 0)
           )
           .id(note.id)
+          .frame(minHeight: 48)
+          .layoutPriority(1)
           .padding(.vertical, 10)
 
           BacklinksView(
@@ -1336,6 +1338,11 @@
       case newFolder
     }
 
+    private enum NoteDropTarget: Equatable {
+      case unfiled
+      case folder(UUID)
+    }
+
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedRow: FocusedRow?
@@ -1343,6 +1350,8 @@
     @State private var isCreatingFolder = false
     @State private var folderNameDraft = ""
     @State private var folderPendingDeletion: Folder?
+    @State private var noteDropTarget: NoteDropTarget?
+    @State private var isUnfiledHovered = false
     private let folderNavigatorMaxHeight: CGFloat = 32
 
     let activeFolderID: UUID?
@@ -1454,31 +1463,55 @@
     }
 
     private var rootRow: some View {
-      Button {
-        onSelect(nil)
-      } label: {
-        rowLabel(
-          name: "Unfiled",
-          systemImage: "tray",
-          count: appState.visibleNotes(in: nil).count,
-          isSelected: activeFolderID == nil,
-          isEmpty: appState.visibleNotes(in: nil).isEmpty
-        )
+      let unfiledNotes = appState.visibleNotes(in: nil)
+      return HStack(spacing: 0) {
+        Button {
+          onSelect(nil)
+        } label: {
+          rowLabel(
+            name: "Unfiled",
+            systemImage: "tray",
+            count: unfiledNotes.count,
+            isSelected: activeFolderID == nil,
+            isEmpty: unfiledNotes.isEmpty,
+            isDropTarget: noteDropTarget == .unfiled,
+            showsName: !isUnfiledCompact
+          )
+        }
+        .buttonStyle(.plain)
+        .focused($focusedRow, equals: .unfiled)
+        .focusable()
+        .accessibilityLabel("Unfiled")
+        .accessibilityIdentifier("folder-unfiled")
+        .accessibilityValue(unfiledAccessibilityValue)
+        .accessibilityAddTraits(activeFolderID == nil ? .isSelected : [])
+        .accessibilityAction(named: Text("Toggle Unfiled compact mode")) {
+          setUnfiledCompact(!isUnfiledCompact)
+        }
+
+        if showsUnfiledDisclosure {
+          Button {
+            setUnfiledCompact(!isUnfiledCompact)
+          } label: {
+            Image(systemName: isUnfiledCompact ? "chevron.right" : "chevron.left")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+              .frame(width: 20, height: 24)
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(
+            isUnfiledCompact ? "Expand Unfiled" : "Collapse Unfiled"
+          )
+        }
       }
-      .buttonStyle(.plain)
-      .focused($focusedRow, equals: .unfiled)
-      .focusable()
-      .onDrop(of: [FolderDragPayload.noteType], isTargeted: nil) { providers, _ in
+      .onHover { isUnfiledHovered = $0 }
+      .contentShape(Rectangle())
+      .onDrop(
+        of: [FolderDragPayload.noteType],
+        isTargeted: noteDropTargetBinding(.unfiled)
+      ) { providers, _ in
         handleNoteDrop(providers, targetFolderID: nil)
       }
-      .accessibilityLabel("Unfiled")
-      .accessibilityIdentifier("folder-unfiled")
-      .accessibilityValue(
-        "\(appState.visibleNotes(in: nil).count) notes"
-          + (activeFolderID == nil ? ", Selected" : "")
-          + (appState.visibleNotes(in: nil).isEmpty ? ", Empty" : "")
-      )
-      .accessibilityAddTraits(activeFolderID == nil ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -1494,7 +1527,8 @@
             systemImage: "folder",
             count: appState.visibleNotes(in: folder.id).count,
             isSelected: activeFolderID == folder.id,
-            isEmpty: appState.visibleNotes(in: folder.id).isEmpty
+            isEmpty: appState.visibleNotes(in: folder.id).isEmpty,
+            isDropTarget: noteDropTarget == .folder(folder.id)
           )
         }
         .buttonStyle(.plain)
@@ -1502,14 +1536,13 @@
         .focusable()
         .onDrag { FolderDragPayload.folderProvider(folderID: folder.id) }
         .onDrop(
-          of: [FolderDragPayload.noteType, FolderDragPayload.folderType],
-          isTargeted: nil
+          of: [FolderDragPayload.noteType],
+          isTargeted: noteDropTargetBinding(.folder(folder.id))
         ) { providers, _ in
-          handleDrop(
-            providers,
-            noteTargetFolderID: folder.id,
-            folderBeforeID: folder.id
-          )
+          handleNoteDrop(providers, targetFolderID: folder.id)
+        }
+        .onDrop(of: [FolderDragPayload.folderType], isTargeted: nil) { providers, _ in
+          handleFolderDrop(providers, beforeFolderID: folder.id)
         }
         .contextMenu {
           Button("Rename", systemImage: "pencil") {
@@ -1524,6 +1557,7 @@
           "\(appState.visibleNotes(in: folder.id).count) notes"
             + (activeFolderID == folder.id ? ", Selected" : "")
             + (appState.visibleNotes(in: folder.id).isEmpty ? ", Empty" : "")
+            + (noteDropTarget == .folder(folder.id) ? ", Drop target" : "")
         )
         .accessibilityAddTraits(activeFolderID == folder.id ? .isSelected : [])
       }
@@ -1587,14 +1621,20 @@
       systemImage: String,
       count: Int,
       isSelected: Bool,
-      isEmpty: Bool
+      isEmpty: Bool,
+      isDropTarget: Bool = false,
+      showsName: Bool = true
     ) -> some View {
       HStack(spacing: 7) {
         Image(systemName: systemImage)
           .frame(width: 18)
-        Text(name)
-          .lineLimit(1)
-        Spacer(minLength: 4)
+        if showsName {
+          Text(name)
+            .lineLimit(1)
+          Spacer(minLength: 4)
+        } else {
+          Spacer(minLength: 2)
+        }
         Text(count, format: .number)
           .font(.caption.monospacedDigit())
           .foregroundStyle(.secondary)
@@ -1602,11 +1642,54 @@
       .padding(.horizontal, 8)
       .padding(.vertical, 5)
       .background(
-        isSelected ? Color.accentColor.opacity(0.18) : .clear,
+        isDropTarget
+          ? Color.accentColor.opacity(0.28)
+          : (isSelected ? Color.accentColor.opacity(0.18) : .clear),
         in: RoundedRectangle(cornerRadius: 6)
       )
       .contentShape(RoundedRectangle(cornerRadius: 6))
       .accessibilityHint(isEmpty ? "Empty folder" : "")
+    }
+
+    private func noteDropTargetBinding(_ target: NoteDropTarget) -> Binding<Bool> {
+      Binding(
+        get: { noteDropTarget == target },
+        set: { isTargeted in
+          if isTargeted {
+            noteDropTarget = target
+          } else if noteDropTarget == target {
+            noteDropTarget = nil
+          }
+        }
+      )
+    }
+
+    private var isUnfiledCompact: Bool {
+      appState.preferences.isUnfiledCompact
+    }
+
+    private var unfiledAccessibilityValue: String {
+      let notes = appState.visibleNotes(in: nil)
+      var parts = ["\(notes.count) notes"]
+      if activeFolderID == nil { parts.append("Selected") }
+      if notes.isEmpty { parts.append("Empty") }
+      if isUnfiledCompact { parts.append("Compact") }
+      if noteDropTarget == .unfiled { parts.append("Drop target") }
+      return parts.joined(separator: ", ")
+    }
+
+    private var showsUnfiledDisclosure: Bool {
+      isUnfiledHovered || focusedRow == .unfiled
+    }
+
+    private func setUnfiledCompact(_ compact: Bool) {
+      if reduceMotion {
+        appState.updatePreferences { $0.isUnfiledCompact = compact }
+      } else {
+        withAnimation(motion.quick) {
+          appState.updatePreferences { $0.isUnfiledCompact = compact }
+        }
+      }
     }
 
     private var motion: AppMotion {
@@ -1695,37 +1778,25 @@
       press.characters.unicodeScalars.contains { $0.value == UInt32(NSF2FunctionKey) }
     }
 
-    private func handleDrop(
-      _ providers: [NSItemProvider],
-      noteTargetFolderID: UUID?,
-      folderBeforeID: UUID?
-    ) -> Bool {
-      if let provider = providers.first(where: {
-        $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
-      }) {
-        return handleNoteDrop([provider], targetFolderID: noteTargetFolderID)
-      }
-      if let provider = providers.first(where: {
-        $0.registeredTypeIdentifiers.contains(FolderDragPayload.folderType.identifier)
-      }) {
-        return handleFolderDrop([provider], beforeFolderID: folderBeforeID)
-      }
-      return false
-    }
-
     private func handleNoteDrop(
       _ providers: [NSItemProvider],
       targetFolderID: UUID?
     ) -> Bool {
+      noteDropTarget = nil
       guard let provider = providers.first(where: {
         $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
       }) else { return false }
       provider.loadDataRepresentation(forTypeIdentifier: FolderDragPayload.noteType.identifier) {
         data, _ in
-        guard let data, let payload = FolderDragPayload.noteValue(from: data) else { return }
         Task { @MainActor in
+          self.noteDropTarget = nil
+          guard let data, let payload = FolderDragPayload.noteValue(from: data) else { return }
+          guard targetFolderID == nil || appState.workspace.folders.contains(where: {
+            $0.id == targetFolderID
+          }) else { return }
           guard let note = appState.workspace.notes.first(where: { $0.id == payload.noteID }),
-            note.folderID == payload.sourceFolderID
+            note.folderID == payload.sourceFolderID,
+            note.folderID != targetFolderID
           else { return }
           _ = appState.moveNote(
             payload.noteID,
