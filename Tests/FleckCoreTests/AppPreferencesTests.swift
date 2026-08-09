@@ -29,6 +29,68 @@ import Testing
   #expect(value.editorTypographyVersion == AppPreferences.currentEditorTypographyVersion)
 }
 
+@Test func presentationPreferencesHaveSafeDefaultsAndEncode() throws {
+  let value = AppPreferences()
+  #expect(!value.isUnfiledCompact)
+  #expect(value.confirmBeforeMovingNotesToTrash)
+
+  let json = try JSONSerialization.jsonObject(
+    with: JSONEncoder().encode(value)
+  ) as? [String: Any]
+  #expect(json?["isUnfiledCompact"] as? Bool == false)
+  #expect(json?["confirmBeforeMovingNotesToTrash"] as? Bool == true)
+}
+
+@Test func missingPresentationPreferencesUseSafeDefaults() throws {
+  let value = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo"}"#.utf8)
+  )
+  #expect(!value.isUnfiledCompact)
+  #expect(value.confirmBeforeMovingNotesToTrash)
+  #expect(value.fontFamily == "Menlo")
+}
+
+@Test func presentationPreferencesRoundTrip() throws {
+  var value = AppPreferences()
+  value.isUnfiledCompact = true
+  value.confirmBeforeMovingNotesToTrash = false
+
+  let decoded = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: JSONEncoder().encode(value)
+  )
+  #expect(decoded.isUnfiledCompact)
+  #expect(!decoded.confirmBeforeMovingNotesToTrash)
+}
+
+@Test func malformedUnfiledCompactPreferenceRejectsSnapshot() {
+  #expect(throws: (any Error).self) {
+    try JSONDecoder().decode(
+      AppPreferences.self,
+      from: Data(#"{"fontFamily":"Menlo","isUnfiledCompact":"yes"}"#.utf8)
+    )
+  }
+}
+
+@Test func malformedTrashConfirmationPreferenceRejectsSnapshot() {
+  #expect(throws: (any Error).self) {
+    try JSONDecoder().decode(
+      AppPreferences.self,
+      from: Data(#"{"confirmBeforeMovingNotesToTrash":"yes"}"#.utf8)
+    )
+  }
+}
+
+@Test func unrelatedMalformedPresentationPreferenceStillThrows() {
+  #expect(throws: (any Error).self) {
+    try JSONDecoder().decode(
+      AppPreferences.self,
+      from: Data(#"{"isUnfiledCompact":"yes","showFormattingBar":"yes"}"#.utf8)
+    )
+  }
+}
+
 @Test func untouchedLegacyTypographyMigratesOnce() throws {
   let data = Data(#"{"fontFamily":".AppleSystemUIFont","fontSize":15}"#.utf8)
   let value = try JSONDecoder().decode(AppPreferences.self, from: data)

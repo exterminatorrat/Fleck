@@ -22,6 +22,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var pinnedPanelWidth: Double
   public var pinnedPanelHeight: Double
   public var showFormattingBar: Bool
+  public var isUnfiledCompact: Bool
+  public var confirmBeforeMovingNotesToTrash: Bool
   public var automaticLists: Bool
   public var launchAtLogin: Bool
   public var shortcuts: [Shortcut]
@@ -47,7 +49,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     theme: AppTheme = .system, panelWidth: Double = 640, panelHeight: Double = 430,
     panelSizingVersion: Int = AppPreferences.currentPanelSizingVersion,
     pinnedPanelWidth: Double = 640, pinnedPanelHeight: Double = 430,
-    showFormattingBar: Bool = true, automaticLists: Bool = true,
+    showFormattingBar: Bool = true, isUnfiledCompact: Bool = false,
+    confirmBeforeMovingNotesToTrash: Bool = true, automaticLists: Bool = true,
     launchAtLogin: Bool = false,
     shortcuts: [Shortcut] = Shortcut.defaults,
     dictationSpeechEngine: DictationSpeechEngine = .standard,
@@ -73,6 +76,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.pinnedPanelWidth = Self.clampedPanelDimension(pinnedPanelWidth, minimum: 480)
     self.pinnedPanelHeight = Self.clampedPanelDimension(pinnedPanelHeight, minimum: 320)
     self.showFormattingBar = showFormattingBar
+    self.isUnfiledCompact = isUnfiledCompact
+    self.confirmBeforeMovingNotesToTrash = confirmBeforeMovingNotesToTrash
     self.automaticLists = automaticLists
     self.launchAtLogin = launchAtLogin
     self.shortcuts = shortcuts
@@ -93,7 +98,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     case fontFamily, fontSize, editorTypographyVersion, accentHex, editorTextHex,
       editorBackgroundHex, panelOpacity, theme, panelWidth, panelHeight, panelSizingVersion,
       pinnedPanelWidth, pinnedPanelHeight, showFormattingBar,
-      automaticLists, launchAtLogin, shortcuts, dictationSpeechEngine,
+      isUnfiledCompact, confirmBeforeMovingNotesToTrash, automaticLists,
+      launchAtLogin, shortcuts, dictationSpeechEngine,
       legacyDictationShortcut = "dictationShortcut", dictationModifierKey,
       dictationCapsuleDock, dictationHistoryEnabled, dictationCapsuleEnabled,
       dictationMicrophoneUID, onboardingProgress
@@ -162,6 +168,11 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         fallback: 430
       ),
       showFormattingBar: try c.decodeIfPresent(Bool.self, forKey: .showFormattingBar) ?? true,
+      isUnfiledCompact: try c.decodeIfPresent(Bool.self, forKey: .isUnfiledCompact) ?? false,
+      confirmBeforeMovingNotesToTrash: try c.decodeIfPresent(
+        Bool.self,
+        forKey: .confirmBeforeMovingNotesToTrash
+      ) ?? true,
       automaticLists: try c.decodeIfPresent(Bool.self, forKey: .automaticLists) ?? true,
       launchAtLogin: try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false,
       shortcuts: try c.decodeIfPresent([Shortcut].self, forKey: .shortcuts) ?? Shortcut.defaults,
