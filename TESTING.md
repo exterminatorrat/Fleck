@@ -111,11 +111,55 @@ git diff --exit-code -- Package.resolved
 The test suite probes private, unknown, Trash, and Dictation History UUIDs;
 unshared activity; the closed command model; secret-free profile persistence
 and setup output; same-user IPC; revisions, retries, transaction recovery, and
-Undo; the exact thirteen MCP tools; and tools-only MCP capabilities.
+Undo; pending-restore privacy and commit outcomes; the exact thirteen existing
+MCP tools; and tools-only MCP capabilities.
 `Scripts/audit-agent-boundary.sh` separately rejects helper AppKit outside the
 non-activating launch adapter, HTTP/TCP/listener APIs, direct Fleck storage
 paths, an altered MCP tool/handler surface, MCP-mode stdout prose, and
 credential-bearing snippets.
+
+### MCP Capability Foundation Phase A evidence
+
+Fresh code review of exact implementation head
+`1671792fca311af4b66efff3c96fe0d1a560f22d` returned exactly **ship** before
+Task 8. The parent automated release gate recorded:
+
+- `swift test --disable-automatic-resolution --no-parallel`: exit 0, 994 tests
+  in 14 suites.
+- `swift build -c release --product Fleck`: exit 0.
+- `swift build -c release --product fleck-agent`: exit 0.
+- `Scripts/audit-agent-boundary.sh`: exit 0, including exact 13 tools, local
+  IPC, and no storage fallback.
+- `Scripts/check-release-size.sh`: exit 0. Latest sizes were Fleck
+  10,803,712 bytes and `fleck-agent` 11,171,312 bytes, below the 15 MiB Fleck
+  budget.
+- `Scripts/validate-macos.sh`: exit 0 on rerun. The first run encountered one
+  existing `WorkspaceSearchHosting` timing flake after a separate full 994/994
+  pass; the rerun passed.
+- `Scripts/build-fleck-app.sh`: exit 0.
+- `codesign --verify --deep --strict .build/Fleck.app`: exit 0.
+- `git diff --check`: exit 0.
+
+The environment was arm64 macOS 26.2 build 25C56, Xcode 26.6 build 17F113,
+Swift 6.3.3. Development ad-hoc packaging and codesign verification passed;
+this is not distribution signing evidence.
+
+The profile model under test is `notes.list`, `notes.read`, `notes.write`, and
+`changes.undo`; direct note grants and explicit `folderIncludingFutureNotes`
+grants are tested separately, with future inheritance off by default and
+confirmation required. Folder-contained notes use the same existing note
+operations as unfiled notes when their Agent Access grants authorize them.
+
+`tools/list` is recomputed per request from the current profile authority,
+returns only authorized entries from the static exact 13 existing registrations,
+and does not advertise `listChanged`. Wire v1 remains compatible while internal
+v2 `getCapabilities` remains typed and non-mutating.
+
+GitHub CI remains pending until the branch and pull request are pushed.
+Interactive packaged-app/manual workflows, installed Codex/Claude/Kimi/generic
+clients, live Keychain, accessibility, Full Keyboard Access, Reduce Motion,
+multiple-window, sleep/wake, five-minute idle, distribution signing,
+notarization, and App Store gates remain pending or unrecorded.
 
 `Scripts/validate-macos.sh` builds the native ad-hoc development-signed
 `Fleck.app`, verifies its stable code identity and separately packaged helper,

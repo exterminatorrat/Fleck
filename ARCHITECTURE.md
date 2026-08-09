@@ -93,10 +93,10 @@ local MCP client or CLI
   -> 30-day activity record and retry tombstone
 ```
 
-- A note is private until the user enables `agentAccess` for that note. Listing,
+- A note is private until an authorized profile has an explicit grant. Listing,
   reads, task operations, activity, writes, and Undo all derive visibility from
-  the current in-memory workspace. Unknown UUIDs and private UUIDs return the
-  same `note_not_found` error.
+  the current in-memory workspace and the native capability authority. Unknown,
+  private, and unauthorized UUIDs return the same `note_not_found` error.
 - The helper never opens note `.md`/`.rtf` files, `workspace.json`, Trash, or
   Dictation History. It cannot receive settings, share, note-delete, path, or
   shell commands because those cases do not exist in the typed protocol.
@@ -121,6 +121,49 @@ local MCP client or CLI
   executing as the same macOS user may have equivalent access to local files,
   Keychain prompts, input, or accessibility APIs and is outside this bridge's
   threat model.
+
+### MCP Capability Foundation Phase A
+
+The Phase A capability surface is deliberately a policy boundary around the
+existing typed note operations, not a general agent runtime:
+
+- Profiles carry the four current capabilities `notes.list`, `notes.read`,
+  `notes.write`, and `changes.undo`. New profiles start with no tools or
+  resource scopes.
+- Resource grants are explicit. A direct note grant authorizes the current note;
+  a `folderIncludingFutureNotes` grant authorizes the current notes in that
+  folder and future notes only after explicit confirmation. Future inheritance
+  is off by default. Current-folder materialization is represented by direct
+  note grants, not an implicit global folder switch.
+- Legacy per-note `agentAccess` values are migration input. Active profiles
+  receive direct grants; legacy shares without an active profile remain
+  unassigned and require explicit assignment. A newly created profile receives
+  none of those shares automatically.
+- The native authority evaluates every command, rechecks the current workspace
+  revision before protected reads return and before writes commit, and fails
+  closed on revoked or unknown profiles. Capability changes take effect through
+  the shared authority snapshot; they cannot be self-granted by an agent.
+- Wire v1 remains compatible with the existing command set. Internal v2
+  `getCapabilities` is typed and non-mutating, but is not exposed as a CLI
+  command. MCP `tools/list` is recomputed for every request from the profile's
+  current authority and returns only authorized entries from the static exact 13
+  existing registrations; `listChanged` is not advertised.
+- Capability JSON has recoverable current/previous generations. Malformed
+  capability data is isolated from note/workspace availability and produces only
+  a bounded, content-free agent error. Pending restored notes stay hidden from
+  agent authority until durable workspace commit; post-commit Trash cleanup
+  failure does not roll back the workspace or leave the exclusion stuck.
+- The profile and note access UI exposes effective sharing, Activity, and safe
+  local Undo. Folder-contained notes use the same existing note operations as
+  unfiled notes when their grants authorize them.
+
+The following are intentionally outside Phase A: expanded Discovery/context
+(`list_folders`, search, backlinks, and outgoing links), Organization, Change
+Sets/Proposals, Collaboration/Work Items, the Add-on SDK or registry, a
+sandboxed execution broker, Context Packs, recipes, schedules, richer
+automation, a community directory or marketplace, iCloud, onboarding changes,
+and AI/dictation changes. Fleck remains source-available under PolyForm Shield;
+this phase does not change the license.
 
 ## Clean Dictation data flow and privacy boundary
 
@@ -190,11 +233,13 @@ Glass opacity is stored now, but fine-grained material rendering and contrast ad
    a release-disabled candidate. Real-device quality, device matrices,
    accessibility, resource, legal, artifact, signing/notarization, and store
    gates remain pending.
-8. **Agent workspace (implemented, manual compatibility pending):** explicit
-   per-note sharing, typed mutations, local same-user IPC, CLI/MCP helper,
-   revision/idempotency contracts, 30-day activity, safe Undo, packaging, and
-   automated privacy audits are implemented. Manual Codex, Claude Code, Kimi,
-   generic CLI, accessibility, lifecycle, and signed-distribution checks remain.
+8. **MCP Capability Foundation Phase A (implemented, manual compatibility and distribution pending):**
+   profile-scoped capabilities, explicit note/folder grants, native authority
+   enforcement, recoverable capability storage, typed local same-user IPC,
+   profile-filtered tools/list, revision/idempotency contracts, 30-day Activity,
+   safe Undo, pending-restore privacy, and the profile/note access UI are
+   implemented. Manual client compatibility, live Keychain, accessibility,
+   lifecycle, packaging, signing, and distribution checks remain pending.
 
 ## Explicit non-goals for the lightweight base app
 
@@ -203,6 +248,9 @@ Glass opacity is stored now, but fine-grained material rendering and contrast ad
 - A database server or background synchronization daemon.
 - Agent access to private notes, Trash, Dictation History, settings, sharing,
   note deletion, arbitrary file paths, a shell, or direct storage edits.
+- Expanded MCP Discovery/context, Organization, Change Sets/Proposals,
+  Collaboration/Work Items, Add-on SDK/registry, and sandboxed execution are
+  deferred capabilities rather than implicit permissions.
 - Bundled font collections.
 - Bundled speech-model weights, cloud speech fallback, cloud cleanup/routing,
   or a mandatory AI runtime for ordinary notes.

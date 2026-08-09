@@ -14,10 +14,11 @@ This document distinguishes implemented behavior from work that still requires n
 - Editable, removable, and restorable shortcuts with normalization and duplicate-conflict warnings. Configured shortcuts are active while the panel is open.
 - Launch-at-login integration through `SMAppService` when running as a packaged macOS application.
 - Explicit per-note Agent Access with first-share confirmation, shared badges,
-  immediate unshare, per-client profiles, revocation, and visible activity.
+  immediate unshare, per-client profiles, revocation, effective-sharing badges,
+  profile and note access editing, and visible Activity.
 - A separately packaged `fleck-agent` **Agent Connector** with direct JSON CLI
-  and twelve-tool MCP interfaces for shared-note reads, bounded text/task
-  mutations, activity, and safe Undo.
+  and the static exact 13 existing MCP registrations for profile-filtered
+  shared-note reads, bounded text/task mutations, Activity, and safe Undo.
 - Same-user Unix-domain IPC, Keychain-backed credentials, optimistic revisions,
   caller-owned retry IDs, durable transaction reconciliation, and 30-day
   activity/idempotency retention.
@@ -34,6 +35,79 @@ This document distinguishes implemented behavior from work that still requires n
 - macOS GitHub Actions build/test coverage and scripts for native bundle
   assembly, launch smoke testing, release executable size, resident-memory
   budgets, and agent-boundary enforcement.
+
+## MCP Capability Foundation Phase A
+
+The accepted Phase A implementation adds a narrow, profile-scoped capability
+authority around the existing note command surface:
+
+- The current capabilities are `notes.list`, `notes.read`, `notes.write`, and
+  `changes.undo`. New profiles start with no tools or scopes.
+- Grants are explicit per note or explicit `folderIncludingFutureNotes`. The
+  latter requires confirmation and is off by default. Current notes are
+  materialized as direct grants; future-note inheritance is never implicit.
+- Legacy `Note.agentAccess` data is migrated to direct grants for active
+  profiles. Legacy shares without an active profile remain unassigned until the
+  user explicitly assigns them. New profiles do not receive legacy shares.
+- The native authority checks every command and rechecks the workspace revision
+  before protected reads return and before writes commit. Unknown, private, and
+  unauthorized targets remain indistinguishable.
+- Wire v1 remains compatible. Internal v2 `getCapabilities` is typed,
+  non-mutating, and not a user-facing CLI command. MCP `tools/list` is recomputed
+  on every request, filters the static exact 13 existing registrations, and does
+  not advertise `listChanged`.
+- Capability storage has recoverable current/previous generations. Malformed
+  capability data is isolated from note availability and reports only a bounded,
+  content-free agent error.
+- Pending restored notes remain excluded from agent authority until durable
+  workspace commit. A Trash cleanup failure after that commit keeps the workspace
+  result and exposes only a bounded recoverable cleanup error.
+- Folder-contained notes are already reachable through the existing note
+  operations when the profile's Agent Access grant authorizes them; Phase A does
+  not add a separate folder-access mechanism.
+
+### Deferred MCP scope
+
+The following are not implemented: expanded Discovery/context tools
+(`list_folders`, search, backlinks, outgoing links, or related-note traversal),
+Organization, Change Sets/Proposals, Collaboration/Work Items, per-agent
+capability features beyond the Phase A authority, Add-on SDK/registry,
+sandboxed execution broker, Context Packs, recipes, schedules, richer
+automation, community directory/marketplace, iCloud, onboarding changes, and
+AI/dictation changes. The license remains PolyForm Shield/source-available and
+was not changed.
+
+### Phase A automated and release evidence
+
+Fresh code review of exact implementation head
+`1671792fca311af4b66efff3c96fe0d1a560f22d` returned exactly **ship** before
+the documentation task. The parent release verification recorded:
+
+- `swift test --disable-automatic-resolution --no-parallel`: exit 0, 994 tests
+  in 14 suites.
+- `swift build -c release --product Fleck`: exit 0.
+- `swift build -c release --product fleck-agent`: exit 0.
+- `Scripts/audit-agent-boundary.sh`: exit 0, including the exact 13-tool
+  surface, local IPC boundary, and no storage fallback.
+- `Scripts/check-release-size.sh`: exit 0. Latest sizes were Fleck
+  10,803,712 bytes and `fleck-agent` 11,171,312 bytes, both below the 15 MiB
+  Fleck budget.
+- `Scripts/validate-macos.sh`: exit 0 on rerun. The first run encountered one
+  existing `WorkspaceSearchHosting` timing flake after a separate full 994/994
+  pass; the rerun passed.
+- `Scripts/build-fleck-app.sh`: exit 0.
+- `codesign --verify --deep --strict .build/Fleck.app`: exit 0.
+- `git diff --check`: exit 0.
+
+The environment was arm64 macOS 26.2 build 25C56, Xcode 26.6 build 17F113,
+Swift 6.3.3. Development ad-hoc packaging and codesign verification passed;
+that is not distribution signing evidence.
+
+GitHub CI remains pending until the branch and pull request are pushed.
+Interactive packaged-app/manual workflows, installed Codex/Claude/Kimi/generic
+clients, live Keychain, accessibility, Full Keyboard Access, Reduce Motion,
+multiple-window, sleep/wake, five-minute idle, distribution signing,
+notarization, and App Store gates remain pending or unrecorded.
 
 ## Requires macOS validation
 
@@ -78,6 +152,9 @@ The automated commands and manual checklist are recorded in `TESTING.md`.
 Automated evidence proves the typed and static boundaries on the current
 checkout; it does not prove compatibility with installed third-party clients,
 live Keychain behavior, accessibility, signing, notarization, or distribution.
+
+The historical record below predates the MCP Capability Foundation Phase A and
+is retained as release-validation history, not as current Phase A evidence.
 
 Recorded 2026-07-29 from source base
 `264f988beee8fbca79415797d1cf0222916ec4b3` on arm64 macOS 26.2 (25C56),
