@@ -907,7 +907,7 @@ struct AgentCapabilityPresentationTests {
       if failing {
         throw RestoreTestError.restoreFailed
       }
-      return optimisticWorkspace
+      return .committed(workspace: optimisticWorkspace, trashCleanup: .succeeded)
     }
     let state = AppState(
       store: store,
@@ -978,7 +978,7 @@ struct AgentCapabilityPresentationTests {
       if failing {
         throw RestoreTestError.restoreFailed
       }
-      return optimisticWorkspace
+      return .committed(workspace: optimisticWorkspace, trashCleanup: .succeeded)
     }
     let state = AppState(
       store: store,
@@ -1072,6 +1072,61 @@ struct AgentCapabilityPresentationTests {
   }
 
   @Test @MainActor
+  func CommittedRestoreCleanupFailureKeepsWorkspaceAndSupportsTrashCleanupRetry()
+    async throws
+  {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(
+        "RestoreCleanupFailure-\(UUID().uuidString)",
+        isDirectory: true
+      )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let existing = Note(title: "Existing")
+    let restored = Note(title: "Restored")
+    let other = Note(title: "Other trash")
+    let fileManager: FileManager = RestoreCleanupFailureFileManager(
+      failingURL: root
+        .appendingPathComponent("Trash", isDirectory: true)
+        .appendingPathComponent(restored.id.uuidString.lowercased(), isDirectory: true)
+    )
+    let store = LocalStore(rootURL: root, fileManager: fileManager)
+    try await store.save(
+      workspace: Workspace(notes: [existing], selectedNoteID: existing.id),
+      preferences: .init(),
+      trashedNotes: [restored, other]
+    )
+    let loadedTrash = try await store.loadTrash()
+    #expect(loadedTrash.map(\.id).contains(restored.id))
+    let state = AppState(store: store)
+    await state.waitUntilInitialLoad()
+    let row = try #require(state.trashedNotes.first(where: { $0.id == restored.id }))
+    let task = try #require(state.restore(row))
+    await task.value
+
+    #expect(state.workspace.notes.filter { $0.id == restored.id }.count == 1)
+    #expect(state.trashedNotes.filter { $0.id == restored.id }.count == 1)
+    #expect(state.trashedNotes.filter { $0.id == other.id }.count == 1)
+    #expect(
+      state.saveError
+        == "The note was restored, but Trash cleanup could not finish. Try again."
+    )
+    #expect(try await store.loadSnapshot().workspace.notes.filter { $0.id == restored.id }.count == 1)
+    #expect(try await store.loadTrash().filter { $0.id == restored.id }.count == 1)
+
+    let retryRow = try #require(
+      state.trashedNotes.first(where: { $0.id == restored.id })
+    )
+    let retry = try #require(state.restore(retryRow))
+    await retry.value
+
+    #expect(state.workspace.notes.filter { $0.id == restored.id }.count == 1)
+    #expect(state.trashedNotes.filter { $0.id == restored.id }.isEmpty)
+    #expect(state.trashedNotes.filter { $0.id == other.id }.count == 1)
+    #expect(state.saveError == nil)
+    #expect(try await store.loadTrash().filter { $0.id == restored.id }.isEmpty)
+  }
+
+  @Test @MainActor
   func PendingRestoreRejectsNoteCapabilityRoutesButAllowsUnrelatedNotes()
     async throws
   {
@@ -1151,7 +1206,7 @@ struct AgentCapabilityPresentationTests {
       if failing {
         throw RestoreTestError.restoreFailed
       }
-      return optimisticWorkspace
+      return .committed(workspace: optimisticWorkspace, trashCleanup: .succeeded)
     }
     let state = AppState(
       store: localStore,
@@ -1391,7 +1446,7 @@ struct AgentCapabilityPresentationTests {
       if failing {
         throw RestoreTestError.restoreFailed
       }
-      return optimisticWorkspace
+      return .committed(workspace: optimisticWorkspace, trashCleanup: .succeeded)
     }
     let state = AppState(
       store: localStore,
@@ -1583,7 +1638,7 @@ struct AgentCapabilityPresentationTests {
       if failing {
         throw RestoreTestError.restoreFailed
       }
-      return optimisticWorkspace
+      return .committed(workspace: optimisticWorkspace, trashCleanup: .succeeded)
     }
     let state = AppState(
       store: localStore,
@@ -1846,7 +1901,7 @@ struct AgentCapabilityPresentationTests {
       let entry = await restoreGate.markEntered()
       let failing = await restoreGate.waitForRelease(entry: entry)
       if failing { throw AgentWorkspaceError(code: .internalSaveFailure) }
-      return optimisticWorkspace
+      return .committed(workspace: optimisticWorkspace, trashCleanup: .succeeded)
     }
     let state = AppState(
       store: localStore,
@@ -2111,6 +2166,24 @@ private enum RestoreTestError: Error, LocalizedError, Sendable {
     case .trashRefreshFailed: "trash refresh failed"
     case .compensatingRefreshFailed: "compensating refresh failed"
     }
+  }
+}
+
+private final class RestoreCleanupFailureFileManager: FileManager {
+  private let failingURL: URL
+  private var hasFailed = false
+
+  init(failingURL: URL) {
+    self.failingURL = failingURL
+    super.init()
+  }
+
+  override func removeItem(at URL: URL) throws {
+    if !hasFailed && URL.standardizedFileURL == failingURL.standardizedFileURL {
+      hasFailed = true
+      throw RestoreTestError.compensatingRefreshFailed
+    }
+    try super.removeItem(at: URL)
   }
 }
 

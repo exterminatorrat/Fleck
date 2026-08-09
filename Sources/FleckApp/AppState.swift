@@ -44,7 +44,7 @@
         Workspace,
         AppPreferences,
         UInt64
-      ) async throws -> Workspace
+      ) async throws -> LocalStore.RestoreOutcome
     typealias AgentCapabilityBatchReplaceOperation =
       @Sendable (
         [(profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)],
@@ -1124,7 +1124,7 @@
           setAgentCapabilityNoteExclusion(trashedNote.id, excluded: false)
         }
         do {
-          _ = try await restoreOperation(
+          let restoreOutcome = try await restoreOperation(
             trashedNote,
             optimisticWorkspace,
             preferences,
@@ -1132,6 +1132,23 @@
           )
           pendingRestoreNoteIDs.remove(trashedNote.id)
           setAgentCapabilityNoteExclusion(trashedNote.id, excluded: false)
+
+          do {
+            trashedNotes = try await loadTrashOperation()
+            saveError = restoreOutcome.trashCleanup == .failed
+              ? Self.restoreTrashCleanupFailureMessage
+              : nil
+          } catch {
+            if restoreOutcome.trashCleanup == .failed {
+              if !trashedNotes.contains(where: { $0.id == trashedNote.id }) {
+                trashedNotes.append(trashedNote)
+              }
+              saveError = Self.restoreTrashCleanupFailureMessage
+            } else {
+              saveError = error.localizedDescription
+            }
+          }
+          return
         } catch {
           let restoreError = error
           var rolledBackWorkspace = workspace
@@ -1155,13 +1172,6 @@
           }
           saveError = restoreError.localizedDescription
           return
-        }
-
-        do {
-          trashedNotes = try await loadTrashOperation()
-          saveError = nil
-        } catch {
-          saveError = error.localizedDescription
         }
       }
     }
@@ -1241,6 +1251,8 @@
 
     private static let agentCapabilityFailureMessage =
       "Agent workspace is unavailable. Reopen Fleck after resolving capability storage."
+    private static let restoreTrashCleanupFailureMessage =
+      "The note was restored, but Trash cleanup could not finish. Try again."
 
     private typealias SaveSnapshot = (
       workspace: Workspace,
