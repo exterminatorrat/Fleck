@@ -6,10 +6,12 @@
   import MCP
 
   enum FleckMCPServer {
+    typealias ToolListHandler = @Sendable () async throws -> [Tool]
     typealias ToolHandler =
       @Sendable (CallTool.Parameters) async throws -> CallTool.Result
 
     static func makeServer(
+      listTools: @escaping ToolListHandler,
       callTool: @escaping ToolHandler
     ) async -> Server {
       let server = Server(
@@ -18,16 +20,22 @@
         capabilities: .init(tools: .init(listChanged: false))
       )
       await server.withMethodHandler(ListTools.self) { _ in
-        ListTools.Result(tools: FleckMCPToolRegistry.tools)
+        ListTools.Result(tools: try await listTools())
       }
       await server.withMethodHandler(CallTool.self, handler: callTool)
       return server
     }
 
     static func run(profileID: UUID) async throws {
-      let server = await makeServer { parameters in
-        FleckMCPToolRegistry.call(parameters, profileID: profileID)
-      }
+      let client = AgentWorkspaceClient(profileID: profileID)
+      let server = await makeServer(
+        listTools: {
+          FleckMCPToolRegistry.tools(for: try client.capabilities())
+        },
+        callTool: { parameters in
+          FleckMCPToolRegistry.call(parameters, client: client)
+        }
+      )
       let transport = FleckStdioTransport()
 
       try await server.start(transport: transport)

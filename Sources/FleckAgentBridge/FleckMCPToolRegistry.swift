@@ -7,137 +7,196 @@
   enum FleckMCPToolRegistry {
     static let maximumTextBytes = 65_536
 
-    static let tools: [Tool] = [
-      tool(
-        "list_shared_notes",
-        "List notes explicitly shared with this integration.",
-        properties: [:],
-        readOnly: true
+    struct Registration {
+      let tool: Tool
+      let capability: AgentCapability
+    }
+
+    static let registrations: [Registration] = [
+      registration(
+        capability: .listNotes,
+        tool: tool(
+          "list_shared_notes",
+          "List notes explicitly shared with this integration.",
+          properties: [:],
+          readOnly: true
+        )
       ),
-      tool(
-        "read_note",
-        "Read a shared note, optionally using one-based line windows.",
-        properties: [
-          "note_id": uuid("Stable note ID."),
-          "start_line": positiveInteger("First one-based line to return."),
-          "max_lines": positiveInteger("Maximum number of lines to return."),
-        ],
-        required: ["note_id"],
-        readOnly: true
+      registration(
+        capability: .readNotes,
+        tool: tool(
+          "read_note",
+          "Read a shared note, optionally using one-based line windows.",
+          properties: [
+            "note_id": uuid("Stable note ID."),
+            "start_line": positiveInteger("First one-based line to return."),
+            "max_lines": positiveInteger("Maximum number of lines to return."),
+          ],
+          required: ["note_id"],
+          readOnly: true
+        )
       ),
-      tool(
-        "append_text",
-        writeDescription("Append up to 65,536 UTF-8 bytes to a shared note."),
-        properties: writeProperties([
-          "text": string("Text to append; at most 65,536 UTF-8 bytes.")
-        ]),
-        required: writeRequired + ["text"]
+      registration(
+        capability: .writeNotes,
+        tool: tool(
+          "append_text",
+          writeDescription("Append up to 65,536 UTF-8 bytes to a shared note."),
+          properties: writeProperties([
+            "text": string("Text to append; at most 65,536 UTF-8 bytes.")
+          ]),
+          required: writeRequired + ["text"]
+        )
       ),
-      tool(
-        "insert_text",
-        writeDescription(
-          "Insert up to 65,536 UTF-8 bytes before a one-based line."
-        ),
-        properties: writeProperties([
-          "before_line": positiveInteger("One-based line before which to insert."),
-          "text": string("Text to insert; at most 65,536 UTF-8 bytes."),
-        ]),
-        required: writeRequired + ["before_line", "text"]
-      ),
-      tool(
-        "replace_lines",
-        writeDescription(
-          "Replace an inclusive one-based line range with up to 65,536 UTF-8 bytes."
-        ),
-        properties: writeProperties([
-          "start_line": positiveInteger("First one-based line to replace."),
-          "end_line": positiveInteger("Last one-based line to replace, inclusive."),
-          "expected_text_sha256": string(
-            "SHA-256 of the observed line range as 64 lowercase hexadecimal characters."
+      registration(
+        capability: .writeNotes,
+        tool: tool(
+          "insert_text",
+          writeDescription(
+            "Insert up to 65,536 UTF-8 bytes before a one-based line."
           ),
-          "text": string("Replacement text; at most 65,536 UTF-8 bytes."),
-        ]),
-        required: writeRequired
-          + ["start_line", "end_line", "expected_text_sha256", "text"]
-      ),
-      tool(
-        "delete_lines",
-        writeDescription("Delete an inclusive one-based line range."),
-        properties: writeProperties([
-          "start_line": positiveInteger("First one-based line to delete."),
-          "end_line": positiveInteger("Last one-based line to delete, inclusive."),
-          "expected_text_sha256": string(
-            "SHA-256 of the observed line range as 64 lowercase hexadecimal characters."
-          ),
-        ]),
-        required: writeRequired
-          + ["start_line", "end_line", "expected_text_sha256"]
-      ),
-      tool(
-        "list_tasks",
-        "List checklist tasks in a shared note.",
-        properties: ["note_id": uuid("Stable note ID.")],
-        required: ["note_id"],
-        readOnly: true
-      ),
-      tool(
-        "add_task",
-        writeDescription(
-          "Add a checklist task whose text is at most 65,536 UTF-8 bytes."
+          properties: writeProperties([
+            "before_line": positiveInteger("One-based line before which to insert."),
+            "text": string("Text to insert; at most 65,536 UTF-8 bytes."),
+          ]),
+          required: writeRequired + ["before_line", "text"]
         ),
-        properties: writeProperties([
-          "after_task_handle": string(
-            "Optional authenticated task handle after which to add the task."
+      ),
+      registration(
+        capability: .writeNotes,
+        tool: tool(
+          "replace_lines",
+          writeDescription(
+            "Replace an inclusive one-based line range with up to 65,536 UTF-8 bytes."
           ),
-          "text": string("Task text; at most 65,536 UTF-8 bytes."),
-        ]),
-        required: writeRequired + ["text"]
-      ),
-      tool(
-        "rename_task",
-        writeDescription(
-          "Rename a checklist task with text of at most 65,536 UTF-8 bytes."
+          properties: writeProperties([
+            "start_line": positiveInteger("First one-based line to replace."),
+            "end_line": positiveInteger("Last one-based line to replace, inclusive."),
+            "expected_text_sha256": string(
+              "SHA-256 of the observed line range as 64 lowercase hexadecimal characters."
+            ),
+            "text": string("Replacement text; at most 65,536 UTF-8 bytes."),
+          ]),
+          required: writeRequired
+            + ["start_line", "end_line", "expected_text_sha256", "text"]
         ),
-        properties: writeProperties([
-          "task_handle": string("Authenticated task handle."),
-          "text": string("New task text; at most 65,536 UTF-8 bytes."),
-        ]),
-        required: writeRequired + ["task_handle", "text"]
       ),
-      tool(
-        "set_task_state",
-        writeDescription("Mark a checklist task completed or open."),
-        properties: writeProperties([
-          "task_handle": string("Authenticated task handle."),
-          "completed": ["type": "boolean", "description": "Desired task state."],
-        ]),
-        required: writeRequired + ["task_handle", "completed"]
+      registration(
+        capability: .writeNotes,
+        tool: tool(
+          "delete_lines",
+          writeDescription("Delete an inclusive one-based line range."),
+          properties: writeProperties([
+            "start_line": positiveInteger("First one-based line to delete."),
+            "end_line": positiveInteger("Last one-based line to delete, inclusive."),
+            "expected_text_sha256": string(
+              "SHA-256 of the observed line range as 64 lowercase hexadecimal characters."
+            ),
+          ]),
+          required: writeRequired
+            + ["start_line", "end_line", "expected_text_sha256"]
+        )
       ),
-      tool(
-        "remove_task",
-        writeDescription("Remove a checklist task."),
-        properties: writeProperties([
-          "task_handle": string("Authenticated task handle.")
-        ]),
-        required: writeRequired + ["task_handle"]
+      registration(
+        capability: .readNotes,
+        tool: tool(
+          "list_tasks",
+          "List checklist tasks in a shared note.",
+          properties: ["note_id": uuid("Stable note ID.")],
+          required: ["note_id"],
+          readOnly: true
+        )
       ),
-      tool(
-        "list_agent_activity",
-        "List visible integration activity.",
-        properties: [:],
-        readOnly: true
+      registration(
+        capability: .writeNotes,
+        tool: tool(
+          "add_task",
+          writeDescription(
+            "Add a checklist task whose text is at most 65,536 UTF-8 bytes."
+          ),
+          properties: writeProperties([
+            "after_task_handle": string(
+              "Optional authenticated task handle after which to add the task."
+            ),
+            "text": string("Task text; at most 65,536 UTF-8 bytes."),
+          ]),
+          required: writeRequired + ["text"]
+        ),
       ),
-      tool(
-        "undo_agent_change",
-        writeDescription("Undo an eligible integration change."),
-        properties: [
-          "change_id": uuid("Stable activity change ID."),
-          "expected_revision": revision,
-          "operation_id": operation,
-        ],
-        required: ["change_id", "expected_revision", "operation_id"]
+      registration(
+        capability: .writeNotes,
+        tool: tool(
+          "rename_task",
+          writeDescription(
+            "Rename a checklist task with text of at most 65,536 UTF-8 bytes."
+          ),
+          properties: writeProperties([
+            "task_handle": string("Authenticated task handle."),
+            "text": string("New task text; at most 65,536 UTF-8 bytes."),
+          ]),
+          required: writeRequired + ["task_handle", "text"]
+        ),
+      ),
+      registration(
+        capability: .writeNotes,
+        tool: tool(
+          "set_task_state",
+          writeDescription("Mark a checklist task completed or open."),
+          properties: writeProperties([
+            "task_handle": string("Authenticated task handle."),
+            "completed": ["type": "boolean", "description": "Desired task state."],
+          ]),
+          required: writeRequired + ["task_handle", "completed"]
+        )
+      ),
+      registration(
+        capability: .writeNotes,
+        tool: tool(
+          "remove_task",
+          writeDescription("Remove a checklist task."),
+          properties: writeProperties([
+            "task_handle": string("Authenticated task handle.")
+          ]),
+          required: writeRequired + ["task_handle"]
+        )
+      ),
+      registration(
+        capability: .readNotes,
+        tool: tool(
+          "list_agent_activity",
+          "List visible integration activity.",
+          properties: [:],
+          readOnly: true
+        )
+      ),
+      registration(
+        capability: .undoChanges,
+        tool: tool(
+          "undo_agent_change",
+          writeDescription("Undo an eligible integration change."),
+          properties: [
+            "change_id": uuid("Stable activity change ID."),
+            "expected_revision": revision,
+            "operation_id": operation,
+          ],
+          required: ["change_id", "expected_revision", "operation_id"]
+        )
       ),
     ]
+
+    static let tools: [Tool] = registrations.map(\.tool)
+
+    static func tools(for summary: AgentCapabilitySummary) -> [Tool] {
+      registrations
+        .filter { summary.availableCapabilities.contains($0.capability) }
+        .map(\.tool)
+    }
+
+    private static func registration(
+      capability: AgentCapability,
+      tool: Tool
+    ) -> Registration {
+      Registration(tool: tool, capability: capability)
+    }
 
     static func command(
       name: String,
@@ -273,20 +332,11 @@
 
     static func call(
       _ parameters: CallTool.Parameters,
-      profileID: UUID
+      client: AgentWorkspaceClient
     ) -> CallTool.Result {
       do {
         let command = try command(for: parameters)
-        let credential = try BridgeCredentialStore().load(profileID: profileID)
-        let response = try AgentIPCClient().send(
-          AgentWireRequest(
-            requestID: UUID(),
-            profileID: profileID,
-            credentialBase64: credential,
-            command: command
-          )
-        )
-        return try result(for: response)
+        return try result(for: client.execute(command))
       } catch let error as AgentWorkspaceError {
         return fallbackResult(for: error)
       } catch BridgeCredentialStoreError.credentialNotFound {

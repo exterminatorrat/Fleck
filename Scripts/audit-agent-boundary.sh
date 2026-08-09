@@ -128,12 +128,31 @@ if ! diff -u "$expected_tools" "$actual_tools"; then
   printf 'error: MCP tool registry differs from the approved thirteen\n' >&2
   exit 1
 fi
+capability_registration_count="$(
+  (rg -o 'capability:[[:space:]]*\.[A-Za-z]+' "$tool_registry" || true) \
+    | wc -l \
+    | tr -d '[:space:]'
+)"
+if [[ "$capability_registration_count" != "13" ]]; then
+  printf \
+    'error: MCP tool registry must assign exactly one capability to each tool\n' \
+    >&2
+  exit 1
+fi
+if [[ "$(rg -c 'tools\(for summary:' "$tool_registry")" != "1" ]]; then
+  printf 'error: MCP tool registry must filter tools from the current summary\n' >&2
+  exit 1
+fi
 
 # MCP advertises and handles tools only. Roots are client capabilities; no
 # resources, prompts, logging, completions, sampling, or elicitation handler is
 # registered by this server.
 if [[ "$(rg -c 'capabilities: \.init\(tools: \.init\(listChanged: false\)\)' "$mcp_server")" != "1" ]]; then
   printf 'error: MCP server must advertise exactly the reviewed tools capability\n' >&2
+  exit 1
+fi
+if [[ "$(rg -c 'try await listTools\(\)' "$mcp_server")" != "1" ]]; then
+  printf 'error: MCP server must recompute ListTools through its handler\n' >&2
   exit 1
 fi
 handlers="$(
