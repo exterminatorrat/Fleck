@@ -1,7 +1,7 @@
 # Fleck MCP Capability Platform Design
 
-**Status:** Proposed for user review  
-**Date:** 2026-08-08  
+**Status:** Proposed for user review
+**Date:** 2026-08-08
 **Scope:** MCP capability foundations, durable Swarm-style work handoffs, and
 the later community add-on registry and execution model
 
