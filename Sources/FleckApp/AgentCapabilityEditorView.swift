@@ -44,6 +44,13 @@
     case unavailable
   }
 
+  struct AgentNoteAccessContext: Equatable, Sendable {
+    let noteID: UUID
+    let noteExists: Bool
+    let noteFolderID: UUID?
+    let folderExists: Bool
+  }
+
   enum AgentCapabilityPresentation {
     static let noToolsOrNotesGranted = "No tools or notes granted"
     static let manageAgentAccessTitle = "Manage Agent Access…"
@@ -57,6 +64,8 @@
       "Access is inherited from a folder. Edit the profile to change it."
     static let unavailableAccessMessage =
       "Capability profile unavailable. Close and reopen this sheet."
+    static let noteAccessContextChangedMessage =
+      "This note’s folder changed. Close and reopen this sheet."
 
     struct ProfileSummary: Equatable, Sendable {
       let summary: String
@@ -143,6 +152,37 @@
       "Includes future notes in “\(folderName)”"
     }
 
+    static func noteAccessContext(
+      for noteID: UUID,
+      in workspace: Workspace
+    ) -> AgentNoteAccessContext {
+      guard let note = workspace.notes.first(where: { $0.id == noteID }) else {
+        return AgentNoteAccessContext(
+          noteID: noteID,
+          noteExists: false,
+          noteFolderID: nil,
+          folderExists: false
+        )
+      }
+      let folderExists = note.folderID.map { folderID in
+        workspace.folders.contains(where: { $0.id == folderID })
+      } ?? false
+      return AgentNoteAccessContext(
+        noteID: noteID,
+        noteExists: true,
+        noteFolderID: note.folderID,
+        folderExists: folderExists
+      )
+    }
+
+    static func noteAccessContextIsUnchanged(
+      noteID: UUID,
+      captured: AgentNoteAccessContext,
+      workspace: Workspace
+    ) -> Bool {
+      captured == noteAccessContext(for: noteID, in: workspace)
+    }
+
     static func noteAccess(
       for noteID: UUID,
       profile: AgentProfileCapabilities,
@@ -218,6 +258,17 @@
         }
       }
       return (updatedDirectAccess, updatedMaterializedAccess)
+    }
+
+    static func rebaseMaterializedAccess(
+      assignedNoteIDs: Set<UUID>,
+      materializedAccess: [UUID: AgentNoteAccessLevel]
+    ) -> [UUID: AgentNoteAccessLevel] {
+      var rebasedAccess = materializedAccess
+      for noteID in assignedNoteIDs {
+        rebasedAccess.removeValue(forKey: noteID)
+      }
+      return rebasedAccess
     }
 
     static func capabilityReplacement(
@@ -404,6 +455,27 @@
         noteID: noteID,
         level: level,
         baseline: baseline
+      )
+    }
+
+    static func noteAccessReplacementIfContextUnchanged(
+      noteID: UUID,
+      level: AgentNoteAccessLevel,
+      baseline: AgentProfileCapabilities,
+      baselineWorkspace: Workspace,
+      capturedContext: AgentNoteAccessContext,
+      currentWorkspace: Workspace
+    ) -> AgentProfileCapabilities? {
+      guard noteAccessContextIsUnchanged(
+        noteID: noteID,
+        captured: capturedContext,
+        workspace: currentWorkspace
+      ) else { return nil }
+      return noteAccessReplacementIfEditable(
+        noteID: noteID,
+        level: level,
+        baseline: baseline,
+        workspace: baselineWorkspace
       )
     }
 
@@ -716,6 +788,10 @@
             baselineCapabilities = updated
             expectedGrantRevision = updated.grantRevision
           }
+          materializedDirectAccess = AgentCapabilityPresentation.rebaseMaterializedAccess(
+            assignedNoteIDs: selected,
+            materializedAccess: materializedDirectAccess
+          )
           for noteID in selected {
             directAccess[noteID] = .write
           }

@@ -688,6 +688,189 @@ struct AgentCapabilityPresentationTests {
     #expect(try await store.currentState() == beforeRetry)
   }
 
+  @Test func NoteAccessContextDriftFailsClosedWithoutAReplacement() throws {
+    let folder = try Folder(
+      id: testUUID("00000000-0000-0000-0000-000000000350"),
+      name: "Projects"
+    )
+    let otherFolder = try Folder(
+      id: testUUID("00000000-0000-0000-0000-000000000351"),
+      name: "Archive"
+    )
+    let note = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000352"),
+      title: "Original",
+      folderID: folder.id
+    )
+    let baselineWorkspace = Workspace(
+      notes: [note],
+      folders: [folder, otherFolder]
+    )
+    let captured = AgentCapabilityPresentation.noteAccessContext(
+      for: note.id,
+      in: baselineWorkspace
+    )
+    let profile = AgentProfileCapabilities(
+      profileID: UUID(),
+      grantRevision: 1,
+      allowedCapabilities: [.readNotes],
+      grants: [
+        AgentResourceGrant(
+          scope: .note(noteID: note.id),
+          authority: .read
+        )
+      ]
+    )
+
+    let movedOut = Workspace(
+      notes: [Note(id: note.id, title: note.title, folderID: nil)],
+      folders: baselineWorkspace.folders
+    )
+    let movedIn = Workspace(
+      notes: [Note(id: note.id, title: note.title, folderID: otherFolder.id)],
+      folders: baselineWorkspace.folders
+    )
+    let deletedFolder = Workspace(
+      notes: [note],
+      folders: [otherFolder]
+    )
+    let deletedNote = Workspace(folders: baselineWorkspace.folders)
+    let unchangedContext = Workspace(
+      notes: [
+        Note(
+          id: note.id,
+          title: "Renamed",
+          body: "Body changed",
+          revision: 9,
+          folderID: folder.id
+        )
+      ],
+      folders: baselineWorkspace.folders
+    )
+
+    #expect(
+      !AgentCapabilityPresentation.noteAccessContextIsUnchanged(
+        noteID: note.id,
+        captured: captured,
+        workspace: movedOut
+      )
+    )
+    #expect(
+      !AgentCapabilityPresentation.noteAccessContextIsUnchanged(
+        noteID: note.id,
+        captured: captured,
+        workspace: movedIn
+      )
+    )
+    #expect(
+      !AgentCapabilityPresentation.noteAccessContextIsUnchanged(
+        noteID: note.id,
+        captured: captured,
+        workspace: deletedFolder
+      )
+    )
+    #expect(
+      !AgentCapabilityPresentation.noteAccessContextIsUnchanged(
+        noteID: note.id,
+        captured: captured,
+        workspace: deletedNote
+      )
+    )
+    #expect(
+      AgentCapabilityPresentation.noteAccessContextIsUnchanged(
+        noteID: note.id,
+        captured: captured,
+        workspace: unchangedContext
+      )
+    )
+    #expect(
+      AgentCapabilityPresentation.noteAccessContextChangedMessage
+        == "This note’s folder changed. Close and reopen this sheet."
+    )
+
+    #expect(
+      AgentCapabilityPresentation.noteAccessReplacementIfContextUnchanged(
+        noteID: note.id,
+        level: .off,
+        baseline: profile,
+        baselineWorkspace: baselineWorkspace,
+        capturedContext: captured,
+        currentWorkspace: movedOut
+      ) == nil
+    )
+    #expect(
+      AgentCapabilityPresentation.noteAccessReplacementIfContextUnchanged(
+        noteID: note.id,
+        level: .off,
+        baseline: profile,
+        baselineWorkspace: baselineWorkspace,
+        capturedContext: captured,
+        currentWorkspace: unchangedContext
+      ) != nil
+    )
+  }
+
+  @Test func LegacyAssignmentRebasesMaterializedFolderMarkers() throws {
+    let folder = try Folder(
+      id: testUUID("00000000-0000-0000-0000-000000000353"),
+      name: "Projects"
+    )
+    let assignedNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000354"),
+      folderID: folder.id
+    )
+    let unassignedNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000355"),
+      folderID: folder.id
+    )
+    let workspace = Workspace(
+      notes: [assignedNote, unassignedNote],
+      folders: [folder]
+    )
+    let materialized = AgentCapabilityPresentation.materializeCurrentFolderNotes(
+      folderID: folder.id,
+      workspace: workspace,
+      directAccess: [:],
+      materializedAccess: [:]
+    )
+    let rebasedMarkers = AgentCapabilityPresentation.rebaseMaterializedAccess(
+      assignedNoteIDs: [assignedNote.id],
+      materializedAccess: materialized.materializedAccess
+    )
+    let restored = AgentCapabilityPresentation.restoreMaterializedCurrentFolderNotes(
+      folderID: folder.id,
+      workspace: workspace,
+      directAccess: materialized.directAccess,
+      materializedAccess: rebasedMarkers
+    )
+    let refreshedBaseline = AgentProfileCapabilities(
+      profileID: UUID(),
+      grantRevision: 2,
+      allowedCapabilities: [.writeNotes],
+      grants: [
+        AgentResourceGrant(
+          scope: .note(noteID: assignedNote.id),
+          authority: .write
+        )
+      ]
+    )
+
+    #expect(
+      restored.directAccess
+        == [assignedNote.id: AgentNoteAccessLevel.write]
+    )
+    #expect(restored.materializedAccess.isEmpty)
+    #expect(
+      AgentCapabilityPresentation.capabilityReplacementIfChanged(
+        baseline: refreshedBaseline,
+        allowedCapabilities: refreshedBaseline.allowedCapabilities,
+        expectedGrantRevision: refreshedBaseline.grantRevision,
+        directAccess: restored.directAccess,
+        folderAccess: [folder.id: .off]
+      ) == nil
+    )
+  }
+
   private func testUUID(_ value: String) -> UUID {
     UUID(uuidString: value)!
   }

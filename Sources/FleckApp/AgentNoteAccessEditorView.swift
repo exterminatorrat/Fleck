@@ -8,6 +8,8 @@
     let note: Note
     @State private var accessByProfileID: [UUID: AgentNoteAccessLevel] = [:]
     @State private var baselineCapabilities: [UUID: AgentProfileCapabilities] = [:]
+    @State private var baselineWorkspace = Workspace()
+    @State private var baselineNoteAccessContext: AgentNoteAccessContext?
     @State private var displayedProfiles: [AgentIntegrationProfile] = []
     @State private var hasLoadedDraft = false
     @State private var errorMessage: String?
@@ -24,7 +26,7 @@
                 for: note.id,
                 profileID: profile.id,
                 baselineCapabilities: baselineCapabilities,
-                workspace: appState.workspace
+                workspace: baselineWorkspace
               )
               let rowMessage = message(for: rowState)
               Picker(
@@ -89,6 +91,12 @@
 
     private func loadDraft() {
       guard !hasLoadedDraft else { return }
+      let workspace = appState.workspace
+      baselineWorkspace = workspace
+      baselineNoteAccessContext = AgentCapabilityPresentation.noteAccessContext(
+        for: note.id,
+        in: workspace
+      )
       displayedProfiles = AgentCapabilityPresentation.snapshotActiveProfiles(
         appState.agentProfiles
       )
@@ -98,7 +106,7 @@
           accessByProfileID[profile.id] = AgentCapabilityPresentation.noteAccess(
             for: note.id,
             profile: capabilities,
-            workspace: appState.workspace
+            workspace: workspace
           )
         }
       }
@@ -109,11 +117,22 @@
       errorMessage = nil
       guard
         hasLoadedDraft,
+        let capturedContext = baselineNoteAccessContext,
         displayedProfiles.allSatisfy({ baselineCapabilities[$0.id] != nil })
       else {
         errorMessage = AgentCapabilityPresentation.unavailableAccessMessage
         return
       }
+      guard AgentCapabilityPresentation.noteAccessContextIsUnchanged(
+        noteID: note.id,
+        captured: capturedContext,
+        workspace: appState.workspace
+      ) else {
+        errorMessage = AgentCapabilityPresentation.noteAccessContextChangedMessage
+        return
+      }
+
+      let currentWorkspace = appState.workspace
 
       let expectedGrantRevisions = [UUID: UInt64](
         uniqueKeysWithValues: displayedProfiles.compactMap { profile in
@@ -135,13 +154,15 @@
           level != AgentCapabilityPresentation.noteAccess(
             for: note.id,
             profile: baseline,
-            workspace: appState.workspace
+            workspace: baselineWorkspace
           ),
-          let replacement = AgentCapabilityPresentation.noteAccessReplacementIfEditable(
+          let replacement = AgentCapabilityPresentation.noteAccessReplacementIfContextUnchanged(
             noteID: note.id,
             level: level,
             baseline: baseline,
-            workspace: appState.workspace
+            baselineWorkspace: baselineWorkspace,
+            capturedContext: capturedContext,
+            currentWorkspace: currentWorkspace
           )
         else { return nil }
         return (
@@ -150,6 +171,14 @@
         )
       }
       Task { @MainActor in
+        guard AgentCapabilityPresentation.noteAccessContextIsUnchanged(
+          noteID: note.id,
+          captured: capturedContext,
+          workspace: appState.workspace
+        ) else {
+          errorMessage = AgentCapabilityPresentation.noteAccessContextChangedMessage
+          return
+        }
         switch await appState.updateAgentCapabilities(
           replacements,
           expectedGrantRevisions: expectedGrantRevisions
