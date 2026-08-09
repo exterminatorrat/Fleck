@@ -80,21 +80,91 @@ actor AgentCapabilityStore {
     _ profile: AgentProfileCapabilities,
     expectedGrantRevision: UInt64
   ) throws -> AgentCapabilityState {
+    try replaceProfiles([
+      (
+        profile: profile,
+        expectedGrantRevision: expectedGrantRevision
+      )
+    ])
+  }
+
+  func replaceProfiles(
+    _ replacements: [
+      (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+    ]
+  ) throws -> AgentCapabilityState {
     var state = try loadPersistedState()
-    guard let current = state.profiles[profile.profileID] else {
+    guard !replacements.isEmpty else { return state }
+    guard Set(replacements.map { $0.profile.profileID }).count == replacements.count else {
+      throw AgentWorkspaceError(code: .invalidPayload)
+    }
+
+    for replacement in replacements {
+      guard let current = state.profiles[replacement.profile.profileID] else {
+        throw AgentWorkspaceError(code: .invalidPayload)
+      }
+      guard current.grantRevision == replacement.expectedGrantRevision else {
+        throw AgentWorkspaceError(code: .revisionConflict)
+      }
+      guard
+        current.grantRevision < UInt64.max,
+        replacement.profile.grantRevision == current.grantRevision + 1
+      else {
+        throw AgentWorkspaceError(code: .invalidPayload)
+      }
+    }
+
+    for replacement in replacements {
+      state.profiles[replacement.profile.profileID] = replacement.profile
+    }
+    do {
+      try validateCapabilityState(state)
+    } catch {
+      throw AgentWorkspaceError(code: .invalidPayload)
+    }
+    try save(state)
+    return state
+  }
+
+  func assignUnassignedLegacyNotes(
+    _ noteIDs: Set<UUID>,
+    to profileID: UUID,
+    expectedGrantRevision: UInt64
+  ) throws -> AgentCapabilityState {
+    var state = try loadPersistedState()
+    guard !noteIDs.isEmpty else { return state }
+    guard let current = state.profiles[profileID] else {
       throw AgentWorkspaceError(code: .invalidPayload)
     }
     guard current.grantRevision == expectedGrantRevision else {
       throw AgentWorkspaceError(code: .revisionConflict)
     }
-    guard
-      current.grantRevision < UInt64.max,
-      profile.grantRevision == current.grantRevision + 1
-    else {
+    guard noteIDs.isSubset(of: state.unassignedLegacyNoteIDs) else {
+      throw AgentWorkspaceError(code: .invalidPayload)
+    }
+    guard current.grantRevision < UInt64.max else {
       throw AgentWorkspaceError(code: .invalidPayload)
     }
 
-    state.profiles[profile.profileID] = profile
+    let existingNoteIDs = Set(
+      current.grants.compactMap { grant -> UUID? in
+        guard case let .note(noteID) = grant.scope else { return nil }
+        return noteID
+      }
+    )
+    let newGrants = noteIDs.subtracting(existingNoteIDs).map { noteID in
+      AgentResourceGrant(
+        scope: .note(noteID: noteID),
+        authority: .write
+      )
+    }
+    state.profiles[profileID] = AgentProfileCapabilities(
+      profileID: current.profileID,
+      grantRevision: current.grantRevision + 1,
+      allowedCapabilities: current.allowedCapabilities,
+      grants: current.grants + newGrants
+    )
+    state.unassignedLegacyNoteIDs.subtract(noteIDs)
     do {
       try validateCapabilityState(state)
     } catch {

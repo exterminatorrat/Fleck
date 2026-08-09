@@ -613,6 +613,147 @@ struct AgentCapabilityStoreTests {
     )
     #expect(!source.contains("AgentCapability.allCases"))
   }
+
+  @Test func BatchReplacementValidatesEveryRevisionBeforeWriting() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    let firstID = testUUID("00000000-0000-0000-0000-000000000221")
+    let secondID = testUUID("00000000-0000-0000-0000-000000000222")
+    let initial = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [firstID, secondID],
+      workspace: Workspace()
+    )
+    let first = try #require(initial.profiles[firstID])
+    let second = try #require(initial.profiles[secondID])
+    let beforeBytes = try Data(contentsOf: fixture.capabilitiesURL)
+    let replacements = [
+      (
+        profile: AgentProfileCapabilities(
+          profileID: firstID,
+          grantRevision: first.grantRevision + 1,
+          allowedCapabilities: [.readNotes],
+          grants: []
+        ),
+        expectedGrantRevision: first.grantRevision
+      ),
+      (
+        profile: AgentProfileCapabilities(
+          profileID: secondID,
+          grantRevision: second.grantRevision + 1,
+          allowedCapabilities: [.writeNotes],
+          grants: []
+        ),
+        expectedGrantRevision: second.grantRevision - 1
+      ),
+    ]
+
+    await #expect(throws: AgentWorkspaceError(code: .revisionConflict)) {
+      _ = try await fixture.store.replaceProfiles(replacements)
+    }
+    #expect(try Data(contentsOf: fixture.capabilitiesURL) == beforeBytes)
+    #expect(try await fixture.store.currentState() == initial)
+
+    let missing = AgentProfileCapabilities(
+      profileID: testUUID("00000000-0000-0000-0000-000000000223"),
+      grantRevision: 1,
+      allowedCapabilities: [.readNotes],
+      grants: []
+    )
+    await #expect(throws: AgentWorkspaceError(code: .invalidPayload)) {
+      _ = try await fixture.store.replaceProfiles([
+        (
+          profile: missing,
+          expectedGrantRevision: 0
+        )
+      ])
+    }
+    #expect(try Data(contentsOf: fixture.capabilitiesURL) == beforeBytes)
+    #expect(try await fixture.store.currentState() == initial)
+
+    let updated = try await fixture.store.replaceProfiles([
+      (
+        profile: AgentProfileCapabilities(
+          profileID: firstID,
+          grantRevision: first.grantRevision + 1,
+          allowedCapabilities: [.readNotes],
+          grants: []
+        ),
+        expectedGrantRevision: first.grantRevision
+      ),
+      (
+        profile: AgentProfileCapabilities(
+          profileID: secondID,
+          grantRevision: second.grantRevision + 1,
+          allowedCapabilities: [.writeNotes],
+          grants: []
+        ),
+        expectedGrantRevision: second.grantRevision
+      ),
+    ])
+    #expect(updated.profiles[firstID]?.grantRevision == first.grantRevision + 1)
+    #expect(updated.profiles[secondID]?.grantRevision == second.grantRevision + 1)
+  }
+
+  @Test func AssigningUnassignedLegacySharesIsAtomicAndDeduplicated() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    let firstNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000231"),
+      agentAccess: true
+    )
+    let secondNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000232"),
+      agentAccess: true
+    )
+    let thirdNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000233"),
+      agentAccess: true
+    )
+    let profileID = testUUID("00000000-0000-0000-0000-000000000234")
+    let initial = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [],
+      workspace: Workspace(notes: [firstNote, secondNote, thirdNote])
+    )
+    let registered = try await fixture.store.registerEmptyProfile(profileID)
+    let current = try #require(registered.profiles[profileID])
+
+    let assigned = try await fixture.store.assignUnassignedLegacyNotes(
+      [firstNote.id, secondNote.id],
+      to: profileID,
+      expectedGrantRevision: current.grantRevision
+    )
+    let assignedProfile = try #require(assigned.profiles[profileID])
+    #expect(assigned.unassignedLegacyNoteIDs == [thirdNote.id])
+    #expect(
+      Set(assignedProfile.grants.compactMap { grant in
+        if case let .note(noteID) = grant.scope { return noteID }
+        return nil
+      }) == [firstNote.id, secondNote.id]
+    )
+    #expect(assignedProfile.grants.count == 2)
+
+    let beforeInvalid = try Data(contentsOf: fixture.capabilitiesURL)
+    await #expect(throws: AgentWorkspaceError(code: .invalidPayload)) {
+      _ = try await fixture.store.assignUnassignedLegacyNotes(
+        [firstNote.id, thirdNote.id],
+        to: profileID,
+        expectedGrantRevision: assignedProfile.grantRevision
+      )
+    }
+    #expect(try Data(contentsOf: fixture.capabilitiesURL) == beforeInvalid)
+    #expect(try await fixture.store.currentState() == assigned)
+
+    await #expect(throws: AgentWorkspaceError(code: .revisionConflict)) {
+      _ = try await fixture.store.assignUnassignedLegacyNotes(
+        [thirdNote.id],
+        to: profileID,
+        expectedGrantRevision: current.grantRevision
+      )
+    }
+    #expect(try await fixture.store.currentState() == assigned)
+
+    _ = initial
+  }
 }
 
 private struct CapabilityStoreFixture {

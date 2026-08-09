@@ -393,24 +393,9 @@
         }
         .environmentObject(appState)
       }
-      .confirmationDialog(
-        "Allow authorized agents to read and edit this note?",
-        isPresented: Binding(
-          get: { notePendingAgentShare != nil },
-          set: { if !$0 { notePendingAgentShare = nil } }
-        )
-      ) {
-        Button("Allow Agent Access") {
-          guard let note = notePendingAgentShare else { return }
-          notePendingAgentShare = nil
-          guard isNoteVisible(note.id) else { return }
-          appState.confirmFirstAgentShare(noteID: note.id)
-        }
-        Button("Cancel", role: .cancel) {
-          notePendingAgentShare = nil
-        }
-      } message: {
-        Text("Every authorized local integration will be able to read and edit this note.")
+      .sheet(item: $notePendingAgentShare) { note in
+        AgentNoteAccessEditorView(note: note)
+          .environmentObject(appState)
       }
       .onAppear {
         dictationRuntime.registerEditor(editorCommands)
@@ -642,13 +627,9 @@
             isShowingAgentActivity = true
           }
           if let note = visibleSelectedNote {
-            Toggle(
-              "Allow Agent Access",
-              isOn: Binding(
-                get: { note.agentAccess },
-                set: { requestAgentAccess(note, enabled: $0) }
-              )
-            )
+            Button(AgentCapabilityPresentation.manageAgentAccessTitle) {
+              notePendingAgentShare = note
+            }
           }
         } label: {
           Image(systemName: "ellipsis.circle")
@@ -741,7 +722,7 @@
                     .font(.caption2)
                 }
                 Text(note.displayTitle).lineLimit(1)
-                if note.agentAccess {
+                if appState.isSharedWithAnyActiveProfile(note.id) {
                   Image(systemName: "point.3.connected.trianglepath.dotted")
                     .font(.caption2)
                     .accessibilityLabel(AgentSharingPresentation.sharedBadgeAccessibilityLabel)
@@ -829,13 +810,10 @@
                 tabColorPickerNoteID = note.id
               }
               .accessibilityValue(tabColorAccessibilityValue(for: note.tabColorHex))
-              Toggle(
-                "Allow Agent Access",
-                isOn: Binding(
-                  get: { note.agentAccess },
-                  set: { requestAgentAccess(note, enabled: $0) }
-                )
-              )
+              Button(AgentCapabilityPresentation.manageAgentAccessTitle) {
+                guard isNoteVisible(note.id) else { return }
+                notePendingAgentShare = note
+              }
               Divider()
               Button("Move to Trash", systemImage: "trash", role: .destructive) {
                 requestDeletion(note)
@@ -974,22 +952,6 @@
     private func requestDeletion(_ note: Note) {
       guard isNoteVisible(note.id) else { return }
       notePendingDeletion = note
-    }
-
-    private func requestAgentAccess(_ note: Note, enabled: Bool) {
-      guard isNoteVisible(note.id) else { return }
-      guard enabled else {
-        appState.setAgentAccess(noteID: note.id, enabled: false)
-        return
-      }
-      if AgentSharingPresentation(
-        note: note,
-        hasConfirmedFirstShare: appState.hasConfirmedFirstAgentShare
-      ).requiresEnableConfirmation {
-        notePendingAgentShare = note
-      } else {
-        appState.setAgentAccess(noteID: note.id, enabled: true)
-      }
     }
 
     private func confirmDeletion(_ note: Note) {

@@ -5,6 +5,12 @@
   import FleckCore
   import ServiceManagement
 
+  enum AgentCapabilitySaveResult {
+    case succeeded
+    case revisionConflict
+    case failed
+  }
+
   @MainActor
   final class AppState: ObservableObject, DictationSaving, AgentWorkspaceStateAccess {
     typealias SaveOperation =
@@ -243,8 +249,23 @@
       agentCapabilityState.profiles[profileID]
     }
 
+    static func activeCapabilityProfiles(
+      profiles: [AgentIntegrationProfile],
+      state: AgentCapabilityState
+    ) -> [AgentProfileCapabilities] {
+      profiles.compactMap { profile in
+        guard !profile.isRevoked else { return nil }
+        return state.profiles[profile.id]
+      }
+    }
+
+    var activeAgentCapabilityProfiles: [AgentProfileCapabilities] {
+      Self.activeCapabilityProfiles(profiles: agentProfiles, state: agentCapabilityState)
+    }
+
     func profilesWithReadAccess(to noteID: UUID) -> [AgentIntegrationProfile] {
       agentProfiles.filter { profile in
+        guard !profile.isRevoked else { return false }
         guard let capabilities = agentCapabilityState.profiles[profile.id] else {
           return false
         }
@@ -259,18 +280,66 @@
       !profilesWithReadAccess(to: noteID).isEmpty
     }
 
+    @discardableResult
     func updateAgentCapabilities(
       _ replacement: AgentProfileCapabilities,
       expectedGrantRevision: UInt64
-    ) async {
+    ) async -> AgentCapabilitySaveResult {
       do {
         agentCapabilityState = try await agentCapabilityStore.replaceProfile(
           replacement,
           expectedGrantRevision: expectedGrantRevision
         )
         agentCleanupError = nil
+        return .succeeded
+      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
+        agentCleanupError = AgentCapabilityPresentation.conflictMessage
+        return .revisionConflict
       } catch {
         agentCleanupError = "Could not update Agent capabilities. Try again."
+        return .failed
+      }
+    }
+
+    @discardableResult
+    func updateAgentCapabilities(
+      _ replacements: [
+        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+      ]
+    ) async -> AgentCapabilitySaveResult {
+      do {
+        agentCapabilityState = try await agentCapabilityStore.replaceProfiles(replacements)
+        agentCleanupError = nil
+        return .succeeded
+      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
+        agentCleanupError = AgentCapabilityPresentation.conflictMessage
+        return .revisionConflict
+      } catch {
+        agentCleanupError = "Could not update Agent access. Try again."
+        return .failed
+      }
+    }
+
+    @discardableResult
+    func assignUnassignedLegacyNotes(
+      _ noteIDs: Set<UUID>,
+      to profileID: UUID,
+      expectedGrantRevision: UInt64
+    ) async -> AgentCapabilitySaveResult {
+      do {
+        agentCapabilityState = try await agentCapabilityStore.assignUnassignedLegacyNotes(
+          noteIDs,
+          to: profileID,
+          expectedGrantRevision: expectedGrantRevision
+        )
+        agentCleanupError = nil
+        return .succeeded
+      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
+        agentCleanupError = AgentCapabilityPresentation.conflictMessage
+        return .revisionConflict
+      } catch {
+        agentCleanupError = "Could not assign legacy Agent shares. Try again."
+        return .failed
       }
     }
 
@@ -659,28 +728,6 @@
       guard let id = workspace.selectedNoteID else { return }
       workspace.setTabColor(id: id, hex: hex)
       scheduleSave()
-    }
-
-    func setSelectedAgentAccess(_ enabled: Bool) {
-      guard let id = workspace.selectedNoteID else { return }
-      setAgentAccess(noteID: id, enabled: enabled)
-    }
-
-    func setAgentAccess(noteID: UUID, enabled: Bool) {
-      let originalWorkspace = workspace
-      workspace.setAgentAccess(id: noteID, enabled: enabled)
-      guard workspace != originalWorkspace else { return }
-      saveNow()
-      refreshAgentActivity()
-    }
-
-    var hasConfirmedFirstAgentShare: Bool {
-      UserDefaults.standard.bool(forKey: "hasConfirmedFirstAgentShare")
-    }
-
-    func confirmFirstAgentShare(noteID: UUID) {
-      UserDefaults.standard.set(true, forKey: "hasConfirmedFirstAgentShare")
-      setAgentAccess(noteID: noteID, enabled: true)
     }
 
     func toggleList(_ style: MarkdownEditing.ListStyle) {

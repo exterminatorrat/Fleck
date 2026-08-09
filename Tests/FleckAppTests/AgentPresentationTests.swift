@@ -82,21 +82,15 @@ struct AgentPresentationTests {
     }
   }
 
-  @Test func sharingStartsPrivateAndFirstEnableRequiresConfirmation() {
-    let note = Note()
+  @Test func sharingBadgeUsesEffectiveCapabilitiesOnly() {
+    let note = Note(agentAccess: true)
 
-    #expect(!note.agentAccess)
     #expect(
-      AgentSharingPresentation(
-        note: note,
-        hasConfirmedFirstShare: false
-      ).requiresEnableConfirmation
-    )
-    #expect(
-      !AgentSharingPresentation(
-        note: note,
-        hasConfirmedFirstShare: true
-      ).requiresEnableConfirmation
+      !AgentSharingPresentation.isShared(
+        noteID: note.id,
+        activeProfiles: [],
+        workspace: Workspace(notes: [note])
+      )
     )
     #expect(AgentSharingPresentation.sharedBadgeAccessibilityLabel == "Shared with agents")
   }
@@ -104,11 +98,24 @@ struct AgentPresentationTests {
   @Test func unsharingRemovesNoteFromServiceVisibilityImmediately() {
     let shared = Note(title: "Shared", agentAccess: true)
     let privateNote = Note(title: "Private")
+    let profile = AgentProfileCapabilities(
+      profileID: UUID(),
+      grantRevision: 1,
+      allowedCapabilities: [.readNotes],
+      grants: [
+        AgentResourceGrant(
+          scope: .note(noteID: shared.id),
+          authority: .read
+        )
+      ]
+    )
+    let workspace = Workspace(notes: [shared, privateNote])
 
     #expect(
-      AgentPresentation.visibleNoteIDs(in: Workspace(notes: [shared, privateNote]))
+      AgentPresentation.visibleNoteIDs(in: workspace, activeProfiles: [profile])
         == [shared.id]
     )
+    #expect(AgentPresentation.visibleNoteIDs(in: workspace) == [])
   }
 
   @Test func activityRowsExposeDetailsAndLocalUndoSurvivesUnshareAndRevoke() throws {
@@ -132,18 +139,6 @@ struct AgentPresentationTests {
     #expect(row.beforeText == "")
     #expect(row.afterText == "after")
     #expect(row.canUndo)
-  }
-
-  @Test func bridgeActivityCannotExposeAnUnsharedNote() {
-    let note = Note(title: "Private")
-    let record = makeRecord(note: note)
-
-    #expect(
-      AgentPresentation.bridgeVisibleActivity(
-        [record],
-        workspace: Workspace(notes: [note])
-      ).isEmpty
-    )
   }
 
   @Test func feedbackCoalescesBannerCountWithoutChangingActivityCount() {
@@ -185,6 +180,39 @@ struct AgentPresentationTests {
     let revoked = profile(name: "Claude", revokedAt: Date())
 
     #expect(AgentProfilesPresentation.active([revoked, active]) == [active])
+  }
+
+  @Test @MainActor func revokedProfileWithRetainedReadGrantCannotProduceSharedBadge() {
+    let revoked = profile(name: "Claude", revokedAt: Date())
+    let note = Note(title: "Private")
+    let capabilities = AgentProfileCapabilities(
+      profileID: revoked.id,
+      grantRevision: 3,
+      allowedCapabilities: [.readNotes],
+      grants: [
+        AgentResourceGrant(
+          scope: .note(noteID: note.id),
+          authority: .read
+        )
+      ]
+    )
+    let state = AgentCapabilityState(
+      profiles: [revoked.id: capabilities],
+      unassignedLegacyNoteIDs: []
+    )
+    let activeCapabilities = AppState.activeCapabilityProfiles(
+      profiles: [revoked],
+      state: state
+    )
+
+    #expect(activeCapabilities.isEmpty)
+    #expect(
+      !AgentCapabilityPresentation.isShared(
+        noteID: note.id,
+        activeProfiles: activeCapabilities,
+        workspace: Workspace(notes: [note])
+      )
+    )
   }
 
   @Test func clearingActivityRequiresConfirmation() {

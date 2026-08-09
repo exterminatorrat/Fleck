@@ -26,6 +26,7 @@
     @EnvironmentObject private var appState: AppState
     @State private var showsClearConfirmation = false
     @State private var showsAgentActivity = false
+    @State private var profileForCapabilities: AgentIntegrationProfile?
 
     var body: some View {
       Section(AgentConnectorPresentation.sectionTitle) {
@@ -66,6 +67,21 @@
             Text(lastConnection(profile))
               .font(.caption)
               .foregroundStyle(.secondary)
+            if let capabilities = appState.capabilityProfile(profile.id) {
+              let summary = AgentCapabilityPresentation.profileSummary(
+                for: capabilities,
+                isActive: true,
+                workspace: appState.workspace,
+                unassignedLegacyNoteIDs: appState.agentCapabilityState.unassignedLegacyNoteIDs
+              )
+              Text(summary.scopeSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(summary.accessibilityLabel)
+              Button("Edit Capabilities…") {
+                profileForCapabilities = profile
+              }
+            }
             if let snippet = appState.agentSetupSnippet(profileID: profile.id) {
               HStack {
                 Text(snippet)
@@ -106,10 +122,19 @@
 
       Section("Access") {
         Text(
-          "Only notes where you enable Agent Access can be read and edited by authorized integrations. This protects against cooperative tools, not malicious software already running as your macOS user."
+          "Only notes with explicit capability grants can be read or edited by authorized integrations. This protects against cooperative tools, not malicious software already running as your macOS user."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
+      }
+      .sheet(item: $profileForCapabilities) { profile in
+        if let capabilities = appState.capabilityProfile(profile.id) {
+          AgentCapabilityEditorView(
+            profile: profile,
+            capabilities: capabilities
+          )
+          .environmentObject(appState)
+        }
       }
     }
 
