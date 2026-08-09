@@ -1181,6 +1181,90 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(source.contains("guard let note = visibleSelectedNote else { return }"))
 }
 
+@Test func folderCreationPolishUsesSmoothMotionAndFleckPills() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let bodyStart = try #require(navigator.range(of: "var body: some View"))
+  let rootDefinition = try #require(navigator.range(of: "private var rootRow"))
+  let body = String(navigator[bodyStart.upperBound..<rootDefinition.lowerBound])
+  let editor = navigator
+    .components(separatedBy: "@ViewBuilder\n    private func folderEditor")
+    .dropFirst()
+    .first ?? ""
+  let styleTail = navigator
+    .components(separatedBy: "private struct FolderActionButtonStyle: ButtonStyle")
+    .dropFirst()
+    .first ?? ""
+  let style = styleTail
+    .components(separatedBy: "@ViewBuilder\n    private func folderEditor")
+    .first ?? styleTail
+  let normalizedNavigator = navigator
+    .split(whereSeparator: \.isWhitespace)
+    .joined(separator: " ")
+  let normalizedEditor = editor
+    .split(whereSeparator: \.isWhitespace)
+    .joined(separator: " ")
+
+  #expect(navigator.contains("@Environment(\\.accessibilityReduceMotion) private var reduceMotion"))
+  #expect(
+    normalizedNavigator.contains(
+      "private var folderMorphAnimation: Animation? { reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0) }"
+    )
+  )
+  #expect(body.contains(".animation(folderMorphAnimation, value: isCreatingFolder)"))
+  #expect(!body.contains(".animation(motion.spatial, value: isCreatingFolder)"))
+
+  #expect(editor.contains("let accent = Color(hex: appState.preferences.accentHex) ?? .accentColor"))
+  #expect(
+    normalizedEditor.contains(
+      ".buttonStyle(FolderActionButtonStyle(role: .save, accent: accent, motion: motion))"
+    )
+  )
+  #expect(
+    normalizedEditor.contains(
+      ".buttonStyle(FolderActionButtonStyle(role: .cancel, accent: accent, motion: motion))"
+    )
+  )
+  #expect(editor.contains("Button(\"Save\")"))
+  #expect(editor.contains("Button(\"Cancel\", role: .cancel)"))
+  #expect(editor.contains("Save folder name"))
+  #expect(editor.contains("Cancel folder name"))
+
+  #expect(style.contains("enum Role: Equatable"))
+  #expect(style.contains("let role: Role"))
+  #expect(style.contains("let accent: Color"))
+  #expect(style.contains("let motion: AppMotion"))
+  #expect(style.contains("@Environment(\\.isEnabled) private var isEnabled"))
+  #expect(style.contains(".font(.caption.weight(isSave ? .semibold : .medium))"))
+  #expect(style.contains(".padding(.horizontal, 8)"))
+  #expect(style.contains(".frame(height: 22)"))
+  #expect(
+    style.contains("RoundedRectangle(cornerRadius: 6, style: .continuous)")
+  )
+  #expect(style.contains("accent.opacity(configuration.isPressed ? 0.24 : 0.16)"))
+  #expect(
+    style.contains(
+      "Color.primary.opacity(configuration.isPressed ? 0.10 : 0.06)"
+    )
+  )
+  #expect(
+    style.contains(
+      ".scaleEffect(isEnabled && configuration.isPressed ? motion.pressScale : 1)"
+    )
+  )
+  #expect(style.contains(".opacity(isEnabled ? 1 : 0.48)"))
+  #expect(style.contains(".animation(motion.quick, value: configuration.isPressed)"))
+  #expect(editor.contains("folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"))
+  #expect(!style.contains("Image(systemName:"))
+  #expect(!style.lowercased().contains("material"))
+  #expect(!style.lowercased().contains("gradient"))
+  #expect(!style.lowercased().contains("shadow"))
+  #expect(!style.lowercased().contains("outline"))
+  #expect(!style.lowercased().contains("stroke"))
+}
+
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)

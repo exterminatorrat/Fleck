@@ -1298,6 +1298,7 @@
     }
 
     @EnvironmentObject private var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedRow: FocusedRow?
     @State private var editingFolderID: UUID?
     @State private var isCreatingFolder = false
@@ -1369,6 +1370,7 @@
           )
         }
       }
+      .animation(folderMorphAnimation, value: isCreatingFolder)
       .padding(.horizontal, 12)
       .padding(.vertical, 5)
       .onMoveCommand { direction in
@@ -1488,8 +1490,39 @@
       }
     }
 
+    private struct FolderActionButtonStyle: ButtonStyle {
+      enum Role: Equatable {
+        case save
+        case cancel
+      }
+
+      let role: Role
+      let accent: Color
+      let motion: AppMotion
+      @Environment(\.isEnabled) private var isEnabled
+
+      func makeBody(configuration: Configuration) -> some View {
+        let isSave = role == .save
+        return configuration.label
+          .font(.caption.weight(isSave ? .semibold : .medium))
+          .foregroundStyle(isSave ? accent : Color.secondary)
+          .frame(height: 22)
+          .padding(.horizontal, 8)
+          .background(
+            isSave
+              ? accent.opacity(configuration.isPressed ? 0.24 : 0.16)
+              : Color.primary.opacity(configuration.isPressed ? 0.10 : 0.06),
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+          )
+          .scaleEffect(isEnabled && configuration.isPressed ? motion.pressScale : 1)
+          .opacity(isEnabled ? 1 : 0.48)
+          .animation(motion.quick, value: configuration.isPressed)
+      }
+    }
+
     @ViewBuilder
     private func folderEditor(label: String, focus: FocusedRow) -> some View {
+      let accent = Color(hex: appState.preferences.accentHex) ?? .accentColor
       HStack(spacing: 5) {
         TextField(label, text: $folderNameDraft)
           .textFieldStyle(.roundedBorder)
@@ -1497,10 +1530,13 @@
           .onSubmit { commitFolderEditing() }
           .onExitCommand { cancelFolderEditing() }
         Button("Save") { commitFolderEditing() }
-          .buttonStyle(.plain)
+          .buttonStyle(FolderActionButtonStyle(role: .save, accent: accent, motion: motion))
+          .disabled(
+            folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          )
           .accessibilityLabel("Save folder name")
         Button("Cancel", role: .cancel) { cancelFolderEditing() }
-          .buttonStyle(.plain)
+          .buttonStyle(FolderActionButtonStyle(role: .cancel, accent: accent, motion: motion))
           .accessibilityLabel("Cancel folder name")
       }
       .accessibilityElement(children: .contain)
@@ -1532,6 +1568,14 @@
       )
       .contentShape(RoundedRectangle(cornerRadius: 6))
       .accessibilityHint(isEmpty ? "Empty folder" : "")
+    }
+
+    private var motion: AppMotion {
+      AppMotion(reduceMotion: reduceMotion)
+    }
+
+    private var folderMorphAnimation: Animation? {
+      reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0)
     }
 
     private func beginNewFolder() {
