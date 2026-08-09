@@ -290,6 +290,7 @@
       noteID: UUID,
       targetFolderID: UUID?
     ) -> Bool {
+      guard !pendingRestoreNoteIDs.contains(noteID) else { return true }
       guard noteAccessTransactionLocks[noteID] != nil else { return false }
       let currentContext = AgentCapabilityPresentation.noteAccessContext(
         for: noteID,
@@ -300,11 +301,15 @@
     }
 
     private func isLockedNote(_ noteID: UUID) -> Bool {
-      noteAccessTransactionLocks[noteID] != nil
+      pendingRestoreNoteIDs.contains(noteID)
+        || noteAccessTransactionLocks[noteID] != nil
     }
 
     private func isLockedFolder(_ folderID: UUID) -> Bool {
       noteAccessTransactionLocks.values.contains { $0.folderID == folderID }
+        || pendingRestoreNoteIDs.contains { noteID in
+          workspace.notes.first(where: { $0.id == noteID })?.folderID == folderID
+        }
     }
 
     private func isLockedContextUnchanged(in workspace: Workspace) -> Bool {
@@ -313,6 +318,21 @@
           for: lock.capturedContext.noteID,
           in: workspace
         ) == lock.capturedContext
+      }
+    }
+
+    private func setAgentCapabilityNoteExclusion(
+      _ noteID: UUID,
+      excluded: Bool
+    ) {
+      guard
+        let manager = agentCapabilityAuthority
+          as? any AgentCapabilityExclusionManaging
+      else { return }
+      if excluded {
+        manager.exclude(noteID: noteID)
+      } else {
+        manager.include(noteID: noteID)
       }
     }
 
@@ -396,70 +416,14 @@
       }
     }
 
-    private func futureFolderGrants(
-      for profile: AgentProfileCapabilities?
-    ) -> [AgentResourceGrant] {
-      profile?.grants.filter { grant in
-        if case .folderIncludingFutureNotes = grant.scope { return true }
-        return false
-      }
-      .sorted { $0.id.uuidString < $1.id.uuidString } ?? []
-    }
-
-    private func pendingRestoreNoteIDsNeedingCapabilityContextLock(
-      _ replacements: [
-        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
-      ]
-    ) -> Set<UUID> {
-      guard !pendingRestoreNoteIDs.isEmpty else { return [] }
-      return replacements.reduce(into: Set<UUID>()) { noteIDs, replacement in
-        let current = agentCapabilityState.profiles[replacement.profile.profileID]
-        let currentFutureFolderGrants = futureFolderGrants(for: current)
-        let replacementFutureFolderGrants = futureFolderGrants(
-          for: replacement.profile
-        )
-        guard currentFutureFolderGrants != replacementFutureFolderGrants
-          || (
-            current?.allowedCapabilities != replacement.profile.allowedCapabilities
-              && (
-                !currentFutureFolderGrants.isEmpty
-                  || !replacementFutureFolderGrants.isEmpty
-              )
-          )
-        else {
-          return
-        }
-        noteIDs.formUnion(pendingRestoreNoteIDs)
-      }
-    }
-
     private func rejectPendingRestoreCapabilityMutation() {
       agentCleanupError = AgentCapabilityPresentation.conflictMessage
     }
 
     private func performAgentCapabilitySave(
-      replacements: [
-        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
-      ],
       operation: @escaping @Sendable () async throws -> AgentCapabilityState,
       failureMessage: String
     ) async -> AgentCapabilitySaveResult {
-      let lockedNoteIDs =
-        pendingRestoreNoteIDsNeedingCapabilityContextLock(replacements)
-      let transactionID = UUID()
-      guard acquireNoteAccessTransactionLocks(
-        for: lockedNoteIDs,
-        ownerID: transactionID
-      ) else {
-        rejectPendingRestoreCapabilityMutation()
-        return .revisionConflict
-      }
-      defer {
-        releaseNoteAccessTransactionLocks(
-          for: lockedNoteIDs,
-          ownerID: transactionID
-        )
-      }
       do {
         agentCapabilityState = try await operation()
         agentCleanupError = nil
@@ -592,7 +556,6 @@
       ]
       let operation = replaceAgentCapabilitiesOperation
       return await performAgentCapabilitySave(
-        replacements: replacements,
         operation: {
           try await operation(replacements, expectedGrantRevisions)
         },
@@ -617,7 +580,6 @@
       }
       let operation = replaceAgentCapabilitiesOperation
       return await performAgentCapabilitySave(
-        replacements: replacements,
         operation: {
           try await operation(replacements, expectedGrantRevisions)
         },
@@ -638,7 +600,6 @@
       }
       let operation = replaceAgentCapabilitiesOperation
       return await performAgentCapabilitySave(
-        replacements: replacements,
         operation: {
           try await operation(replacements, expectedGrantRevisions)
         },
@@ -1144,6 +1105,7 @@
       guard pendingRestoreNoteIDs.insert(trashedNote.id).inserted else {
         return nil
       }
+      setAgentCapabilityNoteExclusion(trashedNote.id, excluded: true)
       debouncedSaveTask?.cancel()
       resetSaveStatus()
       pendingTrashNotes.removeValue(forKey: trashedNote.id)
@@ -1157,7 +1119,10 @@
       let restoreOperation = self.restoreOperation
       let loadTrashOperation = self.loadTrashOperation
       return Task { @MainActor in
-        defer { pendingRestoreNoteIDs.remove(trashedNote.id) }
+        defer {
+          pendingRestoreNoteIDs.remove(trashedNote.id)
+          setAgentCapabilityNoteExclusion(trashedNote.id, excluded: false)
+        }
         do {
           _ = try await restoreOperation(
             trashedNote,
@@ -1165,6 +1130,8 @@
             preferences,
             generation
           )
+          pendingRestoreNoteIDs.remove(trashedNote.id)
+          setAgentCapabilityNoteExclusion(trashedNote.id, excluded: false)
         } catch {
           let restoreError = error
           var rolledBackWorkspace = workspace

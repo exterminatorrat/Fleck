@@ -12,11 +12,47 @@ protocol AgentCapabilityAuthorizing: Sendable {
   ) async throws
 }
 
-struct AgentCapabilityAuthority: AgentCapabilityAuthorizing, Sendable {
+protocol AgentCapabilityExclusionManaging: Sendable {
+  func exclude(noteID: UUID)
+  func include(noteID: UUID)
+}
+
+private final class AgentCapabilityExclusions: @unchecked Sendable {
+  private let lock = NSLock()
+  private var noteIDs: Set<UUID> = []
+
+  func exclude(noteID: UUID) {
+    lock.withLock { _ = noteIDs.insert(noteID) }
+  }
+
+  func include(noteID: UUID) {
+    lock.withLock { _ = noteIDs.remove(noteID) }
+  }
+
+  func contains(noteID: UUID) -> Bool {
+    lock.withLock { noteIDs.contains(noteID) }
+  }
+}
+
+struct AgentCapabilityAuthority:
+  AgentCapabilityAuthorizing,
+  AgentCapabilityExclusionManaging,
+  Sendable
+{
   let store: AgentCapabilityStore
+  private let exclusions: AgentCapabilityExclusions
 
   init(store: AgentCapabilityStore = AgentCapabilityStore()) {
     self.store = store
+    exclusions = AgentCapabilityExclusions()
+  }
+
+  func exclude(noteID: UUID) {
+    exclusions.exclude(noteID: noteID)
+  }
+
+  func include(noteID: UUID) {
+    exclusions.include(noteID: noteID)
   }
 
   func snapshot(
@@ -24,9 +60,20 @@ struct AgentCapabilityAuthority: AgentCapabilityAuthorizing, Sendable {
     workspace: Workspace
   ) async throws -> AgentAuthorizationSnapshot {
     let profile = try await profile(profileID: profileID)
-    return AgentCapabilityPolicy.authorizationSnapshot(
+    let snapshot = AgentCapabilityPolicy.authorizationSnapshot(
       for: profile,
       workspace: workspace
+    )
+    let excludedNoteIDs = Set(
+      workspace.notes.map(\.id).filter { exclusions.contains(noteID: $0) }
+    )
+    return AgentAuthorizationSnapshot(
+      profileID: snapshot.profileID,
+      grantRevision: snapshot.grantRevision,
+      availableCapabilities: snapshot.availableCapabilities,
+      readableNoteIDs: snapshot.readableNoteIDs.subtracting(excludedNoteIDs),
+      proposableNoteIDs: snapshot.proposableNoteIDs.subtracting(excludedNoteIDs),
+      writableNoteIDs: snapshot.writableNoteIDs.subtracting(excludedNoteIDs)
     )
   }
 
