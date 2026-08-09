@@ -112,6 +112,7 @@
         isDirectory: true
       )
       let store = store ?? LocalStore(rootURL: canonicalRoot)
+      let agentRoot = store.rootURL
       self.store = store
       snapshotWriter = store.snapshotWriter
       self.saveOperation =
@@ -127,17 +128,23 @@
         loadTrashOperation ?? {
           try await store.loadTrash()
         }
-      self.agentProfileStore = agentProfileStore ?? AgentProfileStore()
+      self.agentProfileStore =
+        agentProfileStore
+        ?? AgentProfileStore(
+          profilesURL: agentRoot
+            .appendingPathComponent("AgentIntegrations", isDirectory: true)
+            .appendingPathComponent("profiles.json")
+        )
       self.agentActivityStore =
         agentActivityStore
-        ?? AgentActivityStore(rootURL: canonicalRoot)
+        ?? AgentActivityStore(rootURL: agentRoot)
       let capabilityStore =
         agentCapabilityStore
         ?? AgentCapabilityStore(
-          capabilitiesURL: canonicalRoot
+          capabilitiesURL: agentRoot
             .appendingPathComponent("AgentIntegrations", isDirectory: true)
             .appendingPathComponent("capabilities.json"),
-          previousCapabilitiesURL: canonicalRoot
+          previousCapabilitiesURL: agentRoot
             .appendingPathComponent("AgentIntegrations", isDirectory: true)
             .appendingPathComponent("capabilities.previous.json")
         )

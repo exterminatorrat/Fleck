@@ -400,6 +400,98 @@ func appStateKeepsUnassignedLegacySharesUnassigned() async throws {
   #expect(!state.isSharedWithAnyActiveProfile(note.id))
 }
 
+@Test @MainActor
+func appStateDefaultsAgentStoresToInjectedStoreRoot() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("AppStateCoherentAgentStorageTests-\(UUID())", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let agentDirectory = root.appendingPathComponent("AgentIntegrations", isDirectory: true)
+  try FileManager.default.createDirectory(at: agentDirectory, withIntermediateDirectories: true)
+  let profile = AgentIntegrationProfile(
+    id: UUID(),
+    displayName: "Isolated profile",
+    createdAt: Date(timeIntervalSince1970: 100),
+    lastConnectedAt: nil,
+    revokedAt: nil
+  )
+  try JSONEncoder().encode([profile]).write(
+    to: agentDirectory.appendingPathComponent("profiles.json")
+  )
+
+  let canonicalRoot = FileManager.default.urls(
+    for: .applicationSupportDirectory,
+    in: .userDomainMask
+  )[0].appendingPathComponent(FleckProductPaths.canonicalDirectoryName, isDirectory: true)
+  let canonicalProfilesURL = canonicalRoot
+    .appendingPathComponent("AgentIntegrations", isDirectory: true)
+    .appendingPathComponent("profiles.json")
+  let canonicalCapabilitiesURL = canonicalRoot
+    .appendingPathComponent("AgentIntegrations", isDirectory: true)
+    .appendingPathComponent("capabilities.json")
+  let canonicalProfilesBefore = try? Data(contentsOf: canonicalProfilesURL)
+  let canonicalCapabilitiesBefore = try? Data(contentsOf: canonicalCapabilitiesURL)
+
+  let store = LocalStore(rootURL: root)
+  #expect(store.rootURL == root)
+  let state = AppState(store: store)
+  await state.waitUntilInitialLoad()
+
+  #expect(state.hasFinishedInitialLoad)
+  #expect(state.agentProfiles == [profile])
+  #expect(state.agentCapabilityState.profiles[profile.id]?.profileID == profile.id)
+  #expect(
+    FileManager.default.fileExists(
+      atPath: agentDirectory.appendingPathComponent("capabilities.json").path
+    )
+  )
+  #expect(
+    FileManager.default.fileExists(
+      atPath: root.appendingPathComponent("AgentActivity/Records", isDirectory: true).path
+    )
+  )
+  let canonicalProfilesAfter = try? Data(contentsOf: canonicalProfilesURL)
+  let canonicalCapabilitiesAfter = try? Data(contentsOf: canonicalCapabilitiesURL)
+  #expect(canonicalProfilesAfter == canonicalProfilesBefore)
+  #expect(canonicalCapabilitiesAfter == canonicalCapabilitiesBefore)
+}
+
+@Test @MainActor
+func bothMalformedCapabilityGenerationsKeepNotesUsableAndAgentWorkspaceUnavailable()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("AppStateDualMalformedCapabilityTests-\(UUID())", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Still usable", body: "Keep this")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: .init()
+  )
+  let agentDirectory = root.appendingPathComponent("AgentIntegrations", isDirectory: true)
+  try FileManager.default.createDirectory(at: agentDirectory, withIntermediateDirectories: true)
+  try Data("current-not-json".utf8).write(
+    to: agentDirectory.appendingPathComponent("capabilities.json")
+  )
+  try Data("previous-not-json".utf8).write(
+    to: agentDirectory.appendingPathComponent("capabilities.previous.json")
+  )
+
+  let state = AppState(store: store)
+  await state.waitUntilInitialLoad()
+
+  #expect(state.selectedNote?.body == "Keep this")
+  #expect(state.hasFinishedInitialLoad)
+  #expect(!state.isAgentWorkspaceAvailable)
+  #expect(state.saveError == nil)
+  #expect(
+    state.agentCleanupError
+      == "Agent workspace is unavailable. Reopen Fleck after resolving capability storage."
+  )
+  #expect(!(state.agentCleanupError ?? "").contains("not-json"))
+  #expect(!(state.agentCleanupError ?? "").contains(root.path))
+}
+
 private func appStateCapabilityStore(root: URL) -> AgentCapabilityStore {
   let directory = root.appendingPathComponent("AgentIntegrations", isDirectory: true)
   return AgentCapabilityStore(

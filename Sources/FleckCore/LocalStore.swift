@@ -9,7 +9,7 @@ public actor LocalStore {
     case restoreConflict
   }
 
-  private let rootURL: URL
+  public nonisolated let rootURL: URL
   private let fileManager: FileManager
   private let decoder: JSONDecoder
   public nonisolated let snapshotWriter: LocalStoreSnapshotWriter
