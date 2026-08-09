@@ -1283,8 +1283,6 @@
             .frame(width: 0, height: 0)
           )
           .id(note.id)
-          .frame(minHeight: 48)
-          .layoutPriority(1)
           .padding(.vertical, 10)
 
           BacklinksView(
@@ -1697,7 +1695,7 @@
     }
 
     private var showsUnfiledDisclosure: Bool {
-      isUnfiledHovered || focusedRow == .unfiled
+      !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled
     }
 
     private func setUnfiledCompact(_ compact: Bool) {

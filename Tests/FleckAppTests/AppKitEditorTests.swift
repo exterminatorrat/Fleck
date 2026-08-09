@@ -1297,6 +1297,33 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(navigator.contains("count:"))
 }
 
+@Test func compactUnfiledDisclosureShowsExpandedAtRestAndOnInteraction() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let normalizedNavigator = navigator
+    .split(whereSeparator: \.isWhitespace)
+    .joined(separator: " ")
+
+  #expect(
+    normalizedNavigator.contains(
+      "private var showsUnfiledDisclosure: Bool { !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled }"
+    )
+  )
+}
+
+@Test func compactUnfiledRemovesOnlyItsAccidentalEditorLayoutModifiers() throws {
+  let source = try notesPanelSource()
+  let editor = try #require(
+    source.components(separatedBy: "private var editor: some View").last
+  )
+
+  #expect(!editor.contains(".frame(minHeight: 48)"))
+  #expect(source.contains(".frame(minHeight: 80)"))
+  #expect(source.components(separatedBy: ".layoutPriority(1)").count - 1 == 1)
+}
+
 @Test func compactUnfiledDoesNotChangeNamedFolderOrTrashRowLabels() throws {
   let source = try notesPanelSource()
   let navigator = try #require(
