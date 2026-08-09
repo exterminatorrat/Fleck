@@ -1132,6 +1132,16 @@ struct AgentCapabilityPresentationTests {
       workspace: Workspace(notes: [restored, unrelated, secondUnrelated])
     )
     _ = try await capabilityStore.registerEmptyProfile(profileID)
+    let replacementGate = PausableAgentCapabilitySaveGate()
+    let replacementOperation: AppState.AgentCapabilityBatchReplaceOperation = {
+      replacements,
+      expectedGrantRevisions in
+      _ = await replacementGate.markEntered()
+      return try await capabilityStore.replaceProfiles(
+        replacements,
+        expectedGrantRevisions: expectedGrantRevisions
+      )
+    }
     let restoreGate = PausableAgentCapabilitySaveGate()
     let restoreOperation: AppState.RestoreOperation = {
       _, optimisticWorkspace, _, _ in
@@ -1148,7 +1158,8 @@ struct AgentCapabilityPresentationTests {
       loadTrashOperation: { [restoredTrash] },
       restoreOperation: restoreOperation,
       agentProfileStore: AgentProfileStore(profilesURL: profilesURL),
-      agentCapabilityStore: capabilityStore
+      agentCapabilityStore: capabilityStore,
+      replaceAgentCapabilities: replacementOperation
     )
     await state.waitUntilInitialLoad()
 
@@ -1211,6 +1222,7 @@ struct AgentCapabilityPresentationTests {
         expectedGrantRevision: singleProfile.grantRevision
       ) == .succeeded
     )
+    #expect(await replacementGate.count == 1)
 
     let batchUnrelatedState = try await capabilityStore.currentState()
     let batchUnrelatedProfile = try #require(
@@ -1229,6 +1241,7 @@ struct AgentCapabilityPresentationTests {
         )
       ]) == .succeeded
     )
+    #expect(await replacementGate.count == 2)
 
     let assignmentUnrelatedState = try await capabilityStore.currentState()
     let assignmentUnrelatedProfile = try #require(
@@ -1269,6 +1282,185 @@ struct AgentCapabilityPresentationTests {
     }
     #expect(retryGrants.isEmpty)
     #expect(stateAfterRetry.unassignedLegacyNoteIDs.contains(restored.id))
+  }
+
+  @Test @MainActor
+  func GenericFutureFolderSaveLocksPendingRestoreContextThroughPublication()
+    async throws
+  {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(
+        "GenericPendingRestoreCapabilities-\(UUID().uuidString)",
+        isDirectory: true
+      )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let folderA = try Folder(
+      id: testUUID("00000000-0000-0000-0000-000000000380"),
+      name: "Current"
+    )
+    let folderB = try Folder(
+      id: testUUID("00000000-0000-0000-0000-000000000381"),
+      name: "Granted"
+    )
+    let folderC = try Folder(
+      id: testUUID("00000000-0000-0000-0000-000000000382"),
+      name: "Next"
+    )
+    let restoredNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000383"),
+      title: "Restored",
+      folderID: folderA.id
+    )
+    let unrelatedNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000384"),
+      title: "Unrelated",
+      folderID: folderA.id
+    )
+    let profileID = testUUID("00000000-0000-0000-0000-000000000385")
+    let profile = AgentIntegrationProfile(
+      id: profileID,
+      displayName: "Codex",
+      createdAt: Date(timeIntervalSince1970: 1),
+      lastConnectedAt: nil,
+      revokedAt: nil
+    )
+    let localStore = LocalStore(rootURL: root)
+    let restoredTrash = TrashedNote(note: restoredNote, deletedAt: Date())
+    try await localStore.save(
+      workspace: Workspace(
+        notes: [unrelatedNote],
+        selectedNoteID: unrelatedNote.id,
+        folders: [folderA, folderB, folderC]
+      ),
+      preferences: .init(),
+      trashedNotes: [restoredNote]
+    )
+    let profilesURL = root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("profiles.json")
+    try FileManager.default.createDirectory(
+      at: profilesURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try JSONEncoder().encode([profile]).write(to: profilesURL)
+    let capabilityStore = AgentCapabilityStore(
+      capabilitiesURL: profilesURL.deletingLastPathComponent()
+        .appendingPathComponent("capabilities.json"),
+      previousCapabilitiesURL: profilesURL.deletingLastPathComponent()
+        .appendingPathComponent("capabilities.previous.json")
+    )
+    _ = try await capabilityStore.loadOrMigrate(
+      activeProfileIDs: [],
+      workspace: Workspace(
+        notes: [restoredNote, unrelatedNote],
+        folders: [folderA, folderB, folderC]
+      )
+    )
+    _ = try await capabilityStore.registerEmptyProfile(profileID)
+
+    let capabilityGate = PausableAgentCapabilitySaveGate()
+    let restoreGate = PausableAgentCapabilitySaveGate()
+    let replacementOperation: AppState.AgentCapabilityBatchReplaceOperation = {
+      replacements,
+      expectedGrantRevisions in
+      let entry = await capabilityGate.markEntered()
+      let failing = await capabilityGate.waitForRelease(entry: entry)
+      if failing {
+        throw AgentWorkspaceError(code: .revisionConflict)
+      }
+      return try await capabilityStore.replaceProfiles(
+        replacements,
+        expectedGrantRevisions: expectedGrantRevisions
+      )
+    }
+    let restoreOperation: AppState.RestoreOperation = {
+      _, optimisticWorkspace, _, _ in
+      let entry = await restoreGate.markEntered()
+      let failing = await restoreGate.waitForRelease(entry: entry)
+      if failing {
+        throw RestoreTestError.restoreFailed
+      }
+      return optimisticWorkspace
+    }
+    let state = AppState(
+      store: localStore,
+      saveOperation: { _, _, _, _ in .committed },
+      loadTrashOperation: { [] },
+      restoreOperation: restoreOperation,
+      agentProfileStore: AgentProfileStore(profilesURL: profilesURL),
+      agentCapabilityStore: capabilityStore,
+      replaceAgentCapabilities: replacementOperation
+    )
+    await state.waitUntilInitialLoad()
+
+    let restoreTask = try #require(state.restore(restoredTrash))
+    let restoreEntry = await restoreGate.waitUntilEntered(after: 0)
+    let initialProfile = try #require(state.capabilityProfile(profileID))
+    let firstReplacement = AgentProfileCapabilities(
+      profileID: profileID,
+      grantRevision: initialProfile.grantRevision + 1,
+      allowedCapabilities: [.readNotes, .writeNotes],
+      grants: [
+        AgentResourceGrant(
+          scope: .folderIncludingFutureNotes(folderID: folderB.id),
+          authority: .write
+        )
+      ]
+    )
+    let firstTask = Task { @MainActor in
+      await state.updateAgentCapabilities(
+        firstReplacement,
+        expectedGrantRevision: initialProfile.grantRevision
+      )
+    }
+    let firstEntry = await capabilityGate.waitUntilEntered(after: 0)
+    let workspaceBeforeRejectedMoves = state.workspace
+    #expect(!state.moveNote(restoredNote.id, toFolderID: folderB.id))
+    #expect(state.workspace == workspaceBeforeRejectedMoves)
+    #expect(state.moveNote(unrelatedNote.id, toFolderID: folderB.id))
+    state.updateSelected(title: "Edited while saving", body: "Body is allowed")
+    #expect(state.selectedNote?.body == "Body is allowed")
+    let foldersBeforeRejectedDelete = state.workspace.folders
+    try state.deleteFolder(id: folderA.id)
+    let folderDeleteWasRejected = state.workspace.folders == foldersBeforeRejectedDelete
+    #expect(folderDeleteWasRejected)
+    guard folderDeleteWasRejected else { return }
+
+    await capabilityGate.release(entry: firstEntry, failing: false)
+    #expect(await firstTask.value == .succeeded)
+    #expect(state.moveNote(restoredNote.id, toFolderID: folderB.id))
+    #expect(state.moveNote(restoredNote.id, toFolderID: folderA.id))
+
+    let currentProfile = try #require(state.capabilityProfile(profileID))
+    let secondReplacement = AgentProfileCapabilities(
+      profileID: profileID,
+      grantRevision: currentProfile.grantRevision + 1,
+      allowedCapabilities: currentProfile.allowedCapabilities,
+      grants: [
+        AgentResourceGrant(
+          scope: .folderIncludingFutureNotes(folderID: folderC.id),
+          authority: .write
+        )
+      ]
+    )
+    let secondTask = Task { @MainActor in
+      await state.updateAgentCapabilities(
+        secondReplacement,
+        expectedGrantRevision: currentProfile.grantRevision
+      )
+    }
+    let secondEntry = await capabilityGate.waitUntilEntered(after: firstEntry)
+    #expect(!state.moveNote(restoredNote.id, toFolderID: folderC.id))
+    await capabilityGate.release(entry: secondEntry, failing: true)
+    #expect(await secondTask.value == .revisionConflict)
+    #expect(state.moveNote(restoredNote.id, toFolderID: folderC.id))
+
+    await restoreGate.release(entry: restoreEntry, failing: false)
+    await restoreTask.value
+    #expect(
+      state.workspace.notes.first(where: { $0.id == restoredNote.id })?.folderID
+        == folderC.id
+    )
   }
 
   @Test @MainActor

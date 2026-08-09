@@ -106,6 +106,7 @@
     private let replaceAgentCapabilitiesOperation:
       AgentCapabilityBatchReplaceOperation
     private struct NoteAccessTransactionLock {
+      let ownerID: UUID
       let capturedContext: AgentNoteAccessContext
       let folderID: UUID?
     }
@@ -315,6 +316,43 @@
       }
     }
 
+    private func acquireNoteAccessTransactionLocks(
+      for noteIDs: Set<UUID>,
+      ownerID: UUID,
+      capturedContexts: [UUID: AgentNoteAccessContext] = [:]
+    ) -> Bool {
+      guard noteIDs.allSatisfy({ noteAccessTransactionLocks[$0] == nil }) else {
+        return false
+      }
+      for noteID in noteIDs {
+        let capturedContext = capturedContexts[noteID]
+          ?? AgentCapabilityPresentation.noteAccessContext(
+            for: noteID,
+            in: workspace
+          )
+        noteAccessTransactionLocks[noteID] = NoteAccessTransactionLock(
+          ownerID: ownerID,
+          capturedContext: capturedContext,
+          folderID: capturedContext.folderExists
+            ? capturedContext.noteFolderID
+            : nil
+        )
+      }
+      return true
+    }
+
+    private func releaseNoteAccessTransactionLocks(
+      for noteIDs: Set<UUID>,
+      ownerID: UUID
+    ) {
+      for noteID in noteIDs {
+        guard noteAccessTransactionLocks[noteID]?.ownerID == ownerID else {
+          continue
+        }
+        noteAccessTransactionLocks.removeValue(forKey: noteID)
+      }
+    }
+
     private func relevantCapabilityGrants(
       for profile: AgentProfileCapabilities?,
       noteID: UUID
@@ -358,8 +396,81 @@
       }
     }
 
+    private func futureFolderGrants(
+      for profile: AgentProfileCapabilities?
+    ) -> [AgentResourceGrant] {
+      profile?.grants.filter { grant in
+        if case .folderIncludingFutureNotes = grant.scope { return true }
+        return false
+      }
+      .sorted { $0.id.uuidString < $1.id.uuidString } ?? []
+    }
+
+    private func pendingRestoreNoteIDsNeedingCapabilityContextLock(
+      _ replacements: [
+        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+      ]
+    ) -> Set<UUID> {
+      guard !pendingRestoreNoteIDs.isEmpty else { return [] }
+      return replacements.reduce(into: Set<UUID>()) { noteIDs, replacement in
+        let current = agentCapabilityState.profiles[replacement.profile.profileID]
+        let currentFutureFolderGrants = futureFolderGrants(for: current)
+        let replacementFutureFolderGrants = futureFolderGrants(
+          for: replacement.profile
+        )
+        guard currentFutureFolderGrants != replacementFutureFolderGrants
+          || (
+            current?.allowedCapabilities != replacement.profile.allowedCapabilities
+              && (
+                !currentFutureFolderGrants.isEmpty
+                  || !replacementFutureFolderGrants.isEmpty
+              )
+          )
+        else {
+          return
+        }
+        noteIDs.formUnion(pendingRestoreNoteIDs)
+      }
+    }
+
     private func rejectPendingRestoreCapabilityMutation() {
       agentCleanupError = AgentCapabilityPresentation.conflictMessage
+    }
+
+    private func performAgentCapabilitySave(
+      replacements: [
+        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+      ],
+      operation: @escaping @Sendable () async throws -> AgentCapabilityState,
+      failureMessage: String
+    ) async -> AgentCapabilitySaveResult {
+      let lockedNoteIDs =
+        pendingRestoreNoteIDsNeedingCapabilityContextLock(replacements)
+      let transactionID = UUID()
+      guard acquireNoteAccessTransactionLocks(
+        for: lockedNoteIDs,
+        ownerID: transactionID
+      ) else {
+        rejectPendingRestoreCapabilityMutation()
+        return .revisionConflict
+      }
+      defer {
+        releaseNoteAccessTransactionLocks(
+          for: lockedNoteIDs,
+          ownerID: transactionID
+        )
+      }
+      do {
+        agentCapabilityState = try await operation()
+        agentCleanupError = nil
+        return .succeeded
+      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
+        agentCleanupError = AgentCapabilityPresentation.conflictMessage
+        return .revisionConflict
+      } catch {
+        agentCleanupError = failureMessage
+        return .failed
+      }
     }
 
     func activeDestinations() -> [DictationDestination] {
@@ -429,18 +540,21 @@
       else {
         return .contextChanged
       }
-      guard noteAccessTransactionLocks[noteID] == nil else {
+      let transactionID = UUID()
+      guard acquireNoteAccessTransactionLocks(
+        for: [noteID],
+        ownerID: transactionID,
+        capturedContexts: [noteID: capturedContext]
+      ) else {
         agentCleanupError = "Could not update Agent access. Try again."
         return .failed
       }
-
-      noteAccessTransactionLocks[noteID] = NoteAccessTransactionLock(
-        capturedContext: capturedContext,
-        folderID: capturedContext.folderExists
-          ? capturedContext.noteFolderID
-          : nil
-      )
-      defer { noteAccessTransactionLocks.removeValue(forKey: noteID) }
+      defer {
+        releaseNoteAccessTransactionLocks(
+          for: [noteID],
+          ownerID: transactionID
+        )
+      }
 
       do {
         agentCapabilityState = try await replaceAgentCapabilitiesOperation(
@@ -463,29 +577,27 @@
       _ replacement: AgentProfileCapabilities,
       expectedGrantRevision: UInt64
     ) async -> AgentCapabilitySaveResult {
-      guard !capabilityMutationAffectsPendingRestoreNote([
+      let replacements = [
         (
           profile: replacement,
           expectedGrantRevision: expectedGrantRevision
         )
-      ]) else {
+      ]
+      guard !capabilityMutationAffectsPendingRestoreNote(replacements) else {
         rejectPendingRestoreCapabilityMutation()
         return .revisionConflict
       }
-      do {
-        agentCapabilityState = try await agentCapabilityStore.replaceProfile(
-          replacement,
-          expectedGrantRevision: expectedGrantRevision
-        )
-        agentCleanupError = nil
-        return .succeeded
-      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
-        agentCleanupError = AgentCapabilityPresentation.conflictMessage
-        return .revisionConflict
-      } catch {
-        agentCleanupError = "Could not update Agent capabilities. Try again."
-        return .failed
-      }
+      let expectedGrantRevisions = [
+        replacement.profileID: expectedGrantRevision
+      ]
+      let operation = replaceAgentCapabilitiesOperation
+      return await performAgentCapabilitySave(
+        replacements: replacements,
+        operation: {
+          try await operation(replacements, expectedGrantRevisions)
+        },
+        failureMessage: "Could not update Agent capabilities. Try again."
+      )
     }
 
     @discardableResult
@@ -498,17 +610,19 @@
         rejectPendingRestoreCapabilityMutation()
         return .revisionConflict
       }
-      do {
-        agentCapabilityState = try await agentCapabilityStore.replaceProfiles(replacements)
-        agentCleanupError = nil
-        return .succeeded
-      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
-        agentCleanupError = AgentCapabilityPresentation.conflictMessage
-        return .revisionConflict
-      } catch {
-        agentCleanupError = "Could not update Agent access. Try again."
-        return .failed
+      let expectedGrantRevisions = replacements.reduce(
+        into: [UUID: UInt64]()
+      ) { result, replacement in
+        result[replacement.profile.profileID] = replacement.expectedGrantRevision
       }
+      let operation = replaceAgentCapabilitiesOperation
+      return await performAgentCapabilitySave(
+        replacements: replacements,
+        operation: {
+          try await operation(replacements, expectedGrantRevisions)
+        },
+        failureMessage: "Could not update Agent access. Try again."
+      )
     }
 
     @discardableResult
@@ -522,20 +636,14 @@
         rejectPendingRestoreCapabilityMutation()
         return .revisionConflict
       }
-      do {
-        agentCapabilityState = try await agentCapabilityStore.replaceProfiles(
-          replacements,
-          expectedGrantRevisions: expectedGrantRevisions
-        )
-        agentCleanupError = nil
-        return .succeeded
-      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
-        agentCleanupError = AgentCapabilityPresentation.conflictMessage
-        return .revisionConflict
-      } catch {
-        agentCleanupError = "Could not update Agent access. Try again."
-        return .failed
-      }
+      let operation = replaceAgentCapabilitiesOperation
+      return await performAgentCapabilitySave(
+        replacements: replacements,
+        operation: {
+          try await operation(replacements, expectedGrantRevisions)
+        },
+        failureMessage: "Could not update Agent access. Try again."
+      )
     }
 
     @discardableResult
