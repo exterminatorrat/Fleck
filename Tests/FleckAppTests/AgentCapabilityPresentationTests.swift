@@ -894,6 +894,11 @@ struct AgentCapabilityPresentationTests {
       title: "Locked",
       folderID: folder.id
     )
+    let restoredNote = Note(
+      id: testUUID("00000000-0000-0000-0000-000000000365"),
+      title: "Restored",
+      folderID: folder.id
+    )
     let unrelatedNote = Note(
       id: testUUID("00000000-0000-0000-0000-000000000363"),
       title: "Unrelated",
@@ -934,6 +939,7 @@ struct AgentCapabilityPresentationTests {
         .appendingPathComponent("capabilities.previous.json")
     )
     let gate = PausableAgentCapabilitySaveGate()
+    let restoreGate = PausableAgentCapabilitySaveGate()
     let replacementOperation: AppState.AgentCapabilityBatchReplaceOperation = {
       replacements,
       expectedGrantRevisions in
@@ -945,14 +951,156 @@ struct AgentCapabilityPresentationTests {
         expectedGrantRevisions: expectedGrantRevisions
       )
     }
+    let restoreOperation: AppState.RestoreOperation = {
+      _, optimisticWorkspace, _, _ in
+      let entry = await restoreGate.markEntered()
+      let failing = await restoreGate.waitForRelease(entry: entry)
+      if failing { throw AgentWorkspaceError(code: .internalSaveFailure) }
+      return optimisticWorkspace
+    }
     let state = AppState(
       store: localStore,
       saveOperation: { _, _, _, _ in .committed },
+      loadTrashOperation: { [] },
+      restoreOperation: restoreOperation,
       agentProfileStore: AgentProfileStore(profilesURL: profilesURL),
       agentCapabilityStore: capabilityStore,
       replaceAgentCapabilities: replacementOperation
     )
     await state.waitUntilInitialLoad()
+
+    let restoredTrash = TrashedNote(note: restoredNote, deletedAt: Date())
+    let restoreTask = try #require(state.restore(restoredTrash))
+    let restoreEntry = await restoreGate.waitUntilEntered(after: 0)
+    #expect(
+      state.workspace.notes.contains(where: { $0.id == restoredNote.id })
+    )
+    #expect(state.restore(restoredTrash) == nil)
+    let initialDisplayed = try #require(state.capabilityProfile(profileID))
+    let restoredContext = AgentCapabilityPresentation.noteAccessContext(
+      for: restoredNote.id,
+      in: state.workspace
+    )
+    let restoredReplacement = AgentCapabilityPresentation.noteAccessReplacement(
+      noteID: restoredNote.id,
+      level: .write,
+      baseline: initialDisplayed
+    )
+    let restoredExpectedRevision = [profileID: initialDisplayed.grantRevision]
+    #expect(
+      await state.updateAgentCapabilitiesForNote(
+        noteID: restoredNote.id,
+        capturedContext: restoredContext,
+        replacements: [
+          (
+            profile: restoredReplacement,
+            expectedGrantRevision: initialDisplayed.grantRevision
+          )
+        ],
+        expectedGrantRevisions: restoredExpectedRevision
+      ) == .contextChanged
+    )
+    #expect(await gate.count == 0)
+
+    let unrelatedContext = AgentCapabilityPresentation.noteAccessContext(
+      for: note.id,
+      in: state.workspace
+    )
+    let unrelatedReplacement = AgentCapabilityPresentation.noteAccessReplacement(
+      noteID: note.id,
+      level: .write,
+      baseline: initialDisplayed
+    )
+    let unrelatedTask = Task { @MainActor in
+      await state.updateAgentCapabilitiesForNote(
+        noteID: note.id,
+        capturedContext: unrelatedContext,
+        replacements: [
+          (
+            profile: unrelatedReplacement,
+            expectedGrantRevision: initialDisplayed.grantRevision
+          )
+        ],
+        expectedGrantRevisions: [profileID: initialDisplayed.grantRevision]
+      )
+    }
+    let unrelatedEntry = await gate.waitUntilEntered(after: 0)
+    await gate.release(entry: unrelatedEntry, failing: false)
+    #expect(await unrelatedTask.value == .succeeded)
+
+    await restoreGate.release(entry: restoreEntry, failing: true)
+    await restoreTask.value
+    #expect(
+      !state.workspace.notes.contains(where: { $0.id == restoredNote.id })
+    )
+    #expect(
+      await state.updateAgentCapabilitiesForNote(
+        noteID: restoredNote.id,
+        capturedContext: restoredContext,
+        replacements: [
+          (
+            profile: restoredReplacement,
+            expectedGrantRevision: initialDisplayed.grantRevision
+          )
+        ],
+        expectedGrantRevisions: restoredExpectedRevision
+      ) == .contextChanged
+    )
+
+    let retryRestoreTask = try #require(state.restore(restoredTrash))
+    let retryRestoreEntry = await restoreGate.waitUntilEntered(after: restoreEntry)
+    let retryDisplayed = try #require(state.capabilityProfile(profileID))
+    let retryReplacement = AgentCapabilityPresentation.noteAccessReplacement(
+      noteID: restoredNote.id,
+      level: .write,
+      baseline: retryDisplayed
+    )
+    #expect(
+      await state.updateAgentCapabilitiesForNote(
+        noteID: restoredNote.id,
+        capturedContext: restoredContext,
+        replacements: [
+          (
+            profile: retryReplacement,
+            expectedGrantRevision: retryDisplayed.grantRevision
+          )
+        ],
+        expectedGrantRevisions: [profileID: retryDisplayed.grantRevision]
+      ) == .contextChanged
+    )
+    #expect(await gate.count == unrelatedEntry)
+    await restoreGate.release(entry: retryRestoreEntry, failing: false)
+    await retryRestoreTask.value
+    #expect(
+      state.workspace.notes.contains(where: { $0.id == restoredNote.id })
+    )
+
+    let freshDisplayed = try #require(state.capabilityProfile(profileID))
+    let freshRestoredContext = AgentCapabilityPresentation.noteAccessContext(
+      for: restoredNote.id,
+      in: state.workspace
+    )
+    let freshRestoredReplacement = AgentCapabilityPresentation.noteAccessReplacement(
+      noteID: restoredNote.id,
+      level: .write,
+      baseline: freshDisplayed
+    )
+    let freshCapabilityTask = Task { @MainActor in
+      await state.updateAgentCapabilitiesForNote(
+        noteID: restoredNote.id,
+        capturedContext: freshRestoredContext,
+        replacements: [
+          (
+            profile: freshRestoredReplacement,
+            expectedGrantRevision: freshDisplayed.grantRevision
+          )
+        ],
+        expectedGrantRevisions: [profileID: freshDisplayed.grantRevision]
+      )
+    }
+    let freshCapabilityEntry = await gate.waitUntilEntered(after: unrelatedEntry)
+    await gate.release(entry: freshCapabilityEntry, failing: false)
+    #expect(await freshCapabilityTask.value == .succeeded)
 
     let displayed = try #require(state.capabilityProfile(profileID))
     let capturedContext = AgentCapabilityPresentation.noteAccessContext(
@@ -979,7 +1127,7 @@ struct AgentCapabilityPresentationTests {
         expectedGrantRevisions: expectedGrantRevisions
       ) == .contextChanged
     )
-    #expect(await gate.count == 0)
+    #expect(await gate.count == freshCapabilityEntry)
     #expect(state.moveNote(note.id, toFolderID: folder.id))
 
     let saveTask = Task { @MainActor in
@@ -995,7 +1143,7 @@ struct AgentCapabilityPresentationTests {
         expectedGrantRevisions: expectedGrantRevisions
       )
     }
-    let firstEntry = await gate.waitUntilEntered(after: 0)
+    let firstEntry = await gate.waitUntilEntered(after: freshCapabilityEntry)
 
     state.updateSelected(title: "Edited while saving", body: "Body is allowed")
     #expect(state.selectedNote?.body == "Body is allowed")

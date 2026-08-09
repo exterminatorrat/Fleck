@@ -38,6 +38,13 @@
       @Sendable (UUID, Data) async throws -> Void
     typealias AgentProfileDisconnectOperation =
       @Sendable (UUID) async throws -> Void
+    typealias RestoreOperation =
+      @Sendable (
+        TrashedNote,
+        Workspace,
+        AppPreferences,
+        UInt64
+      ) async throws -> Workspace
     typealias AgentCapabilityBatchReplaceOperation =
       @Sendable (
         [(profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)],
@@ -95,6 +102,7 @@
     let agentCapabilityAuthority: any AgentCapabilityAuthorizing
     private let agentProfileProvisionOperation: AgentProfileProvisionOperation
     private let agentProfileDisconnectOperation: AgentProfileDisconnectOperation
+    private let restoreOperation: RestoreOperation
     private let replaceAgentCapabilitiesOperation:
       AgentCapabilityBatchReplaceOperation
     private struct NoteAccessTransactionLock {
@@ -102,6 +110,7 @@
       let folderID: UUID?
     }
     private var noteAccessTransactionLocks: [UUID: NoteAccessTransactionLock] = [:]
+    private var pendingRestoreNoteIDs: Set<UUID> = []
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
     private var awaitedSaveWaiters: [CheckedContinuation<Void, Never>] = []
@@ -120,6 +129,7 @@
       store: LocalStore? = nil,
       saveOperation: SaveOperation? = nil,
       loadTrashOperation: LoadTrashOperation? = nil,
+      restoreOperation: RestoreOperation? = nil,
       agentProfileStore: AgentProfileStore? = nil,
       agentActivityStore: AgentActivityStore? = nil,
       agentCapabilityStore: AgentCapabilityStore? = nil,
@@ -153,6 +163,15 @@
       self.loadTrashOperation =
         loadTrashOperation ?? {
           try await store.loadTrash()
+        }
+      self.restoreOperation =
+        restoreOperation ?? { trashedNote, workspace, preferences, generation in
+          try await store.restore(
+            trashedNote,
+            into: workspace,
+            preferences: preferences,
+            generation: generation
+          )
         }
       self.agentProfileStore =
         agentProfileStore
@@ -346,6 +365,9 @@
       ],
       expectedGrantRevisions: [UUID: UInt64]
     ) async -> AgentNoteAccessSaveResult {
+      guard !pendingRestoreNoteIDs.contains(noteID) else {
+        return .contextChanged
+      }
       guard
         capturedContext.noteID == noteID,
         capturedContext.noteExists,
@@ -936,9 +958,13 @@
       }
     }
 
-    func restore(_ trashedNote: TrashedNote) {
-      guard !isLockedNote(trashedNote.id) else { return }
-      guard startupMigrationError == nil else { return }
+    @discardableResult
+    func restore(_ trashedNote: TrashedNote) -> Task<Void, Never>? {
+      guard !isLockedNote(trashedNote.id) else { return nil }
+      guard startupMigrationError == nil else { return nil }
+      guard pendingRestoreNoteIDs.insert(trashedNote.id).inserted else {
+        return nil
+      }
       debouncedSaveTask?.cancel()
       resetSaveStatus()
       pendingTrashNotes.removeValue(forKey: trashedNote.id)
@@ -949,13 +975,15 @@
       let preferences = preferences
       let generation = persistenceGeneration
       let store = store
-      Task {
+      let restoreOperation = self.restoreOperation
+      return Task { @MainActor in
+        defer { pendingRestoreNoteIDs.remove(trashedNote.id) }
         do {
-          _ = try await store.restore(
+          _ = try await restoreOperation(
             trashedNote,
-            into: optimisticWorkspace,
-            preferences: preferences,
-            generation: generation
+            optimisticWorkspace,
+            preferences,
+            generation
           )
           trashedNotes = try await store.loadTrash()
           saveError = nil
