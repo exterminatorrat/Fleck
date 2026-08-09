@@ -11,6 +11,13 @@
     case failed
   }
 
+  enum AgentNoteAccessSaveResult: Equatable {
+    case succeeded
+    case revisionConflict
+    case contextChanged
+    case failed
+  }
+
   @MainActor
   final class AppState: ObservableObject, DictationSaving, AgentWorkspaceStateAccess {
     typealias SaveOperation =
@@ -31,6 +38,11 @@
       @Sendable (UUID, Data) async throws -> Void
     typealias AgentProfileDisconnectOperation =
       @Sendable (UUID) async throws -> Void
+    typealias AgentCapabilityBatchReplaceOperation =
+      @Sendable (
+        [(profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)],
+        [UUID: UInt64]
+      ) async throws -> AgentCapabilityState
 
     enum SaveStatus: Equatable {
       case idle
@@ -83,6 +95,13 @@
     let agentCapabilityAuthority: any AgentCapabilityAuthorizing
     private let agentProfileProvisionOperation: AgentProfileProvisionOperation
     private let agentProfileDisconnectOperation: AgentProfileDisconnectOperation
+    private let replaceAgentCapabilitiesOperation:
+      AgentCapabilityBatchReplaceOperation
+    private struct NoteAccessTransactionLock {
+      let capturedContext: AgentNoteAccessContext
+      let folderID: UUID?
+    }
+    private var noteAccessTransactionLocks: [UUID: NoteAccessTransactionLock] = [:]
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
     private var awaitedSaveWaiters: [CheckedContinuation<Void, Never>] = []
@@ -105,6 +124,7 @@
       agentActivityStore: AgentActivityStore? = nil,
       agentCapabilityStore: AgentCapabilityStore? = nil,
       agentCapabilityAuthority: (any AgentCapabilityAuthorizing)? = nil,
+      replaceAgentCapabilities: AgentCapabilityBatchReplaceOperation? = nil,
       provisionAgentProfile: AgentProfileProvisionOperation? = nil,
       disconnectAgentProfile: AgentProfileDisconnectOperation? = nil,
       startupMigrationError: FleckProductMigrationError? = nil
@@ -157,6 +177,13 @@
       self.agentCapabilityStore = capabilityStore
       self.agentCapabilityAuthority =
         agentCapabilityAuthority ?? AgentCapabilityAuthority(store: capabilityStore)
+      self.replaceAgentCapabilitiesOperation =
+        replaceAgentCapabilities ?? { replacements, expectedGrantRevisions in
+          try await capabilityStore.replaceProfiles(
+            replacements,
+            expectedGrantRevisions: expectedGrantRevisions
+          )
+        }
       self.agentProfileProvisionOperation =
         provisionAgentProfile ?? { profileID, credential in
           try await AgentBridgeInstaller.live().provisionAsync(
@@ -239,6 +266,36 @@
       return folderID
     }
 
+    private func isLockedNoteMembershipChange(
+      noteID: UUID,
+      targetFolderID: UUID?
+    ) -> Bool {
+      guard noteAccessTransactionLocks[noteID] != nil else { return false }
+      let currentContext = AgentCapabilityPresentation.noteAccessContext(
+        for: noteID,
+        in: workspace
+      )
+      guard currentContext.noteExists else { return true }
+      return currentContext.noteFolderID != targetFolderID
+    }
+
+    private func isLockedNote(_ noteID: UUID) -> Bool {
+      noteAccessTransactionLocks[noteID] != nil
+    }
+
+    private func isLockedFolder(_ folderID: UUID) -> Bool {
+      noteAccessTransactionLocks.values.contains { $0.folderID == folderID }
+    }
+
+    private func isLockedContextUnchanged(in workspace: Workspace) -> Bool {
+      noteAccessTransactionLocks.values.allSatisfy { lock in
+        AgentCapabilityPresentation.noteAccessContext(
+          for: lock.capturedContext.noteID,
+          in: workspace
+        ) == lock.capturedContext
+      }
+    }
+
     func activeDestinations() -> [DictationDestination] {
       workspace.notes.map {
         DictationDestination(noteID: $0.id, title: $0.displayTitle)
@@ -278,6 +335,55 @@
 
     func isSharedWithAnyActiveProfile(_ noteID: UUID) -> Bool {
       !profilesWithReadAccess(to: noteID).isEmpty
+    }
+
+    @discardableResult
+    func updateAgentCapabilitiesForNote(
+      noteID: UUID,
+      capturedContext: AgentNoteAccessContext,
+      replacements: [
+        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+      ],
+      expectedGrantRevisions: [UUID: UInt64]
+    ) async -> AgentNoteAccessSaveResult {
+      guard
+        capturedContext.noteID == noteID,
+        capturedContext.noteExists,
+        AgentCapabilityPresentation.noteAccessContextIsUnchanged(
+          noteID: noteID,
+          captured: capturedContext,
+          workspace: workspace
+        )
+      else {
+        return .contextChanged
+      }
+      guard noteAccessTransactionLocks[noteID] == nil else {
+        agentCleanupError = "Could not update Agent access. Try again."
+        return .failed
+      }
+
+      noteAccessTransactionLocks[noteID] = NoteAccessTransactionLock(
+        capturedContext: capturedContext,
+        folderID: capturedContext.folderExists
+          ? capturedContext.noteFolderID
+          : nil
+      )
+      defer { noteAccessTransactionLocks.removeValue(forKey: noteID) }
+
+      do {
+        agentCapabilityState = try await replaceAgentCapabilitiesOperation(
+          replacements,
+          expectedGrantRevisions
+        )
+        agentCleanupError = nil
+        return .succeeded
+      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
+        agentCleanupError = AgentCapabilityPresentation.conflictMessage
+        return .revisionConflict
+      } catch {
+        agentCleanupError = "Could not update Agent access. Try again."
+        return .failed
+      }
     }
 
     @discardableResult
@@ -515,6 +621,10 @@
 
     func importNote(_ note: Note, intoFolderID targetFolderID: UUID?) {
       var imported = note
+      guard
+        !isLockedNote(imported.id)
+          || workspace.notes.contains(where: { $0.id == imported.id })
+      else { return }
       if workspace.notes.contains(where: { $0.id == imported.id }) {
         imported = Note(
           id: UUID(),
@@ -561,6 +671,7 @@
     }
 
     func deleteFolder(id: UUID, activeFolderID: UUID? = nil) throws {
+      guard !isLockedFolder(id) else { return }
       let selectedID = workspace.selectedNoteID
       let selectedWasMember = workspace.notes.contains {
         $0.id == selectedID && $0.folderID == id
@@ -619,6 +730,8 @@
         targetFolderID == nil
           || workspace.folders.contains(where: { $0.id == targetFolderID })
       else { return false }
+      guard !isLockedNoteMembershipChange(noteID: id, targetFolderID: targetFolderID)
+      else { return false }
       guard note.folderID != targetFolderID else { return false }
 
       let sourceFolderID = note.folderID
@@ -662,6 +775,7 @@
     }
 
     func moveToTrash(_ id: UUID) {
+      guard !isLockedNote(id) else { return }
       guard let note = workspace.notes.first(where: { $0.id == id }) else { return }
       pendingTrashNotes[id] = note
       workspace.deleteNote(id: id)
@@ -669,6 +783,7 @@
     }
 
     func moveToTrash(_ id: UUID, activeFolderID: UUID?) {
+      guard !isLockedNote(id) else { return }
       guard let note = workspace.notes.first(where: { $0.id == id }) else { return }
       let sourceFolderID = note.folderID
       let sourceVisibleNotes = workspace.notes(inFolderID: sourceFolderID)
@@ -822,6 +937,7 @@
     }
 
     func restore(_ trashedNote: TrashedNote) {
+      guard !isLockedNote(trashedNote.id) else { return }
       guard startupMigrationError == nil else { return }
       debouncedSaveTask?.cancel()
       resetSaveStatus()
@@ -1026,6 +1142,11 @@
           code: .fleckUnavailable,
           recoveryAction: "Wait for Trash to finish saving, then retry."
         )
+      }
+      guard isLockedContextUnchanged(in: self.workspace),
+        isLockedContextUnchanged(in: workspace)
+      else {
+        throw AgentWorkspaceError(code: .revisionConflict)
       }
       debouncedSaveTask?.cancel()
       let committedGeneration = expectedGeneration + 1

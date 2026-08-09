@@ -179,14 +179,18 @@
           errorMessage = AgentCapabilityPresentation.noteAccessContextChangedMessage
           return
         }
-        switch await appState.updateAgentCapabilities(
-          replacements,
+        switch await appState.updateAgentCapabilitiesForNote(
+          noteID: note.id,
+          capturedContext: capturedContext,
+          replacements: replacements,
           expectedGrantRevisions: expectedGrantRevisions
         ) {
         case .succeeded:
           dismiss()
         case .revisionConflict:
           errorMessage = AgentCapabilityPresentation.conflictMessage
+        case .contextChanged:
+          errorMessage = AgentCapabilityPresentation.noteAccessContextChangedMessage
         case .failed:
           errorMessage = "Could not update Agent access. Try again."
         }
