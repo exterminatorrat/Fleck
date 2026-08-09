@@ -1118,7 +1118,15 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(source.contains("showFormattingBar.toggle()"))
   #expect(source.contains("if appState.preferences.showFormattingBar"))
   #expect(source.contains("\"chevron.up\""))
-  #expect(source.contains("\"chevron.down\""))
+  #expect(source.contains(".rotationEffect("))
+  #expect(
+    source.contains(
+      ".degrees(appState.preferences.showFormattingBar ? 0 : 180)"
+    )
+  )
+  #expect(source.contains("if reduceMotion"))
+  #expect(source.contains("withAnimation(motion.quick)"))
+  #expect(source.contains(".move(edge: .top).combined(with: .opacity)"))
 
   let editorCommands = try #require(source.range(of: "@StateObject private var editorCommands = EditorCommands()"))
   let formattingBar = try #require(source.range(of: "if appState.preferences.showFormattingBar"))

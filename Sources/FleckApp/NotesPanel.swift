@@ -595,13 +595,22 @@
         }
 
         Button {
-          appState.updatePreferences { $0.showFormattingBar.toggle() }
+          if reduceMotion {
+            appState.updatePreferences { $0.showFormattingBar.toggle() }
+          } else {
+            withAnimation(motion.quick) {
+              appState.updatePreferences { $0.showFormattingBar.toggle() }
+            }
+          }
         } label: {
-          Image(
-            systemName: appState.preferences.showFormattingBar
-              ? "chevron.up"
-              : "chevron.down"
-          )
+          Image(systemName: "chevron.up")
+            .rotationEffect(
+              .degrees(appState.preferences.showFormattingBar ? 0 : 180)
+            )
+            .animation(
+              reduceMotion ? nil : motion.quick,
+              value: appState.preferences.showFormattingBar
+            )
         }
         .accessibilityLabel(
           appState.preferences.showFormattingBar
@@ -1192,7 +1201,12 @@
                 }
               }
             )
-            .transition(.opacity)
+            .transition(
+              .asymmetric(
+                insertion: .move(edge: .top).combined(with: .opacity),
+                removal: .move(edge: .top).combined(with: .opacity)
+              )
+            )
             .animation(reduceMotion ? nil : motion.quick, value: appState.preferences.showFormattingBar)
           }
           TextField(
