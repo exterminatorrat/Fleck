@@ -1427,20 +1427,93 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 }
 
 @Test @MainActor func hostedCompactUnfiledKeepsNamedFolderPillInsideNavigator() async throws {
-  let root = FileManager.default.temporaryDirectory
+  let unfiledRoot = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
-  defer { try? FileManager.default.removeItem(at: root) }
+  let namedRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer {
+    try? FileManager.default.removeItem(at: unfiledRoot)
+    try? FileManager.default.removeItem(at: namedRoot)
+  }
   let folder = try Folder(id: UUID(), name: "SoftwareDev")
-  let note = Note(title: "Selected folder render", body: "Body", folderID: folder.id)
-  let state = await hostedPanelState(
-    root: root,
-    workspace: Workspace(
-      notes: [note],
-      selectedNoteID: note.id,
-      folders: [folder]
-    )
+  let unfiledNote = Note(title: "Selected Unfiled", body: "Body")
+  let namedNote = Note(
+    title: "Selected folder render",
+    body: "Body",
+    folderID: folder.id
   )
+  let unfiledWorkspace = Workspace(
+    notes: [unfiledNote, namedNote],
+    selectedNoteID: unfiledNote.id,
+    folders: [folder]
+  )
+  var namedWorkspace = unfiledWorkspace
+  namedWorkspace.selectedNoteID = namedNote.id
   let accentHex = "#00FF00"
+  let unfiledPill = try await hostedFolderSelectionGeometry(
+    root: unfiledRoot,
+    workspace: unfiledWorkspace,
+    accentHex: accentHex
+  )
+  let namedPill = try await hostedFolderSelectionGeometry(
+    root: namedRoot,
+    workspace: namedWorkspace,
+    accentHex: accentHex
+  )
+
+  let navigatorBand = CGRect(x: 0, y: 42, width: 640, height: 40)
+  let windowBounds = CGRect(x: 0, y: 0, width: 640, height: 430)
+  for pill in [unfiledPill, namedPill] {
+    #expect(navigatorBand.contains(pill.bounds))
+    #expect(windowBounds.contains(pill.bounds))
+    #expect(pill.bounds.width >= 24)
+    #expect(pill.bounds.height >= 24)
+    #expect(pill.bounds.height <= 33)
+    #expect(pill.pixelCount >= 32)
+    #expect(pill.bounds.minX >= 4)
+    #expect(pill.bounds.maxX <= 636)
+  }
+
+  #expect(abs(namedPill.bounds.minY - unfiledPill.bounds.minY) <= 2)
+  #expect(abs(namedPill.bounds.height - unfiledPill.bounds.height) <= 5)
+  #expect(namedPill.bounds.width > unfiledPill.bounds.width)
+
+  let focusDestination = FolderNavigatorFocus.nextIndex(
+    currentIndex: 0,
+    direction: .down,
+    count: 2
+  )
+  #expect(focusDestination == 1)
+  #expect(unfiledWorkspace.selectedNoteID == unfiledNote.id)
+
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  #expect(navigator.contains(".focused($focusedRow, equals: .unfiled)"))
+  #expect(navigator.contains(".focused($focusedRow, equals: .folder(folder.id))"))
+  #expect(navigator.contains(".onMoveCommand { direction in"))
+  #expect(navigator.contains("moveFocus(direction)"))
+  #expect(navigator.contains("isSelected: activeFolderID == nil"))
+  #expect(navigator.contains("isSelected: activeFolderID == folder.id"))
+  let rowLabel = try #require(navigator.range(of: "private func rowLabel("))
+  let rowLabelBody = navigator[rowLabel.lowerBound...]
+  #expect(rowLabelBody.contains("RoundedRectangle(cornerRadius: 6)"))
+  #expect(rowLabelBody.contains("isSelected ? Color.accentColor.opacity(0.18)"))
+}
+
+private struct HostedAccentPillGeometry {
+  let bounds: CGRect
+  let pixelCount: Int
+}
+
+@MainActor
+private func hostedFolderSelectionGeometry(
+  root: URL,
+  workspace: Workspace,
+  accentHex: String
+) async throws -> HostedAccentPillGeometry {
+  let state = await hostedPanelState(root: root, workspace: workspace)
   state.updatePreferences {
     $0.accentHex = accentHex
     $0.isUnfiledCompact = true
@@ -1458,12 +1531,13 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
   let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
   host.cacheDisplay(in: host.bounds, to: imageRep)
-  let selectedPill = try #require(
-    hostedAccentFillBounds(in: imageRep, hostSize: host.bounds.size, accentHex: accentHex)
+  return try #require(
+    hostedAccentFillBounds(
+      in: imageRep,
+      hostSize: host.bounds.size,
+      accentHex: accentHex
+    )
   )
-
-  #expect(selectedPill.minX < 100)
-  #expect(selectedPill.minY < 90)
 }
 
 @Test @MainActor func hostedNotesPanelEvacuatesTitleFocusWithoutRestoringBody() async throws {
@@ -1886,7 +1960,7 @@ private func hostedAccentFillBounds(
   in imageRep: NSBitmapImageRep,
   hostSize: CGSize,
   accentHex: String
-) -> CGRect? {
+) -> HostedAccentPillGeometry? {
   guard hostSize.width > 0, hostSize.height > 0,
     let accent = NSColor(hex: accentHex)?.usingColorSpace(.sRGB)
   else { return nil }
@@ -1901,18 +1975,22 @@ private func hostedAccentFillBounds(
     blue: &accentBlue,
     alpha: &accentAlpha
   )
-  guard accentGreen > accentRed, accentGreen > accentBlue else { return nil }
+  guard accentRed < 0.01, accentGreen > 0.99, accentBlue < 0.01 else { return nil }
 
   let scaleX = CGFloat(imageRep.pixelsWide) / hostSize.width
   let scaleY = CGFloat(imageRep.pixelsHigh) / hostSize.height
-  let bandEnd = min(imageRep.pixelsHigh, Int(ceil(min(hostSize.height, 90) * scaleY)))
+  let bandTop: CGFloat = 42
+  let bandBottom: CGFloat = 82
+  let bandStart = max(0, Int(floor(bandTop * scaleY)))
+  let bandEnd = min(imageRep.pixelsHigh, Int(ceil(bandBottom * scaleY)))
+  guard bandStart < bandEnd else { return nil }
   var matchCount = 0
   var minX = Int.max
   var minY = Int.max
   var maxX = Int.min
   var maxY = Int.min
 
-  for y in 0..<bandEnd {
+  for y in bandStart..<bandEnd {
     for x in 0..<imageRep.pixelsWide {
       guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
       else { continue }
@@ -1922,7 +2000,7 @@ private func hostedAccentFillBounds(
       var alpha: CGFloat = 0
       color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
       guard alpha > 0.5 else { continue }
-      guard green > red + 0.05, green > blue + 0.05 else { continue }
+      guard green > 0.05, green > red + 0.05, green > blue + 0.05 else { continue }
       matchCount += 1
       minX = min(minX, x)
       minY = min(minY, y)
@@ -1933,11 +2011,14 @@ private func hostedAccentFillBounds(
 
   let minimumPixels = max(32, Int(20 * scaleX * scaleY))
   guard matchCount >= minimumPixels else { return nil }
-  return CGRect(
-    x: CGFloat(minX) / scaleX,
-    y: CGFloat(minY) / scaleY,
-    width: CGFloat(maxX - minX + 1) / scaleX,
-    height: CGFloat(maxY - minY + 1) / scaleY
+  return HostedAccentPillGeometry(
+    bounds: CGRect(
+      x: CGFloat(minX) / scaleX,
+      y: CGFloat(minY) / scaleY,
+      width: CGFloat(maxX - minX + 1) / scaleX,
+      height: CGFloat(maxY - minY + 1) / scaleY
+    ),
+    pixelCount: matchCount
   )
 }
 
