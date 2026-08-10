@@ -8,31 +8,50 @@
     static let noteType = UTType(exportedAs: "com.harryjin.fleck.local-note")
     static let folderType = UTType(exportedAs: "com.harryjin.fleck.local-folder")
 
-    private struct NoteValue: Codable {
-      let noteID: UUID
-      let sourceFolderID: UUID?
+    private final class LocalNoteItemProvider: NSItemProvider {
+      let source: NoteDropSource
+
+      init(source: NoteDropSource) {
+        self.source = source
+        super.init()
+      }
+
+      required init?(coder: NSCoder) {
+        return nil
+      }
     }
 
     private struct FolderValue: Codable {
       let folderID: UUID
     }
 
-    static func noteProvider(noteID: UUID, sourceFolderID: UUID?) -> NSItemProvider {
-      provider(
-        type: noteType,
-        value: NoteValue(noteID: noteID, sourceFolderID: sourceFolderID)
-      )
+    static func noteProvider(source: NoteDropSource) -> NSItemProvider {
+      let data = try! JSONEncoder().encode(source)
+      let provider = LocalNoteItemProvider(source: source)
+      provider.registerDataRepresentation(
+        forTypeIdentifier: noteType.identifier,
+        visibility: .ownProcess
+      ) { completion in
+        completion(data, nil)
+        return nil
+      }
+      return provider
+    }
+
+    static func noteSource(from providers: [NSItemProvider]) -> NoteDropSource? {
+      providers.first(where: {
+        $0.registeredTypeIdentifiers.contains(noteType.identifier)
+      }).flatMap {
+        ($0 as? LocalNoteItemProvider)?.source
+      }
+    }
+
+    static func noteValue(from data: Data) -> NoteDropSource? {
+      try? JSONDecoder().decode(NoteDropSource.self, from: data)
     }
 
     static func folderProvider(folderID: UUID) -> NSItemProvider {
       provider(type: folderType, value: FolderValue(folderID: folderID))
-    }
-
-    static func noteValue(from data: Data) -> (noteID: UUID, sourceFolderID: UUID?)? {
-      guard let value = try? JSONDecoder().decode(NoteValue.self, from: data) else {
-        return nil
-      }
-      return (value.noteID, value.sourceFolderID)
     }
 
     static func folderID(from data: Data) -> UUID? {
@@ -56,9 +75,16 @@
     }
   }
 
-  struct NoteDropSource: Equatable {
+  struct NoteDropSource: Codable, Equatable {
     let noteID: UUID
     let sourceFolderID: UUID?
+    let dragSessionID: UUID
+
+    init(noteID: UUID, sourceFolderID: UUID?, dragSessionID: UUID = UUID()) {
+      self.noteID = noteID
+      self.sourceFolderID = sourceFolderID
+      self.dragSessionID = dragSessionID
+    }
   }
 
   enum NoteDropPresentation {
@@ -97,6 +123,25 @@
   }
 
   enum TabDragReorder {
+    static func isValidLocalDrag(
+      draggedSource: NoteDropSource?,
+      providerSource: NoteDropSource?,
+      destinationID: UUID,
+      activeFolderID: UUID?,
+      currentNotes: [Note]
+    ) -> Bool {
+      guard let draggedSource,
+        draggedSource == providerSource,
+        draggedSource.sourceFolderID == activeFolderID,
+        draggedSource.noteID != destinationID,
+        let draggedNote = currentNotes.first(where: { $0.id == draggedSource.noteID }),
+        draggedNote.folderID == draggedSource.sourceFolderID,
+        let destinationNote = currentNotes.first(where: { $0.id == destinationID }),
+        destinationNote.folderID == activeFolderID
+      else { return false }
+      return true
+    }
+
     static func partitionLocalDestination(
       draggedID: UUID,
       absoluteDestination: Int,
@@ -121,6 +166,7 @@
 
     static func performLiveMove(
       draggedSource: NoteDropSource?,
+      providerSource: NoteDropSource?,
       over destinationID: UUID,
       activeFolderID: UUID?,
       currentNotes: () -> [Note],
@@ -128,13 +174,13 @@
       move: (UUID, Int) -> Void
     ) -> LiveMoveResult {
       let visibleNotes = currentNotes()
-      guard let draggedSource,
-        draggedSource.sourceFolderID == activeFolderID,
-        draggedSource.noteID != destinationID,
-        let draggedNote = visibleNotes.first(where: { $0.id == draggedSource.noteID }),
-        draggedNote.folderID == draggedSource.sourceFolderID,
-        let destinationNote = visibleNotes.first(where: { $0.id == destinationID }),
-        destinationNote.folderID == activeFolderID
+      guard isValidLocalDrag(
+        draggedSource: draggedSource,
+        providerSource: providerSource,
+        destinationID: destinationID,
+        activeFolderID: activeFolderID,
+        currentNotes: visibleNotes
+      ), let draggedSource
       else {
         return LiveMoveResult(didMove: false, destinationID: nil)
       }
@@ -753,16 +799,15 @@
             .buttonStyle(.plain)
             .accessibilityIdentifier("note-tab-\(note.id.uuidString)")
             .onDrag {
-              noteDropSource = NoteDropSource(
+              let source = NoteDropSource(
                 noteID: note.id,
-                sourceFolderID: note.folderID
+                sourceFolderID: note.folderID,
+                dragSessionID: UUID()
               )
+              noteDropSource = source
               tabDragDestinationID = nil
               _ = activateNoteAndScope(note.id)
-              return FolderDragPayload.noteProvider(
-                noteID: note.id,
-                sourceFolderID: note.folderID
-              )
+              return FolderDragPayload.noteProvider(source: source)
             }
             .onDrop(
               of: [FolderDragPayload.noteType],
@@ -1448,8 +1493,8 @@
         }
       }
       .animation(folderMorphAnimation, value: isCreatingFolder)
-      .onChange(of: draggedSource) { _, newValue in
-        if newValue == nil {
+      .onChange(of: draggedSource) { oldValue, newValue in
+        if oldValue != newValue {
           noteDropTarget = nil
         }
       }
@@ -1543,10 +1588,8 @@
       .contentShape(Rectangle())
       .onDrop(
         of: [FolderDragPayload.noteType],
-        isTargeted: noteDropTargetBinding(.unfiled)
-      ) { providers, _ in
-        handleNoteDrop(providers, targetFolderID: nil)
-      }
+        delegate: noteDropDelegate(.unfiled)
+      )
     }
 
     @ViewBuilder
@@ -1572,10 +1615,8 @@
         .onDrag { FolderDragPayload.folderProvider(folderID: folder.id) }
         .onDrop(
           of: [FolderDragPayload.noteType],
-          isTargeted: noteDropTargetBinding(.folder(folder.id))
-        ) { providers, _ in
-          handleNoteDrop(providers, targetFolderID: folder.id)
-        }
+          delegate: noteDropDelegate(.folder(folder.id))
+        )
         .onDrop(of: [FolderDragPayload.folderType], isTargeted: nil) { providers, _ in
           handleFolderDrop(providers, beforeFolderID: folder.id)
         }
@@ -1687,26 +1728,43 @@
       .accessibilityHint(isEmpty ? "Empty folder" : "")
     }
 
-    private func noteDropTargetBinding(_ target: NoteDropTarget) -> Binding<Bool> {
-      Binding(
-        get: { isNoteDropTarget(target) },
-        set: { isTargeted in
-          if isTargeted && canHighlightNoteDrop(targetFolderID: target.folderID) {
-            noteDropTarget = target
-          } else if noteDropTarget == target {
-            noteDropTarget = nil
-          }
+    private func noteDropDelegate(_ target: NoteDropTarget) -> NoteDropDelegate {
+      NoteDropDelegate(
+        target: target,
+        draggedSource: $draggedSource,
+        dropTarget: $noteDropTarget,
+        canAccept: { expectedSource, targetFolderID in
+          canHighlightNoteDrop(
+            expectedSource: expectedSource,
+            targetFolderID: targetFolderID
+          )
+        },
+        perform: { providers, targetFolderID, expectedSource in
+          handleNoteDrop(
+            providers,
+            targetFolderID: targetFolderID,
+            expectedSource: expectedSource
+          )
         }
       )
     }
 
     private func isNoteDropTarget(_ target: NoteDropTarget) -> Bool {
-      noteDropTarget == target && canHighlightNoteDrop(targetFolderID: target.folderID)
+      guard let draggedSource else { return false }
+      return noteDropTarget == target
+        && canHighlightNoteDrop(
+          expectedSource: draggedSource,
+          targetFolderID: target.folderID
+        )
     }
 
-    private func canHighlightNoteDrop(targetFolderID: UUID?) -> Bool {
-      NoteDropPresentation.isValidTarget(
-        draggedSource: draggedSource,
+    private func canHighlightNoteDrop(
+      expectedSource: NoteDropSource,
+      targetFolderID: UUID?
+    ) -> Bool {
+      guard draggedSource == expectedSource else { return false }
+      return NoteDropPresentation.isValidTarget(
+        draggedSource: expectedSource,
         targetFolderID: targetFolderID,
         notes: appState.workspace.notes,
         validTargetFolderIDs: Set(appState.workspace.folders.map(\.id))
@@ -1829,18 +1887,29 @@
 
     private func handleNoteDrop(
       _ providers: [NSItemProvider],
-      targetFolderID: UUID?
+      targetFolderID: UUID?,
+      expectedSource: NoteDropSource
     ) -> Bool {
-      draggedSource = nil
       noteDropTarget = nil
-      guard let provider = providers.first(where: {
-        $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
-      }) else { return false }
+      guard draggedSource == expectedSource,
+        FolderDragPayload.noteSource(from: providers) == expectedSource,
+        let provider = providers.first(where: {
+          $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
+        })
+      else {
+        if draggedSource == expectedSource { draggedSource = nil }
+        return false
+      }
       provider.loadDataRepresentation(forTypeIdentifier: FolderDragPayload.noteType.identifier) {
         data, _ in
         Task { @MainActor in
-          self.noteDropTarget = nil
+          defer {
+            if self.draggedSource == expectedSource { self.draggedSource = nil }
+            self.noteDropTarget = nil
+          }
+          guard self.draggedSource == expectedSource else { return }
           guard let data, let payload = FolderDragPayload.noteValue(from: data) else { return }
+          guard payload == expectedSource else { return }
           guard targetFolderID == nil || appState.workspace.folders.contains(where: {
             $0.id == targetFolderID
           }) else { return }
@@ -1857,6 +1926,71 @@
         }
       }
       return true
+    }
+
+    private struct NoteDropDelegate: DropDelegate {
+      let target: NoteDropTarget
+      @Binding var draggedSource: NoteDropSource?
+      @Binding var dropTarget: NoteDropTarget?
+      let canAccept: (NoteDropSource, UUID?) -> Bool
+      let perform: ([NSItemProvider], UUID?, NoteDropSource) -> Bool
+
+      private func matchingSource(_ info: DropInfo) -> NoteDropSource? {
+        guard let expectedSource = draggedSource,
+          let providerSource = FolderDragPayload.noteSource(
+            from: info.itemProviders(for: [FolderDragPayload.noteType])
+          ),
+          providerSource == expectedSource,
+          canAccept(expectedSource, target.folderID)
+        else { return nil }
+        return expectedSource
+      }
+
+      func validateDrop(info: DropInfo) -> Bool {
+        matchingSource(info) != nil
+      }
+
+      func dropEntered(info: DropInfo) {
+        if matchingSource(info) != nil {
+          dropTarget = target
+        } else if dropTarget == target {
+          dropTarget = nil
+        }
+      }
+
+      func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard matchingSource(info) != nil else { return nil }
+        return DropProposal(operation: .move)
+      }
+
+      func dropExited(info: DropInfo) {
+        if dropTarget == target { dropTarget = nil }
+      }
+
+      func performDrop(info: DropInfo) -> Bool {
+        let providerSource = FolderDragPayload.noteSource(
+          from: info.itemProviders(for: [FolderDragPayload.noteType])
+        )
+        guard let expectedSource = draggedSource,
+          providerSource == expectedSource
+        else {
+          if dropTarget == target { dropTarget = nil }
+          return false
+        }
+        guard canAccept(expectedSource, target.folderID) else {
+          if draggedSource == expectedSource { draggedSource = nil }
+          if dropTarget == target { dropTarget = nil }
+          return false
+        }
+        dropTarget = nil
+        let accepted = perform(
+          info.itemProviders(for: [FolderDragPayload.noteType]),
+          target.folderID,
+          expectedSource
+        )
+        if !accepted && draggedSource == expectedSource { draggedSource = nil }
+        return accepted
+      }
     }
 
     private func handleFolderDrop(
@@ -2289,9 +2423,13 @@
     let move: (UUID, Int) -> Void
 
     func dropEntered(info: DropInfo) {
-      guard info.hasItemsConforming(to: [FolderDragPayload.noteType]) else { return }
+      let providerSource = FolderDragPayload.noteSource(
+        from: info.itemProviders(for: [FolderDragPayload.noteType])
+      )
+      guard draggedSource == providerSource else { return }
       let result = TabDragReorder.performLiveMove(
         draggedSource: draggedSource,
+        providerSource: providerSource,
         over: destinationID,
         activeFolderID: activeFolderID,
         currentNotes: currentNotes,
@@ -2302,14 +2440,37 @@
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-      guard info.hasItemsConforming(to: [FolderDragPayload.noteType]) else { return nil }
+      let providerSource = FolderDragPayload.noteSource(
+        from: info.itemProviders(for: [FolderDragPayload.noteType])
+      )
+      guard draggedSource == providerSource,
+        TabDragReorder.isValidLocalDrag(
+          draggedSource: draggedSource,
+          providerSource: providerSource,
+          destinationID: destinationID,
+          activeFolderID: activeFolderID,
+          currentNotes: currentNotes()
+        )
+      else { return nil }
       return DropProposal(operation: .move)
     }
 
     func performDrop(info: DropInfo) -> Bool {
-      let accepted = info.hasItemsConforming(to: [FolderDragPayload.noteType])
-      draggedSource = nil
-      lastDestinationID = nil
+      let providerSource = FolderDragPayload.noteSource(
+        from: info.itemProviders(for: [FolderDragPayload.noteType])
+      )
+      let accepted = draggedSource == providerSource
+        && TabDragReorder.isValidLocalDrag(
+          draggedSource: draggedSource,
+          providerSource: providerSource,
+          destinationID: destinationID,
+          activeFolderID: activeFolderID,
+          currentNotes: currentNotes()
+        )
+      if draggedSource == providerSource {
+        draggedSource = nil
+        lastDestinationID = nil
+      }
       return accepted
     }
   }

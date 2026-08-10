@@ -117,6 +117,100 @@ import FleckCore
   )
 }
 
+@Test func noteDragPayloadIsBoundToOneOriginatingPanelSession() throws {
+  let source = try tabNotesPanelSource()
+  let payload = try #require(
+    source.components(separatedBy: "enum FolderDragPayload").last?
+      .components(separatedBy: "enum NoteDropPresentation").first
+  )
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let tabDropDelegate = try #require(
+    source.components(separatedBy: "private struct TabDropDelegate").last?
+      .components(separatedBy: "private struct ToolbarIconLabel").first
+  )
+
+  #expect(payload.contains("let dragSessionID: UUID"))
+  #expect(payload.contains("static func noteProvider(source: NoteDropSource)"))
+  #expect(payload.contains("static func noteSource(from providers: [NSItemProvider])"))
+  #expect(tabStrip.contains("dragSessionID: UUID()"))
+  #expect(tabStrip.contains("noteDropSource = source"))
+  #expect(tabStrip.contains("noteProvider(source: source)"))
+  #expect(tabDropDelegate.contains("providerSource: providerSource"))
+  #expect(tabDropDelegate.contains("draggedSource == providerSource"))
+  #expect(navigator.contains("delegate: noteDropDelegate("))
+  #expect(navigator.contains("expectedSource: NoteDropSource"))
+  #expect(navigator.contains("payload == expectedSource"))
+  #expect(navigator.contains("draggedSource == expectedSource"))
+  #expect(navigator.contains("if oldValue != newValue"))
+  #expect(!navigator.contains("isTargeted: noteDropTargetBinding"))
+}
+
+@Test func noteDragSessionRoundTripsAndRejectsOtherOrMissingSessions() throws {
+  let sessionID = UUID()
+  let source = NoteDropSource(
+    noteID: UUID(),
+    sourceFolderID: UUID(),
+    dragSessionID: sessionID
+  )
+  let encoded = try JSONEncoder().encode(source)
+
+  #expect(FolderDragPayload.noteValue(from: encoded) == source)
+  #expect(FolderDragPayload.noteSource(from: [FolderDragPayload.noteProvider(source: source)]) == source)
+  #expect(FolderDragPayload.noteSource(from: [NSItemProvider()]) == nil)
+
+  let otherSession = NoteDropSource(
+    noteID: source.noteID,
+    sourceFolderID: source.sourceFolderID,
+    dragSessionID: UUID()
+  )
+  let destination = Note(id: UUID(), title: "Destination", folderID: source.sourceFolderID)
+  let currentNotes = [
+    Note(id: source.noteID, title: "Source", folderID: source.sourceFolderID),
+    destination,
+  ]
+  #expect(otherSession != source)
+  #expect(
+    !TabDragReorder.isValidLocalDrag(
+      draggedSource: source,
+      providerSource: otherSession,
+      destinationID: destination.id,
+      activeFolderID: source.sourceFolderID,
+      currentNotes: currentNotes
+    )
+  )
+  #expect(
+    TabDragReorder.isValidLocalDrag(
+      draggedSource: source,
+      providerSource: source,
+      destinationID: destination.id,
+      activeFolderID: source.sourceFolderID,
+      currentNotes: currentNotes
+    )
+  )
+  #expect(
+    !TabDragReorder.isValidLocalDrag(
+      draggedSource: source,
+      providerSource: source,
+      destinationID: source.noteID,
+      activeFolderID: source.sourceFolderID,
+      currentNotes: currentNotes
+    )
+  )
+
+  let legacyPayload = Data(
+    "{\"noteID\":\"\(source.noteID.uuidString)\",\"sourceFolderID\":null}".utf8
+  )
+  #expect(FolderDragPayload.noteValue(from: legacyPayload) == nil)
+  #expect(FolderDragPayload.noteValue(from: Data("not-json".utf8)) == nil)
+  #expect(sessionID == source.dragSessionID)
+}
+
 @Test func noteDropHighlightUsesCapturedSourceContextAndClearsAtEnd() throws {
   let source = try tabNotesPanelSource()
   let tabStrip = try #require(
@@ -131,9 +225,11 @@ import FleckCore
       .components(separatedBy: "private struct ToolbarIconLabel").first
   )
 
-  #expect(tabStrip.contains("noteDropSource = NoteDropSource"))
+  #expect(tabStrip.contains("let source = NoteDropSource"))
+  #expect(tabStrip.contains("noteDropSource = source"))
   #expect(tabStrip.contains("sourceFolderID: note.folderID"))
   #expect(dropDelegate.contains("draggedSource = nil"))
+  #expect(dropDelegate.contains("if draggedSource == providerSource"))
   #expect(navigator.contains("NoteDropPresentation.isValidTarget"))
   #expect(navigator.contains("draggedSource"))
   #expect(navigator.contains(".onChange(of: draggedSource)"))
@@ -202,7 +298,8 @@ import FleckCore
 
   #expect(!label.contains(".onDrag"))
   #expect(outerModifiers.contains(".onDrag"))
-  #expect(outerModifiers.contains("noteDropSource = NoteDropSource"))
+  #expect(outerModifiers.contains("let source = NoteDropSource"))
+  #expect(outerModifiers.contains("noteDropSource = source"))
   #expect(outerModifiers.contains("FolderDragPayload.noteProvider"))
   #expect(outerModifiers.contains(".onDrop("))
   #expect(outerModifiers.contains("of: [FolderDragPayload.noteType]"))
@@ -266,9 +363,11 @@ private func assertPartitionLocalLiveMove(
   )
 
   var lastDestinationID: UUID?
+  let source = NoteDropSource(noteID: first.id, sourceFolderID: folderID)
   func drag(over destinationID: UUID) -> TabDragReorder.LiveMoveResult {
     let result = TabDragReorder.performLiveMove(
-      draggedSource: NoteDropSource(noteID: first.id, sourceFolderID: folderID),
+      draggedSource: source,
+      providerSource: source,
       over: destinationID,
       activeFolderID: folderID,
       currentNotes: { state.visibleNotes(in: folderID) },
@@ -381,6 +480,7 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   var notes = [first, second, third]
   var lastDestinationID: UUID?
   var moves: [(UUID, Int)] = []
+  let source = NoteDropSource(noteID: first.id, sourceFolderID: nil)
 
   func move(_ id: UUID, to destination: Int) {
     moves.append((id, destination))
@@ -390,7 +490,8 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
 
   func drag(over destinationID: UUID) -> TabDragReorder.LiveMoveResult {
     let result = TabDragReorder.performLiveMove(
-      draggedSource: NoteDropSource(noteID: first.id, sourceFolderID: nil),
+      draggedSource: source,
+      providerSource: source,
       over: destinationID,
       activeFolderID: nil,
       currentNotes: { notes },
@@ -427,6 +528,7 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   ) -> TabDragReorder.LiveMoveResult {
     TabDragReorder.performLiveMove(
       draggedSource: source,
+      providerSource: source,
       over: destinationID,
       activeFolderID: activeFolderID,
       currentNotes: { notes },
@@ -476,6 +578,7 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   let third = Note(title: "C")
   var notes = [first, second, third]
   var lastDestinationID: UUID?
+  let source = NoteDropSource(noteID: third.id, sourceFolderID: nil)
 
   func move(_ id: UUID, to destination: Int) {
     let source = notes.firstIndex(where: { $0.id == id })!
@@ -483,7 +586,8 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   }
 
   var result = TabDragReorder.performLiveMove(
-    draggedSource: NoteDropSource(noteID: third.id, sourceFolderID: nil),
+    draggedSource: source,
+    providerSource: source,
     over: second.id,
     activeFolderID: nil,
     currentNotes: { notes },
@@ -495,7 +599,8 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   #expect(notes == [first, third, second])
 
   result = TabDragReorder.performLiveMove(
-    draggedSource: NoteDropSource(noteID: third.id, sourceFolderID: nil),
+    draggedSource: source,
+    providerSource: source,
     over: first.id,
     activeFolderID: nil,
     currentNotes: { notes },
@@ -519,8 +624,10 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   }
 
   var lastDestinationID: UUID?
+  let pinnedSource = NoteDropSource(noteID: pinned.id, sourceFolderID: nil)
   var result = TabDragReorder.performLiveMove(
-    draggedSource: NoteDropSource(noteID: pinned.id, sourceFolderID: nil),
+    draggedSource: pinnedSource,
+    providerSource: pinnedSource,
     over: firstUnpinned.id,
     activeFolderID: nil,
     currentNotes: { workspace.notes },
@@ -532,7 +639,8 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   #expect(workspace.notes == [pinned, firstUnpinned, secondUnpinned])
 
   result = TabDragReorder.performLiveMove(
-    draggedSource: NoteDropSource(noteID: pinned.id, sourceFolderID: nil),
+    draggedSource: pinnedSource,
+    providerSource: pinnedSource,
     over: firstUnpinned.id,
     activeFolderID: nil,
     currentNotes: { workspace.notes },
@@ -542,8 +650,10 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   #expect(!result.didMove)
 
   lastDestinationID = nil
+  let unpinnedSource = NoteDropSource(noteID: secondUnpinned.id, sourceFolderID: nil)
   result = TabDragReorder.performLiveMove(
-    draggedSource: NoteDropSource(noteID: secondUnpinned.id, sourceFolderID: nil),
+    draggedSource: unpinnedSource,
+    providerSource: unpinnedSource,
     over: pinned.id,
     activeFolderID: nil,
     currentNotes: { workspace.notes },
@@ -627,8 +737,9 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
 
   #expect(navigator.contains("private enum NoteDropTarget"))
   #expect(navigator.contains("@State private var noteDropTarget"))
-  #expect(navigator.contains("noteDropTargetBinding"))
-  #expect(navigator.contains("isTargeted: noteDropTargetBinding"))
+  #expect(navigator.contains("private struct NoteDropDelegate: DropDelegate"))
+  #expect(navigator.contains("delegate: noteDropDelegate("))
+  #expect(navigator.contains("providerSource == expectedSource"))
   #expect(navigator.contains("Color.accentColor.opacity"))
   #expect(navigator.contains("noteDropTarget = nil"))
   #expect(navigator.contains("sourceFolderID"))
