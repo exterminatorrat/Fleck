@@ -259,6 +259,7 @@
     @State private var isShowingDictationHistory = false
     @State private var isShowingAgentActivity = false
     @State private var notePendingDeletion: Note?
+    @State private var folderPendingDeletion: Folder?
     @State private var dontAskAgainForDeletion = false
     @State private var notePendingAgentShare: Note?
     @State private var exportDocument: NoteFileDocument?
@@ -426,10 +427,6 @@
           appState.saveError = "Export failed: \(error.localizedDescription)"
         }
       }
-      .sheet(isPresented: $isShowingTrash) {
-        TrashView(onDone: { isShowingTrash = false })
-          .environmentObject(appState)
-      }
       .sheet(isPresented: $isShowingDictationHistory) {
         DictationHistoryView(
           history: dictationRuntime.historyController,
@@ -456,6 +453,30 @@
       }
       .overlay {
         ZStack {
+          if isShowingTrash {
+            TrashPanelOverlay(
+              onDone: { isShowingTrash = false }
+            )
+            .transition(
+              .opacity.combined(
+                with: .scale(scale: reduceMotion ? 1 : 0.985)
+              )
+            )
+          }
+
+          if let folderPendingDeletion {
+            FolderDeleteConfirmationOverlay(
+              folder: folderPendingDeletion,
+              onCancel: { self.folderPendingDeletion = nil },
+              onConfirm: { confirmFolderDeletion(folderPendingDeletion) }
+            )
+            .transition(
+              .opacity.combined(
+                with: .scale(scale: reduceMotion ? 1 : 0.985)
+              )
+            )
+          }
+
           if let notePendingDeletion {
             DeleteConfirmationOverlay(
               note: notePendingDeletion,
@@ -473,6 +494,8 @@
             )
           }
         }
+        .animation(motion.standard, value: isShowingTrash)
+        .animation(motion.standard, value: folderPendingDeletion?.id)
         .animation(motion.standard, value: notePendingDeletion?.id)
       }
       .overlay {
@@ -712,7 +735,7 @@
         draggedSource: $noteDropSource,
         activeFolderID: activeFolderID,
         onSelect: selectFolder,
-        onDelete: deleteFolder,
+        onDelete: { folderPendingDeletion = $0 },
         onOpenTrash: { isShowingTrash = true }
       )
       .environmentObject(appState)
@@ -753,6 +776,11 @@
         }
         appState.saveError = "Could not update folder: \(String(describing: error))"
       }
+    }
+
+    private func confirmFolderDeletion(_ folder: Folder) {
+      folderPendingDeletion = nil
+      deleteFolder(folder.id)
     }
 
     private var tabStrip: some View {
@@ -1113,6 +1141,7 @@
 
     private var isBlockingOverlayPresented: Bool {
       searchController.isPresented || noteLinkPickerController.isPresented
+        || notePendingDeletion != nil || folderPendingDeletion != nil || isShowingTrash
     }
 
     private var folderNamesByID: [UUID: String] {
@@ -1408,21 +1437,20 @@
     @State private var editingFolderID: UUID?
     @State private var isCreatingFolder = false
     @State private var folderNameDraft = ""
-    @State private var folderPendingDeletion: Folder?
     @State private var noteDropTarget: NoteDropTarget?
     @State private var isUnfiledHovered = false
     private let folderNavigatorMaxHeight: CGFloat = 32
 
     let activeFolderID: UUID?
     let onSelect: (UUID?) -> Void
-    let onDelete: (UUID) -> Void
+    let onDelete: (Folder) -> Void
     let onOpenTrash: () -> Void
 
     init(
       draggedSource: Binding<NoteDropSource?>,
       activeFolderID: UUID?,
       onSelect: @escaping (UUID?) -> Void,
-      onDelete: @escaping (UUID) -> Void,
+      onDelete: @escaping (Folder) -> Void,
       onOpenTrash: @escaping () -> Void
     ) {
       self._draggedSource = draggedSource
@@ -1507,7 +1535,7 @@
         guard case .folder(let id) = focusedRow,
           let folder = appState.workspace.folders.first(where: { $0.id == id })
         else { return }
-        folderPendingDeletion = folder
+        onDelete(folder)
       }
       .onExitCommand {
         cancelFolderEditing()
@@ -1519,25 +1547,6 @@
       .onKeyPress(keys: [.return, .space], phases: .down) { _ in
         activateFocusedRow()
         return .handled
-      }
-      .confirmationDialog(
-        "Delete folder?",
-        isPresented: Binding(
-          get: { folderPendingDeletion != nil },
-          set: { if !$0 { folderPendingDeletion = nil } }
-        ),
-        titleVisibility: .visible
-      ) {
-        Button("Delete Folder", role: .destructive) {
-          guard let folderPendingDeletion else { return }
-          self.folderPendingDeletion = nil
-          onDelete(folderPendingDeletion.id)
-        }
-        Button("Cancel", role: .cancel) {
-          folderPendingDeletion = nil
-        }
-      } message: {
-        Text("Notes in this folder move to Unfiled. No notes are deleted.")
       }
     }
 
@@ -1625,7 +1634,7 @@
             _ = beginRename(folderID: folder.id)
           }
           Button("Delete", systemImage: "trash", role: .destructive) {
-            folderPendingDeletion = folder
+            onDelete(folder)
           }
         }
         .accessibilityLabel(folder.name)
@@ -2025,6 +2034,64 @@
     }
   }
 
+  struct TrashPanelOverlay: View {
+    let onDone: () -> Void
+
+    var body: some View {
+      ZStack {
+        Color.black.opacity(0.28)
+          .ignoresSafeArea()
+          .accessibilityHidden(true)
+
+        TrashView(onDone: onDone)
+          .frame(maxWidth: 520, maxHeight: 400)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+          .clipShape(RoundedRectangle(cornerRadius: 14))
+          .shadow(radius: 20, y: 8)
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("Trash")
+      }
+    }
+  }
+
+  struct FolderDeleteConfirmationOverlay: View {
+    let folder: Folder
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
+      ZStack {
+        Color.black.opacity(0.28)
+          .ignoresSafeArea()
+          .accessibilityHidden(true)
+
+        VStack(alignment: .leading, spacing: 16) {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Delete \(folder.name)?")
+              .font(.headline)
+            Text("Notes in this folder move to Unfiled. No notes are deleted.")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          }
+
+          HStack {
+            Spacer()
+            Button("Cancel", role: .cancel, action: onCancel)
+              .keyboardShortcut(.cancelAction)
+            Button("Delete Folder", role: .destructive, action: onConfirm)
+              .keyboardShortcut(.defaultAction)
+          }
+        }
+        .padding(20)
+        .frame(maxWidth: 360)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .shadow(radius: 20, y: 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Delete folder confirmation")
+      }
+    }
+  }
+
   private struct DeleteConfirmationOverlay: View {
     let note: Note
     @Binding var dontAskAgain: Bool
@@ -2051,6 +2118,7 @@
           HStack {
             Spacer()
             Button("Cancel", role: .cancel, action: onCancel)
+              .keyboardShortcut(.cancelAction)
             Button("Confirm", role: .destructive, action: onConfirm)
               .keyboardShortcut(.defaultAction)
           }
