@@ -52,6 +52,7 @@ import FleckCore
   #expect(tabStrip.contains("TabFramePreferenceKey"))
   #expect(tabStrip.contains("proxy.frame(in: .named(\"tab-strip\"))"))
   #expect(tabStrip.contains("appState.moveNote"))
+  #expect(tabStrip.contains("toVisibleIndex: localDestination"))
   #expect(tabStrip.contains(".onDrag"))
   #expect(!tabStrip.contains(".onDrop"))
   #expect(!tabStrip.contains("TabDropDelegate"))
@@ -71,6 +72,155 @@ import FleckCore
   #expect(tabStrip.contains("toFolderID"))
   #expect(tabStrip.contains(".disabled"))
   #expect(tabStrip.contains("checkmark"))
+}
+
+@Test @MainActor
+func partitionLocalLiveMoveUsesAppStateInUnfiledAndNamedFolderScopes() async throws {
+  let folder = try Folder(id: UUID(), name: "Work")
+  try await assertPartitionLocalLiveMove(folderID: nil, folders: [])
+  try await assertPartitionLocalLiveMove(folderID: folder.id, folders: [folder])
+}
+
+@MainActor
+private func assertPartitionLocalLiveMove(
+  folderID: UUID?,
+  folders: [Folder]
+) async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("tab-reorder-state-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let pinned = Note(title: "Pinned", isPinned: true, folderID: folderID)
+  let first = Note(title: "A", folderID: folderID)
+  let second = Note(title: "B", folderID: folderID)
+  let third = Note(title: "C", folderID: folderID)
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(
+    notes: [pinned, first, second, third],
+    selectedNoteID: first.id,
+    folders: folders
+  )
+
+  var lastDestinationID: UUID?
+  func drag(_ locationX: CGFloat) -> TabDragReorder.LiveMoveResult {
+    let result = TabDragReorder.performLiveMove(
+      draggedID: first.id,
+      locationX: locationX,
+      currentNoteIDs: {
+        state.visibleNotes(in: folderID).map(\.id)
+      },
+      currentFrames: {
+        tabFrames(for: state.visibleNotes(in: folderID).map(\.id))
+      },
+      lastDestinationID: lastDestinationID,
+      move: { id, absoluteDestination in
+        let visibleNotes = state.visibleNotes(in: folderID)
+        guard let localDestination = TabDragReorder.partitionLocalDestination(
+          draggedID: id,
+          absoluteDestination: absoluteDestination,
+          visibleNotes: visibleNotes
+        ) else { return }
+        _ = state.moveNote(
+          id,
+          inFolderID: folderID,
+          toVisibleIndex: localDestination
+        )
+      }
+    )
+    lastDestinationID = result.destinationID
+    return result
+  }
+
+  #expect(drag(270).didMove)
+  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "A", "C"])
+  #expect(drag(380).didMove)
+  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "C", "A"])
+  #expect(!drag(500).didMove)
+  #expect(drag(250).didMove)
+  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "A", "C"])
+  #expect(drag(140).didMove)
+  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "A", "B", "C"])
+  #expect(!drag(140).didMove)
+  #expect(state.workspace.selectedNoteID == first.id)
+}
+
+@Test @MainActor
+func contextMovesUsePartitionLocalMapperInUnfiledAndNamedFolderScopes() async throws {
+  let folder = try Folder(id: UUID(), name: "Work")
+  try await assertContextMoves(folderID: nil, folders: [])
+  try await assertContextMoves(folderID: folder.id, folders: [folder])
+}
+
+@MainActor
+private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("tab-reorder-context-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let pinned = Note(title: "Pinned", isPinned: true, folderID: folderID)
+  let first = Note(title: "A", folderID: folderID)
+  let second = Note(title: "B", folderID: folderID)
+  let third = Note(title: "C", folderID: folderID)
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(
+    notes: [pinned, first, second, third],
+    selectedNoteID: first.id,
+    folders: folders
+  )
+
+  func contextMove(_ noteID: UUID, offset: Int) -> Bool {
+    let visibleNotes = state.visibleNotes(in: folderID)
+    guard let index = visibleNotes.firstIndex(where: { $0.id == noteID }),
+      let localDestination = TabDragReorder.partitionLocalDestination(
+        draggedID: noteID,
+        absoluteDestination: index + offset,
+        visibleNotes: visibleNotes
+      )
+    else { return false }
+    return state.moveNote(
+      noteID,
+      inFolderID: folderID,
+      toVisibleIndex: localDestination
+    )
+  }
+
+  #expect(contextMove(first.id, offset: 1))
+  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "A", "C"])
+  #expect(contextMove(first.id, offset: 1))
+  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "C", "A"])
+  #expect(contextMove(first.id, offset: -1))
+  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "A", "C"])
+  #expect(contextMove(first.id, offset: -1))
+  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "A", "B", "C"])
+  #expect(!contextMove(pinned.id, offset: 1))
+  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "A", "B", "C"])
+}
+
+@Test func tabReorderUsesOnePartitionLocalMapperForDragAndContextMoves() throws {
+  let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
+  let moveFunction = try #require(
+    source.components(separatedBy: "private func move(_ note: Note, offset: Int)").last?
+      .components(separatedBy: "private func startExport").first
+  )
+
+  #expect(tabStrip.contains("TabDragReorder.partitionLocalDestination"))
+  #expect(tabStrip.contains("absoluteDestination: destination"))
+  #expect(moveFunction.contains("TabDragReorder.partitionLocalDestination"))
+  #expect(moveFunction.contains("absoluteDestination: index + offset"))
+  #expect(!tabStrip.contains("toVisibleIndex: destination"))
+  #expect(!moveFunction.contains("toVisibleIndex: index + offset"))
 }
 
 @Test func liveTabDragMovesFirstAcrossSecondAndThirdUsingCurrentFrames() {
@@ -330,7 +480,7 @@ import FleckCore
 
   #expect(tabStrip.contains("visibleNotes.map(\\.id)"))
   #expect(tabStrip.contains("inFolderID: activeFolderID"))
-  #expect(tabStrip.contains("toVisibleIndex: destination"))
+  #expect(tabStrip.contains("toVisibleIndex: localDestination"))
   #expect(!tabStrip.contains("modifiedAt"))
   #expect(!tabStrip.contains("sorted("))
 }

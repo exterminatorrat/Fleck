@@ -79,6 +79,23 @@
       let index: Int
     }
 
+    static func partitionLocalDestination(
+      draggedID: UUID,
+      absoluteDestination: Int,
+      visibleNotes: [Note]
+    ) -> Int? {
+      guard let draggedNote = visibleNotes.first(where: { $0.id == draggedID }) else {
+        return nil
+      }
+      let notesAfterRemoval = visibleNotes.filter { $0.id != draggedID }
+      let insertion = min(max(absoluteDestination, 0), notesAfterRemoval.count)
+      return notesAfterRemoval.prefix(insertion).reduce(into: 0) { count, note in
+        if note.isPinned == draggedNote.isPinned {
+          count += 1
+        }
+      }
+    }
+
     struct LiveMoveResult: Equatable {
       let didMove: Bool
       let destinationID: UUID?
@@ -784,10 +801,15 @@
                     currentFrames: { tabFrames },
                     lastDestinationID: tabDragDestinationID,
                     move: { id, destination in
+                      guard let localDestination = TabDragReorder.partitionLocalDestination(
+                        draggedID: id,
+                        absoluteDestination: destination,
+                        visibleNotes: visibleNotes
+                      ) else { return }
                       _ = appState.moveNote(
                         id,
                         inFolderID: activeFolderID,
-                        toVisibleIndex: destination
+                        toVisibleIndex: localDestination
                       )
                     }
                   )
@@ -1038,10 +1060,15 @@
       guard let index = visibleNotes.firstIndex(where: { $0.id == note.id }) else {
         return
       }
+      guard let localDestination = TabDragReorder.partitionLocalDestination(
+        draggedID: note.id,
+        absoluteDestination: index + offset,
+        visibleNotes: visibleNotes
+      ) else { return }
       _ = appState.moveNote(
         note.id,
         inFolderID: activeFolderID,
-        toVisibleIndex: index + offset
+        toVisibleIndex: localDestination
       )
     }
 
