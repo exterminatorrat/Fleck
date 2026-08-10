@@ -1272,7 +1272,10 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   )
 
   #expect(navigator.contains("NoteDropTarget"))
-  #expect(navigator.contains("noteDropTargetBinding"))
+  #expect(navigator.contains("private struct NoteDropDelegate: DropDelegate"))
+  #expect(navigator.contains("delegate: noteDropDelegate("))
+  #expect(navigator.contains("providerSource == expectedSource"))
+  #expect(navigator.contains("draggedSource == expectedSource"))
   #expect(navigator.contains("Color.accentColor.opacity"))
   #expect(navigator.contains(".contentShape"))
   #expect(navigator.contains("accessibilityAction"))
@@ -1348,7 +1351,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   )
   let rowLabel = try #require(
     navigator.components(separatedBy: "private func rowLabel").last?
-      .components(separatedBy: "private func noteDropTargetBinding").first
+      .components(separatedBy: "private func noteDropDelegate").first
   )
 
   #expect(rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
@@ -1381,7 +1384,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   )
   let rowLabel = try #require(
     navigator.components(separatedBy: "private func rowLabel").last?
-      .components(separatedBy: "private func noteDropTargetBinding").first
+      .components(separatedBy: "private func noteDropDelegate").first
   )
 
   #expect(folderScroll.contains(".frame(maxWidth: .infinity)"))
