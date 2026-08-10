@@ -15,7 +15,7 @@ import FleckCore
 
   #expect(
     !NoteDropPresentation.isValidTarget(
-      draggedNoteID: filed.id,
+      draggedSource: NoteDropSource(noteID: filed.id, sourceFolderID: work.id),
       targetFolderID: work.id,
       notes: notes,
       validTargetFolderIDs: folderIDs
@@ -23,7 +23,7 @@ import FleckCore
   )
   #expect(
     NoteDropPresentation.isValidTarget(
-      draggedNoteID: filed.id,
+      draggedSource: NoteDropSource(noteID: filed.id, sourceFolderID: work.id),
       targetFolderID: other.id,
       notes: notes,
       validTargetFolderIDs: folderIDs
@@ -31,7 +31,7 @@ import FleckCore
   )
   #expect(
     !NoteDropPresentation.isValidTarget(
-      draggedNoteID: unfiled.id,
+      draggedSource: NoteDropSource(noteID: unfiled.id, sourceFolderID: nil),
       targetFolderID: nil,
       notes: notes,
       validTargetFolderIDs: folderIDs
@@ -39,7 +39,7 @@ import FleckCore
   )
   #expect(
     NoteDropPresentation.isValidTarget(
-      draggedNoteID: unfiled.id,
+      draggedSource: NoteDropSource(noteID: unfiled.id, sourceFolderID: nil),
       targetFolderID: work.id,
       notes: notes,
       validTargetFolderIDs: folderIDs
@@ -47,7 +47,7 @@ import FleckCore
   )
   #expect(
     !NoteDropPresentation.isValidTarget(
-      draggedNoteID: nil,
+      draggedSource: nil,
       targetFolderID: work.id,
       notes: notes,
       validTargetFolderIDs: folderIDs
@@ -55,7 +55,7 @@ import FleckCore
   )
   #expect(
     !NoteDropPresentation.isValidTarget(
-      draggedNoteID: UUID(),
+      draggedSource: NoteDropSource(noteID: UUID(), sourceFolderID: work.id),
       targetFolderID: work.id,
       notes: notes,
       validTargetFolderIDs: folderIDs
@@ -63,7 +63,7 @@ import FleckCore
   )
   #expect(
     !NoteDropPresentation.isValidTarget(
-      draggedNoteID: filed.id,
+      draggedSource: NoteDropSource(noteID: filed.id, sourceFolderID: work.id),
       targetFolderID: UUID(),
       notes: notes,
       validTargetFolderIDs: folderIDs
@@ -71,16 +71,69 @@ import FleckCore
   )
 }
 
-@Test func noteDropHighlightUsesLiveDragIdentityAndClearsAtEnd() throws {
+@Test func noteDropPresentationFailsClosedWhenLiveNoteMovesAfterDragStarts() throws {
+  let sourceFolder = try Folder(id: UUID(), name: "Source")
+  let currentFolder = try Folder(id: UUID(), name: "Current")
+  let thirdFolder = try Folder(id: UUID(), name: "Third")
+  let noteID = UUID()
+  let capturedSource = NoteDropSource(noteID: noteID, sourceFolderID: sourceFolder.id)
+  let liveNote = Note(id: noteID, title: "Moved", folderID: currentFolder.id)
+  let folderIDs = Set([sourceFolder.id, currentFolder.id, thirdFolder.id])
+
+  for targetFolderID in [sourceFolder.id, currentFolder.id, thirdFolder.id] {
+    #expect(
+      !NoteDropPresentation.isValidTarget(
+        draggedSource: capturedSource,
+        targetFolderID: targetFolderID,
+        notes: [liveNote],
+        validTargetFolderIDs: folderIDs
+      )
+    )
+  }
+}
+
+@Test func noteDropPresentationAllowsValidUnfiledAndFolderTransfers() throws {
+  let folder = try Folder(id: UUID(), name: "Folder")
+  let otherFolder = try Folder(id: UUID(), name: "Other")
+  let filed = Note(id: UUID(), title: "Filed", folderID: folder.id)
+  let unfiled = Note(id: UUID(), title: "Unfiled")
+  let folderIDs = Set([folder.id, otherFolder.id])
+
+  #expect(
+    NoteDropPresentation.isValidTarget(
+      draggedSource: NoteDropSource(noteID: filed.id, sourceFolderID: folder.id),
+      targetFolderID: otherFolder.id,
+      notes: [filed, unfiled],
+      validTargetFolderIDs: folderIDs
+    )
+  )
+  #expect(
+    NoteDropPresentation.isValidTarget(
+      draggedSource: NoteDropSource(noteID: unfiled.id, sourceFolderID: nil),
+      targetFolderID: folder.id,
+      notes: [filed, unfiled],
+      validTargetFolderIDs: folderIDs
+    )
+  )
+}
+
+@Test func noteDropHighlightUsesCapturedSourceContextAndClearsAtEnd() throws {
   let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
   let navigator = try #require(
     source.components(separatedBy: "private struct FolderNavigator").last
   )
 
+  #expect(tabStrip.contains("noteDropSource = NoteDropSource"))
+  #expect(tabStrip.contains("sourceFolderID: note.folderID"))
+  #expect(tabStrip.contains("noteDropSource = nil"))
   #expect(navigator.contains("NoteDropPresentation.isValidTarget"))
-  #expect(navigator.contains("draggedNoteID"))
-  #expect(navigator.contains(".onChange(of: draggedNoteID)"))
-  #expect(navigator.contains("draggedNoteID = nil"))
+  #expect(navigator.contains("draggedSource"))
+  #expect(navigator.contains(".onChange(of: draggedSource)"))
+  #expect(navigator.contains("draggedSource = nil"))
   #expect(navigator.contains("noteDropTarget = nil"))
 }
 
