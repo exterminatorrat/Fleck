@@ -5,6 +5,85 @@ import Testing
 @testable import FleckApp
 import FleckCore
 
+@Test func noteDropPresentationRejectsSameFolderAndInvalidDragStates() throws {
+  let work = try Folder(id: UUID(), name: "Work")
+  let other = try Folder(id: UUID(), name: "Other")
+  let filed = Note(id: UUID(), title: "Filed", folderID: work.id)
+  let unfiled = Note(id: UUID(), title: "Unfiled")
+  let notes = [filed, unfiled]
+  let folderIDs = Set([work.id, other.id])
+
+  #expect(
+    !NoteDropPresentation.isValidTarget(
+      draggedNoteID: filed.id,
+      targetFolderID: work.id,
+      notes: notes,
+      validTargetFolderIDs: folderIDs
+    )
+  )
+  #expect(
+    NoteDropPresentation.isValidTarget(
+      draggedNoteID: filed.id,
+      targetFolderID: other.id,
+      notes: notes,
+      validTargetFolderIDs: folderIDs
+    )
+  )
+  #expect(
+    !NoteDropPresentation.isValidTarget(
+      draggedNoteID: unfiled.id,
+      targetFolderID: nil,
+      notes: notes,
+      validTargetFolderIDs: folderIDs
+    )
+  )
+  #expect(
+    NoteDropPresentation.isValidTarget(
+      draggedNoteID: unfiled.id,
+      targetFolderID: work.id,
+      notes: notes,
+      validTargetFolderIDs: folderIDs
+    )
+  )
+  #expect(
+    !NoteDropPresentation.isValidTarget(
+      draggedNoteID: nil,
+      targetFolderID: work.id,
+      notes: notes,
+      validTargetFolderIDs: folderIDs
+    )
+  )
+  #expect(
+    !NoteDropPresentation.isValidTarget(
+      draggedNoteID: UUID(),
+      targetFolderID: work.id,
+      notes: notes,
+      validTargetFolderIDs: folderIDs
+    )
+  )
+  #expect(
+    !NoteDropPresentation.isValidTarget(
+      draggedNoteID: filed.id,
+      targetFolderID: UUID(),
+      notes: notes,
+      validTargetFolderIDs: folderIDs
+    )
+  )
+}
+
+@Test func noteDropHighlightUsesLiveDragIdentityAndClearsAtEnd() throws {
+  let source = try tabNotesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+
+  #expect(navigator.contains("NoteDropPresentation.isValidTarget"))
+  #expect(navigator.contains("draggedNoteID"))
+  #expect(navigator.contains(".onChange(of: draggedNoteID)"))
+  #expect(navigator.contains("draggedNoteID = nil"))
+  #expect(navigator.contains("noteDropTarget = nil"))
+}
+
 @Test func tabStripAllocatesItsActualOverflowViewportAtSupportedWidths() throws {
   #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380) == 352)
   #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 520) == 492)
