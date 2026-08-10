@@ -43,7 +43,19 @@ func WorkspaceSearchHostingPreservesSearchResultsAndNoteStateAcrossAccentUpdates
   searchController.present()
   await settleWorkspaceSearchHost(host)
   searchController.setQuery("cafe", in: state.workspace.notes)
-  await settleWorkspaceSearchHost(host)
+  let searchDeadline = ContinuousClock.now + .seconds(1)
+  while
+    (!searchController.resultsAreCurrent
+      || searchController.results.map(\.noteID) != [titleNoteID]),
+    ContinuousClock.now < searchDeadline
+  {
+    await Task.yield()
+  }
+  #expect(
+    searchController.resultsAreCurrent
+      && searchController.results.map(\.noteID) == [titleNoteID],
+    "Timed out waiting for the current workspace search result"
+  )
 
   #expect(searchController.results.map(\.noteID) == [titleNoteID])
   let initialResult = try #require(searchController.results.first)
