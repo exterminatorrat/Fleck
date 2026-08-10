@@ -795,19 +795,19 @@
                   )
                 }
               }
+              .onDrag {
+                noteDropSource = NoteDropSource(
+                  noteID: note.id,
+                  sourceFolderID: note.folderID
+                )
+                return FolderDragPayload.noteProvider(
+                  noteID: note.id,
+                  sourceFolderID: note.folderID
+                )
+              }
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("note-tab-\(note.id.uuidString)")
-            .onDrag {
-              noteDropSource = NoteDropSource(
-                noteID: note.id,
-                sourceFolderID: note.folderID
-              )
-              return FolderDragPayload.noteProvider(
-                noteID: note.id,
-                sourceFolderID: note.folderID
-              )
-            }
             .transition(
               .opacity.combined(
                 with: .offset(x: motion.offset)

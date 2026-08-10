@@ -176,6 +176,17 @@ import FleckCore
     source.components(separatedBy: "private var tabStrip").last?
       .components(separatedBy: "private var motion").first
   )
+  let tab = try #require(
+    tabStrip.components(separatedBy: "ForEach(visibleNotes) { note in").last?
+      .components(separatedBy: ".contextMenu {").first
+  )
+  let label = try #require(
+    tab.components(separatedBy: "} label: {").last?
+      .components(separatedBy: "            }\n            .buttonStyle(.plain)").first
+  )
+  let outerModifiers = try #require(
+    tab.components(separatedBy: "            }\n            .buttonStyle(.plain)").last
+  )
 
   #expect(tabStrip.contains("DragGesture("))
   #expect(tabStrip.contains("coordinateSpace: .named(\"tab-strip\")"))
@@ -185,7 +196,10 @@ import FleckCore
   #expect(tabStrip.contains("proxy.frame(in: .named(\"tab-strip\"))"))
   #expect(tabStrip.contains("appState.moveNote"))
   #expect(tabStrip.contains("toVisibleIndex: localDestination"))
-  #expect(tabStrip.contains(".onDrag"))
+  #expect(label.contains(".onDrag"))
+  #expect(label.contains("FolderDragPayload.noteProvider"))
+  #expect(outerModifiers.contains(".simultaneousGesture("))
+  #expect(!outerModifiers.contains(".onDrag"))
   #expect(!tabStrip.contains(".onDrop"))
   #expect(!tabStrip.contains("TabDropDelegate"))
 }
