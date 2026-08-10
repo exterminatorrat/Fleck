@@ -1054,12 +1054,13 @@
         return
       }
       let shouldSuppressConfirmation = dontAskAgainForDeletion
+      _ = appState.moveToTrash(
+        note.id,
+        activeFolderID: activeFolderID,
+        suppressConfirmation: shouldSuppressConfirmation
+      )
       notePendingDeletion = nil
       dontAskAgainForDeletion = false
-      if shouldSuppressConfirmation {
-        appState.updatePreferences { $0.confirmBeforeMovingNotesToTrash = false }
-      }
-      appState.moveToTrash(note.id, activeFolderID: activeFolderID)
     }
 
     private func openHistoryDestination(_ noteID: UUID) {

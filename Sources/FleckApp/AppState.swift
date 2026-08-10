@@ -936,20 +936,37 @@
       return true
     }
 
-    func moveToTrash(_ id: UUID) {
-      guard !isLockedNote(id) else { return }
-      guard let note = workspace.notes.first(where: { $0.id == id }) else { return }
+    @discardableResult
+    func moveToTrash(_ id: UUID, suppressConfirmation: Bool = false) -> Bool {
+      guard !isLockedNote(id) else { return false }
+      guard let note = workspace.notes.first(where: { $0.id == id }) else {
+        return false
+      }
+      if suppressConfirmation {
+        preferences.confirmBeforeMovingNotesToTrash = false
+      }
       pendingTrashNotes[id] = note
       workspace.deleteNote(id: id)
       saveNow()
+      return true
     }
 
-    func moveToTrash(_ id: UUID, activeFolderID: UUID?) {
-      guard !isLockedNote(id) else { return }
-      guard let note = workspace.notes.first(where: { $0.id == id }) else { return }
+    @discardableResult
+    func moveToTrash(
+      _ id: UUID,
+      activeFolderID: UUID?,
+      suppressConfirmation: Bool = false
+    ) -> Bool {
+      guard !isLockedNote(id) else { return false }
+      guard let note = workspace.notes.first(where: { $0.id == id }) else {
+        return false
+      }
       let sourceFolderID = note.folderID
       let sourceVisibleNotes = workspace.notes(inFolderID: sourceFolderID)
       let selectedWasDeleted = workspace.selectedNoteID == id
+      if suppressConfirmation {
+        preferences.confirmBeforeMovingNotesToTrash = false
+      }
       pendingTrashNotes[id] = note
       var updated = workspace
       updated.deleteNote(id: id)
@@ -963,6 +980,7 @@
       }
       workspace = updated
       saveNow()
+      return true
     }
 
     func selectAdjacentNote(forward: Bool) {
