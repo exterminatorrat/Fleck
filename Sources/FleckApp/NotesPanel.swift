@@ -97,11 +97,6 @@
   }
 
   enum TabDragReorder {
-    struct Destination: Equatable {
-      let id: UUID
-      let index: Int
-    }
-
     static func partitionLocalDestination(
       draggedID: UUID,
       absoluteDestination: Int,
@@ -124,61 +119,39 @@
       let destinationID: UUID?
     }
 
-    static func destination(
-      draggedID: UUID?,
-      locationX: CGFloat,
-      currentNoteIDs: [UUID],
-      currentFrames: [UUID: CGRect]
-    ) -> Destination? {
-      guard let draggedID,
-        let sourceIndex = currentNoteIDs.firstIndex(of: draggedID),
-        let draggedFrame = currentFrames[draggedID]
-      else { return nil }
-
-      let destinationID: UUID?
-      if locationX > draggedFrame.midX {
-        destinationID = currentNoteIDs.dropFirst(sourceIndex + 1).last { id in
-          guard let midpoint = currentFrames[id]?.midX else { return false }
-          return midpoint <= locationX
-        }
-      } else if locationX < draggedFrame.midX {
-        destinationID = currentNoteIDs.prefix(sourceIndex).first { id in
-          guard let midpoint = currentFrames[id]?.midX else { return false }
-          return midpoint >= locationX
-        }
-      } else {
-        destinationID = nil
-      }
-
-      guard let destinationID,
-        let destinationIndex = currentNoteIDs.firstIndex(of: destinationID)
-      else { return nil }
-      return Destination(id: destinationID, index: destinationIndex)
-    }
-
     static func performLiveMove(
-      draggedID: UUID?,
-      locationX: CGFloat,
-      currentNoteIDs: () -> [UUID],
-      currentFrames: () -> [UUID: CGRect],
+      draggedSource: NoteDropSource?,
+      over destinationID: UUID,
+      activeFolderID: UUID?,
+      currentNotes: () -> [Note],
       lastDestinationID: UUID?,
       move: (UUID, Int) -> Void
     ) -> LiveMoveResult {
-      guard let draggedID,
-        let destination = destination(
-          draggedID: draggedID,
-          locationX: locationX,
-          currentNoteIDs: currentNoteIDs(),
-          currentFrames: currentFrames()
+      let visibleNotes = currentNotes()
+      guard let draggedSource,
+        draggedSource.sourceFolderID == activeFolderID,
+        draggedSource.noteID != destinationID,
+        let draggedNote = visibleNotes.first(where: { $0.id == draggedSource.noteID }),
+        draggedNote.folderID == draggedSource.sourceFolderID,
+        let destinationNote = visibleNotes.first(where: { $0.id == destinationID }),
+        destinationNote.folderID == activeFolderID
+      else {
+        return LiveMoveResult(didMove: false, destinationID: nil)
+      }
+      guard destinationID != lastDestinationID else {
+        return LiveMoveResult(didMove: false, destinationID: destinationID)
+      }
+      guard let absoluteDestination = visibleNotes.firstIndex(where: { $0.id == destinationID }),
+        let localDestination = partitionLocalDestination(
+          draggedID: draggedSource.noteID,
+          absoluteDestination: absoluteDestination,
+          visibleNotes: visibleNotes
         )
       else {
         return LiveMoveResult(didMove: false, destinationID: nil)
       }
-      guard destination.id != lastDestinationID else {
-        return LiveMoveResult(didMove: false, destinationID: destination.id)
-      }
-      move(draggedID, destination.index)
-      return LiveMoveResult(didMove: true, destinationID: destination.id)
+      move(draggedSource.noteID, localDestination)
+      return LiveMoveResult(didMove: true, destinationID: destinationID)
     }
   }
 
@@ -216,14 +189,6 @@
     }
   }
 
-  private struct TabFramePreferenceKey: PreferenceKey {
-    static let defaultValue: [UUID: CGRect] = [:]
-
-    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
-      value.merge(nextValue(), uniquingKeysWith: { _, new in new })
-    }
-  }
-
   enum NotesPanelSizing: Equatable {
     case storedPreferences
     case container
@@ -253,11 +218,9 @@
     @State private var exportDocument: NoteFileDocument?
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
-    @State private var draggedNoteID: UUID?
     @State private var noteDropSource: NoteDropSource?
     @State private var tabDragDestinationID: UUID?
     @State private var tabColorPickerNoteID: UUID?
-    @State private var tabFrames: [UUID: CGRect] = [:]
     @State private var tabContentTrailingEdge: CGFloat = 0
     @State private var activeFolderID: UUID?
     @State private var restoreEditorFocusAfterHide = false
@@ -760,7 +723,6 @@
               HStack(spacing: 6) {
                 ForEach(visibleNotes) { note in
             Button {
-              guard draggedNoteID == nil else { return }
               _ = activateNoteAndScope(note.id)
             } label: {
               HStack(spacing: 4) {
@@ -787,68 +749,42 @@
                     .fill(tabColor(for: note, opacity: 0.10))
                 }
               }
-              .background {
-                GeometryReader { proxy in
-                  Color.clear.preference(
-                    key: TabFramePreferenceKey.self,
-                    value: [note.id: proxy.frame(in: .named("tab-strip"))]
-                  )
-                }
-              }
-              .onDrag {
-                noteDropSource = NoteDropSource(
-                  noteID: note.id,
-                  sourceFolderID: note.folderID
-                )
-                return FolderDragPayload.noteProvider(
-                  noteID: note.id,
-                  sourceFolderID: note.folderID
-                )
-              }
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("note-tab-\(note.id.uuidString)")
+            .onDrag {
+              noteDropSource = NoteDropSource(
+                noteID: note.id,
+                sourceFolderID: note.folderID
+              )
+              tabDragDestinationID = nil
+              _ = activateNoteAndScope(note.id)
+              return FolderDragPayload.noteProvider(
+                noteID: note.id,
+                sourceFolderID: note.folderID
+              )
+            }
+            .onDrop(
+              of: [FolderDragPayload.noteType],
+              delegate: TabDropDelegate(
+                destinationID: note.id,
+                activeFolderID: activeFolderID,
+                currentNotes: { visibleNotes },
+                draggedSource: $noteDropSource,
+                lastDestinationID: $tabDragDestinationID,
+                move: { id, localDestination in
+                  _ = appState.moveNote(
+                    id,
+                    inFolderID: activeFolderID,
+                    toVisibleIndex: localDestination
+                  )
+                }
+              )
+            )
             .transition(
               .opacity.combined(
                 with: .offset(x: motion.offset)
               )
-            )
-            .simultaneousGesture(
-              DragGesture(minimumDistance: 2, coordinateSpace: .named("tab-strip"))
-                .onChanged { value in
-                  guard abs(value.translation.width) >= 2 else { return }
-                  if draggedNoteID == nil {
-                    draggedNoteID = note.id
-                    tabDragDestinationID = nil
-                    _ = activateNoteAndScope(note.id)
-                  }
-                  guard draggedNoteID == note.id else { return }
-                  let result = TabDragReorder.performLiveMove(
-                    draggedID: draggedNoteID,
-                    locationX: value.location.x,
-                    currentNoteIDs: { visibleNotes.map(\.id) },
-                    currentFrames: { tabFrames },
-                    lastDestinationID: tabDragDestinationID,
-                    move: { id, destination in
-                      guard let localDestination = TabDragReorder.partitionLocalDestination(
-                        draggedID: id,
-                        absoluteDestination: destination,
-                        visibleNotes: visibleNotes
-                      ) else { return }
-                      _ = appState.moveNote(
-                        id,
-                        inFolderID: activeFolderID,
-                        toVisibleIndex: localDestination
-                      )
-                    }
-                  )
-                  tabDragDestinationID = result.destinationID
-                }
-                .onEnded { _ in
-                  draggedNoteID = nil
-                  noteDropSource = nil
-                  tabDragDestinationID = nil
-                }
             )
             .contextMenu {
               Button(
@@ -975,9 +911,6 @@
         .onPreferenceChange(TabContentTrailingEdgePreferenceKey.self) { trailingEdge in
           guard tabContentTrailingEdge != trailingEdge else { return }
           tabContentTrailingEdge = trailingEdge
-        }
-        .onPreferenceChange(TabFramePreferenceKey.self) { frames in
-          tabFrames = frames
         }
         }
         .frame(height: 37)
@@ -2344,6 +2277,40 @@
       .frame(width: 62, height: 22, alignment: .trailing)
       .animation(motion.quick, value: status)
       .accessibilityElement(children: .combine)
+    }
+  }
+
+  private struct TabDropDelegate: DropDelegate {
+    let destinationID: UUID
+    let activeFolderID: UUID?
+    let currentNotes: () -> [Note]
+    @Binding var draggedSource: NoteDropSource?
+    @Binding var lastDestinationID: UUID?
+    let move: (UUID, Int) -> Void
+
+    func dropEntered(info: DropInfo) {
+      guard info.hasItemsConforming(to: [FolderDragPayload.noteType]) else { return }
+      let result = TabDragReorder.performLiveMove(
+        draggedSource: draggedSource,
+        over: destinationID,
+        activeFolderID: activeFolderID,
+        currentNotes: currentNotes,
+        lastDestinationID: lastDestinationID,
+        move: move
+      )
+      lastDestinationID = result.destinationID
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+      guard info.hasItemsConforming(to: [FolderDragPayload.noteType]) else { return nil }
+      return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+      let accepted = info.hasItemsConforming(to: [FolderDragPayload.noteType])
+      draggedSource = nil
+      lastDestinationID = nil
+      return accepted
     }
   }
 
