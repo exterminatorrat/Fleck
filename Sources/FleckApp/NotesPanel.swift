@@ -1519,6 +1519,7 @@
           )
         }
       }
+      .fixedSize(horizontal: isUnfiledCompact, vertical: false)
       .onHover { isUnfiledHovered = $0 }
       .contentShape(Rectangle())
       .onDrop(

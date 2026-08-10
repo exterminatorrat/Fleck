@@ -1337,6 +1337,24 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!navigator.contains("Inbox"))
 }
 
+@Test func compactUnfiledReleasesOnlyItsFlexibleRootRowWidth() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let rootRow = try #require(
+    navigator.components(separatedBy: "private var rootRow").last?
+      .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
+  )
+  let rowLabel = try #require(
+    navigator.components(separatedBy: "private func rowLabel").last?
+      .components(separatedBy: "private func noteDropTargetBinding").first
+  )
+
+  #expect(rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
+  #expect(!rowLabel.contains(".fixedSize(horizontal:"))
+}
+
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1406,6 +1424,46 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(actualRTF == expectedRTF)
   #expect(commands.isBold)
   #expect(textView.undoManager?.canUndo == true)
+}
+
+@Test @MainActor func hostedCompactUnfiledKeepsNamedFolderPillInsideNavigator() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = try Folder(id: UUID(), name: "SoftwareDev")
+  let note = Note(title: "Selected folder render", body: "Body", folderID: folder.id)
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(
+      notes: [note],
+      selectedNoteID: note.id,
+      folders: [folder]
+    )
+  )
+  let accentHex = "#00FF00"
+  state.updatePreferences {
+    $0.accentHex = accentHex
+    $0.isUnfiledCompact = true
+  }
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(
+    root: root,
+    state: state,
+    commands: commands,
+    accentHex: accentHex
+  )
+  window.appearance = NSAppearance(named: .darkAqua)
+  defer { window.orderOut(nil) }
+  await settleHostedView(host)
+
+  let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+  host.cacheDisplay(in: host.bounds, to: imageRep)
+  let selectedPill = try #require(
+    hostedAccentFillBounds(in: imageRep, hostSize: host.bounds.size, accentHex: accentHex)
+  )
+
+  #expect(selectedPill.minX < 100)
+  #expect(selectedPill.minY < 90)
 }
 
 @Test @MainActor func hostedNotesPanelEvacuatesTitleFocusWithoutRestoringBody() async throws {
@@ -1765,15 +1823,18 @@ private func hostedPanelState(root: URL, workspace: Workspace) async -> AppState
 private func hostedPanel(
   root: URL,
   state: AppState,
-  commands: EditorCommands
+  commands: EditorCommands,
+  accentHex: String? = nil
 ) -> (NSWindow, NSHostingView<AnyView>) {
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
-  let host = NSHostingView(
-    rootView: AnyView(
-      NotesPanel(dictationRuntime: runtime, editorCommands: commands)
-        .environmentObject(state)
-    )
-  )
+  let panel = NotesPanel(dictationRuntime: runtime, editorCommands: commands)
+  let rootView: AnyView
+  if let accentHex, let accent = Color(hex: accentHex) {
+    rootView = AnyView(panel.environmentObject(state).accentColor(accent))
+  } else {
+    rootView = AnyView(panel.environmentObject(state))
+  }
+  let host = NSHostingView(rootView: rootView)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
     styleMask: [.titled], backing: .buffered, defer: false
@@ -1817,6 +1878,66 @@ private func hostedPanelRTF(text: String) throws -> Data {
   return try attributed.data(
     from: range,
     documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+}
+
+@MainActor
+private func hostedAccentFillBounds(
+  in imageRep: NSBitmapImageRep,
+  hostSize: CGSize,
+  accentHex: String
+) -> CGRect? {
+  guard hostSize.width > 0, hostSize.height > 0,
+    let accent = NSColor(hex: accentHex)?.usingColorSpace(.sRGB)
+  else { return nil }
+
+  var accentRed: CGFloat = 0
+  var accentGreen: CGFloat = 0
+  var accentBlue: CGFloat = 0
+  var accentAlpha: CGFloat = 0
+  accent.getRed(
+    &accentRed,
+    green: &accentGreen,
+    blue: &accentBlue,
+    alpha: &accentAlpha
+  )
+  guard accentGreen > accentRed, accentGreen > accentBlue else { return nil }
+
+  let scaleX = CGFloat(imageRep.pixelsWide) / hostSize.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / hostSize.height
+  let bandEnd = min(imageRep.pixelsHigh, Int(ceil(min(hostSize.height, 90) * scaleY)))
+  var matchCount = 0
+  var minX = Int.max
+  var minY = Int.max
+  var maxX = Int.min
+  var maxY = Int.min
+
+  for y in 0..<bandEnd {
+    for x in 0..<imageRep.pixelsWide {
+      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+      else { continue }
+      var red: CGFloat = 0
+      var green: CGFloat = 0
+      var blue: CGFloat = 0
+      var alpha: CGFloat = 0
+      color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+      guard alpha > 0.5 else { continue }
+      guard green > red + 0.05, green > blue + 0.05 else { continue }
+      matchCount += 1
+      minX = min(minX, x)
+      minY = min(minY, y)
+      maxX = max(maxX, x)
+      maxY = max(maxY, y)
+    }
+  }
+
+  let minimumPixels = max(32, Int(20 * scaleX * scaleY))
+  guard matchCount >= minimumPixels else { return nil }
+  return CGRect(
+    x: CGFloat(minX) / scaleX,
+    y: CGFloat(minY) / scaleY,
+    width: CGFloat(maxX - minX + 1) / scaleX,
+    height: CGFloat(maxY - minY + 1) / scaleY
   )
 }
 
