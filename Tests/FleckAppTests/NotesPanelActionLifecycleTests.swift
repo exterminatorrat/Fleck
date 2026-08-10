@@ -11,9 +11,11 @@ import Testing
 struct NotesPanelActionLifecycleTests {
   @Test func folderAndTrashActionsUsePanelOwnedPresentation() throws {
     let source = try notesPanelSource()
+    let trashSource = try trashViewSource()
 
     #expect(!source.contains(".confirmationDialog("))
     #expect(!source.contains(".sheet(isPresented: $isShowingTrash)"))
+    #expect(!trashSource.contains(".frame(minWidth: 440, minHeight: 320)"))
     #expect(source.contains("onConfirm: { confirmFolderDeletion(folderPendingDeletion) }"))
     #expect(source.contains("onDone: { isShowingTrash = false }"))
     #expect(
@@ -50,7 +52,10 @@ struct NotesPanelActionLifecycleTests {
           onConfirm: { Issue.record("Cancel invoked Delete Folder") }
         )
       ),
-      isPinned: isPinned
+      hostCase: PanelHostCase(
+        isPinned: isPinned,
+        size: NSSize(width: 640, height: 430)
+      )
     )
     await settle(cancelHost)
     sendKey(.escape, to: cancelWindow)
@@ -80,7 +85,10 @@ struct NotesPanelActionLifecycleTests {
           }
         )
       ),
-      isPinned: isPinned
+      hostCase: PanelHostCase(
+        isPinned: isPinned,
+        size: NSSize(width: 640, height: 430)
+      )
     )
     await settle(deleteHost)
     sendKey(.return, to: deleteWindow)
@@ -95,8 +103,8 @@ struct NotesPanelActionLifecycleTests {
     deleteWindow.orderOut(nil)
   }
 
-  @Test(arguments: [false, true])
-  func trashRestoreAndDoneStayInsideOwningPanel(isPinned: Bool) async throws {
+  @Test(arguments: PanelHostCase.all)
+  func trashRestoreAndDoneStayInsideOwningPanel(hostCase: PanelHostCase) async throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("notes-panel-trash-" + UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -128,7 +136,7 @@ struct NotesPanelActionLifecycleTests {
         TrashPanelOverlay(onDone: { doneCount += 1 })
           .environmentObject(state)
       ),
-      isPinned: isPinned
+      hostCase: hostCase
     )
     defer {
       window.contentView = nil
@@ -136,15 +144,29 @@ struct NotesPanelActionLifecycleTests {
     }
     await settle(host)
 
-    // SwiftUI does not publish button AX children in the SwiftPM host. The
-    // button's native focus ring still gives us its real hit target.
-    let restoreFocusRing = try #require(
-      physicalDescendants(of: host).first(where: { view in
-        String(describing: type(of: view)) == "_FocusRingView"
-          && view.ancestorTypeName == "ListTableCellView"
-      })
+    let cardFrame = try #require(
+      descendants(in: host, as: NSVisualEffectView.self)
+        .map { material in
+          material.superview?.convert(material.frame, to: host) ?? material.frame
+        }
+        .max { $0.width * $0.height < $1.width * $1.height }
     )
-    click(restoreFocusRing, in: window, root: host)
+    #expect(host.bounds.contains(cardFrame))
+    #expect(host.fittingSize.width <= host.bounds.width + 0.5)
+    #expect(host.fittingSize.height <= host.bounds.height + 0.5)
+
+    let trashList = try #require(
+      descendants(in: host, as: NSOutlineView.self).first { $0.numberOfRows == 1 }
+    )
+    let row = try #require(trashList.view(atColumn: 0, row: 0, makeIfNecessary: false))
+    click(
+      at: row.convert(
+        NSPoint(x: row.bounds.maxX - 35, y: row.bounds.midY),
+        to: host
+      ),
+      in: window,
+      root: host
+    )
     await settle(host)
 
     #expect(window.isVisible)
@@ -153,16 +175,38 @@ struct NotesPanelActionLifecycleTests {
     #expect(state.workspace.selectedNoteID == trashed.id)
     let restoreCount = await restoreCounter.value
     #expect(restoreCount == 1)
-    let doneProxy = try #require(
-      physicalDescendants(of: host).first {
-        String(describing: type(of: $0)) == "KeyViewProxy"
-      }
-    )
-    click(doneProxy, in: window, root: host)
+    sendKey(.return, to: window)
     await settle(host)
 
     #expect(window.isVisible)
     #expect(doneCount == 1)
+  }
+
+  @Test(arguments: PanelHostCase.all)
+  func trashEscapeClosesOnlyTheOverlay(hostCase: PanelHostCase) async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("notes-panel-trash-escape-" + UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let state = AppState(store: LocalStore(rootURL: root))
+    await state.waitUntilInitialLoad()
+    var doneCount = 0
+    let (window, host) = hostOverlay(
+      AnyView(
+        TrashPanelOverlay(onDone: { doneCount += 1 })
+          .environmentObject(state)
+      ),
+      hostCase: hostCase
+    )
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+    await settle(host)
+    sendKey(.escape, to: window)
+    await settle(host)
+
+    #expect(doneCount == 1)
+    #expect(window.isVisible)
   }
 }
 
@@ -187,15 +231,38 @@ private func notesPanelSource() throws -> String {
   )
 }
 
+private func trashViewSource() throws -> String {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  return try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/TrashView.swift"),
+    encoding: .utf8
+  )
+}
+
+struct PanelHostCase: Sendable {
+  let isPinned: Bool
+  let size: NSSize
+
+  static let all = [
+    PanelHostCase(isPinned: false, size: NSSize(width: 380, height: 300)),
+    PanelHostCase(isPinned: true, size: NSSize(width: 480, height: 320)),
+    PanelHostCase(isPinned: false, size: NSSize(width: 640, height: 430)),
+    PanelHostCase(isPinned: true, size: NSSize(width: 640, height: 430)),
+  ]
+}
+
 @MainActor
 private func hostOverlay(
   _ rootView: AnyView,
-  isPinned: Bool
+  hostCase: PanelHostCase
 ) -> (NSWindow, NSHostingView<AnyView>) {
   let host = NSHostingView(rootView: rootView)
   let window = NSWindow(
-    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
-    styleMask: isPinned ? [.titled] : [.borderless],
+    contentRect: NSRect(origin: .zero, size: hostCase.size),
+    styleMask: hostCase.isPinned ? [.titled] : [.borderless],
     backing: .buffered,
     defer: false
   )
@@ -205,28 +272,18 @@ private func hostOverlay(
 }
 
 @MainActor
-private func physicalDescendants(of view: NSView) -> [NSView] {
-  [view] + view.subviews.flatMap(physicalDescendants)
-}
-
-private extension NSView {
-  var ancestorTypeName: String? {
-    var ancestor = superview
-    while let current = ancestor {
-      let name = String(describing: type(of: current))
-      if name == "ListTableCellView" { return name }
-      ancestor = current.superview
-    }
-    return nil
+private func descendants<T: NSView>(in view: NSView, as type: T.Type) -> [T] {
+  var result = view as? T == nil ? [] : [view as! T]
+  for subview in view.subviews {
+    result.append(contentsOf: descendants(in: subview, as: type))
   }
+  return result
 }
 
 @MainActor
-private func click(_ view: NSView, in window: NSWindow, root: NSView) {
-  guard let superview = view.superview else { return }
-  let frame = superview.convert(view.frame, to: root)
+private func click(at point: NSPoint, in window: NSWindow, root: NSView) {
   let location = root.convert(
-    NSPoint(x: frame.midX, y: frame.midY),
+    point,
     to: nil
   )
   for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {

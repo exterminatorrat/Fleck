@@ -2050,6 +2050,13 @@
           .shadow(radius: 20, y: 8)
           .accessibilityElement(children: .contain)
           .accessibilityLabel("Trash")
+          .padding(8)
+
+        Button("Close Trash", action: onDone)
+          .keyboardShortcut(.cancelAction)
+          .frame(width: 0, height: 0)
+          .opacity(0)
+          .accessibilityHidden(true)
       }
     }
   }
