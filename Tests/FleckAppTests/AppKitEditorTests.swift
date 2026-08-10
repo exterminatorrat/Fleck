@@ -1355,6 +1355,49 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!rowLabel.contains(".fixedSize(horizontal:"))
 }
 
+@Test func compactTrashAloneUsesIntrinsicWidthAndLeavesFolderStripFlexible() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let bodyStart = try #require(navigator.range(of: "var body: some View"))
+  let rootDefinition = try #require(navigator.range(of: "private var rootRow"))
+  let body = String(navigator[bodyStart.upperBound..<rootDefinition.lowerBound])
+  let folderScroll = try #require(
+    body.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").last?
+      .components(separatedBy: "beginNewFolder()").first
+  )
+  let trashBlock = try #require(
+    body.components(separatedBy: "Divider()").last?
+      .components(separatedBy: ".accessibilityValue(").first
+  )
+  let rootRow = try #require(
+    navigator.components(separatedBy: "private var rootRow").last?
+      .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
+  )
+  let folderRow = try #require(
+    navigator.components(separatedBy: "private func folderRow").last?
+      .components(separatedBy: "private struct FolderActionButtonStyle").first
+  )
+  let rowLabel = try #require(
+    navigator.components(separatedBy: "private func rowLabel").last?
+      .components(separatedBy: "private func noteDropTargetBinding").first
+  )
+
+  #expect(folderScroll.contains(".frame(maxWidth: .infinity)"))
+  #expect(trashBlock.contains("onOpenTrash()"))
+  #expect(trashBlock.contains("name: \"Trash\""))
+  #expect(trashBlock.contains(".fixedSize(horizontal: true, vertical: false)"))
+  #expect(
+    body.components(separatedBy: ".fixedSize(horizontal: true, vertical: false)").count
+      - 1 == 1
+  )
+  #expect(!rootRow.contains(".fixedSize(horizontal: true, vertical: false)"))
+  #expect(rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
+  #expect(!folderRow.contains(".fixedSize(horizontal: true, vertical: false)"))
+  #expect(!rowLabel.contains(".fixedSize(horizontal: true, vertical: false)"))
+}
+
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)

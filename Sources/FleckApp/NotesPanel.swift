@@ -1501,6 +1501,7 @@
               isEmpty: appState.trashedNotes.isEmpty
             )
           }
+          .fixedSize(horizontal: true, vertical: false)
           .buttonStyle(.plain)
           .focused($focusedRow, equals: .trash)
           .focusable()
