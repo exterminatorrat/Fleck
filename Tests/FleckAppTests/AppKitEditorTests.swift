@@ -1600,6 +1600,59 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   )
 }
 
+@Test @MainActor func hostedFolderKeyboardFocusAddsOutlineToUnselectedRow() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = try Folder(id: UUID(), name: "School")
+  let note = Note(title: "Selected Unfiled", body: "Body")
+  let folderNote = Note(
+    title: "Selected School",
+    body: "Body",
+    folderID: folder.id
+  )
+  let workspace = Workspace(
+    notes: [note, folderNote],
+    selectedNoteID: note.id,
+    folders: [folder]
+  )
+  let state = await hostedPanelState(root: root, workspace: workspace)
+  state.updatePreferences {
+    $0.accentHex = "#00FF00"
+    $0.isUnfiledCompact = false
+  }
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(
+    root: root,
+    state: state,
+    commands: commands,
+    accentHex: "#00FF00"
+  )
+  window.appearance = NSAppearance(named: .darkAqua)
+  defer { window.orderOut(nil) }
+  await settleHostedView(host)
+
+  try sendHostedClick(at: NSPoint(x: 40, y: 60), in: host, to: window)
+  await settleHostedView(host)
+
+  let before = try hostedNavigatorAccentGeometry(
+    in: host,
+    accentHex: "#00FF00"
+  )
+  try sendHostedKeyDown("\t", keyCode: 48, to: window)
+  await settleHostedView(host)
+  let after = try hostedNavigatorAccentGeometry(
+    in: host,
+    accentHex: "#00FF00"
+  )
+
+  #expect(after.pixelCount > before.pixelCount)
+
+  try sendHostedKeyDown("\r", keyCode: 36, to: window)
+  await settleHostedView(host)
+  #expect(state.workspace.selectedNoteID == folderNote.id)
+}
+
 private struct HostedAccentPillGeometry {
   let bounds: CGRect
   let pixelCount: Int
@@ -1627,6 +1680,22 @@ private func hostedFolderSelectionGeometry(
   defer { window.orderOut(nil) }
   await settleHostedView(host)
 
+  let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+  host.cacheDisplay(in: host.bounds, to: imageRep)
+  return try #require(
+    hostedAccentFillBounds(
+      in: imageRep,
+      hostSize: host.bounds.size,
+      accentHex: accentHex
+    )
+  )
+}
+
+@MainActor
+private func hostedNavigatorAccentGeometry(
+  in host: NSHostingView<AnyView>,
+  accentHex: String
+) throws -> HostedAccentPillGeometry {
   let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
   host.cacheDisplay(in: host.bounds, to: imageRep)
   return try #require(
@@ -2157,6 +2226,54 @@ private func sendHostedKeyEquivalent(
     )
   )
   _ = window.performKeyEquivalent(with: event)
+}
+
+@MainActor
+private func sendHostedClick(
+  at point: NSPoint,
+  in host: NSView,
+  to window: NSWindow
+) throws {
+  let location = host.convert(point, to: nil)
+  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    let event = try #require(
+      NSEvent.mouseEvent(
+        with: eventType,
+        location: location,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 0,
+        clickCount: 1,
+        pressure: eventType == .leftMouseDown ? 1 : 0
+      )
+    )
+    window.sendEvent(event)
+  }
+}
+
+@MainActor
+private func sendHostedKeyDown(
+  _ characters: String,
+  keyCode: UInt16,
+  to window: NSWindow
+) throws {
+  let event = try #require(
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      characters: characters,
+      charactersIgnoringModifiers: characters,
+      isARepeat: false,
+      keyCode: keyCode
+    )
+  )
+  window.sendEvent(event)
 }
 
 @Test @MainActor func tabColorSwatchesAreNonTemplateImages() {

@@ -1568,6 +1568,11 @@
           )
         }
         .buttonStyle(.plain)
+        .modifier(
+          FolderRowFocusPublisher(onFocusChange: { isFocused in
+            updateFocusedRow(.unfiled, isFocused: isFocused)
+          })
+        )
         .focusable()
         .focused($focusedRow, equals: .unfiled)
         .focusEffectDisabled()
@@ -1623,6 +1628,11 @@
           )
         }
         .buttonStyle(.plain)
+        .modifier(
+          FolderRowFocusPublisher(onFocusChange: { isFocused in
+            updateFocusedRow(.folder(folder.id), isFocused: isFocused)
+          })
+        )
         .focusable()
         .focused($focusedRow, equals: .folder(folder.id))
         .focusEffectDisabled()
@@ -1704,6 +1714,21 @@
           .accessibilityLabel("Cancel folder name")
       }
       .accessibilityElement(children: .contain)
+    }
+
+    private struct FolderRowFocusPublisher: ViewModifier {
+      @Environment(\.isFocused) private var isNativeFocused
+      let onFocusChange: (Bool) -> Void
+
+      init(onFocusChange: @escaping (Bool) -> Void) {
+        self.onFocusChange = onFocusChange
+      }
+
+      func body(content: Content) -> some View {
+        content.onChange(of: isNativeFocused) { _, isFocused in
+          onFocusChange(isFocused)
+        }
+      }
     }
 
     @ViewBuilder
@@ -1873,6 +1898,14 @@
       isCreatingFolder = false
       folderNameDraft = ""
       focusedRow = nil
+    }
+
+    private func updateFocusedRow(_ row: FocusedRow, isFocused: Bool) {
+      if isFocused {
+        focusedRow = row
+      } else if focusedRow == row {
+        focusedRow = nil
+      }
     }
 
     private func activateFocusedRow() {
