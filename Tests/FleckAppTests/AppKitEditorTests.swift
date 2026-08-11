@@ -1580,6 +1580,16 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(folderRow.contains("isFocused: focusedRow == .folder(folder.id)"))
   #expect(rootRow.contains(".focusEffectDisabled()"))
   #expect(folderRow.contains(".focusEffectDisabled()"))
+  let rootFocused = try #require(
+    rootRow.range(of: ".focused($focusedRow, equals: .unfiled)")
+  )
+  let rootFocusable = try #require(rootRow.range(of: ".focusable()"))
+  let folderFocused = try #require(
+    folderRow.range(of: ".focused($focusedRow, equals: .folder(folder.id))")
+  )
+  let folderFocusable = try #require(folderRow.range(of: ".focusable()"))
+  #expect(rootFocusable.lowerBound < rootFocused.lowerBound)
+  #expect(folderFocusable.lowerBound < folderFocused.lowerBound)
   #expect(rowLabelBody.contains("isFocused: Bool"))
   #expect(rowLabelBody.contains("isFocused && !isSelected"))
   #expect(rowLabelBody.contains(".overlay"))

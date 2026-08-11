@@ -1568,8 +1568,8 @@
           )
         }
         .buttonStyle(.plain)
-        .focused($focusedRow, equals: .unfiled)
         .focusable()
+        .focused($focusedRow, equals: .unfiled)
         .focusEffectDisabled()
         .accessibilityLabel("Unfiled")
         .accessibilityIdentifier("folder-unfiled")
@@ -1623,8 +1623,8 @@
           )
         }
         .buttonStyle(.plain)
-        .focused($focusedRow, equals: .folder(folder.id))
         .focusable()
+        .focused($focusedRow, equals: .folder(folder.id))
         .focusEffectDisabled()
         .onDrag { FolderDragPayload.folderProvider(folderID: folder.id) }
         .onDrop(
@@ -1733,6 +1733,7 @@
       }
       .padding(.horizontal, 8)
       .padding(.vertical, 5)
+      .frame(minHeight: 24)
       .background(
         isDropTarget
           ? Color.accentColor.opacity(0.28)
