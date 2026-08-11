@@ -1340,7 +1340,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!navigator.contains("Inbox"))
 }
 
-@Test func compactUnfiledReleasesOnlyItsFlexibleRootRowWidth() throws {
+@Test func compactUnfiledUsesIntrinsicRootRowWidth() throws {
   let source = try notesPanelSource()
   let navigator = try #require(
     source.components(separatedBy: "private struct FolderNavigator").last
@@ -1354,7 +1354,8 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
       .components(separatedBy: "private func noteDropDelegate").first
   )
 
-  #expect(rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
+  #expect(rootRow.contains(".fixedSize(horizontal: true, vertical: false)"))
+  #expect(!rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
   #expect(!rowLabel.contains(".fixedSize(horizontal:"))
 }
 
@@ -1395,10 +1396,31 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     body.components(separatedBy: ".fixedSize(horizontal: true, vertical: false)").count
       - 1 == 1
   )
-  #expect(!rootRow.contains(".fixedSize(horizontal: true, vertical: false)"))
-  #expect(rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
+  #expect(rootRow.contains(".fixedSize(horizontal: true, vertical: false)"))
+  #expect(!rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
   #expect(!folderRow.contains(".fixedSize(horizontal: true, vertical: false)"))
   #expect(!rowLabel.contains(".fixedSize(horizontal: true, vertical: false)"))
+}
+
+@Test func compactUnfiledDisclosureUsesForgivingRectangularHitTarget() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let rootRow = try #require(
+    navigator.components(separatedBy: "private var rootRow").last?
+      .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
+  )
+  let disclosure = try #require(
+    rootRow.components(separatedBy: "if showsUnfiledDisclosure").last?
+      .components(separatedBy: ".onHover").first
+  )
+
+  #expect(disclosure.contains(".frame(width: 28, height: 28)"))
+  #expect(disclosure.contains(".contentShape(Rectangle())"))
+  #expect(disclosure.contains(".buttonStyle(.plain)"))
+  #expect(disclosure.contains("Expand Unfiled"))
+  #expect(disclosure.contains("Collapse Unfiled"))
 }
 
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
@@ -1544,8 +1566,28 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(navigator.contains("isSelected: activeFolderID == folder.id"))
   let rowLabel = try #require(navigator.range(of: "private func rowLabel("))
   let rowLabelBody = navigator[rowLabel.lowerBound...]
+  let rootRow = try #require(
+    navigator.components(separatedBy: "private var rootRow").last?
+      .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
+  )
+  let folderRow = try #require(
+    navigator.components(separatedBy: "private func folderRow").last?
+      .components(separatedBy: "private struct FolderActionButtonStyle").first
+  )
   #expect(rowLabelBody.contains("RoundedRectangle(cornerRadius: 6)"))
   #expect(rowLabelBody.contains("isSelected ? Color.accentColor.opacity(0.18)"))
+  #expect(rootRow.contains("isFocused: focusedRow == .unfiled"))
+  #expect(folderRow.contains("isFocused: focusedRow == .folder(folder.id)"))
+  #expect(rootRow.contains(".focusEffectDisabled()"))
+  #expect(folderRow.contains(".focusEffectDisabled()"))
+  #expect(rowLabelBody.contains("isFocused: Bool"))
+  #expect(rowLabelBody.contains("isFocused && !isSelected"))
+  #expect(rowLabelBody.contains(".overlay"))
+  #expect(
+    rowLabelBody.contains(
+      ".strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)"
+    )
+  )
 }
 
 private struct HostedAccentPillGeometry {

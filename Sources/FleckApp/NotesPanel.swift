@@ -1563,12 +1563,14 @@
             isSelected: activeFolderID == nil,
             isEmpty: unfiledNotes.isEmpty,
             isDropTarget: isNoteDropTarget(.unfiled),
+            isFocused: focusedRow == .unfiled,
             showsName: !isUnfiledCompact
           )
         }
         .buttonStyle(.plain)
         .focused($focusedRow, equals: .unfiled)
         .focusable()
+        .focusEffectDisabled()
         .accessibilityLabel("Unfiled")
         .accessibilityIdentifier("folder-unfiled")
         .accessibilityValue(unfiledAccessibilityValue)
@@ -1584,7 +1586,8 @@
             Image(systemName: isUnfiledCompact ? "chevron.right" : "chevron.left")
               .font(.caption2)
               .foregroundStyle(.secondary)
-              .frame(width: 20, height: 24)
+              .frame(width: 28, height: 28)
+              .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
           .accessibilityLabel(
@@ -1592,7 +1595,7 @@
           )
         }
       }
-      .fixedSize(horizontal: isUnfiledCompact, vertical: false)
+      .fixedSize(horizontal: true, vertical: false)
       .onHover { isUnfiledHovered = $0 }
       .contentShape(Rectangle())
       .onDrop(
@@ -1615,12 +1618,14 @@
             count: appState.visibleNotes(in: folder.id).count,
             isSelected: activeFolderID == folder.id,
             isEmpty: appState.visibleNotes(in: folder.id).isEmpty,
-            isDropTarget: isNoteDropTarget(.folder(folder.id))
+            isDropTarget: isNoteDropTarget(.folder(folder.id)),
+            isFocused: focusedRow == .folder(folder.id)
           )
         }
         .buttonStyle(.plain)
         .focused($focusedRow, equals: .folder(folder.id))
         .focusable()
+        .focusEffectDisabled()
         .onDrag { FolderDragPayload.folderProvider(folderID: folder.id) }
         .onDrop(
           of: [FolderDragPayload.noteType],
@@ -1709,6 +1714,7 @@
       isSelected: Bool,
       isEmpty: Bool,
       isDropTarget: Bool = false,
+      isFocused: Bool = false,
       showsName: Bool = true
     ) -> some View {
       HStack(spacing: 7) {
@@ -1734,6 +1740,12 @@
         in: RoundedRectangle(cornerRadius: 6)
       )
       .contentShape(RoundedRectangle(cornerRadius: 6))
+      .overlay {
+        if isFocused && !isSelected {
+          RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)
+        }
+      }
       .accessibilityHint(isEmpty ? "Empty folder" : "")
     }
 
