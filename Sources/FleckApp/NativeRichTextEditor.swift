@@ -1060,6 +1060,7 @@
     var reduceMotion = false
     private weak var checklistCompletionOverlay: ChecklistCompletionOverlay?
     private struct TemporaryAttributeSlice {
+      let key: NSAttributedString.Key
       let range: NSRange
       let value: Any?
     }
@@ -1069,9 +1070,70 @@
       let underlineStyle: [TemporaryAttributeSlice]
     }
 
+    private struct ChecklistItem {
+      let markerRange: NSRange
+      let contentRange: NSRange
+      let completed: Bool
+    }
+
     private var temporaryNoteLinkPresentations: [TemporaryNoteLinkPresentation] = []
+    private var temporaryChecklistSlices: [TemporaryAttributeSlice] = []
+    private var checklistTrackingArea: NSTrackingArea?
+    private var hoveredChecklistMarkerRange: NSRange?
+    private var checklistPresentationNeedsRefresh = true
+
+    private func clearChecklistPresentation() {
+      if let layoutManager {
+        restoreTemporaryAttributeSlices(
+          temporaryChecklistSlices,
+          in: layoutManager,
+          textLength: (string as NSString).length
+        )
+      }
+      temporaryChecklistSlices = []
+      checklistPresentationNeedsRefresh = true
+    }
+
+    func refreshChecklistPresentation() {
+      clearChecklistPresentation()
+      checklistPresentationNeedsRefresh = false
+      guard let storage = textStorage, let layoutManager, storage.length > 0 else {
+        needsDisplay = true
+        return
+      }
+
+      let linkRanges = NoteLinkParser.links(in: string).map(\.range)
+      for item in checklistItems() {
+        temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
+          .foregroundColor,
+          in: item.markerRange,
+          layoutManager: layoutManager
+        ))
+        layoutManager.addTemporaryAttribute(
+          .foregroundColor,
+          value: NSColor.clear,
+          forCharacterRange: item.markerRange
+        )
+
+        guard item.completed, item.contentRange.length > 0 else { continue }
+        for range in rangesExcluding(item.contentRange, ranges: linkRanges) {
+          temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
+            .foregroundColor,
+            in: range,
+            layoutManager: layoutManager
+          ))
+          temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
+            .strikethroughColor,
+            in: range,
+            layoutManager: layoutManager
+          ))
+          applyChecklistRecession(in: range, storage: storage, layoutManager: layoutManager)
+        }
+      }
+    }
 
     func clearNoteLinkPresentation() {
+      clearChecklistPresentation()
       guard let layoutManager else {
         temporaryNoteLinkPresentations = []
         return
@@ -1092,6 +1154,7 @@
 
       let links = NoteLinkParser.links(in: string)
       guard !links.isEmpty, textLength > 0 else {
+        refreshChecklistPresentation()
         needsDisplay = true
         return
       }
@@ -1125,6 +1188,7 @@
         )
         temporaryNoteLinkPresentations.append(presentation)
       }
+      refreshChecklistPresentation()
       needsDisplay = true
     }
 
@@ -1147,6 +1211,7 @@
         let effectiveEnd = max(location + 1, min(end, NSMaxRange(effectiveRange)))
         slices.append(
           TemporaryAttributeSlice(
+            key: key,
             range: NSRange(location: location, length: effectiveEnd - location),
             value: value
           )
@@ -1163,13 +1228,11 @@
       for presentation in temporaryNoteLinkPresentations {
         restoreTemporaryAttributeSlices(
           presentation.foregroundColor,
-          key: .foregroundColor,
           in: layoutManager,
           textLength: textLength
         )
         restoreTemporaryAttributeSlices(
           presentation.underlineStyle,
-          key: .underlineStyle,
           in: layoutManager,
           textLength: textLength
         )
@@ -1178,7 +1241,6 @@
 
     private func restoreTemporaryAttributeSlices(
       _ slices: [TemporaryAttributeSlice],
-      key: NSAttributedString.Key,
       in layoutManager: NSLayoutManager,
       textLength: Int
     ) {
@@ -1190,9 +1252,9 @@
         )
         guard range.length > 0 else { continue }
         if let value = slice.value {
-          layoutManager.addTemporaryAttribute(key, value: value, forCharacterRange: range)
+          layoutManager.addTemporaryAttribute(slice.key, value: value, forCharacterRange: range)
         } else {
-          layoutManager.removeTemporaryAttribute(key, forCharacterRange: range)
+          layoutManager.removeTemporaryAttribute(slice.key, forCharacterRange: range)
         }
       }
     }
@@ -1230,32 +1292,72 @@
       guard glyphRange.length > 0 else { return nil }
       let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
         .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-      let diameter = max(10, min(glyphRect.width, glyphRect.height))
-      return NSRect(
-        x: glyphRect.midX - diameter / 2,
-        y: glyphRect.midY - diameter / 2,
-        width: diameter,
-        height: diameter
-      ).integral
+      return ChecklistMarkerDrawing.markerRect(around: glyphRect)
     }
 
     func checklistHitRect(for markerRange: NSRange) -> NSRect? {
-      checklistMarkerRect(for: markerRange)?.insetBy(dx: -4, dy: -3)
+      guard let markerRect = checklistMarkerRect(for: markerRange) else { return nil }
+      return ChecklistMarkerDrawing.hitRect(around: markerRect)
     }
 
     override func draw(_ dirtyRect: NSRect) {
+      if checklistPresentationNeedsRefresh { refreshChecklistPresentation() }
       super.draw(dirtyRect)
 
-      for markerRange in completedChecklistMarkerRanges(in: dirtyRect) {
-        guard let rect = checklistMarkerRect(for: markerRange), rect.intersects(dirtyRect) else {
+      for item in checklistItems(in: dirtyRect) {
+        guard let rect = checklistMarkerRect(for: item.markerRange), rect.intersects(dirtyRect) else {
           continue
         }
-        ChecklistMarkerDrawing.drawCompleted(
-          in: rect,
-          accentColor: checklistAccentColor,
-          flipped: isFlipped
-        )
+        let isHovered = hoveredChecklistMarkerRange == item.markerRange
+        let hoverColor = checklistAccentColor.withAlphaComponent(isHovered ? 0.14 : 0)
+        if item.completed {
+          ChecklistMarkerDrawing.drawCompleted(
+            in: rect,
+            accentColor: checklistAccentColor,
+            flipped: isFlipped,
+            hoverColor: isHovered ? hoverColor : nil
+          )
+        } else {
+          ChecklistMarkerDrawing.drawOpen(
+            in: rect,
+            strokeColor: .secondaryLabelColor,
+            hoverColor: isHovered ? hoverColor : nil
+          )
+        }
       }
+    }
+
+    override func resetCursorRects() {
+      super.resetCursorRects()
+      for item in checklistItems(in: visibleRect) {
+        guard let hitRect = checklistHitRect(for: item.markerRange) else { continue }
+        addCursorRect(hitRect, cursor: .arrow)
+      }
+    }
+
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      if let checklistTrackingArea {
+        removeTrackingArea(checklistTrackingArea)
+      }
+      let trackingArea = NSTrackingArea(
+        rect: bounds,
+        options: [.activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
+        owner: self,
+        userInfo: ["fleckChecklistMarker": true]
+      )
+      checklistTrackingArea = trackingArea
+      addTrackingArea(trackingArea)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+      updateHoveredChecklistMarker(at: convert(event.locationInWindow, from: nil))
+      super.mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+      updateHoveredChecklistMarker(at: nil)
+      super.mouseExited(with: event)
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -1572,12 +1674,16 @@
         x: point.x - textContainerOrigin.x,
         y: point.y - textContainerOrigin.y
       )
-      guard textPoint.x >= 0, textPoint.y >= 0, layoutManager.numberOfGlyphs > 0 else {
+      guard layoutManager.numberOfGlyphs > 0 else {
         super.mouseDown(with: event)
         return
       }
 
-      let glyphIndex = layoutManager.glyphIndex(for: textPoint, in: textContainer)
+      let glyphPoint = NSPoint(
+        x: max(0, textPoint.x),
+        y: max(0, textPoint.y)
+      )
+      let glyphIndex = layoutManager.glyphIndex(for: glyphPoint, in: textContainer)
       guard glyphIndex < layoutManager.numberOfGlyphs else {
         super.mouseDown(with: event)
         return
@@ -1603,27 +1709,20 @@
       let paragraphRange = ns.paragraphRange(
         for: NSRange(location: characterIndex, length: 0)
       )
-      let paragraph = ns.substring(with: paragraphRange).trimmingCharacters(in: .newlines)
-      guard let parsed = EditorListEngine.parse(paragraph),
-        parsed.style == .checklist
-      else {
+      guard let item = checklistItem(in: paragraphRange, string: ns) else {
         super.mouseDown(with: event)
         return
       }
 
-      let markerRange = NSRange(
-        location: paragraphRange.location + (parsed.depth * 4),
-        length: 1
-      )
-      guard checklistHitRect(for: markerRange)?.contains(point) == true else {
+      guard checklistHitRect(for: item.markerRange)?.contains(point) == true else {
         super.mouseDown(with: event)
         return
       }
 
       _ = toggleChecklist(
-        markerRange: markerRange,
-        contentLength: parsed.content.utf16.count,
-        currentlyCompleted: parsed.isChecklistComplete
+        markerRange: item.markerRange,
+        contentLength: item.contentRange.length,
+        currentlyCompleted: item.completed
       )
     }
 
@@ -1807,10 +1906,151 @@
       return true
     }
 
+    private func checklistItems(in dirtyRect: NSRect? = nil) -> [ChecklistItem] {
+      let ns = string as NSString
+      guard ns.length > 0 else { return [] }
+      let characterRange: NSRange
+      if let dirtyRect {
+        guard let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 else {
+          return []
+        }
+        let containerRect = dirtyRect.offsetBy(
+          dx: -textContainerOrigin.x,
+          dy: -textContainerOrigin.y
+        )
+        let glyphRange = layoutManager.glyphRange(
+          forBoundingRect: containerRect,
+          in: textContainer
+        )
+        guard glyphRange.length > 0 else { return [] }
+        characterRange = layoutManager.characterRange(
+          forGlyphRange: glyphRange,
+          actualGlyphRange: nil
+        )
+      } else {
+        characterRange = NSRange(location: 0, length: ns.length)
+      }
+
+      var location = min(characterRange.location, ns.length)
+      let end = min(ns.length, NSMaxRange(characterRange))
+      var items: [ChecklistItem] = []
+      while location < end {
+        let paragraphRange = ns.paragraphRange(
+          for: NSRange(location: location, length: 0)
+        )
+        if let item = checklistItem(in: paragraphRange, string: ns) { items.append(item) }
+        let nextLocation = NSMaxRange(paragraphRange)
+        guard nextLocation > location else { break }
+        location = nextLocation
+      }
+      return items
+    }
+
+    private func checklistItem(in paragraphRange: NSRange, string ns: NSString) -> ChecklistItem? {
+      let paragraph = ns.substring(with: paragraphRange).trimmingCharacters(in: .newlines)
+      guard let parsed = EditorListEngine.parse(paragraph), parsed.style == .checklist else {
+        return nil
+      }
+      let markerRange = NSRange(
+        location: paragraphRange.location + (parsed.depth * 4),
+        length: 1
+      )
+      return ChecklistItem(
+        markerRange: markerRange,
+        contentRange: NSRange(
+          location: NSMaxRange(markerRange) + 1,
+          length: parsed.content.utf16.count
+        ),
+        completed: parsed.isChecklistComplete
+      )
+    }
+
+    private func rangesExcluding(
+      _ range: NSRange,
+      ranges excludedRanges: [NSRange]
+    ) -> [NSRange] {
+      let end = NSMaxRange(range)
+      var location = range.location
+      var result: [NSRange] = []
+      for excluded in excludedRanges.sorted(by: { $0.location < $1.location }) {
+        guard excluded.location < end else { break }
+        let overlapStart = max(location, excluded.location)
+        let overlapEnd = min(end, NSMaxRange(excluded))
+        guard overlapEnd > location else { continue }
+        if overlapStart > location {
+          result.append(NSRange(location: location, length: overlapStart - location))
+        }
+        location = overlapEnd
+        if location == end { break }
+      }
+      if location < end {
+        result.append(NSRange(location: location, length: end - location))
+      }
+      return result
+    }
+
+    private func applyChecklistRecession(
+      in range: NSRange,
+      storage: NSTextStorage,
+      layoutManager: NSLayoutManager
+    ) {
+      guard range.length > 0 else { return }
+      storage.enumerateAttribute(.foregroundColor, in: range) { value, subrange, _ in
+        let effectiveColor = (
+          layoutManager.temporaryAttribute(
+            .foregroundColor,
+            atCharacterIndex: subrange.location,
+            effectiveRange: nil
+          ) as? NSColor
+        ) ?? (value as? NSColor) ?? .textColor
+        let recessionColor = effectiveColor.withAlphaComponent(
+          effectiveColor.alphaComponent * 0.72
+        )
+        layoutManager.addTemporaryAttribute(
+          .foregroundColor,
+          value: recessionColor,
+          forCharacterRange: subrange
+        )
+        layoutManager.addTemporaryAttribute(
+          .strikethroughColor,
+          value: recessionColor,
+          forCharacterRange: subrange
+        )
+      }
+    }
+
+    private func updateHoveredChecklistMarker(at point: NSPoint?) {
+      let hovered = point.flatMap { point -> NSRange? in
+        guard let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 else {
+          return nil
+        }
+        let textPoint = NSPoint(
+          x: max(0, point.x - textContainerOrigin.x),
+          y: max(0, point.y - textContainerOrigin.y)
+        )
+        let glyphIndex = layoutManager.glyphIndex(for: textPoint, in: textContainer)
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        let ns = string as NSString
+        guard characterIndex < ns.length,
+          let item = checklistItem(
+            in: ns.paragraphRange(for: NSRange(location: characterIndex, length: 0)),
+            string: ns
+          ),
+          checklistHitRect(for: item.markerRange)?.contains(point) == true
+        else { return nil }
+        return item.markerRange
+      }
+      guard hovered != hoveredChecklistMarkerRange else { return }
+      hoveredChecklistMarkerRange = hovered
+      needsDisplay = true
+    }
+
     private func registerStrikethroughUndo(enabled: Bool, range: NSRange) {
       undoManager?.registerUndo(withTarget: self) { target in
         target.registerStrikethroughUndo(enabled: !enabled, range: range)
         target.removeChecklistCompletionOverlay()
+        target.clearChecklistPresentation()
         guard let storage = target.textStorage, range.length > 0 else { return }
         if enabled {
           storage.addAttribute(
@@ -1823,54 +2063,6 @@
         }
         target.didChangeText()
       }
-    }
-
-    private func completedChecklistMarkerRanges(in dirtyRect: NSRect) -> [NSRange] {
-      guard let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 else {
-        return []
-      }
-      let containerRect = dirtyRect.offsetBy(
-        dx: -textContainerOrigin.x,
-        dy: -textContainerOrigin.y
-      )
-      let glyphRange = layoutManager.glyphRange(
-        forBoundingRect: containerRect,
-        in: textContainer
-      )
-      guard glyphRange.length > 0 else { return [] }
-
-      let characterRange = layoutManager.characterRange(
-        forGlyphRange: glyphRange,
-        actualGlyphRange: nil
-      )
-      let ns = string as NSString
-      let visibleEnd = min(ns.length, NSMaxRange(characterRange))
-      var location = min(characterRange.location, ns.length)
-      var markerRanges: [NSRange] = []
-
-      while location < visibleEnd {
-        let paragraphRange = ns.paragraphRange(
-          for: NSRange(location: location, length: 0)
-        )
-        let paragraph = ns.substring(with: paragraphRange)
-          .trimmingCharacters(in: .newlines)
-        if let parsed = EditorListEngine.parse(paragraph),
-          parsed.style == .checklist,
-          parsed.isChecklistComplete
-        {
-          markerRanges.append(
-            NSRange(
-              location: paragraphRange.location + (parsed.depth * 4),
-              length: 1
-            )
-          )
-        }
-        let nextLocation = NSMaxRange(paragraphRange)
-        guard nextLocation > location else { break }
-        location = nextLocation
-      }
-
-      return markerRanges
     }
 
     private func renumberNumberedList(around affectedRange: NSRange) {

@@ -326,17 +326,184 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
 
 @Test @MainActor func checklistHitRectContainsItsRenderedMarker() throws {
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
-  textView.font = .systemFont(ofSize: 16)
+  textView.font = .systemFont(ofSize: 11)
   textView.string = "○ Task"
   textView.layoutManager?.ensureLayout(for: try #require(textView.textContainer))
 
   let markerRange = NSRange(location: 0, length: 1)
   let markerRect = try #require(textView.checklistMarkerRect(for: markerRange))
   let hitRect = try #require(textView.checklistHitRect(for: markerRange))
+  let layoutManager = try #require(textView.layoutManager)
+  let textContainer = try #require(textView.textContainer)
+  let contentGlyphRange = layoutManager.glyphRange(
+    forCharacterRange: NSRange(location: 2, length: 1),
+    actualCharacterRange: nil
+  )
+  let contentRect = layoutManager.boundingRect(
+    forGlyphRange: contentGlyphRange,
+    in: textContainer
+  ).offsetBy(
+    dx: textView.textContainerOrigin.x,
+    dy: textView.textContainerOrigin.y
+  )
 
-  #expect(hitRect.contains(NSPoint(x: markerRect.midX, y: markerRect.midY)))
+  #expect(markerRect.size == CGSize(width: 16, height: 16))
+  #expect(hitRect.contains(markerRect))
   #expect(hitRect.width > markerRect.width)
   #expect(hitRect.height > markerRect.height)
+  #expect(hitRect.width >= 28)
+  #expect(hitRect.height >= 28)
+  #expect(markerRect.maxX <= contentRect.minX)
+  #expect(hitRect.maxX <= contentRect.minX)
+}
+
+@Test @MainActor func nestedChecklistUsesStableMarkerSizeAndKeepsHitTargetBeforeContent() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.font = .systemFont(ofSize: 11)
+  textView.string = "    ○ Nested"
+  let container = try #require(textView.textContainer)
+  let layoutManager = try #require(textView.layoutManager)
+  layoutManager.ensureLayout(for: container)
+
+  let markerRange = NSRange(location: 4, length: 1)
+  let markerRect = try #require(textView.checklistMarkerRect(for: markerRange))
+  let hitRect = try #require(textView.checklistHitRect(for: markerRange))
+  let contentGlyphRange = layoutManager.glyphRange(
+    forCharacterRange: NSRange(location: 6, length: 1),
+    actualCharacterRange: nil
+  )
+  let contentRect = layoutManager.boundingRect(
+    forGlyphRange: contentGlyphRange,
+    in: container
+  ).offsetBy(
+    dx: textView.textContainerOrigin.x,
+    dy: textView.textContainerOrigin.y
+  )
+
+  #expect(markerRect.size == CGSize(width: 16, height: 16))
+  #expect(hitRect.contains(markerRect))
+  #expect(hitRect.width >= 28)
+  #expect(hitRect.height >= 28)
+  #expect(markerRect.maxX <= contentRect.minX)
+  #expect(hitRect.maxX <= contentRect.minX)
+}
+
+@Test @MainActor func completedChecklistTextUsesReversibleDisplayOnlyRecession() {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  let authoredColor = NSColor(calibratedRed: 0.12, green: 0.42, blue: 0.92, alpha: 1)
+  textView.string = "● Task"
+  textView.textStorage?.addAttribute(
+    .foregroundColor,
+    value: authoredColor,
+    range: NSRange(location: 2, length: 4)
+  )
+  textView.textStorage?.addAttribute(
+    .strikethroughStyle,
+    value: NSUnderlineStyle.single.rawValue,
+    range: NSRange(location: 2, length: 4)
+  )
+  textView.refreshChecklistPresentation()
+
+  NSImage(size: textView.bounds.size).lockFocus()
+  textView.draw(textView.bounds)
+  NSImage(size: textView.bounds.size).unlockFocus()
+
+  let foreground = textView.layoutManager?.temporaryAttribute(
+    .foregroundColor,
+    atCharacterIndex: 2,
+    effectiveRange: nil
+  ) as? NSColor
+  let strikethrough = textView.layoutManager?.temporaryAttribute(
+    .strikethroughColor,
+    atCharacterIndex: 2,
+    effectiveRange: nil
+  ) as? NSColor
+
+  #expect(foreground != nil)
+  #expect((foreground?.alphaComponent ?? 1) < authoredColor.alphaComponent)
+  #expect(strikethrough?.isEqual(foreground) == true)
+  let storedColor = textView.textStorage?.attribute(
+    .foregroundColor,
+    at: 2,
+    effectiveRange: nil
+  ) as? NSColor
+  #expect(storedColor?.isEqual(authoredColor) == true)
+}
+
+@Test @MainActor func completedChecklistRecessionComposesWithNoteLinkPresentation() throws {
+  let target = UUID()
+  let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
+  let text = "● Outside \(token) tail"
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 160))
+  textView.string = text
+  let storage = try #require(textView.textStorage)
+  let layoutManager = try #require(textView.layoutManager)
+  let link = try #require(NoteLinkParser.links(in: text).first)
+  let contentRange = NSRange(location: 2, length: text.utf16.count - 2)
+  let authoredColor = NSColor(calibratedRed: 0.12, green: 0.42, blue: 0.92, alpha: 1)
+  storage.addAttribute(
+    .foregroundColor,
+    value: authoredColor,
+    range: NSRange(location: 2, length: 7)
+  )
+  storage.addAttribute(
+    .strikethroughStyle,
+    value: NSUnderlineStyle.single.rawValue,
+    range: contentRange
+  )
+
+  let accent = try #require(NSColor(hex: "#FFD600"))
+  textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
+  textView.refreshChecklistPresentation()
+  textView.refreshChecklistPresentation()
+
+  func assertLayers() {
+    #expect(
+      sRGB(
+        layoutManager.temporaryAttribute(
+          .foregroundColor,
+          atCharacterIndex: link.range.location,
+          effectiveRange: nil
+        ) as? NSColor
+      ) == sRGB(accent)
+    )
+    #expect(
+      layoutManager.temporaryAttribute(
+        .underlineStyle,
+        atCharacterIndex: link.range.location,
+        effectiveRange: nil
+      ) as? Int == NSUnderlineStyle.single.rawValue
+    )
+
+    let expectedRecession = authoredColor.withAlphaComponent(0.72)
+    let foreground = layoutManager.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: 2,
+      effectiveRange: nil
+    ) as? NSColor
+    let strikethrough = layoutManager.temporaryAttribute(
+      .strikethroughColor,
+      atCharacterIndex: 2,
+      effectiveRange: nil
+    ) as? NSColor
+    #expect(sRGB(foreground) == sRGB(expectedRecession))
+    #expect(sRGB(strikethrough) == sRGB(expectedRecession))
+    #expect(
+      storage.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor
+        == authoredColor
+    )
+    #expect(
+      storage.attribute(.strikethroughStyle, at: 2, effectiveRange: nil) as? Int
+        == NSUnderlineStyle.single.rawValue
+    )
+  }
+
+  assertLayers()
+  textView.clearNoteLinkPresentation()
+  textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
+  assertLayers()
 }
 
 @Test @MainActor func clickingChecklistControlUsesSharedHitRect() throws {
@@ -390,6 +557,21 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
       effectiveRange: nil
     ) as? Int == NSUnderlineStyle.single.rawValue
   )
+}
+
+@Test @MainActor func checklistTrackingAreaReplacesWithoutDuplicates() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.updateTrackingAreas()
+  textView.updateTrackingAreas()
+
+  let checklistAreas = textView.trackingAreas.filter {
+    ($0.userInfo?["fleckChecklistMarker"] as? Bool) == true
+      && $0.owner === textView
+      && $0.options.contains(.inVisibleRect)
+      && $0.options.contains(.mouseMoved)
+      && $0.options.contains(.mouseEnteredAndExited)
+  }
+  #expect(checklistAreas.count == 1)
 }
 
 @Test @MainActor func completedChecklistRoundTripsWithoutRenderingArtifacts() {

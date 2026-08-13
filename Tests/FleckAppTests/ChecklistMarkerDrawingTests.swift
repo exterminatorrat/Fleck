@@ -8,6 +8,16 @@
     #expect(ChecklistCompletionOverlay.duration == AppMotion.quickDuration)
   }
 
+  @Test @MainActor func markerRectKeepsStableSixteenPointControlSize() {
+    let markerRect = ChecklistMarkerDrawing.markerRect(
+      around: NSRect(x: 12, y: 8, width: 8, height: 8)
+    )
+
+    #expect(markerRect.size == NSSize(width: 16, height: 16))
+    #expect(markerRect.maxX == 20)
+    #expect(markerRect.midY == 12)
+  }
+
   @Test @MainActor func completedChecklistMarkerContainsAccentFillAndWhiteCheck() throws {
     let size = NSSize(width: 24, height: 24)
     let image = NSImage(size: size)
