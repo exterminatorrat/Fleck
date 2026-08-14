@@ -1361,6 +1361,37 @@
       }
     }
 
+    override func deleteBackward(_ sender: Any?) {
+      let selection = selectedRange()
+      let ns = string as NSString
+      guard selection.length == 0, selection.location > 0, selection.location <= ns.length else {
+        super.deleteBackward(sender)
+        return
+      }
+
+      let paragraphRange = ns.paragraphRange(
+        for: NSRange(location: selection.location, length: 0)
+      )
+      guard let item = checklistItem(in: paragraphRange, string: ns),
+        item.contentRange.length == 0,
+        selection.location == item.contentRange.location
+      else {
+        super.deleteBackward(sender)
+        return
+      }
+
+      performUndoGroup {
+        _ = replaceText(
+          in: NSRange(
+            location: item.markerRange.location,
+            length: item.markerRange.length + 1
+          ),
+          with: "",
+          selecting: NSRange(location: item.markerRange.location, length: 0)
+        )
+      }
+    }
+
     override func resetCursorRects() {
       super.resetCursorRects()
       for item in checklistItems(in: visibleRect) {

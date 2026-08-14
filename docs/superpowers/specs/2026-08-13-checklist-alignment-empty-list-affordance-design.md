@@ -159,6 +159,11 @@ storage attributes remain unchanged.
 - Completed content continues to use native `.strikethroughStyle` in RTF.
 - Undo and redo include empty-list insertion/removal and preserve the caret,
   selection, typing attributes, and existing undo grouping.
+- At a collapsed caret at the content start of an empty checklist, Backspace
+  atomically removes only the marker and separator, leaves a plain paragraph at
+  the marker location, never exposes or persists an orphan marker, preserves
+  indentation and any trailing paragraph newline, and remains undoable. All
+  other Backspace cases retain native `NSTextView` behavior.
 - Attributed inline formatting, authored foreground/background, paragraph
   style, automatic numbering metadata, indentation, note links, accessibility,
   and RTF round-trips remain intact.

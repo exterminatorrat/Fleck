@@ -36,6 +36,11 @@
 - Empty-list insertion applies only to one empty current paragraph, including a
   one-line newline-terminated paragraph. Blank lines inside multi-line
   selections remain blank.
+- At a collapsed caret at the content start of an empty checklist, Backspace
+  atomically removes only the marker and separator, leaves a plain paragraph at
+  the marker location, never exposes or persists an orphan marker, preserves
+  indentation and any trailing paragraph newline, and remains undoable. All
+  other Backspace cases retain native `NSTextView` behavior.
 - Preserve font, paragraph style, indentation, authored foreground/background,
   inline formatting, selection/caret, typing attributes, automatic-number
   metadata, note-link presentation, accessibility, UndoManager grouping, RTF

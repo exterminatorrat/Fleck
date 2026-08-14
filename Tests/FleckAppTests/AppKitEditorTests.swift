@@ -27,6 +27,43 @@ import Testing
   )
 }
 
+@Test @MainActor func deletingEmptyChecklistPrefixRemovesMarkerAndSeparatorAtomically() async throws {
+  let textView = ListAwareTextView(frame: .zero)
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  textView.allowsUndo = true
+  textView.string = "○ x"
+  textView.setSelectedRange(NSRange(location: 3, length: 0))
+
+  textView.deleteBackward(nil)
+
+  #expect(textView.string == "○ ")
+  #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
+  await Task.yield()
+
+  textView.deleteBackward(nil)
+
+  #expect(textView.string == "")
+  #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+
+  try #require(textView.undoManager).undo()
+
+  #expect(textView.string == "○ ")
+
+  textView.string = "    ● \n"
+  textView.setSelectedRange(NSRange(location: 6, length: 0))
+
+  textView.deleteBackward(nil)
+
+  #expect(textView.string == "    \n")
+  #expect(textView.selectedRange() == NSRange(location: 4, length: 0))
+}
+
 @Test @MainActor func appKitLinkPresentationDoesNotWriteLinkAttributes() throws {
   let target = UUID()
   let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
