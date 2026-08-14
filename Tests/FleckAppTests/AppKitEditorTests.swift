@@ -137,6 +137,10 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   #expect(textView.toggleSelectedChecklist())
   #expect(textView.string == "● Task")
   #expect(textView.checklistCompletionOverlayCount == 1)
+  let overlay = try #require(
+    textView.subviews.compactMap { $0 as? ChecklistCompletionOverlay }.first
+  )
+  #expect(abs(CGFloat(overlay.layer?.opacity ?? 0) - 1) < 0.001)
   #expect(
     textView.textStorage?.attribute(
       .strikethroughStyle,
@@ -169,6 +173,24 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   #expect(textView.toggleSelectedChecklist())
   #expect(textView.string == "● Task")
   #expect(textView.checklistCompletionOverlayCount == 0)
+}
+
+@Test @MainActor func emptyChecklistCompletionOverlayUsesEmptyItemOpacity() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.string = "○ "
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  textView.reduceMotion = false
+
+  #expect(textView.toggleSelectedChecklist())
+  let overlay = try #require(
+    textView.subviews.compactMap { $0 as? ChecklistCompletionOverlay }.first
+  )
+  #expect(
+    abs(
+      CGFloat(overlay.layer?.opacity ?? 0)
+        - ChecklistMarkerDrawing.emptyListMarkerOpacity
+    ) < 0.001
+  )
 }
 
 @Test @MainActor func rapidChecklistToggleDoesNotLeaveStaleOverlay() {
@@ -582,6 +604,17 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   toggleTwice(marker: "• ") { $0.toggleList(.bullet(.disc)) }
   toggleTwice(marker: "○ ") { $0.toggleList(.checklist) }
   toggleTwice(marker: "1. ") { $0.toggleAutomaticList(.numbers) }
+}
+
+@Test @MainActor func multilineEmptyListRemovalKeepsReplacementSelection() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.string = "• \n• "
+  textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
+
+  textView.toggleList(.bullet(.disc))
+
+  #expect(textView.string == "\n")
+  #expect(textView.selectedRange() == NSRange(location: 0, length: 1))
 }
 
 @Test @MainActor func completedChecklistTextUsesReversibleDisplayOnlyRecession() {

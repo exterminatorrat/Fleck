@@ -1286,10 +1286,16 @@
       checklistCompletionOverlay?.removeFromSuperview()
     }
 
-    private func showChecklistCompletionAnimation(for markerRange: NSRange) {
+    private func showChecklistCompletionAnimation(
+      for markerRange: NSRange,
+      contentLength: Int
+    ) {
       removeChecklistCompletionOverlay()
       guard !reduceMotion, let rect = checklistMarkerRect(for: markerRange) else { return }
       let overlay = ChecklistCompletionOverlay(frame: rect, accentColor: checklistAccentColor)
+      overlay.layer?.opacity = Float(
+        contentLength == 0 ? ChecklistMarkerDrawing.emptyListMarkerOpacity : 1
+      )
       checklistCompletionOverlay = overlay
       addSubview(overlay)
       overlay.start { [weak overlay] in
@@ -1764,14 +1770,19 @@
         location: range.location,
         length: replacement.utf16.count
       )
+      let originalParagraph = original.trimmingCharacters(in: .newlines)
+      let isSingleEmptyListRemoval =
+        (replacement.isEmpty || replacement == "\n")
+        && (original == originalParagraph || original == originalParagraph + "\n")
+        && EditorListEngine.parse(originalParagraph)?.content.isEmpty == true
       let selection: NSRange
-      if replacement.isEmpty || replacement == "\n" {
-        selection = NSRange(location: range.location, length: 0)
-      } else if original.isEmpty || original == "\n" {
+      if original.isEmpty || original == "\n" {
         let offset = replacement.hasSuffix("\n")
           ? replacement.utf16.count - 1
           : replacement.utf16.count
         selection = NSRange(location: range.location + offset, length: 0)
+      } else if isSingleEmptyListRemoval {
+        selection = NSRange(location: range.location, length: 0)
       } else {
         selection = replacementRange
       }
@@ -1936,7 +1947,10 @@
       }
       guard changed else { return false }
       if completed {
-        showChecklistCompletionAnimation(for: markerRange)
+        showChecklistCompletionAnimation(
+          for: markerRange,
+          contentLength: contentLength
+        )
       } else {
         removeChecklistCompletionOverlay()
       }
