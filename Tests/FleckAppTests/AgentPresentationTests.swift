@@ -1,5 +1,7 @@
+import AppKit
 import FleckCore
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import FleckApp
@@ -215,6 +217,78 @@ struct AgentPresentationTests {
     )
   }
 
+  @Test @MainActor
+  func manageAgentAccessPermissionChoicesStayInline() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AgentAccessPresentation-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Launch")
+    let store = LocalStore(rootURL: root)
+    try await store.save(
+      workspace: Workspace(notes: [note], selectedNoteID: note.id),
+      preferences: .init(),
+      trashedNotes: []
+    )
+    let state = AppState(
+      store: store,
+      saveOperation: { _, _, _, _ in .committed }
+    )
+    await state.waitUntilInitialLoad()
+
+    let profile = profile(name: "Codex", revokedAt: nil)
+    let capabilities = AgentProfileCapabilities(
+      profileID: profile.id,
+      grantRevision: 0,
+      allowedCapabilities: [],
+      grants: []
+    )
+    let (window, host) = await hostedWindow(
+      rootView: AgentCapabilityEditorView(
+        profile: profile,
+        capabilities: capabilities
+      )
+      .environmentObject(state),
+      size: NSSize(width: 640, height: 560)
+    )
+    defer { window.orderOut(nil) }
+
+    let permissionControl = try #require(
+      hostedDescendant(in: host, as: NSSegmentedControl.self)
+    )
+    #expect(permissionControl.segmentCount == 3)
+    #expect(permissionControl.label(forSegment: 0) == "Off")
+    #expect(permissionControl.label(forSegment: 1) == "Read")
+    #expect(permissionControl.label(forSegment: 2) == "Read & Write")
+  }
+
+  @Test @MainActor
+  func noteAgentAccessPermissionChoicesStayInline() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("NoteAgentAccessPresentation-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Launch")
+    let profile = profile(name: "Codex", revokedAt: nil)
+    let state = try await makeAgentAccessState(
+      root: root,
+      note: note,
+      profile: profile
+    )
+    let (window, host) = await hostedWindow(
+      rootView: AgentNoteAccessEditorView(note: note)
+        .environmentObject(state),
+      size: NSSize(width: 520, height: 600)
+    )
+    defer { window.orderOut(nil) }
+
+    let permissionControl = try #require(
+      hostedDescendant(in: host, as: NSSegmentedControl.self)
+    )
+    #expect(permissionControl.segmentCount == 3)
+    #expect(permissionControl.label(forSegment: 0) == "Off")
+    #expect(permissionControl.label(forSegment: 1) == "Read")
+    #expect(permissionControl.label(forSegment: 2) == "Read & Write")
+  }
+
   @Test func clearingActivityRequiresConfirmation() {
     #expect(AgentActivityClearPresentation.requiresConfirmation)
   }
@@ -276,5 +350,71 @@ struct AgentPresentationTests {
       lastConnectedAt: nil,
       revokedAt: revokedAt
     )
+  }
+
+  @MainActor
+  private func makeAgentAccessState(
+    root: URL,
+    note: Note,
+    profile: AgentIntegrationProfile
+  ) async throws -> AppState {
+    let store = LocalStore(rootURL: root)
+    try await store.save(
+      workspace: Workspace(notes: [note], selectedNoteID: note.id),
+      preferences: .init(),
+      trashedNotes: []
+    )
+    let profilesURL = root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("profiles.json")
+    try FileManager.default.createDirectory(
+      at: profilesURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try JSONEncoder().encode([profile]).write(to: profilesURL)
+    let capabilityStore = AgentCapabilityStore(
+      capabilitiesURL: profilesURL.deletingLastPathComponent()
+        .appendingPathComponent("capabilities.json"),
+      previousCapabilitiesURL: profilesURL.deletingLastPathComponent()
+        .appendingPathComponent("capabilities.previous.json")
+    )
+    let state = AppState(
+      store: store,
+      saveOperation: { _, _, _, _ in .committed },
+      agentProfileStore: AgentProfileStore(profilesURL: profilesURL),
+      agentCapabilityStore: capabilityStore
+    )
+    await state.waitUntilInitialLoad()
+    return state
+  }
+
+  @MainActor
+  private func hostedWindow<Content: View>(
+    rootView: Content,
+    size: NSSize
+  ) async -> (window: NSWindow, host: NSHostingView<Content>) {
+    let host = NSHostingView(rootView: rootView)
+    let window = NSWindow(
+      contentRect: NSRect(origin: .zero, size: size),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    for _ in 0..<5 {
+      host.layoutSubtreeIfNeeded()
+      await Task.yield()
+    }
+    return (window, host)
+  }
+
+  @MainActor
+  private func hostedDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T? {
+    if let match = view as? T { return match }
+    for subview in view.subviews {
+      if let match = hostedDescendant(in: subview, as: type) { return match }
+    }
+    return nil
   }
 }

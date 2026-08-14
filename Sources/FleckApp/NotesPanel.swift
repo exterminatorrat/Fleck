@@ -442,7 +442,10 @@
         .environmentObject(appState)
       }
       .sheet(item: $notePendingAgentShare) { note in
-        AgentNoteAccessEditorView(note: note)
+        AgentNoteAccessEditorView(
+          note: note,
+          onDismiss: { notePendingAgentShare = nil }
+        )
           .environmentObject(appState)
       }
       .onAppear {

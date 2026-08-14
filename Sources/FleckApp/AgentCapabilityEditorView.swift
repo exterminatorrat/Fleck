@@ -11,7 +11,7 @@
       switch self {
       case .off: "Off"
       case .read: "Read"
-      case .write: "Write"
+      case .write: "Read & Write"
       }
     }
 
@@ -562,6 +562,7 @@
                   directAccess[note.id] ?? .off
                 )
               )
+              .pickerStyle(.segmented)
             }
           }
         }

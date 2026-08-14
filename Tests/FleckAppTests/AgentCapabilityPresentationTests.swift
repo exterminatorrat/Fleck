@@ -175,12 +175,20 @@ struct AgentCapabilityPresentationTests {
 
   @Test func VoiceOverLabelsAreDeterministicAndContentSafe() {
     #expect(
+      AgentNoteAccessLevel.allCases.map(\.title)
+        == ["Off", "Read", "Read & Write"]
+    )
+    #expect(
       AgentCapabilityPresentation.manageAgentAccessAccessibilityLabel
         == "Manage Agent Access…"
     )
     #expect(
       AgentCapabilityPresentation.noteAccessAccessibilityLabel(.read)
         == "Agent access: Read"
+    )
+    #expect(
+      AgentCapabilityPresentation.noteAccessAccessibilityLabel(.write)
+        == "Agent access: Read & Write"
     )
     #expect(
       !AgentCapabilityPresentation.noteAccessAccessibilityLabel(.write)

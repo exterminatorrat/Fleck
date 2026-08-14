@@ -6,6 +6,7 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
     let note: Note
+    let onDismiss: (() -> Void)?
     @State private var accessByProfileID: [UUID: AgentNoteAccessLevel] = [:]
     @State private var baselineCapabilities: [UUID: AgentProfileCapabilities] = [:]
     @State private var baselineWorkspace = Workspace()
@@ -13,6 +14,11 @@
     @State private var displayedProfiles: [AgentIntegrationProfile] = []
     @State private var hasLoadedDraft = false
     @State private var errorMessage: String?
+
+    init(note: Note, onDismiss: (() -> Void)? = nil) {
+      self.note = note
+      self.onDismiss = onDismiss
+    }
 
     var body: some View {
       Form {
@@ -44,6 +50,7 @@
               )
               .disabled(rowState != .editable)
               .accessibilityHint(rowMessage ?? "")
+              .pickerStyle(.segmented)
               if let rowMessage {
                 Text(rowMessage)
                   .font(.caption)
@@ -61,7 +68,7 @@
 
         HStack {
           Spacer()
-          Button("Cancel") { dismiss() }
+          Button("Cancel") { closeEditor() }
           Button("Save") { save() }
             .keyboardShortcut(.defaultAction)
         }
@@ -186,7 +193,7 @@
           expectedGrantRevisions: expectedGrantRevisions
         ) {
         case .succeeded:
-          dismiss()
+          closeEditor()
         case .revisionConflict:
           errorMessage = AgentCapabilityPresentation.conflictMessage
         case .contextChanged:
@@ -194,6 +201,14 @@
         case .failed:
           errorMessage = "Could not update Agent access. Try again."
         }
+      }
+    }
+
+    private func closeEditor() {
+      if let onDismiss {
+        onDismiss()
+      } else {
+        dismiss()
       }
     }
   }
