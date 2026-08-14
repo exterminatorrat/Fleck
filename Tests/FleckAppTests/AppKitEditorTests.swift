@@ -398,6 +398,87 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   #expect(hitRect.maxX <= contentRect.minX)
 }
 
+@Test @MainActor func depthZeroChecklistMarkerCacheDisplayKeepsWholeCircleInsideLeftClip() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 160, height: 80))
+  textView.appearance = NSAppearance(named: .aqua)
+  textView.drawsBackground = true
+  textView.backgroundColor = .white
+  textView.textContainerInset = NSSize(width: 16, height: 10)
+  textView.textContainer?.lineFragmentPadding = 0
+  textView.font = .systemFont(ofSize: 11)
+  textView.checklistAccentColor = NSColor(
+    calibratedRed: 0.12,
+    green: 0.42,
+    blue: 0.92,
+    alpha: 1
+  )
+  textView.string = "○ Task"
+  textView.textStorage?.addAttribute(
+    .foregroundColor,
+    value: NSColor.systemRed,
+    range: NSRange(location: 2, length: 4)
+  )
+  textView.refreshChecklistPresentation()
+
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 160, height: 80),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  window.makeKeyAndOrderFront(nil)
+  defer { window.orderOut(nil) }
+  textView.updateTrackingAreas()
+  let hoverLocation = textView.convert(
+    NSPoint(x: markerRect.midX, y: markerRect.midY),
+    to: nil
+  )
+  let hoverEvent = try #require(
+    NSEvent.mouseEvent(
+      with: .mouseMoved,
+      location: hoverLocation,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 0,
+      pressure: 0
+    )
+  )
+  textView.mouseMoved(with: hoverEvent)
+
+  let imageRep = try #require(textView.bitmapImageRepForCachingDisplay(in: textView.bounds))
+  textView.cacheDisplay(in: textView.bounds, to: imageRep)
+
+  let scaleX = CGFloat(imageRep.pixelsWide) / textView.bounds.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / textView.bounds.height
+  let xEnd = min(imageRep.pixelsWide, max(0, Int(ceil(markerRect.maxX * scaleX))))
+  let yStart = max(0, Int(floor(markerRect.minY * scaleY)))
+  let yEnd = min(imageRep.pixelsHigh, max(0, Int(ceil(markerRect.maxY * scaleY))))
+  let inkColumns = (0..<xEnd).filter { x in
+    (yStart..<yEnd).contains { y in
+      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+        return false
+      }
+      let channelRange = max(color.redComponent, color.greenComponent, color.blueComponent)
+        - min(color.redComponent, color.greenComponent, color.blueComponent)
+      return channelRange < 0.08
+        && color.redComponent < 0.95
+    }
+  }
+  let renderedWidth = (inkColumns.last ?? -1) - (inkColumns.first ?? 0) + 1
+  #expect(markerRect.width == ChecklistMarkerDrawing.markerDiameter)
+  #expect(
+    renderedWidth
+      >= Int(ChecklistMarkerDrawing.markerDiameter * scaleX) - 1
+  )
+}
+
 @Test @MainActor func nestedChecklistUsesStableMarkerSizeAndKeepsHitTargetBeforeContent() throws {
   for fontSize in [CGFloat(11), CGFloat(14)] {
     let textView = ListAwareTextView(

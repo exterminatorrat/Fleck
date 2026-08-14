@@ -1329,7 +1329,9 @@
 
     override func draw(_ dirtyRect: NSRect) {
       if checklistPresentationNeedsRefresh { refreshChecklistPresentation() }
+      NSGraphicsContext.saveGraphicsState()
       super.draw(dirtyRect)
+      NSGraphicsContext.restoreGraphicsState()
 
       for item in checklistItems(in: dirtyRect) {
         guard let rect = checklistMarkerRect(for: item.markerRange), rect.intersects(dirtyRect) else {
