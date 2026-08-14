@@ -140,6 +140,9 @@
     }
 
     static func toggle(style: EditorListStyle, in text: String) -> String {
+      if let emptyParagraph = emptyParagraphToggle(style: style, text: text) {
+        return emptyParagraph
+      }
       let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
       let populated = lines.filter { !$0.isEmpty }
       let removesMarkers =
@@ -168,6 +171,12 @@
     }
 
     static func toggleAutomatic(family: EditorListFamily, in text: String) -> String {
+      if let emptyParagraph = emptyParagraphToggle(
+        style: automaticStyle(family: family, depth: 0),
+        text: text
+      ) {
+        return emptyParagraph
+      }
       let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
       let populated = lines.filter { !$0.isEmpty }
       let removesMarkers =
@@ -276,6 +285,19 @@
       guard let parsed = parse(line), parsed.style == .checklist else { return line }
       let indent = String(repeating: indentation, count: parsed.depth)
       return indent + (parsed.isChecklistComplete ? "○ " : "● ") + parsed.content
+    }
+
+    private static func emptyParagraphToggle(
+      style: EditorListStyle,
+      text: String
+    ) -> String? {
+      let terminator: String
+      switch text {
+      case "": terminator = ""
+      case "\n": terminator = "\n"
+      default: return nil
+      }
+      return marker(for: style, ordinal: 1) + " " + terminator
     }
 
     private static func indentLine(_ line: String, removing: Bool) -> String {

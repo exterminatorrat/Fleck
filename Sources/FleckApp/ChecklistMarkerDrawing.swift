@@ -5,11 +5,14 @@
   enum ChecklistMarkerDrawing {
     static let markerDiameter: CGFloat = 16
     static let hitTargetSize: CGFloat = 28
+    static let emptyListMarkerOpacity: CGFloat = 0.45
 
-    static func markerRect(around glyphRect: CGRect) -> CGRect {
-      CGRect(
-        x: glyphRect.maxX - markerDiameter,
-        y: glyphRect.midY - markerDiameter / 2,
+    static func markerRect(around slotRect: CGRect) -> CGRect {
+      let idealX = slotRect.midX - markerDiameter / 2
+      let safeRightAlignedX = slotRect.maxX - markerDiameter
+      return CGRect(
+        x: min(idealX, safeRightAlignedX),
+        y: slotRect.midY - markerDiameter / 2,
         width: markerDiameter,
         height: markerDiameter
       )
@@ -29,10 +32,12 @@
     static func drawOpen(
       in rect: NSRect,
       strokeColor: NSColor,
-      hoverColor: NSColor?
+      hoverColor: NSColor?,
+      opacity: CGFloat = 1
     ) {
       guard let context = NSGraphicsContext.current?.cgContext else { return }
       context.saveGState()
+      context.setAlpha(opacity)
       if let hoverColor {
         context.setFillColor(hoverColor.cgColor)
         context.fillEllipse(in: rect.insetBy(dx: -3, dy: -3))
@@ -63,10 +68,12 @@
       in rect: NSRect,
       accentColor: NSColor,
       flipped: Bool,
-      hoverColor: NSColor? = nil
+      hoverColor: NSColor? = nil,
+      opacity: CGFloat = 1
     ) {
       guard let context = NSGraphicsContext.current?.cgContext else { return }
       context.saveGState()
+      context.setAlpha(opacity)
       if let hoverColor {
         context.setFillColor(hoverColor.cgColor)
         context.fillEllipse(in: rect.insetBy(dx: -3, dy: -3))

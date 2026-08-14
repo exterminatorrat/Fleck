@@ -335,6 +335,17 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   let hitRect = try #require(textView.checklistHitRect(for: markerRange))
   let layoutManager = try #require(textView.layoutManager)
   let textContainer = try #require(textView.textContainer)
+  let slotGlyphRange = layoutManager.glyphRange(
+    forCharacterRange: NSRange(location: 0, length: 2),
+    actualCharacterRange: nil
+  )
+  let slotRect = layoutManager.boundingRect(
+    forGlyphRange: slotGlyphRange,
+    in: textContainer
+  ).offsetBy(
+    dx: textView.textContainerOrigin.x,
+    dy: textView.textContainerOrigin.y
+  )
   let contentGlyphRange = layoutManager.glyphRange(
     forCharacterRange: NSRange(location: 2, length: 1),
     actualCharacterRange: nil
@@ -346,46 +357,231 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
     dx: textView.textContainerOrigin.x,
     dy: textView.textContainerOrigin.y
   )
+  let expectedX = min(slotRect.midX - 8, slotRect.maxX - 16)
 
   #expect(markerRect.size == CGSize(width: 16, height: 16))
+  #expect(abs(markerRect.minX - expectedX) < 0.01)
+  if slotRect.width >= 16 {
+    #expect(abs(markerRect.midX - slotRect.midX) < 0.01)
+  } else {
+    #expect(abs(markerRect.maxX - slotRect.maxX) < 0.01)
+  }
   #expect(hitRect.contains(markerRect))
   #expect(hitRect.width > markerRect.width)
   #expect(hitRect.height > markerRect.height)
   #expect(hitRect.width >= 28)
   #expect(hitRect.height >= 28)
+  #expect(abs(hitRect.maxX - markerRect.maxX) < 0.01)
   #expect(markerRect.maxX <= contentRect.minX)
   #expect(hitRect.maxX <= contentRect.minX)
 }
 
 @Test @MainActor func nestedChecklistUsesStableMarkerSizeAndKeepsHitTargetBeforeContent() throws {
-  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
-  textView.font = .systemFont(ofSize: 11)
-  textView.string = "    ○ Nested"
-  let container = try #require(textView.textContainer)
+  for fontSize in [CGFloat(11), CGFloat(14)] {
+    let textView = ListAwareTextView(
+      frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+    )
+    textView.font = .systemFont(ofSize: fontSize)
+    textView.string = "    ○ Nested"
+    let container = try #require(textView.textContainer)
+    let layoutManager = try #require(textView.layoutManager)
+    layoutManager.ensureLayout(for: container)
+
+    let markerRange = NSRange(location: 4, length: 1)
+    let markerRect = try #require(textView.checklistMarkerRect(for: markerRange))
+    let hitRect = try #require(textView.checklistHitRect(for: markerRange))
+    let slotGlyphRange = layoutManager.glyphRange(
+      forCharacterRange: NSRange(location: 4, length: 2),
+      actualCharacterRange: nil
+    )
+    let slotRect = layoutManager.boundingRect(
+      forGlyphRange: slotGlyphRange,
+      in: container
+    ).offsetBy(
+      dx: textView.textContainerOrigin.x,
+      dy: textView.textContainerOrigin.y
+    )
+    let contentGlyphRange = layoutManager.glyphRange(
+      forCharacterRange: NSRange(location: 6, length: 1),
+      actualCharacterRange: nil
+    )
+    let contentRect = layoutManager.boundingRect(
+      forGlyphRange: contentGlyphRange,
+      in: container
+    ).offsetBy(
+      dx: textView.textContainerOrigin.x,
+      dy: textView.textContainerOrigin.y
+    )
+    let expectedX = min(slotRect.midX - 8, slotRect.maxX - 16)
+
+    #expect(markerRect.size == CGSize(width: 16, height: 16))
+    #expect(abs(markerRect.minX - expectedX) < 0.01)
+    if slotRect.width >= 16 {
+      #expect(abs(markerRect.midX - slotRect.midX) < 0.01)
+    } else {
+      #expect(abs(markerRect.maxX - slotRect.maxX) < 0.01)
+    }
+    #expect(hitRect.contains(markerRect))
+    #expect(hitRect.width >= 28)
+    #expect(hitRect.height >= 28)
+    #expect(abs(hitRect.maxX - markerRect.maxX) < 0.01)
+    #expect(markerRect.maxX <= contentRect.minX)
+    #expect(hitRect.maxX <= contentRect.minX)
+  }
+}
+
+@Test @MainActor func emptyBulletMarkerUsesRelativeTemporaryOpacity() throws {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  let authoredColor = NSColor(
+    calibratedRed: 0.12,
+    green: 0.42,
+    blue: 0.92,
+    alpha: 0.6
+  )
+  textView.string = "• "
+  let storage = try #require(textView.textStorage)
   let layoutManager = try #require(textView.layoutManager)
-  layoutManager.ensureLayout(for: container)
-
-  let markerRange = NSRange(location: 4, length: 1)
-  let markerRect = try #require(textView.checklistMarkerRect(for: markerRange))
-  let hitRect = try #require(textView.checklistHitRect(for: markerRange))
-  let contentGlyphRange = layoutManager.glyphRange(
-    forCharacterRange: NSRange(location: 6, length: 1),
-    actualCharacterRange: nil
-  )
-  let contentRect = layoutManager.boundingRect(
-    forGlyphRange: contentGlyphRange,
-    in: container
-  ).offsetBy(
-    dx: textView.textContainerOrigin.x,
-    dy: textView.textContainerOrigin.y
+  storage.addAttribute(
+    .foregroundColor,
+    value: authoredColor,
+    range: NSRange(location: 0, length: 1)
   )
 
-  #expect(markerRect.size == CGSize(width: 16, height: 16))
-  #expect(hitRect.contains(markerRect))
-  #expect(hitRect.width >= 28)
-  #expect(hitRect.height >= 28)
-  #expect(markerRect.maxX <= contentRect.minX)
-  #expect(hitRect.maxX <= contentRect.minX)
+  textView.refreshChecklistPresentation()
+
+  let temporaryColor = try #require(
+    layoutManager.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: 0,
+      effectiveRange: nil
+    ) as? NSColor
+  )
+  #expect(abs(temporaryColor.alphaComponent - authoredColor.alphaComponent * 0.45) < 0.001)
+  #expect(temporaryColor.alphaComponent < authoredColor.alphaComponent)
+  #expect(
+    (storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+      == authoredColor
+  )
+
+  textView.refreshChecklistPresentation()
+  let repeatedColor = try #require(
+    layoutManager.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: 0,
+      effectiveRange: nil
+    ) as? NSColor
+  )
+  #expect(abs(repeatedColor.alphaComponent - authoredColor.alphaComponent * 0.45) < 0.001)
+
+  textView.clearNoteLinkPresentation()
+  #expect(
+    (storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+      == authoredColor
+  )
+  textView.refreshChecklistPresentation()
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  textView.insertText("x", replacementRange: textView.selectedRange())
+  textView.refreshChecklistPresentation()
+  #expect(textView.string == "• x")
+  #expect(
+    layoutManager.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: 0,
+      effectiveRange: nil
+    ) == nil
+  )
+}
+
+@Test @MainActor func emptyListCommandsPlaceCaretAfterMarkerAndReturnExits() throws {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  textView.allowsUndo = true
+
+  textView.toggleList(.bullet(.disc))
+  #expect(textView.string == "• ")
+  #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
+  try #require(textView.undoManager).undo()
+  #expect(textView.string.isEmpty)
+  try #require(textView.undoManager).redo()
+  #expect(textView.string == "• ")
+  #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
+
+  textView.string = "\n"
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  textView.toggleAutomaticList(.numbers)
+  #expect(textView.string == "1. \n")
+  #expect(textView.selectedRange() == NSRange(location: 3, length: 0))
+
+  textView.string = "○ "
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  #expect(textView.accessibilityCustomActions()?.isEmpty == false)
+  #expect(textView.toggleSelectedChecklist())
+  #expect(textView.string == "● ")
+
+  textView.string = "○ "
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let clickPoint = NSPoint(x: markerRect.midX, y: markerRect.midY)
+  let windowPoint = textView.convert(clickPoint, to: nil)
+  let event = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: windowPoint,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    )
+  )
+  textView.mouseDown(with: event)
+  #expect(textView.string == "● ")
+
+  for marker in ["• ", "1. ", "○ "] {
+    textView.string = marker
+    textView.setSelectedRange(NSRange(location: marker.utf16.count, length: 0))
+    textView.insertNewline(nil)
+    #expect(textView.string.isEmpty)
+  }
+}
+
+@Test @MainActor func newlineTerminatedEmptyListRemovalLeavesCaretAtParagraphStart() {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+
+  func toggleTwice(
+    marker: String,
+    toggle: (ListAwareTextView) -> Void
+  ) {
+    textView.string = "\n"
+    textView.setSelectedRange(NSRange(location: 0, length: 0))
+    toggle(textView)
+    #expect(textView.string == marker + "\n")
+    #expect(textView.selectedRange() == NSRange(location: marker.utf16.count, length: 0))
+
+    toggle(textView)
+    #expect(textView.string == "\n")
+    #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+  }
+
+  toggleTwice(marker: "• ") { $0.toggleList(.bullet(.disc)) }
+  toggleTwice(marker: "○ ") { $0.toggleList(.checklist) }
+  toggleTwice(marker: "1. ") { $0.toggleAutomaticList(.numbers) }
 }
 
 @Test @MainActor func completedChecklistTextUsesReversibleDisplayOnlyRecession() {
