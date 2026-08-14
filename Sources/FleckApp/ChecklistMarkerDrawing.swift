@@ -5,11 +5,12 @@
   enum ChecklistMarkerDrawing {
     static let markerDiameter: CGFloat = 16
     static let hitTargetSize: CGFloat = 28
+    static let minimumContentGap: CGFloat = 4
     static let emptyListMarkerOpacity: CGFloat = 0.45
 
     static func markerRect(around slotRect: CGRect) -> CGRect {
       let idealX = slotRect.midX - markerDiameter / 2
-      let safeRightAlignedX = slotRect.maxX - markerDiameter
+      let safeRightAlignedX = slotRect.maxX - markerDiameter - minimumContentGap
       return CGRect(
         x: min(idealX, safeRightAlignedX),
         y: slotRect.midY - markerDiameter / 2,

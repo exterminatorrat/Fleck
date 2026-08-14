@@ -379,14 +379,25 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
     dx: textView.textContainerOrigin.x,
     dy: textView.textContainerOrigin.y
   )
-  let expectedX = min(slotRect.midX - 8, slotRect.maxX - 16)
+  let expectedX = min(
+    slotRect.midX - 8,
+    slotRect.maxX - ChecklistMarkerDrawing.markerDiameter
+      - ChecklistMarkerDrawing.minimumContentGap
+  )
 
   #expect(markerRect.size == CGSize(width: 16, height: 16))
   #expect(abs(markerRect.minX - expectedX) < 0.01)
-  if slotRect.width >= 16 {
+  if slotRect.width >= ChecklistMarkerDrawing.markerDiameter
+    + 2 * ChecklistMarkerDrawing.minimumContentGap
+  {
     #expect(abs(markerRect.midX - slotRect.midX) < 0.01)
   } else {
-    #expect(abs(markerRect.maxX - slotRect.maxX) < 0.01)
+    #expect(
+      abs(
+        markerRect.maxX
+          - (slotRect.maxX - ChecklistMarkerDrawing.minimumContentGap)
+      ) < 0.01
+    )
   }
   #expect(hitRect.contains(markerRect))
   #expect(hitRect.width > markerRect.width)
@@ -396,6 +407,45 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   #expect(abs(hitRect.maxX - markerRect.maxX) < 0.01)
   #expect(markerRect.maxX <= contentRect.minX)
   #expect(hitRect.maxX <= contentRect.minX)
+}
+
+@Test @MainActor func checklistMarkerLeavesMinimumGapBeforeFirstContentGlyph() throws {
+  for fontSize in [CGFloat(11), CGFloat(14)] {
+    for text in ["○ d", "○ 1"] {
+      let textView = ListAwareTextView(
+        frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+      )
+      textView.textContainerInset = NSSize(width: 16, height: 10)
+      textView.textContainer?.lineFragmentPadding = 0
+      textView.font = .systemFont(ofSize: fontSize)
+      textView.string = text
+
+      let textContainer = try #require(textView.textContainer)
+      let layoutManager = try #require(textView.layoutManager)
+      layoutManager.ensureLayout(for: textContainer)
+
+      let markerRect = try #require(
+        textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+      )
+      let contentGlyphRange = layoutManager.glyphRange(
+        forCharacterRange: NSRange(location: 2, length: 1),
+        actualCharacterRange: nil
+      )
+      let contentRect = layoutManager.boundingRect(
+        forGlyphRange: contentGlyphRange,
+        in: textContainer
+      ).offsetBy(
+        dx: textView.textContainerOrigin.x,
+        dy: textView.textContainerOrigin.y
+      )
+      let gap = contentRect.minX - markerRect.maxX
+
+      #expect(
+        gap >= 4 - 0.001,
+        "font \(fontSize), text \(text), gap \(gap)"
+      )
+    }
+  }
 }
 
 @Test @MainActor func depthZeroChecklistMarkerCacheDisplayKeepsWholeCircleInsideLeftClip() throws {
@@ -515,14 +565,25 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
       dx: textView.textContainerOrigin.x,
       dy: textView.textContainerOrigin.y
     )
-    let expectedX = min(slotRect.midX - 8, slotRect.maxX - 16)
+    let expectedX = min(
+      slotRect.midX - 8,
+      slotRect.maxX - ChecklistMarkerDrawing.markerDiameter
+        - ChecklistMarkerDrawing.minimumContentGap
+    )
 
     #expect(markerRect.size == CGSize(width: 16, height: 16))
     #expect(abs(markerRect.minX - expectedX) < 0.01)
-    if slotRect.width >= 16 {
+    if slotRect.width >= ChecklistMarkerDrawing.markerDiameter
+      + 2 * ChecklistMarkerDrawing.minimumContentGap
+    {
       #expect(abs(markerRect.midX - slotRect.midX) < 0.01)
     } else {
-      #expect(abs(markerRect.maxX - slotRect.maxX) < 0.01)
+      #expect(
+        abs(
+          markerRect.maxX
+            - (slotRect.maxX - ChecklistMarkerDrawing.minimumContentGap)
+        ) < 0.01
+      )
     }
     #expect(hitRect.contains(markerRect))
     #expect(hitRect.width >= 28)

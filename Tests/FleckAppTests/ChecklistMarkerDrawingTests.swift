@@ -9,11 +9,13 @@
   }
 
   @Test @MainActor func markerRectCentersWideSlotsAndClampsNarrowSlots() {
-    let wideSlot = NSRect(x: 12, y: 8, width: 20, height: 8)
+    let wideSlot = NSRect(x: 12, y: 8, width: 24, height: 8)
     let centered = ChecklistMarkerDrawing.markerRect(around: wideSlot)
 
     #expect(centered.size == NSSize(width: 16, height: 16))
-    #expect(centered.minX == 14)
+    #expect(centered.minX == 16)
+    #expect(centered.midX == wideSlot.midX)
+    #expect(centered.maxX == wideSlot.maxX - ChecklistMarkerDrawing.minimumContentGap)
     #expect(centered.midY == wideSlot.midY)
 
     let narrowSlot = NSRect(x: 12, y: 8, width: 8, height: 8)
@@ -21,7 +23,7 @@
     let hitRect = ChecklistMarkerDrawing.hitRect(around: clamped)
 
     #expect(clamped.size == NSSize(width: 16, height: 16))
-    #expect(clamped.maxX == narrowSlot.maxX)
+    #expect(clamped.maxX == narrowSlot.maxX - ChecklistMarkerDrawing.minimumContentGap)
     #expect(clamped.midY == narrowSlot.midY)
     #expect(hitRect.contains(clamped))
     #expect(hitRect.width >= 28)
