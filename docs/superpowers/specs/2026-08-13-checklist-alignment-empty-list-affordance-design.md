@@ -16,11 +16,11 @@ behavior.
 
 Two existing seams explain the defects:
 
-- `ChecklistMarkerDrawing.markerRect` uses `glyphRect.maxX - 16`. At Fleck's
-  real font metrics, right-aligning a 16-point control to the narrow stored
-  marker glyph makes the control appear too far left. The editor's
-  `checklistMarkerRect(for:)` also supplies only the marker glyph bounds, so it
-  ignores the separator-space glyph.
+- The previous marker geometry right-aligned a 16-point control to the narrow
+  stored marker glyph, allowing the control to consume the separator slot and
+  leave less than a normal-space-sized gap before content at Fleck's real font
+  metrics. The editor's `checklistMarkerRect(for:)` must use the marker-plus-
+  separator union so the separator participates in the visual boundary.
 - `EditorListEngine.toggle` and `toggleAutomatic` leave empty strings
   unchanged. Consequently, a toolbar command on an empty current paragraph
   does not create a list affordance.
@@ -90,11 +90,11 @@ uses the union of those two glyph rects, rather than the marker glyph alone.
 That union's `maxX` is the safe first-content boundary, or the insertion-caret
 boundary for an empty item. `ChecklistMarkerDrawing.markerRect(around:)` first
 computes the ideal centered x position for an exactly 16 by 16-point control,
-then clamps only left when the slot is narrower than 16 points:
+then reserves the named 4-point minimum content gap when it clamps only left:
 
 ```swift
 let idealX = slotRect.midX - markerDiameter / 2
-let safeRightAlignedX = slotRect.maxX - markerDiameter
+let safeRightAlignedX = slotRect.maxX - markerDiameter - minimumContentGap
 let x = min(idealX, safeRightAlignedX)
 return CGRect(
   x: x,
@@ -104,15 +104,20 @@ return CGRect(
 )
 ```
 
-This centers when the slot is at least 16 points wide and otherwise makes the
-minimal left shift needed for `markerRect.maxX == slotRect.maxX`. The boundary
-is derived from TextKit geometry, never from a fixed-pixel nudge or a layout
-change. Using the marker-plus-separator slot also moves the safe right edge
-beyond the old marker-only `maxX` when the metrics allow it.
+Here `minimumContentGap` is a single `CGFloat` constant equal to 4 points.
+Centering is possible when the slot is at least
+`markerDiameter + 2 * minimumContentGap`, which is 24 points for the 16-point
+marker. At that threshold and whenever the marker is clamped, the marker's
+right edge is `slotRect.maxX - minimumContentGap`; narrower slots use the same
+minimal left clamp. The boundary is derived from TextKit geometry, never from
+a fixed-pixel nudge or a layout change. The marker-plus-separator slot keeps
+the content boundary authoritative while the reserved gap keeps the control
+visually separate from the first content glyph.
 
 `ChecklistMarkerDrawing.hitRect(around:)` remains at least 28 by 28 points,
 contains the complete drawn marker, left-expands from `markerRect.maxX`, and
-ends at or before that same content boundary. It must work for flat and
+keeps `hitRect.maxX == markerRect.maxX`, at or before that same content
+boundary. It must work for flat and
 indented/nested checklist paragraphs
 without changing `textContainerInset`, `lineFragmentPadding`, font, baseline,
 stored marker text, or paragraph layout. The marker stays in its glyph slot and
@@ -195,8 +200,13 @@ The implementation is accepted when focused tests prove all of the following:
   markers use multiplier `1`, and the first typed character restores it.
 - Flat and nested checklist controls are exactly 16 by 16 points; each 28 by
   28-or-larger hit rect contains its marker and ends before the first content
-  glyph/caret boundary. Wide slots center the marker exactly; narrow slots
-  apply only the minimal left clamp so the marker ends at the slot boundary.
+  glyph/caret boundary with at least a 4-point visual gap. Slots at least
+  24 points wide center the marker exactly; narrower slots apply only the
+  minimal left clamp so `markerRect.maxX == slotRect.maxX - minimumContentGap`.
+- Real production-config TextKit geometry (16-point horizontal inset and zero
+  line-fragment padding) covers both `"○ d"` and `"○ 1"` at small/common fonts
+  and asserts that the first content glyph begins at least 4 points after the
+  marker's right edge.
 - Hover/cursor/tracking behavior remains single-area and leak-free, with arrow
   over controls and I-beam over text.
 - Undo/redo, Return exit, rapid toggles, authored colors, native strike

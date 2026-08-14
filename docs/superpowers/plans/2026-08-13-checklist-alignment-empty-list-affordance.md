@@ -67,6 +67,7 @@ The intended narrow drawing signatures are:
 enum ChecklistMarkerDrawing {
   static let markerDiameter: CGFloat = 16
   static let hitTargetSize: CGFloat = 28
+  static let minimumContentGap: CGFloat = 4
   static let emptyListMarkerOpacity: CGFloat = 0.45
 
   static func markerRect(around slotRect: CGRect) -> CGRect
@@ -177,12 +178,12 @@ swift test --disable-automatic-resolution --no-parallel --filter EditorListEngin
 The visual marker is always exactly 16 by 16 points. The supplied `slotRect` is
 the TextKit union of the stored marker glyph and separator-space glyph; its
 `maxX` is the safe first-content/caret boundary. Compute the ideal centered x,
-the safe right-aligned x, and choose the leftmost value only when centering
-would cross the boundary:
+the safe right-aligned x after reserving the 4-point minimum content gap, and
+choose the leftmost value only when centering would cross that boundary:
 
 ```swift
 let idealX = slotRect.midX - markerDiameter / 2
-let safeRightAlignedX = slotRect.maxX - markerDiameter
+let safeRightAlignedX = slotRect.maxX - markerDiameter - minimumContentGap
 let x = min(idealX, safeRightAlignedX)
 return CGRect(
   x: x,
@@ -192,11 +193,14 @@ return CGRect(
 )
 ```
 
-This centers exactly when `slotRect.width >= markerDiameter`; otherwise it
-performs the minimal left clamp and yields `markerRect.maxX == slotRect.maxX`.
-Do not add a separate content-boundary argument: `slotRect.maxX` is the
-boundary. The marker-plus-separator slot also moves the safe right edge beyond
-the old marker-only `maxX` when the font metrics permit it.
+Centering is exact when
+`slotRect.width >= markerDiameter + 2 * minimumContentGap`, which is 24 points
+for a 16-point marker. At that threshold and whenever the marker is clamped,
+the marker ends at `slotRect.maxX - minimumContentGap`; narrower slots use the
+same minimal left clamp. Do not add a separate content-boundary argument:
+`slotRect.maxX` remains the TextKit boundary from which the 4-point gap is
+reserved. The marker-plus-separator slot keeps that content boundary
+authoritative instead of consuming the separator glyph.
 
 Keep the target left-expanding around the marker’s right edge, as the current
 editor hit path expects, while preserving the minimum-size contract:
@@ -217,10 +221,10 @@ content-boundary constraint for flat and nested TextKit layouts.
 
 - [ ] Strengthen the pure geometry tests so `markerRect` is exactly 16 by 16,
   `hitRect` is at least 28 by 28, and a hit rect contains the complete marker.
-  Assert exact center when the slot width is at least 16 points; for a
-  narrower slot, assert the minimal left clamp and
-  `markerRect.maxX == slotRect.maxX`. Replace any expectation that relies on
-  right-aligning to the old narrow marker glyph.
+  Use a 24-point slot to assert exact center and the 4-point trailing gap at
+  the centering threshold; for a narrower slot, assert the minimal left clamp
+  and `markerRect.maxX == slotRect.maxX - minimumContentGap`. Replace any
+  expectation that relies on right-aligning to the old narrow marker glyph.
 - [ ] Add a test for the named multiplier
   `emptyListMarkerOpacity == 0.45` and for a semi-transparent authored color:
   the temporary marker alpha must equal `authoredAlpha * 0.45`, never exceed
@@ -277,22 +281,26 @@ calculation. Pass the resulting marker-plus-space slot to
 `ChecklistMarkerDrawing.markerRect(around:)`. The slot’s `maxX` is the content
 boundary: it is the first content glyph’s minimum x when content exists, or the
 TextKit caret boundary immediately after the separator for an empty item. The
-returned marker must end at or before `slotRect.maxX`; the returned hit rect
-must contain the marker, left-expand from `markerRect.maxX`, and end at or
-before `slotRect.maxX`. Do not pass a separate content-boundary argument into
-the drawing helper, change a text inset, or add a cache.
+returned marker must end at or before `slotRect.maxX - minimumContentGap`; the
+returned hit rect must contain the marker, left-expand from `markerRect.maxX`,
+and keep `hitRect.maxX == markerRect.maxX`. Do not pass a separate
+content-boundary argument into the drawing helper, change a text inset, or add
+a cache.
 
 - [ ] Add red real-editor geometry tests at 11-point and the normal configured
-  editor size. For both a flat `"○ content"` paragraph and an indented/nested
-  checklist paragraph, extract the marker and separator glyph rects from the
-  real `NSLayoutManager`, form their union slot, and assert:
+  editor size. With the production 16-point horizontal inset and zero
+  line-fragment padding, cover flat `"○ d"` and `"○ 1"` paragraphs at the
+  small/common fonts, extract the first content glyph rect from the real
+  `NSLayoutManager`, and assert a visual gap of at least 4 points. Retain the
+  flat and indented/nested checklist coverage for the marker and hit geometry;
+  form each marker-plus-separator union slot and assert:
   - the drawn marker is exactly 16 by 16;
-  - if the slot width is at least 16 points, its center matches the slot center
+  - if the slot width is at least 24 points, its center matches the slot center
     within the test’s small TextKit tolerance;
-  - if the slot is narrower than 16 points, the marker uses the minimal left
-    clamp and `markerRect.maxX == slotRect.maxX`;
+  - if the slot is narrower than 24 points, the marker uses the minimal left
+    clamp and `markerRect.maxX == slotRect.maxX - minimumContentGap`;
   - in both cases, `markerRect.maxX` is at or before the first content glyph
-    minimum x;
+    minimum x with the reserved 4-point gap;
   - the hit rect contains the entire marker;
   - the hit rect is at least 28 by 28, left-expands from the marker, and
     `hitRect.maxX` is at or before the first content glyph minimum x.
@@ -312,8 +320,9 @@ swift test --disable-automatic-resolution --no-parallel --filter AppKitEditorTes
 - [ ] Replace the marker-only glyph request with the two-character
   marker-plus-separator request, pass its union slot to the drawing helper,
   and preserve the existing visible/point-local lookup and tracking lifecycle.
-  The center-then-clamp rule must use only `slotRect.maxX` as the safe edge;
-  do not introduce a separate content-glyph argument or fixed pixel nudge.
+  The center-then-clamp rule must use the TextKit `slotRect.maxX` boundary and
+  reserve `minimumContentGap` in its safe right-aligned edge; do not introduce
+  a separate content-glyph argument or fixed pixel nudge.
 - [ ] Ensure the hit calculation is derived from the returned marker rect and
   is content-safe for both flat and nested paragraphs; do not use a fixed
   pixel shift to hide a geometry failure.
