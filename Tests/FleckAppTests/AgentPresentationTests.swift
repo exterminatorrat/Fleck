@@ -293,6 +293,53 @@ struct AgentPresentationTests {
     #expect(AgentActivityClearPresentation.requiresConfirmation)
   }
 
+  @Test func agentActivityDismissalControlDeclaresRequiredSemantics() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let sourceRoot = testFile.deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp")
+    let source = try String(
+      contentsOf: sourceRoot.appendingPathComponent("AgentActivityView.swift"),
+      encoding: .utf8
+    )
+
+    #expect(source.contains("@Environment(\\.dismiss) private var dismiss"))
+    #expect(source.contains("Button(\"Done\") {"))
+    #expect(source.contains("dismiss()"))
+    #expect(source.contains(".keyboardShortcut(.cancelAction)"))
+    #expect(source.contains(".accessibilityLabel(\"Close Agent Activity\")"))
+  }
+
+  @Test @MainActor
+  func agentActivityEscapeDismissesPresentedSheet() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AgentActivityEscape-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let state = AppState(store: LocalStore(rootURL: root))
+    await state.waitUntilInitialLoad()
+    let initialActivityCount = state.agentActivity.count
+    let initialWorkspace = state.workspace
+    let (window, host) = await hostedWindow(
+      rootView: AgentActivitySheetHarness()
+        .environmentObject(state),
+      size: NSSize(width: 640, height: 480)
+    )
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+
+    let sheet = try await presentedAgentActivitySheet(from: window, parent: host)
+    sendEscape(to: sheet)
+    await settleHostedSheet(sheet, parent: host)
+
+    #expect(window.sheets.isEmpty)
+    #expect(window.isVisible)
+    #expect(state.agentActivity.count == initialActivityCount)
+    #expect(state.workspace == initialWorkspace)
+  }
+
   private func makeRecord(
     note: Note,
     actor: AgentActivityActor = .integration(profileID: UUID(), displayName: "Codex")
@@ -416,5 +463,60 @@ struct AgentPresentationTests {
       if let match = hostedDescendant(in: subview, as: type) { return match }
     }
     return nil
+  }
+}
+
+@MainActor
+private struct AgentActivitySheetHarness: View {
+  @State private var isShowingAgentActivity = true
+
+  var body: some View {
+    Color.clear
+      .frame(width: 320, height: 240)
+      .sheet(isPresented: $isShowingAgentActivity) {
+        AgentActivityView { _ in }
+      }
+  }
+}
+
+@MainActor
+private func presentedAgentActivitySheet(
+  from window: NSWindow,
+  parent: NSView
+) async throws -> NSWindow {
+  for _ in 0..<40 {
+    parent.layoutSubtreeIfNeeded()
+    if let sheet = window.sheets.first {
+      sheet.contentView?.layoutSubtreeIfNeeded()
+      return sheet
+    }
+    await Task.yield()
+  }
+  return try #require(window.sheets.first)
+}
+
+@MainActor
+private func sendEscape(to window: NSWindow) {
+  guard let event = NSEvent.keyEvent(
+    with: .keyDown,
+    location: .zero,
+    modifierFlags: [],
+    timestamp: ProcessInfo.processInfo.systemUptime,
+    windowNumber: window.windowNumber,
+    context: nil,
+    characters: "\u{1b}",
+    charactersIgnoringModifiers: "\u{1b}",
+    isARepeat: false,
+    keyCode: 53
+  ) else { return }
+  window.sendEvent(event)
+}
+
+@MainActor
+private func settleHostedSheet(_ sheet: NSWindow, parent: NSView) async {
+  for _ in 0..<40 {
+    parent.layoutSubtreeIfNeeded()
+    sheet.contentView?.layoutSubtreeIfNeeded()
+    await Task.yield()
   }
 }

@@ -101,6 +101,7 @@
 
   struct AgentActivityView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
     let onOpenNote: (UUID) -> Void
     @State private var showsClearConfirmation = false
 
@@ -113,6 +114,11 @@
             showsClearConfirmation = true
           }
           .disabled(appState.agentActivity.isEmpty)
+          Button("Done") {
+            dismiss()
+          }
+          .keyboardShortcut(.cancelAction)
+          .accessibilityLabel("Close Agent Activity")
         }
 
         if appState.agentActivity.isEmpty {
