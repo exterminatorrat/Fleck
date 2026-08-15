@@ -311,12 +311,17 @@ legacy coordinator behavior.
 ~~~bash
 git diff --check
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckApp/DictationProcessingModels.swift \
     Tests/FleckAppTests/DictationProcessingModelsTests.swift \
     Sources/FleckApp/DictationInterfaces.swift \
-  | sort
+  | sort -u
 )"
 git add Sources/FleckApp/DictationInterfaces.swift Sources/FleckApp/DictationProcessingModels.swift Tests/FleckAppTests/DictationProcessingModelsTests.swift
 git commit -m "feat: define streaming dictation contracts"
@@ -572,11 +577,16 @@ private static func splitStablePrefix(
 swift test --disable-automatic-resolution --no-parallel --filter StreamingTranscriptStateTests
 git diff --check
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckApp/StreamingTranscriptState.swift \
     Tests/FleckAppTests/StreamingTranscriptStateTests.swift \
-  | sort
+  | sort -u
 )"
 git add Sources/FleckApp/StreamingTranscriptState.swift Tests/FleckAppTests/StreamingTranscriptStateTests.swift
 git commit -m "feat: bound streaming transcript mutability"
@@ -731,7 +741,12 @@ Expected: all pass without loading a model or creating audio.
 git diff --check
 ! rg -n 'URLSession|AVAudioEngine|SFSpeech|SpeechAnalyzer|FileHandle|Data\.write' Sources/FleckApp/DictationRuntimePolicy.swift Sources/FleckApp/DictationInferenceScheduler.swift Sources/FleckApp/LocalDictationRuntime.swift
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckApp/DictationRuntimePolicy.swift \
     Sources/FleckApp/DictationInferenceScheduler.swift \
@@ -739,7 +754,7 @@ test "$(git diff --name-only | sort)" = "$(
     Tests/FleckAppTests/DictationRuntimePolicyTests.swift \
     Tests/FleckAppTests/DictationInferenceSchedulerTests.swift \
     Tests/FleckAppTests/LocalDictationRuntimeTests.swift \
-  | sort
+  | sort -u
 )"
 git add Sources/FleckApp/DictationRuntimePolicy.swift Sources/FleckApp/DictationInferenceScheduler.swift Sources/FleckApp/LocalDictationRuntime.swift Tests/FleckAppTests/DictationRuntimePolicyTests.swift Tests/FleckAppTests/DictationInferenceSchedulerTests.swift Tests/FleckAppTests/LocalDictationRuntimeTests.swift
 git commit -m "feat: restore local dictation runtime policy"
@@ -885,8 +900,11 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
 
 @Test func foundationModelCallerCancellationAcknowledgesAndReturnsNoCandidate() async throws {
   let probe = FoundationModelOperationProbe()
-  let generator = FoundationModelCleanupGenerator { request, _ in
-    await probe.waitUntilStarted()
+  let generator = FoundationModelCleanupGenerator { request, maximumOutputTokens in
+    await probe.record(
+      request: request,
+      maximumOutputTokens: maximumOutputTokens
+    )
     await probe.waitUntilReleased()
     return request.baseline
   }
@@ -926,8 +944,11 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
 
 @Test func foundationModelForceTerminationUnblocksBothWaiters() async throws {
   let probe = FoundationModelOperationProbe()
-  let session = try FoundationModelCleanupGenerator { request, _ in
-    await probe.waitUntilStarted()
+  let session = try FoundationModelCleanupGenerator { request, maximumOutputTokens in
+    await probe.record(
+      request: request,
+      maximumOutputTokens: maximumOutputTokens
+    )
     await probe.waitUntilReleased()
     return request.baseline
   }.start(.init(
@@ -948,7 +969,11 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
 
 @Test func foundationModelLateUnderlyingWorkCannotPublish() async throws {
   let probe = FoundationModelOperationProbe()
-  let session = try FoundationModelCleanupGenerator { request, _ in
+  let session = try FoundationModelCleanupGenerator { request, maximumOutputTokens in
+    await probe.record(
+      request: request,
+      maximumOutputTokens: maximumOutputTokens
+    )
     await probe.waitUntilReleased()
     return request.baseline
   }.start(.init(
@@ -958,6 +983,7 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
     deadline: TestCleanupClock.fixedInstant.advanced(by: .seconds(1))
   ), maximumOutputTokens: 20)
   let result = Task { try await session.result() }
+  await probe.waitUntilStarted()
   session.forceTerminate()
   await #expect(throws: CleanupGenerationError.terminated) {
     try await result.value
@@ -1123,9 +1149,12 @@ the Foundation Model computation itself was killed.
 `FoundationModelOperationProbe` is an actor-owned test fixture with
 `record(request:maximumOutputTokens:)`, `waitUntilStarted()`,
 `waitUntilReleased()`, and `release(_:)`. It blocks the underlying closure
-until each test chooses cancellation or force termination. It does not inspect
-the private publication gate; the tests use only `result()` and
-`acknowledgement()` as the observable session contract.
+until each test chooses cancellation or force termination. `record` stores the
+request/token values and resumes `waitUntilStarted()` waiters. Every producer
+closure calls `record` before waiting for release, and each cancellation or
+force-termination test waits for `waitUntilStarted()` before closing the gate.
+It does not inspect the private publication gate; the tests use only `result()`
+and `acknowledgement()` as the observable session contract.
 
 - [ ] **Step 5: Add the processor/session.**
 
@@ -1243,7 +1272,12 @@ rejection, and adapter tests prove no second audio source.
 git diff --check
 ! rg -n 'AVAudioEngine|installTap|SFSpeechRecognizer|SpeechAnalyzer|URLSession|FileHandle|Data\.write' Sources/FleckApp/AppleSpeechStreamingAdapter.swift Sources/FleckApp/FoundationModelCleanupGenerator.swift Sources/FleckApp/StreamingDictationProcessor.swift
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckApp/AppleSpeechStreamingAdapter.swift \
     Sources/FleckApp/FoundationModelCleanupGenerator.swift \
@@ -1251,7 +1285,7 @@ test "$(git diff --name-only | sort)" = "$(
     Tests/FleckAppTests/AppleSpeechStreamingAdapterTests.swift \
     Tests/FleckAppTests/FoundationModelCleanupGeneratorTests.swift \
     Tests/FleckAppTests/StreamingDictationProcessorTests.swift \
-  | sort
+  | sort -u
 )"
 git add Sources/FleckApp/AppleSpeechStreamingAdapter.swift Sources/FleckApp/FoundationModelCleanupGenerator.swift Sources/FleckApp/StreamingDictationProcessor.swift Tests/FleckAppTests/AppleSpeechStreamingAdapterTests.swift Tests/FleckAppTests/FoundationModelCleanupGeneratorTests.swift Tests/FleckAppTests/StreamingDictationProcessorTests.swift
 git commit -m "feat: compose Apple streaming dictation"
@@ -1465,14 +1499,19 @@ git diff --check
 rg -n 'processingSession|processingUpdatesTask|cancelRequested|isTerminating' Sources/FleckApp/DictationCoordinator.swift
 test "$(rg -n 'AppleSpeechCapture\(' Sources/FleckApp/FleckApp.swift | wc -l | tr -d ' ')" -eq 1
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckApp/PersonalDictionaryTranscriptResolver.swift \
     Tests/FleckAppTests/PersonalDictionaryTranscriptResolverTests.swift \
     Sources/FleckApp/DictationCoordinator.swift \
     Sources/FleckApp/FleckApp.swift \
     Tests/FleckAppTests/DictationCoordinatorTests.swift \
-  | sort
+  | sort -u
 )"
 git add Sources/FleckApp/PersonalDictionaryTranscriptResolver.swift Sources/FleckApp/DictationCoordinator.swift Sources/FleckApp/FleckApp.swift Tests/FleckAppTests/DictationCoordinatorTests.swift Tests/FleckAppTests/PersonalDictionaryTranscriptResolverTests.swift
 git commit -m "feat: integrate streaming dictation with coordinator"

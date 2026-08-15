@@ -221,13 +221,18 @@ accepted cleanup token/span base is unchanged.
 ~~~bash
 git diff --check
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckCore/PersonalDictionary.swift \
     Sources/FleckCore/PersonalDictionaryResolver.swift \
     Tests/FleckCoreTests/PersonalDictionaryTests.swift \
     Tests/FleckCoreTests/PersonalDictionaryResolverTests.swift \
-  | sort
+  | sort -u
 )"
 for path in Sources/FleckCore/PersonalDictionary.swift Sources/FleckCore/PersonalDictionaryResolver.swift Tests/FleckCoreTests/PersonalDictionaryTests.swift Tests/FleckCoreTests/PersonalDictionaryResolverTests.swift; do test "$(git hash-object "$path")" = "$(git rev-parse "898ceae:$path")"; done
 git add Sources/FleckCore/PersonalDictionary.swift Sources/FleckCore/PersonalDictionaryResolver.swift Tests/FleckCoreTests/PersonalDictionaryTests.swift Tests/FleckCoreTests/PersonalDictionaryResolverTests.swift
@@ -589,11 +594,16 @@ Run:
 ```bash
 git diff --check
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckApp/FaithfulCleanupValidator.swift \
     Tests/FleckAppTests/FaithfulCleanupValidatorTests.swift \
-  | sort
+  | sort -u
 )"
 ```
 
@@ -1169,11 +1179,16 @@ git diff --check
 ! rg -n "URLSession|FileHandle|Data\.write|NSXPC|LanguageModelSession|transcript|audio" Sources/FleckApp/IncrementalTranscriptCleaner.swift
 ! rg -n "func start\([^)]*\) async|await .*\.start\(" Sources/FleckApp/IncrementalTranscriptCleaner.swift
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckApp/IncrementalTranscriptCleaner.swift \
     Tests/FleckAppTests/IncrementalTranscriptCleanerTests.swift \
-  | sort
+  | sort -u
 )"
 ```
 

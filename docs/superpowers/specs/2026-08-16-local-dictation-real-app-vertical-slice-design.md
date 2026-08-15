@@ -398,6 +398,14 @@ installer snapshot without starting transport. The coordinator continues using
 the built-in Apple Speech/deterministic-cleanup path, so a malformed candidate
 configuration cannot disable the safe dictation fallback.
 
+Refreshing the Settings state subscribes only to the manager's published state
+for the refresh duration, maps its final `ready`, `updateAvailable`, or
+`repairRequired` value, and never starts transport, byte progress, startup,
+calibration, or an installer operation. Fake installer evidence uses one exact
+8-byte fixture (`Data("fixture!".utf8)`); descriptor download bytes, manifest
+file/aggregate bytes and checksum, artifact identity, and emitted `[4, 8]`
+progress all derive from that same fixture.
+
 The UI uses the existing native macOS Settings structure, semantic colors and
 styles, keyboard and VoiceOver labels/values, and no frequent decorative
 animation. Keyboard-initiated dictation has no animation. Installer phases,

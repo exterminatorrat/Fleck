@@ -581,11 +581,16 @@ ordinary constructor passes nil.
 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelDescriptorTests
 git diff --check
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckApp/AdmittedModelDescriptor.swift \
     Tests/FleckAppTests/AdmittedModelDescriptorTests.swift \
-  | sort
+  | sort -u
 )"
 git add Sources/FleckApp/AdmittedModelDescriptor.swift Tests/FleckAppTests/AdmittedModelDescriptorTests.swift
 git commit -m "feat: define admitted model catalog"
@@ -629,6 +634,15 @@ built-in installer seam.
   are short `Data` values, not model weights.
 
 ~~~swift
+import CryptoKit
+
+enum TestFixtures {
+  static let tinyBytes = Data("fixture!".utf8) // exactly 8 bytes
+  static let tinySHA256 = SHA256.hash(data: tinyBytes)
+    .map { String(format: "%02x", $0) }
+    .joined()
+}
+
 @Test @MainActor
 func defaultBuildUsesBuiltInInstallerWithoutManagerReference() async {
   let installer = BuiltInAdmittedModelInstaller()
@@ -640,7 +654,15 @@ func defaultBuildUsesBuiltInInstallerWithoutManagerReference() async {
 @Test @MainActor
 func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
-  let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  #expect(TestFixtures.tinyBytes.count == 8)
+  #expect(descriptor.downloadBytes == 8)
+  #expect(TestManifests.tiny.totalByteCount == 8)
+  #expect(TestManifests.tiny.files[0].byteCount == 8)
+  #expect(TestManifests.tiny.files[0].sha256 == TestFixtures.tinySHA256)
+  #expect(TestArtifacts.identity(matching: descriptor).downloadBytes == 8)
+  #expect(TestArtifacts.identity(matching: descriptor).files[0].byteCount == 8)
+  #expect(TestArtifacts.identity(matching: descriptor).files[0].sha256 == TestFixtures.tinySHA256)
   let lifecycle = PhaseRecorder()
   let manager = EnhancedModelManager(
     modelRootURL: TestPaths.temporaryDirectory(),
@@ -680,7 +702,8 @@ func checksumFailureBecomesActionableRepairState() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let manager = TestManagers.managerWithWrongFixtureChecksum(
     descriptor: descriptor,
-    artifactIdentity: TestArtifacts.identity(matching: descriptor)
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny
   )
   let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
@@ -696,11 +719,54 @@ func checksumFailureBecomesActionableRepairState() async {
   #expect(message.contains("checksum"))
 }
 
+enum TestRefreshFixture: Equatable {
+  case ready
+  case updateAvailable
+  case repairRequired
+}
+
+@Test @MainActor
+func refreshMapsStaleStateWithoutStartingOperation() async throws {
+  let cases: [(TestRefreshFixture, AdmittedModelInstallPhase)] = [
+    (.ready, .ready),
+    (.updateAvailable, .updateAvailable),
+    (.repairRequired, .repairRequired(message: "Fixture requires repair"))
+  ]
+
+  for (refreshFixture, expectedPhase) in cases {
+    let descriptor = TestDescriptors.tinyAdmittedASR
+    let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+    let manager = TestManagers.manager(
+      descriptor: descriptor,
+      artifactIdentity: TestArtifacts.identity(matching: descriptor),
+      manifest: TestManifests.tiny,
+      transport: transport,
+      refreshFixture: refreshFixture
+    )
+    let installer = try EnhancedModelManagerInstaller(
+      manager: manager,
+      descriptor: descriptor,
+      startup: { Issue.record("refresh must not start startup") },
+      calibrate: { Issue.record("refresh must not start calibration") }
+    )
+
+    #expect(installer.snapshot.phase == .notInstalled)
+    await installer.refresh()
+
+    #expect(installer.snapshot.phase == expectedPhase)
+    #expect(transport.downloadCalls == 0)
+    #expect(!installer.phaseHistory.contains {
+      if case .downloading = $0 { return true }
+      return false
+    })
+  }
+}
+
 @Test @MainActor
 func cancellationPublishesCancelledAndCannotPublishInstalledLater() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(
-    bytes: Data("fixture".utf8),
+    bytes: TestFixtures.tinyBytes,
     pausesUntilCancelled: true
   )
   let manager = TestManagers.manager(
@@ -731,7 +797,7 @@ func cancellationPublishesCancelledAndCannotPublishInstalledLater() async {
 @Test @MainActor
 func descriptorArtifactMismatchFailsBeforeTransport() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
-  let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
   let manager = TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identityWith(
@@ -820,7 +886,7 @@ func artifactManifestMismatchesAreRejectedBeforeTransport() throws {
 @Test @MainActor
 func artifactManifestMismatchFailsBeforeTransport() {
   let descriptor = TestDescriptors.tinyAdmittedASR
-  let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
   let manager = TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
@@ -860,7 +926,7 @@ struct ObservedProgress: Equatable, Sendable {
 func installerUpdatesExposeBytesBeforeCompletion() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(
-    bytes: Data("fixture".utf8),
+    bytes: TestFixtures.tinyBytes,
     progressSequence: [4, 8],
     pausesAfterFirstProgress: true
   )
@@ -925,14 +991,32 @@ prove zero transport calls. `TestManagers.manager(descriptor:artifactIdentity:ma
 has no default identity or manifest and constructs `EnhancedModelManager` with
 the supplied artifact identity and actual manifest; normal fixtures pass
 `TestArtifacts.identity(matching: descriptor)`, while the checksum fixture
-helper takes the same explicit identity. `PhaseRecorder` proves startup follows
+helper takes `descriptor:artifactIdentity:manifest:` in the same order.
+`PhaseRecorder` proves startup follows
 the manager's `.ready` state and calibration follows startup. The manager's
 `@Published state` subscription maps `.verifying`, `.installing`, `.ready`,
 `.repairRequired`, `.removing`, and operation failures while the
 `@Published byteProgress` subscription maps live byte snapshots. Both
 subscriptions are synchronous `@MainActor` sinks with no `receive(on:)`, and
 they are cancelled before the operation task's defer returns so the final
-byte update cannot queue past teardown.
+byte update cannot queue past teardown. `TestFixtures.tinyBytes` is exactly
+8 bytes; `TestDescriptors.tinyAdmittedASR.downloadBytes`,
+`TestManifests.tiny.totalByteCount`, its sole file's `byteCount` and checksum,
+and `TestArtifacts.identity(matching:)` are all derived from those same eight
+bytes. The successful fake install therefore uses total/progress `8`, with no
+seven-byte fixture hidden behind an eight-byte assertion.
+
+`refresh()` owns a temporary synchronous `@MainActor` state subscription, calls
+only `manager.refreshState()`, maps the final `manager.state`, and cancels that
+subscription before returning. It never creates an operation task, subscribes
+to byte progress, invokes transport, startup, or calibration, or publishes an
+installing phase. `TestRefreshFixture` seeds the real manager assessment root
+for `ready`, `updateAvailable`, or the exact `repairRequired` message; the
+test begins from the installer's stale `.notInstalled` snapshot and proves all
+three refresh outcomes without a download. The test-only
+`TestManagers.manager` signature is
+`descriptor:artifactIdentity:manifest:transport:refreshFixture:`; the first
+four labels and order remain mandatory for every manager fixture call.
 
 - [ ] **Step 2: Run the red commands.**
 
@@ -1154,8 +1238,12 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
       }
   }
 
-  private func publishManagerState(_ state: EnhancedModelState) {
-    guard operationID != nil, !cancellationRequested else { return }
+  private func publishManagerState(
+    _ state: EnhancedModelState,
+    allowOutsideOperation: Bool = false
+  ) {
+    guard allowOutsideOperation
+      || (operationID != nil && !cancellationRequested) else { return }
     switch state {
     case .notInstalled:
       publish(.init(
@@ -1350,7 +1438,16 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
     ) { try await manager.update() }
   }
 
-  func refresh() async { await manager.refreshState() }
+  func refresh() async {
+    guard operationTask == nil else { return }
+    var refreshSubscription: AnyCancellable?
+    refreshSubscription = manager.$state.sink { [weak self] state in
+      self?.publishManagerState(state, allowOutsideOperation: true)
+    }
+    defer { refreshSubscription?.cancel() }
+    await manager.refreshState()
+    publishManagerState(manager.state, allowOutsideOperation: true)
+  }
 
   func cancel() {
     guard let operationTask else { return }
@@ -1411,13 +1508,18 @@ from the default-build result.
 git diff --check
 rg -n "URLSessionModelDownloader\\(\\)|ModelDownloading|byteProgress|verifyRepository|deleteModel" Sources/FleckApp/EnhancedModelManager.swift Sources/FleckApp/AdmittedModelInstallation.swift
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckApp/AdmittedModelInstallation.swift \
     Tests/FleckAppTests/AdmittedModelInstallationTests.swift \
     Sources/FleckApp/EnhancedModelManager.swift \
     Tests/FleckAppTests/EnhancedModelManagerTests.swift \
-  | sort
+  | sort -u
 )"
 git add Sources/FleckApp/EnhancedModelManager.swift Sources/FleckApp/AdmittedModelInstallation.swift Tests/FleckAppTests/EnhancedModelManagerTests.swift Tests/FleckAppTests/AdmittedModelInstallationTests.swift
 git commit -m "feat: expose admitted model installation phases"
@@ -1543,7 +1645,7 @@ func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
 @Test @MainActor
 func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
   let descriptor = TestDescriptors.tinyAdmittedASR
-  let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
   let manager = TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identityWith(revision: "wrong"),
@@ -1724,7 +1826,12 @@ accessibility values expose byte progress.
 git diff --check
 ! rg -n 'Picker\("Engine"|Enhanced Local|ModelConsentView|Download Enhanced Model|Loading' Sources/FleckApp/SettingsView.swift
 git diff --
-test "$(git diff --name-only | sort)" = "$(
+worktree_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$worktree_inventory" = "$(
   printf '%s\n' \
     Sources/FleckApp/AdmittedModelSettingsPresentation.swift \
     Tests/FleckAppTests/AdmittedModelSettingsPresentationTests.swift \
@@ -1732,7 +1839,7 @@ test "$(git diff --name-only | sort)" = "$(
     Sources/FleckApp/FleckApp.swift \
     Tests/FleckAppTests/DictationSettingsTests.swift \
     Tests/FleckAppTests/DictationAvailabilityTests.swift \
-  | sort
+  | sort -u
 )"
 git add Sources/FleckApp/AdmittedModelSettingsPresentation.swift Sources/FleckApp/SettingsView.swift Sources/FleckApp/FleckApp.swift Tests/FleckAppTests/AdmittedModelSettingsPresentationTests.swift Tests/FleckAppTests/DictationSettingsTests.swift Tests/FleckAppTests/DictationAvailabilityTests.swift
 git commit -m "feat: present admitted model recommendation"
