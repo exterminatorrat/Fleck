@@ -1559,15 +1559,32 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
   #expect(!source.contains("Font Size Presets"))
 }
 
-@Test func titleFontMenuRoutesByFocusedFieldAndUsesTheTitleFallback() throws {
-  let source = try notesPanelSource()
+@Test func titleFontActionRoutesOnlyToFocusedMutation() {
+  var titleFamily: String?
+  var bodyFamily: String?
 
-  #expect(source.contains("@FocusState private var editorFocus"))
-  #expect(source.contains(".focused($editorFocus, equals: .title)"))
-  #expect(source.contains("note.titleFontFamily ?? appState.preferences.fontFamily"))
-  #expect(source.contains("appState.setSelectedTitleFontFamily(family)"))
-  #expect(source.contains("commands.applyFontFamily(family)"))
-  #expect(source.contains("if isTitleFocused"))
+  routeFontFamilyAction(
+    family: "Menlo",
+    isTitleFocused: true,
+    titleMutation: { titleFamily = $0 },
+    bodyMutation: { bodyFamily = $0 }
+  )
+
+  #expect(titleFamily == "Menlo")
+  #expect(bodyFamily == nil)
+
+  titleFamily = nil
+  bodyFamily = nil
+
+  routeFontFamilyAction(
+    family: "Avenir",
+    isTitleFocused: false,
+    titleMutation: { titleFamily = $0 },
+    bodyMutation: { bodyFamily = $0 }
+  )
+
+  #expect(titleFamily == nil)
+  #expect(bodyFamily == "Avenir")
 }
 
 @Test func formattingBarUsesFleckPaletteForForegroundAndHighlight() throws {

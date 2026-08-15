@@ -2201,6 +2201,19 @@
     }
   }
 
+  func routeFontFamilyAction(
+    family: String,
+    isTitleFocused: Bool,
+    titleMutation: (String) -> Void,
+    bodyMutation: (String) -> Void
+  ) {
+    if isTitleFocused {
+      titleMutation(family)
+    } else {
+      bodyMutation(family)
+    }
+  }
+
   private struct FormattingBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var appState: AppState
@@ -2497,11 +2510,12 @@
     }
 
     private func applyFontFamily(_ family: String) {
-      if isTitleFocused {
-        appState.setSelectedTitleFontFamily(family)
-      } else {
-        commands.applyFontFamily(family)
-      }
+      routeFontFamilyAction(
+        family: family,
+        isTitleFocused: isTitleFocused,
+        titleMutation: { appState.setSelectedTitleFontFamily($0) },
+        bodyMutation: { commands.applyFontFamily($0) }
+      )
     }
 
     private func syncFontSizeText() {
