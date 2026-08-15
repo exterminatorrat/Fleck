@@ -263,19 +263,23 @@ the capture is not cancelling/terminating, and the pipeline is still accepting
 updates.
 
 The selected `DictationProcessingSession` owns one finalization task. `finish()`
-installs that task exactly once; `cancel()` invalidates the generation and closes
-updates first, cancels and awaits the finalization task second, and only then
-cancels the speech source and releases its resources. This makes caller
-cancellation reach `IncrementalTranscriptCleaner`; its bounded helper
-acknowledgement or force-termination path completes before session cancellation
-returns.
+installs that task exactly once. `cancel()` invalidates the generation and closes
+updates first, cancels the sole speech source early enough to unblock an
+in-flight `finish()`, cancels and awaits the finalization task, and only then
+releases source resources exactly once. This makes caller cancellation reach
+`IncrementalTranscriptCleaner`; its bounded helper acknowledgement or
+force-termination path completes before session cancellation returns.
+Concurrent finish callers await the same existing task; if cancellation wins
+before any finish task exists, the cancellation guard prevents new finalization
+work from starting.
 
 Cancellation must execute in this order:
 
 1. mark the capture cancelled and invalidate its generation;
 2. restore the focused editor's exact pre-capture transaction;
-3. await processing-session cancellation, which cancels/awaits finalization and
-   then stops the selected speech source and releases its resources;
+3. await processing-session cancellation, which cancels the selected speech
+   source early enough to unblock an in-flight finish, then cancels/awaits
+   finalization and releases source resources exactly once;
 4. erase provisional transcript and in-memory audio buffers;
 5. remove provisional history work and release runtime scratch state;
 6. publish only `.cancelled` after the session's bounded helper

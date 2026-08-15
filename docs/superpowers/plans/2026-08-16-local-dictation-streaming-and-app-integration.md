@@ -35,10 +35,12 @@ replay/archive buffer is introduced.
   provisional state, cancellation generation, history, routing, insertion, and
   recovery presentation.
 - `StreamingDictationSession` owns one finalization task. `finish()` installs it
-  exactly once; `cancel()` invalidates first, cancels and awaits that task, and
-  only then cancels/releases the speech source. This lets caller cancellation
-  reach `IncrementalTranscriptCleaner` and its bounded helper acknowledgement
-  or force-termination path before session cancellation returns.
+  exactly once; `cancel()` invalidates and closes updates first, cancels the sole
+  speech source early enough to unblock an in-flight `finish()`, then cancels
+  and awaits that task, and releases source resources exactly once. This lets
+  caller cancellation reach `IncrementalTranscriptCleaner` and its bounded
+  helper acknowledgement or force-termination path before session cancellation
+  returns.
 - Coordinator cancellation marks the capture cancelled and invalidates its
   generation first, restores the focused editor transaction second, and only
   then awaits processing-session cancellation or legacy source cancellation and
@@ -147,7 +149,8 @@ protocol DictationProcessing: AnyObject {
 protocol DictationProcessingSession: AnyObject {
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
   func finish() async throws -> DictationProcessingResult
-  // Awaits in-flight finalization/cleanup before source cancellation returns.
+  // Cancels source to unblock finish, then awaits finalization/cleanup before
+  // resource release returns.
   func cancel() async
 }
 
@@ -848,8 +851,14 @@ enum StreamingSpeechSourceProbeError: Error {
 
 @MainActor
 final class StreamingSpeechSourceProbe: StreamingSpeechSource {
-  init(startError: StreamingSpeechSourceProbeError? = nil)
+  init(
+    startError: StreamingSpeechSourceProbeError? = nil,
+    finishBlocksUntilCancel: Bool = false
+  )
   private(set) var startCount = 0
+  private(set) var finishCount = 0
+  private(set) var finishStarted = false
+  private(set) var finishUnblockedByCancel = false
   private(set) var cancelCount = 0
   private(set) var releaseCount = 0
   private(set) var callbacksWereInstalled = false
@@ -862,6 +871,7 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
   func finish() async throws -> String?
   func cancel() async
   func releaseResources() async
+  func waitUntilFinishStarted() async
 }
 
 @Test @MainActor
@@ -945,6 +955,54 @@ func cancellingSessionAwaitsCleanupAcknowledgementBeforeSourceShutdown() async t
   #expect(source.cancelCount == 1)
   #expect(source.releaseCount == 1)
   #expect(try await updates.value.isEmpty)
+}
+
+@Test @MainActor
+func cancellingSessionUnblocksInFlightSourceFinishBeforeReleasingResources() async throws {
+  let source = StreamingSpeechSourceProbe(finishBlocksUntilCancel: true)
+  let processor = makeProcessor(source: source)
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ))
+  let updates = Task {
+    try await session.updates.reduce(into: [DictationTextUpdate]()) {
+      $0.append($1)
+    }
+  }
+  let firstFinish = Task { try await session.finish() }
+  await source.waitUntilFinishStarted()
+  let secondFinish = Task { try await session.finish() }
+  await Task.yield()
+
+  await session.cancel()
+
+  await #expect(throws: CancellationError.self) { try await firstFinish.value }
+  await #expect(throws: CancellationError.self) { try await secondFinish.value }
+  #expect(source.finishCount == 1)
+  #expect(source.finishUnblockedByCancel)
+  #expect(source.cancelCount == 1)
+  #expect(source.releaseCount == 1)
+  #expect(try await updates.value.isEmpty)
+}
+
+@Test @MainActor
+func cancellingBeforeFinishCannotStartFinalizationWork() async throws {
+  let source = StreamingSpeechSourceProbe()
+  let processor = makeProcessor(source: source)
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ))
+
+  await session.cancel()
+
+  await #expect(throws: CancellationError.self) { try await session.finish() }
+  #expect(source.finishCount == 0)
+  #expect(source.cancelCount == 1)
+  #expect(source.releaseCount == 1)
 }
 
 @Test @MainActor
@@ -1304,6 +1362,16 @@ cancellation test waits for the helper start, awaits `session.cancel()`, and
 then checks that acknowledgement, source cancellation, and source release all
 completed before it accepts the no-result/no-update assertions.
 
+When initialized with `finishBlocksUntilCancel: true`, the same source probe
+marks `finishStarted`, waits inside `finish()` for `cancel()`, and then marks
+`finishUnblockedByCancel` before throwing `CancellationError`. The blocking
+source test waits for `waitUntilFinishStarted()`, starts a second finish waiter,
+cancels the session, and asserts one finish call, one source cancellation, one
+release, both finish waiters' terminal cancellation, and no published result or
+update. This is the Apple Speech continuation case: source cancellation occurs
+early enough to unblock finish, while the session still awaits finalization
+before releasing resources.
+
 - [ ] **Step 5: Add the processor/session.**
 
 ~~~swift
@@ -1372,6 +1440,8 @@ final class StreamingDictationSession: DictationProcessingSession {
   private let budget: DictationProcessingBudget
   private var finalizationTask: Task<DictationProcessingResult, Error>?
   private var isCancelled = false
+  private var sourceCancellationRequested = false
+  private var resourcesReleased = false
   private var generation: UInt64 = 0
 
   fileprivate init(
@@ -1390,6 +1460,7 @@ final class StreamingDictationSession: DictationProcessingSession {
     if let finalizationTask {
       return try await finalizationTask.value
     }
+    guard !isCancelled else { throw CancellationError() }
     let task = Task { try await self.finalize() }
     finalizationTask = task
     return try await task.value
@@ -1400,12 +1471,21 @@ final class StreamingDictationSession: DictationProcessingSession {
     isCancelled = true
     generation &+= 1
     continuation.finish()
+
+    // Apple Speech may suspend finish() on its session continuation. Cancel
+    // the sole source before awaiting finalization so that continuation opens.
+    if !sourceCancellationRequested {
+      sourceCancellationRequested = true
+      await source.cancel()
+    }
     if let finalizationTask {
       finalizationTask.cancel()
       _ = try? await finalizationTask.value
     }
-    await source.cancel()
-    await source.releaseResources()
+    if !resourcesReleased {
+      resourcesReleased = true
+      await source.releaseResources()
+    }
   }
 
   private func finalize() async throws -> DictationProcessingResult
@@ -1427,7 +1507,10 @@ release count, and emitted callbacks in the two lifecycle tests above.
 counter, stream continuation, one `finalizationTask`, cancellation state,
 injected `DictationClock`, and `DictationProcessingBudget`. At `begin`, it
 records no deadline. At `finish`, the session installs exactly one finalization
-task; later callers await that same task. The task records
+task; later callers await that same task. It first returns the existing task
+when present, then guards `isCancelled` before creating a new task, so
+cancel-before-finish cannot start new work and simultaneous finish callers share
+one terminal task. The task records
 `stopInstant = clock.now()` exactly once, constructs
 `insertionDeadline = stopInstant.advanced(by: budget.insertion)` immediately,
 and passes both values to:
@@ -1458,12 +1541,13 @@ resolves the dictionary before creating the request, and never calls the legacy
 cleaner. A cleaned candidate publishes `cleanedTranscript`; every
 unsafe/unavailable cleanup publishes `insertedText` equal to the exact
 baseline. A resolver failure publishes raw ASR recovery with no cleaner call.
-`cancel` invalidates the generation and closes updates first, cancels the one
-finalization task and awaits it second, then cancels the source and releases
-resources once. The awaited task propagates caller cancellation into
+`cancel` invalidates the generation and closes updates first, cancels the sole
+source early enough to unblock an in-flight source `finish`, cancels the one
+finalization task, and awaits it before releasing resources exactly once. The
+awaited task propagates caller cancellation into
 `IncrementalTranscriptCleaner`, so its helper acknowledgement or force
-termination completes before source shutdown returns. No final result or update
-can publish after that boundary. A state or source error closes without a late
+termination completes before release returns. No final result or update can
+publish after that boundary. A state or source error closes without a late
 result.
 
 `TestDictationClock` supplies a fixed sequence of instants to the processor;
@@ -1745,10 +1829,12 @@ capture cancelled and invalidate its generation first; restore the focused
 editor transaction second through `rollbackEditor` (which calls
 `cancelFocusedDictation()` when no commit receipt exists); only then await
 processing-session `cancel()`. That session owns finalization cancellation and
-source cancellation/release. The coordinator publishes `.cancelled` only after
-that await and publishes nothing from a late task. The ordered coordinator test
-records focused-editor rollback, session cancel, source cancel, and source
-release and asserts this exact sequence.
+source cancellation/release; when finalization is in flight, the session
+cancels its source before awaiting finalization so Apple Speech finish can
+unblock. The coordinator publishes `.cancelled` only after that await and
+publishes nothing from a late task. The ordered coordinator test records
+focused-editor rollback, session cancel, source cancel, and source release and
+asserts this exact sequence.
 
 - [ ] **Step 5: Wire the real app without a second capture.** In
 `FleckApp.swift`, construct the existing Foundation/deterministic cleanup
