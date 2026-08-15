@@ -25,7 +25,7 @@ existing FleckCore dictionary/cleanup structures. No new package dependency.
 - The target cleanup input is the exact dictionary baseline. Dictionary resolution failure before a baseline exists belongs to the later coordinator raw-ASR recovery path and is not converted into a cleanup baseline here.
 - Automatic cleanup may change only punctuation, capitalization, whitespace, isolated unambiguous fillers, immediate exact repetition, an explicitly spoken same-tail correction, and short-list formatting without changing list items.
 - Names and dictionary forms, numbers and number words, dates and times, prices, units and quantities, recipients and destinations, paths, URLs, email addresses, code, commands, negation, modality, commitments, quotes, and mixed English/Mandarin order are protected meaning.
-- Number classification runs before filler, repetition, or correction recognition; supported English cardinal/ordinal words, scales through trillion, full-token digit ordinals, fractions, decimals, percentages, currencies, and unit quantities must keep the exact ordered number signature, while ambiguous or unrecognized numeric/quantity-looking forms fail closed. Only paired, validated ordinal list markers are exempt.
+- Number classification runs over raw `CleanupLexeme` sequences before filler, repetition, or correction recognition; supported English cardinal/ordinal words, scales through trillion, semantically valid full-token digit ordinals, fractions, decimals, percentages, currencies, and unit quantities must keep the exact ordered number signature, while ambiguous or unrecognized numeric/quantity-looking forms fail closed. Only paired, validated ordinal list markers are exempt.
 - The validator runs protected-span preservation before allowlist classification. Any protected-meaning violation rejects the candidate.
 - The automatic target is at most 80 lexical words. The candidate output is at most input token count plus 32; helper-reported metadata is not authoritative.
 - There is one request, one generation attempt, zero automatic retries, no network, no transcript logging, no transcript persistence, and no audio persistence.
@@ -374,6 +374,55 @@ import Testing
       against: .init(baseline: "send 21st files", protectedForms: [], replacements: 0)
     ) == .accepted(text: "send 21st files.", operations: [.punctuation])
   )
+  #expect(CleanupLexeme.scan("21st").map(\.original) == ["21", "st"])
+  for ordinal in ["11th", "12th", "13th", "21st", "22nd", "23rd", "24th"] {
+    let decision = FaithfulCleanupValidator().validate(
+      candidate: "send \(ordinal) files.",
+      against: .init(
+        baseline: "send \(ordinal) files",
+        protectedForms: [],
+        replacements: 0
+      )
+    )
+    guard case .accepted = decision else {
+      Issue.record("Semantic ordinal \(ordinal) must remain protected but punctuation-cleanable")
+      continue
+    }
+  }
+
+  let unchangedNumericForms = [
+    ("pay $20", "Pay $20."),
+    ("progress 20%", "Progress 20%."),
+    ("ratio 1/2", "Ratio 1/2."),
+    ("meet at 10:30 am", "Meet at 10:30 AM."),
+    ("score -3.5", "Score -3.5."),
+    ("charge ($20)", "Charge ($20).")
+  ]
+  for (baseline, candidate) in unchangedNumericForms {
+    let decision = FaithfulCleanupValidator().validate(
+      candidate: candidate,
+      against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+    )
+    guard case .accepted(let text, _) = decision else {
+      Issue.record("Unchanged lexer-supported numeric form must permit punctuation-only cleanup")
+      continue
+    }
+    #expect(text == candidate)
+  }
+
+  let validListWithInterMarkerPunctuation = FaithfulCleanupValidator().validate(
+    candidate: "1. buy 20 apples;\n2. buy 20 oranges.",
+    against: .init(
+      baseline: "first buy 20 apples, second buy 20 oranges",
+      protectedForms: [],
+      replacements: 0
+    )
+  )
+  guard case .accepted(let text, _) = validListWithInterMarkerPunctuation else {
+    Issue.record("Validated markers must not exempt unchanged in-item quantities")
+    return
+  }
+  #expect(text == "1. buy 20 apples;\n2. buy 20 oranges.")
 
   let rejected: [(String, String)] = [
     ("twenty twenty", "twenty"),
@@ -384,12 +433,27 @@ import Testing
     ("trillionish trillionish", "trillionish"),
     ("send 21stx 21stx", "send 21stx"),
     ("send 1st2 actually 1st2", "send 1st2"),
+    ("send 11st files", "Send 11st files."),
+    ("send 21th files", "Send 21th files."),
+    ("send 21stx files", "Send 21stx files."),
     ("send 20 files", "send 10 files"),
     ("send twenty-two files", "send 22 files"),
     ("send 20th files", "send 20 files"),
+    ("pay $20", "pay $21"),
+    ("progress 20%", "progress 25%"),
+    ("ratio 1/2", "ratio 2/3"),
+    ("meet at 10:30 am", "meet at 11:30 am"),
+    ("score -3.5", "score 3.5"),
+    ("charge ($20)", "charge ($21)"),
+    ("move 21st actually 22nd", "move 22"),
+    ("move 21st actually 22nd", "move 22th"),
     (
       "first buy 20 apples second buy 20 oranges",
       "1. buy 10 apples\n2. buy 10 oranges"
+    ),
+    (
+      "first buy 20 apples, second buy 20 oranges",
+      "1. buy 20 apples,\n2. buy 10 oranges"
     ),
     (
       "first privacy second speed",
@@ -529,12 +593,14 @@ struct FaithfulCleanupValidator: Sendable {
     let baselineValues = baselineLexemes.filter(\.isLexical).map(\.canonical)
     let candidateValues = candidateLexemes.filter(\.isLexical).map(\.canonical)
     let ordinalMarkerPairs = pairedOrdinalMarkersAreOnlyDifference(
-      baselineValues: baselineValues,
-      candidateValues: candidateValues,
+      baselineLexemes: baselineLexemes,
       candidateLexemes: candidateLexemes
     )
 
-    guard numberMeaningIsPreserved(baselineValues, candidateValues)
+    guard numberMeaningIsPreserved(
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes
+    )
       || ordinalMarkerPairs != nil else {
       return .rejected(.numberMeaningChanged)
     }
@@ -556,6 +622,7 @@ struct FaithfulCleanupValidator: Sendable {
       baselineSpans,
       candidateSpans,
       baselineValues: baselineValues,
+      candidateLexemes: candidateLexemes,
       ordinalMarkerPairs: ordinalMarkerPairs
     ) else { return .rejected(.protectedContentChanged) }
 
@@ -589,7 +656,12 @@ struct FaithfulCleanupValidator: Sendable {
     if hasCorrectionMarker(baselineValues) {
       return .rejected(.ambiguousCorrection)
     }
-    if isShortListFormatting(baselineValues, candidateLexemes) {
+    if let ordinalMarkerPairs,
+       isShortListFormatting(
+         baselineLexemes,
+         candidateLexemes,
+         ordinalMarkerPairs: ordinalMarkerPairs
+       ) {
       return .accepted(text: candidate, operations: [.formatList])
     }
     if candidateValues.count > baselineValues.count {
@@ -650,8 +722,14 @@ struct FaithfulCleanupValidator: Sendable {
   }
 
   private struct PairedOrdinalMarkerIndices: Equatable {
-    let baselineIndices: [Int]
-    let candidateIndices: [Int]
+    let baselineRawRanges: [Range<Int>]
+    let candidateRawRanges: [Range<Int>]
+    let candidateNumberRawRanges: [Range<Int>]
+  }
+
+  private struct NumberSignature: Equatable {
+    let rawRange: Range<Int>
+    let classification: NumberClassification
   }
 
   private static let ordinalMarkerNumbers: [String: Int] = [
@@ -663,15 +741,120 @@ struct FaithfulCleanupValidator: Sendable {
   ]
 
   private static func numberMeaningIsPreserved(
-    _ baselineValues: [String],
-    _ candidateValues: [String]
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme]
   ) -> Bool {
-    let baseline = baselineValues.map(classifyNumber)
-    let candidate = candidateValues.map(classifyNumber)
+    let baseline = numberSignatures(from: baselineLexemes).map(\.classification)
+    let candidate = numberSignatures(from: candidateLexemes).map(\.classification)
     guard !baseline.contains(.ambiguous), !candidate.contains(.ambiguous) else {
       return false
     }
     return baseline.filter { $0 != .none } == candidate.filter { $0 != .none }
+  }
+
+  private static func numberSignatures(from lexemes: [CleanupLexeme]) -> [NumberSignature] {
+    var signatures: [NumberSignature] = []
+    var consumedIndices = Set<Int>()
+    var index = 0
+    while index < lexemes.count {
+      guard lexemes[index].kind == .number else {
+        index += 1
+        continue
+      }
+
+      let value = lexemes[index].canonical.lowercased()
+      if index + 1 < lexemes.count, lexemes[index + 1].kind == .word {
+        let suffix = lexemes[index + 1].canonical.lowercased()
+        if ["st", "nd", "rd", "th"].contains(suffix) {
+          let range = index..<(index + 2)
+          let classification = validOrdinalSuffix(for: value, suffix: suffix)
+            ? .digitOrdinal(value + suffix)
+            : .ambiguous
+          signatures.append(.init(rawRange: range, classification: classification))
+          consumedIndices.formUnion(range)
+          index += 2
+          continue
+        }
+        if unitWords.contains(suffix) {
+          signatures.append(.init(
+            rawRange: index..<(index + 2),
+            classification: .quantity(value + suffix)
+          ))
+          consumedIndices.formUnion(index..<(index + 2))
+          index += 2
+          continue
+        }
+        if suffix.hasPrefix("st") || suffix.hasPrefix("nd")
+            || suffix.hasPrefix("rd") || suffix.hasPrefix("th") {
+          signatures.append(.init(rawRange: index..<(index + 2), classification: .ambiguous))
+          consumedIndices.formUnion(index..<(index + 2))
+          index += 2
+          continue
+        }
+        // A digit immediately followed by letters is not a safe punctuation-only
+        // form unless the bounded unit/ordinal cases above recognized it.
+        signatures.append(.init(rawRange: index..<(index + 2), classification: .ambiguous))
+        consumedIndices.formUnion(index..<(index + 2))
+        index += 2
+        continue
+      }
+
+      if index + 2 < lexemes.count,
+         lexemes[index + 1].kind == .whitespace,
+         lexemes[index + 2].kind == .word,
+         ["am", "pm"].contains(lexemes[index + 2].canonical.lowercased()),
+         value.contains(":") {
+        signatures.append(.init(
+          rawRange: index..<(index + 3),
+          classification: .digit(value + lexemes[index + 2].canonical.lowercased())
+        ))
+        consumedIndices.formUnion(index..<(index + 3))
+        index += 3
+        continue
+      }
+
+      signatures.append(.init(
+        rawRange: index..<(index + 1),
+        classification: classifyNumber(value)
+      ))
+      consumedIndices.insert(index)
+      index += 1
+    }
+
+    for index in lexemes.indices where lexemes[index].kind == .word && !consumedIndices.contains(index) {
+      if classifyNumber(lexemes[index].canonical) != .none {
+        signatures.append(.init(
+          rawRange: index..<(index + 1),
+          classification: classifyNumber(lexemes[index].canonical)
+        ))
+      }
+    }
+    return signatures.sorted { $0.rawRange.lowerBound < $1.rawRange.lowerBound }
+  }
+
+  private static let unitWords: Set<String> = [
+    "ms", "s", "sec", "secs", "min", "mins", "hour", "hours", "mm", "cm",
+    "m", "km", "g", "kg", "mg", "oz", "lb", "lbs", "ml", "l", "gb", "mb",
+    "tb", "c", "°c"
+  ]
+
+  private static func validOrdinalSuffix(for digits: String, suffix: String) -> Bool {
+    guard let integer = Int(digits), ["st", "nd", "rd", "th"].contains(suffix) else {
+      return false
+    }
+    let expected: String
+    let lastTwo = integer % 100
+    if (11...13).contains(lastTwo) {
+      expected = "th"
+    } else {
+      switch integer % 10 {
+      case 1: expected = "st"
+      case 2: expected = "nd"
+      case 3: expected = "rd"
+      default: expected = "th"
+      }
+    }
+    return suffix == expected
   }
 
   private static func classifyNumber(_ value: String) -> NumberClassification {
@@ -692,9 +875,22 @@ struct FaithfulCleanupValidator: Sendable {
       }
     }
     if canonical.range(of: #"^[0-9]+(?:st|nd|rd|th)$"#, options: .regularExpression) != nil {
-      return .digitOrdinal(canonical)
+      let suffix = String(canonical.suffix(2))
+      let digits = String(canonical.dropLast(2))
+      return validOrdinalSuffix(for: digits, suffix: suffix)
+        ? .digitOrdinal(canonical)
+        : .ambiguous
     }
-    if canonical.range(of: #"^\d+(?:\.\d+)?$"#, options: .regularExpression) != nil {
+    let supportedDigitPatterns = [
+      #"^[+-]?\(?[$€£¥]?\d+(?:\.\d+)?[$€£¥]?\)?$"#,
+      #"^[+-]?\d+(?:\.\d+)?%$"#,
+      #"^[+-]?\d+/\d+$"#,
+      #"^\d{1,2}(?::\d{2})?(?:am|pm)$"#,
+      #"^\d{1,2}:\d{2}$"#
+    ]
+    if supportedDigitPatterns.contains(where: {
+      canonical.range(of: $0, options: .regularExpression) != nil
+    }) {
       return .digit(canonical)
     }
     if canonical.unicodeScalars.contains(where: CharacterSet.decimalDigits.contains) {
@@ -716,44 +912,56 @@ struct FaithfulCleanupValidator: Sendable {
   }
 
   private static func pairedOrdinalMarkersAreOnlyDifference(
-    baselineValues: [String],
-    candidateValues: [String],
+    baselineLexemes: [CleanupLexeme],
     candidateLexemes: [CleanupLexeme]
   ) -> PairedOrdinalMarkerIndices? {
-    guard let markerIndices = validatedShortListMarkerIndices(
-      baselineValues: baselineValues,
+    guard let markerRanges = validatedShortListMarkerRanges(
+      baselineLexemes: baselineLexemes,
       candidateLexemes: candidateLexemes
     ) else {
       return nil
     }
-    let baselineMarkers = markerIndices.baselineIndices
-    let candidateMarkers = markerIndices.candidateIndices
+    let baselineMarkers = markerRanges.baselineRawRanges
+    let candidateMarkers = markerRanges.candidateRawRanges
     guard baselineMarkers.count >= 2,
           baselineMarkers.count == candidateMarkers.count else {
       return nil
     }
     guard zip(baselineMarkers, candidateMarkers).enumerated().allSatisfy({ offset, pair in
-      guard let baselineNumber = ordinalMarkerNumbers[baselineValues[pair.0]],
-            let candidateNumber = isNumericListMarker(candidateValues[pair.1]) else {
+      guard let baselineNumber = ordinalMarkerNumbers[
+              baselineLexemes[pair.0.lowerBound].canonical
+            ],
+            let candidateNumber = isNumericListMarker(
+              candidateLexemes[pair.1.lowerBound].canonical
+            ) else {
         return false
       }
       return baselineNumber == offset + 1 && candidateNumber == offset + 1
     }) else {
       return nil
     }
-    let baselineRemainder = baselineValues.enumerated()
-      .filter { !baselineMarkers.contains($0.offset) }
-      .map(\.element)
-    let candidateRemainder = candidateValues.enumerated()
-      .filter { !candidateMarkers.contains($0.offset) }
-      .map(\.element)
-    guard numberMeaningIsPreserved(baselineRemainder, candidateRemainder) else {
+    let baselineRemainder = removingRawRanges(baselineMarkers, from: baselineLexemes)
+    let candidateRemainder = removingRawRanges(candidateMarkers, from: candidateLexemes)
+    guard numberMeaningIsPreserved(
+      baselineLexemes: baselineRemainder,
+      candidateLexemes: candidateRemainder
+    ) else {
       return nil
     }
     return .init(
-      baselineIndices: baselineMarkers,
-      candidateIndices: candidateMarkers
+      baselineRawRanges: baselineMarkers,
+      candidateRawRanges: candidateMarkers,
+      candidateNumberRawRanges: markerRanges.candidateNumberRawRanges
     )
+  }
+
+  private static func removingRawRanges(
+    _ ranges: [Range<Int>],
+    from lexemes: [CleanupLexeme]
+  ) -> [CleanupLexeme] {
+    lexemes.enumerated()
+      .filter { index, _ in !ranges.contains { $0.contains(index) } }
+      .map(\.element)
   }
 
   private static func isNumericListMarker(_ value: String) -> Int? {
@@ -765,8 +973,20 @@ struct FaithfulCleanupValidator: Sendable {
     _ baseline: [CleanupProtectedSpan],
     _ candidate: [CleanupProtectedSpan],
     baselineValues: [String],
+    candidateLexemes: [CleanupLexeme],
     ordinalMarkerPairs: PairedOrdinalMarkerIndices?
-  ) -> Bool
+  ) -> Bool {
+    let exemptCandidateNumbers = ordinalMarkerPairs?.candidateNumberRawRanges ?? []
+    for (baselineSpan, candidateSpan) in zip(baseline, candidate) {
+      let exactMarker = candidateSpan.category == .number
+        && exemptCandidateNumbers.contains(candidateSpan.lexemeRange)
+      guard exactMarker || (
+        baselineSpan.category == candidateSpan.category
+          && baselineSpan.canonicalLexemes == candidateSpan.canonicalLexemes
+      ) else { return false }
+    }
+    return baseline.count == candidate.count
+  }
 
   private static func equalLexicalOperations(
     _ baseline: [CleanupLexeme],
@@ -797,14 +1017,42 @@ struct FaithfulCleanupValidator: Sendable {
   private static func hasCorrectionMarker(_ values: [String]) -> Bool
 
   private static func isShortListFormatting(
-    _ baselineValues: [String],
-    _ candidate: [CleanupLexeme]
+    _ baseline: [CleanupLexeme],
+    _ candidate: [CleanupLexeme],
+    ordinalMarkerPairs: PairedOrdinalMarkerIndices
   ) -> Bool
 
-  private static func validatedShortListMarkerIndices(
-    baselineValues: [String],
+  private static func validatedShortListMarkerRanges(
+    baselineLexemes: [CleanupLexeme],
     candidateLexemes: [CleanupLexeme]
-  ) -> (baselineIndices: [Int], candidateIndices: [Int])?
+  ) -> (
+    baselineRawRanges: [Range<Int>],
+    candidateRawRanges: [Range<Int>],
+    candidateNumberRawRanges: [Range<Int>]
+  )? {
+    let baseline = baselineLexemes.indices.compactMap { index -> Range<Int>? in
+      guard baselineLexemes[index].kind == .word,
+            ordinalMarkerNumbers[baselineLexemes[index].canonical] != nil else {
+        return nil
+      }
+      return index..<(index + 1)
+    }
+    let candidate = candidateLexemes.indices.compactMap { index -> (Range<Int>, Range<Int>)? in
+      guard candidateLexemes[index].kind == .number,
+            isNumericListMarker(candidateLexemes[index].canonical) != nil,
+            index + 1 < candidateLexemes.count,
+            candidateLexemes[index + 1].original == "." else {
+        return nil
+      }
+      return (index..<(index + 2), index..<(index + 1))
+    }
+    guard baseline.count == candidate.count, baseline.count >= 2 else { return nil }
+    return (
+      baselineRawRanges: baseline,
+      candidateRawRanges: candidate.map(\.0),
+      candidateNumberRawRanges: candidate.map(\.1)
+    )
+  }
 }
 ```
 
@@ -814,13 +1062,15 @@ predicate; its sole numeric exception is
 `pairedOrdinalMarkersAreOnlyDifference`, which first validates the exact ordered
 mapping `first -> 1`, `second -> 2`, `third -> 3`, `fourth -> 4`, and
 `fifth -> 5` at the corresponding item positions. Its
-`validatedShortListMarkerIndices` helper uses lexical indices and item-boundary
-punctuation to return only a numeric lexeme immediately followed by `.` as a
-list marker; a quantity `1` or `2` inside an item is not returned. The paired
-helper returns the validated baseline and candidate marker indices, and
-`protectedSpansMatch` receives those indices so only those exact candidate
-ordinal digit spans are exempt. It must never ignore a quantity inside a list
-item. Thus a baseline with ordinal items
+`validatedShortListMarkerRanges` helper scans the raw `CleanupLexeme` array and
+returns full raw ranges for the baseline word and candidate number-plus-period,
+plus a separate raw range for each candidate number lexeme. A quantity `1` or
+`2` inside an item is not returned because it is not immediately followed by the
+marker period. The paired helper validates those raw ranges, removes only the
+full marker ranges for its remainder comparison, and passes the exact candidate
+number ranges to `protectedSpansMatch`; only those exact candidate ordinal digit
+spans are exempt. It must never ignore a quantity inside a list item. Thus a
+baseline with ordinal items
 and quantity `20` is rejected when a numbered candidate uses quantity `10`, and
 swapped markers (`first privacy second speed` to `2. Privacy / 1. Speed`) reject.
 Ignore only numeric list markers introduced by a valid ordinal list; never ignore
@@ -829,10 +1079,17 @@ a number inside a normal sentence. Implement the four edit recognizers with
 it is one of the five listed words, isolated by punctuation/boundaries, and not
 inside a protected quote/span. A duplicate is adjacent, exact after canonical
 comparison, and not numeric/protected. Before those recognizers run,
-`numberMeaningIsPreserved` classifies digits, supported English cardinal/ordinal
-words through trillion, full-token digit ordinals matching
-`^[0-9]+(st|nd|rd|th)$`, fractions, decimals, percentages, currencies, and unit
-quantities. It requires the ordered number signature to remain identical;
+`numberMeaningIsPreserved` builds ordered signatures from raw lexeme sequences,
+not from a filtered string list. A contiguous `.number` plus `.word` suffix is
+one signature only for a semantically valid full-token ordinal; `11th`, `12th`,
+`13th`, `21st`, and `22nd` pass, while `11st`, `21th`, and `21stx` become
+ambiguous and fail closed. A number followed by an allowlisted unit is likewise
+one bounded quantity signature. A number, optional whitespace, and `am`/`pm`
+form one time signature. The remaining single `.number` forms use exact
+normalized signatures for currency, percentage, fraction, time, signed,
+parenthesized, and decimal lexemes (`$20`, `20%`, `1/2`, `10:30`, `10:30am`,
+`-3.5`, and `($20)`); unsupported digit-bearing sequences remain ambiguous.
+It requires the ordered number signature to remain identical;
 ordinary words such as `send`, `word`, `with`, and `last` remain `.none`, while
 malformed digit/suffix forms remain ambiguous and reject fail-closed rather than
 reaching duplicate or correction deletion. Avoid broad substring hints for

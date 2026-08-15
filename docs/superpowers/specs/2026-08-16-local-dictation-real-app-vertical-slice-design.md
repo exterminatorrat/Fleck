@@ -257,13 +257,20 @@ filler, repetition, or correction recognition; the ordered number signature
 must remain identical, and ambiguous or unrecognized numeric/quantity-looking
 forms fail closed. Short-list formatting may ignore only paired validated
 ordinal marker positions; it never bypasses a quantity change inside an item.
-Digit ordinals are recognized only as full-token `[0-9]+(st|nd|rd|th)` forms in
-addition to the bounded ordinal vocabulary; ordinary words ending in `st`,
-`nd`, `rd`, or `th` remain ordinary words, while malformed digit/suffix forms
-fail closed. A list exception validates the ordered pairs `first -> 1` through
-`fifth -> 5` and passes only those baseline/candidate marker indices to protected
-span comparison; swapped markers and item quantities remain protected. Only
-those paired ordinal markers may be introduced by the short-list formatting rule.
+Digit ordinals are recognized from raw `CleanupLexeme` sequences: an adjacent
+digit lexeme plus suffix word is one full-token `[0-9]+(st|nd|rd|th)` signature
+only when the suffix is semantic (`11th`, `12th`, `13th`, and otherwise
+`1st`/`2nd`/`3rd`/`4th` endings). Thus `21st` is protected exactly, while
+`11st`, `21th`, and malformed `21stx` fail closed; ordinary words ending in
+`st`, `nd`, `rd`, or `th` remain ordinary words. Currency, percentage,
+fraction, time, signed, parenthesized, decimal, and bounded unit forms use
+exact normalized signatures; unsupported digit-bearing sequences are
+ambiguous. A list exception validates the ordered pairs `first -> 1` through
+`fifth -> 5`, removes only the full raw marker ranges for its remainder check,
+and passes only the exact candidate number ranges to protected-span comparison.
+Inter-marker whitespace/punctuation does not change those raw coordinates;
+swapped markers and item quantities remain protected. Only those paired ordinal
+markers may be introduced by the short-list formatting rule.
 The transcript is quoted data, never instructions.
 
 ## Cancellation and generations
@@ -277,15 +284,22 @@ updates.
 
 The selected `DictationProcessingSession` owns one finalization task and one
 shared `cancellationTask`. `finish()` installs finalization exactly once. The
-first `cancel()` stores the shared task before invalidating the generation and
-closing updates, cancels the sole speech source early enough to unblock an
-in-flight `finish()`, cancels and awaits finalization, and releases source
-resources exactly once. Every independent concurrent caller awaits that same
-task, so cancellation reaches `IncrementalTranscriptCleaner` and its bounded
-helper acknowledgement or force-termination path before any caller returns.
+first actor-isolated `cancel()` turn marks cancellation, invalidates the
+generation, and closes updates synchronously before creating and storing the
+shared task. `finish()` rejects if that invalidated state or a shared
+`cancellationTask` already exists when no finalization task is already shared;
+finish callers that entered first await that existing task. The shared task
+cancels the sole speech source early enough to unblock an in-flight `finish()`,
+then cancels and awaits finalization and releases source resources exactly once.
+Every independent concurrent caller awaits that same task, so cancellation
+reaches `IncrementalTranscriptCleaner` and its bounded helper acknowledgement
+or force-termination path before any caller returns.
 Concurrent finish callers await the same existing task; if cancellation wins
 before any finish task exists, the cancellation guard prevents new finalization
-work from starting.
+work from starting. The processor test records the synchronous invalidation
+boundary, schedules `finish()` only after that event, and asserts that neither
+finalization nor source `finish()` starts; the separate source-blocking test
+proves early source cancellation unblocks an already-running finish.
 
 The ordered cancellation test records source cancellation, helper
 acknowledgement, source release, and each caller return. It requires source
