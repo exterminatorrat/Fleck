@@ -262,16 +262,25 @@ unless all of these remain true: the UUID is active, the generation is current,
 the capture is not cancelling/terminating, and the pipeline is still accepting
 updates.
 
+The selected `DictationProcessingSession` owns one finalization task. `finish()`
+installs that task exactly once; `cancel()` invalidates the generation and closes
+updates first, cancels and awaits the finalization task second, and only then
+cancels the speech source and releases its resources. This makes caller
+cancellation reach `IncrementalTranscriptCleaner`; its bounded helper
+acknowledgement or force-termination path completes before session cancellation
+returns.
+
 Cancellation must execute in this order:
 
 1. mark the capture cancelled and invalidate its generation;
 2. restore the focused editor's exact pre-capture transaction;
-3. stop the selected speech source and cancel the processing session;
+3. await processing-session cancellation, which cancels/awaits finalization and
+   then stops the selected speech source and releases its resources;
 4. erase provisional transcript and in-memory audio buffers;
 5. remove provisional history work and release runtime scratch state;
-6. await the bounded cleanup/helper acknowledgement, forcing termination when
-   its cancellation budget expires; and
-7. publish only `.cancelled` after no active work can publish.
+6. publish only `.cancelled` after the session's bounded helper
+   acknowledgement/force-termination path has completed and no active work can
+   publish.
 
 After cancellation, no update, final result, history mutation, route, insertion,
 or recovery receipt may publish. A caller cancellation of the cleanup task throws

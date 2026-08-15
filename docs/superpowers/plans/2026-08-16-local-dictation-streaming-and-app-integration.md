@@ -34,6 +34,16 @@ replay/archive buffer is introduced.
 - DictationCoordinator remains transaction owner for capture UUID, editor
   provisional state, cancellation generation, history, routing, insertion, and
   recovery presentation.
+- `StreamingDictationSession` owns one finalization task. `finish()` installs it
+  exactly once; `cancel()` invalidates first, cancels and awaits that task, and
+  only then cancels/releases the speech source. This lets caller cancellation
+  reach `IncrementalTranscriptCleaner` and its bounded helper acknowledgement
+  or force-termination path before session cancellation returns.
+- Coordinator cancellation marks the capture cancelled and invalidates its
+  generation first, restores the focused editor transaction second, and only
+  then awaits processing-session cancellation or legacy source cancellation and
+  resource release. No late update, result, history mutation, route, or
+  insertion may publish.
 - Apple Speech requests require on-device recognition and fail when the locale
   or device cannot provide it. There is no network recognition or hidden
   fallback.
@@ -137,6 +147,7 @@ protocol DictationProcessing: AnyObject {
 protocol DictationProcessingSession: AnyObject {
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
   func finish() async throws -> DictationProcessingResult
+  // Awaits in-flight finalization/cleanup before source cancellation returns.
   func cancel() async
 }
 
@@ -839,6 +850,7 @@ enum StreamingSpeechSourceProbeError: Error {
 final class StreamingSpeechSourceProbe: StreamingSpeechSource {
   init(startError: StreamingSpeechSourceProbeError? = nil)
   private(set) var startCount = 0
+  private(set) var cancelCount = 0
   private(set) var releaseCount = 0
   private(set) var callbacksWereInstalled = false
   private(set) var provisionalCallbackCount = 0
@@ -885,6 +897,54 @@ func beginReleasesTheSourceWhenStartFails() async {
   }
   #expect(source.startCount == 1)
   #expect(source.releaseCount == 1)
+}
+
+@Test @MainActor
+func cancellingSessionAwaitsCleanupAcknowledgementBeforeSourceShutdown() async throws {
+  let source = StreamingSpeechSourceProbe()
+  let helper = CleanupGeneratorProbe(
+    result: "Send the report.",
+    waitsForCancellation: true
+  )
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: helper,
+    clock: .bounded(milliseconds: 1),
+    cancellationBudget: .milliseconds(25)
+  )
+  let processor = StreamingDictationProcessor(
+    makeSource: { source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(
+        baseline: "Send the report",
+        protectedForms: [],
+        replacements: 0
+      )
+    ),
+    cleaner: cleaner,
+    runtime: nil,
+    clock: TestDictationClock.immediate,
+    budget: .production
+  )
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ))
+  let updates = Task {
+    try await session.updates.reduce(into: [DictationTextUpdate]()) {
+      $0.append($1)
+    }
+  }
+  let finalization = Task { try await session.finish() }
+  await helper.waitUntilStarted()
+
+  await session.cancel()
+
+  #expect(await helper.acknowledgementFinished)
+  await #expect(throws: CancellationError.self) { try await finalization.value }
+  #expect(source.cancelCount == 1)
+  #expect(source.releaseCount == 1)
+  #expect(try await updates.value.isEmpty)
 }
 
 @Test @MainActor
@@ -1084,8 +1144,9 @@ swift test --disable-automatic-resolution --no-parallel --filter StreamingDictat
 ~~~
 
 Expected failure: adapter, generator, processor, session, processor error,
-clock, budget, cleanup-deadline, four-method Foundation Model session, and
-publication-gate symbols do not exist.
+clock, budget, cleanup-deadline, finalization-task ownership, cancellation
+acknowledgement, four-method Foundation Model session, and publication-gate
+symbols do not exist.
 
 ### Minimal implementation, green, and checkpoint
 
@@ -1235,6 +1296,14 @@ force-termination test waits for `waitUntilStarted()` before closing the gate.
 It does not inspect the private publication gate; the tests use only `result()`
 and `acknowledgement()` as the observable session contract.
 
+The Task 4 cleanup probe additionally exposes
+`acknowledgementFinished` after the cleaner's helper session has either
+acknowledged cancellation or completed its bounded force-termination path.
+`StreamingSpeechSourceProbe.cancel()` increments `cancelCount`; the session
+cancellation test waits for the helper start, awaits `session.cancel()`, and
+then checks that acknowledgement, source cancellation, and source release all
+completed before it accepts the no-result/no-update assertions.
+
 - [ ] **Step 5: Add the processor/session.**
 
 ~~~swift
@@ -1295,6 +1364,16 @@ fileprivate final class StreamingDictationCallbackBuffer {
 
 @MainActor
 final class StreamingDictationSession: DictationProcessingSession {
+  private let source: any StreamingSpeechSource
+  private let continuation: AsyncThrowingStream<DictationTextUpdate, Error>.Continuation
+  private let dictionaryResolver: any TranscriptDictionaryResolving
+  private let cleaner: IncrementalTranscriptCleaner
+  private let clock: DictationClock
+  private let budget: DictationProcessingBudget
+  private var finalizationTask: Task<DictationProcessingResult, Error>?
+  private var isCancelled = false
+  private var generation: UInt64 = 0
+
   fileprivate init(
     configuration: DictationProcessingConfiguration,
     source: any StreamingSpeechSource,
@@ -1307,8 +1386,29 @@ final class StreamingDictationSession: DictationProcessingSession {
   )
 
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
-  func finish() async throws -> DictationProcessingResult
-  func cancel() async
+  func finish() async throws -> DictationProcessingResult {
+    if let finalizationTask {
+      return try await finalizationTask.value
+    }
+    let task = Task { try await self.finalize() }
+    finalizationTask = task
+    return try await task.value
+  }
+
+  func cancel() async {
+    guard !isCancelled else { return }
+    isCancelled = true
+    generation &+= 1
+    continuation.finish()
+    if let finalizationTask {
+      finalizationTask.cancel()
+      _ = try? await finalizationTask.value
+    }
+    await source.cancel()
+    await source.releaseResources()
+  }
+
+  private func finalize() async throws -> DictationProcessingResult
 }
 ~~~
 
@@ -1324,9 +1424,11 @@ rethrowing; a factory failure before a source exists has nothing to release.
 release count, and emitted callbacks in the two lifecycle tests above.
 
 `StreamingDictationSession` owns one already-started source, state, generation
-counter, stream, finalization flag, injected `DictationClock`, and
-`DictationProcessingBudget`. At `begin`, it records no deadline. At `finish`,
-the session records `stopInstant = clock.now()` exactly once, constructs
+counter, stream continuation, one `finalizationTask`, cancellation state,
+injected `DictationClock`, and `DictationProcessingBudget`. At `begin`, it
+records no deadline. At `finish`, the session installs exactly one finalization
+task; later callers await that same task. The task records
+`stopInstant = clock.now()` exactly once, constructs
 `insertionDeadline = stopInstant.advanced(by: budget.insertion)` immediately,
 and passes both values to:
 
@@ -1356,8 +1458,13 @@ resolves the dictionary before creating the request, and never calls the legacy
 cleaner. A cleaned candidate publishes `cleanedTranscript`; every
 unsafe/unavailable cleanup publishes `insertedText` equal to the exact
 baseline. A resolver failure publishes raw ASR recovery with no cleaner call.
-`cancel` invalidates first, closes the stream, cancels the source, and releases
-resources once. A state or source error closes without a late result.
+`cancel` invalidates the generation and closes updates first, cancels the one
+finalization task and awaits it second, then cancels the source and releases
+resources once. The awaited task propagates caller cancellation into
+`IncrementalTranscriptCleaner`, so its helper acknowledgement or force
+termination completes before source shutdown returns. No final result or update
+can publish after that boundary. A state or source error closes without a late
+result.
 
 `TestDictationClock` supplies a fixed sequence of instants to the processor;
 `CleanupGeneratorProbe.requests` records the request. These tests never call
@@ -1486,6 +1593,49 @@ func cancellationRejectsLateProcessingUpdateAndResult() async throws {
   #expect(fixture.saver.savedTexts.isEmpty)
 }
 
+enum CancellationEvent: Equatable {
+  case focusedEditorRollback
+  case sessionCancel
+  case sourceCancel
+  case sourceRelease
+}
+
+@MainActor
+final class CancellationOrderRecorder {
+  private(set) var values: [CancellationEvent] = []
+  func append(_ event: CancellationEvent) { values.append(event) }
+}
+
+// ProcessingProbe's callbacks are test-only hooks from its owned session and
+// source probes; Fixture(onFocusedEditorRollback:) records the existing
+// FocusedDictationEditing.cancelFocusedDictation() restoration call.
+
+@Test @MainActor
+func cancellationRollsBackFocusedEditorBeforeSessionAndSourceCancel() async throws {
+  let order = CancellationOrderRecorder()
+  let processing = ProcessingProbe(
+    onSessionCancel: { order.append(.sessionCancel) },
+    onSourceCancel: { order.append(.sourceCancel) },
+    onSourceRelease: { order.append(.sourceRelease) }
+  )
+  let fixture = try Fixture(
+    processing: processing,
+    onFocusedEditorRollback: { order.append(.focusedEditorRollback) }
+  )
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+
+  await fixture.coordinator.cancel()
+
+  #expect(order.values == [
+    .focusedEditorRollback,
+    .sessionCancel,
+    .sourceCancel,
+    .sourceRelease
+  ])
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+}
+
 @Test @MainActor
 func absentProcessorPreservesLegacyCleanerPath() async throws {
   let fixture = try Fixture(processing: nil)
@@ -1555,6 +1705,30 @@ init(
 )
 ~~~
 
+The capture record stores its current generation and, for the incremental path,
+the owned `DictationProcessingSession`. The cancellation path is ordered
+explicitly:
+
+~~~swift
+private func cancelActiveCapture(_ id: UUID) async {
+  guard var capture, capture.id == id, !capture.cancelRequested else { return }
+  capture.cancelRequested = true
+  capture.generation &+= 1
+  self.capture = capture
+
+  rollbackEditor(id)
+
+  guard let current = self.capture, current.id == id else { return }
+  if let session = current.processingSession {
+    await session.cancel()
+  } else if let engine = current.engine {
+    await engine.cancel()
+    await engine.releaseResources()
+  }
+  await completeCancellation(id)
+}
+~~~
+
 At capture start, choose the processor only when the injected processor is
 available and the selected standard mode requests the incremental path;
 otherwise use the existing engine branch. Store the selected session before
@@ -1566,10 +1740,15 @@ provisional text.
 On finish, cancel and await the update task, await one processor result, repeat
 all guards, create/update the existing history record, and pass only
 `result.insertedText` to focused commit or existing Smart Capture routing. Do
-not call legacy `cleaner.clean` on this branch. At cancellation start, mark
-the capture cancelled and invalidate its generation before calling session
-`cancel`; then await cancellation, release existing editor state, and publish
-nothing from a late task.
+not call legacy `cleaner.clean` on this branch. At cancellation start, mark the
+capture cancelled and invalidate its generation first; restore the focused
+editor transaction second through `rollbackEditor` (which calls
+`cancelFocusedDictation()` when no commit receipt exists); only then await
+processing-session `cancel()`. That session owns finalization cancellation and
+source cancellation/release. The coordinator publishes `.cancelled` only after
+that await and publishes nothing from a late task. The ordered coordinator test
+records focused-editor rollback, session cancel, source cancel, and source
+release and asserts this exact sequence.
 
 - [ ] **Step 5: Wire the real app without a second capture.** In
 `FleckApp.swift`, construct the existing Foundation/deterministic cleanup

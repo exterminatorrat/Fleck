@@ -448,8 +448,8 @@ and catalog interfaces above.
     signedDescriptor: nil,
     hardware: .init(
       architecture: "arm64",
-      availableBytes: 16_000_000_000,
-      requestedLanguages: ["en-US"]
+      requestedLanguages: ["en-US"],
+      availableBytes: 16_000_000_000
     )
   )
   #expect(catalog.recommendation() == .builtIn)
@@ -461,8 +461,8 @@ and catalog interfaces above.
     signedDescriptor: descriptor,
     hardware: .init(
       architecture: "arm64",
-      availableBytes: descriptor.requiredCapacityBytes + 1,
-      requestedLanguages: ["en-US"]
+      requestedLanguages: ["en-US"],
+      availableBytes: descriptor.requiredCapacityBytes + 1
     )
   )
   #expect(catalog.recommendation() == .recommended(descriptor))
@@ -475,8 +475,8 @@ and catalog interfaces above.
     signedDescriptor: descriptor,
     hardware: .init(
       architecture: descriptor.architectures[0],
-      availableBytes: descriptor.requiredCapacityBytes,
-      requestedLanguages: ["en-US", "zh-CN"]
+      requestedLanguages: ["en-US", "zh-CN"],
+      availableBytes: descriptor.requiredCapacityBytes
     )
   )
   #expect(catalog.recommendation() == .builtIn)
@@ -487,8 +487,8 @@ and catalog interfaces above.
     signedDescriptor: TestDescriptors.admittedASR,
     hardware: .init(
       architecture: "x86_64",
-      availableBytes: 1,
-      requestedLanguages: ["zh-CN"]
+      requestedLanguages: ["zh-CN"],
+      availableBytes: 1
     )
   )
   #expect(catalog.recommendation() == .builtIn)
@@ -503,8 +503,8 @@ and catalog interfaces above.
     signedDescriptor: descriptor,
     hardware: .init(
       architecture: descriptor.architectures[0],
-      availableBytes: availableBytes,
-      requestedLanguages: [descriptor.languages[0]]
+      requestedLanguages: [descriptor.languages[0]],
+      availableBytes: availableBytes
     )
   )
   #expect(catalog.recommendation() == .builtIn)
