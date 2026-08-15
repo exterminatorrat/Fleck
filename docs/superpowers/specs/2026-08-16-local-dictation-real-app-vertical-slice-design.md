@@ -180,7 +180,10 @@ struct DictationProcessingResult: Equatable, Sendable {
 `SpeechEngine` from `DictationSpeechEngineProvider` and forwards its
 provisional/final/level/cancel/release interface; it never constructs
 `AppleSpeechCapture`, installs another tap, or creates another audio engine. The
-legacy coordinator path continues to call `SpeechEngine.start` and `finish`
+processor awaits the source factory, starts this one source exactly once with
+both callbacks, and passes the already-started source to a synchronous session
+initializer; a start failure releases the source before rethrowing. The legacy
+coordinator path continues to call `SpeechEngine.start` and `finish`
 directly when the incremental processor is not selected. A capture is either
 that legacy path or a `DictationProcessingSession`, never both.
 
@@ -362,6 +365,12 @@ artifact identity with the actual manifest identity before any manager operation
 descriptor/artifact or artifact/manifest mismatch rejects before transport. The
 existing manifest path/revision checks and `?download=true` URL query remain
 authoritative. This is a small seam, not a generic multi-model registry.
+The existing `DictationModelCapability(modelRootURL:)` call remains source
+compatible through a compile-gated manager convenience initializer that uses
+the current experimental Parakeet manifest and a compatibility-only embedded
+identity. That route does not create an admitted descriptor, recommendation,
+or installer; an explicit signed configuration must still provide its own
+already-created manager and pass binding before any operation.
 
 The signed app supplies either no descriptor or exactly one hardware-appropriate
 recommendation for the curated experience. Ordinary release configuration is
@@ -388,7 +397,8 @@ release admission. The installer exposes
 `updates: AsyncStream<AdmittedModelInstallationSnapshot>`; the manager adapter
 owns one cancellable operation task plus synchronous `@MainActor`
 subscriptions to manager byte progress and state. It publishes live monotonic
-byte snapshots and `verifying`/`installing`/`ready`/`repairRequired`/
+byte snapshots, starting with one explicit zero and ignoring duplicate or
+out-of-range manager emissions, and `verifying`/`installing`/`ready`/`repairRequired`/
 `removing`/`cancelled`/failure transitions while the operation is active, and
 the Settings view model owns the cancellable subscription.
 
@@ -397,14 +407,19 @@ Settings construction boundary catches the error and exposes a finite failed
 installer snapshot without starting transport. The coordinator continues using
 the built-in Apple Speech/deterministic-cleanup path, so a malformed candidate
 configuration cannot disable the safe dictation fallback.
+The boundary input is `Optional<AdmittedModelSignedConfiguration>` in the
+compile-gated path and is `nil` in the current app; nil maps to the built-in
+installer in both ordinary and gated builds. A non-nil value carries the raw
+descriptor, already-created manager, startup closure, and calibration closure.
 
 Refreshing the Settings state subscribes only to the manager's published state
 for the refresh duration, maps its final `ready`, `updateAvailable`, or
 `repairRequired` value, and never starts transport, byte progress, startup,
 calibration, or an installer operation. Fake installer evidence uses one exact
 8-byte fixture (`Data("fixture!".utf8)`); descriptor download bytes, manifest
-file/aggregate bytes and checksum, artifact identity, and emitted `[4, 8]`
-progress all derive from that same fixture.
+file/aggregate bytes and checksum, artifact identity, and emitted `[4, 8, 8]`
+manager progress all derive from that same fixture, while the installer
+publishes `[0, 4, 8]`.
 
 The UI uses the existing native macOS Settings structure, semantic colors and
 styles, keyboard and VoiceOver labels/values, and no frequent decorative

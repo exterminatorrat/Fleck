@@ -808,6 +808,85 @@ func adapterForwardsSpeechCallbacksWithoutCreatingAudio() async throws {
   #expect(engine.createdAudioSources == 0)
 }
 
+@MainActor
+private func makeProcessor(
+  source: any StreamingSpeechSource
+) -> StreamingDictationProcessor {
+  StreamingDictationProcessor(
+    makeSource: { source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(
+        baseline: "First",
+        protectedForms: [],
+        replacements: 0
+      )
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "First"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: TestDictationClock.immediate,
+    budget: .production
+  )
+}
+
+enum StreamingSpeechSourceProbeError: Error {
+  case failed
+}
+
+@MainActor
+final class StreamingSpeechSourceProbe: StreamingSpeechSource {
+  init(startError: StreamingSpeechSourceProbeError? = nil)
+  private(set) var startCount = 0
+  private(set) var releaseCount = 0
+  private(set) var callbacksWereInstalled = false
+  private(set) var provisionalCallbackCount = 0
+  func emitProvisional(_ text: String)
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void
+  ) async throws
+  func finish() async throws -> String?
+  func cancel() async
+  func releaseResources() async
+}
+
+@Test @MainActor
+func beginStartsTheSoleSourceOnceBeforeReturningAndWiresCallbacks() async throws {
+  let source = StreamingSpeechSourceProbe()
+  let processor = makeProcessor(source: source)
+
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ))
+
+  #expect(source.startCount == 1)
+  #expect(source.callbacksWereInstalled)
+  source.emitProvisional("First")
+  #expect(source.provisionalCallbackCount == 1)
+  await session.cancel()
+  #expect(source.releaseCount == 1)
+}
+
+@Test @MainActor
+func beginReleasesTheSourceWhenStartFails() async {
+  let source = StreamingSpeechSourceProbe(startError: .failed)
+  let processor = makeProcessor(source: source)
+
+  await #expect(throws: StreamingSpeechSourceProbeError.failed) {
+    _ = try await processor.begin(configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ))
+  }
+  #expect(source.startCount == 1)
+  #expect(source.releaseCount == 1)
+}
+
 @Test @MainActor
 func processorUsesExactBaselineWhenCleanupIsRejected() async throws {
   let engine = SpeechEngineProbe(finalText: "Do not cancel 2 meetings")
@@ -1181,25 +1260,45 @@ final class StreamingDictationProcessor: DictationProcessing {
   func begin(
     configuration: DictationProcessingConfiguration
   ) async throws -> any DictationProcessingSession {
-    return try await StreamingDictationSession(
-      configuration: configuration,
-      makeSource: makeSource,
-      dictionaryResolver: dictionaryResolver,
-      cleaner: cleaner,
-      runtime: runtime,
-      clock: clock,
-      budget: budget
-    )
+    let source = try await makeSource()
+    let callbackBuffer = StreamingDictationCallbackBuffer()
+    do {
+      try await source.start(
+        provisional: { callbackBuffer.provisional($0) },
+        level: { callbackBuffer.level($0) }
+      )
+      return StreamingDictationSession(
+        configuration: configuration,
+        source: source,
+        callbackBuffer: callbackBuffer,
+        dictionaryResolver: dictionaryResolver,
+        cleaner: cleaner,
+        runtime: runtime,
+        clock: clock,
+        budget: budget
+      )
+    } catch {
+      await source.releaseResources()
+      throw error
+    }
   }
 }
 ~~~
 
 ~~~swift
 @MainActor
+fileprivate final class StreamingDictationCallbackBuffer {
+  func provisional(_ text: String)
+  func level(_ value: Float)
+  func attach(to session: StreamingDictationSession)
+}
+
+@MainActor
 final class StreamingDictationSession: DictationProcessingSession {
-  init(
+  fileprivate init(
     configuration: DictationProcessingConfiguration,
-    makeSource: @escaping StreamingDictationProcessor.SourceFactory,
+    source: any StreamingSpeechSource,
+    callbackBuffer: StreamingDictationCallbackBuffer,
     dictionaryResolver: any TranscriptDictionaryResolving,
     cleaner: IncrementalTranscriptCleaner,
     runtime: LocalDictationRuntime?,
@@ -1213,8 +1312,19 @@ final class StreamingDictationSession: DictationProcessingSession {
 }
 ~~~
 
-`StreamingDictationSession` owns one source, state, generation counter, stream,
-finalization flag, injected `DictationClock`, and
+`StreamingDictationProcessor.begin` is the only source starter. It awaits the
+`SourceFactory`, creates one callback buffer, installs both callbacks, and
+awaits `source.start` exactly once before returning. The synchronous session
+initializer receives that already-started source and the buffer; it never
+calls `start`. The buffer forwards callbacks after `attach(to:)` and retains
+callbacks that arrive synchronously during start until the session takes
+ownership. If source start throws, `begin` awaits `releaseResources()` before
+rethrowing; a factory failure before a source exists has nothing to release.
+`StreamingSpeechSourceProbe` records start count, callback installation,
+release count, and emitted callbacks in the two lifecycle tests above.
+
+`StreamingDictationSession` owns one already-started source, state, generation
+counter, stream, finalization flag, injected `DictationClock`, and
 `DictationProcessingBudget`. At `begin`, it records no deadline. At `finish`,
 the session records `stopInstant = clock.now()` exactly once, constructs
 `insertionDeadline = stopInstant.advanced(by: budget.insertion)` immediately,

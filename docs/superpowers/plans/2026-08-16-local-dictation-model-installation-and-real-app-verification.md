@@ -638,10 +638,28 @@ import CryptoKit
 
 enum TestFixtures {
   static let tinyBytes = Data("fixture!".utf8) // exactly 8 bytes
-  static let tinySHA256 = SHA256.hash(data: tinyBytes)
+static let tinySHA256 = SHA256.hash(data: tinyBytes)
     .map { String(format: "%02x", $0) }
     .joined()
 }
+
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+enum TestManagers {
+  static func manager(
+    descriptor: AdmittedModelDescriptor,
+    artifactIdentity: EnhancedModelArtifactIdentity,
+    manifest: EnhancedModelManifest,
+    transport: any ModelDownloading,
+    refreshFixture: TestRefreshFixture? = nil
+  ) -> EnhancedModelManager
+
+  static func managerWithWrongFixtureChecksum(
+    descriptor: AdmittedModelDescriptor,
+    artifactIdentity: EnhancedModelArtifactIdentity,
+    manifest: EnhancedModelManifest
+  ) -> EnhancedModelManager
+}
+#endif
 
 @Test @MainActor
 func defaultBuildUsesBuiltInInstallerWithoutManagerReference() async {
@@ -651,6 +669,14 @@ func defaultBuildUsesBuiltInInstallerWithoutManagerReference() async {
 }
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test @MainActor
+func existingDictationModelCapabilityConstructionRemainsSourceCompatible() {
+  let capability = DictationModelCapability(
+    modelRootURL: TestPaths.temporaryDirectory()
+  )
+  #expect(capability.state == .notInstalled)
+}
+
 @Test @MainActor
 func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
@@ -927,7 +953,7 @@ func installerUpdatesExposeBytesBeforeCompletion() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(
     bytes: TestFixtures.tinyBytes,
-    progressSequence: [4, 8],
+    progressSequence: [4, 8, 8],
     pausesAfterFirstProgress: true
   )
   let manager = TestManagers.manager(
@@ -971,6 +997,14 @@ func installerUpdatesExposeBytesBeforeCompletion() async {
   ])
   #expect(snapshots.map(\.receivedBytes) ==
     snapshots.map(\.receivedBytes).sorted())
+  let publishedDownloads = installer.phaseHistory.compactMap { phase -> Int64? in
+    guard case .downloading(let receivedBytes, let totalBytes) = phase else {
+      return nil
+    }
+    #expect(totalBytes == descriptor.downloadBytes)
+    return receivedBytes
+  }
+  #expect(publishedDownloads == [0, 4, 8])
   updates.cancel()
 }
 #endif
@@ -978,8 +1012,11 @@ func installerUpdatesExposeBytesBeforeCompletion() async {
 
 `ModelDownloadingProbe` requires the exact artifact identity through its
 `TestManagers.manager(descriptor:artifactIdentity:manifest:transport:)` helper, emits progress values
-`4` and `8` with `totalBytes == descriptor.downloadBytes`, pauses after `4`,
-and does not complete until the test releases the gate. With
+`4`, `8`, and a duplicate `8` with `totalBytes == descriptor.downloadBytes`,
+pauses after `4`, and does not complete until the test releases the gate. The
+installer publishes the explicit initial `0`, then accepts only a strictly
+larger received count in the inclusive `0...descriptor.downloadBytes` range;
+the duplicate final `8` is ignored. With
 `pausesUntilCancelled`, it remains in the manager operation until
 `EnhancedModelManagerInstaller.cancel()` cancels the single operation task and
 its manager/download child. The actor-backed
@@ -1052,14 +1089,59 @@ struct EnhancedModelByteProgress: Equatable, Sendable {
 
 final class EnhancedModelManager: ObservableObject {
   private let artifactIdentity: EnhancedModelArtifactIdentity
+  private let manifest: EnhancedModelManifest
   @Published private(set) var byteProgress: EnhancedModelByteProgress?
 
   init(
+    modelRootURL: URL? = nil,
+    fileManager: FileManager = .default,
     manifest: EnhancedModelManifest,
     artifactIdentity: EnhancedModelArtifactIdentity,
-    /* existing manager dependencies */
+    trustedManifests: [EnhancedModelManifest]? = nil,
+    candidateEnabled: Bool = CleanDictationFeatures.enhancedLocalCandidateEnabled,
+    capacityProvider: @escaping @Sendable () throws -> Int64 = { .max },
+    architectureProvider: @escaping @Sendable () -> Bool = { true },
+    clock: @escaping @Sendable () -> Date = { Date() },
+    transport: any ModelDownloading = URLSessionModelDownloader(),
+    assessmentDidComplete: @escaping @Sendable () -> Void = {},
+    cleanupWillBegin: @escaping @Sendable () -> Void = {},
+    removalWillBegin: @escaping @Sendable () -> Void = {},
+    resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
+      try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
+    }
   ) {
+    // Forward all existing storage/transport behavior to the current manager
+    // initializer while making the identity a required stored value.
     self.artifactIdentity = artifactIdentity
+    self.manifest = manifest
+  }
+
+  convenience init(modelRootURL: URL? = nil) {
+    let manifest = Self.embeddedManifest()
+    self.init(
+      modelRootURL: modelRootURL,
+      manifest: manifest,
+      artifactIdentity: Self.experimentalEmbeddedArtifactIdentity(for: manifest)
+    )
+  }
+
+  private static func experimentalEmbeddedArtifactIdentity(
+    for manifest: EnhancedModelManifest
+  ) -> EnhancedModelArtifactIdentity {
+    .init(
+      sourceRepository: URL(string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml")!,
+      modelID: manifest.modelID,
+      revision: manifest.revision,
+      license: "experimental-manifest-only",
+      runtimeABI: "experimental-manifest-only",
+      conversion: "experimental-manifest-only",
+      quantization: "experimental-manifest-only",
+      files: manifest.files.map {
+        .init(path: $0.path, byteCount: $0.byteCount, sha256: $0.sha256)
+      },
+      downloadBytes: manifest.totalByteCount,
+      installedBytes: manifest.totalByteCount
+    )
   }
 
   var admittedArtifactIdentity: EnhancedModelArtifactIdentity { artifactIdentity }
@@ -1099,7 +1181,15 @@ final class EnhancedModelManager: ObservableObject {
 ~~~
 
 The existing embedded manager construction supplies its immutable artifact
-identity beside the actual manifest. The adapter never substitutes a
+identity beside the actual manifest. The source-compatible
+`DictationModelCapability(modelRootURL:)` convenience initializer uses only the
+current experimental Parakeet manifest and a compatibility-only identity; it
+does not construct an admitted descriptor, catalog recommendation, or
+installer. Any existing manager test that supplies a custom manifest passes its
+matching `artifactIdentity` explicitly, using the argument order
+`modelRootURL:manifest:artifactIdentity:` before the existing dependency labels.
+The only unchanged call site is the gated
+`DictationModelCapability(modelRootURL:)` construction covered above. The adapter never substitutes a
 descriptor for that value, and the URL root no longer hard-codes a candidate
 repository. Keep the manager's existing `validateRelativePath` and
 `validateRevision` checks in the generalized helper; preserve the existing
@@ -1221,7 +1311,9 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
         guard let self,
               self.operationID != nil, !self.cancellationRequested,
               progress.totalBytes == self.descriptor.downloadBytes,
-              progress.receivedBytes >= self.lastReceivedBytes else { return }
+              progress.receivedBytes >= 0,
+              progress.receivedBytes <= progress.totalBytes,
+              progress.receivedBytes > self.lastReceivedBytes else { return }
         self.lastReceivedBytes = progress.receivedBytes
         self.publish(.init(
           recommendation: .recommended(self.descriptor),
@@ -1553,8 +1645,9 @@ and candidate model files.
 methods, and the existing native Settings structure.
 
 **Produces:** `AdmittedModelSettingsPresentation`,
-`AdmittedModelSettingsViewModel`, exactly one Settings card, and phase-specific
-Settings/error copy.
+`AdmittedModelSettingsViewModel`, `AdmittedModelSignedConfiguration`, the
+`makeAdmittedModelInstaller` boundary, exactly one Settings card, and
+phase-specific Settings/error copy.
 
 ### TDD red
 
@@ -1620,18 +1713,37 @@ Settings/error copy.
   }
 }
 
+@Test @MainActor
+func currentAppConstructionDefaultsToBuiltInInstaller() {
+  let installer = makeAdmittedModelInstaller()
+  #expect(installer.snapshot.recommendation == .builtIn)
+  #expect(installer.snapshot.phase == .builtIn)
+}
+
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test @MainActor
+func nilSignedConfigurationUsesBuiltInInstaller() {
+  let installer = makeAdmittedModelInstaller(signedConfiguration: nil)
+  #expect(installer.snapshot.recommendation == .builtIn)
+  #expect(installer.snapshot.phase == .builtIn)
+}
+
+@Test @MainActor
 func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
-  let installer: any AdmittedModelInstalling
-  do {
-    let raw = TestDescriptors.make(TestDescriptors.neutralAdmitted, modelID: "")
-    _ = try AdmittedModelDescriptor(validating: raw)
-    Issue.record("Expected signed descriptor validation to fail")
-    return
-  } catch {
-    installer = FailedAdmittedModelInstaller(message: String(describing: error))
-  }
+  let raw = TestDescriptors.make(TestDescriptors.neutralAdmitted, modelID: "")
+  let manager = TestManagers.manager(
+    descriptor: TestDescriptors.tinyAdmittedASR,
+    artifactIdentity: TestArtifacts.identity(matching: TestDescriptors.tinyAdmittedASR),
+    manifest: TestManifests.tiny,
+    transport: ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  )
+  let configuration = AdmittedModelSignedConfiguration(
+    rawDescriptor: raw,
+    manager: manager,
+    startup: { },
+    calibrate: { }
+  )
+  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
   #expect(installer.snapshot.recommendation == .builtIn)
   guard case .failed(let message) = installer.snapshot.phase else {
     Issue.record("Expected a failed non-operating Settings snapshot")
@@ -1652,17 +1764,13 @@ func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
     manifest: TestManifests.tiny,
     transport: transport
   )
-  let installer: any AdmittedModelInstalling
-  do {
-    installer = try EnhancedModelManagerInstaller(
-      manager: manager,
-      descriptor: descriptor,
-      startup: { },
-      calibrate: { }
-    )
-  } catch {
-    installer = FailedAdmittedModelInstaller(message: String(describing: error))
-  }
+  let configuration = AdmittedModelSignedConfiguration(
+    rawDescriptor: descriptor,
+    manager: manager,
+    startup: { },
+    calibrate: { }
+  )
+  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
   #expect(installer.snapshot.recommendation == .builtIn)
   #expect(transport.downloadCalls == 0)
   #expect(installer.snapshot.lastError != nil)
@@ -1679,8 +1787,8 @@ FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parall
 FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter DictationAvailabilityTests
 ~~~
 
-Expected failure: the presentation, action, snapshot mapping, and view-model
-symbols do not exist.
+Expected failure: the presentation, action, snapshot mapping, view-model,
+optional signed-configuration, and installer-factory symbols do not exist.
 
 ### Minimal implementation, green, and checkpoint
 
@@ -1748,31 +1856,66 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
 
 In `FleckApp.swift`, construct the empty catalog and
 `BuiltInAdmittedModelInstaller` for ordinary release. Under the existing
-compile-gated configuration, inject the one signed descriptor and
-`EnhancedModelManagerInstaller` only when the caller explicitly supplies that
-configuration. Store one view model on `DictationRuntime`; do not create
-parallel operation dictionaries or a second manager. Invalid signed
-configuration or artifact binding must be caught at this boundary so Settings
-construction never fails and Apple Speech/deterministic cleanup remains active.
+compile-gated configuration, inject an optional
+`AdmittedModelSignedConfiguration` whose manager has already been created by the
+caller; the current app passes `nil` in both ordinary and gated builds. Store
+one view model on `DictationRuntime`; do not create parallel operation
+dictionaries or a second manager. Invalid signed configuration or artifact
+binding must be caught at this boundary so Settings construction never fails
+and Apple Speech/deterministic cleanup remains active.
 
 The construction boundary is explicit:
 
 ~~~swift
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-let installer: any AdmittedModelInstalling
-do {
-  let descriptor = try AdmittedModelDescriptor(validating: signedRawDescriptor)
-  installer = try EnhancedModelManagerInstaller(
-    manager: manager,
-    descriptor: descriptor,
-    startup: startup,
-    calibrate: calibrate
-  )
-} catch {
-  installer = FailedAdmittedModelInstaller(message: String(describing: error))
+let signedConfiguration: AdmittedModelSignedConfiguration? = nil
+let installer = makeAdmittedModelInstaller(
+  signedConfiguration: signedConfiguration
+)
+#else
+let installer = makeAdmittedModelInstaller()
+#endif
+~~~
+
+`AdmittedModelSignedConfiguration` is owned by
+`AdmittedModelSettingsPresentation.swift` and is compile-gated with the
+manager:
+
+~~~swift
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+struct AdmittedModelSignedConfiguration {
+  let rawDescriptor: AdmittedModelDescriptor
+  let manager: EnhancedModelManager
+  let startup: @MainActor () async throws -> Void
+  let calibrate: @MainActor () async throws -> Void
+}
+
+@MainActor
+func makeAdmittedModelInstaller(
+  signedConfiguration: AdmittedModelSignedConfiguration? = nil
+) -> any AdmittedModelInstalling {
+  guard let signedConfiguration else {
+    return BuiltInAdmittedModelInstaller()
+  }
+  do {
+    let descriptor = try AdmittedModelDescriptor(
+      validating: signedConfiguration.rawDescriptor
+    )
+    return try EnhancedModelManagerInstaller(
+      manager: signedConfiguration.manager,
+      descriptor: descriptor,
+      startup: signedConfiguration.startup,
+      calibrate: signedConfiguration.calibrate
+    )
+  } catch {
+    return FailedAdmittedModelInstaller(message: String(describing: error))
+  }
 }
 #else
-let installer: any AdmittedModelInstalling = BuiltInAdmittedModelInstaller()
+@MainActor
+func makeAdmittedModelInstaller() -> any AdmittedModelInstalling {
+  BuiltInAdmittedModelInstaller()
+}
 #endif
 ~~~
 
