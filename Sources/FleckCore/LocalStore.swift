@@ -182,7 +182,8 @@ public actor LocalStore {
         isPinned: metadata.isPinned,
         agentAccess: metadata.agentAccess ?? false,
         revision: metadata.revision ?? 0,
-        folderID: metadata.folderID
+        folderID: metadata.folderID,
+        titleFontFamily: metadata.titleFontFamily
       ),
       deletedAt: metadata.deletedAt
     )

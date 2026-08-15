@@ -140,6 +140,7 @@ import Testing
 
   #expect(note.agentAccess == false)
   #expect(note.revision == 0)
+  #expect(note.titleFontFamily == nil)
 }
 
 @Test func oldWorkspaceJSONDefaultsFoldersAndNoteFolderID() throws {
@@ -220,6 +221,38 @@ import Testing
     title: "After",
     now: changedAt.addingTimeInterval(1)
   )
+  #expect(workspace.notes[0].revision == 1)
+  #expect(workspace.notes[0].modifiedAt == changedAt)
+}
+
+@Test func titleFontFamilyChangesOnlyTargetNoteAndNoOpsDoNot() {
+  let firstID = UUID()
+  let secondID = UUID()
+  let originalDate = Date(timeIntervalSince1970: 500)
+  let changedAt = Date(timeIntervalSince1970: 600)
+  var workspace = Workspace(
+    notes: [
+      Note(id: firstID, modifiedAt: originalDate),
+      Note(id: secondID, modifiedAt: originalDate, titleFontFamily: "Avenir"),
+    ],
+    selectedNoteID: firstID
+  )
+
+  workspace.setTitleFontFamily(id: firstID, family: "Menlo", now: changedAt)
+
+  #expect(workspace.notes[0].titleFontFamily == "Menlo")
+  #expect(workspace.notes[0].revision == 1)
+  #expect(workspace.notes[0].modifiedAt == changedAt)
+  #expect(workspace.notes[1].titleFontFamily == "Avenir")
+  #expect(workspace.notes[1].revision == 0)
+  #expect(workspace.notes[1].modifiedAt == originalDate)
+
+  workspace.setTitleFontFamily(
+    id: firstID,
+    family: "Menlo",
+    now: changedAt.addingTimeInterval(1)
+  )
+
   #expect(workspace.notes[0].revision == 1)
   #expect(workspace.notes[0].modifiedAt == changedAt)
 }

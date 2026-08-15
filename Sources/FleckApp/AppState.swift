@@ -799,7 +799,8 @@
           isPinned: imported.isPinned,
           agentAccess: imported.agentAccess,
           revision: imported.revision,
-          folderID: imported.folderID
+          folderID: imported.folderID,
+          titleFontFamily: imported.titleFontFamily
         )
       }
       imported.folderID = validFolderIDOrUnfiled(targetFolderID)
@@ -1045,6 +1046,14 @@
     func setSelectedTabColor(_ hex: String?) {
       guard let id = workspace.selectedNoteID else { return }
       workspace.setTabColor(id: id, hex: hex)
+      scheduleSave()
+    }
+
+    func setSelectedTitleFontFamily(_ family: String?) {
+      guard let id = workspace.selectedNoteID else { return }
+      let originalWorkspace = workspace
+      workspace.setTitleFontFamily(id: id, family: family)
+      guard workspace != originalWorkspace else { return }
       scheduleSave()
     }
 

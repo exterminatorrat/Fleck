@@ -255,6 +255,7 @@ import Testing
   #expect(note.agentAccess == false)
   #expect(note.revision == 0)
   #expect(note.folderID == nil)
+  #expect(note.titleFontFamily == nil)
 
   let remaining = Note(
     id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
@@ -274,6 +275,57 @@ import Testing
   #expect(restored.notes.last?.title == "Legacy trash")
   #expect(restored.notes.last?.body == "Legacy trash body")
   #expect(try await store.loadTrash().isEmpty)
+}
+
+@Test func titleFontFamilyRoundTripsThroughRootAndRecovery() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let first = Note(title: "First", titleFontFamily: "Menlo")
+
+  try await store.save(
+    workspace: Workspace(notes: [first], selectedNoteID: first.id),
+    preferences: .init(),
+    generation: 1
+  )
+  #expect(try await store.loadSnapshot().workspace.notes.first?.titleFontFamily == "Menlo")
+
+  let second = Note(title: "Second", titleFontFamily: "Avenir")
+  try await store.save(
+    workspace: Workspace(notes: [second], selectedNoteID: second.id),
+    preferences: .init(),
+    generation: 2
+  )
+  try Data("corrupt".utf8).write(to: root.appendingPathComponent("preferences.json"))
+
+  let recovered = try await store.loadSnapshot()
+  #expect(recovered.source == .recovery)
+  #expect(recovered.workspace.notes.first?.titleFontFamily == "Menlo")
+}
+
+@Test func titleFontFamilyRoundTripsThroughTrashAndRestore() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let deleted = Note(title: "Restore me", titleFontFamily: "Courier")
+  let remaining = Note(title: "Remaining")
+  let activeWorkspace = Workspace(notes: [remaining], selectedNoteID: remaining.id)
+  let store = LocalStore(rootURL: root)
+
+  try await store.save(
+    workspace: activeWorkspace,
+    preferences: .init(),
+    trashedNotes: [deleted]
+  )
+  let trashedNote = try #require(await store.loadTrash().first)
+  #expect(trashedNote.note.titleFontFamily == "Courier")
+
+  let restored = try await store.restore(
+    trashedNote,
+    into: activeWorkspace,
+    preferences: .init()
+  )
+  #expect(restored.workspace.notes.last?.titleFontFamily == "Courier")
+  #expect(try await store.loadWorkspace().notes.last?.titleFontFamily == "Courier")
 }
 
 @Test func trashRetainsEntriesUntilThirtyDaysThenPurgesThem() async throws {

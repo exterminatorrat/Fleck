@@ -13,6 +13,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
   public var agentAccess: Bool
   public var revision: UInt64
   public var folderID: UUID?
+  public var titleFontFamily: String?
 
   public init(
     id: UUID = UUID(),
@@ -25,7 +26,8 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     isPinned: Bool = false,
     agentAccess: Bool = false,
     revision: UInt64 = 0,
-    folderID: UUID? = nil
+    folderID: UUID? = nil,
+    titleFontFamily: String? = nil
   ) {
     self.id = id
     self.title = title
@@ -38,6 +40,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     self.agentAccess = agentAccess
     self.revision = revision
     self.folderID = folderID
+    self.titleFontFamily = titleFontFamily
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -52,6 +55,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     case agentAccess
     case revision
     case folderID
+    case titleFontFamily
   }
 
   public init(from decoder: Decoder) throws {
@@ -67,6 +71,7 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
     agentAccess = try container.decodeIfPresent(Bool.self, forKey: .agentAccess) ?? false
     revision = try container.decodeIfPresent(UInt64.self, forKey: .revision) ?? 0
     folderID = try container.decodeIfPresent(UUID.self, forKey: .folderID)
+    titleFontFamily = try container.decodeIfPresent(String.self, forKey: .titleFontFamily)
   }
 
   public var displayTitle: String {

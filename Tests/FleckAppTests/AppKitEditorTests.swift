@@ -1559,6 +1559,17 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
   #expect(!source.contains("Font Size Presets"))
 }
 
+@Test func titleFontMenuRoutesByFocusedFieldAndUsesTheTitleFallback() throws {
+  let source = try notesPanelSource()
+
+  #expect(source.contains("@FocusState private var editorFocus"))
+  #expect(source.contains(".focused($editorFocus, equals: .title)"))
+  #expect(source.contains("note.titleFontFamily ?? appState.preferences.fontFamily"))
+  #expect(source.contains("appState.setSelectedTitleFontFamily(family)"))
+  #expect(source.contains("commands.applyFontFamily(family)"))
+  #expect(source.contains("if isTitleFocused"))
+}
+
 @Test func formattingBarUsesFleckPaletteForForegroundAndHighlight() throws {
   let source = try notesPanelSource()
 

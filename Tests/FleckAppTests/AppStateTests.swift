@@ -102,6 +102,30 @@ private func waitForSaveCount(
   #expect(state.saveStatus == .saved)
 }
 
+@Test @MainActor func selectedTitleFontFamilySchedulesOneNoteSaveWithoutChangingPreferences() async throws {
+  let first = Note(title: "Selected")
+  let second = Note(title: "Other", titleFontFamily: "Avenir")
+  let recorder = SaveRecorder()
+  let state = await folderedState(
+    workspace: Workspace(notes: [first, second], selectedNoteID: first.id),
+    recorder: recorder
+  )
+  let originalPreferences = state.preferences
+
+  state.setSelectedTitleFontFamily("Menlo")
+
+  #expect(state.selectedNote?.titleFontFamily == "Menlo")
+  #expect(state.workspace.notes[1].titleFontFamily == "Avenir")
+  #expect(state.preferences == originalPreferences)
+  #expect(state.saveStatus == .saving)
+  try await waitForSaveCount(recorder, 1)
+  #expect(recorder.generations.count == 1)
+
+  state.setSelectedTitleFontFamily("Menlo")
+  try await Task.sleep(for: .milliseconds(450))
+  #expect(recorder.generations.count == 1)
+}
+
 @Test @MainActor func restoringRemovesTrashRowImmediately() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)

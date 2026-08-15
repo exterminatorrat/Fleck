@@ -241,6 +241,11 @@
   }
 
   struct NotesPanel: View {
+    private enum EditorFocus: Hashable {
+      case title
+      case body
+    }
+
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
@@ -271,6 +276,7 @@
     @State private var tabContentTrailingEdge: CGFloat = 0
     @State private var activeFolderID: UUID?
     @State private var restoreEditorFocusAfterHide = false
+    @FocusState private var editorFocus: EditorFocus?
 
     init(
       dictationRuntime: DictationRuntime,
@@ -1278,9 +1284,11 @@
         VStack(spacing: 0) {
           if appState.preferences.showFormattingBar {
             FormattingBar(
+              appState: appState,
               commands: editorCommands,
               dictationRuntime: dictationRuntime,
               isEditorVisible: isEditorVisible,
+              isTitleFocused: editorFocus == .title,
               onDelete: {
                 if let note = visibleSelectedNote {
                   requestDeletion(note)
@@ -1306,7 +1314,12 @@
             )
           )
           .textFieldStyle(.plain)
-          .font(EditorTypography.titleFont(family: appState.preferences.fontFamily))
+          .font(
+            EditorTypography.titleFont(
+              family: note.titleFontFamily ?? appState.preferences.fontFamily
+            )
+          )
+          .focused($editorFocus, equals: .title)
           .padding(.horizontal, 16)
           .padding(.top, 12)
 
@@ -1341,6 +1354,7 @@
             onOpenNoteLink: openNoteLink,
             onUnavailableNoteLink: { appState.saveError = "Note unavailable" }
           )
+          .focused($editorFocus, equals: .body)
           .background(
             EditorCommandVisibilityBoundary(
               appState: appState,
@@ -2189,9 +2203,11 @@
 
   private struct FormattingBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject var appState: AppState
     @ObservedObject var commands: EditorCommands
     @ObservedObject var dictationRuntime: DictationRuntime
     let isEditorVisible: Bool
+    let isTitleFocused: Bool
     let onDelete: () -> Void
     @State private var fontSizeText = ""
     @FocusState private var isFontSizeFocused: Bool
@@ -2280,11 +2296,11 @@
           ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
             Button {
               guard isEditorVisible else { return }
-              commands.applyFontFamily(family)
+              applyFontFamily(family)
             } label: {
               HStack {
                 Text(family)
-                if !commands.isFontFamilyMixed, commands.currentFontFamily == family {
+                if !isFontFamilyMixed, currentFontFamily == family {
                   Image(systemName: "checkmark")
                 }
               }
@@ -2296,7 +2312,7 @@
         .help("Font")
         .accessibilityLabel("Font")
         .accessibilityValue(
-          commands.isFontFamilyMixed ? "Mixed" : commands.currentFontFamily ?? "Automatic"
+          isFontFamilyMixed ? "Mixed" : currentFontFamily ?? "Automatic"
         )
         TextField("Font size", text: $fontSizeText)
           .textFieldStyle(.roundedBorder)
@@ -2467,6 +2483,25 @@
     private var fontSizeDisplay: String {
       guard !commands.isFontSizeMixed, let size = commands.currentFontSize else { return "" }
       return String(format: "%.2f", size).replacingOccurrences(of: #"\.00$"#, with: "", options: .regularExpression)
+    }
+
+    private var currentFontFamily: String? {
+      if isTitleFocused {
+        return appState.selectedNote?.titleFontFamily ?? appState.preferences.fontFamily
+      }
+      return commands.currentFontFamily
+    }
+
+    private var isFontFamilyMixed: Bool {
+      isTitleFocused ? false : commands.isFontFamilyMixed
+    }
+
+    private func applyFontFamily(_ family: String) {
+      if isTitleFocused {
+        appState.setSelectedTitleFontFamily(family)
+      } else {
+        commands.applyFontFamily(family)
+      }
     }
 
     private func syncFontSizeText() {
