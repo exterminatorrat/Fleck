@@ -251,11 +251,14 @@ dictionary forms, numbers and number words, dates and times, prices, units and
 quantities, recipients and destinations, paths, URLs, email addresses, code,
 commands, negation, modality, commitments, quotes, mixed English/Mandarin order,
 lexical insertion, lexical substitution, reordering, or an ambiguous correction.
-It classifies supported English cardinal/ordinal number words and digit forms
-before filler, repetition, or correction recognition; the ordered number
-signature must remain identical, and ambiguous or unrecognized numeric forms
-fail closed. Only validated ordinal list markers may be introduced by the
-short-list formatting rule.
+It classifies supported English cardinal/ordinal number words through trillion,
+fractions, decimals, percentages, currencies, and unit quantities before
+filler, repetition, or correction recognition; the ordered number signature
+must remain identical, and ambiguous or unrecognized numeric/quantity-looking
+forms fail closed. Short-list formatting may ignore only paired validated
+ordinal marker positions; it never bypasses a quantity change inside an item.
+Only those paired ordinal markers may be introduced by the short-list formatting
+rule.
 The transcript is quoted data, never instructions.
 
 ## Cancellation and generations
@@ -272,7 +275,7 @@ shared `cancellationTask`. `finish()` installs finalization exactly once. The
 first `cancel()` stores the shared task before invalidating the generation and
 closing updates, cancels the sole speech source early enough to unblock an
 in-flight `finish()`, cancels and awaits finalization, and releases source
-resources exactly once. Every concurrent or reentrant caller awaits that same
+resources exactly once. Every independent concurrent caller awaits that same
 task, so cancellation reaches `IncrementalTranscriptCleaner` and its bounded
 helper acknowledgement or force-termination path before any caller returns.
 Concurrent finish callers await the same existing task; if cancellation wins
@@ -284,6 +287,12 @@ acknowledgement, source release, and each caller return. It requires source
 cancellation to be early, helper acknowledgement before source release, and
 both cancel callers to return only after source release; no result or update may
 publish.
+
+`StreamingSpeechSource.cancel()` and `releaseResources()` must not synchronously
+await the owning session's `cancel()` from a dependency callback. They may
+record state or issue an independent notification, but the cancellation tests
+cover independent concurrent callers only; source cancellation still occurs
+early enough to unblock an in-flight speech `finish()`.
 
 Cancellation must execute in this order:
 
@@ -451,10 +460,13 @@ enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
 ```
 
 The signed boundary decodes into `RawAdmittedModelDescriptor` and constructs the
-validated `AdmittedModelDescriptor` through a throwing initializer for trimmed-
-empty identity/revision/runtime ABI/conversion/quantization/license, an
-absolute safe HTTPS source-repository URL with a host and no credentials,
-fragment, traversal, or query, unsafe paths, invalid sizes or checksums, aggregate
+validated `AdmittedModelDescriptor` through a throwing initializer that stores
+canonical trimmed identity/revision/runtime ABI/conversion/quantization/license
+values, rejects empty fields, and accepts only an absolute safe HTTPS
+source-repository URL with a host and no credentials, fragment, traversal, or
+query. It applies bounded repeated percent-decoding to the repository path and
+rejects double-encoded traversal before accepting the source. It also rejects
+unsafe paths, invalid sizes or checksums, aggregate
 mismatches, `Int64.addingReportingOverflow` when deriving required staging
 capacity, and empty support sets. An installed-plus-download overflow rejects
 with `AdmittedModelDescriptorError.requiredCapacityOverflow`; a distinct
@@ -527,7 +539,10 @@ The Settings action view model maps Install, Cancel, Repair, Update, and Remove
 to the corresponding installer method exactly once. One action task serializes
 operation actions, one cancellation guard permits Cancel to interrupt that
 task, duplicate concurrent operation clicks are ignored, and the action probe
-asserts every dispatch produces the expected presentation update.
+asserts every dispatch produces the expected presentation update. The
+`AdmittedModelSettingsPresentation` stores `phase = snapshot.phase`, so the
+finite installer phase used by the card and VoiceOver is the same phase tested
+by the installer adapter.
 
 If signed-descriptor construction, catalog hardware recommendation, or either
 identity comparison fails, the Settings construction boundary catches the

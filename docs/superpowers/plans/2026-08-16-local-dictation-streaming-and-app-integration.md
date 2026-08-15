@@ -39,7 +39,7 @@ replay/archive buffer is introduced.
   `cancel()` creates the shared task, invalidates and closes updates, cancels the
   sole speech source early enough to unblock an in-flight `finish()`, cancels
   and awaits finalization, and releases source resources exactly once. Every
-  concurrent or reentrant caller awaits that same cancellation task, so no
+  independent concurrent caller awaits that same cancellation task, so no
   caller returns before the cleaner's bounded helper acknowledgement or
   force-termination path and source release have completed.
 - Coordinator cancellation marks the capture cancelled and invalidates its
@@ -176,6 +176,13 @@ protocol StreamingSpeechSource: AnyObject {
   func releaseResources() async
 }
 ~~~
+
+`StreamingSpeechSource.cancel()` and `releaseResources()` implementations must
+not synchronously await the owning `StreamingDictationSession.cancel()` from a
+dependency callback; a callback may record state or send an independent
+notification, but it cannot await the session's shared cancellation task. The
+B4 concurrency evidence therefore covers independent concurrent callers while
+source cancellation still occurs early enough to unblock an in-flight `finish()`.
 
 ## Task 1: Define processing contracts and final artifacts
 
@@ -1655,7 +1662,7 @@ The first `cancel` stores a `Task<Void, Never>` in `cancellationTask` before
 awaiting it. That task invalidates the generation and closes updates, cancels
 the sole source early enough to unblock an in-flight source `finish`, cancels
 the one finalization task, awaits it, and releases resources exactly once.
-Later concurrent or reentrant callers find the stored handle and await its
+Later independent concurrent callers find the stored handle and await its
 value; they never return early. The awaited task propagates caller cancellation
 into `IncrementalTranscriptCleaner`, so its helper acknowledgement or
 force-termination completes before release returns. No final result or update

@@ -47,9 +47,10 @@ resource, downloader, or build script.
   `AdmittedModelDescriptor` reaches `AdmittedModelCatalog` or an installer. Its
   memberwise construction is private and its checked `requiredCapacityBytes` is
   stored at validation time.
-- Validation requires trimmed nonempty model identity, revision, runtime ABI,
-  conversion, quantization, and license, plus an absolute HTTPS repository URL
-  with a host, no credentials, fragment, traversal, or query. Relative, HTTP,
+- Validation stores canonical trimmed model identity, revision, runtime ABI,
+  conversion, quantization, and license values before nonempty validation, plus
+  an absolute HTTPS repository URL with a host, no credentials, fragment,
+  traversal, or query. Relative, HTTP,
   userinfo, fragment, traversal, and unsafe-query sources reject before catalog
   recommendation or transport.
 - A nonempty `requestedLanguages` set must be a subset of descriptor-supported
@@ -552,6 +553,7 @@ import Foundation
     URL(string: "https://example.invalid/repository#fragment")!,
     URL(string: "https://example.invalid/repository/../escape")!,
     URL(string: "https://example.invalid/repository/%2e%2e/escape")!,
+    URL(string: "https://example.invalid/repository/%252e%252e/escape")!,
     URL(string: "https://example.invalid/repository?download=true")!
   ]
   for source in invalidSources {
@@ -601,6 +603,33 @@ import Foundation
   }
   #expect(throws: AdmittedModelDescriptorError.emptySupport) {
     _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, languages: [], architectures: []))
+  }
+}
+
+@Test func descriptorStoresCanonicalTrimmedIdentityFields() throws {
+  let descriptor = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+    TestDescriptors.neutralAdmitted,
+    modelID: " model ",
+    revision: " revision ",
+    runtimeABI: " runtime ",
+    conversion: " conversion ",
+    quantization: " quantized ",
+    license: " license "
+  ))
+  #expect(descriptor.modelID == "model")
+  #expect(descriptor.revision == "revision")
+  #expect(descriptor.runtimeABI == "runtime")
+  #expect(descriptor.conversion == "conversion")
+  #expect(descriptor.quantization == "quantized")
+  #expect(descriptor.license == "license")
+}
+
+@Test func doubleEncodedRepositoryTraversalIsRejected() {
+  #expect(throws: AdmittedModelDescriptorError.invalidSource) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+      TestDescriptors.neutralAdmitted,
+      source: URL(string: "https://example.invalid/repository/%252e%252e/escape")!
+    ))
   }
 }
 ~~~
@@ -702,22 +731,28 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
 
 extension AdmittedModelDescriptor {
   init(validating raw: RawAdmittedModelDescriptor) throws {
-    guard !raw.modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    let modelID = raw.modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+    let revision = raw.revision.trimmingCharacters(in: .whitespacesAndNewlines)
+    let runtimeABI = raw.runtimeABI.trimmingCharacters(in: .whitespacesAndNewlines)
+    let conversion = raw.conversion.trimmingCharacters(in: .whitespacesAndNewlines)
+    let quantization = raw.quantization.trimmingCharacters(in: .whitespacesAndNewlines)
+    let license = raw.license.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !modelID.isEmpty else {
       throw AdmittedModelDescriptorError.emptyIdentity
     }
-    guard !raw.revision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    guard !revision.isEmpty else {
       throw AdmittedModelDescriptorError.emptyRevision
     }
-    guard !raw.runtimeABI.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    guard !runtimeABI.isEmpty else {
       throw AdmittedModelDescriptorError.emptyRuntimeABI
     }
-    guard !raw.conversion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    guard !conversion.isEmpty else {
       throw AdmittedModelDescriptorError.emptyConversion
     }
-    guard !raw.quantization.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    guard !quantization.isEmpty else {
       throw AdmittedModelDescriptorError.emptyQuantization
     }
-    guard !raw.license.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    guard !license.isEmpty else {
       throw AdmittedModelDescriptorError.emptyLicense
     }
     guard let source = URLComponents(
@@ -732,11 +767,19 @@ extension AdmittedModelDescriptor {
       source.fragment == nil,
       source.query == nil,
       !source.path.isEmpty,
-      !source.path.split(separator: "/").contains(".."),
-      !source.percentEncodedPath.split(separator: "/").contains {
-        let segment = String($0).lowercased()
-        return segment == ".." || segment == "%2e%2e"
-      } else {
+      !source.path.split(separator: "/").contains("..") else {
+      throw AdmittedModelDescriptorError.invalidSource
+    }
+    var canonicalPath = source.percentEncodedPath
+    for _ in 0..<3 {
+      guard let decodedPath = canonicalPath.removingPercentEncoding else {
+        throw AdmittedModelDescriptorError.invalidSource
+      }
+      if decodedPath == canonicalPath { break }
+      canonicalPath = decodedPath
+    }
+    guard !canonicalPath.contains("%"),
+          !canonicalPath.split(separator: "/").contains("..") else {
       throw AdmittedModelDescriptorError.invalidSource
     }
     guard !raw.languages.isEmpty, !raw.architectures.isEmpty else {
@@ -776,12 +819,12 @@ extension AdmittedModelDescriptor {
     }
     self.init(
       role: raw.role,
-      modelID: raw.modelID,
-      revision: raw.revision,
-      runtimeABI: raw.runtimeABI,
-      conversion: raw.conversion,
-      quantization: raw.quantization,
-      license: raw.license,
+      modelID: modelID,
+      revision: revision,
+      runtimeABI: runtimeABI,
+      conversion: conversion,
+      quantization: quantization,
+      license: license,
       notices: raw.notices,
       source: raw.source,
       files: raw.files,
@@ -807,9 +850,10 @@ call the throwing initializer below before constructing the inaccessible
 validated value. `TestDescriptors.neutralAdmitted` is a validated fixture;
 `TestDescriptors.raw(_:)` returns its raw copy and `TestDescriptors.make` returns
 a raw copy with the named override. The test
-cases above cover trimmed-empty identity/revision/runtime ABI/conversion/
-quantization/license, relative/non-HTTPS/userinfo/fragment/query/traversal
-sources, unsafe file paths, negative byte counts, non-64-hex checksums, aggregate mismatches, the
+cases above cover canonical trimmed identity/revision/runtime ABI/conversion/
+quantization/license, trimmed-empty fields, relative/non-HTTPS/userinfo/
+fragment/query/traversal sources including double-encoded traversal, unsafe file
+paths, negative byte counts, non-64-hex checksums, aggregate mismatches, the
 `installedBytes: Int64.max, downloadBytes: 1` required-capacity overflow, and a
 distinct per-file checked-add overflow. The stored `requiredCapacityBytes` is
 the checked value from validation, not a recomputed sum. Do not accept an array, picker index, or
@@ -2113,11 +2157,17 @@ func settingsActionsDispatchExactlyOnceAndUpdatePresentation() async {
   let cancellingViewModel = AdmittedModelSettingsViewModel(installer: cancellingProbe)
   cancellingViewModel.perform(.install)
   await cancellingProbe.waitUntilStarted(.install)
+  cancellingViewModel.perform(.repair)
+  cancellingViewModel.perform(.update)
+  cancellingViewModel.perform(.remove)
   cancellingViewModel.perform(.cancel)
   cancellingViewModel.perform(.cancel)
   await cancellingProbe.waitUntilPhase(.cancelled)
   await Task.yield()
   #expect(cancellingProbe.count(.install) == 1)
+  #expect(cancellingProbe.count(.repair) == 0)
+  #expect(cancellingProbe.count(.update) == 0)
+  #expect(cancellingProbe.count(.remove) == 0)
   #expect(cancellingProbe.count(.cancel) == 1)
   #expect(cancellingViewModel.presentation.phase == .cancelled)
 }
@@ -2335,6 +2385,7 @@ enum AdmittedModelSettingsAction: Equatable {
 struct AdmittedModelSettingsPresentation: Equatable {
   let title: String
   let detail: String
+  let phase: AdmittedModelInstallPhase
   let identity: String?
   let revision: String?
   let license: String?
@@ -2352,7 +2403,9 @@ struct AdmittedModelSettingsPresentation: Equatable {
 }
 ~~~
 
-Map every phase to finite title/detail/action text. Use exact byte counts, exact
+`AdmittedModelSettingsPresentation.init(snapshot:)` stores
+`phase = snapshot.phase` and maps every phase to finite title/detail/action
+text. Use exact byte counts, exact
 identity/revision/license/checksum strings, and stable accessibility labels and
 values. The recommendation card's Install button is keyboard-focusable and
 uses the presentation values directly:
@@ -2375,8 +2428,9 @@ copy, and exact in-progress byte value. Use no indefinite Loading text and no
 automatic action on view appearance. Its installer-action probe also asserts
 that Install, Cancel, Repair, Update, and Remove each dispatch exactly once and
 that each resulting snapshot reaches the presentation. A held operation test
-proves duplicate operation clicks are serialized and duplicate Cancel clicks
-do not call the installer twice.
+invokes Repair, Update, and Remove while Install is held, then invokes Cancel
+twice; it proves the three extra operation counts stay zero and Cancel occurs
+exactly once.
 
 - [ ] **Step 4: Add the observable action view model and wire the native UI.**
 
@@ -2452,8 +2506,8 @@ by one `actionTask`; a second operation click while it is non-nil is ignored.
 Cancel is allowed to interrupt that task exactly once, guarded by
 `cancellationSent`, and the task's `defer` clears both guards after the
 installer returns. The probe tests wait for each published phase and assert the
-exact per-action count, including one Cancel for two concurrent cancellation
-clicks.
+exact per-action count, including zero queued Repair/Update/Remove calls while
+Install is held and one Cancel for two cancellation clicks.
 
 In `FleckApp.swift`, construct the empty catalog and
 `BuiltInAdmittedModelInstaller` for ordinary release. Under the existing

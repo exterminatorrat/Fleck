@@ -25,7 +25,7 @@ existing FleckCore dictionary/cleanup structures. No new package dependency.
 - The target cleanup input is the exact dictionary baseline. Dictionary resolution failure before a baseline exists belongs to the later coordinator raw-ASR recovery path and is not converted into a cleanup baseline here.
 - Automatic cleanup may change only punctuation, capitalization, whitespace, isolated unambiguous fillers, immediate exact repetition, an explicitly spoken same-tail correction, and short-list formatting without changing list items.
 - Names and dictionary forms, numbers and number words, dates and times, prices, units and quantities, recipients and destinations, paths, URLs, email addresses, code, commands, negation, modality, commitments, quotes, and mixed English/Mandarin order are protected meaning.
-- Number classification runs before filler, repetition, or correction recognition; supported English cardinal/ordinal words and digit forms must keep the exact ordered number signature, while ambiguous or unrecognized numeric forms fail closed. Only validated ordinal list markers are exempt.
+- Number classification runs before filler, repetition, or correction recognition; supported English cardinal/ordinal words, scales through trillion, fractions, decimals, percentages, currencies, and unit quantities must keep the exact ordered number signature, while ambiguous or unrecognized numeric/quantity-looking forms fail closed. Only paired, validated ordinal list markers are exempt.
 - The validator runs protected-span preservation before allowlist classification. Any protected-meaning violation rejects the candidate.
 - The automatic target is at most 80 lexical words. The candidate output is at most input token count plus 32; helper-reported metadata is not authoritative.
 - There is one request, one generation attempt, zero automatic retries, no network, no transcript logging, no transcript persistence, and no audio persistence.
@@ -337,13 +337,26 @@ import Testing
     "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
     "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty",
     "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million",
-    "billion", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+    "billion", "trillion", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
     "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth",
     "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth", "twentieth",
     "thirtieth", "fortieth", "fiftieth", "sixtieth", "seventieth", "eightieth",
-    "ninetieth"
+    "ninetieth", "hundredth", "thousandth", "millionth", "billionth", "trillionth"
   ]
-  for word in numberWords {
+  let quantityWords = [
+    "half", "halves", "quarter", "quarters", "thirds", "fourths", "fifths",
+    "eighths", "tenths", "fraction", "fractions", "decimal", "decimals",
+    "percent", "percentage", "percentages", "currency", "currencies", "cent",
+    "cents", "dollar", "dollars", "euro", "euros",
+    "yen", "pound", "pounds", "yuan", "dozen", "dozens", "pair", "pairs",
+    "gram", "grams", "kilogram", "kilograms", "meter", "meters", "metre",
+    "metres", "kilometer", "kilometers", "kilometre", "kilometres", "mile",
+    "miles", "inch", "inches", "foot", "feet", "yard", "yards", "liter",
+    "liters", "litre", "litres", "hour", "hours", "minute", "minutes",
+    "second", "seconds", "day", "days", "week", "weeks", "month", "months",
+    "year", "years"
+  ]
+  for word in numberWords + quantityWords {
     #expect(
       FaithfulCleanupValidator().validate(
         candidate: "send \(word) files.",
@@ -359,9 +372,17 @@ import Testing
   let rejected: [(String, String)] = [
     ("twenty twenty", "twenty"),
     ("twenty actually thirty", "thirty"),
+    ("trillion trillion", "trillion"),
+    ("hundredth hundredth", "hundredth"),
+    ("half half", "half"),
+    ("trillionish trillionish", "trillionish"),
     ("send 20 files", "send 10 files"),
     ("send twenty-two files", "send 22 files"),
-    ("send 20th files", "send 20 files")
+    ("send 20th files", "send 20 files"),
+    (
+      "first buy 20 apples second buy 20 oranges",
+      "1. buy 10 apples\n2. buy 10 oranges"
+    )
   ]
   for (baseline, candidate) in rejected {
     #expect(
@@ -481,8 +502,12 @@ struct FaithfulCleanupValidator: Sendable {
     let baselineValues = baselineLexemes.filter(\.isLexical).map(\.canonical)
     let candidateValues = candidateLexemes.filter(\.isLexical).map(\.canonical)
 
-    guard isShortListFormatting(baselineValues, candidateLexemes)
-      || numberMeaningIsPreserved(baselineValues, candidateValues) else {
+    guard numberMeaningIsPreserved(baselineValues, candidateValues)
+      || pairedOrdinalMarkersAreOnlyDifference(
+        baselineValues: baselineValues,
+        candidateValues: candidateValues,
+        candidateLexemes: candidateLexemes
+      ) else {
       return .rejected(.numberMeaningChanged)
     }
 
@@ -556,12 +581,32 @@ struct FaithfulCleanupValidator: Sendable {
     "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
     "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
     "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty",
-    "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million",
-    "billion", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+    "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million", "billion",
+    "trillion", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
     "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth",
     "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth", "twentieth",
     "thirtieth", "fortieth", "fiftieth", "sixtieth", "seventieth", "eightieth",
-    "ninetieth"
+    "ninetieth", "hundredth", "thousandth", "millionth", "billionth", "trillionth"
+  ]
+  private static let quantityWords: Set<String> = [
+    "half", "halves", "quarter", "quarters", "thirds", "fourths", "fifths",
+    "eighths", "tenths", "fraction", "fractions", "decimal", "decimals",
+    "percent", "percentage", "percentages", "currency", "currencies", "cent",
+    "cents", "dollar", "dollars", "euro", "euros",
+    "yen", "pound", "pounds", "yuan", "dozen", "dozens", "pair", "pairs",
+    "gram", "grams", "kilogram", "kilograms", "meter", "meters", "metre",
+    "metres", "kilometer", "kilometers", "kilometre", "kilometres", "mile",
+    "miles", "inch", "inches", "foot", "feet", "yard", "yards", "liter",
+    "liters", "litre", "litres", "hour", "hours", "minute", "minutes",
+    "second", "seconds", "day", "days", "week", "weeks", "month", "months",
+    "year", "years"
+  ]
+  private static let numericLookingFragments: Set<String> = [
+    "hundred", "thousand", "million", "billion", "trillion", "percent",
+    "fraction", "decimal", "half", "quarter", "cent", "dollar", "euro",
+    "currency",
+    "yen", "pound", "yuan", "dozen", "gram", "kilo", "meter", "metre",
+    "liter", "litre", "mile", "inch", "foot", "yard"
   ]
   private static let correctionMarkers: Set<String> = ["actually", "sorry", "no"]
 
@@ -569,6 +614,7 @@ struct FaithfulCleanupValidator: Sendable {
     case none
     case digit(String)
     case word(String)
+    case quantity(String)
     case ambiguous
   }
 
@@ -589,12 +635,15 @@ struct FaithfulCleanupValidator: Sendable {
     if numberWords.contains(canonical) {
       return .word(canonical)
     }
+    if quantityWords.contains(canonical) {
+      return .quantity(canonical)
+    }
     if canonical.contains("-") {
       let parts = canonical.split(separator: "-").map(String.init)
-      if parts.allSatisfy(numberWords.contains) {
+      if parts.allSatisfy({ numberWords.contains($0) || quantityWords.contains($0) }) {
         return .word(canonical)
       }
-      if parts.contains(where: numberWords.contains) {
+      if parts.contains(where: { numberWords.contains($0) || quantityWords.contains($0) }) {
         return .ambiguous
       }
     }
@@ -604,7 +653,43 @@ struct FaithfulCleanupValidator: Sendable {
     if canonical.unicodeScalars.contains(where: CharacterSet.decimalDigits.contains) {
       return .ambiguous
     }
+    if numericLookingFragments.contains(where: canonical.contains)
+      || ["st", "nd", "rd", "th"].contains(where: canonical.hasSuffix) {
+      return .ambiguous
+    }
     return .none
+  }
+
+  private static func pairedOrdinalMarkersAreOnlyDifference(
+    baselineValues: [String],
+    candidateValues: [String],
+    candidateLexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard isShortListFormatting(baselineValues, candidateLexemes) else {
+      return false
+    }
+    let baselineMarkers = baselineValues.enumerated().compactMap { index, value in
+      ordinalWords.contains(value) ? index : nil
+    }
+    let candidateMarkers = candidateValues.enumerated().compactMap { index, value in
+      isNumericListMarker(value) ? index : nil
+    }
+    guard baselineMarkers.count >= 2,
+          baselineMarkers.count == candidateMarkers.count else {
+      return false
+    }
+    let baselineRemainder = baselineValues.enumerated()
+      .filter { !baselineMarkers.contains($0.offset) }
+      .map(\.element)
+    let candidateRemainder = candidateValues.enumerated()
+      .filter { !candidateMarkers.contains($0.offset) }
+      .map(\.element)
+    return numberMeaningIsPreserved(baselineRemainder, candidateRemainder)
+  }
+
+  private static func isNumericListMarker(_ value: String) -> Bool {
+    guard let number = Int(value) else { return false }
+    return (1...5).contains(number)
   }
 
   private static func protectedSpansMatch(
@@ -649,22 +734,29 @@ struct FaithfulCleanupValidator: Sendable {
 ```
 
 Implement `protectedSpansMatch` by grouping ordered canonical span lexemes by
-category and occurrence. Ignore only numeric list markers introduced by a valid
-ordinal list (`first ... second ...` to `1. ... 2. ...`); never ignore a number
-inside a normal sentence. Implement the four edit recognizers with
+category and occurrence. `isShortListFormatting` is only a presentation
+predicate; its sole numeric exception is
+`pairedOrdinalMarkersAreOnlyDifference`, which removes the paired ordinal
+marker positions from both sequences and then reruns the full number signature
+comparison. It must never ignore a quantity inside a list item. Thus a baseline
+with ordinal items and quantity `20` is rejected when a numbered candidate uses
+quantity `10`. Ignore only numeric list markers introduced by a valid ordinal
+list (`first ... second ...` to `1. ... 2. ...`); never ignore a number inside a
+normal sentence. Implement the four edit recognizers with
 `CleanupLexeme` indices, not string replacement. A filler is removable only when
 it is one of the five listed words, isolated by punctuation/boundaries, and not
 inside a protected quote/span. A duplicate is adjacent, exact after canonical
 comparison, and not numeric/protected. Before those recognizers run,
-`numberMeaningIsPreserved` classifies digits and the complete supported English
-cardinal/ordinal vocabulary. It requires the ordered number signature to remain
-identical; an unrecognized digit-bearing or mixed number form is ambiguous and
-rejects fail-closed. The only numeric exception is the already-validated ordinal
-list-marker formatting above. Thus neither filler removal, immediate repetition,
-nor explicit correction can delete or replace a number word; `twenty twenty` to
-`twenty` and `twenty actually thirty` to `thirty` both reject. Any other
-count-preserving change is substitution or reordering. Do not put candidate text
-in a failure value.
+`numberMeaningIsPreserved` classifies digits, supported English cardinal/ordinal
+words through trillion, fractions, decimals, percentages, currencies, and unit
+quantities. It requires the ordered number signature to remain identical; an
+unrecognized digit-bearing or numeric/quantity-looking alphabetic form is
+ambiguous and rejects fail-closed rather than reaching duplicate or correction
+deletion. Thus neither filler removal, immediate repetition, nor explicit
+correction can delete or replace a number word; `twenty twenty` to `twenty`,
+`trillion trillion` to `trillion`, `hundredth hundredth` to `hundredth`, and
+`half half` to `half` all reject. Any other count-preserving change is
+substitution or reordering. Do not put candidate text in a failure value.
 
 - [ ] **Step 4: Run the focused green command.**
 
