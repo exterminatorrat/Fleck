@@ -32,6 +32,10 @@ resource, downloader, or build script.
 - The ordinary release catalog is empty: Settings shows only
   “Apple Speech — Built in”, “On-device recognition”, and “No custom model is
   installed.” It has no model picker and no Advanced selector.
+- Ordinary and compile-gated candidate Settings use the same single
+  recommendation/built-in card. Remove the old `Picker`, `ModelConsentView`,
+  and `Download Enhanced Model` surfaces; the compile gate changes available
+  manager wiring, not the Settings choice model.
 - A signed configuration may provide exactly one automatic recommendation after
   hardware/language checks. The UI never chooses among a list and never
   auto-starts an install.
@@ -58,6 +62,10 @@ resource, downloader, or build script.
   manifest; its source repository drives `remoteURL`, and the adapter rejects
   any descriptor/identity mismatch before manager operation. This is not a
   generic model registry.
+- Hardware recommendation checks use explicit staging capacity:
+  `requiredCapacityBytes = installedBytes + downloadBytes`. A device with
+  space above `downloadBytes` but below that required capacity falls back to
+  built-in Apple Speech.
 - Preserve the existing debug-only `EnhancedModelManager` installer behind
   `CLEAN_DICTATION_ENHANCED_CANDIDATE`; this workstream does not turn its candidate
   route into ordinary-release routing or release evidence.
@@ -163,6 +171,10 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
   let installedBytes: Int64
   let languages: [String]
   let architectures: [String]
+
+  var requiredCapacityBytes: Int64 {
+    installedBytes + downloadBytes
+  }
 
   var immutableIdentity: AdmittedModelImmutableIdentity { get }
   init(validating raw: Self) throws
@@ -348,7 +360,7 @@ and catalog interfaces above.
     signedDescriptor: descriptor,
     hardware: .init(
       architecture: "arm64",
-      availableBytes: descriptor.downloadBytes + 1,
+      availableBytes: descriptor.requiredCapacityBytes + 1,
       languages: ["en-US"]
     )
   )
@@ -362,6 +374,22 @@ and catalog interfaces above.
       architecture: "x86_64",
       availableBytes: 1,
       languages: ["zh-CN"]
+    )
+  )
+  #expect(catalog.recommendation() == .builtIn)
+}
+
+@Test func spaceAboveDownloadBytesButBelowStagingRequirementFallsBackToBuiltIn() {
+  let descriptor = TestDescriptors.neutralAdmitted
+  let availableBytes = descriptor.downloadBytes + 1
+  #expect(availableBytes > descriptor.downloadBytes)
+  #expect(availableBytes < descriptor.requiredCapacityBytes)
+  let catalog = AdmittedModelCatalog(
+    signedDescriptor: descriptor,
+    hardware: .init(
+      architecture: descriptor.architectures[0],
+      availableBytes: availableBytes,
+      languages: [descriptor.languages[0]]
     )
   )
   #expect(catalog.recommendation() == .builtIn)
@@ -436,7 +464,7 @@ struct AdmittedModelCatalog: Sendable {
     guard let descriptor = signedDescriptor,
           descriptor.architectures.contains(hardware.architecture),
           descriptor.languages.contains(where: hardware.languages.contains),
-          hardware.availableBytes >= descriptor.downloadBytes else {
+          hardware.availableBytes >= descriptor.requiredCapacityBytes else {
       return .builtIn
     }
     return .recommended(descriptor)
@@ -532,7 +560,7 @@ built-in installer seam.
 
 **Produces:** `AdmittedModelInstallPhase`,
 `AdmittedModelInstallationSnapshot`, `AdmittedModelInstalling`,
-`BuiltInAdmittedModelInstaller`, and the compile-gated
+`BuiltInAdmittedModelInstaller`, `FailedAdmittedModelInstaller`, and the compile-gated
 `EnhancedModelManagerInstaller`.
 
 ### TDD red
@@ -556,6 +584,7 @@ func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
   let manager = EnhancedModelManager(
     modelRootURL: TestPaths.temporaryDirectory(),
     manifest: TestManifests.tiny,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
     candidateEnabled: true,
     capacityProvider: { Int64.max },
     architectureProvider: { true },
@@ -581,10 +610,14 @@ func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
 
 @Test @MainActor
 func checksumFailureBecomesActionableRepairState() async {
-  let manager = TestManagers.managerWithWrongFixtureChecksum()
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let manager = TestManagers.managerWithWrongFixtureChecksum(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor)
+  )
   let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
-    descriptor: TestDescriptors.tinyAdmittedASR,
+    descriptor: descriptor,
     startup: { },
     calibrate: { }
   )
@@ -598,8 +631,10 @@ func checksumFailureBecomesActionableRepairState() async {
 
 @Test @MainActor
 func descriptorArtifactMismatchFailsBeforeTransport() async {
+  let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
   let manager = TestManagers.manager(
+    descriptor: descriptor,
     transport: transport,
     artifactIdentity: TestArtifacts.identityWith(
       revision: "different-revision"
@@ -608,7 +643,7 @@ func descriptorArtifactMismatchFailsBeforeTransport() async {
   #expect(throws: AdmittedModelArtifactMismatch.immutableIdentityMismatch) {
     _ = try EnhancedModelManagerInstaller(
       manager: manager,
-      descriptor: TestDescriptors.tinyAdmittedASR,
+      descriptor: descriptor,
       startup: { },
       calibrate: { }
     )
@@ -643,30 +678,65 @@ func immutableArtifactMismatchesAreRejectedBeforeTransport() throws {
 
 @Test @MainActor
 func installerUpdatesExposeBytesBeforeCompletion() async {
-  let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8), pausesAfterFirstProgress: true)
-  let manager = TestManagers.manager(transport: transport)
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(
+    bytes: Data("fixture".utf8),
+    progressSequence: [4, 8],
+    pausesAfterFirstProgress: true
+  )
+  let manager = TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    transport: transport
+  )
   let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
-    descriptor: TestDescriptors.tinyAdmittedASR,
+    descriptor: descriptor,
     startup: { },
     calibrate: { }
   )
-  let firstDownload = Task { () -> Int64? in
+  let recorder = ProgressSnapshotRecorder()
+  let updates = Task {
     for await snapshot in installer.updates {
-      if case .downloading(let receivedBytes, _) = snapshot.phase {
-        return receivedBytes
+      if case .downloading(let receivedBytes, let totalBytes) = snapshot.phase,
+         receivedBytes > 0 {
+        await recorder.append((receivedBytes, totalBytes))
       }
     }
-    return nil
   }
   let install = Task { await installer.install() }
   await transport.waitUntilFirstProgress()
-  #expect(await firstDownload.value == 4)
+  await recorder.waitUntilCount(1)
+  #expect(await recorder.values == [
+    (4, descriptor.downloadBytes)
+  ])
   await transport.releaseProgress()
   await install.value
+  await recorder.waitUntilCount(2)
+  #expect(await recorder.values == [
+    (4, descriptor.downloadBytes),
+    (8, descriptor.downloadBytes)
+  ])
+  let receivedBytes = await recorder.values.map(\.0)
+  #expect(receivedBytes == receivedBytes.sorted())
+  updates.cancel()
 }
 #endif
 ~~~
+
+`ModelDownloadingProbe` requires the exact artifact identity through its
+`TestManagers.manager(descriptor:artifactIdentity:transport:)` helper, emits progress values
+`4` and `8` with `totalBytes == descriptor.downloadBytes`, pauses after `4`,
+and does not complete until the test releases the gate. The actor-backed
+`ProgressSnapshotRecorder.waitUntilCount(_:)` lets the test assert the first
+snapshot while installation is still blocked, then assert monotonic bytes and
+the exact total after the second snapshot. The only exception is the deliberate
+descriptor-mismatch fixture, which passes a different immutable identity to
+prove zero transport calls. `TestManagers.manager(descriptor:artifactIdentity:transport:)`
+has no default identity and constructs `EnhancedModelManager` with the supplied
+artifact identity; normal fixtures pass
+`TestArtifacts.identity(matching: descriptor)`, while the checksum fixture
+helper takes the same explicit identity.
 
 - [ ] **Step 2: Run the red commands.**
 
@@ -726,7 +796,10 @@ final class EnhancedModelManager: ObservableObject {
 
 The existing embedded manager construction supplies its immutable artifact
 identity beside the manifest. The adapter never substitutes a descriptor for
-that value, and the URL root no longer hard-codes a candidate repository.
+that value, and the URL root no longer hard-codes a candidate repository. Its
+verified required-capacity calculation remains authoritative for install
+admission; the catalog's `installedBytes + downloadBytes` check is the signed
+configuration equivalent.
 
 - [ ] **Step 4: Add the two installer implementations.**
 
@@ -757,6 +830,29 @@ final class BuiltInAdmittedModelInstaller: AdmittedModelInstalling {
   func remove() async {}
 }
 
+@MainActor
+final class FailedAdmittedModelInstaller: AdmittedModelInstalling {
+  let snapshot: AdmittedModelInstallationSnapshot
+  let updates: AsyncStream<AdmittedModelInstallationSnapshot>
+
+  init(message: String) {
+    let initial = AdmittedModelInstallationSnapshot(
+      recommendation: .builtIn,
+      phase: .failed(message: message),
+      lastError: message
+    )
+    snapshot = initial
+    updates = AsyncStream { continuation in continuation.yield(initial) }
+  }
+
+  func refresh() async {}
+  func install() async {}
+  func cancel() {}
+  func repair() async {}
+  func update() async {}
+  func remove() async {}
+}
+
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @MainActor
 final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
@@ -768,6 +864,9 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   private(set) var phaseHistory: [AdmittedModelInstallPhase] = []
   let updates: AsyncStream<AdmittedModelInstallationSnapshot>
   private let continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation
+  private var progressSubscription: AnyCancellable?
+  private var operationID: UUID?
+  private var lastReceivedBytes: Int64 = 0
 
   init(
     manager: EnhancedModelManager,
@@ -800,11 +899,71 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
     continuation.yield(next)
   }
 
+  private func beginProgressForwarding() {
+    operationID = UUID()
+    lastReceivedBytes = 0
+    progressSubscription = manager.$byteProgress
+      .compactMap { $0 }
+      .receive(on: RunLoop.main)
+      .sink { [weak self] progress in
+        guard let self,
+              self.operationID != nil,
+              progress.totalBytes == self.descriptor.downloadBytes,
+              progress.receivedBytes >= self.lastReceivedBytes else { return }
+        self.lastReceivedBytes = progress.receivedBytes
+        self.publish(.init(
+          recommendation: .recommended(self.descriptor),
+          phase: .downloading(
+            receivedBytes: progress.receivedBytes,
+            totalBytes: progress.totalBytes
+          ),
+          lastError: nil
+        ))
+      }
+  }
+
+  private func endProgressForwarding() {
+    operationID = nil
+    progressSubscription?.cancel()
+    progressSubscription = nil
+  }
+
+  private func runManagerOperation(
+    _ operation: @escaping @MainActor () async throws -> Void
+  ) async {
+    beginProgressForwarding()
+    publish(.init(
+      recommendation: .recommended(descriptor),
+      phase: .downloading(receivedBytes: 0, totalBytes: descriptor.downloadBytes),
+      lastError: nil
+    ))
+    defer { endProgressForwarding() }
+    do {
+      try await operation()
+      // Existing manager state is mapped to verifying/installing/ready here.
+    } catch {
+      publish(.init(
+        recommendation: .recommended(descriptor),
+        phase: .failed(message: String(describing: error)),
+        lastError: String(describing: error)
+      ))
+    }
+  }
+
+  func install() async {
+    await runManagerOperation { try await manager.download() }
+  }
+
+  func repair() async {
+    await runManagerOperation { try await manager.repair() }
+  }
+
+  func update() async {
+    await runManagerOperation { try await manager.update() }
+  }
+
   func refresh() async
-  func install() async
   func cancel()
-  func repair() async
-  func update() async
   func remove() async
 }
 #endif
@@ -922,6 +1081,54 @@ Settings/error copy.
   #expect(presentation.progressAccessibilityValue == "25 of 100 bytes")
   #expect(presentation.primaryAction == .cancel)
 }
+
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test @MainActor
+func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
+  let installer: any AdmittedModelInstalling
+  do {
+    let raw = TestDescriptors.make(TestDescriptors.neutralAdmitted, modelID: "")
+    _ = try AdmittedModelDescriptor(validating: raw)
+    Issue.record("Expected signed descriptor validation to fail")
+    return
+  } catch {
+    installer = FailedAdmittedModelInstaller(message: String(describing: error))
+  }
+  #expect(installer.snapshot.recommendation == .builtIn)
+  guard case .failed(let message) = installer.snapshot.phase else {
+    Issue.record("Expected a failed non-operating Settings snapshot")
+    return
+  }
+  #expect(!message.isEmpty)
+  let presentation = AdmittedModelSettingsPresentation(snapshot: installer.snapshot)
+  #expect(presentation.detail.contains(message))
+}
+
+@Test @MainActor
+func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
+  let manager = TestManagers.manager(
+    descriptor: descriptor,
+    transport: transport,
+    artifactIdentity: TestArtifacts.identityWith(revision: "wrong")
+  )
+  let installer: any AdmittedModelInstalling
+  do {
+    installer = try EnhancedModelManagerInstaller(
+      manager: manager,
+      descriptor: descriptor,
+      startup: { },
+      calibrate: { }
+    )
+  } catch {
+    installer = FailedAdmittedModelInstaller(message: String(describing: error))
+  }
+  #expect(installer.snapshot.recommendation == .builtIn)
+  #expect(transport.downloadCalls == 0)
+  #expect(installer.snapshot.lastError != nil)
+}
+#endif
 ~~~
 
 - [ ] **Step 2: Run the red command.**
@@ -1005,30 +1212,46 @@ In `FleckApp.swift`, construct the empty catalog and
 compile-gated configuration, inject the one signed descriptor and
 `EnhancedModelManagerInstaller` only when the caller explicitly supplies that
 configuration. Store one view model on `DictationRuntime`; do not create
-parallel operation dictionaries or a second manager.
+parallel operation dictionaries or a second manager. Invalid signed
+configuration or artifact binding must be caught at this boundary so Settings
+construction never fails and Apple Speech/deterministic cleanup remains active.
 
 The construction boundary is explicit:
 
 ~~~swift
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-let installer: any AdmittedModelInstalling = try EnhancedModelManagerInstaller(
-  manager: manager,
-  descriptor: signedDescriptor,
-  startup: startup,
-  calibrate: calibrate
-)
+let installer: any AdmittedModelInstalling
+do {
+  let descriptor = try AdmittedModelDescriptor(validating: signedRawDescriptor)
+  installer = try EnhancedModelManagerInstaller(
+    manager: manager,
+    descriptor: descriptor,
+    startup: startup,
+    calibrate: calibrate
+  )
+} catch {
+  installer = FailedAdmittedModelInstaller(message: String(describing: error))
+}
 #else
 let installer: any AdmittedModelInstalling = BuiltInAdmittedModelInstaller()
 #endif
 ~~~
 
+`FailedAdmittedModelInstaller` is non-operating and exists only to render the
+actionable Settings error. Its `.builtIn` recommendation does not replace the
+coordinator's existing Apple Speech/deterministic-cleanup dependencies, so a
+bad signed descriptor or artifact binding leaves the production fallback
+usable and performs no transport work.
+
 In `SettingsView.swift`, make the ordinary-build Dictation section render one
 native card from the view model: its recommendation card has one explicit
 Install button and metadata, and its built-in card has no install action.
 Repair/update/removal are explicit buttons when a signed recommendation is
-present. Keep the existing debug-only `EnhancedModelManager` installer branch
-behind `CLEAN_DICTATION_ENHANCED_CANDIDATE`; it is not ordinary-release UI or
-candidate routing authority. Use semantic colors, keyboard-focusable buttons,
+present. Under `CLEAN_DICTATION_ENHANCED_CANDIDATE`, use this same single card
+and `AdmittedModelSettingsViewModel`; remove the old `Picker`,
+`ModelConsentView`, and `Download Enhanced Model` surfaces. The manager remains
+compile-gated and is not ordinary-release UI or candidate routing authority.
+Use semantic colors, keyboard-focusable buttons,
 VoiceOver labels/values for phase and byte progress, and no decorative progress
 animation. Do not change the existing shortcut, permission, history, or editor
 settings.

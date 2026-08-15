@@ -290,8 +290,11 @@ struct DictationDeadline: Sendable {
 Add the remaining enums/measurement/context values and the three protocols
 from the interface section. The processor receives `DictationClock` and
 `DictationProcessingBudget`; tests inject fixed instants and never read or
-sleep a production wall clock. Preserve current interfaces; do not add audio
-chunks or a second source abstraction.
+sleep a production wall clock. The session creates `stopInstant` and
+`insertionDeadline = stopInstant + budget.insertion` together at finish, so
+cleanup is bounded by `min(stopInstant + budget.cleanup, insertionDeadline)`.
+Preserve current interfaces; do not add audio chunks or a second source
+abstraction.
 
 - [ ] **Step 4: Run green and broader checks.**
 
@@ -377,6 +380,13 @@ processor, Apple capture, runtime, model, and UI files.
   )
   #expect(update.stableText == "第一句。第二句！")
   #expect(update.provisionalTail == "第三句？第四句")
+}
+
+@Test func whitespaceAfterTerminatorBelongsToStablePrefix() throws {
+  var state = StreamingTranscriptState()
+  let update = try state.accept(generation: 1, fullText: "First. Second")
+  #expect(update.stableText == "First. ")
+  #expect(update.provisionalTail == "Second")
 }
 
 @Test func mixedLanguageTerminatorsDoNotRequireWhitespace() throws {
@@ -468,7 +478,7 @@ private static func splitStablePrefix(
 ) -> (stable: String, tail: String) {
   let lexemes = CleanupLexeme.scan(fullText)
   var offset = 0
-  var terminatorStarts = [Int]()
+  var terminatorEnds = [Int]()
   var lexicalSpans = [(start: Int, end: Int)]()
 
   for lexeme in lexemes {
@@ -477,27 +487,33 @@ private static func splitStablePrefix(
     if lexeme.kind == .punctuation,
        lexeme.original.count == 1,
        clauseTerminators.contains(Character(lexeme.original)) {
-      terminatorStarts.append(start)
+      terminatorEnds.append(offset)
     }
     if lexeme.isLexical {
       lexicalSpans.append((start: start, end: offset))
     }
   }
 
-  let clauseStart: Int
-  if terminatorStarts.count >= maximumMutableClauses {
-    clauseStart = terminatorStarts[
-      terminatorStarts.count - maximumMutableClauses
-    ] + 1
+  var clauseStart: Int
+  if terminatorEnds.count >= maximumMutableClauses {
+    clauseStart = terminatorEnds[
+      terminatorEnds.count - maximumMutableClauses
+    ]
   } else {
     clauseStart = 0
+  }
+
+  let characters = Array(fullText)
+  let trailingLexemes = CleanupLexeme.scan(String(characters[clauseStart...]))
+  for lexeme in trailingLexemes {
+    guard lexeme.kind == .whitespace else { break }
+    clauseStart += Array(lexeme.original).count
   }
 
   let mutableSpans = lexicalSpans.filter { $0.start >= clauseStart }
   let boundedStart = mutableSpans.count > maximumMutableLexicalUnits
     ? mutableSpans[mutableSpans.count - maximumMutableLexicalUnits].start
     : clauseStart
-  let characters = Array(fullText)
   return (
     String(characters[..<boundedStart]),
     String(characters[boundedStart...])
@@ -749,7 +765,7 @@ func processorUsesExactBaselineWhenCleanupIsRejected() async throws {
 func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throws {
   let start = TestDictationClock.fixedInstant
   let stop = start.advanced(by: .seconds(2))
-  let clock = TestDictationClock(values: [start, stop])
+  let clock = TestDictationClock(values: [stop])
   let engine = SpeechEngineProbe(finalText: "send the report")
   let generator = CleanupGeneratorProbe(result: "send the report")
   let cleaner = IncrementalTranscriptCleaner(
@@ -778,7 +794,110 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
   ))
   _ = try await session.finish()
 
-  #expect(await generator.requests.first?.deadline == start.advanced(by: .seconds(3)))
+  #expect(await generator.requests.first?.deadline == start.advanced(by: .milliseconds(3500)))
+  #expect(await generator.requests.first?.deadline == stop.advanced(by: .milliseconds(1500)))
+}
+
+@Test func foundationModelGeneratorReceivesTheCleanupDeadline() async throws {
+  let deadline = TestCleanupClock.fixedInstant.advanced(by: .milliseconds(1500))
+  let probe = FoundationModelOperationProbe(result: "Send the report.")
+  let generator = FoundationModelCleanupGenerator { request, maximumOutputTokens in
+    await probe.record(request: request, maximumOutputTokens: maximumOutputTokens)
+    await probe.waitUntilReleased()
+    return request.baseline
+  }
+  let request = IncrementalCleanupRequest(
+    baseline: "send the report",
+    protectedForms: [],
+    replacements: 0,
+    deadline: deadline
+  )
+  let session = try generator.start(request, maximumOutputTokens: 20)
+  await probe.waitUntilStarted()
+  #expect(await probe.request?.deadline == deadline)
+  #expect(await probe.maximumOutputTokens == 20)
+  session.requestCancellation()
+  await session.acknowledgement()
+}
+
+@Test func foundationModelCallerCancellationAcknowledgesAndReturnsNoCandidate() async throws {
+  let probe = FoundationModelOperationProbe(result: "late")
+  let generator = FoundationModelCleanupGenerator { request, _ in
+    await probe.waitUntilStarted()
+    await probe.waitUntilReleased()
+    return request.baseline
+  }
+  let session = try generator.start(.init(
+    baseline: "send the report",
+    protectedForms: [],
+    replacements: 0,
+    deadline: TestCleanupClock.fixedInstant.advanced(by: .seconds(1))
+  ), maximumOutputTokens: 20)
+  let result = Task { try await session.result() }
+  await probe.waitUntilStarted()
+  session.requestCancellation()
+  await session.acknowledgement()
+  await #expect(throws: CleanupGenerationError.requestCancelled) {
+    try await result.value
+  }
+  await probe.release("late")
+  #expect(await probe.lateCandidateWasPublished == false)
+}
+
+@Test func foundationModelAcknowledgementCompletesAfterCancellation() async throws {
+  let session = try FoundationModelCleanupGenerator { _, _ in "unused" }
+    .start(.init(
+      baseline: "send the report",
+      protectedForms: [],
+      replacements: 0,
+      deadline: TestCleanupClock.fixedInstant.advanced(by: .seconds(1))
+    ), maximumOutputTokens: 20)
+  let acknowledgement = Task { await session.acknowledgement() }
+  session.requestCancellation()
+  _ = await acknowledgement.value
+}
+
+@Test func foundationModelForceTerminationUnblocksBothWaiters() async throws {
+  let probe = FoundationModelOperationProbe(result: "never")
+  let session = try FoundationModelCleanupGenerator { request, _ in
+    await probe.waitUntilStarted()
+    await probe.waitUntilReleased()
+    return request.baseline
+  }.start(.init(
+    baseline: "send the report",
+    protectedForms: [],
+    replacements: 0,
+    deadline: TestCleanupClock.fixedInstant.advanced(by: .seconds(1))
+  ), maximumOutputTokens: 20)
+  let result = Task { try await session.result() }
+  let acknowledgement = Task { await session.acknowledgement() }
+  await probe.waitUntilStarted()
+  session.forceTerminate()
+  await #expect(throws: CleanupGenerationError.terminated) {
+    try await result.value
+  }
+  _ = await acknowledgement.value
+}
+
+@Test func foundationModelLateUnderlyingWorkCannotPublish() async throws {
+  let probe = FoundationModelOperationProbe(result: "late")
+  let session = try FoundationModelCleanupGenerator { request, _ in
+    await probe.waitUntilReleased()
+    return request.baseline
+  }.start(.init(
+    baseline: "send the report",
+    protectedForms: [],
+    replacements: 0,
+    deadline: TestCleanupClock.fixedInstant.advanced(by: .seconds(1))
+  ), maximumOutputTokens: 20)
+  let result = Task { try await session.result() }
+  session.forceTerminate()
+  await #expect(throws: CleanupGenerationError.terminated) {
+    try await result.value
+  }
+  await probe.release("late")
+  await session.acknowledgement()
+  #expect(await probe.lateCandidateWasPublished == false)
 }
 ~~~
 
@@ -791,7 +910,8 @@ swift test --disable-automatic-resolution --no-parallel --filter StreamingDictat
 ~~~
 
 Expected failure: adapter, generator, processor, session, processor error,
-clock, budget, and cleanup-deadline symbols do not exist.
+clock, budget, cleanup-deadline, four-method Foundation Model session, and
+publication-gate symbols do not exist.
 
 ### Minimal implementation, green, and checkpoint
 
@@ -827,10 +947,19 @@ construct `AppleSpeechCapture` and does not expose audio chunks.
 
 ~~~swift
 struct FoundationModelCleanupGenerator: BoundedCleanupGenerating {
-  private let generate: @Sendable (String) async throws -> String
+  private let generate:
+    @Sendable (IncrementalCleanupRequest, Int) async throws -> String
 
   init(dictation: FoundationModelDictation) {
-    generate = { raw in await dictation.cleanupResult(raw).text }
+    generate = { request, _ in
+      await dictation.cleanupResult(request.baseline).text
+    }
+  }
+
+  init(
+    generate: @escaping @Sendable (IncrementalCleanupRequest, Int) async throws -> String
+  ) {
+    self.generate = generate
   }
 
   func start(
@@ -838,15 +967,92 @@ struct FoundationModelCleanupGenerator: BoundedCleanupGenerating {
     maximumOutputTokens: Int
   ) throws -> any CleanupGenerationSession {
     FoundationModelCleanupSession(
-      task: Task { try await generate(request.baseline) }
+      request: request,
+      maximumOutputTokens: maximumOutputTokens,
+      generate: generate
     )
   }
 }
+
+private final class FoundationModelCleanupSession: CleanupGenerationSession, @unchecked Sendable {
+  private let gate: FoundationModelPublicationGate
+  private let underlying: Task<Void, Never>
+
+  init(
+    request: IncrementalCleanupRequest,
+    maximumOutputTokens: Int,
+    generate: @escaping @Sendable (IncrementalCleanupRequest, Int) async throws -> String
+  ) {
+    let publicationGate = FoundationModelPublicationGate()
+    gate = publicationGate
+    underlying = Task.detached {
+      do {
+        let text = try await generate(request, maximumOutputTokens)
+        publicationGate.publish(.init(cleaned: text))
+      } catch is CancellationError {
+        publicationGate.close(.requestCancelled)
+      } catch {
+        publicationGate.close(.generationFailed)
+      }
+    }
+  }
+
+  func result() async throws -> GeneratedCleanupCandidate {
+    try await gate.result()
+  }
+
+  func acknowledgement() async {
+    await gate.acknowledgement()
+  }
+
+  func requestCancellation() {
+    gate.close(.requestCancelled)
+    underlying.cancel()
+  }
+
+  func forceTerminate() {
+    gate.close(.terminated)
+    underlying.cancel()
+  }
+}
+
+private final class FoundationModelPublicationGate: @unchecked Sendable {
+  // The lock-protected gate resumes result/acknowledgement continuations once.
+  // publish returns false after close, so detached late work is never visible.
+  func publish(_ candidate: GeneratedCleanupCandidate) -> Bool
+  func close(_ error: CleanupGenerationError)
+  func result() async throws -> GeneratedCleanupCandidate
+  func acknowledgement() async
+}
 ~~~
+
+Implement the gate with `NSLock` and one result continuation plus one
+acknowledgement continuation: `publish` stores the candidate, marks the gate
+closed, resumes both waiters, and returns `true`; `close` marks it closed,
+resumes a waiting result with its terminal error and the acknowledgement
+waiter, and is a no-op after the first terminal transition. `result` and
+`acknowledgement` first consume an already-completed state under the lock, so
+there is no continuation race.
 
 The injected production closure calls existing Apple Foundation Models where
 supported and deterministic local cleanup otherwise. The Workstream A Task 1
-validator remains final authority. Test closures are fake and local.
+validator remains final authority. `FoundationModelCleanupSession` implements
+all four `CleanupGenerationSession` methods. Its underlying operation is
+detachable because in-process Foundation Models cannot promise true force
+termination: cancellation first closes the publication gate and acknowledges
+the session, then requests cancellation of the underlying task. A deadline or
+caller cancellation therefore lets the bounded cleaner drain its structured
+children immediately. If the underlying operation later completes, `publish`
+returns false and no result, update, insertion, or acknowledgement is emitted.
+The gate is idempotent and the first terminal state wins; no claim is made that
+the Foundation Model computation itself was killed.
+
+`FoundationModelOperationProbe` is an actor-owned test fixture with
+`record(request:maximumOutputTokens:)`, `waitUntilStarted()`,
+`waitUntilReleased()`, `release(_:)`, and
+`lateCandidateWasPublished`. It blocks the underlying closure until each test
+chooses cancellation or force termination, so the tests observe acknowledgement
+and publication behavior rather than a post-completion history array.
 
 - [ ] **Step 5: Add the processor/session.**
 
@@ -873,7 +1079,6 @@ final class StreamingDictationProcessor: DictationProcessing {
   func begin(
     configuration: DictationProcessingConfiguration
   ) async throws -> any DictationProcessingSession {
-    let insertionDeadline = clock.now().advanced(by: budget.insertion)
     return try await StreamingDictationSession(
       configuration: configuration,
       makeSource: makeSource,
@@ -881,8 +1086,7 @@ final class StreamingDictationProcessor: DictationProcessing {
       cleaner: cleaner,
       runtime: runtime,
       clock: clock,
-      budget: budget,
-      insertionDeadline: insertionDeadline
+      budget: budget
     )
   }
 }
@@ -898,8 +1102,7 @@ final class StreamingDictationSession: DictationProcessingSession {
     cleaner: IncrementalTranscriptCleaner,
     runtime: LocalDictationRuntime?,
     clock: DictationClock,
-    budget: DictationProcessingBudget,
-    insertionDeadline: ContinuousClock.Instant
+    budget: DictationProcessingBudget
   )
 
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
@@ -910,12 +1113,14 @@ final class StreamingDictationSession: DictationProcessingSession {
 
 `StreamingDictationSession` owns one source, state, generation counter, stream,
 finalization flag, injected `DictationClock`, and
-`DictationProcessingBudget`. At `begin`, the processor records the capture's
-three-second insertion deadline from the injected clock and budget. At
-`finish`, the session records `stopInstant = clock.now()` exactly once and
-constructs:
+`DictationProcessingBudget`. At `begin`, it records no deadline. At `finish`,
+the session records `stopInstant = clock.now()` exactly once, constructs
+`insertionDeadline = stopInstant.advanced(by: budget.insertion)` immediately,
+and passes both values to:
 
 ~~~swift
+let stopInstant = clock.now()
+let insertionDeadline = stopInstant.advanced(by: budget.insertion)
 let deadline = DictationDeadline(
   stopInstant: stopInstant,
   insertionDeadline: insertionDeadline,
@@ -931,8 +1136,8 @@ let decision = try await cleaner.clean(request)
 ~~~
 
 `cleanupDeadline` is exactly
-`min(stopInstant + 1,500 ms, insertionDeadline)`, where `insertionDeadline`
-is the remaining three-second insertion deadline. Each provisional callback
+`min(stopInstant + budget.cleanup, stopInstant + budget.insertion)` (1,500 ms
+and 3,000 ms in production). Each provisional callback
 increments generation and publishes only an accepted `StreamingTranscriptState`
 update. `finish` calls source `finish` exactly once, rejects empty final text,
 resolves the dictionary before creating the request, and never calls the legacy

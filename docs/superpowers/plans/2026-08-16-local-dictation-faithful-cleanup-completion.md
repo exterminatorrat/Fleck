@@ -228,8 +228,9 @@ git commit -m "feat: restore personal dictionary resolution core"
 
 Expected: the blob loop matches all four files to the final `898ceae` versions;
 exactly those four Task 0 paths differ; codec/store/UI/evaluation and candidate
-files are absent. The parent Sol task reruns all Task 0 checks and a fresh
-`sol_advisor_sol_reviewer` returns exactly `ship` before Task 1 starts.
+files are absent. The parent Sol task reruns all Task 0 checks. The parent also
+obtains a fresh Sol `ship` verdict from
+`sol_advisor_sol_reviewer` before Task 1 starts.
 
 ## Task 1: Implement the faithful edit validator
 
@@ -580,7 +581,7 @@ Run:
 ```bash
 git diff --check
 git diff -- Sources/FleckApp/FaithfulCleanupValidator.swift Tests/FleckAppTests/FaithfulCleanupValidatorTests.swift
-test "$(git diff --name-only -- Sources/FleckApp/FaithfulCleanupValidator.swift Tests/FleckAppTests/FaithfulCleanupValidatorTests.swift | sort)" = "Sources/FleckApp/FaithfulCleanupValidator.swift\nTests/FleckAppTests/FaithfulCleanupValidatorTests.swift"
+test "$(git diff --name-only -- Sources/FleckApp/FaithfulCleanupValidator.swift Tests/FleckAppTests/FaithfulCleanupValidatorTests.swift | sort)" = "$(printf '%s\n' Sources/FleckApp/FaithfulCleanupValidator.swift Tests/FleckAppTests/FaithfulCleanupValidatorTests.swift)"
 ```
 
 Expected: clean whitespace; the diff contains only the two Task 1 files; no
@@ -787,6 +788,7 @@ struct GeneratedCleanupCandidate: Equatable, Sendable {
 enum CleanupGenerationError: Error, Equatable, Sendable {
   case requestCancelled
   case terminated
+  case generationFailed
 }
 
 struct CleanupClock: Sendable {
@@ -1017,6 +1019,7 @@ private func race(
         switch error {
         case .requestCancelled: return .requestCancelled
         case .terminated: return .terminated
+        case .generationFailed: return .generationFailed
         }
       } catch is CancellationError {
         return Task.isCancelled ? .callerCancelled : .generationFailed
@@ -1109,8 +1112,13 @@ The session contract requires that synchronous force to unblock both result and
 acknowledgement waiters before the cleaner returns, making the deliberately
 non-cooperative test bounded. Caller cancellation is rechecked after every
 start, race, termination, and validation boundary and is never converted into a
-baseline decision. No detached task, retry, network, file write, transcript
-diagnostic, or runtime/model ownership is introduced.
+baseline decision. The bounded cleaner itself owns no detached task, retry,
+network, file write, transcript diagnostic, or runtime/model ownership. An
+adapter that cannot guarantee true underlying force termination must instead
+use the four-method session contract with a detachable publication gate, as
+specified for `FoundationModelCleanupSession` in Workstream B; closing that
+gate immediately acknowledges cancellation and makes every later candidate
+unpublishable.
 
 - [ ] **Step 4: Run the focused green command.**
 
@@ -1147,7 +1155,7 @@ Run:
 git diff --check
 rg -n "URLSession|FileHandle|Data\.write|NSXPC|LanguageModelSession|transcript|audio" Sources/FleckApp/IncrementalTranscriptCleaner.swift
 rg -n "func start\([^)]*\) async|await .*\.start\(" Sources/FleckApp/IncrementalTranscriptCleaner.swift
-test "$(git diff --name-only -- Sources/FleckApp/IncrementalTranscriptCleaner.swift Tests/FleckAppTests/IncrementalTranscriptCleanerTests.swift | sort)" = "Sources/FleckApp/IncrementalTranscriptCleaner.swift\nTests/FleckAppTests/IncrementalTranscriptCleanerTests.swift"
+test "$(git diff --name-only -- Sources/FleckApp/IncrementalTranscriptCleaner.swift Tests/FleckAppTests/IncrementalTranscriptCleanerTests.swift | sort)" = "$(printf '%s\n' Sources/FleckApp/IncrementalTranscriptCleaner.swift Tests/FleckAppTests/IncrementalTranscriptCleanerTests.swift)"
 ```
 
 Expected: the first scan finds no network, file, IPC, or transcript/audio

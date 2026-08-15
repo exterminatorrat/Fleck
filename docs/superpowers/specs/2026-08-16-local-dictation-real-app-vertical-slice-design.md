@@ -114,7 +114,7 @@ SettingsView -------------> admitted recommendation presentation, not model sele
 | `DictationProcessing` / `StreamingDictationProcessor` | One incremental capture session's transcript updates, dictionary-before-cleanup final artifacts, and bounded cleanup decision. | Shortcut identity, note persistence, routing policy, or UI ownership. |
 | `StreamingTranscriptState` | Generation ordering, append-only stable prefix, and a mutable tail capped by the newest two clauses or 80 `CleanupLexeme` lexical units. | Semantic cleanup or insertion. |
 | `FaithfulCleanupValidator` | The deterministic allowlist and protected-meaning decision. | Generating text, choosing a model, or logging transcript data. |
-| `IncrementalTranscriptCleaner` | One bounded cleanup request, one generation attempt, deadline/cancellation race, validation, and exact baseline fallback. | Dictionary resolution, audio, runtime residency, or UI. |
+| `IncrementalTranscriptCleaner` | One bounded cleanup request, one generation attempt, deadline/cancellation race, validation, exact baseline fallback, and session-box publication gate. | Dictionary resolution, audio, runtime residency, or UI. |
 | `LocalDictationRuntime` | Restored active/warm/standby/cold policy, one lease, lifecycle signals, scheduler, and future adapter health. | The Apple audio capture path and installer UI. |
 | `EnhancedModelManager` | Existing compile-gated manifest, download, checksum, repair, update, and remove transactions when an admitted configuration exists. | Selecting a model, normal-release routing, or a second downloader. |
 | `AdmittedModelCatalog` and settings presentation | One signed configuration's exact identity and one automatic recommendation, or the built-in state. | A model picker, Advanced selector, inference, or model weights. |
@@ -217,7 +217,9 @@ rejected cleanup attempt selects exactly `PersonalDictionaryResolution.baseline`
    Smart Capture may expose levels/status but does not insert provisional text.
 6. On stop, the processing session finishes the existing Speech source exactly
    once and obtains final raw ASR text. It resolves the personal dictionary
-   before constructing `IncrementalCleanupRequest`.
+   before constructing `IncrementalCleanupRequest`. At that finish boundary it
+   records `stopInstant`, creates `insertionDeadline = stopInstant + 3,000 ms`,
+   and gives cleanup `min(stopInstant + 1,500 ms, insertionDeadline)`.
 7. `IncrementalTranscriptCleaner` performs at most one bounded generation.
    `FaithfulCleanupValidator` compares the candidate with the dictionary
    baseline and protected spans. A valid candidate becomes `cleanedTranscript`;
@@ -271,6 +273,14 @@ or recovery receipt may publish. A caller cancellation of the cleanup task throw
 valid capture returns a baseline decision. These are distinct from a dictionary
 failure before a baseline, which remains raw-ASR recovery.
 
+The Apple Foundation Models cleanup adapter implements all four
+`CleanupGenerationSession` methods. Because in-process model work cannot promise
+true force termination, its detachable underlying operation is behind a locked
+publication gate: cancellation or force termination closes the gate and
+acknowledges immediately, while any late candidate is rejected and cannot keep
+the cleaner's structured children waiting. The architecture claims bounded
+publication and drain, not that the underlying model computation was killed.
+
 ## Runtime, privacy, and network rules
 
 The restored `LocalDictationRuntime` remains a small lifecycle seam with active,
@@ -320,6 +330,8 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
   let installedBytes: Int64
   let languages: [String]
   let architectures: [String]
+
+  var requiredCapacityBytes: Int64 { installedBytes + downloadBytes }
 }
 
 struct AdmittedModelImmutableIdentity: Equatable, Sendable {
@@ -355,12 +367,22 @@ surface, when an admitted descriptor exists, has one explicit `Install` action
 and shows exact identity, revision, license, checksums, download/installed size,
 and supported hardware/languages.
 
+Hardware recommendation uses an explicit staging requirement of
+`installedBytes + downloadBytes`, not download bytes alone. Ordinary and
+compile-gated candidate Settings render the same single recommendation/built-in
+card; the candidate gate does not restore a model picker, Advanced selector,
+consent view, or download-specific surface.
+
 Installer presentation has explicit states for `notInstalled`, `downloading`
 with received/total bytes, `verifying`, `installing`, `starting`, `calibrating`,
 `installed`, `updateAvailable`, `repairRequired`, `removing`, and actionable
 failure. It never calls an indeterminate operation “Loading”. Repair, update,
 and removal require explicit user actions. Startup and calibration are visible
-phases; installation does not imply readiness or release admission.
+phases; installation does not imply readiness or release admission. The
+installer exposes `updates: AsyncStream<AdmittedModelInstallationSnapshot>`;
+the manager adapter publishes live monotonic byte snapshots only while an
+operation is active, and the Settings view model owns the cancellable
+subscription.
 
 The UI uses the existing native macOS Settings structure, semantic colors and
 styles, keyboard and VoiceOver labels/values, and no frequent decorative
@@ -410,7 +432,9 @@ slice's development app is successful with all custom components uninstalled.
   fake prove byte progress, checksum/size/path validation, verification,
   installation, startup, calibration, repair, update, removal, cancellation,
   actionable errors, live in-progress snapshot delivery, and descriptor/artifact
-  mismatch rejection without a real model transfer.
+  mismatch rejection without a real model transfer. Invalid signed descriptors
+  and bindings are caught into a non-operating failed Settings snapshot; Apple
+  Speech remains the active fallback and transport calls remain zero.
 6. **Offline/cancellation checks:** serialized SwiftPM commands run with
    `--disable-automatic-resolution --no-parallel`; tests assert no URLSession,
    transcript file, audio file, or late insertion is introduced by the vertical
