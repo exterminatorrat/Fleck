@@ -34,13 +34,14 @@ replay/archive buffer is introduced.
 - DictationCoordinator remains transaction owner for capture UUID, editor
   provisional state, cancellation generation, history, routing, insertion, and
   recovery presentation.
-- `StreamingDictationSession` owns one finalization task. `finish()` installs it
-  exactly once; `cancel()` invalidates and closes updates first, cancels the sole
-  speech source early enough to unblock an in-flight `finish()`, then cancels
-  and awaits that task, and releases source resources exactly once. This lets
-  caller cancellation reach `IncrementalTranscriptCleaner` and its bounded
-  helper acknowledgement or force-termination path before session cancellation
-  returns.
+- `StreamingDictationSession` owns one finalization task and one shared
+  `cancellationTask`. `finish()` installs finalization exactly once. The first
+  `cancel()` creates the shared task, invalidates and closes updates, cancels the
+  sole speech source early enough to unblock an in-flight `finish()`, cancels
+  and awaits finalization, and releases source resources exactly once. Every
+  concurrent or reentrant caller awaits that same cancellation task, so no
+  caller returns before the cleaner's bounded helper acknowledgement or
+  force-termination path and source release have completed.
 - Coordinator cancellation marks the capture cancelled and invalidates its
   generation first, restores the focused editor transaction second, and only
   then awaits processing-session cancellation or legacy source cancellation and
@@ -149,8 +150,8 @@ protocol DictationProcessing: AnyObject {
 protocol DictationProcessingSession: AnyObject {
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
   func finish() async throws -> DictationProcessingResult
-  // Cancels source to unblock finish, then awaits finalization/cleanup before
-  // resource release returns.
+  // All callers await one source-unblocking/finalization/cleanup cancellation
+  // task before resource release returns.
   func cancel() async
 }
 
@@ -853,7 +854,9 @@ enum StreamingSpeechSourceProbeError: Error {
 final class StreamingSpeechSourceProbe: StreamingSpeechSource {
   init(
     startError: StreamingSpeechSourceProbeError? = nil,
-    finishBlocksUntilCancel: Bool = false
+    finishBlocksUntilCancel: Bool = false,
+    onCancel: (@MainActor @Sendable () async -> Void)? = nil,
+    onRelease: (@MainActor @Sendable () async -> Void)? = nil
   )
   private(set) var startCount = 0
   private(set) var finishCount = 0
@@ -955,6 +958,96 @@ func cancellingSessionAwaitsCleanupAcknowledgementBeforeSourceShutdown() async t
   #expect(source.cancelCount == 1)
   #expect(source.releaseCount == 1)
   #expect(try await updates.value.isEmpty)
+}
+
+enum CancellationDrainEvent: Equatable {
+  case sourceCancel
+  case helperAcknowledged
+  case sourceRelease
+  case firstCallerReturned
+  case secondCallerReturned
+}
+
+@MainActor
+final class CancellationDrainRecorder {
+  private(set) var events: [CancellationDrainEvent] = []
+  func append(_ event: CancellationDrainEvent) { events.append(event) }
+  func waitUntil(_ event: CancellationDrainEvent) async {
+    while !events.contains(event) { await Task.yield() }
+  }
+}
+
+@Test @MainActor
+func concurrentCancelCallersShareOneTaskAndAwaitOrderedCleanupDrain() async throws {
+  let order = CancellationDrainRecorder()
+  let source = StreamingSpeechSourceProbe(
+    onCancel: { await order.append(.sourceCancel) },
+    onRelease: { await order.append(.sourceRelease) }
+  )
+  let helper = CleanupGeneratorProbe(
+    result: "Send the report.",
+    waitsForCancellation: true,
+    onAcknowledgementFinished: {
+      await order.append(.helperAcknowledged)
+    }
+  )
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: helper,
+    clock: .bounded(milliseconds: 1),
+    cancellationBudget: .milliseconds(25)
+  )
+  let processor = StreamingDictationProcessor(
+    makeSource: { source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(
+        baseline: "Send the report",
+        protectedForms: [],
+        replacements: 0
+      )
+    ),
+    cleaner: cleaner,
+    runtime: nil,
+    clock: TestDictationClock.immediate,
+    budget: .production
+  )
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ))
+  let updates = Task {
+    try await session.updates.reduce(into: [DictationTextUpdate]()) {
+      $0.append($1)
+    }
+  }
+  let finalization = Task { try await session.finish() }
+  await helper.waitUntilStarted()
+
+  let first = Task {
+    await session.cancel()
+    await order.append(.firstCallerReturned)
+  }
+  await order.waitUntil(.sourceCancel)
+  let second = Task {
+    await session.cancel()
+    await order.append(.secondCallerReturned)
+  }
+  await first.value
+  await second.value
+  await #expect(throws: CancellationError.self) { try await finalization.value }
+
+  #expect(source.cancelCount == 1)
+  #expect(source.releaseCount == 1)
+  #expect(try await updates.value.isEmpty)
+  let events = order.events
+  let helperIndex = try #require(events.firstIndex(of: .helperAcknowledged))
+  let releaseIndex = try #require(events.firstIndex(of: .sourceRelease))
+  let firstReturnIndex = try #require(events.firstIndex(of: .firstCallerReturned))
+  let secondReturnIndex = try #require(events.firstIndex(of: .secondCallerReturned))
+  #expect((events.firstIndex(of: .sourceCancel) ?? Int.max) < helperIndex)
+  #expect(helperIndex < releaseIndex)
+  #expect(releaseIndex < firstReturnIndex)
+  #expect(releaseIndex < secondReturnIndex)
 }
 
 @Test @MainActor
@@ -1357,10 +1450,13 @@ and `acknowledgement()` as the observable session contract.
 The Task 4 cleanup probe additionally exposes
 `acknowledgementFinished` after the cleaner's helper session has either
 acknowledged cancellation or completed its bounded force-termination path.
-`StreamingSpeechSourceProbe.cancel()` increments `cancelCount`; the session
-cancellation test waits for the helper start, awaits `session.cancel()`, and
-then checks that acknowledgement, source cancellation, and source release all
-completed before it accepts the no-result/no-update assertions.
+For the ordered cancellation test, `CleanupGeneratorProbe` accepts the
+test-only `onAcknowledgementFinished` callback and invokes it at its single
+acknowledgement transition. `StreamingSpeechSourceProbe` accepts `onCancel`
+and `onRelease` callbacks and invokes them exactly once from the corresponding
+source methods. The test therefore observes source cancellation early, helper
+acknowledgement before source release, and both caller-return events after
+release rather than inferring order from a post-completion history.
 
 When initialized with `finishBlocksUntilCancel: true`, the same source probe
 marks `finishStarted`, waits inside `finish()` for `cancel()`, and then marks
@@ -1439,6 +1535,7 @@ final class StreamingDictationSession: DictationProcessingSession {
   private let clock: DictationClock
   private let budget: DictationProcessingBudget
   private var finalizationTask: Task<DictationProcessingResult, Error>?
+  private var cancellationTask: Task<Void, Never>?
   private var isCancelled = false
   private var sourceCancellationRequested = false
   private var resourcesReleased = false
@@ -1467,6 +1564,18 @@ final class StreamingDictationSession: DictationProcessingSession {
   }
 
   func cancel() async {
+    if let cancellationTask {
+      await cancellationTask.value
+      return
+    }
+    let task = Task { @MainActor [weak self] in
+      await self?.performCancellation()
+    }
+    cancellationTask = task
+    await task.value
+  }
+
+  private func performCancellation() async {
     guard !isCancelled else { return }
     isCancelled = true
     generation &+= 1
@@ -1504,13 +1613,14 @@ rethrowing; a factory failure before a source exists has nothing to release.
 release count, and emitted callbacks in the two lifecycle tests above.
 
 `StreamingDictationSession` owns one already-started source, state, generation
-counter, stream continuation, one `finalizationTask`, cancellation state,
-injected `DictationClock`, and `DictationProcessingBudget`. At `begin`, it
-records no deadline. At `finish`, the session installs exactly one finalization
-task; later callers await that same task. It first returns the existing task
-when present, then guards `isCancelled` before creating a new task, so
-cancel-before-finish cannot start new work and simultaneous finish callers share
-one terminal task. The task records
+counter, stream continuation, one `finalizationTask`, one shared
+`cancellationTask`, cancellation state, injected `DictationClock`, and
+`DictationProcessingBudget`. At `begin`, it records no deadline. At `finish`,
+the session installs exactly one finalization task; later callers await that
+same task. It first returns the existing task when present, then guards
+`isCancelled` before creating a new task, so cancel-before-finish cannot start
+new work and simultaneous finish callers share one terminal task. The task
+records
 `stopInstant = clock.now()` exactly once, constructs
 `insertionDeadline = stopInstant.advanced(by: budget.insertion)` immediately,
 and passes both values to:
@@ -1541,13 +1651,15 @@ resolves the dictionary before creating the request, and never calls the legacy
 cleaner. A cleaned candidate publishes `cleanedTranscript`; every
 unsafe/unavailable cleanup publishes `insertedText` equal to the exact
 baseline. A resolver failure publishes raw ASR recovery with no cleaner call.
-`cancel` invalidates the generation and closes updates first, cancels the sole
-source early enough to unblock an in-flight source `finish`, cancels the one
-finalization task, and awaits it before releasing resources exactly once. The
-awaited task propagates caller cancellation into
-`IncrementalTranscriptCleaner`, so its helper acknowledgement or force
-termination completes before release returns. No final result or update can
-publish after that boundary. A state or source error closes without a late
+The first `cancel` stores a `Task<Void, Never>` in `cancellationTask` before
+awaiting it. That task invalidates the generation and closes updates, cancels
+the sole source early enough to unblock an in-flight source `finish`, cancels
+the one finalization task, awaits it, and releases resources exactly once.
+Later concurrent or reentrant callers find the stored handle and await its
+value; they never return early. The awaited task propagates caller cancellation
+into `IncrementalTranscriptCleaner`, so its helper acknowledgement or
+force-termination completes before release returns. No final result or update
+can publish after that boundary. A state or source error closes without a late
 result.
 
 `TestDictationClock` supplies a fixed sequence of instants to the processor;

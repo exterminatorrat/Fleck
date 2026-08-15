@@ -251,6 +251,11 @@ dictionary forms, numbers and number words, dates and times, prices, units and
 quantities, recipients and destinations, paths, URLs, email addresses, code,
 commands, negation, modality, commitments, quotes, mixed English/Mandarin order,
 lexical insertion, lexical substitution, reordering, or an ambiguous correction.
+It classifies supported English cardinal/ordinal number words and digit forms
+before filler, repetition, or correction recognition; the ordered number
+signature must remain identical, and ambiguous or unrecognized numeric forms
+fail closed. Only validated ordinal list markers may be introduced by the
+short-list formatting rule.
 The transcript is quoted data, never instructions.
 
 ## Cancellation and generations
@@ -262,16 +267,23 @@ unless all of these remain true: the UUID is active, the generation is current,
 the capture is not cancelling/terminating, and the pipeline is still accepting
 updates.
 
-The selected `DictationProcessingSession` owns one finalization task. `finish()`
-installs that task exactly once. `cancel()` invalidates the generation and closes
-updates first, cancels the sole speech source early enough to unblock an
-in-flight `finish()`, cancels and awaits the finalization task, and only then
-releases source resources exactly once. This makes caller cancellation reach
-`IncrementalTranscriptCleaner`; its bounded helper acknowledgement or
-force-termination path completes before session cancellation returns.
+The selected `DictationProcessingSession` owns one finalization task and one
+shared `cancellationTask`. `finish()` installs finalization exactly once. The
+first `cancel()` stores the shared task before invalidating the generation and
+closing updates, cancels the sole speech source early enough to unblock an
+in-flight `finish()`, cancels and awaits finalization, and releases source
+resources exactly once. Every concurrent or reentrant caller awaits that same
+task, so cancellation reaches `IncrementalTranscriptCleaner` and its bounded
+helper acknowledgement or force-termination path before any caller returns.
 Concurrent finish callers await the same existing task; if cancellation wins
 before any finish task exists, the cancellation guard prevents new finalization
 work from starting.
+
+The ordered cancellation test records source cancellation, helper
+acknowledgement, source release, and each caller return. It requires source
+cancellation to be early, helper acknowledgement before source release, and
+both cancel callers to return only after source release; no result or update may
+publish.
 
 Cancellation must execute in this order:
 
@@ -423,7 +435,11 @@ struct AdmittedModelHardwareProfile: Equatable, Sendable {
 enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
   case emptyIdentity
   case emptyRevision
+  case emptyRuntimeABI
+  case emptyConversion
+  case emptyQuantization
   case emptyLicense
+  case invalidSource
   case unsafePath(String)
   case invalidByteCount
   case invalidChecksum(String)
@@ -435,8 +451,10 @@ enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
 ```
 
 The signed boundary decodes into `RawAdmittedModelDescriptor` and constructs the
-validated `AdmittedModelDescriptor` through a throwing initializer for empty
-identity/revision/license, unsafe paths, invalid sizes or checksums, aggregate
+validated `AdmittedModelDescriptor` through a throwing initializer for trimmed-
+empty identity/revision/runtime ABI/conversion/quantization/license, an
+absolute safe HTTPS source-repository URL with a host and no credentials,
+fragment, traversal, or query, unsafe paths, invalid sizes or checksums, aggregate
 mismatches, `Int64.addingReportingOverflow` when deriving required staging
 capacity, and empty support sets. An installed-plus-download overflow rejects
 with `AdmittedModelDescriptorError.requiredCapacityOverflow`; a distinct
@@ -505,6 +523,11 @@ byte snapshots, starting with one explicit zero and ignoring duplicate or
 out-of-range manager emissions, and `verifying`/`installing`/`ready`/`repairRequired`/
 `removing`/`cancelled`/failure transitions while the operation is active, and
 the Settings view model owns the cancellable subscription.
+The Settings action view model maps Install, Cancel, Repair, Update, and Remove
+to the corresponding installer method exactly once. One action task serializes
+operation actions, one cancellation guard permits Cancel to interrupt that
+task, duplicate concurrent operation clicks are ignored, and the action probe
+asserts every dispatch produces the expected presentation update.
 
 If signed-descriptor construction, catalog hardware recommendation, or either
 identity comparison fails, the Settings construction boundary catches the
@@ -582,7 +605,8 @@ slice's development app is successful with all custom components uninstalled.
    `IncrementalTranscriptCleanerTests`, and `StreamingTranscriptStateTests`
    prove dictionary alias resolution/ambiguity/protected counts, token
    boundaries, protected categories, allowlisted edits, output bounds, one
-   request, deadline behavior, and caller cancellation. The
+   request, deadline behavior, caller cancellation, and number/number-word
+   preservation before filler, repetition, or correction edits. The
    `AdmittedModelDescriptorTests` and catalog tests prove raw/validated
    separation, both checked-add overflow errors, complete requested-language
    subset gating, exact staging capacity, and the built-in fallback.
@@ -606,7 +630,9 @@ slice's development app is successful with all custom components uninstalled.
    and bindings are caught into a non-operating failed Settings snapshot; Apple
    Speech remains the active fallback and transport calls remain zero. The
    Task 3-owned Settings presentation tests separately prove the recommendation
-   card's VoiceOver label/value, keyboard focus, and finite phase/progress copy.
+   card's VoiceOver label/value, keyboard focus, finite phase/progress copy, and
+   exactly-once Install/Cancel/Repair/Update/Remove dispatch with serialized
+   duplicate-operation handling.
 6. **Offline/cancellation checks:** serialized SwiftPM commands run with
    `--disable-automatic-resolution --no-parallel`; tests assert no URLSession,
    transcript file, audio file, or late insertion is introduced by the vertical

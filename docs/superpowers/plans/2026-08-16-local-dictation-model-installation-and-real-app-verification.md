@@ -47,6 +47,11 @@ resource, downloader, or build script.
   `AdmittedModelDescriptor` reaches `AdmittedModelCatalog` or an installer. Its
   memberwise construction is private and its checked `requiredCapacityBytes` is
   stored at validation time.
+- Validation requires trimmed nonempty model identity, revision, runtime ABI,
+  conversion, quantization, and license, plus an absolute HTTPS repository URL
+  with a host, no credentials, fragment, traversal, or query. Relative, HTTP,
+  userinfo, fragment, traversal, and unsafe-query sources reject before catalog
+  recommendation or transport.
 - A nonempty `requestedLanguages` set must be a subset of descriptor-supported
   languages. Mixed English/Mandarin requests against an English-only descriptor
   fall back to built-in Apple Speech before transport.
@@ -57,6 +62,10 @@ resource, downloader, or build script.
 - Install, repair, update, and removal are explicit actions. Startup and
   calibration are visible phases and installation does not imply readiness or
   release admission.
+- Settings action dispatch has one serialized operation task and one
+  cancellation guard: Install, Cancel, Repair, Update, and Remove each map to
+  their installer method exactly once, while duplicate concurrent operations or
+  duplicate cancellation clicks do not start a second call.
 - Reuse the existing compile-gated `EnhancedModelManager`,
   `EnhancedModelManifest`, `ModelDownloading`, checksum verification, secure
   resume, repair, update, and removal implementation. Do not add a downloader
@@ -241,7 +250,11 @@ struct AdmittedModelImmutableIdentity: Equatable, Sendable {
 enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
   case emptyIdentity
   case emptyRevision
+  case emptyRuntimeABI
+  case emptyConversion
+  case emptyQuantization
   case emptyLicense
+  case invalidSource
   case unsafePath(String)
   case invalidByteCount
   case invalidChecksum(String)
@@ -443,6 +456,8 @@ and catalog interfaces above.
 - [ ] **Step 1: Write exact catalog tests.**
 
 ~~~swift
+import Foundation
+
 @Test func ordinaryConfigurationShowsBuiltInState() {
   let catalog = AdmittedModelCatalog(
     signedDescriptor: nil,
@@ -520,6 +535,29 @@ and catalog interfaces above.
   }
   #expect(throws: AdmittedModelDescriptorError.emptyLicense) {
     _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, license: ""))
+  }
+  #expect(throws: AdmittedModelDescriptorError.emptyRuntimeABI) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, runtimeABI: "   "))
+  }
+  #expect(throws: AdmittedModelDescriptorError.emptyConversion) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, conversion: "\t"))
+  }
+  #expect(throws: AdmittedModelDescriptorError.emptyQuantization) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, quantization: "\n"))
+  }
+  let invalidSources: [URL] = [
+    URL(string: "relative/repository")!,
+    URL(string: "http://example.invalid/repository")!,
+    URL(string: "https://user:pass@example.invalid/repository")!,
+    URL(string: "https://example.invalid/repository#fragment")!,
+    URL(string: "https://example.invalid/repository/../escape")!,
+    URL(string: "https://example.invalid/repository/%2e%2e/escape")!,
+    URL(string: "https://example.invalid/repository?download=true")!
+  ]
+  for source in invalidSources {
+    #expect(throws: AdmittedModelDescriptorError.invalidSource) {
+      _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, source: source))
+    }
   }
   #expect(throws: AdmittedModelDescriptorError.unsafePath("../escape.bin")) {
     _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
@@ -664,9 +702,43 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
 
 extension AdmittedModelDescriptor {
   init(validating raw: RawAdmittedModelDescriptor) throws {
-    guard !raw.modelID.isEmpty else { throw AdmittedModelDescriptorError.emptyIdentity }
-    guard !raw.revision.isEmpty else { throw AdmittedModelDescriptorError.emptyRevision }
-    guard !raw.license.isEmpty else { throw AdmittedModelDescriptorError.emptyLicense }
+    guard !raw.modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw AdmittedModelDescriptorError.emptyIdentity
+    }
+    guard !raw.revision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw AdmittedModelDescriptorError.emptyRevision
+    }
+    guard !raw.runtimeABI.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw AdmittedModelDescriptorError.emptyRuntimeABI
+    }
+    guard !raw.conversion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw AdmittedModelDescriptorError.emptyConversion
+    }
+    guard !raw.quantization.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw AdmittedModelDescriptorError.emptyQuantization
+    }
+    guard !raw.license.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw AdmittedModelDescriptorError.emptyLicense
+    }
+    guard let source = URLComponents(
+      url: raw.source,
+      resolvingAgainstBaseURL: false
+    ),
+      raw.source.baseURL == nil,
+      source.scheme?.lowercased() == "https",
+      source.host?.isEmpty == false,
+      source.user == nil,
+      source.password == nil,
+      source.fragment == nil,
+      source.query == nil,
+      !source.path.isEmpty,
+      !source.path.split(separator: "/").contains(".."),
+      !source.percentEncodedPath.split(separator: "/").contains {
+        let segment = String($0).lowercased()
+        return segment == ".." || segment == "%2e%2e"
+      } else {
+      throw AdmittedModelDescriptorError.invalidSource
+    }
     guard !raw.languages.isEmpty, !raw.architectures.isEmpty else {
       throw AdmittedModelDescriptorError.emptySupport
     }
@@ -735,8 +807,9 @@ call the throwing initializer below before constructing the inaccessible
 validated value. `TestDescriptors.neutralAdmitted` is a validated fixture;
 `TestDescriptors.raw(_:)` returns its raw copy and `TestDescriptors.make` returns
 a raw copy with the named override. The test
-cases above cover empty identity/revision/license, unsafe paths, negative byte
-counts, non-64-hex checksums, aggregate mismatches, the
+cases above cover trimmed-empty identity/revision/runtime ABI/conversion/
+quantization/license, relative/non-HTTPS/userinfo/fragment/query/traversal
+sources, unsafe file paths, negative byte counts, non-64-hex checksums, aggregate mismatches, the
 `installedBytes: Int64.max, downloadBytes: 1` required-capacity overflow, and a
 distinct per-file checked-add overflow. The stored `requiredCapacityBytes` is
 the checked value from validation, not a recomputed sum. Do not accept an array, picker index, or
@@ -1756,7 +1829,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
         totalBytes: descriptor.downloadBytes
       ),
       runsStartupAndCalibration: true
-    ) { try await manager.download() }
+    ) { try await self.manager.download() }
   }
 
   func repair() async {
@@ -1766,7 +1839,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
         totalBytes: descriptor.downloadBytes
       ),
       runsStartupAndCalibration: true
-    ) { try await manager.repair() }
+    ) { try await self.manager.repair() }
   }
 
   func update() async {
@@ -1776,7 +1849,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
         totalBytes: descriptor.downloadBytes
       ),
       runsStartupAndCalibration: true
-    ) { try await manager.update() }
+    ) { try await self.manager.update() }
   }
 
   func refresh() async {
@@ -1800,7 +1873,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
     await runManagerOperation(
       initialPhase: .removing,
       runsStartupAndCalibration: false
-    ) { try await manager.deleteModel() }
+    ) { try await self.manager.deleteModel() }
   }
 }
 #endif
@@ -1812,7 +1885,8 @@ Combine subscriptions. The byte-progress sink publishes monotonic
 `verifying`, `installing`, `ready`, `updateAvailable`, `repairRequired`, and
 `removing` as they occur. No `receive(on:)` is used, so a final byte update is
 delivered before the operation's teardown. One `operationTask` owns each
-manager `download`, `repair`, `update`, or `deleteModel` call. `cancel()` sets
+manager `download`, `repair`, `update`, or `deleteModel` call; each escaping
+installer closure names `self.manager` explicitly. `cancel()` sets
 the cancellation flag and cancels that task; the manager operation is the
 task's awaited child, so cancellation propagates into the manager's existing
 `ModelDownloading`/URLSession downloader cancellation handler. The task keeps
@@ -1825,7 +1899,7 @@ publishes `.starting`, awaits startup, publishes `.calibrating`, awaits
 calibration, and only then publishes `.installed`. On checksum, size, path,
 capacity, transport, startup, or calibration failure, set an actionable
 `failed` or `repairRequired` message and retain the safe previous installation
-when the manager does. Removal calls only `manager.deleteModel()`. The
+when the manager does. Removal calls only `self.manager.deleteModel()`. The
 ordinary release uses `BuiltInAdmittedModelInstaller` and cannot reach the
 manager.
 
@@ -1999,6 +2073,53 @@ finite phase/progress text.
     #expect(!presentation.detail.isEmpty)
     #expect(!presentation.detail.contains("Loading"))
   }
+}
+
+@MainActor
+final class InstallerActionProbe: AdmittedModelInstalling {
+  init(holdsOperations: Bool = false)
+  private(set) var snapshot: AdmittedModelInstallationSnapshot { get }
+  var updates: AsyncStream<AdmittedModelInstallationSnapshot> { get }
+  func count(_ action: AdmittedModelSettingsAction) -> Int
+  func waitUntilStarted(_ action: AdmittedModelSettingsAction) async
+  func waitUntilPhase(_ phase: AdmittedModelInstallPhase) async
+  func refresh() async
+  func install() async
+  func cancel()
+  func repair() async
+  func update() async
+  func remove() async
+}
+
+@Test @MainActor
+func settingsActionsDispatchExactlyOnceAndUpdatePresentation() async {
+  let rows: [(AdmittedModelSettingsAction, AdmittedModelInstallPhase)] = [
+    (.install, .ready),
+    (.repair, .repairRequired(message: "repair")),
+    (.update, .updateAvailable),
+    (.remove, .removing)
+  ]
+  for (action, expectedPhase) in rows {
+    let probe = InstallerActionProbe()
+    let viewModel = AdmittedModelSettingsViewModel(installer: probe)
+    viewModel.perform(action)
+    await probe.waitUntilPhase(expectedPhase)
+    await Task.yield()
+    #expect(probe.count(action) == 1)
+    #expect(viewModel.presentation.phase == expectedPhase)
+  }
+
+  let cancellingProbe = InstallerActionProbe(holdsOperations: true)
+  let cancellingViewModel = AdmittedModelSettingsViewModel(installer: cancellingProbe)
+  cancellingViewModel.perform(.install)
+  await cancellingProbe.waitUntilStarted(.install)
+  cancellingViewModel.perform(.cancel)
+  cancellingViewModel.perform(.cancel)
+  await cancellingProbe.waitUntilPhase(.cancelled)
+  await Task.yield()
+  #expect(cancellingProbe.count(.install) == 1)
+  #expect(cancellingProbe.count(.cancel) == 1)
+  #expect(cancellingViewModel.presentation.phase == .cancelled)
 }
 
 @Test @MainActor
@@ -2251,7 +2372,11 @@ if let action = presentation.primaryAction,
 The Task 3-owned `AdmittedModelSettingsPresentationTests` file asserts the
 recommendation label, identity/revision value, keyboard focus, finite phase
 copy, and exact in-progress byte value. Use no indefinite Loading text and no
-automatic action on view appearance.
+automatic action on view appearance. Its installer-action probe also asserts
+that Install, Cancel, Repair, Update, and Remove each dispatch exactly once and
+that each resulting snapshot reaches the presentation. A held operation test
+proves duplicate operation clicks are serialized and duplicate Cancel clicks
+do not call the installer twice.
 
 - [ ] **Step 4: Add the observable action view model and wire the native UI.**
 
@@ -2262,6 +2387,8 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
     AdmittedModelSettingsPresentation
   private let installer: any AdmittedModelInstalling
   private var updatesTask: Task<Void, Never>?
+  private var actionTask: Task<Void, Never>?
+  private var cancellationSent = false
 
   init(installer: any AdmittedModelInstalling) {
     self.installer = installer
@@ -2269,9 +2396,40 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
     subscribeToUpdates()
   }
   func refresh() async
-  func perform(_ action: AdmittedModelSettingsAction)
+  func perform(_ action: AdmittedModelSettingsAction) {
+    if action == .cancel {
+      guard !cancellationSent else { return }
+      cancellationSent = true
+      installer.cancel()
+      return
+    }
+    guard actionTask == nil else { return }
+    cancellationSent = false
+    actionTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        self.actionTask = nil
+        self.cancellationSent = false
+      }
+      switch action {
+      case .install:
+        await self.installer.install()
+      case .repair:
+        await self.installer.repair()
+      case .update:
+        await self.installer.update()
+      case .remove:
+        await self.installer.remove()
+      case .cancel:
+        self.installer.cancel()
+      }
+    }
+  }
 
-  deinit { updatesTask?.cancel() }
+  deinit {
+    updatesTask?.cancel()
+    actionTask?.cancel()
+  }
 
   private func subscribeToUpdates() {
     updatesTask = Task { [weak self, installer] in
@@ -2287,6 +2445,15 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
   }
 }
 ~~~
+
+`perform(_:)` has no default or no-op action branch: every enum case maps to the
+corresponding installer method. Install, Repair, Update, and Remove are guarded
+by one `actionTask`; a second operation click while it is non-nil is ignored.
+Cancel is allowed to interrupt that task exactly once, guarded by
+`cancellationSent`, and the task's `defer` clears both guards after the
+installer returns. The probe tests wait for each published phase and assert the
+exact per-action count, including one Cancel for two concurrent cancellation
+clicks.
 
 In `FleckApp.swift`, construct the empty catalog and
 `BuiltInAdmittedModelInstaller` for ordinary release. Under the existing

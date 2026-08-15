@@ -25,6 +25,7 @@ existing FleckCore dictionary/cleanup structures. No new package dependency.
 - The target cleanup input is the exact dictionary baseline. Dictionary resolution failure before a baseline exists belongs to the later coordinator raw-ASR recovery path and is not converted into a cleanup baseline here.
 - Automatic cleanup may change only punctuation, capitalization, whitespace, isolated unambiguous fillers, immediate exact repetition, an explicitly spoken same-tail correction, and short-list formatting without changing list items.
 - Names and dictionary forms, numbers and number words, dates and times, prices, units and quantities, recipients and destinations, paths, URLs, email addresses, code, commands, negation, modality, commitments, quotes, and mixed English/Mandarin order are protected meaning.
+- Number classification runs before filler, repetition, or correction recognition; supported English cardinal/ordinal words and digit forms must keep the exact ordered number signature, while ambiguous or unrecognized numeric forms fail closed. Only validated ordinal list markers are exempt.
 - The validator runs protected-span preservation before allowlist classification. Any protected-meaning violation rejects the candidate.
 - The automatic target is at most 80 lexical words. The candidate output is at most input token count plus 32; helper-reported metadata is not authoritative.
 - There is one request, one generation attempt, zero automatic retries, no network, no transcript logging, no transcript persistence, and no audio persistence.
@@ -330,9 +331,50 @@ import Testing
   #expect(nearMiss == .rejected(.ambiguousCorrection))
 }
 
+@Test func faithfulValidatorProtectsNumbersAndNumberWordsBeforeCleanupEdits() {
+  let numberWords = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty",
+    "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million",
+    "billion", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+    "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth",
+    "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth", "twentieth",
+    "thirtieth", "fortieth", "fiftieth", "sixtieth", "seventieth", "eightieth",
+    "ninetieth"
+  ]
+  for word in numberWords {
+    #expect(
+      FaithfulCleanupValidator().validate(
+        candidate: "send \(word) files.",
+        against: .init(
+          baseline: "send \(word) files",
+          protectedForms: [],
+          replacements: 0
+        )
+      ) == .accepted(text: "send \(word) files.", operations: [.punctuation])
+    )
+  }
+
+  let rejected: [(String, String)] = [
+    ("twenty twenty", "twenty"),
+    ("twenty actually thirty", "thirty"),
+    ("send 20 files", "send 10 files"),
+    ("send twenty-two files", "send 22 files"),
+    ("send 20th files", "send 20 files")
+  ]
+  for (baseline, candidate) in rejected {
+    #expect(
+      FaithfulCleanupValidator().validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
+}
+
 @Test func faithfulValidatorRejectsProtectedMeaningChanges() {
   let rows: [(String, String, [String])] = [
-    ("Send 20 files", "Send 10 files.", []),
     ("Meet Tuesday", "Meet Wednesday.", []),
     ("Do not cancel", "Cancel.", []),
     ("I might send it", "I will send it.", []),
@@ -415,6 +457,7 @@ enum CleanupValidationFailure: Error, Equatable, Sendable {
   case lexicalSubstitution
   case reorderedContent
   case ambiguousCorrection
+  case numberMeaningChanged
 }
 
 enum CleanupValidationDecision: Equatable, Sendable {
@@ -437,6 +480,11 @@ struct FaithfulCleanupValidator: Sendable {
     let candidateLexemes = CleanupLexeme.scan(candidate)
     let baselineValues = baselineLexemes.filter(\.isLexical).map(\.canonical)
     let candidateValues = candidateLexemes.filter(\.isLexical).map(\.canonical)
+
+    guard isShortListFormatting(baselineValues, candidateLexemes)
+      || numberMeaningIsPreserved(baselineValues, candidateValues) else {
+      return .rejected(.numberMeaningChanged)
+    }
 
     guard PersonalDictionaryResolver.cleanupPreserves(
       resolution.protectedForms,
@@ -504,7 +552,60 @@ struct FaithfulCleanupValidator: Sendable {
 
   private static let fillerWords: Set<String> = ["um", "uh", "erm", "呃", "嗯"]
   private static let ordinalWords: Set<String> = ["first", "second", "third", "fourth", "fifth"]
+  private static let numberWords: Set<String> = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty",
+    "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million",
+    "billion", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+    "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth",
+    "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth", "twentieth",
+    "thirtieth", "fortieth", "fiftieth", "sixtieth", "seventieth", "eightieth",
+    "ninetieth"
+  ]
   private static let correctionMarkers: Set<String> = ["actually", "sorry", "no"]
+
+  private enum NumberClassification: Equatable {
+    case none
+    case digit(String)
+    case word(String)
+    case ambiguous
+  }
+
+  private static func numberMeaningIsPreserved(
+    _ baselineValues: [String],
+    _ candidateValues: [String]
+  ) -> Bool {
+    let baseline = baselineValues.map(classifyNumber)
+    let candidate = candidateValues.map(classifyNumber)
+    guard !baseline.contains(.ambiguous), !candidate.contains(.ambiguous) else {
+      return false
+    }
+    return baseline.filter { $0 != .none } == candidate.filter { $0 != .none }
+  }
+
+  private static func classifyNumber(_ value: String) -> NumberClassification {
+    let canonical = value.lowercased()
+    if numberWords.contains(canonical) {
+      return .word(canonical)
+    }
+    if canonical.contains("-") {
+      let parts = canonical.split(separator: "-").map(String.init)
+      if parts.allSatisfy(numberWords.contains) {
+        return .word(canonical)
+      }
+      if parts.contains(where: numberWords.contains) {
+        return .ambiguous
+      }
+    }
+    if canonical.range(of: #"^\d+(?:\.\d+)?$"#, options: .regularExpression) != nil {
+      return .digit(canonical)
+    }
+    if canonical.unicodeScalars.contains(where: CharacterSet.decimalDigits.contains) {
+      return .ambiguous
+    }
+    return .none
+  }
 
   private static func protectedSpansMatch(
     _ baseline: [CleanupProtectedSpan],
@@ -554,10 +655,16 @@ inside a normal sentence. Implement the four edit recognizers with
 `CleanupLexeme` indices, not string replacement. A filler is removable only when
 it is one of the five listed words, isolated by punctuation/boundaries, and not
 inside a protected quote/span. A duplicate is adjacent, exact after canonical
-comparison, and not numeric/protected. An explicit correction may select only a
-spoken same-tail branch marked by `actually`, `sorry`, `no`, or the exact
-`change X to Y` form. Any other count-preserving change is substitution or
-reordering. Do not put candidate text in a failure value.
+comparison, and not numeric/protected. Before those recognizers run,
+`numberMeaningIsPreserved` classifies digits and the complete supported English
+cardinal/ordinal vocabulary. It requires the ordered number signature to remain
+identical; an unrecognized digit-bearing or mixed number form is ambiguous and
+rejects fail-closed. The only numeric exception is the already-validated ordinal
+list-marker formatting above. Thus neither filler removal, immediate repetition,
+nor explicit correction can delete or replace a number word; `twenty twenty` to
+`twenty` and `twenty actually thirty` to `thirty` both reject. Any other
+count-preserving change is substitution or reordering. Do not put candidate text
+in a failure value.
 
 - [ ] **Step 4: Run the focused green command.**
 
