@@ -223,6 +223,23 @@ func fleckMarkRetainsPackagedImageAfterBackingFileDisappears() throws {
   #expect(validationScript.contains("LSUIElement"))
 }
 
+@Test func packagedDevelopmentAccessIsEnabledOnlyByTheDevelopmentBuildScript() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let buildScript = try String(
+    contentsOf: root.appendingPathComponent("Scripts/build-fleck-app.sh"),
+    encoding: .utf8
+  )
+
+  #expect(
+    buildScript.contains(
+      #"/usr/bin/plutil -insert FleckDevelopmentAccess -bool true "$staged_app/Contents/Info.plist""#
+    )
+  )
+}
+
 private func sourceText(in root: URL) throws -> String {
   guard
     let enumerator = FileManager.default.enumerator(

@@ -65,3 +65,47 @@ final class UnavailableFleckAccessActions: FleckAccessActions {
   func purchaseLifetime() async -> FleckAccessActionResult { .unavailable }
   func restorePurchase() async -> FleckAccessActionResult { .unavailable }
 }
+
+@MainActor
+final class DevelopmentFleckAccessActions: FleckAccessActions {
+  private(set) var presentation = FleckAccessPresentation(
+    state: .trialNotStarted,
+    localizedLifetimePrice: nil,
+    inFlightAction: nil,
+    message: nil
+  )
+
+  func refresh() async {}
+
+  func startTrial() async -> FleckAccessActionResult {
+    let expiresAt = Date().addingTimeInterval(7 * 24 * 60 * 60)
+    presentation = FleckAccessPresentation(
+      state: .trialActive(expiresAt: expiresAt),
+      localizedLifetimePrice: nil,
+      inFlightAction: nil,
+      message: nil
+    )
+    return .trialActive(expiresAt: expiresAt)
+  }
+
+  func purchaseLifetime() async -> FleckAccessActionResult { .unavailable }
+  func restorePurchase() async -> FleckAccessActionResult { .unavailable }
+}
+
+@MainActor
+enum FleckAccessActionsFactory {
+  private static let developmentAccessInfoKey = "FleckDevelopmentAccess"
+
+  static func make(bundle: Bundle = .main) -> any FleckAccessActions {
+    make(
+      developmentAccessEnabled:
+        bundle.object(forInfoDictionaryKey: developmentAccessInfoKey) as? Bool == true
+    )
+  }
+
+  static func make(developmentAccessEnabled: Bool) -> any FleckAccessActions {
+    developmentAccessEnabled
+      ? DevelopmentFleckAccessActions()
+      : UnavailableFleckAccessActions()
+  }
+}

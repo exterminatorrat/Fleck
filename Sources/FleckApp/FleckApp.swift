@@ -162,7 +162,7 @@
       let onboarding = OnboardingCoordinator(
         appState: appState,
         dictationRuntime: dictationRuntime,
-        accessActions: UnavailableFleckAccessActions()
+        accessActions: FleckAccessActionsFactory.make()
       )
       _appState = StateObject(wrappedValue: appState)
       _dictationRuntime = StateObject(wrappedValue: dictationRuntime)

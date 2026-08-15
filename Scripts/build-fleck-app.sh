@@ -49,6 +49,7 @@ readonly staged_app="$staging_root/Fleck.app"
 /bin/cp "$helper_executable" "$staged_app/Contents/SharedSupport/fleck-agent"
 /bin/cp "$info_plist" "$staged_app/Contents/Info.plist"
 /bin/cp "$canonical_mark" "$staged_app/Contents/Resources/fleck-mark.png"
+/usr/bin/plutil -insert FleckDevelopmentAccess -bool true "$staged_app/Contents/Info.plist"
 /bin/chmod 755 \
   "$staged_app/Contents/MacOS/Fleck" \
   "$staged_app/Contents/SharedSupport/fleck-agent"
