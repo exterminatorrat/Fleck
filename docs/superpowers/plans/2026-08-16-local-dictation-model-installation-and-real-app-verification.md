@@ -62,10 +62,17 @@ resource, downloader, or build script.
   manifest; its source repository drives `remoteURL`, and the adapter rejects
   any descriptor/identity mismatch before manager operation. This is not a
   generic model registry.
-- Hardware recommendation checks use explicit staging capacity:
-  `requiredCapacityBytes = installedBytes + downloadBytes`. A device with
-  space above `downloadBytes` but below that required capacity falls back to
-  built-in Apple Speech.
+- Hardware recommendation checks use the descriptor's validated staging
+  capacity. `AdmittedModelDescriptor.init(validating:)` computes
+  `installedBytes + downloadBytes` with `Int64.addingReportingOverflow` and
+  rejects overflow; a device with space above `downloadBytes` but below that
+  validated capacity falls back to built-in Apple Speech.
+- The C3 factory receives one exact `AdmittedModelHardwareProfile`, constructs
+  `AdmittedModelCatalog` before `EnhancedModelManagerInstaller`, and proceeds
+  only when the catalog returns `.recommended` with the same descriptor.
+  Unsupported architecture/language or insufficient validated staging space
+  yields a non-operating built-in/failure snapshot, preserves Apple fallback,
+  and makes zero transport calls.
 - Preserve the existing debug-only `EnhancedModelManager` installer behind
   `CLEAN_DICTATION_ENHANCED_CANDIDATE`; this workstream does not turn its candidate
   route into ordinary-release routing or release evidence.
@@ -172,9 +179,7 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
   let languages: [String]
   let architectures: [String]
 
-  var requiredCapacityBytes: Int64 {
-    installedBytes + downloadBytes
-  }
+  var requiredCapacityBytes: Int64 { get }
 
   var immutableIdentity: AdmittedModelImmutableIdentity { get }
   init(validating raw: Self) throws
@@ -201,13 +206,14 @@ enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
   case invalidByteCount
   case invalidChecksum(String)
   case aggregateMismatch
+  case capacityOverflow
   case emptySupport
 }
 
-struct AdmittedHardwareProfile: Equatable, Sendable {
+struct AdmittedModelHardwareProfile: Equatable, Sendable {
   let architecture: String
+  let requestedLanguages: Set<String>
   let availableBytes: Int64
-  let languages: Set<String>
 }
 
 enum AdmittedModelRecommendation: Equatable, Sendable {
@@ -218,7 +224,7 @@ enum AdmittedModelRecommendation: Equatable, Sendable {
 struct AdmittedModelCatalog: Sendable {
   init(
     signedDescriptor: AdmittedModelDescriptor?,
-    hardware: AdmittedHardwareProfile
+    hardware: AdmittedModelHardwareProfile
   )
   func recommendation() -> AdmittedModelRecommendation
 }
@@ -385,7 +391,8 @@ operation.
 files, manifests, and model resources.
 
 **Consumes:** Signed-app configuration input supplied by the caller and a
-deterministic `AdmittedHardwareProfile`.
+deterministic `AdmittedModelHardwareProfile` containing the current
+architecture, requested language set, and available capacity.
 
 **Produces:** The descriptor, file identity, hardware profile, recommendation,
 and catalog interfaces above.
@@ -401,7 +408,7 @@ and catalog interfaces above.
     hardware: .init(
       architecture: "arm64",
       availableBytes: 16_000_000_000,
-      languages: ["en-US"]
+      requestedLanguages: ["en-US"]
     )
   )
   #expect(catalog.recommendation() == .builtIn)
@@ -414,7 +421,7 @@ and catalog interfaces above.
     hardware: .init(
       architecture: "arm64",
       availableBytes: descriptor.requiredCapacityBytes + 1,
-      languages: ["en-US"]
+      requestedLanguages: ["en-US"]
     )
   )
   #expect(catalog.recommendation() == .recommended(descriptor))
@@ -426,7 +433,7 @@ and catalog interfaces above.
     hardware: .init(
       architecture: "x86_64",
       availableBytes: 1,
-      languages: ["zh-CN"]
+      requestedLanguages: ["zh-CN"]
     )
   )
   #expect(catalog.recommendation() == .builtIn)
@@ -442,7 +449,7 @@ and catalog interfaces above.
     hardware: .init(
       architecture: descriptor.architectures[0],
       availableBytes: availableBytes,
-      languages: [descriptor.languages[0]]
+      requestedLanguages: [descriptor.languages[0]]
     )
   )
   #expect(catalog.recommendation() == .builtIn)
@@ -481,6 +488,13 @@ and catalog interfaces above.
   #expect(throws: AdmittedModelDescriptorError.aggregateMismatch) {
     _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, installedBytes: 1))
   }
+  #expect(throws: AdmittedModelDescriptorError.capacityOverflow) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+      valid,
+      installedBytes: Int64.max,
+      downloadBytes: 1
+    ))
+  }
   #expect(throws: AdmittedModelDescriptorError.emptySupport) {
     _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, languages: [], architectures: []))
   }
@@ -503,11 +517,11 @@ types do not exist.
 ~~~swift
 struct AdmittedModelCatalog: Sendable {
   private let signedDescriptor: AdmittedModelDescriptor?
-  private let hardware: AdmittedHardwareProfile
+  private let hardware: AdmittedModelHardwareProfile
 
   init(
     signedDescriptor: AdmittedModelDescriptor?,
-    hardware: AdmittedHardwareProfile
+    hardware: AdmittedModelHardwareProfile
   ) {
     self.signedDescriptor = signedDescriptor
     self.hardware = hardware
@@ -516,7 +530,7 @@ struct AdmittedModelCatalog: Sendable {
   func recommendation() -> AdmittedModelRecommendation {
     guard let descriptor = signedDescriptor,
           descriptor.architectures.contains(hardware.architecture),
-          descriptor.languages.contains(where: hardware.languages.contains),
+          descriptor.languages.contains(where: hardware.requestedLanguages.contains),
           hardware.availableBytes >= descriptor.requiredCapacityBytes else {
       return .builtIn
     }
@@ -529,6 +543,22 @@ Add validation at the signed boundary, not in the view:
 
 ~~~swift
 extension AdmittedModelDescriptor {
+  private static func checkedRequiredCapacity(
+    installedBytes: Int64,
+    downloadBytes: Int64
+  ) -> Int64 {
+    let (value, overflow) = installedBytes.addingReportingOverflow(downloadBytes)
+    precondition(!overflow, "requiredCapacityBytes requires a validated descriptor")
+    return value
+  }
+
+  var requiredCapacityBytes: Int64 {
+    Self.checkedRequiredCapacity(
+      installedBytes: installedBytes,
+      downloadBytes: downloadBytes
+    )
+  }
+
   init(validating raw: Self) throws {
     guard !raw.modelID.isEmpty else { throw AdmittedModelDescriptorError.emptyIdentity }
     guard !raw.revision.isEmpty else { throw AdmittedModelDescriptorError.emptyRevision }
@@ -541,7 +571,20 @@ extension AdmittedModelDescriptor {
           raw.files.allSatisfy({ $0.byteCount > 0 }) else {
       throw AdmittedModelDescriptorError.invalidByteCount
     }
-    guard raw.files.reduce(0) { $0 + $1.byteCount } == raw.downloadBytes,
+    let (_, requiredCapacityOverflow) =
+      raw.installedBytes.addingReportingOverflow(raw.downloadBytes)
+    guard !requiredCapacityOverflow else {
+      throw AdmittedModelDescriptorError.capacityOverflow
+    }
+    var aggregate: Int64 = 0
+    for file in raw.files {
+      let (next, overflow) = aggregate.addingReportingOverflow(file.byteCount)
+      guard !overflow else {
+        throw AdmittedModelDescriptorError.capacityOverflow
+      }
+      aggregate = next
+    }
+    guard aggregate == raw.downloadBytes,
           raw.installedBytes >= raw.downloadBytes else {
       throw AdmittedModelDescriptorError.aggregateMismatch
     }
@@ -571,9 +614,11 @@ Have the signed-configuration path call the throwing initializer below before
 constructing this immutable value. `TestDescriptors.make` is a test-only helper
 that starts from one valid neutral descriptor and applies the named override;
 the test cases above cover empty identity/revision/license, unsafe paths,
-negative byte counts, non-64-hex checksums, aggregate mismatches, and empty
-support sets. Do not accept an array, picker index, or fallback descriptor. The
-ordinary constructor passes nil.
+negative byte counts, non-64-hex checksums, aggregate mismatches, the
+`installedBytes: Int64.max, downloadBytes: 1` required-capacity overflow, and
+empty support sets. Do not
+accept an array, picker index, or fallback descriptor. The ordinary constructor
+passes nil.
 
 - [ ] **Step 4: Run green, inspect, and commit.**
 
@@ -1267,8 +1312,8 @@ descriptor for that value, and the URL root no longer hard-codes a candidate
 repository. Keep the manager's existing `validateRelativePath` and
 `validateRevision` checks in the generalized helper; preserve the existing
 `?download=true` query item exactly. Its verified required-capacity calculation
-remains authoritative for install admission; the catalog's
-`installedBytes + downloadBytes` check is the signed configuration equivalent.
+remains authoritative for install admission; the catalog consumes the signed
+descriptor's overflow-checked `requiredCapacityBytes` equivalent.
 The test-only `TestManagers` helpers may inject `capacityProvider: { Int64.max }`
 and `architectureProvider: { true }`; those values are never production or
 compatibility defaults.
@@ -1717,13 +1762,19 @@ Sol `ship` gate.
 audio/streaming/cleanup/coordinator file, `Sources/FleckApp/DictationCapsule.swift`,
 and candidate model files.
 
-**Consumes:** Task 1 catalog/recommendation, Task 2 installer snapshot/action
-methods, and the existing native Settings structure.
+**Consumes:** Task 1 descriptor/catalog and
+`AdmittedModelHardwareProfile`, Task 2 installer snapshot/action methods, and
+the existing native Settings structure. The factory boundary must construct the
+catalog from the signed descriptor and profile before it can construct the
+manager installer.
 
 **Produces:** `AdmittedModelSettingsPresentation`,
 `AdmittedModelSettingsViewModel`, `AdmittedModelSignedConfiguration`, the
 `makeAdmittedModelInstaller` boundary, exactly one Settings card, and
-phase-specific Settings/error copy.
+phase-specific Settings/error copy. The factory returns a recommended installer
+only for an exact `.recommended(descriptor)` catalog result; all architecture,
+language, and staging-capacity mismatches return a non-operating built-in/failure
+snapshot with zero transport calls.
 
 ### TDD red
 
@@ -1804,6 +1855,108 @@ func nilSignedConfigurationUsesBuiltInInstaller() {
   #expect(installer.snapshot.phase == .builtIn)
 }
 
+func supportedHardware(
+  for descriptor: AdmittedModelDescriptor,
+  availableBytes: Int64? = nil
+) -> AdmittedModelHardwareProfile {
+  .init(
+    architecture: descriptor.architectures[0],
+    requestedLanguages: [descriptor.languages[0]],
+    availableBytes: availableBytes ?? descriptor.requiredCapacityBytes
+  )
+}
+
+func signedConfiguration(
+  descriptor: AdmittedModelDescriptor,
+  hardware: AdmittedModelHardwareProfile,
+  transport: ModelDownloadingProbe
+) -> AdmittedModelSignedConfiguration {
+  let manager = TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
+    transport: transport
+  )
+  return AdmittedModelSignedConfiguration(
+    rawDescriptor: descriptor,
+    hardware: hardware,
+    manager: manager,
+    startup: { },
+    calibrate: { }
+  )
+}
+
+@Test @MainActor
+func architectureMismatchReturnsBuiltInFailureWithoutTransport() {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let configuration = signedConfiguration(
+    descriptor: descriptor,
+    hardware: .init(
+      architecture: "x86_64",
+      requestedLanguages: [descriptor.languages[0]],
+      availableBytes: descriptor.requiredCapacityBytes
+    ),
+    transport: transport
+  )
+  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  #expect(installer.snapshot.recommendation == .builtIn)
+  #expect(installer.snapshot.lastError != nil)
+  #expect(transport.downloadCalls == 0)
+}
+
+@Test @MainActor
+func languageMismatchReturnsBuiltInFailureWithoutTransport() {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let configuration = signedConfiguration(
+    descriptor: descriptor,
+    hardware: .init(
+      architecture: descriptor.architectures[0],
+      requestedLanguages: ["zh-CN"],
+      availableBytes: descriptor.requiredCapacityBytes
+    ),
+    transport: transport
+  )
+  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  #expect(installer.snapshot.recommendation == .builtIn)
+  #expect(installer.snapshot.lastError != nil)
+  #expect(transport.downloadCalls == 0)
+}
+
+@Test @MainActor
+func insufficientStagingCapacityReturnsBuiltInFailureWithoutTransport() {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let availableBytes = descriptor.downloadBytes + 1
+  #expect(availableBytes > descriptor.downloadBytes)
+  #expect(availableBytes < descriptor.requiredCapacityBytes)
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let configuration = signedConfiguration(
+    descriptor: descriptor,
+    hardware: supportedHardware(for: descriptor, availableBytes: availableBytes),
+    transport: transport
+  )
+  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  #expect(installer.snapshot.recommendation == .builtIn)
+  #expect(installer.snapshot.lastError != nil)
+  #expect(transport.downloadCalls == 0)
+}
+
+@Test @MainActor
+func supportedHardwareProfileReachesRecommendedInstallerWithoutStartingTransport() {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let configuration = signedConfiguration(
+    descriptor: descriptor,
+    hardware: supportedHardware(for: descriptor),
+    transport: transport
+  )
+  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  #expect(installer.snapshot.recommendation == .recommended(descriptor))
+  #expect(installer.snapshot.phase == .notInstalled)
+  #expect(transport.downloadCalls == 0)
+}
+
 @Test @MainActor
 func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
   let raw = TestDescriptors.make(TestDescriptors.neutralAdmitted, modelID: "")
@@ -1815,6 +1968,7 @@ func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
   )
   let configuration = AdmittedModelSignedConfiguration(
     rawDescriptor: raw,
+    hardware: supportedHardware(for: TestDescriptors.tinyAdmittedASR),
     manager: manager,
     startup: { },
     calibrate: { }
@@ -1842,6 +1996,7 @@ func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
   )
   let configuration = AdmittedModelSignedConfiguration(
     rawDescriptor: descriptor,
+    hardware: supportedHardware(for: descriptor),
     manager: manager,
     startup: { },
     calibrate: { }
@@ -1933,10 +2088,11 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
 In `FleckApp.swift`, construct the empty catalog and
 `BuiltInAdmittedModelInstaller` for ordinary release. Under the existing
 compile-gated configuration, inject an optional
-`AdmittedModelSignedConfiguration` whose manager has already been created by the
-caller; the current app passes `nil` in both ordinary and gated builds. Store
-one view model on `DictationRuntime`; do not create parallel operation
-dictionaries or a second manager. Invalid signed configuration or artifact
+`AdmittedModelSignedConfiguration` whose manager and exact
+`AdmittedModelHardwareProfile` have already been created by the caller; the
+current app passes `nil` in both ordinary and gated builds. Store one view model
+on `DictationRuntime`; do not create parallel operation dictionaries or a second
+manager. Invalid signed configuration, hardware recommendation, or artifact
 binding must be caught at this boundary so Settings construction never fails
 and Apple Speech/deterministic cleanup remains active.
 
@@ -1961,6 +2117,7 @@ manager:
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 struct AdmittedModelSignedConfiguration {
   let rawDescriptor: AdmittedModelDescriptor
+  let hardware: AdmittedModelHardwareProfile
   let manager: EnhancedModelManager
   let startup: @MainActor () async throws -> Void
   let calibrate: @MainActor () async throws -> Void
@@ -1977,6 +2134,16 @@ func makeAdmittedModelInstaller(
     let descriptor = try AdmittedModelDescriptor(
       validating: signedConfiguration.rawDescriptor
     )
+    let catalog = AdmittedModelCatalog(
+      signedDescriptor: descriptor,
+      hardware: signedConfiguration.hardware
+    )
+    guard case .recommended(let recommended) = catalog.recommendation(),
+          recommended == descriptor else {
+      return FailedAdmittedModelInstaller(
+        message: "This model is not supported by the current Mac, language, or available staging capacity."
+      )
+    }
     return try EnhancedModelManagerInstaller(
       manager: signedConfiguration.manager,
       descriptor: descriptor,
@@ -1998,8 +2165,11 @@ func makeAdmittedModelInstaller() -> any AdmittedModelInstalling {
 `FailedAdmittedModelInstaller` is non-operating and exists only to render the
 actionable Settings error. Its `.builtIn` recommendation does not replace the
 coordinator's existing Apple Speech/deterministic-cleanup dependencies, so a
-bad signed descriptor or artifact binding leaves the production fallback
-usable and performs no transport work.
+bad signed descriptor, unsupported hardware/language profile, insufficient
+staging capacity, or artifact binding leaves the production fallback usable and
+performs no transport work. The catalog result is compared to the same
+validated descriptor before `EnhancedModelManagerInstaller` is constructed;
+there is no silent recommendation or install path.
 
 In `SettingsView.swift`, make the ordinary-build Dictation section render one
 native card from the view model: its recommendation card has one explicit
@@ -2066,7 +2236,12 @@ git commit -m "feat: present admitted model recommendation"
 
 Expected scan: no normal model picker, old consent surface, or indefinite
 Loading copy remains. The parent reruns the default and candidate-gated checks,
-inspects the UI diff, and obtains the final fresh Sol ship verdict.
+inspects the UI diff, and confirms the four gated hardware-factory cases:
+architecture mismatch, language mismatch, insufficient staging capacity, and
+one supported profile. Each unsupported case must retain the built-in/failure
+snapshot with zero transport calls, while the supported case must reach the
+exact recommended descriptor. The parent then obtains the final fresh Sol ship
+verdict.
 
 ## Parent verification and real-app handoff
 

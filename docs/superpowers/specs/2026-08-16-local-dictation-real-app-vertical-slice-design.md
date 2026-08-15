@@ -337,7 +337,8 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
   let languages: [String]
   let architectures: [String]
 
-  var requiredCapacityBytes: Int64 { installedBytes + downloadBytes }
+  // Derived only after init(validating:) accepts a checked Int64 sum.
+  var requiredCapacityBytes: Int64 { get }
 }
 
 struct AdmittedModelImmutableIdentity: Equatable, Sendable {
@@ -352,11 +353,32 @@ struct AdmittedModelImmutableIdentity: Equatable, Sendable {
   let downloadBytes: Int64
   let installedBytes: Int64
 }
+
+struct AdmittedModelHardwareProfile: Equatable, Sendable {
+  let architecture: String
+  let requestedLanguages: Set<String>
+  let availableBytes: Int64
+}
+
+enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
+  case emptyIdentity
+  case emptyRevision
+  case emptyLicense
+  case unsafePath(String)
+  case invalidByteCount
+  case invalidChecksum(String)
+  case aggregateMismatch
+  case capacityOverflow
+  case emptySupport
+}
 ```
 
 The signed boundary constructs the descriptor through a throwing validation
 initializer for empty identity/revision/license, unsafe paths, invalid sizes or
-checksums, aggregate mismatches, and empty support sets. The existing
+checksums, aggregate mismatches, `Int64.addingReportingOverflow` when deriving
+required staging capacity, and empty support sets. An overflow rejects with
+`AdmittedModelDescriptorError.capacityOverflow`; no unchecked sum is stored or
+used for recommendation. The existing
 compile-gated manager builds or receives one immutable
 `EnhancedModelArtifactIdentity` alongside its `EnhancedModelManifest`; its
 source repository and revision derive every `remoteURL`. The admitted installer
@@ -373,22 +395,30 @@ detection defaults, while tests may inject explicit providers. They use the
 current experimental Parakeet manifest and a compatibility-only embedded
 identity; that route does not create an admitted descriptor, recommendation, or
 installer. An explicit signed configuration must still provide its own
-already-created manager and pass binding before any operation.
+already-created manager and pass binding before any operation. It also carries
+one `AdmittedModelHardwareProfile`; the C3 factory constructs
+`AdmittedModelCatalog(signedDescriptor:hardware:)` after descriptor validation
+and before `EnhancedModelManagerInstaller`. It continues only when the catalog
+returns `.recommended(theSameDescriptor)`. Architecture mismatch, language
+mismatch, or available capacity below the validated staging requirement returns
+a non-operating built-in/failure presentation with zero transport calls.
 
 The signed app supplies either no descriptor or exactly one hardware-appropriate
-recommendation for the curated experience. Ordinary release configuration is
-empty, so the normal Dictation settings surface shows the built-in Apple state:
+recommendation for the curated experience; the factory never silently surfaces
+an unsupported descriptor. Ordinary release configuration is empty, so the
+normal Dictation settings surface shows the built-in Apple state:
 “Apple Speech — Built in”, “On-device recognition”, and “No custom model is
 installed.” There is no model picker and no Advanced selector. A recommendation
 surface, when an admitted descriptor exists, has one explicit `Install` action
 and shows exact identity, revision, license, checksums, download/installed size,
 and supported hardware/languages.
 
-Hardware recommendation uses an explicit staging requirement of
-`installedBytes + downloadBytes`, not download bytes alone. Ordinary and
-compile-gated candidate Settings render the same single recommendation/built-in
-card; the candidate gate does not restore a model picker, Advanced selector,
-consent view, or download-specific surface.
+Hardware recommendation uses the checked `requiredCapacityBytes` staging
+requirement, not download bytes alone. A case where available space exceeds
+`downloadBytes` but remains below the installed-plus-download staging need is
+rejected. Ordinary and compile-gated candidate Settings render the same single
+recommendation/built-in card; the candidate gate does not restore a model
+picker, Advanced selector, consent view, or download-specific surface.
 
 Installer presentation has explicit states for `notInstalled`, `downloading`
 with received/total bytes, `verifying`, `installing`, `ready`, `starting`,
@@ -413,7 +443,11 @@ configuration cannot disable the safe dictation fallback.
 The boundary input is `Optional<AdmittedModelSignedConfiguration>` in the
 compile-gated path and is `nil` in the current app; nil maps to the built-in
 installer in both ordinary and gated builds. A non-nil value carries the raw
-descriptor, already-created manager, startup closure, and calibration closure.
+descriptor, exact hardware profile, already-created manager, startup closure,
+and calibration closure. Gated factory tests cover unsupported architecture,
+unsupported requested language, insufficient staging capacity, and one
+supported profile that reaches the recommendation, with
+`transport.downloadCalls == 0` before any explicit Install action.
 
 Refreshing the Settings state subscribes only to the manager's published state
 for the refresh duration, maps its final `ready`, `updateAvailable`, or
