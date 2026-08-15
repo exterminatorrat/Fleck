@@ -109,6 +109,60 @@ import Testing
   }
 }
 
+@Test @MainActor
+func fleckMarkRetainsPackagedImageAfterBackingFileDisappears() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let canonicalAsset = root.appendingPathComponent("website/public/fleck-mark.png")
+  let temporaryDirectory = FileManager.default.temporaryDirectory
+    .appendingPathComponent("FleckMarkLifetime-\(UUID().uuidString)", isDirectory: true)
+  let markURL = temporaryDirectory.appendingPathComponent("fleck-mark.png")
+  try FileManager.default.createDirectory(
+    at: temporaryDirectory,
+    withIntermediateDirectories: false
+  )
+  defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+  try FileManager.default.copyItem(at: canonicalAsset, to: markURL)
+
+  let loader = FleckMark.Loader(
+    resourceURL: temporaryDirectory,
+    isPackagedApp: true
+  )
+  switch loader.load(template: true) {
+  case .image(let image):
+    #expect(image.isTemplate)
+    #expect(image.size.width == 18)
+    #expect(image.size.height == 18)
+  case .missingPackagedResource:
+    Issue.record("The packaged Fleck mark should load before its file disappears")
+  }
+
+  try FileManager.default.removeItem(at: markURL)
+  #expect(!FileManager.default.fileExists(atPath: markURL.path))
+
+  switch loader.load(template: true) {
+  case .image(let image):
+    #expect(image.isTemplate)
+    #expect(image.size.width == 18)
+    #expect(image.size.height == 18)
+  case .missingPackagedResource:
+    Issue.record("The same loader should retain its decoded packaged mark")
+  }
+
+  let freshLoader = FleckMark.Loader(
+    resourceURL: temporaryDirectory,
+    isPackagedApp: true
+  )
+  switch freshLoader.load(template: true) {
+  case .missingPackagedResource:
+    break
+  case .image:
+    Issue.record("A fresh loader must fail loudly for a missing packaged resource")
+  }
+}
+
 @Test func agentConnectorDocumentationUsesPackagedLaunch() throws {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()

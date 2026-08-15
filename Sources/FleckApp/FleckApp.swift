@@ -20,33 +20,71 @@
     }
   }
 
+  @MainActor
   enum FleckMark {
     enum LoadResult {
       case image(NSImage)
       case missingPackagedResource
     }
 
+    final class Loader {
+      private let resourceURL: URL?
+      private let isPackagedApp: Bool
+      private var cachedImage: NSImage?
+
+      init(resourceURL: URL?, isPackagedApp: Bool) {
+        self.resourceURL = resourceURL
+        self.isPackagedApp = isPackagedApp
+      }
+
+      func load(template: Bool) -> LoadResult {
+        if let cachedImage {
+          return .image(renderedCopy(of: cachedImage, template: template))
+        }
+        if let resourceURL,
+          let data = try? Data(
+            contentsOf: resourceURL.appendingPathComponent("fleck-mark.png")
+          ),
+          let image = NSImage(data: data)
+        {
+          cachedImage = image
+          return .image(renderedCopy(of: image, template: template))
+        }
+        guard !isPackagedApp,
+          let fallback = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Fleck")
+        else {
+          return .missingPackagedResource
+        }
+        fallback.isTemplate = template
+        return .image(fallback)
+      }
+
+      private func renderedCopy(of image: NSImage, template: Bool) -> NSImage {
+        let copy = image.copy() as! NSImage
+        copy.isTemplate = template
+        if template {
+          copy.size = NSSize(width: 18, height: 18)
+        }
+        return copy
+      }
+    }
+
+    private static let productionLoader = Loader(
+      resourceURL: Bundle.main.resourceURL,
+      isPackagedApp: Bundle.main.bundleURL.pathExtension.lowercased() == "app"
+    )
+
+    static func load(template: Bool) -> LoadResult {
+      productionLoader.load(template: template)
+    }
+
     static func load(
       template: Bool,
-      resourceURL: URL? = Bundle.main.resourceURL,
-      isPackagedApp: Bool = Bundle.main.bundleURL.pathExtension.lowercased() == "app"
+      resourceURL: URL?,
+      isPackagedApp: Bool
     ) -> LoadResult {
-      if let resourceURL,
-        let image = NSImage(contentsOf: resourceURL.appendingPathComponent("fleck-mark.png"))
-      {
-        image.isTemplate = template
-        if template {
-          image.size = NSSize(width: 18, height: 18)
-        }
-        return .image(image)
-      }
-      guard !isPackagedApp,
-        let fallback = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Fleck")
-      else {
-        return .missingPackagedResource
-      }
-      fallback.isTemplate = template
-      return .image(fallback)
+      Loader(resourceURL: resourceURL, isPackagedApp: isPackagedApp)
+        .load(template: template)
     }
   }
 
