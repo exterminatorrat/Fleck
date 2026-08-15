@@ -322,6 +322,34 @@ An admitted descriptor is the smallest generic identity shared by the ASR and
 cleanup roles. It includes:
 
 ```swift
+enum AdmittedModelRole: Codable, Equatable, Sendable {
+  case asr
+  case cleanup
+}
+
+struct AdmittedModelFile: Codable, Equatable, Sendable {
+  let path: String
+  let byteCount: Int64
+  let sha256: String
+}
+
+struct RawAdmittedModelDescriptor: Codable, Equatable, Sendable {
+  let role: AdmittedModelRole
+  let modelID: String
+  let revision: String
+  let runtimeABI: String
+  let conversion: String
+  let quantization: String
+  let license: String
+  let notices: String
+  let source: URL
+  let files: [AdmittedModelFile]
+  let downloadBytes: Int64
+  let installedBytes: Int64
+  let languages: [String]
+  let architectures: [String]
+}
+
 struct AdmittedModelDescriptor: Equatable, Sendable {
   let role: AdmittedModelRole
   let modelID: String
@@ -330,15 +358,34 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
   let conversion: String
   let quantization: String
   let license: String
+  let notices: String
   let source: URL
   let files: [AdmittedModelFile]
   let downloadBytes: Int64
   let installedBytes: Int64
   let languages: [String]
   let architectures: [String]
+  let requiredCapacityBytes: Int64
 
-  // Derived only after init(validating:) accepts a checked Int64 sum.
-  var requiredCapacityBytes: Int64 { get }
+  var immutableIdentity: AdmittedModelImmutableIdentity { get }
+  private init(
+    role: AdmittedModelRole,
+    modelID: String,
+    revision: String,
+    runtimeABI: String,
+    conversion: String,
+    quantization: String,
+    license: String,
+    notices: String,
+    source: URL,
+    files: [AdmittedModelFile],
+    downloadBytes: Int64,
+    installedBytes: Int64,
+    languages: [String],
+    architectures: [String],
+    requiredCapacityBytes: Int64
+  )
+  init(validating raw: RawAdmittedModelDescriptor) throws
 }
 
 struct AdmittedModelImmutableIdentity: Equatable, Sendable {
@@ -368,17 +415,23 @@ enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
   case invalidByteCount
   case invalidChecksum(String)
   case aggregateMismatch
-  case capacityOverflow
+  case requiredCapacityOverflow
+  case fileAggregateOverflow
   case emptySupport
 }
 ```
 
-The signed boundary constructs the descriptor through a throwing validation
-initializer for empty identity/revision/license, unsafe paths, invalid sizes or
-checksums, aggregate mismatches, `Int64.addingReportingOverflow` when deriving
-required staging capacity, and empty support sets. An overflow rejects with
-`AdmittedModelDescriptorError.capacityOverflow`; no unchecked sum is stored or
-used for recommendation. The existing
+The signed boundary decodes into `RawAdmittedModelDescriptor` and constructs the
+validated `AdmittedModelDescriptor` through a throwing initializer for empty
+identity/revision/license, unsafe paths, invalid sizes or checksums, aggregate
+mismatches, `Int64.addingReportingOverflow` when deriving required staging
+capacity, and empty support sets. An installed-plus-download overflow rejects
+with `AdmittedModelDescriptorError.requiredCapacityOverflow`; a distinct
+per-file aggregate checked-add overflow rejects with
+`AdmittedModelDescriptorError.fileAggregateOverflow`. The validated descriptor
+stores the checked `requiredCapacityBytes` and has no accessible memberwise
+initializer; invalid raw input is rejected before the value can be observed.
+The existing
 compile-gated manager builds or receives one immutable
 `EnhancedModelArtifactIdentity` alongside its `EnhancedModelManifest`; its
 source repository and revision derive every `remoteURL`. The admitted installer
@@ -391,11 +444,13 @@ The existing `DictationModelCapability(modelRootURL:)` and
 `DictationModelCapability(modelRootURL:candidateEnabled:architectureProvider:)`
 calls remain source-compatible through compile-gated manager convenience
 overloads. They retain the live available-capacity calculation and arm64
-detection defaults, while tests may inject explicit providers. They use the
-current experimental Parakeet manifest and a compatibility-only embedded
-identity; that route does not create an admitted descriptor, recommendation, or
-installer. An explicit signed configuration must still provide its own
-already-created manager and pass binding before any operation. It also carries
+detection defaults, while tests may inject explicit providers. The compatibility
+overloads accept no optional custom manifest: they always pair the exact
+embedded experimental Parakeet manifest with its matching compatibility identity.
+Any custom manifest must use the designated manager initializer with an explicit
+artifact identity. That route does not create an admitted descriptor,
+recommendation, or installer. An explicit signed configuration must still
+provide its own already-created manager and pass binding before any operation. It also carries
 one `AdmittedModelHardwareProfile`; the C3 factory constructs
 `AdmittedModelCatalog(signedDescriptor:hardware:)` after descriptor validation
 and before `EnhancedModelManagerInstaller`. It continues only when the catalog
@@ -414,9 +469,12 @@ and shows exact identity, revision, license, checksums, download/installed size,
 and supported hardware/languages.
 
 Hardware recommendation uses the checked `requiredCapacityBytes` staging
-requirement, not download bytes alone. A case where available space exceeds
-`downloadBytes` but remains below the installed-plus-download staging need is
-rejected. Ordinary and compile-gated candidate Settings render the same single
+requirement, not download bytes alone. When `requestedLanguages` is nonempty,
+the complete requested set must be a subset of the descriptor's supported
+`languages`; an English-plus-Mandarin request against an English-only
+descriptor is rejected. A case where available space exceeds `downloadBytes`
+but remains below the installed-plus-download staging need is also rejected.
+Ordinary and compile-gated candidate Settings render the same single
 recommendation/built-in card; the candidate gate does not restore a model
 picker, Advanced selector, consent view, or download-specific surface.
 
@@ -435,9 +493,10 @@ out-of-range manager emissions, and `verifying`/`installing`/`ready`/`repairRequ
 `removing`/`cancelled`/failure transitions while the operation is active, and
 the Settings view model owns the cancellable subscription.
 
-If signed-descriptor construction or either identity comparison fails, the
-Settings construction boundary catches the error and exposes a finite failed
-installer snapshot without starting transport. The coordinator continues using
+If signed-descriptor construction, catalog hardware recommendation, or either
+identity comparison fails, the Settings construction boundary catches the
+error and exposes a finite failed installer snapshot without starting
+transport. The coordinator continues using
 the built-in Apple Speech/deterministic-cleanup path, so a malformed candidate
 configuration cannot disable the safe dictation fallback.
 The boundary input is `Optional<AdmittedModelSignedConfiguration>` in the
@@ -448,6 +507,23 @@ and calibration closure. Gated factory tests cover unsupported architecture,
 unsupported requested language, insufficient staging capacity, and one
 supported profile that reaches the recommendation, with
 `transport.downloadCalls == 0` before any explicit Install action.
+
+The compile-gated configuration shape is:
+
+```swift
+struct AdmittedModelSignedConfiguration {
+  let rawDescriptor: RawAdmittedModelDescriptor
+  let hardware: AdmittedModelHardwareProfile
+  let manager: EnhancedModelManager
+  let startup: @MainActor () async throws -> Void
+  let calibrate: @MainActor () async throws -> Void
+}
+```
+
+`makeAdmittedModelInstaller` validates `rawDescriptor`, constructs the catalog
+with `hardware`, requires `.recommended(theSameValidatedDescriptor)`, and only
+then constructs `EnhancedModelManagerInstaller`. Nil configuration maps to the
+built-in installer in ordinary and gated builds.
 
 Refreshing the Settings state subscribes only to the manager's published state
 for the refresh duration, maps its final `ready`, `updateAvailable`, or
@@ -463,6 +539,10 @@ styles, keyboard and VoiceOver labels/values, and no frequent decorative
 animation. Keyboard-initiated dictation has no animation. Installer phases,
 errors, and byte progress are Settings-only; `Sources/FleckApp/DictationCapsule.swift`
 remains excluded from this workstream.
+The Task 3-owned `AdmittedModelSettingsPresentationTests` evidence asserts the
+recommendation card's VoiceOver label and identity/revision value, keyboard
+focusability, and finite phase/progress text; unrelated DictationCapsule
+accessibility is not used as evidence for this card.
 
 ## Candidate evaluation and later admission
 
@@ -489,7 +569,10 @@ slice's development app is successful with all custom components uninstalled.
    `IncrementalTranscriptCleanerTests`, and `StreamingTranscriptStateTests`
    prove dictionary alias resolution/ambiguity/protected counts, token
    boundaries, protected categories, allowlisted edits, output bounds, one
-   request, deadline behavior, and caller cancellation.
+   request, deadline behavior, and caller cancellation. The
+   `AdmittedModelDescriptorTests` and catalog tests prove raw/validated
+   separation, both checked-add overflow errors, complete requested-language
+   subset gating, exact staging capacity, and the built-in fallback.
 2. **Coordinator integration:** fake `SpeechEngine`, fake processing session,
    fake dictionary resolver, fake cleaner, editor, saver, and history store prove
    one pipeline per capture, provisional display, dictionary-before-cleanup,
@@ -506,9 +589,11 @@ slice's development app is successful with all custom components uninstalled.
   fake prove byte progress, checksum/size/path validation, verification,
   installation, startup, calibration, repair, update, removal, cancellation,
   actionable errors, live in-progress snapshot delivery, and descriptor/artifact
-  mismatch rejection without a real model transfer. Invalid signed descriptors
-  and bindings are caught into a non-operating failed Settings snapshot; Apple
-  Speech remains the active fallback and transport calls remain zero.
+   mismatch rejection without a real model transfer. Invalid signed descriptors
+   and bindings are caught into a non-operating failed Settings snapshot; Apple
+   Speech remains the active fallback and transport calls remain zero. The
+   Task 3-owned Settings presentation tests separately prove the recommendation
+   card's VoiceOver label/value, keyboard focus, and finite phase/progress copy.
 6. **Offline/cancellation checks:** serialized SwiftPM commands run with
    `--disable-automatic-resolution --no-parallel`; tests assert no URLSession,
    transcript file, audio file, or late insertion is introduced by the vertical
@@ -560,15 +645,22 @@ No custom release admission; later candidate evidence gate remains open.
 ```
 
 Task 0 is the prerequisite separate user-visible task before Workstream A; it
-uses the same parent inspection and fresh-review gate as every later task. The
-A, B, and C lines are dependency-ordered workstreams, not individual
-implementation tasks. Every numbered task in a workstream is its own separate
-user-visible Codex task running GPT-5.6 Luna/Max and titled with the exact
-`Agent - <singular task>` prefix. The parent Sol task inspects and reruns that
-task's diff and checks; a fresh `sol_advisor_sol_reviewer` must return exactly
-`ship` before the next dependent numbered task starts. A `fix-first` result
-returns a corrected bounded specification to the same task; a `rethink` result
-returns to the parent architecture.
+uses the same workflow gate as every later task. The A, B, and C lines are
+dependency-ordered workstreams, not individual implementation tasks. Every
+numbered task in a workstream is its own separate user-visible Codex task
+running GPT-5.6 Luna/Max and titled with the exact `Agent - <singular task>`
+prefix. Before each task, the primary Sol session is GPT-5.6 Sol at High
+reasoning; it first runs the orchestration exactness check and confirms the
+exact native routing roles are available, then writes a bounded five-part
+packet: objective/success criteria; owned files, interfaces, and
+constraints; implementation and explicit non-goals; verification commands and
+expected evidence; and authority boundaries plus the handoff. The Luna/Max task
+adapts to concurrent edits and preserves unrelated work. The parent Sol task
+inspects the actual diff and reruns the required checks; a fresh
+`sol_advisor_sol_reviewer` must return exactly `ship` before the next dependent
+numbered task starts. Both `fix-first` and `rethink` return the corrected bounded
+packet to the same user-visible Luna/Max task; neither switches tasks or adds an
+implementation route.
 
 No workstream or task authorizes a push, PR, merge, GitHub mutation, model-weight download,
 candidate selection, or release admission.

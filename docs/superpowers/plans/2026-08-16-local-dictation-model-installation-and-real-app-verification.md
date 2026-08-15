@@ -1,6 +1,6 @@
 # Local Dictation Model Installation and Real-App Verification Implementation Plan
 
-> **For agentic workers:** Workstream C is a dependency-ordered phase, not one task. Each numbered task below is its own separate user-visible Codex task running GPT-5.6 Luna/Max with a title of `Agent - <singular task>`; the parent Sol task inspects and reruns that task, and a fresh `sol_advisor_sol_reviewer` must return exactly `ship` before the next dependent numbered task. Terra/native subagents are forbidden. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Workstream C is a dependency-ordered phase, not one task. Each numbered task below is its own separate user-visible Codex task running GPT-5.6 Luna/Max with a title of `Agent - <singular task>`. Before each task, the primary Sol session is GPT-5.6 Sol at High reasoning; it first runs the orchestration exactness check and confirms the exact native routing roles are available, then writes a bounded five-part packet: objective/success criteria; owned files, interfaces, and constraints; implementation and explicit non-goals; verification commands and expected evidence; and authority boundaries plus the handoff. The Luna/Max task adapts to concurrent edits and preserves unrelated work. The parent Sol task inspects the actual diff and reruns the required checks; a fresh `sol_advisor_sol_reviewer` must return exactly `ship` before the next dependent numbered task. Both `fix-first` and `rethink` return the corrected bounded packet to the same user-visible Luna/Max task; neither switches tasks or adds an implementation route. Terra/native subagents are forbidden. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add the smallest admitted-model descriptor/catalog, a production-shaped
 installation presentation that is empty for ordinary release, and fake-backed
@@ -43,6 +43,13 @@ resource, downloader, or build script.
   conversion, quantization, license/notices, source, per-file paths,
   checksums, byte counts, total download/installed sizes, languages, and
   architectures.
+- Signed input decodes as `RawAdmittedModelDescriptor`; only the validated
+  `AdmittedModelDescriptor` reaches `AdmittedModelCatalog` or an installer. Its
+  memberwise construction is private and its checked `requiredCapacityBytes` is
+  stored at validation time.
+- A nonempty `requestedLanguages` set must be a subset of descriptor-supported
+  languages. Mixed English/Mandarin requests against an English-only descriptor
+  fall back to built-in Apple Speech before transport.
 - Installer presentation has explicit `notInstalled`, byte-valued
   `downloading`, `verifying`, `installing`, `starting`, `calibrating`,
   `installed`, `updateAvailable`, `repairRequired`, `removing`, and actionable
@@ -152,15 +159,32 @@ this map.
 ## Interfaces produced
 
 ~~~swift
-struct AdmittedModelFile: Equatable, Sendable {
+struct AdmittedModelFile: Codable, Equatable, Sendable {
   let path: String
   let byteCount: Int64
   let sha256: String
 }
 
-enum AdmittedModelRole: Equatable, Sendable {
+enum AdmittedModelRole: Codable, Equatable, Sendable {
   case asr
   case cleanup
+}
+
+struct RawAdmittedModelDescriptor: Codable, Equatable, Sendable {
+  let role: AdmittedModelRole
+  let modelID: String
+  let revision: String
+  let runtimeABI: String
+  let conversion: String
+  let quantization: String
+  let license: String
+  let notices: String
+  let source: URL
+  let files: [AdmittedModelFile]
+  let downloadBytes: Int64
+  let installedBytes: Int64
+  let languages: [String]
+  let architectures: [String]
 }
 
 struct AdmittedModelDescriptor: Equatable, Sendable {
@@ -178,11 +202,27 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
   let installedBytes: Int64
   let languages: [String]
   let architectures: [String]
-
-  var requiredCapacityBytes: Int64 { get }
+  let requiredCapacityBytes: Int64
 
   var immutableIdentity: AdmittedModelImmutableIdentity { get }
-  init(validating raw: Self) throws
+  private init(
+    role: AdmittedModelRole,
+    modelID: String,
+    revision: String,
+    runtimeABI: String,
+    conversion: String,
+    quantization: String,
+    license: String,
+    notices: String,
+    source: URL,
+    files: [AdmittedModelFile],
+    downloadBytes: Int64,
+    installedBytes: Int64,
+    languages: [String],
+    architectures: [String],
+    requiredCapacityBytes: Int64
+  )
+  init(validating raw: RawAdmittedModelDescriptor) throws
 }
 
 struct AdmittedModelImmutableIdentity: Equatable, Sendable {
@@ -206,7 +246,8 @@ enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
   case invalidByteCount
   case invalidChecksum(String)
   case aggregateMismatch
-  case capacityOverflow
+  case requiredCapacityOverflow
+  case fileAggregateOverflow
   case emptySupport
 }
 
@@ -427,6 +468,20 @@ and catalog interfaces above.
   #expect(catalog.recommendation() == .recommended(descriptor))
 }
 
+@Test func mixedRequestedLanguagesDoNotPassAnEnglishOnlyDescriptor() {
+  let descriptor = TestDescriptors.admittedASR
+  #expect(descriptor.languages == ["en-US"])
+  let catalog = AdmittedModelCatalog(
+    signedDescriptor: descriptor,
+    hardware: .init(
+      architecture: descriptor.architectures[0],
+      availableBytes: descriptor.requiredCapacityBytes,
+      requestedLanguages: ["en-US", "zh-CN"]
+    )
+  )
+  #expect(catalog.recommendation() == .builtIn)
+}
+
 @Test func unsupportedHardwareFallsBackToBuiltIn() {
   let catalog = AdmittedModelCatalog(
     signedDescriptor: TestDescriptors.admittedASR,
@@ -488,11 +543,22 @@ and catalog interfaces above.
   #expect(throws: AdmittedModelDescriptorError.aggregateMismatch) {
     _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, installedBytes: 1))
   }
-  #expect(throws: AdmittedModelDescriptorError.capacityOverflow) {
+  #expect(throws: AdmittedModelDescriptorError.requiredCapacityOverflow) {
     _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
       valid,
       installedBytes: Int64.max,
       downloadBytes: 1
+    ))
+  }
+  #expect(throws: AdmittedModelDescriptorError.fileAggregateOverflow) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+      valid,
+      files: [
+        .init(path: "one.bin", byteCount: Int64.max, sha256: String(repeating: "a", count: 64)),
+        .init(path: "two.bin", byteCount: 1, sha256: String(repeating: "b", count: 64))
+      ],
+      downloadBytes: Int64.max / 2,
+      installedBytes: Int64.max / 2
     ))
   }
   #expect(throws: AdmittedModelDescriptorError.emptySupport) {
@@ -528,9 +594,11 @@ struct AdmittedModelCatalog: Sendable {
   }
 
   func recommendation() -> AdmittedModelRecommendation {
+    let supportedLanguages = Set(signedDescriptor?.languages ?? [])
     guard let descriptor = signedDescriptor,
           descriptor.architectures.contains(hardware.architecture),
-          descriptor.languages.contains(where: hardware.requestedLanguages.contains),
+          (hardware.requestedLanguages.isEmpty
+            || hardware.requestedLanguages.isSubset(of: supportedLanguages)),
           hardware.availableBytes >= descriptor.requiredCapacityBytes else {
       return .builtIn
     }
@@ -542,24 +610,60 @@ struct AdmittedModelCatalog: Sendable {
 Add validation at the signed boundary, not in the view:
 
 ~~~swift
-extension AdmittedModelDescriptor {
-  private static func checkedRequiredCapacity(
+struct AdmittedModelDescriptor: Equatable, Sendable {
+  let role: AdmittedModelRole
+  let modelID: String
+  let revision: String
+  let runtimeABI: String
+  let conversion: String
+  let quantization: String
+  let license: String
+  let notices: String
+  let source: URL
+  let files: [AdmittedModelFile]
+  let downloadBytes: Int64
+  let installedBytes: Int64
+  let languages: [String]
+  let architectures: [String]
+  let requiredCapacityBytes: Int64
+
+  private init(
+    role: AdmittedModelRole,
+    modelID: String,
+    revision: String,
+    runtimeABI: String,
+    conversion: String,
+    quantization: String,
+    license: String,
+    notices: String,
+    source: URL,
+    files: [AdmittedModelFile],
+    downloadBytes: Int64,
     installedBytes: Int64,
-    downloadBytes: Int64
-  ) -> Int64 {
-    let (value, overflow) = installedBytes.addingReportingOverflow(downloadBytes)
-    precondition(!overflow, "requiredCapacityBytes requires a validated descriptor")
-    return value
+    languages: [String],
+    architectures: [String],
+    requiredCapacityBytes: Int64
+  ) {
+    self.role = role
+    self.modelID = modelID
+    self.revision = revision
+    self.runtimeABI = runtimeABI
+    self.conversion = conversion
+    self.quantization = quantization
+    self.license = license
+    self.notices = notices
+    self.source = source
+    self.files = files
+    self.downloadBytes = downloadBytes
+    self.installedBytes = installedBytes
+    self.languages = languages
+    self.architectures = architectures
+    self.requiredCapacityBytes = requiredCapacityBytes
   }
+}
 
-  var requiredCapacityBytes: Int64 {
-    Self.checkedRequiredCapacity(
-      installedBytes: installedBytes,
-      downloadBytes: downloadBytes
-    )
-  }
-
-  init(validating raw: Self) throws {
+extension AdmittedModelDescriptor {
+  init(validating raw: RawAdmittedModelDescriptor) throws {
     guard !raw.modelID.isEmpty else { throw AdmittedModelDescriptorError.emptyIdentity }
     guard !raw.revision.isEmpty else { throw AdmittedModelDescriptorError.emptyRevision }
     guard !raw.license.isEmpty else { throw AdmittedModelDescriptorError.emptyLicense }
@@ -571,16 +675,16 @@ extension AdmittedModelDescriptor {
           raw.files.allSatisfy({ $0.byteCount > 0 }) else {
       throw AdmittedModelDescriptorError.invalidByteCount
     }
-    let (_, requiredCapacityOverflow) =
+    let (requiredCapacityBytes, requiredCapacityOverflow) =
       raw.installedBytes.addingReportingOverflow(raw.downloadBytes)
     guard !requiredCapacityOverflow else {
-      throw AdmittedModelDescriptorError.capacityOverflow
+      throw AdmittedModelDescriptorError.requiredCapacityOverflow
     }
     var aggregate: Int64 = 0
     for file in raw.files {
       let (next, overflow) = aggregate.addingReportingOverflow(file.byteCount)
       guard !overflow else {
-        throw AdmittedModelDescriptorError.capacityOverflow
+        throw AdmittedModelDescriptorError.fileAggregateOverflow
       }
       aggregate = next
     }
@@ -598,7 +702,23 @@ extension AdmittedModelDescriptor {
         throw AdmittedModelDescriptorError.invalidChecksum(file.sha256)
       }
     }
-    self = raw
+    self.init(
+      role: raw.role,
+      modelID: raw.modelID,
+      revision: raw.revision,
+      runtimeABI: raw.runtimeABI,
+      conversion: raw.conversion,
+      quantization: raw.quantization,
+      license: raw.license,
+      notices: raw.notices,
+      source: raw.source,
+      files: raw.files,
+      downloadBytes: raw.downloadBytes,
+      installedBytes: raw.installedBytes,
+      languages: raw.languages,
+      architectures: raw.architectures,
+      requiredCapacityBytes: requiredCapacityBytes
+    )
   }
 
   var immutableIdentity: AdmittedModelImmutableIdentity {
@@ -610,15 +730,17 @@ extension AdmittedModelDescriptor {
 }
 ~~~
 
-Have the signed-configuration path call the throwing initializer below before
-constructing this immutable value. `TestDescriptors.make` is a test-only helper
-that starts from one valid neutral descriptor and applies the named override;
-the test cases above cover empty identity/revision/license, unsafe paths,
-negative byte counts, non-64-hex checksums, aggregate mismatches, the
-`installedBytes: Int64.max, downloadBytes: 1` required-capacity overflow, and
-empty support sets. Do not
-accept an array, picker index, or fallback descriptor. The ordinary constructor
-passes nil.
+Have the signed-configuration path decode into `RawAdmittedModelDescriptor` and
+call the throwing initializer below before constructing the inaccessible
+validated value. `TestDescriptors.neutralAdmitted` is a validated fixture;
+`TestDescriptors.raw(_:)` returns its raw copy and `TestDescriptors.make` returns
+a raw copy with the named override. The test
+cases above cover empty identity/revision/license, unsafe paths, negative byte
+counts, non-64-hex checksums, aggregate mismatches, the
+`installedBytes: Int64.max, downloadBytes: 1` required-capacity overflow, and a
+distinct per-file checked-add overflow. The stored `requiredCapacityBytes` is
+the checked value from validation, not a recomputed sum. Do not accept an array, picker index, or
+fallback descriptor in the catalog. The ordinary constructor passes nil.
 
 - [ ] **Step 4: Run green, inspect, and commit.**
 
@@ -983,14 +1105,16 @@ func artifactManifestMismatchFailsBeforeTransport() {
   #expect(transport.downloadCalls == 0)
 }
 
-@Test func artifactRemoteURLKeepsManagerSafetyAndDownloadQuery() throws {
-  let descriptor = TestDescriptors.tinyAdmittedASR
-  let identity = TestArtifacts.identity(matching: descriptor)
+@Test func artifactRemoteURLUsesExplicitSourceAndRevisionAndKeepsDownloadQuery() throws {
+  let sourceRepository = URL(string: "https://example.invalid/custom-repository")!
+  let revision = "custom-revision-123"
   let url = try EnhancedModelManager.remoteURL(
     for: .init(path: "folder/model.bin", byteCount: 4, sha256: String(repeating: "a", count: 64)),
-    sourceRepository: identity.sourceRepository,
-    revision: identity.revision
+    sourceRepository: sourceRepository,
+    revision: revision
   )
+  #expect(url.path == "/custom-repository/resolve/custom-revision-123/folder/model.bin")
+  #expect(url.absoluteString == "https://example.invalid/custom-repository/resolve/custom-revision-123/folder/model.bin?download=true")
   #expect(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems == [
     URLQueryItem(name: "download", value: "true")
   ])
@@ -1198,7 +1322,6 @@ final class EnhancedModelManager: ObservableObject {
   convenience init(
     modelRootURL: URL? = nil,
     fileManager: FileManager = .default,
-    manifest: EnhancedModelManifest? = nil,
     trustedManifests: [EnhancedModelManifest]? = nil,
     candidateEnabled: Bool = CleanDictationFeatures.enhancedLocalCandidateEnabled,
     capacityProvider: @escaping @Sendable () throws -> Int64 = {
@@ -1216,14 +1339,12 @@ final class EnhancedModelManager: ObservableObject {
       try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
     }
   ) {
-    let selectedManifest = manifest ?? Self.embeddedManifest()
+    let embedded = Self.embeddedManifestAndArtifactIdentity()
     self.init(
       modelRootURL: modelRootURL,
       fileManager: fileManager,
-      manifest: selectedManifest,
-      artifactIdentity: Self.experimentalEmbeddedArtifactIdentity(
-        for: selectedManifest
-      ),
+      manifest: embedded.manifest,
+      artifactIdentity: embedded.artifactIdentity,
       trustedManifests: trustedManifests,
       candidateEnabled: candidateEnabled,
       capacityProvider: capacityProvider,
@@ -1237,10 +1358,12 @@ final class EnhancedModelManager: ObservableObject {
     )
   }
 
-  private static func experimentalEmbeddedArtifactIdentity(
-    for manifest: EnhancedModelManifest
-  ) -> EnhancedModelArtifactIdentity {
-    .init(
+  private static func embeddedManifestAndArtifactIdentity() -> (
+    manifest: EnhancedModelManifest,
+    artifactIdentity: EnhancedModelArtifactIdentity
+  ) {
+    let manifest = Self.embeddedManifest()
+    let identity = EnhancedModelArtifactIdentity(
       sourceRepository: URL(string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml")!,
       modelID: manifest.modelID,
       revision: manifest.revision,
@@ -1254,6 +1377,7 @@ final class EnhancedModelManager: ObservableObject {
       downloadBytes: manifest.totalByteCount,
       installedBytes: manifest.totalByteCount
     )
+    return (manifest: manifest, artifactIdentity: identity)
   }
 
   var admittedArtifactIdentity: EnhancedModelArtifactIdentity { artifactIdentity }
@@ -1297,14 +1421,15 @@ identity beside the actual manifest. The source-compatible
 `DictationModelCapability(modelRootURL:)` and
 `DictationModelCapability(modelRootURL:candidateEnabled:architectureProvider:)`
 convenience overloads preserve the current call surface and delegate to the
-manifest/artifact designated initializer. Their default capacity provider reads
-the live volume's `volumeAvailableCapacityForImportantUsage`, and their default
-architecture provider performs the existing `uname` arm64 check; neither uses a
-test-success default. They use only the current experimental Parakeet manifest
-and a compatibility-only identity; they do not construct an admitted
-descriptor, catalog recommendation, or installer. Any existing manager test
-that supplies a custom manifest passes its `artifactIdentity` explicitly, using
-the argument order
+manifest/artifact designated initializer with exactly
+`Self.embeddedManifestAndArtifactIdentity()`. Their default capacity provider
+reads the live volume's `volumeAvailableCapacityForImportantUsage`, and their
+default architecture provider performs the existing `uname` arm64 check;
+neither uses a test-success default. They accept no optional custom manifest and
+use only the current experimental Parakeet manifest plus its matching
+compatibility identity; they do not construct an admitted descriptor, catalog
+recommendation, or installer. Any custom manifest must use the designated
+initializer and pass its `artifactIdentity` explicitly, using the argument order
 `modelRootURL:manifest:artifactIdentity:` before the existing dependency labels.
 Both existing `DictationModelCapability` call shapes remain unchanged. The
 adapter never substitutes a
@@ -1314,6 +1439,9 @@ repository. Keep the manager's existing `validateRelativePath` and
 `?download=true` query item exactly. Its verified required-capacity calculation
 remains authoritative for install admission; the catalog consumes the signed
 descriptor's overflow-checked `requiredCapacityBytes` equivalent.
+The URL test passes a non-default source repository and revision and asserts the
+full resolved path plus `?download=true`, proving the explicit identity is not
+ignored.
 The test-only `TestManagers` helpers may inject `capacityProvider: { Int64.max }`
 and `architectureProvider: { true }`; those values are never production or
 compatibility defaults.
@@ -1774,7 +1902,9 @@ manager installer.
 phase-specific Settings/error copy. The factory returns a recommended installer
 only for an exact `.recommended(descriptor)` catalog result; all architecture,
 language, and staging-capacity mismatches return a non-operating built-in/failure
-snapshot with zero transport calls.
+snapshot with zero transport calls. The Task 3-owned presentation test file also
+proves the recommendation card's VoiceOver label/value, keyboard focus, and
+finite phase/progress text.
 
 ### TDD red
 
@@ -1791,6 +1921,7 @@ snapshot with zero transport calls.
   )
   #expect(presentation.title == "Apple Speech — Built in")
   #expect(presentation.primaryAction == nil)
+  #expect(presentation.primaryActionLabel == nil)
   #expect(presentation.showsModelPicker == false)
   #expect(presentation.detail.contains("No custom model is installed"))
 }
@@ -1805,11 +1936,27 @@ snapshot with zero transport calls.
     )
   )
   #expect(presentation.primaryAction == .install)
+  #expect(presentation.primaryActionLabel == "Install")
   #expect(presentation.identity == descriptor.modelID)
   #expect(presentation.revision == descriptor.revision)
   #expect(presentation.downloadBytes == descriptor.downloadBytes)
   #expect(presentation.installedBytes == descriptor.installedBytes)
   #expect(presentation.checksums == descriptor.files.map(\.sha256))
+}
+
+@Test func recommendationCardHasVoiceOverMetadataAndKeyboardFocus() {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let presentation = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .recommended(descriptor),
+      phase: .notInstalled,
+      lastError: nil
+    )
+  )
+  #expect(presentation.accessibilityLabel == "Admitted model recommendation")
+  #expect(presentation.accessibilityValue.contains(descriptor.modelID))
+  #expect(presentation.accessibilityValue.contains(descriptor.revision))
+  #expect(presentation.isKeyboardFocusable)
 }
 
 @Test func downloadingUsesTruthfulByteProgressAndVoiceOverValue() {
@@ -1823,6 +1970,20 @@ snapshot with zero transport calls.
   #expect(presentation.progress == 0.25)
   #expect(presentation.progressAccessibilityValue == "25 of 100 bytes")
   #expect(presentation.primaryAction == .cancel)
+}
+
+@Test func inProgressCardHasFinitePhaseAndProgressAccessibilityText() {
+  let presentation = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .recommended(TestDescriptors.tinyAdmittedASR),
+      phase: .downloading(receivedBytes: 4, totalBytes: 8),
+      lastError: nil
+    )
+  )
+  #expect(presentation.accessibilityLabel == "Admitted model installation")
+  #expect(presentation.accessibilityValue == "Downloading, 4 of 8 bytes")
+  #expect(presentation.progressAccessibilityValue == "4 of 8 bytes")
+  #expect(!presentation.accessibilityValue.contains("Loading"))
 }
 
 @Test func readyAndCancelledHaveFiniteSettingsCopy() {
@@ -1878,7 +2039,7 @@ func signedConfiguration(
     transport: transport
   )
   return AdmittedModelSignedConfiguration(
-    rawDescriptor: descriptor,
+    rawDescriptor: TestDescriptors.raw(descriptor),
     hardware: hardware,
     manager: manager,
     startup: { },
@@ -1914,6 +2075,26 @@ func languageMismatchReturnsBuiltInFailureWithoutTransport() {
     hardware: .init(
       architecture: descriptor.architectures[0],
       requestedLanguages: ["zh-CN"],
+      availableBytes: descriptor.requiredCapacityBytes
+    ),
+    transport: transport
+  )
+  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  #expect(installer.snapshot.recommendation == .builtIn)
+  #expect(installer.snapshot.lastError != nil)
+  #expect(transport.downloadCalls == 0)
+}
+
+@Test @MainActor
+func mixedRequestedLanguagesReturnBuiltInFailureWithoutTransport() {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  #expect(descriptor.languages == ["en-US"])
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let configuration = signedConfiguration(
+    descriptor: descriptor,
+    hardware: .init(
+      architecture: descriptor.architectures[0],
+      requestedLanguages: ["en-US", "zh-CN"],
       availableBytes: descriptor.requiredCapacityBytes
     ),
     transport: transport
@@ -1995,7 +2176,7 @@ func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
     transport: transport
   )
   let configuration = AdmittedModelSignedConfiguration(
-    rawDescriptor: descriptor,
+    rawDescriptor: TestDescriptors.raw(descriptor),
     hardware: supportedHardware(for: descriptor),
     manager: manager,
     startup: { },
@@ -2041,14 +2222,36 @@ struct AdmittedModelSettingsPresentation: Equatable {
   let installedBytes: Int64?
   let progress: Double?
   let progressAccessibilityValue: String?
+  let accessibilityLabel: String
+  let accessibilityValue: String
+  let isKeyboardFocusable: Bool
   let primaryAction: AdmittedModelSettingsAction?
+  let primaryActionLabel: String?
   let showsModelPicker: Bool
 }
 ~~~
 
 Map every phase to finite title/detail/action text. Use exact byte counts, exact
-identity/revision/license/checksum strings, and stable accessibility labels.
-Use no indefinite Loading text and no automatic action on view appearance.
+identity/revision/license/checksum strings, and stable accessibility labels and
+values. The recommendation card's Install button is keyboard-focusable and
+uses the presentation values directly:
+
+~~~swift
+if let action = presentation.primaryAction,
+   let label = presentation.primaryActionLabel {
+  Button(label) {
+    perform(action)
+  }
+  .focusable(presentation.isKeyboardFocusable)
+  .accessibilityLabel(presentation.accessibilityLabel)
+  .accessibilityValue(presentation.accessibilityValue)
+}
+~~~
+
+The Task 3-owned `AdmittedModelSettingsPresentationTests` file asserts the
+recommendation label, identity/revision value, keyboard focus, finite phase
+copy, and exact in-progress byte value. Use no indefinite Loading text and no
+automatic action on view appearance.
 
 - [ ] **Step 4: Add the observable action view model and wire the native UI.**
 
@@ -2116,7 +2319,7 @@ manager:
 ~~~swift
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 struct AdmittedModelSignedConfiguration {
-  let rawDescriptor: AdmittedModelDescriptor
+  let rawDescriptor: RawAdmittedModelDescriptor
   let hardware: AdmittedModelHardwareProfile
   let manager: EnhancedModelManager
   let startup: @MainActor () async throws -> Void
@@ -2263,10 +2466,14 @@ FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parall
 git diff --check
 ~~~
 
-The parent inspects that only the file map changed; default configuration
-constructs the built-in installer; candidate-gated tests use only injected
-transport/fixtures; byte progress is truthful; manager verification and
-filesystem ownership remain authoritative; and no model-weight path was
+The parent inspects that only the file map changed; raw input never reaches the
+catalog or installer; both descriptor checked-add overflow cases and complete
+requested-language subset gating pass; the compatibility initializer uses only
+the embedded manifest; the explicit URL test preserves source/revision and
+`?download=true`; default configuration constructs the built-in installer;
+candidate-gated tests use only injected transport/fixtures; byte progress is
+truthful; Task 3's own Settings tests prove accessibility; manager verification
+and filesystem ownership remain authoritative; and no model-weight path was
 written. The known viewport assertion is classified separately if present.
 
 ## Automated package/build verification
