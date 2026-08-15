@@ -365,11 +365,14 @@ artifact identity with the actual manifest identity before any manager operation
 descriptor/artifact or artifact/manifest mismatch rejects before transport. The
 existing manifest path/revision checks and `?download=true` URL query remain
 authoritative. This is a small seam, not a generic multi-model registry.
-The existing `DictationModelCapability(modelRootURL:)` call remains source
-compatible through a compile-gated manager convenience initializer that uses
-the current experimental Parakeet manifest and a compatibility-only embedded
-identity. That route does not create an admitted descriptor, recommendation,
-or installer; an explicit signed configuration must still provide its own
+The existing `DictationModelCapability(modelRootURL:)` and
+`DictationModelCapability(modelRootURL:candidateEnabled:architectureProvider:)`
+calls remain source-compatible through compile-gated manager convenience
+overloads. They retain the live available-capacity calculation and arm64
+detection defaults, while tests may inject explicit providers. They use the
+current experimental Parakeet manifest and a compatibility-only embedded
+identity; that route does not create an admitted descriptor, recommendation, or
+installer. An explicit signed configuration must still provide its own
 already-created manager and pass binding before any operation.
 
 The signed app supplies either no descriptor or exactly one hardware-appropriate

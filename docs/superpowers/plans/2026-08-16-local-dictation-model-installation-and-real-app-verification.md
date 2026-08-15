@@ -638,7 +638,7 @@ import CryptoKit
 
 enum TestFixtures {
   static let tinyBytes = Data("fixture!".utf8) // exactly 8 bytes
-static let tinySHA256 = SHA256.hash(data: tinyBytes)
+  static let tinySHA256 = SHA256.hash(data: tinyBytes)
     .map { String(format: "%02x", $0) }
     .joined()
 }
@@ -670,11 +670,19 @@ func defaultBuildUsesBuiltInInstallerWithoutManagerReference() async {
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test @MainActor
-func existingDictationModelCapabilityConstructionRemainsSourceCompatible() {
-  let capability = DictationModelCapability(
+func existingDictationModelCapabilityCallShapesRemainSourceCompatible() {
+  // This call uses the production capacity and arm64 defaults.
+  let defaultCapability = DictationModelCapability(
     modelRootURL: TestPaths.temporaryDirectory()
   )
-  #expect(capability.state == .notInstalled)
+  // This is the existing test shape; only its architecture probe is injected.
+  let testCapability = DictationModelCapability(
+    modelRootURL: TestPaths.temporaryDirectory(),
+    candidateEnabled: true,
+    architectureProvider: { true }
+  )
+  #expect(defaultCapability.state == .notInstalled)
+  #expect(testCapability.state == .notInstalled)
 }
 
 @Test @MainActor
@@ -1010,6 +1018,9 @@ func installerUpdatesExposeBytesBeforeCompletion() async {
 #endif
 ~~~
 
+The gated compile-focused test stays in the Task 2-owned installation test
+file; it does not edit the excluded Settings call sites.
+
 `ModelDownloadingProbe` requires the exact artifact identity through its
 `TestManagers.manager(descriptor:artifactIdentity:manifest:transport:)` helper, emits progress values
 `4`, `8`, and a duplicate `8` with `totalBytes == descriptor.downloadBytes`,
@@ -1087,10 +1098,29 @@ struct EnhancedModelByteProgress: Equatable, Sendable {
   let totalBytes: Int64
 }
 
+@MainActor
 final class EnhancedModelManager: ObservableObject {
   private let artifactIdentity: EnhancedModelArtifactIdentity
   private let manifest: EnhancedModelManifest
   @Published private(set) var byteProgress: EnhancedModelByteProgress?
+
+  nonisolated static func liveAvailableCapacity() throws -> Int64 {
+    let values = try URL(fileURLWithPath: NSHomeDirectory()).resourceValues(
+      forKeys: [.volumeAvailableCapacityForImportantUsageKey]
+    )
+    return values.volumeAvailableCapacityForImportantUsage ?? 0
+  }
+
+  nonisolated static func isAppleSilicon() -> Bool {
+    var info = utsname()
+    uname(&info)
+    let machine = withUnsafePointer(to: &info.machine) {
+      $0.withMemoryRebound(to: CChar.self, capacity: 1) {
+        String(cString: $0)
+      }
+    }
+    return machine == "arm64"
+  }
 
   init(
     modelRootURL: URL? = nil,
@@ -1099,8 +1129,12 @@ final class EnhancedModelManager: ObservableObject {
     artifactIdentity: EnhancedModelArtifactIdentity,
     trustedManifests: [EnhancedModelManifest]? = nil,
     candidateEnabled: Bool = CleanDictationFeatures.enhancedLocalCandidateEnabled,
-    capacityProvider: @escaping @Sendable () throws -> Int64 = { .max },
-    architectureProvider: @escaping @Sendable () -> Bool = { true },
+    capacityProvider: @escaping @Sendable () throws -> Int64 = {
+      try EnhancedModelManager.liveAvailableCapacity()
+    },
+    architectureProvider: @escaping @Sendable () -> Bool = {
+      EnhancedModelManager.isAppleSilicon()
+    },
     clock: @escaping @Sendable () -> Date = { Date() },
     transport: any ModelDownloading = URLSessionModelDownloader(),
     assessmentDidComplete: @escaping @Sendable () -> Void = {},
@@ -1116,12 +1150,45 @@ final class EnhancedModelManager: ObservableObject {
     self.manifest = manifest
   }
 
-  convenience init(modelRootURL: URL? = nil) {
-    let manifest = Self.embeddedManifest()
+  convenience init(
+    modelRootURL: URL? = nil,
+    fileManager: FileManager = .default,
+    manifest: EnhancedModelManifest? = nil,
+    trustedManifests: [EnhancedModelManifest]? = nil,
+    candidateEnabled: Bool = CleanDictationFeatures.enhancedLocalCandidateEnabled,
+    capacityProvider: @escaping @Sendable () throws -> Int64 = {
+      try EnhancedModelManager.liveAvailableCapacity()
+    },
+    architectureProvider: @escaping @Sendable () -> Bool = {
+      EnhancedModelManager.isAppleSilicon()
+    },
+    clock: @escaping @Sendable () -> Date = { Date() },
+    transport: any ModelDownloading = URLSessionModelDownloader(),
+    assessmentDidComplete: @escaping @Sendable () -> Void = {},
+    cleanupWillBegin: @escaping @Sendable () -> Void = {},
+    removalWillBegin: @escaping @Sendable () -> Void = {},
+    resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
+      try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
+    }
+  ) {
+    let selectedManifest = manifest ?? Self.embeddedManifest()
     self.init(
       modelRootURL: modelRootURL,
-      manifest: manifest,
-      artifactIdentity: Self.experimentalEmbeddedArtifactIdentity(for: manifest)
+      fileManager: fileManager,
+      manifest: selectedManifest,
+      artifactIdentity: Self.experimentalEmbeddedArtifactIdentity(
+        for: selectedManifest
+      ),
+      trustedManifests: trustedManifests,
+      candidateEnabled: candidateEnabled,
+      capacityProvider: capacityProvider,
+      architectureProvider: architectureProvider,
+      clock: clock,
+      transport: transport,
+      assessmentDidComplete: assessmentDidComplete,
+      cleanupWillBegin: cleanupWillBegin,
+      removalWillBegin: removalWillBegin,
+      resumeAuthenticationKeyProvider: resumeAuthenticationKeyProvider
     )
   }
 
@@ -1182,20 +1249,29 @@ final class EnhancedModelManager: ObservableObject {
 
 The existing embedded manager construction supplies its immutable artifact
 identity beside the actual manifest. The source-compatible
-`DictationModelCapability(modelRootURL:)` convenience initializer uses only the
-current experimental Parakeet manifest and a compatibility-only identity; it
-does not construct an admitted descriptor, catalog recommendation, or
-installer. Any existing manager test that supplies a custom manifest passes its
-matching `artifactIdentity` explicitly, using the argument order
+`DictationModelCapability(modelRootURL:)` and
+`DictationModelCapability(modelRootURL:candidateEnabled:architectureProvider:)`
+convenience overloads preserve the current call surface and delegate to the
+manifest/artifact designated initializer. Their default capacity provider reads
+the live volume's `volumeAvailableCapacityForImportantUsage`, and their default
+architecture provider performs the existing `uname` arm64 check; neither uses a
+test-success default. They use only the current experimental Parakeet manifest
+and a compatibility-only identity; they do not construct an admitted
+descriptor, catalog recommendation, or installer. Any existing manager test
+that supplies a custom manifest passes its `artifactIdentity` explicitly, using
+the argument order
 `modelRootURL:manifest:artifactIdentity:` before the existing dependency labels.
-The only unchanged call site is the gated
-`DictationModelCapability(modelRootURL:)` construction covered above. The adapter never substitutes a
+Both existing `DictationModelCapability` call shapes remain unchanged. The
+adapter never substitutes a
 descriptor for that value, and the URL root no longer hard-codes a candidate
 repository. Keep the manager's existing `validateRelativePath` and
 `validateRevision` checks in the generalized helper; preserve the existing
 `?download=true` query item exactly. Its verified required-capacity calculation
 remains authoritative for install admission; the catalog's
 `installedBytes + downloadBytes` check is the signed configuration equivalent.
+The test-only `TestManagers` helpers may inject `capacityProvider: { Int64.max }`
+and `architectureProvider: { true }`; those values are never production or
+compatibility defaults.
 
 - [ ] **Step 4: Add the two installer implementations.**
 
