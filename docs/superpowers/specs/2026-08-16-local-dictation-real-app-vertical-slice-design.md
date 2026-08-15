@@ -452,6 +452,7 @@ struct AdmittedModelImmutableIdentity: Equatable, Sendable {
   let files: [AdmittedModelFile]
   let downloadBytes: Int64
   let installedBytes: Int64
+  let requiredCapacityBytes: Int64
 }
 
 struct AdmittedModelHardwareProfile: Equatable, Sendable {
@@ -469,6 +470,7 @@ enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
   case emptyLicense
   case invalidSource
   case unsafePath(String)
+  case duplicateFilePath(String)
   case invalidByteCount
   case invalidChecksum(String)
   case aggregateMismatch
@@ -485,7 +487,8 @@ values, rejects empty fields, and accepts only an absolute safe HTTPS
 source-repository URL with a host and no credentials, fragment, traversal, or
 query. It applies bounded repeated percent-decoding to the repository path and
 rejects double-encoded traversal before accepting the source. It also rejects
-unsafe paths, invalid sizes or checksums, aggregate
+empty/absolute file paths, `.`, `..`, empty path components, dot components,
+backslashes, encoded traversal, duplicate normalized paths, invalid sizes or checksums, aggregate
 mismatches, `Int64.addingReportingOverflow` when deriving required staging
 capacity, and empty support sets. An installed-plus-download overflow rejects
 with `AdmittedModelDescriptorError.requiredCapacityOverflow`; a distinct
@@ -531,7 +534,11 @@ and shows exact identity, revision, license, checksums, download/installed size,
 and supported hardware/languages.
 
 Hardware recommendation uses the checked `requiredCapacityBytes` staging
-requirement, not download bytes alone. When `requestedLanguages` is nonempty,
+requirement, not download bytes alone. The validated required capacity is bound
+into the manager adapter; immediately before every install, repair, or update
+transfer, the adapter re-reads the live capacity provider and fails before
+transport when available bytes are below that bound. It never substitutes the
+embedded Parakeet capacity for an admitted descriptor. When `requestedLanguages` is nonempty,
 the complete requested set must be a subset of the descriptor's supported
 `languages`; an English-plus-Mandarin request against an English-only
 descriptor is rejected. A case where available space exceeds `downloadBytes`
@@ -577,6 +584,9 @@ and calibration closure. Gated factory tests cover unsupported architecture,
 unsupported requested language, insufficient staging capacity, and one
 supported profile that reaches the recommendation, with
 `transport.downloadCalls == 0` before any explicit Install action.
+Manager tests also lower live capacity after catalog recommendation and prove
+install, repair, and update each fail before transport when available bytes are
+above download size but below the bound required staging capacity.
 
 The compile-gated configuration shape is:
 

@@ -436,6 +436,13 @@ import Testing
     ("send 11st files", "Send 11st files."),
     ("send 21th files", "Send 21th files."),
     ("send 21stx files", "Send 21stx files."),
+    ("send ($20", "Send ($20."),
+    ("send 20)", "Send 20)."),
+    ("send 10:", "Send 10:."),
+    ("send 1/", "Send 1/."),
+    ("send 20%%", "Send 20%%."),
+    ("send 99:99am", "Send 99:99am."),
+    ("send 1/0", "Send 1/0."),
     ("send 20 files", "send 10 files"),
     ("send twenty-two files", "send 22 files"),
     ("send 20th files", "send 20 files"),
@@ -621,8 +628,6 @@ struct FaithfulCleanupValidator: Sendable {
     guard protectedSpansMatch(
       baselineSpans,
       candidateSpans,
-      baselineValues: baselineValues,
-      candidateLexemes: candidateLexemes,
       ordinalMarkerPairs: ordinalMarkerPairs
     ) else { return .rejected(.protectedContentChanged) }
 
@@ -763,6 +768,15 @@ struct FaithfulCleanupValidator: Sendable {
       }
 
       let value = lexemes[index].canonical.lowercased()
+      guard numericRawContextIsComplete(at: index, in: lexemes) else {
+        signatures.append(.init(
+          rawRange: index..<(index + 1),
+          classification: .ambiguous
+        ))
+        consumedIndices.insert(index)
+        index += 1
+        continue
+      }
       if index + 1 < lexemes.count, lexemes[index + 1].kind == .word {
         let suffix = lexemes[index + 1].canonical.lowercased()
         if ["st", "nd", "rd", "th"].contains(suffix) {
@@ -804,9 +818,10 @@ struct FaithfulCleanupValidator: Sendable {
          lexemes[index + 2].kind == .word,
          ["am", "pm"].contains(lexemes[index + 2].canonical.lowercased()),
          value.contains(":") {
+        let time = value + lexemes[index + 2].canonical.lowercased()
         signatures.append(.init(
           rawRange: index..<(index + 3),
-          classification: .digit(value + lexemes[index + 2].canonical.lowercased())
+          classification: classifyNumber(time)
         ))
         consumedIndices.formUnion(index..<(index + 3))
         index += 3
@@ -857,6 +872,70 @@ struct FaithfulCleanupValidator: Sendable {
     return suffix == expected
   }
 
+  private static func numericRawContextIsComplete(
+    at index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    let original = lexemes[index].original
+    let openCount = original.filter { $0 == "(" }.count
+    let closeCount = original.filter { $0 == ")" }.count
+    guard openCount == closeCount else { return false }
+    if openCount > 0 {
+      guard original.first == "(", original.last == ")" else { return false }
+    }
+
+    func adjacentNonWhitespace(_ step: Int) -> CleanupLexeme? {
+      var cursor = index + step
+      while lexemes.indices.contains(cursor) {
+        if lexemes[cursor].kind != .whitespace { return lexemes[cursor] }
+        cursor += step
+      }
+      return nil
+    }
+
+    if let previous = adjacentNonWhitespace(-1),
+       previous.original == "(", !original.hasPrefix("(") {
+      return false
+    }
+    if let next = adjacentNonWhitespace(1) {
+      if next.original == ")" && !original.hasSuffix(")") { return false }
+      if ["/", ":", "%"].contains(next.original) { return false }
+      if original.hasSuffix("%") && next.original == "%" { return false }
+    }
+    return true
+  }
+
+  private static func isSupportedNumericForm(_ canonical: String) -> Bool {
+    if canonical.range(of: #"^[+-]?\d+/\d+$"#, options: .regularExpression) != nil {
+      let parts = canonical.split(separator: "/")
+      guard parts.count == 2, let denominator = Int(parts[1]), denominator > 0 else {
+        return false
+      }
+    }
+    let meridiem = canonical.hasSuffix("am") || canonical.hasSuffix("pm")
+    let hasColon = canonical.contains(":")
+    guard !hasColon && !meridiem
+      || canonical.range(of: #"^\d{1,2}(?::\d{2})(?:am|pm)?$"#, options: .regularExpression) != nil
+      || canonical.range(of: #"^\d{1,2}(?:am|pm)$"#, options: .regularExpression) != nil else {
+      return false
+    }
+    guard hasColon || meridiem else { return true }
+    let core = meridiem ? String(canonical.dropLast(2)) : canonical
+    let parts = core.split(separator: ":")
+    if parts.count == 1 {
+      guard meridiem, let hour = Int(parts[0]) else { return false }
+      return (1...12).contains(hour)
+    }
+    guard parts.count == 2,
+          let hour = Int(parts[0]),
+          let minute = Int(parts[1]),
+          (meridiem ? (1...12).contains(hour) : (0...23).contains(hour)),
+          (0...59).contains(minute) else {
+      return false
+    }
+    return true
+  }
+
   private static func classifyNumber(_ value: String) -> NumberClassification {
     let canonical = value.lowercased()
     if numberWords.contains(canonical) {
@@ -891,7 +970,7 @@ struct FaithfulCleanupValidator: Sendable {
     if supportedDigitPatterns.contains(where: {
       canonical.range(of: $0, options: .regularExpression) != nil
     }) {
-      return .digit(canonical)
+      return isSupportedNumericForm(canonical) ? .digit(canonical) : .ambiguous
     }
     if canonical.unicodeScalars.contains(where: CharacterSet.decimalDigits.contains) {
       return .ambiguous
@@ -972,20 +1051,29 @@ struct FaithfulCleanupValidator: Sendable {
   private static func protectedSpansMatch(
     _ baseline: [CleanupProtectedSpan],
     _ candidate: [CleanupProtectedSpan],
-    baselineValues: [String],
-    candidateLexemes: [CleanupLexeme],
     ordinalMarkerPairs: PairedOrdinalMarkerIndices?
   ) -> Bool {
     let exemptCandidateNumbers = ordinalMarkerPairs?.candidateNumberRawRanges ?? []
-    for (baselineSpan, candidateSpan) in zip(baseline, candidate) {
-      let exactMarker = candidateSpan.category == .number
-        && exemptCandidateNumbers.contains(candidateSpan.lexemeRange)
-      guard exactMarker || (
-        baselineSpan.category == candidateSpan.category
-          && baselineSpan.canonicalLexemes == candidateSpan.canonicalLexemes
-      ) else { return false }
+    let comparableCandidate = candidate.filter { span in
+      guard span.category == .number else { return true }
+      return !exemptCandidateNumbers.contains(span.lexemeRange)
     }
-    return baseline.count == candidate.count
+    let stableOrder: (CleanupProtectedSpan, CleanupProtectedSpan) -> Bool = { left, right in
+      if left.category.rawValue != right.category.rawValue {
+        return left.category.rawValue < right.category.rawValue
+      }
+      if left.lexemeRange.lowerBound != right.lexemeRange.lowerBound {
+        return left.lexemeRange.lowerBound < right.lexemeRange.lowerBound
+      }
+      return left.lexemeRange.upperBound < right.lexemeRange.upperBound
+    }
+    let orderedBaseline = baseline.sorted(by: stableOrder)
+    let orderedCandidate = comparableCandidate.sorted(by: stableOrder)
+    guard orderedBaseline.count == orderedCandidate.count else { return false }
+    return zip(orderedBaseline, orderedCandidate).allSatisfy { baselineSpan, candidateSpan in
+      baselineSpan.category == candidateSpan.category
+        && baselineSpan.canonicalLexemes == candidateSpan.canonicalLexemes
+    }
   }
 
   private static func equalLexicalOperations(
@@ -1056,8 +1144,15 @@ struct FaithfulCleanupValidator: Sendable {
 }
 ```
 
-Implement `protectedSpansMatch` by grouping ordered canonical span lexemes by
-category and occurrence. `isShortListFormatting` is only a presentation
+Implement `protectedSpansMatch` by first filtering only candidate `.number`
+spans whose exact raw `lexemeRange` is in
+`ordinalMarkerPairs.candidateNumberRawRanges`; no price, quantity, or other
+number span is exempt. Sort the remaining baseline and candidate spans by
+category raw value, then raw lower/upper bounds, and compare every category and
+canonical lexeme occurrence with equal counts. This makes the baseline ordinal
+words (`first`/`second`) comparable to a candidate after its validated digit
+marker spans are removed without zipping incompatible original arrays.
+`isShortListFormatting` is only a presentation
 predicate; its sole numeric exception is
 `pairedOrdinalMarkersAreOnlyDifference`, which first validates the exact ordered
 mapping `first -> 1`, `second -> 2`, `third -> 3`, `fourth -> 4`, and
@@ -1089,6 +1184,13 @@ form one time signature. The remaining single `.number` forms use exact
 normalized signatures for currency, percentage, fraction, time, signed,
 parenthesized, and decimal lexemes (`$20`, `20%`, `1/2`, `10:30`, `10:30am`,
 `-3.5`, and `($20)`); unsupported digit-bearing sequences remain ambiguous.
+Before classifying any number, `numericRawContextIsComplete(at:in:)` checks
+balanced parentheses, rejects a number adjacent to a dangling `)`, `/`, `:`,
+or extra `%`, and rejects incomplete affixes even when `CleanupLexeme` split
+the punctuation into separate raw lexemes. Complete supported forms then
+validate fraction denominators and clock ranges, so `99:99am` and `1/0` are
+ambiguous. Therefore `($20`, `20)`, `10:`, `1/`, and `20%%` fail closed even
+when their numeric fragments individually match a permissive pattern.
 It requires the ordered number signature to remain identical;
 ordinary words such as `send`, `word`, `with`, and `last` remain `.none`, while
 malformed digit/suffix forms remain ambiguous and reject fail-closed rather than

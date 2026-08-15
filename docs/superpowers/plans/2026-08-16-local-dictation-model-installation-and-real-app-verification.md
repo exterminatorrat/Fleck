@@ -84,6 +84,11 @@ resource, downloader, or build script.
   `installedBytes + downloadBytes` with `Int64.addingReportingOverflow` and
   rejects overflow; a device with space above `downloadBytes` but below that
   validated capacity falls back to built-in Apple Speech.
+- The artifact identity carries that checked `requiredCapacityBytes` into
+  `EnhancedModelManager`. Immediately before every install, repair, and update
+  network transfer, the manager re-reads its live `capacityProvider` and fails
+  before transport when available bytes are below the bound. It never uses a
+  static embedded Parakeet capacity for an admitted descriptor.
 - The C3 factory receives one exact `AdmittedModelHardwareProfile`, constructs
   `AdmittedModelCatalog` before `EnhancedModelManagerInstaller`, and proceeds
   only when the catalog returns `.recommended` with the same descriptor.
@@ -246,6 +251,7 @@ struct AdmittedModelImmutableIdentity: Equatable, Sendable {
   let files: [AdmittedModelFile]
   let downloadBytes: Int64
   let installedBytes: Int64
+  let requiredCapacityBytes: Int64
 }
 
 enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
@@ -257,6 +263,7 @@ enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
   case emptyLicense
   case invalidSource
   case unsafePath(String)
+  case duplicateFilePath(String)
   case invalidByteCount
   case invalidChecksum(String)
   case aggregateMismatch
@@ -341,6 +348,7 @@ struct EnhancedModelArtifactIdentity: Equatable, Sendable {
   let files: [AdmittedModelFile]
   let downloadBytes: Int64
   let installedBytes: Int64
+  let requiredCapacityBytes: Int64
 
   var immutableIdentity: AdmittedModelImmutableIdentity {
     .init(
@@ -353,7 +361,8 @@ struct EnhancedModelArtifactIdentity: Equatable, Sendable {
       quantization: quantization,
       files: files,
       downloadBytes: downloadBytes,
-      installedBytes: installedBytes
+      installedBytes: installedBytes,
+      requiredCapacityBytes: requiredCapacityBytes
     )
   }
 
@@ -567,6 +576,34 @@ import Foundation
       files: [ .init(path: "../escape.bin", byteCount: 4, sha256: String(repeating: "a", count: 64)) ],
       downloadBytes: 4,
       installedBytes: 4
+    ))
+  }
+  for path in [
+    "", "/absolute.bin", ".", "..", "a//b", "a/./b", "a/../b",
+    "a\\b", "a\\..\\b", "a/%2e%2e/b"
+  ] {
+    #expect(throws: AdmittedModelDescriptorError.unsafePath(path)) {
+      _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+        valid,
+        files: [ .init(
+          path: path,
+          byteCount: 4,
+          sha256: String(repeating: "a", count: 64)
+        ) ],
+        downloadBytes: 4,
+        installedBytes: 4
+      ))
+    }
+  }
+  #expect(throws: AdmittedModelDescriptorError.duplicateFilePath("model.bin")) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+      valid,
+      files: [
+        .init(path: "model.bin", byteCount: 4, sha256: String(repeating: "a", count: 64)),
+        .init(path: "model.bin", byteCount: 4, sha256: String(repeating: "b", count: 64))
+      ],
+      downloadBytes: 8,
+      installedBytes: 8
     ))
   }
   #expect(throws: AdmittedModelDescriptorError.invalidByteCount) {
@@ -807,15 +844,35 @@ extension AdmittedModelDescriptor {
           raw.installedBytes >= raw.downloadBytes else {
       throw AdmittedModelDescriptorError.aggregateMismatch
     }
+    var normalizedFiles: [AdmittedModelFile] = []
+    var normalizedPaths = Set<String>()
     for file in raw.files {
-      guard !file.path.hasPrefix("/"),
-            !file.path.split(separator: "/").contains("..") else {
+      let components = file.path
+        .split(separator: "/", omittingEmptySubsequences: false)
+        .map(String.init)
+      guard !file.path.isEmpty,
+            !file.path.hasPrefix("/"),
+            !file.path.contains("\\"),
+            !file.path.localizedCaseInsensitiveContains("%2e"),
+            components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
         throw AdmittedModelDescriptorError.unsafePath(file.path)
+      }
+      let normalizedPath = components.joined(separator: "/")
+      guard normalizedPath == file.path else {
+        throw AdmittedModelDescriptorError.unsafePath(file.path)
+      }
+      guard normalizedPaths.insert(normalizedPath).inserted else {
+        throw AdmittedModelDescriptorError.duplicateFilePath(normalizedPath)
       }
       guard file.sha256.count == 64,
             file.sha256.allSatisfy("0123456789abcdefABCDEF".contains) else {
         throw AdmittedModelDescriptorError.invalidChecksum(file.sha256)
       }
+      normalizedFiles.append(.init(
+        path: normalizedPath,
+        byteCount: file.byteCount,
+        sha256: file.sha256
+      ))
     }
     self.init(
       role: raw.role,
@@ -827,7 +884,7 @@ extension AdmittedModelDescriptor {
       license: license,
       notices: raw.notices,
       source: raw.source,
-      files: raw.files,
+      files: normalizedFiles,
       downloadBytes: raw.downloadBytes,
       installedBytes: raw.installedBytes,
       languages: raw.languages,
@@ -840,7 +897,8 @@ extension AdmittedModelDescriptor {
     .init(sourceRepository: source, modelID: modelID, revision: revision,
           license: license, runtimeABI: runtimeABI, conversion: conversion,
           quantization: quantization, files: files,
-          downloadBytes: downloadBytes, installedBytes: installedBytes)
+          downloadBytes: downloadBytes, installedBytes: installedBytes,
+          requiredCapacityBytes: requiredCapacityBytes)
   }
 }
 ~~~
@@ -852,8 +910,11 @@ validated value. `TestDescriptors.neutralAdmitted` is a validated fixture;
 a raw copy with the named override. The test
 cases above cover canonical trimmed identity/revision/runtime ABI/conversion/
 quantization/license, trimmed-empty fields, relative/non-HTTPS/userinfo/
-fragment/query/traversal sources including double-encoded traversal, unsafe file
-paths, negative byte counts, non-64-hex checksums, aggregate mismatches, the
+fragment/query/traversal sources including double-encoded traversal. File
+validation mirrors the manager's strict relative-path rule: empty and absolute
+paths, `.`, `..`, empty components such as `a//b`, dot components, backslashes,
+encoded traversal, and duplicate normalized paths reject before recommendation.
+The cases also cover negative byte counts, non-64-hex checksums, aggregate mismatches, the
 `installedBytes: Int64.max, downloadBytes: 1` required-capacity overflow, and a
 distinct per-file checked-add overflow. The stored `requiredCapacityBytes` is
 the checked value from validation, not a recomputed sum. Do not accept an array, picker index, or
@@ -918,6 +979,7 @@ built-in installer seam.
   are short `Data` values, not model weights.
 
 ~~~swift
+import Foundation
 import CryptoKit
 
 enum TestFixtures {
@@ -927,6 +989,25 @@ enum TestFixtures {
     .joined()
 }
 
+final class SynchronousCapacityProbe: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: Int64
+
+  init(_ value: Int64) { self.value = value }
+
+  func read() -> Int64 {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
+
+  func set(_ value: Int64) {
+    lock.lock()
+    self.value = value
+    lock.unlock()
+  }
+}
+
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 enum TestManagers {
   static func manager(
@@ -934,13 +1015,18 @@ enum TestManagers {
     artifactIdentity: EnhancedModelArtifactIdentity,
     manifest: EnhancedModelManifest,
     transport: any ModelDownloading,
-    refreshFixture: TestRefreshFixture? = nil
+    refreshFixture: TestRefreshFixture? = nil,
+    capacityProvider: @escaping @Sendable () throws -> Int64 = {
+      Int64.max
+    },
+    architectureProvider: @escaping @Sendable () -> Bool = { true }
   ) -> EnhancedModelManager
 
   static func managerWithWrongFixtureChecksum(
     descriptor: AdmittedModelDescriptor,
     artifactIdentity: EnhancedModelArtifactIdentity,
-    manifest: EnhancedModelManifest
+    manifest: EnhancedModelManifest,
+    transport: any ModelDownloading
   ) -> EnhancedModelManager
 }
 #endif
@@ -1021,7 +1107,8 @@ func checksumFailureBecomesActionableRepairState() async {
   let manager = TestManagers.managerWithWrongFixtureChecksum(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
-    manifest: TestManifests.tiny
+    manifest: TestManifests.tiny,
+    transport: ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
   )
   let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
@@ -1077,6 +1164,62 @@ func refreshMapsStaleStateWithoutStartingOperation() async throws {
       if case .downloading = $0 { return true }
       return false
     })
+  }
+}
+
+@Test @MainActor
+func liveCapacityGateRejectsInstallRepairAndUpdateBeforeTransport() async {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let initialAvailableBytes = descriptor.requiredCapacityBytes + 1
+  let insufficientAvailableBytes = descriptor.downloadBytes + 1
+  #expect(insufficientAvailableBytes > descriptor.downloadBytes)
+  #expect(insufficientAvailableBytes < descriptor.requiredCapacityBytes)
+  let catalog = AdmittedModelCatalog(
+    signedDescriptor: descriptor,
+    hardware: .init(
+      architecture: descriptor.architectures[0],
+      requestedLanguages: [descriptor.languages[0]],
+      availableBytes: initialAvailableBytes
+    )
+  )
+  #expect(catalog.recommendation() == .recommended(descriptor))
+  let operations: [(String, TestRefreshFixture?)] = [
+    ("install", nil),
+    ("repair", .repairRequired),
+    ("update", .updateAvailable)
+  ]
+
+  for (operation, refreshFixture) in operations {
+    let capacity = SynchronousCapacityProbe(initialAvailableBytes)
+    let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+    let manager = TestManagers.manager(
+      descriptor: descriptor,
+      artifactIdentity: TestArtifacts.identity(matching: descriptor),
+      manifest: TestManifests.tiny,
+      transport: transport,
+      refreshFixture: refreshFixture,
+      capacityProvider: { capacity.read() }
+    )
+    let installer = try! EnhancedModelManagerInstaller(
+      manager: manager,
+      descriptor: descriptor,
+      startup: { },
+      calibrate: { }
+    )
+    if refreshFixture != nil { await installer.refresh() }
+    capacity.set(insufficientAvailableBytes)
+    switch operation {
+    case "install": await installer.install()
+    case "repair": await installer.repair()
+    case "update": await installer.update()
+    default: Issue.record("Unexpected fixture operation")
+    }
+    #expect(transport.downloadCalls == 0)
+    #expect(!installer.phaseHistory.contains {
+      if case .downloading = $0 { return true }
+      return false
+    })
+    #expect(installer.snapshot.lastError != nil)
   }
 }
 
@@ -1151,7 +1294,11 @@ func immutableArtifactMismatchesAreRejectedBeforeTransport() throws {
     TestArtifacts.identity(valid, files: [ .init(path: valid.files[0].path, byteCount: valid.files[0].byteCount, sha256: String(repeating: "b", count: 64)) ]),
     TestArtifacts.identity(valid, files: [ .init(path: valid.files[0].path, byteCount: valid.files[0].byteCount + 1, sha256: valid.files[0].sha256) ]),
     TestArtifacts.identity(valid, downloadBytes: valid.downloadBytes + 1),
-    TestArtifacts.identity(valid, installedBytes: valid.installedBytes + 1)
+    TestArtifacts.identity(valid, installedBytes: valid.installedBytes + 1),
+    TestArtifacts.identity(
+      valid,
+      requiredCapacityBytes: valid.requiredCapacityBytes + 1
+    )
   ]
   for artifact in mismatches {
     #expect(throws: AdmittedModelArtifactMismatch.descriptorArtifactMismatch) {
@@ -1324,7 +1471,9 @@ descriptor-mismatch fixture, which passes a different immutable identity to
 prove zero transport calls. `TestManagers.manager(descriptor:artifactIdentity:manifest:transport:)`
 has no default identity or manifest and constructs `EnhancedModelManager` with
 the supplied artifact identity and actual manifest; normal fixtures pass
-`TestArtifacts.identity(matching: descriptor)`, while the checksum fixture
+`TestArtifacts.identity(matching: descriptor)`, whose required capacity is
+copied exactly from the descriptor. Its override helper can change that field
+for the binding mismatch test, while the checksum fixture
 helper takes `descriptor:artifactIdentity:manifest:` in the same order.
 `PhaseRecorder` proves startup follows
 the manager's `.ready` state and calibration follows startup. The manager's
@@ -1349,8 +1498,11 @@ for `ready`, `updateAvailable`, or the exact `repairRequired` message; the
 test begins from the installer's stale `.notInstalled` snapshot and proves all
 three refresh outcomes without a download. The test-only
 `TestManagers.manager` signature is
-`descriptor:artifactIdentity:manifest:transport:refreshFixture:`; the first
-four labels and order remain mandatory for every manager fixture call.
+`descriptor:artifactIdentity:manifest:transport:refreshFixture:capacityProvider:architectureProvider:`;
+the first four labels and order remain mandatory for every manager fixture call.
+Its test-only provider defaults are `Int64.max` and `true`; production and
+compatibility initializers retain the live-capacity and arm64 providers shown
+above.
 
 - [ ] **Step 2: Run the red commands.**
 
@@ -1388,6 +1540,8 @@ struct EnhancedModelByteProgress: Equatable, Sendable {
 final class EnhancedModelManager: ObservableObject {
   private let artifactIdentity: EnhancedModelArtifactIdentity
   private let manifest: EnhancedModelManifest
+  private let requiredCapacityBytes: Int64
+  private let capacityProvider: @Sendable () throws -> Int64
   @Published private(set) var byteProgress: EnhancedModelByteProgress?
 
   nonisolated static func liveAvailableCapacity() throws -> Int64 {
@@ -1434,6 +1588,8 @@ final class EnhancedModelManager: ObservableObject {
     // initializer while making the identity a required stored value.
     self.artifactIdentity = artifactIdentity
     self.manifest = manifest
+    self.requiredCapacityBytes = artifactIdentity.requiredCapacityBytes
+    self.capacityProvider = capacityProvider
   }
 
   convenience init(
@@ -1492,14 +1648,47 @@ final class EnhancedModelManager: ObservableObject {
         .init(path: $0.path, byteCount: $0.byteCount, sha256: $0.sha256)
       },
       downloadBytes: manifest.totalByteCount,
-      installedBytes: manifest.totalByteCount
+      installedBytes: manifest.totalByteCount,
+      requiredCapacityBytes: Self.checkedEmbeddedRequiredCapacity(for: manifest)
     )
     return (manifest: manifest, artifactIdentity: identity)
+  }
+
+  private static func checkedEmbeddedRequiredCapacity(
+    for manifest: EnhancedModelManifest
+  ) -> Int64 {
+    let (value, overflow) = manifest.totalByteCount.addingReportingOverflow(
+      manifest.totalByteCount
+    )
+    return overflow ? Int64.max : value
   }
 
   var admittedArtifactIdentity: EnhancedModelArtifactIdentity { artifactIdentity }
 
   var admittedManifest: EnhancedModelManifest { manifest }
+
+  private func requireLiveTransferCapacity() throws {
+    let availableBytes = try capacityProvider()
+    guard availableBytes >= requiredCapacityBytes else {
+      throw EnhancedModelManagerError.insufficientSpace(
+        required: requiredCapacityBytes,
+        available: availableBytes
+      )
+    }
+  }
+
+  private func performTransfer(
+    from remoteURL: URL,
+    resumeToken: ModelResumeToken?,
+    _ progress: @escaping @Sendable (Int64, Int64) -> Void
+  ) async throws -> ModelDownloadResult {
+    try requireLiveTransferCapacity()
+    return try await transport.download(
+      from: remoteURL,
+      resumeToken: resumeToken,
+      progress
+    )
+  }
 
   func remoteURL(for file: EnhancedModelFile) throws -> URL {
     try Self.remoteURL(
@@ -1552,10 +1741,21 @@ Both existing `DictationModelCapability` call shapes remain unchanged. The
 adapter never substitutes a
 descriptor for that value, and the URL root no longer hard-codes a candidate
 repository. Keep the manager's existing `validateRelativePath` and
-`validateRevision` checks in the generalized helper; preserve the existing
+`validateRevision` checks in the generalized helper; extend
+`validateRelativePath` to reject empty components, `.`, `..`, absolute paths,
+and backslashes so it matches descriptor validation; preserve the existing
 `?download=true` query item exactly. Its verified required-capacity calculation
-remains authoritative for install admission; the catalog consumes the signed
-descriptor's overflow-checked `requiredCapacityBytes` equivalent.
+is the artifact identity's checked `requiredCapacityBytes`, which the manager
+stores as its transfer gate. Immediately before each existing network transfer
+in install, repair, and update, wrap that exact transport call in
+`performTransfer(from:resumeToken:)` with the existing callback that forwards
+received bytes to `updateProgress`; the wrapper
+retains the existing `transport.download(from:resumeToken:progress:)` call and
+re-reads `capacityProvider` immediately before it, throwing
+`insufficientSpace` when live available bytes are below the bound. The old
+`EnhancedModelManager.requiredAvailableCapacity` Parakeet constant is removed
+from this admitted path and is never used for an admitted artifact. The
+catalog and manager therefore use the same signed descriptor requirement.
 The URL test passes a non-default source repository and revision and asserts the
 full resolved path plus `?download=true`, proving the explicit identity is not
 ignored.
