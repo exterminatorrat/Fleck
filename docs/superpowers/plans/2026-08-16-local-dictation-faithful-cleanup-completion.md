@@ -220,7 +220,15 @@ accepted cleanup token/span base is unchanged.
 
 ~~~bash
 git diff --check
-git diff -- Sources/FleckCore/PersonalDictionary.swift Sources/FleckCore/PersonalDictionaryResolver.swift Tests/FleckCoreTests/PersonalDictionaryTests.swift Tests/FleckCoreTests/PersonalDictionaryResolverTests.swift
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckCore/PersonalDictionary.swift \
+    Sources/FleckCore/PersonalDictionaryResolver.swift \
+    Tests/FleckCoreTests/PersonalDictionaryTests.swift \
+    Tests/FleckCoreTests/PersonalDictionaryResolverTests.swift \
+  | sort
+)"
 for path in Sources/FleckCore/PersonalDictionary.swift Sources/FleckCore/PersonalDictionaryResolver.swift Tests/FleckCoreTests/PersonalDictionaryTests.swift Tests/FleckCoreTests/PersonalDictionaryResolverTests.swift; do test "$(git hash-object "$path")" = "$(git rev-parse "898ceae:$path")"; done
 git add Sources/FleckCore/PersonalDictionary.swift Sources/FleckCore/PersonalDictionaryResolver.swift Tests/FleckCoreTests/PersonalDictionaryTests.swift Tests/FleckCoreTests/PersonalDictionaryResolverTests.swift
 git commit -m "feat: restore personal dictionary resolution core"
@@ -580,8 +588,13 @@ Run:
 
 ```bash
 git diff --check
-git diff -- Sources/FleckApp/FaithfulCleanupValidator.swift Tests/FleckAppTests/FaithfulCleanupValidatorTests.swift
-test "$(git diff --name-only -- Sources/FleckApp/FaithfulCleanupValidator.swift Tests/FleckAppTests/FaithfulCleanupValidatorTests.swift | sort)" = "$(printf '%s\n' Sources/FleckApp/FaithfulCleanupValidator.swift Tests/FleckAppTests/FaithfulCleanupValidatorTests.swift)"
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckApp/FaithfulCleanupValidator.swift \
+    Tests/FleckAppTests/FaithfulCleanupValidatorTests.swift \
+  | sort
+)"
 ```
 
 Expected: clean whitespace; the diff contains only the two Task 1 files; no
@@ -1153,9 +1166,15 @@ Run:
 
 ```bash
 git diff --check
-rg -n "URLSession|FileHandle|Data\.write|NSXPC|LanguageModelSession|transcript|audio" Sources/FleckApp/IncrementalTranscriptCleaner.swift
-rg -n "func start\([^)]*\) async|await .*\.start\(" Sources/FleckApp/IncrementalTranscriptCleaner.swift
-test "$(git diff --name-only -- Sources/FleckApp/IncrementalTranscriptCleaner.swift Tests/FleckAppTests/IncrementalTranscriptCleanerTests.swift | sort)" = "$(printf '%s\n' Sources/FleckApp/IncrementalTranscriptCleaner.swift Tests/FleckAppTests/IncrementalTranscriptCleanerTests.swift)"
+! rg -n "URLSession|FileHandle|Data\.write|NSXPC|LanguageModelSession|transcript|audio" Sources/FleckApp/IncrementalTranscriptCleaner.swift
+! rg -n "func start\([^)]*\) async|await .*\.start\(" Sources/FleckApp/IncrementalTranscriptCleaner.swift
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckApp/IncrementalTranscriptCleaner.swift \
+    Tests/FleckAppTests/IncrementalTranscriptCleanerTests.swift \
+  | sort
+)"
 ```
 
 Expected: the first scan finds no network, file, IPC, or transcript/audio

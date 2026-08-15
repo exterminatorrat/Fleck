@@ -233,12 +233,14 @@ enum AdmittedModelInstallPhase: Equatable, Sendable {
   case downloading(receivedBytes: Int64, totalBytes: Int64)
   case verifying
   case installing
+  case ready
   case starting
   case calibrating
   case installed
   case updateAvailable
   case repairRequired(message: String)
   case removing
+  case cancelled
   case failed(message: String)
 }
 
@@ -278,31 +280,73 @@ struct EnhancedModelArtifactIdentity: Equatable, Sendable {
   let files: [AdmittedModelFile]
   let downloadBytes: Int64
   let installedBytes: Int64
+
+  var immutableIdentity: AdmittedModelImmutableIdentity {
+    .init(
+      sourceRepository: sourceRepository,
+      modelID: modelID,
+      revision: revision,
+      license: license,
+      runtimeABI: runtimeABI,
+      conversion: conversion,
+      quantization: quantization,
+      files: files,
+      downloadBytes: downloadBytes,
+      installedBytes: installedBytes
+    )
+  }
+
+  var manifestIdentity: EnhancedModelManifestIdentity {
+    .init(
+      schemaVersion: 1,
+      modelID: modelID,
+      revision: revision,
+      files: files,
+      totalByteCount: downloadBytes
+    )
+  }
+}
+
+struct EnhancedModelManifestIdentity: Equatable, Sendable {
+  let schemaVersion: Int
+  let modelID: String
+  let revision: String
+  let files: [AdmittedModelFile]
+  let totalByteCount: Int64
+
+  init(manifest: EnhancedModelManifest) {
+    schemaVersion = manifest.schemaVersion
+    modelID = manifest.modelID
+    revision = manifest.revision
+    files = manifest.files.map {
+      AdmittedModelFile(
+        path: $0.path,
+        byteCount: $0.byteCount,
+        sha256: $0.sha256
+      )
+    }
+    totalByteCount = manifest.totalByteCount
+  }
 }
 
 enum AdmittedModelArtifactMismatch: Error, Equatable {
-  case immutableIdentityMismatch
+  case descriptorArtifactMismatch
+  case artifactManifestMismatch
 }
 
 enum AdmittedModelArtifactBinding {
   static func validate(
     descriptor: AdmittedModelDescriptor,
-    artifact: EnhancedModelArtifactIdentity
+    artifact: EnhancedModelArtifactIdentity,
+    manifest: EnhancedModelManifest
   ) throws {
-    let expected = AdmittedModelImmutableIdentity(
-      sourceRepository: artifact.sourceRepository,
-      modelID: artifact.modelID,
-      revision: artifact.revision,
-      license: artifact.license,
-      runtimeABI: artifact.runtimeABI,
-      conversion: artifact.conversion,
-      quantization: artifact.quantization,
-      files: artifact.files,
-      downloadBytes: artifact.downloadBytes,
-      installedBytes: artifact.installedBytes
-    )
-    guard descriptor.immutableIdentity == expected else {
-      throw AdmittedModelArtifactMismatch.immutableIdentityMismatch
+    guard descriptor.immutableIdentity == artifact.immutableIdentity else {
+      throw AdmittedModelArtifactMismatch.descriptorArtifactMismatch
+    }
+    guard artifact.manifestIdentity == EnhancedModelManifestIdentity(
+      manifest: manifest
+    ) else {
+      throw AdmittedModelArtifactMismatch.artifactManifestMismatch
     }
   }
 }
@@ -311,9 +355,18 @@ enum AdmittedModelArtifactBinding {
 
 The existing manager receives `artifactIdentity` alongside its manifest and
 constructs each download URL from `artifactIdentity.sourceRepository`,
-`resolve`, and the immutable revision. The adapter initializer runs
-`AdmittedModelArtifactBinding.validate` before calling any manager operation;
-on mismatch construction throws before transport, and the Settings boundary
+`resolve`, and the immutable revision. The current `EnhancedModelManifest`
+represents schema version, model ID (including its repository identity),
+revision, per-file paths/checksums/byte counts, and aggregate bytes, so
+`EnhancedModelManifestIdentity` compares every one of those actual fields.
+The current manifest has no separate source URL, license, or runtime ABI /
+conversion / quantization fields; those remain required artifact-identity
+fields and are covered by the descriptor-to-artifact comparison rather than
+silently invented in the manifest schema. If a future admitted manifest
+represents them, its identity projection must include them before admission.
+The adapter initializer runs `AdmittedModelArtifactBinding.validate` against
+both the descriptor and the actual manager manifest before calling any manager
+operation; either mismatch throws before transport, and the Settings boundary
 maps that actionable error to a failed presentation without starting an
 operation.
 
@@ -527,6 +580,13 @@ ordinary constructor passes nil.
 ~~~bash
 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelDescriptorTests
 git diff --check
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckApp/AdmittedModelDescriptor.swift \
+    Tests/FleckAppTests/AdmittedModelDescriptorTests.swift \
+  | sort
+)"
 git add Sources/FleckApp/AdmittedModelDescriptor.swift Tests/FleckAppTests/AdmittedModelDescriptorTests.swift
 git commit -m "feat: define admitted model catalog"
 ~~~
@@ -581,6 +641,7 @@ func defaultBuildUsesBuiltInInstallerWithoutManagerReference() async {
 func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
+  let lifecycle = PhaseRecorder()
   let manager = EnhancedModelManager(
     modelRootURL: TestPaths.temporaryDirectory(),
     manifest: TestManifests.tiny,
@@ -593,18 +654,24 @@ func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
   let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
     descriptor: descriptor,
-    startup: { },
-    calibrate: { }
+    startup: { await lifecycle.append("startup") },
+    calibrate: { await lifecycle.append("calibration") }
   )
 
   await installer.install()
 
-  #expect(installer.phaseHistory.contains(
-    .downloading(receivedBytes: 0, totalBytes: descriptor.downloadBytes)
-  ))
-  #expect(installer.phaseHistory.contains(.verifying))
-  #expect(installer.phaseHistory.contains(.starting))
-  #expect(installer.phaseHistory.contains(.calibrating))
+  #expect(installer.phaseHistory.suffix(9) == [
+    .downloading(receivedBytes: 0, totalBytes: descriptor.downloadBytes),
+    .downloading(receivedBytes: 4, totalBytes: descriptor.downloadBytes),
+    .downloading(receivedBytes: 8, totalBytes: descriptor.downloadBytes),
+    .verifying,
+    .installing,
+    .ready,
+    .starting,
+    .calibrating,
+    .installed
+  ])
+  #expect(await lifecycle.values == ["startup", "calibration"])
   #expect(installer.snapshot.phase == .installed)
 }
 
@@ -630,17 +697,50 @@ func checksumFailureBecomesActionableRepairState() async {
 }
 
 @Test @MainActor
+func cancellationPublishesCancelledAndCannotPublishInstalledLater() async {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(
+    bytes: Data("fixture".utf8),
+    pausesUntilCancelled: true
+  )
+  let manager = TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
+    transport: transport
+  )
+  let installer = try! EnhancedModelManagerInstaller(
+    manager: manager,
+    descriptor: descriptor,
+    startup: { },
+    calibrate: { }
+  )
+
+  let install = Task { await installer.install() }
+  await transport.waitUntilStarted()
+  installer.cancel()
+  await install.value
+
+  #expect(installer.snapshot.phase == .cancelled)
+  #expect(installer.snapshot.lastError == "Model operation cancelled.")
+  #expect(installer.phaseHistory.last != .installed)
+  #expect(!installer.phaseHistory.contains(.installed))
+  #expect(transport.cancelObserved)
+}
+
+@Test @MainActor
 func descriptorArtifactMismatchFailsBeforeTransport() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
   let manager = TestManagers.manager(
     descriptor: descriptor,
-    transport: transport,
     artifactIdentity: TestArtifacts.identityWith(
       revision: "different-revision"
-    )
+    ),
+    manifest: TestManifests.tiny,
+    transport: transport
   )
-  #expect(throws: AdmittedModelArtifactMismatch.immutableIdentityMismatch) {
+  #expect(throws: AdmittedModelArtifactMismatch.descriptorArtifactMismatch) {
     _ = try EnhancedModelManagerInstaller(
       manager: manager,
       descriptor: descriptor,
@@ -670,10 +770,90 @@ func immutableArtifactMismatchesAreRejectedBeforeTransport() throws {
     TestArtifacts.identity(valid, installedBytes: valid.installedBytes + 1)
   ]
   for artifact in mismatches {
-    #expect(throws: AdmittedModelArtifactMismatch.immutableIdentityMismatch) {
-      try AdmittedModelArtifactBinding.validate(descriptor: descriptor, artifact: artifact)
+    #expect(throws: AdmittedModelArtifactMismatch.descriptorArtifactMismatch) {
+      try AdmittedModelArtifactBinding.validate(
+        descriptor: descriptor,
+        artifact: artifact,
+        manifest: TestManifests.tiny
+      )
     }
   }
+}
+
+@Test @MainActor
+func artifactManifestMismatchesAreRejectedBeforeTransport() throws {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let artifact = TestArtifacts.identity(matching: descriptor)
+  let mismatchedManifests = [
+    TestManifests.make(TestManifests.tiny, schemaVersion: 2),
+    TestManifests.make(TestManifests.tiny, modelID: "other/model"),
+    TestManifests.make(TestManifests.tiny, revision: "other-revision"),
+    TestManifests.make(
+      TestManifests.tiny,
+      files: [ .init(
+        path: artifact.files[0].path,
+        byteCount: artifact.files[0].byteCount,
+        sha256: String(repeating: "b", count: 64)
+      ) ]
+    ),
+    TestManifests.make(
+      TestManifests.tiny,
+      files: [ .init(
+        path: artifact.files[0].path,
+        byteCount: artifact.files[0].byteCount + 1,
+        sha256: artifact.files[0].sha256
+      ) ]
+    ),
+    TestManifests.make(TestManifests.tiny, totalByteCount: 999)
+  ]
+  for manifest in mismatchedManifests {
+    #expect(throws: AdmittedModelArtifactMismatch.artifactManifestMismatch) {
+      try AdmittedModelArtifactBinding.validate(
+        descriptor: descriptor,
+        artifact: artifact,
+        manifest: manifest
+      )
+    }
+  }
+}
+
+@Test @MainActor
+func artifactManifestMismatchFailsBeforeTransport() {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
+  let manager = TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.make(TestManifests.tiny, revision: "wrong"),
+    transport: transport
+  )
+  #expect(throws: AdmittedModelArtifactMismatch.artifactManifestMismatch) {
+    _ = try EnhancedModelManagerInstaller(
+      manager: manager,
+      descriptor: descriptor,
+      startup: { },
+      calibrate: { }
+    )
+  }
+  #expect(transport.downloadCalls == 0)
+}
+
+@Test func artifactRemoteURLKeepsManagerSafetyAndDownloadQuery() throws {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let identity = TestArtifacts.identity(matching: descriptor)
+  let url = try EnhancedModelManager.remoteURL(
+    for: .init(path: "folder/model.bin", byteCount: 4, sha256: String(repeating: "a", count: 64)),
+    sourceRepository: identity.sourceRepository,
+    revision: identity.revision
+  )
+  #expect(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems == [
+    URLQueryItem(name: "download", value: "true")
+  ])
+}
+
+struct ObservedProgress: Equatable, Sendable {
+  let receivedBytes: Int64
+  let totalBytes: Int64
 }
 
 @Test @MainActor
@@ -687,6 +867,7 @@ func installerUpdatesExposeBytesBeforeCompletion() async {
   let manager = TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
     transport: transport
   )
   let installer = try! EnhancedModelManagerInstaller(
@@ -700,43 +881,58 @@ func installerUpdatesExposeBytesBeforeCompletion() async {
     for await snapshot in installer.updates {
       if case .downloading(let receivedBytes, let totalBytes) = snapshot.phase,
          receivedBytes > 0 {
-        await recorder.append((receivedBytes, totalBytes))
+        await recorder.append(ObservedProgress(
+          receivedBytes: receivedBytes,
+          totalBytes: totalBytes
+        ))
       }
     }
   }
   let install = Task { await installer.install() }
   await transport.waitUntilFirstProgress()
   await recorder.waitUntilCount(1)
-  #expect(await recorder.values == [
-    (4, descriptor.downloadBytes)
-  ])
+  let firstSnapshots = await recorder.values
+  #expect(firstSnapshots.map(\.receivedBytes) == [4])
+  #expect(firstSnapshots.map(\.totalBytes) == [descriptor.downloadBytes])
   await transport.releaseProgress()
   await install.value
   await recorder.waitUntilCount(2)
-  #expect(await recorder.values == [
-    (4, descriptor.downloadBytes),
-    (8, descriptor.downloadBytes)
+  let snapshots = await recorder.values
+  #expect(snapshots.map(\.receivedBytes) == [4, 8])
+  #expect(snapshots.map(\.totalBytes) == [
+    descriptor.downloadBytes,
+    descriptor.downloadBytes
   ])
-  let receivedBytes = await recorder.values.map(\.0)
-  #expect(receivedBytes == receivedBytes.sorted())
+  #expect(snapshots.map(\.receivedBytes) ==
+    snapshots.map(\.receivedBytes).sorted())
   updates.cancel()
 }
 #endif
 ~~~
 
 `ModelDownloadingProbe` requires the exact artifact identity through its
-`TestManagers.manager(descriptor:artifactIdentity:transport:)` helper, emits progress values
+`TestManagers.manager(descriptor:artifactIdentity:manifest:transport:)` helper, emits progress values
 `4` and `8` with `totalBytes == descriptor.downloadBytes`, pauses after `4`,
-and does not complete until the test releases the gate. The actor-backed
+and does not complete until the test releases the gate. With
+`pausesUntilCancelled`, it remains in the manager operation until
+`EnhancedModelManagerInstaller.cancel()` cancels the single operation task and
+its manager/download child. The actor-backed
 `ProgressSnapshotRecorder.waitUntilCount(_:)` lets the test assert the first
 snapshot while installation is still blocked, then assert monotonic bytes and
 the exact total after the second snapshot. The only exception is the deliberate
 descriptor-mismatch fixture, which passes a different immutable identity to
-prove zero transport calls. `TestManagers.manager(descriptor:artifactIdentity:transport:)`
-has no default identity and constructs `EnhancedModelManager` with the supplied
-artifact identity; normal fixtures pass
+prove zero transport calls. `TestManagers.manager(descriptor:artifactIdentity:manifest:transport:)`
+has no default identity or manifest and constructs `EnhancedModelManager` with
+the supplied artifact identity and actual manifest; normal fixtures pass
 `TestArtifacts.identity(matching: descriptor)`, while the checksum fixture
-helper takes the same explicit identity.
+helper takes the same explicit identity. `PhaseRecorder` proves startup follows
+the manager's `.ready` state and calibration follows startup. The manager's
+`@Published state` subscription maps `.verifying`, `.installing`, `.ready`,
+`.repairRequired`, `.removing`, and operation failures while the
+`@Published byteProgress` subscription maps live byte snapshots. Both
+subscriptions are synchronous `@MainActor` sinks with no `receive(on:)`, and
+they are cancelled before the operation task's defer returns so the final
+byte update cannot queue past teardown.
 
 - [ ] **Step 2: Run the red commands.**
 
@@ -784,22 +980,48 @@ final class EnhancedModelManager: ObservableObject {
 
   var admittedArtifactIdentity: EnhancedModelArtifactIdentity { artifactIdentity }
 
-  func remoteURL(for file: EnhancedModelFile) -> URL {
-    artifactIdentity.sourceRepository
-      .appendingPathComponent("resolve")
-      .appendingPathComponent(artifactIdentity.revision)
-      .appendingPathComponent(file.path)
+  var admittedManifest: EnhancedModelManifest { manifest }
+
+  func remoteURL(for file: EnhancedModelFile) throws -> URL {
+    try Self.remoteURL(
+      for: file,
+      sourceRepository: artifactIdentity.sourceRepository,
+      revision: artifactIdentity.revision
+    )
+  }
+
+  nonisolated static func remoteURL(
+    for file: EnhancedModelFile,
+    sourceRepository: URL,
+    revision: String
+  ) throws -> URL {
+    try validateRelativePath(file.path)
+    try validateRevision(revision)
+    let revisionRoot = sourceRepository
+      .appendingPathComponent("resolve", isDirectory: true)
+      .appendingPathComponent(revision, isDirectory: true)
+    let artifactURL = file.path.split(separator: "/").reduce(revisionRoot) {
+      $0.appendingPathComponent(String($1))
+    }
+    var components = URLComponents(
+      url: artifactURL,
+      resolvingAgainstBaseURL: false
+    )!
+    components.queryItems = [URLQueryItem(name: "download", value: "true")]
+    return components.url!
   }
 }
 #endif
 ~~~
 
 The existing embedded manager construction supplies its immutable artifact
-identity beside the manifest. The adapter never substitutes a descriptor for
-that value, and the URL root no longer hard-codes a candidate repository. Its
-verified required-capacity calculation remains authoritative for install
-admission; the catalog's `installedBytes + downloadBytes` check is the signed
-configuration equivalent.
+identity beside the actual manifest. The adapter never substitutes a
+descriptor for that value, and the URL root no longer hard-codes a candidate
+repository. Keep the manager's existing `validateRelativePath` and
+`validateRevision` checks in the generalized helper; preserve the existing
+`?download=true` query item exactly. Its verified required-capacity calculation
+remains authoritative for install admission; the catalog's
+`installedBytes + downloadBytes` check is the signed configuration equivalent.
 
 - [ ] **Step 4: Add the two installer implementations.**
 
@@ -865,8 +1087,12 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   let updates: AsyncStream<AdmittedModelInstallationSnapshot>
   private let continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation
   private var progressSubscription: AnyCancellable?
+  private var stateSubscription: AnyCancellable?
+  private var operationTask: Task<Void, Never>?
   private var operationID: UUID?
   private var lastReceivedBytes: Int64 = 0
+  private var managerReady = false
+  private var cancellationRequested = false
 
   init(
     manager: EnhancedModelManager,
@@ -876,7 +1102,8 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   ) throws {
     try AdmittedModelArtifactBinding.validate(
       descriptor: descriptor,
-      artifact: manager.admittedArtifactIdentity
+      artifact: manager.admittedArtifactIdentity,
+      manifest: manager.admittedManifest
     )
     var continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation!
     updates = AsyncStream { continuation = $0 }
@@ -899,15 +1126,16 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
     continuation.yield(next)
   }
 
-  private func beginProgressForwarding() {
+  private func beginOperationSubscriptions() {
     operationID = UUID()
+    managerReady = false
+    cancellationRequested = false
     lastReceivedBytes = 0
     progressSubscription = manager.$byteProgress
       .compactMap { $0 }
-      .receive(on: RunLoop.main)
       .sink { [weak self] progress in
         guard let self,
-              self.operationID != nil,
+              self.operationID != nil, !self.cancellationRequested,
               progress.totalBytes == self.descriptor.downloadBytes,
               progress.receivedBytes >= self.lastReceivedBytes else { return }
         self.lastReceivedBytes = progress.receivedBytes
@@ -920,64 +1148,248 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
           lastError: nil
         ))
       }
+    stateSubscription = manager.$state
+      .sink { [weak self] state in
+        self?.publishManagerState(state)
+      }
   }
 
-  private func endProgressForwarding() {
-    operationID = nil
-    progressSubscription?.cancel()
-    progressSubscription = nil
-  }
-
-  private func runManagerOperation(
-    _ operation: @escaping @MainActor () async throws -> Void
-  ) async {
-    beginProgressForwarding()
-    publish(.init(
-      recommendation: .recommended(descriptor),
-      phase: .downloading(receivedBytes: 0, totalBytes: descriptor.downloadBytes),
-      lastError: nil
-    ))
-    defer { endProgressForwarding() }
-    do {
-      try await operation()
-      // Existing manager state is mapped to verifying/installing/ready here.
-    } catch {
+  private func publishManagerState(_ state: EnhancedModelState) {
+    guard operationID != nil, !cancellationRequested else { return }
+    switch state {
+    case .notInstalled:
       publish(.init(
         recommendation: .recommended(descriptor),
-        phase: .failed(message: String(describing: error)),
-        lastError: String(describing: error)
+        phase: .notInstalled,
+        lastError: nil
+      ))
+    case .downloading(_):
+      break // byteProgress is the authoritative live download phase.
+    case .verifying:
+      publish(.init(
+        recommendation: .recommended(descriptor),
+        phase: .verifying,
+        lastError: nil
+      ))
+    case .installing:
+      publish(.init(
+        recommendation: .recommended(descriptor),
+        phase: .installing,
+        lastError: nil
+      ))
+    case .ready:
+      managerReady = true
+      publish(.init(
+        recommendation: .recommended(descriptor),
+        phase: .ready,
+        lastError: nil
+      ))
+    case .updateAvailable:
+      publish(.init(
+        recommendation: .recommended(descriptor),
+        phase: .updateAvailable,
+        lastError: nil
+      ))
+    case .repairRequired(let message):
+      publish(.init(
+        recommendation: .recommended(descriptor),
+        phase: .repairRequired(message: message),
+        lastError: message
+      ))
+    case .removing:
+      publish(.init(
+        recommendation: .recommended(descriptor),
+        phase: .removing,
+        lastError: nil
       ))
     }
   }
 
+  private func endOperation() {
+    operationID = nil
+    progressSubscription?.cancel()
+    progressSubscription = nil
+    stateSubscription?.cancel()
+    stateSubscription = nil
+  }
+
+  private func runManagerOperation(
+    initialPhase: AdmittedModelInstallPhase,
+    runsStartupAndCalibration: Bool,
+    _ operation: @escaping @MainActor () async throws -> Void
+  ) async {
+    guard operationTask == nil else {
+      publish(.init(
+        recommendation: .recommended(descriptor),
+        phase: .failed(message: "Another model operation is already running."),
+        lastError: "Another model operation is already running."
+      ))
+      return
+    }
+    beginOperationSubscriptions()
+    publish(.init(
+      recommendation: .recommended(descriptor),
+      phase: initialPhase,
+      lastError: nil
+    ))
+    let task = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.endOperation() }
+      do {
+        try await operation()
+        guard !Task.isCancelled, !self.cancellationRequested else {
+          self.publish(.init(
+            recommendation: .recommended(self.descriptor),
+            phase: .cancelled,
+            lastError: "Model operation cancelled."
+          ))
+          return
+        }
+        guard !runsStartupAndCalibration || self.managerReady || self.manager.state == .ready else {
+          self.publish(.init(
+            recommendation: .recommended(self.descriptor),
+            phase: .failed(message: "The model did not reach ready state."),
+            lastError: "The model did not reach ready state."
+          ))
+          return
+        }
+        guard runsStartupAndCalibration else { return }
+        self.publish(.init(
+          recommendation: .recommended(self.descriptor),
+          phase: .starting,
+          lastError: nil
+        ))
+        try await self.startup()
+        guard !Task.isCancelled, !self.cancellationRequested else {
+          self.publish(.init(
+            recommendation: .recommended(self.descriptor),
+            phase: .cancelled,
+            lastError: "Model operation cancelled."
+          ))
+          return
+        }
+        self.publish(.init(
+          recommendation: .recommended(self.descriptor),
+          phase: .calibrating,
+          lastError: nil
+        ))
+        try await self.calibrate()
+        guard !Task.isCancelled, !self.cancellationRequested else {
+          self.publish(.init(
+            recommendation: .recommended(self.descriptor),
+            phase: .cancelled,
+            lastError: "Model operation cancelled."
+          ))
+          return
+        }
+        self.publish(.init(
+          recommendation: .recommended(self.descriptor),
+          phase: .installed,
+          lastError: nil
+        ))
+      } catch is CancellationError {
+        self.publish(.init(
+          recommendation: .recommended(self.descriptor),
+          phase: .cancelled,
+          lastError: "Model operation cancelled."
+        ))
+      } catch {
+        if self.cancellationRequested || Task.isCancelled {
+          self.publish(.init(
+            recommendation: .recommended(self.descriptor),
+            phase: .cancelled,
+            lastError: "Model operation cancelled."
+          ))
+        } else if case .repairRequired(let message) = self.manager.state {
+          self.publish(.init(
+            recommendation: .recommended(self.descriptor),
+            phase: .repairRequired(message: message),
+            lastError: message
+          ))
+        } else {
+          self.publish(.init(
+            recommendation: .recommended(self.descriptor),
+            phase: .failed(message: String(describing: error)),
+            lastError: String(describing: error)
+          ))
+        }
+      }
+    }
+    operationTask = task
+    await task.value
+    operationTask = nil
+  }
+
   func install() async {
-    await runManagerOperation { try await manager.download() }
+    await runManagerOperation(
+      initialPhase: .downloading(
+        receivedBytes: 0,
+        totalBytes: descriptor.downloadBytes
+      ),
+      runsStartupAndCalibration: true
+    ) { try await manager.download() }
   }
 
   func repair() async {
-    await runManagerOperation { try await manager.repair() }
+    await runManagerOperation(
+      initialPhase: .downloading(
+        receivedBytes: 0,
+        totalBytes: descriptor.downloadBytes
+      ),
+      runsStartupAndCalibration: true
+    ) { try await manager.repair() }
   }
 
   func update() async {
-    await runManagerOperation { try await manager.update() }
+    await runManagerOperation(
+      initialPhase: .downloading(
+        receivedBytes: 0,
+        totalBytes: descriptor.downloadBytes
+      ),
+      runsStartupAndCalibration: true
+    ) { try await manager.update() }
   }
 
-  func refresh() async
-  func cancel()
-  func remove() async
+  func refresh() async { await manager.refreshState() }
+
+  func cancel() {
+    guard let operationTask else { return }
+    cancellationRequested = true
+    operationTask.cancel()
+  }
+
+  func remove() async {
+    await runManagerOperation(
+      initialPhase: .removing,
+      runsStartupAndCalibration: false
+    ) { try await manager.deleteModel() }
+  }
 }
 #endif
 ~~~
 
-Map manager states to the phase enum. On install/repair/update, call only the
-manager's existing method, forward `byteProgress` as
-`downloading(receivedBytes:totalBytes:)`, then run injected startup and
-calibration closures as separate phases. On checksum, size, path, capacity,
-transport, startup, or calibration failure, set an actionable `failed` or
-`repairRequired` message and retain the safe previous installation when the
-manager does. Cancellation cancels the one operation task and never reports
-installed. Removal calls only `manager.deleteModel()`. The ordinary release
-uses `BuiltInAdmittedModelInstaller` and cannot reach the manager.
+Map manager states to the phase enum through both synchronous `@MainActor`
+Combine subscriptions. The byte-progress sink publishes monotonic
+`downloading(receivedBytes:totalBytes:)` snapshots; the state sink publishes
+`verifying`, `installing`, `ready`, `updateAvailable`, `repairRequired`, and
+`removing` as they occur. No `receive(on:)` is used, so a final byte update is
+delivered before the operation's teardown. One `operationTask` owns each
+manager `download`, `repair`, `update`, or `deleteModel` call. `cancel()` sets
+the cancellation flag and cancels that task; the manager operation is the
+task's awaited child, so cancellation propagates into the manager's existing
+`ModelDownloading`/URLSession downloader cancellation handler. The task keeps
+its handle until `await task.value` returns, then clears it after the deferred
+subscription teardown; this prevents a synchronously completing operation from
+leaving a stale task handle. It publishes
+exactly `phase: .cancelled` with `lastError: "Model operation cancelled."` and
+never publishes `.installed` afterward. After manager `.ready`, the task
+publishes `.starting`, awaits startup, publishes `.calibrating`, awaits
+calibration, and only then publishes `.installed`. On checksum, size, path,
+capacity, transport, startup, or calibration failure, set an actionable
+`failed` or `repairRequired` message and retain the safe previous installation
+when the manager does. Removal calls only `manager.deleteModel()`. The
+ordinary release uses `BuiltInAdmittedModelInstaller` and cannot reach the
+manager.
 
 - [ ] **Step 5: Run green and broader checks.**
 
@@ -998,6 +1410,15 @@ from the default-build result.
 ~~~bash
 git diff --check
 rg -n "URLSessionModelDownloader\\(\\)|ModelDownloading|byteProgress|verifyRepository|deleteModel" Sources/FleckApp/EnhancedModelManager.swift Sources/FleckApp/AdmittedModelInstallation.swift
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckApp/AdmittedModelInstallation.swift \
+    Tests/FleckAppTests/AdmittedModelInstallationTests.swift \
+    Sources/FleckApp/EnhancedModelManager.swift \
+    Tests/FleckAppTests/EnhancedModelManagerTests.swift \
+  | sort
+)"
 git add Sources/FleckApp/EnhancedModelManager.swift Sources/FleckApp/AdmittedModelInstallation.swift Tests/FleckAppTests/EnhancedModelManagerTests.swift Tests/FleckAppTests/AdmittedModelInstallationTests.swift
 git commit -m "feat: expose admitted model installation phases"
 ~~~
@@ -1082,6 +1503,21 @@ Settings/error copy.
   #expect(presentation.primaryAction == .cancel)
 }
 
+@Test func readyAndCancelledHaveFiniteSettingsCopy() {
+  for phase in [AdmittedModelInstallPhase.ready, .cancelled] {
+    let presentation = AdmittedModelSettingsPresentation(
+      snapshot: .init(
+        recommendation: .recommended(TestDescriptors.tinyAdmittedASR),
+        phase: phase,
+        lastError: nil
+      )
+    )
+    #expect(!presentation.title.isEmpty)
+    #expect(!presentation.detail.isEmpty)
+    #expect(!presentation.detail.contains("Loading"))
+  }
+}
+
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test @MainActor
 func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
@@ -1110,8 +1546,9 @@ func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
   let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
   let manager = TestManagers.manager(
     descriptor: descriptor,
-    transport: transport,
-    artifactIdentity: TestArtifacts.identityWith(revision: "wrong")
+    artifactIdentity: TestArtifacts.identityWith(revision: "wrong"),
+    manifest: TestManifests.tiny,
+    transport: transport
   )
   let installer: any AdmittedModelInstalling
   do {
@@ -1257,9 +1694,9 @@ animation. Do not change the existing shortcut, permission, history, or editor
 settings.
 
 Keep installer phases and errors in Settings only: map them to finite
-`downloading`, `verifying`, `installing`, `starting`, `calibrating`,
-`installed`, `repairRequired`, `removing`, or `failed` copy. Errors name the
-action and next recovery step. Do not modify `Sources/FleckApp/DictationCapsule.swift`;
+`downloading`, `verifying`, `installing`, `ready`, `starting`, `calibrating`,
+`installed`, `repairRequired`, `removing`, `cancelled`, or `failed` copy. Errors
+name the action and next recovery step. Do not modify `Sources/FleckApp/DictationCapsule.swift`;
 all installer phase state remains in Settings. Dictation stays on Apple
 Speech/deterministic cleanup when the catalog is built-in or an operation
 fails.
@@ -1285,7 +1722,18 @@ accessibility values expose byte progress.
 
 ~~~bash
 git diff --check
-rg -n 'Picker\("Engine"|Enhanced Local|ModelConsentView|Download Enhanced Model|Loading' Sources/FleckApp/SettingsView.swift
+! rg -n 'Picker\("Engine"|Enhanced Local|ModelConsentView|Download Enhanced Model|Loading' Sources/FleckApp/SettingsView.swift
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckApp/AdmittedModelSettingsPresentation.swift \
+    Tests/FleckAppTests/AdmittedModelSettingsPresentationTests.swift \
+    Sources/FleckApp/SettingsView.swift \
+    Sources/FleckApp/FleckApp.swift \
+    Tests/FleckAppTests/DictationSettingsTests.swift \
+    Tests/FleckAppTests/DictationAvailabilityTests.swift \
+  | sort
+)"
 git add Sources/FleckApp/AdmittedModelSettingsPresentation.swift Sources/FleckApp/SettingsView.swift Sources/FleckApp/FleckApp.swift Tests/FleckAppTests/AdmittedModelSettingsPresentationTests.swift Tests/FleckAppTests/DictationSettingsTests.swift Tests/FleckAppTests/DictationAvailabilityTests.swift
 git commit -m "feat: present admitted model recommendation"
 ~~~

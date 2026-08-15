@@ -211,7 +211,10 @@ rejected cleanup attempt selects exactly `PersonalDictionaryResolution.baseline`
    generations. The state publishes `stableText + provisionalTail`; stable text
    only grows, and the mutable tail contains no more than the newest two clauses
    and 80 `CleanupLexeme` lexical units; `.?!。！？` terminators count without
-   requiring following whitespace.
+   requiring following whitespace. With no terminator the whole string remains
+   mutable; with one terminator the boundary is after that terminator; with two
+   it is after the first; and with three it is after the second. Immediately
+   following whitespace is consumed into stable text.
 5. In focused mode the coordinator accepts only the active capture generation
    and calls `FocusedDictationEditing.updateFocusedDictation(provisionalText:)`.
    Smart Capture may expose levels/status but does not insert provisional text.
@@ -354,9 +357,11 @@ checksums, aggregate mismatches, and empty support sets. The existing
 compile-gated manager builds or receives one immutable
 `EnhancedModelArtifactIdentity` alongside its `EnhancedModelManifest`; its
 source repository and revision derive every `remoteURL`. The admitted installer
-compares the descriptor's immutable identity with that artifact identity before
-any manager operation and rejects a mismatch before transport. This is a small
-seam, not a generic multi-model registry.
+compares the descriptor's immutable identity with that artifact identity and the
+artifact identity with the actual manifest identity before any manager operation;
+descriptor/artifact or artifact/manifest mismatch rejects before transport. The
+existing manifest path/revision checks and `?download=true` URL query remain
+authoritative. This is a small seam, not a generic multi-model registry.
 
 The signed app supplies either no descriptor or exactly one hardware-appropriate
 recommendation for the curated experience. Ordinary release configuration is
@@ -374,15 +379,24 @@ card; the candidate gate does not restore a model picker, Advanced selector,
 consent view, or download-specific surface.
 
 Installer presentation has explicit states for `notInstalled`, `downloading`
-with received/total bytes, `verifying`, `installing`, `starting`, `calibrating`,
-`installed`, `updateAvailable`, `repairRequired`, `removing`, and actionable
-failure. It never calls an indeterminate operation “Loading”. Repair, update,
-and removal require explicit user actions. Startup and calibration are visible
-phases; installation does not imply readiness or release admission. The
-installer exposes `updates: AsyncStream<AdmittedModelInstallationSnapshot>`;
-the manager adapter publishes live monotonic byte snapshots only while an
-operation is active, and the Settings view model owns the cancellable
-subscription.
+with received/total bytes, `verifying`, `installing`, `ready`, `starting`,
+`calibrating`, `installed`, `updateAvailable`, `repairRequired`, `removing`,
+`cancelled`, and actionable failure. It never calls an indeterminate operation
+“Loading”. Repair, update, and removal require explicit user actions. Startup
+and calibration are visible phases; installation does not imply readiness or
+release admission. The installer exposes
+`updates: AsyncStream<AdmittedModelInstallationSnapshot>`; the manager adapter
+owns one cancellable operation task plus synchronous `@MainActor`
+subscriptions to manager byte progress and state. It publishes live monotonic
+byte snapshots and `verifying`/`installing`/`ready`/`repairRequired`/
+`removing`/`cancelled`/failure transitions while the operation is active, and
+the Settings view model owns the cancellable subscription.
+
+If signed-descriptor construction or either identity comparison fails, the
+Settings construction boundary catches the error and exposes a finite failed
+installer snapshot without starting transport. The coordinator continues using
+the built-in Apple Speech/deterministic-cleanup path, so a malformed candidate
+configuration cannot disable the safe dictation fallback.
 
 The UI uses the existing native macOS Settings structure, semantic colors and
 styles, keyboard and VoiceOver labels/values, and no frequent decorative

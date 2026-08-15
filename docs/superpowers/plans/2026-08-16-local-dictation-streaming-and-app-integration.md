@@ -310,7 +310,14 @@ legacy coordinator behavior.
 
 ~~~bash
 git diff --check
-git diff -- Sources/FleckApp/DictationInterfaces.swift Sources/FleckApp/DictationProcessingModels.swift Tests/FleckAppTests/DictationProcessingModelsTests.swift
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckApp/DictationProcessingModels.swift \
+    Tests/FleckAppTests/DictationProcessingModelsTests.swift \
+    Sources/FleckApp/DictationInterfaces.swift \
+  | sort
+)"
 git add Sources/FleckApp/DictationInterfaces.swift Sources/FleckApp/DictationProcessingModels.swift Tests/FleckAppTests/DictationProcessingModelsTests.swift
 git commit -m "feat: define streaming dictation contracts"
 ~~~
@@ -352,6 +359,40 @@ processor, Apple capture, runtime, model, and UI files.
   )
   #expect(update.stableText == "First. ")
   #expect(update.provisionalTail == "Second. Third")
+}
+
+@Test func zeroTerminatorsKeepTheWholeTranscriptMutable() throws {
+  var state = StreamingTranscriptState()
+  let update = try state.accept(generation: 1, fullText: "No terminator")
+  #expect(update.stableText == "")
+  #expect(update.provisionalTail == "No terminator")
+}
+
+@Test func oneTerminatorStabilizesThatClause() throws {
+  var state = StreamingTranscriptState()
+  let update = try state.accept(generation: 1, fullText: "First. Second")
+  #expect(update.stableText == "First. ")
+  #expect(update.provisionalTail == "Second")
+}
+
+@Test func twoTerminatorsKeepTheNewestTwoClausesMutable() throws {
+  var state = StreamingTranscriptState()
+  let update = try state.accept(
+    generation: 1,
+    fullText: "First. Second. Third"
+  )
+  #expect(update.stableText == "First. ")
+  #expect(update.provisionalTail == "Second. Third")
+}
+
+@Test func threeTerminatorsKeepTheNewestTwoClausesMutable() throws {
+  var state = StreamingTranscriptState()
+  let update = try state.accept(
+    generation: 1,
+    fullText: "First. Second. Third. Fourth"
+  )
+  #expect(update.stableText == "First. Second. ")
+  #expect(update.provisionalTail == "Third. Fourth")
 }
 
 @Test func staleGenerationAndStableRegressionAreRejected() throws {
@@ -460,11 +501,15 @@ single-character punctuation lexemes in `.?!。！？` as clause terminators, so
 terminator is recognized without requiring following whitespace and periods
 inside URL/path/code lexemes are not boundaries. Track each lexeme's character
 span from `lexeme.original`; `lexeme.isLexical` is the only unit counted for
-the 80-unit bound. Start the mutable tail after the oldest terminator among
-the newest two clauses, then move its start forward to the first of the newest
-80 lexical spans when necessary. The result therefore keeps the newest two
-clauses OR 80 lexical units, whichever is stricter. Never mutate the
-previously accepted stable prefix.
+the 80-unit bound. If there are no terminators, set `clauseStart = 0`. If
+there are terminators, select `boundaryIndex = max(0, terminatorEnds.count -
+maximumMutableClauses)` and set `clauseStart = terminatorEnds[boundaryIndex]`:
+one terminator selects its own end, two select the first end, and three select
+the second end, leaving at most the newest two clauses mutable. Then advance
+over immediately following whitespace lexemes so that whitespace after a
+terminator belongs to stable text. Move the start forward to the first of the
+newest 80 lexical spans when necessary. Never mutate the previously accepted
+stable prefix.
 
 ~~~swift
 private static let clauseTerminators: Set<Character> = [
@@ -494,13 +539,13 @@ private static func splitStablePrefix(
     }
   }
 
-  var clauseStart: Int
-  if terminatorEnds.count >= maximumMutableClauses {
-    clauseStart = terminatorEnds[
+  var clauseStart = 0
+  if !terminatorEnds.isEmpty {
+    let boundaryIndex = max(
+      0,
       terminatorEnds.count - maximumMutableClauses
-    ]
-  } else {
-    clauseStart = 0
+    )
+    clauseStart = terminatorEnds[boundaryIndex]
   }
 
   let characters = Array(fullText)
@@ -526,6 +571,13 @@ private static func splitStablePrefix(
 ~~~bash
 swift test --disable-automatic-resolution --no-parallel --filter StreamingTranscriptStateTests
 git diff --check
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckApp/StreamingTranscriptState.swift \
+    Tests/FleckAppTests/StreamingTranscriptStateTests.swift \
+  | sort
+)"
 git add Sources/FleckApp/StreamingTranscriptState.swift Tests/FleckAppTests/StreamingTranscriptStateTests.swift
 git commit -m "feat: bound streaming transcript mutability"
 ~~~
@@ -677,7 +729,18 @@ Expected: all pass without loading a model or creating audio.
 
 ~~~bash
 git diff --check
-rg -n 'URLSession|AVAudioEngine|SFSpeech|SpeechAnalyzer|FileHandle|Data\.write' Sources/FleckApp/DictationRuntimePolicy.swift Sources/FleckApp/DictationInferenceScheduler.swift Sources/FleckApp/LocalDictationRuntime.swift
+! rg -n 'URLSession|AVAudioEngine|SFSpeech|SpeechAnalyzer|FileHandle|Data\.write' Sources/FleckApp/DictationRuntimePolicy.swift Sources/FleckApp/DictationInferenceScheduler.swift Sources/FleckApp/LocalDictationRuntime.swift
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckApp/DictationRuntimePolicy.swift \
+    Sources/FleckApp/DictationInferenceScheduler.swift \
+    Sources/FleckApp/LocalDictationRuntime.swift \
+    Tests/FleckAppTests/DictationRuntimePolicyTests.swift \
+    Tests/FleckAppTests/DictationInferenceSchedulerTests.swift \
+    Tests/FleckAppTests/LocalDictationRuntimeTests.swift \
+  | sort
+)"
 git add Sources/FleckApp/DictationRuntimePolicy.swift Sources/FleckApp/DictationInferenceScheduler.swift Sources/FleckApp/LocalDictationRuntime.swift Tests/FleckAppTests/DictationRuntimePolicyTests.swift Tests/FleckAppTests/DictationInferenceSchedulerTests.swift Tests/FleckAppTests/LocalDictationRuntimeTests.swift
 git commit -m "feat: restore local dictation runtime policy"
 ~~~
@@ -800,7 +863,7 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
 
 @Test func foundationModelGeneratorReceivesTheCleanupDeadline() async throws {
   let deadline = TestCleanupClock.fixedInstant.advanced(by: .milliseconds(1500))
-  let probe = FoundationModelOperationProbe(result: "Send the report.")
+  let probe = FoundationModelOperationProbe()
   let generator = FoundationModelCleanupGenerator { request, maximumOutputTokens in
     await probe.record(request: request, maximumOutputTokens: maximumOutputTokens)
     await probe.waitUntilReleased()
@@ -821,7 +884,7 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
 }
 
 @Test func foundationModelCallerCancellationAcknowledgesAndReturnsNoCandidate() async throws {
-  let probe = FoundationModelOperationProbe(result: "late")
+  let probe = FoundationModelOperationProbe()
   let generator = FoundationModelCleanupGenerator { request, _ in
     await probe.waitUntilStarted()
     await probe.waitUntilReleased()
@@ -841,7 +904,10 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
     try await result.value
   }
   await probe.release("late")
-  #expect(await probe.lateCandidateWasPublished == false)
+  await session.acknowledgement()
+  await #expect(throws: CleanupGenerationError.requestCancelled) {
+    try await session.result()
+  }
 }
 
 @Test func foundationModelAcknowledgementCompletesAfterCancellation() async throws {
@@ -855,10 +921,11 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
   let acknowledgement = Task { await session.acknowledgement() }
   session.requestCancellation()
   _ = await acknowledgement.value
+  await session.acknowledgement()
 }
 
 @Test func foundationModelForceTerminationUnblocksBothWaiters() async throws {
-  let probe = FoundationModelOperationProbe(result: "never")
+  let probe = FoundationModelOperationProbe()
   let session = try FoundationModelCleanupGenerator { request, _ in
     await probe.waitUntilStarted()
     await probe.waitUntilReleased()
@@ -880,7 +947,7 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
 }
 
 @Test func foundationModelLateUnderlyingWorkCannotPublish() async throws {
-  let probe = FoundationModelOperationProbe(result: "late")
+  let probe = FoundationModelOperationProbe()
   let session = try FoundationModelCleanupGenerator { request, _ in
     await probe.waitUntilReleased()
     return request.baseline
@@ -897,7 +964,9 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
   }
   await probe.release("late")
   await session.acknowledgement()
-  #expect(await probe.lateCandidateWasPublished == false)
+  await #expect(throws: CleanupGenerationError.terminated) {
+    try await session.result()
+  }
 }
 ~~~
 
@@ -1031,8 +1100,12 @@ acknowledgement continuation: `publish` stores the candidate, marks the gate
 closed, resumes both waiters, and returns `true`; `close` marks it closed,
 resumes a waiting result with its terminal error and the acknowledgement
 waiter, and is a no-op after the first terminal transition. `result` and
-`acknowledgement` first consume an already-completed state under the lock, so
-there is no continuation race.
+`acknowledgement` first read an already-completed state under the lock, so
+there is no continuation race. The terminal result/error is replayable and
+stable for later `result()` calls; acknowledgement is idempotent. The tests
+therefore release the underlying operation only after cancellation or force
+termination, then call `result()` again and assert the same terminal error
+without observing a second candidate publication.
 
 The injected production closure calls existing Apple Foundation Models where
 supported and deterministic local cleanup otherwise. The Workstream A Task 1
@@ -1049,10 +1122,10 @@ the Foundation Model computation itself was killed.
 
 `FoundationModelOperationProbe` is an actor-owned test fixture with
 `record(request:maximumOutputTokens:)`, `waitUntilStarted()`,
-`waitUntilReleased()`, `release(_:)`, and
-`lateCandidateWasPublished`. It blocks the underlying closure until each test
-chooses cancellation or force termination, so the tests observe acknowledgement
-and publication behavior rather than a post-completion history array.
+`waitUntilReleased()`, and `release(_:)`. It blocks the underlying closure
+until each test chooses cancellation or force termination. It does not inspect
+the private publication gate; the tests use only `result()` and
+`acknowledgement()` as the observable session contract.
 
 - [ ] **Step 5: Add the processor/session.**
 
@@ -1168,7 +1241,18 @@ rejection, and adapter tests prove no second audio source.
 
 ~~~bash
 git diff --check
-rg -n 'AVAudioEngine|installTap|SFSpeechRecognizer|SpeechAnalyzer|URLSession|FileHandle|Data\.write' Sources/FleckApp/AppleSpeechStreamingAdapter.swift Sources/FleckApp/FoundationModelCleanupGenerator.swift Sources/FleckApp/StreamingDictationProcessor.swift
+! rg -n 'AVAudioEngine|installTap|SFSpeechRecognizer|SpeechAnalyzer|URLSession|FileHandle|Data\.write' Sources/FleckApp/AppleSpeechStreamingAdapter.swift Sources/FleckApp/FoundationModelCleanupGenerator.swift Sources/FleckApp/StreamingDictationProcessor.swift
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckApp/AppleSpeechStreamingAdapter.swift \
+    Sources/FleckApp/FoundationModelCleanupGenerator.swift \
+    Sources/FleckApp/StreamingDictationProcessor.swift \
+    Tests/FleckAppTests/AppleSpeechStreamingAdapterTests.swift \
+    Tests/FleckAppTests/FoundationModelCleanupGeneratorTests.swift \
+    Tests/FleckAppTests/StreamingDictationProcessorTests.swift \
+  | sort
+)"
 git add Sources/FleckApp/AppleSpeechStreamingAdapter.swift Sources/FleckApp/FoundationModelCleanupGenerator.swift Sources/FleckApp/StreamingDictationProcessor.swift Tests/FleckAppTests/AppleSpeechStreamingAdapterTests.swift Tests/FleckAppTests/FoundationModelCleanupGeneratorTests.swift Tests/FleckAppTests/StreamingDictationProcessorTests.swift
 git commit -m "feat: compose Apple streaming dictation"
 ~~~
@@ -1380,6 +1464,16 @@ exact baseline/raw recovery, provisional display, and legacy cleaner isolation.
 git diff --check
 rg -n 'processingSession|processingUpdatesTask|cancelRequested|isTerminating' Sources/FleckApp/DictationCoordinator.swift
 test "$(rg -n 'AppleSpeechCapture\(' Sources/FleckApp/FleckApp.swift | wc -l | tr -d ' ')" -eq 1
+git diff --
+test "$(git diff --name-only | sort)" = "$(
+  printf '%s\n' \
+    Sources/FleckApp/PersonalDictionaryTranscriptResolver.swift \
+    Tests/FleckAppTests/PersonalDictionaryTranscriptResolverTests.swift \
+    Sources/FleckApp/DictationCoordinator.swift \
+    Sources/FleckApp/FleckApp.swift \
+    Tests/FleckAppTests/DictationCoordinatorTests.swift \
+  | sort
+)"
 git add Sources/FleckApp/PersonalDictionaryTranscriptResolver.swift Sources/FleckApp/DictationCoordinator.swift Sources/FleckApp/FleckApp.swift Tests/FleckAppTests/DictationCoordinatorTests.swift Tests/FleckAppTests/PersonalDictionaryTranscriptResolverTests.swift
 git commit -m "feat: integrate streaming dictation with coordinator"
 ~~~
