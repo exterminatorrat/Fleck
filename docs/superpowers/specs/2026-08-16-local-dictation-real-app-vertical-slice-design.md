@@ -257,8 +257,13 @@ filler, repetition, or correction recognition; the ordered number signature
 must remain identical, and ambiguous or unrecognized numeric/quantity-looking
 forms fail closed. Short-list formatting may ignore only paired validated
 ordinal marker positions; it never bypasses a quantity change inside an item.
-Only those paired ordinal markers may be introduced by the short-list formatting
-rule.
+Digit ordinals are recognized only as full-token `[0-9]+(st|nd|rd|th)` forms in
+addition to the bounded ordinal vocabulary; ordinary words ending in `st`,
+`nd`, `rd`, or `th` remain ordinary words, while malformed digit/suffix forms
+fail closed. A list exception validates the ordered pairs `first -> 1` through
+`fifth -> 5` and passes only those baseline/candidate marker indices to protected
+span comparison; swapped markers and item quantities remain protected. Only
+those paired ordinal markers may be introduced by the short-list formatting rule.
 The transcript is quoted data, never instructions.
 
 ## Cancellation and generations

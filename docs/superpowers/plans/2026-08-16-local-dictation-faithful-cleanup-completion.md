@@ -25,7 +25,7 @@ existing FleckCore dictionary/cleanup structures. No new package dependency.
 - The target cleanup input is the exact dictionary baseline. Dictionary resolution failure before a baseline exists belongs to the later coordinator raw-ASR recovery path and is not converted into a cleanup baseline here.
 - Automatic cleanup may change only punctuation, capitalization, whitespace, isolated unambiguous fillers, immediate exact repetition, an explicitly spoken same-tail correction, and short-list formatting without changing list items.
 - Names and dictionary forms, numbers and number words, dates and times, prices, units and quantities, recipients and destinations, paths, URLs, email addresses, code, commands, negation, modality, commitments, quotes, and mixed English/Mandarin order are protected meaning.
-- Number classification runs before filler, repetition, or correction recognition; supported English cardinal/ordinal words, scales through trillion, fractions, decimals, percentages, currencies, and unit quantities must keep the exact ordered number signature, while ambiguous or unrecognized numeric/quantity-looking forms fail closed. Only paired, validated ordinal list markers are exempt.
+- Number classification runs before filler, repetition, or correction recognition; supported English cardinal/ordinal words, scales through trillion, full-token digit ordinals, fractions, decimals, percentages, currencies, and unit quantities must keep the exact ordered number signature, while ambiguous or unrecognized numeric/quantity-looking forms fail closed. Only paired, validated ordinal list markers are exempt.
 - The validator runs protected-span preservation before allowlist classification. Any protected-meaning violation rejects the candidate.
 - The automatic target is at most 80 lexical words. The candidate output is at most input token count plus 32; helper-reported metadata is not authoritative.
 - There is one request, one generation attempt, zero automatic retries, no network, no transcript logging, no transcript persistence, and no audio persistence.
@@ -368,6 +368,12 @@ import Testing
       ) == .accepted(text: "send \(word) files.", operations: [.punctuation])
     )
   }
+  #expect(
+    FaithfulCleanupValidator().validate(
+      candidate: "send 21st files.",
+      against: .init(baseline: "send 21st files", protectedForms: [], replacements: 0)
+    ) == .accepted(text: "send 21st files.", operations: [.punctuation])
+  )
 
   let rejected: [(String, String)] = [
     ("twenty twenty", "twenty"),
@@ -376,12 +382,18 @@ import Testing
     ("hundredth hundredth", "hundredth"),
     ("half half", "half"),
     ("trillionish trillionish", "trillionish"),
+    ("send 21stx 21stx", "send 21stx"),
+    ("send 1st2 actually 1st2", "send 1st2"),
     ("send 20 files", "send 10 files"),
     ("send twenty-two files", "send 22 files"),
     ("send 20th files", "send 20 files"),
     (
       "first buy 20 apples second buy 20 oranges",
       "1. buy 10 apples\n2. buy 10 oranges"
+    ),
+    (
+      "first privacy second speed",
+      "2. Privacy\n1. Speed"
     )
   ]
   for (baseline, candidate) in rejected {
@@ -391,6 +403,21 @@ import Testing
         against: .init(baseline: baseline, protectedForms: [], replacements: 0)
       ) == .rejected(.numberMeaningChanged)
     )
+  }
+}
+
+@Test func faithfulValidatorKeepsOrdinalSuffixWordsInTheOrdinaryAcceptanceMatrix() {
+  let baseline = "send word with last"
+  for candidate in ["Send word with last.", "send WORD WITH LAST."] {
+    let decision = FaithfulCleanupValidator().validate(
+      candidate: candidate,
+      against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+    )
+    guard case .accepted(let text, _) = decision else {
+      Issue.record("Ordinary words ending in ordinal-like suffixes must remain cleanable")
+      continue
+    }
+    #expect(text == candidate)
   }
 }
 
@@ -501,13 +528,14 @@ struct FaithfulCleanupValidator: Sendable {
     let candidateLexemes = CleanupLexeme.scan(candidate)
     let baselineValues = baselineLexemes.filter(\.isLexical).map(\.canonical)
     let candidateValues = candidateLexemes.filter(\.isLexical).map(\.canonical)
+    let ordinalMarkerPairs = pairedOrdinalMarkersAreOnlyDifference(
+      baselineValues: baselineValues,
+      candidateValues: candidateValues,
+      candidateLexemes: candidateLexemes
+    )
 
     guard numberMeaningIsPreserved(baselineValues, candidateValues)
-      || pairedOrdinalMarkersAreOnlyDifference(
-        baselineValues: baselineValues,
-        candidateValues: candidateValues,
-        candidateLexemes: candidateLexemes
-      ) else {
+      || ordinalMarkerPairs != nil else {
       return .rejected(.numberMeaningChanged)
     }
 
@@ -527,7 +555,8 @@ struct FaithfulCleanupValidator: Sendable {
     guard protectedSpansMatch(
       baselineSpans,
       candidateSpans,
-      baselineValues: baselineValues
+      baselineValues: baselineValues,
+      ordinalMarkerPairs: ordinalMarkerPairs
     ) else { return .rejected(.protectedContentChanged) }
 
     if baselineValues == candidateValues {
@@ -601,22 +630,37 @@ struct FaithfulCleanupValidator: Sendable {
     "second", "seconds", "day", "days", "week", "weeks", "month", "months",
     "year", "years"
   ]
-  private static let numericLookingFragments: Set<String> = [
+  private static let numericLookingRoots: Set<String> = [
     "hundred", "thousand", "million", "billion", "trillion", "percent",
     "fraction", "decimal", "half", "quarter", "cent", "dollar", "euro",
     "currency",
     "yen", "pound", "yuan", "dozen", "gram", "kilo", "meter", "metre",
     "liter", "litre", "mile", "inch", "foot", "yard"
   ]
+  private static let numericLookingSuffixes: [String] = ["ish", "like"]
   private static let correctionMarkers: Set<String> = ["actually", "sorry", "no"]
 
   private enum NumberClassification: Equatable {
     case none
     case digit(String)
+    case digitOrdinal(String)
     case word(String)
     case quantity(String)
     case ambiguous
   }
+
+  private struct PairedOrdinalMarkerIndices: Equatable {
+    let baselineIndices: [Int]
+    let candidateIndices: [Int]
+  }
+
+  private static let ordinalMarkerNumbers: [String: Int] = [
+    "first": 1,
+    "second": 2,
+    "third": 3,
+    "fourth": 4,
+    "fifth": 5
+  ]
 
   private static func numberMeaningIsPreserved(
     _ baselineValues: [String],
@@ -647,36 +691,55 @@ struct FaithfulCleanupValidator: Sendable {
         return .ambiguous
       }
     }
+    if canonical.range(of: #"^[0-9]+(?:st|nd|rd|th)$"#, options: .regularExpression) != nil {
+      return .digitOrdinal(canonical)
+    }
     if canonical.range(of: #"^\d+(?:\.\d+)?$"#, options: .regularExpression) != nil {
       return .digit(canonical)
     }
     if canonical.unicodeScalars.contains(where: CharacterSet.decimalDigits.contains) {
       return .ambiguous
     }
-    if numericLookingFragments.contains(where: canonical.contains)
-      || ["st", "nd", "rd", "th"].contains(where: canonical.hasSuffix) {
+    if isBoundedNumericLookingForm(canonical) {
       return .ambiguous
     }
     return .none
+  }
+
+  private static func isBoundedNumericLookingForm(_ canonical: String) -> Bool {
+    guard canonical.allSatisfy({ $0.isLetter }) else { return false }
+    return numericLookingSuffixes.contains { suffix in
+      guard canonical.hasSuffix(suffix) else { return false }
+      let root = String(canonical.dropLast(suffix.count))
+      return numericLookingRoots.contains(root)
+    }
   }
 
   private static func pairedOrdinalMarkersAreOnlyDifference(
     baselineValues: [String],
     candidateValues: [String],
     candidateLexemes: [CleanupLexeme]
-  ) -> Bool {
-    guard isShortListFormatting(baselineValues, candidateLexemes) else {
-      return false
+  ) -> PairedOrdinalMarkerIndices? {
+    guard let markerIndices = validatedShortListMarkerIndices(
+      baselineValues: baselineValues,
+      candidateLexemes: candidateLexemes
+    ) else {
+      return nil
     }
-    let baselineMarkers = baselineValues.enumerated().compactMap { index, value in
-      ordinalWords.contains(value) ? index : nil
-    }
-    let candidateMarkers = candidateValues.enumerated().compactMap { index, value in
-      isNumericListMarker(value) ? index : nil
-    }
+    let baselineMarkers = markerIndices.baselineIndices
+    let candidateMarkers = markerIndices.candidateIndices
     guard baselineMarkers.count >= 2,
           baselineMarkers.count == candidateMarkers.count else {
-      return false
+      return nil
+    }
+    guard zip(baselineMarkers, candidateMarkers).enumerated().allSatisfy({ offset, pair in
+      guard let baselineNumber = ordinalMarkerNumbers[baselineValues[pair.0]],
+            let candidateNumber = isNumericListMarker(candidateValues[pair.1]) else {
+        return false
+      }
+      return baselineNumber == offset + 1 && candidateNumber == offset + 1
+    }) else {
+      return nil
     }
     let baselineRemainder = baselineValues.enumerated()
       .filter { !baselineMarkers.contains($0.offset) }
@@ -684,18 +747,25 @@ struct FaithfulCleanupValidator: Sendable {
     let candidateRemainder = candidateValues.enumerated()
       .filter { !candidateMarkers.contains($0.offset) }
       .map(\.element)
-    return numberMeaningIsPreserved(baselineRemainder, candidateRemainder)
+    guard numberMeaningIsPreserved(baselineRemainder, candidateRemainder) else {
+      return nil
+    }
+    return .init(
+      baselineIndices: baselineMarkers,
+      candidateIndices: candidateMarkers
+    )
   }
 
-  private static func isNumericListMarker(_ value: String) -> Bool {
-    guard let number = Int(value) else { return false }
-    return (1...5).contains(number)
+  private static func isNumericListMarker(_ value: String) -> Int? {
+    guard let number = Int(value) else { return nil }
+    return (1...5).contains(number) ? number : nil
   }
 
   private static func protectedSpansMatch(
     _ baseline: [CleanupProtectedSpan],
     _ candidate: [CleanupProtectedSpan],
-    baselineValues: [String]
+    baselineValues: [String],
+    ordinalMarkerPairs: PairedOrdinalMarkerIndices?
   ) -> Bool
 
   private static func equalLexicalOperations(
@@ -730,33 +800,49 @@ struct FaithfulCleanupValidator: Sendable {
     _ baselineValues: [String],
     _ candidate: [CleanupLexeme]
   ) -> Bool
+
+  private static func validatedShortListMarkerIndices(
+    baselineValues: [String],
+    candidateLexemes: [CleanupLexeme]
+  ) -> (baselineIndices: [Int], candidateIndices: [Int])?
 }
 ```
 
 Implement `protectedSpansMatch` by grouping ordered canonical span lexemes by
 category and occurrence. `isShortListFormatting` is only a presentation
 predicate; its sole numeric exception is
-`pairedOrdinalMarkersAreOnlyDifference`, which removes the paired ordinal
-marker positions from both sequences and then reruns the full number signature
-comparison. It must never ignore a quantity inside a list item. Thus a baseline
-with ordinal items and quantity `20` is rejected when a numbered candidate uses
-quantity `10`. Ignore only numeric list markers introduced by a valid ordinal
-list (`first ... second ...` to `1. ... 2. ...`); never ignore a number inside a
-normal sentence. Implement the four edit recognizers with
+`pairedOrdinalMarkersAreOnlyDifference`, which first validates the exact ordered
+mapping `first -> 1`, `second -> 2`, `third -> 3`, `fourth -> 4`, and
+`fifth -> 5` at the corresponding item positions. Its
+`validatedShortListMarkerIndices` helper uses lexical indices and item-boundary
+punctuation to return only a numeric lexeme immediately followed by `.` as a
+list marker; a quantity `1` or `2` inside an item is not returned. The paired
+helper returns the validated baseline and candidate marker indices, and
+`protectedSpansMatch` receives those indices so only those exact candidate
+ordinal digit spans are exempt. It must never ignore a quantity inside a list
+item. Thus a baseline with ordinal items
+and quantity `20` is rejected when a numbered candidate uses quantity `10`, and
+swapped markers (`first privacy second speed` to `2. Privacy / 1. Speed`) reject.
+Ignore only numeric list markers introduced by a valid ordinal list; never ignore
+a number inside a normal sentence. Implement the four edit recognizers with
 `CleanupLexeme` indices, not string replacement. A filler is removable only when
 it is one of the five listed words, isolated by punctuation/boundaries, and not
 inside a protected quote/span. A duplicate is adjacent, exact after canonical
 comparison, and not numeric/protected. Before those recognizers run,
 `numberMeaningIsPreserved` classifies digits, supported English cardinal/ordinal
-words through trillion, fractions, decimals, percentages, currencies, and unit
-quantities. It requires the ordered number signature to remain identical; an
-unrecognized digit-bearing or numeric/quantity-looking alphabetic form is
-ambiguous and rejects fail-closed rather than reaching duplicate or correction
-deletion. Thus neither filler removal, immediate repetition, nor explicit
-correction can delete or replace a number word; `twenty twenty` to `twenty`,
-`trillion trillion` to `trillion`, `hundredth hundredth` to `hundredth`, and
-`half half` to `half` all reject. Any other count-preserving change is
-substitution or reordering. Do not put candidate text in a failure value.
+words through trillion, full-token digit ordinals matching
+`^[0-9]+(st|nd|rd|th)$`, fractions, decimals, percentages, currencies, and unit
+quantities. It requires the ordered number signature to remain identical;
+ordinary words such as `send`, `word`, `with`, and `last` remain `.none`, while
+malformed digit/suffix forms remain ambiguous and reject fail-closed rather than
+reaching duplicate or correction deletion. Avoid broad substring hints for
+numeric roots; numeric-looking heuristics use exact vocabulary or bounded token
+patterns. Thus neither filler removal, immediate repetition, nor
+explicit correction can delete or replace a number word; `twenty twenty` to
+`twenty`, `trillion trillion` to `trillion`, `hundredth hundredth` to
+`hundredth`, and `half half` to `half` all reject. Any other count-preserving
+change is substitution or reordering. Do not put candidate text in a failure
+value.
 
 - [ ] **Step 4: Run the focused green command.**
 
