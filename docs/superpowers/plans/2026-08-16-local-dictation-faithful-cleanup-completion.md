@@ -68,7 +68,7 @@ existing FleckCore dictionary/cleanup structures. No new package dependency.
 
 **Separate user-visible task title:** `Agent - personal dictionary resolution core`
 
-**Files:**
+**Owned files:**
 
 - Create exactly: `Sources/FleckCore/PersonalDictionary.swift`
 - Create exactly: `Sources/FleckCore/PersonalDictionaryResolver.swift`
@@ -238,10 +238,14 @@ files are absent. The parent Sol task reruns all Task 0 checks and a fresh
 **Dependency:** Begin only after Task 0's four-file blob comparison, parent
 rerun, and fresh Sol `ship` verdict.
 
-**Files:**
+**Owned files:**
 
 - Create: `Sources/FleckApp/FaithfulCleanupValidator.swift`
 - Test: `Tests/FleckAppTests/FaithfulCleanupValidatorTests.swift`
+
+**Excluded files:** Task 0's four FleckCore files, Task 2's cleaner files, all
+coordinator, processor, runtime, Apple Speech, Settings, model, package,
+resource, script, and every file outside these two paths.
 
 **Interfaces:**
 
@@ -599,15 +603,19 @@ fresh Sol/High reviewer must return exactly `ship` before Task 2 starts.
 **Dependency:** Begin only after Task 1's validator diff, parent rerun, and
 fresh Sol `ship` verdict.
 
-**Files:**
+**Owned files:**
 
 - Create: `Sources/FleckApp/IncrementalTranscriptCleaner.swift`
 - Test: `Tests/FleckAppTests/IncrementalTranscriptCleanerTests.swift`
 
+**Excluded files:** Task 0's four FleckCore files, Task 1's validator files,
+all coordinator, processor, runtime, Apple Speech, Settings, model, package,
+resource, script, and every file outside these two paths.
+
 **Interfaces:**
 
 - Consumes: `FaithfulCleanupValidator`, `CleanupLexeme.tokenCount(_:)`, and the exact dictionary fields from Task 0's `PersonalDictionaryResolution`.
-- Produces: `IncrementalCleanupRequest`, `IncrementalCleanupDecision`, `IncrementalCleanupFallbackReason`, `GeneratedCleanupCandidate`, `CleanupGenerationError`, `CleanupGenerationSession`, `BoundedCleanupGenerating`, `CleanupClock`, and `IncrementalTranscriptCleaner.clean(_:)`.
+- Produces: `IncrementalCleanupRequest`, `IncrementalCleanupDecision`, `IncrementalCleanupFallbackReason`, `GeneratedCleanupCandidate`, `CleanupGenerationError`, `CleanupGenerationSession`, `BoundedCleanupGenerating`, `CleanupClock`, `CleanupTerminationDisposition`, and `IncrementalTranscriptCleaner.clean(_:)`.
 
 ### TDD red
 
@@ -625,7 +633,7 @@ import Testing
   let generator = CleanupGeneratorProbe(result: "Send 10 files.")
   let cleaner = IncrementalTranscriptCleaner(
     generator: generator,
-    clock: .immediate
+    clock: TestCleanupClock.immediate
   )
   let request = IncrementalCleanupRequest(
     baseline: "Send 20 files.",
@@ -644,7 +652,10 @@ import Testing
 @Test func cleanerReturnsBaselineForBoundsMalformedOutputAndDeadline() async throws {
   let large = String(repeating: "word ", count: 81)
   let generator = CleanupGeneratorProbe(result: "unused")
-  let cleaner = IncrementalTranscriptCleaner(generator: generator, clock: .immediate)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
 
   let largeDecision = try await cleaner.clean(.init(
     baseline: large,
@@ -691,7 +702,41 @@ The committed file also includes explicit tests for helper-request cancellation,
 generation failure, empty output, output greater than input plus 32 tokens,
 synchronous `start` returning without I/O, a deadline tie recheck, and a
 non-cooperative session whose `forceTerminate()` unblocks both `result()` and
-`acknowledgement()`.
+`acknowledgement()`. The non-cooperative case uses a fixed injected clock and a
+25 ms cancellation budget; it does not sleep on a wall clock or rely on a
+post-completion `phaseHistory`-style assertion.
+
+~~~swift
+@Test func nonCooperativeSessionIsForcedWithinTheInjectedBudget() async throws {
+  let now = TestCleanupClock.fixedInstant
+  let session = CleanupGenerationSessionProbe(
+    result: .success(.init(cleaned: "late")),
+    ignoresCancellation: true
+  )
+  let clock = TestCleanupClock(
+    now: now,
+    recordedSleeps: { TestCleanupClock.recordedSleeps.append($0) }
+  )
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: CleanupGeneratorProbe(session: session),
+    clock: clock,
+    cancellationBudget: .milliseconds(25)
+  )
+
+  let decision = try await cleaner.clean(.init(
+    baseline: "send the report",
+    protectedForms: [],
+    replacements: 0,
+    deadline: now.advanced(by: .seconds(1))
+  ))
+
+  #expect(decision == .baseline(reason: .deadlineExpired))
+  #expect(session.forceTerminateCalled)
+  #expect(session.resultFinished)
+  #expect(session.acknowledgementFinished)
+  #expect(TestCleanupClock.recordedSleeps == [.milliseconds(25)])
+}
+~~~
 
 - [ ] **Step 2: Run the focused red command.**
 
@@ -744,6 +789,18 @@ enum CleanupGenerationError: Error, Equatable, Sendable {
   case terminated
 }
 
+struct CleanupClock: Sendable {
+  let now: @Sendable () -> ContinuousClock.Instant
+  let sleepUntil: @Sendable (ContinuousClock.Instant) async throws -> Void
+  let sleepFor: @Sendable (Duration) async throws -> Void
+
+  static let live = Self(
+    now: { ContinuousClock().now },
+    sleepUntil: { try await ContinuousClock().sleep(until: $0) },
+    sleepFor: { try await ContinuousClock().sleep(for: $0) }
+  )
+}
+
 protocol CleanupGenerationSession: Sendable {
   func result() async throws -> GeneratedCleanupCandidate
   func acknowledgement() async
@@ -752,28 +809,28 @@ protocol CleanupGenerationSession: Sendable {
 }
 
 protocol BoundedCleanupGenerating: Sendable {
+  // This synchronous call only constructs a request-specific session.
   func start(
     _ request: IncrementalCleanupRequest,
     maximumOutputTokens: Int
   ) throws -> any CleanupGenerationSession
 }
 
-protocol CleanupClock: Sendable {
-  func now() -> ContinuousClock.Instant
-  func sleepUntil(_ deadline: ContinuousClock.Instant) async throws
-  func sleepFor(_ duration: Duration) async throws
+enum CleanupTerminationDisposition: Equatable, Sendable {
+  case acknowledged
+  case forcedTermination
 }
 
 actor IncrementalTranscriptCleaner {
   private let generator: any BoundedCleanupGenerating
   private let validator: FaithfulCleanupValidator
-  private let clock: any CleanupClock
+  private let clock: CleanupClock
   private let cancellationBudget: Duration
 
   init(
     generator: any BoundedCleanupGenerating,
     validator: FaithfulCleanupValidator = .init(),
-    clock: any CleanupClock,
+    clock: CleanupClock,
     cancellationBudget: Duration = .milliseconds(250)
   ) {
     self.generator = generator
@@ -790,51 +847,145 @@ actor IncrementalTranscriptCleaner {
       return .baseline(reason: .deadlineExpired)
     }
 
-    let session = try generator.start(
-      request,
-      maximumOutputTokens: inputCount + 32
-    )
-    let event = await withTaskCancellationHandler {
-      await race(session: session, deadline: request.deadline)
-    } onCancel: {
-      session.requestCancellation()
-    }
-    try Task.checkCancellation()
-
-    switch event {
-    case .deadline:
-      session.requestCancellation()
-      await awaitTermination(session)
+    let box = CleanupSessionBox()
+    do {
+      let session = try generator.start(
+        request,
+        maximumOutputTokens: inputCount + 32
+      )
+      box.install(session)
       try Task.checkCancellation()
-      return .baseline(reason: .deadlineExpired)
-    case .requestCancelled, .terminated:
-      await awaitTermination(session)
-      return .baseline(reason: .requestCancelled)
-    case .generationFailed:
-      return .baseline(reason: .generationFailed)
-    case .candidate(let candidate):
       guard request.deadline > clock.now() else {
-        session.requestCancellation()
-        await awaitTermination(session)
+        box.requestCancellation()
+        _ = await awaitTermination(
+          session: session,
+          box: box,
+          clock: clock,
+          cancellationBudget: cancellationBudget
+        )
         try Task.checkCancellation()
         return .baseline(reason: .deadlineExpired)
       }
-      guard !candidate.cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-        return .baseline(reason: .malformedOutput)
+
+      let event = await withTaskCancellationHandler(operation: {
+        await race(
+          session: session,
+          deadline: request.deadline,
+          box: box,
+          clock: clock,
+          cancellationBudget: cancellationBudget
+        )
+      }, onCancel: {
+        box.requestCancellation()
+      })
+      try Task.checkCancellation()
+
+      switch event {
+      case .deadline:
+        return .baseline(reason: .deadlineExpired)
+      case .requestCancelled, .terminated:
+        return .baseline(reason: .requestCancelled)
+      case .callerCancelled:
+        throw CancellationError()
+      case .generationFailed:
+        return .baseline(reason: .generationFailed)
+      case .candidate(let candidate):
+        guard request.deadline > clock.now() else {
+          box.requestCancellation()
+          _ = await awaitTermination(
+            session: session,
+            box: box,
+            clock: clock,
+            cancellationBudget: cancellationBudget
+          )
+          try Task.checkCancellation()
+          return .baseline(reason: .deadlineExpired)
+        }
+        guard !candidate.cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+          return .baseline(reason: .malformedOutput)
+        }
+        guard CleanupLexeme.tokenCount(candidate.cleaned) <= inputCount + 32 else {
+          return .baseline(reason: .outputTooLarge)
+        }
+        let resolution = PersonalDictionaryResolution(
+          baseline: request.baseline,
+          protectedForms: request.protectedForms,
+          replacements: request.replacements
+        )
+        switch validator.validate(candidate: candidate.cleaned, against: resolution) {
+        case .accepted(let text, _): return .accepted(text)
+        case .rejected: return .baseline(reason: .validationRejected)
+        }
       }
-      guard CleanupLexeme.tokenCount(candidate.cleaned) <= inputCount + 32 else {
-        return .baseline(reason: .outputTooLarge)
+    } catch is CancellationError {
+      box.requestCancellation()
+      if let session = box.currentSession() {
+        _ = await awaitTermination(
+          session: session,
+          box: box,
+          clock: clock,
+          cancellationBudget: cancellationBudget
+        )
       }
-      let resolution = PersonalDictionaryResolution(
-        baseline: request.baseline,
-        protectedForms: request.protectedForms,
-        replacements: request.replacements
-      )
-      switch validator.validate(candidate: candidate.cleaned, against: resolution) {
-      case .accepted(let text, _): return .accepted(text)
-      case .rejected: return .baseline(reason: .validationRejected)
+      throw CancellationError()
+    } catch {
+      do {
+        try Task.checkCancellation()
+      } catch is CancellationError {
+        box.requestCancellation()
+        if let session = box.currentSession() {
+          _ = await awaitTermination(
+            session: session,
+            box: box,
+            clock: clock,
+            cancellationBudget: cancellationBudget
+          )
+        }
+        throw CancellationError()
       }
+      return .baseline(reason: .generationFailed)
     }
+  }
+}
+
+private final class CleanupSessionBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var session: (any CleanupGenerationSession)?
+  private var cancellationRequested = false
+  private var forceRequested = false
+
+  func install(_ session: any CleanupGenerationSession) {
+    let actions = lock.withLock {
+      self.session = session
+      return (cancellationRequested, forceRequested)
+    }
+    if actions.0 { session.requestCancellation() }
+    if actions.1 { session.forceTerminate() }
+  }
+
+  func currentSession() -> (any CleanupGenerationSession)? {
+    lock.withLock { session }
+  }
+
+  func requestCancellation() {
+    let session = lock.withLock {
+      cancellationRequested = true
+      return self.session
+    }
+    session?.requestCancellation()
+  }
+
+  func forceTerminate() {
+    let session = lock.withLock { () -> (any CleanupGenerationSession)? in
+      guard !forceRequested else { return nil }
+      forceRequested = true
+      return self.session
+    }
+    session?.forceTerminate()
+  }
+
+  func forceTerminationRequested() -> Bool {
+    lock.withLock { forceRequested }
   }
 }
 
@@ -844,26 +995,122 @@ private enum CleanupRaceEvent: Sendable {
   case requestCancelled
   case terminated
   case generationFailed
+  case callerCancelled
+}
+
+private enum CleanupTerminationEvent: Sendable {
+  case acknowledged
+  case budgetExpired
 }
 
 private func race(
   session: any CleanupGenerationSession,
-  deadline: ContinuousClock.Instant
-) async -> CleanupRaceEvent
+  deadline: ContinuousClock.Instant,
+  box: CleanupSessionBox,
+  clock: CleanupClock,
+  cancellationBudget: Duration
+) async -> CleanupRaceEvent {
+  return await withTaskGroup(of: CleanupRaceEvent.self) { group in
+    group.addTask {
+      do { return .candidate(try await session.result()) }
+      catch let error as CleanupGenerationError {
+        switch error {
+        case .requestCancelled: return .requestCancelled
+        case .terminated: return .terminated
+        }
+      } catch is CancellationError {
+        return Task.isCancelled ? .callerCancelled : .generationFailed
+      } catch {
+        return .generationFailed
+      }
+    }
+    group.addTask {
+      do {
+        try await clock.sleepUntil(deadline)
+        return .deadline
+      } catch is CancellationError {
+        return Task.isCancelled ? .callerCancelled : .deadline
+      } catch {
+        return .deadline
+      }
+    }
+
+    guard let first = await group.next() else { return .generationFailed }
+    switch first {
+    case .deadline, .callerCancelled, .requestCancelled, .terminated:
+      box.requestCancellation()
+      _ = await awaitTermination(
+        session: session,
+        box: box,
+        clock: clock,
+        cancellationBudget: cancellationBudget
+      )
+      group.cancelAll()
+      while await group.next() != nil { }
+      return first
+    case .candidate, .generationFailed:
+      group.cancelAll()
+      while await group.next() != nil { }
+      return first
+    }
+  }
+}
 
 private func awaitTermination(
-  _ session: any CleanupGenerationSession
-) async
+  session: any CleanupGenerationSession,
+  box: CleanupSessionBox,
+  clock: CleanupClock,
+  cancellationBudget: Duration
+) async -> CleanupTerminationDisposition {
+  return await withTaskGroup(of: CleanupTerminationEvent.self) { group in
+    group.addTask {
+      await session.acknowledgement()
+      return .acknowledged
+    }
+    group.addTask {
+      do {
+        try await clock.sleepFor(cancellationBudget)
+        return .budgetExpired
+      } catch {
+        return .budgetExpired
+      }
+    }
+
+    guard let first = await group.next() else {
+      box.forceTerminate()
+      group.cancelAll()
+      while await group.next() != nil { }
+      return .forcedTermination
+    }
+    switch first {
+    case .acknowledged:
+      group.cancelAll()
+      while await group.next() != nil { }
+      return box.forceTerminationRequested() ? .forcedTermination : .acknowledged
+    case .budgetExpired:
+      box.forceTerminate()
+      group.cancelAll()
+      while await group.next() != nil { }
+      return .forcedTermination
+    }
+  }
+}
 ```
 
-The private race uses a task group with exactly two children: the session
-`result()` and the injected deadline sleeper. A deadline, helper cancellation,
-or helper termination requests cancellation, waits for acknowledgement, then
-forces termination after `cancellationBudget` and drains the acknowledgement
-waiter. Caller cancellation is rechecked after every synchronous start, race,
-termination, and candidate validation boundary; it is never converted into a
-baseline decision. The source file contains no detached task, URL loading,
-filesystem write, transcript diagnostic, or retry.
+`race` has exactly two structured children: the session `result()` waiter and
+the injected `CleanupClock.sleepUntil` deadline waiter. It receives the
+`CleanupSessionBox` so cancellation cannot race session installation. Every
+deadline/helper/caller-cancellation branch calls `awaitTermination` with the
+session, box, injected clock, and cancellation budget while the result child is
+still in the task group, then cancels and drains all children. `awaitTermination`
+races the acknowledgement waiter against the injected `cancellationBudget`; a
+budget win calls synchronous `box.forceTerminate()`.
+The session contract requires that synchronous force to unblock both result and
+acknowledgement waiters before the cleaner returns, making the deliberately
+non-cooperative test bounded. Caller cancellation is rechecked after every
+start, race, termination, and validation boundary and is never converted into a
+baseline decision. No detached task, retry, network, file write, transcript
+diagnostic, or runtime/model ownership is introduced.
 
 - [ ] **Step 4: Run the focused green command.**
 

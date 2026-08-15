@@ -112,7 +112,7 @@ SettingsView -------------> admitted recommendation presentation, not model sele
 | `AppleSpeechCapture` | The existing `AVAudioEngine`/Speech framework session, permission request, on-device requirement, provisional/final callbacks, interruption, and resource release. | Dictionary resolution, cleanup, routing, history, UI, or model downloads. |
 | `AppleSpeechStreamingAdapter` | Adapting the existing `SpeechEngine` callback/final interface to the processor seam. | A second audio tap, microphone session, network fallback, or model choice. |
 | `DictationProcessing` / `StreamingDictationProcessor` | One incremental capture session's transcript updates, dictionary-before-cleanup final artifacts, and bounded cleanup decision. | Shortcut identity, note persistence, routing policy, or UI ownership. |
-| `StreamingTranscriptState` | Generation ordering, append-only stable prefix, and a mutable tail capped by the newest two clauses or 80 words. | Semantic cleanup or insertion. |
+| `StreamingTranscriptState` | Generation ordering, append-only stable prefix, and a mutable tail capped by the newest two clauses or 80 `CleanupLexeme` lexical units. | Semantic cleanup or insertion. |
 | `FaithfulCleanupValidator` | The deterministic allowlist and protected-meaning decision. | Generating text, choosing a model, or logging transcript data. |
 | `IncrementalTranscriptCleaner` | One bounded cleanup request, one generation attempt, deadline/cancellation race, validation, and exact baseline fallback. | Dictionary resolution, audio, runtime residency, or UI. |
 | `LocalDictationRuntime` | Restored active/warm/standby/cold policy, one lease, lifecycle signals, scheduler, and future adapter health. | The Apple audio capture path and installer UI. |
@@ -210,7 +210,8 @@ rejected cleanup attempt selects exactly `PersonalDictionaryResolution.baseline`
    `StreamingTranscriptState`. Accepted updates have strictly increasing
    generations. The state publishes `stableText + provisionalTail`; stable text
    only grows, and the mutable tail contains no more than the newest two clauses
-   and 80 lexical words.
+   and 80 `CleanupLexeme` lexical units; `.?!。！？` terminators count without
+   requiring following whitespace.
 5. In focused mode the coordinator accepts only the active capture generation
    and calls `FocusedDictationEditing.updateFocusedDictation(provisionalText:)`.
    Smart Capture may expose levels/status but does not insert provisional text.
@@ -227,7 +228,7 @@ rejected cleanup attempt selects exactly `PersonalDictionaryResolution.baseline`
    path for the same incremental capture.
 9. The coordinator publishes terminal UI state only after its generation check.
    Late processing, cleanup, route, save, or installer events cannot mutate the
-   editor, history, route, insertion, or capsule.
+   editor, history, route, insertion, or terminal dictation state.
 
 ### Exact cleanup allowlist
 
@@ -320,7 +321,30 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
   let languages: [String]
   let architectures: [String]
 }
+
+struct AdmittedModelImmutableIdentity: Equatable, Sendable {
+  let sourceRepository: URL
+  let modelID: String
+  let revision: String
+  let license: String
+  let runtimeABI: String
+  let conversion: String
+  let quantization: String
+  let files: [AdmittedModelFile]
+  let downloadBytes: Int64
+  let installedBytes: Int64
+}
 ```
+
+The signed boundary constructs the descriptor through a throwing validation
+initializer for empty identity/revision/license, unsafe paths, invalid sizes or
+checksums, aggregate mismatches, and empty support sets. The existing
+compile-gated manager builds or receives one immutable
+`EnhancedModelArtifactIdentity` alongside its `EnhancedModelManifest`; its
+source repository and revision derive every `remoteURL`. The admitted installer
+compares the descriptor's immutable identity with that artifact identity before
+any manager operation and rejects a mismatch before transport. This is a small
+seam, not a generic multi-model registry.
 
 The signed app supplies either no descriptor or exactly one hardware-appropriate
 recommendation for the curated experience. Ordinary release configuration is
@@ -340,9 +364,9 @@ phases; installation does not imply readiness or release admission.
 
 The UI uses the existing native macOS Settings structure, semantic colors and
 styles, keyboard and VoiceOver labels/values, and no frequent decorative
-animation. Keyboard-initiated dictation has no animation. The capsule reports
-truthful listening/finalizing/cleaning/saved/failure states and remains separate
-from installer progress.
+animation. Keyboard-initiated dictation has no animation. Installer phases,
+errors, and byte progress are Settings-only; `Sources/FleckApp/DictationCapsule.swift`
+remains excluded from this workstream.
 
 ## Candidate evaluation and later admission
 
@@ -383,9 +407,10 @@ slice's development app is successful with all custom components uninstalled.
    sleep, and mutation gates use deterministic sleepers and fake adapters. They
    do not claim a custom model is loaded.
 5. **Fake installer tests:** tiny data fixtures and an injected `ModelDownloading`
-   fake prove byte progress, checksum/size/path validation, verification,
-   installation, startup, calibration, repair, update, removal, cancellation,
-   and actionable errors without a real model transfer.
+  fake prove byte progress, checksum/size/path validation, verification,
+  installation, startup, calibration, repair, update, removal, cancellation,
+  actionable errors, live in-progress snapshot delivery, and descriptor/artifact
+  mismatch rejection without a real model transfer.
 6. **Offline/cancellation checks:** serialized SwiftPM commands run with
    `--disable-automatic-resolution --no-parallel`; tests assert no URLSession,
    transcript file, audio file, or late insertion is introduced by the vertical

@@ -37,7 +37,8 @@ replay/archive buffer is introduced.
 - Apple Speech requests require on-device recognition and fail when the locale
   or device cannot provide it. There is no network recognition or hidden
   fallback.
-- Stable text is append-only. Only the newest two clauses or 80 lexical words
+- Stable text is append-only. Only the newest two clauses or 80 `CleanupLexeme`
+  lexical units
   remain mutable. A stale generation or stable-prefix regression is rejected
   before editor publication.
 - Dictionary resolution precedes cleanup. A valid
@@ -182,7 +183,8 @@ protocol StreamingSpeechSource: AnyObject {
 **Produces:** `DictationPreparationIntent`, `DictationRuntimeSignal`,
 `DictationRecognitionContext`, `DictationProcessingConfiguration`,
 `DictationTextUpdate`, `DictationRuntimeMeasurements`,
-`DictationProcessingResult`, `DictationDeadline`,
+`DictationProcessingResult`, `DictationProcessingBudget`, `DictationClock`,
+`DictationDeadline`,
 `DictationProcessing`, `DictationProcessingSession`, and
 `TranscriptDictionaryResolving`.
 
@@ -240,6 +242,22 @@ struct DictationProcessingConfiguration: Equatable, Sendable {
   let recognitionContext: DictationRecognitionContext
 }
 
+struct DictationProcessingBudget: Equatable, Sendable {
+  let insertion: Duration
+  let cleanup: Duration
+
+  static let production = Self(
+    insertion: .seconds(3),
+    cleanup: .milliseconds(1500)
+  )
+}
+
+struct DictationClock: Sendable {
+  let now: @Sendable () -> ContinuousClock.Instant
+
+  static let live = Self(now: { ContinuousClock().now })
+}
+
 struct DictationProcessingResult: Equatable, Sendable {
   let rawTranscript: String
   let dictionaryBaseline: String?
@@ -252,16 +270,27 @@ struct DictationProcessingResult: Equatable, Sendable {
 struct DictationDeadline: Sendable {
   let stopInstant: ContinuousClock.Instant
   let insertionDeadline: ContinuousClock.Instant
+  let cleanupDeadline: ContinuousClock.Instant
 
-  init(stopInstant: ContinuousClock.Instant, budget: Duration) {
+  init(
+    stopInstant: ContinuousClock.Instant,
+    insertionDeadline: ContinuousClock.Instant,
+    cleanupBudget: Duration
+  ) {
     self.stopInstant = stopInstant
-    self.insertionDeadline = stopInstant.advanced(by: budget)
+    self.insertionDeadline = insertionDeadline
+    cleanupDeadline = min(
+      stopInstant.advanced(by: cleanupBudget),
+      insertionDeadline
+    )
   }
 }
 ~~~
 
 Add the remaining enums/measurement/context values and the three protocols
-from the interface section. Preserve current interfaces; do not add audio
+from the interface section. The processor receives `DictationClock` and
+`DictationProcessingBudget`; tests inject fixed instants and never read or
+sleep a production wall clock. Preserve current interfaces; do not add audio
 chunks or a second source abstraction.
 
 - [ ] **Step 4: Run green and broader checks.**
@@ -333,11 +362,31 @@ processor, Apple capture, runtime, model, and UI files.
   }
 }
 
-@Test func mutableTailNeverExceedsEightyWords() throws {
+@Test func mutableTailNeverExceedsEightyCleanupLexemes() throws {
   var state = StreamingTranscriptState()
-  let words = (0..<90).map { "word\($0)" }.joined(separator: " ")
-  let update = try state.accept(generation: 1, fullText: words)
-  #expect(update.provisionalTail.split(whereSeparator: \.isWhitespace).count <= 80)
+  let lexicalUnits = String(repeating: "字，", count: 81) + "尾"
+  let update = try state.accept(generation: 1, fullText: lexicalUnits)
+  #expect(CleanupLexeme.tokenCount(update.provisionalTail) <= 80)
+}
+
+@Test func noSpaceMandarinKeepsOnlyNewestTwoClausesMutable() throws {
+  var state = StreamingTranscriptState()
+  let update = try state.accept(
+    generation: 1,
+    fullText: "第一句。第二句！第三句？第四句"
+  )
+  #expect(update.stableText == "第一句。第二句！")
+  #expect(update.provisionalTail == "第三句？第四句")
+}
+
+@Test func mixedLanguageTerminatorsDoNotRequireWhitespace() throws {
+  var state = StreamingTranscriptState()
+  let update = try state.accept(
+    generation: 1,
+    fullText: "你好。send report!下一句"
+  )
+  #expect(update.stableText == "你好。")
+  #expect(update.provisionalTail == "send report!下一句")
 }
 ~~~
 
@@ -364,7 +413,7 @@ struct StreamingTranscriptState {
   private(set) var update = DictationTextUpdate(
     generation: 0, stableText: "", provisionalTail: ""
   )
-  let maximumMutableWords = 80
+  let maximumMutableLexicalUnits = 80
   let maximumMutableClauses = 2
 
   mutating func accept(
@@ -376,14 +425,14 @@ struct StreamingTranscriptState {
     }
     let split = Self.splitStablePrefix(
       fullText,
-      maximumMutableWords: maximumMutableWords,
+      maximumMutableLexicalUnits: maximumMutableLexicalUnits,
       maximumMutableClauses: maximumMutableClauses
     )
     guard split.stable.hasPrefix(update.stableText) else {
       throw StreamingTranscriptStateError.stablePrefixChanged
     }
-    guard split.tail.split(whereSeparator: \.isWhitespace).count
-      <= maximumMutableWords else {
+    guard CleanupLexeme.tokenCount(split.tail)
+      <= maximumMutableLexicalUnits else {
       throw StreamingTranscriptStateError.mutableTailTooLarge
     }
     update = DictationTextUpdate(
@@ -396,10 +445,65 @@ struct StreamingTranscriptState {
 }
 ~~~
 
-Implement `splitStablePrefix` using sentence terminators `.?!。？！` followed
-by whitespace: retain only the newest two clauses as mutable, then move older
-words into the stable prefix until the tail is at most 80 words. Never mutate
-the previously accepted stable prefix. Test English and mixed punctuation.
+Implement `splitStablePrefix` from `CleanupLexeme.scan(fullText)`. Treat only
+single-character punctuation lexemes in `.?!。！？` as clause terminators, so a
+terminator is recognized without requiring following whitespace and periods
+inside URL/path/code lexemes are not boundaries. Track each lexeme's character
+span from `lexeme.original`; `lexeme.isLexical` is the only unit counted for
+the 80-unit bound. Start the mutable tail after the oldest terminator among
+the newest two clauses, then move its start forward to the first of the newest
+80 lexical spans when necessary. The result therefore keeps the newest two
+clauses OR 80 lexical units, whichever is stricter. Never mutate the
+previously accepted stable prefix.
+
+~~~swift
+private static let clauseTerminators: Set<Character> = [
+  ".", "?", "!", "。", "！", "？"
+]
+
+private static func splitStablePrefix(
+  _ fullText: String,
+  maximumMutableLexicalUnits: Int,
+  maximumMutableClauses: Int
+) -> (stable: String, tail: String) {
+  let lexemes = CleanupLexeme.scan(fullText)
+  var offset = 0
+  var terminatorStarts = [Int]()
+  var lexicalSpans = [(start: Int, end: Int)]()
+
+  for lexeme in lexemes {
+    let start = offset
+    offset += Array(lexeme.original).count
+    if lexeme.kind == .punctuation,
+       lexeme.original.count == 1,
+       clauseTerminators.contains(Character(lexeme.original)) {
+      terminatorStarts.append(start)
+    }
+    if lexeme.isLexical {
+      lexicalSpans.append((start: start, end: offset))
+    }
+  }
+
+  let clauseStart: Int
+  if terminatorStarts.count >= maximumMutableClauses {
+    clauseStart = terminatorStarts[
+      terminatorStarts.count - maximumMutableClauses
+    ] + 1
+  } else {
+    clauseStart = 0
+  }
+
+  let mutableSpans = lexicalSpans.filter { $0.start >= clauseStart }
+  let boundedStart = mutableSpans.count > maximumMutableLexicalUnits
+    ? mutableSpans[mutableSpans.count - maximumMutableLexicalUnits].start
+    : clauseStart
+  let characters = Array(fullText)
+  return (
+    String(characters[..<boundedStart]),
+    String(characters[boundedStart...])
+  )
+}
+~~~
 
 - [ ] **Step 4: Run green, inspect, and commit.**
 
@@ -615,7 +719,7 @@ func processorUsesExactBaselineWhenCleanupIsRejected() async throws {
   let engine = SpeechEngineProbe(finalText: "Do not cancel 2 meetings")
   let cleaner = IncrementalTranscriptCleaner(
     generator: CleanupGeneratorProbe(result: "Cancel the meetings"),
-    clock: .immediate
+    clock: TestCleanupClock.immediate
   )
   let processor = StreamingDictationProcessor(
     makeSource: { AppleSpeechStreamingAdapter(engine: engine) },
@@ -627,7 +731,9 @@ func processorUsesExactBaselineWhenCleanupIsRejected() async throws {
       )
     ),
     cleaner: cleaner,
-    runtime: nil
+    runtime: nil,
+    clock: TestDictationClock.immediate,
+    budget: .production
   )
   let session = try await processor.begin(configuration: .init(
     captureID: UUID(),
@@ -637,6 +743,42 @@ func processorUsesExactBaselineWhenCleanupIsRejected() async throws {
   let result = try await session.finish()
   #expect(result.insertedText == "Do not cancel 2 meetings")
   #expect(result.cleanedTranscript == nil)
+}
+
+@Test @MainActor
+func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throws {
+  let start = TestDictationClock.fixedInstant
+  let stop = start.advanced(by: .seconds(2))
+  let clock = TestDictationClock(values: [start, stop])
+  let engine = SpeechEngineProbe(finalText: "send the report")
+  let generator = CleanupGeneratorProbe(result: "send the report")
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+  let processor = StreamingDictationProcessor(
+    makeSource: { AppleSpeechStreamingAdapter(engine: engine) },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(
+        baseline: "send the report",
+        protectedForms: [],
+        replacements: 0
+      )
+    ),
+    cleaner: cleaner,
+    runtime: nil,
+    clock: clock,
+    budget: .production
+  )
+
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ))
+  _ = try await session.finish()
+
+  #expect(await generator.requests.first?.deadline == start.advanced(by: .seconds(3)))
 }
 ~~~
 
@@ -648,8 +790,8 @@ swift test --disable-automatic-resolution --no-parallel --filter FoundationModel
 swift test --disable-automatic-resolution --no-parallel --filter StreamingDictationProcessorTests
 ~~~
 
-Expected failure: adapter, generator, processor, session, and processor error
-symbols do not exist.
+Expected failure: adapter, generator, processor, session, processor error,
+clock, budget, and cleanup-deadline symbols do not exist.
 
 ### Minimal implementation, green, and checkpoint
 
@@ -714,32 +856,95 @@ final class StreamingDictationProcessor: DictationProcessing {
   typealias SourceFactory =
     @MainActor () async throws -> any StreamingSpeechSource
 
+  private let clock: DictationClock
+  private let budget: DictationProcessingBudget
+
   init(
     makeSource: @escaping SourceFactory,
     dictionaryResolver: any TranscriptDictionaryResolving,
     cleaner: IncrementalTranscriptCleaner,
-    runtime: LocalDictationRuntime?
+    runtime: LocalDictationRuntime?,
+    clock: DictationClock = .live,
+    budget: DictationProcessingBudget = .production
   )
 
   func prepare(for intent: DictationPreparationIntent) async
   func handle(_ signal: DictationRuntimeSignal) async
   func begin(
     configuration: DictationProcessingConfiguration
-  ) async throws -> any DictationProcessingSession
+  ) async throws -> any DictationProcessingSession {
+    let insertionDeadline = clock.now().advanced(by: budget.insertion)
+    return try await StreamingDictationSession(
+      configuration: configuration,
+      makeSource: makeSource,
+      dictionaryResolver: dictionaryResolver,
+      cleaner: cleaner,
+      runtime: runtime,
+      clock: clock,
+      budget: budget,
+      insertionDeadline: insertionDeadline
+    )
+  }
+}
+~~~
+
+~~~swift
+@MainActor
+final class StreamingDictationSession: DictationProcessingSession {
+  init(
+    configuration: DictationProcessingConfiguration,
+    makeSource: @escaping StreamingDictationProcessor.SourceFactory,
+    dictionaryResolver: any TranscriptDictionaryResolving,
+    cleaner: IncrementalTranscriptCleaner,
+    runtime: LocalDictationRuntime?,
+    clock: DictationClock,
+    budget: DictationProcessingBudget,
+    insertionDeadline: ContinuousClock.Instant
+  )
+
+  var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
+  func finish() async throws -> DictationProcessingResult
+  func cancel() async
 }
 ~~~
 
 `StreamingDictationSession` owns one source, state, generation counter, stream,
-and finalization flag. Each provisional callback increments generation and
-publishes only an accepted `StreamingTranscriptState` update. Its `finish`
-calls source `finish` exactly once, rejects empty final text, resolves the
-dictionary, and sends only the baseline to
-`IncrementalTranscriptCleaner`. A cleaned candidate publishes
-`cleanedTranscript`; every unsafe/unavailable cleanup publishes
-`insertedText` equal to the exact baseline. A resolver failure publishes raw
-ASR recovery with no cleaner call. `cancel` invalidates first, closes the
-stream, cancels the source, and releases resources once. A state or source
-error closes without a late result.
+finalization flag, injected `DictationClock`, and
+`DictationProcessingBudget`. At `begin`, the processor records the capture's
+three-second insertion deadline from the injected clock and budget. At
+`finish`, the session records `stopInstant = clock.now()` exactly once and
+constructs:
+
+~~~swift
+let deadline = DictationDeadline(
+  stopInstant: stopInstant,
+  insertionDeadline: insertionDeadline,
+  cleanupBudget: budget.cleanup
+)
+let request = IncrementalCleanupRequest(
+  baseline: resolution.baseline,
+  protectedForms: resolution.protectedForms,
+  replacements: resolution.replacements,
+  deadline: deadline.cleanupDeadline
+)
+let decision = try await cleaner.clean(request)
+~~~
+
+`cleanupDeadline` is exactly
+`min(stopInstant + 1,500 ms, insertionDeadline)`, where `insertionDeadline`
+is the remaining three-second insertion deadline. Each provisional callback
+increments generation and publishes only an accepted `StreamingTranscriptState`
+update. `finish` calls source `finish` exactly once, rejects empty final text,
+resolves the dictionary before creating the request, and never calls the legacy
+cleaner. A cleaned candidate publishes `cleanedTranscript`; every
+unsafe/unavailable cleanup publishes `insertedText` equal to the exact
+baseline. A resolver failure publishes raw ASR recovery with no cleaner call.
+`cancel` invalidates first, closes the stream, cancels the source, and releases
+resources once. A state or source error closes without a late result.
+
+`TestDictationClock` supplies a fixed sequence of instants to the processor;
+`CleanupGeneratorProbe.requests` records the request. These tests never call
+`Date()`, sleep a real clock, or infer the deadline from elapsed wall time.
 
 - [ ] **Step 6: Run green and broader checks.**
 

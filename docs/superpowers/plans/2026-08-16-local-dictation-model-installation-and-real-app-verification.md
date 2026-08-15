@@ -50,6 +50,14 @@ resource, downloader, or build script.
   `EnhancedModelManifest`, `ModelDownloading`, checksum verification, secure
   resume, repair, update, and removal implementation. Do not add a downloader
   or bypass its path validation.
+- Every production and test reference to `EnhancedModelManager`,
+  `EnhancedModelManifest`, `ModelDownloading`, or `ModelDownloadResult` is
+  enclosed by `#if CLEAN_DICTATION_ENHANCED_CANDIDATE`. Default tests use only
+  built-in or non-gated types. A small compile-gated immutable
+  `EnhancedModelArtifactIdentity` is built or injected alongside the existing
+  manifest; its source repository drives `remoteURL`, and the adapter rejects
+  any descriptor/identity mismatch before manager operation. This is not a
+  generic model registry.
 - Preserve the existing debug-only `EnhancedModelManager` installer behind
   `CLEAN_DICTATION_ENHANCED_CANDIDATE`; this workstream does not turn its candidate
   route into ordinary-release routing or release evidence.
@@ -71,6 +79,9 @@ resource, downloader, or build script.
 - Use native macOS Settings structure, semantic colors/styles, keyboard and
   VoiceOver labels/values, and no frequent decorative animation. Keyboard-
   initiated dictation has no animation.
+- Installer phases and truthful byte progress are Settings-only. This
+  workstream does not own dictation status presentation or modify
+  `Sources/FleckApp/DictationCapsule.swift`.
 - Use serialized offline-safe commands:
   `swift test --disable-automatic-resolution --no-parallel [--filter ...]`.
 - Reuse `./Scripts/build-fleck-app.sh`. The evidence artifact is
@@ -105,7 +116,7 @@ resource, downloader, or build script.
   recommendation surface in ordinary builds while retaining the existing
   debug-only installer branch behind its compile flag.
 - `Sources/FleckApp/FleckApp.swift` — inject one installer/view model, map
-  phase-specific capsule state, and remove duplicate model-operation ownership.
+  Settings-only phase state, and remove duplicate model-operation ownership.
 - `Tests/FleckAppTests/EnhancedModelManagerTests.swift` — byte-progress and
   adapter lifecycle tests under the existing compile gate.
 - `Tests/FleckAppTests/DictationSettingsTests.swift` — built-in,
@@ -117,7 +128,8 @@ resource, downloader, or build script.
 ### Explicitly excluded
 
 `Package.swift`, `Package.resolved`, `Scripts/build-fleck-app.sh`,
-`Resources/EnhancedModelManifest.json`, `EnhancedSpeechCapture.swift`,
+`Sources/FleckApp/Resources/EnhancedModelManifest.json`,
+`Sources/FleckApp/DictationCapsule.swift`, `EnhancedSpeechCapture.swift`,
 `AppleSpeechCapture.swift`, all streaming/cleanup/coordinator files from
 Workstreams A and B, candidate adapters, model weights, and every file outside
 this map.
@@ -151,6 +163,33 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
   let installedBytes: Int64
   let languages: [String]
   let architectures: [String]
+
+  var immutableIdentity: AdmittedModelImmutableIdentity { get }
+  init(validating raw: Self) throws
+}
+
+struct AdmittedModelImmutableIdentity: Equatable, Sendable {
+  let sourceRepository: URL
+  let modelID: String
+  let revision: String
+  let license: String
+  let runtimeABI: String
+  let conversion: String
+  let quantization: String
+  let files: [AdmittedModelFile]
+  let downloadBytes: Int64
+  let installedBytes: Int64
+}
+
+enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
+  case emptyIdentity
+  case emptyRevision
+  case emptyLicense
+  case unsafePath(String)
+  case invalidByteCount
+  case invalidChecksum(String)
+  case aggregateMismatch
+  case emptySupport
 }
 
 struct AdmittedHardwareProfile: Equatable, Sendable {
@@ -200,6 +239,7 @@ struct AdmittedModelInstallationSnapshot: Equatable, Sendable {
 @MainActor
 protocol AdmittedModelInstalling: AnyObject {
   var snapshot: AdmittedModelInstallationSnapshot { get }
+  var updates: AsyncStream<AdmittedModelInstallationSnapshot> { get }
   func refresh() async
   func install() async
   func cancel()
@@ -208,6 +248,62 @@ protocol AdmittedModelInstalling: AnyObject {
   func remove() async
 }
 ~~~
+
+Under `#if CLEAN_DICTATION_ENHANCED_CANDIDATE`, keep the manager seam small and
+immutable. Build or inject this value at the same point as the existing
+`EnhancedModelManifest`; do not create a registry or a second manifest:
+
+~~~swift
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+struct EnhancedModelArtifactIdentity: Equatable, Sendable {
+  let sourceRepository: URL
+  let modelID: String
+  let revision: String
+  let license: String
+  let runtimeABI: String
+  let conversion: String
+  let quantization: String
+  let files: [AdmittedModelFile]
+  let downloadBytes: Int64
+  let installedBytes: Int64
+}
+
+enum AdmittedModelArtifactMismatch: Error, Equatable {
+  case immutableIdentityMismatch
+}
+
+enum AdmittedModelArtifactBinding {
+  static func validate(
+    descriptor: AdmittedModelDescriptor,
+    artifact: EnhancedModelArtifactIdentity
+  ) throws {
+    let expected = AdmittedModelImmutableIdentity(
+      sourceRepository: artifact.sourceRepository,
+      modelID: artifact.modelID,
+      revision: artifact.revision,
+      license: artifact.license,
+      runtimeABI: artifact.runtimeABI,
+      conversion: artifact.conversion,
+      quantization: artifact.quantization,
+      files: artifact.files,
+      downloadBytes: artifact.downloadBytes,
+      installedBytes: artifact.installedBytes
+    )
+    guard descriptor.immutableIdentity == expected else {
+      throw AdmittedModelArtifactMismatch.immutableIdentityMismatch
+    }
+  }
+}
+#endif
+~~~
+
+The existing manager receives `artifactIdentity` alongside its manifest and
+constructs each download URL from `artifactIdentity.sourceRepository`,
+`resolve`, and the immutable revision. The adapter initializer runs
+`AdmittedModelArtifactBinding.validate` before calling any manager operation;
+on mismatch construction throws before transport, and the Settings boundary
+maps that actionable error to a failed presentation without starting an
+operation.
 
 ## Task 1: Define the admitted descriptor and one-recommendation catalog
 
@@ -270,6 +366,44 @@ and catalog interfaces above.
   )
   #expect(catalog.recommendation() == .builtIn)
 }
+
+@Test func invalidSignedDescriptorInputsAreRejected() {
+  let valid = TestDescriptors.neutralAdmitted
+  #expect(throws: AdmittedModelDescriptorError.emptyIdentity) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, modelID: ""))
+  }
+  #expect(throws: AdmittedModelDescriptorError.emptyRevision) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, revision: ""))
+  }
+  #expect(throws: AdmittedModelDescriptorError.emptyLicense) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, license: ""))
+  }
+  #expect(throws: AdmittedModelDescriptorError.unsafePath("../escape.bin")) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+      valid,
+      files: [ .init(path: "../escape.bin", byteCount: 4, sha256: String(repeating: "a", count: 64)) ],
+      downloadBytes: 4,
+      installedBytes: 4
+    ))
+  }
+  #expect(throws: AdmittedModelDescriptorError.invalidByteCount) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, downloadBytes: -1))
+  }
+  #expect(throws: AdmittedModelDescriptorError.invalidChecksum("abc")) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+      valid,
+      files: [ .init(path: "model.bin", byteCount: 4, sha256: "abc") ],
+      downloadBytes: 4,
+      installedBytes: 4
+    ))
+  }
+  #expect(throws: AdmittedModelDescriptorError.aggregateMismatch) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, installedBytes: 1))
+  }
+  #expect(throws: AdmittedModelDescriptorError.emptySupport) {
+    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, languages: [], architectures: []))
+  }
+}
 ~~~
 
 - [ ] **Step 2: Run the red command.**
@@ -310,12 +444,55 @@ struct AdmittedModelCatalog: Sendable {
 }
 ~~~
 
-Have the signed-configuration path reject empty identity/revision/license,
-unsafe relative file paths, negative or otherwise invalid byte counts, checksums
-that are not exactly 64 hexadecimal characters, mismatched aggregate download
-or installed sizes, and empty supported architecture/language sets before
-constructing this immutable value. Do not accept an array, picker index, or
-fallback descriptor. The ordinary constructor passes nil.
+Add validation at the signed boundary, not in the view:
+
+~~~swift
+extension AdmittedModelDescriptor {
+  init(validating raw: Self) throws {
+    guard !raw.modelID.isEmpty else { throw AdmittedModelDescriptorError.emptyIdentity }
+    guard !raw.revision.isEmpty else { throw AdmittedModelDescriptorError.emptyRevision }
+    guard !raw.license.isEmpty else { throw AdmittedModelDescriptorError.emptyLicense }
+    guard !raw.languages.isEmpty, !raw.architectures.isEmpty else {
+      throw AdmittedModelDescriptorError.emptySupport
+    }
+    guard raw.downloadBytes > 0,
+          raw.installedBytes > 0,
+          raw.files.allSatisfy({ $0.byteCount > 0 }) else {
+      throw AdmittedModelDescriptorError.invalidByteCount
+    }
+    guard raw.files.reduce(0) { $0 + $1.byteCount } == raw.downloadBytes,
+          raw.installedBytes >= raw.downloadBytes else {
+      throw AdmittedModelDescriptorError.aggregateMismatch
+    }
+    for file in raw.files {
+      guard !file.path.hasPrefix("/"),
+            !file.path.split(separator: "/").contains("..") else {
+        throw AdmittedModelDescriptorError.unsafePath(file.path)
+      }
+      guard file.sha256.count == 64,
+            file.sha256.allSatisfy("0123456789abcdefABCDEF".contains) else {
+        throw AdmittedModelDescriptorError.invalidChecksum(file.sha256)
+      }
+    }
+    self = raw
+  }
+
+  var immutableIdentity: AdmittedModelImmutableIdentity {
+    .init(sourceRepository: source, modelID: modelID, revision: revision,
+          license: license, runtimeABI: runtimeABI, conversion: conversion,
+          quantization: quantization, files: files,
+          downloadBytes: downloadBytes, installedBytes: installedBytes)
+  }
+}
+~~~
+
+Have the signed-configuration path call the throwing initializer below before
+constructing this immutable value. `TestDescriptors.make` is a test-only helper
+that starts from one valid neutral descriptor and applies the named override;
+the test cases above cover empty identity/revision/license, unsafe paths,
+negative byte counts, non-64-hex checksums, aggregate mismatches, and empty
+support sets. Do not accept an array, picker index, or fallback descriptor. The
+ordinary constructor passes nil.
 
 - [ ] **Step 4: Run green, inspect, and commit.**
 
@@ -347,10 +524,11 @@ Sol `ship` gate.
 catalog code except Task 1 interfaces, package files, resources, the manifest,
 audio/streaming/cleanup/coordinator files, and all model-weight paths.
 
-**Consumes:** Task 1 `AdmittedModelDescriptor`, the existing
-`EnhancedModelManifest`, `EnhancedModelManager`, `ModelDownloading`,
-`ModelDownloadResult`, and the existing checksum/path/repair/update/remove
-operations.
+**Consumes:** Task 1 `AdmittedModelDescriptor`; under
+`CLEAN_DICTATION_ENHANCED_CANDIDATE`, the existing `EnhancedModelManifest`,
+`EnhancedModelManager`, `ModelDownloading`, `ModelDownloadResult`, and its
+checksum/path/repair/update/remove operations. Default builds consume only the
+built-in installer seam.
 
 **Produces:** `AdmittedModelInstallPhase`,
 `AdmittedModelInstallationSnapshot`, `AdmittedModelInstalling`,
@@ -364,6 +542,14 @@ operations.
 
 ~~~swift
 @Test @MainActor
+func defaultBuildUsesBuiltInInstallerWithoutManagerReference() async {
+  let installer = BuiltInAdmittedModelInstaller()
+  await installer.install()
+  #expect(installer.snapshot.phase == .builtIn)
+}
+
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test @MainActor
 func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
@@ -375,7 +561,7 @@ func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
     architectureProvider: { true },
     transport: transport
   )
-  let installer = EnhancedModelManagerInstaller(
+  let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
     descriptor: descriptor,
     startup: { },
@@ -396,7 +582,7 @@ func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
 @Test @MainActor
 func checksumFailureBecomesActionableRepairState() async {
   let manager = TestManagers.managerWithWrongFixtureChecksum()
-  let installer = EnhancedModelManagerInstaller(
+  let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
     descriptor: TestDescriptors.tinyAdmittedASR,
     startup: { },
@@ -409,12 +595,84 @@ func checksumFailureBecomesActionableRepairState() async {
   }
   #expect(message.contains("checksum"))
 }
+
+@Test @MainActor
+func descriptorArtifactMismatchFailsBeforeTransport() async {
+  let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8))
+  let manager = TestManagers.manager(
+    transport: transport,
+    artifactIdentity: TestArtifacts.identityWith(
+      revision: "different-revision"
+    )
+  )
+  #expect(throws: AdmittedModelArtifactMismatch.immutableIdentityMismatch) {
+    _ = try EnhancedModelManagerInstaller(
+      manager: manager,
+      descriptor: TestDescriptors.tinyAdmittedASR,
+      startup: { },
+      calibrate: { }
+    )
+  }
+  #expect(transport.downloadCalls == 0)
+}
+
+@Test @MainActor
+func immutableArtifactMismatchesAreRejectedBeforeTransport() throws {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let valid = TestArtifacts.identity(matching: descriptor)
+  let mismatches = [
+    TestArtifacts.identity(valid, sourceRepository: URL(string: "https://example.invalid/other")!),
+    TestArtifacts.identity(valid, modelID: "different-model"),
+    TestArtifacts.identity(valid, revision: "different-revision"),
+    TestArtifacts.identity(valid, license: "different-license"),
+    TestArtifacts.identity(valid, runtimeABI: "different-runtime"),
+    TestArtifacts.identity(valid, conversion: "different-conversion"),
+    TestArtifacts.identity(valid, quantization: "different-quantization"),
+    TestArtifacts.identity(valid, files: [ .init(path: "other.bin", byteCount: 4, sha256: String(repeating: "a", count: 64)) ]),
+    TestArtifacts.identity(valid, files: [ .init(path: valid.files[0].path, byteCount: valid.files[0].byteCount, sha256: String(repeating: "b", count: 64)) ]),
+    TestArtifacts.identity(valid, files: [ .init(path: valid.files[0].path, byteCount: valid.files[0].byteCount + 1, sha256: valid.files[0].sha256) ]),
+    TestArtifacts.identity(valid, downloadBytes: valid.downloadBytes + 1),
+    TestArtifacts.identity(valid, installedBytes: valid.installedBytes + 1)
+  ]
+  for artifact in mismatches {
+    #expect(throws: AdmittedModelArtifactMismatch.immutableIdentityMismatch) {
+      try AdmittedModelArtifactBinding.validate(descriptor: descriptor, artifact: artifact)
+    }
+  }
+}
+
+@Test @MainActor
+func installerUpdatesExposeBytesBeforeCompletion() async {
+  let transport = ModelDownloadingProbe(bytes: Data("fixture".utf8), pausesAfterFirstProgress: true)
+  let manager = TestManagers.manager(transport: transport)
+  let installer = try! EnhancedModelManagerInstaller(
+    manager: manager,
+    descriptor: TestDescriptors.tinyAdmittedASR,
+    startup: { },
+    calibrate: { }
+  )
+  let firstDownload = Task { () -> Int64? in
+    for await snapshot in installer.updates {
+      if case .downloading(let receivedBytes, _) = snapshot.phase {
+        return receivedBytes
+      }
+    }
+    return nil
+  }
+  let install = Task { await installer.install() }
+  await transport.waitUntilFirstProgress()
+  #expect(await firstDownload.value == 4)
+  await transport.releaseProgress()
+  await install.value
+}
+#endif
 ~~~
 
 - [ ] **Step 2: Run the red commands.**
 
 ~~~bash
 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelInstallationTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelInstallationTests
 FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter EnhancedModelManagerTests
 ~~~
 
@@ -424,8 +682,9 @@ offline because its transport is injected.
 
 ### Minimal implementation, green, and checkpoint
 
-- [ ] **Step 3: Expose byte progress without replacing manager work.** Add a
-  small `EnhancedModelByteProgress` value and
+- [ ] **Step 3: Expose byte progress without replacing manager work.** Under
+  `CLEAN_DICTATION_ENHANCED_CANDIDATE`, add a small
+  `EnhancedModelByteProgress` value and
   `@Published private(set) var byteProgress` to the existing manager. Update it
   from the existing
   `updateProgress(completedBytes:receivedBytes:operationID:)` callback; clear it
@@ -435,11 +694,39 @@ offline because its transport is injected.
   staging, secure resume, and filesystem ownership unchanged.
 
 ~~~swift
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
 struct EnhancedModelByteProgress: Equatable, Sendable {
   let receivedBytes: Int64
   let totalBytes: Int64
 }
+
+final class EnhancedModelManager: ObservableObject {
+  private let artifactIdentity: EnhancedModelArtifactIdentity
+  @Published private(set) var byteProgress: EnhancedModelByteProgress?
+
+  init(
+    manifest: EnhancedModelManifest,
+    artifactIdentity: EnhancedModelArtifactIdentity,
+    /* existing manager dependencies */
+  ) {
+    self.artifactIdentity = artifactIdentity
+  }
+
+  var admittedArtifactIdentity: EnhancedModelArtifactIdentity { artifactIdentity }
+
+  func remoteURL(for file: EnhancedModelFile) -> URL {
+    artifactIdentity.sourceRepository
+      .appendingPathComponent("resolve")
+      .appendingPathComponent(artifactIdentity.revision)
+      .appendingPathComponent(file.path)
+  }
+}
+#endif
 ~~~
+
+The existing embedded manager construction supplies its immutable artifact
+identity beside the manifest. The adapter never substitutes a descriptor for
+that value, and the URL root no longer hard-codes a candidate repository.
 
 - [ ] **Step 4: Add the two installer implementations.**
 
@@ -447,13 +734,19 @@ struct EnhancedModelByteProgress: Equatable, Sendable {
 @MainActor
 final class BuiltInAdmittedModelInstaller: AdmittedModelInstalling {
   private(set) var snapshot: AdmittedModelInstallationSnapshot
+  let updates: AsyncStream<AdmittedModelInstallationSnapshot>
+  private let continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation
 
   init() {
+    var continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation!
+    updates = AsyncStream { continuation = $0 }
+    self.continuation = continuation
     snapshot = .init(
       recommendation: .builtIn,
       phase: .builtIn,
       lastError: nil
     )
+    continuation.yield(snapshot)
   }
 
   func refresh() async {}
@@ -473,13 +766,39 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   private let calibrate: @MainActor () async throws -> Void
   private(set) var snapshot: AdmittedModelInstallationSnapshot
   private(set) var phaseHistory: [AdmittedModelInstallPhase] = []
+  let updates: AsyncStream<AdmittedModelInstallationSnapshot>
+  private let continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation
 
   init(
     manager: EnhancedModelManager,
     descriptor: AdmittedModelDescriptor,
     startup: @escaping @MainActor () async throws -> Void,
     calibrate: @escaping @MainActor () async throws -> Void
-  )
+  ) throws {
+    try AdmittedModelArtifactBinding.validate(
+      descriptor: descriptor,
+      artifact: manager.admittedArtifactIdentity
+    )
+    var continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation!
+    updates = AsyncStream { continuation = $0 }
+    self.continuation = continuation
+    self.manager = manager
+    self.descriptor = descriptor
+    self.startup = startup
+    self.calibrate = calibrate
+    self.snapshot = .init(
+      recommendation: .recommended(descriptor),
+      phase: .notInstalled,
+      lastError: nil
+    )
+    continuation.yield(snapshot)
+  }
+
+  private func publish(_ next: AdmittedModelInstallationSnapshot) {
+    snapshot = next
+    phaseHistory.append(next.phase)
+    continuation.yield(next)
+  }
 
   func refresh() async
   func install() async
@@ -505,6 +824,7 @@ uses `BuiltInAdmittedModelInstaller` and cannot reach the manager.
 
 ~~~bash
 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelInstallationTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelInstallationTests
 FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter EnhancedModelManagerTests
 swift test --disable-automatic-resolution --no-parallel --filter DictationAvailabilityTests
 ~~~
@@ -544,14 +864,15 @@ Sol `ship` gate.
 
 **Excluded files:** All manager/downloader implementation beyond Workstream C Task 2,
 `Package.swift`, `Scripts/build-fleck-app.sh`, resources/manifests, every
-audio/streaming/cleanup/coordinator file, and candidate model files.
+audio/streaming/cleanup/coordinator file, `Sources/FleckApp/DictationCapsule.swift`,
+and candidate model files.
 
 **Consumes:** Task 1 catalog/recommendation, Task 2 installer snapshot/action
-methods, existing native Settings structure, and existing capsule controller.
+methods, and the existing native Settings structure.
 
 **Produces:** `AdmittedModelSettingsPresentation`,
 `AdmittedModelSettingsViewModel`, exactly one Settings card, and phase-specific
-capsule/error copy.
+Settings/error copy.
 
 ### TDD red
 
@@ -607,6 +928,9 @@ capsule/error copy.
 
 ~~~bash
 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelSettingsPresentationTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelSettingsPresentationTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter DictationSettingsTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter DictationAvailabilityTests
 ~~~
 
 Expected failure: the presentation, action, snapshot mapping, and view-model
@@ -649,10 +973,30 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
   @Published private(set) var presentation:
     AdmittedModelSettingsPresentation
   private let installer: any AdmittedModelInstalling
+  private var updatesTask: Task<Void, Never>?
 
-  init(installer: any AdmittedModelInstalling)
+  init(installer: any AdmittedModelInstalling) {
+    self.installer = installer
+    self.presentation = .init(snapshot: installer.snapshot)
+    subscribeToUpdates()
+  }
   func refresh() async
   func perform(_ action: AdmittedModelSettingsAction)
+
+  deinit { updatesTask?.cancel() }
+
+  private func subscribeToUpdates() {
+    updatesTask = Task { [weak self, installer] in
+      for await snapshot in installer.updates {
+        guard !Task.isCancelled else { return }
+        self?.apply(snapshot)
+      }
+    }
+  }
+
+  private func apply(_ snapshot: AdmittedModelInstallationSnapshot) {
+    presentation = .init(snapshot: snapshot)
+  }
 }
 ~~~
 
@@ -662,6 +1006,21 @@ compile-gated configuration, inject the one signed descriptor and
 `EnhancedModelManagerInstaller` only when the caller explicitly supplies that
 configuration. Store one view model on `DictationRuntime`; do not create
 parallel operation dictionaries or a second manager.
+
+The construction boundary is explicit:
+
+~~~swift
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+let installer: any AdmittedModelInstalling = try EnhancedModelManagerInstaller(
+  manager: manager,
+  descriptor: signedDescriptor,
+  startup: startup,
+  calibrate: calibrate
+)
+#else
+let installer: any AdmittedModelInstalling = BuiltInAdmittedModelInstaller()
+#endif
+~~~
 
 In `SettingsView.swift`, make the ordinary-build Dictation section render one
 native card from the view model: its recommendation card has one explicit
@@ -674,11 +1033,13 @@ VoiceOver labels/values for phase and byte progress, and no decorative progress
 animation. Do not change the existing shortcut, permission, history, or editor
 settings.
 
-Map installer phases to the existing capsule as
+Keep installer phases and errors in Settings only: map them to finite
 `downloading`, `verifying`, `installing`, `starting`, `calibrating`,
-`installed`, `repairRequired`, `removing`, or `failed`. Errors name the action
-and next recovery step. Dictation stays on Apple Speech/deterministic cleanup
-when the catalog is built-in or an operation fails.
+`installed`, `repairRequired`, `removing`, or `failed` copy. Errors name the
+action and next recovery step. Do not modify `Sources/FleckApp/DictationCapsule.swift`;
+all installer phase state remains in Settings. Dictation stays on Apple
+Speech/deterministic cleanup when the catalog is built-in or an operation
+fails.
 
 - [ ] **Step 5: Run green and broader UI checks.**
 
@@ -687,6 +1048,9 @@ swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelSe
 swift test --disable-automatic-resolution --no-parallel --filter DictationSettingsTests
 swift test --disable-automatic-resolution --no-parallel --filter DictationAvailabilityTests
 swift test --disable-automatic-resolution --no-parallel --filter DictationAccessibilityTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelSettingsPresentationTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter DictationSettingsTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter DictationAvailabilityTests
 ~~~
 
 Expected: all commands pass; default settings show built-in state with no model
@@ -719,6 +1083,10 @@ swift test --disable-automatic-resolution --no-parallel --filter DictationSettin
 swift test --disable-automatic-resolution --no-parallel --filter DictationAvailabilityTests
 swift test --disable-automatic-resolution --no-parallel --filter DictationAccessibilityTests
 swift test --disable-automatic-resolution --no-parallel
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelInstallationTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter AdmittedModelSettingsPresentationTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter DictationSettingsTests
+FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter DictationAvailabilityTests
 FLECK_ENHANCED_CANDIDATE=1 swift test --disable-automatic-resolution --no-parallel --filter EnhancedModelManagerTests
 git diff --check
 ~~~
