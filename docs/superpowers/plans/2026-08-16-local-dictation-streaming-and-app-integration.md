@@ -717,6 +717,11 @@ import Testing
   #expect(!scheduler.canStart(.cleanup, while: .liveASR))
 }
 
+@Test func inferencePriorityOrdersByRawValue() {
+  #expect(DictationInferencePriority.optionalPolish < .cleanup)
+  #expect(DictationInferencePriority.finalASR < .liveASR)
+}
+
 @Test func cancellationReleasesOneCaptureLease() async throws {
   let runtime = LocalDictationRuntime(
     asrAdapter: RuntimeAdapterProbe(role: .asr),
@@ -762,6 +767,10 @@ struct DictationRuntimePolicy: Equatable, Sendable {
 
 enum DictationInferencePriority: Int, Comparable, Sendable {
   case optionalPolish = 0, cleanup = 1, finalASR = 2, liveASR = 3
+
+  static func < (lhs: Self, rhs: Self) -> Bool {
+    lhs.rawValue < rhs.rawValue
+  }
 }
 
 struct DictationInferenceScheduler: Sendable {

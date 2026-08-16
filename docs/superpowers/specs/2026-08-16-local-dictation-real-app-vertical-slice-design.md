@@ -265,6 +265,16 @@ dictionary forms, numbers and number words, dates and times, prices, units and
 quantities, recipients and destinations, paths, URLs, email addresses, code,
 commands, negation, modality, commitments, quotes, mixed English/Mandarin order,
 lexical insertion, lexical substitution, reordering, or an ambiguous correction.
+When ordered canonical lexical values are identical, a narrow reconciliation maps
+single-lexeme candidate `.name` spans by `(lexicalOrdinal, canonical)` occurrence
+to the baseline. It keeps every baseline `.name` occurrence and requires the
+same occurrence/category in the candidate, while filtering only candidate-only
+`.name` spans whose one raw lexeme differs from the baseline only by case
+folding and whose baseline occurrence was not a name.
+It never filters dictionary spans or applies when values are substituted or
+reordered, so ordinary `send word with last` -> `SEND WORD WITH LAST.` and a
+real `Tony` -> `TONY` case change can pass without weakening any other protected
+category.
 It classifies supported English cardinal/ordinal number words through trillion,
 fractions, decimals, percentages, currencies, and unit quantities before
 filler, repetition, or correction recognition; the ordered number signature
@@ -292,13 +302,15 @@ scanner splits `20(` and `20)` into a `.number` lexeme followed by a
 `.punctuation` lexeme, so the raw-context check rejects both directions
 symmetrically unless the number lexeme itself contains a balanced pair. Thus
 `send 20(` to `Send 20.` rejects, and even unchanged `send 20(` to `Send 20(`
-fails closed as malformed; a valid balanced `($20)` remains one supported
-number lexeme. Balanced parentheses and
+fails closed as malformed; the same preceding rule covers `)20` and `.)20`.
+A valid balanced `($20)` remains one supported number lexeme. Balanced parentheses and
 complete separators/affixes are required, so `pay - 20`, `pay :20`, `pay : 20`,
 `pay %20`, and `pay % 20` cannot become `Pay 20.`; `20-` cannot lose its
 trailing sign; and split/doubled `$`/`+`/`-` forms cannot lose one affix.
-Parentheses around nonnumeric lexical text remain ordinary punctuation and do
-not enter numeric context.
+The same preceding-neighbor rule rejects detached `) 20` and `.)20` when the
+leading parenthesis is removed or retained; only a number lexeme containing its
+own balanced pair is exempt. Parentheses around nonnumeric lexical text remain
+ordinary punctuation and do not enter numeric context.
 Unsupported digit-bearing sequences are ambiguous. A list exception validates the ordered pairs `first -> 1` through
 `fifth -> 5`, removes only the full raw marker ranges for its remainder check,
 and passes only the exact candidate number ranges to protected-span comparison.
@@ -632,6 +644,14 @@ and before `EnhancedModelManagerInstaller`. It continues only when the catalog
 returns `.recommended(theSameDescriptor)`. Architecture mismatch, language
 mismatch, or available capacity below the validated staging requirement returns
 a non-operating built-in/failure presentation with zero transport calls.
+An admitted manager derives one deterministic
+`AdmittedModelStorageNamespace(baseRootURL:descriptor:)` under an explicit
+admitted base root, passes only that child namespace to its `FileContext`, and
+exposes the selected namespace/root for binding. The installer and C3 factory
+validate that the manager root equals the descriptor-derived namespace before
+operation. A shared base root, sibling/wrong namespace, missing namespace, or
+attempt to delete the admitted base root fails before transport; compatibility
+initializers retain their legacy root and are not admitted multi-model storage.
 
 The signed app supplies either no descriptor or exactly one hardware-appropriate
 recommendation for the curated experience; the factory never silently surfaces
@@ -650,7 +670,10 @@ invents architecture or language claims.
 
 Hardware recommendation uses the checked `requiredCapacityBytes` staging
 requirement, not download bytes alone. The validated required capacity is bound
-into the manager adapter; immediately before every install, repair, or update
+into the manager adapter. An internal `preflightTransferCapacity()` runs before
+the installer creates subscriptions or publishes `downloading(0, total)` for
+install, repair, or update; failure publishes only an actionable failed/repair
+state with zero transport. Immediately before every install, repair, or update
 transfer, the adapter re-reads the live capacity provider and fails before
 transport when available bytes are below that bound. It never substitutes the
 embedded Parakeet capacity for an admitted descriptor. When `requestedLanguages` is nonempty,

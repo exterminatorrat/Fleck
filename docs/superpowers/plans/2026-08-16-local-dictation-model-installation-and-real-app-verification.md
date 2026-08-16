@@ -1037,7 +1037,9 @@ consume only the built-in installer seam.
 **Produces:** `AdmittedModelInstallPhase`,
 `AdmittedModelInstallationSnapshot`, `AdmittedModelInstalling`,
 `BuiltInAdmittedModelInstaller`, `FailedAdmittedModelInstaller`, and the compile-gated
-`EnhancedModelManagerInstaller`.
+`EnhancedModelManagerInstaller`, plus the internal
+`AdmittedModelStorageNamespace` and `EnhancedModelManager.preflightTransferCapacity()`
+seams used to bind live capacity and selected-model filesystem ownership.
 
 ### TDD red
 
@@ -1115,15 +1117,20 @@ final class TestManagerFixture {
   ) throws {
     root = TestPaths.temporaryDirectory()
     do {
+      let namespace = try AdmittedModelStorageNamespace(
+        baseRootURL: root,
+        descriptor: descriptor
+      )
       let trustedManifests = try refreshFixture?.seed(
-        root: root,
+        root: namespace.rootURL,
         current: manifest
       ) ?? [manifest]
-      manager = EnhancedModelManager(
-        modelRootURL: root,
+      manager = try EnhancedModelManager(
+        admittedBaseRoot: root,
+        descriptor: descriptor,
         manifest: manifest,
-        trustedManifests: trustedManifests,
         artifactIdentity: artifactIdentity,
+        trustedManifests: trustedManifests,
         candidateEnabled: true,
         capacityProvider: capacityProvider,
         architectureProvider: architectureProvider,
@@ -1161,6 +1168,27 @@ enum TestManagers {
       refreshFixture: refreshFixture,
       capacityProvider: capacityProvider,
       architectureProvider: architectureProvider
+    )
+  }
+
+  @MainActor
+  static func managerAtRoot(
+    descriptor: AdmittedModelDescriptor,
+    artifactIdentity: EnhancedModelArtifactIdentity,
+    manifest: EnhancedModelManifest,
+    transport: any ModelDownloading,
+    modelRootURL: URL,
+    admittedStorageNamespace: AdmittedModelStorageNamespace
+  ) -> EnhancedModelManager {
+    EnhancedModelManager(
+      modelRootURL: modelRootURL,
+      manifest: manifest,
+      artifactIdentity: artifactIdentity,
+      candidateEnabled: true,
+      capacityProvider: { Int64.max },
+      architectureProvider: { true },
+      transport: transport,
+      admittedStorageNamespace: admittedStorageNamespace
     )
   }
 }
@@ -1426,6 +1454,111 @@ func liveCapacityGateRejectsInstallRepairAndUpdateBeforeTransport() async {
     })
     #expect(installer.snapshot.lastError != nil)
   }
+}
+
+@Test @MainActor
+func removeDeletesOnlyTheSelectedAdmittedNamespace() async throws {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let baseRoot = TestPaths.temporaryDirectory()
+  defer { TestPaths.remove(baseRoot) }
+  let namespace = try AdmittedModelStorageNamespace(
+    baseRootURL: baseRoot,
+    descriptor: descriptor
+  )
+  let fileManager = FileManager.default
+  for layer in ["installed", "staging", "resume", "derived"] {
+    let selected = namespace.rootURL.appendingPathComponent(layer, isDirectory: true)
+    try fileManager.createDirectory(at: selected, withIntermediateDirectories: true)
+    try Data("selected".utf8).write(
+      to: selected.appendingPathComponent("sentinel"),
+      options: .atomic
+    )
+  }
+  let sibling = baseRoot
+    .appendingPathComponent("sibling-model", isDirectory: true)
+    .appendingPathComponent("installed", isDirectory: true)
+  try fileManager.createDirectory(at: sibling, withIntermediateDirectories: true)
+  let siblingFile = sibling.appendingPathComponent("sentinel")
+  try Data("sibling".utf8).write(to: siblingFile, options: .atomic)
+
+  let manager = TestManagers.managerAtRoot(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
+    transport: ModelDownloadingProbe(bytes: TestFixtures.tinyBytes),
+    modelRootURL: namespace.rootURL,
+    admittedStorageNamespace: namespace
+  )
+  let installer = try EnhancedModelManagerInstaller(
+    manager: manager,
+    descriptor: descriptor,
+    startup: { },
+    calibrate: { }
+  )
+
+  await installer.remove()
+
+  for layer in ["installed", "staging", "resume", "derived"] {
+    #expect(!fileManager.fileExists(
+      atPath: namespace.rootURL.appendingPathComponent(layer).path
+    ))
+  }
+  #expect(fileManager.fileExists(atPath: namespace.rootURL.path))
+  #expect(fileManager.fileExists(atPath: siblingFile.path))
+  #expect(fileManager.fileExists(atPath: baseRoot.path))
+}
+
+@Test @MainActor
+func admittedInstallerRejectsSharedOrWrongNamespaceBeforeOperation() throws {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let baseRoot = TestPaths.temporaryDirectory()
+  defer { TestPaths.remove(baseRoot) }
+  let selected = try AdmittedModelStorageNamespace(
+    baseRootURL: baseRoot,
+    descriptor: descriptor
+  )
+
+  let sharedTransport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let sharedManager = TestManagers.managerAtRoot(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
+    transport: sharedTransport,
+    modelRootURL: baseRoot,
+    admittedStorageNamespace: selected
+  )
+  #expect(throws: AdmittedModelStorageNamespace.Error.managerRootMismatch) {
+    _ = try EnhancedModelManagerInstaller(
+      manager: sharedManager,
+      descriptor: descriptor,
+      startup: { },
+      calibrate: { }
+    )
+  }
+
+  let wrong = try AdmittedModelStorageNamespace(
+    baseRootURL: baseRoot,
+    descriptor: TestDescriptors.neutralAdmitted
+  )
+  let wrongTransport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let wrongManager = TestManagers.managerAtRoot(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
+    transport: wrongTransport,
+    modelRootURL: wrong.rootURL,
+    admittedStorageNamespace: wrong
+  )
+  #expect(throws: AdmittedModelStorageNamespace.Error.managerRootMismatch) {
+    _ = try EnhancedModelManagerInstaller(
+      manager: wrongManager,
+      descriptor: descriptor,
+      startup: { },
+      calibrate: { }
+    )
+  }
+  #expect(sharedTransport.downloadCalls == 0)
+  #expect(wrongTransport.downloadCalls == 0)
 }
 
 @Test @MainActor
@@ -1804,11 +1937,76 @@ offline because its transport is injected.
   `URLSessionModelDownloader`, manifest validation, checksum verification,
   staging, secure resume, and filesystem ownership unchanged.
 
+In this same existing-manager edit, add the explicit admitted storage namespace
+and `preflightTransferCapacity()` seams shown below. The selected namespace is
+the only root passed to admitted `FileContext`; compatibility initializers keep
+their existing root. The preflight is a synchronous actor check before any
+installer subscription or initial zero-byte publication, while the existing
+transfer wrapper remains the second live-capacity check immediately before
+transport.
+
 ~~~swift
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 struct EnhancedModelByteProgress: Equatable, Sendable {
   let receivedBytes: Int64
   let totalBytes: Int64
+}
+
+struct AdmittedModelStorageNamespace: Equatable, Sendable {
+  enum Error: Swift.Error, Equatable {
+    case invalidBaseRoot
+    case managerRootMismatch
+  }
+
+  let baseRootURL: URL
+  let rootURL: URL
+  let identityKey: String
+
+  init(baseRootURL: URL, descriptor: AdmittedModelDescriptor) throws {
+    let base = baseRootURL.standardizedFileURL.resolvingSymlinksInPath()
+    guard base.path != "/", !base.path.isEmpty else {
+      throw Error.invalidBaseRoot
+    }
+    let identity = descriptor.immutableIdentity
+    let material = [
+      identity.sourceRepository.absoluteString,
+      identity.modelID,
+      identity.revision,
+      identity.license,
+      identity.runtimeABI,
+      identity.conversion,
+      identity.quantization,
+      identity.files.map {
+        "\($0.path):\($0.byteCount):\($0.sha256)"
+      }.joined(separator: "\u{1f}"),
+      String(identity.downloadBytes),
+      String(identity.installedBytes),
+      String(identity.requiredCapacityBytes)
+    ].joined(separator: "\u{1e}")
+    let identityKey = SHA256.hash(data: Data(material.utf8))
+      .map { String(format: "%02x", $0) }
+      .joined()
+    let root = base.appendingPathComponent(identityKey, isDirectory: true)
+    guard root.path.hasPrefix(base.path + "/") else {
+      throw Error.invalidBaseRoot
+    }
+    self.baseRootURL = base
+    self.rootURL = root
+    self.identityKey = identityKey
+  }
+
+  static func validate(
+    managerRootURL: URL,
+    selected: Self?,
+    descriptor: AdmittedModelDescriptor
+  ) throws {
+    guard let selected else { throw Error.managerRootMismatch }
+    let derived = try Self(baseRootURL: selected.baseRootURL, descriptor: descriptor)
+    guard selected == derived,
+          managerRootURL.standardizedFileURL == selected.rootURL else {
+      throw Error.managerRootMismatch
+    }
+  }
 }
 
 @MainActor
@@ -1849,6 +2047,7 @@ final class EnhancedModelManager: ObservableObject {
   private let cleanupWillBegin: @Sendable () -> Void
   private let removalWillBegin: @Sendable () -> Void
   private let resumeAuthenticationKeyProvider: @Sendable () throws -> SymmetricKey
+  private let admittedStorageNamespace: AdmittedModelStorageNamespace?
   @Published private(set) var byteProgress: EnhancedModelByteProgress? = nil
   private var stateChangedAt: Date
   private var activeOperationID: UUID?
@@ -1895,7 +2094,8 @@ final class EnhancedModelManager: ObservableObject {
     removalWillBegin: @escaping @Sendable () -> Void = {},
     resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
       try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
-    }
+    },
+    admittedStorageNamespace: AdmittedModelStorageNamespace? = nil
   ) {
     let root = modelRootURL ?? fileManager.urls(
       for: .applicationSupportDirectory,
@@ -1921,6 +2121,7 @@ final class EnhancedModelManager: ObservableObject {
     self.cleanupWillBegin = cleanupWillBegin
     self.removalWillBegin = removalWillBegin
     self.resumeAuthenticationKeyProvider = resumeAuthenticationKeyProvider
+    self.admittedStorageNamespace = admittedStorageNamespace
     self.stateChangedAt = clock()
   }
 
@@ -1993,6 +2194,71 @@ final class EnhancedModelManager: ObservableObject {
   var admittedArtifactIdentity: EnhancedModelArtifactIdentity { artifactIdentity }
 
   var admittedManifest: EnhancedModelManifest { manifest }
+
+  var admittedStorageNamespaceRootURL: URL? {
+    admittedStorageNamespace?.rootURL
+  }
+
+  var admittedStorageBaseRootURL: URL? {
+    admittedStorageNamespace?.baseRootURL
+  }
+
+  var selectedAdmittedStorageNamespace: AdmittedModelStorageNamespace? {
+    admittedStorageNamespace
+  }
+
+  var modelRootURL: URL { context.root }
+
+  convenience init(
+    admittedBaseRoot: URL,
+    descriptor: AdmittedModelDescriptor,
+    fileManager: FileManager = .default,
+    manifest: EnhancedModelManifest,
+    artifactIdentity: EnhancedModelArtifactIdentity,
+    trustedManifests: [EnhancedModelManifest]? = nil,
+    candidateEnabled: Bool = CleanDictationFeatures.enhancedLocalCandidateEnabled,
+    capacityProvider: @escaping @Sendable () throws -> Int64 = {
+      try EnhancedModelManager.liveAvailableCapacity()
+    },
+    architectureProvider: @escaping @Sendable () -> Bool = {
+      EnhancedModelManager.isAppleSilicon()
+    },
+    clock: @escaping @Sendable () -> Date = { Date() },
+    transport: any ModelDownloading = URLSessionModelDownloader(),
+    assessmentDidComplete: @escaping @Sendable () -> Void = {},
+    cleanupWillBegin: @escaping @Sendable () -> Void = {},
+    removalWillBegin: @escaping @Sendable () -> Void = {},
+    resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
+      try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
+    }
+  ) throws {
+    let namespace = try AdmittedModelStorageNamespace(
+      baseRootURL: admittedBaseRoot,
+      descriptor: descriptor
+    )
+    self.init(
+      modelRootURL: namespace.rootURL,
+      fileManager: fileManager,
+      manifest: manifest,
+      artifactIdentity: artifactIdentity,
+      trustedManifests: trustedManifests,
+      candidateEnabled: candidateEnabled,
+      capacityProvider: capacityProvider,
+      architectureProvider: architectureProvider,
+      clock: clock,
+      transport: transport,
+      assessmentDidComplete: assessmentDidComplete,
+      cleanupWillBegin: cleanupWillBegin,
+      removalWillBegin: removalWillBegin,
+      resumeAuthenticationKeyProvider: resumeAuthenticationKeyProvider,
+      admittedStorageNamespace: namespace
+    )
+  }
+
+  // This is the same bound used by the immediately-before-transport check.
+  func preflightTransferCapacity() throws {
+    try requireLiveTransferCapacity()
+  }
 
   private func requireLiveTransferCapacity() throws {
     let availableBytes = try capacityProvider()
@@ -2102,6 +2368,17 @@ The source-compatible embedded path preserves the current experimental manager
 capacity of exactly `1_197_261_950` bytes. That constant is used only for the
 embedded compatibility identity; signed admitted artifacts carry their own
 validated checked `requiredCapacityBytes` and never use it.
+For an admitted descriptor, derive one
+`AdmittedModelStorageNamespace(baseRootURL:descriptor:)` by hashing the
+validated immutable identity into a safe child name under the explicit admitted
+base root. The explicit admitted manager initializer passes that namespace root
+to the existing `FileContext`, stores the exact namespace/base pair, and exposes
+`modelRootURL`, `admittedStorageNamespaceRootURL`, and
+`selectedAdmittedStorageNamespace`; compatibility initializers leave the
+namespace nil and preserve their legacy root behavior. The installer and C3
+factory call `AdmittedModelStorageNamespace.validate(managerRootURL:selected:descriptor:)`
+before constructing an operating installer. A shared base root, a sibling/wrong
+namespace, or a missing namespace throws `managerRootMismatch` before transport.
 At the start of the existing `validateManifest`, call
 `try validateManifestPaths(manifest)` before checksum or byte-count checks;
 this is the manager-side regression point for the shared path rule.
@@ -2128,6 +2405,12 @@ re-reads `capacityProvider` immediately before it, throwing
 remain for legacy behavior, but this admitted path never reads that Parakeet
 constant; it uses only the signed artifact's checked requirement. The catalog
 and manager therefore use the same signed descriptor requirement.
+`preflightTransferCapacity()` exposes the same live check internally. The
+installer invokes it for install, repair, and update before creating manager
+subscriptions or publishing `downloading(receivedBytes: 0, ...)`; a failure
+publishes only an actionable `.failed`/repair-safe snapshot and keeps transport
+at zero. After that preflight succeeds, `performTransfer` re-reads live
+capacity immediately before the actual download to close the race.
 The URL test passes a non-default source repository and revision and asserts the
 full resolved path plus `?download=true`, proving the explicit identity is not
 ignored.
@@ -2135,7 +2418,10 @@ The test-only `TestManagers` helpers may inject `capacityProvider: { Int64.max }
 and `architectureProvider: { true }`; those values are never production or
 compatibility defaults. `TestPaths.temporaryDirectory()` creates one unique,
 canonical directory below `FileManager.default.temporaryDirectory`; every
-`TestManagerFixture` owns and removes only its root, and direct compatibility
+`TestManagerFixture` uses an isolated namespace below its temporary base and
+removes only that base. The selected namespace removal test seeds installed,
+staging, resume, and derived sentinels, proves sibling files survive, and
+proves the admitted base root itself is never removed. Direct compatibility
 call-shape tests use `defer` to remove both named temporary roots.
 The manager path regression passes the descriptor's complete unsafe-path table
 through `remoteURL` and asserts `invalidManifestPath` before URL construction;
@@ -2228,6 +2514,11 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
       descriptor: descriptor,
       artifact: manager.admittedArtifactIdentity,
       manifest: manager.admittedManifest
+    )
+    try AdmittedModelStorageNamespace.validate(
+      managerRootURL: manager.modelRootURL,
+      selected: manager.selectedAdmittedStorageNamespace,
+      descriptor: descriptor
     )
     var continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation!
     updates = AsyncStream { continuation = $0 }
@@ -2346,6 +2637,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   private func runManagerOperation(
     initialPhase: AdmittedModelInstallPhase,
     runsStartupAndCalibration: Bool,
+    requiresTransferCapacityPreflight: Bool,
     _ operation: @escaping @MainActor () async throws -> Void
   ) async {
     guard operationTask == nil else {
@@ -2355,6 +2647,18 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
         lastError: "Another model operation is already running."
       ))
       return
+    }
+    if requiresTransferCapacityPreflight {
+      do {
+        try manager.preflightTransferCapacity()
+      } catch {
+        publish(.init(
+          recommendation: .recommended(descriptor),
+          phase: .failed(message: error.localizedDescription),
+          lastError: error.localizedDescription
+        ))
+        return
+      }
     }
     beginOperationSubscriptions()
     publish(.init(
@@ -2456,7 +2760,8 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
         receivedBytes: 0,
         totalBytes: descriptor.downloadBytes
       ),
-      runsStartupAndCalibration: true
+      runsStartupAndCalibration: true,
+      requiresTransferCapacityPreflight: true
     ) { try await self.manager.download() }
   }
 
@@ -2466,7 +2771,8 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
         receivedBytes: 0,
         totalBytes: descriptor.downloadBytes
       ),
-      runsStartupAndCalibration: true
+      runsStartupAndCalibration: true,
+      requiresTransferCapacityPreflight: true
     ) { try await self.manager.repair() }
   }
 
@@ -2476,7 +2782,8 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
         receivedBytes: 0,
         totalBytes: descriptor.downloadBytes
       ),
-      runsStartupAndCalibration: true
+      runsStartupAndCalibration: true,
+      requiresTransferCapacityPreflight: true
     ) { try await self.manager.update() }
   }
 
@@ -2500,7 +2807,8 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   func remove() async {
     await runManagerOperation(
       initialPhase: .removing,
-      runsStartupAndCalibration: false
+      runsStartupAndCalibration: false,
+      requiresTransferCapacityPreflight: false
     ) { try await self.manager.deleteModel() }
   }
 }
@@ -2527,9 +2835,12 @@ publishes `.starting`, awaits startup, publishes `.calibrating`, awaits
 calibration, and only then publishes `.installed`. On checksum, size, path,
 capacity, transport, startup, or calibration failure, set an actionable
 `failed` or `repairRequired` message and retain the safe previous installation
-when the manager does. Removal calls only `self.manager.deleteModel()`. The
-ordinary release uses `BuiltInAdmittedModelInstaller` and cannot reach the
-manager.
+when the manager does. Removal calls only `self.manager.deleteModel()`. Because
+the admitted manager's `FileContext.root` is the selected namespace, the
+existing four child-tree deletions are contained there; they never accept a
+caller path, remove the namespace root itself, or recursively delete the
+admitted base root. The ordinary release uses `BuiltInAdmittedModelInstaller`
+and cannot reach the manager.
 
 - [ ] **Step 5: Run green and broader checks.**
 
@@ -2600,7 +2911,7 @@ manager installer.
 
 **Produces:** `AdmittedModelSettingsPresentation`,
 `AdmittedModelSettingsViewModel`, `AdmittedModelSignedConfiguration`, the
-`makeAdmittedModelInstaller` boundary, exactly one Settings card, and
+`makeAdmittedModelInstaller` boundary with selected-namespace validation, exactly one Settings card, and
 phase-specific Settings/error copy. The factory returns a recommended installer
 only for an exact `.recommended(descriptor)` catalog result; all architecture,
 language, and staging-capacity mismatches return a non-operating built-in/failure
@@ -3037,6 +3348,40 @@ func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
   ))
   #expect(availability.standardAvailable)
 }
+
+@Test @MainActor
+func storageNamespaceMismatchIsRecommendedFailureWithoutTransport() throws {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let baseRoot = TestPaths.temporaryDirectory()
+  defer { TestPaths.remove(baseRoot) }
+  let selected = try AdmittedModelStorageNamespace(
+    baseRootURL: baseRoot,
+    descriptor: descriptor
+  )
+  let manager = EnhancedModelManager(
+    modelRootURL: baseRoot,
+    manifest: TestManifests.tiny,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    candidateEnabled: true,
+    capacityProvider: { Int64.max },
+    architectureProvider: { true },
+    transport: transport,
+    admittedStorageNamespace: selected
+  )
+  let configuration = AdmittedModelSignedConfiguration(
+    rawDescriptor: TestDescriptors.raw(descriptor),
+    hardware: supportedHardware(for: descriptor),
+    manager: manager,
+    startup: { },
+    calibrate: { }
+  )
+
+  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  #expect(installer.snapshot.recommendation == .recommended(descriptor))
+  #expect(installer.snapshot.lastError != nil)
+  #expect(transport.downloadCalls == 0)
+}
 #endif
 ~~~
 
@@ -3280,6 +3625,19 @@ func makeAdmittedModelInstaller(
     return FailedAdmittedModelInstaller(
       recommendation: .builtIn,
       message: "This model is not supported by the current Mac, language, or available staging capacity."
+      )
+  }
+
+  do {
+    try AdmittedModelStorageNamespace.validate(
+      managerRootURL: signedConfiguration.manager.modelRootURL,
+      selected: signedConfiguration.manager.selectedAdmittedStorageNamespace,
+      descriptor: descriptor
+    )
+  } catch {
+    return FailedAdmittedModelInstaller(
+      recommendation: .recommended(recommended),
+      message: String(describing: error)
     )
   }
 

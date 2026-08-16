@@ -458,6 +458,15 @@ import Testing
   #expect(CleanupLexeme.scan("send 20(").map(\.kind) == [
     .word, .whitespace, .number, .punctuation
   ])
+  #expect(CleanupLexeme.scan("send ) 20").map(\.original) == [
+    "send", " ", ")", " ", "20"
+  ])
+  #expect(CleanupLexeme.scan("send )20").map(\.original) == [
+    "send", " ", ")", "20"
+  ])
+  #expect(CleanupLexeme.scan("send .)20").map(\.original) == [
+    "send", " ", ".", ")", "20"
+  ])
   #expect(CleanupLexeme.scan("charge ($20)").filter { $0.kind == .number }.map(\.original) == [
     "($20)"
   ])
@@ -519,6 +528,12 @@ import Testing
     ("send 20(", "Send 20."),
     ("send 20(", "Send 20("),
     ("send 20)", "Send 20)."),
+    ("send ) 20", "Send 20."),
+    ("send ) 20", "Send ) 20."),
+    ("send )20", "Send 20."),
+    ("send )20", "Send )20."),
+    ("send .)20", "Send 20."),
+    ("send .)20", "Send .)20."),
     ("send 10:", "Send 10:."),
     ("send 1/", "Send 1/."),
     ("send 20%%", "Send 20%%."),
@@ -556,6 +571,56 @@ import Testing
       ) == .rejected(.numberMeaningChanged)
     )
   }
+}
+
+@Test func faithfulValidatorReconcilesCaseOnlyNameSpansWithoutWideningProtection() {
+  let validator = FaithfulCleanupValidator()
+  let ordinary = validator.validate(
+    candidate: "SEND WORD WITH LAST.",
+    against: .init(
+      baseline: "send word with last",
+      protectedForms: [],
+      replacements: 0
+    )
+  )
+  guard case .accepted(let ordinaryText, _) = ordinary else {
+    Issue.record("Case-only capitalization must not create protected names")
+    return
+  }
+  #expect(ordinaryText == "SEND WORD WITH LAST.")
+
+  let realName = validator.validate(
+    candidate: "I SAW TONY.",
+    against: .init(
+      baseline: "I saw Tony",
+      protectedForms: [],
+      replacements: 0
+    )
+  )
+  guard case .accepted(let nameText, _) = realName else {
+    Issue.record("A real name must remain protected while case changes")
+    return
+  }
+  #expect(nameText == "I SAW TONY.")
+
+  #expect(
+    validator.validate(
+      candidate: "I SAW TONYX.",
+      against: .init(baseline: "I saw Tony", protectedForms: [], replacements: 0)
+    ) == .rejected(.protectedContentChanged)
+  )
+  #expect(
+    validator.validate(
+      candidate: "SEND $21.",
+      against: .init(baseline: "send $20", protectedForms: [], replacements: 0)
+    ) == .rejected(.numberMeaningChanged)
+  )
+  #expect(
+    validator.validate(
+      candidate: "DO SEND.",
+      against: .init(baseline: "do not send", protectedForms: [], replacements: 0)
+    ) == .rejected(.protectedContentChanged)
+  )
 }
 
 @Test func faithfulValidatorKeepsOrdinalSuffixWordsInTheOrdinaryAcceptanceMatrix() {
@@ -732,9 +797,17 @@ struct FaithfulCleanupValidator: Sendable {
       from: candidate,
       protectedForms: resolution.protectedForms
     )
+    guard let comparableCandidateSpans = reconcileCaseOnlyNameSpans(
+      baseline: baselineSpans,
+      candidate: candidateSpans,
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes,
+      baselineValues: baselineValues,
+      candidateValues: candidateValues
+    ) else { return .rejected(.protectedContentChanged) }
     guard protectedSpansMatch(
       baselineSpans,
-      candidateSpans,
+      comparableCandidateSpans,
       ordinalMarkerPairs: ordinalMarkerPairs
     ) else { return .rejected(.protectedContentChanged) }
 
@@ -1069,7 +1142,8 @@ struct FaithfulCleanupValidator: Sendable {
     let previous = adjacentNonWhitespace(-1)
     let next = adjacentNonWhitespace(1)
     if let previous,
-       previous.original == "(", !original.hasPrefix("(") {
+       ["(", ")"].contains(previous.original),
+       !(openCount > 0 && closeCount > 0) {
       return nil
     }
     if let next {
@@ -1330,6 +1404,89 @@ struct FaithfulCleanupValidator: Sendable {
     return (1...5).contains(number) ? number : nil
   }
 
+  private struct NameOccurrence: Hashable {
+    let lexicalOrdinal: Int
+    let canonical: String
+  }
+
+  private static func singleNameOccurrence(
+    _ span: CleanupProtectedSpan,
+    in lexemes: [CleanupLexeme]
+  ) -> NameOccurrence? {
+    guard span.category == .name,
+          span.lexemeRange.count == 1,
+          let index = span.lexemeRange.first,
+          lexemes.indices.contains(index),
+          lexemes[index].isLexical else { return nil }
+    let lexicalOrdinal = lexemes[..<index].reduce(into: 0) { count, lexeme in
+      if lexeme.isLexical { count += 1 }
+    }
+    return .init(
+      lexicalOrdinal: lexicalOrdinal,
+      canonical: lexemes[index].canonical
+    )
+  }
+
+  private static func lexicalIndex(
+    atOrdinal ordinal: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Int? {
+    guard ordinal >= 0 else { return nil }
+    var currentOrdinal = 0
+    for index in lexemes.indices where lexemes[index].isLexical {
+      if currentOrdinal == ordinal { return index }
+      currentOrdinal += 1
+    }
+    return nil
+  }
+
+  private static func reconcileCaseOnlyNameSpans(
+    baseline: [CleanupProtectedSpan],
+    candidate: [CleanupProtectedSpan],
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme],
+    baselineValues: [String],
+    candidateValues: [String]
+  ) -> [CleanupProtectedSpan]? {
+    guard baselineValues == candidateValues else { return candidate }
+
+    let baselineNames = Set(
+      baseline.compactMap { singleNameOccurrence($0, in: baselineLexemes) }
+    )
+    let candidateNames = Set(
+      candidate.compactMap { singleNameOccurrence($0, in: candidateLexemes) }
+    )
+    guard baselineNames.isSubset(of: candidateNames) else { return nil }
+
+    return candidate.filter { span in
+      guard let occurrence = singleNameOccurrence(span, in: candidateLexemes) else {
+        return true
+      }
+      guard !baselineNames.contains(occurrence) else { return true }
+      guard baselineValues.indices.contains(occurrence.lexicalOrdinal),
+            candidateValues.indices.contains(occurrence.lexicalOrdinal),
+            baselineValues[occurrence.lexicalOrdinal]
+              == candidateValues[occurrence.lexicalOrdinal],
+            candidateValues[occurrence.lexicalOrdinal] == occurrence.canonical else {
+        return true
+      }
+      guard let baselineIndex = lexicalIndex(
+              atOrdinal: occurrence.lexicalOrdinal,
+              in: baselineLexemes
+            ),
+            let candidateIndex = span.lexemeRange.first,
+            candidateLexemes.indices.contains(candidateIndex),
+            baselineLexemes[baselineIndex].canonical == occurrence.canonical,
+            baselineLexemes[baselineIndex].original
+              != candidateLexemes[candidateIndex].original,
+            baselineLexemes[baselineIndex].original.lowercased()
+              == candidateLexemes[candidateIndex].original.lowercased() else {
+        return true
+      }
+      return false
+    }
+  }
+
   private static func protectedSpansMatch(
     _ baseline: [CleanupProtectedSpan],
     _ candidate: [CleanupProtectedSpan],
@@ -1434,6 +1591,16 @@ category raw value, then raw lower/upper bounds, and compare every category and
 canonical lexeme occurrence with equal counts. This makes the baseline ordinal
 words (`first`/`second`) comparable to a candidate after its validated digit
 marker spans are removed without zipping incompatible original arrays.
+Before that comparison, when the ordered canonical lexical arrays are identical,
+`reconcileCaseOnlyNameSpans` maps each single-lexeme candidate `.name` span to
+its `(lexicalOrdinal, canonical)` occurrence in the baseline. It requires every
+baseline `.name` occurrence to have the same candidate occurrence and category,
+then filters only candidate-only `.name` spans whose matching baseline occurrence
+was not `.name` and whose raw lexeme differs only by case folding. It never filters a
+`.dictionary` span, a multi-lexeme protected span, or any span when lexical
+values differ; substitutions, reordering, and dictionary/name identity therefore
+remain protected. This keeps `send word with last` -> `SEND WORD WITH LAST.` and
+`I saw Tony` -> `I SAW TONY.` acceptable without making `Tony` -> `TONYX` safe.
 `isShortListFormatting` is only a presentation
 predicate; its sole numeric exception is
 `pairedOrdinalMarkersAreOnlyDifference`, which first validates the exact ordered
@@ -1473,7 +1640,8 @@ parenthesis spelling remains in the semantic signature (`$-20`, `(-$20)`,
 `₹20`, `$20`, `20%`, `1/2`, `10:30`, `10:30am`, `-3.5`, and `($20)`);
 unsupported digit-bearing sequences remain ambiguous.
 Before classifying any number, `numericRawContext(at:in:)` checks balanced
-parentheses, rejects a number adjacent to a dangling `(` or `)`, `/`, `:`, `%`, or
+parentheses, rejects a number adjacent to a preceding or following dangling
+`(` or `)`, `/`, `:`, `%`, or
 trailing sign/currency, and rejects incomplete affixes even when
 `CleanupLexeme` split the punctuation into separate raw lexemes. It performs one
 ordered raw-context walk in each direction: whitespace is skipped only while
@@ -1487,7 +1655,9 @@ trailing context punctuation is ambiguous. Thus the observable validator rejects
 `pay - 20` to `Pay 20.`, `pay $ : 20` to `Pay : 20.`, `pay + : 20` to
 `Pay : 20.`, `pay $ % 20` to `Pay % 20.`, `pay :20` to `Pay 20.`,
 `pay : 20` to `Pay 20.`, `pay %20` to `Pay 20.`, and `pay % 20` to
-`Pay 20.`; unchanged unsupported mixed forms also fail closed. The number's
+`Pay 20.`; it also rejects `send ) 20` and `send .)20` when the leading
+parenthesis is removed or retained. Unchanged unsupported mixed forms also fail
+closed. The number's
 semantic signature compares both the classified numeric form and the complete
 ordered context, so removing a detached sign/currency/separator or one member
 of a doubled or split affix cannot compare equal. Hyphen, colon, slash, or
