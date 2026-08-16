@@ -332,10 +332,17 @@ terminal session. This keeps concurrent callers behind the shared cleanup
 acknowledgement even if an unblocked finish has already marked terminal state.
 Concurrent finish callers await the same existing task; if cancellation wins
 before any finish task exists, the cancellation guard prevents new finalization
-work from starting. The processor test records the synchronous invalidation
-boundary, schedules `finish()` only after that event, and asserts that neither
-finalization nor source `finish()` starts; the separate source-blocking test
-proves early source cancellation unblocks an already-running finish.
+work from starting. A test-only finalization-start gate may hold an installed
+finalization task before it enters `finalizeBody`; the production default has no
+gate. `finalizeBody`'s first statement is `try Task.checkCancellation()`, before
+any source interaction. The pre-start test cancels two independent callers,
+releases the gate, and proves the check prevents `source.finish()` from
+starting after source cancellation has released Apple Speech; both callers wait
+for shared drain and the finish waiter throws `CancellationError`. The
+processor test also records the synchronous invalidation boundary, schedules
+`finish()` only after that event, and asserts that neither finalization nor
+source `finish()` starts; the separate source-blocking test proves early source
+cancellation unblocks an already-running finish.
 
 An empty final source transcript is a terminal
 `StreamingDictationProcessorError.noSpeech` failure. If cancellation unblocks
@@ -353,7 +360,10 @@ acknowledgement or force termination, and returns only after that acknowledgemen
 Its assertions do not require `cancel` to precede physical release. A separate
 concurrent blocked-finish test holds the first source-cancel callback until a
 second caller enters, proving both callers await one shared cancellation task.
-No result or update may publish in either phase.
+No result or update may publish in either phase. The pre-start finalization test
+is a distinct phase: it proves `source.finishCount == 0`, one source cancel,
+shared drain before both caller returns, and no product result for the
+coordinator to insert.
 
 `StreamingSpeechSource.cancel()` and `releaseResources()` must not synchronously
 await the owning session's `cancel()` from a dependency callback. They may
@@ -366,9 +376,12 @@ Cancellation must execute in this order:
 1. mark the capture cancelled and invalidate its generation;
 2. restore the focused editor's exact pre-capture transaction;
 3. await processing-session cancellation, which synchronously closes updates;
-   if source finish is still in flight, it calls the selected speech source's
-   `cancel()` early enough to unblock finish, otherwise it makes no second
-   source-terminal call, then cancels/awaits finalization and helper drain;
+   the session cancels the finalization task first; if its body has not entered
+   `finalizeBody`, releasing its test gate still makes the first
+   `Task.checkCancellation()` run before any source interaction. If source
+   finish is still in flight, it calls the selected speech source's `cancel()`
+   early enough to unblock finish, otherwise it makes no second source-terminal
+   call, then awaits finalization and helper drain;
 4. erase provisional transcript and in-memory audio buffers;
 5. remove provisional history work and release runtime scratch state;
 6. publish only `.cancelled` after the session's bounded helper
@@ -778,7 +791,9 @@ duplicate manifest paths fail before transport.
    and no network path.
    `StreamingDictationProcessorTests` also hold source finalization at a
    deterministic two-second gate and prove the stop-anchored cleanup and
-   insertion deadlines are not reset after the source returns.
+   insertion deadlines are not reset after the source returns. A separate
+   finalization-start gate proves cancellation before `finalizeBody` prevents
+   any source finish call and leaves no result for insertion.
 4. **Runtime tests:** pure policy, scheduler, lease, lifecycle, memory-pressure,
    sleep, and mutation gates use deterministic sleepers and fake adapters. They
    do not claim a custom model is loaded.

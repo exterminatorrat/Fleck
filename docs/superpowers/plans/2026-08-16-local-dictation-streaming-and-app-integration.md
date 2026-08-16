@@ -58,6 +58,13 @@ replay/archive buffer is introduced.
   physical release. The session records one logical source terminalization,
   and every independent concurrent caller awaits that same cancellation task
   before returning.
+- A finalization task may be held at a test-only `finalizationStartGate`
+  before entering `finalizeBody`; the production default is nil. The first
+  statement of `finalizeBody` is `try Task.checkCancellation()`, before any
+  source interaction. Cancellation therefore cancels the held task, performs
+  the one applicable source cancellation, and can release the gate without
+  allowing `source.finish()` to start after the Apple Speech session was
+  released.
 - Coordinator cancellation marks the capture cancelled and invalidates its
   generation first, restores the focused editor transaction second, and only
   then awaits processing-session cancellation or legacy source cancellation and
@@ -962,8 +969,28 @@ private actor FoundationModelOperationProbe {
 }
 
 @MainActor
+private final class FinalizationStartGate {
+  private(set) var entered = false
+  private var released = false
+
+  func wait() async {
+    entered = true
+    while !released { await Task.yield() }
+  }
+
+  func waitUntilEntered() async {
+    while !entered { await Task.yield() }
+  }
+
+  func release() {
+    released = true
+  }
+}
+
+@MainActor
 private func makeProcessor(
   source: any StreamingSpeechSource,
+  finalizationStartGate: (@MainActor @Sendable () async -> Void)? = nil,
   onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil,
   onCancellationDrained: (@MainActor @Sendable () -> Void)? = nil
 ) -> StreamingDictationProcessor {
@@ -983,6 +1010,7 @@ private func makeProcessor(
     runtime: nil,
     clock: TestDictationClock.immediate,
     budget: .production,
+    finalizationStartGate: finalizationStartGate,
     onCancellationInvalidated: onCancellationInvalidated,
     onCancellationDrained: onCancellationDrained
   )
@@ -1301,6 +1329,69 @@ func concurrentCancelCallersShareOneTaskDuringBlockedFinish() async throws {
   #expect(cancelIndex < secondEntryIndex)
   #expect(physicalReleaseIndex < firstReturnIndex)
   #expect(physicalReleaseIndex < secondReturnIndex)
+  #expect(sharedDrainIndex < firstReturnIndex)
+  #expect(sharedDrainIndex < secondReturnIndex)
+}
+
+@Test @MainActor
+func cancellingBeforeFinalizationBodyStartsSkipsSourceFinish() async throws {
+  let order = CancellationDrainRecorder()
+  let gate = FinalizationStartGate()
+  let source = StreamingSpeechSourceProbe(
+    onCancel: {
+      await order.append(.sourceCancelStarted)
+      await order.waitUntil(.secondCallerEntered)
+    },
+    onPhysicalRelease: { await order.append(.sourcePhysicalRelease) }
+  )
+  let processor = makeProcessor(
+    source: source,
+    finalizationStartGate: { await gate.wait() },
+    onCancellationDrained: { order.append(.sharedDrainCompleted) }
+  )
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ))
+  let updates = Task {
+    try await session.updates.reduce(into: [DictationTextUpdate]()) {
+      $0.append($1)
+    }
+  }
+  let finalization = Task { try await session.finish() }
+  await gate.waitUntilEntered()
+  #expect(source.finishCount == 0)
+
+  let first = Task {
+    await session.cancel()
+    await order.append(.firstCallerReturned)
+  }
+  await order.waitUntil(.sourceCancelStarted)
+  let second = Task {
+    await order.append(.secondCallerEntered)
+    await session.cancel()
+    await order.append(.secondCallerReturned)
+  }
+  await order.waitUntil(.secondCallerEntered)
+  gate.release()
+
+  await first.value
+  await second.value
+  await #expect(throws: CancellationError.self) { try await finalization.value }
+
+  #expect(source.finishStarted == false)
+  #expect(source.finishCount == 0)
+  #expect(source.cancelCount == 1)
+  #expect(source.sourceTerminalizationCount == 1)
+  #expect(source.physicalReleaseCount == 1)
+  #expect(try await updates.value.isEmpty)
+  let events = order.events
+  let sharedDrainIndex = try #require(
+    events.firstIndex(of: .sharedDrainCompleted)
+  )
+  let firstReturnIndex = try #require(events.firstIndex(of: .firstCallerReturned))
+  let secondReturnIndex = try #require(events.firstIndex(of: .secondCallerReturned))
   #expect(sharedDrainIndex < firstReturnIndex)
   #expect(sharedDrainIndex < secondReturnIndex)
 }
@@ -2120,6 +2211,19 @@ cancellation occurs early enough to unblock finish; the session then awaits
 finalization and helper drain before terminal cancellation returns, without a
 double physical release.
 
+`FinalizationStartGate` is a test-only gate passed through
+`makeProcessor(finalizationStartGate:)`; the production initializer defaults it
+to nil. The pre-start race test waits until `finish()` has installed its
+finalization task and entered the gate, then starts two independent cancellation
+callers. The first cancellation cancels the held task and calls source
+`cancel()` once; the second caller enters while that shared task is held. After
+the test releases the gate, `finalizeBody` observes cancellation as its first
+statement, so `source.finishCount == 0`, the finish waiter throws
+`CancellationError`, both callers return only after `sharedDrainCompleted`, and
+no update or product result exists for the coordinator to insert. This test is
+separate from the blocked-finish nil-return race: there, `source.finish()` has
+already started and cancellation must unblock it.
+
 When initialized with `finishBlocksUntilRelease: true`, the probe marks
 `finishStarted` and holds `finish()` at its deterministic release gate without
 completing or physically releasing. The deadline test supplies
@@ -2144,6 +2248,7 @@ final class StreamingDictationProcessor: DictationProcessing {
 
   private let clock: DictationClock
   private let budget: DictationProcessingBudget
+  private let finalizationStartGate: (@MainActor @Sendable () async -> Void)?
   private let onCancellationInvalidated: (@MainActor @Sendable () -> Void)?
   private let onCancellationDrained: (@MainActor @Sendable () -> Void)?
 
@@ -2154,6 +2259,7 @@ final class StreamingDictationProcessor: DictationProcessing {
     runtime: LocalDictationRuntime?,
     clock: DictationClock = .live,
     budget: DictationProcessingBudget = .production,
+    finalizationStartGate: (@MainActor @Sendable () async -> Void)? = nil,
     onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil,
     onCancellationDrained: (@MainActor @Sendable () -> Void)? = nil
   )
@@ -2179,6 +2285,7 @@ final class StreamingDictationProcessor: DictationProcessing {
         runtime: runtime,
         clock: clock,
         budget: budget,
+        finalizationStartGate: finalizationStartGate,
         onCancellationInvalidated: onCancellationInvalidated,
         onCancellationDrained: onCancellationDrained
       )
@@ -2206,6 +2313,7 @@ final class StreamingDictationSession: DictationProcessingSession {
   private let cleaner: IncrementalTranscriptCleaner
   private let clock: DictationClock
   private let budget: DictationProcessingBudget
+  private let finalizationStartGate: (@MainActor @Sendable () async -> Void)?
   private let onCancellationInvalidated: (@MainActor @Sendable () -> Void)?
   private let onCancellationDrained: (@MainActor @Sendable () -> Void)?
   private var finalizationTask: Task<DictationProcessingResult, Error>?
@@ -2229,6 +2337,7 @@ final class StreamingDictationSession: DictationProcessingSession {
     runtime: LocalDictationRuntime?,
     clock: DictationClock,
     budget: DictationProcessingBudget,
+    finalizationStartGate: (@MainActor @Sendable () async -> Void)? = nil,
     onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil,
     onCancellationDrained: (@MainActor @Sendable () -> Void)? = nil
   )
@@ -2252,6 +2361,9 @@ final class StreamingDictationSession: DictationProcessingSession {
     )
     let task = Task { @MainActor [weak self] in
       guard let self else { throw CancellationError() }
+      if let finalizationStartGate = self.finalizationStartGate {
+        await finalizationStartGate()
+      }
       return try await self.runFinalization(deadline: deadline)
     }
     finalizationTask = task
@@ -2324,7 +2436,10 @@ final class StreamingDictationSession: DictationProcessingSession {
 
 private func finalizeBody(
   deadline: DictationDeadline
-  ) async throws -> DictationProcessingResult
+  ) async throws -> DictationProcessingResult {
+  try Task.checkCancellation()
+  // The source-terminalization block below is the next body operation.
+}
 }
 ~~~
 
@@ -2382,10 +2497,13 @@ once before rethrowing.
 `StreamingDictationSession` owns one already-started source, state, generation
 counter, stream continuation, one `finalizationTask`, one shared
 `cancellationTask`, a `SourceTerminalization` state, cancellation/terminal
-state, injected `DictationClock`, and `DictationProcessingBudget`. At `begin`,
-it records no deadline. At `finish`, the session installs exactly one
-finalization task; later callers await that same task. It first returns the
-existing task when present, then guards `isCancelled`, `isTerminal`, and
+state, injected `DictationClock`, `DictationProcessingBudget`, and an optional
+test-only `finalizationStartGate`. At `begin`, it records no deadline. At
+`finish`, the session installs exactly one finalization task; later callers
+await that same task. The task may await the test gate before entering
+`finalizeBody`, but the production default performs no extra wait or source
+interaction. It first returns the existing task when present, then guards
+`isCancelled`, `isTerminal`, and
 `cancellationTask == nil` before creating a new task, so a finish that began
 before cancellation shares the terminal task while cancel-before-finish cannot
 start new work. On the first accepted public `finish()` call, before storing or
@@ -2411,7 +2529,8 @@ let decision = try await cleaner.clean(request)
 
 `cleanupDeadline` is exactly
 `min(stopInstant + budget.cleanup, insertionDeadline)` (1,500 ms and 3,000 ms
-from the same stop boundary in production). `finalizeBody(deadline:)` calls
+from the same stop boundary in production). `finalizeBody(deadline:)` begins
+with `try Task.checkCancellation()` before any source interaction, then calls
 `source.finish()` exactly once and records `.finished` whether that source
 operation returns text or throws; source-finalization latency therefore consumes
 the remaining insertion budget and cannot reset either deadline. If cancellation
@@ -2457,8 +2576,12 @@ The successful and failed finish tests emit a late provisional callback and
 assert no update appears. The blocked nil-finish test asserts cancellation wins
 instead of `StreamingDictationProcessorError.noSpeech`, both shared-task
 callers return only after drain, and no update or insertion occurs. A
-deterministic race test waits for the invalidation callback before scheduling
-`finish()`, then proves source `finish` never starts after cancellation wins.
+deterministic pre-start race test holds the finalization task at its test gate,
+cancels two callers, releases the gate, and proves the first cancellation check
+prevents source `finish()` from starting. The separate invalidation-boundary
+test schedules `finish()` only after cancellation wins and also proves source
+`finish()` never starts. The blocked nil-finish and cleanup-phase tests remain
+separate phase-specific evidence.
 
 `TestDictationClock` supplies a fixed sequence of instants to the processor;
 `CleanupGeneratorProbe.requests` records the request. These tests never call
