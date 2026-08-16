@@ -227,11 +227,15 @@ rejected cleanup attempt selects exactly `PersonalDictionaryResolution.baseline`
 5. In focused mode the coordinator accepts only the active capture generation
    and calls `FocusedDictationEditing.updateFocusedDictation(provisionalText:)`.
    Smart Capture may expose levels/status but does not insert provisional text.
-6. On stop, the processing session finishes the existing Speech source exactly
-   once and obtains final raw ASR text. It resolves the personal dictionary
-   before constructing `IncrementalCleanupRequest`. At that finish boundary it
-   records `stopInstant`, creates `insertionDeadline = stopInstant + 3,000 ms`,
-   and gives cleanup `min(stopInstant + 1,500 ms, insertionDeadline)`.
+6. On stop, the processing session's first accepted public `finish()` entry
+   synchronously records `stopInstant` before creating or awaiting
+   finalization and before calling `source.finish()`. It creates
+   `insertionDeadline = stopInstant + 3,000 ms`; source-finalization latency
+   consumes that absolute stop-to-insertion budget. After the source returns,
+   it resolves the personal dictionary before constructing
+   `IncrementalCleanupRequest` and gives cleanup the absolute
+   `min(stopInstant + 1,500 ms, insertionDeadline)` deadline, never a reset
+   clock based on source-finalization completion.
 7. `IncrementalTranscriptCleaner` performs at most one bounded generation.
    `FaithfulCleanupValidator` compares the candidate with the dictionary
    baseline and protected spans. A valid candidate becomes `cleanedTranscript`;
@@ -592,8 +596,10 @@ surface, when an admitted descriptor exists, has one explicit `Install` action
 and shows exact identity, revision, license, checksums, download/installed size,
 and the descriptor-derived `supportedArchitectures` and `supportedLanguages`
 values. Those arrays are also part of the card's VoiceOver label/value or
-accessible child text. Built-in and failed states expose empty custom
-compatibility arrays; they never invent architecture or language claims.
+accessible child text. Built-in and failed states without a validated
+recommendation expose empty custom compatibility arrays; a failed phase with a
+validated recommendation retains the exact descriptor arrays. The UI never
+invents architecture or language claims.
 
 Hardware recommendation uses the checked `requiredCapacityBytes` staging
 requirement, not download bytes alone. The validated required capacity is bound
@@ -683,7 +689,8 @@ errors, and byte progress are Settings-only; `Sources/FleckApp/DictationCapsule.
 remains excluded from this workstream. Task 3's presentation tests assert the
 exact architecture/language strings alongside identity, revision, license,
 checksum, size, focus, and finite-progress evidence, plus empty compatibility
-values for built-in and failed snapshots.
+values for built-in or invalid/no-recommendation failures and retained exact
+values for recommended failures.
 The Task 3-owned `AdmittedModelSettingsPresentationTests` evidence is the
 source/UI proof for this card; unrelated DictationCapsule accessibility is not
 used as evidence.
@@ -735,6 +742,9 @@ duplicate manifest paths fail before transport.
    the exact `GenerationOptions.maximumResponseTokens` cap. Existing
    `AppleSpeechCapture` tests remain green and must prove on-device rejection
    and no network path.
+   `StreamingDictationProcessorTests` also hold source finalization at a
+   deterministic two-second gate and prove the stop-anchored cleanup and
+   insertion deadlines are not reset after the source returns.
 4. **Runtime tests:** pure policy, scheduler, lease, lifecycle, memory-pressure,
    sleep, and mutation gates use deterministic sleepers and fake adapters. They
    do not claim a custom model is loaded.
@@ -754,7 +764,12 @@ duplicate manifest paths fail before transport.
    transcript file, audio file, or late insertion is introduced by the vertical
    slice.
 7. **App packaging:** after every source task has parent verification and a
-   fresh Sol `ship`, the final parent preflights the real
+   fresh Sol `ship`, the final parent starts the shell checkpoint with
+   `set -euo pipefail`, fetches `origin main` read-only, and requires fetched
+   `origin/main`, local `main`, the current root HEAD, and pinned starting SHA
+   `ab886d9968e6c1ae088d18e085938bec8a80f7c9` to agree. A live `main` may
+   track `archive/main`, but `origin/main` is the operational content source.
+   It then preflights the real
    `/Users/harryjin/Fleck` checkout at exact root HEAD
    `ab886d9968e6c1ae088d18e085938bec8a80f7c9`, branch `main`, and status
    exactly ` M AGENTS.md`. It verifies the cumulative diff from that starting
@@ -763,7 +778,10 @@ duplicate manifest paths fail before transport.
    local `codex/...` branch at that exact SHA without merge/rebase/cherry-pick.
    It requires final SHA/branch, hash, diff, ancestry, unmerged-state, and
    ` M AGENTS.md` status to remain identical and aborts before packaging on any
-   mismatch. Only then run `./Scripts/build-fleck-app.sh` and inspect
+   mismatch. The full-suite command may continue after a nonzero exit only for
+   the one documented `AppStateTests.swift` viewport assertion `18.0 >= 48.0`,
+   classified from a bounded log after fail-fast is restored; every other
+   failure aborts. Only then run `./Scripts/build-fleck-app.sh` and inspect
    `/Users/harryjin/Fleck/.build/Fleck.app`. A bundle produced in an isolated
    worktree is not evidence for that exact path.
 8. **Operator microphone test:** a human launches the development app, grants

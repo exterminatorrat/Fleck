@@ -344,9 +344,12 @@ struct DictationDeadline: Sendable {
 Add the remaining enums/measurement/context values and the three protocols
 from the interface section. The processor receives `DictationClock` and
 `DictationProcessingBudget`; tests inject fixed instants and never read or
-sleep a production wall clock. The session creates `stopInstant` and
-`insertionDeadline = stopInstant + budget.insertion` together at finish, so
-cleanup is bounded by `min(stopInstant + budget.cleanup, insertionDeadline)`.
+sleep a production wall clock. The first accepted public `finish()` entry
+captures `stopInstant` synchronously before creating or awaiting its
+finalization task and before the source's `finish()` is called. It creates
+`insertionDeadline = stopInstant + budget.insertion` immediately; cleanup is
+bounded by the absolute `min(stopInstant + budget.cleanup, insertionDeadline)`
+even when source finalization consumes part of the insertion budget.
 Preserve current interfaces; do not add audio chunks or a second source
 abstraction.
 
@@ -957,6 +960,7 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     startError: StreamingSpeechSourceProbeError? = nil,
     finishError: StreamingSpeechSourceProbeError? = nil,
     finishBlocksUntilCancel: Bool = false,
+    finishBlocksUntilRelease: Bool = false,
     onCancel: (@MainActor @Sendable () async -> Void)? = nil,
     onPhysicalRelease: (@MainActor @Sendable () async -> Void)? = nil
   )
@@ -978,6 +982,9 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
   ) async throws
   func finish() async throws -> String?
   func cancel() async
+  // Test-only deterministic gate for source finalization latency. The test
+  // advances its injected clock, then calls this without sleeping.
+  func releaseFinish()
   // This hook is used for pre-start failure cleanup; finish/cancel own the
   // production physical release.
   func releaseResources() async
@@ -1174,6 +1181,7 @@ final class CancellationDrainRecorder {
 func concurrentCancelCallersShareOneTaskDuringBlockedFinish() async throws {
   let order = CancellationDrainRecorder()
   let source = StreamingSpeechSourceProbe(
+    finishBlocksUntilCancel: true,
     onCancel: {
       await order.append(.sourceCancelStarted)
       await order.waitUntil(.secondCallerEntered)
@@ -1350,18 +1358,18 @@ func processorUsesExactBaselineWhenCleanupIsRejected() async throws {
 }
 
 @Test @MainActor
-func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throws {
-  let start = TestDictationClock.fixedInstant
-  let stop = start.advanced(by: .seconds(2))
-  let clock = TestDictationClock(values: [stop])
-  let engine = SpeechEngineProbe(finalText: "send the report")
+func processorCapturesStopBeforeDelayedSourceFinalization() async throws {
+  let stop = TestDictationClock.fixedInstant
+  let sourceFinishedAt = stop.advanced(by: .seconds(2))
+  let clock = TestDictationClock(values: [stop, sourceFinishedAt])
+  let source = StreamingSpeechSourceProbe(finishBlocksUntilRelease: true)
   let generator = CleanupGeneratorProbe(result: "send the report")
   let cleaner = IncrementalTranscriptCleaner(
     generator: generator,
     clock: TestCleanupClock.immediate
   )
   let processor = StreamingDictationProcessor(
-    makeSource: { AppleSpeechStreamingAdapter(engine: engine) },
+    makeSource: { source },
     dictionaryResolver: DictionaryResolverProbe(
       resolution: .init(
         baseline: "send the report",
@@ -1380,10 +1388,20 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
     mode: .focused,
     recognitionContext: .englishDefault
   ))
-  _ = try await session.finish()
+  let finalization = Task { try await session.finish() }
+  await source.waitUntilFinishStarted()
+  #expect(source.finishCompleted == false)
 
-  #expect(await generator.requests.first?.deadline == start.advanced(by: .milliseconds(3500)))
+  // The second deterministic instant represents two seconds spent inside
+  // source.finish(). It is observed before releasing the source gate; no
+  // production wall clock or sleep is involved.
+  #expect(clock.now() == sourceFinishedAt)
+  source.releaseFinish()
+  _ = try await finalization.value
+
   #expect(await generator.requests.first?.deadline == stop.advanced(by: .milliseconds(1500)))
+  #expect(await generator.requests.first?.deadline != sourceFinishedAt.advanced(by: .milliseconds(1500)))
+  #expect(sourceFinishedAt.advanced(by: .seconds(1)) == stop.advanced(by: .seconds(3)))
 }
 
 @Test func foundationModelGeneratorReceivesTheCleanupDeadline() async throws {
@@ -1864,6 +1882,16 @@ cancellation occurs early enough to unblock finish; the session then awaits
 finalization and helper drain before terminal cancellation returns, without a
 double physical release.
 
+When initialized with `finishBlocksUntilRelease: true`, the probe marks
+`finishStarted` and holds `finish()` at its deterministic release gate without
+completing or physically releasing. The deadline test supplies
+`TestDictationClock(values: [stopInstant, sourceFinishedAt])`, observes the
+second instant after `finishStarted` to model two seconds of source
+finalization, then calls `releaseFinish()`. It asserts cleanup still receives
+`stopInstant + 1,500 ms`, not `sourceFinishedAt + 1,500 ms`, while the
+insertion deadline remains `stopInstant + 3,000 ms`; source finalization cannot
+reset either boundary.
+
 - [ ] **Step 5: Add the processor/session.**
 
 ~~~swift
@@ -1966,9 +1994,18 @@ final class StreamingDictationSession: DictationProcessingSession {
     guard !isCancelled, !isTerminal, cancellationTask == nil else {
       throw CancellationError()
     }
+    // Capture the stop boundary on the public finish entry before any task
+    // suspension and before source.finish() can consume the budget.
+    let stopInstant = clock.now()
+    let insertionDeadline = stopInstant.advanced(by: budget.insertion)
+    let deadline = DictationDeadline(
+      stopInstant: stopInstant,
+      insertionDeadline: insertionDeadline,
+      cleanupBudget: budget.cleanup
+    )
     let task = Task { @MainActor [weak self] in
       guard let self else { throw CancellationError() }
-      return try await self.runFinalization()
+      return try await self.runFinalization(deadline: deadline)
     }
     finalizationTask = task
     return try await task.value
@@ -2010,9 +2047,11 @@ final class StreamingDictationSession: DictationProcessingSession {
     markTerminal()
   }
 
-  private func runFinalization() async throws -> DictationProcessingResult {
+  private func runFinalization(
+    deadline: DictationDeadline
+  ) async throws -> DictationProcessingResult {
     do {
-      let result = try await finalizeBody()
+      let result = try await finalizeBody(deadline: deadline)
       markTerminal()
       return result
     } catch {
@@ -2028,7 +2067,9 @@ final class StreamingDictationSession: DictationProcessingSession {
     continuation.finish()
   }
 
-private func finalizeBody() async throws -> DictationProcessingResult
+private func finalizeBody(
+  deadline: DictationDeadline
+) async throws -> DictationProcessingResult
 }
 ~~~
 
@@ -2084,15 +2125,13 @@ finalization task; later callers await that same task. It first returns the
 existing task when present, then guards `isCancelled`, `isTerminal`, and
 `cancellationTask == nil` before creating a new task, so a finish that began
 before cancellation shares the terminal task while cancel-before-finish cannot
-start new work. The task
-records
-`stopInstant = clock.now()` exactly once, constructs
-`insertionDeadline = stopInstant.advanced(by: budget.insertion)` immediately,
-and passes both values to:
+start new work. On the first accepted public `finish()` call, before storing or
+awaiting the task and before `source.finish()`, it synchronously records
+`stopInstant = clock.now()`, constructs
+`insertionDeadline = stopInstant.advanced(by: budget.insertion)`, and passes
+the resulting absolute deadline to:
 
 ~~~swift
-let stopInstant = clock.now()
-let insertionDeadline = stopInstant.advanced(by: budget.insertion)
 let deadline = DictationDeadline(
   stopInstant: stopInstant,
   insertionDeadline: insertionDeadline,
@@ -2108,11 +2147,13 @@ let decision = try await cleaner.clean(request)
 ~~~
 
 `cleanupDeadline` is exactly
-`min(stopInstant + budget.cleanup, stopInstant + budget.insertion)` (1,500 ms
-and 3,000 ms in production). `finalizeBody` calls `source.finish()` exactly
-once and records `.finished` whether that source operation returns text or
-throws; if cancellation already claimed `.cancelled`, it does not claim a
-second logical terminalization. The production source's `finish()` owns its
+`min(stopInstant + budget.cleanup, insertionDeadline)` (1,500 ms and 3,000 ms
+from the same stop boundary in production). `finalizeBody(deadline:)` calls
+`source.finish()` exactly once and records `.finished` whether that source
+operation returns text or throws; source-finalization latency therefore consumes
+the remaining insertion budget and cannot reset either deadline. If cancellation
+already claimed `.cancelled`, it does not claim a second logical
+terminalization. The production source's `finish()` owns its
 physical release. Each provisional callback
 increments generation and publishes only an accepted `StreamingTranscriptState`
 update. `finish` calls source `finish` exactly once, rejects empty final text,
