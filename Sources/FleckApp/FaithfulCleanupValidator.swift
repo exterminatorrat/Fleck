@@ -538,6 +538,10 @@ struct FaithfulCleanupValidator: Sendable {
       return nil
     }
     if degreeUnitRange(at: index, in: lexemes) == nil,
+       degreeSymbolIndex(after: index, in: lexemes) != nil {
+      return nil
+    }
+    if degreeUnitRange(at: index, in: lexemes) == nil,
        hasNumericPunctuationBridge(at: index, in: lexemes) {
       return nil
     }
@@ -614,24 +618,30 @@ struct FaithfulCleanupValidator: Sendable {
     at index: Int,
     in lexemes: [CleanupLexeme]
   ) -> Range<Int>? {
-    let degreeIndex: Int
-    if index + 1 < lexemes.count,
-       lexemes[index + 1].kind == .punctuation,
-       lexemes[index + 1].original == "°" {
-      degreeIndex = index + 1
-    } else if index + 2 < lexemes.count,
-              lexemes[index + 1].kind == .whitespace,
-              lexemes[index + 2].kind == .punctuation,
-              lexemes[index + 2].original == "°" {
-      degreeIndex = index + 2
-    } else {
-      return nil
-    }
-    guard lexemes.indices.contains(degreeIndex + 1),
+    guard let degreeIndex = degreeSymbolIndex(after: index, in: lexemes),
+          lexemes.indices.contains(degreeIndex + 1),
           lexemes[degreeIndex + 1].kind == .word else {
       return nil
     }
     return index..<(degreeIndex + 2)
+  }
+
+  private static func degreeSymbolIndex(
+    after index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Int? {
+    if index + 1 < lexemes.count,
+       lexemes[index + 1].kind == .punctuation,
+       lexemes[index + 1].original == "°" {
+      return index + 1
+    }
+    if index + 2 < lexemes.count,
+       lexemes[index + 1].kind == .whitespace,
+       lexemes[index + 2].kind == .punctuation,
+       lexemes[index + 2].original == "°" {
+      return index + 2
+    }
+    return nil
   }
 
   private static func hasNumericPunctuationBridge(
@@ -690,16 +700,30 @@ struct FaithfulCleanupValidator: Sendable {
     while lexemes.indices.contains(cursor), lexemes[cursor].kind == .whitespace {
       cursor += 1
     }
-    var punctuationCount = 0
-    var hasNumericAffix = false
-    while lexemes.indices.contains(cursor), lexemes[cursor].kind == .punctuation {
-      punctuationCount += 1
-      hasNumericAffix = hasNumericAffix || isNumericAffixPunctuation(lexemes[cursor])
+    var hasNumericContext = false
+    while lexemes.indices.contains(cursor),
+          (lexemes[cursor].kind == .punctuation
+            || lexemes[cursor].kind == .whitespace
+            || lexemes[cursor].original == "/") {
+      if lexemes[cursor].kind == .punctuation {
+        hasNumericContext = hasNumericContext
+          || isNumericContextPunctuation(lexemes[cursor])
+          || lexemes[cursor].original == "°"
+      }
+      hasNumericContext = hasNumericContext || lexemes[cursor].original == "/"
       cursor += 1
     }
-    return hasNumericAffix || (punctuationCount > 0
+    if hasNumericContext { return true }
+
+    cursor = index
+    var punctuationCount = 0
+    while lexemes.indices.contains(cursor), lexemes[cursor].kind == .punctuation {
+      punctuationCount += 1
+      cursor += 1
+    }
+    return punctuationCount > 0
       && lexemes.indices.contains(cursor)
-      && lexemes[cursor].isLexical)
+      && lexemes[cursor].isLexical
   }
 
   private static func isNumericSign(_ character: Character) -> Bool {

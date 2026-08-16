@@ -190,6 +190,39 @@ import Testing
   }
 }
 
+@Test func faithfulValidatorRejectsNumericContextAfterKnownUnits() {
+  let validator = FaithfulCleanupValidator()
+  for base in ["send 20kg", "set 20 °C"] {
+    for suffix in ["%", "/", ":", "°"] {
+      for baseline in [base + suffix, base + " " + suffix, base + "! " + suffix] {
+        #expect(
+          validator.validate(
+            candidate: base,
+            against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+          ) == .rejected(.numberMeaningChanged)
+        )
+      }
+    }
+  }
+}
+
+@Test func faithfulValidatorRejectsIncompleteDegreeSuffixes() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    ("set 20°", "set 20"),
+    ("set 20°", "Set 20."),
+    ("set 20 °", "set 20"),
+    ("set 20 °", "Set 20.")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
+}
+
 @Test func faithfulValidatorDoesNotScanPastNearestCurrencyAffix() {
   let decision = FaithfulCleanupValidator().validate(
     candidate: "Pay! $ 20.",
