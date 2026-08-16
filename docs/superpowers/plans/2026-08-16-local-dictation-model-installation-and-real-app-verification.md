@@ -3503,8 +3503,8 @@ set -euo pipefail
 test "$(wc -c < "$full_suite_log" | tr -d ' ')" -le 1048576
 if (( full_suite_status != 0 )); then
   known_assertion_pattern='AppStateTests\.swift:916(:[0-9]+)?.*18\.0[[:space:]]*>=[[:space:]]*48\.0'
-  known_test_pattern='Test (?!run with 1 test in 0 suites).* failed after .* with 1 issue'
-  known_summary_pattern='Test run with 1 test in 0 suites failed .*with 1 issue'
+  known_test_pattern='Test (?!run with [1-9][0-9]* tests? in [1-9][0-9]* suites? failed).*(AppStateTests|AppState|viewport|Viewport).* failed after .* with 1 issue'
+  known_summary_pattern='Test run with [1-9][0-9]* tests? in [1-9][0-9]* suites? failed .*with 1 issue'
   known_assertion_records="$(rg -n -P "$known_assertion_pattern" "$full_suite_log" || true)"
   known_test_records="$(rg -n -P "$known_test_pattern" "$full_suite_log" || true)"
   known_summary_records="$(rg -n -P "$known_summary_pattern" "$full_suite_log" || true)"
@@ -3531,11 +3531,13 @@ in-progress-operation check aborts before the build. The full-suite command is
 the only temporarily non-fail-fast command: its output is captured in a
 bounded log, fail-fast is restored on the next line, and continuation is
 allowed only when the log contains exactly one `AppStateTests.swift:916`
-assertion containing `18.0 >= 48.0`, exactly one per-test record matching
-`Test ... failed after ... with 1 issue`, exactly one suite summary beginning
-`Test run with 1 test in 0 suites failed` and containing `with 1 issue`, and no
-other failure-related record. Any other nonzero suite result exits before the
-build. Run the build script exactly as committed; do not copy
+assertion containing `18.0 >= 48.0`, exactly one per-test record for the known
+AppState/viewport test matching `Test ... failed after ... with 1 issue`,
+exactly one suite summary matching `Test run with <positive> test(s) in
+<positive> suite(s) failed ... with 1 issue`, and no other failure-related
+record. The positive counts may be any full-suite counts; the one issue and
+one failed test record may not be relaxed to a one-test fixture. Any other
+nonzero suite result exits before the build. Run the build script exactly as committed; do not copy
 it, add another script, or use an isolated-worktree bundle as evidence. The
 primary may launch the app and inspect Settings, but must report only observed
 process and UI state.

@@ -35,13 +35,17 @@ replay/archive buffer is introduced.
   provisional state, cancellation generation, history, routing, insertion, and
   recovery presentation.
 - `StreamingDictationSession` owns one finalization task and one shared
-  `cancellationTask`. `finish()` installs finalization exactly once. On the
-  first actor-isolated `cancel()` turn, it marks `isCancelled`, invalidates the
-  generation, and closes updates synchronously before creating or storing the
-  shared cancellation task. A `finish()` that entered earlier returns the one
-  existing finalization task; otherwise it rejects when that invalidated state
-  or a stored cancellation task is already present, so cancellation cannot
-  race in a new finalization task. If source `finish()` is still blocked, the
+  `cancellationTask`. `finish()` installs finalization exactly once. On every
+  `cancel()` call, the session first checks for an existing stored
+  `cancellationTask` and awaits that exact task before inspecting terminal
+  state; only a caller that finds no stored task may return early for an
+  already-terminal session. The first cancellation caller then marks
+  `isCancelled`, invalidates the generation, and closes updates synchronously
+  before creating or storing the shared cancellation task. A `finish()` that
+  entered earlier returns the one existing finalization task; otherwise it
+  rejects when that invalidated state or a stored cancellation task is already
+  present, so cancellation cannot race in a new finalization task. If source
+  `finish()` is still blocked, the
   shared task calls the sole source's `cancel()` early enough to unblock it,
   then cancels and awaits finalization and the cleaner's bounded
   acknowledgement or force-termination path. If `finish()` has already
@@ -928,7 +932,8 @@ private actor FoundationModelResponderProbe {
 @MainActor
 private func makeProcessor(
   source: any StreamingSpeechSource,
-  onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil
+  onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil,
+  onCancellationDrained: (@MainActor @Sendable () -> Void)? = nil
 ) -> StreamingDictationProcessor {
   StreamingDictationProcessor(
     makeSource: { source },
@@ -946,7 +951,8 @@ private func makeProcessor(
     runtime: nil,
     clock: TestDictationClock.immediate,
     budget: .production,
-    onCancellationInvalidated: onCancellationInvalidated
+    onCancellationInvalidated: onCancellationInvalidated,
+    onCancellationDrained: onCancellationDrained
   )
 }
 
@@ -959,11 +965,13 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
   init(
     startError: StreamingSpeechSourceProbeError? = nil,
     finishError: StreamingSpeechSourceProbeError? = nil,
+    finalText: String? = "First",
     finishBlocksUntilCancel: Bool = false,
     finishBlocksUntilRelease: Bool = false,
     onCancel: (@MainActor @Sendable () async -> Void)? = nil,
     onPhysicalRelease: (@MainActor @Sendable () async -> Void)? = nil
   )
+  private let finalText: String?
   private(set) var startCount = 0
   private(set) var finishCount = 0
   private(set) var finishStarted = false
@@ -1050,6 +1058,23 @@ func successfulFinishUsesSourceOwnedTerminalizationWithoutSecondRelease() async 
   await session.cancel()
   #expect(source.cancelCount == 0)
   #expect(source.sourceTerminalizationCount == 1)
+  #expect(source.physicalReleaseCount == 1)
+}
+
+@Test @MainActor
+func emptyFinalTextThrowsStreamingProcessorNoSpeech() async throws {
+  let source = StreamingSpeechSourceProbe(finalText: nil)
+  let processor = makeProcessor(source: source)
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ))
+
+  await #expect(throws: StreamingDictationProcessorError.noSpeech) {
+    _ = try await session.finish()
+  }
+  #expect(source.finishCount == 1)
   #expect(source.physicalReleaseCount == 1)
 }
 
@@ -1163,6 +1188,7 @@ enum CancellationDrainEvent: Equatable {
   case sourceCancelStarted
   case sourcePhysicalRelease
   case helperAcknowledged
+  case sharedDrainCompleted
   case secondCallerEntered
   case firstCallerReturned
   case secondCallerReturned
@@ -1188,7 +1214,10 @@ func concurrentCancelCallersShareOneTaskDuringBlockedFinish() async throws {
     },
     onPhysicalRelease: { await order.append(.sourcePhysicalRelease) }
   )
-  let processor = makeProcessor(source: source)
+  let processor = makeProcessor(
+    source: source,
+    onCancellationDrained: { order.append(.sharedDrainCompleted) }
+  )
   let session = try await processor.begin(configuration: .init(
     captureID: UUID(),
     mode: .focused,
@@ -1228,11 +1257,16 @@ func concurrentCancelCallersShareOneTaskDuringBlockedFinish() async throws {
   let physicalReleaseIndex = try #require(
     events.firstIndex(of: .sourcePhysicalRelease)
   )
+  let sharedDrainIndex = try #require(
+    events.firstIndex(of: .sharedDrainCompleted)
+  )
   let firstReturnIndex = try #require(events.firstIndex(of: .firstCallerReturned))
   let secondReturnIndex = try #require(events.firstIndex(of: .secondCallerReturned))
   #expect(cancelIndex < secondEntryIndex)
   #expect(physicalReleaseIndex < firstReturnIndex)
   #expect(physicalReleaseIndex < secondReturnIndex)
+  #expect(sharedDrainIndex < firstReturnIndex)
+  #expect(sharedDrainIndex < secondReturnIndex)
 }
 
 @Test @MainActor
@@ -1866,8 +1900,10 @@ would put cancellation before an already-completed finish release; both the
 helper acknowledgement and the sole caller return are still observed after
 the source-owned finish release. The concurrent-caller test uses the separate
 blocked-finish phase: its first source-cancel callback waits until the second
-caller has entered, proving both callers await the one shared cancellation
-task, and both return only after the cancellation-owned physical release.
+caller has entered, then the session's `onCancellationDrained` callback records
+`sharedDrainCompleted`. Both caller return events must occur after that shared
+drain event, proving that terminal state cannot short-circuit the in-flight
+cancellation task; the cancellation-owned physical release is also observed.
 
 When initialized with `finishBlocksUntilCancel: true`, the same source probe
 marks `finishStarted`, waits inside `finish()` for `cancel()`, and then marks
@@ -1895,6 +1931,10 @@ reset either boundary.
 - [ ] **Step 5: Add the processor/session.**
 
 ~~~swift
+enum StreamingDictationProcessorError: Error, Equatable {
+  case noSpeech
+}
+
 @MainActor
 final class StreamingDictationProcessor: DictationProcessing {
   typealias SourceFactory =
@@ -1903,6 +1943,7 @@ final class StreamingDictationProcessor: DictationProcessing {
   private let clock: DictationClock
   private let budget: DictationProcessingBudget
   private let onCancellationInvalidated: (@MainActor @Sendable () -> Void)?
+  private let onCancellationDrained: (@MainActor @Sendable () -> Void)?
 
   init(
     makeSource: @escaping SourceFactory,
@@ -1911,7 +1952,8 @@ final class StreamingDictationProcessor: DictationProcessing {
     runtime: LocalDictationRuntime?,
     clock: DictationClock = .live,
     budget: DictationProcessingBudget = .production,
-    onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil
+    onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil,
+    onCancellationDrained: (@MainActor @Sendable () -> Void)? = nil
   )
 
   func prepare(for intent: DictationPreparationIntent) async
@@ -1935,7 +1977,8 @@ final class StreamingDictationProcessor: DictationProcessing {
         runtime: runtime,
         clock: clock,
         budget: budget,
-        onCancellationInvalidated: onCancellationInvalidated
+        onCancellationInvalidated: onCancellationInvalidated,
+        onCancellationDrained: onCancellationDrained
       )
     } catch {
       await source.releaseResources()
@@ -1962,6 +2005,7 @@ final class StreamingDictationSession: DictationProcessingSession {
   private let clock: DictationClock
   private let budget: DictationProcessingBudget
   private let onCancellationInvalidated: (@MainActor @Sendable () -> Void)?
+  private let onCancellationDrained: (@MainActor @Sendable () -> Void)?
   private var finalizationTask: Task<DictationProcessingResult, Error>?
   private var cancellationTask: Task<Void, Never>?
   private var isCancelled = false
@@ -1983,7 +2027,8 @@ final class StreamingDictationSession: DictationProcessingSession {
     runtime: LocalDictationRuntime?,
     clock: DictationClock,
     budget: DictationProcessingBudget,
-    onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil
+    onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil,
+    onCancellationDrained: (@MainActor @Sendable () -> Void)? = nil
   )
 
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
@@ -2012,11 +2057,11 @@ final class StreamingDictationSession: DictationProcessingSession {
   }
 
   func cancel() async {
-    guard !isTerminal else { return }
     if let cancellationTask {
       await cancellationTask.value
       return
     }
+    guard !isTerminal else { return }
     // This actor turn is the cancellation winner. No suspension occurs between
     // invalidation and storing the shared task.
     isCancelled = true
@@ -2044,6 +2089,7 @@ final class StreamingDictationSession: DictationProcessingSession {
       finalizationTask.cancel()
       _ = try? await finalizationTask.value
     }
+    onCancellationDrained?()
     markTerminal()
   }
 
@@ -2089,7 +2135,9 @@ do {
   }
   throw error
 }
-guard let rawText, !rawText.isEmpty else { throw DictationProcessingError.noSpeech }
+guard let rawText, !rawText.isEmpty else {
+  throw StreamingDictationProcessorError.noSpeech
+}
 ~~~
 
 If cancellation has already claimed `.cancelled`, this code is only the
@@ -2161,16 +2209,23 @@ resolves the dictionary before creating the request, and never calls the legacy
 cleaner. A cleaned candidate publishes `cleanedTranscript`; every
 unsafe/unavailable cleanup publishes `insertedText` equal to the exact
 baseline. A resolver failure publishes raw ASR recovery with no cleaner call.
-On the first actor-isolated `cancel()` turn, `isCancelled`, the generation, and
-the update continuation change synchronously; the test-only
-`onCancellationInvalidated` callback records that boundary. The method then
-creates and stores a `Task<Void, Never>` in `cancellationTask` without an
-intervening await. That shared task claims `.cancelled`, calls the sole
+On every `cancel()` call, the method first checks for and awaits an existing
+`cancellationTask`; it checks `isTerminal` only when no cancellation task is
+stored. This prevents a concurrent caller from returning merely because an
+unblocked finish marked the session terminal while the first cancellation
+caller still drains cleanup. Only the cancellation winner changes
+`isCancelled`, the generation, and the update continuation synchronously; the
+test-only `onCancellationInvalidated` callback records that boundary. The
+method then creates and stores a `Task<Void, Never>` in `cancellationTask`
+without an intervening await. That shared task claims `.cancelled`, calls the sole
 source's `cancel()` early enough to unblock an in-flight source `finish`,
 cancels the one finalization task, and awaits it. Production `cancel()` owns
 the physical release; the session does not call `releaseResources()` again.
-Later independent concurrent callers find the stored handle and await its
-value; they never return early. The awaited task propagates caller cancellation
+Later independent concurrent callers find the stored handle before terminal
+state and await its value; they never return early. The test-only
+`onCancellationDrained` callback records completion after finalization and the
+cleaner's bounded helper acknowledgement/force-termination path, immediately
+before terminal marking. The awaited task propagates caller cancellation
 into `IncrementalTranscriptCleaner`, so its helper acknowledgement or
 force-termination completes before terminal cancellation returns. No final
 result or update can publish after that boundary. `runFinalization` marks the

@@ -325,12 +325,21 @@ calls and only drains finalization/cleanup. In production,
 Speech session before returning, and the adapter forwards those operations
 without adding a physical release. Every independent concurrent caller awaits
 that same task before returning.
+Every `cancel()` first checks for and awaits an existing stored
+`cancellationTask`; only when no task exists may it return for an already
+terminal session. This keeps concurrent callers behind the shared cleanup
+acknowledgement even if an unblocked finish has already marked terminal state.
 Concurrent finish callers await the same existing task; if cancellation wins
 before any finish task exists, the cancellation guard prevents new finalization
 work from starting. The processor test records the synchronous invalidation
 boundary, schedules `finish()` only after that event, and asserts that neither
 finalization nor source `finish()` starts; the separate source-blocking test
 proves early source cancellation unblocks an already-running finish.
+
+An empty final source transcript is a terminal
+`StreamingDictationProcessorError.noSpeech` failure. It uses the same
+source-owned finish/cancel terminalization contract and cannot publish a
+result, update, or late insertion.
 
 The cancellation evidence is phase-specific. A blocked-finish test records
 source cancellation and physical release: cancellation wins, releases once,
@@ -800,11 +809,13 @@ duplicate manifest paths fail before transport.
    ` M AGENTS.md` status to remain identical and aborts before packaging on any
    mismatch. The full-suite command may continue after a nonzero exit only when
    its bounded log contains exactly the known `AppStateTests.swift:916` viewport
-   assertion `18.0 >= 48.0`, one Swift Testing per-test record of the form
-   `Test ... failed after ... with 1 issue`, and one suite summary beginning
-   `Test run with 1 test in 0 suites failed` and containing `with 1 issue`, with
-   no other failure, issue, error, crash, or unexpected record. Every other
-   failure aborts. Only then run `./Scripts/build-fleck-app.sh` and inspect
+   assertion `18.0 >= 48.0`, one known AppState/viewport Swift Testing
+   per-test record matching `Test ... failed after ... with 1 issue`, and one
+   suite summary matching `Test run with <positive> test(s) in <positive>
+   suite(s) failed ... with 1 issue`, with no other failure, issue, error,
+   crash, or unexpected record. The full-suite counts are not reduced to a one-test
+   fixture; exactly one known failed test record and one issue remain required.
+   Every other failure aborts. Only then run `./Scripts/build-fleck-app.sh` and inspect
    `/Users/harryjin/Fleck/.build/Fleck.app`. A bundle produced in an isolated
    worktree is not evidence for that exact path.
 8. **Operator microphone test:** a human launches the development app, grants
