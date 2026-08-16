@@ -52,6 +52,130 @@ import Testing
   #expect(nearMiss == .rejected(.ambiguousCorrection))
 }
 
+@Test func faithfulValidatorAllowsOnlyOneNewTerminalPunctuationForCommands() {
+  let validator = FaithfulCleanupValidator()
+  #expect(
+    validator.validate(
+      candidate: "Run printf foo.",
+      against: .init(baseline: "run printf foo", protectedForms: [], replacements: 0)
+    ) == .accepted(
+      text: "Run printf foo.",
+      operations: [.caseChange, .punctuation]
+    )
+  )
+
+  for (baseline, candidate) in [
+    ("run printf foo?", "Run printf foo!"),
+    ("run printf foo?", "Run printf foo"),
+    ("run printf foo", "Run printf foo!!")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.protectedContentChanged)
+    )
+  }
+}
+
+@Test func faithfulValidatorRequiresStrictShortListGrammarAndNormalizedItemCase() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    (
+      "I finished first, she finished second",
+      "I finished: 1. she finished: 2."
+    ),
+    (
+      "first item second",
+      "1. item\n2."
+    )
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
+
+  #expect(
+    validator.validate(
+      candidate: "1. Privacy Policy\n2. System Speed",
+      against: .init(
+        baseline: "first privacy policy second system speed",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == .accepted(
+      text: "1. Privacy Policy\n2. System Speed",
+      operations: [.formatList]
+    )
+  )
+}
+
+@Test func faithfulValidatorRejectsMalformedFullTokenNumericBoundaries() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    ("send 21st2 files", "Send 21st2 files."),
+    ("20=foo", "20 foo"),
+    ("20_foo", "20 foo"),
+    ("20`foo", "20 foo")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
+}
+
+@Test func faithfulValidatorRequiresDelimitedUnambiguousCorrections() {
+  let validator = FaithfulCleanupValidator()
+  #expect(
+    validator.validate(
+      candidate: "like blue",
+      against: .init(
+        baseline: "I actually like blue",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == .rejected(.ambiguousCorrection)
+  )
+  #expect(
+    validator.validate(
+      candidate: "blue",
+      against: .init(
+        baseline: "red. actually. blue",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == .rejected(.ambiguousCorrection)
+  )
+  #expect(
+    validator.validate(
+      candidate: "The color is blue.",
+      against: .init(
+        baseline: "The color is red, no, blue.",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == .accepted(
+      text: "The color is blue.",
+      operations: [.selectExplicitCorrection(removed: ["red"], kept: ["blue"])]
+    )
+  )
+}
+
+@Test func faithfulValidatorReportsPunctuationChangesAtLexicalPositions() {
+  #expect(
+    FaithfulCleanupValidator().validate(
+      candidate: "send report,",
+      against: .init(baseline: "send, report", protectedForms: [], replacements: 0)
+    ) == .accepted(text: "send report,", operations: [.punctuation])
+  )
+}
+
 @Test func faithfulValidatorProtectsNumbersAndNumberWordsBeforeCleanupEdits() {
   let numberWords = [
     "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",

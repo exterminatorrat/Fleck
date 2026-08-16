@@ -46,7 +46,6 @@ struct FaithfulCleanupValidator: Sendable {
       baselineLexemes: baselineLexemes,
       candidateLexemes: candidateLexemes
     )
-
     guard Self.numberMeaningIsPreserved(
       baselineLexemes: baselineLexemes,
       candidateLexemes: candidateLexemes
@@ -54,6 +53,12 @@ struct FaithfulCleanupValidator: Sendable {
       || ordinalMarkerPairs != nil else {
       return .rejected(.numberMeaningChanged)
     }
+
+    let correction = Self.explicitCorrection(
+      baselineLexemes,
+      candidateValues,
+      baselineValues
+    )
 
     guard PersonalDictionaryResolver.cleanupPreserves(
       resolution.protectedForms,
@@ -74,12 +79,14 @@ struct FaithfulCleanupValidator: Sendable {
       baselineLexemes: baselineLexemes,
       candidateLexemes: candidateLexemes,
       baselineValues: baselineValues,
-      candidateValues: candidateValues
+      candidateValues: candidateValues,
+      ordinalMarkerPairs: ordinalMarkerPairs
     ) else { return .rejected(.protectedContentChanged) }
     guard Self.protectedSpansMatch(
       baselineSpans,
       comparableCandidateSpans,
-      ordinalMarkerPairs: ordinalMarkerPairs
+      ordinalMarkerPairs: ordinalMarkerPairs,
+      correction: correction
     ) else { return .rejected(.protectedContentChanged) }
 
     if baselineValues == candidateValues {
@@ -98,9 +105,7 @@ struct FaithfulCleanupValidator: Sendable {
     ) {
       return .accepted(text: candidate, operations: [.deleteImmediateDuplicate(duplicate)])
     }
-    if let correction = Self.explicitCorrection(
-      baselineLexemes, candidateValues, baselineValues
-    ) {
+    if let correction {
       return .accepted(
         text: candidate,
         operations: [.selectExplicitCorrection(
@@ -182,6 +187,19 @@ struct FaithfulCleanupValidator: Sendable {
     let baselineRawRanges: [Range<Int>]
     let candidateRawRanges: [Range<Int>]
     let candidateNumberRawRanges: [Range<Int>]
+  }
+
+  private struct ExplicitCorrection: Equatable {
+    let removed: [String]
+    let kept: [String]
+    let markerCanonical: String
+    let markerRawRange: Range<Int>
+  }
+
+  private struct FormattingLexeme: Equatable {
+    let kind: CleanupLexemeKind
+    let lexicalAnchor: Int
+    let value: String
   }
 
   private struct NumericRawContext: Equatable {
@@ -270,6 +288,7 @@ struct FaithfulCleanupValidator: Sendable {
         if ["st", "nd", "rd", "th"].contains(suffix) {
           let range = index..<(index + 2)
           let classification: NumberClassification = validOrdinalSuffix(for: value, suffix: suffix)
+            && hasCompleteDigitOrdinalToken(after: range, in: lexemes)
             ? .digitOrdinal(value + suffix)
             : .ambiguous
           signatures.append(.init(
@@ -360,7 +379,9 @@ struct FaithfulCleanupValidator: Sendable {
     guard lexeme.kind == .code,
           lexeme.original.unicodeScalars.contains(where: CharacterSet.decimalDigits.contains)
     else { return false }
-    return lexeme.original.contains("(") || lexeme.original.contains(")")
+    return lexeme.original.contains {
+      ["(", ")", "=", "_", "`"].contains(String($0))
+    }
   }
 
   private static let unitWords: Set<String> = [
@@ -386,6 +407,22 @@ struct FaithfulCleanupValidator: Sendable {
       }
     }
     return suffix == expected
+  }
+
+  private static func hasCompleteDigitOrdinalToken(
+    after range: Range<Int>,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(range.upperBound) else { return true }
+    let next = lexemes[range.upperBound]
+    guard next.kind != .whitespace else { return true }
+    guard next.kind == .punctuation else { return false }
+    guard sentenceTerminalPunctuation.contains(next.original)
+      || [",", ";"].contains(next.original) else {
+      return false
+    }
+    guard lexemes.indices.contains(range.upperBound + 1) else { return true }
+    return lexemes[range.upperBound + 1].kind == .whitespace
   }
 
   private static func numericRawContext(
@@ -422,6 +459,17 @@ struct FaithfulCleanupValidator: Sendable {
         cursor += step
       }
       return step < 0 ? Array(context.reversed()) : context
+    }
+
+    if index > 0,
+       lexemes[index - 1].kind != .whitespace,
+       isNumericCodeBoundaryPunctuation(lexemes[index - 1]) {
+      return nil
+    }
+    if index + 1 < lexemes.count,
+       lexemes[index + 1].kind != .whitespace,
+       isNumericCodeBoundaryPunctuation(lexemes[index + 1]) {
+      return nil
     }
 
     let previous = adjacentNonWhitespace(-1)
@@ -471,6 +519,11 @@ struct FaithfulCleanupValidator: Sendable {
       return false
     }
     return isNumericSign(character) || isCurrencySymbol(character)
+  }
+
+  private static func isNumericCodeBoundaryPunctuation(_ lexeme: CleanupLexeme) -> Bool {
+    guard lexeme.kind == .punctuation, lexeme.original.count == 1 else { return false }
+    return ["(", ")", "/", ":", "%", "=", "_", "`"].contains(lexeme.original)
   }
 
   private static func isNumericSign(_ character: Character) -> Bool {
@@ -690,15 +743,19 @@ struct FaithfulCleanupValidator: Sendable {
 
   private static func singleNameOccurrence(
     _ span: CleanupProtectedSpan,
-    in lexemes: [CleanupLexeme]
+    in lexemes: [CleanupLexeme],
+    ignoring ignoredRawRanges: [Range<Int>] = []
   ) -> NameOccurrence? {
     guard span.category == .name,
           span.lexemeRange.count == 1,
           let index = span.lexemeRange.first,
           lexemes.indices.contains(index),
           lexemes[index].isLexical else { return nil }
-    let lexicalOrdinal = lexemes[..<index].reduce(into: 0) { count, lexeme in
-      if lexeme.isLexical { count += 1 }
+    let lexicalOrdinal = lexemes[..<index].enumerated().reduce(into: 0) { count, pair in
+      let (rawIndex, lexeme) = pair
+      if lexeme.isLexical && !ignoredRawRanges.contains(where: { $0.contains(rawIndex) }) {
+        count += 1
+      }
     }
     return .init(
       lexicalOrdinal: lexicalOrdinal,
@@ -708,11 +765,14 @@ struct FaithfulCleanupValidator: Sendable {
 
   private static func lexicalIndex(
     atOrdinal ordinal: Int,
-    in lexemes: [CleanupLexeme]
+    in lexemes: [CleanupLexeme],
+    ignoring ignoredRawRanges: [Range<Int>] = []
   ) -> Int? {
     guard ordinal >= 0 else { return nil }
     var currentOrdinal = 0
-    for index in lexemes.indices where lexemes[index].isLexical {
+    for index in lexemes.indices
+      where lexemes[index].isLexical
+        && !ignoredRawRanges.contains(where: { $0.contains(index) }) {
       if currentOrdinal == ordinal { return index }
       currentOrdinal += 1
     }
@@ -725,33 +785,62 @@ struct FaithfulCleanupValidator: Sendable {
     baselineLexemes: [CleanupLexeme],
     candidateLexemes: [CleanupLexeme],
     baselineValues: [String],
-    candidateValues: [String]
+    candidateValues: [String],
+    ordinalMarkerPairs: PairedOrdinalMarkerIndices?
   ) -> [CleanupProtectedSpan]? {
-    guard baselineValues == candidateValues else { return candidate }
+    guard baselineValues == candidateValues || ordinalMarkerPairs != nil else { return candidate }
+    let ignoredBaselineRawRanges = ordinalMarkerPairs?.baselineRawRanges ?? []
+    let ignoredCandidateRawRanges = ordinalMarkerPairs?.candidateRawRanges ?? []
+    let normalizedBaselineValues = removingRawRanges(
+      ignoredBaselineRawRanges,
+      from: baselineLexemes
+    ).filter(\.isLexical).map(\.canonical)
+    let normalizedCandidateValues = removingRawRanges(
+      ignoredCandidateRawRanges,
+      from: candidateLexemes
+    ).filter(\.isLexical).map(\.canonical)
+    guard normalizedBaselineValues == normalizedCandidateValues else { return candidate }
 
     let baselineNames = Set(
-      baseline.compactMap { singleNameOccurrence($0, in: baselineLexemes) }
+      baseline.compactMap {
+        singleNameOccurrence(
+          $0,
+          in: baselineLexemes,
+          ignoring: ignoredBaselineRawRanges
+        )
+      }
     )
     let candidateNames = Set(
-      candidate.compactMap { singleNameOccurrence($0, in: candidateLexemes) }
+      candidate.compactMap {
+        singleNameOccurrence(
+          $0,
+          in: candidateLexemes,
+          ignoring: ignoredCandidateRawRanges
+        )
+      }
     )
     guard baselineNames.isSubset(of: candidateNames) else { return nil }
 
     return candidate.filter { span in
-      guard let occurrence = singleNameOccurrence(span, in: candidateLexemes) else {
+      guard let occurrence = singleNameOccurrence(
+        span,
+        in: candidateLexemes,
+        ignoring: ignoredCandidateRawRanges
+      ) else {
         return true
       }
       guard !baselineNames.contains(occurrence) else { return true }
-      guard baselineValues.indices.contains(occurrence.lexicalOrdinal),
-            candidateValues.indices.contains(occurrence.lexicalOrdinal),
-            baselineValues[occurrence.lexicalOrdinal]
-              == candidateValues[occurrence.lexicalOrdinal],
-            candidateValues[occurrence.lexicalOrdinal] == occurrence.canonical else {
+      guard normalizedBaselineValues.indices.contains(occurrence.lexicalOrdinal),
+            normalizedCandidateValues.indices.contains(occurrence.lexicalOrdinal),
+            normalizedBaselineValues[occurrence.lexicalOrdinal]
+              == normalizedCandidateValues[occurrence.lexicalOrdinal],
+            normalizedCandidateValues[occurrence.lexicalOrdinal] == occurrence.canonical else {
         return true
       }
       guard let baselineIndex = lexicalIndex(
               atOrdinal: occurrence.lexicalOrdinal,
-              in: baselineLexemes
+              in: baselineLexemes,
+              ignoring: ignoredBaselineRawRanges
             ),
             let candidateIndex = span.lexemeRange.first,
             candidateLexemes.indices.contains(candidateIndex),
@@ -769,8 +858,14 @@ struct FaithfulCleanupValidator: Sendable {
   private static func protectedSpansMatch(
     _ baseline: [CleanupProtectedSpan],
     _ candidate: [CleanupProtectedSpan],
-    ordinalMarkerPairs: PairedOrdinalMarkerIndices?
+    ordinalMarkerPairs: PairedOrdinalMarkerIndices?,
+    correction: ExplicitCorrection?
   ) -> Bool {
+    let comparableBaseline = baseline.filter { span in
+      guard let correction,
+            correction.markerCanonical == "no" else { return true }
+      return !(span.category == .negation && span.lexemeRange == correction.markerRawRange)
+    }
     let exemptCandidateNumbers = ordinalMarkerPairs?.candidateNumberRawRanges ?? []
     let comparableCandidate = candidate.filter { span in
       guard span.category == .number else { return true }
@@ -785,22 +880,32 @@ struct FaithfulCleanupValidator: Sendable {
       }
       return left.lexemeRange.upperBound < right.lexemeRange.upperBound
     }
-    let orderedBaseline = baseline.sorted(by: stableOrder)
+    let orderedBaseline = comparableBaseline.sorted(by: stableOrder)
     let orderedCandidate = comparableCandidate.sorted(by: stableOrder)
     guard orderedBaseline.count == orderedCandidate.count else { return false }
     return zip(orderedBaseline, orderedCandidate).allSatisfy { baselineSpan, candidateSpan in
       baselineSpan.category == candidateSpan.category
-        && comparableProtectedLexemes(baselineSpan.canonicalLexemes)
-          == comparableProtectedLexemes(candidateSpan.canonicalLexemes)
+        && protectedSpanLexemesMatch(baselineSpan, candidateSpan)
     }
   }
 
-  private static func comparableProtectedLexemes(_ values: [String]) -> [String] {
-    var comparable = values
-    while let last = comparable.last, sentenceTerminalPunctuation.contains(last) {
-      comparable.removeLast()
+  private static func protectedSpanLexemesMatch(
+    _ baseline: CleanupProtectedSpan,
+    _ candidate: CleanupProtectedSpan
+  ) -> Bool {
+    guard baseline.category == .command else {
+      return baseline.canonicalLexemes == candidate.canonicalLexemes
     }
-    return comparable
+    if baseline.canonicalLexemes == candidate.canonicalLexemes { return true }
+    guard let baselineLast = baseline.canonicalLexemes.last,
+          !sentenceTerminalPunctuation.contains(baselineLast),
+          candidate.canonicalLexemes.count == baseline.canonicalLexemes.count + 1,
+          Array(candidate.canonicalLexemes.dropLast()) == baseline.canonicalLexemes,
+          let candidateLast = candidate.canonicalLexemes.last,
+          sentenceTerminalPunctuation.contains(candidateLast) else {
+      return false
+    }
+    return true
   }
 
   private static func equalLexicalOperations(
@@ -818,15 +923,34 @@ struct FaithfulCleanupValidator: Sendable {
     }) {
       operations.append(.caseChange)
     }
-    if baseline.filter({ $0.kind == .punctuation }).map(\.original)
-      != candidate.filter({ $0.kind == .punctuation }).map(\.original) {
+    if formattingLexemes(baseline, kind: .punctuation)
+      != formattingLexemes(candidate, kind: .punctuation) {
       operations.append(.punctuation)
     }
-    if baseline.filter({ $0.kind == .whitespace }).map(\.original)
-      != candidate.filter({ $0.kind == .whitespace }).map(\.original) {
+    if formattingLexemes(baseline, kind: .whitespace)
+      != formattingLexemes(candidate, kind: .whitespace) {
       operations.append(.whitespace)
     }
     return operations
+  }
+
+  private static func formattingLexemes(
+    _ lexemes: [CleanupLexeme],
+    kind: CleanupLexemeKind
+  ) -> [FormattingLexeme] {
+    var lexicalAnchor = 0
+    var result: [FormattingLexeme] = []
+    for lexeme in lexemes {
+      if lexeme.kind == kind {
+        result.append(.init(
+          kind: lexeme.kind,
+          lexicalAnchor: lexicalAnchor,
+          value: lexeme.original
+        ))
+      }
+      if lexeme.isLexical { lexicalAnchor += 1 }
+    }
+    return result
   }
 
   private static func isolatedFillerRemoval(
@@ -902,19 +1026,47 @@ struct FaithfulCleanupValidator: Sendable {
     _ baseline: [CleanupLexeme],
     _ candidateValues: [String],
     _ baselineValues: [String]
-  ) -> (removed: [String], kept: [String])? {
-    _ = baseline
-    var matches: [(removed: [String], kept: [String])] = []
+  ) -> ExplicitCorrection? {
+    let lexicalIndices = baseline.indices.filter { baseline[$0].isLexical }
+    let correctionDelimiters: Set<String> = [",", ";", ":", "-", "–", "—"]
+
+    func nearestNonWhitespace(_ index: Int, step: Int) -> Int? {
+      var cursor = index + step
+      while baseline.indices.contains(cursor) {
+        if baseline[cursor].kind != .whitespace { return cursor }
+        cursor += step
+      }
+      return nil
+    }
+
+    var matches: [ExplicitCorrection] = []
     for markerIndex in baselineValues.indices where correctionMarkers.contains(baselineValues[markerIndex]) {
-      guard markerIndex + 1 < baselineValues.count else { continue }
+      guard lexicalIndices.indices.contains(markerIndex),
+            markerIndex + 1 < baselineValues.count else { continue }
+      let markerRawIndex = lexicalIndices[markerIndex]
+      guard let previous = nearestNonWhitespace(markerRawIndex, step: -1),
+            let next = nearestNonWhitespace(markerRawIndex, step: 1),
+            baseline[previous].kind == .punctuation,
+            baseline[next].kind == .punctuation,
+            correctionDelimiters.contains(baseline[previous].original),
+            correctionDelimiters.contains(baseline[next].original) else {
+        continue
+      }
       let kept = Array(baselineValues[(markerIndex + 1)...])
-      guard !kept.isEmpty else { continue }
+      guard !kept.isEmpty,
+            kept.allSatisfy({ !correctionMarkers.contains($0) }) else { continue }
       for splitIndex in 0..<markerIndex {
         let prefix = Array(baselineValues[..<splitIndex])
         let removed = Array(baselineValues[splitIndex..<markerIndex])
         guard !removed.isEmpty,
+              removed.allSatisfy({ !correctionMarkers.contains($0) }),
               candidateValues == prefix + kept else { continue }
-        matches.append((removed, kept))
+        matches.append(.init(
+          removed: removed,
+          kept: kept,
+          markerCanonical: baselineValues[markerIndex],
+          markerRawRange: markerRawIndex..<(markerRawIndex + 1)
+        ))
       }
     }
     guard matches.count == 1 else { return nil }
@@ -930,31 +1082,6 @@ struct FaithfulCleanupValidator: Sendable {
     _ candidate: [CleanupLexeme],
     ordinalMarkerPairs: PairedOrdinalMarkerIndices
   ) -> Bool {
-    func startsItem(
-      _ range: Range<Int>,
-      in lexemes: [CleanupLexeme]
-    ) -> Bool {
-      var index = range.lowerBound - 1
-      var hasLineBreak = false
-      while index >= 0 {
-        if lexemes[index].kind == .whitespace {
-          hasLineBreak = hasLineBreak
-            || lexemes[index].original.contains("\n")
-            || lexemes[index].original.contains("\r")
-          index -= 1
-          continue
-        }
-        return hasLineBreak || lexemes[index].kind == .punctuation
-      }
-      return true
-    }
-
-    guard ordinalMarkerPairs.candidateRawRanges.allSatisfy({
-      startsItem($0, in: candidate)
-    }) else {
-      return false
-    }
-
     let baselineRemainder = removingRawRanges(
       ordinalMarkerPairs.baselineRawRanges,
       from: baseline
@@ -991,11 +1118,57 @@ struct FaithfulCleanupValidator: Sendable {
       }
       return (index..<(index + 2), index..<(index + 1))
     }
-    guard baseline.count == candidate.count, baseline.count >= 2 else { return nil }
+    guard baseline.count == candidate.count,
+          (2...5).contains(baseline.count),
+          let firstBaseline = baseline.first,
+          let firstCandidate = candidate.first,
+          startsShortList(at: firstBaseline, in: baselineLexemes),
+          startsShortList(at: firstCandidate.0, in: candidateLexemes),
+          markersHaveItems(baseline, in: baselineLexemes),
+          markersHaveItems(candidate.map(\.0), in: candidateLexemes),
+          candidate.dropFirst().allSatisfy({ marker in
+            isPrecededByLineBreak(marker.0, in: candidateLexemes)
+          }) else {
+      return nil
+    }
     return (
       baselineRawRanges: baseline,
       candidateRawRanges: candidate.map(\.0),
       candidateNumberRawRanges: candidate.map(\.1)
     )
+  }
+
+  private static func startsShortList(
+    at range: Range<Int>,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    lexemes[..<range.lowerBound].allSatisfy { $0.kind == .whitespace }
+  }
+
+  private static func isPrecededByLineBreak(
+    _ range: Range<Int>,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    var index = range.lowerBound - 1
+    while index >= 0, lexemes[index].kind == .whitespace {
+      if lexemes[index].original.contains("\n")
+        || lexemes[index].original.contains("\r") {
+        return true
+      }
+      index -= 1
+    }
+    return false
+  }
+
+  private static func markersHaveItems(
+    _ ranges: [Range<Int>],
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    ranges.enumerated().allSatisfy { offset, range in
+      let end = offset + 1 < ranges.count
+        ? ranges[offset + 1].lowerBound
+        : lexemes.count
+      return lexemes[range.upperBound..<end].contains(where: \.isLexical)
+    }
   }
 }
