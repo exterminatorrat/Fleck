@@ -210,6 +210,7 @@ import Testing
   #expect(session.resultCount == 0)
   #expect(session.requestCancellationCount == 1)
   #expect(session.acknowledgementCallCount == 1)
+  #expect(session.acknowledgementFinished)
   #expect(session.forceTerminateCount == 0)
 }
 
@@ -353,7 +354,12 @@ private enum TestCleanupClock {
       sleepUntil: { deadline in
         try await ContinuousClock().sleep(until: deadline)
       },
-      sleepFor: { _ in }
+      sleepFor: { _ in
+        while true {
+          try Task.checkCancellation()
+          await Task.yield()
+        }
+      }
     )
   }
 }
