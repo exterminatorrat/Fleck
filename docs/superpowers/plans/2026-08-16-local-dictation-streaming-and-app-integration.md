@@ -68,8 +68,11 @@ replay/archive buffer is introduced.
   `TranscriptCleaning.clean(_:)` after a processing result.
 - After cancellation, no update, result, history mutation, route, insertion, or
   recovery receipt may publish. Every guard is repeated after an `await`.
-- `FoundationModelDictation.cleanupResult(_:)` remains the Apple Foundation
-  Models/deterministic control. Workstream B adds only a bounded wrapper.
+- `FoundationModelDictation.cleanupResult(_:maximumOutputTokens:)` remains the
+  Apple Foundation Models/deterministic control. Workstream B threads the
+  bounded token count through its existing closure and the real
+  `GenerationOptions(maximumResponseTokens:)` request; it adds no retry or
+  second request.
 - The ordinary application path is model-free and does not load, download,
   select, log, persist, or route through custom models.
 - No Settings, installer, EnhancedModelManager, manifest, package, resource,
@@ -125,8 +128,12 @@ replay/archive buffer is introduced.
   generation/cancellation guards.
 - `Sources/FleckApp/FleckApp.swift` — construct the processor from the existing
   provider and an explicitly empty dictionary-entry provider.
+- `Sources/FleckApp/FoundationModelDictation.swift` — thread the bounded
+  cleanup token count into the existing Foundation Models request.
 - `Tests/FleckAppTests/DictationCoordinatorTests.swift` — both-path,
   provisional, result, and cancellation integration tests.
+- `Tests/FleckAppTests/FoundationModelDictationTests.swift` — update the
+  existing cleanup closure fixtures and prove the production cap boundary.
 
 ### Explicitly excluded
 
@@ -815,15 +822,19 @@ Sol `ship` gate. This remains a separate task from the runtime foundation.
 **Owned files:** Create
 `Sources/FleckApp/AppleSpeechStreamingAdapter.swift`,
 `Sources/FleckApp/FoundationModelCleanupGenerator.swift`,
-`Sources/FleckApp/StreamingDictationProcessor.swift`, and the three matching
-test files.
+`Sources/FleckApp/StreamingDictationProcessor.swift`; modify
+`Sources/FleckApp/FoundationModelDictation.swift`; and create or modify the
+four matching test files, including
+`Tests/FleckAppTests/FoundationModelDictationTests.swift`.
 
 **Excluded files:** Every other Workstream B path, especially
 `AppleSpeechCapture.swift`, `DictationCoordinator.swift`, `FleckApp.swift`,
-`EnhancedModelManager.swift`, Settings, manifests, and all model files.
+`EnhancedModelManager.swift`, Settings, manifests, and all model files except
+the existing `FoundationModelDictation.swift` control explicitly owned here.
 
-**Consumes:** `SpeechEngine`, Workstream B Tasks 1–3, and Workstream A Task 2's
-`IncrementalTranscriptCleaner`.
+**Consumes:** `SpeechEngine`, Workstream B Tasks 1–3, Workstream A Task 2's
+`IncrementalTranscriptCleaner`, and the existing
+`FoundationModelDictation.cleanupResult` control.
 
 **Produces:** `AppleSpeechStreamingAdapter`,
 `FoundationModelCleanupGenerator`, `StreamingDictationProcessor`,
@@ -853,6 +864,35 @@ func adapterForwardsSpeechCallbacksWithoutCreatingAudio() async throws {
   #expect(try await adapter.finish() == "First.")
   #expect(provisional == ["First"])
   #expect(engine.createdAudioSources == 0)
+}
+
+@Test
+func foundationModelDictationPassesMaximumOutputTokensToProductionBoundary() async {
+  let probe = FoundationModelCapProbe()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { prompt, maximumOutputTokens in
+      await probe.record(maximumOutputTokens)
+      return prompt.rawTranscript
+    },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = await dictation.cleanupResult(
+    "send the report",
+    maximumOutputTokens: 23
+  )
+
+  #expect(result.outcome == .cleaned)
+  #expect(await probe.maximumOutputTokens == 23)
+}
+
+private actor FoundationModelCapProbe {
+  private(set) var maximumOutputTokens: Int?
+
+  func record(_ value: Int) {
+    maximumOutputTokens = value
+  }
 }
 
 @MainActor
@@ -888,6 +928,7 @@ enum StreamingSpeechSourceProbeError: Error {
 final class StreamingSpeechSourceProbe: StreamingSpeechSource {
   init(
     startError: StreamingSpeechSourceProbeError? = nil,
+    finishError: StreamingSpeechSourceProbeError? = nil,
     finishBlocksUntilCancel: Bool = false,
     onCancel: (@MainActor @Sendable () async -> Void)? = nil,
     onRelease: (@MainActor @Sendable () async -> Void)? = nil
@@ -943,6 +984,54 @@ func beginReleasesTheSourceWhenStartFails() async {
     ))
   }
   #expect(source.startCount == 1)
+  #expect(source.releaseCount == 1)
+}
+
+@Test @MainActor
+func successfulFinishReleasesTheSourceExactlyOnceWithoutCancellingIt() async throws {
+  let source = StreamingSpeechSourceProbe()
+  let processor = makeProcessor(source: source)
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ))
+
+  _ = try await session.finish()
+  source.emitProvisional("late")
+
+  #expect(source.cancelCount == 0)
+  #expect(source.releaseCount == 1)
+  await session.cancel()
+  #expect(source.cancelCount == 1)
+  #expect(source.releaseCount == 1)
+}
+
+@Test @MainActor
+func failedFinishReleasesTheSourceExactlyOnceAndPublishesNoLateUpdate() async throws {
+  let source = StreamingSpeechSourceProbe(finishError: .failed)
+  let processor = makeProcessor(source: source)
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ))
+  let updates = Task {
+    try await session.updates.reduce(into: [DictationTextUpdate]()) {
+      $0.append($1)
+    }
+  }
+
+  await #expect(throws: StreamingSpeechSourceProbeError.failed) {
+    _ = try await session.finish()
+  }
+  source.emitProvisional("late")
+
+  #expect(source.cancelCount == 0)
+  #expect(source.releaseCount == 1)
+  #expect(try await updates.value.isEmpty)
+  await session.cancel()
+  #expect(source.cancelCount == 1)
   #expect(source.releaseCount == 1)
 }
 
@@ -1360,12 +1449,14 @@ func processorPassesMinCleanupAndInsertionDeadlineWithoutWallClock() async throw
 swift test --disable-automatic-resolution --no-parallel --filter AppleSpeechStreamingAdapterTests
 swift test --disable-automatic-resolution --no-parallel --filter FoundationModelCleanupGeneratorTests
 swift test --disable-automatic-resolution --no-parallel --filter StreamingDictationProcessorTests
+swift test --disable-automatic-resolution --no-parallel --filter FoundationModelDictationTests
 ~~~
 
 Expected failure: adapter, generator, processor, session, processor error,
 clock, budget, cleanup-deadline, finalization-task ownership, cancellation
-acknowledgement, four-method Foundation Model session, and publication-gate
-symbols do not exist.
+acknowledgement, four-method Foundation Model session, publication-gate
+symbols, and the bounded Foundation Models cleanup closure/request do not
+exist.
 
 ### Minimal implementation, green, and checkpoint
 
@@ -1405,8 +1496,11 @@ struct FoundationModelCleanupGenerator: BoundedCleanupGenerating {
     @Sendable (IncrementalCleanupRequest, Int) async throws -> String
 
   init(dictation: FoundationModelDictation) {
-    generate = { request, _ in
-      await dictation.cleanupResult(request.baseline).text
+    generate = { request, maximumOutputTokens in
+      await dictation.cleanupResult(
+        request.baseline,
+        maximumOutputTokens: maximumOutputTokens
+      ).text
     }
   }
 
@@ -1479,6 +1573,86 @@ private final class FoundationModelPublicationGate: @unchecked Sendable {
   func acknowledgement() async
 }
 ~~~
+
+Modify the existing `FoundationModelDictation` control in this task rather
+than introducing a second Foundation Models session. Its cleanup closure and
+entry point carry the cap, and every existing test fixture changes from
+`{ prompt in ... }` to `{ prompt, _ in ... }` unless it asserts the cap. Keep
+one injected `respond` call and preserve the deterministic local fallback:
+
+~~~swift
+struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
+  typealias CleanupGenerator =
+    @Sendable (FoundationModelCleanupPrompt, Int) async throws -> String
+
+  func cleanupResult(
+    _ rawTranscript: String,
+    maximumOutputTokens: Int = 128
+  ) async -> FoundationModelCleanupResult {
+    let localFallback = Self.localCleanup(rawTranscript)
+    guard osMajorVersion() >= 26 else {
+      return Self.fallbackResult(raw: rawTranscript, cleaned: localFallback)
+    }
+    do {
+      let cleaned = try await cleanupGenerator(
+        .init(rawTranscript: rawTranscript),
+        maximumOutputTokens
+      )
+      guard Self.isFaithful(cleaned, to: rawTranscript) else {
+        return Self.fallbackResult(raw: rawTranscript, cleaned: localFallback)
+      }
+      return .init(text: cleaned, outcome: .cleaned)
+    } catch {
+      return Self.fallbackResult(raw: rawTranscript, cleaned: localFallback)
+    }
+  }
+}
+
+private extension FoundationModelDictation {
+  static func generateCleanup(
+    _ prompt: FoundationModelCleanupPrompt,
+    _ maximumOutputTokens: Int
+  ) async throws -> String {
+    guard #available(macOS 26, *) else {
+      throw FoundationModelDictationError.unavailable
+    }
+    return try await generateCleanupOnCurrentOS(
+      prompt,
+      maximumOutputTokens: maximumOutputTokens
+    )
+  }
+}
+
+@available(macOS 26, *)
+private extension FoundationModelDictation {
+  static func generateCleanupOnCurrentOS(
+    _ prompt: FoundationModelCleanupPrompt,
+    maximumOutputTokens: Int
+  ) async throws -> String {
+    guard SystemLanguageModel.default.isAvailable else {
+      throw FoundationModelDictationError.unavailable
+    }
+    let session = LanguageModelSession(instructions: cleanupInstructions)
+    let options = GenerationOptions(
+      maximumResponseTokens: maximumOutputTokens
+    )
+    return try await session.respond(
+      to: prompt.rendered,
+      generating: GeneratedCleanup.self,
+      options: options
+    ).content.text
+  }
+}
+~~~
+
+The unavailable-platform overload has the same two parameters and throws the
+same unavailable error. `clean(_:)` calls `cleanupResult` with the fixed
+production cap, while the incremental processor passes its bounded request
+cap. The production-boundary test proves the caller's value reaches the
+closure; the shown `GenerationOptions(maximumResponseTokens:)` call proves the
+real Foundation Models request consumes it. There is one `respond` call, no
+retry, and the existing deadline/cancellation publication gate still owns the
+bounded session.
 
 Implement the gate with `NSLock` and one result continuation plus one
 acknowledgement continuation: `publish` stores the candidate, marks the gate
@@ -1609,6 +1783,7 @@ final class StreamingDictationSession: DictationProcessingSession {
   private var finalizationTask: Task<DictationProcessingResult, Error>?
   private var cancellationTask: Task<Void, Never>?
   private var isCancelled = false
+  private var isTerminal = false
   private var sourceCancellationRequested = false
   private var resourcesReleased = false
   private var generation: UInt64 = 0
@@ -1630,8 +1805,13 @@ final class StreamingDictationSession: DictationProcessingSession {
     if let finalizationTask {
       return try await finalizationTask.value
     }
-    guard !isCancelled, cancellationTask == nil else { throw CancellationError() }
-    let task = Task { try await self.finalize() }
+    guard !isCancelled, !isTerminal, cancellationTask == nil else {
+      throw CancellationError()
+    }
+    let task = Task { @MainActor [weak self] in
+      guard let self else { throw CancellationError() }
+      return try await self.runFinalization()
+    }
     finalizationTask = task
     return try await task.value
   }
@@ -1666,13 +1846,36 @@ final class StreamingDictationSession: DictationProcessingSession {
       finalizationTask.cancel()
       _ = try? await finalizationTask.value
     }
-    if !resourcesReleased {
-      resourcesReleased = true
-      await source.releaseResources()
+    await releaseSourceExactlyOnce()
+  }
+
+  private func runFinalization() async throws -> DictationProcessingResult {
+    do {
+      let result = try await finalizeBody()
+      markTerminal()
+      await releaseSourceExactlyOnce()
+      return result
+    } catch {
+      markTerminal()
+      await releaseSourceExactlyOnce()
+      throw error
     }
   }
 
-  private func finalize() async throws -> DictationProcessingResult
+  private func markTerminal() {
+    guard !isTerminal else { return }
+    isTerminal = true
+    generation &+= 1
+    continuation.finish()
+  }
+
+  private func releaseSourceExactlyOnce() async {
+    guard !resourcesReleased else { return }
+    resourcesReleased = true
+    await source.releaseResources()
+  }
+
+  private func finalizeBody() async throws -> DictationProcessingResult
 }
 ~~~
 
@@ -1685,17 +1888,22 @@ callbacks that arrive synchronously during start until the session takes
 ownership. If source start throws, `begin` awaits `releaseResources()` before
 rethrowing; a factory failure before a source exists has nothing to release.
 `StreamingSpeechSourceProbe` records start count, callback installation,
-release count, and emitted callbacks in the two lifecycle tests above.
+release count, and emitted callbacks in the two lifecycle tests above. Its
+`finishError` initializer input makes `finish()` throw after recording the
+attempt, while the normal probe returns its configured final text. The
+successful and failed terminal-path tests therefore assert `releaseCount == 1`
+before and after a later `session.cancel()`; success has `cancelCount == 0`
+until that later explicit cancellation, and failure has the same rule.
 
 `StreamingDictationSession` owns one already-started source, state, generation
 counter, stream continuation, one `finalizationTask`, one shared
-`cancellationTask`, cancellation state, injected `DictationClock`, and
-`DictationProcessingBudget`. At `begin`, it records no deadline. At `finish`,
-the session installs exactly one finalization task; later callers await that
-same task. It first returns the existing task when present, then guards both
-`isCancelled` and `cancellationTask == nil` before creating a new task, so a
-finish that began before cancellation shares the terminal task while
-cancel-before-finish cannot start new work. The task
+`cancellationTask`, cancellation/terminal state, injected `DictationClock`,
+and `DictationProcessingBudget`. At `begin`, it records no deadline. At
+`finish`, the session installs exactly one finalization task; later callers
+await that same task. It first returns the existing task when present, then
+guards `isCancelled`, `isTerminal`, and `cancellationTask == nil` before
+creating a new task, so a finish that began before cancellation shares the
+terminal task while cancel-before-finish cannot start new work. The task
 records
 `stopInstant = clock.now()` exactly once, constructs
 `insertionDeadline = stopInstant.advanced(by: budget.insertion)` immediately,
@@ -1738,10 +1946,17 @@ Later independent concurrent callers find the stored handle and await its
 value; they never return early. The awaited task propagates caller cancellation
 into `IncrementalTranscriptCleaner`, so its helper acknowledgement or
 force-termination completes before release returns. No final result or update
-can publish after that boundary. A state or source error closes without a late
-result. A deterministic race test waits for the invalidation callback before
-scheduling `finish()`, then proves source `finish` never starts after
-cancellation wins.
+can publish after that boundary. `runFinalization` marks the terminal state and
+calls `releaseSourceExactlyOnce()` on both success and thrown terminal error.
+Its do/catch is the async-safe deferred terminal owner; no separate terminal
+path performs an unguarded release.
+successful finish releases once without calling source `cancel`; a failed
+finish releases once, closes updates, and likewise does not call `cancel`
+unless the caller-cancellation path won. A later session cancellation sees the
+same release guard, so it cannot double-release. The successful and failed
+finish tests emit a late provisional callback and assert no update appears. A
+deterministic race test waits for the invalidation callback before scheduling
+`finish()`, then proves source `finish` never starts after cancellation wins.
 
 `TestDictationClock` supplies a fixed sequence of instants to the processor;
 `CleanupGeneratorProbe.requests` records the request. These tests never call
@@ -1764,7 +1979,7 @@ rejection, and adapter tests prove no second audio source.
 
 ~~~bash
 git diff --check
-! rg -n 'AVAudioEngine|installTap|SFSpeechRecognizer|SpeechAnalyzer|URLSession|FileHandle|Data\.write' Sources/FleckApp/AppleSpeechStreamingAdapter.swift Sources/FleckApp/FoundationModelCleanupGenerator.swift Sources/FleckApp/StreamingDictationProcessor.swift
+! rg -n 'AVAudioEngine|installTap|SFSpeechRecognizer|SpeechAnalyzer|URLSession|FileHandle|Data\.write' Sources/FleckApp/AppleSpeechStreamingAdapter.swift Sources/FleckApp/FoundationModelCleanupGenerator.swift Sources/FleckApp/StreamingDictationProcessor.swift Sources/FleckApp/FoundationModelDictation.swift
 git diff --
 worktree_inventory="$({
   git diff --name-only
@@ -1776,12 +1991,14 @@ test "$worktree_inventory" = "$(
     Sources/FleckApp/AppleSpeechStreamingAdapter.swift \
     Sources/FleckApp/FoundationModelCleanupGenerator.swift \
     Sources/FleckApp/StreamingDictationProcessor.swift \
+    Sources/FleckApp/FoundationModelDictation.swift \
     Tests/FleckAppTests/AppleSpeechStreamingAdapterTests.swift \
     Tests/FleckAppTests/FoundationModelCleanupGeneratorTests.swift \
     Tests/FleckAppTests/StreamingDictationProcessorTests.swift \
+    Tests/FleckAppTests/FoundationModelDictationTests.swift \
   | sort -u
 )"
-git add Sources/FleckApp/AppleSpeechStreamingAdapter.swift Sources/FleckApp/FoundationModelCleanupGenerator.swift Sources/FleckApp/StreamingDictationProcessor.swift Tests/FleckAppTests/AppleSpeechStreamingAdapterTests.swift Tests/FleckAppTests/FoundationModelCleanupGeneratorTests.swift Tests/FleckAppTests/StreamingDictationProcessorTests.swift
+git add Sources/FleckApp/AppleSpeechStreamingAdapter.swift Sources/FleckApp/FoundationModelCleanupGenerator.swift Sources/FleckApp/StreamingDictationProcessor.swift Sources/FleckApp/FoundationModelDictation.swift Tests/FleckAppTests/AppleSpeechStreamingAdapterTests.swift Tests/FleckAppTests/FoundationModelCleanupGeneratorTests.swift Tests/FleckAppTests/StreamingDictationProcessorTests.swift Tests/FleckAppTests/FoundationModelDictationTests.swift
 git commit -m "feat: compose Apple streaming dictation"
 ~~~
 
@@ -2121,26 +2338,24 @@ cleanup ordering, no post-cancel publication, and the absence of network,
 logging, persistence, and weights. Classify any inherited viewport failure with
 its exact assertion.
 
-## Final real-app verification checklist
+## Final real-app verification handoff
 
-After Workstream C completes its numbered tasks, the primary runs from the real checkout:
+Workstream B does not build or switch the separate real checkout. After Task 5
+parent verification and a fresh Sol `ship`, Workstream C owns the final root
+snapshot/branch/ancestry checkpoint, the serialized SwiftPM run,
+`./Scripts/build-fleck-app.sh`, and the exact
+`/Users/harryjin/Fleck/.build/Fleck.app` launch. The C checkpoint preserves the
+sole dirty root `AGENTS.md` byte-for-byte and aborts before packaging on any
+branch, accepted-SHA, unmerged-state, or extra-dirty-file mismatch.
 
-~~~bash
-cd /Users/harryjin/Fleck
-swift test --disable-automatic-resolution --no-parallel
-./Scripts/build-fleck-app.sh
-test -d /Users/harryjin/Fleck/.build/Fleck.app
-open /Users/harryjin/Fleck/.build/Fleck.app
-~~~
-
-The operator grants Microphone and Speech Recognition permissions, focuses a
-Fleck note, holds the existing dictation shortcut, and speaks a known sentence
-containing a filler, immediate repetition, a name/number/path, and punctuation.
-Record the observed provisional display, stable prefix, final insertion, and
-protected-content result. Cancel a second capture and record that no text or
-history entry appeared. Automated tests and a launched process do not constitute
-speech output evidence; the primary may launch the app but must not fabricate
-microphone words or cleanup results.
+The operator then grants Microphone and Speech Recognition permissions, focuses
+a Fleck note, holds the existing dictation shortcut, and speaks a known
+sentence containing a filler, immediate repetition, a name/number/path, and
+punctuation. Record the observed provisional display, stable prefix, final
+insertion, and protected-content result. Cancel a second capture and record
+that no text or history entry appeared. Automated tests and a launched process
+do not constitute speech output evidence; the primary may launch the app but
+must not fabricate microphone words or cleanup results.
 
 ## Authority boundary
 

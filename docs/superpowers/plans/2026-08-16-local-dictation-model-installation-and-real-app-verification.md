@@ -1064,6 +1064,47 @@ final class SynchronousCapacityProbe: @unchecked Sendable {
 }
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@MainActor
+final class TestManagerFixture {
+  let root: URL
+  let manager: EnhancedModelManager
+
+  init(
+    descriptor: AdmittedModelDescriptor,
+    artifactIdentity: EnhancedModelArtifactIdentity,
+    manifest: EnhancedModelManifest,
+    transport: any ModelDownloading,
+    refreshFixture: TestRefreshFixture? = nil,
+    capacityProvider: @escaping @Sendable () throws -> Int64 = { Int64.max },
+    architectureProvider: @escaping @Sendable () -> Bool = { true }
+  ) throws {
+    root = TestPaths.temporaryDirectory()
+    do {
+      let trustedManifests = try refreshFixture?.seed(
+        root: root,
+        current: manifest
+      ) ?? [manifest]
+      manager = EnhancedModelManager(
+        modelRootURL: root,
+        manifest: manifest,
+        trustedManifests: trustedManifests,
+        artifactIdentity: artifactIdentity,
+        candidateEnabled: true,
+        capacityProvider: capacityProvider,
+        architectureProvider: architectureProvider,
+        transport: transport
+      )
+    } catch {
+      try? FileManager.default.removeItem(at: root)
+      throw error
+    }
+  }
+
+  func cleanup() {
+    try? FileManager.default.removeItem(at: root)
+  }
+}
+
 enum TestManagers {
   @MainActor
   static func manager(
@@ -1076,17 +1117,71 @@ enum TestManagers {
       Int64.max
     },
     architectureProvider: @escaping @Sendable () -> Bool = { true }
-  ) -> EnhancedModelManager {
-    _ = refreshFixture
-    return EnhancedModelManager(
-      modelRootURL: TestPaths.temporaryDirectory(),
-      manifest: manifest,
+  ) throws -> TestManagerFixture {
+    try TestManagerFixture(
+      descriptor: descriptor,
       artifactIdentity: artifactIdentity,
-      candidateEnabled: true,
+      manifest: manifest,
+      transport: transport,
+      refreshFixture: refreshFixture,
       capacityProvider: capacityProvider,
-      architectureProvider: architectureProvider,
-      transport: transport
+      architectureProvider: architectureProvider
     )
+  }
+}
+
+enum TestRefreshFixture: Equatable {
+  case ready
+  case updateAvailable
+  case repairRequired
+
+  func seed(
+    root: URL,
+    current: EnhancedModelManifest
+  ) throws -> [EnhancedModelManifest] {
+    let fileManager = FileManager.default
+    let modelName = try #require(current.modelID.split(separator: "/").last)
+
+    func seedInstall(
+      _ manifest: EnhancedModelManifest,
+      bytes: Data
+    ) throws {
+      let repository = root
+        .appendingPathComponent("installed", isDirectory: true)
+        .appendingPathComponent(manifest.revision, isDirectory: true)
+        .appendingPathComponent(String(modelName), isDirectory: true)
+      try fileManager.createDirectory(
+        at: repository,
+        withIntermediateDirectories: true
+      )
+      let file = repository.appendingPathComponent(manifest.files[0].path)
+      try fileManager.createDirectory(
+        at: file.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+      )
+      try bytes.write(to: file, options: .atomic)
+      try JSONEncoder().encode(manifest).write(
+        to: repository.deletingLastPathComponent()
+          .appendingPathComponent("manifest.json"),
+        options: .atomic
+      )
+    }
+
+    switch self {
+    case .ready:
+      try seedInstall(current, bytes: TestFixtures.tinyBytes)
+      return [current]
+    case .updateAvailable:
+      let previous = TestManifests.make(
+        current,
+        revision: "previous-revision"
+      )
+      try seedInstall(previous, bytes: TestFixtures.tinyBytes)
+      return [current, previous]
+    case .repairRequired:
+      try seedInstall(current, bytes: Data("bad".utf8))
+      return [current]
+    }
   }
 }
 #endif
@@ -1128,15 +1223,14 @@ func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
   #expect(TestArtifacts.identity(matching: descriptor).files[0].byteCount == 8)
   #expect(TestArtifacts.identity(matching: descriptor).files[0].sha256 == TestFixtures.tinySHA256)
   let lifecycle = PhaseRecorder()
-  let manager = EnhancedModelManager(
-    modelRootURL: TestPaths.temporaryDirectory(),
-    manifest: TestManifests.tiny,
+  let fixture = try! TestManagers.manager(
+    descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
-    candidateEnabled: true,
-    capacityProvider: { Int64.max },
-    architectureProvider: { true },
+    manifest: TestManifests.tiny,
     transport: transport
   )
+  defer { fixture.cleanup() }
+  let manager = fixture.manager
   let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
     descriptor: descriptor,
@@ -1164,12 +1258,14 @@ func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
 @Test @MainActor
 func checksumFailureBecomesActionableRepairState() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
-  let manager = TestManagers.manager(
+  let fixture = try! TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
     manifest: TestManifests.tiny,
     transport: ModelDownloadingProbe(bytes: Data("corrupt!".utf8))
   )
+  defer { fixture.cleanup() }
+  let manager = fixture.manager
   let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
     descriptor: descriptor,
@@ -1184,30 +1280,26 @@ func checksumFailureBecomesActionableRepairState() async {
   #expect(message.contains("checksum"))
 }
 
-enum TestRefreshFixture: Equatable {
-  case ready
-  case updateAvailable
-  case repairRequired
-}
-
 @Test @MainActor
 func refreshMapsStaleStateWithoutStartingOperation() async throws {
-  let cases: [(TestRefreshFixture, AdmittedModelInstallPhase)] = [
-    (.ready, .ready),
-    (.updateAvailable, .updateAvailable),
-    (.repairRequired, .repairRequired(message: "Fixture requires repair"))
+  let cases: [TestRefreshFixture] = [
+    .ready,
+    .updateAvailable,
+    .repairRequired
   ]
 
-  for (refreshFixture, expectedPhase) in cases {
+  for refreshFixture in cases {
     let descriptor = TestDescriptors.tinyAdmittedASR
     let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-    let manager = TestManagers.manager(
+    let fixture = try TestManagers.manager(
       descriptor: descriptor,
       artifactIdentity: TestArtifacts.identity(matching: descriptor),
       manifest: TestManifests.tiny,
       transport: transport,
       refreshFixture: refreshFixture
     )
+    defer { fixture.cleanup() }
+    let manager = fixture.manager
     let installer = try EnhancedModelManagerInstaller(
       manager: manager,
       descriptor: descriptor,
@@ -1218,7 +1310,17 @@ func refreshMapsStaleStateWithoutStartingOperation() async throws {
     #expect(installer.snapshot.phase == .notInstalled)
     await installer.refresh()
 
-    #expect(installer.snapshot.phase == expectedPhase)
+    switch refreshFixture {
+    case .ready:
+      #expect(installer.snapshot.phase == .ready)
+    case .updateAvailable:
+      #expect(installer.snapshot.phase == .updateAvailable)
+    case .repairRequired:
+      guard case .repairRequired = installer.snapshot.phase else {
+        Issue.record("Expected the manager's filesystem repairRequired state")
+        continue
+      }
+    }
     #expect(transport.downloadCalls == 0)
     #expect(!installer.phaseHistory.contains {
       if case .downloading = $0 { return true }
@@ -1252,7 +1354,7 @@ func liveCapacityGateRejectsInstallRepairAndUpdateBeforeTransport() async {
   for (operation, refreshFixture) in operations {
     let capacity = SynchronousCapacityProbe(initialAvailableBytes)
     let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-    let manager = TestManagers.manager(
+    let fixture = try! TestManagers.manager(
       descriptor: descriptor,
       artifactIdentity: TestArtifacts.identity(matching: descriptor),
       manifest: TestManifests.tiny,
@@ -1260,6 +1362,8 @@ func liveCapacityGateRejectsInstallRepairAndUpdateBeforeTransport() async {
       refreshFixture: refreshFixture,
       capacityProvider: { capacity.read() }
     )
+    defer { fixture.cleanup() }
+    let manager = fixture.manager
     let installer = try! EnhancedModelManagerInstaller(
       manager: manager,
       descriptor: descriptor,
@@ -1290,12 +1394,14 @@ func cancellationPublishesCancelledAndCannotPublishInstalledLater() async {
     bytes: TestFixtures.tinyBytes,
     pausesUntilCancelled: true
   )
-  let manager = TestManagers.manager(
+  let fixture = try! TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
     manifest: TestManifests.tiny,
     transport: transport
   )
+  defer { fixture.cleanup() }
+  let manager = fixture.manager
   let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
     descriptor: descriptor,
@@ -1319,7 +1425,7 @@ func cancellationPublishesCancelledAndCannotPublishInstalledLater() async {
 func descriptorArtifactMismatchFailsBeforeTransport() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-  let manager = TestManagers.manager(
+  let fixture = try! TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identityWith(
       revision: "different-revision"
@@ -1327,6 +1433,8 @@ func descriptorArtifactMismatchFailsBeforeTransport() async {
     manifest: TestManifests.tiny,
     transport: transport
   )
+  defer { fixture.cleanup() }
+  let manager = fixture.manager
   #expect(throws: AdmittedModelArtifactMismatch.descriptorArtifactMismatch) {
     _ = try EnhancedModelManagerInstaller(
       manager: manager,
@@ -1412,12 +1520,14 @@ func artifactManifestMismatchesAreRejectedBeforeTransport() throws {
 func artifactManifestMismatchFailsBeforeTransport() {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-  let manager = TestManagers.manager(
+  let fixture = try! TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
     manifest: TestManifests.make(TestManifests.tiny, revision: "wrong"),
     transport: transport
   )
+  defer { fixture.cleanup() }
+  let manager = fixture.manager
   #expect(throws: AdmittedModelArtifactMismatch.artifactManifestMismatch) {
     _ = try EnhancedModelManagerInstaller(
       manager: manager,
@@ -1479,13 +1589,15 @@ func managerRejectsDuplicateNormalizedManifestPathsBeforeTransport() async {
     totalByteCount: 16
   )
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-  let manager = TestManagers.manager(
+  let fixture = try! TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
     manifest: duplicateManifest,
     transport: transport,
     capacityProvider: { Int64.max }
   )
+  defer { fixture.cleanup() }
+  let manager = fixture.manager
   do {
     try await manager.download()
     Issue.record("Duplicate normalized manifest paths unexpectedly downloaded")
@@ -1510,12 +1622,14 @@ func installerUpdatesExposeBytesBeforeCompletion() async {
     progressSequence: [4, 8, 8],
     pausesAfterFirstProgress: true
   )
-  let manager = TestManagers.manager(
+  let fixture = try! TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
     manifest: TestManifests.tiny,
     transport: transport
   )
+  defer { fixture.cleanup() }
+  let manager = fixture.manager
   let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
     descriptor: descriptor,
@@ -1582,12 +1696,14 @@ snapshot while installation is still blocked, then assert monotonic bytes and
 the exact total after the second snapshot. The only exception is the deliberate
 descriptor-mismatch fixture, which passes a different immutable identity to
 prove zero transport calls. `TestManagers.manager(descriptor:artifactIdentity:manifest:transport:)`
-has no default identity or manifest and constructs `EnhancedModelManager` with
-the supplied artifact identity and actual manifest; normal fixtures pass
-`TestArtifacts.identity(matching: descriptor)`, whose required capacity is
-copied exactly from the descriptor. Its override helper can change that field
-for the binding mismatch test, while the checksum fixture
-helper takes `descriptor:artifactIdentity:manifest:` in the same order.
+has no default identity or manifest and returns a `TestManagerFixture` whose
+`manager` is constructed with the supplied artifact identity and actual
+manifest. Every call site binds the fixture, uses `fixture.manager`, and
+defers `fixture.cleanup()`; cleanup removes only that fixture's temporary root.
+Normal fixtures pass `TestArtifacts.identity(matching: descriptor)`, whose
+required capacity is copied exactly from the descriptor. Its override helper
+can change that field for the binding mismatch test, while the checksum
+fixture helper takes `descriptor:artifactIdentity:manifest:` in the same order.
 `PhaseRecorder` proves startup follows
 the manager's `.ready` state and calibration follows startup. The manager's
 `@Published state` subscription maps `.verifying`, `.installing`, `.ready`,
@@ -1606,13 +1722,18 @@ seven-byte fixture hidden behind an eight-byte assertion.
 only `manager.refreshState()`, maps the final `manager.state`, and cancels that
 subscription before returning. It never creates an operation task, subscribes
 to byte progress, invokes transport, startup, or calibration, or publishes an
-installing phase. `TestRefreshFixture` seeds the real manager assessment root
-for `ready`, `updateAvailable`, or the exact `repairRequired` message; the
-test begins from the installer's stale `.notInstalled` snapshot and proves all
-three refresh outcomes without a download. The test-only
+installing phase. `TestRefreshFixture` seeds the real manager assessment root:
+`.ready` writes the current revision, manifest JSON, and checksum-valid
+eight-byte file; `.updateAvailable` writes a trusted previous revision with
+the same tiny file; and `.repairRequired` writes the current manifest with a
+wrong-size file. The manager therefore derives each state through its real
+`refreshState()` filesystem assessment, not a fake state setter. The test
+begins from the installer's stale `.notInstalled` snapshot and proves all three
+refresh outcomes without a download. The test-only
 `TestManagers.manager` signature is
 `descriptor:artifactIdentity:manifest:transport:refreshFixture:capacityProvider:architectureProvider:`;
-the first four labels and order remain mandatory for every manager fixture call.
+the first four labels and order remain mandatory for every manager fixture call,
+and every fixture's isolated root is explicitly cleaned by its owning test.
 Its test-only provider defaults are `Int64.max` and `true`; production and
 compatibility initializers retain the live-capacity and arm64 providers shown
 above.
@@ -2614,23 +2735,31 @@ func supportedHardware(
   )
 }
 
+struct SignedTestConfiguration {
+  let value: AdmittedModelSignedConfiguration
+  let fixture: TestManagerFixture
+}
+
 func signedConfiguration(
   descriptor: AdmittedModelDescriptor,
   hardware: AdmittedModelHardwareProfile,
   transport: ModelDownloadingProbe
-) -> AdmittedModelSignedConfiguration {
-  let manager = TestManagers.manager(
+) -> SignedTestConfiguration {
+  let fixture = try! TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
     manifest: TestManifests.tiny,
     transport: transport
   )
-  return AdmittedModelSignedConfiguration(
-    rawDescriptor: TestDescriptors.raw(descriptor),
-    hardware: hardware,
-    manager: manager,
-    startup: { },
-    calibrate: { }
+  return SignedTestConfiguration(
+    value: AdmittedModelSignedConfiguration(
+      rawDescriptor: TestDescriptors.raw(descriptor),
+      hardware: hardware,
+      manager: fixture.manager,
+      startup: { },
+      calibrate: { }
+    ),
+    fixture: fixture
   )
 }
 
@@ -2638,7 +2767,7 @@ func signedConfiguration(
 func architectureMismatchReturnsBuiltInFailureWithoutTransport() {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-  let configuration = signedConfiguration(
+  let test = signedConfiguration(
     descriptor: descriptor,
     hardware: .init(
       architecture: "x86_64",
@@ -2647,7 +2776,8 @@ func architectureMismatchReturnsBuiltInFailureWithoutTransport() {
     ),
     transport: transport
   )
-  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  defer { test.fixture.cleanup() }
+  let installer = makeAdmittedModelInstaller(signedConfiguration: test.value)
   #expect(installer.snapshot.recommendation == .builtIn)
   #expect(installer.snapshot.lastError != nil)
   #expect(transport.downloadCalls == 0)
@@ -2657,7 +2787,7 @@ func architectureMismatchReturnsBuiltInFailureWithoutTransport() {
 func languageMismatchReturnsBuiltInFailureWithoutTransport() {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-  let configuration = signedConfiguration(
+  let test = signedConfiguration(
     descriptor: descriptor,
     hardware: .init(
       architecture: descriptor.architectures[0],
@@ -2666,7 +2796,8 @@ func languageMismatchReturnsBuiltInFailureWithoutTransport() {
     ),
     transport: transport
   )
-  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  defer { test.fixture.cleanup() }
+  let installer = makeAdmittedModelInstaller(signedConfiguration: test.value)
   #expect(installer.snapshot.recommendation == .builtIn)
   #expect(installer.snapshot.lastError != nil)
   #expect(transport.downloadCalls == 0)
@@ -2677,7 +2808,7 @@ func mixedRequestedLanguagesReturnBuiltInFailureWithoutTransport() {
   let descriptor = TestDescriptors.tinyAdmittedASR
   #expect(descriptor.languages == ["en-US"])
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-  let configuration = signedConfiguration(
+  let test = signedConfiguration(
     descriptor: descriptor,
     hardware: .init(
       architecture: descriptor.architectures[0],
@@ -2686,7 +2817,8 @@ func mixedRequestedLanguagesReturnBuiltInFailureWithoutTransport() {
     ),
     transport: transport
   )
-  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  defer { test.fixture.cleanup() }
+  let installer = makeAdmittedModelInstaller(signedConfiguration: test.value)
   #expect(installer.snapshot.recommendation == .builtIn)
   #expect(installer.snapshot.lastError != nil)
   #expect(transport.downloadCalls == 0)
@@ -2699,12 +2831,13 @@ func insufficientStagingCapacityReturnsBuiltInFailureWithoutTransport() {
   #expect(availableBytes > descriptor.downloadBytes)
   #expect(availableBytes < descriptor.requiredCapacityBytes)
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-  let configuration = signedConfiguration(
+  let test = signedConfiguration(
     descriptor: descriptor,
     hardware: supportedHardware(for: descriptor, availableBytes: availableBytes),
     transport: transport
   )
-  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  defer { test.fixture.cleanup() }
+  let installer = makeAdmittedModelInstaller(signedConfiguration: test.value)
   #expect(installer.snapshot.recommendation == .builtIn)
   #expect(installer.snapshot.lastError != nil)
   #expect(transport.downloadCalls == 0)
@@ -2714,12 +2847,13 @@ func insufficientStagingCapacityReturnsBuiltInFailureWithoutTransport() {
 func supportedHardwareProfileReachesRecommendedInstallerWithoutStartingTransport() {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-  let configuration = signedConfiguration(
+  let test = signedConfiguration(
     descriptor: descriptor,
     hardware: supportedHardware(for: descriptor),
     transport: transport
   )
-  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+  defer { test.fixture.cleanup() }
+  let installer = makeAdmittedModelInstaller(signedConfiguration: test.value)
   #expect(installer.snapshot.recommendation == .recommended(descriptor))
   #expect(installer.snapshot.phase == .notInstalled)
   #expect(transport.downloadCalls == 0)
@@ -2728,16 +2862,17 @@ func supportedHardwareProfileReachesRecommendedInstallerWithoutStartingTransport
 @Test @MainActor
 func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
   let raw = TestDescriptors.make(TestDescriptors.neutralAdmitted, modelID: "")
-  let manager = TestManagers.manager(
+  let fixture = try! TestManagers.manager(
     descriptor: TestDescriptors.tinyAdmittedASR,
     artifactIdentity: TestArtifacts.identity(matching: TestDescriptors.tinyAdmittedASR),
     manifest: TestManifests.tiny,
     transport: ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
   )
+  defer { fixture.cleanup() }
   let configuration = AdmittedModelSignedConfiguration(
     rawDescriptor: raw,
     hardware: supportedHardware(for: TestDescriptors.tinyAdmittedASR),
-    manager: manager,
+    manager: fixture.manager,
     startup: { },
     calibrate: { }
   )
@@ -2756,16 +2891,17 @@ func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
 func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
-  let manager = TestManagers.manager(
+  let fixture = try! TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identityWith(revision: "wrong"),
     manifest: TestManifests.tiny,
     transport: transport
   )
+  defer { fixture.cleanup() }
   let configuration = AdmittedModelSignedConfiguration(
     rawDescriptor: TestDescriptors.raw(descriptor),
     hardware: supportedHardware(for: descriptor),
-    manager: manager,
+    manager: fixture.manager,
     startup: { },
     calibrate: { }
   )
@@ -3113,12 +3249,57 @@ truthful; Task 3's own Settings tests prove accessibility; manager verification
 and filesystem ownership remain authoritative; and no model-weight path was
 written. The known viewport assertion is classified separately if present.
 
-## Automated package/build verification
+## Final real-checkout packaging checkpoint
 
-These commands establish packaging evidence but do not establish speech words:
+The source tasks form a dependent accepted commit chain. The parent has already
+verified that root `ab886d9` is an ancestor of accepted base
+`4212314398853091fa85e7aec18318b9650e8604`, and that `AGENTS.md` is unchanged
+between those two commits. After every source task has parent verification and
+a fresh Sol `ship`, the final parent supplies the exact accepted implementation
+SHA through `FINAL_ACCEPTED_SHA`; the following local checkpoint must pass
+before packaging. It does not merge, rebase, cherry-pick, push, or modify
+`AGENTS.md`:
 
 ~~~bash
-cd /Users/harryjin/Fleck
+root=/Users/harryjin/Fleck
+final_accepted_sha="${FINAL_ACCEPTED_SHA:?the final accepted implementation SHA must come from the parent ship handoff}"
+final_branch=codex/local-dictation-real-app-final
+snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/fleck-root-handoff.XXXXXX")"
+cd "$root"
+test "$(git rev-parse --show-toplevel)" = "$root"
+git merge-base --is-ancestor ab886d9 4212314398853091fa85e7aec18318b9650e8604
+git diff --quiet ab886d9 4212314398853091fa85e7aec18318b9650e8604 -- AGENTS.md
+git merge-base --is-ancestor 4212314398853091fa85e7aec18318b9650e8604 "$final_accepted_sha"
+git rev-parse HEAD > "$snapshot_dir/head.before"
+git status --short --branch > "$snapshot_dir/status.before"
+git hash-object AGENTS.md > "$snapshot_dir/agents.hash.before"
+git diff --binary -- AGENTS.md > "$snapshot_dir/agents.diff.before"
+test "$(git status --short)" = " M AGENTS.md"
+test -z "$(git diff --cached --name-only)"
+test -z "$(git ls-files --others --exclude-standard)"
+test -z "$(git ls-files -u)"
+test ! -e .git/MERGE_HEAD
+test ! -e .git/rebase-merge
+test ! -e .git/rebase-apply
+test ! -e .git/CHERRY_PICK_HEAD
+test -z "$(git branch --list "$final_branch")"
+git switch --create "$final_branch" "$final_accepted_sha"
+test "$(git rev-parse HEAD)" = "$final_accepted_sha"
+test "$(git branch --show-current)" = "$final_branch"
+git diff --quiet ab886d9 "$final_accepted_sha" -- AGENTS.md
+test "$(git hash-object AGENTS.md)" = "$(cat "$snapshot_dir/agents.hash.before")"
+git diff --binary -- AGENTS.md > "$snapshot_dir/agents.diff.after"
+cmp -s "$snapshot_dir/agents.diff.before" "$snapshot_dir/agents.diff.after"
+test "$(git status --short)" = " M AGENTS.md"
+test -z "$(git diff --cached --name-only)"
+test -z "$(git ls-files --others --exclude-standard)"
+test -z "$(git ls-files -u)"
+test ! -e .git/MERGE_HEAD
+test ! -e .git/rebase-merge
+test ! -e .git/rebase-apply
+test ! -e .git/CHERRY_PICK_HEAD
+test "$(git diff --name-only | sort)" = "AGENTS.md"
+
 swift test --disable-automatic-resolution --no-parallel
 ./Scripts/build-fleck-app.sh
 test -d /Users/harryjin/Fleck/.build/Fleck.app
@@ -3126,10 +3307,11 @@ codesign --verify --deep --strict /Users/harryjin/Fleck/.build/Fleck.app
 open /Users/harryjin/Fleck/.build/Fleck.app
 ~~~
 
-Run the build script exactly as committed; do not copy it into the worktree,
-add another script, or use an isolated-worktree bundle as evidence. The primary
-may launch the app and inspect Settings, but must report only observed process
-and UI state.
+Any failed snapshot, ancestry, branch, dirty-file, unmerged-state, or
+in-progress-operation check aborts before the build. Run the build script
+exactly as committed; do not copy it, add another script, or use an
+isolated-worktree bundle as evidence. The primary may launch the app and
+inspect Settings, but must report only observed process and UI state.
 
 ## Final human microphone verification
 

@@ -115,6 +115,7 @@ SettingsView -------------> admitted recommendation presentation, not model sele
 | `StreamingTranscriptState` | Generation ordering, append-only stable prefix, and a mutable tail capped by the newest two clauses or 80 `CleanupLexeme` lexical units. | Semantic cleanup or insertion. |
 | `FaithfulCleanupValidator` | The deterministic allowlist and protected-meaning decision. | Generating text, choosing a model, or logging transcript data. |
 | `IncrementalTranscriptCleaner` | One bounded cleanup request, one generation attempt, deadline/cancellation race, validation, exact baseline fallback, and session-box publication gate. | Dictionary resolution, audio, runtime residency, or UI. |
+| `FoundationModelDictation` / `FoundationModelCleanupGenerator` | The existing Apple Foundation Models/deterministic control and its bounded incremental wrapper. The cleanup cap reaches `GenerationOptions(maximumResponseTokens:)` in the single `respond` request. | Retries, cloud fallback, or a second generation request. |
 | `LocalDictationRuntime` | Restored active/warm/standby/cold policy, one lease, lifecycle signals, scheduler, and future adapter health. | The Apple audio capture path and installer UI. |
 | `EnhancedModelManager` | Existing compile-gated manifest, download, checksum, repair, update, and remove transactions when an admitted configuration exists. | Selecting a model, normal-release routing, or a second downloader. |
 | `AdmittedModelCatalog` and settings presentation | One signed configuration's exact identity and one automatic recommendation, or the built-in state. | A model picker, Advanced selector, inference, or model weights. |
@@ -230,6 +231,10 @@ rejected cleanup attempt selects exactly `PersonalDictionaryResolution.baseline`
    `FaithfulCleanupValidator` compares the candidate with the dictionary
    baseline and protected spans. A valid candidate becomes `cleanedTranscript`;
    every other valid-capture cleanup outcome inserts the exact baseline.
+   When the Apple Foundation Models control is available, the caller's
+   `maximumOutputTokens` reaches `GenerationOptions(maximumResponseTokens:)`
+   in its one `respond` call; otherwise the deterministic fallback remains in
+   place.
 8. The processor returns one final artifact to the coordinator. The coordinator
    updates history, routes Smart Capture, commits focused insertion, or exposes
    the existing recovery action. It never calls the legacy `TranscriptCleaning`
@@ -336,6 +341,17 @@ Cancellation must execute in this order:
 6. publish only `.cancelled` after the session's bounded helper
    acknowledgement/force-termination path has completed and no active work can
    publish.
+
+`StreamingDictationSession` also owns terminal cleanup for non-cancellation
+paths. Its one finalization task calls `markTerminal()` and an
+`releaseSourceExactlyOnce()` guard on both successful result and thrown source,
+dictionary, or cleanup error. A successful or failed finish releases the
+already-started source exactly once without calling source `cancel`; a later
+explicit cancellation may cancel the source but cannot release it again. The
+terminal guard closes the update stream before release, so callbacks arriving
+after success or failure cannot publish. The cancellation task retains its
+settled early-source-cancel ordering for an in-flight Apple Speech finish,
+then awaits finalization and the same release guard.
 
 After cancellation, no update, final result, history mutation, route, insertion,
 or recovery receipt may publish. A caller cancellation of the cleanup task throws
@@ -689,9 +705,12 @@ duplicate manifest paths fail before transport.
    exact baseline insertion, raw-ASR recovery, cancellation, no late events, and
    unchanged legacy behavior.
 3. **Apple adapter tests:** injected `SpeechEngine` probes prove the adapter
-   forwards provisional/final text and levels, releases exactly once, and makes
-   no second capture. Existing `AppleSpeechCapture` tests remain green and must
-   prove on-device rejection and no network path.
+   forwards provisional/final text and levels, releases exactly once on
+   success/failure/cancellation, and makes no second capture. The Foundation
+   Model production-boundary probe proves the caller's maximum output token cap
+   reaches the single `GenerationOptions(maximumResponseTokens:)` request.
+   Existing `AppleSpeechCapture` tests remain green and must prove on-device
+   rejection and no network path.
 4. **Runtime tests:** pure policy, scheduler, lease, lifecycle, memory-pressure,
    sleep, and mutation gates use deterministic sleepers and fake adapters. They
    do not claim a custom model is loaded.
@@ -710,9 +729,15 @@ duplicate manifest paths fail before transport.
    `--disable-automatic-resolution --no-parallel`; tests assert no URLSession,
    transcript file, audio file, or late insertion is introduced by the vertical
    slice.
-7. **App packaging:** run `./Scripts/build-fleck-app.sh` from the real
-   `/Users/harryjin/Fleck` checkout and inspect `/Users/harryjin/Fleck/.build/Fleck.app`.
-   A bundle produced in an isolated worktree is not evidence for that exact path.
+7. **App packaging:** after every source task has parent verification and a
+   fresh Sol `ship`, snapshot the sole dirty root `AGENTS.md`, verify the
+   cumulative accepted diff does not modify it, switch the real
+   `/Users/harryjin/Fleck` checkout to one local `codex/...` branch at the exact
+   final accepted SHA without merge/rebase/cherry-pick, and require the hash,
+   diff, branch, ancestry, and ` M AGENTS.md` status to remain identical. Only
+   then run `./Scripts/build-fleck-app.sh` and inspect
+   `/Users/harryjin/Fleck/.build/Fleck.app`. A bundle produced in an isolated
+   worktree is not evidence for that exact path.
 8. **Operator microphone test:** a human launches the development app, grants
    permissions, speaks a known sentence containing punctuation/filler/repetition
    and protected content, observes provisional display and final insertion,
