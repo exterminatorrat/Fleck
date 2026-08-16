@@ -65,6 +65,7 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
   private let finishReturnsNilAfterCancel: Bool
   private let finishBlocksUntilRelease: Bool
   private let synchronousProvisional: String?
+  private let synchronousLevel: Float?
   private let onCancel: (@MainActor @Sendable () async -> Void)?
   private let onPhysicalRelease: (@MainActor @Sendable () async -> Void)?
   private var provisional: (@MainActor @Sendable (String) -> Void)?
@@ -81,6 +82,7 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     finishReturnsNilAfterCancel: Bool = false,
     finishBlocksUntilRelease: Bool = false,
     synchronousProvisional: String? = nil,
+    synchronousLevel: Float? = nil,
     onCancel: (@MainActor @Sendable () async -> Void)? = nil,
     onPhysicalRelease: (@MainActor @Sendable () async -> Void)? = nil
   ) {
@@ -91,6 +93,7 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     self.finishReturnsNilAfterCancel = finishReturnsNilAfterCancel
     self.finishBlocksUntilRelease = finishBlocksUntilRelease
     self.synchronousProvisional = synchronousProvisional
+    self.synchronousLevel = synchronousLevel
     self.onCancel = onCancel
     self.onPhysicalRelease = onPhysicalRelease
   }
@@ -111,6 +114,10 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     provisional?(text)
   }
 
+  func emitLevel(_ value: Float) {
+    level?(value)
+  }
+
   func start(
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void
@@ -124,6 +131,9 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     callbacksWereInstalled = true
     if let synchronousProvisional {
       self.provisional?(synchronousProvisional)
+    }
+    if let synchronousLevel {
+      level(synchronousLevel)
     }
     if let startError { throw startError }
   }
@@ -227,7 +237,7 @@ func beginStartsTheSoleSourceOnceBeforeReturningAndWiresCallbacks() async throws
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
 
   #expect(source.startCount == 1)
   #expect(source.callbacksWereInstalled)
@@ -239,6 +249,26 @@ func beginStartsTheSoleSourceOnceBeforeReturningAndWiresCallbacks() async throws
 }
 
 @Test @MainActor
+func beginForwardsSynchronousAndLaterSourceLevelsExactlyOnce() async throws {
+  var levels: [Float] = []
+  let source = StreamingSpeechSourceProbe(synchronousLevel: 0.25)
+  let processor = makeProcessor(source: source)
+
+  let session = try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { levels.append($0) }
+  )
+  source.emitLevel(0.75)
+
+  #expect(levels == [0.25, 0.75])
+  await session.cancel()
+}
+
+@Test @MainActor
 func beginRetainsSynchronousCallbacksUntilTheSessionAttaches() async throws {
   let source = StreamingSpeechSourceProbe(synchronousProvisional: "First")
   let processor = makeProcessor(source: source)
@@ -246,7 +276,7 @@ func beginRetainsSynchronousCallbacksUntilTheSessionAttaches() async throws {
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
 
   let update = try await firstUpdate(from: session.updates)
   #expect(update?.displayText == "First")
@@ -263,7 +293,7 @@ func beginReleasesTheSourceWhenStartFails() async {
       captureID: UUID(),
       mode: .focused,
       recognitionContext: .englishDefault
-    ))
+    ), level: { _ in })
   }
   #expect(source.startCount == 1)
   #expect(source.releaseHookCount == 1)
@@ -278,7 +308,7 @@ func successfulFinishUsesSourceOwnedTerminalizationWithoutSecondRelease() async 
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
 
   _ = try await session.finish()
   source.emitProvisional("late")
@@ -303,7 +333,7 @@ func emptyFinalTextThrowsStreamingProcessorNoSpeech() async throws {
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
 
   await #expect(throws: StreamingDictationProcessorError.noSpeech) {
     _ = try await session.finish()
@@ -320,7 +350,7 @@ func failedFinishUsesSourceOwnedTerminalizationAndPublishesNoLateUpdate() async 
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
@@ -379,7 +409,7 @@ func cancellingAfterSourceFinishAwaitsCleanupWithoutSecondSourceTerminalization(
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
@@ -456,7 +486,7 @@ func concurrentCancelCallersShareOneTaskDuringBlockedFinish() async throws {
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
@@ -521,7 +551,7 @@ func cancellingBeforeFinalizationBodyStartsSkipsSourceFinish() async throws {
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
@@ -583,7 +613,7 @@ func cancellingBlockedFinishReturningNilWinsWithoutNoSpeechResult() async throws
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
@@ -629,7 +659,7 @@ func cancellingSessionUnblocksInFlightSourceFinishWithSourceOwnedRelease() async
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
@@ -662,7 +692,7 @@ func cancellingBeforeFinishCannotStartFinalizationWork() async throws {
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
 
   await session.cancel()
 
@@ -699,7 +729,7 @@ func cancellationWinnerClosesTheFinishRaceBeforeAnyFinalizationOrSourceFinish() 
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
 
   let cancellation = Task { await session.cancel() }
   await recorder.waitUntilInvalidated()
@@ -737,7 +767,7 @@ func processorUsesExactBaselineWhenCleanupIsRejected() async throws {
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
   let result = try await session.finish()
   #expect(result.insertedText == "Do not cancel 2 meetings")
   #expect(result.cleanedTranscript == nil)
@@ -763,7 +793,7 @@ func processorUsesRawRecoveryWhenDictionaryResolutionFails() async throws {
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
 
   let result = try await session.finish()
   #expect(result.rawTranscript == raw)
@@ -803,7 +833,7 @@ func processorCapturesStopBeforeDelayedSourceFinalization() async throws {
     captureID: UUID(),
     mode: .focused,
     recognitionContext: .englishDefault
-  ))
+  ), level: { _ in })
   let finalization = Task { try await session.finish() }
   await source.waitUntilFinishStarted()
   #expect(source.finishCompleted == false)

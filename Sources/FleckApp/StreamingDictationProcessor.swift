@@ -51,14 +51,15 @@ final class StreamingDictationProcessor: DictationProcessing {
   }
 
   func begin(
-    configuration: DictationProcessingConfiguration
+    configuration: DictationProcessingConfiguration,
+    level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession {
     let source = try await makeSource()
     let callbackBuffer = StreamingDictationCallbackBuffer()
     do {
       try await source.start(
         provisional: { callbackBuffer.provisional($0) },
-        level: { callbackBuffer.level($0) }
+        level: level
       )
       return StreamingDictationSession(
         configuration: configuration,
@@ -91,10 +92,6 @@ fileprivate final class StreamingDictationCallbackBuffer {
     } else {
       provisionalTexts.append(text)
     }
-  }
-
-  func level(_ value: Float) {
-    _ = value
   }
 
   func attach(to session: StreamingDictationSession) {

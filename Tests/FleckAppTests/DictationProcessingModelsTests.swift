@@ -124,9 +124,10 @@ import FleckCore
     }
 
     func begin(
-      configuration: DictationProcessingConfiguration
+      configuration: DictationProcessingConfiguration,
+      level: @escaping @MainActor @Sendable (Float) -> Void
     ) async throws -> any DictationProcessingSession {
-      _ = configuration
+      _ = (configuration, level)
       return SessionProbe()
     }
 

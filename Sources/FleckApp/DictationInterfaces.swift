@@ -39,7 +39,8 @@ protocol TranscriptCleaning: Sendable {
 protocol DictationProcessing: AnyObject {
   func prepare(for intent: DictationPreparationIntent) async
   func begin(
-    configuration: DictationProcessingConfiguration
+    configuration: DictationProcessingConfiguration,
+    level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession
   func handle(_ signal: DictationRuntimeSignal) async
 }

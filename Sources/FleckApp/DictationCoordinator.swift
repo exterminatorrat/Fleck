@@ -398,11 +398,17 @@ final class DictationCoordinator {
 
     let session: any DictationProcessingSession
     do {
-      session = try await processing.begin(configuration: .init(
-        captureID: id,
-        mode: mode,
-        recognitionContext: .englishDefault
-      ))
+      session = try await processing.begin(
+        configuration: .init(
+          captureID: id,
+          mode: mode,
+          recognitionContext: .englishDefault
+        ),
+        level: { [weak self] level in
+          guard let self, self.isActive(id) else { return }
+          self.levelObserver?(level)
+        }
+      )
     } catch {
       guard finishStarting(id) != nil else { return }
       guard await continueCapture(id) else { return }

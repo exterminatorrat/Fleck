@@ -334,6 +334,21 @@ func cancelDuringLegacySourceFinishDoesNotRollbackOrPublishTerminalState()
   #expect(levels == [0.42, 0])
 }
 
+@Test @MainActor
+func processingPathForwardsOnlyActiveCaptureLevels() async throws {
+  let processing = ProcessingProbe(synchronousLevel: 0.25)
+  let fixture = try Fixture(processing: processing)
+  var levels: [Float] = []
+  fixture.coordinator.setLevelObserver { levels.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  processing.emitLevel(0.5)
+  await fixture.coordinator.cancel()
+  processing.emitLevel(0.9)
+
+  #expect(levels == [0.25, 0.5, 0])
+}
+
 @Test @MainActor func failedStartResetsTheLevel() async throws {
   let fixture = try Fixture()
   fixture.standard.startError = TestError.failed
@@ -2346,6 +2361,7 @@ final class ProcessingProbe: DictationProcessing {
   private let updates: [DictationTextUpdate]
   private(set) var result: DictationProcessingResult
   private let finishBlocksUntilCancel: Bool
+  private let synchronousLevel: Float?
   private let drainGate: Gate?
   private let onFinishStarted: (() -> Void)?
   private let onSessionCancel: (() -> Void)?
@@ -2354,6 +2370,7 @@ final class ProcessingProbe: DictationProcessing {
   private let onFinishUnblocked: (() -> Void)?
   private let onSessionDrain: (() -> Void)?
   private var session: ProcessingSessionProbe?
+  private var levelCallback: (@MainActor @Sendable (Float) -> Void)?
   private var finishStarted = false
   private var finishWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -2371,6 +2388,7 @@ final class ProcessingProbe: DictationProcessing {
       measurements: .empty
     ),
     finishBlocksUntilCancel: Bool = false,
+    synchronousLevel: Float? = nil,
     drainGate: Gate? = nil,
     onFinishStarted: (() -> Void)? = nil,
     onSessionCancel: (() -> Void)? = nil,
@@ -2382,6 +2400,7 @@ final class ProcessingProbe: DictationProcessing {
     self.updates = updates
     self.result = result
     self.finishBlocksUntilCancel = finishBlocksUntilCancel
+    self.synchronousLevel = synchronousLevel
     self.drainGate = drainGate
     self.onFinishStarted = onFinishStarted
     self.onSessionCancel = onSessionCancel
@@ -2396,9 +2415,12 @@ final class ProcessingProbe: DictationProcessing {
   }
 
   func begin(
-    configuration: DictationProcessingConfiguration
+    configuration: DictationProcessingConfiguration,
+    level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession {
     _ = configuration
+    levelCallback = level
+    if let synchronousLevel { level(synchronousLevel) }
     beginCount += 1
     let session = ProcessingSessionProbe(
       result: result,
@@ -2431,6 +2453,10 @@ final class ProcessingProbe: DictationProcessing {
     for update in updates {
       await emit(update)
     }
+  }
+
+  func emitLevel(_ value: Float) {
+    levelCallback?(value)
   }
 
   func complete(with result: DictationProcessingResult) {
