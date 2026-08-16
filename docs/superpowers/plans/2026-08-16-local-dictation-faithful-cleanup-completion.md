@@ -25,7 +25,7 @@ existing FleckCore dictionary/cleanup structures. No new package dependency.
 - The target cleanup input is the exact dictionary baseline. Dictionary resolution failure before a baseline exists belongs to the later coordinator raw-ASR recovery path and is not converted into a cleanup baseline here.
 - Automatic cleanup may change only punctuation, capitalization, whitespace, isolated unambiguous fillers, immediate exact repetition, an explicitly spoken same-tail correction, and short-list formatting without changing list items.
 - Names and dictionary forms, numbers and number words, dates and times, prices, units and quantities, recipients and destinations, paths, URLs, email addresses, code, commands, negation, modality, commitments, quotes, and mixed English/Mandarin order are protected meaning.
-- Number classification runs over raw `CleanupLexeme` sequences before filler, repetition, or correction recognition; supported English cardinal/ordinal words, scales through trillion, semantically valid full-token digit ordinals, fractions, decimals, percentages, currencies, and unit quantities must keep the exact ordered number signature, while ambiguous or unrecognized numeric/quantity-looking forms fail closed. Only paired, validated ordinal list markers are exempt.
+- Number classification runs over raw `CleanupLexeme` sequences before filler, repetition, or correction recognition; supported English cardinal/ordinal words, scales through trillion, semantically valid full-token digit ordinals, fractions, decimals, percentages, currencies, and unit quantities must keep the exact ordered number signature and detached sign/currency context, while ambiguous or unrecognized numeric/quantity-looking forms fail closed. Only paired, validated ordinal list markers are exempt.
 - The validator runs protected-span preservation before allowlist classification. Any protected-meaning violation rejects the candidate.
 - The automatic target is at most 80 lexical words. The candidate output is at most input token count plus 32; helper-reported metadata is not authoritative.
 - There is one request, one generation attempt, zero automatic retries, no network, no transcript logging, no transcript persistence, and no audio persistence.
@@ -396,7 +396,14 @@ import Testing
     ("ratio 1/2", "Ratio 1/2."),
     ("meet at 10:30 am", "Meet at 10:30 AM."),
     ("score -3.5", "Score -3.5."),
-    ("charge ($20)", "Charge ($20).")
+    ("charge ($20)", "Charge ($20)."),
+    ("pay - 20", "Pay - 20."),
+    ("pay $ 20", "Pay $ 20."),
+    ("pay $$20", "Pay $$20."),
+    ("pay $ $20", "Pay $ $20."),
+    ("pay $ $ $20", "Pay $ $ $20."),
+    ("pay + +20", "Pay + +20."),
+    ("pay + + +20", "Pay + + +20.")
   ]
   for (baseline, candidate) in unchangedNumericForms {
     let decision = FaithfulCleanupValidator().validate(
@@ -409,6 +416,24 @@ import Testing
     }
     #expect(text == candidate)
   }
+  #expect(CleanupLexeme.scan("pay - 20").map(\.original) == [
+    "pay", " ", "-", " ", "20"
+  ])
+  #expect(CleanupLexeme.scan("pay $ 20").map(\.original) == [
+    "pay", " ", "$", " ", "20"
+  ])
+  #expect(CleanupLexeme.scan("pay $$20").map(\.original) == [
+    "pay", " ", "$", "$20"
+  ])
+  #expect(CleanupLexeme.scan("pay $ $20").map(\.original) == [
+    "pay", " ", "$", " ", "$20"
+  ])
+  #expect(CleanupLexeme.scan("pay + +20").map(\.original) == [
+    "pay", " ", "+", " ", "+20"
+  ])
+  #expect(CleanupLexeme.scan("pay + + +20").map(\.original) == [
+    "pay", " ", "+", " ", "+", " ", "+20"
+  ])
 
   let validListWithInterMarkerPunctuation = FaithfulCleanupValidator().validate(
     candidate: "1. buy 20 apples;\n2. buy 20 oranges.",
@@ -436,6 +461,18 @@ import Testing
     ("send 11st files", "Send 11st files."),
     ("send 21th files", "Send 21th files."),
     ("send 21stx files", "Send 21stx files."),
+    ("pay - 20", "Pay 20."),
+    ("pay 20-", "Pay 20."),
+    ("pay $ 20", "Pay 20."),
+    ("pay $$20", "Pay $20."),
+    ("pay $ $20", "Pay $20."),
+    ("pay $ $ $20", "Pay $ $20."),
+    ("pay + 20", "Pay 20."),
+    ("pay ++20", "Pay +20."),
+    ("pay + +20", "Pay +20."),
+    ("pay + + +20", "Pay + +20."),
+    ("pay - -20", "Pay -20."),
+    ("pay 20-", "Pay 20-."),
     ("send ($20", "Send ($20."),
     ("send 20)", "Send 20)."),
     ("send 10:", "Send 10:."),
@@ -490,6 +527,19 @@ import Testing
     }
     #expect(text == candidate)
   }
+  let ordinaryHyphen = FaithfulCleanupValidator().validate(
+    candidate: "Send - word.",
+    against: .init(
+      baseline: "send - word",
+      protectedForms: [],
+      replacements: 0
+    )
+  )
+  guard case .accepted(let text, _) = ordinaryHyphen else {
+    Issue.record("A hyphen with no numeric raw neighbor must remain ordinary punctuation")
+    return
+  }
+  #expect(text == "Send - word.")
 }
 
 @Test func faithfulValidatorRejectsProtectedMeaningChanges() {
@@ -732,9 +782,39 @@ struct FaithfulCleanupValidator: Sendable {
     let candidateNumberRawRanges: [Range<Int>]
   }
 
+  private struct NumericRawContext: Equatable {
+    let detachedLeadingAffixes: [String]
+    let detachedTrailingAffixes: [String]
+
+    static let none = Self(
+      detachedLeadingAffixes: [],
+      detachedTrailingAffixes: []
+    )
+  }
+
+  private struct NumberSemanticSignature: Equatable {
+    let classification: NumberClassification
+    let rawContext: NumericRawContext
+  }
+
   private struct NumberSignature: Equatable {
     let rawRange: Range<Int>
     let classification: NumberClassification
+    let rawContext: NumericRawContext
+
+    init(
+      rawRange: Range<Int>,
+      classification: NumberClassification,
+      rawContext: NumericRawContext = .none
+    ) {
+      self.rawRange = rawRange
+      self.classification = classification
+      self.rawContext = rawContext
+    }
+
+    var semantic: NumberSemanticSignature {
+      .init(classification: classification, rawContext: rawContext)
+    }
   }
 
   private static let ordinalMarkerNumbers: [String: Int] = [
@@ -749,12 +829,18 @@ struct FaithfulCleanupValidator: Sendable {
     baselineLexemes: [CleanupLexeme],
     candidateLexemes: [CleanupLexeme]
   ) -> Bool {
-    let baseline = numberSignatures(from: baselineLexemes).map(\.classification)
-    let candidate = numberSignatures(from: candidateLexemes).map(\.classification)
-    guard !baseline.contains(.ambiguous), !candidate.contains(.ambiguous) else {
+    let baseline = numberSignatures(from: baselineLexemes)
+    let candidate = numberSignatures(from: candidateLexemes)
+    guard !baseline.contains(where: { $0.classification == .ambiguous }),
+          !candidate.contains(where: { $0.classification == .ambiguous }) else {
       return false
     }
-    return baseline.filter { $0 != .none } == candidate.filter { $0 != .none }
+    return baseline
+      .filter { $0.classification != .none }
+      .map(\.semantic)
+      == candidate
+      .filter { $0.classification != .none }
+      .map(\.semantic)
   }
 
   private static func numberSignatures(from lexemes: [CleanupLexeme]) -> [NumberSignature] {
@@ -768,7 +854,7 @@ struct FaithfulCleanupValidator: Sendable {
       }
 
       let value = lexemes[index].canonical.lowercased()
-      guard numericRawContextIsComplete(at: index, in: lexemes) else {
+      guard let rawContext = numericRawContext(at: index, in: lexemes) else {
         signatures.append(.init(
           rawRange: index..<(index + 1),
           classification: .ambiguous
@@ -784,7 +870,11 @@ struct FaithfulCleanupValidator: Sendable {
           let classification = validOrdinalSuffix(for: value, suffix: suffix)
             ? .digitOrdinal(value + suffix)
             : .ambiguous
-          signatures.append(.init(rawRange: range, classification: classification))
+          signatures.append(.init(
+            rawRange: range,
+            classification: classification,
+            rawContext: rawContext
+          ))
           consumedIndices.formUnion(range)
           index += 2
           continue
@@ -792,7 +882,8 @@ struct FaithfulCleanupValidator: Sendable {
         if unitWords.contains(suffix) {
           signatures.append(.init(
             rawRange: index..<(index + 2),
-            classification: .quantity(value + suffix)
+            classification: .quantity(value + suffix),
+            rawContext: rawContext
           ))
           consumedIndices.formUnion(index..<(index + 2))
           index += 2
@@ -800,14 +891,22 @@ struct FaithfulCleanupValidator: Sendable {
         }
         if suffix.hasPrefix("st") || suffix.hasPrefix("nd")
             || suffix.hasPrefix("rd") || suffix.hasPrefix("th") {
-          signatures.append(.init(rawRange: index..<(index + 2), classification: .ambiguous))
+          signatures.append(.init(
+            rawRange: index..<(index + 2),
+            classification: .ambiguous,
+            rawContext: rawContext
+          ))
           consumedIndices.formUnion(index..<(index + 2))
           index += 2
           continue
         }
         // A digit immediately followed by letters is not a safe punctuation-only
         // form unless the bounded unit/ordinal cases above recognized it.
-        signatures.append(.init(rawRange: index..<(index + 2), classification: .ambiguous))
+        signatures.append(.init(
+          rawRange: index..<(index + 2),
+          classification: .ambiguous,
+          rawContext: rawContext
+        ))
         consumedIndices.formUnion(index..<(index + 2))
         index += 2
         continue
@@ -821,7 +920,8 @@ struct FaithfulCleanupValidator: Sendable {
         let time = value + lexemes[index + 2].canonical.lowercased()
         signatures.append(.init(
           rawRange: index..<(index + 3),
-          classification: classifyNumber(time)
+          classification: classifyNumber(time),
+          rawContext: rawContext
         ))
         consumedIndices.formUnion(index..<(index + 3))
         index += 3
@@ -830,7 +930,8 @@ struct FaithfulCleanupValidator: Sendable {
 
       signatures.append(.init(
         rawRange: index..<(index + 1),
-        classification: classifyNumber(value)
+        classification: classifyNumber(value),
+        rawContext: rawContext
       ))
       consumedIndices.insert(index)
       index += 1
@@ -872,16 +973,16 @@ struct FaithfulCleanupValidator: Sendable {
     return suffix == expected
   }
 
-  private static func numericRawContextIsComplete(
+  private static func numericRawContext(
     at index: Int,
     in lexemes: [CleanupLexeme]
-  ) -> Bool {
+  ) -> NumericRawContext? {
     let original = lexemes[index].original
     let openCount = original.filter { $0 == "(" }.count
     let closeCount = original.filter { $0 == ")" }.count
-    guard openCount == closeCount else { return false }
+    guard openCount == closeCount else { return nil }
     if openCount > 0 {
-      guard original.first == "(", original.last == ")" else { return false }
+      guard original.first == "(", original.last == ")" else { return nil }
     }
 
     func adjacentNonWhitespace(_ step: Int) -> CleanupLexeme? {
@@ -893,16 +994,60 @@ struct FaithfulCleanupValidator: Sendable {
       return nil
     }
 
-    if let previous = adjacentNonWhitespace(-1),
+    func affixRun(_ step: Int) -> [String] {
+      var cursor = index + step
+      var affixes: [String] = []
+      while lexemes.indices.contains(cursor) {
+        if lexemes[cursor].kind == .whitespace {
+          cursor += step
+          continue
+        }
+        guard isNumericAffixPunctuation(lexemes[cursor]) else { break }
+        affixes.append(lexemes[cursor].original)
+        cursor += step
+      }
+      return step < 0 ? Array(affixes.reversed()) : affixes
+    }
+
+    let previous = adjacentNonWhitespace(-1)
+    let next = adjacentNonWhitespace(1)
+    if let previous,
        previous.original == "(", !original.hasPrefix("(") {
+      return nil
+    }
+    if let next {
+      if next.original == ")" && !original.hasSuffix(")") { return nil }
+      if ["/", ":", "%"].contains(next.original) { return nil }
+      if original.hasSuffix("%") && next.original == "%" { return nil }
+    }
+    let detachedLeadingAffixes = affixRun(-1)
+    let detachedTrailingAffixes = affixRun(1)
+    guard detachedTrailingAffixes.isEmpty else {
+      return nil
+    }
+    return .init(
+      detachedLeadingAffixes: detachedLeadingAffixes,
+      detachedTrailingAffixes: detachedTrailingAffixes
+    )
+  }
+
+  private static func isNumericAffixPunctuation(_ lexeme: CleanupLexeme) -> Bool {
+    guard lexeme.kind == .punctuation,
+          lexeme.original.count == 1,
+          let character = lexeme.original.first else {
       return false
     }
-    if let next = adjacentNonWhitespace(1) {
-      if next.original == ")" && !original.hasSuffix(")") { return false }
-      if ["/", ":", "%"].contains(next.original) { return false }
-      if original.hasSuffix("%") && next.original == "%" { return false }
+    return isNumericSign(character) || isCurrencySymbol(character)
+  }
+
+  private static func isNumericSign(_ character: Character) -> Bool {
+    character == "+" || character == "-" || character == "−"
+  }
+
+  private static func isCurrencySymbol(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      $0.properties.generalCategory == .currencySymbol
     }
-    return true
   }
 
   private static func isSupportedNumericForm(_ canonical: String) -> Bool {
@@ -1184,13 +1329,22 @@ form one time signature. The remaining single `.number` forms use exact
 normalized signatures for currency, percentage, fraction, time, signed,
 parenthesized, and decimal lexemes (`$20`, `20%`, `1/2`, `10:30`, `10:30am`,
 `-3.5`, and `($20)`); unsupported digit-bearing sequences remain ambiguous.
-Before classifying any number, `numericRawContextIsComplete(at:in:)` checks
-balanced parentheses, rejects a number adjacent to a dangling `)`, `/`, `:`,
-or extra `%`, and rejects incomplete affixes even when `CleanupLexeme` split
-the punctuation into separate raw lexemes. Complete supported forms then
+Before classifying any number, `numericRawContext(at:in:)` checks balanced
+parentheses, rejects a number adjacent to a dangling `)`, `/`, `:`, `%`, or
+trailing sign/currency, and rejects incomplete affixes even when
+`CleanupLexeme` split the punctuation into separate raw lexemes. It skips
+whitespace only while walking the contiguous raw affix run: every one-character
+`+`, `-`, `−`, or currency symbol before a number is recorded in source order
+in `NumericRawContext`; any such run after a number is ambiguous. The number's
+semantic signature compares both the classified numeric form and the complete
+context, so removing a detached sign/currency or one member of a doubled or
+split affix cannot compare equal. Hyphen punctuation elsewhere, with no number
+as a raw neighbor, is not treated as numeric context. Complete supported forms then
 validate fraction denominators and clock ranges, so `99:99am` and `1/0` are
 ambiguous. Therefore `($20`, `20)`, `10:`, `1/`, and `20%%` fail closed even
-when their numeric fragments individually match a permissive pattern.
+when their numeric fragments individually match a permissive pattern. Exact
+unchanged contexts such as `pay - 20`, `pay $ 20`, and `pay $$20` remain
+punctuation-cleanable; candidates that remove those contexts reject.
 It requires the ordered number signature to remain identical;
 ordinary words such as `send`, `word`, `with`, and `last` remain `.none`, while
 malformed digit/suffix forms remain ambiguous and reject fail-closed rather than

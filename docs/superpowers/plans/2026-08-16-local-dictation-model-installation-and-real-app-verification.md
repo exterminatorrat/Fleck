@@ -71,6 +71,12 @@ resource, downloader, or build script.
   `EnhancedModelManifest`, `ModelDownloading`, checksum verification, secure
   resume, repair, update, and removal implementation. Do not add a downloader
   or bypass its path validation.
+- Descriptor files and manager manifest files use the same
+  `AdmittedModelPathRules.canonicalizeUnique` rule: up to three percent-decoding
+  passes, rejection when the decoded canonical path differs from the raw path
+  or leaves encoding behind, empty/absolute paths, empty
+  components, `.`/`..`, backslashes, encoded traversal, and duplicate canonical
+  paths. Manager validation runs before URL resolution and transport.
 - Every production and test reference to `EnhancedModelManager`,
   `EnhancedModelManifest`, `ModelDownloading`, or `ModelDownloadResult` is
   enclosed by `#if CLEAN_DICTATION_ENHANCED_CANDIDATE`. Default tests use only
@@ -272,6 +278,51 @@ enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
   case emptySupport
 }
 
+enum AdmittedModelPathError: Error, Equatable, Sendable {
+  case unsafePath(String)
+  case duplicatePath(String)
+}
+
+enum AdmittedModelPathRules {
+  static func canonicalize(_ rawPath: String) throws -> String {
+    guard !rawPath.isEmpty else {
+      throw AdmittedModelPathError.unsafePath(rawPath)
+    }
+    var path = rawPath
+    for _ in 0..<3 {
+      guard let decoded = path.removingPercentEncoding else {
+        throw AdmittedModelPathError.unsafePath(rawPath)
+      }
+      if decoded == path { break }
+      path = decoded
+    }
+    guard path == rawPath,
+          !path.isEmpty,
+          !path.hasPrefix("/"),
+          !path.contains("\\"),
+          !path.contains("%") else {
+      throw AdmittedModelPathError.unsafePath(rawPath)
+    }
+    let components = path
+      .split(separator: "/", omittingEmptySubsequences: false)
+    guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+      throw AdmittedModelPathError.unsafePath(rawPath)
+    }
+    return components.joined(separator: "/")
+  }
+
+  static func canonicalizeUnique(_ rawPaths: [String]) throws -> [String] {
+    var seen = Set<String>()
+    return try rawPaths.map { rawPath in
+      let path = try canonicalize(rawPath)
+      guard seen.insert(path).inserted else {
+        throw AdmittedModelPathError.duplicatePath(path)
+      }
+      return path
+    }
+  }
+}
+
 struct AdmittedModelHardwareProfile: Equatable, Sendable {
   let architecture: String
   let requestedLanguages: Set<String>
@@ -458,8 +509,8 @@ files, manifests, and model resources.
 deterministic `AdmittedModelHardwareProfile` containing the current
 architecture, requested language set, and available capacity.
 
-**Produces:** The descriptor, file identity, hardware profile, recommendation,
-and catalog interfaces above.
+**Produces:** The descriptor, shared `AdmittedModelPathRules`, file identity,
+hardware profile, recommendation, and catalog interfaces above.
 
 ### TDD red
 
@@ -579,8 +630,9 @@ import Foundation
     ))
   }
   for path in [
-    "", "/absolute.bin", ".", "..", "a//b", "a/./b", "a/../b",
-    "a\\b", "a\\..\\b", "a/%2e%2e/b"
+    "", "/absolute.bin", "%2fabsolute.bin", ".", "..", "a//b",
+    "a/./b", "a/../b", "a\\b", "a\\..\\b", "a/%2e%2e/b",
+    "a/%252e%252e/b", "%6dodel.bin"
   ] {
     #expect(throws: AdmittedModelDescriptorError.unsafePath(path)) {
       _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
@@ -844,26 +896,18 @@ extension AdmittedModelDescriptor {
           raw.installedBytes >= raw.downloadBytes else {
       throw AdmittedModelDescriptorError.aggregateMismatch
     }
+    let normalizedPaths: [String]
+    do {
+      normalizedPaths = try AdmittedModelPathRules.canonicalizeUnique(
+        raw.files.map(\.path)
+      )
+    } catch AdmittedModelPathError.unsafePath(let path) {
+      throw AdmittedModelDescriptorError.unsafePath(path)
+    } catch AdmittedModelPathError.duplicatePath(let path) {
+      throw AdmittedModelDescriptorError.duplicateFilePath(path)
+    }
     var normalizedFiles: [AdmittedModelFile] = []
-    var normalizedPaths = Set<String>()
-    for file in raw.files {
-      let components = file.path
-        .split(separator: "/", omittingEmptySubsequences: false)
-        .map(String.init)
-      guard !file.path.isEmpty,
-            !file.path.hasPrefix("/"),
-            !file.path.contains("\\"),
-            !file.path.localizedCaseInsensitiveContains("%2e"),
-            components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
-        throw AdmittedModelDescriptorError.unsafePath(file.path)
-      }
-      let normalizedPath = components.joined(separator: "/")
-      guard normalizedPath == file.path else {
-        throw AdmittedModelDescriptorError.unsafePath(file.path)
-      }
-      guard normalizedPaths.insert(normalizedPath).inserted else {
-        throw AdmittedModelDescriptorError.duplicateFilePath(normalizedPath)
-      }
+    for (file, normalizedPath) in zip(raw.files, normalizedPaths) {
       guard file.sha256.count == 64,
             file.sha256.allSatisfy("0123456789abcdefABCDEF".contains) else {
         throw AdmittedModelDescriptorError.invalidChecksum(file.sha256)
@@ -910,10 +954,14 @@ validated value. `TestDescriptors.neutralAdmitted` is a validated fixture;
 a raw copy with the named override. The test
 cases above cover canonical trimmed identity/revision/runtime ABI/conversion/
 quantization/license, trimmed-empty fields, relative/non-HTTPS/userinfo/
-fragment/query/traversal sources including double-encoded traversal. File
-validation mirrors the manager's strict relative-path rule: empty and absolute
-paths, `.`, `..`, empty components such as `a//b`, dot components, backslashes,
-encoded traversal, and duplicate normalized paths reject before recommendation.
+fragment/query/traversal sources including double-encoded traversal. Both the
+descriptor and manager call `AdmittedModelPathRules.canonicalizeUnique`, which
+repeatedly percent-decodes up to three times, rejects any path whose decoded
+canonical value differs from its raw value or leaves encoding behind, and
+rejects empty and absolute paths, `.`, `..`, empty components such as
+`a//b`, dot components, backslashes, encoded traversal, and duplicate
+normalized paths. The descriptor maps those shared errors to
+`unsafePath`/`duplicateFilePath` before recommendation.
 The cases also cover negative byte counts, non-64-hex checksums, aggregate mismatches, the
 `installedBytes: Int64.max, downloadBytes: 1` required-capacity overflow, and a
 distinct per-file checked-add overflow. The stored `requiredCapacityBytes` is
@@ -965,8 +1013,9 @@ audio/streaming/cleanup/coordinator files, and all model-weight paths.
 **Consumes:** Task 1 `AdmittedModelDescriptor`; under
 `CLEAN_DICTATION_ENHANCED_CANDIDATE`, the existing `EnhancedModelManifest`,
 `EnhancedModelManager`, `ModelDownloading`, `ModelDownloadResult`, and its
-checksum/path/repair/update/remove operations. Default builds consume only the
-built-in installer seam.
+checksum/path/repair/update/remove operations. It also consumes Task 1's
+`AdmittedModelPathRules` for manager manifest and URL validation. Default builds
+consume only the built-in installer seam.
 
 **Produces:** `AdmittedModelInstallPhase`,
 `AdmittedModelInstallationSnapshot`, `AdmittedModelInstalling`,
@@ -1384,6 +1433,59 @@ func artifactManifestMismatchFailsBeforeTransport() {
   ])
 }
 
+@Test @MainActor
+func managerRejectsDescriptorUnsafePathTableBeforeURLResolution() {
+  let unsafePaths = [
+    "", "/absolute.bin", "%2fabsolute.bin", ".", "..", "a//b",
+    "a/./b", "a/../b", "a\\b", "a\\..\\b", "a/%2e%2e/b",
+    "a/%252e%252e/b", "%6dodel.bin"
+  ]
+  for path in unsafePaths {
+    do {
+      _ = try EnhancedModelManager.remoteURL(
+        for: .init(path: path, byteCount: 8, sha256: String(repeating: "a", count: 64)),
+        sourceRepository: URL(string: "https://example.invalid/repository")!,
+        revision: "revision"
+      )
+      Issue.record("Unsafe manager path unexpectedly reached URL construction: \(path)")
+    } catch let error as EnhancedModelManagerError {
+      #expect(error == .invalidManifestPath(path))
+    } catch {
+      Issue.record("Unexpected manager path error for \(path): \(error)")
+    }
+  }
+}
+
+@Test @MainActor
+func managerRejectsDuplicateNormalizedManifestPathsBeforeTransport() async {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let duplicateManifest = TestManifests.make(
+    TestManifests.tiny,
+    files: [
+      .init(path: "model.bin", byteCount: 8, sha256: TestFixtures.tinySHA256),
+      .init(path: "model.bin", byteCount: 8, sha256: TestFixtures.tinySHA256)
+    ],
+    totalByteCount: 16
+  )
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let manager = TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: duplicateManifest,
+    transport: transport,
+    capacityProvider: { Int64.max }
+  )
+  do {
+    try await manager.download()
+    Issue.record("Duplicate normalized manifest paths unexpectedly downloaded")
+  } catch let error as EnhancedModelManagerError {
+    #expect(error == .invalidManifest)
+  } catch {
+    Issue.record("Unexpected duplicate-path manager error: \(error)")
+  }
+  #expect(transport.downloadCalls == 0)
+}
+
 struct ObservedProgress: Equatable, Sendable {
   let receivedBytes: Int64
   let totalBytes: Int64
@@ -1690,6 +1792,30 @@ final class EnhancedModelManager: ObservableObject {
     )
   }
 
+  private static func validateManifestPaths(
+    _ manifest: EnhancedModelManifest
+  ) throws {
+    do {
+      _ = try AdmittedModelPathRules.canonicalizeUnique(
+        manifest.files.map(\.path)
+      )
+    } catch AdmittedModelPathError.unsafePath(let path) {
+      throw EnhancedModelManagerError.invalidManifestPath(path)
+    } catch AdmittedModelPathError.duplicatePath(_) {
+      throw EnhancedModelManagerError.invalidManifest
+    }
+  }
+
+  nonisolated private static func validateRelativePath(
+    _ rawPath: String
+  ) throws -> String {
+    do {
+      return try AdmittedModelPathRules.canonicalize(rawPath)
+    } catch {
+      throw EnhancedModelManagerError.invalidManifestPath(rawPath)
+    }
+  }
+
   func remoteURL(for file: EnhancedModelFile) throws -> URL {
     try Self.remoteURL(
       for: file,
@@ -1703,12 +1829,12 @@ final class EnhancedModelManager: ObservableObject {
     sourceRepository: URL,
     revision: String
   ) throws -> URL {
-    try validateRelativePath(file.path)
+    let canonicalPath = try validateRelativePath(file.path)
     try validateRevision(revision)
     let revisionRoot = sourceRepository
       .appendingPathComponent("resolve", isDirectory: true)
       .appendingPathComponent(revision, isDirectory: true)
-    let artifactURL = file.path.split(separator: "/").reduce(revisionRoot) {
+    let artifactURL = canonicalPath.split(separator: "/").reduce(revisionRoot) {
       $0.appendingPathComponent(String($1))
     }
     var components = URLComponents(
@@ -1737,13 +1863,19 @@ compatibility identity; they do not construct an admitted descriptor, catalog
 recommendation, or installer. Any custom manifest must use the designated
 initializer and pass its `artifactIdentity` explicitly, using the argument order
 `modelRootURL:manifest:artifactIdentity:` before the existing dependency labels.
+At the start of the existing `validateManifest`, call
+`try validateManifestPaths(manifest)` before checksum or byte-count checks;
+this is the manager-side regression point for the shared path rule.
 Both existing `DictationModelCapability` call shapes remain unchanged. The
 adapter never substitutes a
 descriptor for that value, and the URL root no longer hard-codes a candidate
-repository. Keep the manager's existing `validateRelativePath` and
-`validateRevision` checks in the generalized helper; extend
-`validateRelativePath` to reject empty components, `.`, `..`, absolute paths,
-and backslashes so it matches descriptor validation; preserve the existing
+repository. Keep the manager's existing `validateRevision` check and replace
+its path body with `AdmittedModelPathRules.canonicalize`; call
+`validateManifestPaths` before the existing checksum/byte loop so duplicate
+canonical paths fail before any URL is built. `remoteURL` uses the canonical
+path returned by `validateRelativePath`, so empty/absolute paths, empty
+components, `.`, `..`, backslashes, single- or double-encoded traversal, and
+duplicate manifest paths share the descriptor's exact rule. Preserve the existing
 `?download=true` query item exactly. Its verified required-capacity calculation
 is the artifact identity's checked `requiredCapacityBytes`, which the manager
 stores as its transfer gate. Immediately before each existing network transfer
@@ -1762,6 +1894,10 @@ ignored.
 The test-only `TestManagers` helpers may inject `capacityProvider: { Int64.max }`
 and `architectureProvider: { true }`; those values are never production or
 compatibility defaults.
+The manager path regression passes the descriptor's complete unsafe-path table
+through `remoteURL` and asserts `invalidManifestPath` before URL construction;
+a separate duplicate-normalized-manifest fixture calls `download()` with
+`ModelDownloadingProbe` and asserts `invalidManifest` plus zero transport calls.
 
 - [ ] **Step 4: Add the two installer implementations.**
 

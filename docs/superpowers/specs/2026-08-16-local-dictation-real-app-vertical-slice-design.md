@@ -264,8 +264,14 @@ only when the suffix is semantic (`11th`, `12th`, `13th`, and otherwise
 `11st`, `21th`, and malformed `21stx` fail closed; ordinary words ending in
 `st`, `nd`, `rd`, or `th` remain ordinary words. Currency, percentage,
 fraction, time, signed, parenthesized, decimal, and bounded unit forms use
-exact normalized signatures; unsupported digit-bearing sequences are
-ambiguous. A list exception validates the ordered pairs `first -> 1` through
+exact normalized signatures plus the complete raw sign/currency affix runs that
+`CleanupLexeme` detached while scanning. Removing a detached or doubled affix
+therefore changes the numeric signature; a trailing detached sign/currency is
+ambiguous, while a hyphen without a numeric raw neighbor remains ordinary punctuation. Balanced parentheses and
+complete separators/affixes are required, so `pay - 20` cannot become
+`Pay 20.`, `20-` cannot lose its trailing sign, and split/doubled
+`$`/`+`/`-` forms cannot lose one affix. Unsupported digit-bearing sequences
+are ambiguous. A list exception validates the ordered pairs `first -> 1` through
 `fifth -> 5`, removes only the full raw marker ranges for its remainder check,
 and passes only the exact candidate number ranges to protected-span comparison.
 Inter-marker whitespace/punctuation does not change those raw coordinates;
@@ -478,6 +484,16 @@ enum AdmittedModelDescriptorError: Error, Equatable, Sendable {
   case fileAggregateOverflow
   case emptySupport
 }
+
+enum AdmittedModelPathError: Error, Equatable, Sendable {
+  case unsafePath(String)
+  case duplicatePath(String)
+}
+
+enum AdmittedModelPathRules {
+  static func canonicalize(_ rawPath: String) throws -> String
+  static func canonicalizeUnique(_ rawPaths: [String]) throws -> [String]
+}
 ```
 
 The signed boundary decodes into `RawAdmittedModelDescriptor` and constructs the
@@ -496,6 +512,11 @@ per-file aggregate checked-add overflow rejects with
 `AdmittedModelDescriptorError.fileAggregateOverflow`. The validated descriptor
 stores the checked `requiredCapacityBytes` and has no accessible memberwise
 initializer; invalid raw input is rejected before the value can be observed.
+`AdmittedModelPathRules.canonicalizeUnique` is also called by the manager's
+manifest validation and by `remoteURL`; it performs the same bounded repeated
+percent-decoding, rejects any path whose decoded canonical value differs from
+its raw value or leaves encoding behind, and rejects the same unsafe and
+duplicate canonical paths before URL construction or transport.
 The existing
 compile-gated manager builds or receives one immutable
 `EnhancedModelArtifactIdentity` alongside its `EnhancedModelManifest`; its
@@ -652,8 +673,11 @@ slice's development app is successful with all custom components uninstalled.
    request, deadline behavior, caller cancellation, and number/number-word
    preservation before filler, repetition, or correction edits. The
    `AdmittedModelDescriptorTests` and catalog tests prove raw/validated
-   separation, both checked-add overflow errors, complete requested-language
-   subset gating, exact staging capacity, and the built-in fallback.
+separation, both checked-add overflow errors, complete requested-language
+subset gating, exact staging capacity, shared repeated-decoding path rejection,
+duplicate canonical-path rejection, and the built-in fallback. Compile-gated
+manager tests repeat the unsafe-path table through `remoteURL` and prove
+duplicate manifest paths fail before transport.
 2. **Coordinator integration:** fake `SpeechEngine`, fake processing session,
    fake dictionary resolver, fake cleaner, editor, saver, and history store prove
    one pipeline per capture, provisional display, dictionary-before-cleanup,
