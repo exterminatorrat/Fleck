@@ -347,6 +347,20 @@
         }
       )
       let languageModel = FoundationModelDictation()
+      let cleanupGenerator = FoundationModelCleanupGenerator(dictation: languageModel)
+      let incrementalCleaner = IncrementalTranscriptCleaner(
+        generator: cleanupGenerator,
+        clock: .live
+      )
+      let processing = StreamingDictationProcessor(
+        makeSource: {
+          let engine = try await engineProvider.engineForCapture(preferred: .standard)
+          return AppleSpeechStreamingAdapter(engine: engine)
+        },
+        dictionaryResolver: PersonalDictionaryTranscriptResolver(entries: { [] }),
+        cleaner: incrementalCleaner,
+        runtime: nil
+      )
       let coordinator = DictationCoordinator(
         engineProvider: engineProvider,
         preferredEngine: { [weak appState] in
@@ -358,7 +372,8 @@
         historyController: historyController,
         historyEnabled: { [weak appState] in
           appState?.preferences.dictationHistoryEnabled ?? true
-        }
+        },
+        processing: processing
       )
       let capsuleController = DictationCapsuleController()
       let shortcutController = GlobalHoldShortcut(
