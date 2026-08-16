@@ -329,38 +329,41 @@ private func awaitTermination(
     return disposition
   }
 
-  return await withTaskGroup(of: CleanupTerminationEvent.self) { group in
-    group.addTask {
-      await session.acknowledgement()
-      return .acknowledged
-    }
-    group.addTask {
-      do {
-        try await clock.sleepFor(cancellationBudget)
-        return .budgetExpired
-      } catch {
-        return .budgetExpired
+  let shield = Task {
+    await withTaskGroup(of: CleanupTerminationEvent.self) { group in
+      group.addTask {
+        await session.acknowledgement()
+        return .acknowledged
+      }
+      group.addTask {
+        do {
+          try await clock.sleepFor(cancellationBudget)
+          return .budgetExpired
+        } catch {
+          return .budgetExpired
+        }
+      }
+
+      guard let first = await group.next() else {
+        box.forceTerminate()
+        group.cancelAll()
+        while await group.next() != nil { }
+        return box.recordTermination(.forcedTermination)
+      }
+      switch first {
+      case .acknowledged:
+        group.cancelAll()
+        while await group.next() != nil { }
+        return box.recordTermination(
+          box.forceTerminationRequested() ? .forcedTermination : .acknowledged
+        )
+      case .budgetExpired:
+        box.forceTerminate()
+        group.cancelAll()
+        while await group.next() != nil { }
+        return box.recordTermination(.forcedTermination)
       }
     }
-
-    guard let first = await group.next() else {
-      box.forceTerminate()
-      group.cancelAll()
-      while await group.next() != nil { }
-      return box.recordTermination(.forcedTermination)
-    }
-    switch first {
-    case .acknowledged:
-      group.cancelAll()
-      while await group.next() != nil { }
-      return box.recordTermination(
-        box.forceTerminationRequested() ? .forcedTermination : .acknowledged
-      )
-    case .budgetExpired:
-      box.forceTerminate()
-      group.cancelAll()
-      while await group.next() != nil { }
-      return box.recordTermination(.forcedTermination)
-    }
   }
+  return await shield.value
 }

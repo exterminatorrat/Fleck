@@ -83,7 +83,7 @@ import Testing
   let generator = CleanupGeneratorProbe(session: session)
   let cleaner = IncrementalTranscriptCleaner(
     generator: generator,
-    clock: TestCleanupClock.acknowledgementFirst(session)
+    clock: TestCleanupClock.acknowledgementFirst()
   )
 
   let decision = try await cleaner.clean(request("send the report"))
@@ -236,14 +236,20 @@ import Testing
 }
 
 @Test func cooperativeCallerCancellationRequestsOneAcknowledgementAndNoForce() async {
+  let cancellationProbe = CancellationStateProbe()
   let session = CleanupGenerationSessionProbe(
     result: .success(.init(cleaned: "Send the report.")),
-    waitsForCancellation: true
+    waitsForCancellation: true,
+    acknowledgementGate: {
+      await cancellationProbe.waitUntilSleepForStarted()
+    }
   )
   let generator = CleanupGeneratorProbe(session: session)
   let cleaner = IncrementalTranscriptCleaner(
     generator: generator,
-    clock: TestCleanupClock.acknowledgementFirst(session)
+    clock: TestCleanupClock.acknowledgementFirst(
+      onSleepStart: cancellationProbe.record
+    )
   )
   let task = Task {
     try await cleaner.clean(request("send the report"))
@@ -252,6 +258,8 @@ import Testing
   task.cancel()
 
   await #expect(throws: CancellationError.self) { try await task.value }
+  #expect(cancellationProbe.sleepForStarted)
+  #expect(cancellationProbe.startedWhileCancelled == false)
   #expect(session.requestCancellationCount == 1)
   #expect(session.acknowledgementCallCount == 1)
   #expect(session.forceTerminateCount == 0)
@@ -310,7 +318,7 @@ private enum TestCleanupClock {
   )
 
   static func acknowledgementFirst(
-    _ session: CleanupGenerationSessionProbe
+    onSleepStart: (@Sendable (Bool) -> Void)? = nil
   ) -> CleanupClock {
     CleanupClock(
       now: { ContinuousClock().now },
@@ -318,6 +326,7 @@ private enum TestCleanupClock {
         try await ContinuousClock().sleep(until: deadline)
       },
       sleepFor: { _ in
+        onSleepStart?(Task.isCancelled)
         while true {
           try Task.checkCancellation()
           await Task.yield()
@@ -442,6 +451,7 @@ private final class CleanupGenerationSessionProbe: CleanupGenerationSession, @un
   private let waitsForCancellation: Bool
   private let ignoresCancellation: Bool
   private let lateCandidateOnCancellation: Bool
+  private let acknowledgementGate: (@Sendable () async -> Void)?
   private var resultCountStorage = 0
   private var resultOutcomeStorage: Outcome?
   private var startedStorage = false
@@ -459,7 +469,8 @@ private final class CleanupGenerationSessionProbe: CleanupGenerationSession, @un
     result: Result<GeneratedCleanupCandidate, CleanupGenerationError>,
     waitsForCancellation: Bool = false,
     ignoresCancellation: Bool = false,
-    lateCandidateOnCancellation: Bool = false
+    lateCandidateOnCancellation: Bool = false,
+    acknowledgementGate: (@Sendable () async -> Void)? = nil
   ) {
     switch result {
     case .success(let candidate):
@@ -470,6 +481,7 @@ private final class CleanupGenerationSessionProbe: CleanupGenerationSession, @un
     self.waitsForCancellation = waitsForCancellation
     self.ignoresCancellation = ignoresCancellation
     self.lateCandidateOnCancellation = lateCandidateOnCancellation
+    self.acknowledgementGate = acknowledgementGate
     self.resultOutcomeStorage = waitsForCancellation || ignoresCancellation ? nil : initialOutcome
   }
 
@@ -495,6 +507,7 @@ private final class CleanupGenerationSessionProbe: CleanupGenerationSession, @un
     while !lock.testWithLock({ acknowledgementSignaledStorage }) {
       await Task.yield()
     }
+    await acknowledgementGate?()
     lock.testWithLock { acknowledgementFinishedStorage = true }
   }
 
@@ -594,6 +607,33 @@ private final class DurationRecorder: @unchecked Sendable {
 
   var values: [Duration] {
     lock.testWithLock { valuesStorage }
+  }
+}
+
+private final class CancellationStateProbe: @unchecked Sendable {
+  private let lock = NSLock()
+  private var sleepForStartedStorage = false
+  private var startedWhileCancelledStorage: Bool?
+
+  func record(_ isCancelled: Bool) {
+    lock.testWithLock {
+      sleepForStartedStorage = true
+      startedWhileCancelledStorage = isCancelled
+    }
+  }
+
+  func waitUntilSleepForStarted() async {
+    while !sleepForStarted {
+      await Task.yield()
+    }
+  }
+
+  var sleepForStarted: Bool {
+    lock.testWithLock { sleepForStartedStorage }
+  }
+
+  var startedWhileCancelled: Bool? {
+    lock.testWithLock { startedWhileCancelledStorage }
   }
 }
 
