@@ -364,6 +364,17 @@ Cancellation must execute in this order:
    acknowledgement/force-termination path has completed and no active work can
    publish.
 
+`DictationCoordinator` does not use `isFinishing` as a blanket cancellation
+guard. An enhanced capture that owns a `processingSession` remains cancellable
+while its session is finishing; otherwise a blocked Apple Speech
+`source.finish()` could never receive the session cancellation that unblocks
+it. The legacy finishing guard remains only when no processing session exists.
+The coordinator integration test starts a blocked processing-session finish,
+waits for its start signal, cancels, and proves focused-editor rollback precedes
+session/source cancellation, the finish unblocks, session drain precedes cancel
+return, and no provisional update, insertion, history mutation, save, or late
+result occurs.
+
 `StreamingDictationSession` also owns terminal state for non-cancellation paths.
 Its one finalization task marks terminal after both successful result and
 thrown source, dictionary, or cleanup error. `source.finish()` owns the
@@ -638,11 +649,16 @@ asserts every dispatch produces the expected presentation update. The
 finite installer phase used by the card and VoiceOver is the same phase tested
 by the installer adapter.
 
-If signed-descriptor construction, catalog hardware recommendation, or either
-identity comparison fails, the Settings construction boundary catches the
-error and exposes a finite failed installer snapshot without starting
-transport. The coordinator continues using
-the built-in Apple Speech/deterministic-cleanup path, so a malformed candidate
+If raw signed-descriptor construction fails, or if catalog hardware/language/
+capacity gating produces no recommendation, the Settings construction boundary
+catches the error and exposes a finite failed installer snapshot with
+`.builtIn` recommendation and no custom compatibility claims. If descriptor
+validation and catalog recommendation have already succeeded but artifact/
+manifest identity binding or enhanced-installer construction fails, the boundary
+exposes a finite non-operating failed snapshot retaining
+`.recommended(theSameDescriptor)` and its exact architecture/language values.
+Both paths start no transport. The coordinator continues using the built-in
+Apple Speech/deterministic-cleanup path, so a malformed or failed candidate
 configuration cannot disable the safe dictation fallback.
 The boundary input is `Optional<AdmittedModelSignedConfiguration>` in the
 compile-gated path and is `nil` in the current app; nil maps to the built-in
@@ -753,8 +769,12 @@ duplicate manifest paths fail before transport.
   installation, startup, calibration, repair, update, removal, cancellation,
   actionable errors, live in-progress snapshot delivery, and descriptor/artifact
    mismatch rejection without a real model transfer. Invalid signed descriptors
-   and bindings are caught into a non-operating failed Settings snapshot; Apple
-   Speech remains the active fallback and transport calls remain zero. The
+   and unsupported catalog profiles use a non-operating failed snapshot with
+   `.builtIn` and empty compatibility arrays; binding/installer construction
+   failures after a successful recommendation use `.recommended(descriptor)` and
+   retain exact descriptor architecture/language arrays. Tests also verify the
+   existing Apple Speech availability remains active and transport calls remain
+   zero. The
    Task 3-owned Settings presentation tests separately prove the recommendation
    card's VoiceOver label/value, keyboard focus, finite phase/progress copy, and
    exactly-once Install/Cancel/Repair/Update/Remove dispatch with serialized
@@ -778,9 +798,12 @@ duplicate manifest paths fail before transport.
    local `codex/...` branch at that exact SHA without merge/rebase/cherry-pick.
    It requires final SHA/branch, hash, diff, ancestry, unmerged-state, and
    ` M AGENTS.md` status to remain identical and aborts before packaging on any
-   mismatch. The full-suite command may continue after a nonzero exit only for
-   the one documented `AppStateTests.swift` viewport assertion `18.0 >= 48.0`,
-   classified from a bounded log after fail-fast is restored; every other
+   mismatch. The full-suite command may continue after a nonzero exit only when
+   its bounded log contains exactly the known `AppStateTests.swift:916` viewport
+   assertion `18.0 >= 48.0`, one Swift Testing per-test record of the form
+   `Test ... failed after ... with 1 issue`, and one suite summary beginning
+   `Test run with 1 test in 0 suites failed` and containing `with 1 issue`, with
+   no other failure, issue, error, crash, or unexpected record. Every other
    failure aborts. Only then run `./Scripts/build-fleck-app.sh` and inspect
    `/Users/harryjin/Fleck/.build/Fleck.app`. A bundle produced in an isolated
    worktree is not evidence for that exact path.

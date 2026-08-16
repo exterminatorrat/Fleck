@@ -2173,12 +2173,17 @@ final class BuiltInAdmittedModelInstaller: AdmittedModelInstalling {
 
 @MainActor
 final class FailedAdmittedModelInstaller: AdmittedModelInstalling {
+  let recommendation: AdmittedModelRecommendation
   let snapshot: AdmittedModelInstallationSnapshot
   let updates: AsyncStream<AdmittedModelInstallationSnapshot>
 
-  init(message: String) {
+  init(
+    recommendation: AdmittedModelRecommendation,
+    message: String
+  ) {
+    self.recommendation = recommendation
     let initial = AdmittedModelInstallationSnapshot(
-      recommendation: .builtIn,
+      recommendation: recommendation,
       phase: .failed(message: message),
       lastError: message
     )
@@ -2962,11 +2967,12 @@ func supportedHardwareProfileReachesRecommendedInstallerWithoutStartingTransport
 @Test @MainActor
 func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
   let raw = TestDescriptors.make(TestDescriptors.neutralAdmitted, modelID: "")
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
   let fixture = try! TestManagers.manager(
     descriptor: TestDescriptors.tinyAdmittedASR,
     artifactIdentity: TestArtifacts.identity(matching: TestDescriptors.tinyAdmittedASR),
     manifest: TestManifests.tiny,
-    transport: ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+    transport: transport
   )
   defer { fixture.cleanup() }
   let configuration = AdmittedModelSignedConfiguration(
@@ -2985,6 +2991,9 @@ func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
   #expect(!message.isEmpty)
   let presentation = AdmittedModelSettingsPresentation(snapshot: installer.snapshot)
   #expect(presentation.detail.contains(message))
+  #expect(presentation.supportedArchitectures.isEmpty)
+  #expect(presentation.supportedLanguages.isEmpty)
+  #expect(transport.downloadCalls == 0)
 }
 
 @Test @MainActor
@@ -3006,9 +3015,27 @@ func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
     calibrate: { }
   )
   let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
-  #expect(installer.snapshot.recommendation == .builtIn)
+  #expect(installer.snapshot.recommendation == .recommended(descriptor))
   #expect(transport.downloadCalls == 0)
   #expect(installer.snapshot.lastError != nil)
+  let presentation = AdmittedModelSettingsPresentation(snapshot: installer.snapshot)
+  #expect(presentation.supportedArchitectures == descriptor.architectures)
+  #expect(presentation.supportedLanguages == descriptor.languages)
+  #expect(presentation.accessibilityValue.contains(descriptor.architectures.joined(separator: ", ")))
+  #expect(presentation.accessibilityValue.contains(descriptor.languages.joined(separator: ", ")))
+
+  // The installer failure does not alter the existing Apple Speech capability
+  // decision; standard on-device recognition remains the safe fallback.
+  let availability = DictationAvailability.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  ))
+  #expect(availability.standardAvailable)
 }
 #endif
 ~~~
@@ -3232,20 +3259,31 @@ func makeAdmittedModelInstaller(
   guard let signedConfiguration else {
     return BuiltInAdmittedModelInstaller()
   }
+  let descriptor: AdmittedModelDescriptor
   do {
-    let descriptor = try AdmittedModelDescriptor(
+    descriptor = try AdmittedModelDescriptor(
       validating: signedConfiguration.rawDescriptor
     )
-    let catalog = AdmittedModelCatalog(
-      signedDescriptor: descriptor,
-      hardware: signedConfiguration.hardware
+  } catch {
+    return FailedAdmittedModelInstaller(
+      recommendation: .builtIn,
+      message: String(describing: error)
     )
-    guard case .recommended(let recommended) = catalog.recommendation(),
-          recommended == descriptor else {
-      return FailedAdmittedModelInstaller(
-        message: "This model is not supported by the current Mac, language, or available staging capacity."
-      )
-    }
+  }
+
+  let catalog = AdmittedModelCatalog(
+    signedDescriptor: descriptor,
+    hardware: signedConfiguration.hardware
+  )
+  guard case .recommended(let recommended) = catalog.recommendation(),
+        recommended == descriptor else {
+    return FailedAdmittedModelInstaller(
+      recommendation: .builtIn,
+      message: "This model is not supported by the current Mac, language, or available staging capacity."
+    )
+  }
+
+  do {
     return try EnhancedModelManagerInstaller(
       manager: signedConfiguration.manager,
       descriptor: descriptor,
@@ -3253,7 +3291,12 @@ func makeAdmittedModelInstaller(
       calibrate: signedConfiguration.calibrate
     )
   } catch {
-    return FailedAdmittedModelInstaller(message: String(describing: error))
+    // Descriptor validation and catalog recommendation already succeeded, so
+    // preserve the exact recommendation while keeping this installer inert.
+    return FailedAdmittedModelInstaller(
+      recommendation: .recommended(recommended),
+      message: String(describing: error)
+    )
   }
 }
 #else
@@ -3265,13 +3308,19 @@ func makeAdmittedModelInstaller() -> any AdmittedModelInstalling {
 ~~~
 
 `FailedAdmittedModelInstaller` is non-operating and exists only to render the
-actionable Settings error. Its `.builtIn` recommendation does not replace the
-coordinator's existing Apple Speech/deterministic-cleanup dependencies, so a
-bad signed descriptor, unsupported hardware/language profile, insufficient
-staging capacity, or artifact binding leaves the production fallback usable and
-performs no transport work. The catalog result is compared to the same
-validated descriptor before `EnhancedModelManagerInstaller` is constructed;
-there is no silent recommendation or install path.
+actionable Settings error. It accepts an explicit recommendation. Raw descriptor
+validation failure, unsupported hardware/language, and insufficient staging
+capacity have no validated recommendation and therefore use `.builtIn`; an
+artifact/manifest binding or enhanced-installer construction failure after
+descriptor validation and a successful catalog match uses
+`.recommended(theSameDescriptor)`. The latter preserves the descriptor's exact
+architecture/language values in the failed presentation while remaining inert.
+Neither failure path replaces the coordinator's existing Apple
+Speech/deterministic-cleanup dependencies: Settings construction remains safe,
+transport remains at zero before explicit user action, and Apple Speech stays
+available as the fallback. The catalog result is compared to the same validated
+descriptor before `EnhancedModelManagerInstaller` is constructed; there is no
+silent recommendation or install path.
 
 In `SettingsView.swift`, make the ordinary-build Dictation section render one
 native card from the view model: its recommendation card has one explicit
@@ -3453,18 +3502,21 @@ full_suite_status=$?
 set -euo pipefail
 test "$(wc -c < "$full_suite_log" | tr -d ' ')" -le 1048576
 if (( full_suite_status != 0 )); then
-  known_failure_pattern='AppStateTests\.swift:[0-9]+.*18\.0.*48\.0'
-  known_summary_pattern='Test run with 1 test[s]? failed'
-  known_failure_count="$(rg -n "$known_failure_pattern" "$full_suite_log" | wc -l | tr -d ' ')"
-  known_summary_count="$(rg -n -i "$known_summary_pattern" "$full_suite_log" | wc -l | tr -d ' ')"
-  test "$known_failure_count" = "1"
-  test "$known_summary_count" = "1"
-  unexpected_failure_records="$(
-    rg -n -i 'error:|fatal error:|issue recorded|unexpected|assertion failed|expectation failed|test .* failed|failures?:' "$full_suite_log" || true
+  known_assertion_pattern='AppStateTests\.swift:916(:[0-9]+)?.*18\.0[[:space:]]*>=[[:space:]]*48\.0'
+  known_test_pattern='Test (?!run with 1 test in 0 suites).* failed after .* with 1 issue'
+  known_summary_pattern='Test run with 1 test in 0 suites failed .*with 1 issue'
+  known_assertion_records="$(rg -n -P "$known_assertion_pattern" "$full_suite_log" || true)"
+  known_test_records="$(rg -n -P "$known_test_pattern" "$full_suite_log" || true)"
+  known_summary_records="$(rg -n -P "$known_summary_pattern" "$full_suite_log" || true)"
+  test "$(printf '%s\n' "$known_assertion_records" | sed '/^$/d' | wc -l | tr -d ' ')" = "1"
+  test "$(printf '%s\n' "$known_test_records" | sed '/^$/d' | wc -l | tr -d ' ')" = "1"
+  test "$(printf '%s\n' "$known_summary_records" | sed '/^$/d' | wc -l | tr -d ' ')" = "1"
+  failure_related_records="$(
+    rg -n -i 'fail|failure|issue|error|crash|unexpected' "$full_suite_log" || true
   )"
   unexpected_failure_records="$(
-    printf '%s\n' "$unexpected_failure_records" |
-      rg -v "$known_failure_pattern|$known_summary_pattern" || true
+    printf '%s\n' "$failure_related_records" |
+      rg -v -P "$known_assertion_pattern|$known_test_pattern|$known_summary_pattern" || true
   )"
   test -z "$unexpected_failure_records"
 fi
@@ -3478,10 +3530,12 @@ Any failed snapshot, ancestry, branch, dirty-file, unmerged-state, or
 in-progress-operation check aborts before the build. The full-suite command is
 the only temporarily non-fail-fast command: its output is captured in a
 bounded log, fail-fast is restored on the next line, and continuation is
-allowed only when the log contains exactly one
-`AppStateTests.swift` viewport assertion matching `18.0 >= 48.0` plus its one
-failure summary and no other failure record. Any other nonzero suite result
-exits before the build. Run the build script exactly as committed; do not copy
+allowed only when the log contains exactly one `AppStateTests.swift:916`
+assertion containing `18.0 >= 48.0`, exactly one per-test record matching
+`Test ... failed after ... with 1 issue`, exactly one suite summary beginning
+`Test run with 1 test in 0 suites failed` and containing `with 1 issue`, and no
+other failure-related record. Any other nonzero suite result exits before the
+build. Run the build script exactly as committed; do not copy
 it, add another script, or use an isolated-worktree bundle as evidence. The
 primary may launch the app and inspect Settings, but must report only observed
 process and UI state.

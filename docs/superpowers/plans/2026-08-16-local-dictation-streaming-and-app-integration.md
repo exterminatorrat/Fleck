@@ -2320,9 +2320,13 @@ func cancellationRejectsLateProcessingUpdateAndResult() async throws {
 
 enum CancellationEvent: Equatable {
   case focusedEditorRollback
+  case finishStarted
   case sessionCancel
   case sourceCancel
   case sourcePhysicalRelease
+  case finishUnblocked
+  case sessionDrain
+  case coordinatorCancelReturned
 }
 
 @MainActor
@@ -2334,6 +2338,11 @@ final class CancellationOrderRecorder {
 // ProcessingProbe's callbacks are test-only hooks from its owned session and
 // source probes; Fixture(onFocusedEditorRollback:) records the existing
 // FocusedDictationEditing.cancelFocusedDictation() restoration call.
+// For the blocked-finish case the same probe exposes
+// `finishBlocksUntilCancel`, `waitUntilFinishStarted()`, `onFinishUnblocked`,
+// `onSessionDrain`, and `publishedUpdates`. The Fixture exposes the existing
+// history probe as `historyStore.records`; these are test-only observations,
+// not production coordinator state.
 
 @Test @MainActor
 func cancellationRollsBackFocusedEditorBeforeSessionAndSourceCancel() async throws {
@@ -2359,6 +2368,50 @@ func cancellationRollsBackFocusedEditorBeforeSessionAndSourceCancel() async thro
   ])
   #expect(fixture.editor.committedTexts.isEmpty)
   #expect(fixture.saver.savedTexts.isEmpty)
+}
+
+@Test @MainActor
+func cancellingEnhancedCaptureDuringBlockedFinishRollsBackBeforeSessionCancelAndDrains() async throws {
+  let order = CancellationOrderRecorder()
+  let processing = ProcessingProbe(
+    finishBlocksUntilCancel: true,
+    onFinishStarted: { order.append(.finishStarted) },
+    onSessionCancel: { order.append(.sessionCancel) },
+    onSourceCancel: { order.append(.sourceCancel) },
+    onSourcePhysicalRelease: { order.append(.sourcePhysicalRelease) },
+    onFinishUnblocked: { order.append(.finishUnblocked) },
+    onSessionDrain: { order.append(.sessionDrain) }
+  )
+  let fixture = try Fixture(
+    processing: processing,
+    onFocusedEditorRollback: { order.append(.focusedEditorRollback) }
+  )
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+
+  let finishTask = Task { await fixture.coordinator.finish() }
+  await processing.waitUntilFinishStarted()
+  let cancelTask = Task {
+    await fixture.coordinator.cancel()
+    order.append(.coordinatorCancelReturned)
+  }
+  await cancelTask.value
+  await finishTask.value
+
+  #expect(order.values.firstIndex(of: .focusedEditorRollback)!
+    < order.values.firstIndex(of: .sessionCancel)!)
+  #expect(order.values.firstIndex(of: .sessionCancel)!
+    < order.values.firstIndex(of: .sourceCancel)!)
+  #expect(order.values.firstIndex(of: .sourceCancel)!
+    < order.values.firstIndex(of: .finishUnblocked)!)
+  #expect(order.values.firstIndex(of: .sessionDrain)!
+    < order.values.firstIndex(of: .coordinatorCancelReturned)!)
+  #expect(order.values.filter { $0 == .sourceCancel }.count == 1)
+  #expect(order.values.filter { $0 == .sourcePhysicalRelease }.count == 1)
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.historyStore.records.isEmpty)
+  #expect(processing.publishedUpdates.isEmpty)
 }
 
 @Test @MainActor
@@ -2430,13 +2483,20 @@ init(
 )
 ~~~
 
-The capture record stores its current generation and, for the incremental path,
-the owned `DictationProcessingSession`. The cancellation path is ordered
-explicitly:
+The capture record stores its current generation, `isFinishing` state, and, for
+the incremental path, the owned `DictationProcessingSession`. The cancellation
+path is ordered explicitly. A capture with a processing session remains
+cancellable while `isFinishing` is true; returning early in that state would
+leave a blocked source `finish()` unable to receive the session's cancellation.
+The legacy guard remains only for a finishing capture with no processing session,
+because that branch has no cancellable finalization owner:
 
 ~~~swift
 private func cancelActiveCapture(_ id: UUID) async {
   guard var capture, capture.id == id, !capture.cancelRequested else { return }
+  guard !capture.isFinishing || capture.processingSession != nil else {
+    return // legacy finalization has no cancellable processing-session owner
+  }
   capture.cancelRequested = true
   capture.generation &+= 1
   self.capture = capture
@@ -2462,7 +2522,14 @@ cancel-requested state, termination state, strictly increasing generation, and
 stable-prefix continuity before each editor update. It updates only focused
 provisional text.
 
-On finish, cancel and await the update task, await one processor result, repeat
+On finish, set `capture.isFinishing = true` before awaiting the processing
+session's result. On the enhanced path, `cancelActiveCapture` still enters
+while that flag is set, invalidates the generation and stops updates, rolls
+back the focused editor transaction, and awaits the session's cancellation;
+the session cancellation unblocks a blocked source `finish()`. On the legacy
+path, the existing finishing guard remains in force because the engine branch
+does not own the incremental finalization task. On a successful finish, cancel
+and await the update task, await one processor result, repeat
 all guards, create/update the existing history record, and pass only
 `result.insertedText` to focused commit or existing Smart Capture routing. Do
 not call legacy `cleaner.clean` on this branch. At cancellation start, mark the
@@ -2473,10 +2540,13 @@ processing-session `cancel()`. That session owns finalization cancellation and
 source terminalization; when finalization is in flight, the session calls its
 source `cancel()` before awaiting finalization so Apple Speech cancel releases
 the session and unblocks finish. The coordinator publishes `.cancelled` only
-after that await and publishes nothing from a late task. The ordered coordinator
-test records focused-editor rollback, session cancel, source cancel, and the
-physical release performed by that source terminal operation and asserts this
-exact sequence.
+after that await and publishes nothing from a late task. The existing order
+test covers an idle enhanced capture; the blocked-finish coordinator test uses
+`ProcessingProbe(finishBlocksUntilCancel: true)`, waits for the processing
+session's finish-start signal, then cancels. It asserts rollback before session
+and source cancellation, one source terminal call/release, finish unblocking,
+session drain before coordinator cancel returns, and empty provisional,
+insertion, history, save, and late-update probes.
 
 - [ ] **Step 5: Wire the real app without a second capture.** In
 `FleckApp.swift`, construct the existing Foundation/deterministic cleanup
