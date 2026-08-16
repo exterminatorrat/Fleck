@@ -518,6 +518,9 @@ hardware profile, recommendation, and catalog interfaces above.
 
 ~~~swift
 import Foundation
+import Testing
+
+@testable import FleckApp
 
 @Test func ordinaryConfigurationShowsBuiltInState() {
   let catalog = AdmittedModelCatalog(
@@ -1030,6 +1033,9 @@ consume only the built-in installer seam.
 ~~~swift
 import Foundation
 import CryptoKit
+import Testing
+
+@testable import FleckApp
 
 enum TestFixtures {
   static let tinyBytes = Data("fixture!".utf8) // exactly 8 bytes
@@ -1059,6 +1065,7 @@ final class SynchronousCapacityProbe: @unchecked Sendable {
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 enum TestManagers {
+  @MainActor
   static func manager(
     descriptor: AdmittedModelDescriptor,
     artifactIdentity: EnhancedModelArtifactIdentity,
@@ -1069,14 +1076,18 @@ enum TestManagers {
       Int64.max
     },
     architectureProvider: @escaping @Sendable () -> Bool = { true }
-  ) -> EnhancedModelManager
-
-  static func managerWithWrongFixtureChecksum(
-    descriptor: AdmittedModelDescriptor,
-    artifactIdentity: EnhancedModelArtifactIdentity,
-    manifest: EnhancedModelManifest,
-    transport: any ModelDownloading
-  ) -> EnhancedModelManager
+  ) -> EnhancedModelManager {
+    _ = refreshFixture
+    return EnhancedModelManager(
+      modelRootURL: TestPaths.temporaryDirectory(),
+      manifest: manifest,
+      artifactIdentity: artifactIdentity,
+      candidateEnabled: true,
+      capacityProvider: capacityProvider,
+      architectureProvider: architectureProvider,
+      transport: transport
+    )
+  }
 }
 #endif
 
@@ -1153,11 +1164,11 @@ func fakeInstallReportsBytesThenVerificationStartupAndCalibration() async {
 @Test @MainActor
 func checksumFailureBecomesActionableRepairState() async {
   let descriptor = TestDescriptors.tinyAdmittedASR
-  let manager = TestManagers.managerWithWrongFixtureChecksum(
+  let manager = TestManagers.manager(
     descriptor: descriptor,
     artifactIdentity: TestArtifacts.identity(matching: descriptor),
     manifest: TestManifests.tiny,
-    transport: ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+    transport: ModelDownloadingProbe(bytes: Data("corrupt!".utf8))
   )
   let installer = try! EnhancedModelManagerInstaller(
     manager: manager,
@@ -1640,11 +1651,49 @@ struct EnhancedModelByteProgress: Equatable, Sendable {
 
 @MainActor
 final class EnhancedModelManager: ObservableObject {
-  private let artifactIdentity: EnhancedModelArtifactIdentity
+  nonisolated static let resumeAuthenticationService =
+    "com.harryjin.fleck.enhanced-model-resume"
+  nonisolated static let legacyResumeAuthenticationService =
+    "com.motes.enhanced-model-resume"
+  nonisolated private static let resumeAuthenticationAccount = "default"
+  nonisolated private static let resumeAuthenticationLock = NSLock()
+  static let requiredAvailableCapacity: Int64 = 1_197_261_950
+
+  @Published private(set) var state: EnhancedModelState = .notInstalled
+  private(set) var verifiedRepositoryURL: URL?
+  var verifiedLoadState: EnhancedModelVerifiedLoadState {
+    guard candidateEnabled, let verifiedRepositoryURL else {
+      return .unavailable
+    }
+    switch state {
+    case .ready, .updateAvailable, .downloading, .verifying, .installing:
+      return .ready(repositoryURL: verifiedRepositoryURL)
+    case .notInstalled, .repairRequired, .removing:
+      return .unavailable
+    }
+  }
+  let isArchitectureSupported: Bool
+
+  private let context: FileContext
   private let manifest: EnhancedModelManifest
+  private let trustedManifests: [EnhancedModelManifest]
+  private let artifactIdentity: EnhancedModelArtifactIdentity
   private let requiredCapacityBytes: Int64
   private let capacityProvider: @Sendable () throws -> Int64
-  @Published private(set) var byteProgress: EnhancedModelByteProgress?
+  private let candidateEnabled: Bool
+  private let clock: @Sendable () -> Date
+  private let transport: any ModelDownloading
+  private let assessmentDidComplete: @Sendable () -> Void
+  private let cleanupWillBegin: @Sendable () -> Void
+  private let removalWillBegin: @Sendable () -> Void
+  private let resumeAuthenticationKeyProvider: @Sendable () throws -> SymmetricKey
+  @Published private(set) var byteProgress: EnhancedModelByteProgress? = nil
+  private var stateChangedAt: Date
+  private var activeOperationID: UUID?
+  private var activeAssessmentCount = 0
+  private var pendingInferenceLoadFailure: (message: String, repositoryURL: URL)?
+  private var lifecycleEpoch: UInt64 = 0
+  private var highestProgress = 0.0
 
   nonisolated static func liveAvailableCapacity() throws -> Int64 {
     let values = try URL(fileURLWithPath: NSHomeDirectory()).resourceValues(
@@ -1686,12 +1735,31 @@ final class EnhancedModelManager: ObservableObject {
       try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
     }
   ) {
-    // Forward all existing storage/transport behavior to the current manager
-    // initializer while making the identity a required stored value.
-    self.artifactIdentity = artifactIdentity
+    let root = modelRootURL ?? fileManager.urls(
+      for: .applicationSupportDirectory,
+      in: .userDomainMask
+    )[0]
+      .appendingPathComponent(
+        FleckProductPaths.canonicalDirectoryName,
+        isDirectory: true
+      )
+      .appendingPathComponent("DictationModels", isDirectory: true)
+
+    self.context = FileContext(root: root, fileManager: fileManager)
     self.manifest = manifest
+    self.trustedManifests = trustedManifests ?? [manifest]
+    self.artifactIdentity = artifactIdentity
     self.requiredCapacityBytes = artifactIdentity.requiredCapacityBytes
+    self.candidateEnabled = candidateEnabled
     self.capacityProvider = capacityProvider
+    self.isArchitectureSupported = architectureProvider()
+    self.clock = clock
+    self.transport = transport
+    self.assessmentDidComplete = assessmentDidComplete
+    self.cleanupWillBegin = cleanupWillBegin
+    self.removalWillBegin = removalWillBegin
+    self.resumeAuthenticationKeyProvider = resumeAuthenticationKeyProvider
+    self.stateChangedAt = clock()
   }
 
   convenience init(
@@ -1782,17 +1850,17 @@ final class EnhancedModelManager: ObservableObject {
   private func performTransfer(
     from remoteURL: URL,
     resumeToken: ModelResumeToken?,
-    _ progress: @escaping @Sendable (Int64, Int64) -> Void
+    progress: @escaping @Sendable (Int64, Int64) -> Void
   ) async throws -> ModelDownloadResult {
     try requireLiveTransferCapacity()
     return try await transport.download(
       from: remoteURL,
       resumeToken: resumeToken,
-      progress
+      progress: progress
     )
   }
 
-  private static func validateManifestPaths(
+  nonisolated private static func validateManifestPaths(
     _ manifest: EnhancedModelManifest
   ) throws {
     do {
@@ -1848,21 +1916,27 @@ final class EnhancedModelManager: ObservableObject {
 #endif
 ~~~
 
-The existing embedded manager construction supplies its immutable artifact
-identity beside the actual manifest. The source-compatible
+The displayed initializer is the existing manager initializer with every
+stored-property assignment retained; it adds only the immutable artifact
+identity and its checked required-capacity binding. The existing embedded
+manager construction supplies that identity beside the actual manifest. The
+source-compatible
 `DictationModelCapability(modelRootURL:)` and
 `DictationModelCapability(modelRootURL:candidateEnabled:architectureProvider:)`
 convenience overloads preserve the current call surface and delegate to the
 manifest/artifact designated initializer with exactly
-`Self.embeddedManifestAndArtifactIdentity()`. Their default capacity provider
+`Self.embeddedManifestAndArtifactIdentity()`. The designated initializer's
+declared label order is
+`modelRootURL:fileManager:manifest:artifactIdentity:trustedManifests:` followed
+by the existing dependency labels. Their default capacity provider
 reads the live volume's `volumeAvailableCapacityForImportantUsage`, and their
 default architecture provider performs the existing `uname` arm64 check;
 neither uses a test-success default. They accept no optional custom manifest and
 use only the current experimental Parakeet manifest plus its matching
 compatibility identity; they do not construct an admitted descriptor, catalog
 recommendation, or installer. Any custom manifest must use the designated
-initializer and pass its `artifactIdentity` explicitly, using the argument order
-`modelRootURL:manifest:artifactIdentity:` before the existing dependency labels.
+initializer and pass its `artifactIdentity` explicitly, using the declared
+argument order above before the existing dependency labels.
 At the start of the existing `validateManifest`, call
 `try validateManifestPaths(manifest)` before checksum or byte-count checks;
 this is the manager-side regression point for the shared path rule.
@@ -1880,14 +1954,15 @@ duplicate manifest paths share the descriptor's exact rule. Preserve the existin
 is the artifact identity's checked `requiredCapacityBytes`, which the manager
 stores as its transfer gate. Immediately before each existing network transfer
 in install, repair, and update, wrap that exact transport call in
-`performTransfer(from:resumeToken:)` with the existing callback that forwards
-received bytes to `updateProgress`; the wrapper
+`performTransfer(from:resumeToken:progress:)` with the existing callback that
+forwards received bytes to `updateProgress`; the wrapper
 retains the existing `transport.download(from:resumeToken:progress:)` call and
 re-reads `capacityProvider` immediately before it, throwing
-`insufficientSpace` when live available bytes are below the bound. The old
-`EnhancedModelManager.requiredAvailableCapacity` Parakeet constant is removed
-from this admitted path and is never used for an admitted artifact. The
-catalog and manager therefore use the same signed descriptor requirement.
+`insufficientSpace` when live available bytes are below the bound. The existing
+`EnhancedModelManager.requiredAvailableCapacity` compatibility symbol may
+remain for legacy behavior, but this admitted path never reads that Parakeet
+constant; it uses only the signed artifact's checked requirement. The catalog
+and manager therefore use the same signed descriptor requirement.
 The URL test passes a non-default source repository and revision and asserts the
 full resolved path plus `?download=true`, proving the explicit identity is not
 ignored.
@@ -2365,6 +2440,11 @@ finite phase/progress text.
 - [ ] **Step 1: Write presentation tests before changing Settings.**
 
 ~~~swift
+import Foundation
+import Testing
+
+@testable import FleckApp
+
 @Test func builtInStateHasNoInstallActionOrPicker() {
   let presentation = AdmittedModelSettingsPresentation(
     snapshot: .init(
@@ -2458,7 +2538,7 @@ finite phase/progress text.
 @MainActor
 final class InstallerActionProbe: AdmittedModelInstalling {
   init(holdsOperations: Bool = false)
-  private(set) var snapshot: AdmittedModelInstallationSnapshot { get }
+  private(set) var snapshot: AdmittedModelInstallationSnapshot
   var updates: AsyncStream<AdmittedModelInstallationSnapshot> { get }
   func count(_ action: AdmittedModelSettingsAction) -> Int
   func waitUntilStarted(_ action: AdmittedModelSettingsAction) async

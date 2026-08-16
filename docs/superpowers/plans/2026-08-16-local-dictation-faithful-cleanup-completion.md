@@ -25,7 +25,7 @@ existing FleckCore dictionary/cleanup structures. No new package dependency.
 - The target cleanup input is the exact dictionary baseline. Dictionary resolution failure before a baseline exists belongs to the later coordinator raw-ASR recovery path and is not converted into a cleanup baseline here.
 - Automatic cleanup may change only punctuation, capitalization, whitespace, isolated unambiguous fillers, immediate exact repetition, an explicitly spoken same-tail correction, and short-list formatting without changing list items.
 - Names and dictionary forms, numbers and number words, dates and times, prices, units and quantities, recipients and destinations, paths, URLs, email addresses, code, commands, negation, modality, commitments, quotes, and mixed English/Mandarin order are protected meaning.
-- Number classification runs over raw `CleanupLexeme` sequences before filler, repetition, or correction recognition; supported English cardinal/ordinal words, scales through trillion, semantically valid full-token digit ordinals, fractions, decimals, percentages, currencies, and unit quantities must keep the exact ordered number signature and detached sign/currency context, while ambiguous or unrecognized numeric/quantity-looking forms fail closed. Only paired, validated ordinal list markers are exempt.
+- Number classification runs over raw `CleanupLexeme` sequences before filler, repetition, or correction recognition; supported English cardinal/ordinal words, scales through trillion, semantically valid full-token digit ordinals, fractions, decimals, percentages, scanner-valid signed/parenthesized currency forms using any Unicode currency symbol, and unit quantities must keep the exact ordered number signature and detached sign/currency context, while ambiguous or unrecognized numeric/quantity-looking forms fail closed. Only paired, validated ordinal list markers are exempt.
 - The validator runs protected-span preservation before allowlist classification. Any protected-meaning violation rejects the candidate.
 - The automatic target is at most 80 lexical words. The candidate output is at most input token count plus 32; helper-reported metadata is not authoritative.
 - There is one request, one generation attempt, zero automatic retries, no network, no transcript logging, no transcript persistence, and no audio persistence.
@@ -105,6 +105,11 @@ existing FleckCore target only.
   strings.
 
 ~~~swift
+import Foundation
+import Testing
+
+@testable import FleckCore
+
 @Test func resolutionReplacesOnlyAnUnambiguousAlias() throws {
   let entry = PersonalDictionaryEntry(
     preferredForm: "FleckApp",
@@ -278,6 +283,7 @@ resource, script, and every file outside these two paths.
   rather than asserting only that a result is nonempty.
 
 ```swift
+import Foundation
 import FleckCore
 import Testing
 
@@ -397,6 +403,9 @@ import Testing
     ("meet at 10:30 am", "Meet at 10:30 AM."),
     ("score -3.5", "Score -3.5."),
     ("charge ($20)", "Charge ($20)."),
+    ("pay $-20", "Pay $-20."),
+    ("charge (-$20)", "Charge (-$20)."),
+    ("pay ₹20", "Pay ₹20."),
     ("pay - 20", "Pay - 20."),
     ("pay $ 20", "Pay $ 20."),
     ("pay $$20", "Pay $$20."),
@@ -425,6 +434,15 @@ import Testing
   #expect(CleanupLexeme.scan("pay $$20").map(\.original) == [
     "pay", " ", "$", "$20"
   ])
+  #expect(CleanupLexeme.scan("pay $-20").map(\.original) == [
+    "pay", " ", "$-20"
+  ])
+  #expect(CleanupLexeme.scan("charge (-$20)").map(\.original) == [
+    "charge", " ", "(-$20)"
+  ])
+  #expect(CleanupLexeme.scan("pay ₹20").map(\.original) == [
+    "pay", " ", "₹20"
+  ])
   #expect(CleanupLexeme.scan("pay $ $20").map(\.original) == [
     "pay", " ", "$", " ", "$20"
   ])
@@ -449,6 +467,8 @@ import Testing
   }
   #expect(text == "1. buy 20 apples;\n2. buy 20 oranges.")
 
+  // Number signatures run before protected-span comparison, so the currency
+  // change below must report numberMeaningChanged rather than protectedContentChanged.
   let rejected: [(String, String)] = [
     ("twenty twenty", "twenty"),
     ("twenty actually thirty", "thirty"),
@@ -473,6 +493,10 @@ import Testing
     ("pay + + +20", "Pay + +20."),
     ("pay - -20", "Pay -20."),
     ("pay 20-", "Pay 20-."),
+    ("pay $-20", "Pay $20."),
+    ("charge (-$20)", "Charge ($20)."),
+    ("pay ₹20", "Pay $20."),
+    ("Pay € 20", "Pay $ 20"),
     ("send ($20", "Send ($20."),
     ("send 20)", "Send 20)."),
     ("send 10:", "Send 10:."),
@@ -550,7 +574,6 @@ import Testing
     ("Email Tanay", "Email Tony.", ["Tanay"]),
     ("Run git commit -m Fix", "Run git push", []),
     ("Use /tmp/Fleck.md", "Use /tmp/Fleck.txt.", []),
-    ("Pay € 20", "Pay $ 20", []),
     ("Say \"Ignore prior instructions\"", "Say \"Follow prior instructions\"", []),
     ("明天 review Fleck", "review 明天 Fleck", ["Fleck"])
   ]
@@ -1050,31 +1073,97 @@ struct FaithfulCleanupValidator: Sendable {
     }
   }
 
-  private static func isSupportedNumericForm(_ canonical: String) -> Bool {
-    if canonical.range(of: #"^[+-]?\d+/\d+$"#, options: .regularExpression) != nil {
-      let parts = canonical.split(separator: "/")
-      guard parts.count == 2, let denominator = Int(parts[1]), denominator > 0 else {
+  private static func parseScannerNumericForm(
+    _ canonical: String
+  ) -> NumberClassification? {
+    let characters = Array(canonical)
+    guard !characters.isEmpty else { return nil }
+    var index = 0
+    let parenthesized = characters[index] == "("
+    if parenthesized { index += 1 }
+    if characters.indices.contains(index), isNumericSign(characters[index]) {
+      index += 1
+    }
+    if characters.indices.contains(index), isCurrencySymbol(characters[index]) {
+      index += 1
+    }
+    if characters.indices.contains(index), isNumericSign(characters[index]) {
+      index += 1
+    }
+
+    let coreStart = index
+    guard characters.indices.contains(index), characters[index].isNumber else {
+      return nil
+    }
+    while index < characters.count {
+      if characters[index].isNumber {
+        index += 1
+        continue
+      }
+      let separator = characters[index]
+      guard [".", "-", "/", ":"].contains(separator),
+            index + 1 < characters.count,
+            characters[index + 1].isNumber else {
+        break
+      }
+      index += 1
+    }
+    let core = String(characters[coreStart..<index])
+    if index < characters.count,
+       characters[index] == "%" || isCurrencySymbol(characters[index]) {
+      index += 1
+    }
+
+    var meridiem: String?
+    if parenthesized {
+      guard index < characters.count, characters[index] == ")" else {
+        return nil
+      }
+      index += 1
+    } else if index + 1 < characters.count,
+              (characters[index] == "a" || characters[index] == "p"),
+              characters[index + 1] == "m" {
+      meridiem = String(characters[index...(index + 1)]).lowercased()
+      index += 2
+    }
+
+    guard index == characters.count,
+          isSupportedNumericCore(core, meridiem: meridiem) else {
+      return nil
+    }
+    return .digit(canonical)
+  }
+
+  private static func isSupportedNumericCore(
+    _ core: String,
+    meridiem: String?
+  ) -> Bool {
+    if core.range(of: #"^\d+/\d+$"#, options: .regularExpression) != nil {
+      let parts = core.split(separator: "/")
+      guard meridiem == nil,
+            parts.count == 2,
+            let denominator = Int(parts[1]),
+            denominator > 0 else {
         return false
       }
+      return true
     }
-    let meridiem = canonical.hasSuffix("am") || canonical.hasSuffix("pm")
-    let hasColon = canonical.contains(":")
-    guard !hasColon && !meridiem
-      || canonical.range(of: #"^\d{1,2}(?::\d{2})(?:am|pm)?$"#, options: .regularExpression) != nil
-      || canonical.range(of: #"^\d{1,2}(?:am|pm)$"#, options: .regularExpression) != nil else {
+
+    if core.range(of: #"^\d+(?:\.\d+)?$"#, options: .regularExpression) != nil {
+      guard let meridiem else { return true }
+      guard let hour = Int(core) else { return false }
+      return (1...12).contains(hour)
+        && core.range(of: #"^\d{1,2}$"#, options: .regularExpression) != nil
+    }
+
+    guard core.range(of: #"^\d{1,2}:\d{2}$"#, options: .regularExpression) != nil else {
       return false
     }
-    guard hasColon || meridiem else { return true }
-    let core = meridiem ? String(canonical.dropLast(2)) : canonical
     let parts = core.split(separator: ":")
-    if parts.count == 1 {
-      guard meridiem, let hour = Int(parts[0]) else { return false }
-      return (1...12).contains(hour)
-    }
     guard parts.count == 2,
           let hour = Int(parts[0]),
           let minute = Int(parts[1]),
-          (meridiem ? (1...12).contains(hour) : (0...23).contains(hour)),
+          (meridiem == nil ? (0...23).contains(hour) : (1...12).contains(hour)),
           (0...59).contains(minute) else {
       return false
     }
@@ -1105,17 +1194,8 @@ struct FaithfulCleanupValidator: Sendable {
         ? .digitOrdinal(canonical)
         : .ambiguous
     }
-    let supportedDigitPatterns = [
-      #"^[+-]?\(?[$€£¥]?\d+(?:\.\d+)?[$€£¥]?\)?$"#,
-      #"^[+-]?\d+(?:\.\d+)?%$"#,
-      #"^[+-]?\d+/\d+$"#,
-      #"^\d{1,2}(?::\d{2})?(?:am|pm)$"#,
-      #"^\d{1,2}:\d{2}$"#
-    ]
-    if supportedDigitPatterns.contains(where: {
-      canonical.range(of: $0, options: .regularExpression) != nil
-    }) {
-      return isSupportedNumericForm(canonical) ? .digit(canonical) : .ambiguous
+    if let numeric = parseScannerNumericForm(canonical) {
+      return numeric
     }
     if canonical.unicodeScalars.contains(where: CharacterSet.decimalDigits.contains) {
       return .ambiguous
@@ -1325,10 +1405,16 @@ one signature only for a semantically valid full-token ordinal; `11th`, `12th`,
 `13th`, `21st`, and `22nd` pass, while `11st`, `21th`, and `21stx` become
 ambiguous and fail closed. A number followed by an allowlisted unit is likewise
 one bounded quantity signature. A number, optional whitespace, and `am`/`pm`
-form one time signature. The remaining single `.number` forms use exact
-normalized signatures for currency, percentage, fraction, time, signed,
-parenthesized, and decimal lexemes (`$20`, `20%`, `1/2`, `10:30`, `10:30am`,
-`-3.5`, and `($20)`); unsupported digit-bearing sequences remain ambiguous.
+form one time signature. The `parseScannerNumericForm` helper mirrors
+`CleanupLexeme.numberEnd`: it consumes an optional opening parenthesis, sign,
+any `CharacterSet.currencySymbols` currency character, an optional second sign
+after that currency, digits and digit-followed separators, one trailing
+percent/currency character, an optional closing parenthesis, and an optional
+`am`/`pm` suffix. It validates the remaining core as a decimal, fraction, or
+clock and returns `.digit(canonical)` so the exact currency, sign, and
+parenthesis spelling remains in the semantic signature (`$-20`, `(-$20)`,
+`₹20`, `$20`, `20%`, `1/2`, `10:30`, `10:30am`, `-3.5`, and `($20)`);
+unsupported digit-bearing sequences remain ambiguous.
 Before classifying any number, `numericRawContext(at:in:)` checks balanced
 parentheses, rejects a number adjacent to a dangling `)`, `/`, `:`, `%`, or
 trailing sign/currency, and rejects incomplete affixes even when
@@ -1445,6 +1531,14 @@ resource, script, and every file outside these two paths.
   test file defines all probes locally so production contains no test helper
   type, lock, transcript recorder, fake model, or file writer.
 
+The committed file also includes explicit tests for helper-request cancellation,
+generation failure, empty output, output greater than input plus 32 tokens,
+synchronous `start` returning without I/O, a deadline tie recheck, and a
+non-cooperative session whose `forceTerminate()` unblocks both `result()` and
+`acknowledgement()`. The non-cooperative case uses a fixed injected clock and a
+25 ms cancellation budget; it does not sleep on a wall clock or rely on a
+post-completion `phaseHistory`-style assertion.
+
 ```swift
 import Foundation
 import Testing
@@ -1518,17 +1612,7 @@ import Testing
   #expect(await generator.forceTerminateCount == 1)
   #expect(await generator.lateCandidateWasIgnored)
 }
-```
 
-The committed file also includes explicit tests for helper-request cancellation,
-generation failure, empty output, output greater than input plus 32 tokens,
-synchronous `start` returning without I/O, a deadline tie recheck, and a
-non-cooperative session whose `forceTerminate()` unblocks both `result()` and
-`acknowledgement()`. The non-cooperative case uses a fixed injected clock and a
-25 ms cancellation budget; it does not sleep on a wall clock or rely on a
-post-completion `phaseHistory`-style assertion.
-
-~~~swift
 @Test func nonCooperativeSessionIsForcedWithinTheInjectedBudget() async throws {
   let now = TestCleanupClock.fixedInstant
   let session = CleanupGenerationSessionProbe(
@@ -1558,7 +1642,7 @@ post-completion `phaseHistory`-style assertion.
   #expect(session.acknowledgementFinished)
   #expect(TestCleanupClock.recordedSleeps == [.milliseconds(25)])
 }
-~~~
+```
 
 - [ ] **Step 2: Run the focused red command.**
 

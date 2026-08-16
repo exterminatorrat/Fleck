@@ -263,11 +263,16 @@ only when the suffix is semantic (`11th`, `12th`, `13th`, and otherwise
 `1st`/`2nd`/`3rd`/`4th` endings). Thus `21st` is protected exactly, while
 `11st`, `21th`, and malformed `21stx` fail closed; ordinary words ending in
 `st`, `nd`, `rd`, or `th` remain ordinary words. Currency, percentage,
-fraction, time, signed, parenthesized, decimal, and bounded unit forms use
-exact normalized signatures plus the complete raw sign/currency affix runs that
-`CleanupLexeme` detached while scanning. Removing a detached or doubled affix
-therefore changes the numeric signature; a trailing detached sign/currency is
-ambiguous, while a hyphen without a numeric raw neighbor remains ordinary punctuation. Balanced parentheses and
+fraction, time, signed, parenthesized, decimal, and bounded unit forms use a
+parser mirroring `CleanupLexeme.numberEnd`: optional parenthesis, sign, any
+Unicode currency symbol, optional second sign after that currency, digits and
+separators, one trailing percent/currency character, closing parenthesis, and
+`am`/`pm`. The exact canonical form is retained, so `$-20`, `(-$20)`, and
+`₹20` cannot lose or change their sign, currency, or parentheses. The complete
+raw sign/currency affix runs that `CleanupLexeme` detached are also retained.
+Removing a detached or doubled affix therefore changes the numeric signature; a
+trailing detached sign/currency is ambiguous, while a hyphen without a numeric
+raw neighbor remains ordinary punctuation. Balanced parentheses and
 complete separators/affixes are required, so `pay - 20` cannot become
 `Pay 20.`, `20-` cannot lose its trailing sign, and split/doubled
 `$`/`+`/`-` forms cannot lose one affix. Unsupported digit-bearing sequences

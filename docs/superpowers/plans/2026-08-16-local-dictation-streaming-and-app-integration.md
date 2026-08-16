@@ -220,6 +220,11 @@ source cancellation still occurs early enough to unblock an in-flight `finish()`
 - [ ] **Step 1: Write contract tests.**
 
 ~~~swift
+import Foundation
+import Testing
+
+@testable import FleckApp
+
 @Test func updateDisplayIsStablePrefixPlusTail() {
   #expect(DictationTextUpdate(
     generation: 4,
@@ -382,6 +387,11 @@ processor, Apple capture, runtime, model, and UI files.
 - [ ] **Step 1: Write boundary tests.**
 
 ~~~swift
+import Foundation
+import Testing
+
+@testable import FleckApp
+
 @Test func stablePrefixOnlyGrows() throws {
   var state = StreamingTranscriptState()
   _ = try state.accept(generation: 1, fullText: "First. Second")
@@ -649,6 +659,11 @@ coordinator, app, Settings, model-manager, and resource files.
 - [ ] **Step 1: Write policy, priority, and lease tests.**
 
 ~~~swift
+import Foundation
+import Testing
+
+@testable import FleckApp
+
 @Test func policyReachesColdAfterCriticalMemory() {
   let policy = DictationRuntimePolicy.policy(
     memoryBytes: 16 * 1_024 * 1_024 * 1_024
@@ -819,6 +834,11 @@ test files.
 - [ ] **Step 1: Write forwarding and safety tests.**
 
 ~~~swift
+import Foundation
+import Testing
+
+@testable import FleckApp
+
 @Test @MainActor
 func adapterForwardsSpeechCallbacksWithoutCreatingAudio() async throws {
   let engine = SpeechEngineProbe()
@@ -1799,6 +1819,11 @@ construction through the existing engine provider.
 - [ ] **Step 1: Add processor-path and legacy-path tests.**
 
 ~~~swift
+import Foundation
+import Testing
+
+@testable import FleckApp
+
 @Test @MainActor
 func processingPathPublishesProvisionalAndCommitsFinalResult() async throws {
   let processing = ProcessingProbe(
