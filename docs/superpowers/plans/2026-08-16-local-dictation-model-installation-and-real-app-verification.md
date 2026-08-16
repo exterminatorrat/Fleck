@@ -2600,8 +2600,9 @@ phase-specific Settings/error copy. The factory returns a recommended installer
 only for an exact `.recommended(descriptor)` catalog result; all architecture,
 language, and staging-capacity mismatches return a non-operating built-in/failure
 snapshot with zero transport calls. The Task 3-owned presentation test file also
-proves the recommendation card's VoiceOver label/value, keyboard focus, and
-finite phase/progress text.
+proves the recommendation card's VoiceOver label/value, exact supported
+architecture/language strings, keyboard focus, and finite phase/progress text.
+Built-in and failed presentations carry empty custom compatibility arrays.
 
 ### TDD red
 
@@ -2641,9 +2642,12 @@ import Testing
   #expect(presentation.primaryActionLabel == "Install")
   #expect(presentation.identity == descriptor.modelID)
   #expect(presentation.revision == descriptor.revision)
+  #expect(presentation.license == descriptor.license)
   #expect(presentation.downloadBytes == descriptor.downloadBytes)
   #expect(presentation.installedBytes == descriptor.installedBytes)
   #expect(presentation.checksums == descriptor.files.map(\.sha256))
+  #expect(presentation.supportedArchitectures == descriptor.architectures)
+  #expect(presentation.supportedLanguages == descriptor.languages)
 }
 
 @Test func recommendationCardHasVoiceOverMetadataAndKeyboardFocus() {
@@ -2658,7 +2662,30 @@ import Testing
   #expect(presentation.accessibilityLabel == "Admitted model recommendation")
   #expect(presentation.accessibilityValue.contains(descriptor.modelID))
   #expect(presentation.accessibilityValue.contains(descriptor.revision))
+  #expect(presentation.accessibilityValue.contains(
+    descriptor.architectures.joined(separator: ", ")
+  ))
+  #expect(presentation.accessibilityValue.contains(
+    descriptor.languages.joined(separator: ", ")
+  ))
+  #expect(presentation.detail.contains(
+    "Supported architectures: \(descriptor.architectures.joined(separator: ", "))"
+  ))
+  #expect(presentation.detail.contains(
+    "Supported languages: \(descriptor.languages.joined(separator: ", "))"
+  ))
   #expect(presentation.isKeyboardFocusable)
+}
+
+@Test func builtInAndFailureStatesDoNotInventCustomCompatibilityValues() {
+  for phase in [AdmittedModelInstallPhase.builtIn,
+                .failed(message: "invalid signed configuration")] {
+    let presentation = AdmittedModelSettingsPresentation(
+      snapshot: .init(recommendation: .builtIn, phase: phase, lastError: nil)
+    )
+    #expect(presentation.supportedArchitectures.isEmpty)
+    #expect(presentation.supportedLanguages.isEmpty)
+  }
 }
 
 @Test func downloadingUsesTruthfulByteProgressAndVoiceOverValue() {
@@ -2989,6 +3016,8 @@ struct AdmittedModelSettingsPresentation: Equatable {
   let revision: String?
   let license: String?
   let checksums: [String]
+  let supportedArchitectures: [String]
+  let supportedLanguages: [String]
   let downloadBytes: Int64?
   let installedBytes: Int64?
   let progress: Double?
@@ -2999,17 +3028,36 @@ struct AdmittedModelSettingsPresentation: Equatable {
   let primaryAction: AdmittedModelSettingsAction?
   let primaryActionLabel: String?
   let showsModelPicker: Bool
+
+  private static func compatibilityValues(
+    for recommendation: AdmittedModelRecommendation
+  ) -> (architectures: [String], languages: [String]) {
+    guard case .recommended(let descriptor) = recommendation else {
+      return ([], [])
+    }
+    return (descriptor.architectures, descriptor.languages)
+  }
 }
 ~~~
 
 `AdmittedModelSettingsPresentation.init(snapshot:)` stores
 `phase = snapshot.phase` and maps every phase to finite title/detail/action
 text. Use exact byte counts, exact
-identity/revision/license/checksum strings, and stable accessibility labels and
-values. The recommendation card's Install button is keyboard-focusable and
-uses the presentation values directly:
+identity/revision/license/checksum strings, and derive
+`supportedArchitectures` and `supportedLanguages` only from the validated
+descriptor in `.recommended` (the initializer calls
+`compatibilityValues(for:)`). For `.builtIn` and `.failed` snapshots, both
+arrays are empty; they must not invent custom compatibility values. Include
+the exact arrays in the recommendation detail and stable VoiceOver
+label/value. The recommendation card's Install button is keyboard-focusable
+and uses the presentation values directly:
 
 ~~~swift
+if !presentation.supportedArchitectures.isEmpty {
+  Text("Supported architectures: \(presentation.supportedArchitectures.joined(separator: ", "))")
+  Text("Supported languages: \(presentation.supportedLanguages.joined(separator: ", "))")
+}
+
 if let action = presentation.primaryAction,
    let label = presentation.primaryActionLabel {
   Button(label) {
@@ -3022,9 +3070,12 @@ if let action = presentation.primaryAction,
 ~~~
 
 The Task 3-owned `AdmittedModelSettingsPresentationTests` file asserts the
-recommendation label, identity/revision value, keyboard focus, finite phase
-copy, and exact in-progress byte value. Use no indefinite Loading text and no
-automatic action on view appearance. Its installer-action probe also asserts
+recommendation label, identity/revision/license/checksum/size values, exact
+supported architecture/language strings in both detail and VoiceOver value,
+keyboard focus, finite phase copy, and exact in-progress byte value. It also
+asserts that built-in and failed states expose empty compatibility arrays. Use
+no indefinite Loading text and no automatic action on view appearance. Its
+installer-action probe also asserts
 that Install, Cancel, Repair, Update, and Remove each dispatch exactly once and
 that each resulting snapshot reaches the presentation. A held operation test
 invokes Repair, Update, and Remove while Install is held, then invokes Cancel
@@ -3350,7 +3401,12 @@ test ! -e .git/MERGE_HEAD
 test ! -e .git/rebase-merge
 test ! -e .git/rebase-apply
 test ! -e .git/CHERRY_PICK_HEAD
-test "$(git diff --name-only | sort)" = "AGENTS.md"
+post_switch_inventory="$({
+  git diff --name-only
+  git diff --cached --name-only
+  git ls-files --others --exclude-standard
+} | sort -u)"
+test "$post_switch_inventory" = "AGENTS.md"
 
 swift test --disable-automatic-resolution --no-parallel
 ./Scripts/build-fleck-app.sh

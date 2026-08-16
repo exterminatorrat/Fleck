@@ -310,14 +310,17 @@ first actor-isolated `cancel()` turn marks cancellation, invalidates the
 generation, and closes updates synchronously before creating and storing the
 shared task. `finish()` rejects if that invalidated state or a shared
 `cancellationTask` already exists when no finalization task is already shared;
-finish callers that entered first await that existing task. The shared task
-calls the sole speech source's `cancel()` early enough to unblock an in-flight
-`finish()`, then cancels and awaits finalization and the cleaner's bounded
-helper acknowledgement or force-termination path. In production,
-`AppleSpeechCapture.cancel()` owns physical release of its Apple Speech
-session before returning; the session records one logical source
-terminalization and does not require a second physical release. Every
-independent concurrent caller awaits that same task before returning.
+finish callers that entered first await that existing task. If the sole speech
+source's `finish()` is still blocked, the shared task calls `cancel()` early
+enough to unblock it, then cancels and awaits finalization and the cleaner's
+bounded helper acknowledgement or force-termination path. If `finish()` has
+already completed, its source-owned physical release and logical `.finished`
+state are already recorded; cancellation makes zero second source-terminal
+calls and only drains finalization/cleanup. In production,
+`AppleSpeechCapture.finish()` and `cancel()` each release the underlying Apple
+Speech session before returning, and the adapter forwards those operations
+without adding a physical release. Every independent concurrent caller awaits
+that same task before returning.
 Concurrent finish callers await the same existing task; if cancellation wins
 before any finish task exists, the cancellation guard prevents new finalization
 work from starting. The processor test records the synchronous invalidation
@@ -325,11 +328,17 @@ boundary, schedules `finish()` only after that event, and asserts that neither
 finalization nor source `finish()` starts; the separate source-blocking test
 proves early source cancellation unblocks an already-running finish.
 
-The ordered cancellation test records source cancellation, source physical
-release, helper acknowledgement, and each caller return. It requires source
-cancellation to be early and both cancel callers to return only after source
-terminalization and helper drain; it deliberately does not require helper
-acknowledgement to precede source release. No result or update may publish.
+The cancellation evidence is phase-specific. A blocked-finish test records
+source cancellation and physical release: cancellation wins, releases once,
+unblocks the source continuation, and returns only after the shared task drains;
+there is no completed finish result or update. A cleanup-phase test waits until
+`finish()` has completed and recorded physical release, then blocks the helper;
+session cancellation makes zero second source-terminal calls, awaits helper
+acknowledgement or force termination, and returns only after that acknowledgement.
+Its assertions do not require `cancel` to precede physical release. A separate
+concurrent blocked-finish test holds the first source-cancel callback until a
+second caller enters, proving both callers await one shared cancellation task.
+No result or update may publish in either phase.
 
 `StreamingSpeechSource.cancel()` and `releaseResources()` must not synchronously
 await the owning session's `cancel()` from a dependency callback. They may
@@ -341,9 +350,10 @@ Cancellation must execute in this order:
 
 1. mark the capture cancelled and invalidate its generation;
 2. restore the focused editor's exact pre-capture transaction;
-3. await processing-session cancellation, which synchronously closes updates,
-   calls the selected speech source's `cancel()` early enough to unblock an
-   in-flight finish, then cancels/awaits finalization and helper drain;
+3. await processing-session cancellation, which synchronously closes updates;
+   if source finish is still in flight, it calls the selected speech source's
+   `cancel()` early enough to unblock finish, otherwise it makes no second
+   source-terminal call, then cancels/awaits finalization and helper drain;
 4. erase provisional transcript and in-memory audio buffers;
 5. remove provisional history work and release runtime scratch state;
 6. publish only `.cancelled` after the session's bounded helper
@@ -355,7 +365,7 @@ Its one finalization task marks terminal after both successful result and
 thrown source, dictionary, or cleanup error. `source.finish()` owns the
 physical release on those paths; the session records `.finished` exactly once
 and does not call `releaseResources()` afterward. The cancellation task claims
-`.cancelled`, calls source `cancel()` early for an in-flight Apple Speech
+`.cancelled`, calls source `cancel()` early only for an in-flight Apple Speech
 finish, then awaits finalization and helper drain. The terminal guard closes
 the update stream before any terminal return, so callbacks arriving after
 success, failure, or cancellation cannot publish.
@@ -580,7 +590,10 @@ normal Dictation settings surface shows the built-in Apple state:
 installed.” There is no model picker and no Advanced selector. A recommendation
 surface, when an admitted descriptor exists, has one explicit `Install` action
 and shows exact identity, revision, license, checksums, download/installed size,
-and supported hardware/languages.
+and the descriptor-derived `supportedArchitectures` and `supportedLanguages`
+values. Those arrays are also part of the card's VoiceOver label/value or
+accessible child text. Built-in and failed states expose empty custom
+compatibility arrays; they never invent architecture or language claims.
 
 Hardware recommendation uses the checked `requiredCapacityBytes` staging
 requirement, not download bytes alone. The validated required capacity is bound
@@ -667,11 +680,13 @@ The UI uses the existing native macOS Settings structure, semantic colors and
 styles, keyboard and VoiceOver labels/values, and no frequent decorative
 animation. Keyboard-initiated dictation has no animation. Installer phases,
 errors, and byte progress are Settings-only; `Sources/FleckApp/DictationCapsule.swift`
-remains excluded from this workstream.
-The Task 3-owned `AdmittedModelSettingsPresentationTests` evidence asserts the
-recommendation card's VoiceOver label and identity/revision value, keyboard
-focusability, and finite phase/progress text; unrelated DictationCapsule
-accessibility is not used as evidence for this card.
+remains excluded from this workstream. Task 3's presentation tests assert the
+exact architecture/language strings alongside identity, revision, license,
+checksum, size, focus, and finite-progress evidence, plus empty compatibility
+values for built-in and failed snapshots.
+The Task 3-owned `AdmittedModelSettingsPresentationTests` evidence is the
+source/UI proof for this card; unrelated DictationCapsule accessibility is not
+used as evidence.
 
 ## Candidate evaluation and later admission
 

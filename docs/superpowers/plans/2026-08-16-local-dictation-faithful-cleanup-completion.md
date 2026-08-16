@@ -482,6 +482,11 @@ import Testing
     ("send 21th files", "Send 21th files."),
     ("send 21stx files", "Send 21stx files."),
     ("pay - 20", "Pay 20."),
+    ("pay $ : 20", "Pay : 20."),
+    ("pay + : 20", "Pay : 20."),
+    ("pay $ % 20", "Pay % 20."),
+    ("pay $ : 20", "Pay $ : 20."),
+    ("pay + % 20", "Pay + % 20."),
     ("pay :20", "Pay 20."),
     ("pay : 20", "Pay 20."),
     ("pay %20", "Pay 20."),
@@ -568,6 +573,19 @@ import Testing
     return
   }
   #expect(text == "Send - word.")
+
+  for (baseline, candidate) in [("send: word", "Send: word."),
+                                ("send / word", "Send / word."),
+                                ("send % word", "Send % word.")] {
+    guard case .accepted(let text, _) = FaithfulCleanupValidator().validate(
+      candidate: candidate,
+      against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+    ) else {
+      Issue.record("Punctuation without a numeric neighbor must remain ordinary")
+      continue
+    }
+    #expect(text == candidate)
+  }
 }
 
 @Test func faithfulValidatorRejectsProtectedMeaningChanges() {
@@ -1021,19 +1039,19 @@ struct FaithfulCleanupValidator: Sendable {
       return nil
     }
 
-    func affixRun(_ step: Int) -> [String] {
+    func rawContextRun(_ step: Int) -> [String] {
       var cursor = index + step
-      var affixes: [String] = []
+      var context: [String] = []
       while lexemes.indices.contains(cursor) {
         if lexemes[cursor].kind == .whitespace {
           cursor += step
           continue
         }
-        guard isNumericAffixPunctuation(lexemes[cursor]) else { break }
-        affixes.append(lexemes[cursor].original)
+        guard isNumericContextPunctuation(lexemes[cursor]) else { break }
+        context.append(lexemes[cursor].original)
         cursor += step
       }
-      return step < 0 ? Array(affixes.reversed()) : affixes
+      return step < 0 ? Array(context.reversed()) : context
     }
 
     let previous = adjacentNonWhitespace(-1)
@@ -1047,37 +1065,32 @@ struct FaithfulCleanupValidator: Sendable {
       if ["/", ":", "%"].contains(next.original) { return nil }
       if original.hasSuffix("%") && next.original == "%" { return nil }
     }
-    func separatorRun(_ step: Int) -> [String] {
-      var cursor = index + step
-      var separators: [String] = []
-      while lexemes.indices.contains(cursor) {
-        if lexemes[cursor].kind == .whitespace {
-          cursor += step
-          continue
-        }
-        guard lexemes[cursor].kind == .punctuation,
-              [":", "/", "%"].contains(lexemes[cursor].original)
-        else { break }
-        separators.append(lexemes[cursor].original)
-        cursor += step
-      }
-      return step < 0 ? Array(separators.reversed()) : separators
-    }
-
-    let detachedLeadingAffixes = affixRun(-1)
-    let detachedTrailingAffixes = affixRun(1)
-    let detachedLeadingSeparators = separatorRun(-1)
-    let detachedTrailingSeparators = separatorRun(1)
-    guard detachedTrailingAffixes.isEmpty,
-          detachedTrailingSeparators.isEmpty else {
+    let detachedLeadingContext = rawContextRun(-1)
+    let detachedTrailingContext = rawContextRun(1)
+    guard detachedTrailingContext.isEmpty else {
       return nil
     }
+    let hasAffix = detachedLeadingContext.contains { value in
+      guard value.count == 1, let character = value.first else { return false }
+      return isNumericSign(character) || isCurrencySymbol(character)
+    }
+    let hasSeparator = detachedLeadingContext.contains {
+      [":", "/", "%"].contains($0)
+    }
+    // The complete ordered run is retained in the semantic signature. A mixed
+    // affix/separator run is not a supported amount grammar, so both sides
+    // become ambiguous rather than allowing one class to disappear.
+    guard !(hasAffix && hasSeparator) else { return nil }
     return .init(
-      detachedLeadingContext:
-        detachedLeadingAffixes + detachedLeadingSeparators,
-      detachedTrailingContext:
-        detachedTrailingAffixes + detachedTrailingSeparators
+      detachedLeadingContext: detachedLeadingContext,
+      detachedTrailingContext: detachedTrailingContext
     )
+  }
+
+  private static func isNumericContextPunctuation(_ lexeme: CleanupLexeme) -> Bool {
+    isNumericAffixPunctuation(lexeme)
+      || (lexeme.kind == .punctuation
+        && [":", "/", "%"].contains(lexeme.original))
   }
 
   private static func isNumericAffixPunctuation(_ lexeme: CleanupLexeme) -> Bool {
@@ -1444,19 +1457,24 @@ unsupported digit-bearing sequences remain ambiguous.
 Before classifying any number, `numericRawContext(at:in:)` checks balanced
 parentheses, rejects a number adjacent to a dangling `)`, `/`, `:`, `%`, or
 trailing sign/currency, and rejects incomplete affixes even when
-`CleanupLexeme` split the punctuation into separate raw lexemes. It skips
-whitespace only while walking the contiguous raw context: every one-character
-`+`, `-`, `−`, or currency symbol before a number is recorded in source order,
-and a leading `:`, `/`, or `%` is recorded symmetrically when it is the raw
-neighbor of that number. The same separator run is inspected after the number;
-any trailing sign, currency, separator, or percent is ambiguous. Thus the
-observable validator rejects `pay - 20` to `Pay 20.`, `pay :20` to `Pay 20.`,
-`pay : 20` to `Pay 20.`, `pay %20` to `Pay 20.`, and `pay % 20` to `Pay 20.`.
-The number's semantic signature compares both the classified numeric form and
-the complete context, so removing a detached sign/currency/separator or one
-member of a doubled or split affix cannot compare equal. Hyphen, colon, slash,
-or percent punctuation elsewhere, with no numeric raw neighbor, is not treated
-as numeric context. Complete supported forms then
+`CleanupLexeme` split the punctuation into separate raw lexemes. It performs one
+ordered raw-context walk in each direction: whitespace is skipped only while
+the walk remains adjacent to the number, and every one-character `+`, `-`, `−`,
+Unicode currency symbol, `:`, `/`, or `%` is recorded in source order. The full
+leading run, rather than the first punctuation class encountered, is retained in
+the semantic signature. A run containing both affix and separator classes is an
+unsupported mixed amount grammar and is classified ambiguous after the entire
+run is seen; it cannot be made safe by deleting only the first class. Any
+trailing context punctuation is ambiguous. Thus the observable validator rejects
+`pay - 20` to `Pay 20.`, `pay $ : 20` to `Pay : 20.`, `pay + : 20` to
+`Pay : 20.`, `pay $ % 20` to `Pay % 20.`, `pay :20` to `Pay 20.`,
+`pay : 20` to `Pay 20.`, `pay %20` to `Pay 20.`, and `pay % 20` to
+`Pay 20.`; unchanged unsupported mixed forms also fail closed. The number's
+semantic signature compares both the classified numeric form and the complete
+ordered context, so removing a detached sign/currency/separator or one member
+of a doubled or split affix cannot compare equal. Hyphen, colon, slash, or
+percent punctuation elsewhere, with no numeric raw neighbor, is not treated as
+numeric context. Complete supported forms then
 validate fraction denominators and clock ranges, so `99:99am` and `1/0` are
 ambiguous. Therefore `($20`, `20)`, `10:`, `1/`, and `20%%` fail closed even
 when their numeric fragments individually match a permissive pattern. Exact
