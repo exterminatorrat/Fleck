@@ -45,6 +45,58 @@ func processingPathPublishesProvisionalAndCommitsFinalResult() async throws {
 }
 
 @Test @MainActor
+func processingUsesExactDictionaryBaselineForRawFallback() async throws {
+  let processing = ProcessingProbe(
+    result: .init(
+      rawTranscript: "send fleck app",
+      dictionaryBaseline: "Send FleckApp",
+      cleanedTranscript: nil,
+      insertedText: "Send FleckApp",
+      cleanupOutcome: .usedRaw,
+      measurements: .empty
+    )
+  )
+  let fixture = try Fixture(processing: processing)
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  await fixture.coordinator.finish()
+
+  let record = try #require(await fixture.history.list().first)
+  #expect(fixture.editor.committedTexts == ["Send FleckApp"])
+  #expect(processing.result.dictionaryBaseline == "Send FleckApp")
+  #expect(record.rawTranscript == "send fleck app")
+  #expect(record.cleanedTranscript == nil)
+  #expect(record.cleanupOutcome == .usedRaw)
+  #expect(fixture.cleaner.calls == 0)
+}
+
+@Test @MainActor
+func processingRawRecoveryKeepsRawInsertionAndHistoryFallback() async throws {
+  let processing = ProcessingProbe(
+    result: .init(
+      rawTranscript: "send fleck app",
+      dictionaryBaseline: nil,
+      cleanedTranscript: nil,
+      insertedText: "send fleck app",
+      cleanupOutcome: .usedRaw,
+      measurements: .empty
+    )
+  )
+  let fixture = try Fixture(processing: processing)
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  await fixture.coordinator.finish()
+
+  let record = try #require(await fixture.history.list().first)
+  #expect(fixture.editor.committedTexts == ["send fleck app"])
+  #expect(processing.result.dictionaryBaseline == nil)
+  #expect(record.rawTranscript == "send fleck app")
+  #expect(record.cleanedTranscript == nil)
+  #expect(record.cleanupOutcome == .usedRaw)
+  #expect(fixture.cleaner.calls == 0)
+}
+
+@Test @MainActor
 func cancellationRejectsLateProcessingUpdateAndResult() async throws {
   let processing = ProcessingProbe()
   let fixture = try Fixture(processing: processing)
@@ -230,6 +282,33 @@ func absentProcessorPreservesLegacyCleanerPath() async throws {
 
   #expect(fixture.cleaner.calls == 1)
   #expect(fixture.saver.savedTexts == ["Buy tea."])
+}
+
+@Test @MainActor
+func cancelDuringLegacySourceFinishDoesNotRollbackOrPublishTerminalState()
+  async throws
+{
+  let fixture = try Fixture()
+  let finishGate = Gate()
+  fixture.standard.finishGate = finishGate
+  fixture.standard.finalText = "Legacy finish"
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let finishTask = Task { await fixture.coordinator.finish() }
+  await finishGate.waitUntilWaiting()
+
+  await fixture.coordinator.cancel()
+
+  #expect(fixture.editor.cancelCount == 0)
+  #expect(fixture.standard.cancelCount == 0)
+  #expect(fixture.coordinator.phase == .finalizing)
+  #expect(events.allSatisfy { $0.terminal == nil })
+
+  await finishGate.openGate()
+  await finishTask.value
+  #expect(fixture.editor.committedTexts == ["Legacy finish"])
 }
 
 @Test @MainActor func coordinatorRequestsStandardByDefault() async throws {
@@ -2265,7 +2344,7 @@ private actor CoordinatorBlockingAppleSpeechSession: AppleSpeechSession {
 @MainActor
 final class ProcessingProbe: DictationProcessing {
   private let updates: [DictationTextUpdate]
-  private var result: DictationProcessingResult
+  private(set) var result: DictationProcessingResult
   private let finishBlocksUntilCancel: Bool
   private let drainGate: Gate?
   private let onFinishStarted: (() -> Void)?

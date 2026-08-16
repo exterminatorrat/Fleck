@@ -60,6 +60,7 @@ final class DictationCoordinator {
     var stablePrefix = ""
     var isStarting = true
     var isFinishing = false
+    var isSourceFinishing = false
     var releaseRequested = false
     var cancelRequested = false
     var processingSessionCancellationTask: Task<Void, Never>?
@@ -503,10 +504,13 @@ final class DictationCoordinator {
 
     guard let engine = capture.engine else { return }
 
+    setSourceFinishing(capture.id, true)
     let rawText: String?
     do {
       rawText = try await engine.finish()
+      setSourceFinishing(capture.id, false)
     } catch {
+      setSourceFinishing(capture.id, false)
       guard await continueCapture(capture.id) else { return }
       await terminate(capture.id, phase: .failed(message(for: error)), cancelEditor: capture.mode == .focused)
       return
@@ -647,6 +651,9 @@ final class DictationCoordinator {
 
   private func cancelActiveCapture(_ id: UUID) async {
     guard var capture, capture.id == id, !capture.cancelRequested else { return }
+    guard capture.processingSession != nil || !capture.isSourceFinishing else {
+      return
+    }
     let hasProcessingSession = capture.processingSession != nil
     capture.cancelRequested = true
     if hasProcessingSession { capture.generation &+= 1 }
@@ -668,6 +675,12 @@ final class DictationCoordinator {
       guard !current.isStarting, !current.isFinishing else { return }
       await completeCancellation(id)
     }
+  }
+
+  private func setSourceFinishing(_ id: UUID, _ isFinishing: Bool) {
+    guard var capture, capture.id == id else { return }
+    capture.isSourceFinishing = isFinishing
+    self.capture = capture
   }
 
   private func holdThresholdElapsed(_ id: UUID) async {
