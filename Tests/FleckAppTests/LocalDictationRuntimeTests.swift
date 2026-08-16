@@ -320,6 +320,135 @@ import Testing
   await sleeper.resumeAll()
 }
 
+@Test func queuedAcquisitionWaitsForImmediatePreparationUpgrade() async throws {
+  let asrLoadGate = AsyncRuntimeGate()
+  let cleanupLoadGate = AsyncRuntimeGate()
+  let asr = FakeRuntimeAdapter(role: .asr, loadGate: asrLoadGate)
+  let cleanup = FakeRuntimeAdapter(
+    role: .cleanup,
+    loadGates: [cleanupLoadGate]
+  )
+  let sleeper = ManualRuntimeSleeper()
+  let runtime = makeRuntime(asr: asr, cleanup: cleanup, sleeper: sleeper)
+  let completions = RuntimeCompletionProbe()
+
+  let likelyPreparation = Task {
+    await runtime.prepare(for: .likelyCapture)
+  }
+  await asrLoadGate.waitUntilWaiting()
+
+  let immediatePreparation = Task {
+    await runtime.prepare(for: .immediateCapture)
+  }
+  await Task.yield()
+  let acquisition = Task {
+    let result = await captureLeaseResult(from: runtime)
+    if case .success = result {
+      await completions.mark()
+    }
+    return result
+  }
+  await Task.yield()
+
+  await asrLoadGate.openGate()
+  await cleanupLoadGate.waitUntilWaiting()
+  for _ in 0..<3 {
+    await Task.yield()
+  }
+
+  #expect(await cleanup.loadCallCount == 1)
+  #expect(await completions.count == 0)
+
+  await cleanupLoadGate.openGate()
+  await likelyPreparation.value
+  await immediatePreparation.value
+  let result = await acquisition.value
+  guard case .success(let lease) = result else {
+    #expect(Bool(false), "acquisition did not wait for the immediate preparation")
+    await sleeper.resumeAll()
+    return
+  }
+
+  #expect(await cleanup.loadCallCount == 1)
+  #expect(await completions.count == 1)
+  await runtime.releaseCaptureLease(lease)
+  await runtime.handle(.memoryCritical)
+  await sleeper.resumeAll()
+}
+
+@Test func criticalSignalWaitsForPreparationUpgradeAndLeavesRuntimeCold() async {
+  let asrLoadGate = AsyncRuntimeGate()
+  let cleanupLoadGate = AsyncRuntimeGate()
+  let asr = FakeRuntimeAdapter(role: .asr, loadGate: asrLoadGate)
+  let cleanup = FakeRuntimeAdapter(
+    role: .cleanup,
+    loadGates: [cleanupLoadGate]
+  )
+  let sleeper = ManualRuntimeSleeper()
+  let runtime = makeRuntime(asr: asr, cleanup: cleanup, sleeper: sleeper)
+  let completions = RuntimeCompletionProbe()
+
+  let likelyPreparation = Task {
+    await runtime.prepare(for: .likelyCapture)
+  }
+  await asrLoadGate.waitUntilWaiting()
+  let immediatePreparation = Task {
+    await runtime.prepare(for: .immediateCapture)
+  }
+  await Task.yield()
+  let criticalSignal = Task {
+    await runtime.handle(.memoryCritical)
+    await completions.mark()
+  }
+  await Task.yield()
+
+  await asrLoadGate.openGate()
+  await cleanupLoadGate.waitUntilWaiting()
+  for _ in 0..<3 {
+    await Task.yield()
+  }
+
+  #expect(await completions.count == 0)
+  #expect(await asr.unloadCallCount == 0)
+  #expect(await cleanup.unloadCallCount == 0)
+
+  await cleanupLoadGate.openGate()
+  await likelyPreparation.value
+  await immediatePreparation.value
+  await criticalSignal.value
+
+  #expect(await completions.count == 1)
+  #expect(await cleanup.loadCallCount == 1)
+  #expect(await asr.unloadCallCount == 1)
+  #expect(await cleanup.unloadCallCount == 1)
+  #expect(await runtime.snapshot() == LocalDictationRuntimeSnapshot(
+    residency: .cold,
+    asrHealth: .available,
+    cleanupHealth: .available,
+    hasActiveLease: false
+  ))
+  await sleeper.resumeAll()
+}
+
+@Test func preparationDuringActiveLeaseDoesNotStartAdapterWork() async throws {
+  let asr = FakeRuntimeAdapter(role: .asr)
+  let cleanup = FakeRuntimeAdapter(role: .cleanup)
+  let sleeper = ManualRuntimeSleeper()
+  let runtime = makeRuntime(asr: asr, cleanup: cleanup, sleeper: sleeper)
+  let lease = try await runtime.acquireCaptureLease()
+  let asrLoads = await asr.loadCallCount
+  let cleanupLoads = await cleanup.loadCallCount
+
+  await runtime.prepare(for: .immediateCapture)
+
+  #expect(await asr.loadCallCount == asrLoads)
+  #expect(await cleanup.loadCallCount == cleanupLoads)
+  #expect(await runtime.snapshot().hasActiveLease)
+  await runtime.releaseCaptureLease(lease)
+  await runtime.handle(.memoryCritical)
+  await sleeper.resumeAll()
+}
+
 @Test func captureWaitsForInFlightIdleUnloadBeforeAcquiring() async throws {
   let cleanupUnloadGate = AsyncRuntimeGate()
   let asr = FakeRuntimeAdapter(role: .asr)

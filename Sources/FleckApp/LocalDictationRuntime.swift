@@ -74,6 +74,12 @@ actor LocalDictationRuntime {
   }
 
   func prepare(for intent: DictationPreparationIntent) async {
+    guard activeLease == nil,
+          !modelMutationPending,
+          !leaseAcquisitionInProgress,
+          !cancellationInProgressIsActive
+    else { return }
+
     if preparationInProgress {
       let inFlightIntent = preparationIntent
       await waitForPreparation()
@@ -82,10 +88,6 @@ actor LocalDictationRuntime {
       }
       return
     }
-    guard !modelMutationPending,
-          !leaseAcquisitionInProgress,
-          !cancellationInProgressIsActive
-    else { return }
     if idleTransitionInProgress {
       await waitForIdleTransition()
       await prepare(for: intent)
@@ -109,18 +111,19 @@ actor LocalDictationRuntime {
   }
 
   func acquireCaptureLease() async throws -> UUID {
-    if modelMutationPending {
-      throw LocalDictationRuntimeError.modelMutationInProgress
-    }
-    if preparationInProgress {
-      await waitForPreparation()
-    }
-    if modelMutationPending {
-      throw LocalDictationRuntimeError.modelMutationInProgress
-    }
-    if idleTransitionInProgress {
-      await waitForIdleTransition()
-      return try await acquireCaptureLease()
+    while true {
+      if modelMutationPending {
+        throw LocalDictationRuntimeError.modelMutationInProgress
+      }
+      if preparationInProgress {
+        await waitForPreparation()
+        continue
+      }
+      if idleTransitionInProgress {
+        await waitForIdleTransition()
+        continue
+      }
+      break
     }
     if activeLease != nil || leaseAcquisitionInProgress {
       throw LocalDictationRuntimeError.captureLeaseAlreadyActive
@@ -183,24 +186,30 @@ actor LocalDictationRuntime {
   }
 
   func handle(_ signal: DictationRuntimeSignal) async {
-    guard activeLease == nil,
-          !leaseAcquisitionInProgress,
-          cancellationInProgress == nil,
-          !modelMutationPending
-    else { return }
+    while true {
+      guard activeLease == nil,
+            !leaseAcquisitionInProgress,
+            cancellationInProgress == nil,
+            !modelMutationPending
+      else { return }
 
-    if preparationInProgress {
-      await waitForPreparation()
+      if preparationInProgress {
+        await waitForPreparation()
+        continue
+      }
+      if idleTransitionInProgress {
+        await waitForIdleTransition()
+        continue
+      }
+      guard activeLease == nil,
+            !leaseAcquisitionInProgress,
+            cancellationInProgress == nil,
+            !modelMutationPending,
+            !preparationInProgress,
+            !idleTransitionInProgress
+      else { continue }
+      break
     }
-    if idleTransitionInProgress {
-      await waitForIdleTransition()
-    }
-    guard activeLease == nil,
-          !leaseAcquisitionInProgress,
-          cancellationInProgress == nil,
-          !modelMutationPending,
-          !idleTransitionInProgress
-    else { return }
 
     let target = policy.targetState(after: signal, activeLease: false)
     let previousResidency = currentResidency
