@@ -159,6 +159,37 @@ import Testing
   )
 }
 
+@Test func faithfulValidatorRejectsPostUnitNumericAffixes() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    ("send 20kg$", "send 20kg"),
+    ("set 20 °C-", "set 20 °C"),
+    ("set 20 °C -", "set 20 °C")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
+}
+
+@Test func faithfulValidatorRejectsUnsupportedDegreeLikeFormatting() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    ("set 20 °F", "Set 20 °F."),
+    ("set 20°F", "Set 20°F.")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
+}
+
 @Test func faithfulValidatorDoesNotScanPastNearestCurrencyAffix() {
   let decision = FaithfulCleanupValidator().validate(
     candidate: "Pay! $ 20.",
