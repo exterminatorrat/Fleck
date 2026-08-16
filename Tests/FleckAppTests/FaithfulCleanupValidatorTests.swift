@@ -27,6 +27,35 @@ import Testing
   }
 }
 
+@Test func faithfulValidatorRejectsSpacedInterposedNumericAffixes() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    ("pay $! 20", "Pay 20."),
+    ("pay -! 20", "Pay 20."),
+    ("pay 20 !$", "Pay 20.")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
+}
+
+@Test func faithfulValidatorAcceptsDetachedCurrencyBeforeNumber() {
+  let decision = FaithfulCleanupValidator().validate(
+    candidate: "Pay $ 20.",
+    against: .init(baseline: "pay $ 20", protectedForms: [], replacements: 0)
+  )
+
+  guard case .accepted(let text, _) = decision else {
+    Issue.record("A supported detached currency affix must remain cleanable")
+    return
+  }
+  #expect(text == "Pay $ 20.")
+}
+
 @Test func faithfulValidatorRejectsProtectedOccurrenceRelocation() {
   #expect(
     FaithfulCleanupValidator().validate(

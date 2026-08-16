@@ -585,8 +585,11 @@ struct FaithfulCleanupValidator: Sendable {
     for step in [-1, 1] {
       var cursor = index + step
       var run: [CleanupLexeme] = []
-      while lexemes.indices.contains(cursor), lexemes[cursor].kind == .punctuation {
-        run.append(lexemes[cursor])
+      while lexemes.indices.contains(cursor),
+            [.punctuation, .whitespace].contains(lexemes[cursor].kind) {
+        if lexemes[cursor].kind == .punctuation {
+          run.append(lexemes[cursor])
+        }
         cursor += step
       }
       guard run.contains(where: isNumericAffixPunctuation) else { continue }
