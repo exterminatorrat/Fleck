@@ -430,6 +430,96 @@ import Testing
   await sleeper.resumeAll()
 }
 
+@Test func lifecycleWaiterCannotPreemptPendingImmediatePreparationUpgrade() async {
+  let asrLoadGate = AsyncRuntimeGate()
+  let asr = FakeRuntimeAdapter(role: .asr, loadGate: asrLoadGate)
+  let cleanup = FakeRuntimeAdapter(role: .cleanup)
+  let sleeper = ManualRuntimeSleeper()
+  let runtime = makeRuntime(asr: asr, cleanup: cleanup, sleeper: sleeper)
+  let completions = RuntimeCompletionProbe()
+
+  let likelyPreparation = Task {
+    await runtime.prepare(for: .likelyCapture)
+  }
+  await asrLoadGate.waitUntilWaiting()
+
+  let criticalSignal = Task {
+    await runtime.handle(.memoryCritical)
+    await completions.mark()
+  }
+  await Task.yield()
+  let immediatePreparation = Task {
+    await runtime.prepare(for: .immediateCapture)
+  }
+  await Task.yield()
+
+  await asrLoadGate.openGate()
+  await likelyPreparation.value
+  await criticalSignal.value
+  await immediatePreparation.value
+
+  #expect(await completions.count == 1)
+  #expect(await asr.loadCallCount == 1)
+  #expect(await cleanup.loadCallCount == 1)
+  #expect(await asr.unloadCallCount == 1)
+  #expect(await cleanup.unloadCallCount == 1)
+  #expect(await runtime.snapshot() == LocalDictationRuntimeSnapshot(
+    residency: .cold,
+    asrHealth: .available,
+    cleanupHealth: .available,
+    hasActiveLease: false
+  ))
+  await sleeper.resumeAll()
+}
+
+@Test func multipleImmediatePreparationRequestsCoalesceBeforeWaitersResume() async {
+  let asrLoadGate = AsyncRuntimeGate()
+  let cleanupLoadGate = AsyncRuntimeGate()
+  let asr = FakeRuntimeAdapter(role: .asr, loadGate: asrLoadGate)
+  let cleanup = FakeRuntimeAdapter(
+    role: .cleanup,
+    loadGates: [cleanupLoadGate]
+  )
+  let sleeper = ManualRuntimeSleeper()
+  let runtime = makeRuntime(asr: asr, cleanup: cleanup, sleeper: sleeper)
+  let completions = RuntimeCompletionProbe()
+
+  let likelyPreparation = Task {
+    await runtime.prepare(for: .likelyCapture)
+  }
+  await asrLoadGate.waitUntilWaiting()
+  let firstImmediatePreparation = Task {
+    await runtime.prepare(for: .immediateCapture)
+    await completions.mark()
+  }
+  await Task.yield()
+  let secondImmediatePreparation = Task {
+    await runtime.prepare(for: .immediateCapture)
+    await completions.mark()
+  }
+  await Task.yield()
+
+  await asrLoadGate.openGate()
+  await cleanupLoadGate.waitUntilWaiting()
+  for _ in 0..<3 {
+    await Task.yield()
+  }
+
+  #expect(await cleanup.loadCallCount == 1)
+  #expect(await completions.count == 0)
+
+  await cleanupLoadGate.openGate()
+  await likelyPreparation.value
+  await firstImmediatePreparation.value
+  await secondImmediatePreparation.value
+
+  #expect(await cleanup.loadCallCount == 1)
+  #expect(await completions.count == 2)
+  #expect(await runtime.snapshot().residency == .warm)
+  await runtime.handle(.memoryCritical)
+  await sleeper.resumeAll()
+}
+
 @Test func preparationDuringActiveLeaseDoesNotStartAdapterWork() async throws {
   let asr = FakeRuntimeAdapter(role: .asr)
   let cleanup = FakeRuntimeAdapter(role: .cleanup)

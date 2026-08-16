@@ -50,6 +50,7 @@ actor LocalDictationRuntime {
   private var cancellationInProgress: UUID?
   private var preparationInProgress = false
   private var preparationIntent: DictationPreparationIntent?
+  private var pendingImmediatePreparation = false
   private var preparationWaiters: [CheckedContinuation<Void, Never>] = []
   private var modelMutationPending = false
   private var mutationWaiters: [CheckedContinuation<Void, Never>] = []
@@ -81,11 +82,11 @@ actor LocalDictationRuntime {
     else { return }
 
     if preparationInProgress {
-      let inFlightIntent = preparationIntent
-      await waitForPreparation()
-      if intent == .immediateCapture, inFlightIntent == .likelyCapture {
-        await prepare(for: intent)
+      if intent == .immediateCapture,
+         preparationIntent == .likelyCapture {
+        pendingImmediatePreparation = true
       }
+      await waitForPreparation()
       return
     }
     if idleTransitionInProgress {
@@ -97,16 +98,7 @@ actor LocalDictationRuntime {
     let previousResidency = currentResidency
     preparationInProgress = true
     preparationIntent = intent
-    do {
-      try await loadASR()
-    } catch {
-      // Preparation is advisory. Acquisition remains authoritative.
-    }
-
-    if intent == .immediateCapture, asrLoaded {
-      await loadCleanupIfPossible()
-    }
-
+    await loadPreparation(for: intent)
     await finishPreparation(from: previousResidency)
   }
 
@@ -263,11 +255,28 @@ actor LocalDictationRuntime {
   }
 
   private func finishPreparation(from previousResidency: DictationRuntimeResidency) async {
-    let mutationWasPending = modelMutationPending
+    var mutationWasPending = modelMutationPending
     if mutationWasPending {
       await forceCold()
     }
 
+    while pendingImmediatePreparation,
+          !mutationWasPending,
+          !modelMutationPending,
+          activeLease == nil,
+          !leaseAcquisitionInProgress,
+          !cancellationInProgressIsActive {
+      pendingImmediatePreparation = false
+      preparationIntent = .immediateCapture
+      await loadPreparation(for: .immediateCapture)
+    }
+
+    if modelMutationPending {
+      mutationWasPending = true
+      await forceCold()
+    }
+
+    pendingImmediatePreparation = false
     preparationInProgress = false
     preparationIntent = nil
     if !mutationWasPending, activeLease == nil {
@@ -277,6 +286,18 @@ actor LocalDictationRuntime {
     let waiters = preparationWaiters
     preparationWaiters = []
     waiters.forEach { $0.resume() }
+  }
+
+  private func loadPreparation(for intent: DictationPreparationIntent) async {
+    do {
+      try await loadASR()
+    } catch {
+      // Preparation is advisory. Acquisition remains authoritative.
+    }
+
+    if intent == .immediateCapture, asrLoaded {
+      await loadCleanupIfPossible()
+    }
   }
 
   private var currentResidency: DictationRuntimeResidency {
