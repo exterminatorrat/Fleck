@@ -3495,6 +3495,37 @@ post_switch_inventory="$({
 } | sort -u)"
 test "$post_switch_inventory" = "AGENTS.md"
 
+classify_full_suite_fixture() {
+  local fixture="$1"
+  local known_assertion_pattern='AppStateTests\.swift:916(:[0-9]+)?.*18\.0[[:space:]]*>=[[:space:]]*48\.0'
+  local known_test_pattern='Test NotesPanelFolderNavigatorBoundsFoldersAtCompactAndRegularHeights(?:\(\))? failed after .* with 1 issue'
+  local known_summary_pattern='Test run with [1-9][0-9]* tests? in [1-9][0-9]* suites? failed .*with 1 issue'
+  local known_assertion_records known_test_records known_summary_records
+  local failure_related_records unexpected_failure_records
+  known_assertion_records="$(printf '%s\n' "$fixture" | rg -n -P "$known_assertion_pattern" || true)"
+  known_test_records="$(printf '%s\n' "$fixture" | rg -n -P "$known_test_pattern" || true)"
+  known_summary_records="$(printf '%s\n' "$fixture" | rg -n -P "$known_summary_pattern" || true)"
+  test "$(printf '%s\n' "$known_assertion_records" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" || return 1
+  test "$(printf '%s\n' "$known_test_records" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" || return 1
+  test "$(printf '%s\n' "$known_summary_records" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" || return 1
+  failure_related_records="$(printf '%s\n' "$fixture" | rg -n -i -P 'Expectation failed|Test .* failed|with [1-9][0-9]* issues?|error:|crash' || true)"
+  unexpected_failure_records="$(printf '%s\n' "$failure_related_records" | rg -v -P "$known_assertion_pattern|$known_test_pattern|$known_summary_pattern" || true)"
+  test -z "$unexpected_failure_records" || return 1
+}
+
+known_classifier_fixture=$'Tests/FleckAppTests/AppStateTests.swift:916: Expectation failed: 18.0 >= 48.0\nTest NotesPanelFolderNavigatorBoundsFoldersAtCompactAndRegularHeights() failed after 0.2 seconds with 1 issue\nTest run with 907 tests in 9 suites failed after 4.2 seconds with 1 issue\n0 failures (0 unexpected)'
+if ! classify_full_suite_fixture "$known_classifier_fixture"; then
+  exit 1
+fi
+other_failure_fixture=$'Tests/FleckAppTests/AppStateTests.swift:916: Expectation failed: 18.0 >= 48.0\nTests/OtherTests.swift:12: Expectation failed: (1) == (2)\nTest OtherTests.unexpected failed after 0.1 seconds with 1 issue\nTest run with 907 tests in 9 suites failed after 4.2 seconds with 1 issue\n0 failures (0 unexpected)'
+if classify_full_suite_fixture "$other_failure_fixture"; then
+  exit 1
+fi
+multiple_issue_fixture=$'Tests/FleckAppTests/AppStateTests.swift:916: Expectation failed: 18.0 >= 48.0\nTest NotesPanelFolderNavigatorBoundsFoldersAtCompactAndRegularHeights() failed after 0.2 seconds with 2 issues\nTest run with 907 tests in 9 suites failed after 4.2 seconds with 2 issues\n0 failures (0 unexpected)'
+if classify_full_suite_fixture "$multiple_issue_fixture"; then
+  exit 1
+fi
+
 full_suite_log="$snapshot_dir/full-suite.log"
 set +e
 swift test --disable-automatic-resolution --no-parallel >"$full_suite_log" 2>&1
@@ -3503,7 +3534,7 @@ set -euo pipefail
 test "$(wc -c < "$full_suite_log" | tr -d ' ')" -le 1048576
 if (( full_suite_status != 0 )); then
   known_assertion_pattern='AppStateTests\.swift:916(:[0-9]+)?.*18\.0[[:space:]]*>=[[:space:]]*48\.0'
-  known_test_pattern='Test (?!run with [1-9][0-9]* tests? in [1-9][0-9]* suites? failed).*(AppStateTests|AppState|viewport|Viewport).* failed after .* with 1 issue'
+  known_test_pattern='Test NotesPanelFolderNavigatorBoundsFoldersAtCompactAndRegularHeights(?:\(\))? failed after .* with 1 issue'
   known_summary_pattern='Test run with [1-9][0-9]* tests? in [1-9][0-9]* suites? failed .*with 1 issue'
   known_assertion_records="$(rg -n -P "$known_assertion_pattern" "$full_suite_log" || true)"
   known_test_records="$(rg -n -P "$known_test_pattern" "$full_suite_log" || true)"
@@ -3512,7 +3543,7 @@ if (( full_suite_status != 0 )); then
   test "$(printf '%s\n' "$known_test_records" | sed '/^$/d' | wc -l | tr -d ' ')" = "1"
   test "$(printf '%s\n' "$known_summary_records" | sed '/^$/d' | wc -l | tr -d ' ')" = "1"
   failure_related_records="$(
-    rg -n -i 'fail|failure|issue|error|crash|unexpected' "$full_suite_log" || true
+    rg -n -i -P 'Expectation failed|Test .* failed|with [1-9][0-9]* issues?|error:|crash' "$full_suite_log" || true
   )"
   unexpected_failure_records="$(
     printf '%s\n' "$failure_related_records" |
@@ -3531,13 +3562,15 @@ in-progress-operation check aborts before the build. The full-suite command is
 the only temporarily non-fail-fast command: its output is captured in a
 bounded log, fail-fast is restored on the next line, and continuation is
 allowed only when the log contains exactly one `AppStateTests.swift:916`
-assertion containing `18.0 >= 48.0`, exactly one per-test record for the known
-AppState/viewport test matching `Test ... failed after ... with 1 issue`,
-exactly one suite summary matching `Test run with <positive> test(s) in
-<positive> suite(s) failed ... with 1 issue`, and no other failure-related
-record. The positive counts may be any full-suite counts; the one issue and
-one failed test record may not be relaxed to a one-test fixture. Any other
-nonzero suite result exits before the build. Run the build script exactly as committed; do not copy
+assertion containing `18.0 >= 48.0`, exactly one per-test record for
+`NotesPanelFolderNavigatorBoundsFoldersAtCompactAndRegularHeights` matching
+`Test NotesPanelFolderNavigatorBoundsFoldersAtCompactAndRegularHeights()`
+`failed after ... with 1 issue`, exactly one suite summary matching
+`Test run with <positive> test(s) in <positive> suite(s) failed ... with 1
+issue`. The captured live evidence is `907 tests in 9 suites`; the production
+pattern permits other positive full-suite counts but not another failed test,
+assertion, or more than one issue. Benign `0 failures (0 unexpected)` lines
+are ignored. Any other nonzero suite result exits before the build. Run the build script exactly as committed; do not copy
 it, add another script, or use an isolated-worktree bundle as evidence. The
 primary may launch the app and inspect Settings, but must report only observed
 process and UI state.

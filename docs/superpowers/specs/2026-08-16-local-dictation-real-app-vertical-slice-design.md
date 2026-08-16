@@ -315,9 +315,10 @@ generation, and closes updates synchronously before creating and storing the
 shared task. `finish()` rejects if that invalidated state or a shared
 `cancellationTask` already exists when no finalization task is already shared;
 finish callers that entered first await that existing task. If the sole speech
-source's `finish()` is still blocked, the shared task calls `cancel()` early
-enough to unblock it, then cancels and awaits finalization and the cleaner's
-bounded helper acknowledgement or force-termination path. If `finish()` has
+source's `finish()` is still blocked, the shared task cancels finalization
+first so `Task.isCancelled` is visible, then calls `cancel()` early enough to
+unblock it, and awaits finalization and the cleaner's bounded helper
+acknowledgement or force-termination path. If `finish()` has
 already completed, its source-owned physical release and logical `.finished`
 state are already recorded; cancellation makes zero second source-terminal
 calls and only drains finalization/cleanup. In production,
@@ -337,9 +338,10 @@ finalization nor source `finish()` starts; the separate source-blocking test
 proves early source cancellation unblocks an already-running finish.
 
 An empty final source transcript is a terminal
-`StreamingDictationProcessorError.noSpeech` failure. It uses the same
-source-owned finish/cancel terminalization contract and cannot publish a
-result, update, or late insertion.
+`StreamingDictationProcessorError.noSpeech` failure. If cancellation unblocks
+a blocked source finish with nil, the finalization task checks cancellation
+before interpreting nil, so `CancellationError` wins and no noSpeech result,
+update, insertion, or late publication escapes.
 
 The cancellation evidence is phase-specific. A blocked-finish test records
 source cancellation and physical release: cancellation wins, releases once,
@@ -401,12 +403,16 @@ valid capture returns a baseline decision. These are distinct from a dictionary
 failure before a baseline, which remains raw-ASR recovery.
 
 The Apple Foundation Models cleanup adapter implements all four
-`CleanupGenerationSession` methods. Because in-process model work cannot promise
-true force termination, its detachable underlying operation is behind a locked
-publication gate: cancellation or force termination closes the gate and
-acknowledges immediately, while any late candidate is rejected and cannot keep
-the cleaner's structured children waiting. The architecture claims bounded
-publication and drain, not that the underlying model computation was killed.
+`CleanupGenerationSession` methods. Its initializer stores the request, token
+cap, responder, and cancellation state only; the first `result()` call lazily
+creates one generation task under a lock, and concurrent/repeated result calls
+share that task. Pre-result cancellation acknowledges without starting model
+work. Because in-process model work cannot promise true force termination, its
+underlying operation is behind a locked publication gate: cancellation or force
+termination closes the gate and acknowledges immediately, while any late
+candidate is rejected and cannot keep the cleaner's structured children
+waiting. The architecture claims bounded publication and drain, not that the
+underlying model computation was killed.
 
 ## Runtime, privacy, and network rules
 
@@ -764,7 +770,10 @@ duplicate manifest paths fail before transport.
    success/failure/cancellation, and makes no second capture. The Foundation
    Model production-boundary probe executes `FoundationModelDictation` through
    an injected responder at the single `respond` call, records one call and
-   the exact `GenerationOptions.maximumResponseTokens` cap. Existing
+   the exact `GenerationOptions.maximumResponseTokens` cap. The cleanup session
+   test proves initialization makes zero responder calls, first/concurrent/
+   repeated `result()` calls share one generation, and pre-result cancellation
+   acknowledges without starting it. Existing
    `AppleSpeechCapture` tests remain green and must prove on-device rejection
    and no network path.
    `StreamingDictationProcessorTests` also hold source finalization at a
@@ -809,12 +818,15 @@ duplicate manifest paths fail before transport.
    ` M AGENTS.md` status to remain identical and aborts before packaging on any
    mismatch. The full-suite command may continue after a nonzero exit only when
    its bounded log contains exactly the known `AppStateTests.swift:916` viewport
-   assertion `18.0 >= 48.0`, one known AppState/viewport Swift Testing
-   per-test record matching `Test ... failed after ... with 1 issue`, and one
-   suite summary matching `Test run with <positive> test(s) in <positive>
-   suite(s) failed ... with 1 issue`, with no other failure, issue, error,
-   crash, or unexpected record. The full-suite counts are not reduced to a one-test
-   fixture; exactly one known failed test record and one issue remain required.
+   assertion `18.0 >= 48.0`, one per-test record for
+   `NotesPanelFolderNavigatorBoundsFoldersAtCompactAndRegularHeights` matching
+   `Test NotesPanelFolderNavigatorBoundsFoldersAtCompactAndRegularHeights()`
+   `failed after ... with 1 issue`, and one suite summary matching
+   `Test run with <positive> test(s) in <positive> suite(s) failed ... with 1
+   issue`. The captured live counts are 907 tests in 9 suites; the pattern may
+   accept other positive counts but never another failed test/assertion or more
+   than one issue. Benign `0 failures (0 unexpected)` lines are ignored. The
+   full-suite counts are not reduced to a one-test fixture.
    Every other failure aborts. Only then run `./Scripts/build-fleck-app.sh` and inspect
    `/Users/harryjin/Fleck/.build/Fleck.app`. A bundle produced in an isolated
    worktree is not evidence for that exact path.
