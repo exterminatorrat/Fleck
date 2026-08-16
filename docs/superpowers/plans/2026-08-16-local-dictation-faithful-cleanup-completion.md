@@ -482,6 +482,10 @@ import Testing
     ("send 21th files", "Send 21th files."),
     ("send 21stx files", "Send 21stx files."),
     ("pay - 20", "Pay 20."),
+    ("pay :20", "Pay 20."),
+    ("pay : 20", "Pay 20."),
+    ("pay %20", "Pay 20."),
+    ("pay % 20", "Pay 20."),
     ("pay 20-", "Pay 20."),
     ("pay $ 20", "Pay 20."),
     ("pay $$20", "Pay $20."),
@@ -806,12 +810,12 @@ struct FaithfulCleanupValidator: Sendable {
   }
 
   private struct NumericRawContext: Equatable {
-    let detachedLeadingAffixes: [String]
-    let detachedTrailingAffixes: [String]
+    let detachedLeadingContext: [String]
+    let detachedTrailingContext: [String]
 
     static let none = Self(
-      detachedLeadingAffixes: [],
-      detachedTrailingAffixes: []
+      detachedLeadingContext: [],
+      detachedTrailingContext: []
     )
   }
 
@@ -1043,14 +1047,36 @@ struct FaithfulCleanupValidator: Sendable {
       if ["/", ":", "%"].contains(next.original) { return nil }
       if original.hasSuffix("%") && next.original == "%" { return nil }
     }
+    func separatorRun(_ step: Int) -> [String] {
+      var cursor = index + step
+      var separators: [String] = []
+      while lexemes.indices.contains(cursor) {
+        if lexemes[cursor].kind == .whitespace {
+          cursor += step
+          continue
+        }
+        guard lexemes[cursor].kind == .punctuation,
+              [":", "/", "%"].contains(lexemes[cursor].original)
+        else { break }
+        separators.append(lexemes[cursor].original)
+        cursor += step
+      }
+      return step < 0 ? Array(separators.reversed()) : separators
+    }
+
     let detachedLeadingAffixes = affixRun(-1)
     let detachedTrailingAffixes = affixRun(1)
-    guard detachedTrailingAffixes.isEmpty else {
+    let detachedLeadingSeparators = separatorRun(-1)
+    let detachedTrailingSeparators = separatorRun(1)
+    guard detachedTrailingAffixes.isEmpty,
+          detachedTrailingSeparators.isEmpty else {
       return nil
     }
     return .init(
-      detachedLeadingAffixes: detachedLeadingAffixes,
-      detachedTrailingAffixes: detachedTrailingAffixes
+      detachedLeadingContext:
+        detachedLeadingAffixes + detachedLeadingSeparators,
+      detachedTrailingContext:
+        detachedTrailingAffixes + detachedTrailingSeparators
     )
   }
 
@@ -1419,13 +1445,18 @@ Before classifying any number, `numericRawContext(at:in:)` checks balanced
 parentheses, rejects a number adjacent to a dangling `)`, `/`, `:`, `%`, or
 trailing sign/currency, and rejects incomplete affixes even when
 `CleanupLexeme` split the punctuation into separate raw lexemes. It skips
-whitespace only while walking the contiguous raw affix run: every one-character
-`+`, `-`, `−`, or currency symbol before a number is recorded in source order
-in `NumericRawContext`; any such run after a number is ambiguous. The number's
-semantic signature compares both the classified numeric form and the complete
-context, so removing a detached sign/currency or one member of a doubled or
-split affix cannot compare equal. Hyphen punctuation elsewhere, with no number
-as a raw neighbor, is not treated as numeric context. Complete supported forms then
+whitespace only while walking the contiguous raw context: every one-character
+`+`, `-`, `−`, or currency symbol before a number is recorded in source order,
+and a leading `:`, `/`, or `%` is recorded symmetrically when it is the raw
+neighbor of that number. The same separator run is inspected after the number;
+any trailing sign, currency, separator, or percent is ambiguous. Thus the
+observable validator rejects `pay - 20` to `Pay 20.`, `pay :20` to `Pay 20.`,
+`pay : 20` to `Pay 20.`, `pay %20` to `Pay 20.`, and `pay % 20` to `Pay 20.`.
+The number's semantic signature compares both the classified numeric form and
+the complete context, so removing a detached sign/currency/separator or one
+member of a doubled or split affix cannot compare equal. Hyphen, colon, slash,
+or percent punctuation elsewhere, with no numeric raw neighbor, is not treated
+as numeric context. Complete supported forms then
 validate fraction denominators and clock ranges, so `99:99am` and `1/0` are
 ambiguous. Therefore `($20`, `20)`, `10:`, `1/`, and `20%%` fail closed even
 when their numeric fragments individually match a permissive pattern. Exact

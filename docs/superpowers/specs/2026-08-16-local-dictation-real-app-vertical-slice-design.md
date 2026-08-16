@@ -109,13 +109,13 @@ SettingsView -------------> admitted recommendation presentation, not model sele
 
 | Module | Owns | Does not own |
 | --- | --- | --- |
-| `AppleSpeechCapture` | The existing `AVAudioEngine`/Speech framework session, permission request, on-device requirement, provisional/final callbacks, interruption, and resource release. | Dictionary resolution, cleanup, routing, history, UI, or model downloads. |
-| `AppleSpeechStreamingAdapter` | Adapting the existing `SpeechEngine` callback/final interface to the processor seam. | A second audio tap, microphone session, network fallback, or model choice. |
+| `AppleSpeechCapture` | The existing `AVAudioEngine`/Speech framework session, permission request, on-device requirement, provisional/final callbacks, interruption, and source-owned terminal release. Its `finish()` and `cancel()` release the underlying `AppleSpeechSession` before returning and are idempotent at the session boundary. | Dictionary resolution, cleanup, routing, history, UI, or model downloads. |
+| `AppleSpeechStreamingAdapter` | Adapting the already-created `SpeechEngine` callback/final interface to the processor seam; `finish()` and `cancel()` are direct forwards and do not construct `AppleSpeechCapture` or add a second physical release. | A second audio tap, microphone session, network fallback, or model choice. |
 | `DictationProcessing` / `StreamingDictationProcessor` | One incremental capture session's transcript updates, dictionary-before-cleanup final artifacts, and bounded cleanup decision. | Shortcut identity, note persistence, routing policy, or UI ownership. |
 | `StreamingTranscriptState` | Generation ordering, append-only stable prefix, and a mutable tail capped by the newest two clauses or 80 `CleanupLexeme` lexical units. | Semantic cleanup or insertion. |
 | `FaithfulCleanupValidator` | The deterministic allowlist and protected-meaning decision. | Generating text, choosing a model, or logging transcript data. |
 | `IncrementalTranscriptCleaner` | One bounded cleanup request, one generation attempt, deadline/cancellation race, validation, exact baseline fallback, and session-box publication gate. | Dictionary resolution, audio, runtime residency, or UI. |
-| `FoundationModelDictation` / `FoundationModelCleanupGenerator` | The existing Apple Foundation Models/deterministic control and its bounded incremental wrapper. The cleanup cap reaches `GenerationOptions(maximumResponseTokens:)` in the single `respond` request. | Retries, cloud fallback, or a second generation request. |
+| `FoundationModelDictation` / `FoundationModelCleanupGenerator` | The existing Apple Foundation Models/deterministic control and its bounded incremental wrapper. An inspectable responder seam carries `GenerationOptions(maximumResponseTokens:)` into the one production `respond` request. | Retries, cloud fallback, or a second generation request. |
 | `LocalDictationRuntime` | Restored active/warm/standby/cold policy, one lease, lifecycle signals, scheduler, and future adapter health. | The Apple audio capture path and installer UI. |
 | `EnhancedModelManager` | Existing compile-gated manifest, download, checksum, repair, update, and remove transactions when an admitted configuration exists. | Selecting a model, normal-release routing, or a second downloader. |
 | `AdmittedModelCatalog` and settings presentation | One signed configuration's exact identity and one automatic recommendation, or the built-in state. | A model picker, Advanced selector, inference, or model weights. |
@@ -179,11 +179,16 @@ struct DictationProcessingResult: Equatable, Sendable {
 `StreamingSpeechSource` is an adapter protocol over the existing
 `SpeechEngine`. `AppleSpeechStreamingAdapter` receives the already-created
 `SpeechEngine` from `DictationSpeechEngineProvider` and forwards its
-provisional/final/level/cancel/release interface; it never constructs
-`AppleSpeechCapture`, installs another tap, or creates another audio engine. The
-processor awaits the source factory, starts this one source exactly once with
-both callbacks, and passes the already-started source to a synchronous session
-initializer; a start failure releases the source before rethrowing. The legacy
+provisional/final/level/finish/cancel/release interface; it never constructs
+`AppleSpeechCapture`, installs another tap, or creates another audio engine.
+`finish()` and `cancel()` are source-owned terminal operations: the current
+`AppleSpeechCapture` releases its underlying `AppleSpeechSession` before either
+returns, and repeated terminal calls are idempotent. `releaseResources()` is
+only the pre-start cleanup hook for this streaming session, not a second
+physical release after finish/cancel. The processor awaits the source factory,
+starts this one source exactly once with both callbacks, and passes the
+already-started source to a synchronous session initializer; a start failure
+releases the source before rethrowing. The legacy
 coordinator path continues to call `SpeechEngine.start` and `finish`
 directly when the incremental processor is not selected. A capture is either
 that legacy path or a `DictationProcessingSession`, never both.
@@ -274,14 +279,15 @@ Unicode currency symbol, optional second sign after that currency, digits and
 separators, one trailing percent/currency character, closing parenthesis, and
 `am`/`pm`. The exact canonical form is retained, so `$-20`, `(-$20)`, and
 `₹20` cannot lose or change their sign, currency, or parentheses. The complete
-raw sign/currency affix runs that `CleanupLexeme` detached are also retained.
+raw sign/currency/separator context that `CleanupLexeme` detached is also
+retained.
 Removing a detached or doubled affix therefore changes the numeric signature; a
 trailing detached sign/currency is ambiguous, while a hyphen without a numeric
 raw neighbor remains ordinary punctuation. Balanced parentheses and
-complete separators/affixes are required, so `pay - 20` cannot become
-`Pay 20.`, `20-` cannot lose its trailing sign, and split/doubled
-`$`/`+`/`-` forms cannot lose one affix. Unsupported digit-bearing sequences
-are ambiguous. A list exception validates the ordered pairs `first -> 1` through
+complete separators/affixes are required, so `pay - 20`, `pay :20`, `pay : 20`,
+`pay %20`, and `pay % 20` cannot become `Pay 20.`; `20-` cannot lose its
+trailing sign; and split/doubled `$`/`+`/`-` forms cannot lose one affix.
+Unsupported digit-bearing sequences are ambiguous. A list exception validates the ordered pairs `first -> 1` through
 `fifth -> 5`, removes only the full raw marker ranges for its remainder check,
 and passes only the exact candidate number ranges to protected-span comparison.
 Inter-marker whitespace/punctuation does not change those raw coordinates;
@@ -305,11 +311,13 @@ generation, and closes updates synchronously before creating and storing the
 shared task. `finish()` rejects if that invalidated state or a shared
 `cancellationTask` already exists when no finalization task is already shared;
 finish callers that entered first await that existing task. The shared task
-cancels the sole speech source early enough to unblock an in-flight `finish()`,
-then cancels and awaits finalization and releases source resources exactly once.
-Every independent concurrent caller awaits that same task, so cancellation
-reaches `IncrementalTranscriptCleaner` and its bounded helper acknowledgement
-or force-termination path before any caller returns.
+calls the sole speech source's `cancel()` early enough to unblock an in-flight
+`finish()`, then cancels and awaits finalization and the cleaner's bounded
+helper acknowledgement or force-termination path. In production,
+`AppleSpeechCapture.cancel()` owns physical release of its Apple Speech
+session before returning; the session records one logical source
+terminalization and does not require a second physical release. Every
+independent concurrent caller awaits that same task before returning.
 Concurrent finish callers await the same existing task; if cancellation wins
 before any finish task exists, the cancellation guard prevents new finalization
 work from starting. The processor test records the synchronous invalidation
@@ -317,11 +325,11 @@ boundary, schedules `finish()` only after that event, and asserts that neither
 finalization nor source `finish()` starts; the separate source-blocking test
 proves early source cancellation unblocks an already-running finish.
 
-The ordered cancellation test records source cancellation, helper
-acknowledgement, source release, and each caller return. It requires source
-cancellation to be early, helper acknowledgement before source release, and
-both cancel callers to return only after source release; no result or update may
-publish.
+The ordered cancellation test records source cancellation, source physical
+release, helper acknowledgement, and each caller return. It requires source
+cancellation to be early and both cancel callers to return only after source
+terminalization and helper drain; it deliberately does not require helper
+acknowledgement to precede source release. No result or update may publish.
 
 `StreamingSpeechSource.cancel()` and `releaseResources()` must not synchronously
 await the owning session's `cancel()` from a dependency callback. They may
@@ -333,25 +341,24 @@ Cancellation must execute in this order:
 
 1. mark the capture cancelled and invalidate its generation;
 2. restore the focused editor's exact pre-capture transaction;
-3. await processing-session cancellation, which cancels the selected speech
-   source early enough to unblock an in-flight finish, then cancels/awaits
-   finalization and releases source resources exactly once;
+3. await processing-session cancellation, which synchronously closes updates,
+   calls the selected speech source's `cancel()` early enough to unblock an
+   in-flight finish, then cancels/awaits finalization and helper drain;
 4. erase provisional transcript and in-memory audio buffers;
 5. remove provisional history work and release runtime scratch state;
 6. publish only `.cancelled` after the session's bounded helper
    acknowledgement/force-termination path has completed and no active work can
    publish.
 
-`StreamingDictationSession` also owns terminal cleanup for non-cancellation
-paths. Its one finalization task calls `markTerminal()` and an
-`releaseSourceExactlyOnce()` guard on both successful result and thrown source,
-dictionary, or cleanup error. A successful or failed finish releases the
-already-started source exactly once without calling source `cancel`; a later
-explicit cancellation may cancel the source but cannot release it again. The
-terminal guard closes the update stream before release, so callbacks arriving
-after success or failure cannot publish. The cancellation task retains its
-settled early-source-cancel ordering for an in-flight Apple Speech finish,
-then awaits finalization and the same release guard.
+`StreamingDictationSession` also owns terminal state for non-cancellation paths.
+Its one finalization task marks terminal after both successful result and
+thrown source, dictionary, or cleanup error. `source.finish()` owns the
+physical release on those paths; the session records `.finished` exactly once
+and does not call `releaseResources()` afterward. The cancellation task claims
+`.cancelled`, calls source `cancel()` early for an in-flight Apple Speech
+finish, then awaits finalization and helper drain. The terminal guard closes
+the update stream before any terminal return, so callbacks arriving after
+success, failure, or cancellation cannot publish.
 
 After cancellation, no update, final result, history mutation, route, insertion,
 or recovery receipt may publish. A caller cancellation of the cleanup task throws
@@ -705,12 +712,14 @@ duplicate manifest paths fail before transport.
    exact baseline insertion, raw-ASR recovery, cancellation, no late events, and
    unchanged legacy behavior.
 3. **Apple adapter tests:** injected `SpeechEngine` probes prove the adapter
-   forwards provisional/final text and levels, releases exactly once on
+   forwards provisional/final text and levels, preserves source-owned
+   finish/cancel terminalization and idempotent physical release on
    success/failure/cancellation, and makes no second capture. The Foundation
-   Model production-boundary probe proves the caller's maximum output token cap
-   reaches the single `GenerationOptions(maximumResponseTokens:)` request.
-   Existing `AppleSpeechCapture` tests remain green and must prove on-device
-   rejection and no network path.
+   Model production-boundary probe executes `FoundationModelDictation` through
+   an injected responder at the single `respond` call, records one call and
+   the exact `GenerationOptions.maximumResponseTokens` cap. Existing
+   `AppleSpeechCapture` tests remain green and must prove on-device rejection
+   and no network path.
 4. **Runtime tests:** pure policy, scheduler, lease, lifecycle, memory-pressure,
    sleep, and mutation gates use deterministic sleepers and fake adapters. They
    do not claim a custom model is loaded.
@@ -730,12 +739,16 @@ duplicate manifest paths fail before transport.
    transcript file, audio file, or late insertion is introduced by the vertical
    slice.
 7. **App packaging:** after every source task has parent verification and a
-   fresh Sol `ship`, snapshot the sole dirty root `AGENTS.md`, verify the
-   cumulative accepted diff does not modify it, switch the real
-   `/Users/harryjin/Fleck` checkout to one local `codex/...` branch at the exact
-   final accepted SHA without merge/rebase/cherry-pick, and require the hash,
-   diff, branch, ancestry, and ` M AGENTS.md` status to remain identical. Only
-   then run `./Scripts/build-fleck-app.sh` and inspect
+   fresh Sol `ship`, the final parent preflights the real
+   `/Users/harryjin/Fleck` checkout at exact root HEAD
+   `ab886d9968e6c1ae088d18e085938bec8a80f7c9`, branch `main`, and status
+   exactly ` M AGENTS.md`. It verifies the cumulative diff from that starting
+   HEAD to the final accepted SHA does not modify `AGENTS.md`, snapshots the
+   working-file hash and exact diff, then switches the root checkout to one
+   local `codex/...` branch at that exact SHA without merge/rebase/cherry-pick.
+   It requires final SHA/branch, hash, diff, ancestry, unmerged-state, and
+   ` M AGENTS.md` status to remain identical and aborts before packaging on any
+   mismatch. Only then run `./Scripts/build-fleck-app.sh` and inspect
    `/Users/harryjin/Fleck/.build/Fleck.app`. A bundle produced in an isolated
    worktree is not evidence for that exact path.
 8. **Operator microphone test:** a human launches the development app, grants

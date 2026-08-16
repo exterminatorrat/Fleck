@@ -435,6 +435,20 @@ struct EnhancedModelManifestIdentity: Equatable, Sendable {
   let files: [AdmittedModelFile]
   let totalByteCount: Int64
 
+  init(
+    schemaVersion: Int,
+    modelID: String,
+    revision: String,
+    files: [AdmittedModelFile],
+    totalByteCount: Int64
+  ) {
+    self.schemaVersion = schemaVersion
+    self.modelID = modelID
+    self.revision = revision
+    self.files = files
+    self.totalByteCount = totalByteCount
+  }
+
   init(manifest: EnhancedModelManifest) {
     schemaVersion = manifest.schemaVersion
     modelID = manifest.modelID
@@ -1064,6 +1078,27 @@ final class SynchronousCapacityProbe: @unchecked Sendable {
 }
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+enum TestPaths {
+  static func temporaryDirectory() -> URL {
+    let candidate = FileManager.default.temporaryDirectory
+      .appendingPathComponent("Fleck-\(UUID().uuidString)", isDirectory: true)
+      .standardizedFileURL
+    do {
+      try FileManager.default.createDirectory(
+        at: candidate,
+        withIntermediateDirectories: false
+      )
+      return candidate.resolvingSymlinksInPath().standardizedFileURL
+    } catch {
+      preconditionFailure("Unable to create isolated test directory: \(error)")
+    }
+  }
+
+  static func remove(_ directory: URL) {
+    try? FileManager.default.removeItem(at: directory)
+  }
+}
+
 @MainActor
 final class TestManagerFixture {
   let root: URL
@@ -1095,13 +1130,13 @@ final class TestManagerFixture {
         transport: transport
       )
     } catch {
-      try? FileManager.default.removeItem(at: root)
+      TestPaths.remove(root)
       throw error
     }
   }
 
   func cleanup() {
-    try? FileManager.default.removeItem(at: root)
+    TestPaths.remove(root)
   }
 }
 
@@ -1196,13 +1231,19 @@ func defaultBuildUsesBuiltInInstallerWithoutManagerReference() async {
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test @MainActor
 func existingDictationModelCapabilityCallShapesRemainSourceCompatible() {
+  let defaultRoot = TestPaths.temporaryDirectory()
+  let testRoot = TestPaths.temporaryDirectory()
+  defer {
+    TestPaths.remove(defaultRoot)
+    TestPaths.remove(testRoot)
+  }
   // This call uses the production capacity and arm64 defaults.
   let defaultCapability = DictationModelCapability(
-    modelRootURL: TestPaths.temporaryDirectory()
+    modelRootURL: defaultRoot
   )
   // This is the existing test shape; only its architecture probe is injected.
   let testCapability = DictationModelCapability(
-    modelRootURL: TestPaths.temporaryDirectory(),
+    modelRootURL: testRoot,
     candidateEnabled: true,
     architectureProvider: { true }
   )
@@ -1940,19 +1981,14 @@ final class EnhancedModelManager: ObservableObject {
       },
       downloadBytes: manifest.totalByteCount,
       installedBytes: manifest.totalByteCount,
-      requiredCapacityBytes: Self.checkedEmbeddedRequiredCapacity(for: manifest)
+      requiredCapacityBytes: Self.embeddedCompatibilityRequiredCapacity
     )
     return (manifest: manifest, artifactIdentity: identity)
   }
 
-  private static func checkedEmbeddedRequiredCapacity(
-    for manifest: EnhancedModelManifest
-  ) -> Int64 {
-    let (value, overflow) = manifest.totalByteCount.addingReportingOverflow(
-      manifest.totalByteCount
-    )
-    return overflow ? Int64.max : value
-  }
+  // Compatibility only: this is the current experimental embedded Parakeet
+  // manager path, never a signed admitted artifact or recommendation.
+  private static let embeddedCompatibilityRequiredCapacity: Int64 = 1_197_261_950
 
   var admittedArtifactIdentity: EnhancedModelArtifactIdentity { artifactIdentity }
 
@@ -2037,7 +2073,11 @@ final class EnhancedModelManager: ObservableObject {
 #endif
 ~~~
 
-The displayed initializer is the existing manager initializer with every
+`EnhancedModelManifestIdentity` has an explicit fieldwise initializer
+`init(schemaVersion:modelID:revision:files:totalByteCount:)`; the artifact
+projection uses that initializer rather than relying on a suppressed
+memberwise initializer after `init(manifest:)` exists. The displayed
+initializer is the existing manager initializer with every
 stored-property assignment retained; it adds only the immutable artifact
 identity and its checked required-capacity binding. The existing embedded
 manager construction supplies that identity beside the actual manifest. The
@@ -2058,6 +2098,10 @@ compatibility identity; they do not construct an admitted descriptor, catalog
 recommendation, or installer. Any custom manifest must use the designated
 initializer and pass its `artifactIdentity` explicitly, using the declared
 argument order above before the existing dependency labels.
+The source-compatible embedded path preserves the current experimental manager
+capacity of exactly `1_197_261_950` bytes. That constant is used only for the
+embedded compatibility identity; signed admitted artifacts carry their own
+validated checked `requiredCapacityBytes` and never use it.
 At the start of the existing `validateManifest`, call
 `try validateManifestPaths(manifest)` before checksum or byte-count checks;
 this is the manager-side regression point for the shared path rule.
@@ -2089,7 +2133,10 @@ full resolved path plus `?download=true`, proving the explicit identity is not
 ignored.
 The test-only `TestManagers` helpers may inject `capacityProvider: { Int64.max }`
 and `architectureProvider: { true }`; those values are never production or
-compatibility defaults.
+compatibility defaults. `TestPaths.temporaryDirectory()` creates one unique,
+canonical directory below `FileManager.default.temporaryDirectory`; every
+`TestManagerFixture` owns and removes only its root, and direct compatibility
+call-shape tests use `defer` to remove both named temporary roots.
 The manager path regression passes the descriptor's complete unsafe-path table
 through `remoteURL` and asserts `invalidManifestPath` before URL construction;
 a separate duplicate-normalized-manifest fixture calls `download()` with
@@ -3252,7 +3299,8 @@ written. The known viewport assertion is classified separately if present.
 ## Final real-checkout packaging checkpoint
 
 The source tasks form a dependent accepted commit chain. The parent has already
-verified that root `ab886d9` is an ancestor of accepted base
+verified that root
+`ab886d9968e6c1ae088d18e085938bec8a80f7c9` is an ancestor of accepted base
 `4212314398853091fa85e7aec18318b9650e8604`, and that `AGENTS.md` is unchanged
 between those two commits. After every source task has parent verification and
 a fresh Sol `ship`, the final parent supplies the exact accepted implementation
@@ -3264,12 +3312,16 @@ before packaging. It does not merge, rebase, cherry-pick, push, or modify
 root=/Users/harryjin/Fleck
 final_accepted_sha="${FINAL_ACCEPTED_SHA:?the final accepted implementation SHA must come from the parent ship handoff}"
 final_branch=codex/local-dictation-real-app-final
+starting_root_sha=ab886d9968e6c1ae088d18e085938bec8a80f7c9
 snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/fleck-root-handoff.XXXXXX")"
 cd "$root"
 test "$(git rev-parse --show-toplevel)" = "$root"
-git merge-base --is-ancestor ab886d9 4212314398853091fa85e7aec18318b9650e8604
-git diff --quiet ab886d9 4212314398853091fa85e7aec18318b9650e8604 -- AGENTS.md
+test "$(git rev-parse HEAD)" = "$starting_root_sha"
+test "$(git branch --show-current)" = "main"
+test "$(git status --short)" = " M AGENTS.md"
+git merge-base --is-ancestor "$starting_root_sha" 4212314398853091fa85e7aec18318b9650e8604
 git merge-base --is-ancestor 4212314398853091fa85e7aec18318b9650e8604 "$final_accepted_sha"
+git diff --quiet "$starting_root_sha" "$final_accepted_sha" -- AGENTS.md
 git rev-parse HEAD > "$snapshot_dir/head.before"
 git status --short --branch > "$snapshot_dir/status.before"
 git hash-object AGENTS.md > "$snapshot_dir/agents.hash.before"
@@ -3286,7 +3338,7 @@ test -z "$(git branch --list "$final_branch")"
 git switch --create "$final_branch" "$final_accepted_sha"
 test "$(git rev-parse HEAD)" = "$final_accepted_sha"
 test "$(git branch --show-current)" = "$final_branch"
-git diff --quiet ab886d9 "$final_accepted_sha" -- AGENTS.md
+git diff --quiet "$starting_root_sha" "$final_accepted_sha" -- AGENTS.md
 test "$(git hash-object AGENTS.md)" = "$(cat "$snapshot_dir/agents.hash.before")"
 git diff --binary -- AGENTS.md > "$snapshot_dir/agents.diff.after"
 cmp -s "$snapshot_dir/agents.diff.before" "$snapshot_dir/agents.diff.after"
