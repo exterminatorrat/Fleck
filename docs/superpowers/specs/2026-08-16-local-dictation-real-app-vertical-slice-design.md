@@ -286,11 +286,19 @@ separators, one trailing percent/currency character, closing parenthesis, and
 raw sign/currency/separator context that `CleanupLexeme` detached is also
 retained.
 Removing a detached or doubled affix therefore changes the numeric signature; a
-trailing detached sign/currency is ambiguous, while a hyphen without a numeric
-raw neighbor remains ordinary punctuation. Balanced parentheses and
+trailing detached sign/currency or parenthesis is ambiguous, while a hyphen or
+parenthesis without a numeric raw neighbor remains ordinary punctuation. The
+scanner splits `20(` and `20)` into a `.number` lexeme followed by a
+`.punctuation` lexeme, so the raw-context check rejects both directions
+symmetrically unless the number lexeme itself contains a balanced pair. Thus
+`send 20(` to `Send 20.` rejects, and even unchanged `send 20(` to `Send 20(`
+fails closed as malformed; a valid balanced `($20)` remains one supported
+number lexeme. Balanced parentheses and
 complete separators/affixes are required, so `pay - 20`, `pay :20`, `pay : 20`,
 `pay %20`, and `pay % 20` cannot become `Pay 20.`; `20-` cannot lose its
 trailing sign; and split/doubled `$`/`+`/`-` forms cannot lose one affix.
+Parentheses around nonnumeric lexical text remain ordinary punctuation and do
+not enter numeric context.
 Unsupported digit-bearing sequences are ambiguous. A list exception validates the ordered pairs `first -> 1` through
 `fifth -> 5`, removes only the full raw marker ranges for its remainder check,
 and passes only the exact candidate number ranges to protected-span comparison.

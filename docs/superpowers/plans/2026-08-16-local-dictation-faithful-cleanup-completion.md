@@ -452,6 +452,15 @@ import Testing
   #expect(CleanupLexeme.scan("pay + + +20").map(\.original) == [
     "pay", " ", "+", " ", "+", " ", "+20"
   ])
+  #expect(CleanupLexeme.scan("send 20(").map(\.original) == [
+    "send", " ", "20", "("
+  ])
+  #expect(CleanupLexeme.scan("send 20(").map(\.kind) == [
+    .word, .whitespace, .number, .punctuation
+  ])
+  #expect(CleanupLexeme.scan("charge ($20)").filter { $0.kind == .number }.map(\.original) == [
+    "($20)"
+  ])
 
   let validListWithInterMarkerPunctuation = FaithfulCleanupValidator().validate(
     candidate: "1. buy 20 apples;\n2. buy 20 oranges.",
@@ -507,6 +516,8 @@ import Testing
     ("pay ₹20", "Pay $20."),
     ("Pay € 20", "Pay $ 20"),
     ("send ($20", "Send ($20."),
+    ("send 20(", "Send 20."),
+    ("send 20(", "Send 20("),
     ("send 20)", "Send 20)."),
     ("send 10:", "Send 10:."),
     ("send 1/", "Send 1/."),
@@ -576,7 +587,8 @@ import Testing
 
   for (baseline, candidate) in [("send: word", "Send: word."),
                                 ("send / word", "Send / word."),
-                                ("send % word", "Send % word.")] {
+                                ("send % word", "Send % word."),
+                                ("send (word)", "Send (word).")] {
     guard case .accepted(let text, _) = FaithfulCleanupValidator().validate(
       candidate: candidate,
       against: .init(baseline: baseline, protectedForms: [], replacements: 0)
@@ -1061,7 +1073,13 @@ struct FaithfulCleanupValidator: Sendable {
       return nil
     }
     if let next {
-      if next.original == ")" && !original.hasSuffix(")") { return nil }
+      // CleanupLexeme splits `20(` and `20)` into a number plus punctuation.
+      // Only a number lexeme that already contains a balanced pair may sit
+      // next to a parenthesis without becoming ambiguous.
+      if ["(", ")"].contains(next.original),
+         !(openCount > 0 && closeCount > 0) {
+        return nil
+      }
       if ["/", ":", "%"].contains(next.original) { return nil }
       if original.hasSuffix("%") && next.original == "%" { return nil }
     }
@@ -1455,7 +1473,7 @@ parenthesis spelling remains in the semantic signature (`$-20`, `(-$20)`,
 `₹20`, `$20`, `20%`, `1/2`, `10:30`, `10:30am`, `-3.5`, and `($20)`);
 unsupported digit-bearing sequences remain ambiguous.
 Before classifying any number, `numericRawContext(at:in:)` checks balanced
-parentheses, rejects a number adjacent to a dangling `)`, `/`, `:`, `%`, or
+parentheses, rejects a number adjacent to a dangling `(` or `)`, `/`, `:`, `%`, or
 trailing sign/currency, and rejects incomplete affixes even when
 `CleanupLexeme` split the punctuation into separate raw lexemes. It performs one
 ordered raw-context walk in each direction: whitespace is skipped only while
@@ -1476,7 +1494,7 @@ of a doubled or split affix cannot compare equal. Hyphen, colon, slash, or
 percent punctuation elsewhere, with no numeric raw neighbor, is not treated as
 numeric context. Complete supported forms then
 validate fraction denominators and clock ranges, so `99:99am` and `1/0` are
-ambiguous. Therefore `($20`, `20)`, `10:`, `1/`, and `20%%` fail closed even
+ambiguous. Therefore `($20`, `20(`, `20)`, `10:`, `1/`, and `20%%` fail closed even
 when their numeric fragments individually match a permissive pattern. Exact
 unchanged contexts such as `pay - 20`, `pay $ 20`, and `pay $$20` remain
 punctuation-cleanable; candidates that remove those contexts reject.
