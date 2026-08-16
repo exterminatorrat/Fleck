@@ -183,6 +183,43 @@ func cancellingEnhancedCaptureDuringBlockedFinishRollsBackBeforeSessionCancelAnd
 }
 
 @Test @MainActor
+func cancellingBlockedFinishWaitsForSessionDrainBeforePublishingAndStartingAgain()
+  async throws
+{
+  let drainGate = Gate()
+  let processing = ProcessingProbe(
+    finishBlocksUntilCancel: true,
+    drainGate: drainGate
+  )
+  let fixture = try Fixture(processing: processing)
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let finishTask = Task { await fixture.coordinator.finish() }
+  await processing.waitUntilFinishStarted()
+  let cancelTask = Task { await fixture.coordinator.cancel() }
+  await drainGate.waitUntilWaiting()
+
+  #expect(events.allSatisfy { $0.terminal == nil })
+  #expect(!fixture.coordinator.canConfigureShortcut)
+  await fixture.coordinator.start(mode: .smartCapture)
+  #expect(processing.beginCount == 1)
+  #expect(fixture.coordinator.phase == .finalizing)
+
+  await drainGate.openGate()
+  await cancelTask.value
+  await finishTask.value
+
+  #expect(events.filter { $0.terminal == .cancelled }.count == 1)
+  #expect(fixture.coordinator.phase == .idle)
+  #expect(fixture.coordinator.canConfigureShortcut)
+  await fixture.coordinator.start(mode: .smartCapture)
+  #expect(processing.beginCount == 2)
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor
 func absentProcessorPreservesLegacyCleanerPath() async throws {
   let fixture = try Fixture(processing: nil)
   fixture.standard.finalText = "Buy tea"
@@ -2230,6 +2267,7 @@ final class ProcessingProbe: DictationProcessing {
   private let updates: [DictationTextUpdate]
   private var result: DictationProcessingResult
   private let finishBlocksUntilCancel: Bool
+  private let drainGate: Gate?
   private let onFinishStarted: (() -> Void)?
   private let onSessionCancel: (() -> Void)?
   private let onSourceCancel: (() -> Void)?
@@ -2241,6 +2279,7 @@ final class ProcessingProbe: DictationProcessing {
   private var finishWaiters: [CheckedContinuation<Void, Never>] = []
 
   private(set) var publishedUpdates: [DictationTextUpdate] = []
+  private(set) var beginCount = 0
 
   init(
     updates: [DictationTextUpdate] = [],
@@ -2253,6 +2292,7 @@ final class ProcessingProbe: DictationProcessing {
       measurements: .empty
     ),
     finishBlocksUntilCancel: Bool = false,
+    drainGate: Gate? = nil,
     onFinishStarted: (() -> Void)? = nil,
     onSessionCancel: (() -> Void)? = nil,
     onSourceCancel: (() -> Void)? = nil,
@@ -2263,6 +2303,7 @@ final class ProcessingProbe: DictationProcessing {
     self.updates = updates
     self.result = result
     self.finishBlocksUntilCancel = finishBlocksUntilCancel
+    self.drainGate = drainGate
     self.onFinishStarted = onFinishStarted
     self.onSessionCancel = onSessionCancel
     self.onSourceCancel = onSourceCancel
@@ -2279,9 +2320,11 @@ final class ProcessingProbe: DictationProcessing {
     configuration: DictationProcessingConfiguration
   ) async throws -> any DictationProcessingSession {
     _ = configuration
+    beginCount += 1
     let session = ProcessingSessionProbe(
       result: result,
       finishBlocksUntilCancel: finishBlocksUntilCancel,
+      drainGate: drainGate,
       onFinishStarted: { [weak self] in self?.markFinishStarted() },
       onSessionCancel: onSessionCancel,
       onSourceCancel: onSourceCancel,
@@ -2338,6 +2381,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
 
   private let continuation: AsyncThrowingStream<DictationTextUpdate, Error>.Continuation
   private let finishBlocksUntilCancel: Bool
+  private let drainGate: Gate?
   private let onFinishStarted: () -> Void
   private let onSessionCancel: (() -> Void)?
   private let onSourceCancel: (() -> Void)?
@@ -2352,6 +2396,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
   init(
     result: DictationProcessingResult,
     finishBlocksUntilCancel: Bool,
+    drainGate: Gate?,
     onFinishStarted: @escaping () -> Void,
     onSessionCancel: (() -> Void)?,
     onSourceCancel: (() -> Void)?,
@@ -2361,6 +2406,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
     onPublishedUpdate: @escaping (DictationTextUpdate) -> Void
   ) {
     self.finishBlocksUntilCancel = finishBlocksUntilCancel
+    self.drainGate = drainGate
     self.onFinishStarted = onFinishStarted
     self.onSessionCancel = onSessionCancel
     self.onSourceCancel = onSourceCancel
@@ -2397,6 +2443,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
       finishContinuation.resume(returning: result)
       onFinishUnblocked?()
     }
+    await drainGate?.wait()
     if let onSessionDrain {
       await Task.yield()
       onSessionDrain()

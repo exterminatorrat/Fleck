@@ -62,7 +62,7 @@ final class DictationCoordinator {
     var isFinishing = false
     var releaseRequested = false
     var cancelRequested = false
-    var processingSessionCancellationStarted = false
+    var processingSessionCancellationTask: Task<Void, Never>?
     var isTerminating = false
     var editorCancelled = false
     var focusedCommitReceipt: FocusedDictationCommitReceipt?
@@ -922,13 +922,19 @@ final class DictationCoordinator {
 
   private func cancelProcessingSession(_ id: UUID) async {
     guard var capture, capture.id == id,
-      let session = capture.processingSession,
-      !capture.processingSessionCancellationStarted
+      let session = capture.processingSession
     else { return }
-    capture.processingSessionCancellationStarted = true
+    if let task = capture.processingSessionCancellationTask {
+      await task.value
+      return
+    }
+    let task = Task { @MainActor [weak self, session] in
+      await session.cancel()
+      await self?.drainProcessingUpdates(id)
+    }
+    capture.processingSessionCancellationTask = task
     self.capture = capture
-    await session.cancel()
-    await drainProcessingUpdates(id)
+    await task.value
   }
 
   private func failUnsafeFocusedCancellation(_ id: UUID) async {
