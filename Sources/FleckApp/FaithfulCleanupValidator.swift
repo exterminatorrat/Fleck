@@ -199,6 +199,13 @@ struct FaithfulCleanupValidator: Sendable {
   private struct FormattingLexeme: Equatable {
     let kind: CleanupLexemeKind
     let lexicalAnchor: Int
+    let ordinalAtAnchor: Int
+    let value: String
+  }
+
+  private struct FormattingCoordinate: Equatable {
+    let lexicalAnchor: Int
+    let ordinalAtAnchor: Int
     let value: String
   }
 
@@ -471,6 +478,9 @@ struct FaithfulCleanupValidator: Sendable {
        isNumericCodeBoundaryPunctuation(lexemes[index + 1]) {
       return nil
     }
+    if hasNumericPunctuationBridge(at: index, in: lexemes) {
+      return nil
+    }
 
     let previous = adjacentNonWhitespace(-1)
     let next = adjacentNonWhitespace(1)
@@ -523,7 +533,26 @@ struct FaithfulCleanupValidator: Sendable {
 
   private static func isNumericCodeBoundaryPunctuation(_ lexeme: CleanupLexeme) -> Bool {
     guard lexeme.kind == .punctuation, lexeme.original.count == 1 else { return false }
-    return ["(", ")", "/", ":", "%", "=", "_", "`"].contains(lexeme.original)
+    return ["(", ")", "/", ":", "%", "=", "_", "`", "@", "#", "\\"].contains(lexeme.original)
+  }
+
+  private static func hasNumericPunctuationBridge(
+    at index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    for step in [-1, 1] {
+      var cursor = index + step
+      var punctuationCount = 0
+      while lexemes.indices.contains(cursor), lexemes[cursor].kind == .punctuation {
+        punctuationCount += 1
+        cursor += step
+      }
+      guard punctuationCount > 0,
+            lexemes.indices.contains(cursor),
+            lexemes[cursor].isLexical else { continue }
+      return true
+    }
+    return false
   }
 
   private static func isNumericSign(_ character: Character) -> Bool {
@@ -707,6 +736,14 @@ struct FaithfulCleanupValidator: Sendable {
     }) else {
       return nil
     }
+    let baselineItems = listItemPayloads(baselineMarkers, in: baselineLexemes)
+    let candidateItems = listItemPayloads(candidateMarkers, in: candidateLexemes)
+    guard baselineItems.count == candidateItems.count,
+          baselineItems.allSatisfy({ !$0.isEmpty }),
+          candidateItems.allSatisfy({ !$0.isEmpty }),
+          baselineItems == candidateItems else {
+      return nil
+    }
     let baselineRemainder = removingRawRanges(baselineMarkers, from: baselineLexemes)
     let candidateRemainder = removingRawRanges(candidateMarkers, from: candidateLexemes)
     guard numberMeaningIsPreserved(
@@ -720,6 +757,20 @@ struct FaithfulCleanupValidator: Sendable {
       candidateRawRanges: candidateMarkers,
       candidateNumberRawRanges: markerRanges.candidateNumberRawRanges
     )
+  }
+
+  private static func listItemPayloads(
+    _ markerRanges: [Range<Int>],
+    in lexemes: [CleanupLexeme]
+  ) -> [[String]] {
+    markerRanges.enumerated().map { offset, range in
+      let end = offset + 1 < markerRanges.count
+        ? markerRanges[offset + 1].lowerBound
+        : lexemes.count
+      return lexemes[range.upperBound..<end]
+        .filter(\.isLexical)
+        .map(\.canonical)
+    }
   }
 
   private static func removingRawRanges(
@@ -923,34 +974,85 @@ struct FaithfulCleanupValidator: Sendable {
     }) {
       operations.append(.caseChange)
     }
-    if formattingLexemes(baseline, kind: .punctuation)
-      != formattingLexemes(candidate, kind: .punctuation) {
+    let baselineFormatting = formattingLexemes(baseline)
+    let candidateFormatting = formattingLexemes(candidate)
+    func formattingCounts(_ lexemes: [FormattingLexeme]) -> [Int: Int] {
+      lexemes.reduce(into: [:]) { counts, lexeme in
+        counts[lexeme.lexicalAnchor, default: 0] += 1
+      }
+    }
+    let baselineCounts = formattingCounts(baselineFormatting)
+    let candidateCounts = formattingCounts(candidateFormatting)
+    let ordinalAnchors = Set(
+      (Array(baselineCounts.keys) + Array(candidateCounts.keys)).filter { anchor in
+        baselineCounts[anchor, default: 0] == candidateCounts[anchor, default: 0]
+      }
+    )
+    let baselinePunctuation = formattingCoordinates(
+      baselineFormatting,
+      kind: .punctuation,
+      ordinalAnchors: ordinalAnchors
+    )
+    let candidatePunctuation = formattingCoordinates(
+      candidateFormatting,
+      kind: .punctuation,
+      ordinalAnchors: ordinalAnchors
+    )
+    let baselineWhitespace = formattingCoordinates(
+      baselineFormatting,
+      kind: .whitespace,
+      ordinalAnchors: ordinalAnchors
+    )
+    let candidateWhitespace = formattingCoordinates(
+      candidateFormatting,
+      kind: .whitespace,
+      ordinalAnchors: ordinalAnchors
+    )
+    if baselinePunctuation != candidatePunctuation {
       operations.append(.punctuation)
     }
-    if formattingLexemes(baseline, kind: .whitespace)
-      != formattingLexemes(candidate, kind: .whitespace) {
+    if baselineWhitespace != candidateWhitespace {
       operations.append(.whitespace)
     }
     return operations
   }
 
   private static func formattingLexemes(
-    _ lexemes: [CleanupLexeme],
-    kind: CleanupLexemeKind
+    _ lexemes: [CleanupLexeme]
   ) -> [FormattingLexeme] {
     var lexicalAnchor = 0
+    var ordinalByAnchor: [Int: Int] = [:]
     var result: [FormattingLexeme] = []
     for lexeme in lexemes {
-      if lexeme.kind == kind {
+      if lexeme.kind == .punctuation || lexeme.kind == .whitespace {
+        let ordinalAtAnchor = ordinalByAnchor[lexicalAnchor, default: 0]
         result.append(.init(
           kind: lexeme.kind,
           lexicalAnchor: lexicalAnchor,
+          ordinalAtAnchor: ordinalAtAnchor,
           value: lexeme.original
         ))
+        ordinalByAnchor[lexicalAnchor] = ordinalAtAnchor + 1
       }
       if lexeme.isLexical { lexicalAnchor += 1 }
     }
     return result
+  }
+
+  private static func formattingCoordinates(
+    _ lexemes: [FormattingLexeme],
+    kind: CleanupLexemeKind,
+    ordinalAnchors: Set<Int>
+  ) -> [FormattingCoordinate] {
+    lexemes.filter { $0.kind == kind }.map {
+      .init(
+        lexicalAnchor: $0.lexicalAnchor,
+        ordinalAtAnchor: ordinalAnchors.contains($0.lexicalAnchor)
+          ? $0.ordinalAtAnchor
+          : 0,
+        value: $0.value
+      )
+    }
   }
 
   private static func isolatedFillerRemoval(

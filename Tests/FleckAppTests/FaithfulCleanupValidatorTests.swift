@@ -86,6 +86,10 @@ import Testing
       "I finished: 1. she finished: 2."
     ),
     (
+      "first alpha beta second gamma",
+      "1. alpha\n2. beta gamma"
+    ),
+    (
       "first item second",
       "1. item\n2."
     )
@@ -111,6 +115,25 @@ import Testing
       operations: [.formatList]
     )
   )
+}
+
+@Test func faithfulValidatorRejectsCodeLikeNumericAdjacency() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    ("20@foo", "20 foo"),
+    ("20.foo", "20 foo"),
+    ("20..foo", "20 foo"),
+    ("foo..20", "foo 20"),
+    ("20!foo", "20 foo"),
+    ("20?foo", "20 foo")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
 }
 
 @Test func faithfulValidatorRejectsMalformedFullTokenNumericBoundaries() {
@@ -173,6 +196,15 @@ import Testing
       candidate: "send report,",
       against: .init(baseline: "send, report", protectedForms: [], replacements: 0)
     ) == .accepted(text: "send report,", operations: [.punctuation])
+  )
+  #expect(
+    FaithfulCleanupValidator().validate(
+      candidate: "send ,report",
+      against: .init(baseline: "send, report", protectedForms: [], replacements: 0)
+    ) == .accepted(
+      text: "send ,report",
+      operations: [.punctuation, .whitespace]
+    )
   )
 }
 
