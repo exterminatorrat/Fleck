@@ -355,6 +355,41 @@ struct FaithfulCleanupValidator: Sendable {
         continue
       }
 
+      if let range = degreeUnitRange(at: index, in: lexemes) {
+        let suffix = "°" + lexemes[range.upperBound - 1].canonical.lowercased()
+        signatures.append(.init(
+          rawRange: range,
+          classification: hasNumericPunctuationBridge(
+            after: range.upperBound,
+            in: lexemes
+          ) ? .ambiguous : .quantity(value + suffix),
+          rawContext: rawContext
+        ))
+        consumedIndices.formUnion(range)
+        index = range.upperBound
+        continue
+      }
+
+      if index + 2 < lexemes.count,
+         lexemes[index + 1].kind == .whitespace,
+         lexemes[index + 2].kind == .word {
+        let suffix = lexemes[index + 2].canonical.lowercased()
+        if unitWords.contains(suffix) {
+          let range = index..<(index + 3)
+          signatures.append(.init(
+            rawRange: range,
+            classification: hasNumericPunctuationBridge(
+              after: range.upperBound,
+              in: lexemes
+            ) ? .ambiguous : .quantity(value + suffix),
+            rawContext: rawContext
+          ))
+          consumedIndices.formUnion(range)
+          index += 3
+          continue
+        }
+      }
+
       if index + 2 < lexemes.count,
          lexemes[index + 1].kind == .whitespace,
          lexemes[index + 2].kind == .word,
@@ -498,7 +533,8 @@ struct FaithfulCleanupValidator: Sendable {
        isNumericCodeBoundaryPunctuation(lexemes[index + 1]) {
       return nil
     }
-    if hasNumericPunctuationBridge(at: index, in: lexemes) {
+    if degreeUnitRange(at: index, in: lexemes) == nil,
+       hasNumericPunctuationBridge(at: index, in: lexemes) {
       return nil
     }
     if hasUnsupportedNumericAffixRun(at: index, in: lexemes) {
@@ -559,6 +595,31 @@ struct FaithfulCleanupValidator: Sendable {
     return ["(", ")", "/", ":", "%", "=", "_", "`", "@", "#", "\\"].contains(lexeme.original)
   }
 
+  private static func degreeUnitRange(
+    at index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Range<Int>? {
+    let degreeIndex: Int
+    if index + 1 < lexemes.count,
+       lexemes[index + 1].kind == .punctuation,
+       lexemes[index + 1].original == "°" {
+      degreeIndex = index + 1
+    } else if index + 2 < lexemes.count,
+              lexemes[index + 1].kind == .whitespace,
+              lexemes[index + 2].kind == .punctuation,
+              lexemes[index + 2].original == "°" {
+      degreeIndex = index + 2
+    } else {
+      return nil
+    }
+    guard lexemes.indices.contains(degreeIndex + 1),
+          lexemes[degreeIndex + 1].kind == .word,
+          unitWords.contains("°" + lexemes[degreeIndex + 1].canonical.lowercased()) else {
+      return nil
+    }
+    return index..<(degreeIndex + 2)
+  }
+
   private static func hasNumericPunctuationBridge(
     at index: Int,
     in lexemes: [CleanupLexeme]
@@ -584,6 +645,13 @@ struct FaithfulCleanupValidator: Sendable {
   ) -> Bool {
     for step in [-1, 1] {
       var cursor = index + step
+      while lexemes.indices.contains(cursor), lexemes[cursor].kind == .whitespace {
+        cursor += step
+      }
+      guard lexemes.indices.contains(cursor),
+            lexemes[cursor].kind == .punctuation else { continue }
+      if isNumericAffixPunctuation(lexemes[cursor]) { continue }
+
       var run: [CleanupLexeme] = []
       while lexemes.indices.contains(cursor),
             [.punctuation, .whitespace].contains(lexemes[cursor].kind) {

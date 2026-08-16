@@ -56,6 +56,126 @@ import Testing
   #expect(text == "Pay $ 20.")
 }
 
+@Test func faithfulValidatorRejectsDegreeUnitChanges() {
+  #expect(
+    FaithfulCleanupValidator().validate(
+      candidate: "set it to 20 C",
+      against: .init(
+        baseline: "set it to 20 °C",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == .rejected(.numberMeaningChanged)
+  )
+}
+
+@Test func faithfulValidatorPreservesDegreeUnitDuringFormattingCleanup() {
+  let decision = FaithfulCleanupValidator().validate(
+    candidate: "Set it to 20 °C.",
+    against: .init(
+      baseline: "set it to 20 °C",
+      protectedForms: [],
+      replacements: 0
+    )
+  )
+
+  guard case .accepted(let text, _) = decision else {
+    Issue.record("Formatting cleanup must preserve the degree unit")
+    return
+  }
+  #expect(text == "Set it to 20 °C.")
+}
+
+@Test func faithfulValidatorPreservesDegreeUnitWithoutSpacing() {
+  let decision = FaithfulCleanupValidator().validate(
+    candidate: "Set it to 20°C.",
+    against: .init(
+      baseline: "set it to 20°C",
+      protectedForms: [],
+      replacements: 0
+    )
+  )
+
+  guard case .accepted(let text, _) = decision else {
+    Issue.record("Formatting cleanup must preserve an unspaced degree unit")
+    return
+  }
+  #expect(text == "Set it to 20°C.")
+}
+
+@Test func faithfulValidatorNormalizesDegreeUnitWhitespaceBothDirections() {
+  let validator = FaithfulCleanupValidator()
+  #expect(
+    validator.validate(
+      candidate: "send 20 °C",
+      against: .init(baseline: "send 20°C", protectedForms: [], replacements: 0)
+    ) == .accepted(text: "send 20 °C", operations: [.whitespace])
+  )
+  #expect(
+    validator.validate(
+      candidate: "send 20°C",
+      against: .init(baseline: "send 20 °C", protectedForms: [], replacements: 0)
+    ) == .accepted(text: "send 20°C", operations: [.whitespace])
+  )
+}
+
+@Test func faithfulValidatorRejectsDegreeUnitIdentityChangesInBothForms() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    ("send 20°C", "send 20°F"),
+    ("send 20 °C", "send 20 C")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
+}
+
+@Test func faithfulValidatorAllowsWhitespaceOnlyKnownUnitNormalization() {
+  let validator = FaithfulCleanupValidator()
+  #expect(
+    validator.validate(
+      candidate: "send 20kg",
+      against: .init(baseline: "send 20 kg", protectedForms: [], replacements: 0)
+    ) == .accepted(text: "send 20kg", operations: [.whitespace])
+  )
+  #expect(
+    validator.validate(
+      candidate: "send 20 kg",
+      against: .init(baseline: "send 20kg", protectedForms: [], replacements: 0)
+    ) == .accepted(text: "send 20 kg", operations: [.whitespace])
+  )
+}
+
+@Test func faithfulValidatorRejectsUnitIdentityChanges() {
+  #expect(
+    FaithfulCleanupValidator().validate(
+      candidate: "send 20 g",
+      against: .init(baseline: "send 20 kg", protectedForms: [], replacements: 0)
+    ) == .rejected(.numberMeaningChanged)
+  )
+}
+
+@Test func faithfulValidatorDoesNotScanPastNearestCurrencyAffix() {
+  let decision = FaithfulCleanupValidator().validate(
+    candidate: "Pay! $ 20.",
+    against: .init(
+      baseline: "pay! $ 20",
+      protectedForms: [],
+      replacements: 0
+    )
+  )
+
+  guard case .accepted(let text, _) = decision else {
+    Issue.record("Sentence punctuation before a detached currency must remain ordinary")
+    return
+  }
+  #expect(text == "Pay! $ 20.")
+}
+
 @Test func faithfulValidatorRejectsProtectedOccurrenceRelocation() {
   #expect(
     FaithfulCleanupValidator().validate(
