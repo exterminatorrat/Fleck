@@ -501,6 +501,9 @@ struct FaithfulCleanupValidator: Sendable {
     if hasNumericPunctuationBridge(at: index, in: lexemes) {
       return nil
     }
+    if hasUnsupportedNumericAffixRun(at: index, in: lexemes) {
+      return nil
+    }
 
     let previous = adjacentNonWhitespace(-1)
     let next = adjacentNonWhitespace(1)
@@ -571,6 +574,25 @@ struct FaithfulCleanupValidator: Sendable {
             lexemes.indices.contains(cursor),
             lexemes[cursor].isLexical else { continue }
       return true
+    }
+    return false
+  }
+
+  private static func hasUnsupportedNumericAffixRun(
+    at index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    for step in [-1, 1] {
+      var cursor = index + step
+      var run: [CleanupLexeme] = []
+      while lexemes.indices.contains(cursor), lexemes[cursor].kind == .punctuation {
+        run.append(lexemes[cursor])
+        cursor += step
+      }
+      guard run.contains(where: isNumericAffixPunctuation) else { continue }
+      if run.contains(where: { !isNumericContextPunctuation($0) }) {
+        return true
+      }
     }
     return false
   }

@@ -638,3 +638,19 @@ import Testing
   }
   #expect(String(describing: failure).contains("PRIVATE_TRANSCRIPT") == false)
 }
+
+@Test func faithfulValidatorRejectsInterposedNumericAffixes() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    ("pay $!20", "pay 20"),
+    ("pay -!20", "pay 20"),
+    ("pay 20!$", "pay 20")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
+}
