@@ -73,18 +73,35 @@ struct FaithfulCleanupValidator: Sendable {
       from: candidate,
       protectedForms: resolution.protectedForms
     )
+    let filler = Self.isolatedFillerRemoval(
+      baselineLexemes, candidateLexemes, baselineValues, candidateValues, baselineSpans
+    )
+    let duplicate = Self.immediateDuplicateRemoval(
+      baselineLexemes, candidateValues, baselineValues, baselineSpans
+    )
+    let candidateToBaselineLexicalOrdinals = Self.candidateToBaselineLexicalOrdinals(
+      baselineValues: baselineValues,
+      candidateValues: candidateValues,
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes,
+      ordinalMarkerPairs: ordinalMarkerPairs,
+      correction: correction,
+      allowSingleDeletion: filler != nil || duplicate != nil
+    )
     guard let comparableCandidateSpans = Self.reconcileCaseOnlyNameSpans(
       baseline: baselineSpans,
       candidate: candidateSpans,
       baselineLexemes: baselineLexemes,
       candidateLexemes: candidateLexemes,
-      baselineValues: baselineValues,
-      candidateValues: candidateValues,
-      ordinalMarkerPairs: ordinalMarkerPairs
+      ordinalMarkerPairs: ordinalMarkerPairs,
+      candidateToBaselineLexicalOrdinals: candidateToBaselineLexicalOrdinals
     ) else { return .rejected(.protectedContentChanged) }
     guard Self.protectedSpansMatch(
       baselineSpans,
       comparableCandidateSpans,
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes,
+      candidateToBaselineLexicalOrdinals: candidateToBaselineLexicalOrdinals,
       ordinalMarkerPairs: ordinalMarkerPairs,
       correction: correction
     ) else { return .rejected(.protectedContentChanged) }
@@ -95,14 +112,10 @@ struct FaithfulCleanupValidator: Sendable {
         operations: Self.equalLexicalOperations(baselineLexemes, candidateLexemes)
       )
     }
-    if let filler = Self.isolatedFillerRemoval(
-      baselineLexemes, candidateLexemes, baselineValues, candidateValues, baselineSpans
-    ) {
+    if let filler {
       return .accepted(text: candidate, operations: [.deleteFiller(filler)])
     }
-    if let duplicate = Self.immediateDuplicateRemoval(
-      baselineLexemes, candidateValues, baselineValues, baselineSpans
-    ) {
+    if let duplicate {
       return .accepted(text: candidate, operations: [.deleteImmediateDuplicate(duplicate)])
     }
     if let correction {
@@ -308,12 +321,16 @@ struct FaithfulCleanupValidator: Sendable {
           continue
         }
         if unitWords.contains(suffix) {
+          let range = index..<(index + 2)
           signatures.append(.init(
-            rawRange: index..<(index + 2),
-            classification: .quantity(value + suffix),
+            rawRange: range,
+            classification: hasNumericPunctuationBridge(
+              after: range.upperBound,
+              in: lexemes
+            ) ? .ambiguous : .quantity(value + suffix),
             rawContext: rawContext
           ))
-          consumedIndices.formUnion(index..<(index + 2))
+          consumedIndices.formUnion(range)
           index += 2
           continue
         }
@@ -468,6 +485,9 @@ struct FaithfulCleanupValidator: Sendable {
       return step < 0 ? Array(context.reversed()) : context
     }
 
+    if index > 0, lexemes[index - 1].isLexical {
+      return nil
+    }
     if index > 0,
        lexemes[index - 1].kind != .whitespace,
        isNumericCodeBoundaryPunctuation(lexemes[index - 1]) {
@@ -553,6 +573,21 @@ struct FaithfulCleanupValidator: Sendable {
       return true
     }
     return false
+  }
+
+  private static func hasNumericPunctuationBridge(
+    after index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    var cursor = index
+    var punctuationCount = 0
+    while lexemes.indices.contains(cursor), lexemes[cursor].kind == .punctuation {
+      punctuationCount += 1
+      cursor += 1
+    }
+    return punctuationCount > 0
+      && lexemes.indices.contains(cursor)
+      && lexemes[cursor].isLexical
   }
 
   private static func isNumericSign(_ character: Character) -> Bool {
@@ -830,16 +865,72 @@ struct FaithfulCleanupValidator: Sendable {
     return nil
   }
 
+  private static func candidateToBaselineLexicalOrdinals(
+    baselineValues: [String],
+    candidateValues: [String],
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme],
+    ordinalMarkerPairs: PairedOrdinalMarkerIndices?,
+    correction: ExplicitCorrection?,
+    allowSingleDeletion: Bool
+  ) -> [Int]? {
+    if let ordinalMarkerPairs {
+      let normalizedBaselineValues = removingRawRanges(
+        ordinalMarkerPairs.baselineRawRanges,
+        from: baselineLexemes
+      ).filter(\.isLexical).map(\.canonical)
+      let normalizedCandidateValues = removingRawRanges(
+        ordinalMarkerPairs.candidateRawRanges,
+        from: candidateLexemes
+      ).filter(\.isLexical).map(\.canonical)
+      guard normalizedBaselineValues == normalizedCandidateValues else { return nil }
+      return Array(normalizedCandidateValues.indices)
+    }
+    if baselineValues == candidateValues {
+      return Array(candidateValues.indices)
+    }
+    if let correction {
+      let prefixCount = baselineValues.count
+        - correction.removed.count
+        - correction.kept.count
+        - 1
+      guard prefixCount >= 0,
+            prefixCount <= baselineValues.count,
+            candidateValues == Array(baselineValues[..<prefixCount]) + correction.kept else {
+        return nil
+      }
+      let tailStart = prefixCount + correction.removed.count + 1
+      guard tailStart <= baselineValues.count,
+            Array(baselineValues[tailStart..<baselineValues.count]) == correction.kept else {
+        return nil
+      }
+      return candidateValues.indices.map { ordinal in
+        ordinal < prefixCount ? ordinal : ordinal + correction.removed.count + 1
+      }
+    }
+    guard allowSingleDeletion,
+          candidateValues.count + 1 == baselineValues.count,
+          let removedOrdinal = baselineValues.indices.first(where: { ordinal in
+            var expected = baselineValues
+            expected.remove(at: ordinal)
+            return expected == candidateValues
+          }) else {
+      return nil
+    }
+    return candidateValues.indices.map { ordinal in
+      ordinal < removedOrdinal ? ordinal : ordinal + 1
+    }
+  }
+
   private static func reconcileCaseOnlyNameSpans(
     baseline: [CleanupProtectedSpan],
     candidate: [CleanupProtectedSpan],
     baselineLexemes: [CleanupLexeme],
     candidateLexemes: [CleanupLexeme],
-    baselineValues: [String],
-    candidateValues: [String],
-    ordinalMarkerPairs: PairedOrdinalMarkerIndices?
+    ordinalMarkerPairs: PairedOrdinalMarkerIndices?,
+    candidateToBaselineLexicalOrdinals: [Int]?
   ) -> [CleanupProtectedSpan]? {
-    guard baselineValues == candidateValues || ordinalMarkerPairs != nil else { return candidate }
+    guard let candidateToBaselineLexicalOrdinals else { return candidate }
     let ignoredBaselineRawRanges = ordinalMarkerPairs?.baselineRawRanges ?? []
     let ignoredCandidateRawRanges = ordinalMarkerPairs?.candidateRawRanges ?? []
     let normalizedBaselineValues = removingRawRanges(
@@ -850,7 +941,6 @@ struct FaithfulCleanupValidator: Sendable {
       ignoredCandidateRawRanges,
       from: candidateLexemes
     ).filter(\.isLexical).map(\.canonical)
-    guard normalizedBaselineValues == normalizedCandidateValues else { return candidate }
 
     let baselineNames = Set(
       baseline.compactMap {
@@ -862,11 +952,18 @@ struct FaithfulCleanupValidator: Sendable {
       }
     )
     let candidateNames = Set(
-      candidate.compactMap {
-        singleNameOccurrence(
-          $0,
+      candidate.compactMap { span -> NameOccurrence? in
+        guard let occurrence = singleNameOccurrence(
+          span,
           in: candidateLexemes,
           ignoring: ignoredCandidateRawRanges
+        ),
+        candidateToBaselineLexicalOrdinals.indices.contains(occurrence.lexicalOrdinal) else {
+          return nil
+        }
+        return .init(
+          lexicalOrdinal: candidateToBaselineLexicalOrdinals[occurrence.lexicalOrdinal],
+          canonical: occurrence.canonical
         )
       }
     )
@@ -880,16 +977,23 @@ struct FaithfulCleanupValidator: Sendable {
       ) else {
         return true
       }
-      guard !baselineNames.contains(occurrence) else { return true }
-      guard normalizedBaselineValues.indices.contains(occurrence.lexicalOrdinal),
+      guard candidateToBaselineLexicalOrdinals.indices.contains(occurrence.lexicalOrdinal) else {
+        return true
+      }
+      let baselineOrdinal = candidateToBaselineLexicalOrdinals[occurrence.lexicalOrdinal]
+      guard !baselineNames.contains(.init(
+        lexicalOrdinal: baselineOrdinal,
+        canonical: occurrence.canonical
+      )) else { return true }
+      guard normalizedBaselineValues.indices.contains(baselineOrdinal),
             normalizedCandidateValues.indices.contains(occurrence.lexicalOrdinal),
-            normalizedBaselineValues[occurrence.lexicalOrdinal]
+            normalizedBaselineValues[baselineOrdinal]
               == normalizedCandidateValues[occurrence.lexicalOrdinal],
             normalizedCandidateValues[occurrence.lexicalOrdinal] == occurrence.canonical else {
         return true
       }
       guard let baselineIndex = lexicalIndex(
-              atOrdinal: occurrence.lexicalOrdinal,
+              atOrdinal: baselineOrdinal,
               in: baselineLexemes,
               ignoring: ignoredBaselineRawRanges
             ),
@@ -909,6 +1013,9 @@ struct FaithfulCleanupValidator: Sendable {
   private static func protectedSpansMatch(
     _ baseline: [CleanupProtectedSpan],
     _ candidate: [CleanupProtectedSpan],
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme],
+    candidateToBaselineLexicalOrdinals: [Int]?,
     ordinalMarkerPairs: PairedOrdinalMarkerIndices?,
     correction: ExplicitCorrection?
   ) -> Bool {
@@ -934,9 +1041,43 @@ struct FaithfulCleanupValidator: Sendable {
     let orderedBaseline = comparableBaseline.sorted(by: stableOrder)
     let orderedCandidate = comparableCandidate.sorted(by: stableOrder)
     guard orderedBaseline.count == orderedCandidate.count else { return false }
+    guard !orderedBaseline.isEmpty else { return true }
+    guard let candidateToBaselineLexicalOrdinals else { return false }
     return zip(orderedBaseline, orderedCandidate).allSatisfy { baselineSpan, candidateSpan in
-      baselineSpan.category == candidateSpan.category
-        && protectedSpanLexemesMatch(baselineSpan, candidateSpan)
+      guard baselineSpan.category == candidateSpan.category,
+            protectedSpanLexemesMatch(baselineSpan, candidateSpan),
+            let baselineOrdinal = protectedSpanLexicalOrdinal(
+              baselineSpan,
+              in: baselineLexemes,
+              ignoring: ordinalMarkerPairs?.baselineRawRanges ?? []
+            ),
+            let candidateOrdinal = protectedSpanLexicalOrdinal(
+              candidateSpan,
+              in: candidateLexemes,
+              ignoring: ordinalMarkerPairs?.candidateRawRanges ?? []
+            ),
+            candidateToBaselineLexicalOrdinals.indices.contains(candidateOrdinal) else {
+        return false
+      }
+      return candidateToBaselineLexicalOrdinals[candidateOrdinal] == baselineOrdinal
+    }
+  }
+
+  private static func protectedSpanLexicalOrdinal(
+    _ span: CleanupProtectedSpan,
+    in lexemes: [CleanupLexeme],
+    ignoring ignoredRawRanges: [Range<Int>]
+  ) -> Int? {
+    guard let firstLexicalIndex = span.lexemeRange.first(where: { index in
+      lexemes.indices.contains(index)
+        && lexemes[index].isLexical
+        && !ignoredRawRanges.contains(where: { $0.contains(index) })
+    }) else { return nil }
+    return lexemes[..<firstLexicalIndex].enumerated().reduce(into: 0) { count, pair in
+      let (rawIndex, lexeme) = pair
+      if lexeme.isLexical && !ignoredRawRanges.contains(where: { $0.contains(rawIndex) }) {
+        count += 1
+      }
     }
   }
 

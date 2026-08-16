@@ -27,6 +27,74 @@ import Testing
   }
 }
 
+@Test func faithfulValidatorRejectsProtectedOccurrenceRelocation() {
+  #expect(
+    FaithfulCleanupValidator().validate(
+      candidate: "foo bar then foo/bar",
+      against: .init(
+        baseline: "foo/bar then foo bar",
+        protectedForms: ["foo/bar"],
+        replacements: 0
+      )
+    ) == .rejected(.protectedContentChanged)
+  )
+}
+
+@Test func faithfulValidatorRejectsConsumedUnitAndLeadingLexicalNumberAdjacency() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    ("send 20kg.foo", "send 20kg foo"),
+    ("foo20", "foo 20")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .rejected(.numberMeaningChanged)
+    )
+  }
+}
+
+@Test func faithfulValidatorCombinesDeletionCorrectionCaseAndPunctuationEdits() {
+  let validator = FaithfulCleanupValidator()
+  #expect(
+    validator.validate(
+      candidate: "Send the REPORT.",
+      against: .init(
+        baseline: "um, send the report",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == .accepted(text: "Send the REPORT.", operations: [.deleteFiller("um")])
+  )
+  #expect(
+    validator.validate(
+      candidate: "Send the REPORT.",
+      against: .init(
+        baseline: "send send the report",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == .accepted(
+      text: "Send the REPORT.",
+      operations: [.deleteImmediateDuplicate(["send"])]
+    )
+  )
+  #expect(
+    validator.validate(
+      candidate: "The color is BLUE.",
+      against: .init(
+        baseline: "The color is red, actually, blue.",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == .accepted(
+      text: "The color is BLUE.",
+      operations: [.selectExplicitCorrection(removed: ["red"], kept: ["blue"])]
+    )
+  )
+}
+
 @Test func faithfulValidatorAcceptsExplicitCorrectionOnlyWhenTheTailIsSpoken() {
   let actual = FaithfulCleanupValidator().validate(
     candidate: "The color is blue.",
