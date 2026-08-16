@@ -5,114 +5,39 @@ import Testing
 
 @testable import FleckApp
 
-#if CLEAN_DICTATION_ENHANCED_CANDIDATE
-@Test func DictationSettingsSelectsStandardByDefault() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(),
-    modelState: .notInstalled,
-    isArchitectureSupported: true,
-    enhancedIsReady: false
+@Test func settingsSourceUsesOneAccessibleAdmittedModelCardAndRemovesLegacySurface() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let runtimeSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
+    encoding: .utf8
   )
 
-  #expect(presentation.selectedEngine == .standard)
+  #expect(source.contains("AdmittedModelSettingsViewModel"))
+  #expect(source.contains("AdmittedModelSettingsPresentation"))
+  #expect(source.contains(".focusable(presentation.isKeyboardFocusable)"))
+  #expect(source.contains(".accessibilityElement(children: .contain)"))
+  #expect(source.contains(".accessibilityLabel(presentation.accessibilityLabel)"))
+  #expect(source.contains(".accessibilityValue(presentation.accessibilityValue)"))
+  #expect(source.contains("await admittedModelSettingsViewModel.refresh()"))
+  #expect(source.contains("Supported architectures:"))
+  #expect(source.contains("Supported languages:"))
+  #expect(!source.contains("Picker(\"Engine\""))
+  #expect(!source.contains("ModelConsentView"))
+  #expect(!source.contains("DictationModelConsentPresentation"))
+  #expect(!source.contains("Download Enhanced Model"))
+  #expect(!source.contains("Loading"))
+  #expect(!source.contains("modelError"))
+  #expect(!source.contains("clearModelError"))
+  #expect(!runtimeSource.contains("modelError"))
+  #expect(!runtimeSource.contains("clearModelError"))
 }
-
-@Test func DictationSettingsDisablesEnhancedOnIntel() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(),
-    modelState: .ready,
-    isArchitectureSupported: false,
-    enhancedIsReady: true
-  )
-
-  #expect(!presentation.enhancedChoiceEnabled)
-  #expect(presentation.architectureCopy == "Enhanced dictation requires Apple silicon.")
-}
-
-@Test func DictationSettingsOffersEnhancedDownloadWhenNotInstalled() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(),
-    modelState: .notInstalled,
-    isArchitectureSupported: true,
-    enhancedIsReady: false
-  )
-
-  #expect(presentation.primaryAction?.title == "Download Enhanced Model")
-}
-
-@Test func DictationSettingsConsentExplainsThePrivateLocalDownload() {
-  let consent = DictationModelConsentPresentation.standard
-
-  #expect(consent.downloadSize == "442.9 MiB")
-  #expect(consent.installedSize == "442.9 MiB")
-  #expect(consent.requirement == "Apple silicon")
-  #expect(consent.language == "English")
-  #expect(consent.attribution.contains("NVIDIA"))
-  #expect(consent.attribution.contains("FluidInference"))
-  #expect(consent.privacyCopy.contains("does not upload"))
-  #expect(consent.privacyCopy.contains("dictation data"))
-}
-
-@Test func DictationSettingsDownloadingShowsProgressAndCancel() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(),
-    modelState: .downloading(progress: 0.42),
-    isArchitectureSupported: true,
-    enhancedIsReady: false
-  )
-
-  #expect(presentation.downloadProgress == 0.42)
-  #expect(presentation.primaryAction == .cancel)
-}
-
-@Test func DictationSettingsFailureOffersRepair() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(dictationSpeechEngine: .enhancedLocal),
-    modelState: .repairRequired(message: "Checksum mismatch"),
-    isArchitectureSupported: true,
-    enhancedIsReady: false
-  )
-
-  #expect(presentation.primaryAction == .repair)
-  #expect(presentation.statusCopy == "Checksum mismatch")
-}
-
-@Test func DictationSettingsReadyAllowsSelectionAndDeletion() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(),
-    modelState: .ready,
-    isArchitectureSupported: true,
-    enhancedIsReady: true
-  )
-
-  #expect(presentation.enhancedChoiceEnabled)
-  #expect(presentation.primaryAction == .delete)
-}
-
-@Test func DictationSettingsDeletionReturnsSelectionToStandard() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(dictationSpeechEngine: .enhancedLocal),
-    modelState: .notInstalled,
-    isArchitectureSupported: true,
-    enhancedIsReady: false
-  )
-
-  #expect(presentation.selectedEngine == .standard)
-}
-
-@Test func DictationSettingsUpdateRequiresAnExplicitAction() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(dictationSpeechEngine: .enhancedLocal),
-    modelState: .updateAvailable,
-    isArchitectureSupported: true,
-    enhancedIsReady: true
-  )
-
-  #expect(presentation.selectedEngine == .enhancedLocal)
-  #expect(presentation.primaryAction == .update)
-  #expect(presentation.secondaryAction == .delete)
-}
-#endif
 
 @Test func DictationSettingsUsesTheExistingMatchedGeometrySectionSelector() {
   #expect(SettingsSection.allCases == [.appearance, .editing, .shortcuts, .dictation])
@@ -541,7 +466,6 @@ import Testing
 @Test @MainActor func DictationRuntimeAssessesOnceBeforeAuthoritativeEnhancedDowngrade() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved", startupBlocked: true)
   fixture.appState.preferences.dictationSpeechEngine = .enhancedLocal
-  fixture.enhancedReady.value = false
 
   #expect(fixture.appState.preferences.dictationSpeechEngine == .enhancedLocal)
   await fixture.startupGate.waitUntilWaiting()
@@ -554,6 +478,34 @@ import Testing
 
   #expect(fixture.appState.preferences.dictationSpeechEngine == .standard)
   #expect(await fixture.startupLog.value == 1)
+}
+
+@Test @MainActor
+func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInstallerIsBuiltIn()
+  async throws
+{
+  let speechRequests = RuntimeCounter()
+  let permissionController = DictationPermissionController(
+    microphoneStatus: { .authorized },
+    speechStatus: { .notDetermined },
+    requestMicrophone: { true },
+    requestSpeech: {
+      await speechRequests.increment()
+      return true
+    }
+  )
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    permissionController: permissionController
+  )
+
+  fixture.appState.updatePreferences { $0.dictationSpeechEngine = .enhancedLocal }
+  await fixture.runtime.requestPermissionsAfterShortcutSetup()
+  #expect(await speechRequests.value == 1)
+
+  await fixture.runtime.toggle()
+  #expect(fixture.provider.requestedKinds == [.standard])
+  await fixture.runtime.cancel()
 }
 
 @Test @MainActor func DictationRuntimeWaitsForLoadedModifierWithoutRequestingAccess()
@@ -1311,289 +1263,6 @@ import Testing
   )
 }
 
-#if CLEAN_DICTATION_ENHANCED_CANDIDATE
-@Test @MainActor func FocusedEnhancedToolbarFailureUsesOnlyMicrophoneRecoveryAndClearsOnRetry()
-  async throws
-{
-  let availability = RuntimeAvailabilityBox(.evaluate(.init(
-    osMajorVersion: 26,
-    architecture: .appleSilicon,
-    microphonePermission: .denied,
-    speechPermission: .denied,
-    appleOnDeviceRecognitionSupported: true,
-    enhancedModelReady: true,
-    foundationModelAvailable: true
-  ), enhancedCandidateEnabled: true))
-  let fixture = try await RuntimeFixture(
-    finalText: "Enhanced",
-    preferredEngine: .enhancedLocal,
-    enhancedReadyAtStartup: true,
-    availabilityProvider: { availability.value }
-  )
-  let focused = focusRuntimeEditor(fixture)
-  fixture.provider.error = DictationFailure.permissionDenied
-
-  await fixture.runtime.toggle()
-
-  #expect(fixture.provider.requestedKinds == [.enhancedLocal])
-  #expect(
-    fixture.runtime.captureFailure?.message
-      == "Enhanced Local needs Microphone access. Open System Settings to allow Fleck."
-  )
-  #expect(
-    fixture.runtime.captureFailure?.actions.map(\.title)
-      == ["Open Microphone Settings"]
-  )
-  #expect(fixture.runtime.captureFailure?.message.contains("Apple Speech") == false)
-  #expect(fixture.runtime.captureFailure?.message.contains("Speech Recognition") == false)
-  #expect(!focused.commands.isFocusedDictationActive)
-
-  availability.value = .evaluate(.init(
-    osMajorVersion: 26,
-    architecture: .appleSilicon,
-    microphonePermission: .authorized,
-    speechPermission: .denied,
-    appleOnDeviceRecognitionSupported: true,
-    enhancedModelReady: true,
-    foundationModelAvailable: true
-  ), enhancedCandidateEnabled: true)
-  fixture.provider.error = nil
-  await fixture.runtime.toggle()
-
-  #expect(fixture.runtime.captureFailure == nil)
-  #expect(fixture.runtime.phase == .listening(mode: .focused, engine: .enhancedLocal))
-  #expect(focused.commands.isFocusedDictationActive)
-
-  await fixture.runtime.cancel()
-  #expect(fixture.runtime.captureFailure == nil)
-}
-
-@Test @MainActor func FocusedEnhancedGlobalFailuresExplainModelArchitectureAndStartup()
-  async throws
-{
-  let scenarios: [(DictationAvailability, Error, String)] = [
-    (
-      .evaluate(.init(
-        osMajorVersion: 26,
-        architecture: .appleSilicon,
-        microphonePermission: .authorized,
-        speechPermission: .denied,
-        appleOnDeviceRecognitionSupported: true,
-        enhancedModelReady: false,
-        foundationModelAvailable: true
-      ), enhancedCandidateEnabled: true),
-      DictationFailure.unavailable,
-      "Enhanced Local is unavailable because its model is not ready. Open Dictation Settings to download or repair it."
-    ),
-    (
-      .evaluate(.init(
-        osMajorVersion: 26,
-        architecture: .intel,
-        microphonePermission: .authorized,
-        speechPermission: .denied,
-        appleOnDeviceRecognitionSupported: true,
-        enhancedModelReady: true,
-        foundationModelAvailable: true
-      ), enhancedCandidateEnabled: true),
-      DictationFailure.unavailable,
-      "Enhanced Local requires Apple silicon."
-    ),
-    (
-      .evaluate(.init(
-        osMajorVersion: 26,
-        architecture: .appleSilicon,
-        microphonePermission: .authorized,
-        speechPermission: .denied,
-        appleOnDeviceRecognitionSupported: true,
-        enhancedModelReady: true,
-        foundationModelAvailable: true
-      ), enhancedCandidateEnabled: true),
-      DictationSettingsTestError.failed,
-      "Enhanced Local could not start. Try again, repair the model in Dictation Settings, or switch to Standard."
-    ),
-  ]
-
-  for (availability, error, expectedMessage) in scenarios {
-    let fixture = try await RuntimeFixture(
-      finalText: nil,
-      preferredEngine: .enhancedLocal,
-      enhancedReadyAtStartup: true,
-      availability: availability
-    )
-    let focused = focusRuntimeEditor(fixture)
-    fixture.provider.error = error
-    await fixture.runtime.awaitStartupAssessment()
-
-    fixture.monitor.emit(.pressed(.rightOption))
-    await fixture.runtime.shortcutController.drainEvents()
-    for _ in 0..<20 {
-      if fixture.runtime.captureFailure != nil { break }
-      await Task.yield()
-    }
-
-    #expect(fixture.provider.requestedKinds == [.enhancedLocal])
-    #expect(fixture.runtime.captureFailure?.message == expectedMessage)
-    #expect(fixture.runtime.captureFailure?.actions.isEmpty == true)
-    #expect(fixture.runtime.captureFailure?.message.contains("Apple Speech") == false)
-    #expect(fixture.runtime.captureFailure?.message.contains("Speech Recognition") == false)
-    #expect(!focused.commands.isFocusedDictationActive)
-
-    fixture.monitor.emit(.released(.rightOption))
-    await fixture.runtime.shortcutController.drainEvents()
-  }
-}
-
-@Test @MainActor func ShortcutPermissionRequestUsesThePreferredEnhancedEngine()
-  async throws
-{
-  let speechRequests = RuntimeCounter()
-  let permissionController = DictationPermissionController(
-    microphoneStatus: { .authorized },
-    speechStatus: { .notDetermined },
-    requestMicrophone: { true },
-    requestSpeech: {
-      await speechRequests.increment()
-      return true
-    }
-  )
-  let fixture = try await RuntimeFixture(
-    finalText: nil,
-    preferredEngine: .enhancedLocal,
-    permissionController: permissionController
-  )
-
-  await fixture.runtime.requestPermissionsAfterShortcutSetup()
-
-  #expect(await speechRequests.value == 0)
-}
-#endif
-
-#if CLEAN_DICTATION_ENHANCED_CANDIDATE
-@Test @MainActor func DictationRuntimeReplaysOnlyAnActiveModelRepairWhenReenabled()
-  async throws
-{
-  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: false)
-  let gate = DictationTestGate()
-  await fixture.runtime.awaitStartupAssessment()
-  let repair = fixture.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in await gate.wait() }
-  )
-  await gate.waitUntilWaiting()
-  #expect(fixture.runtime.currentCapsuleStatus == nil)
-
-  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
-  fixture.runtime.preferencesDidChange()
-  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
-
-  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
-  fixture.runtime.preferencesDidChange()
-  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
-  fixture.runtime.preferencesDidChange()
-  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
-
-  await gate.open()
-  await repair.value
-  #expect(fixture.runtime.currentCapsuleStatus == .idle)
-}
-
-@Test @MainActor func DictationRepairCapsuleReturnsToIdleOnSuccessAndCancellation() async throws {
-  let success = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
-  let successfulTask = success.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in }
-  )
-  #expect(success.runtime.currentCapsuleStatus == .repairingModel)
-  await successfulTask.value
-  #expect(success.runtime.currentCapsuleStatus == .idle)
-
-  let cancelled = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
-  let gate = DictationTestGate()
-  let cancelledTask = cancelled.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in
-      await gate.wait()
-      try Task.checkCancellation()
-    }
-  )
-  await gate.waitUntilWaiting()
-  #expect(cancelled.runtime.currentCapsuleStatus == .repairingModel)
-  cancelled.runtime.cancelModelOperation()
-  await gate.open()
-  await cancelledTask.value
-  #expect(cancelled.runtime.currentCapsuleStatus == .idle)
-}
-
-@Test @MainActor func DictationRepairCapsuleShowsNonTranscriptFailure() async throws {
-  let fixture = try await RuntimeFixture(finalText: "private transcript", capsuleEnabled: true)
-
-  let task = fixture.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in
-      throw DictationSettingsTestError.failed
-    }
-  )
-  await task.value
-
-  #expect(fixture.runtime.currentCapsuleStatus == .failed("Enhanced model repair failed."))
-  #expect(
-    fixture.runtime.currentCapsuleStatus?.presentation.voiceOverText
-      .contains("private transcript") == false
-  )
-}
-
-@Test @MainActor func StaleRepairCompletionCannotDismissANewerRepairStatus() async throws {
-  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
-  let firstGate = DictationTestGate()
-  let secondGate = DictationTestGate()
-  let first = fixture.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in
-      await firstGate.wait()
-    }
-  )
-  await firstGate.waitUntilWaiting()
-  let second = fixture.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in
-      await secondGate.wait()
-    }
-  )
-  await secondGate.waitUntilWaiting()
-
-  await firstGate.open()
-  await first.value
-  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
-
-  await secondGate.open()
-  await second.value
-  #expect(fixture.runtime.currentCapsuleStatus == .idle)
-}
-
-@Test @MainActor func RepairFailureCannotReplaceANewerDictationCapsuleStatus() async throws {
-  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
-  let failureGate = DictationTestGate()
-  let repair = fixture.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in
-      await failureGate.wait()
-      throw DictationSettingsTestError.failed
-    }
-  )
-  await failureGate.waitUntilWaiting()
-  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
-
-  await fixture.runtime.toggle()
-  #expect(fixture.runtime.currentCapsuleStatus == .listening)
-
-  await failureGate.open()
-  await repair.value
-  #expect(fixture.runtime.currentCapsuleStatus == .listening)
-
-  await fixture.runtime.cancel()
-}
-#endif
-
 @Test @MainActor func DictationRuntimeShutdownAwaitsCancelledStartupAssessment() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved", startupBlocked: true)
   await fixture.startupGate.waitUntilWaiting()
@@ -1610,97 +1279,6 @@ import Testing
   await shutdown.value
   #expect(await completed.isComplete)
 }
-
-#if CLEAN_DICTATION_ENHANCED_CANDIDATE
-@Test @MainActor func DictationRuntimeShutdownAwaitsModelOperationFilesystemCleanup() async throws {
-  let fixture = try await RuntimeFixture(finalText: "saved")
-  let operationGate = DictationTestGate()
-  let cleanupGate = DictationTestGate()
-  let file = FileManager.default.temporaryDirectory
-    .appendingPathComponent("model-cleanup-\(UUID().uuidString)")
-  try Data("partial".utf8).write(to: file)
-  let operation = fixture.runtime.runModelOperation(
-    operation: { _ in
-      await operationGate.wait()
-      if Task.isCancelled {
-        await cleanupGate.wait()
-        try? FileManager.default.removeItem(at: file)
-        throw CancellationError()
-      }
-    }
-  )
-  await operationGate.waitUntilWaiting()
-  let completed = RuntimeCompletionProbe()
-
-  let shutdown = Task {
-    await fixture.runtime.shutdown()
-    await completed.complete()
-  }
-  await Task.yield()
-  #expect(!(await completed.isComplete))
-
-  await operationGate.open()
-  await cleanupGate.waitUntilWaiting()
-  #expect(!(await completed.isComplete))
-  await cleanupGate.open()
-  await operation.value
-  await shutdown.value
-  #expect(!FileManager.default.fileExists(atPath: file.path))
-}
-
-@Test @MainActor func DictationRuntimeShutdownAwaitsEverySupersededModelCleanup() async throws {
-  let fixture = try await RuntimeFixture(finalText: "saved")
-  let firstOperationGate = DictationTestGate()
-  let firstCleanupGate = DictationTestGate()
-  let secondOperationGate = DictationTestGate()
-  let secondCleanupGate = DictationTestGate()
-  let first = fixture.runtime.runModelOperation(
-    operation: { _ in
-      await firstOperationGate.wait()
-      if Task.isCancelled {
-        await firstCleanupGate.wait()
-        throw CancellationError()
-      }
-    }
-  )
-  await firstOperationGate.waitUntilWaiting()
-
-  let second = fixture.runtime.runModelOperation(
-    operation: { _ in
-      await secondOperationGate.wait()
-      if Task.isCancelled {
-        await secondCleanupGate.wait()
-        throw CancellationError()
-      }
-    }
-  )
-  await secondOperationGate.waitUntilWaiting()
-  await firstOperationGate.open()
-  await firstCleanupGate.waitUntilWaiting()
-  let completed = RuntimeCompletionProbe()
-
-  let shutdown = Task {
-    await fixture.runtime.shutdown()
-    await completed.complete()
-  }
-  await secondOperationGate.open()
-  await secondCleanupGate.waitUntilWaiting()
-  #expect(!(await completed.isComplete))
-
-  await secondCleanupGate.open()
-  await second.value
-  for _ in 0..<20 {
-    if await completed.isComplete { break }
-    await Task.yield()
-  }
-  #expect(!(await completed.isComplete))
-
-  await firstCleanupGate.open()
-  await first.value
-  await shutdown.value
-  #expect(await completed.isComplete)
-}
-#endif
 
 @Test @MainActor func DictationRuntimeShutdownAwaitsSuspendedProviderAndLateRelease() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
@@ -1850,7 +1428,6 @@ private final class RuntimeFixture {
   let escapeRegistrar = RuntimeEscapeRegistrar()
   let startupGate = DictationTestGate()
   let startupLog = RuntimeCounter()
-  let enhancedReady = RuntimeBool()
   let engine: RuntimeSpeechEngine
   let provider: RuntimeEngineProvider
   let history: DictationHistoryController
@@ -1869,7 +1446,6 @@ private final class RuntimeFixture {
     blockInitialLoad: Bool = false,
     monitorAccessGranted: Bool = true,
     monitorRequestAccessResult: Bool = true,
-    enhancedReadyAtStartup: Bool = false,
     permissionController: DictationPermissionController = .init(),
     availability: DictationAvailability = .evaluate(.init(
       osMajorVersion: 26,
@@ -1923,7 +1499,6 @@ private final class RuntimeFixture {
     }
     monitor.accessGranted = monitorAccessGranted
     monitor.requestAccessResult = monitorRequestAccessResult
-    enhancedReady.value = enhancedReadyAtStartup
     engine = RuntimeSpeechEngine(finalText: finalText, kind: preferredEngine)
     provider = RuntimeEngineProvider(engine: engine)
     history = DictationHistoryController(
@@ -1932,10 +1507,16 @@ private final class RuntimeFixture {
       delete: { _ in },
       clear: {}
     )
+    let admittedModelSettingsViewModel = AdmittedModelSettingsViewModel(
+      installer: makeAdmittedModelInstaller()
+    )
     let coordinator = DictationCoordinator(
       engineProvider: provider,
-      preferredEngine: { [weak appState] in
-        appState?.preferences.dictationSpeechEngine ?? .standard
+      preferredEngine: { [weak appState, admittedModelSettingsViewModel] in
+        DictationRuntime.effectiveEngine(
+          preference: appState?.preferences.dictationSpeechEngine,
+          presentation: admittedModelSettingsViewModel.presentation
+        )
       },
       cleaner: RuntimeCleaner(),
       router: RuntimeRouter(),
@@ -1982,7 +1563,7 @@ private final class RuntimeFixture {
         await log.increment()
         if startupBlocked { await gate.wait() }
       },
-      enhancedIsReady: { [enhancedReady] in enhancedReady.value },
+      admittedModelSettingsViewModel: admittedModelSettingsViewModel,
       availabilityProvider: availabilityProvider ?? { availability },
       capsuleSleeper: capsuleSleeper
     )

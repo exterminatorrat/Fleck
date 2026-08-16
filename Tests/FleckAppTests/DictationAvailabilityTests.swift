@@ -210,6 +210,22 @@ import Testing
   #expect(recognizerFailure.standardFailureCopy?.contains("on-device English") == true)
 }
 
+@Test func standardAppleSpeechRemainsTheFallbackWhenTheAdmittedModelIsUnavailable() {
+  let availability = DictationAvailability.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: true
+  ))
+
+  #expect(availability.standardAvailable)
+  #expect(!availability.enhancedAvailable)
+  #expect(availability.standardFailureCopy == nil)
+}
+
 @Test @MainActor func permissionsWaitForExplicitUserIntent() async {
   let microphone = PermissionProbe()
   let speech = PermissionProbe()
