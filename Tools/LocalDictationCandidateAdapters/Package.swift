@@ -15,6 +15,10 @@ let package = Package(
       targets: ["NemotronASRPreflight"]
     ),
     .executable(
+      name: "whisper-asr-preflight",
+      targets: ["WhisperASRPreflight"]
+    ),
+    .executable(
       name: "local-dictation-candidate",
       targets: ["LocalDictationCandidateCLI"]
     ),
@@ -43,6 +47,11 @@ let package = Package(
       path: "Spikes/NemotronASR/Preflight"
     ),
     .executableTarget(
+      name: "WhisperASRPreflight",
+      dependencies: ["WhisperASRSpikeContract"],
+      path: "Spikes/WhisperASR/Preflight"
+    ),
+    .executableTarget(
       name: "LocalDictationCandidateCLI",
       dependencies: [
         "LocalDictationCandidateProtocol",
@@ -59,6 +68,7 @@ let package = Package(
         "NemotronASRSpikeContract",
         "WhisperASRSpikeContract",
         "NemotronASRPreflight",
+        "WhisperASRPreflight",
       ]
     ),
   ]
