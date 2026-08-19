@@ -1621,6 +1621,29 @@ import Testing
     ])
 }
 
+@Test func acceptsTerminalURLExclamationPunctuation() throws {
+  let exampleURL = "https:" + "//example.com"
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "url-terminal-exclamation",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)!",
+        protectedExpectations: [.init(kind: "url", text: exampleURL, comparison: .exact)]
+      ),
+      .init(
+        id: "url-terminal-exclamation-closing",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)!)",
+        protectedExpectations: [.init(kind: "url", text: exampleURL, comparison: .exact)]
+      ),
+    ]))
+
+  #expect(report.protectedViolations.isEmpty)
+}
+
 @Test func acceptsProtectedTextAtLiteralBoundaries() throws {
   let report = try ModelEvaluationScorer.score(
     validInput(cases: [

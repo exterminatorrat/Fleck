@@ -1003,14 +1003,14 @@ public enum ModelEvaluationScorer {
 
   private static func isURLAlwaysContinuation(_ character: Character) -> Bool {
     character.unicodeScalars.contains {
-      [0x21, 0x23, 0x26, 0x25, 0x3D, 0x40, 0x3A, 0x2B, 0x3F, 0x7E].contains($0.value)
+      [0x23, 0x26, 0x25, 0x3D, 0x40, 0x3A, 0x2B, 0x3F, 0x7E].contains($0.value)
     }
   }
 
   private static func isURLContinuation(_ character: Character) -> Bool {
     isPathURLContinuation(character)
       || character.unicodeScalars.contains {
-        [0x24, 0x2C, 0x3B].contains($0.value)
+        [0x21, 0x24, 0x2C, 0x3B].contains($0.value)
       }
   }
 
