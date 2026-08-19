@@ -612,7 +612,8 @@
     }
 
     private var header: some View {
-      HStack(spacing: 10) {
+      let backlinkEntries = backlinkController.incoming(to: appState.workspace.selectedNoteID)
+      return HStack(spacing: 10) {
         HStack(spacing: 6) {
           switch FleckMark.load(template: true) {
           case .image(let mark):
@@ -629,6 +630,34 @@
           .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
+        Button {
+          backlinkController.toggleDisclosure()
+        } label: {
+          Image(systemName: "link")
+            .frame(width: 22, height: 22)
+        }
+        .accessibilityIdentifier("backlinks-toolbar-button")
+        .accessibilityLabel("Backlinks")
+        .accessibilityValue(
+          backlinkEntries.count == 1
+            ? "1 backlink"
+            : "\(backlinkEntries.count) backlinks"
+        )
+        .accessibilityHint("Show notes linking here")
+        .help("Backlinks")
+        .popover(isPresented: backlinksPopoverPresentation, arrowEdge: .top) {
+          BacklinksView(
+            entries: backlinkEntries,
+            foldersByID: folderNamesByID,
+            onOpen: { noteID in
+              if backlinkController.isExpanded {
+                backlinkController.toggleDisclosure()
+              }
+              openNoteLink(noteID)
+            }
+          )
+          .frame(width: 320)
+        }
         Button {
           guard !noteLinkPickerController.isPresented else { return }
           searchController.present(for: appState.workspace.selectedNoteID)
@@ -1001,6 +1030,16 @@
       AppMotion(reduceMotion: reduceMotion)
     }
 
+    private var backlinksPopoverPresentation: Binding<Bool> {
+      Binding(
+        get: { backlinkController.isExpanded },
+        set: { isPresented in
+          guard backlinkController.isExpanded != isPresented else { return }
+          backlinkController.toggleDisclosure()
+        }
+      )
+    }
+
     private func tabColor(for note: Note, opacity: Double) -> Color {
       guard let hex = note.tabColorHex else {
         return Color.accentColor.opacity(opacity)
@@ -1357,14 +1396,6 @@
           )
           .id(note.id)
           .padding(.vertical, 10)
-
-          BacklinksView(
-            entries: backlinkController.incoming(to: note.id),
-            foldersByID: folderNamesByID,
-            isExpanded: backlinkController.isExpanded,
-            onToggle: backlinkController.toggleDisclosure,
-            onOpen: openNoteLink
-          )
         }
       }
     }

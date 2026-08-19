@@ -6,6 +6,67 @@ import Testing
 @testable import FleckApp
 
 @Test @MainActor
+func NotesPanelBacklinksPopoverReclaimsEditorSpace() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("notes-panel-backlinks-popover-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let target = Note(id: UUID(), title: "Target", body: "Target body")
+  let source = Note(
+    id: UUID(),
+    title: "Source",
+    body: NoteLinkFormatter.markdown(label: "Target", targetNoteID: target.id)
+  )
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [target, source], selectedNoteID: target.id)
+
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let backlinks = BacklinkController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      backlinkController: backlinks
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleBacklinksHost(host)
+
+  let editor = try #require(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self))
+  let editorScrollView = try #require(hostedBacklinksEditorScrollView(in: host))
+  let toolbarControls = hostedBacklinksToolbarControls(in: host)
+  // Catches removing the header trigger and restoring the persistent bottom disclosure.
+  #expect(editorScrollView.frame.height >= 200)
+
+  let originalEditor = editor
+  let originalString = editor.string
+  let backlinksControl = try #require(toolbarControls.first)
+  clickHostedBacklinksControl(backlinksControl, in: window)
+  await settleBacklinksHost(host)
+
+  #expect(backlinks.isExpanded)
+  #expect(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self) === originalEditor)
+  #expect(editor.string == originalString)
+  #expect(window.childWindows?.contains(where: { $0.isVisible }) == true)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
 func NotesPanelDoubleBracketPickerInsertsAndDerivesBacklink() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent("notes-panel-backlinks-" + UUID().uuidString, isDirectory: true)
@@ -718,6 +779,54 @@ private func hostedBacklinksDescendants<T: NSView>(in view: NSView, as type: T.T
     matches.append(contentsOf: hostedBacklinksDescendants(in: subview, as: type))
   }
   return matches
+}
+
+@MainActor
+private func hostedBacklinksEditorScrollView(in view: NSView) -> NSScrollView? {
+  if let scrollView = view as? NSScrollView,
+    hostedBacklinksDescendant(in: scrollView, as: ListAwareTextView.self) != nil
+  {
+    return scrollView
+  }
+  for subview in view.subviews {
+    if let scrollView = hostedBacklinksEditorScrollView(in: subview) { return scrollView }
+  }
+  return nil
+}
+
+@MainActor
+private func hostedBacklinksToolbarControls(in view: NSView) -> [NSView] {
+  hostedBacklinksDescendants(in: view, as: NSView.self)
+    .filter { control in
+      guard String(describing: type(of: control)) == "KeyViewProxy" else { return false }
+      let frame = control.convert(control.bounds, to: view)
+      return frame.minY < 40 && frame.minX > view.bounds.midX
+    }
+    .sorted { lhs, rhs in
+      lhs.convert(lhs.bounds, to: view).minX < rhs.convert(rhs.bounds, to: view).minX
+    }
+}
+
+@MainActor
+private func clickHostedBacklinksControl(_ control: NSView, in window: NSWindow) {
+  let point = control.convert(
+    NSPoint(x: control.bounds.midX, y: control.bounds.midY),
+    to: nil
+  )
+  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    guard let event = NSEvent.mouseEvent(
+      with: eventType,
+      location: point,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 0,
+      clickCount: 1,
+      pressure: eventType == .leftMouseDown ? 1 : 0
+    ) else { continue }
+    window.sendEvent(event)
+  }
 }
 
 @MainActor
