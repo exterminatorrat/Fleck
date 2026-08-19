@@ -867,6 +867,82 @@ import Testing
     ])
 }
 
+@Test func recognizesUnicodeNumericMeaningBoundaries() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "unicode-minus-embedded",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send −2",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-range-embedded",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2–3",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-percent-embedded",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2٪",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-minus-complete",
+        language: .english,
+        reference: "send −2",
+        hypothesis: "send −2.",
+        protectedExpectations: [.init(kind: "number", text: "−2", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-range-complete",
+        language: .english,
+        reference: "send 2–3",
+        hypothesis: "send 2–3.",
+        protectedExpectations: [.init(kind: "range", text: "2–3", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-percent-complete",
+        language: .english,
+        reference: "send 2٪",
+        hypothesis: "send 2٪.",
+        protectedExpectations: [.init(kind: "percent", text: "2٪", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-range-leading-dash",
+        language: .english,
+        reference: "send –2",
+        hypothesis: "send $–2",
+        protectedExpectations: [.init(kind: "range", text: "–2", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-range-repeated-dash",
+        language: .english,
+        reference: "send 2––3",
+        hypothesis: "send $2––3",
+        protectedExpectations: [.init(kind: "range", text: "2––3", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-range-trailing-dash",
+        language: .english,
+        reference: "send 2–",
+        hypothesis: "send $2–",
+        protectedExpectations: [.init(kind: "range", text: "2–", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "unicode-minus-embedded",
+      "unicode-range-embedded",
+      "unicode-percent-embedded",
+    ])
+}
+
 @Test func requiresProtectedNumericRangesToHaveLiteralBoundaries() throws {
   let report = try ModelEvaluationScorer.score(
     validInput(cases: [

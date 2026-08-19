@@ -831,6 +831,9 @@ public enum ModelEvaluationScorer {
       if isWordOrIdentifierContinuation(boundary) {
         return true
       }
+      if isTypographicNumericRangeDash(boundary) {
+        return continuation.map(isDecimalDigit) == true
+      }
       if isCurrencySymbol(boundary) || isNumericSign(boundary) {
         return true
       }
@@ -872,7 +875,7 @@ public enum ModelEvaluationScorer {
         hasDigit = true
         previousWasDigit = true
         requiresDigitAfterRangeHyphen = false
-      } else if character == "-" {
+      } else if isNumericRangeDash(character) {
         guard previousWasDigit else { return false }
         previousWasDigit = false
         requiresDigitAfterRangeHyphen = true
@@ -1027,12 +1030,24 @@ public enum ModelEvaluationScorer {
 
   private static func isPercent(_ character: Character) -> Bool {
     character.unicodeScalars.contains {
-      $0.value == 0x25 || $0.value == 0xFF05
+      [0x25, 0xFF05, 0x066A].contains($0.value)
     }
   }
 
   private static func isNumericSign(_ character: Character) -> Bool {
-    character == "+" || character == "-"
+    character == "+" || character == "-" || character == "−"
+  }
+
+  private static func isNumericRangeDash(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      [0x2D, 0x2012, 0x2013, 0x2014, 0x2015].contains($0.value)
+    }
+  }
+
+  private static func isTypographicNumericRangeDash(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      [0x2012, 0x2013, 0x2014, 0x2015].contains($0.value)
+    }
   }
 
   private static func isNumericSeparator(_ character: Character) -> Bool {
