@@ -44,6 +44,8 @@ public struct NemotronDependencyPin: Equatable, Sendable {
 
 public struct NemotronBuildPreset: Equatable, Sendable {
   public let name: String
+  public let displayName: String
+  public let inherits: String
   public let accelerator: String
   public let configuration: String
   public let generator: String
@@ -52,6 +54,8 @@ public struct NemotronBuildPreset: Equatable, Sendable {
 
   fileprivate init(
     name: String,
+    displayName: String,
+    inherits: String,
     accelerator: String,
     configuration: String,
     generator: String,
@@ -59,6 +63,8 @@ public struct NemotronBuildPreset: Equatable, Sendable {
     cmakeDefinitions: [String]
   ) {
     self.name = name
+    self.displayName = displayName
+    self.inherits = inherits
     self.accelerator = accelerator
     self.configuration = configuration
     self.generator = generator
@@ -169,20 +175,43 @@ public struct NemotronSpeechRuntimeMetadata: Equatable, Sendable {
     ],
     buildPresets: [
       NemotronBuildPreset(
-        name: "CPU Release / Ninja / C++17",
+        name: "cpu-asr",
+        displayName: "CPU ASR and diarization",
+        inherits: "base",
         accelerator: "CPU",
         configuration: "Release",
         generator: "Ninja",
         cxxStandard: "C++17",
-        cmakeDefinitions: ["GGML_METAL=OFF"]
+        cmakeDefinitions: [
+          "NEMO_SPEECH_BUILD_EXAMPLES=OFF",
+          "NEMO_SPEECH_BUILD_TESTS=OFF",
+          "NEMO_SPEECH_BUILD_TOOLS=OFF",
+          "NEMO_SPEECH_GGML_PATCHED=OFF",
+          "NEMO_SPEECH_BUILD_ASR=ON",
+          "NEMO_SPEECH_BUILD_DIAR=ON",
+          "NEMO_SPEECH_BUILD_TTS=OFF",
+          "NEMO_SPEECH_BUILD_NMT=OFF",
+        ]
       ),
       NemotronBuildPreset(
-        name: "Metal Release / Ninja / C++17",
+        name: "metal-asr",
+        displayName: "Metal ASR and diarization",
+        inherits: "cpu-asr",
         accelerator: "Metal",
         configuration: "Release",
         generator: "Ninja",
         cxxStandard: "C++17",
-        cmakeDefinitions: ["GGML_METAL=ON"]
+        cmakeDefinitions: [
+          "NEMO_SPEECH_BUILD_EXAMPLES=OFF",
+          "NEMO_SPEECH_BUILD_TESTS=OFF",
+          "NEMO_SPEECH_BUILD_TOOLS=OFF",
+          "NEMO_SPEECH_GGML_PATCHED=OFF",
+          "NEMO_SPEECH_BUILD_ASR=ON",
+          "NEMO_SPEECH_BUILD_DIAR=ON",
+          "NEMO_SPEECH_BUILD_TTS=OFF",
+          "NEMO_SPEECH_BUILD_NMT=OFF",
+          "GGML_METAL=ON",
+        ]
       ),
     ],
     compiledRuntime: .unadmitted

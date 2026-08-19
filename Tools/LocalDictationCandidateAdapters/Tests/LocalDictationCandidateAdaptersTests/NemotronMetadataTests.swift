@@ -43,19 +43,47 @@ import Testing
   ])
 }
 
-@Test func nemotronBuildPresetsDescribeCPUAndMetalIntent() {
+@Test func nemotronBuildPresetsPinExactUpstreamCMakeIdentity() {
   let presets = NemotronASRMetadata.candidate.sourceRuntime.buildPresets
 
   #expect(presets.map(\.name) == [
-    "CPU Release / Ninja / C++17",
-    "Metal Release / Ninja / C++17",
+    "cpu-asr",
+    "metal-asr",
+  ])
+  #expect(presets.map(\.displayName) == [
+    "CPU ASR and diarization",
+    "Metal ASR and diarization",
+  ])
+  #expect(presets.map(\.inherits) == [
+    "base",
+    "cpu-asr",
   ])
   #expect(presets.map(\.accelerator) == ["CPU", "Metal"])
   #expect(presets.allSatisfy {
     $0.configuration == "Release" && $0.generator == "Ninja" && $0.cxxStandard == "C++17"
   })
-  #expect(presets[0].cmakeDefinitions == ["GGML_METAL=OFF"])
-  #expect(presets[1].cmakeDefinitions == ["GGML_METAL=ON"])
+  #expect(presets[0].cmakeDefinitions == [
+    "NEMO_SPEECH_BUILD_EXAMPLES=OFF",
+    "NEMO_SPEECH_BUILD_TESTS=OFF",
+    "NEMO_SPEECH_BUILD_TOOLS=OFF",
+    "NEMO_SPEECH_GGML_PATCHED=OFF",
+    "NEMO_SPEECH_BUILD_ASR=ON",
+    "NEMO_SPEECH_BUILD_DIAR=ON",
+    "NEMO_SPEECH_BUILD_TTS=OFF",
+    "NEMO_SPEECH_BUILD_NMT=OFF",
+  ])
+  #expect(presets[1].cmakeDefinitions == [
+    "NEMO_SPEECH_BUILD_EXAMPLES=OFF",
+    "NEMO_SPEECH_BUILD_TESTS=OFF",
+    "NEMO_SPEECH_BUILD_TOOLS=OFF",
+    "NEMO_SPEECH_GGML_PATCHED=OFF",
+    "NEMO_SPEECH_BUILD_ASR=ON",
+    "NEMO_SPEECH_BUILD_DIAR=ON",
+    "NEMO_SPEECH_BUILD_TTS=OFF",
+    "NEMO_SPEECH_BUILD_NMT=OFF",
+    "GGML_METAL=ON",
+  ])
+  #expect(presets.flatMap(\.cmakeDefinitions).contains("GGML_METAL=OFF") == false)
 }
 
 @Test func nemotronCompiledRuntimeRemainsStructurallyUnadmitted() {

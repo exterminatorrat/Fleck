@@ -40,9 +40,25 @@ runtime or model quality.
 
 ### Intended build presets
 
-The future route describes CPU and Metal `Release` / `Ninja` / `C++17`
-presets. The Metal preset requires `GGML_METAL=ON`; the CPU preset keeps
-`GGML_METAL=OFF`. These are build intent only and have not been executed here.
+The pinned upstream [`CMakePresets.json`](https://github.com/NVIDIA/NeMo-Speech.cpp/blob/5be7bfb104802131e61fe679b3f1401b27270216/CMakePresets.json)
+defines these exact configure/build preset identities:
+
+| Name | Display name | Inherits |
+| --- | --- | --- |
+| `cpu-asr` | CPU ASR and diarization | `base` |
+| `metal-asr` | Metal ASR and diarization | `cpu-asr` |
+
+The hidden `base` preset uses `Ninja`, `Release`, and disables
+`NEMO_SPEECH_BUILD_EXAMPLES`, `NEMO_SPEECH_BUILD_TESTS`, and
+`NEMO_SPEECH_BUILD_TOOLS`. `cpu-asr` adds
+`NEMO_SPEECH_GGML_PATCHED=OFF`, `NEMO_SPEECH_BUILD_ASR=ON`,
+`NEMO_SPEECH_BUILD_DIAR=ON`, `NEMO_SPEECH_BUILD_TTS=OFF`, and
+`NEMO_SPEECH_BUILD_NMT=OFF`. `metal-asr` inherits the complete CPU/base
+configuration and adds `GGML_METAL=ON`. The CPU preset has no explicit
+`GGML_METAL=OFF` cache entry; CPU is retained only as descriptive metadata,
+alongside the preserved `C++17` build intent.
+
+These are build intent only and have not been executed here.
 
 ## Compiled-runtime admission boundary
 
