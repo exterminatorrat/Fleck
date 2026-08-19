@@ -61,6 +61,15 @@ func NotesPanelBacklinksPopoverReclaimsEditorSpace() async throws {
   #expect(editor.string == originalString)
   #expect(window.childWindows?.contains(where: { $0.isVisible }) == true)
 
+  let popover = try #require(hostedBacklinksVisiblePopover(in: window))
+  let sourceRow = try #require(hostedBacklinksPopoverRows(in: popover).first)
+  clickHostedBacklinksControl(sourceRow, in: popover)
+  await settleBacklinksHost(host)
+
+  #expect(!backlinks.isExpanded)
+  #expect(window.childWindows?.contains(where: { $0.isVisible }) == false)
+  #expect(state.workspace.selectedNoteID == source.id)
+
   window.contentView = nil
   window.orderOut(nil)
   await runtime.shutdown()
@@ -804,6 +813,28 @@ private func hostedBacklinksToolbarControls(in view: NSView) -> [NSView] {
     }
     .sorted { lhs, rhs in
       lhs.convert(lhs.bounds, to: view).minX < rhs.convert(rhs.bounds, to: view).minX
+  }
+}
+
+@MainActor
+private func hostedBacklinksVisiblePopover(in window: NSWindow) -> NSWindow? {
+  window.childWindows?.first { child in
+    child.isVisible && !hostedBacklinksPopoverRows(in: child).isEmpty
+  }
+}
+
+@MainActor
+private func hostedBacklinksPopoverRows(in window: NSWindow) -> [NSView] {
+  guard let contentView = window.contentView else { return [] }
+  return hostedBacklinksDescendants(in: contentView, as: NSView.self)
+    .filter { String(describing: type(of: $0)) == "KeyViewProxy" }
+    .sorted { lhs, rhs in
+      let lhsFrame = lhs.convert(lhs.bounds, to: contentView)
+      let rhsFrame = rhs.convert(rhs.bounds, to: contentView)
+      if lhsFrame.minY == rhsFrame.minY {
+        return lhsFrame.minX < rhsFrame.minX
+      }
+      return lhsFrame.minY < rhsFrame.minY
     }
 }
 

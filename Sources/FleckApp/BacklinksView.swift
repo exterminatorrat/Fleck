@@ -77,12 +77,13 @@
                 .accessibilityHint("Open linked note")
               }
             }
-            .frame(maxHeight: 150)
           }
+          .frame(maxHeight: 150)
         }
       }
       .accessibilityElement(children: .contain)
       .padding(.horizontal, 16)
+      .padding(.vertical, 10)
     }
   }
 #endif
