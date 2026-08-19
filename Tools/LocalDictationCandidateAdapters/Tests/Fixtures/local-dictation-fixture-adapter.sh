@@ -67,6 +67,22 @@ while IFS= read -r line; do
     cancel-wrong-terminal:cancel)
       emit "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
       ;;
+    cancel-timeout-shutdown-forced:transcribe)
+      ;;
+    cancel-timeout-shutdown-forced:cancel)
+      ;;
+    cancel-timeout-shutdown-forced:shutdown)
+      emit "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+      sleep 5
+      ;;
+    cancel-ack-then-malformed:transcribe)
+      ;;
+    cancel-ack-then-malformed:cancel)
+      printf '%s\n%s\n' "{\"event\":\"cancelled\",\"requestID\":\"$request_id\",\"schemaVersion\":1}" '{malformed'
+      ;;
+    shutdown-ack-then-malformed:shutdown)
+      printf '%s\n%s\n' "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}" '{malformed'
+      ;;
     cooperative-cancel:transcribe)
       emit "{\"event\":\"partial\",\"requestID\":\"$request_id\",\"schemaVersion\":1,\"sequence\":1,\"transcript\":\"partial\"}"
       ;;

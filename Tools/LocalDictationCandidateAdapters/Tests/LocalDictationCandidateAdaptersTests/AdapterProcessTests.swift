@@ -252,6 +252,50 @@ struct AdapterProcessTests {
     #expect(path == .forcedTermination)
     let diagnostics = await process.diagnostics()
     #expect(diagnostics.forcedTermination)
+    #expect(!diagnostics.shutdownAcknowledged)
+    #expect(!diagnostics.childIsRunning)
+  }
+
+  @Test func timeoutCancellationPropagatesForcedShutdownPath() async throws {
+    let process = try await startProcess("cancel-timeout-shutdown-forced")
+    try await process.send(request("transcribe-1", operation: .transcribe))
+    let path = try await process.cancel(requestID: "transcribe-1", timeout: .milliseconds(50))
+    #expect(path == .forcedTermination)
+    let diagnostics = await process.diagnostics()
+    #expect(diagnostics.forcedTermination)
+    #expect(!diagnostics.childIsRunning)
+  }
+
+  @Test func cancellationAcknowledgementFollowedByMalformedOutputFailsClosed() async throws {
+    let process = try await startProcess("cancel-ack-then-malformed")
+    try await process.send(request("transcribe-1", operation: .transcribe))
+    var capturedError: AdapterProcessError?
+    do {
+      _ = try await process.cancel(requestID: "transcribe-1", timeout: .seconds(1))
+    } catch let error as AdapterProcessError {
+      capturedError = error
+    }
+    #expect(capturedError == .stdoutProtocol(.malformedJSON))
+    try await waitForChildExit(process, timeout: .seconds(2))
+    let diagnostics = await process.diagnostics()
+    #expect(!diagnostics.cancelAcknowledged)
+    #expect(diagnostics.forcedTermination)
+    #expect(!diagnostics.childIsRunning)
+  }
+
+  @Test func shutdownAcknowledgementFollowedByMalformedOutputFailsClosed() async throws {
+    let process = try await startProcess("shutdown-ack-then-malformed")
+    var capturedError: AdapterProcessError?
+    do {
+      _ = try await process.shutdown(timeout: .seconds(1))
+    } catch let error as AdapterProcessError {
+      capturedError = error
+    }
+    #expect(capturedError == .stdoutProtocol(.malformedJSON))
+    try await waitForChildExit(process, timeout: .seconds(2))
+    let diagnostics = await process.diagnostics()
+    #expect(!diagnostics.shutdownAcknowledged)
+    #expect(diagnostics.forcedTermination)
     #expect(!diagnostics.childIsRunning)
   }
 

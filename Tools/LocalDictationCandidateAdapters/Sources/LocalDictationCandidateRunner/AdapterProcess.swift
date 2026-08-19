@@ -286,12 +286,16 @@ public actor AdapterProcess {
     } catch let error as AdapterProcessError {
       guard case .timeout = error else { throw error }
       do {
-        _ = try await shutdown(timeout: timeout)
-        return .cooperativeShutdown
-      } catch {
+        return try await shutdown(timeout: timeout)
+      } catch let shutdownError as AdapterProcessError {
+        guard case .shutdownAcknowledgementMissing = shutdownError else {
+          throw shutdownError
+        }
         forceTerminate()
         await waitForExit(timeout: .seconds(1))
         return .forcedTermination
+      } catch {
+        throw error
       }
     }
   }
@@ -331,6 +335,7 @@ public actor AdapterProcess {
       if process?.isRunning == true {
         forceTerminate()
         await waitForExit(timeout: .seconds(1))
+        shutdownAcknowledged = false
         return .forcedTermination
       }
       return .cooperativeShutdown
@@ -583,12 +588,12 @@ public actor AdapterProcess {
     expectedKind: CandidateAdapterEventKind,
     timeout: Duration
   ) async throws {
+    if let terminalError {
+      throw terminalError
+    }
     if terminalRequestIDs.contains(requestID) {
       try validateTerminal(requestID, expectedKind: expectedKind)
       return
-    }
-    if let terminalError {
-      throw terminalError
     }
     try await withCheckedThrowingContinuation { continuation in
       waiters[requestID, default: []].append(continuation)
@@ -609,6 +614,9 @@ public actor AdapterProcess {
     _ requestID: String,
     expectedKind: CandidateAdapterEventKind
   ) throws {
+    if let terminalError {
+      throw terminalError
+    }
     guard let receivedKind = terminalEventKinds[requestID], receivedKind != expectedKind else {
       return
     }
@@ -661,6 +669,8 @@ public actor AdapterProcess {
   private func fail(_ error: AdapterProcessError) {
     guard terminalError == nil else { return }
     terminalError = error
+    cancelAcknowledged = false
+    shutdownAcknowledged = false
     eventContinuation?.finish(throwing: error)
     let continuations = waiters.values.flatMap { $0 }
     waiters.removeAll()

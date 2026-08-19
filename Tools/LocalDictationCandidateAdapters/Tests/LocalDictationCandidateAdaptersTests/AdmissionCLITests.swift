@@ -30,3 +30,20 @@ import Testing
   #expect(plan.evaluationOnlyPhrases == ["Fleck", "SwiftUI"])
   #expect(plan.appliedPhrases.isEmpty)
 }
+
+@Test func cancellationReportStatusRequiresCooperativeCancellation() throws {
+  #expect(try cancellationCaseStatus(for: .cooperativeCancellation) == "cancelled")
+  #expect(throws: CLIError.self) {
+    _ = try cancellationCaseStatus(for: .cooperativeShutdown)
+  }
+  #expect(throws: CLIError.self) {
+    _ = try cancellationCaseStatus(for: .forcedTermination)
+  }
+}
+
+@Test func successfulReportRequiresCooperativeShutdown() throws {
+  try requireCooperativeShutdown(.cooperativeShutdown)
+  #expect(throws: CLIError.self) {
+    try requireCooperativeShutdown(.forcedTermination)
+  }
+}

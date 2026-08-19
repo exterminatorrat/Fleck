@@ -398,6 +398,19 @@ func evaluationContextPlan(for phrases: [String]) -> EvaluationContextPlan {
   EvaluationContextPlan(evaluationOnlyPhrases: phrases, appliedPhrases: [])
 }
 
+func cancellationCaseStatus(for terminationPath: AdapterProcessTerminationPath) throws -> String {
+  guard terminationPath == .cooperativeCancellation else {
+    throw CLIError.lifecycle("cancellation-not-cooperative")
+  }
+  return "cancelled"
+}
+
+func requireCooperativeShutdown(_ terminationPath: AdapterProcessTerminationPath) throws {
+  guard terminationPath == .cooperativeShutdown else {
+    throw CLIError.lifecycle("shutdown-not-cooperative")
+  }
+}
+
 private struct AdmissionCaseResult: Codable, Sendable {
   let caseID: String
   let status: String
@@ -575,11 +588,11 @@ private func runCandidate(
       )
     )
     if item.cancellationPoint == "during-active-decode" {
-      _ = try await process.cancel(requestID: requestID, timeout: .seconds(2))
+      let cancellationPath = try await process.cancel(requestID: requestID, timeout: .seconds(2))
       results.append(
         AdmissionCaseResult(
           caseID: item.id,
-          status: "cancelled",
+          status: try cancellationCaseStatus(for: cancellationPath),
           claimedPartials: item.claimsPartials,
           evaluationOnlyContextPhrases: contextPlan.evaluationOnlyPhrases,
           appliedContextPhrases: contextPlan.appliedPhrases,
@@ -649,7 +662,8 @@ private func runCandidate(
     }
   }
 
-  _ = try await process.shutdown(timeout: .seconds(2))
+  let shutdownPath = try await process.shutdown(timeout: .seconds(2))
+  try requireCooperativeShutdown(shutdownPath)
   let diagnostics = await process.diagnostics()
   let hashMapping = try reportHashMapping(
     runtimeRootURL: runtimeRootURL,
