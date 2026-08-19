@@ -41,6 +41,35 @@ func WorkspaceSearchPresentationSelectsPointerAndKeyboardMotionKinds() {
   #expect(controller.presentationKind == .crossfade)
 }
 
+@Test
+func WorkspaceSearchMatchedGeometryDeclaresMutuallyExclusiveIDs() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let notesPanel = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+  let searchView = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/WorkspaceSearchView.swift"),
+    encoding: .utf8
+  )
+
+  for id in ["shellID", "magnifierID"] {
+    #expect(
+      notesPanel.components(separatedBy: "id: WorkspaceSearchTransition.\(id)").count - 1 == 1
+    )
+    #expect(
+      searchView.components(separatedBy: "id: WorkspaceSearchTransition.\(id)").count - 1 == 1
+    )
+  }
+  #expect(notesPanel.contains("if !searchController.isPresented && !reduceMotion"))
+  #expect(searchView.contains("if controller.presentationKind == .morph && !reduceMotion"))
+  #expect(!notesPanel.contains("isSource: false"))
+  #expect(!searchView.contains("isSource: false"))
+}
+
 @Test @MainActor
 func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
   let root = FileManager.default.temporaryDirectory

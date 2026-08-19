@@ -611,7 +611,8 @@
                 .foregroundStyle(.secondary)
                 .matchedGeometryEffect(
                   id: WorkspaceSearchTransition.magnifierID,
-                  in: transitionNamespace
+                  in: transitionNamespace,
+                  isSource: true
                 )
                 .accessibilityHidden(true)
             } else {
@@ -776,7 +777,8 @@
               .fill(.regularMaterial)
               .matchedGeometryEffect(
                 id: WorkspaceSearchTransition.shellID,
-                in: transitionNamespace
+                in: transitionNamespace,
+                isSource: true
               )
               .accessibilityHidden(true)
               .allowsHitTesting(false)

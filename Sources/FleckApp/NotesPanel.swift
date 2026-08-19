@@ -688,15 +688,17 @@
             presentWorkspaceSearch(activation: .keyboard)
           }
         } label: {
-          if reduceMotion {
-            Image(systemName: "magnifyingglass")
-              .accessibilityHidden(true)
-          } else {
+          if !searchController.isPresented && !reduceMotion {
             Image(systemName: "magnifyingglass")
               .matchedGeometryEffect(
                 id: WorkspaceSearchTransition.magnifierID,
-                in: workspaceSearchTransition
+                in: workspaceSearchTransition,
+                isSource: true
               )
+              .accessibilityHidden(true)
+          } else {
+            Image(systemName: "magnifyingglass")
+              .opacity(searchController.isPresented ? 0 : 1)
               .accessibilityHidden(true)
           }
         }
@@ -712,18 +714,20 @@
           }
         )
         .background {
-          if reduceMotion {
+          if !searchController.isPresented && !reduceMotion {
             RoundedRectangle(cornerRadius: 8)
               .fill(.regularMaterial.opacity(0.32))
+              .matchedGeometryEffect(
+                id: WorkspaceSearchTransition.shellID,
+                in: workspaceSearchTransition,
+                isSource: true
+              )
               .accessibilityHidden(true)
               .allowsHitTesting(false)
           } else {
             RoundedRectangle(cornerRadius: 8)
               .fill(.regularMaterial.opacity(0.32))
-              .matchedGeometryEffect(
-                id: WorkspaceSearchTransition.shellID,
-                in: workspaceSearchTransition
-              )
+              .opacity(searchController.isPresented ? 0 : 1)
               .accessibilityHidden(true)
               .allowsHitTesting(false)
           }
