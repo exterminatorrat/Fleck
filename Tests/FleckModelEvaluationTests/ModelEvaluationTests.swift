@@ -582,6 +582,34 @@ import Testing
         hypothesis: "send 2% invoices",
         protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
       ),
+      .init(
+        id: "number-negative-sign-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send -2 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-positive-sign-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send +2 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-range-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send 2-3 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-non-dollar-currency-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send ₽2 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
     ]))
 
   #expect(
@@ -590,6 +618,10 @@ import Testing
       "number-decimal-embedded",
       "number-currency-embedded",
       "number-percent-embedded",
+      "number-negative-sign-embedded",
+      "number-positive-sign-embedded",
+      "number-range-embedded",
+      "number-non-dollar-currency-embedded",
     ])
 }
 

@@ -821,6 +821,9 @@ public enum ModelEvaluationScorer {
       if !isLeft && isPercent(boundary) {
         return true
       }
+      if isNumericSign(boundary) {
+        return isLeft || continuation.map(isDecimalDigit) == true
+      }
       return isNumericSeparator(boundary)
         && continuation.map(isDecimalDigit) == true
     }
@@ -888,9 +891,7 @@ public enum ModelEvaluationScorer {
 
   private static func isCurrencySymbol(_ character: Character) -> Bool {
     character.unicodeScalars.contains {
-      [0x24, 0xA2, 0xA3, 0xA4, 0xA5, 0x20A9, 0x20AC, 0x20B9, 0xFFE5].contains(
-        $0.value
-      )
+      $0.properties.generalCategory == .currencySymbol
     }
   }
 
@@ -898,6 +899,10 @@ public enum ModelEvaluationScorer {
     character.unicodeScalars.contains {
       $0.value == 0x25 || $0.value == 0xFF05
     }
+  }
+
+  private static func isNumericSign(_ character: Character) -> Bool {
+    character == "+" || character == "-"
   }
 
   private static func isNumericSeparator(_ character: Character) -> Bool {
