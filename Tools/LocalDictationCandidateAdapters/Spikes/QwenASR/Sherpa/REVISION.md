@@ -13,7 +13,7 @@ this spike.
 - Unpacked runtime file identities: unavailable; the route is not admitted.
 - Build: Swift 6.3.3, arm64, `-target arm64-apple-macosx13.0`, Release optimization, C API, CPU provider, two runtime threads.
 - Expected runtime layout: `SherpaOnnxC.framework/SherpaOnnxC` and `SherpaOnnxC.framework/Headers/sherpa-onnx/c-api/c-api.h`.
-- Source checkout used for API audit: commit `634265c9b57642fdd158120148785c89aa281c4b`; the executable is linked against the pinned v1.13.4 official release above.
+- Source checkout used for API audit: commit `634265c9b57642fdd158120148785c89aa281c4b`. The current build boundary is a Foundation-only preflight executable; it does not compile or link native Sherpa code.
 
 ## Model and conversion provenance
 
@@ -25,15 +25,15 @@ this spike.
 - Converted release archive SHA-256 (archive-only provenance): `393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96`.
 - Unpacked model/runtime per-file identities: unavailable; no converted payload is admitted.
 - Expected model layout: `conv_frontend.onnx`, `encoder.int8.onnx`, `decoder.int8.onnx`, `tokenizer/vocab.json`, `tokenizer/merges.txt`, and `tokenizer/tokenizer_config.json`.
-- Conversion provenance: the k2-fsa release asset and the Qwen3 C API implementation at the pinned sherpa-onnx source checkout; no community model mirror or unverified conversion was used.
+- Conversion provenance: the k2-fsa release asset and the Qwen3 C API implementation at the pinned sherpa-onnx source checkout. The owner model identity and converted sherpa archive identity are independently pinned; upstream metadata does not attest that the converted archive was produced from this exact owner revision or owner file.
 
 ## Runtime semantics and gates
 
 - Qwen3 through this C API is offline/final-only. The spike emits no partial events and does not claim true streaming.
 - The shared protocol limit of 100 phrases is enforced, but this Qwen offline model cannot accept per-request context: the upstream per-stream hotword API aborts with `Only transducer models support contextual biasing.` The spike therefore rejects nonempty context with `context-unsupported-by-sherpa-qwen3-offline-api` before crossing that API boundary.
 - Locale hints are restricted to `en` and `zh` mappings. Audio is local absolute PCM WAV and is not fetched or resampled by the adapter.
-- Load/unload is repeatable in the historical spike. The checked-in manifest has no trusted per-file identities, so startup fails with `artifact-identity-unadmitted` before model layout or recognizer construction. Cancellation is explicitly reported as unsupported because the offline C API has no load/decode cancellation hook; this is a predeclared admission failure, not a synthetic cancellation result.
-- Runtime/model paths are absolute local directories supplied at startup. The executable contains no download code and makes no inference-time network requests.
+- The checked-in preflight manifest has no trusted per-file identities, so startup fails with `artifact-identity-unadmitted` before helper resolution or native runtime construction. Cancellation is explicitly reported as unsupported because the offline C API has no load/decode cancellation hook; this is a predeclared admission failure, not a synthetic cancellation result.
+- Runtime/model paths are absolute local directories supplied at startup. The preflight executable contains no download code and makes no inference-time network requests.
 - Archive sizes and digests above are immutable provenance only. No archive, runtime binary, model weight, or unpacked payload is checked in or fetched by this foundation.
 - Historical external no-context probes produced English, Mandarin, and concatenated mixed-language finals; the route emitted no partials. Those observations are not current payload-admission or model-quality evidence. Silence produced `system`, so silence quality is not admitted.
 - The 50-cycle lifecycle run and cancellation/load/decode probes are external evidence only; shutdown survivor checks and resident-memory samples are recorded outside the checkout.

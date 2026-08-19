@@ -399,11 +399,11 @@ public enum StartupPathPolicy {
     guard resolvedFile.path.hasPrefix(rootPrefix) else {
       throw StartupPathError.outsideRoot(field)
     }
-    var isDirectory: ObjCBool = false
-    guard FileManager.default.fileExists(atPath: resolvedFile.path, isDirectory: &isDirectory) else {
+    guard FileManager.default.fileExists(atPath: resolvedFile.path) else {
       throw StartupPathError.missing(field)
     }
-    guard !isDirectory.boolValue else {
+    let attributes = try? FileManager.default.attributesOfItem(atPath: resolvedFile.path)
+    guard attributes?[.type] as? FileAttributeType == .typeRegular else {
       throw StartupPathError.notRegularFile(field)
     }
     return resolvedFile

@@ -180,7 +180,7 @@ private struct AdmissionCase: Decodable {
   let expectedCategory: String
   let audioPath: String
   let audioSHA256: String
-  let contextPhrases: [String]
+  let evaluationOnlyContextPhrases: [String]
   let cancellationPoint: String
   let captureTemperature: String
   let claimsPartials: Bool
@@ -189,7 +189,7 @@ private struct AdmissionCase: Decodable {
     let container = try decoder.container(keyedBy: AdmissionCodingKey.self)
     let allowed: Set<String> = [
       "id", "role", "expectedLanguage", "expectedCategory", "audioPath",
-      "audioSHA256", "contextPhrases", "cancellationPoint",
+      "audioSHA256", "evaluationOnlyContextPhrases", "cancellationPoint",
       "captureTemperature", "claimsPartials",
     ]
     try strictKeys(container, allowed: allowed)
@@ -199,7 +199,10 @@ private struct AdmissionCase: Decodable {
     expectedCategory = try container.decode(String.self, forKey: AdmissionCodingKey(stringValue: "expectedCategory"))
     audioPath = try container.decode(String.self, forKey: AdmissionCodingKey(stringValue: "audioPath"))
     audioSHA256 = try container.decode(String.self, forKey: AdmissionCodingKey(stringValue: "audioSHA256"))
-    contextPhrases = try container.decode([String].self, forKey: AdmissionCodingKey(stringValue: "contextPhrases"))
+    evaluationOnlyContextPhrases = try container.decode(
+      [String].self,
+      forKey: AdmissionCodingKey(stringValue: "evaluationOnlyContextPhrases")
+    )
     cancellationPoint = try container.decode(String.self, forKey: AdmissionCodingKey(stringValue: "cancellationPoint"))
     captureTemperature = try container.decode(String.self, forKey: AdmissionCodingKey(stringValue: "captureTemperature"))
     claimsPartials = try container.decode(Bool.self, forKey: AdmissionCodingKey(stringValue: "claimsPartials"))
@@ -288,14 +291,14 @@ private struct AdmissionManifest: Decodable {
       else {
         throw CLIError.invalidManifest("audio-hash-\(index + 1)")
       }
-      guard item.contextPhrases.count <= 100 else {
+      guard item.evaluationOnlyContextPhrases.count <= 100 else {
         throw CLIError.invalidManifest("context-phrase-count-\(index + 1)")
       }
-      guard Set(item.contextPhrases).count == item.contextPhrases.count else {
+      guard Set(item.evaluationOnlyContextPhrases).count == item.evaluationOnlyContextPhrases.count else {
         throw CLIError.invalidManifest("duplicate-context-phrase-\(index + 1)")
       }
-      for phrase in item.contextPhrases {
-        try validateString(phrase, field: "cases[\(index)].contextPhrases")
+      for phrase in item.evaluationOnlyContextPhrases {
+        try validateString(phrase, field: "cases[\(index)].evaluationOnlyContextPhrases")
       }
       guard ["not-applicable", "after-first-partial", "during-active-decode"].contains(item.cancellationPoint) else {
         throw CLIError.invalidManifest("cancellation-point-\(index + 1)")
@@ -386,10 +389,21 @@ struct MeasurementArtifact: Codable, Sendable {
   let unit: String
 }
 
+struct EvaluationContextPlan: Equatable, Sendable {
+  let evaluationOnlyPhrases: [String]
+  let appliedPhrases: [String]
+}
+
+func evaluationContextPlan(for phrases: [String]) -> EvaluationContextPlan {
+  EvaluationContextPlan(evaluationOnlyPhrases: phrases, appliedPhrases: [])
+}
+
 private struct AdmissionCaseResult: Codable, Sendable {
   let caseID: String
   let status: String
   let claimedPartials: Bool
+  let evaluationOnlyContextPhrases: [String]
+  let appliedContextPhrases: [String]
   let measurementArtifacts: [MeasurementArtifact]
 }
 
@@ -403,6 +417,7 @@ private struct AdmissionRunReport: Codable, Sendable {
   let modelRevision: String
   let executableSHA256: String
   let libraryHashes: [String: String]
+  let modelHashes: [String: String]
   let commandLine: [String]
   let operatingSystem: String
   let hardwareIdentity: String
@@ -549,13 +564,14 @@ private func runCandidate(
 
   for item in manifest.cases {
     let requestID = "case-\(item.id)"
+    let contextPlan = evaluationContextPlan(for: item.evaluationOnlyContextPhrases)
     try await process.send(
       request(
         id: requestID,
         operation: .transcribe,
         audioPath: item.audioPath,
         localeIdentifier: item.expectedLanguage,
-        contextPhrases: item.contextPhrases
+        contextPhrases: contextPlan.appliedPhrases
       )
     )
     if item.cancellationPoint == "during-active-decode" {
@@ -565,6 +581,8 @@ private func runCandidate(
           caseID: item.id,
           status: "cancelled",
           claimedPartials: item.claimsPartials,
+          evaluationOnlyContextPhrases: contextPlan.evaluationOnlyPhrases,
+          appliedContextPhrases: contextPlan.appliedPhrases,
           measurementArtifacts: []
         )
       )
@@ -580,6 +598,8 @@ private func runCandidate(
           caseID: item.id,
           status: "completed",
           claimedPartials: item.claimsPartials,
+          evaluationOnlyContextPhrases: contextPlan.evaluationOnlyPhrases,
+          appliedContextPhrases: contextPlan.appliedPhrases,
           measurementArtifacts: caseResult.measurements
         )
       )
@@ -609,7 +629,7 @@ private func runCandidate(
           operation: .transcribe,
           audioPath: item.audioPath,
           localeIdentifier: item.expectedLanguage,
-          contextPhrases: item.contextPhrases
+          contextPhrases: contextPlan.appliedPhrases
         )
       )
       _ = try await nextEvent(
@@ -631,6 +651,10 @@ private func runCandidate(
 
   _ = try await process.shutdown(timeout: .seconds(2))
   let diagnostics = await process.diagnostics()
+  let hashMapping = try reportHashMapping(
+    runtimeRootURL: runtimeRootURL,
+    modelRootURL: modelRootURL
+  )
   return AdmissionRunReport(
     schemaVersion: 1,
     manifestID: manifest.manifestID,
@@ -640,7 +664,8 @@ private func runCandidate(
     runtimeRevision: runtimeRevision,
     modelRevision: modelRevision,
     executableSHA256: try sha256(adapterURL),
-    libraryHashes: try hashFiles(in: modelRootURL),
+    libraryHashes: hashMapping.libraryHashes,
+    modelHashes: hashMapping.modelHashes,
     commandLine: [adapterURL.path],
     operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
     hardwareIdentity: hardwareIdentity(),
@@ -771,8 +796,9 @@ private func sha256(_ url: URL) throws -> String {
 }
 
 private func hashFiles(in root: URL) throws -> [String: String] {
+  let resolvedRoot = canonicalURL(root)
   guard let enumerator = FileManager.default.enumerator(
-    at: root,
+    at: resolvedRoot,
     includingPropertiesForKeys: nil,
     options: [.skipsPackageDescendants]
   ) else {
@@ -782,10 +808,31 @@ private func hashFiles(in root: URL) throws -> [String: String] {
   for case let item as URL in enumerator {
     let attributes = try? FileManager.default.attributesOfItem(atPath: item.path)
     guard attributes?[.type] as? FileAttributeType == .typeRegular else { continue }
-    let relative = String(item.path.dropFirst(root.path.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let relative = String(item.path.dropFirst(resolvedRoot.path.count))
+      .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     hashes[relative] = try sha256(item)
   }
   return hashes
+}
+
+private func canonicalURL(_ url: URL) -> URL {
+  guard let pointer = Darwin.realpath(url.path, nil) else {
+    return url.standardizedFileURL
+  }
+  defer { free(pointer) }
+  return URL(fileURLWithPath: String(cString: pointer), isDirectory: true)
+}
+
+struct ReportHashMapping: Equatable, Sendable {
+  let libraryHashes: [String: String]
+  let modelHashes: [String: String]
+}
+
+func reportHashMapping(runtimeRootURL: URL, modelRootURL: URL) throws -> ReportHashMapping {
+  ReportHashMapping(
+    libraryHashes: try hashFiles(in: runtimeRootURL),
+    modelHashes: try hashFiles(in: modelRootURL)
+  )
 }
 
 private func writeExclusive(_ report: AdmissionRunReport, to path: String) throws {

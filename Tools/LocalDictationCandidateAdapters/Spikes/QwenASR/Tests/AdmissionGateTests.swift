@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 @main
 struct AdmissionGateTests {
@@ -6,12 +7,13 @@ struct AdmissionGateTests {
     testSherpaIsFinalOnlyAndCannotClaimUnsupportedCapabilities()
     testPinnedMetadataIncludesOfficialArchiveSizesAndUnknownInstalledIdentities()
     try testMalformedAndMismatchedIdentityIsRejected()
+    try testPreflightRejectsUnadmittedAndForgedIdentitiesBeforeHelperLaunch()
     try testTenCasePlanUsesOnlySherpaFinalOnlyClaims()
     try testAdmissionProtocolSelfTestDeclaresNoFakeCancellation()
     try testStartupPathsAreAbsoluteContainedAndSymlinkSafe()
     try testContextIsBoundedAndDeterministic()
     try testWaveReaderAcceptsLocalPCM16AndRejectsWrongRate()
-    print("qwen admission gate tests passed: 8")
+    print("qwen admission gate tests passed: 9")
   }
 
   private static func testSherpaIsFinalOnlyAndCannotClaimUnsupportedCapabilities() {
@@ -107,6 +109,40 @@ struct AdmissionGateTests {
     expect(!nativeLoadCalled, "forged complete paths and hashes must not enable native load")
   }
 
+  private static func testPreflightRejectsUnadmittedAndForgedIdentitiesBeforeHelperLaunch() throws {
+    let descriptor = QwenASRHelperDescriptor(executablePath: "/future/qwen-sherpa-helper")
+    var helperLaunchCount = 0
+    expectThrows(ArtifactAdmissionError.self) {
+      try QwenASRPreflight.launchIfAdmitted(
+        manifest: QwenASRArtifactManifests.sherpa,
+        descriptor: descriptor
+      ) { _ in
+        helperLaunchCount += 1
+      }
+    }
+    expect(helperLaunchCount == 0, "unadmitted preflight must not invoke the helper probe")
+
+    let forgedIdentities = try (
+      QwenASRArtifactManifests.sherpa.expectedRuntimePaths
+        + QwenASRArtifactManifests.sherpa.expectedModelPaths
+    ).map {
+      try ArtifactIdentity(relativePath: $0, sha256: String(repeating: "f", count: 64), size: 1)
+    }
+    expect(forgedIdentities.count == QwenASRArtifactManifests.sherpa.expectedRuntimePaths.count
+      + QwenASRArtifactManifests.sherpa.expectedModelPaths.count,
+      "forged identities must cover every expected path in the probe")
+    expect(QwenASRArtifactManifests.sherpa.artifacts.isEmpty, "forged identities must not mutate the catalog")
+    expectThrows(ArtifactAdmissionError.self) {
+      try QwenASRPreflight.launchIfAdmitted(
+        manifest: QwenASRArtifactManifests.sherpa,
+        descriptor: descriptor
+      ) { _ in
+        helperLaunchCount += 1
+      }
+    }
+    expect(helperLaunchCount == 0, "forged identities must not invoke the helper probe")
+  }
+
   private static func testTenCasePlanUsesOnlySherpaFinalOnlyClaims() throws {
     let planURL = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
@@ -126,6 +162,9 @@ struct AdmissionGateTests {
       let capabilities = routeCapabilities?["sherpa"] as? [String: Any]
       expect(capabilities?["resultSemantics"] as? String == "batch-final-only", "sherpa must declare batch-final-only")
       expect(capabilities?["claimsRollingWindowPartials"] as? Bool == false, "sherpa must not claim rolling-window partials")
+      expect(object["evaluationOnlyContextPhrases"] is [Any], "context phrases must be evaluation metadata")
+      expect((object["appliedContextPhrases"] as? [Any])?.isEmpty == true, "context phrases must not be applied")
+      expect(object["contextPhrases"] == nil, "ambiguous applied context phrases must be removed")
       expect(object["claimsPartials"] == nil, "ambiguous claimsPartials must be removed")
     }
 
@@ -153,9 +192,9 @@ struct AdmissionGateTests {
 
   private static func testStartupPathsAreAbsoluteContainedAndSymlinkSafe() throws {
     let temporary = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-      .appendingPathComponent("qwen-admission-gate-tests-(UUID().uuidString)", isDirectory: true)
+      .appendingPathComponent("qwen-admission-gate-tests-\(UUID().uuidString)", isDirectory: true)
     let outside = temporary.deletingLastPathComponent()
-      .appendingPathComponent("qwen-admission-gate-outside-(UUID().uuidString)", isDirectory: true)
+      .appendingPathComponent("qwen-admission-gate-outside-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
     defer {
@@ -191,6 +230,16 @@ struct AdmissionGateTests {
     expectThrows(StartupPathError.self) {
       _ = try StartupPathPolicy.requireContainedFile("/tmp/outside-model-file", within: temporary, field: "model-file")
     }
+
+    let fifo = temporary.appendingPathComponent("not-a-regular-file")
+    expect(Darwin.mkfifo(fifo.path, mode_t(S_IRUSR | S_IWUSR)) == 0, "fifo fixture must be created")
+    var fifoRejected = false
+    do {
+      _ = try StartupPathPolicy.requireContainedFile(fifo.path, within: temporary, field: "model-file")
+    } catch let error as StartupPathError {
+      fifoRejected = error == .notRegularFile("model-file")
+    }
+    expect(fifoRejected, "FIFO must be rejected as a non-regular file")
   }
 
   private static func testContextIsBoundedAndDeterministic() throws {
@@ -206,7 +255,7 @@ struct AdmissionGateTests {
 
   private static func testWaveReaderAcceptsLocalPCM16AndRejectsWrongRate() throws {
     let temporary = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-      .appendingPathComponent("qwen-admission-wave-tests-(UUID().uuidString).wav")
+      .appendingPathComponent("qwen-admission-wave-tests-\(UUID().uuidString).wav")
     try makePCM16Wave(at: temporary, sampleRate: 16_000, samples: [0, 16_384, -16_384])
     defer { try? FileManager.default.removeItem(at: temporary) }
 
