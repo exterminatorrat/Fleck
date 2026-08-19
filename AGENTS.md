@@ -17,7 +17,7 @@ native routing roles are available. It writes a bounded five-part specification:
 4. Verification commands and expected evidence.
 5. Authority boundaries and the required handoff.
 
-Implementation is only through `sol_advisor_terra_implementer` (Terra, High).
+Implementation is only through `sol_advisor_luna_implementer` (Luna, Max).
 The implementation packet must identify ownership, preserve unrelated work,
 and require adaptation to concurrent edits. The primary Sol inspects the parent
 diff and reruns the required verification. A fresh
