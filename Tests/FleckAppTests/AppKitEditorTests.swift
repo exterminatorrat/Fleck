@@ -1684,47 +1684,58 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
   #expect(!source.contains("Font Size Presets"))
 }
 
-@Test func highlighterMarkerShapeUsesHollowBarrelRearCapAndBluntChiselNib() {
+@Test func highlighterMarkerShapeUsesUprightBodyAndDistinctLowerChiselInk() throws {
   let rect = CGRect(x: 0, y: 0, width: 20, height: 18)
-  let barrelPath = HighlighterMarkerShape().path(in: rect)
-  let capPath = HighlighterMarkerCapShape().path(in: rect)
-  let nibPath = HighlighterMarkerNibShape().path(in: rect)
-  var nibPoints: [CGPoint] = []
-  nibPath.forEach { element in
+  let bodyPath = HighlighterMarkerShape().path(in: rect)
+  let inkPath = HighlighterMarkerNibShape().path(in: rect)
+  var inkPoints: [CGPoint] = []
+  inkPath.forEach { element in
     switch element {
     case .move(to: let point), .line(to: let point):
-      nibPoints.append(point)
+      inkPoints.append(point)
     case .quadCurve, .curve, .closeSubpath:
       break
     @unknown default:
       break
     }
   }
-  let chiselEdge = zip(nibPoints, nibPoints.dropFirst()).first { first, second in
-    abs(first.x - second.x) < 0.01 && abs(first.y - second.y) >= rect.height * 0.25
-  }
-  let seamGap = abs(barrelPath.boundingRect.maxX - nibPath.boundingRect.minX)
-  let capBounds = capPath.boundingRect
-  var barrelSubpathCount = 0
-  barrelPath.forEach { element in
-    if case .move = element {
-      barrelSubpathCount += 1
-    }
+  let flatChiselEdge = zip(inkPoints, inkPoints.dropFirst()).first { first, second in
+    abs(first.y - second.y) < 0.01 && abs(first.x - second.x) >= rect.width * 0.25
   }
 
-  #expect(barrelPath.boundingRect.width >= rect.width * 0.55)
-  #expect(barrelPath.boundingRect.height >= rect.height * 0.6)
-  #expect(barrelSubpathCount == 2)
-  #expect(barrelPath.boundingRect.maxX < nibPath.boundingRect.maxX)
-  #expect(nibPath.boundingRect.width <= rect.width * 0.36)
-  #expect(nibPath.contains(CGPoint(x: rect.width * 0.80, y: rect.midY)))
-  #expect(seamGap <= rect.width * 0.1)
-  #expect(capBounds.width <= rect.width * 0.12)
-  #expect(capBounds.height >= rect.height * 0.45)
-  #expect(capBounds.minX > barrelPath.boundingRect.minX)
-  #expect(capBounds.maxX < nibPath.boundingRect.minX)
-  #expect(capPath.contains(CGPoint(x: rect.width * 0.22, y: rect.midY)))
-  #expect(chiselEdge != nil)
+  #expect(bodyPath.boundingRect.width >= rect.width * 0.55)
+  #expect(bodyPath.boundingRect.minY < inkPath.boundingRect.minY)
+  #expect(inkPath.boundingRect.maxY > bodyPath.boundingRect.maxY)
+  #expect(inkPath.boundingRect.width <= bodyPath.boundingRect.width * 0.7)
+  #expect(inkPath.contains(CGPoint(x: rect.width * 0.5, y: rect.height * 0.75)))
+  #expect(flatChiselEdge != nil)
+  #expect(!(try notesPanelSource()).contains(".rotationEffect(.degrees(-32))"))
+}
+
+@Test @MainActor func highlighterMarkerIconUsesUniformHighlightAndYellowFallback() throws {
+  let selectedColor = try #require(NSColor(hex: "#4D8DFF"))
+  let selectedIcon = HighlighterMarkerIcon(
+    backgroundColor: selectedColor,
+    isMixed: false
+  )
+  let noColorIcon = HighlighterMarkerIcon(
+    backgroundColor: nil,
+    isMixed: false
+  )
+  let mixedColorIcon = HighlighterMarkerIcon(
+    backgroundColor: selectedColor,
+    isMixed: true
+  )
+
+  #expect(FleckColorHex.hex(from: selectedIcon.inkColor) == "#4D8DFF")
+  #expect(FleckColorHex.hex(from: noColorIcon.inkColor) == "#FFD600")
+  #expect(FleckColorHex.hex(from: mixedColorIcon.inkColor) == "#FFD600")
+
+  let source = try notesPanelSource()
+
+  #expect(source.contains("backgroundColor: commands.currentBackgroundColor"))
+  #expect(source.contains("isMixed: commands.isBackgroundColorMixed"))
+  #expect(!source.contains("HighlighterMarkerIcon()"))
 }
 
 @Test func titleFontActionRoutesOnlyToFocusedMutation() {

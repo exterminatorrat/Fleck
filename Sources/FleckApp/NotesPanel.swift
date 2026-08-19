@@ -2379,7 +2379,10 @@
           guard isEditorVisible else { return }
           isBackgroundColorPickerPresented = true
         } label: {
-          HighlighterMarkerIcon()
+          HighlighterMarkerIcon(
+            backgroundColor: commands.currentBackgroundColor,
+            isMixed: commands.isBackgroundColorMixed
+          )
         }
         .accessibilityLabel("Highlight")
         .accessibilityValue(
@@ -2648,84 +2651,73 @@
 
   struct HighlighterMarkerShape: Shape {
     func path(in rect: CGRect) -> Path {
-      let barrelRect = CGRect(
-        x: rect.minX + rect.width * 0.08,
-        y: rect.minY + rect.height * 0.15,
-        width: rect.width * 0.58,
-        height: rect.height * 0.70
-      )
-      let hollowRect = barrelRect.insetBy(dx: 1.45, dy: 1.45)
+      let stemMinX = rect.minX + rect.width * 0.20
+      let stemMaxX = rect.minX + rect.width * 0.80
+      let stemTop = rect.minY + rect.height * 0.08
+      let shoulderY = rect.minY + rect.height * 0.43
+      let bodyBottom = rect.minY + rect.height * 0.57
+      let bodyInset = rect.width * 0.08
 
       var path = Path()
-      path.addRoundedRect(
-        in: barrelRect,
-        cornerSize: CGSize(width: 1.7, height: 1.7),
-        style: .continuous
+      path.move(to: CGPoint(x: stemMinX, y: stemTop))
+      path.addLine(to: CGPoint(x: stemMinX, y: shoulderY))
+      path.addLine(
+        to: CGPoint(x: stemMinX + bodyInset, y: bodyBottom)
       )
-      path.addRoundedRect(
-        in: hollowRect,
-        cornerSize: CGSize(width: 0.7, height: 0.7),
-        style: .continuous
+      path.addLine(
+        to: CGPoint(x: stemMaxX - bodyInset, y: bodyBottom)
       )
-      return path
-    }
-  }
-
-  struct HighlighterMarkerCapShape: Shape {
-    func path(in rect: CGRect) -> Path {
-      let capRect = CGRect(
-        x: rect.minX + rect.width * 0.19,
-        y: rect.minY + rect.height * 0.22,
-        width: rect.width * 0.07,
-        height: rect.height * 0.56
-      )
-
-      var path = Path()
-      path.addRoundedRect(
-        in: capRect,
-        cornerSize: CGSize(width: 0.35, height: 0.35),
-        style: .continuous
-      )
+      path.addLine(to: CGPoint(x: stemMaxX, y: shoulderY))
+      path.addLine(to: CGPoint(x: stemMaxX, y: stemTop))
+      path.move(to: CGPoint(x: stemMinX, y: shoulderY))
+      path.addLine(to: CGPoint(x: stemMaxX, y: shoulderY))
       return path
     }
   }
 
   struct HighlighterMarkerNibShape: Shape {
     func path(in rect: CGRect) -> Path {
-      let nibMinX = rect.minX + rect.width * 0.61
-      let nibMaxX = rect.minX + rect.width * 0.94
-      let nibMinY = rect.minY + rect.height * 0.27
-      let nibMaxY = rect.minY + rect.height * 0.73
-      let bluntMinY = rect.minY + rect.height * 0.36
-      let bluntMaxY = rect.minY + rect.height * 0.64
+      let inkMinX = rect.minX + rect.width * 0.34
+      let inkMaxX = rect.minX + rect.width * 0.70
+      let inkTop = rect.minY + rect.height * 0.63
+      let inkBottom = rect.minY + rect.height * 0.96
+      let taperY = inkTop + (inkBottom - inkTop) * 0.38
+      let lowerMinX = inkMinX + rect.width * 0.05
 
       var path = Path()
-      path.move(to: CGPoint(x: nibMinX, y: nibMinY))
-      path.addLine(to: CGPoint(x: nibMaxX, y: bluntMinY))
-      path.addLine(to: CGPoint(x: nibMaxX, y: bluntMaxY))
-      path.addLine(to: CGPoint(x: nibMinX, y: nibMaxY))
+      path.move(to: CGPoint(x: inkMinX, y: inkTop))
+      path.addLine(to: CGPoint(x: inkMaxX, y: inkTop))
+      path.addLine(to: CGPoint(x: inkMaxX, y: taperY))
+      path.addLine(to: CGPoint(x: lowerMinX, y: inkBottom))
+      path.addLine(to: CGPoint(x: inkMinX, y: inkBottom))
       path.closeSubpath()
       return path
     }
   }
 
-  private struct HighlighterMarkerIcon: View {
+  struct HighlighterMarkerIcon: View {
+    let inkColor: NSColor
+
+    init(backgroundColor: NSColor?, isMixed: Bool) {
+      self.inkColor = (!isMixed ? backgroundColor : nil)
+        ?? FleckColorHex.nsColor(from: "#FFD600")!
+    }
+
     var body: some View {
       ZStack {
-        HighlighterMarkerShape()
-          .fill(.primary, style: FillStyle(eoFill: true))
-        HighlighterMarkerCapShape()
-          .fill(.primary)
         HighlighterMarkerNibShape()
-          .fill(.primary)
-        Path { path in
-          path.move(to: CGPoint(x: 12.45, y: 3.55))
-          path.addLine(to: CGPoint(x: 12.45, y: 14.45))
-        }
-        .stroke(.primary, lineWidth: 1.15)
+          .fill(Color(nsColor: inkColor))
+          .overlay {
+            HighlighterMarkerNibShape()
+              .stroke(.primary, lineWidth: 1.1)
+          }
+        HighlighterMarkerShape()
+          .stroke(
+            .primary,
+            style: StrokeStyle(lineWidth: 1.15, lineCap: .butt, lineJoin: .miter)
+          )
       }
         .frame(width: 20, height: 18)
-        .rotationEffect(.degrees(-32))
         .frame(width: 28, height: 26)
         .background(.clear, in: RoundedRectangle(cornerRadius: 5))
         .contentShape(RoundedRectangle(cornerRadius: 5))
