@@ -138,7 +138,7 @@ generate_requests() {
 publish_output_exclusively() {
   local source="$1"
   local destination="$2"
-  if ! ln "$source" "$destination"; then
+  if ! /bin/link "$source" "$destination"; then
     rm -f "$source"
     echo "preflight output publication failed: destination already exists or is unavailable" >&2
     return 2
@@ -200,6 +200,44 @@ run_self_test() {
     return 1
   fi
   echo "self-test=exclusive-publication-race-preserves-destination:pass"
+
+  readonly directory_race_temp="$self_test_root/directory-race-output-temp"
+  readonly directory_race_output="$self_test_root/directory-race-output"
+  printf 'directory-race-output\n' > "$directory_race_temp"
+  mkdir "$directory_race_output"
+  set +e
+  directory_race_publication_output="$(publish_output_exclusively "$directory_race_temp" "$directory_race_output" 2>&1)"
+  directory_race_publication_exit=$?
+  set -e
+  if [[ "$directory_race_publication_exit" -eq 0 ||
+        "$directory_race_publication_output" != *"preflight output publication failed"* ||
+        -e "$directory_race_temp" ||
+        ! -d "$directory_race_output" ]] ||
+     [[ -n "$(find "$directory_race_output" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    echo "self-test=exclusive-publication-directory-destination-rejected:fail" >&2
+    return 1
+  fi
+  echo "self-test=exclusive-publication-directory-destination-rejected:pass"
+
+  readonly symlink_race_temp="$self_test_root/symlink-race-output-temp"
+  readonly symlink_race_output="$self_test_root/symlink-race-output"
+  readonly symlink_race_target="$self_test_root/symlink-race-target"
+  printf 'symlink-race-output\n' > "$symlink_race_temp"
+  mkdir "$symlink_race_target"
+  ln -s "$symlink_race_target" "$symlink_race_output"
+  set +e
+  symlink_race_publication_output="$(publish_output_exclusively "$symlink_race_temp" "$symlink_race_output" 2>&1)"
+  symlink_race_publication_exit=$?
+  set -e
+  if [[ "$symlink_race_publication_exit" -eq 0 ||
+        "$symlink_race_publication_output" != *"preflight output publication failed"* ||
+        -e "$symlink_race_temp" ||
+        ! -L "$symlink_race_output" ]] ||
+     [[ -n "$(find "$symlink_race_target" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    echo "self-test=exclusive-publication-symlink-directory-destination-rejected:fail" >&2
+    return 1
+  fi
+  echo "self-test=exclusive-publication-symlink-directory-destination-rejected:pass"
 
   set +e
   substitution_output="$(
