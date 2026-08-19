@@ -32,7 +32,7 @@ runtime or model quality.
 | `ggml` | `c03b4e2bcece5134827881af90242086daf75be5` |
 | `llama.cpp` | `560445bf34c87356ad0f8d80fb03ec5488850b65` |
 | `riva-common` | `71df98266725320a6b6b3a9f32a6da832dc93691f` |
-| `cpp-httplib` | `62d899feac3cf9215a55f2b43da250fdd98d2153` |
+| `cpp-httplib` | `62d899feac3cf9215a55f2b43da250fdd98d2156` |
 | `cppjieba` | `b3602bef7d1f67521a61788a74fb5801a0e62cd3` |
 | `flashlight-text` | `49e163ab1e7b8108922512c294ab8513b89f404c` |
 | `kenlm` | `4cb443e60b7bf2c0ddf3c745378f76cb59e254e5` |
