@@ -524,7 +524,8 @@
               },
               onActivate: { noteID in
                 guard activateNoteAndScope(noteID) else { return }
-              }
+              },
+              onDismiss: dismissWorkspaceSearch
             )
             .id(searchController.presentationID)
             .zIndex(2)
@@ -571,12 +572,12 @@
           searchPointerActivationPending = false
         }
         if isPresented, noteLinkPickerController.isPresented {
-          searchController.dismiss()
+          dismissWorkspaceSearch()
         }
       }
       .onChange(of: noteLinkPickerController.isPresented) { _, isPresented in
         if isPresented, searchController.isPresented {
-          searchController.dismiss()
+          dismissWorkspaceSearch()
         }
       }
       .onChange(of: appState.workspace.folders) { _, folders in
@@ -1109,6 +1110,15 @@
             presentation: presentation
           )
         }
+      }
+    }
+
+    private func dismissWorkspaceSearch() {
+      guard searchController.isPresented else { return }
+      withAnimation(
+        searchController.presentationKind.usesAnimatedDismissal ? motion.quick : nil
+      ) {
+        searchController.dismiss()
       }
     }
 

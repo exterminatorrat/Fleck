@@ -32,6 +32,9 @@ func WorkspaceSearchPresentationSelectsPointerAndKeyboardMotionKinds() {
       reduceMotion: true
     ) == .instant
   )
+  #expect(WorkspaceSearchPresentationKind.morph.usesAnimatedDismissal)
+  #expect(WorkspaceSearchPresentationKind.crossfade.usesAnimatedDismissal)
+  #expect(!WorkspaceSearchPresentationKind.instant.usesAnimatedDismissal)
 
   let controller = WorkspaceSearchController()
   controller.present(presentation: .morph)
@@ -68,6 +71,28 @@ func WorkspaceSearchMatchedGeometryDeclaresMutuallyExclusiveIDs() throws {
   #expect(searchView.contains("if controller.presentationKind == .morph && !reduceMotion"))
   #expect(!notesPanel.contains("isSource: false"))
   #expect(!searchView.contains("isSource: false"))
+}
+
+@Test
+func WorkspaceSearchDismissalsUseNotesPanelAnimationContract() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let notesPanel = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+  let searchView = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/WorkspaceSearchView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(notesPanel.contains("onDismiss: dismissWorkspaceSearch"))
+  #expect(notesPanel.contains("searchController.presentationKind.usesAnimatedDismissal"))
+  #expect(searchView.contains("let onDismiss: () -> Void"))
+  #expect(searchView.contains("onDismiss: onDismiss"))
+  #expect(searchView.contains("onDismiss()"))
 }
 
 @Test @MainActor
@@ -181,6 +206,86 @@ func WorkspaceSearchHostingImmediateReopenSurvivesOldDisappearance() async throw
   #expect(searchController.isPresented)
   #expect(searchController.presentationKind == .instant)
   #expect(searchController.query == "still open")
+
+  searchController.dismiss()
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingImmediateReopenKeepsQueryFocusAfterOldRestoreRetry()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-focus-reopen-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let note = Note(title: "Focus title", body: "Keep this body")
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let editor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == note.body }
+  )
+  #expect(window.makeFirstResponder(editor))
+
+  searchController.present(for: note.id)
+  await settleWorkspaceSearchHost(host)
+  let firstQueryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  #expect(window.makeFirstResponder(firstQueryField))
+
+  searchController.dismiss()
+  searchController.present(for: note.id)
+  var reopenedField: NSTextField?
+  for _ in 0..<8 {
+    host.layoutSubtreeIfNeeded()
+    reopenedField = hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+    if reopenedField != nil { break }
+    await Task.yield()
+  }
+  let reopenedQueryField = try #require(reopenedField)
+  #expect(window.makeFirstResponder(reopenedQueryField))
+  let reopenedQueryEditor = try #require(
+    reopenedQueryField.currentEditor() as? NSTextView
+  )
+  #expect(window.firstResponder === reopenedQueryEditor)
+
+  try await Task.sleep(for: .milliseconds(400))
+  await settleWorkspaceSearchHost(host)
+
+  #expect(searchController.isPresented)
+  #expect(window.firstResponder === reopenedQueryEditor)
+  #expect(reopenedQueryField.currentEditor() === reopenedQueryEditor)
 
   searchController.dismiss()
   window.contentView = nil
