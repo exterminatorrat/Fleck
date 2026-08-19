@@ -96,7 +96,10 @@ import Testing
     defer: false
   )
   window.contentView = scrollView
-  scrollView.documentView = textView
+  scrollView.documentView = NativeEditorDocumentView(
+    titleField: NSTextField(),
+    textView: textView
+  )
   textView.allowsUndo = true
 
   let undoManager = try #require(textView.undoManager)
@@ -2291,6 +2294,159 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(textView.undoManager?.canUndo == true)
 }
 
+@Test @MainActor func hostedNotesPanelTitleScrollsWithBody() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(
+    title: "Scrollable title",
+    body: (0..<80).map { "Body line \($0) keeps the document taller than the viewport." }
+      .joined(separator: "\n"),
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+  let bodyTextView = try #require(hostedPanelEditor(in: host))
+  let bodyScrollView = try #require(hostedPanelBodyScrollView(in: host))
+  let documentView = try #require(bodyScrollView.documentView)
+  let titleScrollView = hostedVerticalScrollView(containing: titleField)
+
+  #expect(titleField.isDescendant(of: documentView))
+
+  let initialBounds = bodyScrollView.contentView.bounds
+  let initialVisibleDocumentRect = documentView.convert(
+    initialBounds,
+    from: bodyScrollView.contentView
+  )
+  let initialTitleFrame = documentView.convert(titleField.bounds, from: titleField)
+  #expect(titleScrollView === bodyScrollView)
+  #expect(documentView.frame.height > initialBounds.height)
+  #expect(initialVisibleDocumentRect.contains(initialTitleFrame))
+
+  let maximumOriginY = max(
+    documentView.frame.minY,
+    documentView.frame.maxY - initialBounds.height
+  )
+  bodyScrollView.contentView.scroll(
+    to: NSPoint(x: initialBounds.origin.x, y: maximumOriginY)
+  )
+  bodyScrollView.reflectScrolledClipView(bodyScrollView.contentView)
+  forceHostedViewUpdate(host)
+
+  let scrolledBounds = bodyScrollView.contentView.bounds
+  let scrolledVisibleDocumentRect = documentView.convert(
+    scrolledBounds,
+    from: bodyScrollView.contentView
+  )
+  #expect(scrolledBounds.origin.y > initialBounds.origin.y)
+  #expect(!scrolledVisibleDocumentRect.intersects(initialTitleFrame))
+
+  window.setContentSize(NSSize(width: 640, height: 360))
+  host.setFrameSize(window.contentView?.bounds.size ?? NSSize(width: 640, height: 360))
+  await settleHostedView(host)
+
+  let relaidBounds = bodyScrollView.contentView.bounds
+  let relaidVisibleDocumentRect = documentView.convert(
+    relaidBounds,
+    from: bodyScrollView.contentView
+  )
+  let relaidTitleFrame = documentView.convert(titleField.bounds, from: titleField)
+  #expect(abs(relaidBounds.origin.y - scrolledBounds.origin.y) < 0.01)
+  #expect(relaidBounds.origin.y > 0)
+  #expect(!relaidVisibleDocumentRect.intersects(relaidTitleFrame))
+  #expect(bodyTextView.enclosingScrollView === bodyScrollView)
+}
+
+@Test @MainActor func hostedNotesPanelTitleUsesSemiboldCustomFont() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(
+    title: "Semibold title",
+    body: "Body",
+    richTextRTF: try hostedPanelRTF(text: "Body"),
+    folderID: nil,
+    titleFontFamily: "Avenir Next"
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences { $0.fontFamily = "Menlo" }
+  let commands = EditorCommands()
+  let (_, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+  let font = try #require(titleField.font)
+
+  #expect(font.familyName == "Avenir Next")
+  #expect(font.fontName == "AvenirNext-DemiBold")
+  #expect(font.pointSize == 20)
+  #expect(
+    EditorTypography.titleNSFont(family: ".AppleSystemUIFont").isEqual(
+      NSFont.systemFont(ofSize: 20, weight: .semibold)
+    )
+  )
+}
+
+@Test @MainActor func hostedNotesPanelTitleEditingUsesRealFieldEditor() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let title = "Original title"
+  let text = "Body stays exactly the same"
+  let note = Note(
+    title: title,
+    body: text,
+    richTextRTF: try hostedPanelRTF(text: text),
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let bodyEditor = try #require(hostedPanelEditor(in: host))
+  let titleField = try #require(hostedPanelTitleField(with: title, in: host))
+  let selectedNoteID = try #require(state.workspace.selectedNoteID)
+  let originalNote = try #require(
+    state.workspace.notes.first(where: { $0.id == selectedNoteID })
+  )
+  let originalBody = originalNote.body
+  let originalRichTextRTF = originalNote.richTextRTF
+  let newTitle = "Edited through AppKit"
+
+  #expect(commands.textView === bodyEditor)
+  #expect(window.makeFirstResponder(titleField))
+  let fieldEditor = try #require(window.fieldEditor(false, for: titleField) as? NSTextView)
+  #expect(window.firstResponder === fieldEditor)
+  #expect(fieldEditor !== titleField)
+
+  fieldEditor.selectAll(nil)
+  fieldEditor.insertText(newTitle, replacementRange: fieldEditor.selectedRange())
+  await settleHostedView(host)
+
+  let editedNote = try #require(
+    state.workspace.notes.first(where: { $0.id == selectedNoteID })
+  )
+  #expect(editedNote.title == newTitle)
+  #expect(editedNote.body == originalBody)
+  #expect(editedNote.richTextRTF == originalRichTextRTF)
+  #expect(state.workspace.selectedNoteID == selectedNoteID)
+  #expect(commands.textView === bodyEditor)
+}
+
 @Test @MainActor func hostedCompactUnfiledKeepsNamedFolderPillInsideNavigator() async throws {
   let unfiledRoot = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2887,6 +3043,31 @@ private func hostedPanelEditor(in view: NSView) -> ListAwareTextView? {
   if let editor = view as? ListAwareTextView { return editor }
   for subview in view.subviews {
     if let editor = hostedPanelEditor(in: subview) { return editor }
+  }
+  return nil
+}
+
+@MainActor
+private func hostedPanelBodyScrollView(in view: NSView) -> NSScrollView? {
+  if let scrollView = view as? NSScrollView,
+    let documentView = scrollView.documentView,
+    hostedDescendant(in: documentView, as: ListAwareTextView.self) != nil {
+    return scrollView
+  }
+  for subview in view.subviews {
+    if let scrollView = hostedPanelBodyScrollView(in: subview) { return scrollView }
+  }
+  return nil
+}
+
+@MainActor
+private func hostedVerticalScrollView(containing view: NSView) -> NSScrollView? {
+  var current: NSView? = view
+  while let candidate = current {
+    if let scrollView = candidate as? NSScrollView, scrollView.hasVerticalScroller {
+      return scrollView
+    }
+    current = candidate.superview
   }
   return nil
 }

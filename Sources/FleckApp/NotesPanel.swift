@@ -1301,29 +1301,22 @@
             )
             .animation(reduceMotion ? nil : motion.quick, value: appState.preferences.showFormattingBar)
           }
-          TextField(
-            "Note title",
-            text: Binding(
-              get: { note.title },
-              set: {
-                guard visibleSelectedNote?.id == note.id else { return }
-                appState.updateSelected(title: $0)
-              }
-            )
-          )
-          .textFieldStyle(.plain)
-          .font(
-            EditorTypography.titleFont(
-              family: note.titleFontFamily ?? appState.preferences.fontFamily
-            )
-          )
-          .focused($editorFocus, equals: .title)
-          .padding(.horizontal, 16)
-          .padding(.top, 12)
-
           NativeRichTextEditor(
             text: note.body,
             richTextRTF: note.richTextRTF,
+            title: note.title,
+            titleFontFamily: note.titleFontFamily ?? appState.preferences.fontFamily,
+            onTitleChange: { title in
+              guard visibleSelectedNote?.id == note.id else { return }
+              appState.updateSelected(title: title)
+            },
+            onTitleFocusChange: { isFocused in
+              if isFocused {
+                editorFocus = .title
+              } else if editorFocus == .title {
+                editorFocus = nil
+              }
+            },
             onChange: { body, richTextRTF in
               guard visibleSelectedNote?.id == note.id else { return }
               appState.updateSelected(body: body, richTextRTF: richTextRTF)

@@ -668,9 +668,102 @@
     }
   }
 
+  final class NativeEditorDocumentView: NSView {
+    let titleField: NSTextField
+    let textView: ListAwareTextView
+
+    override var isFlipped: Bool { true }
+
+    init(titleField: NSTextField, textView: ListAwareTextView) {
+      self.titleField = titleField
+      self.textView = textView
+      super.init(frame: .zero)
+      autoresizingMask = [.width]
+      addSubview(titleField)
+      addSubview(textView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+      fatalError("init(coder:) has not been implemented")
+    }
+
+    func updateLayout(width: CGFloat, minimumHeight: CGFloat) {
+      let width = max(0, width)
+      let titleHeight = max(24, titleField.fittingSize.height)
+      let titleFrame = NSRect(
+        x: 16,
+        y: 12,
+        width: max(0, width - 32),
+        height: titleHeight
+      )
+      titleField.frame = titleFrame
+
+      let bodyY = titleFrame.maxY + 10
+      textView.frame = NSRect(x: 0, y: bodyY, width: width, height: 1)
+      textView.textContainer?.containerSize = NSSize(
+        width: width,
+        height: .greatestFiniteMagnitude
+      )
+      textView.sizeToFit()
+      textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+      if let textContainer = textView.textContainer,
+        let layoutManager = textView.layoutManager
+      {
+        layoutManager.ensureLayout(for: textContainer)
+      }
+      let usedHeight = textView.textContainer.flatMap { textContainer in
+        textView.layoutManager?.usedRect(for: textContainer).height
+      } ?? 0
+      let textInsets = textView.textContainerInset.height * 2
+      let contentHeight = max(1, usedHeight + textInsets)
+      let minimumBodyHeight = max(0, minimumHeight - bodyY - 10)
+      let bodyHeight = max(contentHeight, minimumBodyHeight)
+      textView.setFrameSize(NSSize(width: width, height: bodyHeight))
+
+      var documentFrame = frame
+      documentFrame.size = NSSize(
+        width: width,
+        height: max(minimumHeight, bodyY + bodyHeight + 10)
+      )
+      frame = documentFrame
+    }
+  }
+
+  fileprivate final class NativeEditorScrollView: NSScrollView {
+    private var isLayingOutDocument = false
+
+    override func layout() {
+      super.layout()
+      guard !isLayingOutDocument,
+        let documentView = documentView as? NativeEditorDocumentView
+      else { return }
+      isLayingOutDocument = true
+      defer { isLayingOutDocument = false }
+      let contentOrigin = contentView.bounds.origin
+      documentView.updateLayout(
+        width: contentView.bounds.width,
+        minimumHeight: contentView.bounds.height
+      )
+      contentView.scroll(to: contentOrigin)
+      reflectScrolledClipView(contentView)
+    }
+
+    func relayoutDocument() {
+      needsLayout = true
+      layoutSubtreeIfNeeded()
+    }
+  }
+
   struct NativeRichTextEditor: NSViewRepresentable {
+    @Environment(\.isEnabled) private var isEnabled
+
     let text: String
     let richTextRTF: Data?
+    let title: String
+    let titleFontFamily: String
+    let onTitleChange: (String) -> Void
+    let onTitleFocusChange: (Bool) -> Void
     let onChange: (String, Data?) -> Void
     let fontFamily: String
     let fontSize: Double
@@ -689,6 +782,10 @@
     init(
       text: String,
       richTextRTF: Data?,
+      title: String = "",
+      titleFontFamily: String? = nil,
+      onTitleChange: @escaping (String) -> Void = { _ in },
+      onTitleFocusChange: @escaping (Bool) -> Void = { _ in },
       onChange: @escaping (String, Data?) -> Void,
       fontFamily: String,
       fontSize: Double,
@@ -706,6 +803,10 @@
     ) {
       self.text = text
       self.richTextRTF = richTextRTF
+      self.title = title
+      self.titleFontFamily = titleFontFamily ?? fontFamily
+      self.onTitleChange = onTitleChange
+      self.onTitleFocusChange = onTitleFocusChange
       self.onChange = onChange
       self.fontFamily = fontFamily
       self.fontSize = fontSize
@@ -725,12 +826,28 @@
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-      let scrollView = NSScrollView()
+      let scrollView = NativeEditorScrollView()
       scrollView.hasVerticalScroller = true
       scrollView.drawsBackground = false
       scrollView.autohidesScrollers = true
 
-      let textView = ListAwareTextView(frame: scrollView.contentView.bounds)
+      let titleField = NSTextField()
+      titleField.placeholderString = "Note title"
+      titleField.stringValue = title
+      titleField.isEditable = true
+      titleField.isSelectable = true
+      titleField.isEnabled = isEnabled
+      titleField.isBordered = false
+      titleField.drawsBackground = false
+      titleField.focusRingType = .none
+      titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
+      titleField.usesSingleLineMode = true
+      titleField.cell?.lineBreakMode = .byTruncatingTail
+      titleField.setAccessibilityLabel("Note title")
+      titleField.setAccessibilityElement(isEnabled)
+      titleField.delegate = context.coordinator
+
+      let textView = ListAwareTextView(frame: .zero)
       textView.delegate = context.coordinator
       textView.isRichText = true
       textView.importsGraphics = false
@@ -742,16 +859,17 @@
       textView.textContainer?.lineFragmentPadding = 0
       textView.isVerticallyResizable = true
       textView.isHorizontallyResizable = false
-      textView.minSize = NSSize(width: 0, height: scrollView.contentView.bounds.height)
+      textView.minSize = .zero
       textView.maxSize = NSSize(
         width: CGFloat.greatestFiniteMagnitude,
         height: CGFloat.greatestFiniteMagnitude
       )
-      textView.autoresizingMask = [.width]
+      textView.autoresizingMask = []
       textView.textContainer?.widthTracksTextView = true
+      textView.textContainer?.heightTracksTextView = false
       textView.textContainer?.containerSize = NSSize(
-        width: scrollView.contentView.bounds.width,
-        height: .greatestFiniteMagnitude
+        width: 0,
+        height: CGFloat.greatestFiniteMagnitude
       )
       textView.setAccessibilityLabel("Note body")
       loadContent(into: textView)
@@ -761,7 +879,13 @@
       applyColors(to: textView)
       Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
       configureNoteLinks(on: textView)
-      scrollView.documentView = textView
+      let documentView = NativeEditorDocumentView(
+        titleField: titleField,
+        textView: textView
+      )
+      scrollView.documentView = documentView
+      documentView.autoresizingMask = [.width]
+      context.coordinator.scrollView = scrollView
       if let undoManager = textView.undoManager {
         context.coordinator.undoManager = undoManager
       }
@@ -769,12 +893,19 @@
         commands.textView = textView
         commands.refreshFormattingState()
       }
+      scrollView.relayoutDocument()
+      scrollView.contentView.scroll(
+        to: NSPoint(x: scrollView.contentView.bounds.origin.x, y: 0)
+      )
+      scrollView.reflectScrolledClipView(scrollView.contentView)
       return scrollView
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
-      guard let textView = nsView.documentView as? ListAwareTextView else { return }
+      guard let documentView = nsView.documentView as? NativeEditorDocumentView else { return }
+      let textView = documentView.textView
       let commands = coordinator.parent.commands
+      documentView.titleField.delegate = nil
       textView.clearNoteLinkPresentation()
       textView.onRequestNoteLink = nil
       textView.onOpenNoteLink = nil
@@ -786,14 +917,19 @@
         undoManager?.removeAllActions(withTarget: storage)
       }
       coordinator.undoManager = nil
+      coordinator.scrollView = nil
       if commands.textView === textView {
         commands.textView = nil
       }
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-      guard let textView = scrollView.documentView as? ListAwareTextView else { return }
+      guard let scrollView = scrollView as? NativeEditorScrollView,
+        let documentView = scrollView.documentView as? NativeEditorDocumentView
+      else { return }
+      let textView = documentView.textView
       context.coordinator.parent = self
+      context.coordinator.scrollView = scrollView
       if let undoManager = textView.undoManager {
         context.coordinator.undoManager = undoManager
       }
@@ -803,6 +939,12 @@
       textView.automaticLists = automaticLists
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
+      documentView.titleField.isEnabled = isEnabled
+      documentView.titleField.setAccessibilityElement(isEnabled)
+      documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
+      if documentView.titleField.stringValue != title {
+        documentView.titleField.stringValue = title
+      }
       textView.clearNoteLinkPresentation()
       let reloadedContent = applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator)
       applyColors(to: textView)
@@ -816,6 +958,7 @@
       }
       context.coordinator.fontFamily = fontFamily
       context.coordinator.fontSize = fontSize
+      scrollView.relayoutDocument()
     }
 
     private func configureNoteLinks(on textView: ListAwareTextView) {
@@ -965,9 +1108,10 @@
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, NSTextFieldDelegate {
       var parent: NativeRichTextEditor
       weak var undoManager: UndoManager?
+      fileprivate weak var scrollView: NativeEditorScrollView?
       var fontFamily: String
       var fontSize: Double
       var text: String
@@ -1022,6 +1166,20 @@
         } else {
           lastReportedNoteLinkTrigger = nil
         }
+        scrollView?.relayoutDocument()
+      }
+
+      func controlTextDidBeginEditing(_ notification: Notification) {
+        parent.onTitleFocusChange(true)
+      }
+
+      func controlTextDidEndEditing(_ notification: Notification) {
+        parent.onTitleFocusChange(false)
+      }
+
+      func controlTextDidChange(_ notification: Notification) {
+        guard let titleField = notification.object as? NSTextField else { return }
+        parent.onTitleChange(titleField.stringValue)
       }
 
       func textViewDidChangeSelection(_ notification: Notification) {
