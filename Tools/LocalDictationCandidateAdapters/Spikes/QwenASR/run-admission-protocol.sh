@@ -135,6 +135,20 @@ generate_requests() {
   emit_shutdown shutdown-final
 }
 
+publish_output_exclusively() {
+  local source="$1"
+  local destination="$2"
+  if ! ln "$source" "$destination"; then
+    rm -f "$source"
+    echo "preflight output publication failed: destination already exists or is unavailable" >&2
+    return 2
+  fi
+  if ! rm -f "$source"; then
+    echo "preflight output publication cleanup failed" >&2
+    return 2
+  fi
+}
+
 run_self_test() {
   readonly self_test_root="$(mktemp -d "${TMPDIR:-/tmp}/fleck-qwen-admission-self-test.XXXXXX")"
   trap 'rm -rf "$self_test_root"' RETURN
@@ -168,6 +182,24 @@ run_self_test() {
     return 1
   fi
   echo "self-test=evaluation-context-metadata-only:pass"
+
+  readonly race_temp="$self_test_root/race-output-temp"
+  readonly race_output="$self_test_root/race-output"
+  printf 'candidate-output\n' > "$race_temp"
+  if [[ -e "$race_output" ]]; then
+    echo "self-test=exclusive-publication-race-precheck:fail" >&2
+    return 1
+  fi
+  printf 'race-created-output\n' > "$race_output"
+  set +e
+  race_publication_output="$(publish_output_exclusively "$race_temp" "$race_output" 2>&1)"
+  race_publication_exit=$?
+  set -e
+  if [[ "$race_publication_exit" -eq 0 || -e "$race_temp" || "$(<"$race_output")" != "race-created-output" ]]; then
+    echo "self-test=exclusive-publication-race-preserves-destination:fail" >&2
+    return 1
+  fi
+  echo "self-test=exclusive-publication-race-preserves-destination:pass"
 
   set +e
   substitution_output="$(
@@ -302,5 +334,5 @@ if [[ "$preflight_exit" -ne 0 ]]; then
   echo "preflight-exit=$preflight_exit" >&2
   exit "$preflight_exit"
 fi
-mv "$output_temp" "$output"
+publish_output_exclusively "$output_temp" "$output"
 echo "preflight-admitted=true"

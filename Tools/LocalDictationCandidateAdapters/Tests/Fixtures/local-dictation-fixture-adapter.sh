@@ -2,9 +2,17 @@
 set -eu
 
 mode=${1:-cooperative}
+fixture_marker=${2:-}
+shutdown_count=0
 
 emit() {
   printf '%s\n' "$1"
+}
+
+record_fixture_request() {
+  if [ -n "$fixture_marker" ]; then
+    printf '%s\n' "$1" >> "$fixture_marker"
+  fi
 }
 
 while IFS= read -r line; do
@@ -92,6 +100,26 @@ while IFS= read -r line; do
     shutdown-nonzero-after-ack:shutdown)
       emit "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
       exit 7
+      ;;
+    concurrent-shutdown-delayed-malformed:shutdown)
+      shutdown_count=$((shutdown_count + 1))
+      record_fixture_request shutdown
+      if [ "$shutdown_count" -eq 1 ]; then
+        emit "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+        (
+          sleep 0.05
+          emit '{malformed'
+          sleep 5
+        ) &
+      else
+        emit "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+      fi
+      ;;
+    completed-load-cancel-probe:load)
+      emit "{\"event\":\"ready\",\"modelRevision\":\"fixture\",\"requestID\":\"$request_id\",\"runtimeVersion\":\"fixture\",\"schemaVersion\":1}"
+      ;;
+    completed-load-cancel-probe:cancel)
+      exit 17
       ;;
     cooperative-cancel:transcribe)
       emit "{\"event\":\"partial\",\"requestID\":\"$request_id\",\"schemaVersion\":1,\"sequence\":1,\"transcript\":\"partial\"}"

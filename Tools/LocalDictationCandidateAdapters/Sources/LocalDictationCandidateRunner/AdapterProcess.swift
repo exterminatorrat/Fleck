@@ -36,6 +36,7 @@ public enum AdapterProcessError: Error, Equatable, Sendable, CustomStringConvert
   )
   case shutdownAcknowledgementMissing
   case childExitFailure(Int32)
+  case childExitNotProven
   case timeout(String)
 
   public var description: String {
@@ -60,6 +61,7 @@ public enum AdapterProcessError: Error, Equatable, Sendable, CustomStringConvert
     case .unexpectedAcknowledgement: return "unexpected acknowledgement"
     case .shutdownAcknowledgementMissing: return "shutdown acknowledgement missing"
     case .childExitFailure(let status): return "child exited with status: \(status)"
+    case .childExitNotProven: return "child exit could not be proven"
     case .timeout(let operation): return "timeout: \(operation)"
     }
   }
@@ -130,6 +132,7 @@ public actor AdapterProcess {
   private static let maximumStdoutBytes = JSONLinesCodec.maximumLineBytes
 
   private let clock: any AdapterProcessClock
+  private let terminationSignal: @Sendable (Int32) -> Void
   private var stderrOutput: BoundedOutput
   private var process: Process?
   private var stdin: FileHandle?
@@ -153,12 +156,26 @@ public actor AdapterProcess {
   private var cancelAcknowledged = false
   private var shutdownAcknowledged = false
   private var shuttingDown = false
+  private var shutdownCompletion: Task<AdapterProcessTerminationPath, Error>?
 
   public init(
     clock: any AdapterProcessClock = ContinuousAdapterClock(),
     redactedRoots: [URL] = []
   ) {
     self.clock = clock
+    self.terminationSignal = { processIdentifier in
+      _ = Darwin.kill(processIdentifier, SIGKILL)
+    }
+    stderrOutput = BoundedOutput(redactedRoots: redactedRoots)
+  }
+
+  init(
+    clock: any AdapterProcessClock = ContinuousAdapterClock(),
+    redactedRoots: [URL] = [],
+    terminationSignal: @escaping @Sendable (Int32) -> Void
+  ) {
+    self.clock = clock
+    self.terminationSignal = terminationSignal
     stderrOutput = BoundedOutput(redactedRoots: redactedRoots)
   }
 
@@ -258,7 +275,13 @@ public actor AdapterProcess {
     requestID: String,
     timeout: Duration
   ) async throws -> AdapterProcessTerminationPath {
-    guard let targetState = requestStates[requestID], !targetState.terminal else {
+    guard let targetState = requestStates[requestID] else {
+      throw AdapterProcessError.unknownCancellationRequest(requestID)
+    }
+    guard !targetState.terminal else {
+      if targetState.operation == .load {
+        throw AdapterProcessError.cancelTargetNotPending(requestID)
+      }
       throw AdapterProcessError.unknownCancellationRequest(requestID)
     }
     let cancelRequestID = "cancel-\(UUID().uuidString)"
@@ -294,7 +317,7 @@ public actor AdapterProcess {
           throw shutdownError
         }
         forceTerminate()
-        await waitForExit(timeout: .seconds(1))
+        try await requireChildExit(timeout: .seconds(1))
         return .forcedTermination
       } catch {
         throw error
@@ -307,8 +330,20 @@ public actor AdapterProcess {
     guard process != nil else {
       throw AdapterProcessError.notStarted
     }
-    if shutdownAcknowledged {
-      return .cooperativeShutdown
+    if let shutdownCompletion {
+      return try await shutdownCompletion.value
+    }
+    let completion = Task { [weak self] () throws -> AdapterProcessTerminationPath in
+      guard let self else { throw AdapterProcessError.notStarted }
+      return try await self.performShutdown(timeout: timeout)
+    }
+    shutdownCompletion = completion
+    return try await completion.value
+  }
+
+  private func performShutdown(timeout: Duration) async throws -> AdapterProcessTerminationPath {
+    guard process != nil else {
+      throw AdapterProcessError.notStarted
     }
     shuttingDown = true
     let shutdownRequestID = "shutdown-\(UUID().uuidString)"
@@ -336,7 +371,7 @@ public actor AdapterProcess {
       if case .timeout = error {
         terminalError = .shutdownAcknowledgementMissing
         forceTerminate()
-        await waitForExit(timeout: .seconds(1))
+        try await requireChildExit(timeout: .seconds(1))
         throw AdapterProcessError.shutdownAcknowledgementMissing
       }
       throw error
@@ -349,8 +384,8 @@ public actor AdapterProcess {
     } catch let error as AdapterProcessError {
       if case .timeout = error {
         forceTerminate()
-        await waitForExit(timeout: .seconds(1))
         shutdownAcknowledged = false
+        try await requireChildExit(timeout: .seconds(1))
         return .forcedTermination
       }
       throw error
@@ -378,7 +413,7 @@ public actor AdapterProcess {
 
   public func terminate() async {
     forceTerminate()
-    await waitForExit(timeout: .seconds(1))
+    _ = await waitForExit(timeout: .seconds(1))
   }
 
   private func consumeStdout(_ data: Data) {
@@ -526,6 +561,7 @@ public actor AdapterProcess {
         throw AdapterProcessError.invalidEventOrdering("ready")
       }
       state.ready = true
+      state.terminal = true
     case .partial(_, let sequence, _):
       guard state.operation == .transcribe, !state.terminal,
         sequence > state.lastPartialSequence
@@ -718,10 +754,16 @@ public actor AdapterProcess {
     stdin?.closeFile()
     guard let process, process.isRunning else { return }
     forcedTermination = true
-    kill(process.processIdentifier, SIGKILL)
+    terminationSignal(process.processIdentifier)
   }
 
-  private func waitForExit(timeout: Duration) async {
+  private func requireChildExit(timeout: Duration) async throws {
+    guard await waitForExit(timeout: timeout) else {
+      throw AdapterProcessError.childExitNotProven
+    }
+  }
+
+  private func waitForExit(timeout: Duration) async -> Bool {
     let components = timeout.components
     let milliseconds = max(
       1,
@@ -737,17 +779,27 @@ public actor AdapterProcess {
         if let process {
           childExitStatus = process.terminationStatus
         }
-        return
+        return true
       }
-      do {
-        try await clock.sleep(for: .milliseconds(5))
-      } catch {
-        return
-      }
+      await sleepIgnoringCancellation(for: .milliseconds(5))
     }
     if let process, !process.isRunning {
       childExitStatus = process.terminationStatus
+      return true
     }
+    return false
+  }
+
+  private func sleepIgnoringCancellation(for duration: Duration) async {
+    let clock = self.clock
+    let sleeper = Task.detached { () -> Void in
+      do {
+        try await clock.sleep(for: duration)
+      } catch {
+        // An injected clock may refuse the delay; the bounded loop remains fail-closed.
+      }
+    }
+    await sleeper.value
   }
 
   private static func resolveExecutable(_ url: URL) throws -> URL {

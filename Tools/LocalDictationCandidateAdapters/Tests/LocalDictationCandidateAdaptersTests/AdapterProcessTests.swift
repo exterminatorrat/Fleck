@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Testing
 @testable import LocalDictationCandidateProtocol
 @testable import LocalDictationCandidateRunner
@@ -8,6 +9,25 @@ private func fixtureAdapterScript() -> URL {
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .appendingPathComponent("Fixtures/local-dictation-fixture-adapter.sh")
+}
+
+private final class TestTerminationSignal: @unchecked Sendable {
+  private let lock = NSLock()
+  private var callCount = 0
+
+  func call(_ processIdentifier: Int32) {
+    lock.lock()
+    callCount += 1
+    let shouldTerminate = callCount > 1
+    lock.unlock()
+    if shouldTerminate {
+      Darwin.kill(processIdentifier, SIGKILL)
+    }
+  }
+}
+
+private enum TestFailure: Error, Equatable {
+  case description(String)
 }
 
 private func request(
@@ -30,14 +50,17 @@ private func request(
   )
 }
 
-private func startProcess(_ mode: String) async throws -> AdapterProcess {
+private func startProcess(
+  _ mode: String,
+  fixtureArguments: [String] = []
+) async throws -> AdapterProcess {
   let process = AdapterProcess(
     redactedRoots: [URL(fileURLWithPath: "/private/model-root")]
   )
   _ = await process.events()
   try await process.start(
     executableURL: URL(fileURLWithPath: "/bin/sh"),
-    arguments: [fixtureAdapterScript().path, mode],
+    arguments: [fixtureAdapterScript().path, mode] + fixtureArguments,
     environment: ["PATH": "/usr/bin:/bin"]
   )
   return process
@@ -266,6 +289,35 @@ struct AdapterProcessTests {
     #expect(!diagnostics.childIsRunning)
   }
 
+  @Test func cancelledForcedTerminationCallerWaitsForExitProof() async throws {
+    let terminationSignal = TestTerminationSignal()
+    let process = AdapterProcess(
+      redactedRoots: [URL(fileURLWithPath: "/private/model-root")],
+      terminationSignal: terminationSignal.call
+    )
+    _ = await process.events()
+    try await process.start(
+      executableURL: URL(fileURLWithPath: "/bin/sh"),
+      arguments: [fixtureAdapterScript().path, "cancel-timeout-shutdown-forced"],
+      environment: ["PATH": "/usr/bin:/bin"]
+    )
+    try await process.send(request("transcribe-1", operation: .transcribe))
+    let cancellation = Task { () -> Result<AdapterProcessTerminationPath, TestFailure> in
+      do {
+        return .success(try await process.cancel(requestID: "transcribe-1", timeout: .milliseconds(50)))
+      } catch {
+        return .failure(.description(String(describing: error)))
+      }
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    cancellation.cancel()
+    let result = await cancellation.value
+    #expect(result == .failure(.description("child exit could not be proven")))
+    #expect((await process.diagnostics()).childIsRunning)
+    await process.terminate()
+    try await waitForChildExit(process, timeout: .seconds(2))
+  }
+
   @Test func cancellationAcknowledgementFollowedByMalformedOutputFailsClosed() async throws {
     let process = try await startProcess("cancel-ack-then-malformed")
     try await process.send(request("transcribe-1", operation: .transcribe))
@@ -315,6 +367,65 @@ struct AdapterProcessTests {
     #expect(!diagnostics.childIsRunning)
   }
 
+  @Test func concurrentShutdownCallersShareOneFailureBoundary() async throws {
+    let markerRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+      .appendingPathComponent("adapter-process-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: markerRoot,
+      withIntermediateDirectories: true
+    )
+    defer { try? FileManager.default.removeItem(at: markerRoot) }
+    let marker = markerRoot.appendingPathComponent("requests")
+    let process = try await startProcess(
+      "concurrent-shutdown-delayed-malformed",
+      fixtureArguments: [marker.path]
+    )
+    let stream = await process.events()
+    let acknowledged = Task { () -> Bool in
+      do {
+        for try await event in stream {
+          if event.kind == .unloaded { return true }
+        }
+      } catch {
+        return false
+      }
+      return false
+    }
+    let first = Task { () -> AdapterProcessError? in
+      do {
+        _ = try await process.shutdown(timeout: .seconds(1))
+        return nil
+      } catch let error as AdapterProcessError {
+        return error
+      } catch {
+        return nil
+      }
+    }
+    #expect(await acknowledged.value)
+    let second = Task { () -> AdapterProcessError? in
+      do {
+        _ = try await process.shutdown(timeout: .seconds(1))
+        return nil
+      } catch let error as AdapterProcessError {
+        return error
+      } catch {
+        return nil
+      }
+    }
+
+    let firstError = await first.value
+    let secondError = await second.value
+    #expect(firstError == .stdoutProtocol(.malformedJSON))
+    #expect(secondError == .stdoutProtocol(.malformedJSON))
+    let records = try String(contentsOf: marker, encoding: .utf8)
+      .split(whereSeparator: \.isNewline)
+      .map(String.init)
+    #expect(records == ["shutdown"])
+    try await waitForChildExit(process, timeout: .seconds(2))
+    #expect(!(await process.diagnostics()).childIsRunning)
+    await process.terminate()
+  }
+
   @Test func nonzeroExitAfterShutdownAcknowledgementFailsClosed() async throws {
     let process = try await startProcess("shutdown-nonzero-after-ack")
     var capturedError: AdapterProcessError?
@@ -351,6 +462,34 @@ struct AdapterProcessTests {
     #expect(diagnostics.shutdownAcknowledged)
     #expect(!diagnostics.childIsRunning)
     #expect(diagnostics.childExitStatus == 0)
+  }
+
+  @Test func completedLoadReadyPreventsCancellationRequest() async throws {
+    let process = try await startProcess("completed-load-cancel-probe")
+    let stream = await process.events()
+    let ready = Task { () -> Bool in
+      do {
+        for try await event in stream {
+          if event.kind == .ready { return true }
+        }
+      } catch {
+        return false
+      }
+      return false
+    }
+    try await process.send(request("load-1", operation: .load))
+    #expect(await ready.value)
+
+    var capturedError: AdapterProcessError?
+    do {
+      _ = try await process.cancel(requestID: "load-1", timeout: .seconds(1))
+    } catch let error as AdapterProcessError {
+      capturedError = error
+    }
+    #expect(capturedError == .cancelTargetNotPending("load-1"))
+    try await Task.sleep(for: .milliseconds(50))
+    #expect((await process.diagnostics()).childIsRunning)
+    await process.terminate()
   }
 
   @Test func finalBeforeCancelAcknowledgementIsRejectedAndNotAcknowledged() async throws {
