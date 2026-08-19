@@ -22,7 +22,7 @@ runtime or model quality.
 - Upstream version: `1.0.0`.
 - Stable C header: `include/nemo_speech/asr.h`.
 - ABI: `nemo-speech-asr 1.0.0`.
-- License: `Apache-2.0`, with `NOTICE` and `THIRD_PARTY_NOTICES` retained as
+- License: `Apache-2.0`, with `NOTICE` and `THIRD_PARTY_NOTICES.md` retained as
   required notices.
 
 ### Dependency pins

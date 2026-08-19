@@ -156,7 +156,7 @@ public struct NemotronSpeechRuntimeMetadata: Equatable, Sendable {
     stableCHeader: "include/nemo_speech/asr.h",
     abi: "nemo-speech-asr 1.0.0",
     license: "Apache-2.0",
-    noticeFiles: ["NOTICE", "THIRD_PARTY_NOTICES"],
+    noticeFiles: ["NOTICE", "THIRD_PARTY_NOTICES.md"],
     dependencies: [
       NemotronDependencyPin(name: "ggml", commit: "c03b4e2bcece5134827881af90242086daf75be5"),
       NemotronDependencyPin(name: "llama.cpp", commit: "560445bf34c87356ad0f8d80fb03ec5488850b65"),

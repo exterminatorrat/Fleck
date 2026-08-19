@@ -21,7 +21,7 @@ import Testing
   #expect(runtime.stableCHeader == "include/nemo_speech/asr.h")
   #expect(runtime.abi == "nemo-speech-asr 1.0.0")
   #expect(runtime.license == "Apache-2.0")
-  #expect(runtime.noticeFiles == ["NOTICE", "THIRD_PARTY_NOTICES"])
+  #expect(runtime.noticeFiles == ["NOTICE", "THIRD_PARTY_NOTICES.md"])
 }
 
 @Test func nemotronDependencyPinsAreExact() {
