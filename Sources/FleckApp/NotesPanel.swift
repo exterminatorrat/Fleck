@@ -625,8 +625,6 @@
               .foregroundStyle(.red)
               .accessibilityLabel("Fleck mark missing")
           }
-          Text("Fleck")
-            .accessibilityLabel("Fleck")
         }
           .font(.headline)
         Spacer()

@@ -40,7 +40,7 @@ import Testing
   #expect(notesPanelSource.contains("FleckMark.load(template: true)"))
 }
 
-@Test func notesPanelHeaderExposesOnlyTheFleckTitleAndMissingMarkWarning() throws {
+@Test func notesPanelHeaderExposesOnlyTheFleckMarkAndMissingMarkWarning() throws {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -51,11 +51,12 @@ import Testing
   )
   let header = try #require(source.components(separatedBy: "private var header: some View").dropFirst().first)
   let titleArea = try #require(header.components(separatedBy: "Spacer()").first)
-  let mark = try #require(titleArea.range(of: "Image(nsImage: mark)"))
-  let title = try #require(titleArea.range(of: "Text(\"Fleck\")"))
+  let mark = try #require(titleArea.range(of: "FleckMark.load(template: true)"))
 
+  #expect(titleArea[mark.upperBound...].contains("Image(nsImage: mark)"))
   #expect(titleArea[mark.upperBound...].contains(".accessibilityHidden(true)"))
-  #expect(titleArea[title.upperBound...].contains(".accessibilityLabel(\"Fleck\")"))
+  #expect(!titleArea.contains("Text(\"Fleck\")"))
+  #expect(!titleArea.contains(".accessibilityLabel(\"Fleck\")"))
   #expect(titleArea.contains(".accessibilityLabel(\"Fleck mark missing\")"))
 }
 
