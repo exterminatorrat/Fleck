@@ -629,12 +629,13 @@ public enum ModelEvaluationScorer {
       index += 1
       while index < characters.count {
         let next = characters[index]
-        if isLetterOrDigit(next) {
+        if isLetterOrDigit(next), !isHan(next) {
           word.append(next)
           index += 1
         } else if isApostrophe(next),
           index + 1 < characters.count,
-          isLetterOrDigit(characters[index + 1])
+          isLetterOrDigit(characters[index + 1]),
+          !isHan(characters[index + 1])
         {
           word.append(next)
           index += 1
@@ -809,8 +810,10 @@ public enum ModelEvaluationScorer {
     case .word:
       return isWordOrIdentifierContinuation(boundary)
     case .pathOrURL:
-      return isWordOrIdentifierContinuation(boundary)
-        || isPathURLContinuation(boundary)
+      return continuesPathOrURLValue(
+        boundary: boundary,
+        continuation: continuation
+      )
     case .numeric:
       if isWordOrIdentifierContinuation(boundary) {
         return true
@@ -846,17 +849,30 @@ public enum ModelEvaluationScorer {
     }
 
     var hasDigit = false
+    var hasRangeHyphen = false
+    var requiresDigitAfterRangeHyphen = false
+    var previousWasDigit = false
     for character in numericText {
       if isDecimalDigit(character) {
         hasDigit = true
+        previousWasDigit = true
+        requiresDigitAfterRangeHyphen = false
+      } else if character == "-" {
+        guard !hasRangeHyphen, previousWasDigit else { return false }
+        hasRangeHyphen = true
+        previousWasDigit = false
+        requiresDigitAfterRangeHyphen = true
       } else if !isNumericSeparator(character)
         && !isCurrencySymbol(character)
         && !isPercent(character)
       {
         return false
+      } else {
+        guard !requiresDigitAfterRangeHyphen else { return false }
+        previousWasDigit = false
       }
     }
-    return hasDigit
+    return hasDigit && !requiresDigitAfterRangeHyphen
   }
 
   private static func isPathURLShaped(_ text: String) -> Bool {
@@ -886,6 +902,20 @@ public enum ModelEvaluationScorer {
 
   private static func isPathURLContinuation(_ character: Character) -> Bool {
     character.unicodeScalars.contains { isPathURLScalar($0) }
+  }
+
+  private static func continuesPathOrURLValue(
+    boundary: Character,
+    continuation: Character?
+  ) -> Bool {
+    if isWordOrIdentifierContinuation(boundary) {
+      return true
+    }
+    if boundary == "/" || boundary == "\\" {
+      return true
+    }
+    guard isPathURLContinuation(boundary) else { return false }
+    return continuation.map { !isWhitespace($0) } == true
   }
 
   private static func isDecimalDigit(_ character: Character) -> Bool {

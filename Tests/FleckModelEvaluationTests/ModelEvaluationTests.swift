@@ -114,6 +114,52 @@ import Testing
     ])
 }
 
+@Test func separatesAdjacentLatinAndHanMixedTokens() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "mixed-latin-han-adjacent",
+        language: .mixed,
+        reference: "send请",
+        hypothesis: "send请"
+      ),
+      .init(
+        id: "mixed-han-latin-adjacent",
+        language: .mixed,
+        reference: "请send",
+        hypothesis: "请send"
+      ),
+      .init(
+        id: "mixed-apostrophe-han-adjacent",
+        language: .mixed,
+        reference: "don't请",
+        hypothesis: "don't请"
+      ),
+    ]))
+
+  #expect(
+    report.caseMetrics == [
+      .init(
+        caseID: "mixed-latin-han-adjacent",
+        language: .mixed,
+        edits: 0,
+        referenceUnits: 2
+      ),
+      .init(
+        caseID: "mixed-han-latin-adjacent",
+        language: .mixed,
+        edits: 0,
+        referenceUnits: 2
+      ),
+      .init(
+        caseID: "mixed-apostrophe-han-adjacent",
+        language: .mixed,
+        edits: 0,
+        referenceUnits: 2
+      ),
+    ])
+}
+
 @Test func aggregatesInsertionDeletionSubstitutionAndEmptyHypothesisEdits() throws {
   let report = try ModelEvaluationScorer.score(
     validInput(cases: [
@@ -625,6 +671,55 @@ import Testing
     ])
 }
 
+@Test func requiresProtectedNumericRangesToHaveLiteralBoundaries() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "range-decimal-embedded",
+        language: .english,
+        reference: "send 2-3 invoices",
+        hypothesis: "send 2-3.0 invoices",
+        protectedExpectations: [.init(kind: "range", text: "2-3", comparison: .exact)]
+      ),
+      .init(
+        id: "range-currency-embedded",
+        language: .english,
+        reference: "send 2-3 invoices",
+        hypothesis: "send $2-3 invoices",
+        protectedExpectations: [.init(kind: "range", text: "2-3", comparison: .exact)]
+      ),
+      .init(
+        id: "range-percent-embedded",
+        language: .english,
+        reference: "send 2-3 invoices",
+        hypothesis: "send 2-3% invoices",
+        protectedExpectations: [.init(kind: "range", text: "2-3", comparison: .exact)]
+      ),
+      .init(
+        id: "range-repeated-embedded",
+        language: .english,
+        reference: "send 2-3 invoices",
+        hypothesis: "send 2-3-4 invoices",
+        protectedExpectations: [.init(kind: "range", text: "2-3", comparison: .exact)]
+      ),
+      .init(
+        id: "range-boundary",
+        language: .english,
+        reference: "send 2-3 invoices",
+        hypothesis: "send 2-3.",
+        protectedExpectations: [.init(kind: "range", text: "2-3", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "range-decimal-embedded",
+      "range-currency-embedded",
+      "range-percent-embedded",
+      "range-repeated-embedded",
+    ])
+}
+
 @Test func classifiesSignedProtectedValuesAsNumeric() throws {
   let report = try ModelEvaluationScorer.score(
     validInput(cases: [
@@ -705,6 +800,69 @@ import Testing
     report.protectedViolations.map(\.caseID) == [
       "path-embedded",
       "path-separator-embedded",
+    ])
+}
+
+@Test func distinguishesTerminalPathURLPunctuationFromContinuation() throws {
+  let exampleURL = "https:" + "//example.com"
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "url-terminal-period",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL).",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "path-terminal-question",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo?",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "url-path-continuation",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)/path",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-query-continuation",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)?x=1",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "path-extension-continuation",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo.txt",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-child-continuation",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo/bar",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "url-path-continuation",
+      "url-query-continuation",
+      "path-extension-continuation",
+      "path-child-continuation",
     ])
 }
 
