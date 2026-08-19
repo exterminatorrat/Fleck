@@ -83,8 +83,16 @@ let package = Package(
             name: "FleckAgentProtocol",
             targets: ["FleckAgentProtocol"]
         ),
+        .library(
+            name: "FleckModelEvaluation",
+            targets: ["FleckModelEvaluation"]
+        ),
         .executable(name: "Fleck", targets: ["FleckApp"]),
         .executable(name: "fleck-agent", targets: ["FleckAgentBridge"]),
+        .executable(
+            name: "fleck-model-eval",
+            targets: ["FleckModelEvaluator"]
+        ),
     ],
     dependencies: packageDependencies,
     targets: [
@@ -95,6 +103,11 @@ let package = Package(
         .target(
             name: "FleckAgentProtocol",
             dependencies: ["FleckCore"]
+        ),
+        .target(name: "FleckModelEvaluation"),
+        .executableTarget(
+            name: "FleckModelEvaluator",
+            dependencies: ["FleckModelEvaluation"]
         ),
         .executableTarget(
             name: "FleckApp",
@@ -126,6 +139,10 @@ let package = Package(
         .testTarget(
             name: "FleckAgentProtocolTests",
             dependencies: ["FleckAgentProtocol", "FleckCore"]
+        ),
+        .testTarget(
+            name: "FleckModelEvaluationTests",
+            dependencies: ["FleckModelEvaluation"]
         ),
         .testTarget(
             name: "FleckAppTests",
