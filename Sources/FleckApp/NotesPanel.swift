@@ -2381,7 +2381,7 @@
           guard isEditorVisible else { return }
           isBackgroundColorPickerPresented = true
         } label: {
-          ToolbarIconLabel(systemImage: "highlighter")
+          HighlighterMarkerIcon()
         }
         .accessibilityLabel("Highlight")
         .accessibilityValue(
@@ -2645,6 +2645,92 @@
         lastDestinationID = nil
       }
       return accepted
+    }
+  }
+
+  struct HighlighterMarkerShape: Shape {
+    func path(in rect: CGRect) -> Path {
+      let barrelRect = CGRect(
+        x: rect.minX + rect.width * 0.08,
+        y: rect.minY + rect.height * 0.15,
+        width: rect.width * 0.58,
+        height: rect.height * 0.70
+      )
+      let hollowRect = barrelRect.insetBy(dx: 1.45, dy: 1.45)
+
+      var path = Path()
+      path.addRoundedRect(
+        in: barrelRect,
+        cornerSize: CGSize(width: 1.7, height: 1.7),
+        style: .continuous
+      )
+      path.addRoundedRect(
+        in: hollowRect,
+        cornerSize: CGSize(width: 0.7, height: 0.7),
+        style: .continuous
+      )
+      return path
+    }
+  }
+
+  struct HighlighterMarkerCapShape: Shape {
+    func path(in rect: CGRect) -> Path {
+      let capRect = CGRect(
+        x: rect.minX + rect.width * 0.19,
+        y: rect.minY + rect.height * 0.22,
+        width: rect.width * 0.07,
+        height: rect.height * 0.56
+      )
+
+      var path = Path()
+      path.addRoundedRect(
+        in: capRect,
+        cornerSize: CGSize(width: 0.35, height: 0.35),
+        style: .continuous
+      )
+      return path
+    }
+  }
+
+  struct HighlighterMarkerNibShape: Shape {
+    func path(in rect: CGRect) -> Path {
+      let nibMinX = rect.minX + rect.width * 0.61
+      let nibMaxX = rect.minX + rect.width * 0.94
+      let nibMinY = rect.minY + rect.height * 0.27
+      let nibMaxY = rect.minY + rect.height * 0.73
+      let bluntMinY = rect.minY + rect.height * 0.36
+      let bluntMaxY = rect.minY + rect.height * 0.64
+
+      var path = Path()
+      path.move(to: CGPoint(x: nibMinX, y: nibMinY))
+      path.addLine(to: CGPoint(x: nibMaxX, y: bluntMinY))
+      path.addLine(to: CGPoint(x: nibMaxX, y: bluntMaxY))
+      path.addLine(to: CGPoint(x: nibMinX, y: nibMaxY))
+      path.closeSubpath()
+      return path
+    }
+  }
+
+  private struct HighlighterMarkerIcon: View {
+    var body: some View {
+      ZStack {
+        HighlighterMarkerShape()
+          .fill(.primary, style: FillStyle(eoFill: true))
+        HighlighterMarkerCapShape()
+          .fill(.primary)
+        HighlighterMarkerNibShape()
+          .fill(.primary)
+        Path { path in
+          path.move(to: CGPoint(x: 12.45, y: 3.55))
+          path.addLine(to: CGPoint(x: 12.45, y: 14.45))
+        }
+        .stroke(.primary, lineWidth: 1.15)
+      }
+        .frame(width: 20, height: 18)
+        .rotationEffect(.degrees(-32))
+        .frame(width: 28, height: 26)
+        .background(.clear, in: RoundedRectangle(cornerRadius: 5))
+        .contentShape(RoundedRectangle(cornerRadius: 5))
     }
   }
 

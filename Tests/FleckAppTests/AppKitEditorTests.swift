@@ -1684,6 +1684,49 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
   #expect(!source.contains("Font Size Presets"))
 }
 
+@Test func highlighterMarkerShapeUsesHollowBarrelRearCapAndBluntChiselNib() {
+  let rect = CGRect(x: 0, y: 0, width: 20, height: 18)
+  let barrelPath = HighlighterMarkerShape().path(in: rect)
+  let capPath = HighlighterMarkerCapShape().path(in: rect)
+  let nibPath = HighlighterMarkerNibShape().path(in: rect)
+  var nibPoints: [CGPoint] = []
+  nibPath.forEach { element in
+    switch element {
+    case .move(to: let point), .line(to: let point):
+      nibPoints.append(point)
+    case .quadCurve, .curve, .closeSubpath:
+      break
+    @unknown default:
+      break
+    }
+  }
+  let chiselEdge = zip(nibPoints, nibPoints.dropFirst()).first { first, second in
+    abs(first.x - second.x) < 0.01 && abs(first.y - second.y) >= rect.height * 0.25
+  }
+  let seamGap = abs(barrelPath.boundingRect.maxX - nibPath.boundingRect.minX)
+  let capBounds = capPath.boundingRect
+  var barrelSubpathCount = 0
+  barrelPath.forEach { element in
+    if case .move = element {
+      barrelSubpathCount += 1
+    }
+  }
+
+  #expect(barrelPath.boundingRect.width >= rect.width * 0.55)
+  #expect(barrelPath.boundingRect.height >= rect.height * 0.6)
+  #expect(barrelSubpathCount == 2)
+  #expect(barrelPath.boundingRect.maxX < nibPath.boundingRect.maxX)
+  #expect(nibPath.boundingRect.width <= rect.width * 0.36)
+  #expect(nibPath.contains(CGPoint(x: rect.width * 0.80, y: rect.midY)))
+  #expect(seamGap <= rect.width * 0.1)
+  #expect(capBounds.width <= rect.width * 0.12)
+  #expect(capBounds.height >= rect.height * 0.45)
+  #expect(capBounds.minX > barrelPath.boundingRect.minX)
+  #expect(capBounds.maxX < nibPath.boundingRect.minX)
+  #expect(capPath.contains(CGPoint(x: rect.width * 0.22, y: rect.midY)))
+  #expect(chiselEdge != nil)
+}
+
 @Test func titleFontActionRoutesOnlyToFocusedMutation() {
   var titleFamily: String?
   var bodyFamily: String?
