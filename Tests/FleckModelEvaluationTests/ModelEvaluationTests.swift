@@ -227,6 +227,33 @@ import Testing
   )
 }
 
+@Test func rejectsDuplicateProtectedExpectationIdentities() {
+  let expectation = ModelEvaluationProtectedExpectation(
+    kind: "number",
+    text: "2",
+    comparison: .exact
+  )
+  do {
+    _ = try ModelEvaluationScorer.score(
+      validInput(cases: [
+        .init(
+          id: "duplicate-protected",
+          language: .english,
+          reference: "send 2",
+          hypothesis: "send 2",
+          protectedExpectations: [expectation, expectation]
+        )
+      ]))
+    Issue.record("Expected duplicate protected expectation error.")
+  } catch let error as ModelEvaluationError {
+    #expect(
+      error.description == "Duplicate protected expectation in case duplicate-protected."
+    )
+  } catch {
+    Issue.record("Unexpected error: \(error).")
+  }
+}
+
 @Test func rejectsEmptyReferencesAndProtectedFields() {
   expectError(
     .emptyReference("case"),
@@ -940,6 +967,65 @@ import Testing
       "unicode-minus-embedded",
       "unicode-range-embedded",
       "unicode-percent-embedded",
+    ])
+}
+
+@Test func rejectsMalformedAndAttachedProtectedValueContinuations() throws {
+  let exampleURL = "https:" + "//example.com"
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "numeric-leading-dash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send –2",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "numeric-trailing-dash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2–",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "numeric-repeated-dash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2––3",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "path-attached-suffix",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo$backup",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "url-attached-suffix",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)!token",
+        protectedExpectations: [.init(kind: "url", text: exampleURL, comparison: .exact)]
+      ),
+      .init(
+        id: "word-dash-adjacency",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alex–Morgan",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "numeric-leading-dash",
+      "numeric-trailing-dash",
+      "numeric-repeated-dash",
+      "path-attached-suffix",
+      "url-attached-suffix",
+      "word-dash-adjacency",
     ])
 }
 

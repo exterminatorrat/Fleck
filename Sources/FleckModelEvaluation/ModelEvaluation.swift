@@ -293,6 +293,7 @@ public enum ModelEvaluationError: Error, Equatable, Sendable, CustomStringConver
   case emptyCases
   case emptyCaseID
   case duplicateCaseID(String)
+  case duplicateProtectedExpectation(String)
   case emptyReference(String)
   case emptyReferenceUnits(String)
   case emptyProtectedKind(String)
@@ -322,6 +323,8 @@ public enum ModelEvaluationError: Error, Equatable, Sendable, CustomStringConver
       return "Case identity is required."
     case .duplicateCaseID(let id):
       return "Duplicate case identity: \(id)."
+    case .duplicateProtectedExpectation(let id):
+      return "Duplicate protected expectation in case \(id)."
     case .emptyReference(let id):
       return "Reference is required for case \(id)."
     case .emptyReferenceUnits(let id):
@@ -530,6 +533,7 @@ public enum ModelEvaluationScorer {
         throw ModelEvaluationError.emptyReference(evaluationCase.id)
       }
 
+      var seenProtectedExpectations: [ModelEvaluationProtectedExpectation] = []
       for expectation in evaluationCase.protectedExpectations {
         guard
           !expectation.kind
@@ -545,6 +549,10 @@ public enum ModelEvaluationScorer {
         else {
           throw ModelEvaluationError.emptyProtectedText(evaluationCase.id)
         }
+        guard !seenProtectedExpectations.contains(expectation) else {
+          throw ModelEvaluationError.duplicateProtectedExpectation(evaluationCase.id)
+        }
+        seenProtectedExpectations.append(expectation)
       }
 
       if let timing = evaluationCase.timing {
@@ -832,7 +840,7 @@ public enum ModelEvaluationScorer {
         return true
       }
       if isTypographicNumericRangeDash(boundary) {
-        return continuation.map(isDecimalDigit) == true
+        return true
       }
       if isCurrencySymbol(boundary) || isNumericSign(boundary) {
         return true
@@ -952,7 +960,7 @@ public enum ModelEvaluationScorer {
     }
     guard
       isApostrophe(boundary)
-        || boundary == "-"
+        || isNumericRangeDash(boundary)
         || boundary == "."
         || boundary == "@"
     else {
@@ -995,7 +1003,7 @@ public enum ModelEvaluationScorer {
 
   private static func isURLAlwaysContinuation(_ character: Character) -> Bool {
     character.unicodeScalars.contains {
-      [0x23, 0x26, 0x25, 0x3D, 0x40, 0x3A, 0x2B, 0x3F, 0x7E].contains($0.value)
+      [0x21, 0x23, 0x26, 0x25, 0x3D, 0x40, 0x3A, 0x2B, 0x3F, 0x7E].contains($0.value)
     }
   }
 
@@ -1058,7 +1066,7 @@ public enum ModelEvaluationScorer {
 
   private static func isPathURLScalar(_ scalar: Unicode.Scalar) -> Bool {
     switch scalar.value {
-    case 0x2F, 0x5C, 0x2E, 0x2D, 0x3A, 0x3F, 0x26, 0x3D, 0x25, 0x23,
+    case 0x2F, 0x5C, 0x2E, 0x2D, 0x24, 0x3A, 0x3F, 0x26, 0x3D, 0x25, 0x23,
       0x40, 0x2B, 0x7E:
       return true
     default:
