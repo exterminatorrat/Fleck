@@ -35,6 +35,7 @@ public enum AdapterProcessError: Error, Equatable, Sendable, CustomStringConvert
     received: CandidateAdapterEventKind
   )
   case shutdownAcknowledgementMissing
+  case childExitFailure(Int32)
   case timeout(String)
 
   public var description: String {
@@ -58,6 +59,7 @@ public enum AdapterProcessError: Error, Equatable, Sendable, CustomStringConvert
     case .unexpectedEOF: return "unexpected adapter EOF"
     case .unexpectedAcknowledgement: return "unexpected acknowledgement"
     case .shutdownAcknowledgementMissing: return "shutdown acknowledgement missing"
+    case .childExitFailure(let status): return "child exited with status: \(status)"
     case .timeout(let operation): return "timeout: \(operation)"
     }
   }
@@ -330,21 +332,26 @@ public actor AdapterProcess {
         expectedKind: .unloaded,
         timeout: timeout
       )
-      shutdownAcknowledged = true
-      await waitForExit(timeout: .seconds(1))
-      if process?.isRunning == true {
-        forceTerminate()
-        await waitForExit(timeout: .seconds(1))
-        shutdownAcknowledged = false
-        return .forcedTermination
-      }
-      return .cooperativeShutdown
     } catch let error as AdapterProcessError {
       if case .timeout = error {
         terminalError = .shutdownAcknowledgementMissing
         forceTerminate()
         await waitForExit(timeout: .seconds(1))
         throw AdapterProcessError.shutdownAcknowledgementMissing
+      }
+      throw error
+    }
+
+    shutdownAcknowledged = true
+    do {
+      try await waitForCleanShutdown(timeout: timeout)
+      return .cooperativeShutdown
+    } catch let error as AdapterProcessError {
+      if case .timeout = error {
+        forceTerminate()
+        await waitForExit(timeout: .seconds(1))
+        shutdownAcknowledged = false
+        return .forcedTermination
       }
       throw error
     }
@@ -608,6 +615,31 @@ public actor AdapterProcess {
       }
     }
     try validateTerminal(requestID, expectedKind: expectedKind)
+  }
+
+  private func waitForCleanShutdown(timeout: Duration) async throws {
+    let deadline = ContinuousClock.now + timeout
+    while true {
+      if let terminalError {
+        throw terminalError
+      }
+      if let childExitStatus, childExitStatus != 0 {
+        let error = AdapterProcessError.childExitFailure(childExitStatus)
+        fail(error)
+        throw error
+      }
+      if stdoutEOFSeen, childExitStatus == 0 {
+        return
+      }
+      guard ContinuousClock.now < deadline else {
+        throw AdapterProcessError.timeout("shutdown-completion")
+      }
+      do {
+        try await clock.sleep(for: .milliseconds(5))
+      } catch {
+        throw AdapterProcessError.timeout("shutdown-completion")
+      }
+    }
   }
 
   private func validateTerminal(

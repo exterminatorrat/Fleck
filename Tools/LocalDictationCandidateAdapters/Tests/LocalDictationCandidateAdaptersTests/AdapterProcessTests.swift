@@ -299,6 +299,38 @@ struct AdapterProcessTests {
     #expect(!diagnostics.childIsRunning)
   }
 
+  @Test func delayedMalformedOutputAfterShutdownAcknowledgementFailsClosed() async throws {
+    let process = try await startProcess("shutdown-delayed-malformed")
+    var capturedError: AdapterProcessError?
+    do {
+      _ = try await process.shutdown(timeout: .seconds(1))
+    } catch let error as AdapterProcessError {
+      capturedError = error
+    }
+    #expect(capturedError == .stdoutProtocol(.malformedJSON))
+    try await waitForChildExit(process, timeout: .seconds(2))
+    let diagnostics = await process.diagnostics()
+    #expect(!diagnostics.shutdownAcknowledged)
+    #expect(diagnostics.forcedTermination)
+    #expect(!diagnostics.childIsRunning)
+  }
+
+  @Test func nonzeroExitAfterShutdownAcknowledgementFailsClosed() async throws {
+    let process = try await startProcess("shutdown-nonzero-after-ack")
+    var capturedError: AdapterProcessError?
+    do {
+      _ = try await process.shutdown(timeout: .seconds(1))
+    } catch let error as AdapterProcessError {
+      capturedError = error
+    }
+    #expect(capturedError == .childExitFailure(7))
+    try await waitForChildExit(process, timeout: .seconds(2))
+    let diagnostics = await process.diagnostics()
+    #expect(!diagnostics.shutdownAcknowledged)
+    #expect(!diagnostics.childIsRunning)
+    #expect(diagnostics.childExitStatus == 7)
+  }
+
   @Test func cooperativeCancellationAndShutdownRecordAcknowledgements() async throws {
     let process = try await startProcess("cooperative-cancel")
     try await process.send(request("load-1", operation: .load))

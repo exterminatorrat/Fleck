@@ -83,6 +83,16 @@ while IFS= read -r line; do
     shutdown-ack-then-malformed:shutdown)
       printf '%s\n%s\n' "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}" '{malformed'
       ;;
+    shutdown-delayed-malformed:shutdown)
+      emit "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+      sleep 0.05
+      emit '{malformed'
+      sleep 5
+      ;;
+    shutdown-nonzero-after-ack:shutdown)
+      emit "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+      exit 7
+      ;;
     cooperative-cancel:transcribe)
       emit "{\"event\":\"partial\",\"requestID\":\"$request_id\",\"schemaVersion\":1,\"sequence\":1,\"transcript\":\"partial\"}"
       ;;

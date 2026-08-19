@@ -212,6 +212,33 @@ run_self_test() {
     return 1
   fi
   echo "self-test=checked-in-preflight-fails-closed:pass"
+  if [[ -e "$self_test_root/checked-in-output" ]] || compgen -G "$self_test_root/.checked-in-output.preflight.*" > /dev/null; then
+    echo "self-test=preflight-failure-left-output:fail" >&2
+    return 1
+  fi
+  echo "self-test=preflight-failure-leaves-no-output:pass"
+
+  set +e
+  retry_output="$(
+    "$script_dir/run-admission-protocol.sh" \
+      --route sherpa \
+      --capability batch-final-only \
+      --runtime-root "$self_test_root/runtime" \
+      --model-root "$self_test_root/model" \
+      --output "$self_test_root/checked-in-output" 2>&1
+  )"
+  retry_exit=$?
+  set -e
+  if [[ "$retry_exit" -ne 2 || "$retry_output" != *"artifact-identity-unadmitted"* ]]; then
+    echo "self-test=preflight-failure-retry-unblocked:fail" >&2
+    printf '%s\n' "$retry_output" >&2
+    return 1
+  fi
+  if [[ -e "$self_test_root/checked-in-output" ]] || compgen -G "$self_test_root/.checked-in-output.preflight.*" > /dev/null; then
+    echo "self-test=preflight-retry-left-output:fail" >&2
+    return 1
+  fi
+  echo "self-test=preflight-failure-retry-unblocked:pass"
 
   set +e
   refusal_output="$(
@@ -252,9 +279,11 @@ done
 
 readonly output_parent="$(dirname "$output")"
 [[ -d "$output_parent" ]] || { echo "output parent is not a directory" >&2; exit 2; }
+readonly output_name="$(basename "$output")"
+readonly output_temp="$(mktemp "$output_parent/.${output_name}.preflight.XXXXXX")"
 readonly preflight_root="$(mktemp -d "${TMPDIR:-/tmp}/fleck-qwen-preflight.XXXXXX")"
 readonly preflight_stderr="$(mktemp "${TMPDIR:-/tmp}/fleck-qwen-preflight.XXXXXX")"
-trap 'rm -rf "$preflight_root"; rm -f "$preflight_stderr"' EXIT
+trap 'rm -rf "$preflight_root"; rm -f "$preflight_stderr" "$output_temp"' EXIT
 
 "$script_dir/Sherpa/build.sh" --output-root "$preflight_root"
 readonly checked_in_preflight="$preflight_root/qwen-sherpa-preflight"
@@ -265,7 +294,7 @@ set +e
   --runtime-root "$runtime_root" \
   --model-root "$model_root" \
   --helper-path "/future/qwen-sherpa-helper" \
-  > "$output" 2> "$preflight_stderr"
+  > "$output_temp" 2> "$preflight_stderr"
 preflight_exit=$?
 set -e
 cat "$preflight_stderr" >&2
@@ -273,4 +302,5 @@ if [[ "$preflight_exit" -ne 0 ]]; then
   echo "preflight-exit=$preflight_exit" >&2
   exit "$preflight_exit"
 fi
+mv "$output_temp" "$output"
 echo "preflight-admitted=true"
