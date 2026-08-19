@@ -346,7 +346,8 @@ public enum ModelEvaluationScorer {
   private enum ProtectedValueShape {
     case word
     case numeric
-    case pathOrURL
+    case path
+    case url
   }
 
   public static func score(
@@ -812,27 +813,35 @@ public enum ModelEvaluationScorer {
         boundary: boundary,
         continuation: continuation
       )
-    case .pathOrURL:
+    case .path:
       return continuesPathOrURLValue(
         boundary: boundary,
         continuation: continuation,
-        isLeft: isLeft
+        isLeft: isLeft,
+        isURL: false
+      )
+    case .url:
+      return continuesPathOrURLValue(
+        boundary: boundary,
+        continuation: continuation,
+        isLeft: isLeft,
+        isURL: true
       )
     case .numeric:
       if isWordOrIdentifierContinuation(boundary) {
         return true
       }
-      if isLeft && isCurrencySymbol(boundary) {
+      if isCurrencySymbol(boundary) || isNumericSign(boundary) {
         return true
       }
       if !isLeft && isPercent(boundary) {
         return true
       }
-      if isNumericSign(boundary) {
-        return isLeft || continuation.map(isDecimalDigit) == true
+      guard isNumericSeparator(boundary) else { return false }
+      if isLeft || boundary != "." && boundary != "," {
+        return true
       }
-      return isNumericSeparator(boundary)
-        && (isLeft || continuation.map(isDecimalDigit) == true)
+      return continuation.map(isDecimalDigit) == true
     }
   }
 
@@ -840,8 +849,11 @@ public enum ModelEvaluationScorer {
     if isNumericShaped(text) {
       return .numeric
     }
-    if isPathURLShaped(text) {
-      return .pathOrURL
+    if isURLShaped(text) {
+      return .url
+    }
+    if isPathShaped(text) {
+      return .path
     }
     return .word
   }
@@ -879,23 +891,30 @@ public enum ModelEvaluationScorer {
     return hasDigit && !requiresDigitAfterRangeHyphen
   }
 
-  private static func isPathURLShaped(_ text: String) -> Bool {
+  private static func isURLShaped(_ text: String) -> Bool {
     let scalars = text.unicodeScalars
+    guard !text.contains(where: isWhitespace) else { return false }
     let hasPathSeparator = scalars.contains {
       $0.value == 0x2F || $0.value == 0x5C
     }
-    if hasPathSeparator {
-      return true
+    let hasScheme = text.contains("://")
+    if hasPathSeparator && !hasScheme {
+      return false
     }
 
-    guard !text.contains(where: isWhitespace) else { return false }
     let hasURLMarker = scalars.contains {
       [0x23, 0x25, 0x26, 0x3A, 0x3D, 0x40, 0x3F].contains($0.value)
     }
     let hasDomainPeriod =
       scalars.contains { $0.value == 0x2E }
       && scalars.contains { CharacterSet.letters.contains($0) }
-    return hasURLMarker || hasDomainPeriod
+    return hasScheme || hasURLMarker || hasDomainPeriod
+  }
+
+  private static func isPathShaped(_ text: String) -> Bool {
+    text.unicodeScalars.contains {
+      $0.value == 0x2F || $0.value == 0x5C
+    }
   }
 
   private static func isWordOrIdentifierContinuation(
@@ -929,12 +948,16 @@ public enum ModelEvaluationScorer {
   private static func continuesPathOrURLValue(
     boundary: Character,
     continuation: Character?,
-    isLeft: Bool
+    isLeft: Bool,
+    isURL: Bool
   ) -> Bool {
     if isWordOrIdentifierContinuation(boundary) {
       return true
     }
     if boundary == "/" || boundary == "\\" {
+      return true
+    }
+    if isURL && isURLAlwaysContinuation(boundary) {
       return true
     }
     guard isPathURLContinuation(boundary) else { return false }
@@ -943,6 +966,12 @@ public enum ModelEvaluationScorer {
     }
     guard let continuation, !isWhitespace(continuation) else { return false }
     return !isClosingSentenceDelimiter(continuation)
+  }
+
+  private static func isURLAlwaysContinuation(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      [0x23, 0x26, 0x25, 0x3D, 0x40, 0x3A, 0x2B, 0x3F, 0x7E].contains($0.value)
+    }
   }
 
   private static func isClosingSentenceDelimiter(_ character: Character) -> Bool {

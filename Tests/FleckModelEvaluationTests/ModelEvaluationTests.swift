@@ -712,6 +712,86 @@ import Testing
     ])
 }
 
+@Test func requiresProtectedNumbersToRejectTerminalOperators() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "number-terminal-euro",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2€",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-pound",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2£",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-slash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2/",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-colon",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2:",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-fraction-slash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2⁄",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-plus",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2+",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-minus",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2-",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-period",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2.",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-comma",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2,",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "number-terminal-euro",
+      "number-terminal-pound",
+      "number-terminal-slash",
+      "number-terminal-colon",
+      "number-terminal-fraction-slash",
+      "number-terminal-plus",
+      "number-terminal-minus",
+    ])
+}
+
 @Test func requiresProtectedNumericRangesToHaveLiteralBoundaries() throws {
   let report = try ModelEvaluationScorer.score(
     validInput(cases: [
@@ -946,12 +1026,66 @@ import Testing
         ]
       ),
       .init(
-        id: "url-terminal-question-parenthesis",
+        id: "url-terminal-period-parenthesis",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL).)",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-fragment-terminal",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)#",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-fragment-closing",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)#)",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-query-terminal",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)?",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-query-closing",
         language: .english,
         reference: "visit \(exampleURL)",
         hypothesis: "visit \(exampleURL)?)",
         protectedExpectations: [
           .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "domain-terminal-query",
+        language: .english,
+        reference: "visit example.com",
+        hypothesis: "visit example.com?",
+        protectedExpectations: [
+          .init(kind: "url", text: "example.com", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "email-terminal-fragment",
+        language: .english,
+        reference: "email alex@example.com",
+        hypothesis: "email alex@example.com#",
+        protectedExpectations: [
+          .init(kind: "url", text: "alex@example.com", comparison: .exact)
         ]
       ),
       .init(
@@ -1004,6 +1138,12 @@ import Testing
 
   #expect(
     report.protectedViolations.map(\.caseID) == [
+      "url-fragment-terminal",
+      "url-fragment-closing",
+      "url-query-terminal",
+      "url-query-closing",
+      "domain-terminal-query",
+      "email-terminal-fragment",
       "path-leading-dot",
       "path-leading-parent",
       "url-path-continuation",
