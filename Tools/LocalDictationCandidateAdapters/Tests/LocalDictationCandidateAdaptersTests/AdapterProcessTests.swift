@@ -256,11 +256,18 @@ struct AdapterProcessTests {
   }
 
   @Test func cooperativeCancellationAndShutdownRecordAcknowledgements() async throws {
-    let process = try await startProcess("cooperative")
+    let process = try await startProcess("cooperative-cancel")
     try await process.send(request("load-1", operation: .load))
     try await process.send(request("transcribe-1", operation: .transcribe))
     let path = try await process.cancel(requestID: "transcribe-1", timeout: .seconds(1))
     #expect(path == .cooperativeCancellation)
+    var secondCancelError: AdapterProcessError?
+    do {
+      _ = try await process.cancel(requestID: "transcribe-1", timeout: .seconds(1))
+    } catch let error as AdapterProcessError {
+      secondCancelError = error
+    }
+    #expect(secondCancelError == .unknownCancellationRequest("transcribe-1"))
     let shutdownPath = try await process.shutdown(timeout: .seconds(1))
     #expect(shutdownPath == .cooperativeShutdown)
     let diagnostics = await process.diagnostics()
@@ -268,6 +275,38 @@ struct AdapterProcessTests {
     #expect(diagnostics.shutdownAcknowledged)
     #expect(!diagnostics.childIsRunning)
     #expect(diagnostics.childExitStatus == 0)
+  }
+
+  @Test func finalBeforeCancelAcknowledgementIsRejectedAndNotAcknowledged() async throws {
+    let process = try await startProcess("cancel-after-final")
+    let stream = await process.events()
+    let collectedEvents = Task { () -> [CandidateAdapterEvent] in
+      var events: [CandidateAdapterEvent] = []
+      do {
+        for try await event in stream {
+          events.append(event)
+        }
+      } catch {
+        // The runner must close the stream with the correlated-cancel refusal.
+      }
+      return events
+    }
+
+    try await process.send(request("load-1", operation: .load))
+    try await process.send(request("transcribe-1", operation: .transcribe))
+    var capturedError: AdapterProcessError?
+    do {
+      _ = try await process.cancel(requestID: "transcribe-1", timeout: .seconds(1))
+    } catch let error as AdapterProcessError {
+      capturedError = error
+    }
+    #expect(capturedError == .cancelTargetNotPending("transcribe-1"))
+    let events = await collectedEvents.value
+    #expect(events.contains { $0.requestID == "transcribe-1" && $0.kind == .final })
+    #expect(!events.contains { $0.kind == .cancelled })
+    let diagnostics = await process.diagnostics()
+    #expect(!diagnostics.cancelAcknowledged)
+    await process.terminate()
   }
 
   @Test func eofBeforeShutdownAcknowledgementFailsClosed() async throws {

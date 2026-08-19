@@ -67,6 +67,20 @@ while IFS= read -r line; do
     cancel-wrong-terminal:cancel)
       emit "{\"event\":\"unloaded\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
       ;;
+    cooperative-cancel:transcribe)
+      emit "{\"event\":\"partial\",\"requestID\":\"$request_id\",\"schemaVersion\":1,\"sequence\":1,\"transcript\":\"partial\"}"
+      ;;
+    cooperative-cancel:cancel)
+      emit "{\"event\":\"cancelled\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+      ;;
+    cancel-after-final:transcribe)
+      ;;
+    cancel-after-final:cancel)
+      target_request_id=$(printf '%s' "$line" | sed -n 's/.*"targetRequestID":"\([^"]*\)".*/\1/p')
+      target_request_id=${target_request_id:-unknown}
+      emit "{\"event\":\"final\",\"requestID\":\"$target_request_id\",\"schemaVersion\":1,\"transcript\":\"final-before-cancel\"}"
+      emit "{\"event\":\"cancelled\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
+      ;;
     failure:transcribe)
       emit "{\"code\":\"fixture-failure\",\"event\":\"failure\",\"message\":\"candidate failed\",\"requestID\":\"$request_id\",\"schemaVersion\":1}"
       sleep 5

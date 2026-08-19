@@ -4,7 +4,6 @@ set -euo pipefail
 
 readonly script_dir="$(cd "$(dirname "$0")" && pwd)"
 readonly case_plan="$script_dir/Cases/ten-case-plan.jsonl"
-preflight=""
 runtime_root=""
 model_root=""
 output=""
@@ -20,7 +19,6 @@ repetitions=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --preflight) preflight="${2:-}"; shift 2 ;;
     --runtime-root) runtime_root="${2:-}"; shift 2 ;;
     --model-root) model_root="${2:-}"; shift 2 ;;
     --output) output="${2:-}"; shift 2 ;;
@@ -172,20 +170,57 @@ run_self_test() {
   echo "self-test=evaluation-context-metadata-only:pass"
 
   set +e
+  substitution_output="$(
+    "$script_dir/run-admission-protocol.sh" \
+      --route sherpa \
+      --capability batch-final-only \
+      --preflight "$fake_preflight" \
+      --runtime-root "$self_test_root/runtime" \
+      --model-root "$self_test_root/model" \
+      --output "$self_test_root/substitution-output" 2>&1
+  )"
+  substitution_exit=$?
+  set -e
+  if [[ "$substitution_exit" -ne 2 || "$substitution_output" != *"unknown argument: --preflight"* ]]; then
+    echo "self-test=preflight-substitution-rejected:fail" >&2
+    return 1
+  fi
+  if [[ -e "$launch_marker" ]]; then
+    echo "self-test=preflight-substitution-launch:fail" >&2
+    return 1
+  fi
+  echo "self-test=preflight-substitution-rejected:pass"
+
+  set +e
+  checked_in_output="$(
+    "$script_dir/run-admission-protocol.sh" \
+      --route sherpa \
+      --capability batch-final-only \
+      --runtime-root "$self_test_root/runtime" \
+      --model-root "$self_test_root/model" \
+      --output "$self_test_root/checked-in-output" 2>&1
+  )"
+  checked_in_exit=$?
+  set -e
+  if [[ "$checked_in_exit" -ne 2 || "$checked_in_output" != *"artifact-identity-unadmitted"* ]]; then
+    echo "self-test=checked-in-preflight-fails-closed:fail" >&2
+    printf '%s\n' "$checked_in_output" >&2
+    return 1
+  fi
+  if [[ -e "$launch_marker" ]]; then
+    echo "self-test=checked-in-preflight-launch:fail" >&2
+    return 1
+  fi
+  echo "self-test=checked-in-preflight-fails-closed:pass"
+
+  set +e
   refusal_output="$(
     "$script_dir/run-admission-protocol.sh" \
       --route sherpa \
       --capability active-cancellation \
-      --preflight "$fake_preflight" \
       --runtime-root "$self_test_root/runtime" \
       --model-root "$self_test_root/model" \
-      --output "$self_test_root/output" \
-      --english-audio "$english_audio" \
-      --mandarin-audio "$mandarin_audio" \
-      --mixed-en-zh-audio "$mixed_en_zh_audio" \
-      --mixed-zh-en-audio "$mixed_zh_en_audio" \
-      --silence-audio "$silence_audio" \
-      --repetitions 1 2>&1
+      --output "$self_test_root/refusal-output" 2>&1
   )"
   refusal_exit=$?
   set -e
@@ -194,11 +229,10 @@ run_self_test() {
     return 1
   fi
   if [[ -e "$launch_marker" ]]; then
-    echo "self-test=preflight-launch:fail" >&2
+    echo "self-test=unsupported-active-cancellation-launch:fail" >&2
     return 1
   fi
   echo "self-test=unsupported-active-cancellation-refused:pass"
-  echo "self-test=preflight-launch:skipped"
 }
 
 if [[ "$self_test" == true ]]; then
@@ -210,20 +244,24 @@ fi
 validate_case_plan || { echo "case plan is not final-only and route-specific" >&2; exit 2; }
 require_route_capability "$route" "$capability"
 
-for path in "$preflight" "$runtime_root" "$model_root" "$output"; do
-  [[ "$path" == /* ]] || { echo "all runtime/preflight/output paths must be absolute" >&2; exit 2; }
+for path in "$runtime_root" "$model_root" "$output"; do
+  [[ "$path" == /* ]] || { echo "all runtime/model/output paths must be absolute" >&2; exit 2; }
 done
-[[ -x "$preflight" ]] || { echo "preflight is not executable" >&2; exit 2; }
 [[ "$repetitions" =~ ^[1-9][0-9]*$ ]] || { echo "repetitions must be positive" >&2; exit 2; }
 [[ ! -e "$output" ]] || { echo "output already exists: $output" >&2; exit 2; }
 
 readonly output_parent="$(dirname "$output")"
 [[ -d "$output_parent" ]] || { echo "output parent is not a directory" >&2; exit 2; }
+readonly preflight_root="$(mktemp -d "${TMPDIR:-/tmp}/fleck-qwen-preflight.XXXXXX")"
 readonly preflight_stderr="$(mktemp "${TMPDIR:-/tmp}/fleck-qwen-preflight.XXXXXX")"
-trap 'rm -f "$preflight_stderr"' EXIT
+trap 'rm -rf "$preflight_root"; rm -f "$preflight_stderr"' EXIT
+
+"$script_dir/Sherpa/build.sh" --output-root "$preflight_root"
+readonly checked_in_preflight="$preflight_root/qwen-sherpa-preflight"
+[[ -x "$checked_in_preflight" ]] || { echo "checked-in preflight build is not executable" >&2; exit 2; }
 
 set +e
-"$preflight" \
+"$checked_in_preflight" \
   --runtime-root "$runtime_root" \
   --model-root "$model_root" \
   --helper-path "/future/qwen-sherpa-helper" \

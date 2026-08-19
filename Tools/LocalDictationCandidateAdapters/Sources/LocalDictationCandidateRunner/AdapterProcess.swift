@@ -23,6 +23,7 @@ public enum AdapterProcessError: Error, Equatable, Sendable, CustomStringConvert
   case invalidArgument
   case duplicateRequestID(String)
   case unknownCancellationRequest(String)
+  case cancelTargetNotPending(String)
   case unexpectedRequestID(String)
   case invalidEventOrdering(String)
   case stdoutProtocol(CandidateAdapterProtocolError)
@@ -47,6 +48,8 @@ public enum AdapterProcessError: Error, Equatable, Sendable, CustomStringConvert
     case .duplicateRequestID(let requestID): return "duplicate request ID: \(requestID)"
     case .unknownCancellationRequest(let requestID):
       return "unknown cancellation request: \(requestID)"
+    case .cancelTargetNotPending(let requestID):
+      return "cancel target not pending: \(requestID)"
     case .unexpectedRequestID(let requestID): return "unexpected request ID: \(requestID)"
     case .invalidEventOrdering(let detail): return "invalid event ordering: \(detail)"
     case .stdoutProtocol(let error): return "stdout protocol error: \(error)"
@@ -106,6 +109,7 @@ public struct AdapterProcessDiagnostics: Equatable, Sendable {
 public actor AdapterProcess {
   private struct RequestState {
     let operation: CandidateAdapterOperation
+    let targetRequestID: String?
     var ready = false
     var terminal = false
     var lastPartialSequence = -1
@@ -235,7 +239,10 @@ public actor AdapterProcess {
     guard let stdin else {
       throw AdapterProcessError.notStarted
     }
-    requestStates[request.requestID] = RequestState(operation: request.operation)
+    requestStates[request.requestID] = RequestState(
+      operation: request.operation,
+      targetRequestID: request.targetRequestID
+    )
     do {
       try stdin.write(contentsOf: data)
     } catch {
@@ -525,8 +532,21 @@ public actor AdapterProcess {
       guard state.operation == .cancel, !state.terminal else {
         throw AdapterProcessError.invalidEventOrdering("cancelled")
       }
+      guard let targetRequestID = state.targetRequestID,
+        var targetState = requestStates[targetRequestID],
+        !targetState.terminal
+      else {
+        throw AdapterProcessError.cancelTargetNotPending(state.targetRequestID ?? "<missing>")
+      }
+      targetState.terminal = true
+      requestStates[targetRequestID] = targetState
+      terminalRequestIDs.insert(targetRequestID)
+      terminalEventKinds[targetRequestID] = .cancelled
+      let targetContinuations = waiters.removeValue(forKey: targetRequestID) ?? []
+      for continuation in targetContinuations {
+        continuation.resume()
+      }
       state.terminal = true
-      cancelAcknowledged = true
     case .unloaded:
       guard (state.operation == .unload || state.operation == .shutdown),
         !state.terminal
