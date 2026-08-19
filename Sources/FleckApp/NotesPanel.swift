@@ -258,6 +258,7 @@
     @StateObject private var noteLinkPickerController: NoteLinkPickerController
     @StateObject private var backlinkController: BacklinkController
     @Namespace private var selectedTabHighlight
+    @Namespace private var workspaceSearchTransition
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var isShowingTrash = false
@@ -276,6 +277,7 @@
     @State private var tabContentTrailingEdge: CGFloat = 0
     @State private var activeFolderID: UUID?
     @State private var restoreEditorFocusAfterHide = false
+    @State private var searchPointerActivationPending = false
     @FocusState private var editorFocus: EditorFocus?
 
     init(
@@ -508,20 +510,35 @@
         .animation(motion.standard, value: notePendingDeletion?.id)
       }
       .overlay {
-        if searchController.isPresented && !noteLinkPickerController.isPresented {
-          WorkspaceSearchView(
-            controller: searchController,
-            notes: appState.workspace.notes,
-            accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
-            currentNoteIDs: {
-              Set(appState.workspace.notes.map(\.id))
-            },
-            onActivate: { noteID in
-              guard activateNoteAndScope(noteID) else { return }
-            }
-          )
-          .zIndex(2)
+        ZStack {
+          if searchController.isPresented && !noteLinkPickerController.isPresented {
+            WorkspaceSearchView(
+              controller: searchController,
+              notes: appState.workspace.notes,
+              accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
+              transitionNamespace: workspaceSearchTransition,
+              presentationID: searchController.presentationID,
+              reduceMotion: reduceMotion,
+              currentNoteIDs: {
+                Set(appState.workspace.notes.map(\.id))
+              },
+              onActivate: { noteID in
+                guard activateNoteAndScope(noteID) else { return }
+              }
+            )
+            .id(searchController.presentationID)
+            .zIndex(2)
+            .transition(
+              searchController.presentationKind == .instant
+                ? .identity
+                : .opacity
+            )
+          }
         }
+        .animation(
+          searchController.presentationKind == .instant ? nil : motion.quick,
+          value: searchController.isPresented
+        )
       }
       .overlay {
         if noteLinkPickerController.isPresented {
@@ -550,6 +567,9 @@
         backlinkController.refresh(liveNotes: notes)
       }
       .onChange(of: searchController.isPresented) { _, isPresented in
+        if !isPresented {
+          searchPointerActivationPending = false
+        }
         if isPresented, noteLinkPickerController.isPresented {
           searchController.dismiss()
         }
@@ -659,15 +679,55 @@
           .frame(width: 320)
         }
         Button {
-          guard !noteLinkPickerController.isPresented else { return }
-          searchController.present(for: appState.workspace.selectedNoteID)
+          let pointerActivation = searchPointerActivationPending
+          searchPointerActivationPending = false
+          guard !pointerActivation else { return }
+          Task { @MainActor in
+            await Task.yield()
+            guard !searchController.isPresented else { return }
+            presentWorkspaceSearch(activation: .keyboard)
+          }
         } label: {
-          Image(systemName: "magnifyingglass")
+          if reduceMotion {
+            Image(systemName: "magnifyingglass")
+              .accessibilityHidden(true)
+          } else {
+            Image(systemName: "magnifyingglass")
+              .matchedGeometryEffect(
+                id: WorkspaceSearchTransition.magnifierID,
+                in: workspaceSearchTransition
+              )
+              .accessibilityHidden(true)
+          }
         }
         .keyboardShortcut("f", modifiers: .command)
         .accessibilityLabel("Search notes")
         .accessibilityHint("Search note titles and bodies")
         .help("Search notes (⌘F)")
+        .simultaneousGesture(
+          TapGesture().onEnded {
+            guard !noteLinkPickerController.isPresented else { return }
+            searchPointerActivationPending = true
+            presentWorkspaceSearch(activation: .pointer)
+          }
+        )
+        .background {
+          if reduceMotion {
+            RoundedRectangle(cornerRadius: 8)
+              .fill(.regularMaterial.opacity(0.32))
+              .accessibilityHidden(true)
+              .allowsHitTesting(false)
+          } else {
+            RoundedRectangle(cornerRadius: 8)
+              .fill(.regularMaterial.opacity(0.32))
+              .matchedGeometryEffect(
+                id: WorkspaceSearchTransition.shellID,
+                in: workspaceSearchTransition
+              )
+              .accessibilityHidden(true)
+              .allowsHitTesting(false)
+          }
+        }
         Button {
           appState.addNote(inFolderID: activeFolderID)
         } label: {
@@ -1028,6 +1088,24 @@
 
     private var motion: AppMotion {
       AppMotion(reduceMotion: reduceMotion)
+    }
+
+    private func presentWorkspaceSearch(activation: WorkspaceSearchActivation) {
+      guard !noteLinkPickerController.isPresented else { return }
+      let presentation = WorkspaceSearchPresentationKind.resolve(
+        activation: activation,
+        reduceMotion: reduceMotion
+      )
+      withAnimation(presentation == .instant ? nil : motion.quick) {
+        if presentation == .instant {
+          searchController.present(for: appState.workspace.selectedNoteID)
+        } else {
+          searchController.present(
+            for: appState.workspace.selectedNoteID,
+            presentation: presentation
+          )
+        }
+      }
     }
 
     private var backlinksPopoverPresentation: Binding<Bool> {

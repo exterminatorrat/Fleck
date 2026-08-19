@@ -7,6 +7,159 @@ import Testing
 @testable import FleckApp
 
 @Test @MainActor
+func WorkspaceSearchPresentationSelectsPointerAndKeyboardMotionKinds() {
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .pointer,
+      reduceMotion: false
+    ) == .morph
+  )
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .pointer,
+      reduceMotion: true
+    ) == .crossfade
+  )
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .keyboard,
+      reduceMotion: false
+    ) == .instant
+  )
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .keyboard,
+      reduceMotion: true
+    ) == .instant
+  )
+
+  let controller = WorkspaceSearchController()
+  controller.present(presentation: .morph)
+  #expect(controller.presentationKind == .morph)
+  controller.dismiss()
+  controller.present(presentation: .crossfade)
+  #expect(controller.presentationKind == .crossfade)
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-pointer-focus-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let note = Note(title: "Focus title", body: "Keep this body")
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      editorCommands: commands,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let editor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == note.body }
+  )
+  #expect(window.makeFirstResponder(editor))
+  let bodySelection = NSRange(location: 2, length: 4)
+  editor.setSelectedRange(bodySelection)
+
+  let searchButton = try #require(workspaceSearchTrigger(in: host))
+  clickWorkspaceSearchControl(searchButton, in: window)
+  await settleWorkspaceSearchHost(host)
+
+  #expect(searchController.isPresented)
+  #expect(searchController.presentationKind == .morph)
+  sendWorkspaceSearchEscape(to: window)
+  await settleWorkspaceSearchHost(host)
+
+  #expect(!searchController.isPresented)
+  #expect(commands.textView === editor)
+  #expect(editor.selectedRange() == bodySelection)
+  #expect(window.firstResponder === editor)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingImmediateReopenSurvivesOldDisappearance() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-reopen-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  searchController.present(presentation: .morph)
+  let firstPresentationID = searchController.presentationID
+  await settleWorkspaceSearchHost(host)
+  searchController.dismiss()
+  searchController.present(presentation: .instant)
+  let reopenedPresentationID = searchController.presentationID
+  #expect(reopenedPresentationID != firstPresentationID)
+  searchController.dismiss(ifPresentationID: firstPresentationID)
+  #expect(searchController.isPresented)
+  searchController.setQuery("still open", in: state.workspace.notes)
+  await settleWorkspaceSearchHost(host)
+  try await Task.sleep(for: .milliseconds(400))
+  await settleWorkspaceSearchHost(host)
+
+  #expect(searchController.isPresented)
+  #expect(searchController.presentationKind == .instant)
+  #expect(searchController.query == "still open")
+
+  searchController.dismiss()
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
 func WorkspaceSearchHostingPreservesSearchResultsAndNoteStateAcrossAccentUpdates()
   async throws
 {
@@ -998,6 +1151,59 @@ private func hostedWorkspaceSearchScrollViews(in view: NSView) -> [NSScrollView]
     scrollViews.append(contentsOf: hostedWorkspaceSearchScrollViews(in: subview))
   }
   return scrollViews
+}
+
+@MainActor
+private func workspaceSearchTrigger(in view: NSView) -> NSView? {
+  let headerControls = hostedWorkspaceSearchDescendants(in: view, as: NSView.self)
+    .filter { control in
+      guard String(describing: type(of: control)) == "KeyViewProxy" else { return false }
+      let frame = control.convert(control.bounds, to: view)
+      return frame.minY < 40 && frame.minX > view.bounds.midX
+    }
+    .sorted {
+      $0.convert($0.bounds, to: view).minX < $1.convert($1.bounds, to: view).minX
+    }
+  return headerControls.dropFirst().first
+}
+
+@MainActor
+private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow) {
+  let point = control.convert(
+    NSPoint(x: control.bounds.midX, y: control.bounds.midY),
+    to: nil
+  )
+  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    guard let event = NSEvent.mouseEvent(
+      with: eventType,
+      location: point,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 0,
+      clickCount: 1,
+      pressure: eventType == .leftMouseDown ? 1 : 0
+    ) else { continue }
+    window.sendEvent(event)
+  }
+}
+
+@MainActor
+private func sendWorkspaceSearchEscape(to window: NSWindow) {
+  guard let event = NSEvent.keyEvent(
+    with: .keyDown,
+    location: .zero,
+    modifierFlags: [],
+    timestamp: ProcessInfo.processInfo.systemUptime,
+    windowNumber: window.windowNumber,
+    context: nil,
+    characters: "\u{1b}",
+    charactersIgnoringModifiers: "\u{1b}",
+    isARepeat: false,
+    keyCode: 53
+  ) else { return }
+  window.sendEvent(event)
 }
 
 @MainActor

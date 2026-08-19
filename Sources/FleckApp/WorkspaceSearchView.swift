@@ -76,6 +76,34 @@
     return coalesced
   }
 
+  enum WorkspaceSearchActivation: Equatable {
+    case pointer
+    case keyboard
+  }
+
+  enum WorkspaceSearchPresentationKind: Equatable {
+    case morph
+    case crossfade
+    case instant
+
+    static func resolve(
+      activation: WorkspaceSearchActivation,
+      reduceMotion: Bool
+    ) -> Self {
+      switch activation {
+      case .pointer:
+        return reduceMotion ? .crossfade : .morph
+      case .keyboard:
+        return .instant
+      }
+    }
+  }
+
+  enum WorkspaceSearchTransition {
+    static let shellID = "workspace-search-shell"
+    static let magnifierID = "workspace-search-magnifier"
+  }
+
   @MainActor
   final class WorkspaceSearchController: ObservableObject {
     typealias SearchOperation = @MainActor (
@@ -90,6 +118,8 @@
     }
 
     @Published private(set) var isPresented = false
+    @Published private(set) var presentationKind: WorkspaceSearchPresentationKind = .instant
+    @Published private(set) var presentationID: UInt64 = 0
     @Published var query = ""
     @Published private(set) var results: [WorkspaceSearchResult] = []
     @Published private(set) var highlightedNoteID: UUID?
@@ -125,10 +155,14 @@
       resultGeneration == searchGeneration
     }
 
-    func present(for noteID: UUID? = nil) {
+    func present(
+      for noteID: UUID? = nil,
+      presentation: WorkspaceSearchPresentationKind = .instant
+    ) {
       guard !isPresented else { return }
       cancelSearch()
       searchGeneration &+= 1
+      presentationID &+= 1
       focusOrigin = WorkspaceSearchFocusOrigin.capture(
         preferredWindow: hostingWindow,
         noteID: noteID
@@ -138,7 +172,13 @@
       highlightedNoteID = nil
       resultGeneration = nil
       hasActivatedCurrentPresentation = false
+      presentationKind = presentation
       isPresented = true
+    }
+
+    func dismiss(ifPresentationID presentationID: UInt64) {
+      guard self.presentationID == presentationID else { return }
+      dismiss()
     }
 
     func dismiss() {
@@ -549,6 +589,9 @@
     @ObservedObject var controller: WorkspaceSearchController
     let notes: [Note]
     let accent: Color
+    let transitionNamespace: Namespace.ID
+    let presentationID: UInt64
+    let reduceMotion: Bool
     let currentNoteIDs: () -> Set<UUID>
     let onActivate: (UUID) -> Void
     @FocusState private var isQueryFocused: Bool
@@ -563,9 +606,19 @@
 
         VStack(alignment: .leading, spacing: 8) {
           HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-              .foregroundStyle(.secondary)
-              .accessibilityHidden(true)
+            if controller.presentationKind == .morph && !reduceMotion {
+              Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .matchedGeometryEffect(
+                  id: WorkspaceSearchTransition.magnifierID,
+                  in: transitionNamespace
+                )
+                .accessibilityHidden(true)
+            } else {
+              Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            }
             TextField("Search notes", text: $controller.query)
               .textFieldStyle(.roundedBorder)
               .focused($isQueryFocused)
@@ -717,10 +770,28 @@
         }
         .padding(12)
         .frame(maxWidth: 560, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background {
+          if controller.presentationKind == .morph && !reduceMotion {
+            RoundedRectangle(cornerRadius: 12)
+              .fill(.regularMaterial)
+              .matchedGeometryEffect(
+                id: WorkspaceSearchTransition.shellID,
+                in: transitionNamespace
+              )
+              .accessibilityHidden(true)
+              .allowsHitTesting(false)
+          } else {
+            RoundedRectangle(cornerRadius: 12)
+              .fill(.regularMaterial)
+              .accessibilityHidden(true)
+              .allowsHitTesting(false)
+          }
+        }
         .overlay {
           RoundedRectangle(cornerRadius: 12)
             .strokeBorder(.quaternary)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
       }
@@ -751,7 +822,7 @@
         controller.refresh(in: newNotes)
       }
       .onDisappear {
-        controller.dismiss()
+        controller.dismiss(ifPresentationID: presentationID)
       }
     }
   }
