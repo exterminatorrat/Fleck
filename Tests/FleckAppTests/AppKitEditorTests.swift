@@ -485,6 +485,131 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   }
 }
 
+@Test @MainActor func checklistMarkerCentersOnFirstVisibleTextGlyphAcrossFontSizes() throws {
+  for fontSize in [CGFloat(11), CGFloat(14), CGFloat(24)] {
+    let textView = ListAwareTextView(
+      frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+    )
+    textView.textContainerInset = NSSize(width: 16, height: 10)
+    textView.textContainer?.lineFragmentPadding = 0
+    textView.font = .systemFont(ofSize: fontSize)
+    textView.string = "○ Formative 1"
+
+    let textContainer = try #require(textView.textContainer)
+    let layoutManager = try #require(textView.layoutManager)
+    layoutManager.ensureLayout(for: textContainer)
+
+    let markerRect = try #require(
+      textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+    )
+    let contentGlyphRange = layoutManager.glyphRange(
+      forCharacterRange: NSRange(location: 2, length: 1),
+      actualCharacterRange: nil
+    )
+    let contentGlyph = contentGlyphRange.location
+    let contentFont = try #require(
+      textView.textStorage?.attribute(
+        .font,
+        at: 2,
+        effectiveRange: nil
+      ) as? NSFont
+    )
+    let lineFragmentRect = layoutManager.lineFragmentRect(
+      forGlyphAt: contentGlyph,
+      effectiveRange: nil
+    )
+    let baselineY = textView.textContainerOrigin.y
+      + lineFragmentRect.minY
+      + layoutManager.location(forGlyphAt: contentGlyph).y
+    let visibleInkMidY = baselineY
+      - contentFont.boundingRect(
+        forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
+      ).midY
+
+    #expect(
+      abs(markerRect.midY - visibleInkMidY) < 0.01,
+      "font \(fontSize), marker midY \(markerRect.midY), visible ink midY \(visibleInkMidY)"
+    )
+  }
+}
+
+@Test @MainActor func checklistMarkerSkipsLeadingWhitespaceBeforeVisibleTextGlyph() throws {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  textView.textContainerInset = NSSize(width: 16, height: 10)
+  textView.textContainer?.lineFragmentPadding = 0
+  textView.font = .systemFont(ofSize: 14)
+  textView.string = "○   Formative 1"
+
+  let textContainer = try #require(textView.textContainer)
+  let layoutManager = try #require(textView.layoutManager)
+  layoutManager.ensureLayout(for: textContainer)
+
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let contentGlyphRange = layoutManager.glyphRange(
+    forCharacterRange: NSRange(location: 4, length: 1),
+    actualCharacterRange: nil
+  )
+  let contentGlyph = contentGlyphRange.location
+  let contentFont = try #require(
+    textView.textStorage?.attribute(
+      .font,
+      at: 4,
+      effectiveRange: nil
+    ) as? NSFont
+  )
+  let lineFragmentRect = layoutManager.lineFragmentRect(
+    forGlyphAt: contentGlyph,
+    effectiveRange: nil
+  )
+  let baselineY = textView.textContainerOrigin.y
+    + lineFragmentRect.minY
+    + layoutManager.location(forGlyphAt: contentGlyph).y
+  let visibleInkMidY = baselineY
+    - contentFont.boundingRect(
+      forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
+    ).midY
+
+  #expect(
+    abs(markerRect.midY - visibleInkMidY) < 0.01,
+    "marker midY \(markerRect.midY), F ink midY \(visibleInkMidY)"
+  )
+}
+
+@Test @MainActor func allWhitespaceChecklistContentKeepsMarkerSlotFallback() throws {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  textView.textContainerInset = NSSize(width: 16, height: 10)
+  textView.textContainer?.lineFragmentPadding = 0
+  textView.font = .systemFont(ofSize: 14)
+  textView.string = "○   "
+
+  let textContainer = try #require(textView.textContainer)
+  let layoutManager = try #require(textView.layoutManager)
+  layoutManager.ensureLayout(for: textContainer)
+
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let slotGlyphRange = layoutManager.glyphRange(
+    forCharacterRange: NSRange(location: 0, length: 2),
+    actualCharacterRange: nil
+  )
+  let slotRect = layoutManager.boundingRect(
+    forGlyphRange: slotGlyphRange,
+    in: textContainer
+  ).offsetBy(
+    dx: textView.textContainerOrigin.x,
+    dy: textView.textContainerOrigin.y
+  )
+
+  #expect(markerRect == ChecklistMarkerDrawing.markerRect(around: slotRect))
+}
+
 @Test @MainActor func depthZeroChecklistMarkerCacheDisplayKeepsWholeCircleInsideLeftClip() throws {
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 160, height: 80))
   textView.appearance = NSAppearance(named: .aqua)

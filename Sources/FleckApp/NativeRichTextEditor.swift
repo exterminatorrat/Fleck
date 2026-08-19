@@ -1319,7 +1319,59 @@
       guard glyphRange.length > 0 else { return nil }
       let slotRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
         .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-      return ChecklistMarkerDrawing.markerRect(around: slotRect)
+      var markerSlotRect = slotRect
+      let ns = string as NSString
+      if let item = checklistItem(
+        in: ns.paragraphRange(for: markerRange),
+        string: ns
+      ), item.contentRange.length > 0, let storage = textStorage
+      {
+        let content = ns.substring(with: item.contentRange)
+        var firstVisibleContentRange: NSRange?
+        content.enumerateSubstrings(
+          in: content.startIndex..<content.endIndex,
+          options: [.byComposedCharacterSequences]
+        ) { substring, range, _, stop in
+          guard let substring,
+            !substring.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          else { return }
+          let relativeRange = NSRange(range, in: content)
+          firstVisibleContentRange = NSRange(
+            location: item.contentRange.location + relativeRange.location,
+            length: relativeRange.length
+          )
+          stop = true
+        }
+
+        if let contentRange = firstVisibleContentRange,
+          let contentFont = (
+            storage.attribute(.font, at: contentRange.location, effectiveRange: nil) as? NSFont
+          ) ?? font
+        {
+          let contentGlyphRange = layoutManager.glyphRange(
+            forCharacterRange: contentRange,
+            actualCharacterRange: nil
+          )
+          if contentGlyphRange.length > 0,
+            contentGlyphRange.location < layoutManager.numberOfGlyphs
+          {
+            let contentGlyph = contentGlyphRange.location
+            let lineFragmentRect = layoutManager.lineFragmentRect(
+              forGlyphAt: contentGlyph,
+              effectiveRange: nil
+            )
+            let baselineY = textContainerOrigin.y
+              + lineFragmentRect.minY
+              + layoutManager.location(forGlyphAt: contentGlyph).y
+            let visibleInkMidY = baselineY
+              - contentFont.boundingRect(
+                forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
+              ).midY
+            markerSlotRect.origin.y += visibleInkMidY - markerSlotRect.midY
+          }
+        }
+      }
+      return ChecklistMarkerDrawing.markerRect(around: markerSlotRect)
     }
 
     func checklistHitRect(for markerRange: NSRange) -> NSRect? {
