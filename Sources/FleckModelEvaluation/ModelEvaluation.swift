@@ -865,7 +865,6 @@ public enum ModelEvaluationScorer {
     }
 
     var hasDigit = false
-    var hasRangeHyphen = false
     var requiresDigitAfterRangeHyphen = false
     var previousWasDigit = false
     for character in numericText {
@@ -874,8 +873,7 @@ public enum ModelEvaluationScorer {
         previousWasDigit = true
         requiresDigitAfterRangeHyphen = false
       } else if character == "-" {
-        guard !hasRangeHyphen, previousWasDigit else { return false }
-        hasRangeHyphen = true
+        guard previousWasDigit else { return false }
         previousWasDigit = false
         requiresDigitAfterRangeHyphen = true
       } else if !isNumericSeparator(character)
@@ -894,11 +892,26 @@ public enum ModelEvaluationScorer {
   private static func isURLShaped(_ text: String) -> Bool {
     let scalars = text.unicodeScalars
     guard !text.contains(where: isWhitespace) else { return false }
-    let hasPathSeparator = scalars.contains {
-      $0.value == 0x2F || $0.value == 0x5C
-    }
+    let hasForwardSlash = scalars.contains { $0.value == 0x2F }
+    let hasBackslash = scalars.contains { $0.value == 0x5C }
+    let hasPathSeparator = hasForwardSlash || hasBackslash
     let hasScheme = text.contains("://")
-    if hasPathSeparator && !hasScheme {
+    let startsWithDoubleSlash = text.hasPrefix("//")
+    let hasEmailMarker = !hasPathSeparator && scalars.contains { $0.value == 0x40 }
+    let hasDomainLikeHostBeforeSlash =
+      text.firstIndex(of: "/").map { index in
+        let host = text[..<index]
+        return host.contains(".")
+          && host.unicodeScalars.contains { CharacterSet.letters.contains($0) }
+      } == true
+    if hasBackslash && !hasScheme {
+      return false
+    }
+    if hasForwardSlash
+      && !hasScheme
+      && !startsWithDoubleSlash
+      && !hasDomainLikeHostBeforeSlash
+    {
       return false
     }
 
@@ -908,7 +921,11 @@ public enum ModelEvaluationScorer {
     let hasDomainPeriod =
       scalars.contains { $0.value == 0x2E }
       && scalars.contains { CharacterSet.letters.contains($0) }
-    return hasScheme || hasURLMarker || hasDomainPeriod
+    return hasScheme
+      || startsWithDoubleSlash
+      || hasEmailMarker
+      || hasURLMarker
+      || hasDomainPeriod
   }
 
   private static func isPathShaped(_ text: String) -> Bool {
@@ -957,10 +974,15 @@ public enum ModelEvaluationScorer {
     if boundary == "/" || boundary == "\\" {
       return true
     }
+    if !isURL && isPathAlwaysContinuation(boundary) {
+      return true
+    }
     if isURL && isURLAlwaysContinuation(boundary) {
       return true
     }
-    guard isPathURLContinuation(boundary) else { return false }
+    guard isURL ? isURLContinuation(boundary) : isPathURLContinuation(boundary) else {
+      return false
+    }
     if isLeft {
       return true
     }
@@ -972,6 +994,17 @@ public enum ModelEvaluationScorer {
     character.unicodeScalars.contains {
       [0x23, 0x26, 0x25, 0x3D, 0x40, 0x3A, 0x2B, 0x3F, 0x7E].contains($0.value)
     }
+  }
+
+  private static func isURLContinuation(_ character: Character) -> Bool {
+    isPathURLContinuation(character)
+      || character.unicodeScalars.contains {
+        [0x24, 0x2C, 0x3B].contains($0.value)
+      }
+  }
+
+  private static func isPathAlwaysContinuation(_ character: Character) -> Bool {
+    isPathURLContinuation(character) && character != "." && character != "?"
   }
 
   private static func isClosingSentenceDelimiter(_ character: Character) -> Bool {

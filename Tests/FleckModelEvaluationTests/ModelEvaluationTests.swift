@@ -792,6 +792,81 @@ import Testing
     ])
 }
 
+@Test func classifiesMultiSegmentNumericDatesAsNumeric() throws {
+  let date = "2026-08-19"
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "date-currency-leading",
+        language: .english,
+        reference: "send \(date)",
+        hypothesis: "send $\(date)",
+        protectedExpectations: [.init(kind: "date", text: date, comparison: .exact)]
+      ),
+      .init(
+        id: "date-sign-leading",
+        language: .english,
+        reference: "send \(date)",
+        hypothesis: "send +\(date)",
+        protectedExpectations: [.init(kind: "date", text: date, comparison: .exact)]
+      ),
+      .init(
+        id: "date-percent-suffix",
+        language: .english,
+        reference: "send \(date)",
+        hypothesis: "send \(date)%",
+        protectedExpectations: [.init(kind: "date", text: date, comparison: .exact)]
+      ),
+      .init(
+        id: "date-decimal-suffix",
+        language: .english,
+        reference: "send \(date)",
+        hypothesis: "send \(date).0",
+        protectedExpectations: [.init(kind: "date", text: date, comparison: .exact)]
+      ),
+      .init(
+        id: "date-terminal-period",
+        language: .english,
+        reference: "send \(date)",
+        hypothesis: "send \(date).",
+        protectedExpectations: [.init(kind: "date", text: date, comparison: .exact)]
+      ),
+      .init(
+        id: "date-repeated-leading-hyphen",
+        language: .english,
+        reference: "send --\(date)",
+        hypothesis: "send $--\(date)",
+        protectedExpectations: [.init(kind: "date", text: "--\(date)", comparison: .exact)]
+      ),
+      .init(
+        id: "date-repeated-internal-hyphen",
+        language: .english,
+        reference: "send 2026--08-19",
+        hypothesis: "send $2026--08-19",
+        protectedExpectations: [
+          .init(kind: "date", text: "2026--08-19", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "date-trailing-hyphen",
+        language: .english,
+        reference: "send 2026-08-19-",
+        hypothesis: "send $2026-08-19-",
+        protectedExpectations: [
+          .init(kind: "date", text: "2026-08-19-", comparison: .exact)
+        ]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "date-currency-leading",
+      "date-sign-leading",
+      "date-percent-suffix",
+      "date-decimal-suffix",
+    ])
+}
+
 @Test func requiresProtectedNumericRangesToHaveLiteralBoundaries() throws {
   let report = try ModelEvaluationScorer.score(
     validInput(cases: [
@@ -1150,6 +1225,237 @@ import Testing
       "url-query-continuation",
       "path-extension-continuation",
       "path-child-continuation",
+    ])
+}
+
+@Test func classifiesSchemeLessURLPathsAsURLs() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "domain-path-query-terminal",
+        language: .english,
+        reference: "visit example.com/path",
+        hypothesis: "visit example.com/path?",
+        protectedExpectations: [
+          .init(kind: "url", text: "example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "domain-path-query-closing",
+        language: .english,
+        reference: "visit example.com/path",
+        hypothesis: "visit example.com/path?)",
+        protectedExpectations: [
+          .init(kind: "url", text: "example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "domain-path-fragment-terminal",
+        language: .english,
+        reference: "visit example.com/path",
+        hypothesis: "visit example.com/path#",
+        protectedExpectations: [
+          .init(kind: "url", text: "example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "domain-path-fragment-closing",
+        language: .english,
+        reference: "visit example.com/path",
+        hypothesis: "visit example.com/path#)",
+        protectedExpectations: [
+          .init(kind: "url", text: "example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "double-slash-query-terminal",
+        language: .english,
+        reference: "visit //example.com/path",
+        hypothesis: "visit //example.com/path?",
+        protectedExpectations: [
+          .init(kind: "url", text: "//example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "double-slash-query-closing",
+        language: .english,
+        reference: "visit //example.com/path",
+        hypothesis: "visit //example.com/path?)",
+        protectedExpectations: [
+          .init(kind: "url", text: "//example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "double-slash-fragment-terminal",
+        language: .english,
+        reference: "visit //example.com/path",
+        hypothesis: "visit //example.com/path#",
+        protectedExpectations: [
+          .init(kind: "url", text: "//example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "double-slash-fragment-closing",
+        language: .english,
+        reference: "visit //example.com/path",
+        hypothesis: "visit //example.com/path#)",
+        protectedExpectations: [
+          .init(kind: "url", text: "//example.com/path", comparison: .exact)
+        ]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "domain-path-query-terminal",
+      "domain-path-query-closing",
+      "domain-path-fragment-terminal",
+      "domain-path-fragment-closing",
+      "double-slash-query-terminal",
+      "double-slash-query-closing",
+      "double-slash-fragment-terminal",
+      "double-slash-fragment-closing",
+    ])
+}
+
+@Test func distinguishesURLSubdelimitersFromFilesystemSuffixes() throws {
+  let exampleURL = "https:" + "//example.com"
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "url-semicolon-parameter",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL);session=1",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-dollar-subdelimiter",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)$token",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-comma-subdelimiter",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL),part",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-terminal-semicolon",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL);",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-terminal-comma",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL),",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "path-terminal-tilde",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo~",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-tilde-closing",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo~)",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-plus",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo+",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-hash",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo#",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-hash-closing",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo#]",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-period",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo.",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-question",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo?",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-period-closing",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo.)",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-question-closing",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo?]",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "windows-path-terminal-question",
+        language: .english,
+        reference: "copy C:\\tmp\\foo",
+        hypothesis: "copy C:\\tmp\\foo?",
+        protectedExpectations: [.init(kind: "path", text: "C:\\tmp\\foo", comparison: .exact)]
+      ),
+      .init(
+        id: "relative-path-terminal-question",
+        language: .english,
+        reference: "copy docs/readme",
+        hypothesis: "copy docs/readme?",
+        protectedExpectations: [.init(kind: "path", text: "docs/readme", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "url-semicolon-parameter",
+      "url-dollar-subdelimiter",
+      "url-comma-subdelimiter",
+      "path-terminal-tilde",
+      "path-terminal-tilde-closing",
+      "path-terminal-plus",
+      "path-terminal-hash",
+      "path-terminal-hash-closing",
     ])
 }
 
