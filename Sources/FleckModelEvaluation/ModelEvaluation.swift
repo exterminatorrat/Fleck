@@ -840,8 +840,13 @@ public enum ModelEvaluationScorer {
   }
 
   private static func isNumericShaped(_ text: String) -> Bool {
+    var numericText = text
+    if let first = numericText.first, isNumericSign(first) {
+      numericText.removeFirst()
+    }
+
     var hasDigit = false
-    for character in text {
+    for character in numericText {
       if isDecimalDigit(character) {
         hasDigit = true
       } else if !isNumericSeparator(character)

@@ -625,6 +625,46 @@ import Testing
     ])
 }
 
+@Test func classifiesSignedProtectedValuesAsNumeric() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "signed-negative-decimal-embedded",
+        language: .english,
+        reference: "send -2 invoices",
+        hypothesis: "send -2.0 invoices",
+        protectedExpectations: [.init(kind: "number", text: "-2", comparison: .exact)]
+      ),
+      .init(
+        id: "signed-positive-embedded",
+        language: .english,
+        reference: "send +2 invoices",
+        hypothesis: "send +20 invoices",
+        protectedExpectations: [.init(kind: "number", text: "+2", comparison: .exact)]
+      ),
+      .init(
+        id: "signed-negative-boundary",
+        language: .english,
+        reference: "send -2 invoices",
+        hypothesis: "send -2.",
+        protectedExpectations: [.init(kind: "number", text: "-2", comparison: .exact)]
+      ),
+      .init(
+        id: "signed-positive-boundary",
+        language: .english,
+        reference: "send +2 invoices",
+        hypothesis: "send +2.",
+        protectedExpectations: [.init(kind: "number", text: "+2", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "signed-negative-decimal-embedded",
+      "signed-positive-embedded",
+    ])
+}
+
 @Test func requiresProtectedWordsToHaveLiteralBoundaries() throws {
   let report = try ModelEvaluationScorer.score(
     validInput(cases: [
