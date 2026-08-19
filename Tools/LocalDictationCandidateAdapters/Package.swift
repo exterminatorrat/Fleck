@@ -25,6 +25,10 @@ let package = Package(
       name: "QwenASRSpikeContract",
       path: "Spikes/QwenASR/Sources/QwenASRSpikeContract"
     ),
+    .target(
+      name: "NemotronASRSpikeContract",
+      path: "Spikes/NemotronASR/Sources/NemotronASRSpikeContract"
+    ),
     .executableTarget(
       name: "LocalDictationCandidateCLI",
       dependencies: [
@@ -39,6 +43,7 @@ let package = Package(
         "LocalDictationCandidateRunner",
         "LocalDictationCandidateCLI",
         "QwenASRSpikeContract",
+        "NemotronASRSpikeContract",
       ]
     ),
   ]
