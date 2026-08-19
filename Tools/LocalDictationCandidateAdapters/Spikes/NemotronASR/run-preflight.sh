@@ -89,7 +89,7 @@ publish_output_exclusively() {
   local source="$1"
   local destination="$2"
 
-  if ! ln "$source" "$destination"; then
+  if ! /bin/link "$source" "$destination"; then
     rm -f "$source"
     echo "preflight output publication failed: destination already exists or is unavailable" >&2
     return 2
@@ -134,6 +134,15 @@ run_self_test() {
   local race_output
   local race_result
   local race_exit
+  local directory_race_temp
+  local directory_race_output
+  local directory_race_result
+  local directory_race_exit
+  local symlink_race_temp
+  local symlink_race_output
+  local symlink_race_target
+  local symlink_race_result
+  local symlink_race_exit
 
   self_test_root="$(mktemp -d "${TMPDIR:-/tmp}/fleck-nemotron-preflight-self-test.XXXXXX")"
   trap 'rm -rf "$self_test_root"' RETURN
@@ -153,6 +162,44 @@ run_self_test() {
     return 1
   fi
   echo "self-test=exclusive-publication-race-preserves-destination:pass"
+
+  directory_race_temp="$self_test_root/directory-race-output-temp"
+  directory_race_output="$self_test_root/directory-race-output"
+  printf 'directory-race-output\n' > "$directory_race_temp"
+  mkdir "$directory_race_output"
+  set +e
+  directory_race_result="$(publish_output_exclusively "$directory_race_temp" "$directory_race_output" 2>&1)"
+  directory_race_exit=$?
+  set -e
+  if [[ "$directory_race_exit" -eq 0 ||
+        "$directory_race_result" != *"preflight output publication failed"* ||
+        -e "$directory_race_temp" ||
+        ! -d "$directory_race_output" ]] ||
+     [[ -n "$(find "$directory_race_output" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    echo "self-test=exclusive-publication-directory-destination-rejected:fail" >&2
+    return 1
+  fi
+  echo "self-test=exclusive-publication-directory-destination-rejected:pass"
+
+  symlink_race_temp="$self_test_root/symlink-race-output-temp"
+  symlink_race_output="$self_test_root/symlink-race-output"
+  symlink_race_target="$self_test_root/symlink-race-target"
+  printf 'symlink-race-output\n' > "$symlink_race_temp"
+  mkdir "$symlink_race_target"
+  ln -s "$symlink_race_target" "$symlink_race_output"
+  set +e
+  symlink_race_result="$(publish_output_exclusively "$symlink_race_temp" "$symlink_race_output" 2>&1)"
+  symlink_race_exit=$?
+  set -e
+  if [[ "$symlink_race_exit" -eq 0 ||
+        "$symlink_race_result" != *"preflight output publication failed"* ||
+        -e "$symlink_race_temp" ||
+        ! -L "$symlink_race_output" ]] ||
+     [[ -n "$(find "$symlink_race_target" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    echo "self-test=exclusive-publication-symlink-directory-destination-rejected:fail" >&2
+    return 1
+  fi
+  echo "self-test=exclusive-publication-symlink-directory-destination-rejected:pass"
 
   invalid_path="$self_test_root/invalid-backend.json"
   set +e
