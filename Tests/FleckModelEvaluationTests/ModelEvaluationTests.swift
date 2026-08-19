@@ -671,6 +671,47 @@ import Testing
     ])
 }
 
+@Test func requiresProtectedNumbersToRejectLeadingSeparators() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "number-leading-decimal",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send .2",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-leading-slash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send /2",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-leading-colon",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send :2",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-period",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2.",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "number-leading-decimal",
+      "number-leading-slash",
+      "number-leading-colon",
+    ])
+}
+
 @Test func requiresProtectedNumericRangesToHaveLiteralBoundaries() throws {
   let report = try ModelEvaluationScorer.score(
     validInput(cases: [
@@ -777,6 +818,64 @@ import Testing
   #expect(report.protectedViolations.map(\.caseID) == ["word-embedded"])
 }
 
+@Test func requiresProtectedWordsToRespectPunctuationContext() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "word-hyphen-right",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alex-Morgan",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+      .init(
+        id: "word-hyphen-left",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Morgan-Alex",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+      .init(
+        id: "word-apostrophe-right",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alex's",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+      .init(
+        id: "word-period-right",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alex.example",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+      .init(
+        id: "word-terminal-period",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alex.",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+      .init(
+        id: "word-insensitive-terminal-period",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "Call ALEX.",
+        protectedExpectations: [
+          .init(kind: "name", text: "Alex", comparison: .caseAndWhitespaceInsensitive)
+        ]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "word-hyphen-right",
+      "word-hyphen-left",
+      "word-apostrophe-right",
+      "word-period-right",
+    ])
+}
+
 @Test func requiresProtectedPathsToHaveLiteralBoundaries() throws {
   let report = try ModelEvaluationScorer.score(
     validInput(cases: [
@@ -824,6 +923,52 @@ import Testing
         protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
       ),
       .init(
+        id: "path-terminal-period-ascii-quote",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo.\"",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-question-bracket",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo?]",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "url-terminal-period-curly-quote",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL).”",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-terminal-question-parenthesis",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)?)",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "path-leading-dot",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy ./tmp/foo",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-leading-parent",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy ../tmp/foo",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
         id: "url-path-continuation",
         language: .english,
         reference: "visit \(exampleURL)",
@@ -859,6 +1004,8 @@ import Testing
 
   #expect(
     report.protectedViolations.map(\.caseID) == [
+      "path-leading-dot",
+      "path-leading-parent",
       "url-path-continuation",
       "url-query-continuation",
       "path-extension-continuation",

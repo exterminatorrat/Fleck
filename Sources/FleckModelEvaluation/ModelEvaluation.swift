@@ -808,11 +808,15 @@ public enum ModelEvaluationScorer {
 
     switch shape {
     case .word:
-      return isWordOrIdentifierContinuation(boundary)
+      return continuesWordValue(
+        boundary: boundary,
+        continuation: continuation
+      )
     case .pathOrURL:
       return continuesPathOrURLValue(
         boundary: boundary,
-        continuation: continuation
+        continuation: continuation,
+        isLeft: isLeft
       )
     case .numeric:
       if isWordOrIdentifierContinuation(boundary) {
@@ -828,7 +832,7 @@ public enum ModelEvaluationScorer {
         return isLeft || continuation.map(isDecimalDigit) == true
       }
       return isNumericSeparator(boundary)
-        && continuation.map(isDecimalDigit) == true
+        && (isLeft || continuation.map(isDecimalDigit) == true)
     }
   }
 
@@ -900,13 +904,32 @@ public enum ModelEvaluationScorer {
     isLetterOrDigit(character) || character == "_"
   }
 
+  private static func continuesWordValue(
+    boundary: Character,
+    continuation: Character?
+  ) -> Bool {
+    if isWordOrIdentifierContinuation(boundary) {
+      return true
+    }
+    guard
+      isApostrophe(boundary)
+        || boundary == "-"
+        || boundary == "."
+        || boundary == "@"
+    else {
+      return false
+    }
+    return continuation.map(isWordOrIdentifierContinuation) == true
+  }
+
   private static func isPathURLContinuation(_ character: Character) -> Bool {
     character.unicodeScalars.contains { isPathURLScalar($0) }
   }
 
   private static func continuesPathOrURLValue(
     boundary: Character,
-    continuation: Character?
+    continuation: Character?,
+    isLeft: Bool
   ) -> Bool {
     if isWordOrIdentifierContinuation(boundary) {
       return true
@@ -915,7 +938,17 @@ public enum ModelEvaluationScorer {
       return true
     }
     guard isPathURLContinuation(boundary) else { return false }
-    return continuation.map { !isWhitespace($0) } == true
+    if isLeft {
+      return true
+    }
+    guard let continuation, !isWhitespace(continuation) else { return false }
+    return !isClosingSentenceDelimiter(continuation)
+  }
+
+  private static func isClosingSentenceDelimiter(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      [0x22, 0x27, 0x2019, 0x201D, 0x29, 0x5D, 0x7D].contains($0.value)
+    }
   }
 
   private static func isDecimalDigit(_ character: Character) -> Bool {
