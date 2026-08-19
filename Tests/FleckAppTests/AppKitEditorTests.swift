@@ -2364,6 +2364,34 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(bodyTextView.enclosingScrollView === bodyScrollView)
 }
 
+@Test @MainActor func hostedNotesPanelUsesSlimOverlayScrollIndicator() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(
+    title: "Slim indicator",
+    body: (0..<80).map { "Body line \($0) keeps the document scrollable." }
+      .joined(separator: "\n"),
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (_, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let scrollView = try #require(hostedPanelBodyScrollView(in: host))
+  let verticalScroller = try #require(scrollView.verticalScroller)
+
+  #expect(scrollView.hasVerticalScroller)
+  #expect(scrollView.autohidesScrollers)
+  #expect(scrollView.scrollerStyle == .overlay)
+  #expect(verticalScroller.controlSize == .mini)
+  #expect(scrollView.contentView.frame.width >= scrollView.bounds.width - 1)
+}
+
 @Test @MainActor func hostedNotesPanelTitleUsesSemiboldCustomFont() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)

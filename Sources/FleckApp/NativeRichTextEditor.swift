@@ -747,6 +747,8 @@
       )
       contentView.scroll(to: contentOrigin)
       reflectScrolledClipView(contentView)
+      scrollerStyle = .overlay
+      verticalScroller?.controlSize = .mini
     }
 
     func relayoutDocument() {
