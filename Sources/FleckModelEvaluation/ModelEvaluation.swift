@@ -288,6 +288,8 @@ public enum ModelEvaluationError: Error, Equatable, Sendable, CustomStringConver
   case emptyModelID
   case emptyRevision
   case emptyRuntime
+  case emptyQuantization
+  case emptyHardware
   case emptyCases
   case emptyCaseID
   case duplicateCaseID(String)
@@ -310,6 +312,10 @@ public enum ModelEvaluationError: Error, Equatable, Sendable, CustomStringConver
       return "Model revision is required."
     case .emptyRuntime:
       return "Runtime is required."
+    case .emptyQuantization:
+      return "Quantization is required."
+    case .emptyHardware:
+      return "Hardware is required."
     case .emptyCases:
       return "At least one evaluation case is required."
     case .emptyCaseID:
@@ -337,6 +343,12 @@ public enum ModelEvaluationError: Error, Equatable, Sendable, CustomStringConver
 }
 
 public enum ModelEvaluationScorer {
+  private enum ProtectedValueShape {
+    case word
+    case numeric
+    case pathOrURL
+  }
+
   public static func score(
     _ input: ModelEvaluationRunInput
   ) throws -> ModelEvaluationReport {
@@ -486,6 +498,12 @@ public enum ModelEvaluationScorer {
     }
     guard !input.runtime.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw ModelEvaluationError.emptyRuntime
+    }
+    guard !input.quantization.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw ModelEvaluationError.emptyQuantization
+    }
+    guard !input.hardware.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw ModelEvaluationError.emptyHardware
     }
     guard !input.cases.isEmpty else {
       throw ModelEvaluationError.emptyCases
@@ -730,8 +748,7 @@ public enum ModelEvaluationScorer {
   ) -> Bool {
     guard !expected.isEmpty else { return false }
 
-    let expectedFirst = expected[expected.startIndex]
-    let expectedLast = expected[expected.index(before: expected.endIndex)]
+    let shape = protectedValueShape(expected)
     var searchStart = hypothesis.startIndex
     while searchStart < hypothesis.endIndex,
       let range = hypothesis.range(
@@ -739,23 +756,38 @@ public enum ModelEvaluationScorer {
         range: searchStart..<hypothesis.endIndex
       )
     {
-      let leftBoundary =
+      let leftBoundaryIndex: String.Index? =
         range.lowerBound > hypothesis.startIndex
-        ? hypothesis[hypothesis.index(before: range.lowerBound)]
+        ? hypothesis.index(before: range.lowerBound)
         : nil
-      let rightBoundary =
+      let rightBoundaryIndex: String.Index? =
         range.upperBound < hypothesis.endIndex
-        ? hypothesis[range.upperBound]
+        ? range.upperBound
         : nil
+      let leftBoundary = leftBoundaryIndex.map { hypothesis[$0] }
+      let rightBoundary = rightBoundaryIndex.map { hypothesis[$0] }
+      let leftContinuation: Character? = leftBoundaryIndex.flatMap { index in
+        guard index > hypothesis.startIndex else { return nil }
+        return hypothesis[hypothesis.index(before: index)]
+      }
+      let rightContinuation: Character? = rightBoundaryIndex.flatMap { index in
+        let nextIndex = hypothesis.index(after: index)
+        guard nextIndex < hypothesis.endIndex else { return nil }
+        return hypothesis[nextIndex]
+      }
 
-      let leftContinuesValue =
-        leftBoundary.map {
-          continuesProtectedValue(edge: expectedFirst, boundary: $0)
-        } ?? false
-      let rightContinuesValue =
-        rightBoundary.map {
-          continuesProtectedValue(edge: expectedLast, boundary: $0)
-        } ?? false
+      let leftContinuesValue = continuesProtectedValue(
+        shape: shape,
+        boundary: leftBoundary,
+        continuation: leftContinuation,
+        isLeft: true
+      )
+      let rightContinuesValue = continuesProtectedValue(
+        shape: shape,
+        boundary: rightBoundary,
+        continuation: rightContinuation,
+        isLeft: false
+      )
       if !leftContinuesValue && !rightContinuesValue {
         return true
       }
@@ -766,17 +798,76 @@ public enum ModelEvaluationScorer {
   }
 
   private static func continuesProtectedValue(
-    edge: Character,
-    boundary: Character
+    shape: ProtectedValueShape,
+    boundary: Character?,
+    continuation: Character?,
+    isLeft: Bool
   ) -> Bool {
-    if isWordOrIdentifierContinuation(edge) {
+    guard let boundary else { return false }
+
+    switch shape {
+    case .word:
+      return isWordOrIdentifierContinuation(boundary)
+    case .pathOrURL:
       return isWordOrIdentifierContinuation(boundary)
         || isPathURLContinuation(boundary)
+    case .numeric:
+      if isWordOrIdentifierContinuation(boundary) {
+        return true
+      }
+      if isLeft && isCurrencySymbol(boundary) {
+        return true
+      }
+      if !isLeft && isPercent(boundary) {
+        return true
+      }
+      return isNumericSeparator(boundary)
+        && continuation.map(isDecimalDigit) == true
     }
-    if isPathURLContinuation(edge) {
-      return isPathURLContinuation(boundary)
+  }
+
+  private static func protectedValueShape(_ text: String) -> ProtectedValueShape {
+    if isNumericShaped(text) {
+      return .numeric
     }
-    return false
+    if isPathURLShaped(text) {
+      return .pathOrURL
+    }
+    return .word
+  }
+
+  private static func isNumericShaped(_ text: String) -> Bool {
+    var hasDigit = false
+    for character in text {
+      if isDecimalDigit(character) {
+        hasDigit = true
+      } else if !isNumericSeparator(character)
+        && !isCurrencySymbol(character)
+        && !isPercent(character)
+      {
+        return false
+      }
+    }
+    return hasDigit
+  }
+
+  private static func isPathURLShaped(_ text: String) -> Bool {
+    let scalars = text.unicodeScalars
+    let hasPathSeparator = scalars.contains {
+      $0.value == 0x2F || $0.value == 0x5C
+    }
+    if hasPathSeparator {
+      return true
+    }
+
+    guard !text.contains(where: isWhitespace) else { return false }
+    let hasURLMarker = scalars.contains {
+      [0x23, 0x25, 0x26, 0x3A, 0x3D, 0x40, 0x3F].contains($0.value)
+    }
+    let hasDomainPeriod =
+      scalars.contains { $0.value == 0x2E }
+      && scalars.contains { CharacterSet.letters.contains($0) }
+    return hasURLMarker || hasDomainPeriod
   }
 
   private static func isWordOrIdentifierContinuation(
@@ -787,6 +878,32 @@ public enum ModelEvaluationScorer {
 
   private static func isPathURLContinuation(_ character: Character) -> Bool {
     character.unicodeScalars.contains { isPathURLScalar($0) }
+  }
+
+  private static func isDecimalDigit(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      CharacterSet.decimalDigits.contains($0)
+    }
+  }
+
+  private static func isCurrencySymbol(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      [0x24, 0xA2, 0xA3, 0xA4, 0xA5, 0x20A9, 0x20AC, 0x20B9, 0xFFE5].contains(
+        $0.value
+      )
+    }
+  }
+
+  private static func isPercent(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      $0.value == 0x25 || $0.value == 0xFF05
+    }
+  }
+
+  private static func isNumericSeparator(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      [0x2C, 0x2E, 0x2F, 0x3A, 0x2044].contains($0.value)
+    }
   }
 
   private static func isPathURLScalar(_ scalar: Unicode.Scalar) -> Bool {

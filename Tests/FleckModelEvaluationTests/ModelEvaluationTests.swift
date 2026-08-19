@@ -156,6 +156,11 @@ import Testing
   expectError(.emptyRuntime, input: validInput(runtime: ""))
 }
 
+@Test func rejectsEmptyQuantizationAndHardwareMetadata() {
+  expectError(.emptyQuantization, input: validInput(quantization: " "))
+  expectError(.emptyHardware, input: validInput(hardware: "\n"))
+}
+
 @Test func rejectsEmptyCaseArray() {
   expectError(.emptyCases, input: validInput(cases: []))
 }
@@ -307,6 +312,38 @@ import Testing
             text: "Priya Shah",
             comparison: .caseAndWhitespaceInsensitive
           )
+        ]
+      )
+    ]))
+
+  #expect(report.protectedViolations.isEmpty)
+}
+
+@Test func acceptsProtectedNumberBeforeTerminalSentencePunctuation() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "number-period",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2.",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      )
+    ]))
+
+  #expect(report.protectedViolations.isEmpty)
+}
+
+@Test func acceptsInsensitiveProtectedNameBeforeTerminalSentencePunctuation() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "name-period",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "Call ALEX.",
+        protectedExpectations: [
+          .init(kind: "name", text: "Alex", comparison: .caseAndWhitespaceInsensitive)
         ]
       )
     ]))
@@ -523,10 +560,37 @@ import Testing
         reference: "send 2 invoices",
         hypothesis: "send 20 invoices",
         protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
-      )
+      ),
+      .init(
+        id: "number-decimal-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send 2.0 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-currency-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send $2 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-percent-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send 2% invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
     ]))
 
-  #expect(report.protectedViolations.map(\.caseID) == ["number-embedded"])
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "number-embedded",
+      "number-decimal-embedded",
+      "number-currency-embedded",
+      "number-percent-embedded",
+    ])
 }
 
 @Test func requiresProtectedWordsToHaveLiteralBoundaries() throws {
