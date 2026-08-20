@@ -1278,6 +1278,8 @@
     private var textChangeGeneration = 0
     private var pasteOptionsBoundsObserver: NSObjectProtocol?
     private var pasteOptionsFocusObservers: [NSObjectProtocol] = []
+    private var pasteOptionsClickMonitor: Any?
+    private var isPasteOptionsMenuVisible = false
 
     var hasPasteOptions: Bool { pendingPaste != nil }
 
@@ -2021,6 +2023,7 @@
       pendingPaste = nil
       pasteOptionsButton?.removeFromSuperview()
       pasteOptionsButton = nil
+      removePasteOptionsClickMonitor()
     }
 
     func isPasteOptionEnabled(_ option: PasteOption) -> Bool {
@@ -2084,6 +2087,8 @@
       addSubview(button)
       pasteOptionsButton = button
       positionPasteOptionsButton(anchor: anchor)
+      guard self.pendingPaste != nil, pasteOptionsButton != nil else { return }
+      installPasteOptionsClickMonitor()
     }
 
     private func pasteOptionsAnchorRect(for range: NSRange) -> NSRect? {
@@ -2142,12 +2147,16 @@
         item.state = option == .keepSourceFormatting ? .on : .off
         menu.addItem(item)
       }
+      isPasteOptionsMenuVisible = true
+      defer {
+        isPasteOptionsMenuVisible = false
+        cancelPasteOptions()
+      }
       menu.popUp(
         positioning: nil,
         at: NSPoint(x: 0, y: sender.bounds.maxY),
         in: sender
       )
-      cancelPasteOptions()
     }
 
     @objc private func selectPasteOptionFromMenu(_ sender: NSMenuItem) {
@@ -2373,18 +2382,23 @@
       super.viewDidMoveToWindow()
       removePasteOptionsBoundsObserver()
       removePasteOptionsFocusObservers()
+      removePasteOptionsClickMonitor()
       guard let window else { return }
       installPasteOptionsFocusObservers(for: window)
-      guard let clipView = enclosingScrollView?.contentView else { return }
-      clipView.postsBoundsChangedNotifications = true
-      pasteOptionsBoundsObserver = NotificationCenter.default.addObserver(
-        forName: NSView.boundsDidChangeNotification,
-        object: clipView,
-        queue: .main
-      ) { [weak self] _ in
-        DispatchQueue.main.async { [weak self] in
-          self?.updatePasteOptionsPlacement()
+      if let clipView = enclosingScrollView?.contentView {
+        clipView.postsBoundsChangedNotifications = true
+        pasteOptionsBoundsObserver = NotificationCenter.default.addObserver(
+          forName: NSView.boundsDidChangeNotification,
+          object: clipView,
+          queue: .main
+        ) { [weak self] _ in
+          DispatchQueue.main.async { [weak self] in
+            self?.updatePasteOptionsPlacement()
+          }
         }
+      }
+      if pendingPaste != nil, pasteOptionsButton != nil {
+        installPasteOptionsClickMonitor()
       }
     }
 
@@ -2393,6 +2407,9 @@
         NotificationCenter.default.removeObserver(observer)
       }
       pasteOptionsFocusObservers.forEach(NotificationCenter.default.removeObserver)
+      if let monitor = pasteOptionsClickMonitor {
+        NSEvent.removeMonitor(monitor)
+      }
     }
 
     override func layout() {
@@ -2416,6 +2433,42 @@
       }
     }
 
+    private func installPasteOptionsClickMonitor() {
+      guard pasteOptionsClickMonitor == nil else { return }
+      pasteOptionsClickMonitor = NSEvent.addLocalMonitorForEvents(
+        matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+      ) { [weak self] event in
+        guard let self else { return event }
+        MainActor.assumeIsolated {
+          guard let textWindow = self.window,
+            event.windowNumber == textWindow.windowNumber
+          else { return }
+          guard !self.isPasteOptionsMenuVisible,
+            !self.isPasteOptionsEventInsideTextView(event)
+          else { return }
+          self.cancelPasteOptions()
+        }
+        return event
+      }
+    }
+
+    private func isPasteOptionsEventInsideTextView(_ event: NSEvent) -> Bool {
+      guard let textWindow = window, event.windowNumber == textWindow.windowNumber else {
+        return false
+      }
+      let point = event.window == nil
+        ? event.locationInWindow
+        : convert(event.locationInWindow, from: nil)
+      return bounds.contains(point)
+    }
+
+    private func removePasteOptionsClickMonitor() {
+      if let pasteOptionsClickMonitor {
+        NSEvent.removeMonitor(pasteOptionsClickMonitor)
+        self.pasteOptionsClickMonitor = nil
+      }
+    }
+
     private func installPasteOptionsFocusObservers(for window: NSWindow) {
       let notificationCenter = NotificationCenter.default
       pasteOptionsFocusObservers = [
@@ -2424,7 +2477,7 @@
           object: window,
           queue: .main
         ) { [weak self] _ in
-          DispatchQueue.main.async { [weak self] in
+          MainActor.assumeIsolated {
             self?.cancelPasteOptions()
           }
         },
@@ -2433,7 +2486,7 @@
           object: NSApplication.shared,
           queue: .main
         ) { [weak self] _ in
-          DispatchQueue.main.async { [weak self] in
+          MainActor.assumeIsolated {
             self?.cancelPasteOptions()
           }
         }

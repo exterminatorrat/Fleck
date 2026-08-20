@@ -200,7 +200,7 @@ import Testing
   #expect(!textView.hasPasteOptions)
 }
 
-@Test @MainActor func pasteOptionsDismissOnWindowAndApplicationFocusNotifications() async {
+@MainActor private func pasteOptionsDismissOnWindowAndApplicationFocusNotificationsImpl() async {
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
@@ -231,6 +231,61 @@ import Testing
   #expect(!textView.hasPasteOptions)
 }
 
+@Test @MainActor func pasteOptionsDismissOnSameWindowOutsideClick() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 220, height: 160))
+  let background = NSView(frame: NSRect(x: 220, y: 0, width: 100, height: 160))
+  let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  contentView.addSubview(textView)
+  contentView.addSubview(background)
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = contentView
+  window.makeKeyAndOrderFront(nil)
+  defer { window.orderOut(nil) }
+  textView.viewDidMoveToWindow()
+  #expect(window.makeFirstResponder(textView))
+
+  textView.insertPastedTextForTesting(NSAttributedString(string: "Pasted"))
+  #expect(textView.hasPasteOptions)
+
+  let location = background.convert(NSPoint(x: 20, y: 20), to: nil)
+  let mouseDown = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: location,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    )
+  )
+  let mouseUp = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseUp,
+      location: location,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 0
+    )
+  )
+  NSApplication.shared.sendEvent(mouseDown)
+  NSApplication.shared.sendEvent(mouseUp)
+
+  #expect(window.firstResponder === textView)
+  #expect(!textView.hasPasteOptions)
+}
+
 @Test @MainActor func attachmentPasteKeepsNativeOptionEnabledOnly() {
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
   let attachment = NSTextAttachment()
@@ -244,7 +299,7 @@ import Testing
   #expect(textView.pasteOptionEnabledStates == [true, false, false])
 }
 
-@Test @MainActor func selectingPasteTextOnlyReplacesOnlyLatestPasteAndUndoRestoresIt() async throws {
+@MainActor private func selectingPasteTextOnlyReplacesOnlyLatestPasteAndUndoRestoresItImpl() async throws {
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
@@ -301,6 +356,17 @@ import Testing
       of: try #require(textView.textStorage?.attribute(.font, at: 7, effectiveRange: nil) as? NSFont)
     ).contains(.italicFontMask)
   )
+}
+
+@Suite(.serialized)
+struct PasteOptionsGlobalFocusTests {
+  @Test @MainActor func pasteOptionsDismissOnWindowAndApplicationFocusNotifications() async {
+    await pasteOptionsDismissOnWindowAndApplicationFocusNotificationsImpl()
+  }
+
+  @Test @MainActor func selectingPasteTextOnlyReplacesOnlyLatestPasteAndUndoRestoresIt() async throws {
+    try await selectingPasteTextOnlyReplacesOnlyLatestPasteAndUndoRestoresItImpl()
+  }
 }
 
 @Test @MainActor func listFormattingPreservesInlineAttributes() {
