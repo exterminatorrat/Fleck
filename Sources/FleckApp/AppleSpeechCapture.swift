@@ -127,6 +127,111 @@ enum AppleSpeechLocale {
   }
 }
 
+enum AppleSpeechAssetStatus: Equatable, Sendable {
+  case unsupported
+  case supported
+  case downloading
+  case installed
+}
+
+struct AppleSpeechAssetReservation: Sendable {
+  let locale: Locale
+  let ownsReservation: Bool
+}
+
+struct AppleSpeechAssetReadiness: Sendable {
+  private let equivalentLocale: @Sendable (Locale) async -> Locale?
+  private let reserveLocale: @Sendable (Locale) async throws -> Bool
+  private let releaseLocale: @Sendable (Locale) async -> Void
+
+  init(
+    equivalentLocale: @escaping @Sendable (Locale) async -> Locale?,
+    reserveLocale: @escaping @Sendable (Locale) async throws -> Bool,
+    releaseLocale: @escaping @Sendable (Locale) async -> Void
+  ) {
+    self.equivalentLocale = equivalentLocale
+    self.reserveLocale = reserveLocale
+    self.releaseLocale = releaseLocale
+  }
+
+  @available(macOS 26.0, *)
+  static var system: Self {
+    Self(
+      equivalentLocale: { locale in
+        await DictationTranscriber.supportedLocale(equivalentTo: locale)
+      },
+      reserveLocale: { locale in
+        try await AssetInventory.reserve(locale: locale)
+      },
+      releaseLocale: { locale in
+        _ = await AssetInventory.release(reservedLocale: locale)
+      }
+    )
+  }
+
+  func equivalentLocale(for requestedLocale: Locale) async -> Locale? {
+    await equivalentLocale(requestedLocale)
+  }
+
+  func release(_ reservation: AppleSpeechAssetReservation) async {
+    guard reservation.ownsReservation else { return }
+    await releaseLocale(reservation.locale)
+  }
+
+  func reserveAndVerify(
+    locale: Locale,
+    status: @escaping @Sendable () async -> AppleSpeechAssetStatus,
+    shouldContinue: @escaping @Sendable () async -> Bool = { !Task.isCancelled }
+  ) async throws -> AppleSpeechAssetReservation {
+    guard await shouldContinue() else { throw CancellationError() }
+
+    let didReserve: Bool
+    do {
+      didReserve = try await reserveLocale(locale)
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      throw DictationFailure.unavailable
+    }
+    let reservation = AppleSpeechAssetReservation(
+      locale: locale,
+      ownsReservation: didReserve
+    )
+
+    guard await shouldContinue() else {
+      await release(reservation)
+      throw CancellationError()
+    }
+    guard await status() == .installed else {
+      await release(reservation)
+      throw DictationFailure.unavailable
+    }
+    guard await shouldContinue() else {
+      await release(reservation)
+      throw CancellationError()
+    }
+    return reservation
+  }
+}
+
+@available(macOS 26.0, *)
+private extension AssetInventory.Status {
+  var appleSpeechAssetStatus: AppleSpeechAssetStatus {
+    switch self {
+    case .unsupported:
+      .unsupported
+    case .supported:
+      .supported
+    case .downloading:
+      .downloading
+    case .installed:
+      .installed
+    @unknown default:
+      .unsupported
+    }
+  }
+}
+
 final class BoundedAudioIngress: @unchecked Sendable {
   let buffers: AsyncThrowingStream<AVAudioPCMBuffer, Error>
   private let continuation: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation
@@ -417,9 +522,10 @@ final class AppleSpeechCapture: SpeechEngine {
 
   private func release(_ candidate: any AppleSpeechSession) async {
     guard let session, session === candidate else { return }
-    self.session = nil
     stopInterruptionObservation()
     await candidate.releaseResources()
+    guard self.session === candidate else { return }
+    self.session = nil
   }
 
   private func stopInterruptionObservation() {
@@ -769,10 +875,12 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
   private let locale = Locale(identifier: "en-US")
   private let microphoneUID: String?
   private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
+  private let assetReadiness: AppleSpeechAssetReadiness
   private var audioEngine: AVAudioEngine?
   private var analyzer: SpeechAnalyzer?
   private var converter: AVAudioConverter?
   private var analyzerFormat: AVAudioFormat?
+  private var ownedReservation: AppleSpeechAssetReservation?
   private var ingress: BoundedAudioIngress?
   private var analysisTask: Task<Void, Never>?
   private var resultsTask: Task<Void, Never>?
@@ -789,10 +897,12 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
 
   init(
     microphoneUID: String?,
-    microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void
+    microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void,
+    assetReadiness: AppleSpeechAssetReadiness = .system
   ) {
     self.microphoneUID = microphoneUID
     self.microphoneSelectionChanged = microphoneSelectionChanged
+    self.assetReadiness = assetReadiness
   }
 
   func start(
@@ -802,35 +912,63 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     guard !terminationRequested else { throw CancellationError() }
     let audioEngine = AVAudioEngine()
     self.audioEngine = audioEngine
-    let installedLocales = await DictationTranscriber.installedLocales
-    guard !terminationRequested else { throw CancellationError() }
-    guard AppleSpeechLocale.containsEquivalent(locale, in: installedLocales) else {
+
+    guard let transcriberLocale = await assetReadiness.equivalentLocale(for: locale) else {
       throw DictationFailure.unavailable
     }
+    guard canContinue() else { throw CancellationError() }
 
     let inputNode = audioEngine.inputNode
     await microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID))
-    guard !terminationRequested else { throw CancellationError() }
+    guard canContinue() else { throw CancellationError() }
     let naturalFormat = inputNode.inputFormat(forBus: 0)
     let transcriber = DictationTranscriber(
-      locale: locale,
+      locale: transcriberLocale,
       preset: .progressiveShortDictation
     )
     let modules: [any SpeechModule] = [transcriber]
+
+    let reservation = try await assetReadiness.reserveAndVerify(
+      locale: transcriberLocale,
+      status: {
+        await AssetInventory.status(forModules: modules).appleSpeechAssetStatus
+      },
+      shouldContinue: { [weak self] in
+        guard let self else { return false }
+        return await self.canContinue()
+      }
+    )
+
+    if reservation.ownsReservation {
+      self.ownedReservation = reservation
+    }
+    guard canContinue() else {
+      await releaseOwnedReservation()
+      throw CancellationError()
+    }
+
     guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(
       compatibleWith: modules,
       considering: naturalFormat
     ) else {
       throw DictationFailure.unavailable
     }
-    guard !terminationRequested else { throw CancellationError() }
+    guard canContinue() else { throw CancellationError() }
+
     let analyzer = SpeechAnalyzer(
       modules: modules,
       options: .init(priority: .userInitiated, modelRetention: .whileInUse)
     )
     self.analyzer = analyzer
+    guard canContinue() else {
+      await cancelAnalyzerOnce()
+      throw CancellationError()
+    }
     try await analyzer.prepareToAnalyze(in: format)
-    guard !terminationRequested else { throw CancellationError() }
+    guard canContinue() else {
+      await cancelAnalyzerOnce()
+      throw CancellationError()
+    }
 
     guard let converter = AVAudioConverter(from: naturalFormat, to: format) else {
       throw DictationFailure.unavailable
@@ -844,8 +982,6 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     self.levelRelay = levelRelay
     transcript = AppleSpeechTranscriptAssembler()
     terminalError = nil
-    didFinalize = false
-    didCancelAnalyzer = false
     let inputs = ModernAnalyzerInputSequence(
       buffers: ingress.buffers,
       convert: { [weak self] buffer in
@@ -940,6 +1076,7 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     }
     await analysisTask?.value
     await resultsTask?.value
+    await releaseOwnedReservation()
     analysisTask = nil
     resultsTask = nil
     ingress = nil
@@ -973,6 +1110,16 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     } else {
       await provisional?(transcript.displayText(provisional: text))
     }
+  }
+
+  private func canContinue() -> Bool {
+    !terminationRequested && !Task.isCancelled
+  }
+
+  private func releaseOwnedReservation() async {
+    guard let ownedReservation else { return }
+    self.ownedReservation = nil
+    await assetReadiness.release(ownedReservation)
   }
 
   private func fail(_ error: Error) {

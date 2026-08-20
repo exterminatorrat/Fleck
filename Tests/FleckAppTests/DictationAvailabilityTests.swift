@@ -508,6 +508,408 @@ private final class PermissionProbe {
   )
 }
 
+@Test func modernAppleSpeechReservesAssetsBeforeAnalyzerFormatSelection() throws {
+  let source = try String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
+    encoding: .utf8
+  )
+  let modern = try #require(
+    source.components(separatedBy: "private actor ModernAppleSpeechSession").last
+  )
+  let reservationOffset = modern.range(of: "assetReadiness.reserveAndVerify(").map {
+    modern.distance(from: modern.startIndex, to: $0.lowerBound)
+  } ?? Int.max
+  let formatOffset = modern.range(of: "SpeechAnalyzer.bestAvailableAudioFormat").map {
+    modern.distance(from: modern.startIndex, to: $0.lowerBound)
+  } ?? Int.max
+  let analyzerStartOffset = modern.range(of: "try await analyzer.start(inputSequence: inputs)").map {
+    modern.distance(from: modern.startIndex, to: $0.lowerBound)
+  } ?? Int.max
+
+  #expect(reservationOffset < formatOffset)
+  #expect(reservationOffset < analyzerStartOffset)
+}
+
+@Test func modernAppleSpeechOwnsReservedLocaleBeforeHandoffCancellationCheck() throws {
+  let source = try String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
+    encoding: .utf8
+  )
+  let modern = try #require(
+    source.components(separatedBy: "private actor ModernAppleSpeechSession").last
+  )
+  let transfer = try #require(modern.range(of: "self.ownedReservation = reservation"))
+  let transferOffset = modern.distance(from: modern.startIndex, to: transfer.lowerBound)
+  let afterTransfer = modern[transfer.upperBound...]
+  let handoffCheckOffset = afterTransfer.range(
+    of: "guard canContinue() else {"
+  ).map {
+    modern.distance(from: modern.startIndex, to: $0.lowerBound)
+  } ?? Int.max
+
+  #expect(handoffCheckOffset != Int.max)
+  #expect(transferOffset < handoffCheckOffset)
+}
+
+@Test func modernAppleSpeechHandoffCancellationReleasesOwnedReservationBeforeThrowing() throws {
+  let source = try String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
+    encoding: .utf8
+  )
+  let modern = try #require(
+    source.components(separatedBy: "private actor ModernAppleSpeechSession").last
+  )
+  let transfer = try #require(modern.range(of: "self.ownedReservation = reservation"))
+  let afterTransfer = modern[transfer.upperBound...]
+  let handoffGuard = try #require(afterTransfer.range(of: "guard canContinue() else {"))
+  let guardBody = afterTransfer[handoffGuard.upperBound...]
+  let releaseOffset = guardBody.range(of: "await releaseOwnedReservation()").map {
+    guardBody.distance(from: guardBody.startIndex, to: $0.lowerBound)
+  } ?? Int.max
+  let throwOffset = guardBody.range(of: "throw CancellationError()").map {
+    guardBody.distance(from: guardBody.startIndex, to: $0.lowerBound)
+  } ?? Int.max
+
+  #expect(releaseOffset != Int.max)
+  #expect(throwOffset != Int.max)
+  #expect(releaseOffset < throwOffset)
+}
+
+@Test func modernAppleSpeechGuardsLocaleLookupBeforeMicrophoneSelection() throws {
+  let source = try String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
+    encoding: .utf8
+  )
+  let modern = try #require(
+    source.components(separatedBy: "private actor ModernAppleSpeechSession").last
+  )
+  let localeLookup = try #require(
+    modern.range(
+      of: "guard let transcriberLocale = await assetReadiness.equivalentLocale(for: locale) else {"
+    )
+  )
+  let afterLocaleLookup = modern[localeLookup.upperBound...]
+  let guardOffset = afterLocaleLookup.range(
+    of: "guard canContinue() else { throw CancellationError() }"
+  ).map {
+    afterLocaleLookup.distance(from: afterLocaleLookup.startIndex, to: $0.lowerBound)
+  } ?? Int.max
+  let microphoneSelectionOffset = afterLocaleLookup.range(
+    of: "await microphoneSelectionChanged"
+  ).map {
+    afterLocaleLookup.distance(
+      from: afterLocaleLookup.startIndex,
+      to: $0.lowerBound
+    )
+  } ?? Int.max
+
+  #expect(guardOffset != Int.max)
+  #expect(guardOffset < microphoneSelectionOffset)
+}
+
+@Test func modernAppleSpeechGuardsFormatBeforeAnalyzerConstruction() throws {
+  let source = try String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
+    encoding: .utf8
+  )
+  let modern = try #require(
+    source.components(separatedBy: "private actor ModernAppleSpeechSession").last
+  )
+  let formatStart = try #require(
+    modern.range(of: "guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(")
+  )
+  let analyzerConstruction = try #require(
+    modern.range(of: "let analyzer = SpeechAnalyzer(")
+  )
+  let betweenFormatAndConstruction = modern[formatStart.lowerBound..<analyzerConstruction.lowerBound]
+  let guardOffset = betweenFormatAndConstruction.range(
+    of: "guard canContinue() else { throw CancellationError() }"
+  ).map {
+    betweenFormatAndConstruction.distance(
+      from: betweenFormatAndConstruction.startIndex,
+      to: $0.lowerBound
+    )
+  } ?? Int.max
+
+  #expect(guardOffset != Int.max)
+}
+
+@Test func modernAppleSpeechOwnsAnalyzerBeforePrepareAndGuardsBeforeStart() throws {
+  let source = try String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
+    encoding: .utf8
+  )
+  let modern = try #require(
+    source.components(separatedBy: "private actor ModernAppleSpeechSession").last
+  )
+  func offset(of needle: String) -> Int {
+    modern.range(of: needle).map {
+      modern.distance(from: modern.startIndex, to: $0.lowerBound)
+    } ?? Int.max
+  }
+
+  let analyzerConstructionOffset = offset(of: "let analyzer = SpeechAnalyzer(")
+  let analyzerOwnershipOffset = offset(of: "self.analyzer = analyzer")
+  let prepareOffset = offset(of: "try await analyzer.prepareToAnalyze(in: format)")
+  let analyzerStartOffset = offset(of: "try await analyzer.start(inputSequence: inputs)")
+  let prepareRange = try #require(
+    modern.range(of: "try await analyzer.prepareToAnalyze(in: format)")
+  )
+  let startRange = try #require(
+    modern.range(of: "try await analyzer.start(inputSequence: inputs)")
+  )
+  let afterPrepareBeforeStart = modern[prepareRange.upperBound..<startRange.lowerBound]
+  let postPrepareGuardOffset = afterPrepareBeforeStart.range(
+    of: "guard canContinue() else {\n      await cancelAnalyzerOnce()\n      throw CancellationError()\n    }"
+  ).map {
+    modern.distance(from: modern.startIndex, to: $0.lowerBound)
+  } ?? Int.max
+
+  #expect(analyzerConstructionOffset < analyzerOwnershipOffset)
+  #expect(analyzerOwnershipOffset < prepareOffset)
+  #expect(prepareOffset < postPrepareGuardOffset)
+  #expect(postPrepareGuardOffset < analyzerStartOffset)
+}
+
+@Test func modernAppleSpeechReadinessUsesEquivalentInstalledLocaleAndReturnsReservedLocale()
+  async throws
+{
+  let probe = AssetReadinessProbe()
+  let readiness = AppleSpeechAssetReadiness(
+    equivalentLocale: { _ in
+      await probe.record("equivalent")
+      return Locale(identifier: "en_US")
+    },
+    reserveLocale: { locale in
+      await probe.record("reserve:\(locale.identifier)")
+      return true
+    },
+    releaseLocale: { locale in
+      await probe.record("release:\(locale.identifier)")
+    }
+  )
+
+  let equivalentLocale = try #require(
+    await readiness.equivalentLocale(for: Locale(identifier: "en-US"))
+  )
+  let reservation = try await readiness.reserveAndVerify(
+    locale: equivalentLocale,
+    status: {
+      await probe.record("status:installed")
+      return .installed
+    }
+  )
+
+  #expect(reservation.locale.identifier == "en_US")
+  #expect(reservation.ownsReservation)
+  #expect(await probe.events == [
+    "equivalent",
+    "reserve:en_US",
+    "status:installed",
+  ])
+
+  await readiness.release(reservation)
+  #expect(await probe.events.last == "release:en_US")
+  #expect(await probe.count("release:en_US") == 1)
+}
+
+@Test func modernAppleSpeechReadinessRejectsSupportedDownloadingAndUnsupportedAssets()
+  async
+{
+  for status in [
+    AppleSpeechAssetStatus.supported,
+    .downloading,
+    .unsupported,
+  ] {
+    let probe = AssetReadinessProbe()
+    let readiness = makeAssetReadiness(probe: probe)
+
+    await #expect(throws: DictationFailure.unavailable) {
+      try await readiness.reserveAndVerify(
+        locale: Locale(identifier: "en_US"),
+        status: { status }
+      )
+    }
+
+    #expect(await probe.count("release:en_US") == 1)
+  }
+}
+
+@Test func modernAppleSpeechReadinessAcceptsPreExistingInstalledReservation() async throws {
+  let probe = AssetReadinessProbe()
+  let readiness = AppleSpeechAssetReadiness(
+    equivalentLocale: { _ in Locale(identifier: "en_US") },
+    reserveLocale: { locale in
+      await probe.record("reserve:\(locale.identifier)")
+      return false
+    },
+    releaseLocale: { locale in
+      await probe.record("release:\(locale.identifier)")
+    }
+  )
+
+  let reservation = try await readiness.reserveAndVerify(
+    locale: Locale(identifier: "en_US"),
+    status: {
+      await probe.record("status:installed")
+      return .installed
+    }
+  )
+
+  #expect(reservation.locale.identifier == "en_US")
+  #expect(!reservation.ownsReservation)
+  #expect(await probe.events == [
+    "reserve:en_US",
+    "status:installed",
+  ])
+  #expect(await probe.count("release:en_US") == 0)
+}
+
+@Test func modernAppleSpeechReadinessKeepsPreExistingReservationOnNotReady() async {
+  let probe = AssetReadinessProbe()
+  let readiness = AppleSpeechAssetReadiness(
+    equivalentLocale: { _ in Locale(identifier: "en_US") },
+    reserveLocale: { _ in false },
+    releaseLocale: { locale in
+      await probe.record("release:\(locale.identifier)")
+    }
+  )
+
+  await #expect(throws: DictationFailure.unavailable) {
+    try await readiness.reserveAndVerify(
+      locale: Locale(identifier: "en_US"),
+      status: {
+        await probe.record("status:not-ready")
+        return .supported
+      }
+    )
+  }
+
+  #expect(await probe.count("status:not-ready") == 1)
+  #expect(await probe.count("release:en_US") == 0)
+}
+
+@Test func modernAppleSpeechReadinessKeepsPreExistingReservationOnCancellation() async {
+  let probe = AssetReadinessProbe()
+  let continuation = AssetReadinessContinuationProbe()
+  let readiness = AppleSpeechAssetReadiness(
+    equivalentLocale: { _ in Locale(identifier: "en_US") },
+    reserveLocale: { _ in false },
+    releaseLocale: { locale in
+      await probe.record("release:\(locale.identifier)")
+    }
+  )
+
+  await #expect(throws: CancellationError.self) {
+    try await readiness.reserveAndVerify(
+      locale: Locale(identifier: "en_US"),
+      status: {
+        await probe.record("status:installed")
+        return .installed
+      },
+      shouldContinue: {
+        await continuation.shouldContinue()
+      }
+    )
+  }
+
+  #expect(await probe.count("status:installed") == 1)
+  #expect(await probe.count("release:en_US") == 0)
+}
+
+@Test func modernAppleSpeechReadinessReserveErrorsRemainUnavailableWithoutRelease() async {
+  let probe = AssetReadinessProbe()
+  let readiness = AppleSpeechAssetReadiness(
+    equivalentLocale: { _ in Locale(identifier: "en_US") },
+    reserveLocale: { _ in throw AssetReadinessProbeError.failed },
+    releaseLocale: { locale in
+      await probe.record("release:\(locale.identifier)")
+    }
+  )
+
+  await #expect(throws: DictationFailure.unavailable) {
+    try await readiness.reserveAndVerify(
+      locale: Locale(identifier: "en_US"),
+      status: {
+        await probe.record("status")
+        return .installed
+      }
+    )
+  }
+
+  #expect(await probe.count("status") == 0)
+  #expect(await probe.count("release:en_US") == 0)
+}
+
+@Test func modernAppleSpeechReadinessCancellationReleasesReservedLocale() async {
+  let probe = AssetReadinessProbe()
+  let gate = AssetReadinessGate()
+  let readiness = makeAssetReadiness(probe: probe)
+  let cancellation = AssetReadinessCancellationProbe()
+
+  let task = Task {
+    try await readiness.reserveAndVerify(
+      locale: Locale(identifier: "en_US"),
+      status: {
+        await gate.wait()
+        return .installed
+      },
+      shouldContinue: {
+        await cancellation.shouldContinue()
+      }
+    )
+  }
+
+  await gate.waitUntilEntered()
+  await cancellation.cancel()
+  await gate.open()
+
+  await #expect(throws: CancellationError.self) {
+    try await task.value
+  }
+  #expect(await probe.count("release:en_US") == 1)
+}
+
+@Test func modernAppleSpeechDictationTriggerDoesNotRequestAssetInstallation() throws {
+  let source = try String(
+    contentsOf: URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
+    encoding: .utf8
+  )
+
+  let installationRequestName = "asset" + "Installation" + "Request"
+  let automaticInstallName = "download" + "And" + "Install"
+  #expect(!source.contains(installationRequestName))
+  #expect(!source.contains(automaticInstallName))
+}
+
 @Test func boundedAudioIngressDrainsAcceptedBuffersAndFailsOverflow() async throws {
   let format = try #require(
     AVAudioFormat(
@@ -649,9 +1051,9 @@ private final class PermissionProbe {
       .appendingPathComponent("Sources/FleckApp/AppleSpeechCapture.swift"),
     encoding: .utf8
   )
-  let legacy = try #require(
-    source.components(separatedBy: "@available(macOS 26.0, *)").first
-  )
+  let legacyStart = try #require(source.range(of: "actor LegacyAppleSpeechSession"))
+  let modernStart = try #require(source.range(of: "private struct ModernAnalyzerInputSequence"))
+  let legacy = String(source[legacyStart.lowerBound..<modernStart.lowerBound])
   let modernSections = source.components(
     separatedBy: "private actor ModernAppleSpeechSession"
   )
@@ -718,6 +1120,59 @@ private final class PermissionProbe {
   #expect(observation.startRanOnMainThread == false)
   #expect(observation.heartbeatRanBeforeRelease)
   await capture.cancel()
+}
+
+@Test @MainActor func appleSpeechCaptureKeepsSessionDuringTeardownAndProtectsRestart() async throws {
+  let firstReleaseGate = AssetReadinessGate()
+  let secondReleaseGate = AssetReadinessGate()
+  let oldSession = BlockingReleaseAppleSpeechSessionProbe(
+    firstReleaseGate: firstReleaseGate,
+    secondReleaseGate: secondReleaseGate
+  )
+  let newSession = AppleSpeechSessionProbe()
+  var sessionNumber = 0
+  let capture = AppleSpeechCapture(
+    requestPermission: { .granted },
+    makeSession: {
+      sessionNumber += 1
+      return sessionNumber == 1 ? oldSession : newSession
+    }
+  )
+
+  try await capture.start(provisional: { _ in }, level: { _ in })
+  #expect(oldSession.startCount == 1)
+
+  let teardown = Task { @MainActor in
+    await capture.releaseResources()
+  }
+  await firstReleaseGate.waitUntilEntered()
+
+  await #expect(throws: DictationFailure.unavailable) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+  #expect(newSession.startCount == 0)
+  if newSession.startCount != 0 {
+    await firstReleaseGate.open()
+    await teardown.value
+    return
+  }
+
+  let duplicateTeardown = Task { @MainActor in
+    await capture.releaseResources()
+  }
+  await secondReleaseGate.waitUntilEntered()
+
+  await firstReleaseGate.open()
+  await teardown.value
+
+  try await capture.start(provisional: { _ in }, level: { _ in })
+  #expect(newSession.startCount == 1)
+
+  await secondReleaseGate.open()
+  await duplicateTeardown.value
+  await capture.cancel()
+  #expect(newSession.cancelCount == 1)
+  #expect(newSession.releaseCount == 1)
 }
 
 @Test @MainActor func appleSpeechCaptureConstructsLegacyFrameworkObjectsOffMainActor() async {
@@ -980,6 +1435,49 @@ private actor BlockingAppleSpeechSessionProbe: AppleSpeechSession {
 }
 
 @MainActor
+private final class BlockingReleaseAppleSpeechSessionProbe: AppleSpeechSession {
+  let firstReleaseGate: AssetReadinessGate
+  let secondReleaseGate: AssetReadinessGate
+  var supportsOnDeviceRecognition = true
+  var startCount = 0
+  var cancelCount = 0
+  var releaseCount = 0
+
+  init(
+    firstReleaseGate: AssetReadinessGate,
+    secondReleaseGate: AssetReadinessGate
+  ) {
+    self.firstReleaseGate = firstReleaseGate
+    self.secondReleaseGate = secondReleaseGate
+  }
+
+  func start(
+    provisional _: @escaping @MainActor (String) -> Void,
+    level _: @escaping @MainActor (Float) -> Void
+  ) async throws {
+    startCount += 1
+  }
+
+  func finish() async throws -> String? { nil }
+
+  func cancel() async {
+    cancelCount += 1
+  }
+
+  func releaseResources() async {
+    releaseCount += 1
+    switch releaseCount {
+    case 1:
+      await firstReleaseGate.wait()
+    case 2:
+      await secondReleaseGate.wait()
+    default:
+      break
+    }
+  }
+}
+
+@MainActor
 private final class AppleSpeechSessionProbe: AppleSpeechSession {
   var supportsOnDeviceRecognition = true
   var finishResult: Result<String?, Error> = .success(nil)
@@ -1145,5 +1643,81 @@ private actor AudioPumpConsumerProbe {
       await Task.yield()
     }
     return count == expected
+  }
+}
+
+private enum AssetReadinessProbeError: Error, Sendable {
+  case failed
+}
+
+private actor AssetReadinessProbe {
+  private(set) var events: [String] = []
+
+  func record(_ event: String) {
+    events.append(event)
+  }
+
+  func count(_ event: String) -> Int {
+    events.filter { $0 == event }.count
+  }
+}
+
+private func makeAssetReadiness(probe: AssetReadinessProbe) -> AppleSpeechAssetReadiness {
+  AppleSpeechAssetReadiness(
+    equivalentLocale: { _ in
+      await probe.record("equivalent")
+      return Locale(identifier: "en_US")
+    },
+    reserveLocale: { locale in
+      await probe.record("reserve:\(locale.identifier)")
+      return true
+    },
+    releaseLocale: { locale in
+      await probe.record("release:\(locale.identifier)")
+    }
+  )
+}
+
+private actor AssetReadinessGate {
+  private var entered = false
+  private var enteredContinuation: CheckedContinuation<Void, Never>?
+  private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+  func wait() async {
+    entered = true
+    enteredContinuation?.resume()
+    enteredContinuation = nil
+    await withCheckedContinuation { releaseContinuation = $0 }
+  }
+
+  func waitUntilEntered() async {
+    guard !entered else { return }
+    await withCheckedContinuation { enteredContinuation = $0 }
+  }
+
+  func open() {
+    releaseContinuation?.resume()
+    releaseContinuation = nil
+  }
+}
+
+private actor AssetReadinessCancellationProbe {
+  private var cancelled = false
+
+  func cancel() {
+    cancelled = true
+  }
+
+  func shouldContinue() -> Bool {
+    !cancelled
+  }
+}
+
+private actor AssetReadinessContinuationProbe {
+  private var calls = 0
+
+  func shouldContinue() -> Bool {
+    calls += 1
+    return calls <= 2
   }
 }
