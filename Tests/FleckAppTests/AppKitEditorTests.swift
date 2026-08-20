@@ -5,6 +5,304 @@ import Testing
 
 @testable import FleckApp
 
+@MainActor private final class EditorChangeDelegate: NSObject, NSTextViewDelegate {
+  var changeCount = 0
+
+  func textDidChange(_ notification: Notification) {
+    changeCount += 1
+  }
+}
+
+@Test @MainActor func pasteOptionTitlesMatchWordOrder() {
+  #expect(
+    PasteOption.allCases.map(\.title) == [
+      "Keep Source Formatting",
+      "Merge Formatting",
+      "Paste Text Only"
+    ]
+  )
+}
+
+@Test @MainActor func pasteTextOnlyUsesDestinationAttributes() throws {
+  let font = NSFont.systemFont(ofSize: 18)
+  let color = NSColor(calibratedRed: 0.1, green: 0.2, blue: 0.3, alpha: 1)
+  let destinationLink = URL(string: "https://example.com/destination")!
+  let pasted = ListAwareTextView.pasteTextOnly(
+    "Plain",
+    destinationAttributes: [
+      .font: font,
+      .foregroundColor: color,
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+      .link: destinationLink
+    ]
+  )
+
+  #expect(pasted.string == "Plain")
+  #expect((pasted.attribute(.font, at: 0, effectiveRange: nil) as? NSFont) == font)
+  #expect(
+    (pasted.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+      == color
+  )
+  #expect(
+    pasted.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
+      == NSUnderlineStyle.single.rawValue
+  )
+  #expect(pasted.attribute(.link, at: 0, effectiveRange: nil) as? URL == destinationLink)
+}
+
+@Test @MainActor func mergePasteKeepsSemanticAttributesAndDestinationTypography() throws {
+  let sourceFont = NSFontManager.shared.convert(
+    NSFontManager.shared.convert(
+      NSFont.systemFont(ofSize: 13),
+      toHaveTrait: .boldFontMask
+    ),
+    toHaveTrait: .italicFontMask
+  )
+  let source = NSMutableAttributedString(
+    string: "Link",
+    attributes: [
+      .font: sourceFont,
+      .foregroundColor: NSColor.systemRed,
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+      .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+      .link: URL(string: "https://example.com")!
+    ]
+  )
+  let destinationFont = NSFont.systemFont(ofSize: 19)
+  let destinationColor = NSColor.systemBlue
+  let destinationBackground = NSColor.systemYellow
+  let paragraphStyle = NSMutableParagraphStyle()
+  paragraphStyle.alignment = .right
+  let merged = ListAwareTextView.mergePaste(
+    source,
+    destinationAttributes: [
+      .font: destinationFont,
+      .foregroundColor: destinationColor,
+      .backgroundColor: destinationBackground,
+      .paragraphStyle: paragraphStyle
+    ]
+  )
+
+  let mergedFont = try #require(merged.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+  #expect(mergedFont.pointSize == destinationFont.pointSize)
+  #expect(NSFontManager.shared.traits(of: mergedFont).contains(.boldFontMask))
+  #expect(NSFontManager.shared.traits(of: mergedFont).contains(.italicFontMask))
+  #expect((merged.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == destinationColor)
+  #expect((merged.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor) == destinationBackground)
+  #expect(
+    (merged.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.alignment
+      == .right
+  )
+  #expect(
+    merged.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
+      == NSUnderlineStyle.single.rawValue
+  )
+  #expect(
+    merged.attribute(.strikethroughStyle, at: 0, effectiveRange: nil) as? Int
+      == NSUnderlineStyle.single.rawValue
+  )
+  #expect(merged.attribute(.link, at: 0, effectiveRange: nil) as? URL == URL(string: "https://example.com")!)
+}
+
+@Test @MainActor func plainPasteShowsOptionsAndEscapeDismissesThem() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  contentView.addSubview(textView)
+  let otherResponder = NSButton(frame: NSRect(x: 0, y: 0, width: 80, height: 24))
+  contentView.addSubview(otherResponder)
+  window.contentView = contentView
+  textView.allowsUndo = true
+  #expect(window.makeFirstResponder(textView))
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  textView.insertPastedTextForTesting(
+    NSAttributedString(string: "Pasted"),
+    plainText: "Pasted",
+    hasRichFormatting: false
+  )
+
+  #expect(textView.string == "Pasted")
+  #expect(textView.hasPasteOptions)
+  #expect(textView.pasteOptionMenuTitles == PasteOption.allCases.map(\.title))
+  #expect(textView.pasteOptionEnabledStates == [true, false, false])
+  textView.cancelOperation(nil)
+  #expect(!textView.hasPasteOptions)
+
+  textView.insertPastedTextForTesting(
+    NSAttributedString(string: "Again"),
+    plainText: "Again",
+    hasRichFormatting: false
+  )
+  #expect(textView.hasPasteOptions)
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  #expect(!textView.hasPasteOptions)
+
+  textView.insertPastedTextForTesting(
+    NSAttributedString(string: "Once more"),
+    plainText: "Once more",
+    hasRichFormatting: false
+  )
+  #expect(textView.hasPasteOptions)
+  #expect(window.makeFirstResponder(otherResponder))
+  #expect(!textView.hasPasteOptions)
+
+  textView.insertPastedTextForTesting(
+    NSAttributedString(string: "Teardown"),
+    plainText: "Teardown",
+    hasRichFormatting: false
+  )
+  #expect(textView.hasPasteOptions)
+  textView.viewWillMove(toWindow: nil)
+  #expect(!textView.hasPasteOptions)
+}
+
+@Test @MainActor func identicalPasteStillShowsPasteOptions() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.string = "Same"
+  textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
+  let source = textView.textStorage?.attributedSubstring(
+    from: NSRange(location: 0, length: textView.string.utf16.count)
+  ) ?? NSAttributedString(string: "Same")
+
+  textView.insertPastedTextForTesting(
+    source,
+    plainText: source.string,
+    hasRichFormatting: true
+  )
+
+  #expect(textView.string == "Same")
+  #expect(textView.hasPasteOptions)
+}
+
+@Test @MainActor func pasteOptionsDismissWhenNativeSelectionMoves() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  #expect(window.makeFirstResponder(textView))
+
+  textView.insertPastedTextForTesting(NSAttributedString(string: "Pasted"))
+  #expect(textView.hasPasteOptions)
+  let pastedEnd = textView.selectedRange()
+
+  textView.moveLeft(nil)
+
+  #expect(textView.selectedRange() != pastedEnd)
+  #expect(!textView.hasPasteOptions)
+}
+
+@Test @MainActor func pasteOptionsDismissOnWindowAndApplicationFocusNotifications() async {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  textView.viewDidMoveToWindow()
+  #expect(window.makeFirstResponder(textView))
+
+  textView.insertPastedTextForTesting(NSAttributedString(string: "Window"))
+  #expect(textView.hasPasteOptions)
+  NotificationCenter.default.post(
+    name: NSWindow.didResignKeyNotification,
+    object: window
+  )
+  await Task.yield()
+  #expect(!textView.hasPasteOptions)
+
+  textView.insertPastedTextForTesting(NSAttributedString(string: "Application"))
+  #expect(textView.hasPasteOptions)
+  NotificationCenter.default.post(
+    name: NSApplication.didResignActiveNotification,
+    object: NSApplication.shared
+  )
+  await Task.yield()
+  #expect(!textView.hasPasteOptions)
+}
+
+@Test @MainActor func attachmentPasteKeepsNativeOptionEnabledOnly() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let attachment = NSTextAttachment()
+  textView.insertPastedTextForTesting(
+    NSAttributedString(attachment: attachment),
+    plainText: "\u{FFFC}",
+    hasRichFormatting: true
+  )
+
+  #expect(textView.hasPasteOptions)
+  #expect(textView.pasteOptionEnabledStates == [true, false, false])
+}
+
+@Test @MainActor func selectingPasteTextOnlyReplacesOnlyLatestPasteAndUndoRestoresIt() async throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  textView.allowsUndo = true
+  #expect(window.makeFirstResponder(textView))
+  textView.string = "Before"
+  textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+  let sourceFont = NSFontManager.shared.convert(
+    NSFont.systemFont(ofSize: 13),
+    toHaveTrait: .italicFontMask
+  )
+  let source = NSAttributedString(
+    string: " Pasted",
+    attributes: [.font: sourceFont, .foregroundColor: NSColor.systemRed]
+  )
+  let changeDelegate = EditorChangeDelegate()
+  textView.delegate = changeDelegate
+  textView.insertPastedTextForTesting(
+    source,
+    plainText: source.string,
+    hasRichFormatting: true
+  )
+  #expect(textView.string == "Before Pasted")
+  #expect(textView.hasPasteOptions)
+  #expect(textView.pasteOptionEnabledStates == [true, true, true])
+  #expect(
+    NSFontManager.shared.traits(
+      of: try #require(textView.textStorage?.attribute(.font, at: 7, effectiveRange: nil) as? NSFont)
+    ).contains(.italicFontMask)
+  )
+  let changesBeforeOption = changeDelegate.changeCount
+
+  await Task.yield()
+  textView.applyPasteOption(.pasteTextOnly)
+  #expect(textView.string == "Before Pasted")
+  #expect(
+    NSFontManager.shared.traits(
+      of: try #require(textView.textStorage?.attribute(.font, at: 7, effectiveRange: nil) as? NSFont)
+    ).contains(.italicFontMask) == false
+  )
+  #expect(changeDelegate.changeCount > changesBeforeOption)
+  #expect(!textView.hasPasteOptions)
+
+  await Task.yield()
+  try #require(textView.undoManager).undo()
+  #expect(textView.string == "Before Pasted")
+  #expect(
+    NSFontManager.shared.traits(
+      of: try #require(textView.textStorage?.attribute(.font, at: 7, effectiveRange: nil) as? NSFont)
+    ).contains(.italicFontMask)
+  )
+}
+
 @Test @MainActor func listFormattingPreservesInlineAttributes() {
   let textView = ListAwareTextView(frame: .zero)
   textView.string = "One two"

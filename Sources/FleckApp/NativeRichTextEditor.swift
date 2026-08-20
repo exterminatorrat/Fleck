@@ -999,6 +999,7 @@
       guard !commands.isFocusedDictationActive, modelChanged || textView.string != text else {
         return false
       }
+      (textView as? ListAwareTextView)?.cancelPasteOptions()
       let selection = textView.selectedRange()
       loadContent(into: textView)
       textView.setSelectedRange(
@@ -1204,6 +1205,20 @@
     }
   }
 
+  enum PasteOption: Int, CaseIterable, Equatable {
+    case keepSourceFormatting
+    case mergeFormatting
+    case pasteTextOnly
+
+    var title: String {
+      switch self {
+      case .keepSourceFormatting: return "Keep Source Formatting"
+      case .mergeFormatting: return "Merge Formatting"
+      case .pasteTextOnly: return "Paste Text Only"
+      }
+    }
+  }
+
   final class ListAwareTextView: NSTextView {
     private static let noteLinkSeparatorMenuTag = 0xF1EC
     private static let noteLinkRequestMenuTag = 0xF1ED
@@ -1241,6 +1256,92 @@
     private var checklistTrackingArea: NSTrackingArea?
     private var hoveredChecklistMarkerRange: NSRange?
     private var checklistPresentationNeedsRefresh = true
+    private struct PendingPaste {
+      let range: NSRange
+      let nativeText: NSAttributedString
+      let plainText: String
+      let destinationAttributes: [NSAttributedString.Key: Any]
+      let hasRichFormatting: Bool
+      let hasAttachments: Bool
+    }
+
+    private struct PasteContext {
+      let replacementRange: NSRange
+      let destinationAttributes: [NSAttributedString.Key: Any]
+      let originalDocumentLength: Int
+      let changeGeneration: Int
+    }
+
+    private var pendingPaste: PendingPaste?
+    private var pasteOptionsButton: NSButton?
+    private var isApplyingPasteOption = false
+    private var textChangeGeneration = 0
+    private var pasteOptionsBoundsObserver: NSObjectProtocol?
+    private var pasteOptionsFocusObservers: [NSObjectProtocol] = []
+
+    var hasPasteOptions: Bool { pendingPaste != nil }
+
+    var pasteOptionMenuTitles: [String] {
+      PasteOption.allCases.map(\.title)
+    }
+
+    var pasteOptionEnabledStates: [Bool] {
+      PasteOption.allCases.map(isPasteOptionEnabled)
+    }
+
+    static func pasteTextOnly(
+      _ text: String,
+      destinationAttributes: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+      NSAttributedString(string: text, attributes: destinationAttributes)
+    }
+
+    static func mergePaste(
+      _ source: NSAttributedString,
+      destinationAttributes: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+      let result = NSMutableAttributedString()
+      let semanticKeys: [NSAttributedString.Key] = [
+        .underlineStyle,
+        .underlineColor,
+        .strikethroughStyle,
+        .strikethroughColor,
+        .link
+      ]
+      source.enumerateAttributes(
+        in: NSRange(location: 0, length: source.length),
+        options: []
+      ) { sourceAttributes, range, _ in
+        var attributes = destinationAttributes
+        for key in semanticKeys {
+          attributes.removeValue(forKey: key)
+          if let value = sourceAttributes[key] { attributes[key] = value }
+        }
+        if let sourceFont = sourceAttributes[.font] as? NSFont,
+          let destinationFont = destinationAttributes[.font] as? NSFont
+        {
+          attributes[.font] = mergedFont(
+            sourceFont: sourceFont,
+            destinationFont: destinationFont
+          )
+        }
+        let fragment = source.attributedSubstring(from: range)
+        result.append(NSAttributedString(string: fragment.string, attributes: attributes))
+      }
+      return result
+    }
+
+    private static func mergedFont(sourceFont: NSFont, destinationFont: NSFont) -> NSFont {
+      var result = destinationFont
+      for trait: NSFontTraitMask in [.boldFontMask, .italicFontMask] {
+        if NSFontManager.shared.traits(of: sourceFont).contains(trait) {
+          result = NSFontManager.shared.convert(result, toHaveTrait: trait)
+        } else {
+          result = NSFontManager.shared.convert(result, toNotHaveTrait: trait)
+        }
+      }
+      return result
+    }
 
     private func clearChecklistPresentation() {
       if let layoutManager {
@@ -1749,6 +1850,313 @@
       super.insertText(insertString, replacementRange: replacementRange)
     }
 
+    override func paste(_ sender: Any?) {
+      cancelPasteOptions()
+      guard let context = pasteContext() else {
+        super.paste(sender)
+        return
+      }
+
+      let pasteboard = NSPasteboard.general
+      let plainText = pasteboard.string(forType: .string)
+      let hasRichFormatting = pasteboard.data(forType: .rtf) != nil
+        || pasteboard.data(forType: .rtfd) != nil
+        || pasteboard.data(forType: .html) != nil
+
+      performPaste(
+        context: context,
+        plainText: plainText,
+        hasRichFormatting: hasRichFormatting
+      ) {
+        super.paste(sender)
+      }
+    }
+
+    func insertPastedTextForTesting(
+      _ attributedText: NSAttributedString,
+      plainText: String? = nil,
+      hasRichFormatting: Bool = true
+    ) {
+      cancelPasteOptions()
+      guard let context = pasteContext() else { return }
+      performPaste(
+        context: context,
+        plainText: plainText ?? attributedText.string,
+        hasRichFormatting: hasRichFormatting
+      ) {
+        _ = replaceAttributedText(
+          in: context.replacementRange,
+          with: attributedText,
+          selecting: NSRange(
+            location: context.replacementRange.location + attributedText.length,
+            length: 0
+          )
+        )
+      }
+    }
+
+    private func performPaste(
+      context: PasteContext,
+      plainText: String?,
+      hasRichFormatting: Bool,
+      insertion: () -> Void
+    ) {
+      insertion()
+      guard textChangeGeneration > context.changeGeneration else { return }
+      guard let updatedStorage = textStorage else { return }
+      let insertedLength = updatedStorage.length
+        - context.originalDocumentLength
+        + context.replacementRange.length
+      finishPaste(
+        insertedRange: NSRange(
+          location: context.replacementRange.location,
+          length: insertedLength
+        ),
+        plainText: plainText,
+        destinationAttributes: context.destinationAttributes,
+        hasRichFormatting: hasRichFormatting
+      )
+    }
+
+    private func pasteContext() -> PasteContext? {
+      guard let storage = textStorage else { return nil }
+      let selected = selectedRange()
+      guard selected.location != NSNotFound,
+        selected.location >= 0,
+        selected.location <= storage.length
+      else { return nil }
+      let replacementLength = min(selected.length, storage.length - selected.location)
+      let replacementRange = NSRange(location: selected.location, length: replacementLength)
+      return PasteContext(
+        replacementRange: replacementRange,
+        destinationAttributes: pasteDestinationAttributes(for: replacementRange),
+        originalDocumentLength: storage.length,
+        changeGeneration: textChangeGeneration
+      )
+    }
+
+    private func finishPaste(
+      insertedRange: NSRange,
+      plainText: String?,
+      destinationAttributes: [NSAttributedString.Key: Any],
+      hasRichFormatting: Bool
+    ) {
+      guard let updatedStorage = textStorage,
+        insertedRange.length > 0,
+        insertedRange.location >= 0,
+        NSMaxRange(insertedRange) <= updatedStorage.length
+      else { return }
+      let nativeText = updatedStorage.attributedSubstring(from: insertedRange)
+      pendingPaste = PendingPaste(
+        range: insertedRange,
+        nativeText: nativeText,
+        plainText: plainText ?? nativeText.string,
+        destinationAttributes: destinationAttributes,
+        hasRichFormatting: hasRichFormatting,
+        hasAttachments: Self.containsAttachment(in: nativeText)
+      )
+      showPasteOptions()
+    }
+
+    private static func containsAttachment(in text: NSAttributedString) -> Bool {
+      var containsAttachment = false
+      text.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: text.length),
+        options: []
+      ) { value, _, stop in
+        guard value != nil else { return }
+        containsAttachment = true
+        stop.pointee = true
+      }
+      return containsAttachment
+    }
+
+    func applyPasteOption(_ option: PasteOption) {
+      guard let pendingPaste else { return }
+      guard isPasteOptionEnabled(option) else { return }
+      guard option != .keepSourceFormatting else {
+        cancelPasteOptions()
+        return
+      }
+      let replacement: NSAttributedString
+      switch option {
+      case .keepSourceFormatting:
+        replacement = pendingPaste.nativeText
+      case .mergeFormatting:
+        replacement = Self.mergePaste(
+          pendingPaste.nativeText,
+          destinationAttributes: pendingPaste.destinationAttributes
+        )
+      case .pasteTextOnly:
+        replacement = Self.pasteTextOnly(
+          pendingPaste.plainText,
+          destinationAttributes: pendingPaste.destinationAttributes
+        )
+      }
+      guard let storage = textStorage,
+        pendingPaste.range.location >= 0,
+        NSMaxRange(pendingPaste.range) <= storage.length
+      else {
+        cancelPasteOptions()
+        return
+      }
+
+      isApplyingPasteOption = true
+      performUndoGroup {
+        _ = replaceAttributedText(
+          in: pendingPaste.range,
+          with: replacement,
+          selecting: NSRange(
+            location: pendingPaste.range.location + replacement.length,
+            length: 0
+          )
+        )
+      }
+      isApplyingPasteOption = false
+      cancelPasteOptions()
+    }
+
+    func cancelPasteOptions() {
+      pendingPaste = nil
+      pasteOptionsButton?.removeFromSuperview()
+      pasteOptionsButton = nil
+    }
+
+    func isPasteOptionEnabled(_ option: PasteOption) -> Bool {
+      guard let pendingPaste else { return false }
+      switch option {
+      case .keepSourceFormatting:
+        return true
+      case .mergeFormatting:
+        guard pendingPaste.hasRichFormatting, !pendingPaste.hasAttachments else { return false }
+        let merged = Self.mergePaste(
+          pendingPaste.nativeText,
+          destinationAttributes: pendingPaste.destinationAttributes
+        )
+        return !merged.isEqual(to: pendingPaste.nativeText)
+      case .pasteTextOnly:
+        guard pendingPaste.hasRichFormatting, !pendingPaste.hasAttachments else { return false }
+        let textOnly = Self.pasteTextOnly(
+          pendingPaste.plainText,
+          destinationAttributes: pendingPaste.destinationAttributes
+        )
+        return !textOnly.isEqual(to: pendingPaste.nativeText)
+      }
+    }
+
+    private func pasteDestinationAttributes(
+      for range: NSRange
+    ) -> [NSAttributedString.Key: Any] {
+      if range.length > 0,
+        let storage = textStorage,
+        range.location < storage.length
+      {
+        return storage.attributes(at: range.location, effectiveRange: nil)
+      }
+      return typingAttributes
+    }
+
+    private func showPasteOptions() {
+      guard let pendingPaste else { return }
+      guard let anchor = pasteOptionsAnchorRect(for: pendingPaste.range) else {
+        cancelPasteOptions()
+        return
+      }
+      let button = NSButton(frame: .zero)
+      button.setButtonType(.momentaryPushIn)
+      button.bezelStyle = .texturedRounded
+      button.isBordered = true
+      button.image = NSImage(
+        systemSymbolName: "doc.on.clipboard",
+        accessibilityDescription: "Paste options"
+      )
+      button.title = "⌄"
+      button.imagePosition = .imageLeading
+      button.imageScaling = .scaleProportionallyDown
+      button.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+      button.contentTintColor = .secondaryLabelColor
+      button.setAccessibilityElement(true)
+      button.setAccessibilityLabel("Paste options")
+      button.setAccessibilityHelp("Choose how the pasted content is formatted")
+      button.target = self
+      button.action = #selector(showPasteOptionsMenu(_:))
+      addSubview(button)
+      pasteOptionsButton = button
+      positionPasteOptionsButton(anchor: anchor)
+    }
+
+    private func pasteOptionsAnchorRect(for range: NSRange) -> NSRect? {
+      guard let layoutManager, let textContainer,
+        range.location >= 0,
+        range.location <= (string as NSString).length
+      else { return nil }
+      layoutManager.ensureLayout(for: textContainer)
+      let stringLength = (string as NSString).length
+      let endpoint = min(NSMaxRange(range), stringLength)
+      let glyphIndex: Int
+      if endpoint < stringLength {
+        glyphIndex = layoutManager.glyphIndexForCharacter(at: endpoint)
+      } else {
+        guard endpoint > 0 else { return nil }
+        glyphIndex = layoutManager.glyphIndexForCharacter(at: endpoint - 1)
+      }
+      guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+      return layoutManager
+        .boundingRect(
+          forGlyphRange: NSRange(location: glyphIndex, length: 1),
+          in: textContainer
+        )
+        .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+    }
+
+    private func positionPasteOptionsButton(anchor: NSRect) {
+      guard let button = pasteOptionsButton else { return }
+      let visible = visibleRect.isEmpty ? bounds : visibleRect
+      let size = NSSize(width: 36, height: 24)
+      guard !visible.isEmpty, anchor.intersects(visible) else {
+        cancelPasteOptions()
+        return
+      }
+      var origin = NSPoint(x: anchor.maxX - size.width, y: anchor.maxY + 4)
+      origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - size.width - 4)
+      if origin.y + size.height > visible.maxY {
+        origin.y = anchor.minY - size.height - 4
+      }
+      origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - size.height - 4)
+      button.frame = NSRect(origin: origin, size: size)
+    }
+
+    @objc private func showPasteOptionsMenu(_ sender: NSButton) {
+      let menu = NSMenu(title: "Paste Options")
+      menu.autoenablesItems = false
+      for option in PasteOption.allCases {
+        let item = NSMenuItem(
+          title: option.title,
+          action: #selector(selectPasteOptionFromMenu(_:)),
+          keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = option.rawValue
+        item.isEnabled = isPasteOptionEnabled(option)
+        item.state = option == .keepSourceFormatting ? .on : .off
+        menu.addItem(item)
+      }
+      menu.popUp(
+        positioning: nil,
+        at: NSPoint(x: 0, y: sender.bounds.maxY),
+        in: sender
+      )
+      cancelPasteOptions()
+    }
+
+    @objc private func selectPasteOptionFromMenu(_ sender: NSMenuItem) {
+      guard let rawValue = sender.representedObject as? Int,
+        let option = PasteOption(rawValue: rawValue)
+      else { return }
+      applyPasteOption(option)
+    }
+
     func toggleList(_ style: EditorListStyle) {
       let ns = string as NSString
       let lineRange = ns.lineRange(for: selectedRange())
@@ -1909,7 +2317,83 @@
         return false
       }
       clearNoteLinkPresentation()
+      if !isApplyingPasteOption { cancelPasteOptions() }
       return true
+    }
+
+    override func didChangeText() {
+      textChangeGeneration += 1
+      super.didChangeText()
+    }
+
+    override func setSelectedRange(_ range: NSRange) {
+      let changed = range != selectedRange()
+      super.setSelectedRange(range)
+      if changed, !isApplyingPasteOption { cancelPasteOptions() }
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+      guard hasPasteOptions else {
+        super.cancelOperation(sender)
+        return
+      }
+      cancelPasteOptions()
+    }
+
+    override func resignFirstResponder() -> Bool {
+      cancelPasteOptions()
+      return super.resignFirstResponder()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+      if newWindow == nil {
+        removePasteOptionsBoundsObserver()
+        cancelPasteOptions()
+      }
+      super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      removePasteOptionsBoundsObserver()
+      guard window != nil, let clipView = enclosingScrollView?.contentView else { return }
+      clipView.postsBoundsChangedNotifications = true
+      pasteOptionsBoundsObserver = NotificationCenter.default.addObserver(
+        forName: NSView.boundsDidChangeNotification,
+        object: clipView,
+        queue: .main
+      ) { [weak self] _ in
+        DispatchQueue.main.async { [weak self] in
+          self?.updatePasteOptionsPlacement()
+        }
+      }
+    }
+
+    isolated deinit {
+      if let observer = pasteOptionsBoundsObserver {
+        NotificationCenter.default.removeObserver(observer)
+      }
+    }
+
+    override func layout() {
+      super.layout()
+      updatePasteOptionsPlacement()
+    }
+
+    private func updatePasteOptionsPlacement() {
+      guard let pendingPaste else { return }
+      guard let anchor = pasteOptionsAnchorRect(for: pendingPaste.range) else {
+        cancelPasteOptions()
+        return
+      }
+      positionPasteOptionsButton(anchor: anchor)
+    }
+
+    private func removePasteOptionsBoundsObserver() {
+      if let pasteOptionsBoundsObserver {
+        NotificationCenter.default.removeObserver(pasteOptionsBoundsObserver)
+        self.pasteOptionsBoundsObserver = nil
+      }
     }
 
     func noteLinkTarget(atViewPoint point: NSPoint) -> UUID? {
@@ -1941,6 +2425,7 @@
     }
 
     override func mouseDown(with event: NSEvent) {
+      cancelPasteOptions()
       guard let layoutManager, let textContainer else {
         super.mouseDown(with: event)
         return
