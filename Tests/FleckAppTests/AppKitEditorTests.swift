@@ -17,8 +17,8 @@ import Testing
   #expect(
     PasteOption.allCases.map(\.title) == [
       "Keep Source Formatting",
-      "Merge Formatting",
-      "Paste Text Only"
+      "Paste Text Only",
+      "Merge Formatting"
     ]
   )
 }
@@ -58,13 +58,19 @@ import Testing
     ),
     toHaveTrait: .italicFontMask
   )
+  let sourceUnderlineColor = NSColor.systemRed
+  let sourceStrikethroughColor = NSColor.systemBlue
+  let destinationUnderlineColor = NSColor.systemGreen
+  let destinationStrikethroughColor = NSColor.systemPurple
   let source = NSMutableAttributedString(
     string: "Link",
     attributes: [
       .font: sourceFont,
       .foregroundColor: NSColor.systemRed,
       .underlineStyle: NSUnderlineStyle.single.rawValue,
+      .underlineColor: sourceUnderlineColor,
       .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+      .strikethroughColor: sourceStrikethroughColor,
       .link: URL(string: "https://example.com")!
     ]
   )
@@ -79,6 +85,8 @@ import Testing
       .font: destinationFont,
       .foregroundColor: destinationColor,
       .backgroundColor: destinationBackground,
+      .underlineColor: destinationUnderlineColor,
+      .strikethroughColor: destinationStrikethroughColor,
       .paragraphStyle: paragraphStyle
     ]
   )
@@ -98,8 +106,16 @@ import Testing
       == NSUnderlineStyle.single.rawValue
   )
   #expect(
+    (merged.attribute(.underlineColor, at: 0, effectiveRange: nil) as? NSColor)
+      == destinationUnderlineColor
+  )
+  #expect(
     merged.attribute(.strikethroughStyle, at: 0, effectiveRange: nil) as? Int
       == NSUnderlineStyle.single.rawValue
+  )
+  #expect(
+    (merged.attribute(.strikethroughColor, at: 0, effectiveRange: nil) as? NSColor)
+      == destinationStrikethroughColor
   )
   #expect(merged.attribute(.link, at: 0, effectiveRange: nil) as? URL == URL(string: "https://example.com")!)
 }

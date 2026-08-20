@@ -1207,8 +1207,8 @@
 
   enum PasteOption: Int, CaseIterable, Equatable {
     case keepSourceFormatting
-    case mergeFormatting
     case pasteTextOnly
+    case mergeFormatting
 
     var title: String {
       switch self {
@@ -1305,9 +1305,7 @@
       let result = NSMutableAttributedString()
       let semanticKeys: [NSAttributedString.Key] = [
         .underlineStyle,
-        .underlineColor,
         .strikethroughStyle,
-        .strikethroughColor,
         .link
       ]
       source.enumerateAttributes(
