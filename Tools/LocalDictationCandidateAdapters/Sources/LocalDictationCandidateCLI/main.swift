@@ -7,7 +7,10 @@ import LocalDictationCandidateRunner
 struct LocalDictationCandidateCLI {
   static func run(
     _ arguments: [String],
-    eventTimeout: Duration = .seconds(30)
+    eventTimeout: Duration = .seconds(30),
+    diagnosticSink: @Sendable @escaping (String) -> Void = { message in
+      fputs("\(message)\n", stderr)
+    }
   ) async -> Int32 {
     do {
       switch try Command.parse(arguments) {
@@ -42,10 +45,10 @@ struct LocalDictationCandidateCLI {
         return 0
       }
     } catch let error as CLIError {
-      fputs("admission error: \(error.description)\n", stderr)
+      diagnosticSink("admission error: \(error.description)")
       return 2
     } catch {
-      fputs("admission error: invalid input\n", stderr)
+      diagnosticSink("admission error: invalid input")
       return 2
     }
   }

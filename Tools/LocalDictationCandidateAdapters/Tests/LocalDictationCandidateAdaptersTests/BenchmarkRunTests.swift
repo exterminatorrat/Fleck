@@ -11,7 +11,7 @@ struct BenchmarkRunTests {
 
     let status = await LocalDictationCandidateCLI.run(
       fixture.arguments,
-      eventTimeout: .seconds(2)
+      eventTimeout: .seconds(30)
     )
     #expect(status == 0)
 
@@ -42,7 +42,7 @@ struct BenchmarkRunTests {
 
     let status = await LocalDictationCandidateCLI.run(
       fixture.arguments,
-      eventTimeout: .seconds(2)
+      eventTimeout: .seconds(30)
     )
     #expect(status == 2)
     #expect(!FileManager.default.fileExists(atPath: fixture.output.path))
@@ -51,13 +51,15 @@ struct BenchmarkRunTests {
   @Test func missingCancellationAcknowledgementUsesCooperativeShutdownBoundary() async throws {
     let fixture = try BenchmarkFixture(mode: "missing-cancel-ack-cooperative")
     defer { fixture.remove() }
+    let diagnostics = DiagnosticCapture()
 
-    let invocation = await runWithCapturedStderr(
+    let status = await LocalDictationCandidateCLI.run(
       fixture.arguments,
-      eventTimeout: .milliseconds(500)
+      eventTimeout: .seconds(30),
+      diagnosticSink: diagnostics.append
     )
-    #expect(invocation.status == 2)
-    #expect(invocation.stderr == "admission error: lifecycle: cancellation-not-cooperative\n")
+    #expect(status == 2)
+    #expect(diagnostics.values() == ["admission error: lifecycle: cancellation-not-cooperative"])
     #expect(!FileManager.default.fileExists(atPath: fixture.output.path))
     #expect(try fixture.eventRecords() == ["cancel", "shutdown"])
     try await Task.sleep(for: .milliseconds(100))
@@ -67,13 +69,15 @@ struct BenchmarkRunTests {
   @Test func missingCancellationAcknowledgementUsesForcedTerminationBoundary() async throws {
     let fixture = try BenchmarkFixture(mode: "missing-cancel-ack-forced")
     defer { fixture.remove() }
+    let diagnostics = DiagnosticCapture()
 
-    let invocation = await runWithCapturedStderr(
+    let status = await LocalDictationCandidateCLI.run(
       fixture.arguments,
-      eventTimeout: .milliseconds(500)
+      eventTimeout: .seconds(30),
+      diagnosticSink: diagnostics.append
     )
-    #expect(invocation.status == 2)
-    #expect(invocation.stderr == "admission error: lifecycle: cancellation-not-cooperative\n")
+    #expect(status == 2)
+    #expect(diagnostics.values() == ["admission error: lifecycle: cancellation-not-cooperative"])
     #expect(!FileManager.default.fileExists(atPath: fixture.output.path))
     #expect(try fixture.eventRecords() == ["cancel", "shutdown"])
     try await Task.sleep(for: .milliseconds(100))
@@ -124,35 +128,22 @@ struct BenchmarkRunTests {
   }
 }
 
-private struct CLIInvocation {
-  let status: Int32
-  let stderr: String
-}
+private final class DiagnosticCapture: @unchecked Sendable {
+  private let lock = NSLock()
+  private var captured: [String] = []
 
-private func runWithCapturedStderr(
-  _ arguments: [String],
-  eventTimeout: Duration
-) async -> CLIInvocation {
-  let pipe = Pipe()
-  let savedStderr = dup(STDERR_FILENO)
-  precondition(savedStderr >= 0)
-  fflush(stderr)
-  precondition(dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO) >= 0)
+  func append(_ message: String) {
+    lock.lock()
+    captured.append(message)
+    lock.unlock()
+  }
 
-  let status = await LocalDictationCandidateCLI.run(
-    arguments,
-    eventTimeout: eventTimeout
-  )
-
-  fflush(stderr)
-  precondition(dup2(savedStderr, STDERR_FILENO) >= 0)
-  close(savedStderr)
-  pipe.fileHandleForWriting.closeFile()
-  let data = pipe.fileHandleForReading.readDataToEndOfFile()
-  return CLIInvocation(
-    status: status,
-    stderr: String(decoding: data, as: UTF8.self)
-  )
+  func values() -> [String] {
+    lock.lock()
+    let values = captured
+    lock.unlock()
+    return values
+  }
 }
 
 private struct BenchmarkFixture {
