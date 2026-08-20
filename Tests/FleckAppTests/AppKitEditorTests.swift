@@ -302,6 +302,54 @@ import Testing
   #expect(!textView.hasPasteOptions)
 }
 
+@Test @MainActor func pasteOptionsDismissOnNonactivatingWindowClick() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 220, height: 160))
+  let editorWindow = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 220, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  editorWindow.contentView = textView
+  editorWindow.makeKeyAndOrderFront(nil)
+  defer { editorWindow.orderOut(nil) }
+  textView.viewDidMoveToWindow()
+  #expect(editorWindow.makeFirstResponder(textView))
+  textView.insertPastedTextForTesting(NSAttributedString(string: "Pasted"))
+  #expect(textView.hasPasteOptions)
+
+  let panel = NSPanel(
+    contentRect: NSRect(x: 260, y: 0, width: 120, height: 80),
+    styleMask: [.borderless, .nonactivatingPanel],
+    backing: .buffered,
+    defer: false
+  )
+  panel.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
+  panel.orderFrontRegardless()
+  defer { panel.orderOut(nil) }
+
+  let location = NSPoint(x: textView.bounds.maxX + 20, y: textView.bounds.midY)
+  let panelWindowNumber = panel.windowNumber == editorWindow.windowNumber
+    ? editorWindow.windowNumber + 1
+    : panel.windowNumber
+  let mouseDown = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: location,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: panelWindowNumber,
+      context: nil,
+      eventNumber: 2,
+      clickCount: 1,
+      pressure: 1
+    )
+  )
+  NSApplication.shared.sendEvent(mouseDown)
+
+  #expect(!textView.hasPasteOptions)
+}
+
 @Test @MainActor func attachmentPasteKeepsNativeOptionEnabledOnly() {
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
   let attachment = NSTextAttachment()

@@ -2438,9 +2438,6 @@
       ) { [weak self] event in
         guard let self else { return event }
         MainActor.assumeIsolated {
-          guard let textWindow = self.window,
-            event.windowNumber == textWindow.windowNumber
-          else { return }
           guard !self.isPasteOptionsMenuVisible,
             !self.isPasteOptionsEventInsideTextView(event)
           else { return }
