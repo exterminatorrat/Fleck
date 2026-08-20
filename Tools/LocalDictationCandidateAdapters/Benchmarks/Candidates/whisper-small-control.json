@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "runID": "whisper-small-control-corpus-v1",
+  "candidate": {
+    "model": {
+      "id": "ggerganov/whisper.cpp:ggml-small.bin",
+      "revision": "80da2d8bfee42b0e836fc3a9890373e5defc00a6",
+      "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Quarantine/whisper-small-control/ggml-small.bin",
+      "byteCount": 487601967,
+      "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+      "fileType": 1,
+      "quantization": "mostly-F16/float16 (ggml ftype=1)",
+      "license": "MIT"
+    },
+    "runtime": {
+      "id": "whisper.cpp",
+      "version": "v1.9.2",
+      "sourceCommit": "306c88f4d1286aec1bf96e544632897886af5501",
+      "sourcePath": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Sources/whisper.cpp-306c88f4d1286aec1bf96e544632897886af5501",
+      "cliPath": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Builds/whisper-small-control/metal-static/bin/whisper-cli",
+      "cliByteCount": 3271592,
+      "cliSHA256": "cbde25b4d8db46feeab59355809725ff11ec4039b3251a1997ddd3a187901e03",
+      "buildCachePath": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Builds/whisper-small-control/metal-static/CMakeCache.txt",
+      "architecture": "arm64",
+      "license": "MIT",
+      "buildFlags": {
+        "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0",
+        "GGML_BLAS": "OFF",
+        "GGML_METAL": "ON",
+        "GGML_METAL_EMBED_LIBRARY": "ON",
+        "GGML_OPENMP": "OFF",
+        "WHISPER_COREML": "OFF",
+        "WHISPER_CURL": "OFF",
+        "WHISPER_BUILD_SERVER": "OFF",
+        "WHISPER_OPENVINO": "OFF",
+        "WHISPER_SDL2": "OFF",
+        "WHISPER_BUILD_TESTS": "OFF",
+        "WHISPER_BUILD_EXAMPLES": "ON"
+      }
+    }
+  },
+  "corpus": {
+    "manifestPath": "Tools/LocalDictationCandidateAdapters/Benchmarks/Corpus/manifest-v1.json",
+    "validationRoot": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Prepared/corpus/fleurs-a3c817c-validation-subset-v1",
+    "compositeRoot": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Prepared/corpus/fleurs-a3c817c-public-human-composite-mixed-v1",
+    "manifestID": "fleurs-a3c817c-local-dictation-corpus-v1",
+    "sourceRevision": "a3c817cbf7c08863e0c472861c7c39e27ce7f38e",
+    "license": "CC-BY-4.0",
+    "expectedCounts": {
+      "english": 12,
+      "mandarin": 12,
+      "mixed": 12
+    }
+  },
+  "execution": {
+    "expectedWarmCaseCount": 36,
+    "coldCaseIDs": [
+      "en_us-01",
+      "en_us-02",
+      "cmn_hans_cn-01",
+      "cmn_hans_cn-02",
+      "mixed-01"
+    ],
+    "cancellationCaseID": "mixed-01",
+    "maximumStdoutBytes": 1048576,
+    "maximumStderrBytes": 8388608,
+    "maximumJSONBytes": 4194304,
+    "pollMilliseconds": 20,
+    "warmTimeoutSeconds": 3600,
+    "coldTimeoutSeconds": 900,
+    "cancellationTimeoutSeconds": 120
+  }
+}
