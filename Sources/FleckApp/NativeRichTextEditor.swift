@@ -2332,6 +2332,21 @@
       if changed, !isApplyingPasteOption { cancelPasteOptions() }
     }
 
+    override func setSelectedRanges(
+      _ ranges: [NSValue],
+      affinity: NSSelectionAffinity,
+      stillSelecting flag: Bool
+    ) {
+      let previousRanges = selectedRanges
+      super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: flag)
+      guard !isApplyingPasteOption else { return }
+      let currentRanges = selectedRanges
+      guard previousRanges.count != currentRanges.count
+        || zip(previousRanges, currentRanges).contains(where: { !$0.isEqual(to: $1) })
+      else { return }
+      cancelPasteOptions()
+    }
+
     override func cancelOperation(_ sender: Any?) {
       guard hasPasteOptions else {
         super.cancelOperation(sender)
@@ -2348,6 +2363,7 @@
     override func viewWillMove(toWindow newWindow: NSWindow?) {
       if newWindow == nil {
         removePasteOptionsBoundsObserver()
+        removePasteOptionsFocusObservers()
         cancelPasteOptions()
       }
       super.viewWillMove(toWindow: newWindow)
@@ -2356,7 +2372,10 @@
     override func viewDidMoveToWindow() {
       super.viewDidMoveToWindow()
       removePasteOptionsBoundsObserver()
-      guard window != nil, let clipView = enclosingScrollView?.contentView else { return }
+      removePasteOptionsFocusObservers()
+      guard let window else { return }
+      installPasteOptionsFocusObservers(for: window)
+      guard let clipView = enclosingScrollView?.contentView else { return }
       clipView.postsBoundsChangedNotifications = true
       pasteOptionsBoundsObserver = NotificationCenter.default.addObserver(
         forName: NSView.boundsDidChangeNotification,
@@ -2373,6 +2392,7 @@
       if let observer = pasteOptionsBoundsObserver {
         NotificationCenter.default.removeObserver(observer)
       }
+      pasteOptionsFocusObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
     override func layout() {
@@ -2394,6 +2414,35 @@
         NotificationCenter.default.removeObserver(pasteOptionsBoundsObserver)
         self.pasteOptionsBoundsObserver = nil
       }
+    }
+
+    private func installPasteOptionsFocusObservers(for window: NSWindow) {
+      let notificationCenter = NotificationCenter.default
+      pasteOptionsFocusObservers = [
+        notificationCenter.addObserver(
+          forName: NSWindow.didResignKeyNotification,
+          object: window,
+          queue: .main
+        ) { [weak self] _ in
+          DispatchQueue.main.async { [weak self] in
+            self?.cancelPasteOptions()
+          }
+        },
+        notificationCenter.addObserver(
+          forName: NSApplication.didResignActiveNotification,
+          object: NSApplication.shared,
+          queue: .main
+        ) { [weak self] _ in
+          DispatchQueue.main.async { [weak self] in
+            self?.cancelPasteOptions()
+          }
+        }
+      ]
+    }
+
+    private func removePasteOptionsFocusObservers() {
+      pasteOptionsFocusObservers.forEach(NotificationCenter.default.removeObserver)
+      pasteOptionsFocusObservers.removeAll()
     }
 
     func noteLinkTarget(atViewPoint point: NSPoint) -> UUID? {
