@@ -4,12 +4,7 @@ import Foundation
 import LocalDictationCandidateProtocol
 import LocalDictationCandidateRunner
 
-@main
 struct LocalDictationCandidateCLI {
-  static func main() async {
-    exit(await run(Array(CommandLine.arguments.dropFirst())))
-  }
-
   static func run(
     _ arguments: [String],
     eventTimeout: Duration = .seconds(30)
@@ -383,12 +378,6 @@ private enum AdmissionSchema {
   }
 }
 
-struct MeasurementArtifact: Codable, Sendable {
-  let name: String
-  let value: Double
-  let unit: String
-}
-
 struct EvaluationContextPlan: Equatable, Sendable {
   let evaluationOnlyPhrases: [String]
   let appliedPhrases: [String]
@@ -415,9 +404,39 @@ private struct AdmissionCaseResult: Codable, Sendable {
   let caseID: String
   let status: String
   let claimedPartials: Bool
+  let finalTranscript: String?
+  let partialObservations: [PartialTranscriptObservation]
+  let captureTemperature: String
+  let requestToFirstPartialMilliseconds: Double?
+  let fileDecodeMilliseconds: Double?
+  let audioDurationMilliseconds: Double?
+  let realTimeFactor: Double?
   let evaluationOnlyContextPhrases: [String]
   let appliedContextPhrases: [String]
   let measurementArtifacts: [MeasurementArtifact]
+}
+
+private func makeCaseResult(
+  item: AdmissionCase,
+  status: String,
+  contextPlan: EvaluationContextPlan,
+  metrics: BenchmarkRunMetrics
+) -> AdmissionCaseResult {
+  AdmissionCaseResult(
+    caseID: item.id,
+    status: status,
+    claimedPartials: item.claimsPartials,
+    finalTranscript: metrics.finalTranscript,
+    partialObservations: metrics.partialObservations,
+    captureTemperature: item.captureTemperature,
+    requestToFirstPartialMilliseconds: metrics.requestToFirstPartialMilliseconds,
+    fileDecodeMilliseconds: metrics.fileDecodeMilliseconds,
+    audioDurationMilliseconds: metrics.audioDurationMilliseconds,
+    realTimeFactor: metrics.realTimeFactor,
+    evaluationOnlyContextPhrases: contextPlan.evaluationOnlyPhrases,
+    appliedContextPhrases: contextPlan.appliedPhrases,
+    measurementArtifacts: metrics.measurementArtifacts
+  )
 }
 
 private struct AdmissionRunReport: Codable, Sendable {
@@ -578,6 +597,7 @@ private func runCandidate(
   for item in manifest.cases {
     let requestID = "case-\(item.id)"
     let contextPlan = evaluationContextPlan(for: item.evaluationOnlyContextPhrases)
+    let requestStartedAt = ContinuousClock.now
     try await process.send(
       request(
         id: requestID,
@@ -588,15 +608,23 @@ private func runCandidate(
       )
     )
     if item.cancellationPoint == "during-active-decode" {
-      let cancellationPath = try await process.cancel(requestID: requestID, timeout: .seconds(2))
+      let caseResult = try await runCancellationCase(
+        process: process,
+        stream,
+        requestID: requestID,
+        timeout: .seconds(2)
+      )
+      let metrics = caseResult.benchmarkRun.metrics(
+        requestStartedAt: requestStartedAt,
+        terminalAt: caseResult.terminalAt,
+        cancelled: true
+      )
       results.append(
-        AdmissionCaseResult(
-          caseID: item.id,
-          status: try cancellationCaseStatus(for: cancellationPath),
-          claimedPartials: item.claimsPartials,
-          evaluationOnlyContextPhrases: contextPlan.evaluationOnlyPhrases,
-          appliedContextPhrases: contextPlan.appliedPhrases,
-          measurementArtifacts: []
+        makeCaseResult(
+          item: item,
+          status: try cancellationCaseStatus(for: caseResult.terminationPath),
+          contextPlan: contextPlan,
+          metrics: metrics
         )
       )
     } else {
@@ -606,14 +634,17 @@ private func runCandidate(
         timeout: eventTimeout,
         matching: { $0.kind == .final }
       )
+      let metrics = caseResult.benchmarkRun.metrics(
+        requestStartedAt: requestStartedAt,
+        terminalAt: caseResult.terminalAt,
+        cancelled: false
+      )
       results.append(
-        AdmissionCaseResult(
-          caseID: item.id,
+        makeCaseResult(
+          item: item,
           status: "completed",
-          claimedPartials: item.claimsPartials,
-          evaluationOnlyContextPhrases: contextPlan.evaluationOnlyPhrases,
-          appliedContextPhrases: contextPlan.appliedPhrases,
-          measurementArtifacts: caseResult.measurements
+          contextPlan: contextPlan,
+          metrics: metrics
         )
       )
     }
@@ -724,7 +755,102 @@ private enum EventWaitError: Error, Sendable {
   case stdoutOverflow
 }
 
-private let maximumMeasurementArtifacts = 256
+private struct CancellationCaseResult: Sendable {
+  let terminationPath: AdapterProcessTerminationPath
+  let eventResult: EventWaitResult
+
+  var benchmarkRun: BenchmarkRun {
+    eventResult.benchmarkRun
+  }
+
+  var terminalAt: ContinuousClock.Instant {
+    eventResult.terminalAt
+  }
+}
+
+private func runCancellationCase(
+  process: AdapterProcess,
+  _ stream: AsyncThrowingStream<CandidateAdapterEvent, Error>,
+  requestID: String,
+  timeout: Duration
+) async throws -> CancellationCaseResult {
+  let cancellationTask = Task { () throws -> AdapterProcessTerminationPath in
+    try await process.cancel(requestID: requestID, timeout: timeout)
+  }
+  let eventDrainTask = Task { () throws -> EventWaitResult in
+    try await drainCancellationEvents(stream, requestID: requestID)
+  }
+
+  let terminationPath: AdapterProcessTerminationPath
+  do {
+    terminationPath = try await cancellationTask.value
+  } catch {
+    eventDrainTask.cancel()
+    _ = await eventDrainTask.result
+    throw error
+  }
+
+  guard terminationPath == .cooperativeCancellation else {
+    eventDrainTask.cancel()
+    _ = await eventDrainTask.result
+    throw CLIError.lifecycle("cancellation-not-cooperative")
+  }
+
+  do {
+    let eventResult = try await eventDrainTask.value
+    return CancellationCaseResult(
+      terminationPath: terminationPath,
+      eventResult: eventResult
+    )
+  } catch {
+    eventDrainTask.cancel()
+    _ = await eventDrainTask.result
+    throw error
+  }
+}
+
+private func drainCancellationEvents(
+  _ stream: AsyncThrowingStream<CandidateAdapterEvent, Error>,
+  requestID: String
+) async throws -> EventWaitResult {
+  var benchmarkRun = BenchmarkRun()
+  do {
+    for try await event in stream {
+      let receivedAt = ContinuousClock.now
+      if event.requestID == requestID {
+        if case .measurement = event {
+          guard benchmarkRun.measurementArtifacts.count < maximumMeasurementArtifacts else {
+            throw EventWaitError.measurementOverflow
+          }
+        }
+        if case .failure = event {
+          throw EventWaitError.failure
+        }
+        try benchmarkRun.observe(event, receivedAt: receivedAt)
+        continue
+      }
+      if case .cancelled = event {
+        return EventWaitResult(
+          event: event,
+          benchmarkRun: benchmarkRun,
+          terminalAt: receivedAt
+        )
+      }
+    }
+  } catch let error as EventWaitError {
+    throw error
+  } catch let error as BenchmarkRunError {
+    throw error
+  } catch let error as AdapterProcessError {
+    if case .stdoutFlood = error {
+      throw EventWaitError.stdoutOverflow
+    }
+    throw EventWaitError.ended
+  } catch {
+    throw EventWaitError.ended
+  }
+  throw EventWaitError.ended
+}
 
 func nextEvent(
   _ stream: AsyncThrowingStream<CandidateAdapterEvent, Error>,
@@ -735,26 +861,33 @@ func nextEvent(
   do {
     return try await withThrowingTaskGroup(of: EventWaitResult.self) { group in
       group.addTask {
-        var measurements: [MeasurementArtifact] = []
+        var benchmarkRun = BenchmarkRun()
         do {
           for try await event in stream {
-            if case .measurement(let eventRequestID, let name, let value, let unit) = event,
-              eventRequestID == requestID {
-              guard measurements.count < maximumMeasurementArtifacts else {
-                throw EventWaitError.measurementOverflow
+            let receivedAt = ContinuousClock.now
+            if event.requestID == requestID {
+              if case .measurement = event {
+                guard benchmarkRun.measurementArtifacts.count < maximumMeasurementArtifacts else {
+                  throw EventWaitError.measurementOverflow
+                }
               }
-              measurements.append(MeasurementArtifact(name: name, value: value, unit: unit))
+              if case .failure = event {
+                throw EventWaitError.failure
+              }
+              try benchmarkRun.observe(event, receivedAt: receivedAt)
+              if matching(event) {
+                return EventWaitResult(
+                  event: event,
+                  benchmarkRun: benchmarkRun,
+                  terminalAt: receivedAt
+                )
+              }
               continue
-            }
-            guard event.requestID == requestID else { continue }
-            if case .failure = event {
-              throw EventWaitError.failure
-            }
-            if matching(event) {
-              return EventWaitResult(event: event, measurements: measurements)
             }
           }
         } catch let error as EventWaitError {
+          throw error
+        } catch let error as BenchmarkRunError {
           throw error
         } catch let error as AdapterProcessError {
           if case .stdoutFlood = error {
@@ -789,6 +922,8 @@ func nextEvent(
     case .stdoutOverflow:
       throw CLIError.lifecycle("stdout-overflow")
     }
+  } catch let error as BenchmarkRunError {
+    throw CLIError.lifecycle(error.description)
   } catch {
     throw error
   }
@@ -796,7 +931,12 @@ func nextEvent(
 
 struct EventWaitResult: Sendable {
   let event: CandidateAdapterEvent
-  let measurements: [MeasurementArtifact]
+  let benchmarkRun: BenchmarkRun
+  let terminalAt: ContinuousClock.Instant
+
+  var measurements: [MeasurementArtifact] {
+    benchmarkRun.measurementArtifacts
+  }
 }
 
 private func sha256(_ url: URL) throws -> String {
@@ -888,3 +1028,5 @@ private func hardwareIdentity() -> String {
   return "unknown;logical-processors=\(ProcessInfo.processInfo.processorCount)"
   #endif
 }
+
+exit(await LocalDictationCandidateCLI.run(Array(CommandLine.arguments.dropFirst())))
