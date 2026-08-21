@@ -54,6 +54,14 @@ def canonical_sha256(value):
 EXPECTED_MODEL_REVISION = "15fed4eafb456c6fcb2a1165f19ac609670ed14b"
 EXPECTED_MLX_SWIFT_LM_COMMIT = "bd4b7434e6bdb588c7ef55706ff8904cb7fd4c57"
 EXPECTED_SOURCE_CORPUS_SHA256 = "6d8a639d6b67fde23a198398e13176ccc50af03acdfaf504a68dfaa20c9a17fb"
+EXPECTED_TRANSFER_STATEMENT = (
+    "One exploratory HTTP header probe followed a redirect and transiently transferred "
+    "model response bytes into a closed pipe."
+)
+EXPECTED_NON_PERSISTENCE_STATEMENT = (
+    "No model file/artifact was written, retained, persisted, installed, cached, "
+    "integrated, or used for inference; no runtime dependency was acquired."
+)
 EXPECTED_LOCAL_USE_NOTICE = (
     "Local use constitutes acceptance of the Gemma Terms of Use at "
     "https://ai.google.dev/gemma/terms."
@@ -177,6 +185,33 @@ EXPECTED_SYNTHETIC = {
     },
 }
 
+FORBIDDEN_CJK_RANGES = (
+    (0x3400, 0x4DBF),
+    (0x4E00, 0x9FFF),
+    (0xF900, 0xFAFF),
+    (0x20000, 0x2FA1F),
+)
+
+
+def iter_strings(value, path="$"):
+    if isinstance(value, str):
+        yield path, value
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from iter_strings(item, f"{path}[{index}]")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from iter_strings(key, f"{path}.<key>")
+            yield from iter_strings(item, f"{path}[{key!r}]")
+
+
+def validate_no_forbidden_cjk(value):
+    for path, text in iter_strings(value):
+        for character in text:
+            code_point = ord(character)
+            if any(lower <= code_point <= upper for lower, upper in FORBIDDEN_CJK_RANGES):
+                fail(f"forbidden Han/CJK character U+{code_point:04X} at {path}")
+
 
 def validate_metadata(metadata, readme):
     require(metadata.get("schemaVersion") == 1, "metadata schemaVersion is not 1")
@@ -237,9 +272,20 @@ def validate_metadata(metadata, readme):
     require(inventory.get("revision") == EXPECTED_MODEL_REVISION, "artifact revision changed")
     require(inventory.get("sourceURL") == "https://huggingface.co/mlx-community/gemma-3-1b-it-qat-4bit/tree/15fed4eafb456c6fcb2a1165f19ac609670ed14b", "artifact source URL changed")
     require(inventory.get("files") == EXPECTED_MODEL_FILES, "artifact file inventory changed")
-    require(inventory.get("weightsDownloaded") is False, "model weights must not be downloaded")
-    require(inventory.get("runtimeDependenciesDownloaded") is False, "runtime dependencies must not be downloaded")
-    require(inventory.get("contentAcquisition") == "metadata/tree/LFS pointer only; no model weight contents", "content acquisition boundary changed")
+    require(inventory.get("contentAcquisition") == {
+        "transferObserved": True,
+        "transferStatement": EXPECTED_TRANSFER_STATEMENT,
+        "nonPersistenceStatement": EXPECTED_NON_PERSISTENCE_STATEMENT,
+        "modelFileWritten": False,
+        "artifactWritten": False,
+        "retained": False,
+        "persistedArtifact": False,
+        "installed": False,
+        "cached": False,
+        "integrated": False,
+        "usedForInference": False,
+        "runtimeDependencyAcquired": False,
+    }, "content acquisition disclosure or state changed")
 
     for phrase in (
         "provisional",
@@ -248,6 +294,13 @@ def validate_metadata(metadata, readme):
         "unbundled",
         "zero semantic/protected/lexical violations",
         "FaithfulCleanupValidator",
+        EXPECTED_TRANSFER_STATEMENT,
+        EXPECTED_NON_PERSISTENCE_STATEMENT,
+        "recursively scans every string in the corpus JSON",
+        "U+3400-U+4DBF",
+        "U+4E00-U+9FFF",
+        "U+F900-U+FAFF",
+        "U+20000-U+2FA1F",
     ):
         require(phrase in readme, f"README is missing required phrase: {phrase}")
 
@@ -279,6 +332,7 @@ def validate_corpus(corpus, source_corpus, source_bytes):
         "sha256": EXPECTED_SOURCE_CORPUS_SHA256,
     }, "source corpus identity changed")
     require(hashlib.sha256(source_bytes).hexdigest() == EXPECTED_SOURCE_CORPUS_SHA256, "accepted source corpus bytes changed")
+    validate_no_forbidden_cjk(corpus)
 
     cases = corpus.get("cases")
     require(isinstance(cases, list), "corpus cases are missing")
@@ -367,6 +421,7 @@ try:
     expect_rejection("source baseline", lambda _, corp: corp["cases"][0].__setitem__("rawBaseline", "mutated"), metadata, corpus, source_corpus, source_bytes, readme)
     expect_rejection("source case hash", lambda _, corp: corp["cases"][0].__setitem__("sourceCaseSHA256", "0" * 64), metadata, corpus, source_corpus, source_bytes, readme)
     expect_rejection("Mandarin or mixed case", lambda _, corp: corp["cases"][0].__setitem__("language", "mixed"), metadata, corpus, source_corpus, source_bytes, readme)
+    expect_rejection("nested unknown source annotation Han", lambda _, corp: corp["cases"][0].setdefault("unmodeledNested", {}).update({"sourceNote": "含"}), metadata, corpus, source_corpus, source_bytes, readme)
 except ContractError as error:
     print(f"gemma-metadata-corpus-contract: FAIL {error}", file=sys.stderr)
     raise SystemExit(1)
@@ -374,6 +429,7 @@ except ContractError as error:
 print(
     "gemma-metadata-corpus-contract: PASS "
     "totalCases=38 sourceCases=33 syntheticUtilityCases=5 "
-    "qwenEnglish=12 whisperEnglish=12 protectedStress=9 fixtureMutationsRejected=5"
+    "qwenEnglish=12 whisperEnglish=12 protectedStress=9 fixtureMutationsRejected=6 "
+    "recursiveCJKScan=true"
 )
 PY

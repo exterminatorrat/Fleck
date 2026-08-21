@@ -48,9 +48,20 @@
     "repository": "mlx-community/gemma-3-1b-it-qat-4bit",
     "revision": "15fed4eafb456c6fcb2a1165f19ac609670ed14b",
     "sourceURL": "https://huggingface.co/mlx-community/gemma-3-1b-it-qat-4bit/tree/15fed4eafb456c6fcb2a1165f19ac609670ed14b",
-    "contentAcquisition": "metadata/tree/LFS pointer only; no model weight contents",
-    "weightsDownloaded": false,
-    "runtimeDependenciesDownloaded": false,
+    "contentAcquisition": {
+      "transferObserved": true,
+      "transferStatement": "One exploratory HTTP header probe followed a redirect and transiently transferred model response bytes into a closed pipe.",
+      "nonPersistenceStatement": "No model file/artifact was written, retained, persisted, installed, cached, integrated, or used for inference; no runtime dependency was acquired.",
+      "modelFileWritten": false,
+      "artifactWritten": false,
+      "retained": false,
+      "persistedArtifact": false,
+      "installed": false,
+      "cached": false,
+      "integrated": false,
+      "usedForInference": false,
+      "runtimeDependencyAcquired": false
+    },
     "files": [
       {
         "path": ".gitattributes",

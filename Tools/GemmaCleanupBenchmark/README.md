@@ -2,8 +2,9 @@
 
 This is a provisional, English-only, Apple-Silicon-only candidate record for
 the first native MLX-Swift cleanup experiment. It is unintegrated, unadmitted,
-unbundled, and not a release or distribution approval. No model weights or
-runtime dependencies were downloaded here.
+unbundled, and not a release or distribution approval.
+
+One exploratory HTTP header probe followed a redirect and transiently transferred model response bytes into a closed pipe. No model file/artifact was written, retained, persisted, installed, cached, integrated, or used for inference; no runtime dependency was acquired.
 
 ## Candidate identity
 
@@ -39,7 +40,9 @@ Every copied source case retains its source evidence, protected expectations,
 raw baseline, and canonical source-case SHA-256. The contract rejects changed
 source bytes, changed source fields, Mandarin or mixed language labels, Han
 text, and substituted or mutable revisions. Synthetic cases are explicitly
-labelled and do not replace public-human evidence.
+labelled and do not replace public-human evidence. The contract recursively scans every string in the corpus JSON, including nested objects, source evidence, unknown fields, and object keys, and rejects CJK unified or
+compatibility characters in U+3400-U+4DBF, U+4E00-U+9FFF, U+F900-U+FAFF, or
+U+20000-U+2FA1F.
 
 ## Qualification boundary
 
@@ -53,7 +56,8 @@ jq -e . Tools/GemmaCleanupBenchmark/Corpus/english-qualification-v1.json
 ```
 
 The next packet may build a helper and a local test app, but this packet does
-not add SwiftPM dependencies, download weights, wire Fleck, or admit a model.
+not add SwiftPM dependencies, retain or install model content, wire Fleck, or
+admit a model.
 Any future candidate qualification remains behind `FaithfulCleanupValidator`
 and must establish zero semantic/protected/lexical violations before a model
 can be considered further.
