@@ -157,6 +157,32 @@ import Testing
   }
 }
 
+@Test func personalDictionaryStoreRejectsOversizedReplaceWithoutTouchingExistingFile() async throws {
+  let root = temporaryDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let valid = PersonalDictionarySnapshot(
+    entries: [dictionaryStoreEntry(preferredForm: "Fleck")]
+  )
+  try await store.replace(with: valid)
+  let originalBytes = try Data(contentsOf: store.fileURL)
+
+  let oversized = PersonalDictionarySnapshot(
+    entries: [
+      PersonalDictionaryEntry(
+        preferredForm: String(repeating: "a", count: 64 * 1024)
+      )
+    ]
+  )
+  await #expect(throws: PersonalDictionaryStoreError.fileTooLarge) {
+    try await store.replace(with: oversized)
+  }
+
+  #expect(try Data(contentsOf: store.fileURL) == originalBytes)
+  let freshStore = PersonalDictionaryStore(rootURL: root)
+  #expect(try await freshStore.snapshot() == valid)
+}
+
 private func temporaryDictionaryRoot() -> URL {
   FileManager.default.temporaryDirectory.appendingPathComponent(
     "FleckDictionaryStoreTests-\(UUID().uuidString)",

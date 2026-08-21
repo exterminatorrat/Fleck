@@ -2,6 +2,7 @@ import Foundation
 
 public enum PersonalDictionaryStoreError: Error, Equatable, Sendable, CustomStringConvertible {
   case corruptData
+  case fileTooLarge
   case unsupportedSchemaVersion
   case invalidSnapshot
   case invalidEntry
@@ -12,6 +13,7 @@ public enum PersonalDictionaryStoreError: Error, Equatable, Sendable, CustomStri
   public var description: String {
     switch self {
     case .corruptData: "corruptData"
+    case .fileTooLarge: "fileTooLarge"
     case .unsupportedSchemaVersion: "unsupportedSchemaVersion"
     case .invalidSnapshot: "invalidSnapshot"
     case .invalidEntry: "invalidEntry"
@@ -27,7 +29,7 @@ public actor PersonalDictionaryStore {
 
   private let fileManager: FileManager
   private var cachedSnapshot: PersonalDictionarySnapshot?
-  private static let maximumReadBytes = 64 * 1024
+  private static let maximumFileBytes = 64 * 1024
 
   public init(rootURL: URL, fileManager: FileManager = .default) {
     self.fileManager = fileManager
@@ -144,11 +146,11 @@ public actor PersonalDictionaryStore {
     do {
       let file = try FileHandle(forReadingFrom: fileURL)
       defer { try? file.close() }
-      data = try file.read(upToCount: Self.maximumReadBytes + 1) ?? Data()
+      data = try file.read(upToCount: Self.maximumFileBytes + 1) ?? Data()
     } catch {
       throw PersonalDictionaryStoreError.corruptData
     }
-    guard data.count <= Self.maximumReadBytes else {
+    guard data.count <= Self.maximumFileBytes else {
       throw PersonalDictionaryStoreError.corruptData
     }
     do {
@@ -168,6 +170,9 @@ public actor PersonalDictionaryStore {
       throw PersonalDictionaryStoreError.unsupportedSchemaVersion
     } catch {
       throw PersonalDictionaryStoreError.invalidSnapshot
+    }
+    guard data.count <= Self.maximumFileBytes else {
+      throw PersonalDictionaryStoreError.fileTooLarge
     }
     do {
       try fileManager.createDirectory(
