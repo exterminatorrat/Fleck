@@ -204,6 +204,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   private let continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation
   private var progressSubscription: AnyCancellable?
   private var stateSubscription: AnyCancellable?
+  private var healthSubscription: AnyCancellable?
   private var operationTask: Task<Void, Never>?
   private var operationID: UUID?
   private var lastReceivedBytes: Int64 = 0
@@ -239,6 +240,13 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
       lastError: nil
     )
     continuation.yield(snapshot)
+    healthSubscription = manager.$state
+      .dropFirst()
+      .sink { [weak self] state in
+        guard case .repairRequired = state,
+              self?.operationID == nil else { return }
+        self?.publishManagerState(state, allowOutsideOperation: true)
+      }
   }
 
   private func publish(_ next: AdmittedModelInstallationSnapshot) {
@@ -340,6 +348,42 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
     stateSubscription = nil
   }
 
+  private func checkCancellation() -> Bool {
+    guard !Task.isCancelled, !cancellationRequested else {
+      publish(.init(
+        recommendation: .recommended(descriptor),
+        phase: .cancelled,
+        lastError: "Model operation cancelled."
+      ))
+      return false
+    }
+    return true
+  }
+
+  private func runStartupAndCalibration() async throws -> Bool {
+    guard checkCancellation() else { return false }
+    publish(.init(
+      recommendation: .recommended(descriptor),
+      phase: .starting,
+      lastError: nil
+    ))
+    try await startup()
+    guard checkCancellation() else { return false }
+    publish(.init(
+      recommendation: .recommended(descriptor),
+      phase: .calibrating,
+      lastError: nil
+    ))
+    try await calibrate()
+    guard checkCancellation() else { return false }
+    publish(.init(
+      recommendation: .recommended(descriptor),
+      phase: .installed,
+      lastError: nil
+    ))
+    return true
+  }
+
   private func runManagerOperation(
     initialPhase: AdmittedModelInstallPhase,
     runsStartupAndCalibration: Bool,
@@ -394,39 +438,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
           return
         }
         guard runsStartupAndCalibration else { return }
-        self.publish(.init(
-          recommendation: .recommended(self.descriptor),
-          phase: .starting,
-          lastError: nil
-        ))
-        try await self.startup()
-        guard !Task.isCancelled, !self.cancellationRequested else {
-          self.publish(.init(
-            recommendation: .recommended(self.descriptor),
-            phase: .cancelled,
-            lastError: "Model operation cancelled."
-          ))
-          return
-        }
-        self.publish(.init(
-          recommendation: .recommended(self.descriptor),
-          phase: .calibrating,
-          lastError: nil
-        ))
-        try await self.calibrate()
-        guard !Task.isCancelled, !self.cancellationRequested else {
-          self.publish(.init(
-            recommendation: .recommended(self.descriptor),
-            phase: .cancelled,
-            lastError: "Model operation cancelled."
-          ))
-          return
-        }
-        self.publish(.init(
-          recommendation: .recommended(self.descriptor),
-          phase: .installed,
-          lastError: nil
-        ))
+        _ = try await self.runStartupAndCalibration()
       } catch is CancellationError {
         self.publish(.init(
           recommendation: .recommended(self.descriptor),
@@ -495,13 +507,38 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
 
   func refresh() async {
     guard operationTask == nil else { return }
-    var refreshSubscription: AnyCancellable?
-    refreshSubscription = manager.$state.sink { [weak self] state in
-      self?.publishManagerState(state, allowOutsideOperation: true)
+    beginOperationSubscriptions()
+    let task = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.endOperation() }
+      await self.manager.refreshState()
+      guard self.checkCancellation() else { return }
+      guard self.manager.state == .ready else { return }
+      do {
+        _ = try await self.runStartupAndCalibration()
+      } catch is CancellationError {
+        _ = self.checkCancellation()
+      } catch {
+        if self.cancellationRequested || Task.isCancelled {
+          _ = self.checkCancellation()
+        } else if case .repairRequired(let message) = self.manager.state {
+          self.publish(.init(
+            recommendation: .recommended(self.descriptor),
+            phase: .repairRequired(message: message),
+            lastError: message
+          ))
+        } else {
+          self.publish(.init(
+            recommendation: .recommended(self.descriptor),
+            phase: .failed(message: String(describing: error)),
+            lastError: String(describing: error)
+          ))
+        }
+      }
     }
-    defer { refreshSubscription?.cancel() }
-    await manager.refreshState()
-    publishManagerState(manager.state, allowOutsideOperation: true)
+    operationTask = task
+    await task.value
+    operationTask = nil
   }
 
   func cancel() {

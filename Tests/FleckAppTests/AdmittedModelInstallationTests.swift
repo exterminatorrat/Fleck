@@ -694,7 +694,7 @@ func checksumFailureBecomesActionableRepairState() async {
 }
 
 @Test @MainActor
-func refreshMapsStaleStateWithoutStartingOperation() async throws {
+func refreshReadyStateRunsStartupAndCalibrationBeforeInstalled() async throws {
   let cases: [TestRefreshFixture] = [
     .ready,
     .updateAvailable,
@@ -713,11 +713,12 @@ func refreshMapsStaleStateWithoutStartingOperation() async throws {
     )
     defer { fixture.cleanup() }
     let manager = fixture.manager
+    let lifecycle = PhaseRecorder()
     let installer = try EnhancedModelManagerInstaller(
       manager: manager,
       descriptor: descriptor,
-      startup: { Issue.record("refresh must not start startup") },
-      calibrate: { Issue.record("refresh must not start calibration") }
+      startup: { await lifecycle.append("startup") },
+      calibrate: { await lifecycle.append("calibration") }
     )
 
     #expect(installer.snapshot.phase == .notInstalled)
@@ -725,14 +726,21 @@ func refreshMapsStaleStateWithoutStartingOperation() async throws {
 
     switch refreshFixture {
     case .ready:
-      #expect(installer.snapshot.phase == .ready)
+      #expect(installer.snapshot.phase == .installed)
+      #expect(await lifecycle.values == ["startup", "calibration"])
+      #expect(installer.phaseHistory.contains(.ready))
+      #expect(installer.phaseHistory.contains(.starting))
+      #expect(installer.phaseHistory.contains(.calibrating))
+      #expect(installer.phaseHistory.last == .installed)
     case .updateAvailable:
       #expect(installer.snapshot.phase == .updateAvailable)
+      #expect(await lifecycle.values.isEmpty)
     case .repairRequired:
       guard case .repairRequired = installer.snapshot.phase else {
         Issue.record("Expected the manager's filesystem repairRequired state")
         continue
       }
+      #expect(await lifecycle.values.isEmpty)
     }
     #expect(transport.downloadCalls == 0)
     #expect(!installer.phaseHistory.contains {
@@ -740,6 +748,33 @@ func refreshMapsStaleStateWithoutStartingOperation() async throws {
       return false
     })
   }
+}
+
+@Test @MainActor
+func refreshStartupFailureNeverPublishesInstalledOrDownloads() async throws {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let fixture = try TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
+    transport: transport,
+    refreshFixture: .ready
+  )
+  defer { fixture.cleanup() }
+
+  let installer = try EnhancedModelManagerInstaller(
+    manager: fixture.manager,
+    descriptor: descriptor,
+    startup: { throw EnhancedTestFailure.failed },
+    calibrate: { Issue.record("Calibration must not run after startup failure") }
+  )
+
+  await installer.refresh()
+
+  #expect(installer.snapshot.phase != .installed)
+  #expect(!installer.phaseHistory.contains(.installed))
+  #expect(transport.downloadCalls == 0)
 }
 
 @Test @MainActor

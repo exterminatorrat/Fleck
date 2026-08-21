@@ -1823,6 +1823,125 @@ private func waitForCompletion(
   #expect(!capture.hasActiveResources)
 }
 
+@Test @MainActor
+func EnhancedSpeechAudioStartFailureDowngradesTheInstalledRuntimeBeforeNextCapture() async throws {
+  let runtime = try makeInstalledEnhancedRuntime()
+  defer { runtime.fixture.cleanup() }
+  await runtime.installer.refresh()
+  await waitForInstalledPresentation(runtime.viewModel)
+
+  let inference = EnhancedInferenceSpy()
+  let audio = EnhancedAudioSpy(samples: [], startError: EnhancedTestFailure.failed)
+  let capture = EnhancedSpeechCapture(
+    modelManager: runtime.installer.manager,
+    permissions: grantedEnhancedPermissions(),
+    makeInference: { inference },
+    makeAudio: { _ in audio }
+  )
+
+  await #expect(throws: EnhancedTestFailure.failed) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+  await waitForRepairPresentation(runtime.viewModel)
+
+  #expect(isRepairRequired(runtime.installer.manager.state))
+  #expect(runtime.installer.snapshot.phase != .installed)
+  #expect(!runtime.viewModel.presentation.allowsEnhancedPreference)
+  #expect(
+    DictationRuntime.effectiveEngine(
+      preference: .standard,
+      presentation: runtime.viewModel.presentation
+    ) == .standard
+  )
+  #expect(audio.releaseCount == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(!capture.hasActiveResources)
+
+  await runtime.installer.refresh()
+  await waitForInstalledPresentation(runtime.viewModel)
+  #expect(runtime.installer.snapshot.phase == .installed)
+  #expect(runtime.viewModel.presentation.allowsEnhancedPreference)
+  #expect(
+    DictationRuntime.effectiveEngine(
+      preference: .standard,
+      presentation: runtime.viewModel.presentation
+    ) == .enhancedLocal
+  )
+}
+
+@Test @MainActor
+func EnhancedSpeechTranscriptionFailureDowngradesTheInstalledRuntimeBeforeNextCapture()
+  async throws
+{
+  let runtime = try makeInstalledEnhancedRuntime()
+  defer { runtime.fixture.cleanup() }
+  await runtime.installer.refresh()
+  await waitForInstalledPresentation(runtime.viewModel)
+
+  let inference = EnhancedInferenceSpy()
+  inference.transcriptionError = EnhancedTestFailure.failed
+  let audio = EnhancedAudioSpy(samples: [0.1])
+  let capture = EnhancedSpeechCapture(
+    modelManager: runtime.installer.manager,
+    permissions: grantedEnhancedPermissions(),
+    makeInference: { inference },
+    makeAudio: { _ in audio }
+  )
+
+  try await capture.start(provisional: { _ in }, level: { _ in })
+  await #expect(throws: EnhancedTestFailure.failed) {
+    try await capture.finish()
+  }
+  await waitForRepairPresentation(runtime.viewModel)
+
+  #expect(isRepairRequired(runtime.installer.manager.state))
+  #expect(runtime.installer.snapshot.phase != .installed)
+  #expect(!runtime.viewModel.presentation.allowsEnhancedPreference)
+  #expect(
+    DictationRuntime.effectiveEngine(
+      preference: .standard,
+      presentation: runtime.viewModel.presentation
+    ) == .standard
+  )
+  #expect(audio.releaseCount == 1)
+  #expect(inference.releaseCount == 1)
+  #expect(!capture.hasActiveResources)
+}
+
+@Test @MainActor
+func EnhancedSpeechCancellationDoesNotDowngradeTheInstalledRuntime() async throws {
+  let runtime = try makeInstalledEnhancedRuntime()
+  defer { runtime.fixture.cleanup() }
+  await runtime.installer.refresh()
+  await waitForInstalledPresentation(runtime.viewModel)
+
+  let inference = EnhancedInferenceSpy()
+  let audio = EnhancedAudioSpy(samples: [], startError: CancellationError())
+  let capture = EnhancedSpeechCapture(
+    modelManager: runtime.installer.manager,
+    permissions: grantedEnhancedPermissions(),
+    makeInference: { inference },
+    makeAudio: { _ in audio }
+  )
+
+  await #expect(throws: CancellationError.self) {
+    try await capture.start(provisional: { _ in }, level: { _ in })
+  }
+  await Task.yield()
+
+  #expect(runtime.installer.manager.state == .ready)
+  #expect(runtime.installer.snapshot.phase == .installed)
+  #expect(runtime.viewModel.presentation.allowsEnhancedPreference)
+  #expect(
+    DictationRuntime.effectiveEngine(
+      preference: .standard,
+      presentation: runtime.viewModel.presentation
+    ) == .enhancedLocal
+  )
+  #expect(audio.releaseCount == 1)
+  #expect(inference.releaseCount == 1)
+}
+
 @Test @MainActor func EnhancedSpeechMarksRepairAndRecommendsStandardAfterLoadFailure() async {
   let inference = EnhancedInferenceSpy()
   inference.loadError = EnhancedTestFailure.failed
@@ -1878,13 +1997,18 @@ private func waitForCompletion(
 
 @Test @MainActor func EnhancedSpeechRecommendsStandardAfterAudioConstructionFailure() async {
   let inference = EnhancedInferenceSpy()
+  let repository = URL(fileURLWithPath: "/verified/parakeet")
+  var repairedRepository: URL?
   var standardRecommendations = 0
   let capture = EnhancedSpeechCapture(
     verifiedLoadState: {
-      .ready(repositoryURL: URL(fileURLWithPath: "/verified/parakeet"))
+      .ready(repositoryURL: repository)
     },
     makeInference: { inference },
     makeAudio: { _ in throw EnhancedTestFailure.failed },
+    markRepairRequired: { _, failedRepository in
+      repairedRepository = failedRepository
+    },
     recommendStandard: { standardRecommendations += 1 }
   )
 
@@ -1892,6 +2016,7 @@ private func waitForCompletion(
     try await capture.start(provisional: { _ in }, level: { _ in })
   }
 
+  #expect(repairedRepository == repository)
   #expect(standardRecommendations == 1)
   #expect(inference.releaseCount == 1)
   #expect(!capture.hasActiveResources)
@@ -2138,6 +2263,71 @@ private func makeEnhancedCapture(
     makeInference: { inference },
     makeAudio: { _ in audio }
   )
+}
+
+@MainActor
+private struct InstalledEnhancedRuntime {
+  let fixture: TestManagerFixture
+  let installer: EnhancedModelManagerInstaller
+  let viewModel: AdmittedModelSettingsViewModel
+}
+
+@MainActor
+private func makeInstalledEnhancedRuntime() throws -> InstalledEnhancedRuntime {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let fixture = try TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
+    transport: ModelDownloadingProbe(bytes: TestFixtures.tinyBytes),
+    refreshFixture: .ready
+  )
+  let installer = try EnhancedModelManagerInstaller(
+    manager: fixture.manager,
+    descriptor: descriptor,
+    startup: {},
+    calibrate: {}
+  )
+  return InstalledEnhancedRuntime(
+    fixture: fixture,
+    installer: installer,
+    viewModel: AdmittedModelSettingsViewModel(installer: installer)
+  )
+}
+
+@MainActor
+private func grantedEnhancedPermissions() -> DictationPermissionController {
+  DictationPermissionController(
+    microphoneStatus: { .authorized },
+    speechStatus: { .authorized },
+    requestMicrophone: { true },
+    requestSpeech: { true }
+  )
+}
+
+@MainActor
+private func waitForInstalledPresentation(
+  _ viewModel: AdmittedModelSettingsViewModel
+) async {
+  for _ in 0..<100 {
+    if viewModel.presentation.allowsEnhancedPreference { return }
+    await Task.yield()
+  }
+}
+
+@MainActor
+private func waitForRepairPresentation(
+  _ viewModel: AdmittedModelSettingsViewModel
+) async {
+  for _ in 0..<100 {
+    if !viewModel.presentation.allowsEnhancedPreference { return }
+    await Task.yield()
+  }
+}
+
+private func isRepairRequired(_ state: EnhancedModelState) -> Bool {
+  if case .repairRequired = state { return true }
+  return false
 }
 #endif
 

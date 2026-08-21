@@ -311,21 +311,13 @@
       applicationSupportURL: URL = AgentBridgeEndpoint.applicationSupportURL()
     ) {
       #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        let modelManager = DictationModelCapability(
-          modelRootURL: applicationSupportURL.appendingPathComponent(
-            "DictationModels",
-            isDirectory: true
-          )
+        let activation = ParakeetTDTTestActivation.make(
+          applicationSupportURL: applicationSupportURL
         )
+        let modelManager = activation.manager
+        let admittedModelInstaller = activation.installer
       #else
         let modelManager = DictationModelCapability()
-      #endif
-      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        let signedConfiguration: AdmittedModelSignedConfiguration? = nil
-        let admittedModelInstaller = makeAdmittedModelInstaller(
-          signedConfiguration: signedConfiguration
-        )
-      #else
         let admittedModelInstaller = makeAdmittedModelInstaller()
       #endif
       let admittedModelSettingsViewModel = AdmittedModelSettingsViewModel(
@@ -375,10 +367,16 @@
       )
       let coordinator = DictationCoordinator(
         engineProvider: engineProvider,
-        preferredEngine: { [weak appState, admittedModelSettingsViewModel] in
-          Self.effectiveEngine(
+        preferredEngine: { [weak appState, admittedModelSettingsViewModel, modelManager] in
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+          let enhancedRuntimeHealthy = modelManager.state == .ready
+#else
+          let enhancedRuntimeHealthy = true
+#endif
+          return Self.effectiveEngine(
             preference: appState?.preferences.dictationSpeechEngine,
-            presentation: admittedModelSettingsViewModel.presentation
+            presentation: admittedModelSettingsViewModel.presentation,
+            enhancedRuntimeHealthy: enhancedRuntimeHealthy
           )
         },
         cleaner: languageModel,
@@ -405,7 +403,9 @@
           appState?.saveError = "Dictation shortcut: \(Self.shortcutMessage(error))"
         }
       )
-      let startupAssessment: @MainActor () async -> Void = {}
+      let startupAssessment: @MainActor () async -> Void = {
+        await admittedModelSettingsViewModel.refresh()
+      }
 
       self.init(
         appState: appState,
@@ -1237,14 +1237,18 @@
     }
 
     static func effectiveEngine(
-      preference: DictationSpeechEngine?,
-      presentation: AdmittedModelSettingsPresentation
+      preference _: DictationSpeechEngine?,
+      presentation: AdmittedModelSettingsPresentation,
+      enhancedRuntimeHealthy: Bool = true
     ) -> DictationSpeechEngine {
-      guard preference == .enhancedLocal,
-            presentation.allowsEnhancedPreference else {
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+      guard presentation.allowsEnhancedPreference, enhancedRuntimeHealthy else {
         return .standard
       }
       return .enhancedLocal
+      #else
+      return .standard
+      #endif
     }
   }
 

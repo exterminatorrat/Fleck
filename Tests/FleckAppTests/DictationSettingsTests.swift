@@ -39,6 +39,26 @@ import Testing
   #expect(!runtimeSource.contains("clearModelError"))
 }
 
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test
+func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let runtimeSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
+    encoding: .utf8
+  )
+
+  #expect(runtimeSource.contains("ParakeetTDTTestActivation"))
+  #expect(!runtimeSource.contains(
+    "let signedConfiguration: AdmittedModelSignedConfiguration? = nil"
+  ))
+  #expect(runtimeSource.contains("await admittedModelSettingsViewModel.refresh()"))
+}
+#endif
+
 @Test func DictationSettingsUsesTheExistingMatchedGeometrySectionSelector() {
   #expect(SettingsSection.allCases == [.appearance, .editing, .shortcuts, .dictation])
   #expect(SettingsSection.selectionEffectID == "settings-section")
@@ -479,6 +499,36 @@ import Testing
   #expect(fixture.appState.preferences.dictationSpeechEngine == .standard)
   #expect(await fixture.startupLog.value == 1)
 }
+
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test @MainActor
+func DictationRuntimeAutomaticallySelectsInstalledRecommendationOverStalePreference() {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let installed = AdmittedModelSettingsPresentation(snapshot: .init(
+    recommendation: .recommended(descriptor),
+    phase: .installed,
+    lastError: nil
+  ))
+  let notInstalled = AdmittedModelSettingsPresentation(snapshot: .init(
+    recommendation: .recommended(descriptor),
+    phase: .ready,
+    lastError: nil
+  ))
+
+  #expect(
+    DictationRuntime.effectiveEngine(
+      preference: .standard,
+      presentation: installed
+    ) == .enhancedLocal
+  )
+  #expect(
+    DictationRuntime.effectiveEngine(
+      preference: .enhancedLocal,
+      presentation: notInstalled
+    ) == .standard
+  )
+}
+#endif
 
 @Test @MainActor
 func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInstallerIsBuiltIn()
