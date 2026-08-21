@@ -51,6 +51,44 @@ private enum AdmittedModelSettingsTestDescriptors {
   #expect(presentation.detail.contains("Apple Speech"))
 }
 
+@Test func activeEngineFallsBackToAppleSpeechUntilAdmittedModelIsInstalled() {
+  let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
+  let phases: [(AdmittedModelRecommendation, AdmittedModelInstallPhase)] = [
+    (.builtIn, .builtIn),
+    (.recommended(descriptor), .notInstalled),
+    (.recommended(descriptor), .downloading(receivedBytes: 1, totalBytes: 2)),
+    (.recommended(descriptor), .verifying),
+    (.recommended(descriptor), .installing),
+    (.recommended(descriptor), .ready),
+    (.recommended(descriptor), .starting),
+    (.recommended(descriptor), .calibrating),
+    (.recommended(descriptor), .updateAvailable),
+    (.recommended(descriptor), .repairRequired(message: "repair required")),
+    (.recommended(descriptor), .removing),
+    (.recommended(descriptor), .cancelled),
+    (.recommended(descriptor), .failed(message: "failed")),
+  ]
+
+  for (recommendation, phase) in phases {
+    let presentation = AdmittedModelSettingsPresentation(
+      snapshot: .init(recommendation: recommendation, phase: phase, lastError: nil)
+    )
+    #expect(presentation.activeEngineLabel == "Apple Speech")
+  }
+}
+
+@Test func activeEngineShowsEnhancedLocalOnlyForInstalledAdmittedModel() {
+  let presentation = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .recommended(AdmittedModelSettingsTestDescriptors.tinyAdmittedASR),
+      phase: .installed,
+      lastError: nil
+    )
+  )
+
+  #expect(presentation.activeEngineLabel == "Enhanced Local (Parakeet TDT)")
+}
+
 @Test func recommendationHasExplicitInstallAndExactMetadata() {
   let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
   let presentation = AdmittedModelSettingsPresentation(
@@ -466,6 +504,21 @@ func orderedInstallerUpdatesLeaveFinalPresentationAtInstalled() async {
   await waitForPresentation(viewModel, phase: .installed)
 
   #expect(viewModel.presentation.phase == .installed)
+}
+
+@Test @MainActor
+func activeEngineLabelTracksInstallerSnapshotTransitions() async {
+  let probe = InstallerActionProbe()
+  let viewModel = AdmittedModelSettingsViewModel(installer: probe)
+
+  #expect(viewModel.presentation.activeEngineLabel == "Apple Speech")
+  probe.publishSequence([.installed])
+  await waitForPresentation(viewModel, phase: .installed)
+  #expect(viewModel.presentation.activeEngineLabel == "Enhanced Local (Parakeet TDT)")
+
+  probe.publishSequence([.failed(message: "runtime failed")])
+  await waitForPresentation(viewModel, phase: .failed(message: "runtime failed"))
+  #expect(viewModel.presentation.activeEngineLabel == "Apple Speech")
 }
 
 @Test @MainActor

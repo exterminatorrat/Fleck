@@ -34,6 +34,10 @@ struct AdmittedModelSettingsPresentation: Equatable {
     identity != nil && phase == .installed
   }
 
+  var activeEngineLabel: String {
+    allowsEnhancedPreference ? "Enhanced Local (Parakeet TDT)" : "Apple Speech"
+  }
+
   init(snapshot: AdmittedModelInstallationSnapshot) {
     phase = snapshot.phase
 

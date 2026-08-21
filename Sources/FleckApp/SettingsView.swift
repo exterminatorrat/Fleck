@@ -467,6 +467,10 @@
       return VStack(alignment: .leading, spacing: 8) {
         Label(presentation.title, systemImage: "waveform")
           .font(.headline)
+        Text("Active engine: \(presentation.activeEngineLabel)")
+          .font(.caption)
+          .accessibilityLabel("Active engine")
+          .accessibilityValue(presentation.activeEngineLabel)
         Text(presentation.detail)
           .font(.caption)
           .foregroundStyle(.secondary)
