@@ -57,6 +57,34 @@ enum TestDescriptors {
       architectures: ["arm64"]
     ))
   }
+
+  static func raw(
+    _ descriptor: AdmittedModelDescriptor
+  ) -> RawAdmittedModelDescriptor {
+    make(descriptor, modelID: descriptor.modelID)
+  }
+
+  static func make(
+    _ descriptor: AdmittedModelDescriptor,
+    modelID: String
+  ) -> RawAdmittedModelDescriptor {
+    RawAdmittedModelDescriptor(
+      role: descriptor.role,
+      modelID: modelID,
+      revision: descriptor.revision,
+      runtimeABI: descriptor.runtimeABI,
+      conversion: descriptor.conversion,
+      quantization: descriptor.quantization,
+      license: descriptor.license,
+      notices: descriptor.notices,
+      source: descriptor.source,
+      files: descriptor.files,
+      downloadBytes: descriptor.downloadBytes,
+      installedBytes: descriptor.installedBytes,
+      languages: descriptor.languages,
+      architectures: descriptor.architectures
+    )
+  }
 }
 
 enum TestManifests {
@@ -400,8 +428,8 @@ actor ProgressSnapshotRecorder {
 
 enum TestPaths {
   static func temporaryDirectory() -> URL {
-    let candidate = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Fleck-\(UUID().uuidString)", isDirectory: true)
+    let candidate = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
+      .appendingPathComponent("FleckTests-\(UUID().uuidString)", isDirectory: true)
       .standardizedFileURL
     do {
       try FileManager.default.createDirectory(

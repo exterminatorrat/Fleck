@@ -11,6 +11,7 @@ private let testSourceRepository = URL(
   string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml"
 )!
 
+@MainActor
 private func testArtifactIdentity(
   for manifest: EnhancedModelManifest
 ) -> EnhancedModelArtifactIdentity {

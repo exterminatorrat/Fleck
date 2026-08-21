@@ -3,7 +3,7 @@ import Testing
 
 @testable import FleckApp
 
-private enum TestDescriptors {
+private enum DescriptorValidationFixtures {
   static let neutralAdmitted = makeValidated(
     modelID: "example/neutral",
     languages: ["en-US", "zh-CN"]
@@ -97,7 +97,7 @@ private enum TestDescriptors {
 }
 
 @Test func admittedConfigurationProducesExactlyOneRecommendation() {
-  let descriptor = TestDescriptors.admittedASR
+  let descriptor = DescriptorValidationFixtures.admittedASR
   let catalog = AdmittedModelCatalog(
     signedDescriptor: descriptor,
     hardware: .init(
@@ -110,7 +110,7 @@ private enum TestDescriptors {
 }
 
 @Test func mixedRequestedLanguagesDoNotPassAnEnglishOnlyDescriptor() {
-  let descriptor = TestDescriptors.admittedASR
+  let descriptor = DescriptorValidationFixtures.admittedASR
   #expect(descriptor.languages == ["en-US"])
   let catalog = AdmittedModelCatalog(
     signedDescriptor: descriptor,
@@ -125,7 +125,7 @@ private enum TestDescriptors {
 
 @Test func unsupportedHardwareFallsBackToBuiltIn() {
   let catalog = AdmittedModelCatalog(
-    signedDescriptor: TestDescriptors.admittedASR,
+    signedDescriptor: DescriptorValidationFixtures.admittedASR,
     hardware: .init(
       architecture: "x86_64",
       requestedLanguages: ["zh-CN"],
@@ -136,7 +136,7 @@ private enum TestDescriptors {
 }
 
 @Test func spaceAboveDownloadBytesButBelowStagingRequirementFallsBackToBuiltIn() {
-  let descriptor = TestDescriptors.neutralAdmitted
+  let descriptor = DescriptorValidationFixtures.neutralAdmitted
   let availableBytes = descriptor.downloadBytes + 1
   #expect(availableBytes > descriptor.downloadBytes)
   #expect(availableBytes < descriptor.requiredCapacityBytes)
@@ -152,24 +152,24 @@ private enum TestDescriptors {
 }
 
 @Test func invalidSignedDescriptorInputsAreRejected() {
-  let valid = TestDescriptors.neutralAdmitted
+  let valid = DescriptorValidationFixtures.neutralAdmitted
   #expect(throws: AdmittedModelDescriptorError.emptyIdentity) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, modelID: ""))
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(valid, modelID: ""))
   }
   #expect(throws: AdmittedModelDescriptorError.emptyRevision) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, revision: ""))
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(valid, revision: ""))
   }
   #expect(throws: AdmittedModelDescriptorError.emptyLicense) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, license: ""))
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(valid, license: ""))
   }
   #expect(throws: AdmittedModelDescriptorError.emptyRuntimeABI) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, runtimeABI: "   "))
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(valid, runtimeABI: "   "))
   }
   #expect(throws: AdmittedModelDescriptorError.emptyConversion) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, conversion: "\t"))
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(valid, conversion: "\t"))
   }
   #expect(throws: AdmittedModelDescriptorError.emptyQuantization) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, quantization: "\n"))
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(valid, quantization: "\n"))
   }
   let invalidSources: [URL] = [
     URL(string: "relative/repository")!,
@@ -183,11 +183,11 @@ private enum TestDescriptors {
   ]
   for source in invalidSources {
     #expect(throws: AdmittedModelDescriptorError.invalidSource) {
-      _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, source: source))
+      _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(valid, source: source))
     }
   }
   #expect(throws: AdmittedModelDescriptorError.unsafePath("../escape.bin")) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
       valid,
       files: [ .init(path: "../escape.bin", byteCount: 4, sha256: String(repeating: "a", count: 64)) ],
       downloadBytes: 4,
@@ -200,7 +200,7 @@ private enum TestDescriptors {
     "a/%252e%252e/b", "%6dodel.bin"
   ] {
     #expect(throws: AdmittedModelDescriptorError.unsafePath(path)) {
-      _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+      _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
         valid,
         files: [ .init(
           path: path,
@@ -213,7 +213,7 @@ private enum TestDescriptors {
     }
   }
   #expect(throws: AdmittedModelDescriptorError.duplicateFilePath("model.bin")) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
       valid,
       files: [
         .init(path: "model.bin", byteCount: 4, sha256: String(repeating: "a", count: 64)),
@@ -224,10 +224,10 @@ private enum TestDescriptors {
     ))
   }
   #expect(throws: AdmittedModelDescriptorError.invalidByteCount) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, downloadBytes: -1))
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(valid, downloadBytes: -1))
   }
   #expect(throws: AdmittedModelDescriptorError.invalidChecksum("abc")) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
       valid,
       files: [ .init(path: "model.bin", byteCount: 4, sha256: "abc") ],
       downloadBytes: 4,
@@ -235,17 +235,17 @@ private enum TestDescriptors {
     ))
   }
   #expect(throws: AdmittedModelDescriptorError.aggregateMismatch) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, installedBytes: 1))
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(valid, installedBytes: 1))
   }
   #expect(throws: AdmittedModelDescriptorError.requiredCapacityOverflow) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
       valid,
       downloadBytes: 1,
       installedBytes: Int64.max
     ))
   }
   #expect(throws: AdmittedModelDescriptorError.fileAggregateOverflow) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
       valid,
       files: [
         .init(path: "one.bin", byteCount: Int64.max, sha256: String(repeating: "a", count: 64)),
@@ -256,13 +256,13 @@ private enum TestDescriptors {
     ))
   }
   #expect(throws: AdmittedModelDescriptorError.emptySupport) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(valid, languages: [], architectures: []))
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(valid, languages: [], architectures: []))
   }
 }
 
 @Test func descriptorStoresCanonicalTrimmedIdentityFields() throws {
-  let descriptor = try AdmittedModelDescriptor(validating: TestDescriptors.make(
-    TestDescriptors.neutralAdmitted,
+  let descriptor = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
+    DescriptorValidationFixtures.neutralAdmitted,
     modelID: " model ",
     revision: " revision ",
     runtimeABI: " runtime ",
@@ -280,8 +280,8 @@ private enum TestDescriptors {
 
 @Test func doubleEncodedRepositoryTraversalIsRejected() {
   #expect(throws: AdmittedModelDescriptorError.invalidSource) {
-    _ = try AdmittedModelDescriptor(validating: TestDescriptors.make(
-      TestDescriptors.neutralAdmitted,
+    _ = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
+      DescriptorValidationFixtures.neutralAdmitted,
       source: URL(string: "https://example.invalid/repository/%252e%252e/escape")!
     ))
   }
