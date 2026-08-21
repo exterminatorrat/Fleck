@@ -37,9 +37,14 @@ enum ParakeetTDTTestConfiguration {
       EnhancedModelManager.isAppleSilicon()
     },
     startup: @escaping @MainActor () async throws -> Void,
-    calibrate: @escaping @MainActor () async throws -> Void
+    calibrate: @escaping @MainActor () async throws -> Void,
+    applicationResourceRoot: URL? = Bundle.main.resourceURL,
+    moduleBundle: Bundle? = FleckAppResourceBundle.defaultModuleBundle()
   ) throws -> AdmittedModelSignedConfiguration {
-    let manifest = try loadManifest()
+    let manifest = try loadManifest(
+      applicationResourceRoot: applicationResourceRoot,
+      moduleBundle: moduleBundle
+    )
     guard manifest.schemaVersion == 1,
           manifest.modelID == expectedModelID,
           manifest.revision == expectedRevision,
@@ -50,7 +55,10 @@ enum ParakeetTDTTestConfiguration {
     guard let sourceRepository = URL(string: sourceRepositoryString) else {
       throw ParakeetTDTTestConfigurationError.invalidSourceRepository
     }
-    let notices = try loadNotices()
+    let notices = try loadNotices(
+      applicationResourceRoot: applicationResourceRoot,
+      moduleBundle: moduleBundle
+    )
     let files = manifest.files.map {
       AdmittedModelFile(
         path: $0.path,
@@ -118,10 +126,15 @@ enum ParakeetTDTTestConfiguration {
     )
   }
 
-  private static func loadManifest() throws -> EnhancedModelManifest {
+  private static func loadManifest(
+    applicationResourceRoot: URL?,
+    moduleBundle: Bundle?
+  ) throws -> EnhancedModelManifest {
     let url = try resourceURL(
       name: "EnhancedModelManifest",
-      fileExtension: "json"
+      fileExtension: "json",
+      applicationResourceRoot: applicationResourceRoot,
+      moduleBundle: moduleBundle
     )
     let data: Data
     do {
@@ -136,8 +149,16 @@ enum ParakeetTDTTestConfiguration {
     }
   }
 
-  private static func loadNotices() throws -> String {
-    let url = try resourceURL(name: "ThirdPartyNotices", fileExtension: "md")
+  private static func loadNotices(
+    applicationResourceRoot: URL?,
+    moduleBundle: Bundle?
+  ) throws -> String {
+    let url = try resourceURL(
+      name: "ThirdPartyNotices",
+      fileExtension: "md",
+      applicationResourceRoot: applicationResourceRoot,
+      moduleBundle: moduleBundle
+    )
     do {
       return try String(contentsOf: url, encoding: .utf8)
     } catch {
@@ -145,11 +166,26 @@ enum ParakeetTDTTestConfiguration {
     }
   }
 
-  private static func resourceURL(name: String, fileExtension: String) throws -> URL {
-    guard let url = Bundle.module.url(forResource: name, withExtension: fileExtension) else {
-      throw ParakeetTDTTestConfigurationError.missingResource("\(name).\(fileExtension)")
+  private static func resourceURL(
+    name: String,
+    fileExtension: String,
+    applicationResourceRoot: URL?,
+    moduleBundle: Bundle?
+  ) throws -> URL {
+    do {
+      return try FleckAppResourceBundle.url(
+        forResource: name,
+        withExtension: fileExtension,
+        applicationResourceRoot: applicationResourceRoot,
+        moduleBundle: moduleBundle
+      )
+    } catch FleckAppResourceBundleError.missingResource(let resource) {
+      throw ParakeetTDTTestConfigurationError.missingResource(resource)
+    } catch {
+      throw ParakeetTDTTestConfigurationError.unreadableResource(
+        "\(name).\(fileExtension)"
+      )
     }
-    return url
   }
 }
 #endif

@@ -306,16 +306,21 @@
       removalWillBegin: @escaping @Sendable () -> Void = {},
       resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
         try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
-      }
+      },
+      applicationResourceRoot: URL? = Bundle.main.resourceURL,
+      moduleBundle: Bundle? = FleckAppResourceBundle.defaultModuleBundle()
     ) {
-      let embedded = Self.embeddedManifestAndArtifactIdentity()
+      let embedded = Self.embeddedManifestAndArtifactIdentity(
+        applicationResourceRoot: applicationResourceRoot,
+        moduleBundle: moduleBundle
+      )
       self.init(
         modelRootURL: modelRootURL,
         fileManager: fileManager,
         manifest: embedded.manifest,
         artifactIdentity: embedded.artifactIdentity,
         trustedManifests: trustedManifests,
-        candidateEnabled: candidateEnabled,
+        candidateEnabled: candidateEnabled && embedded.candidateEnabled,
         capacityProvider: capacityProvider,
         architectureProvider: architectureProvider,
         clock: clock,
@@ -327,13 +332,39 @@
       )
     }
 
-    private static func embeddedManifestAndArtifactIdentity() -> (
+    private static func embeddedManifestAndArtifactIdentity(
+      applicationResourceRoot: URL?,
+      moduleBundle: Bundle?
+    ) -> (
       manifest: EnhancedModelManifest,
-      artifactIdentity: EnhancedModelArtifactIdentity
+      artifactIdentity: EnhancedModelArtifactIdentity,
+      candidateEnabled: Bool
     ) {
-      let manifest = Self.embeddedManifest()
+      let manifest: EnhancedModelManifest
+      let candidateEnabled: Bool
+      do {
+        let url = try FleckAppResourceBundle.url(
+          forResource: "EnhancedModelManifest",
+          withExtension: "json",
+          applicationResourceRoot: applicationResourceRoot,
+          moduleBundle: moduleBundle
+        )
+        manifest = try JSONDecoder().decode(
+          EnhancedModelManifest.self,
+          from: Data(contentsOf: url)
+        )
+        candidateEnabled = true
+      } catch {
+        // Compatibility construction cannot throw. Keep the fallback inert so
+        // invalid packaged resources are never accepted as a candidate.
+        manifest = Self.embeddedCompatibilityManifest
+        candidateEnabled = false
+      }
+      let sourceRepository = URL(
+        string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml"
+      ) ?? URL(fileURLWithPath: "/")
       let identity = EnhancedModelArtifactIdentity(
-        sourceRepository: URL(string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml")!,
+        sourceRepository: sourceRepository,
         modelID: manifest.modelID,
         revision: manifest.revision,
         license: "experimental-manifest-only",
@@ -347,8 +378,20 @@
         installedBytes: manifest.totalByteCount,
         requiredCapacityBytes: Self.embeddedCompatibilityRequiredCapacity
       )
-      return (manifest: manifest, artifactIdentity: identity)
+      return (
+        manifest: manifest,
+        artifactIdentity: identity,
+        candidateEnabled: candidateEnabled
+      )
     }
+
+    private static let embeddedCompatibilityManifest = EnhancedModelManifest(
+      schemaVersion: 1,
+      modelID: "FluidInference/parakeet-tdt-0.6b-v2-coreml",
+      revision: "ee09c569f73759e6d44c9bd16766f477b2b36d39",
+      totalByteCount: 0,
+      files: []
+    )
 
     // Compatibility only: this is the current experimental embedded Parakeet
     // manager path, never a signed admitted artifact or recommendation.
@@ -840,17 +883,6 @@
         byteProgress = nil
       }
       state = newState
-    }
-
-    private static func embeddedManifest() -> EnhancedModelManifest {
-      let url = Bundle.module.url(
-        forResource: "EnhancedModelManifest",
-        withExtension: "json"
-      )!
-      return try! JSONDecoder().decode(
-        EnhancedModelManifest.self,
-        from: Data(contentsOf: url)
-      )
     }
 
     nonisolated static func resumeAuthenticationKeychainBaseQuery(
