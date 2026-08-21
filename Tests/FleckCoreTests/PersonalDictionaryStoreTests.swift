@@ -109,10 +109,15 @@ import Testing
   try Data(
     "{\"entries\":[],\"schemaVersion\":2,\"suggestions\":[]}".utf8
   ).write(to: file, options: .atomic)
+  let futureBytes = try Data(contentsOf: file)
   let futureStore = PersonalDictionaryStore(rootURL: root)
   await #expect(throws: PersonalDictionaryStoreError.unsupportedSchemaVersion) {
     try await futureStore.snapshot()
   }
+  await #expect(throws: PersonalDictionaryStoreError.unsupportedSchemaVersion) {
+    try await futureStore.upsert(dictionaryStoreEntry(preferredForm: "Fleck"))
+  }
+  #expect(try Data(contentsOf: file) == futureBytes)
 }
 
 @Test func personalDictionaryStoreReplacesOnlyValidSnapshots() async throws {
@@ -150,10 +155,51 @@ import Testing
   let oversizedData = try PersonalDictionaryCodec.encodeJSON(oversizedSnapshot)
   #expect(oversizedData.count > 64 * 1024)
   try oversizedData.write(to: file)
+  let originalBytes = try Data(contentsOf: file)
 
   let store = PersonalDictionaryStore(rootURL: root)
-  await #expect(throws: PersonalDictionaryStoreError.corruptData) {
+  await #expect(throws: PersonalDictionaryStoreError.fileTooLarge) {
     try await store.snapshot()
+  }
+  await #expect(throws: PersonalDictionaryStoreError.fileTooLarge) {
+    try await store.upsert(dictionaryStoreEntry(preferredForm: "Fleck"))
+  }
+  #expect(try Data(contentsOf: file) == originalBytes)
+}
+
+@Test func personalDictionaryStoreAcceptsExactly64KiBAndRejectsTheNextByte() async throws {
+  let root = temporaryDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let directory = root.appendingPathComponent("PersonalDictionary", isDirectory: true)
+  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  let file = directory.appendingPathComponent("dictionary-v1.json")
+  let entryID = UUID(uuidString: "00000000-0000-0000-0000-000000000021")!
+  let baseSnapshot = PersonalDictionarySnapshot(
+    entries: [PersonalDictionaryEntry(id: entryID, preferredForm: "a")]
+  )
+  let baseData = try PersonalDictionaryCodec.encodeJSON(baseSnapshot)
+  let boundarySnapshot = PersonalDictionarySnapshot(
+    entries: [
+      PersonalDictionaryEntry(
+        id: entryID,
+        preferredForm: String(repeating: "a", count: 64 * 1024 - baseData.count + 1)
+      )
+    ]
+  )
+  let boundaryData = try PersonalDictionaryCodec.encodeJSON(boundarySnapshot)
+  #expect(boundaryData.count == 64 * 1024)
+  try boundaryData.write(to: file)
+
+  let boundaryStore = PersonalDictionaryStore(rootURL: root)
+  #expect(try await boundaryStore.snapshot() == boundarySnapshot)
+
+  var oversizedData = boundaryData
+  oversizedData.append(0)
+  #expect(oversizedData.count == 64 * 1024 + 1)
+  try oversizedData.write(to: file)
+  let oversizedStore = PersonalDictionaryStore(rootURL: root)
+  await #expect(throws: PersonalDictionaryStoreError.fileTooLarge) {
+    try await oversizedStore.snapshot()
   }
 }
 

@@ -151,7 +151,7 @@ public actor PersonalDictionaryStore {
       throw PersonalDictionaryStoreError.corruptData
     }
     guard data.count <= Self.maximumFileBytes else {
-      throw PersonalDictionaryStoreError.corruptData
+      throw PersonalDictionaryStoreError.fileTooLarge
     }
     do {
       return try PersonalDictionaryCodec.decodeJSON(data)
