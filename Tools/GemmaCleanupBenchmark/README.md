@@ -1,0 +1,59 @@
+# Gemma cleanup benchmark
+
+This is a provisional, English-only, Apple-Silicon-only candidate record for
+the first native MLX-Swift cleanup experiment. It is unintegrated, unadmitted,
+unbundled, and not a release or distribution approval. No model weights or
+runtime dependencies were downloaded here.
+
+## Candidate identity
+
+The exact model candidate is
+`mlx-community/gemma-3-1b-it-qat-4bit` at immutable revision
+`15fed4eafb456c6fcb2a1165f19ac609670ed14b`. MLX Swift LM 3.31.4 is pinned to
+commit `bd4b7434e6bdb588c7ef55706ff8904cb7fd4c57`; its tag declares MLX Swift
+with `.upToNextMinor(from: "0.31.4")`, resolved here as `>=0.31.4,<0.32.0`.
+The direct registry path is `LLMRegistry.gemma3_1B_qat_4bit`.
+
+The upstream identity is `google/gemma-3-1b-it`. Gemma is governed by the
+[Gemma Terms of Use](https://ai.google.dev/gemma/terms). Local use constitutes
+acceptance of those terms. No distribution approval is granted: any later
+redistribution requires a copy of the Gemma Terms of Use Agreement, enforceable
+use restrictions, and the required Notice file. The metadata file records the
+full immutable artifact inventory and the available Git, LFS, and Xet content
+identifiers; it does not contain model content.
+
+## Frozen qualification corpus
+
+`Corpus/english-qualification-v1.json` contains exactly 38 English cases:
+
+- 12 Qwen-derived and 12 Whisper-derived public-human ASR baselines copied
+  from `Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json`.
+- 9 English protected-stress cases covering names/destinations, numbers,
+  prices/units, dates/times, URLs/paths, commands/code,
+  recipients/destinations, commitment/modality, and negation.
+- 5 synthetic utility cases covering accepted filler removal, immediate
+  duplicate removal, explicit correction, punctuation/case, and short-list
+  formatting.
+
+Every copied source case retains its source evidence, protected expectations,
+raw baseline, and canonical source-case SHA-256. The contract rejects changed
+source bytes, changed source fields, Mandarin or mixed language labels, Han
+text, and substituted or mutable revisions. Synthetic cases are explicitly
+labelled and do not replace public-human evidence.
+
+## Qualification boundary
+
+Run the offline metadata/corpus contract before any future helper or model
+work:
+
+```sh
+bash Tools/GemmaCleanupBenchmark/Tests/run-metadata-corpus-contract-tests.sh
+jq -e . Tools/GemmaCleanupBenchmark/Metadata/gemma-3-1b-it-qat-4bit.json
+jq -e . Tools/GemmaCleanupBenchmark/Corpus/english-qualification-v1.json
+```
+
+The next packet may build a helper and a local test app, but this packet does
+not add SwiftPM dependencies, download weights, wire Fleck, or admit a model.
+Any future candidate qualification remains behind `FaithfulCleanupValidator`
+and must establish zero semantic/protected/lexical violations before a model
+can be considered further.

@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "candidate": {
+    "status": "provisional",
+    "integrated": false,
+    "admitted": false,
+    "bundled": false,
+    "platform": "Apple Silicon macOS",
+    "languageScope": "English only",
+    "registryPath": "LLMRegistry.gemma3_1B_qat_4bit",
+    "model": {
+      "id": "mlx-community/gemma-3-1b-it-qat-4bit",
+      "revision": "15fed4eafb456c6fcb2a1165f19ac609670ed14b",
+      "format": "MLX",
+      "quantization": "QAT 4-bit",
+      "sourceURL": "https://huggingface.co/mlx-community/gemma-3-1b-it-qat-4bit"
+    },
+    "upstream": {
+      "id": "google/gemma-3-1b-it",
+      "sourceURL": "https://huggingface.co/google/gemma-3-1b-it"
+    },
+    "runtime": {
+      "package": "mlx-swift-lm",
+      "version": "3.31.4",
+      "commit": "bd4b7434e6bdb588c7ef55706ff8904cb7fd4c57",
+      "sourceURL": "https://github.com/ml-explore/mlx-swift-lm",
+      "packageSwiftSHA256": "f03c532f6e128c04cc76fa5d92d05fd3bc1408ab9a883f86605bb9866725ffa2",
+      "mlxSwiftCompatibility": {
+        "dependencyDeclaration": ".package(url: \"https://github.com/ml-explore/mlx-swift\", .upToNextMinor(from: \"0.31.4\"))",
+        "resolvedRange": ">=0.31.4,<0.32.0",
+        "source": "Package.swift at mlx-swift-lm 3.31.4 commit"
+      }
+    }
+  },
+  "license": {
+    "termsIdentity": "Gemma Terms of Use",
+    "termsURL": "https://ai.google.dev/gemma/terms",
+    "localUseStatement": "Local use constitutes acceptance of the Gemma Terms of Use at https://ai.google.dev/gemma/terms.",
+    "redistributionStatement": "No distribution approval is granted. Any later redistribution requires a copy of the Gemma Terms of Use Agreement, the enforceable use restrictions, and the required Notice file.",
+    "distributionApprovalGranted": false,
+    "requiredDistributionObligations": [
+      "copy of the Gemma Terms of Use Agreement",
+      "enforceable use restrictions",
+      "required Notice file"
+    ]
+  },
+  "artifactInventory": {
+    "repository": "mlx-community/gemma-3-1b-it-qat-4bit",
+    "revision": "15fed4eafb456c6fcb2a1165f19ac609670ed14b",
+    "sourceURL": "https://huggingface.co/mlx-community/gemma-3-1b-it-qat-4bit/tree/15fed4eafb456c6fcb2a1165f19ac609670ed14b",
+    "contentAcquisition": "metadata/tree/LFS pointer only; no model weight contents",
+    "weightsDownloaded": false,
+    "runtimeDependenciesDownloaded": false,
+    "files": [
+      {
+        "path": ".gitattributes",
+        "bytes": 1570,
+        "gitBlobOID": "52373fe24473b1aa44333d318f578ae6bf04b49b",
+        "lfsOID": null,
+        "xetHash": null
+      },
+      {
+        "path": "README.md",
+        "bytes": 1202,
+        "gitBlobOID": "fbadf314fb585ef189a5eb061e26537f92f7eade",
+        "lfsOID": null,
+        "xetHash": null
+      },
+      {
+        "path": "added_tokens.json",
+        "bytes": 35,
+        "gitBlobOID": "e17bde03d42feda32d1abfca6d3b598b9a020df7",
+        "lfsOID": null,
+        "xetHash": null
+      },
+      {
+        "path": "config.json",
+        "bytes": 1105,
+        "gitBlobOID": "1fbce929f85fe2ceb9bc6a216ec5ff93994ad287",
+        "lfsOID": null,
+        "xetHash": null
+      },
+      {
+        "path": "model.safetensors",
+        "bytes": 732577304,
+        "gitBlobOID": "b7c72ff4b32704c16afe1914706ac9ed94cc6291",
+        "lfsOID": "b6010f6b03a83f973ca8708eb5784d5b0f80c0e7e9143dbb4c95d0eefe39c837",
+        "xetHash": "558d22fc5d008bc20397be7d20103e9caac80d75598957fbdc2e64d7f40efa69"
+      },
+      {
+        "path": "model.safetensors.index.json",
+        "bytes": 50542,
+        "gitBlobOID": "2edd34f24a81f4e2ae901417d17a08980614c92c",
+        "lfsOID": null,
+        "xetHash": null
+      },
+      {
+        "path": "special_tokens_map.json",
+        "bytes": 662,
+        "gitBlobOID": "1a6193244714d3d78be48666cb02cdbfac62ad86",
+        "lfsOID": null,
+        "xetHash": null
+      },
+      {
+        "path": "tokenizer.json",
+        "bytes": 33384568,
+        "gitBlobOID": "29401f984828a18bb09a6128d437c6766785eb66",
+        "lfsOID": "4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795",
+        "xetHash": "fa66c8c017ade193f7cc37a2b421a1fc461563e803f179a496f7bdda2ec42c21"
+      },
+      {
+        "path": "tokenizer.model",
+        "bytes": 4689074,
+        "gitBlobOID": "14f810a829755bae3fafd6f97096dbd2eac556bd",
+        "lfsOID": "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c",
+        "xetHash": "a81fa217b67ef4a1992b48a47651c27a2a19df419eafd1aad9c0bbd5ff49bde3"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "bytes": 1156959,
+        "gitBlobOID": "87a7b965259321cc01a7602329d13a1fb6d8cb14",
+        "lfsOID": null,
+        "xetHash": null
+      }
+    ]
+  }
+}
