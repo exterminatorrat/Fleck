@@ -7,6 +7,45 @@ import Testing
 @testable import FleckApp
 
 @Test @MainActor
+func enhancedPreferenceUsesProcessingAndReportsItsSelectedEngine() async throws {
+  let processing = ProcessingProbe(
+    result: .init(
+      rawTranscript: "enhanced raw",
+      dictionaryBaseline: "Enhanced raw",
+      cleanedTranscript: "Enhanced raw.",
+      insertedText: "Enhanced raw.",
+      cleanupOutcome: .cleaned,
+      measurements: .empty
+    )
+  )
+  let fixture = try Fixture(
+    processing: processing,
+    preferred: .enhancedLocal
+  )
+  fixture.enhanced.finalText = "legacy raw"
+
+  await fixture.coordinator.start(mode: .smartCapture)
+
+  #expect(processing.beginCount == 1)
+  #expect(fixture.provider.requestedKinds.isEmpty)
+  #expect(fixture.coordinator.phase == .listening(
+    mode: .smartCapture,
+    engine: .enhancedLocal
+  ))
+  let configuration = try #require(processing.configurations.first)
+  #expect(configuration.engine == .enhancedLocal)
+
+  fixture.preferred = .standard
+  await fixture.coordinator.finish()
+
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.engine == .enhancedLocal)
+  #expect(record.rawTranscript == "enhanced raw")
+  #expect(fixture.saver.savedTexts == ["Enhanced raw."])
+  #expect(fixture.cleaner.calls == 0)
+}
+
+@Test @MainActor
 func processingPathPublishesProvisionalAndCommitsFinalResult() async throws {
   let consumed = ProvisionalUpdateProbe()
   let processing = ProcessingProbe(
@@ -2376,6 +2415,7 @@ final class ProcessingProbe: DictationProcessing {
 
   private(set) var publishedUpdates: [DictationTextUpdate] = []
   private(set) var beginCount = 0
+  private(set) var configurations: [DictationProcessingConfiguration] = []
 
   init(
     updates: [DictationTextUpdate] = [],
@@ -2418,7 +2458,7 @@ final class ProcessingProbe: DictationProcessing {
     configuration: DictationProcessingConfiguration,
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession {
-    _ = configuration
+    configurations.append(configuration)
     levelCallback = level
     if let synchronousLevel { level(synchronousLevel) }
     beginCount += 1

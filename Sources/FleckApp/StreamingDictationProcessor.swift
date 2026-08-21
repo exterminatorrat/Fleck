@@ -8,7 +8,7 @@ enum StreamingDictationProcessorError: Error, Equatable {
 @MainActor
 final class StreamingDictationProcessor: DictationProcessing {
   typealias SourceFactory =
-    @MainActor () async throws -> any StreamingSpeechSource
+    @MainActor (DictationProcessingConfiguration) async throws -> any StreamingSpeechSource
 
   private let makeSource: SourceFactory
   private let dictionaryResolver: any TranscriptDictionaryResolving
@@ -54,7 +54,7 @@ final class StreamingDictationProcessor: DictationProcessing {
     configuration: DictationProcessingConfiguration,
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession {
-    let source = try await makeSource()
+    let source = try await makeSource(configuration)
     let callbackBuffer = StreamingDictationCallbackBuffer()
     do {
       try await source.start(

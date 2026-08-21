@@ -50,6 +50,7 @@ final class DictationCoordinator {
   private struct Capture {
     let id: UUID
     let mode: DictationMode
+    let selectedEngine: DictationSpeechEngine
     let editor: (any FocusedDictationEditing)?
     let destination: DictationDestination?
     let startedAt: Date
@@ -308,6 +309,7 @@ final class DictationCoordinator {
     guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
       return false
     }
+    let selectedEngine = preferredEngine()
     copyableTranscript = nil
     recoveryReceipt = nil
     recoveryAction = nil
@@ -317,6 +319,7 @@ final class DictationCoordinator {
     capture = Capture(
       id: id,
       mode: mode,
+      selectedEngine: selectedEngine,
       editor: focusedEditor,
       destination: mode == .focused ? destination : nil,
       startedAt: Date()
@@ -338,13 +341,19 @@ final class DictationCoordinator {
   private func startReservedCapture(_ id: UUID) async {
     guard let reservedCapture = capture, reservedCapture.id == id else { return }
     let mode = reservedCapture.mode
-    if let processing, preferredEngine() == .standard {
-      await startProcessingCapture(id, mode: mode, processing: processing)
+    let selectedEngine = reservedCapture.selectedEngine
+    if let processing {
+      await startProcessingCapture(
+        id,
+        mode: mode,
+        engine: selectedEngine,
+        processing: processing
+      )
       return
     }
     let engine: any SpeechEngine
     do {
-      engine = try await engineProvider.engineForCapture(preferred: preferredEngine())
+      engine = try await engineProvider.engineForCapture(preferred: selectedEngine)
     } catch {
       guard finishStarting(id) != nil else { return }
       guard await continueCapture(id) else { return }
@@ -391,6 +400,7 @@ final class DictationCoordinator {
   private func startProcessingCapture(
     _ id: UUID,
     mode: DictationMode,
+    engine: DictationSpeechEngine,
     processing: any DictationProcessing
   ) async {
     await processing.prepare(for: .immediateCapture)
@@ -402,7 +412,8 @@ final class DictationCoordinator {
         configuration: .init(
           captureID: id,
           mode: mode,
-          recognitionContext: .englishDefault
+          recognitionContext: .englishDefault,
+          engine: engine
         ),
         level: { [weak self] level in
           guard let self, self.isActive(id) else { return }
@@ -431,7 +442,7 @@ final class DictationCoordinator {
     startProcessingUpdates(id, session: session)
     guard let current = capture, current.id == id else { return }
     guard await continueCapture(id) else { return }
-    setPhase(.listening(mode: mode, engine: .standard))
+    setPhase(.listening(mode: mode, engine: engine))
     if current.releaseRequested { await finish() }
   }
 
@@ -604,7 +615,7 @@ final class DictationCoordinator {
     let record = DictationHistoryRecord(
       id: id,
       mode: capture.mode,
-      engine: .standard,
+      engine: capture.selectedEngine,
       startedAt: capture.startedAt,
       completedAt: Date(),
       rawTranscript: result.rawTranscript,

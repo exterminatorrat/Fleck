@@ -355,8 +355,10 @@
         clock: .live
       )
       let processing = StreamingDictationProcessor(
-        makeSource: {
-          let engine = try await engineProvider.engineForCapture(preferred: .standard)
+        makeSource: { configuration in
+          let engine = try await engineProvider.engineForCapture(
+            preferred: configuration.engine
+          )
           return AppleSpeechStreamingAdapter(engine: engine)
         },
         dictionaryResolver: PersonalDictionaryTranscriptResolver(entries: { [] }),

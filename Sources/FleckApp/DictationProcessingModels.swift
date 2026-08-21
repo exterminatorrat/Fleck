@@ -41,6 +41,19 @@ struct DictationProcessingConfiguration: Equatable, Sendable {
   let captureID: UUID
   let mode: DictationMode
   let recognitionContext: DictationRecognitionContext
+  let engine: DictationSpeechEngine
+
+  init(
+    captureID: UUID,
+    mode: DictationMode,
+    recognitionContext: DictationRecognitionContext,
+    engine: DictationSpeechEngine = .standard
+  ) {
+    self.captureID = captureID
+    self.mode = mode
+    self.recognitionContext = recognitionContext
+    self.engine = engine
+  }
 }
 
 struct DictationTextUpdate: Equatable, Sendable {

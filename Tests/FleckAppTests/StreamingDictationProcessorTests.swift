@@ -7,12 +7,16 @@ import FleckCore
 @MainActor
 private func makeProcessor(
   source: any StreamingSpeechSource,
+  onConfiguration: ((DictationProcessingConfiguration) -> Void)? = nil,
   finalizationStartGate: (@MainActor @Sendable () async -> Void)? = nil,
   onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil,
   onCancellationDrained: (@MainActor @Sendable () -> Void)? = nil
 ) -> StreamingDictationProcessor {
   StreamingDictationProcessor(
-    makeSource: { source },
+    makeSource: { configuration in
+      onConfiguration?(configuration)
+      return source
+    },
     dictionaryResolver: DictionaryResolverProbe(
       resolution: .init(
         baseline: "First",
@@ -249,6 +253,29 @@ func beginStartsTheSoleSourceOnceBeforeReturningAndWiresCallbacks() async throws
 }
 
 @Test @MainActor
+func beginPassesSelectedEngineToSourceFactory() async throws {
+  let source = StreamingSpeechSourceProbe()
+  var receivedConfiguration: DictationProcessingConfiguration?
+  let processor = makeProcessor(
+    source: source,
+    onConfiguration: { receivedConfiguration = $0 }
+  )
+
+  let session = try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault,
+      engine: .enhancedLocal
+    ),
+    level: { _ in }
+  )
+
+  #expect(receivedConfiguration?.engine == .enhancedLocal)
+  await session.cancel()
+}
+
+@Test @MainActor
 func beginForwardsSynchronousAndLaterSourceLevelsExactlyOnce() async throws {
   var levels: [Float] = []
   let source = StreamingSpeechSourceProbe(synchronousLevel: 0.25)
@@ -392,7 +419,7 @@ func cancellingAfterSourceFinishAwaitsCleanupWithoutSecondSourceTerminalization(
     cancellationBudget: .milliseconds(25)
   )
   let processor = StreamingDictationProcessor(
-    makeSource: { source },
+    makeSource: { _ in source },
     dictionaryResolver: DictionaryResolverProbe(
       resolution: .init(
         baseline: "Send the report",
@@ -750,7 +777,7 @@ func processorUsesExactBaselineWhenCleanupIsRejected() async throws {
     clock: TestCleanupClock.immediate
   )
   let processor = StreamingDictationProcessor(
-    makeSource: { AppleSpeechStreamingAdapter(engine: engine) },
+    makeSource: { _ in AppleSpeechStreamingAdapter(engine: engine) },
     dictionaryResolver: DictionaryResolverProbe(
       resolution: .init(
         baseline: "Do not cancel 2 meetings",
@@ -782,7 +809,7 @@ func processorUsesRawRecoveryWhenDictionaryResolutionFails() async throws {
     clock: TestCleanupClock.immediate
   )
   let processor = StreamingDictationProcessor(
-    makeSource: { AppleSpeechStreamingAdapter(engine: engine) },
+    makeSource: { _ in AppleSpeechStreamingAdapter(engine: engine) },
     dictionaryResolver: DictionaryResolverProbe(error: .failed),
     cleaner: cleaner,
     runtime: nil,
@@ -815,7 +842,7 @@ func processorCapturesStopBeforeDelayedSourceFinalization() async throws {
     clock: TestCleanupClock.immediate
   )
   let processor = StreamingDictationProcessor(
-    makeSource: { source },
+    makeSource: { _ in source },
     dictionaryResolver: DictionaryResolverProbe(
       resolution: .init(
         baseline: "send the report",
