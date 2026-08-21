@@ -8,6 +8,15 @@ private enum ConfigurationTestError: Error {
   case capacityUnavailable
 }
 
+private final class ArchitectureProbe: @unchecked Sendable {
+  var invocationCount = 0
+
+  func sample() -> Bool {
+    invocationCount += 1
+    return invocationCount == 1
+  }
+}
+
 @MainActor
 private func makeTestConfiguration(
   capacity: Int64 = .max,
@@ -73,6 +82,27 @@ func parakeetConfigurationBindsExactManifestIdentityAndNamespace() throws {
   #expect(test.value.manager.admittedStorageNamespaceRootURL
     == test.value.manager.modelRootURL)
   #expect(test.value.manager.modelRootURL != test.value.manager.admittedStorageBaseRootURL)
+}
+
+@Test @MainActor
+func architectureProviderIsSampledOnceAndManagerMatchesHardwareProfile() throws {
+  let probe = ArchitectureProbe()
+  let baseRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("fleck-parakeet-architecture-probe-\(UUID().uuidString)")
+  let configuration = try ParakeetTDTTestConfiguration.make(
+    admittedBaseRoot: baseRoot,
+    capacityProvider: { Int64.max },
+    architectureProvider: { probe.sample() },
+    startup: {},
+    calibrate: {}
+  )
+  defer { removeTestRoot(baseRoot) }
+
+  #expect(probe.invocationCount == 1)
+  #expect(configuration.hardware.architecture == "arm64")
+  #expect(configuration.manager.isArchitectureSupported)
+  #expect(configuration.manager.isArchitectureSupported
+    == (configuration.hardware.architecture == "arm64"))
 }
 
 @Test @MainActor

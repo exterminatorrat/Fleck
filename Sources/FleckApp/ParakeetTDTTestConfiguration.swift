@@ -107,7 +107,7 @@ enum ParakeetTDTTestConfiguration {
       artifactIdentity: artifactIdentity,
       trustedManifests: [manifest],
       capacityProvider: capacityProvider,
-      architectureProvider: architectureProvider
+      architectureProvider: { architectureSupported }
     )
     return AdmittedModelSignedConfiguration(
       rawDescriptor: rawDescriptor,
