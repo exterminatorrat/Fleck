@@ -394,6 +394,23 @@ import Testing
   #expect(state.isPresented(occurrence))
 }
 
+@Test func notesPanelBannerDismissalPresentsIdenticalCaptureFailureAfterSynchronousClearAndReemit() {
+  let occurrence = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+  var state = NotesPanelBannerDismissalState()
+  state.reconcile(activeOccurrences: [occurrence])
+  state.dismiss(occurrence)
+  #expect(!state.isPresented(occurrence))
+
+  // The source emitted nil and re-emitted this same failure before a render.
+  state.forgetDismissedOccurrences(in: .captureFailure)
+  state.reconcile(activeOccurrences: [occurrence])
+
+  #expect(state.isPresented(occurrence))
+}
+
 @Test func dictationModifierSettingsExplainsFnAndConflictProneKeys() {
   let function = DictationModifierSettingsPresentation(
     selected: .function,

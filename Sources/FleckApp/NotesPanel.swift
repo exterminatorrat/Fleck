@@ -240,11 +240,27 @@
     case container
   }
 
+  enum NotesPanelBannerCategory: Hashable {
+    case modifierRecovery
+    case captureFailure
+    case dictationRecovery
+    case agentChange
+  }
+
   enum NotesPanelBannerOccurrence: Hashable {
     case modifierRecovery(statusCopy: String, recoveryButtonTitle: String)
     case captureFailure(message: String, actionPanes: [DictationPrivacyPane])
     case dictationRecovery(actionTitle: String, accessibilityLabel: String)
     case agentChange(changeID: UUID, count: Int)
+
+    var category: NotesPanelBannerCategory {
+      switch self {
+      case .modifierRecovery: .modifierRecovery
+      case .captureFailure: .captureFailure
+      case .dictationRecovery: .dictationRecovery
+      case .agentChange: .agentChange
+      }
+    }
   }
 
   struct NotesPanelBannerDismissalState: Equatable {
@@ -254,6 +270,14 @@
       activeOccurrences: Set<NotesPanelBannerOccurrence>
     ) {
       dismissedOccurrences.formIntersection(activeOccurrences)
+    }
+
+    mutating func forgetDismissedOccurrences(
+      in category: NotesPanelBannerCategory
+    ) {
+      dismissedOccurrences = dismissedOccurrences.filter {
+        $0.category != category
+      }
     }
 
     mutating func dismiss(_ occurrence: NotesPanelBannerOccurrence) {
@@ -500,6 +524,20 @@
       )
       .onChange(of: activeBannerOccurrences, initial: true) { _, occurrences in
         bannerDismissalState.reconcile(activeOccurrences: occurrences)
+      }
+      .onReceive(dictationRuntime.$captureFailure) { failure in
+        guard failure == nil else { return }
+        bannerDismissalState.forgetDismissedOccurrences(in: .captureFailure)
+      }
+      .onReceive(dictationRuntime.$recoveryAction) { recoveryAction in
+        guard recoveryAction == nil else { return }
+        bannerDismissalState.forgetDismissedOccurrences(in: .dictationRecovery)
+      }
+      .onReceive(dictationRuntime.$modifierMonitorState) { monitorState in
+        guard monitorState == .stopped || monitorState == .running else {
+          return
+        }
+        bannerDismissalState.forgetDismissedOccurrences(in: .modifierRecovery)
       }
       .fileImporter(
         isPresented: $isImporting,
