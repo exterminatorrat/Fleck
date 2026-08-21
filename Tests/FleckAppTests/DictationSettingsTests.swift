@@ -33,6 +33,10 @@ import Testing
   #expect(source.contains("await admittedModelSettingsViewModel.refresh()"))
   #expect(source.contains("Supported architectures:"))
   #expect(source.contains("Supported languages:"))
+  #expect(source.contains(
+    #".accessibilityLabel("Experimental enhanced local model candidate installation progress")"#
+  ))
+  #expect(!source.contains("Admitted model installation progress"))
   #expect(!source.contains("Picker(\"Engine\""))
   #expect(!source.contains("ModelConsentView"))
   #expect(!source.contains("DictationModelConsentPresentation"))
@@ -42,6 +46,46 @@ import Testing
   #expect(!source.contains("clearModelError"))
   #expect(!runtimeSource.contains("modelError"))
   #expect(!runtimeSource.contains("clearModelError"))
+}
+
+@Test func admittedModelSourcesUseNeutralExperimentalCandidateUserFacingCopy() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+
+  let sourcePaths = [
+    "Sources/FleckApp/AdmittedModelSettingsPresentation.swift",
+    "Sources/FleckApp/SettingsView.swift",
+    "Sources/FleckApp/ParakeetTDTTestActivation.swift",
+  ]
+  let sources = try sourcePaths.map { path in
+    (
+      path,
+      try String(contentsOf: repository.appendingPathComponent(path), encoding: .utf8)
+    )
+  }
+  var offendingQuotedCopy: [String] = []
+  for (path, source) in sources {
+    offendingQuotedCopy.append(contentsOf: source.split(whereSeparator: \.isNewline).filter { line in
+      let lowercasedLine = line.lowercased()
+      return lowercasedLine.contains("\"") && (
+        lowercasedLine.contains("admitted model") ||
+        lowercasedLine.contains("admitted local model")
+      )
+    }.map { "\(path): \($0)" })
+  }
+
+  #expect(offendingQuotedCopy.isEmpty)
+  #expect(sources[0].1.contains(
+    "Experimental candidate for hands-on testing; not a release claim."
+  ))
+  #expect(sources[1].1.contains(
+    #".accessibilityLabel("Experimental enhanced local model candidate installation progress")"#
+  ))
+  #expect(sources[2].1.contains(
+    "Repair the experimental enhanced local model candidate in Dictation Settings"
+  ))
 }
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE

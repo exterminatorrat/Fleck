@@ -119,7 +119,7 @@ private enum AdmittedModelSettingsTestDescriptors {
       lastError: nil
     )
   )
-  #expect(presentation.accessibilityLabel == "Admitted model recommendation")
+  #expect(presentation.accessibilityLabel == "Experimental enhanced local model candidate")
   #expect(presentation.accessibilityValue.contains(descriptor.modelID))
   #expect(presentation.accessibilityValue.contains(descriptor.revision))
   #expect(presentation.accessibilityValue.contains(
@@ -134,7 +134,117 @@ private enum AdmittedModelSettingsTestDescriptors {
   #expect(presentation.detail.contains(
     "Supported languages: \(descriptor.languages.joined(separator: ", "))"
   ))
+  #expect(presentation.detail.contains(
+    "Experimental candidate for hands-on testing; not a release claim."
+  ))
   #expect(presentation.isKeyboardFocusable)
+}
+
+@Test func recommendedPhaseCopyUsesNeutralExperimentalCandidateLanguage() {
+  let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
+  let expectations: [
+    (phase: AdmittedModelInstallPhase, title: String, detail: String, accessibilityLabel: String)
+  ] = [
+    (
+      .notInstalled,
+      "Enhanced local model available",
+      "The experimental enhanced local model candidate is available to install.",
+      "Experimental enhanced local model candidate"
+    ),
+    (
+      .downloading(receivedBytes: 4, totalBytes: 8),
+      "Downloading enhanced local model",
+      "Downloading 4 of 8 bytes for the experimental enhanced local model candidate.",
+      "Experimental enhanced local model candidate installation"
+    ),
+    (
+      .verifying,
+      "Verifying enhanced local model",
+      "Verifying the downloaded experimental enhanced local model candidate.",
+      "Experimental enhanced local model candidate installation"
+    ),
+    (
+      .installing,
+      "Installing enhanced local model",
+      "Installing the verified experimental enhanced local model candidate.",
+      "Experimental enhanced local model candidate installation"
+    ),
+    (
+      .ready,
+      "Enhanced local model prepared to start",
+      "The experimental enhanced local model candidate is prepared to start.",
+      "Experimental enhanced local model candidate"
+    ),
+    (
+      .starting,
+      "Starting enhanced local model",
+      "Starting the experimental enhanced local model candidate.",
+      "Experimental enhanced local model candidate installation"
+    ),
+    (
+      .calibrating,
+      "Calibrating enhanced local model",
+      "Calibrating the experimental enhanced local model candidate.",
+      "Experimental enhanced local model candidate installation"
+    ),
+    (
+      .installed,
+      "Enhanced local model installed",
+      "The experimental enhanced local model candidate is installed and available.",
+      "Experimental enhanced local model candidate"
+    ),
+    (
+      .updateAvailable,
+      "Enhanced local model update available",
+      "An update is available for the experimental enhanced local model candidate.",
+      "Experimental enhanced local model candidate"
+    ),
+    (
+      .repairRequired(message: "repair required"),
+      "Enhanced local model needs repair",
+      "The experimental enhanced local model candidate needs repair: repair required",
+      "Experimental enhanced local model candidate"
+    ),
+    (
+      .removing,
+      "Removing enhanced local model",
+      "Removing the experimental enhanced local model candidate and returning to Apple Speech.",
+      "Experimental enhanced local model candidate installation"
+    ),
+    (
+      .cancelled,
+      "Enhanced local model installation cancelled",
+      "Experimental enhanced local model candidate installation was cancelled.",
+      "Experimental enhanced local model candidate"
+    ),
+    (
+      .failed(message: "failed"),
+      "Enhanced local model action failed",
+      "The experimental enhanced local model candidate or its configuration action failed: failed",
+      "Experimental enhanced local model candidate"
+    ),
+  ]
+
+  for expectation in expectations {
+    let presentation = AdmittedModelSettingsPresentation(
+      snapshot: .init(
+        recommendation: .recommended(descriptor),
+        phase: expectation.phase,
+        lastError: nil
+      )
+    )
+
+    #expect(presentation.title == expectation.title)
+    #expect(presentation.detail.hasPrefix(expectation.detail))
+    #expect(presentation.detail.contains(
+      "Experimental candidate for hands-on testing; not a release claim."
+    ))
+    #expect(presentation.accessibilityLabel == expectation.accessibilityLabel)
+    #expect(!presentation.title.localizedCaseInsensitiveContains("admitted model"))
+    #expect(!presentation.detail.localizedCaseInsensitiveContains("admitted model"))
+    #expect(!presentation.accessibilityLabel.localizedCaseInsensitiveContains("admitted model"))
+    #expect(!presentation.accessibilityValue.localizedCaseInsensitiveContains("admitted model"))
+  }
 }
 
 @Test func noRecommendationStatesDoNotInventCustomCompatibilityValues() {
@@ -233,8 +343,8 @@ private enum AdmittedModelSettingsTestDescriptors {
       lastError: nil
     )
   )
-  #expect(presentation.accessibilityLabel == "Admitted model installation")
-  #expect(presentation.accessibilityValue == "Downloading, 4 of 8 bytes")
+  #expect(presentation.accessibilityLabel == "Experimental enhanced local model candidate installation")
+  #expect(presentation.accessibilityValue == "Downloading experimental enhanced local model candidate, 4 of 8 bytes")
   #expect(presentation.progressAccessibilityValue == "4 of 8 bytes")
   #expect(!presentation.accessibilityValue.contains("Loading"))
 }

@@ -29,7 +29,7 @@ enum ParakeetTDTTestActivation {
 
   private static let runtimeFailureMessage =
     "Enhanced Local could not verify the local Parakeet model. Fleck continues "
-      + "with Apple Speech. Repair the admitted model in Dictation Settings and "
+      + "with Apple Speech. Repair the experimental enhanced local model candidate in Dictation Settings and "
       + "restart Fleck."
 
   private enum RuntimeError: Error {

@@ -509,7 +509,7 @@
         }
         if let progress = presentation.progress {
           ProgressView(value: progress)
-            .accessibilityLabel("Admitted model installation progress")
+            .accessibilityLabel("Experimental enhanced local model candidate installation progress")
             .accessibilityValue(presentation.progressAccessibilityValue ?? "")
         }
         if let action = presentation.primaryAction,

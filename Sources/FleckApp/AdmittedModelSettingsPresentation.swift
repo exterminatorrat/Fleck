@@ -93,31 +93,31 @@ struct AdmittedModelSettingsPresentation: Equatable {
     case .builtIn:
       "Apple Speech — Built in"
     case .notInstalled:
-      "Admitted model available"
+      "Enhanced local model available"
     case .downloading:
-      "Downloading admitted model"
+      "Downloading enhanced local model"
     case .verifying:
-      "Verifying admitted model"
+      "Verifying enhanced local model"
     case .installing:
-      "Installing admitted model"
+      "Installing enhanced local model"
     case .ready:
-      "Admitted model ready"
+      "Enhanced local model prepared to start"
     case .starting:
-      "Starting admitted model"
+      "Starting enhanced local model"
     case .calibrating:
-      "Calibrating admitted model"
+      "Calibrating enhanced local model"
     case .installed:
-      "Admitted model installed"
+      "Enhanced local model installed"
     case .updateAvailable:
-      "Admitted model update available"
+      "Enhanced local model update available"
     case .repairRequired:
-      "Admitted model needs repair"
+      "Enhanced local model needs repair"
     case .removing:
-      "Removing admitted model"
+      "Removing enhanced local model"
     case .cancelled:
-      "Admitted model installation cancelled"
+      "Enhanced local model installation cancelled"
     case .failed:
-      "Admitted model action failed"
+      "Enhanced local model action failed"
     }
   }
 
@@ -131,31 +131,31 @@ struct AdmittedModelSettingsPresentation: Equatable {
     case .builtIn:
       phaseDetail = "No custom model is installed. On-device recognition uses Apple Speech on this Mac."
     case .notInstalled:
-      phaseDetail = "The signed local model is available to install."
+      phaseDetail = "The experimental enhanced local model candidate is available to install."
     case .downloading(let receivedBytes, let totalBytes):
-      phaseDetail = "Downloading \(receivedBytes) of \(totalBytes) bytes."
+      phaseDetail = "Downloading \(receivedBytes) of \(totalBytes) bytes for the experimental enhanced local model candidate."
     case .verifying:
-      phaseDetail = "Verifying the downloaded model."
+      phaseDetail = "Verifying the downloaded experimental enhanced local model candidate."
     case .installing:
-      phaseDetail = "Installing the verified model."
+      phaseDetail = "Installing the verified experimental enhanced local model candidate."
     case .ready:
-      phaseDetail = "The model is ready to start."
+      phaseDetail = "The experimental enhanced local model candidate is prepared to start."
     case .starting:
-      phaseDetail = "Starting the local speech model."
+      phaseDetail = "Starting the experimental enhanced local model candidate."
     case .calibrating:
-      phaseDetail = "Calibrating the local speech model."
+      phaseDetail = "Calibrating the experimental enhanced local model candidate."
     case .installed:
-      phaseDetail = "The admitted local model is installed and available."
+      phaseDetail = "The experimental enhanced local model candidate is installed and available."
     case .updateAvailable:
-      phaseDetail = "An update is available for the installed model."
+      phaseDetail = "An update is available for the experimental enhanced local model candidate."
     case .repairRequired(let message):
-      phaseDetail = message
+      phaseDetail = "The experimental enhanced local model candidate needs repair: \(message)"
     case .removing:
-      phaseDetail = "Removing the local model and returning to Apple Speech."
+      phaseDetail = "Removing the experimental enhanced local model candidate and returning to Apple Speech."
     case .cancelled:
-      phaseDetail = "Installation was cancelled. You can install it again when ready."
+      phaseDetail = "Experimental enhanced local model candidate installation was cancelled. You can install it again when ready."
     case .failed(let message):
-      phaseDetail = "The model or configuration action failed: \(message) Fleck continues with Apple Speech. Verify or update the signed configuration, then restart Fleck."
+      phaseDetail = "The experimental enhanced local model candidate or its configuration action failed: \(message) Fleck continues with Apple Speech. Verify or update the signed configuration, then restart Fleck."
     }
 
     guard let descriptor else {
@@ -171,6 +171,7 @@ struct AdmittedModelSettingsPresentation: Equatable {
       "Download size: \(descriptor.downloadBytes) bytes",
       "Installed size: \(descriptor.installedBytes) bytes",
       "Checksums: \(descriptor.files.map(\.sha256).joined(separator: ", "))",
+      "Experimental candidate for hands-on testing; not a release claim.",
     ]
     if let lastError, !lastError.isEmpty, !phaseDetail.contains(lastError) {
       metadata.append("Error: \(lastError)")
@@ -184,9 +185,9 @@ struct AdmittedModelSettingsPresentation: Equatable {
   ) -> String {
     switch phase {
     case .downloading, .verifying, .installing, .starting, .calibrating, .removing:
-      "Admitted model installation"
+      "Experimental enhanced local model candidate installation"
     default:
-      hasDescriptor ? "Admitted model recommendation" : "Apple Speech"
+      hasDescriptor ? "Experimental enhanced local model candidate" : "Apple Speech"
     }
   }
 
@@ -196,7 +197,7 @@ struct AdmittedModelSettingsPresentation: Equatable {
     lastError: String?
   ) -> String {
     if case .downloading(let receivedBytes, let totalBytes) = phase {
-      return "Downloading, \(receivedBytes) of \(totalBytes) bytes"
+      return "Downloading experimental enhanced local model candidate, \(receivedBytes) of \(totalBytes) bytes"
     }
 
     var values = [title(for: phase)]
