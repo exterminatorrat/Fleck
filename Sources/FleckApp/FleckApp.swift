@@ -269,6 +269,8 @@
     let shortcutController: GlobalHoldShortcut
     let capsuleController: DictationCapsuleController
     let historyController: DictationHistoryController
+    let personalDictionaryStore: PersonalDictionaryStore
+    let personalDictionarySettingsViewModel: PersonalDictionarySettingsViewModel
 
     @Published private(set) var phase = DictationPhase.idle
     @Published private(set) var modifierMonitorState = ModifierMonitorState.stopped
@@ -329,6 +331,10 @@
       let admittedModelSettingsViewModel = AdmittedModelSettingsViewModel(
         installer: admittedModelInstaller
       )
+      let personalDictionaryStore = PersonalDictionaryStore(rootURL: applicationSupportURL)
+      let personalDictionarySettingsViewModel = PersonalDictionarySettingsViewModel(
+        store: personalDictionaryStore
+      )
       let historyStore = DictationHistoryStore(rootURL: applicationSupportURL)
       let historyController = DictationHistoryController(store: historyStore)
       let permissionController = DictationPermissionController()
@@ -361,7 +367,9 @@
           )
           return AppleSpeechStreamingAdapter(engine: engine)
         },
-        dictionaryResolver: PersonalDictionaryTranscriptResolver(entries: { [] }),
+        dictionaryResolver: PersonalDictionaryTranscriptResolver(entries: {
+          try await personalDictionaryStore.snapshot().entries
+        }),
         cleaner: incrementalCleaner,
         runtime: nil
       )
@@ -410,7 +418,9 @@
         permissionController: permissionController,
         editorRegistry: editorRegistry,
         startupAssessment: startupAssessment,
-        admittedModelSettingsViewModel: admittedModelSettingsViewModel
+        admittedModelSettingsViewModel: admittedModelSettingsViewModel,
+        personalDictionaryStore: personalDictionaryStore,
+        personalDictionarySettingsViewModel: personalDictionarySettingsViewModel
       )
     }
 
@@ -426,6 +436,8 @@
       editorRegistry: DictationEditorRegistry,
       startupAssessment: @escaping @MainActor () async -> Void,
       admittedModelSettingsViewModel: AdmittedModelSettingsViewModel? = nil,
+      personalDictionaryStore: PersonalDictionaryStore? = nil,
+      personalDictionarySettingsViewModel: PersonalDictionarySettingsViewModel? = nil,
       availabilityProvider: (@MainActor () -> DictationAvailability)? = nil,
       capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
         try? await Task.sleep(for: duration)
@@ -440,6 +452,11 @@
       self.coordinator = coordinator
       self.shortcutController = shortcutController
       self.capsuleController = capsuleController
+      let resolvedPersonalDictionaryStore = personalDictionaryStore
+        ?? PersonalDictionaryStore(rootURL: AgentBridgeEndpoint.applicationSupportURL())
+      self.personalDictionaryStore = resolvedPersonalDictionaryStore
+      self.personalDictionarySettingsViewModel = personalDictionarySettingsViewModel
+        ?? PersonalDictionarySettingsViewModel(store: resolvedPersonalDictionaryStore)
       self.admittedModelSettingsViewModel = admittedModelSettingsViewModel
         ?? AdmittedModelSettingsViewModel(installer: makeAdmittedModelInstaller())
       self.capsuleSleeper = capsuleSleeper

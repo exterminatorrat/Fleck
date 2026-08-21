@@ -2,13 +2,13 @@ import Foundation
 import FleckCore
 
 struct PersonalDictionaryTranscriptResolver: TranscriptDictionaryResolving {
-  private let entries: @Sendable () async -> [PersonalDictionaryEntry]
+  private let entries: @Sendable () async throws -> [PersonalDictionaryEntry]
   private let resolveEntries:
     @Sendable (String, [PersonalDictionaryEntry]) throws
       -> PersonalDictionaryResolution
 
   init(
-    entries: @escaping @Sendable () async -> [PersonalDictionaryEntry],
+    entries: @escaping @Sendable () async throws -> [PersonalDictionaryEntry],
     resolveEntries: @escaping @Sendable (String, [PersonalDictionaryEntry])
       throws -> PersonalDictionaryResolution =
       { raw, entries in try PersonalDictionaryResolver.resolve(
@@ -21,6 +21,6 @@ struct PersonalDictionaryTranscriptResolver: TranscriptDictionaryResolving {
 
   func resolve(_ rawTranscript: String) async throws
     -> PersonalDictionaryResolution {
-    try resolveEntries(rawTranscript, await entries())
+    try resolveEntries(rawTranscript, try await entries())
   }
 }

@@ -41,18 +41,25 @@
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
+    @ObservedObject private var personalDictionarySettingsViewModel:
+      PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     @State private var selectedSection = SettingsSection.appearance
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
     @State private var recordingSelection = SettingsShortcutRecordingState()
+    @State private var personalDictionaryPreferredForm = ""
+    @State private var personalDictionaryAliases = ""
     @Namespace private var selectedSectionHighlight
 
     init(runtime: DictationRuntime) {
       self.runtime = runtime
       _admittedModelSettingsViewModel = ObservedObject(
         wrappedValue: runtime.admittedModelSettingsViewModel
+      )
+      _personalDictionarySettingsViewModel = ObservedObject(
+        wrappedValue: runtime.personalDictionarySettingsViewModel
       )
       _historyController = ObservedObject(wrappedValue: runtime.historyController)
     }
@@ -87,6 +94,7 @@
       .task {
         await runtime.awaitStartupAssessment()
         await admittedModelSettingsViewModel.refresh()
+        await personalDictionarySettingsViewModel.load()
         recoveryActions = runtime.permissionRecoveryActions()
         microphones = DictationMicrophoneOption.available()
         runtime.preferencesDidChange()
@@ -363,6 +371,8 @@
         }
       }
 
+      personalDictionary
+
       Section("Privacy") {
         Text(
           "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
@@ -370,6 +380,84 @@
       }
       .font(.caption)
       .foregroundStyle(.secondary)
+    }
+
+    private var personalDictionary: some View {
+      Section("Personal Dictionary") {
+        TextField("Preferred form", text: $personalDictionaryPreferredForm)
+          .accessibilityLabel("Preferred form")
+        TextField("Aliases", text: $personalDictionaryAliases)
+          .accessibilityLabel("Aliases")
+        Text("Separate aliases with commas or new lines.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+        Button("Add Entry") {
+          let preferredForm = personalDictionaryPreferredForm
+          let aliases = personalDictionaryAliases
+          Task { @MainActor in
+            await personalDictionarySettingsViewModel.add(
+              preferredForm: preferredForm,
+              aliases: aliases
+            )
+            guard personalDictionarySettingsViewModel.errorMessage == nil else { return }
+            personalDictionaryPreferredForm = ""
+            personalDictionaryAliases = ""
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(
+          personalDictionaryPreferredForm
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        )
+        .accessibilityHint("Adds the preferred form and its aliases to the dictionary")
+
+        if let errorMessage = personalDictionarySettingsViewModel.errorMessage {
+          Label(errorMessage, systemImage: "exclamationmark.triangle")
+            .foregroundStyle(.red)
+            .font(.caption)
+        }
+
+        if personalDictionarySettingsViewModel.entries.isEmpty {
+          Text("No entries yet.")
+            .foregroundStyle(.secondary)
+        } else {
+          ForEach(personalDictionarySettingsViewModel.entries) { entry in
+            HStack(alignment: .firstTextBaseline) {
+              Toggle(isOn: Binding(
+                get: { entry.isEnabled },
+                set: { enabled in
+                  Task { @MainActor in
+                    await personalDictionarySettingsViewModel.setEnabled(
+                      enabled,
+                      id: entry.id
+                    )
+                  }
+                }
+              )) {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(entry.preferredForm)
+                  if !entry.aliases.isEmpty {
+                    Text(entry.aliases.joined(separator: ", "))
+                      .font(.caption)
+                      .foregroundStyle(.secondary)
+                  }
+                }
+              }
+              .accessibilityLabel("Enable \(entry.preferredForm)")
+              .accessibilityValue(entry.isEnabled ? "Enabled" : "Disabled")
+
+              Button("Delete", role: .destructive) {
+                Task { @MainActor in
+                  await personalDictionarySettingsViewModel.delete(id: entry.id)
+                }
+              }
+              .accessibilityLabel("Delete \(entry.preferredForm)")
+            }
+          }
+        }
+      }
     }
 
     private var admittedModelCard: some View {
