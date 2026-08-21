@@ -42,54 +42,110 @@ private enum AdmittedModelSettingsTestDescriptors {
       lastError: nil
     )
   )
-  #expect(presentation.title == "Apple Speech — Built in")
   #expect(presentation.primaryAction == nil)
   #expect(presentation.primaryActionLabel == nil)
-  #expect(presentation.showsModelPicker == false)
   #expect(presentation.detail.contains("No custom model is installed"))
   #expect(presentation.detail.contains("On-device recognition"))
   #expect(presentation.detail.contains("Apple Speech"))
+  #expect(presentation.accessibilityLabel == "Dictation model")
+  #expect(presentation.accessibilityValue == "Apple Speech, Built in")
 }
 
-@Test func activeEngineFallsBackToAppleSpeechUntilAdmittedModelIsInstalled() {
-  let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
-  let phases: [(AdmittedModelRecommendation, AdmittedModelInstallPhase)] = [
-    (.builtIn, .builtIn),
-    (.recommended(descriptor), .notInstalled),
-    (.recommended(descriptor), .downloading(receivedBytes: 1, totalBytes: 2)),
-    (.recommended(descriptor), .verifying),
-    (.recommended(descriptor), .installing),
-    (.recommended(descriptor), .ready),
-    (.recommended(descriptor), .starting),
-    (.recommended(descriptor), .calibrating),
-    (.recommended(descriptor), .updateAvailable),
-    (.recommended(descriptor), .repairRequired(message: "repair required")),
-    (.recommended(descriptor), .removing),
-    (.recommended(descriptor), .cancelled),
-    (.recommended(descriptor), .failed(message: "failed")),
-  ]
-
-  for (recommendation, phase) in phases {
-    let presentation = AdmittedModelSettingsPresentation(
-      snapshot: .init(recommendation: recommendation, phase: phase, lastError: nil)
-    )
-    #expect(presentation.activeEngineLabel == "Apple Speech")
-  }
-}
-
-@Test func activeEngineShowsEnhancedLocalOnlyForInstalledAdmittedModel() {
+@Test func builtInFailureRemainsFailClosedWithoutRetryAction() {
   let presentation = AdmittedModelSettingsPresentation(
     snapshot: .init(
+      recommendation: .builtIn,
+      phase: .failed(message: "invalid signed configuration"),
+      lastError: "invalid signed configuration"
+    )
+  )
+
+  #expect(presentation.primaryAction == nil)
+  #expect(presentation.primaryActionLabel == nil)
+}
+
+@Test func modelLabelNamesCandidateAndBuiltInFallback() {
+  let recommended = AdmittedModelSettingsPresentation(
+    snapshot: .init(
       recommendation: .recommended(AdmittedModelSettingsTestDescriptors.tinyAdmittedASR),
-      phase: .installed,
+      phase: .notInstalled,
+      lastError: nil
+    )
+  )
+  let builtIn = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .builtIn,
+      phase: .builtIn,
       lastError: nil
     )
   )
 
-  #expect(presentation.activeEngineLabel == "Enhanced Local (Parakeet TDT)")
+  #expect(recommended.modelLabel == "Parakeet TDT 0.6B v2")
+  #expect(builtIn.modelLabel == "Apple Speech")
 }
 
-@Test func recommendationHasExplicitInstallAndExactMetadata() {
+@Test func ordinaryStatesStayCompactWithOnlyRelevantActions() {
+  let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
+  let presentations: [(AdmittedModelSettingsPresentation, AdmittedModelSettingsAction?)] = [
+    (
+      AdmittedModelSettingsPresentation(
+        snapshot: .init(recommendation: .builtIn, phase: .builtIn, lastError: nil)
+      ),
+      nil
+    ),
+    (
+      AdmittedModelSettingsPresentation(
+        snapshot: .init(recommendation: .recommended(descriptor), phase: .notInstalled, lastError: nil)
+      ),
+      .install
+    ),
+    (
+      AdmittedModelSettingsPresentation(
+        snapshot: .init(recommendation: .recommended(descriptor), phase: .installed, lastError: nil)
+      ),
+      .remove
+    ),
+  ]
+
+  for (presentation, action) in presentations {
+    #expect(!presentation.showsStatus)
+    #expect(!presentation.showsDetail)
+    #expect(presentation.primaryAction == action)
+  }
+}
+
+@Test func onlyActionableExceptionalStatesExposeDetailedCopy() {
+  let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
+  let expectations: [(AdmittedModelInstallPhase, Bool, Bool)] = [
+    (.builtIn, false, false),
+    (.notInstalled, false, false),
+    (.downloading(receivedBytes: 1, totalBytes: 2), true, false),
+    (.verifying, true, false),
+    (.installing, true, false),
+    (.ready, true, false),
+    (.starting, true, false),
+    (.calibrating, true, false),
+    (.installed, false, false),
+    (.updateAvailable, true, false),
+    (.repairRequired(message: "repair required"), true, true),
+    (.removing, true, false),
+    (.cancelled, true, true),
+    (.failed(message: "failed"), true, true),
+  ]
+
+  for (phase, showsStatus, showsDetail) in expectations {
+    let recommendation: AdmittedModelRecommendation = phase == .builtIn
+      ? .builtIn
+      : .recommended(descriptor)
+    let presentation = AdmittedModelSettingsPresentation(
+      snapshot: .init(recommendation: recommendation, phase: phase, lastError: nil)
+    )
+    #expect(presentation.showsStatus == showsStatus)
+    #expect(presentation.showsDetail == showsDetail)
+  }
+}
+
+@Test func recommendationHasExplicitInstallWithoutTechnicalMetadata() {
   let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
   let presentation = AdmittedModelSettingsPresentation(
     snapshot: .init(
@@ -101,16 +157,16 @@ private enum AdmittedModelSettingsTestDescriptors {
   #expect(presentation.primaryAction == .install)
   #expect(presentation.primaryActionLabel == "Install")
   #expect(presentation.identity == descriptor.modelID)
-  #expect(presentation.revision == descriptor.revision)
-  #expect(presentation.license == descriptor.license)
-  #expect(presentation.downloadBytes == descriptor.downloadBytes)
-  #expect(presentation.installedBytes == descriptor.installedBytes)
-  #expect(presentation.checksums == descriptor.files.map(\.sha256))
-  #expect(presentation.supportedArchitectures == descriptor.architectures)
-  #expect(presentation.supportedLanguages == descriptor.languages)
+  #expect(!presentation.detail.contains(descriptor.revision))
+  #expect(!presentation.detail.contains(descriptor.license))
+  #expect(!presentation.detail.contains(String(descriptor.downloadBytes)))
+  #expect(!presentation.detail.contains(String(descriptor.installedBytes)))
+  #expect(!presentation.accessibilityValue.contains(descriptor.revision))
+  #expect(!presentation.accessibilityValue.contains(descriptor.architectures.joined(separator: ", ")))
+  #expect(!presentation.accessibilityValue.contains(descriptor.languages.joined(separator: ", ")))
 }
 
-@Test func recommendationCardHasVoiceOverMetadataAndKeyboardFocus() {
+@Test func recommendationCardHasConciseVoiceOverCopyAndKeyboardFocus() {
   let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
   let presentation = AdmittedModelSettingsPresentation(
     snapshot: .init(
@@ -119,109 +175,70 @@ private enum AdmittedModelSettingsTestDescriptors {
       lastError: nil
     )
   )
-  #expect(presentation.accessibilityLabel == "Experimental enhanced local model candidate")
-  #expect(presentation.accessibilityValue.contains(descriptor.modelID))
-  #expect(presentation.accessibilityValue.contains(descriptor.revision))
-  #expect(presentation.accessibilityValue.contains(
-    descriptor.architectures.joined(separator: ", ")
-  ))
-  #expect(presentation.accessibilityValue.contains(
-    descriptor.languages.joined(separator: ", ")
-  ))
-  #expect(presentation.detail.contains(
-    "Supported architectures: \(descriptor.architectures.joined(separator: ", "))"
-  ))
-  #expect(presentation.detail.contains(
-    "Supported languages: \(descriptor.languages.joined(separator: ", "))"
-  ))
-  #expect(presentation.detail.contains(
-    "Experimental candidate for hands-on testing; not a release claim."
-  ))
+  #expect(presentation.accessibilityLabel == "Dictation model")
+  #expect(presentation.accessibilityValue == "Parakeet TDT 0.6B v2, Available to install")
+  #expect(!presentation.detail.contains("Supported architectures"))
+  #expect(!presentation.detail.contains("Supported languages"))
+  #expect(!presentation.detail.contains("Checksums"))
   #expect(presentation.isKeyboardFocusable)
 }
 
 @Test func recommendedPhaseCopyUsesNeutralExperimentalCandidateLanguage() {
   let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
   let expectations: [
-    (phase: AdmittedModelInstallPhase, title: String, detail: String, accessibilityLabel: String)
+    (phase: AdmittedModelInstallPhase, detail: String)
   ] = [
     (
       .notInstalled,
-      "Enhanced local model available",
-      "The experimental enhanced local model candidate is available to install.",
-      "Experimental enhanced local model candidate"
+      "The experimental enhanced local model candidate is available to install."
     ),
     (
       .downloading(receivedBytes: 4, totalBytes: 8),
-      "Downloading enhanced local model",
-      "Downloading 4 of 8 bytes for the experimental enhanced local model candidate.",
-      "Experimental enhanced local model candidate installation"
+      "Downloading the experimental enhanced local model candidate."
     ),
     (
       .verifying,
-      "Verifying enhanced local model",
-      "Verifying the downloaded experimental enhanced local model candidate.",
-      "Experimental enhanced local model candidate installation"
+      "Verifying the downloaded experimental enhanced local model candidate."
     ),
     (
       .installing,
-      "Installing enhanced local model",
-      "Installing the verified experimental enhanced local model candidate.",
-      "Experimental enhanced local model candidate installation"
+      "Installing the verified experimental enhanced local model candidate."
     ),
     (
       .ready,
-      "Enhanced local model prepared to start",
-      "The experimental enhanced local model candidate is prepared to start.",
-      "Experimental enhanced local model candidate"
+      "The experimental enhanced local model candidate is prepared to start."
     ),
     (
       .starting,
-      "Starting enhanced local model",
-      "Starting the experimental enhanced local model candidate.",
-      "Experimental enhanced local model candidate installation"
+      "Starting the experimental enhanced local model candidate."
     ),
     (
       .calibrating,
-      "Calibrating enhanced local model",
-      "Calibrating the experimental enhanced local model candidate.",
-      "Experimental enhanced local model candidate installation"
+      "Calibrating the experimental enhanced local model candidate."
     ),
     (
       .installed,
-      "Enhanced local model installed",
-      "The experimental enhanced local model candidate is installed and available.",
-      "Experimental enhanced local model candidate"
+      "The experimental enhanced local model candidate is installed and available."
     ),
     (
       .updateAvailable,
-      "Enhanced local model update available",
-      "An update is available for the experimental enhanced local model candidate.",
-      "Experimental enhanced local model candidate"
+      "An update is available for the experimental enhanced local model candidate."
     ),
     (
       .repairRequired(message: "repair required"),
-      "Enhanced local model needs repair",
-      "The experimental enhanced local model candidate needs repair: repair required",
-      "Experimental enhanced local model candidate"
+      "The experimental enhanced local model candidate needs repair: repair required"
     ),
     (
       .removing,
-      "Removing enhanced local model",
-      "Removing the experimental enhanced local model candidate and returning to Apple Speech.",
-      "Experimental enhanced local model candidate installation"
+      "Removing the experimental enhanced local model candidate and returning to Apple Speech."
     ),
     (
       .cancelled,
-      "Enhanced local model installation cancelled",
-      "Experimental enhanced local model candidate installation was cancelled.",
-      "Experimental enhanced local model candidate"
+      "Experimental enhanced local model candidate installation was cancelled."
     ),
     (
       .failed(message: "failed"),
-      "Enhanced local model action failed",
-      "The experimental enhanced local model candidate or its configuration action failed: failed",
-      "Experimental enhanced local model candidate"
+      "Enhanced local dictation failed: failed"
     ),
   ]
 
@@ -234,31 +251,25 @@ private enum AdmittedModelSettingsTestDescriptors {
       )
     )
 
-    #expect(presentation.title == expectation.title)
     #expect(presentation.detail.hasPrefix(expectation.detail))
-    #expect(presentation.detail.contains(
-      "Experimental candidate for hands-on testing; not a release claim."
-    ))
-    #expect(presentation.accessibilityLabel == expectation.accessibilityLabel)
-    #expect(!presentation.title.localizedCaseInsensitiveContains("admitted model"))
+    #expect(presentation.accessibilityLabel == "Dictation model")
     #expect(!presentation.detail.localizedCaseInsensitiveContains("admitted model"))
     #expect(!presentation.accessibilityLabel.localizedCaseInsensitiveContains("admitted model"))
     #expect(!presentation.accessibilityValue.localizedCaseInsensitiveContains("admitted model"))
   }
 }
 
-@Test func noRecommendationStatesDoNotInventCustomCompatibilityValues() {
+@Test func noRecommendationStatesRemainWithoutModelIdentity() {
   for phase in [AdmittedModelInstallPhase.builtIn,
                 .failed(message: "invalid signed configuration")] {
     let presentation = AdmittedModelSettingsPresentation(
       snapshot: .init(recommendation: .builtIn, phase: phase, lastError: nil)
     )
-    #expect(presentation.supportedArchitectures.isEmpty)
-    #expect(presentation.supportedLanguages.isEmpty)
+    #expect(presentation.identity == nil)
   }
 }
 
-@Test func recommendedFailureRetainsDescriptorCompatibilityValues() {
+@Test func recommendedFailureRetainsFallbackAndExposesRetry() {
   let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
   let presentation = AdmittedModelSettingsPresentation(
     snapshot: .init(
@@ -267,28 +278,61 @@ private enum AdmittedModelSettingsTestDescriptors {
       lastError: "startup failed"
     )
   )
-  #expect(presentation.supportedArchitectures == descriptor.architectures)
-  #expect(presentation.supportedLanguages == descriptor.languages)
-  #expect(presentation.detail.contains(
-    "Supported architectures: \(descriptor.architectures.joined(separator: ", "))"
-  ))
-  #expect(presentation.detail.contains(
-    "Supported languages: \(descriptor.languages.joined(separator: ", "))"
-  ))
-  #expect(presentation.accessibilityValue.contains(
-    descriptor.architectures.joined(separator: ", ")
-  ))
-  #expect(presentation.accessibilityValue.contains(
-    descriptor.languages.joined(separator: ", ")
-  ))
-  #expect(presentation.primaryAction == nil)
-  #expect(presentation.primaryActionLabel == nil)
+  #expect(presentation.identity == descriptor.modelID)
+  #expect(presentation.primaryAction == .repair)
+  #expect(presentation.primaryActionLabel == "Retry")
   #expect(presentation.detail.contains("Fleck continues with Apple Speech"))
-  #expect(presentation.detail.contains("Verify or update the signed configuration"))
-  #expect(presentation.detail.contains("restart Fleck"))
+  #expect(presentation.detail.contains("startup failed"))
+  #expect(!presentation.detail.contains("restart Fleck"))
 }
 
-@Test func downloadingUsesTruthfulByteProgressAndVoiceOverValue() {
+@Test func repairRequiredKeepsRepairLabelWhileFailedUsesRetry() {
+  let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
+  let repairRequired = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .recommended(descriptor),
+      phase: .repairRequired(message: "repair required"),
+      lastError: nil
+    )
+  )
+  let failed = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .recommended(descriptor),
+      phase: .failed(message: "startup failed"),
+      lastError: nil
+    )
+  )
+
+  #expect(repairRequired.primaryAction == .repair)
+  #expect(repairRequired.primaryActionLabel == "Repair")
+  #expect(failed.primaryAction == .repair)
+  #expect(failed.primaryActionLabel == "Retry")
+}
+
+@Test func readyKeepsCancellationAvailableUntilInstalled() {
+  let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
+  let ready = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .recommended(descriptor),
+      phase: .ready,
+      lastError: nil
+    )
+  )
+  let installed = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .recommended(descriptor),
+      phase: .installed,
+      lastError: nil
+    )
+  )
+
+  #expect(ready.primaryAction == .cancel)
+  #expect(ready.primaryActionLabel == "Cancel")
+  #expect(installed.primaryAction == .remove)
+  #expect(installed.primaryActionLabel == "Remove")
+}
+
+@Test func downloadingUsesTruthfulProgressAndVoiceOverValue() {
   let presentation = AdmittedModelSettingsPresentation(
     snapshot: .init(
       recommendation: .recommended(AdmittedModelSettingsTestDescriptors.tinyAdmittedASR),
@@ -297,7 +341,7 @@ private enum AdmittedModelSettingsTestDescriptors {
     )
   )
   #expect(presentation.progress == 0.25)
-  #expect(presentation.progressAccessibilityValue == "25 of 100 bytes")
+  #expect(presentation.progressAccessibilityValue == "25%")
   #expect(presentation.primaryAction == .cancel)
 }
 
@@ -327,9 +371,7 @@ private enum AdmittedModelSettingsTestDescriptors {
         lastError: nil
       )
     )
-    #expect(!presentation.title.isEmpty)
     #expect(!presentation.detail.isEmpty)
-    #expect(!presentation.title.contains("Loading"))
     #expect(!presentation.detail.contains("Loading"))
     #expect(!presentation.accessibilityValue.contains("Loading"))
   }
@@ -343,9 +385,9 @@ private enum AdmittedModelSettingsTestDescriptors {
       lastError: nil
     )
   )
-  #expect(presentation.accessibilityLabel == "Experimental enhanced local model candidate installation")
-  #expect(presentation.accessibilityValue == "Downloading experimental enhanced local model candidate, 4 of 8 bytes")
-  #expect(presentation.progressAccessibilityValue == "4 of 8 bytes")
+  #expect(presentation.accessibilityLabel == "Dictation model")
+  #expect(presentation.accessibilityValue == "Parakeet TDT 0.6B v2, Downloading, 50%")
+  #expect(presentation.progressAccessibilityValue == "50%")
   #expect(!presentation.accessibilityValue.contains("Loading"))
 }
 
@@ -358,7 +400,6 @@ private enum AdmittedModelSettingsTestDescriptors {
         lastError: nil
       )
     )
-    #expect(!presentation.title.isEmpty)
     #expect(!presentation.detail.isEmpty)
     #expect(!presentation.detail.contains("Loading"))
   }
@@ -529,6 +570,27 @@ private func waitForPresentation(
 }
 
 @Test @MainActor
+func failedRecommendedSnapshotExposesRetryAndDispatchesRepairExactlyOnce() async {
+  let probe = InstallerActionProbe(
+    refreshPhase: .failed(message: "startup failed")
+  )
+  let viewModel = AdmittedModelSettingsViewModel(installer: probe)
+
+  await viewModel.refresh()
+  await waitForPresentation(viewModel, phase: .failed(message: "startup failed"))
+
+  #expect(viewModel.presentation.primaryAction == .repair)
+  #expect(viewModel.presentation.primaryActionLabel == "Retry")
+
+  viewModel.perform(.repair)
+  viewModel.perform(.repair)
+  await probe.waitUntilPhase(.repairRequired(message: "repair"))
+  await waitForPresentation(viewModel, phase: .repairRequired(message: "repair"))
+
+  #expect(probe.count(.repair) == 1)
+}
+
+@Test @MainActor
 func settingsActionsDispatchExactlyOnceAndUpdatePresentation() async {
   let rows: [(AdmittedModelSettingsAction, AdmittedModelInstallPhase)] = [
     (.install, .ready),
@@ -614,21 +676,6 @@ func orderedInstallerUpdatesLeaveFinalPresentationAtInstalled() async {
   await waitForPresentation(viewModel, phase: .installed)
 
   #expect(viewModel.presentation.phase == .installed)
-}
-
-@Test @MainActor
-func activeEngineLabelTracksInstallerSnapshotTransitions() async {
-  let probe = InstallerActionProbe()
-  let viewModel = AdmittedModelSettingsViewModel(installer: probe)
-
-  #expect(viewModel.presentation.activeEngineLabel == "Apple Speech")
-  probe.publishSequence([.installed])
-  await waitForPresentation(viewModel, phase: .installed)
-  #expect(viewModel.presentation.activeEngineLabel == "Enhanced Local (Parakeet TDT)")
-
-  probe.publishSequence([.failed(message: "runtime failed")])
-  await waitForPresentation(viewModel, phase: .failed(message: "runtime failed"))
-  #expect(viewModel.presentation.activeEngineLabel == "Apple Speech")
 }
 
 @Test @MainActor
@@ -809,13 +856,13 @@ func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
   #expect(!message.isEmpty)
   let presentation = AdmittedModelSettingsPresentation(snapshot: installer.snapshot)
   #expect(presentation.detail.contains(message))
-  #expect(presentation.supportedArchitectures.isEmpty)
-  #expect(presentation.supportedLanguages.isEmpty)
+  #expect(presentation.identity == nil)
+  #expect(presentation.primaryAction == nil)
   #expect(transport.downloadCalls == 0)
 }
 
 @Test @MainActor
-func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
+func artifactBindingFailureReturnsBuiltInWithoutRetryOrTransport() {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
   let fixture = try! TestManagers.manager(
@@ -833,23 +880,15 @@ func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
     calibrate: { }
   )
   let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
-  #expect(installer.snapshot.recommendation == .recommended(descriptor))
+  #expect(installer.snapshot.recommendation == .builtIn)
   #expect(transport.downloadCalls == 0)
   #expect(installer.snapshot.lastError != nil)
   let presentation = AdmittedModelSettingsPresentation(snapshot: installer.snapshot)
-  #expect(presentation.supportedArchitectures == descriptor.architectures)
-  #expect(presentation.supportedLanguages == descriptor.languages)
-  #expect(presentation.accessibilityValue.contains(
-    descriptor.architectures.joined(separator: ", ")
-  ))
-  #expect(presentation.accessibilityValue.contains(
-    descriptor.languages.joined(separator: ", ")
-  ))
+  #expect(presentation.identity == nil)
   #expect(presentation.primaryAction == nil)
   #expect(presentation.primaryActionLabel == nil)
   #expect(presentation.detail.contains("Fleck continues with Apple Speech"))
-  #expect(presentation.detail.contains("Verify or update the signed configuration"))
-  #expect(presentation.detail.contains("restart Fleck"))
+  #expect(!presentation.detail.contains("restart Fleck"))
 
   let availability = DictationAvailability.evaluate(.init(
     osMajorVersion: 26,
@@ -864,7 +903,7 @@ func artifactBindingFailureIsCaughtBeforeTransportAndKeepsAppleFallback() {
 }
 
 @Test @MainActor
-func storageNamespaceMismatchIsRecommendedFailureWithoutTransport() throws {
+func storageNamespaceMismatchReturnsBuiltInWithoutRetryOrTransport() throws {
   let descriptor = TestDescriptors.tinyAdmittedASR
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
   let baseRoot = TestPaths.temporaryDirectory()
@@ -892,8 +931,11 @@ func storageNamespaceMismatchIsRecommendedFailureWithoutTransport() throws {
   )
 
   let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
-  #expect(installer.snapshot.recommendation == .recommended(descriptor))
+  #expect(installer.snapshot.recommendation == .builtIn)
   #expect(installer.snapshot.lastError != nil)
   #expect(transport.downloadCalls == 0)
+  let presentation = AdmittedModelSettingsPresentation(snapshot: installer.snapshot)
+  #expect(presentation.primaryAction == nil)
+  #expect(presentation.primaryActionLabel == nil)
 }
 #endif

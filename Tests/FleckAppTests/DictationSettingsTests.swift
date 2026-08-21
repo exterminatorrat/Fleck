@@ -5,7 +5,7 @@ import Testing
 
 @testable import FleckApp
 
-@Test func settingsSourceUsesOneAccessibleAdmittedModelCardAndRemovesLegacySurface() throws {
+@Test func settingsSourceUsesCompactModelsRowsAndRemovesTechnicalMetadata() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -21,21 +21,33 @@ import Testing
 
   #expect(source.contains("AdmittedModelSettingsViewModel"))
   #expect(source.contains("AdmittedModelSettingsPresentation"))
-  #expect(source.contains("Active engine:"))
-  #expect(source.contains(#"Text("Active engine: \(presentation.activeEngineLabel)")"#))
-  #expect(source.contains("presentation.activeEngineLabel"))
+  #expect(source.contains(#"Section("Models")"#))
+  #expect(source.contains(#"LabeledContent("Dictation")"#))
+  #expect(source.contains(#"LabeledContent("Cleanup", value: cleanupModelLabel)"#))
+  #expect(!source.contains(#"Section("Speech Engine")"#))
+  #expect(!source.contains(#"Text("Active engine:"#))
+  #expect(source.contains(#"Text("Model: \(presentation.modelLabel)")"#))
+  #expect(source.contains("presentation.modelLabel"))
+  #expect(source.contains("if presentation.showsStatus"))
+  #expect(source.contains("if presentation.showsDetail"))
   #expect(source.contains(".focusable(presentation.isKeyboardFocusable)"))
   #expect(source.contains(".accessibilityElement(children: .contain)"))
   #expect(source.contains(".accessibilityLabel(presentation.accessibilityLabel)"))
   #expect(source.contains(".accessibilityValue(presentation.accessibilityValue)"))
-  #expect(source.contains(".accessibilityLabel(\"Active engine\")"))
-  #expect(source.contains(".accessibilityValue(presentation.activeEngineLabel)"))
   #expect(source.contains("await admittedModelSettingsViewModel.refresh()"))
-  #expect(source.contains("Supported architectures:"))
-  #expect(source.contains("Supported languages:"))
+  #expect(source.contains("runtime.availability.foundationModelAvailability"))
+  #expect(source.contains("Apple On-Device"))
+  #expect(source.contains("Deterministic Fallback"))
   #expect(source.contains(
-    #".accessibilityLabel("Experimental enhanced local model candidate installation progress")"#
+    #".accessibilityLabel("Enhanced local dictation installation progress")"#
   ))
+  #expect(!source.contains("License"))
+  #expect(!source.contains("Checksums"))
+  #expect(!source.contains("Supported architectures"))
+  #expect(!source.contains("Supported languages"))
+  #expect(!source.contains("Download size"))
+  #expect(!source.contains("Installed size"))
+  #expect(!source.contains(" bytes"))
   #expect(!source.contains("Admitted model installation progress"))
   #expect(!source.contains("Picker(\"Engine\""))
   #expect(!source.contains("ModelConsentView"))
@@ -48,7 +60,7 @@ import Testing
   #expect(!runtimeSource.contains("clearModelError"))
 }
 
-@Test func admittedModelSourcesUseNeutralExperimentalCandidateUserFacingCopy() throws {
+@Test func admittedModelSourcesUseNeutralUserFacingCopy() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -78,10 +90,10 @@ import Testing
 
   #expect(offendingQuotedCopy.isEmpty)
   #expect(sources[0].1.contains(
-    "Experimental candidate for hands-on testing; not a release claim."
+    "Enhanced local dictation failed:"
   ))
   #expect(sources[1].1.contains(
-    #".accessibilityLabel("Experimental enhanced local model candidate installation progress")"#
+    #".accessibilityLabel("Enhanced local dictation installation progress")"#
   ))
   #expect(sources[2].1.contains(
     "Repair the experimental enhanced local model candidate in Dictation Settings"

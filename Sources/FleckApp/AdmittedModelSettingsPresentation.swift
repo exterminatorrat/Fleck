@@ -10,17 +10,10 @@ enum AdmittedModelSettingsAction: Equatable, Sendable {
 }
 
 struct AdmittedModelSettingsPresentation: Equatable {
-  let title: String
   let detail: String
   let phase: AdmittedModelInstallPhase
   let identity: String?
-  let revision: String?
-  let license: String?
-  let checksums: [String]
-  let supportedArchitectures: [String]
-  let supportedLanguages: [String]
-  let downloadBytes: Int64?
-  let installedBytes: Int64?
+  let modelLabel: String
   let progress: Double?
   let progressAccessibilityValue: String?
   let accessibilityLabel: String
@@ -28,14 +21,21 @@ struct AdmittedModelSettingsPresentation: Equatable {
   let isKeyboardFocusable: Bool
   let primaryAction: AdmittedModelSettingsAction?
   let primaryActionLabel: String?
-  let showsModelPicker: Bool
 
   var allowsEnhancedPreference: Bool {
     identity != nil && phase == .installed
   }
 
-  var activeEngineLabel: String {
-    allowsEnhancedPreference ? "Enhanced Local (Parakeet TDT)" : "Apple Speech"
+  var showsStatus: Bool {
+    Self.showsStatus(for: phase)
+  }
+
+  var showsDetail: Bool {
+    Self.showsDetail(for: phase)
+  }
+
+  var compactStatus: String {
+    Self.compactStatus(for: phase)
   }
 
   init(snapshot: AdmittedModelInstallationSnapshot) {
@@ -50,80 +50,90 @@ struct AdmittedModelSettingsPresentation: Equatable {
     }
 
     identity = descriptor?.modelID
-    revision = descriptor?.revision
-    license = descriptor?.license
-    checksums = descriptor?.files.map(\.sha256) ?? []
-    supportedArchitectures = descriptor?.architectures ?? []
-    supportedLanguages = descriptor?.languages ?? []
-    downloadBytes = descriptor?.downloadBytes
-    installedBytes = descriptor?.installedBytes
+    modelLabel = descriptor == nil ? "Apple Speech" : "Parakeet TDT 0.6B v2"
 
     switch snapshot.phase {
     case .downloading(let receivedBytes, let totalBytes) where totalBytes > 0:
       progress = Double(receivedBytes) / Double(totalBytes)
-      progressAccessibilityValue = "\(receivedBytes) of \(totalBytes) bytes"
+      progressAccessibilityValue = Self.progressAccessibilityValue(
+        receivedBytes: receivedBytes,
+        totalBytes: totalBytes
+      )
     default:
       progress = nil
       progressAccessibilityValue = nil
     }
 
     primaryAction = Self.action(for: snapshot.phase, hasDescriptor: descriptor != nil)
-    primaryActionLabel = primaryAction?.label
+    primaryActionLabel = primaryAction.map {
+      Self.label(for: $0, phase: snapshot.phase)
+    }
     isKeyboardFocusable = primaryAction != nil
-    showsModelPicker = false
-    title = Self.title(for: snapshot.phase)
     detail = Self.detail(
       for: snapshot.phase,
-      descriptor: descriptor,
       lastError: snapshot.lastError
     )
-    accessibilityLabel = Self.accessibilityLabel(
-      for: snapshot.phase,
-      hasDescriptor: descriptor != nil
-    )
+    accessibilityLabel = "Dictation model"
     accessibilityValue = Self.accessibilityValue(
       for: snapshot.phase,
-      descriptor: descriptor,
+      modelLabel: modelLabel,
       lastError: snapshot.lastError
     )
   }
 
-  private static func title(for phase: AdmittedModelInstallPhase) -> String {
+  private static func compactStatus(for phase: AdmittedModelInstallPhase) -> String {
     switch phase {
     case .builtIn:
-      "Apple Speech — Built in"
+      "Built in"
     case .notInstalled:
-      "Enhanced local model available"
+      "Available to install"
     case .downloading:
-      "Downloading enhanced local model"
+      "Downloading"
     case .verifying:
-      "Verifying enhanced local model"
+      "Verifying"
     case .installing:
-      "Installing enhanced local model"
+      "Installing"
     case .ready:
-      "Enhanced local model prepared to start"
+      "Prepared to start"
     case .starting:
-      "Starting enhanced local model"
+      "Starting"
     case .calibrating:
-      "Calibrating enhanced local model"
+      "Calibrating"
     case .installed:
-      "Enhanced local model installed"
+      "Installed"
     case .updateAvailable:
-      "Enhanced local model update available"
+      "Update available"
     case .repairRequired:
-      "Enhanced local model needs repair"
+      "Needs repair"
     case .removing:
-      "Removing enhanced local model"
+      "Removing"
     case .cancelled:
-      "Enhanced local model installation cancelled"
+      "Installation cancelled"
     case .failed:
-      "Enhanced local model action failed"
+      "Action failed"
+    }
+  }
+
+  private static func showsStatus(for phase: AdmittedModelInstallPhase) -> Bool {
+    switch phase {
+    case .builtIn, .notInstalled, .installed:
+      false
+    default:
+      true
+    }
+  }
+
+  private static func showsDetail(for phase: AdmittedModelInstallPhase) -> Bool {
+    switch phase {
+    case .repairRequired, .cancelled, .failed:
+      true
+    default:
+      false
     }
   }
 
   private static func detail(
     for phase: AdmittedModelInstallPhase,
-    descriptor: AdmittedModelDescriptor?,
     lastError: String?
   ) -> String {
     let phaseDetail: String
@@ -132,8 +142,8 @@ struct AdmittedModelSettingsPresentation: Equatable {
       phaseDetail = "No custom model is installed. On-device recognition uses Apple Speech on this Mac."
     case .notInstalled:
       phaseDetail = "The experimental enhanced local model candidate is available to install."
-    case .downloading(let receivedBytes, let totalBytes):
-      phaseDetail = "Downloading \(receivedBytes) of \(totalBytes) bytes for the experimental enhanced local model candidate."
+    case .downloading:
+      phaseDetail = "Downloading the experimental enhanced local model candidate."
     case .verifying:
       phaseDetail = "Verifying the downloaded experimental enhanced local model candidate."
     case .installing:
@@ -155,62 +165,42 @@ struct AdmittedModelSettingsPresentation: Equatable {
     case .cancelled:
       phaseDetail = "Experimental enhanced local model candidate installation was cancelled. You can install it again when ready."
     case .failed(let message):
-      phaseDetail = "The experimental enhanced local model candidate or its configuration action failed: \(message) Fleck continues with Apple Speech. Verify or update the signed configuration, then restart Fleck."
+      phaseDetail = "Enhanced local dictation failed: \(message) Fleck continues with Apple Speech."
     }
 
-    guard let descriptor else {
+    guard let lastError, !lastError.isEmpty, !phaseDetail.contains(lastError) else {
       return phaseDetail
     }
-
-    var metadata = [
-      "Model: \(descriptor.modelID)",
-      "Revision: \(descriptor.revision)",
-      "License: \(descriptor.license)",
-      "Supported architectures: \(descriptor.architectures.joined(separator: ", "))",
-      "Supported languages: \(descriptor.languages.joined(separator: ", "))",
-      "Download size: \(descriptor.downloadBytes) bytes",
-      "Installed size: \(descriptor.installedBytes) bytes",
-      "Checksums: \(descriptor.files.map(\.sha256).joined(separator: ", "))",
-      "Experimental candidate for hands-on testing; not a release claim.",
-    ]
-    if let lastError, !lastError.isEmpty, !phaseDetail.contains(lastError) {
-      metadata.append("Error: \(lastError)")
-    }
-    return ([phaseDetail] + metadata).joined(separator: "\n")
-  }
-
-  private static func accessibilityLabel(
-    for phase: AdmittedModelInstallPhase,
-    hasDescriptor: Bool
-  ) -> String {
-    switch phase {
-    case .downloading, .verifying, .installing, .starting, .calibrating, .removing:
-      "Experimental enhanced local model candidate installation"
-    default:
-      hasDescriptor ? "Experimental enhanced local model candidate" : "Apple Speech"
-    }
+    return "\(phaseDetail) Error: \(lastError)"
   }
 
   private static func accessibilityValue(
     for phase: AdmittedModelInstallPhase,
-    descriptor: AdmittedModelDescriptor?,
+    modelLabel: String,
     lastError: String?
   ) -> String {
-    if case .downloading(let receivedBytes, let totalBytes) = phase {
-      return "Downloading experimental enhanced local model candidate, \(receivedBytes) of \(totalBytes) bytes"
+    let state: String
+    if case .downloading(let receivedBytes, let totalBytes) = phase,
+       totalBytes > 0 {
+      let progress = progressAccessibilityValue(
+        receivedBytes: receivedBytes,
+        totalBytes: totalBytes
+      )
+      state = "Downloading, \(progress)"
+    } else if showsDetail(for: phase) {
+      state = detail(for: phase, lastError: lastError)
+    } else {
+      state = compactStatus(for: phase)
     }
+    return "\(modelLabel), \(state)"
+  }
 
-    var values = [title(for: phase)]
-    if let descriptor {
-      values.append("Model \(descriptor.modelID)")
-      values.append("Revision \(descriptor.revision)")
-      values.append("Supported architectures \(descriptor.architectures.joined(separator: ", "))")
-      values.append("Supported languages \(descriptor.languages.joined(separator: ", "))")
-    }
-    if let lastError, !lastError.isEmpty {
-      values.append(lastError)
-    }
-    return values.joined(separator: ". ")
+  private static func progressAccessibilityValue(
+    receivedBytes: Int64,
+    totalBytes: Int64
+  ) -> String {
+    let fraction = min(max(Double(receivedBytes) / Double(totalBytes), 0), 1)
+    return "\(Int((fraction * 100).rounded()))%"
   }
 
   private static func action(
@@ -223,17 +213,27 @@ struct AdmittedModelSettingsPresentation: Equatable {
       return .install
     case .downloading, .verifying, .installing, .starting, .calibrating, .removing:
       return .cancel
-    case .ready, .installed:
+    case .ready:
+      return .cancel
+    case .installed:
       return .remove
     case .updateAvailable:
       return .update
-    case .repairRequired:
+    case .repairRequired, .failed:
       return .repair
-    case .failed:
-      return nil
     case .builtIn:
       return nil
     }
+  }
+
+  private static func label(
+    for action: AdmittedModelSettingsAction,
+    phase: AdmittedModelInstallPhase
+  ) -> String {
+    if action == .repair, case .failed = phase {
+      return "Retry"
+    }
+    return action.label
   }
 }
 
@@ -408,7 +408,7 @@ func makeAdmittedModelInstaller(
     )
   } catch {
     return FailedAdmittedModelInstaller(
-      recommendation: .recommended(recommended),
+      recommendation: .builtIn,
       message: String(describing: error)
     )
   }
@@ -422,7 +422,7 @@ func makeAdmittedModelInstaller(
     )
   } catch {
     return FailedAdmittedModelInstaller(
-      recommendation: .recommended(recommended),
+      recommendation: .builtIn,
       message: String(describing: error)
     )
   }

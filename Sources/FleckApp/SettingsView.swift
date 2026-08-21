@@ -311,9 +311,7 @@
         }
       }
 
-      Section("Speech Engine") {
-        admittedModelCard
-      }
+      models
 
       Section("Controls") {
         Picker("Modifier key", selection: dictationModifierBinding) {
@@ -460,70 +458,58 @@
       }
     }
 
-    private var admittedModelCard: some View {
+    private var models: some View {
       let presentation: AdmittedModelSettingsPresentation =
         admittedModelSettingsViewModel.presentation
 
-      return VStack(alignment: .leading, spacing: 8) {
-        Label(presentation.title, systemImage: "waveform")
-          .font(.headline)
-        Text("Active engine: \(presentation.activeEngineLabel)")
-          .font(.caption)
-          .accessibilityLabel("Active engine")
-          .accessibilityValue(presentation.activeEngineLabel)
-        Text(presentation.detail)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
+      return Section("Models") {
+        LabeledContent("Dictation") {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Model: \(presentation.modelLabel)")
+              .font(.caption.weight(.medium))
+            if presentation.showsStatus {
+              Text(presentation.compactStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            if presentation.showsDetail {
+              Text(presentation.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
 
-        if let identity = presentation.identity {
-          LabeledContent("Model", value: identity)
+            if let progress = presentation.progress {
+              ProgressView(value: progress)
+                .accessibilityLabel("Enhanced local dictation installation progress")
+                .accessibilityValue(presentation.progressAccessibilityValue ?? "")
+            }
+            if let action = presentation.primaryAction,
+               let label = presentation.primaryActionLabel {
+              Button(label) { perform(action) }
+                .focusable(presentation.isKeyboardFocusable)
+                .buttonStyle(.borderedProminent)
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel(presentation.accessibilityLabel)
+          .accessibilityValue(presentation.accessibilityValue)
         }
-        if let revision = presentation.revision {
-          LabeledContent("Revision", value: revision)
-        }
-        if let license = presentation.license {
-          LabeledContent("License", value: license)
-        }
-        if !presentation.checksums.isEmpty {
-          LabeledContent(
-            "Checksums",
-            value: presentation.checksums.joined(separator: ", ")
-          )
-        }
-        if let downloadBytes = presentation.downloadBytes {
-          LabeledContent("Download size", value: "\(downloadBytes) bytes")
-        }
-        if let installedBytes = presentation.installedBytes {
-          LabeledContent("Installed size", value: "\(installedBytes) bytes")
-        }
-        if !presentation.supportedArchitectures.isEmpty {
-          Text("Supported architectures: \(presentation.supportedArchitectures.joined(separator: ", "))")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        if !presentation.supportedLanguages.isEmpty {
-          Text("Supported languages: \(presentation.supportedLanguages.joined(separator: ", "))")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        if let progress = presentation.progress {
-          ProgressView(value: progress)
-            .accessibilityLabel("Experimental enhanced local model candidate installation progress")
-            .accessibilityValue(presentation.progressAccessibilityValue ?? "")
-        }
-        if let action = presentation.primaryAction,
-           let label = presentation.primaryActionLabel {
-          Button(label) { perform(action) }
-            .focusable(presentation.isKeyboardFocusable)
-            .buttonStyle(.borderedProminent)
-        }
+
+        LabeledContent("Cleanup", value: cleanupModelLabel)
+          .accessibilityLabel("Cleanup")
+          .accessibilityValue(cleanupModelLabel)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.vertical, 4)
-      .accessibilityElement(children: .contain)
-      .accessibilityLabel(presentation.accessibilityLabel)
-      .accessibilityValue(presentation.accessibilityValue)
+    }
+
+    private var cleanupModelLabel: String {
+      switch runtime.availability.foundationModelAvailability {
+      case .available:
+        "Apple On-Device"
+      default:
+        "Deterministic Fallback"
+      }
     }
 
     private var dictationModifierPresentation: DictationModifierSettingsPresentation {
