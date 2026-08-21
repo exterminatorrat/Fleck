@@ -280,6 +280,11 @@
       }
     }
 
+    mutating func dictationPhaseDidEmit(_ phase: DictationPhase) {
+      guard phase == .arming else { return }
+      forgetDismissedOccurrences(in: .modifierRecovery)
+    }
+
     mutating func dismiss(_ occurrence: NotesPanelBannerOccurrence) {
       dismissedOccurrences.insert(occurrence)
     }
@@ -524,6 +529,9 @@
       )
       .onChange(of: activeBannerOccurrences, initial: true) { _, occurrences in
         bannerDismissalState.reconcile(activeOccurrences: occurrences)
+      }
+      .onReceive(dictationRuntime.$phase) { phase in
+        bannerDismissalState.dictationPhaseDidEmit(phase)
       }
       .onReceive(dictationRuntime.$captureFailure) { failure in
         guard failure == nil else { return }

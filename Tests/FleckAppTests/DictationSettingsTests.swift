@@ -411,6 +411,28 @@ import Testing
   #expect(state.isPresented(occurrence))
 }
 
+@Test func notesPanelBannerDismissalResetsModifierOnCaptureArmingWithoutClearingCaptureFailure() {
+  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
+    statusCopy: "Input Monitoring is required",
+    recoveryButtonTitle: "Enable Right Option"
+  )
+  let captureFailure = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+  var state = NotesPanelBannerDismissalState()
+  state.reconcile(activeOccurrences: [modifier, captureFailure])
+  state.dismiss(modifier)
+  state.dismiss(captureFailure)
+  #expect(!state.isPresented(modifier))
+  #expect(!state.isPresented(captureFailure))
+
+  state.dictationPhaseDidEmit(.arming)
+
+  #expect(state.isPresented(modifier))
+  #expect(!state.isPresented(captureFailure))
+}
+
 @Test func dictationModifierSettingsExplainsFnAndConflictProneKeys() {
   let function = DictationModifierSettingsPresentation(
     selected: .function,
