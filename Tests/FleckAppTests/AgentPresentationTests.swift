@@ -161,6 +161,37 @@ struct AgentPresentationTests {
     #expect(!banner.message.contains("body"))
   }
 
+  @Test func agentBannerDismissalKeepsIndependentAndNewOccurrencesVisible() {
+    let firstChangeID = UUID()
+    let first = NotesPanelBannerOccurrence.agentChange(
+      changeID: firstChangeID,
+      count: 1
+    )
+    let coalesced = NotesPanelBannerOccurrence.agentChange(
+      changeID: firstChangeID,
+      count: 2
+    )
+    let differentChange = NotesPanelBannerOccurrence.agentChange(
+      changeID: UUID(),
+      count: 1
+    )
+    let independentRecovery = NotesPanelBannerOccurrence.dictationRecovery(
+      actionTitle: "Recover Last Dictation",
+      accessibilityLabel: "Recover Last Dictation"
+    )
+    var state = NotesPanelBannerDismissalState()
+    state.reconcile(activeOccurrences: [first, independentRecovery])
+    state.dismiss(first)
+
+    state.reconcile(
+      activeOccurrences: [coalesced, differentChange, independentRecovery]
+    )
+
+    #expect(state.isPresented(coalesced))
+    #expect(state.isPresented(differentChange))
+    #expect(state.isPresented(independentRecovery))
+  }
+
   @Test func reduceMotionUsesCrossfadeInsteadOfSpatialTransition() {
     #expect(AgentBannerPresentation.transition(reduceMotion: true) == .crossfade)
     #expect(AgentBannerPresentation.transition(reduceMotion: false) == .spatial)

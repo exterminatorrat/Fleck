@@ -40,6 +40,7 @@
     let presentation: AgentBannerPresentation
     let motion: AppMotion
     let onUndo: () -> Void
+    let onDismiss: () -> Void
 
     var body: some View {
       HStack(spacing: 8) {
@@ -50,6 +51,10 @@
         Spacer()
         Button("Undo", action: onUndo)
           .buttonStyle(.borderless)
+        NotesPanelBannerCloseButton(
+          label: "Agent Activity update",
+          action: onDismiss
+        )
       }
       .padding(.horizontal, 10)
       .padding(.vertical, 7)

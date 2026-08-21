@@ -335,6 +335,65 @@ import Testing
   #expect(source.contains("await dictationRuntime.recoverModifierMonitoring()"))
 }
 
+@Test func notesPanelBannerDismissalInitiallyPresentsAllActiveOccurrences() {
+  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
+    statusCopy: "Input Monitoring is required",
+    recoveryButtonTitle: "Enable Right Option"
+  )
+  let captureFailure = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+  let recovery = NotesPanelBannerOccurrence.dictationRecovery(
+    actionTitle: "Recover Last Dictation",
+    accessibilityLabel: "Recover Last Dictation"
+  )
+  var state = NotesPanelBannerDismissalState()
+  state.reconcile(activeOccurrences: [modifier, captureFailure, recovery])
+
+  #expect(state.isPresented(modifier))
+  #expect(state.isPresented(captureFailure))
+  #expect(state.isPresented(recovery))
+}
+
+@Test func notesPanelBannerDismissalHidesOnlyTheExactActiveIdentity() {
+  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
+    statusCopy: "Input Monitoring is required",
+    recoveryButtonTitle: "Enable Right Option"
+  )
+  let changedModifier = NotesPanelBannerOccurrence.modifierRecovery(
+    statusCopy: "Input Monitoring could not start",
+    recoveryButtonTitle: "Retry Right Option"
+  )
+  let captureFailure = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+  var state = NotesPanelBannerDismissalState()
+  state.reconcile(activeOccurrences: [modifier, changedModifier, captureFailure])
+  state.dismiss(modifier)
+
+  #expect(!state.isPresented(modifier))
+  #expect(state.isPresented(changedModifier))
+  #expect(state.isPresented(captureFailure))
+}
+
+@Test func notesPanelBannerDismissalForgetsIdentityAfterDisappearanceBeforeRecurrence() {
+  let occurrence = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+  var state = NotesPanelBannerDismissalState()
+  state.reconcile(activeOccurrences: [occurrence])
+  state.dismiss(occurrence)
+  #expect(!state.isPresented(occurrence))
+
+  state.reconcile(activeOccurrences: [])
+  state.reconcile(activeOccurrences: [occurrence])
+
+  #expect(state.isPresented(occurrence))
+}
+
 @Test func dictationModifierSettingsExplainsFnAndConflictProneKeys() {
   let function = DictationModifierSettingsPresentation(
     selected: .function,
