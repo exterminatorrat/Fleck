@@ -1590,6 +1590,47 @@ func DictationRuntimeStopsResourceMonitoringBeforeDrainAndCoolsAfterDrain() asyn
   ])
 }
 
+@Test @MainActor
+func DictationRuntimeDeinitDrainsStartupBeforeCoolingWithoutRetainingRuntime()
+  async throws
+{
+  let lifecycle = RuntimeResourceLifecycleProbe()
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    startupBlocked: true,
+    resourceLifecycle: lifecycle
+  )
+  await fixture.startupGate.waitUntilWaiting()
+
+  var runtime: DictationRuntime? = fixture.runtime
+  weak let weakRuntime = runtime
+  fixture.releaseRuntime()
+  runtime = nil
+
+  await lifecycle.monitorStoppedGate.wait()
+  #expect(weakRuntime == nil)
+  #expect(lifecycle.events == [.monitorStarted, .monitorStopped])
+
+  await Task.yield()
+  #expect(lifecycle.events == [.monitorStarted, .monitorStopped])
+
+  await fixture.startupGate.open()
+  await lifecycle.forceColdGate.wait()
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .forceCold,
+  ])
+
+  await Task.yield()
+  await Task.yield()
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .forceCold,
+  ])
+}
+
 private func historyRecord(
   raw: String,
   cleaned: String?,
@@ -1675,9 +1716,19 @@ private enum RuntimeResourceLifecycleEvent: Equatable {
 @MainActor
 private final class RuntimeResourceLifecycleProbe {
   private(set) var events: [RuntimeResourceLifecycleEvent] = []
+  let monitorStoppedGate = DictationTestGate()
+  let forceColdGate = DictationTestGate()
 
   func append(_ event: RuntimeResourceLifecycleEvent) {
     events.append(event)
+    switch event {
+    case .monitorStopped:
+      Task { await monitorStoppedGate.open() }
+    case .forceCold:
+      Task { await forceColdGate.open() }
+    case .monitorStarted, .engineReleased:
+      break
+    }
   }
 }
 

@@ -1708,42 +1708,59 @@ private func waitForCompletion(
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 @Test @MainActor
-func DictationSpeechEngineProviderUsesEnhancedFactoryOnlyForEnhancedCapture()
+func DictationEnhancedCandidateCompositionSharesAdaptiveInferenceAcrossCaptures()
   async throws
 {
+  let gib: UInt64 = 1_024 * 1_024 * 1_024
+  let root = TestPaths.temporaryDirectory()
+  defer { TestPaths.remove(root) }
   let repository = URL(fileURLWithPath: "/verified/parakeet")
   let inference = EnhancedInferenceSpy()
-  let audio = EnhancedAudioSpy(samples: [0.25])
-  var enhancedFactoryCount = 0
-  let provider = DictationSpeechEngineProvider(
-    modelManager: DictationModelCapability(),
-    permissionController: grantedEnhancedPermissions(),
-    microphoneUID: { nil },
-    microphoneSelectionChanged: { _ in },
-    recommendStandard: {},
-    makeEnhancedCapture: {
-      enhancedFactoryCount += 1
-      return EnhancedSpeechCapture(
-        verifiedLoadState: { .ready(repositoryURL: repository) },
-        makeInference: { inference },
-        makeAudio: { _ in audio }
-      )
-    }
+  var snapshot = DictationResourceSnapshot(
+    reclaimableMemoryBytes: 12 * gib
   )
+  let composition = DictationEnhancedCandidateComposition(
+    applicationSupportURL: root,
+    profile: DictationResourceProfile(
+      installedMemoryBytes: 24 * gib,
+      activeProcessorCount: 8
+    ),
+    inference: inference,
+    snapshot: { snapshot },
+    verifiedLoadState: { .ready(repositoryURL: repository) }
+  )
+  defer { composition.stopResourceMonitoring() }
 
-  let standard = try await provider.engineForCapture(preferred: .standard)
-  #expect(standard.kind == .standard)
-  #expect(enhancedFactoryCount == 0)
+  let activationInference = composition.makeInference()
+  #expect(activationInference === composition.adaptiveInference)
+  #expect(activationInference === composition.makeInference())
 
-  let first = try await provider.engineForCapture(preferred: .enhancedLocal)
+  func makeCapture() -> EnhancedSpeechCapture {
+    composition.makeEnhancedCapture(
+      permissions: grantedEnhancedPermissions(),
+      makeAudio: { _ in EnhancedAudioSpy(samples: [0.25]) }
+    )
+  }
+
+  let first = makeCapture()
   try await first.start(provisional: { _ in }, level: { _ in })
   _ = try await first.finish()
 
-  let second = try await provider.engineForCapture(preferred: .enhancedLocal)
+  let second = makeCapture()
   try await second.start(provisional: { _ in }, level: { _ in })
   _ = try await second.finish()
 
-  #expect(enhancedFactoryCount == 2)
+  #expect(inference.loadURLs == [repository])
+
+  snapshot = DictationResourceSnapshot(reclaimableMemoryBytes: gib)
+  let lowMemoryCapture = makeCapture()
+  try await lowMemoryCapture.start(provisional: { _ in }, level: { _ in })
+  _ = try await lowMemoryCapture.finish()
+  #expect(inference.releaseCount == 1)
+
+  let afterRelease = makeCapture()
+  try await afterRelease.start(provisional: { _ in }, level: { _ in })
+  _ = try await afterRelease.finish()
   #expect(inference.loadURLs == [repository, repository])
 }
 
