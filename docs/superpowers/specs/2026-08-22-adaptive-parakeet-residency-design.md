@@ -105,6 +105,12 @@ ProcessInfo thermal/power notifications, and NSWorkspace sleep/wake events.
 It forwards snapshots or force-cold events to the adaptive wrapper. Monitoring
 starts with the dictation runtime and stops during runtime shutdown.
 
+The model manager's installation-cleanup and removal hooks are asynchronous
+barriers. Repair, update cleanup, and removal await the shared inference's
+force-cold acknowledgement before mutating installed model paths. A callback
+that merely schedules cleanup is insufficient because it can race filesystem
+mutation.
+
 The dormant `LocalDictationRuntime` is not wired to a duplicate Parakeet load.
 Gemma will later receive a separate phase-aware packet so 8 GB Macs never hold
 ASR and open-weight cleanup resources simultaneously.
@@ -118,6 +124,8 @@ ASR and open-weight cleanup resources simultaneously.
 - A cancelled load or transcription cannot be retained warm.
 - Timer generations prevent an expired timer from unloading a newly acquired
   capture.
+- Repair, update cleanup, and removal cannot enter filesystem mutation until
+  the model-mutation barrier has returned.
 - System callbacks never block notification delivery on model cleanup; cleanup
   is serialized on the main actor.
 - If monitoring or memory sampling fails, Fleck unloads rather than guessing.

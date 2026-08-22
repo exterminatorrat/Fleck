@@ -111,7 +111,87 @@ Expected: the commit contains exactly the four owned paths.
 
 ---
 
-### Task 2: Shared Parakeet residency and live pressure wiring
+### Task 2: Awaitable model-mutation barrier
+
+**Files:**
+- Modify: `Sources/FleckApp/EnhancedModelManager.swift`
+- Modify: `Sources/FleckApp/ParakeetTDTTestConfiguration.swift`
+- Modify: `Sources/FleckApp/ParakeetTDTTestActivation.swift`
+- Modify: `Tests/FleckAppTests/EnhancedModelManagerTests.swift`
+- Modify: `Tests/FleckAppTests/ParakeetTDTTestConfigurationTests.swift`
+- Modify: `Tests/FleckAppTests/ParakeetTDTTestActivationTests.swift`
+
+**Interfaces:**
+- Produces: awaitable `@Sendable () async -> Void` cleanup/removal hooks and one `modelMutationWillBegin` hook passed from activation through configuration to both manager mutation boundaries.
+- Preserves: manager operation serialization, verified storage ownership, installer state transitions, startup/calibration hooks, and default no-op construction.
+
+- [ ] **Step 1: Write barrier-order failing tests**
+
+Use a controllable async gate. Prove `deleteModel()` reports the mutation hook,
+then remains suspended with the selected repository intact until the gate is
+released. Prove post-install cleanup likewise does not remove superseded owned
+content before the gate releases.
+
+- [ ] **Step 2: Run focused tests red**
+
+Run:
+
+```bash
+Scripts/resolve-enhanced-candidate.sh .build-mutation-red \
+  swift test --scratch-path .build-mutation-red \
+  --disable-automatic-resolution \
+  --filter 'EnhancedModelManager|ParakeetTDTTestConfiguration|ParakeetTDTTestActivation'
+```
+
+Expected: the async-gate tests fail because the existing callbacks return
+before an asynchronous cold-runtime acknowledgement can complete.
+
+- [ ] **Step 3: Implement the minimal awaitable boundary**
+
+Change the two manager hooks to `@Sendable () async -> Void`. Await removal
+before entering the detached owned-tree deletion and await cleanup before
+entering post-commit cleanup. Add a single `modelMutationWillBegin` hook to the
+Parakeet activation/configuration seam and bind it to both manager hooks.
+Default construction remains an async no-op.
+
+- [ ] **Step 4: Prove activation/configuration propagation**
+
+Add tests that invoke both bound manager paths and assert the exact injected
+hook is awaited once per operation. Preserve existing artifact, manifest,
+architecture, and calibration identities.
+
+- [ ] **Step 5: Run focused and candidate checks green**
+
+Run:
+
+```bash
+Scripts/resolve-enhanced-candidate.sh .build-mutation-green \
+  swift test --scratch-path .build-mutation-green \
+  --disable-automatic-resolution \
+  --filter 'EnhancedModelManager|ParakeetTDTTestConfiguration|ParakeetTDTTestActivation'
+git diff --check
+```
+
+Expected: all selected candidate tests pass, Package.resolved is restored, and
+the exact six-file diff is clean.
+
+- [ ] **Step 6: Commit the singular packet**
+
+```bash
+git add Sources/FleckApp/EnhancedModelManager.swift \
+  Sources/FleckApp/ParakeetTDTTestConfiguration.swift \
+  Sources/FleckApp/ParakeetTDTTestActivation.swift \
+  Tests/FleckAppTests/EnhancedModelManagerTests.swift \
+  Tests/FleckAppTests/ParakeetTDTTestConfigurationTests.swift \
+  Tests/FleckAppTests/ParakeetTDTTestActivationTests.swift
+git commit -m "Await cold runtime before model mutation"
+```
+
+Expected: one commit containing exactly the six owned paths.
+
+---
+
+### Task 3: Shared Parakeet residency and live pressure wiring
 
 **Files:**
 - Create: `Sources/FleckApp/AdaptiveEnhancedSpeechInference.swift`
@@ -122,7 +202,7 @@ Expected: the commit contains exactly the four owned paths.
 - Modify: `Tests/FleckAppTests/DictationCoordinatorTests.swift`
 
 **Interfaces:**
-- Consumes: Task 1's `DictationResourceProfile`, `DictationResourceSnapshot`, `DictationResourceSampling`, and `DictationRuntimePolicy.parakeetRetention`.
+- Consumes: Task 1's resource types/policy and Task 2's awaitable `modelMutationWillBegin` barrier.
 - Produces: `AdaptiveEnhancedSpeechInference: EnhancedSpeechInferring` and `DictationResourcePressureMonitor` with explicit `start()` and `stop()` lifecycle.
 - Preserves: `EnhancedSpeechCapture`, `SpeechEngineProviding`, verified model paths, Apple Speech fallback, and the existing dictionary/cleanup/insertion pipeline.
 
@@ -222,7 +302,7 @@ Expected: the commit contains exactly the six owned paths.
 
 ---
 
-### Task 3: Build and package the MacBook test ZIP
+### Task 4: Build and package the MacBook test ZIP
 
 **Files:**
 - No tracked source changes.
@@ -230,7 +310,7 @@ Expected: the commit contains exactly the six owned paths.
 - ZIP artifact: `.build/parakeet-test/Fleck-Parakeet-Adaptive-arm64.zip`
 
 **Interfaces:**
-- Consumes: the accepted Task 2 branch and existing `Scripts/build-parakeet-test-app.sh`.
+- Consumes: the accepted Task 3 branch and existing `Scripts/build-parakeet-test-app.sh`.
 - Produces: an ad-hoc-signed arm64 local test ZIP containing Fleck.app but no model weights.
 
 - [ ] **Step 1: Verify the accepted source checkpoint**
