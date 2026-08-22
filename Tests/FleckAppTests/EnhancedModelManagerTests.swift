@@ -471,6 +471,37 @@ struct EnhancedModelManagerTests {
     #expect(fixture.manager.state == .ready)
   }
 
+  @Test @MainActor
+  func customLocalRepositoryNameIsUsedForVerifiedInstallAndLoad() async throws {
+    let fixture = try Fixture(localRepositoryName: "parakeet-tdt-0.6b-v2")
+    defer { fixture.remove() }
+    let expectedRemoteURL = try testRemoteURL(
+      for: testManifest.files[0],
+      manifest: testManifest
+    )
+    fixture.transport.handler = { receivedURL, _, _ in
+      #expect(receivedURL == expectedRemoteURL)
+      return ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+
+    try await fixture.manager.download()
+
+    #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL)
+    #expect(
+      fixture.manager.verifiedLoadState
+        == .ready(repositoryURL: fixture.repositoryURL)
+    )
+    #expect(FileManager.default.fileExists(atPath: fixture.fileURL.path))
+
+    await fixture.manager.refreshState()
+
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL)
+  }
+
   @Test @MainActor func deleteRemovesOnlyOwnedModelTrees() async throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
@@ -1097,11 +1128,13 @@ private let testManifest = EnhancedModelManifest(
 private final class Fixture {
   let root: URL
   let manifest: EnhancedModelManifest
+  let localRepositoryName: String
   let transport: TestTransport
   let manager: EnhancedModelManager
 
   init(
     manifest: EnhancedModelManifest = testManifest,
+    localRepositoryName: String? = nil,
     capacity: Int64 = .max,
     trustedManifests: [EnhancedModelManifest]? = nil,
     assessmentDidComplete: @escaping @Sendable () -> Void = {},
@@ -1111,6 +1144,9 @@ private final class Fixture {
   ) throws {
     root = temporaryRoot()
     self.manifest = manifest
+    let selectedLocalRepositoryName = localRepositoryName
+      ?? manifest.modelID.split(separator: "/").last.map(String.init)!
+    self.localRepositoryName = selectedLocalRepositoryName
     transport = TestTransport()
     manager = EnhancedModelManager(
       modelRootURL: root,
@@ -1125,7 +1161,8 @@ private final class Fixture {
       assessmentDidComplete: assessmentDidComplete,
       cleanupWillBegin: cleanupWillBegin,
       removalWillBegin: removalWillBegin,
-      resumeAuthenticationKeyProvider: { resumeAuthenticationKey }
+      resumeAuthenticationKeyProvider: { resumeAuthenticationKey },
+      localRepositoryName: selectedLocalRepositoryName
     )
   }
 
@@ -1148,7 +1185,7 @@ private final class Fixture {
   var resumeFileURL: URL {
     resumeURL
       .appendingPathComponent(manifest.revision, isDirectory: true)
-      .appendingPathComponent(manifest.modelID.split(separator: "/").last.map(String.init)!)
+      .appendingPathComponent(localRepositoryName)
       .appendingPathComponent(manifest.files[0].path + ".resumeData")
   }
 
@@ -1163,7 +1200,7 @@ private final class Fixture {
   func repositoryURL(for manifest: EnhancedModelManifest) -> URL {
     installedURL
       .appendingPathComponent(manifest.revision, isDirectory: true)
-      .appendingPathComponent(manifest.modelID.split(separator: "/").last.map(String.init)!)
+      .appendingPathComponent(localRepositoryName)
   }
 
   func fileURL(for manifest: EnhancedModelManifest) -> URL {

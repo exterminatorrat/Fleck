@@ -14,6 +14,7 @@ enum ParakeetTDTTestConfiguration {
     "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml"
   private static let expectedModelID =
     "FluidInference/parakeet-tdt-0.6b-v2-coreml"
+  static let localRepositoryName = "parakeet-tdt-0.6b-v2"
   private static let expectedRevision =
     "ee09c569f73759e6d44c9bd16766f477b2b36d39"
   private static let expectedManifestTotal: Int64 = 464_413_247
@@ -115,7 +116,8 @@ enum ParakeetTDTTestConfiguration {
       artifactIdentity: artifactIdentity,
       trustedManifests: [manifest],
       capacityProvider: capacityProvider,
-      architectureProvider: { architectureSupported }
+      architectureProvider: { architectureSupported },
+      localRepositoryName: localRepositoryName
     )
     return AdmittedModelSignedConfiguration(
       rawDescriptor: rawDescriptor,

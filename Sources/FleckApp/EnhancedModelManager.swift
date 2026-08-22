@@ -213,6 +213,7 @@
     private let removalWillBegin: @Sendable () -> Void
     private let resumeAuthenticationKeyProvider: @Sendable () throws -> SymmetricKey
     private let admittedStorageNamespace: AdmittedModelStorageNamespace?
+    private let localRepositoryName: String?
     private var stateChangedAt: Date
     private var activeOperationID: UUID?
     private var activeAssessmentCount = 0
@@ -259,7 +260,8 @@
       resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
         try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
       },
-      admittedStorageNamespace: AdmittedModelStorageNamespace? = nil
+      admittedStorageNamespace: AdmittedModelStorageNamespace? = nil,
+      localRepositoryName: String? = nil
     ) {
       let root = modelRootURL ?? fileManager.urls(
         for: .applicationSupportDirectory,
@@ -285,6 +287,7 @@
       self.removalWillBegin = removalWillBegin
       self.resumeAuthenticationKeyProvider = resumeAuthenticationKeyProvider
       self.admittedStorageNamespace = admittedStorageNamespace
+      self.localRepositoryName = localRepositoryName
       stateChangedAt = clock()
     }
 
@@ -308,7 +311,8 @@
         try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
       },
       applicationResourceRoot: URL? = Bundle.main.resourceURL,
-      moduleBundle: Bundle? = FleckAppResourceBundle.defaultModuleBundle()
+      moduleBundle: Bundle? = FleckAppResourceBundle.defaultModuleBundle(),
+      localRepositoryName: String? = nil
     ) {
       let embedded = Self.embeddedManifestAndArtifactIdentity(
         applicationResourceRoot: applicationResourceRoot,
@@ -328,7 +332,8 @@
         assessmentDidComplete: assessmentDidComplete,
         cleanupWillBegin: cleanupWillBegin,
         removalWillBegin: removalWillBegin,
-        resumeAuthenticationKeyProvider: resumeAuthenticationKeyProvider
+        resumeAuthenticationKeyProvider: resumeAuthenticationKeyProvider,
+        localRepositoryName: localRepositoryName
       )
     }
 
@@ -439,7 +444,8 @@
       removalWillBegin: @escaping @Sendable () -> Void = {},
       resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
         try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
-      }
+      },
+      localRepositoryName: String? = nil
     ) throws {
       let namespace = try AdmittedModelStorageNamespace(
         baseRootURL: admittedBaseRoot,
@@ -460,7 +466,8 @@
         cleanupWillBegin: cleanupWillBegin,
         removalWillBegin: removalWillBegin,
         resumeAuthenticationKeyProvider: resumeAuthenticationKeyProvider,
-        admittedStorageNamespace: namespace
+        admittedStorageNamespace: namespace,
+        localRepositoryName: localRepositoryName
       )
     }
 
@@ -514,13 +521,15 @@
       let context = context
       let manifest = manifest
       let trustedManifests = trustedManifests
+      let localRepositoryName = localRepositoryName
       let assessmentDidComplete = assessmentDidComplete
       let assessment = await Task.detached {
         let result = Result {
           try Self.assess(
             context: context,
             manifest: manifest,
-            trustedManifests: trustedManifests
+            trustedManifests: trustedManifests,
+            localRepositoryName: localRepositoryName
           )
         }
         assessmentDidComplete()
@@ -646,6 +655,7 @@
       let previousState = state
       let context = context
       let manifest = manifest
+      let localRepositoryName = localRepositoryName
 
       do {
         try requireLiveTransferCapacity()
@@ -658,7 +668,8 @@
 
         let stagingRepository = try Self.repositoryURL(
           under: context.stagingRevision(manifest.revision),
-          manifest: manifest
+          manifest: manifest,
+          localRepositoryName: localRepositoryName
         )
         var completedBytes: Int64 = 0
         for file in manifest.files {
@@ -688,7 +699,8 @@
           let resumeURL = try Self.resumeURL(
             for: file,
             context: context,
-            manifest: manifest
+            manifest: manifest,
+            localRepositoryName: localRepositoryName
           )
           let remoteURL = try remoteURL(for: file)
           let transport = transport
@@ -786,7 +798,11 @@
 
         setState(.installing)
         let installedRepository = try await Task.detached {
-          try Self.commitVerifiedStaging(context, manifest: manifest)
+          try Self.commitVerifiedStaging(
+            context,
+            manifest: manifest,
+            localRepositoryName: localRepositoryName
+          )
         }.value
         verifiedRepositoryURL = installedRepository
         let cleanupWillBegin = cleanupWillBegin
@@ -953,7 +969,8 @@
     nonisolated private static func assess(
       context: FileContext,
       manifest: EnhancedModelManifest,
-      trustedManifests: [EnhancedModelManifest]
+      trustedManifests: [EnhancedModelManifest],
+      localRepositoryName: String?
     ) throws -> Assessment {
       try prepareRoot(context)
       try validateManifest(manifest)
@@ -962,7 +979,11 @@
       }
       let currentRevision = context.installedRevision(manifest.revision)
       if context.fileManager.fileExists(atPath: currentRevision.path) {
-        let repository = try repositoryURL(under: currentRevision, manifest: manifest)
+        let repository = try repositoryURL(
+          under: currentRevision,
+          manifest: manifest,
+          localRepositoryName: localRepositoryName
+        )
         do {
           try verifyRepository(
             at: repository,
@@ -996,7 +1017,8 @@
           oldManifest.modelID == manifest.modelID,
           let repository = try? repositoryURL(
             under: revision,
-            manifest: oldManifest
+            manifest: oldManifest,
+            localRepositoryName: localRepositoryName
           ),
           (try? verifyRepository(
             at: repository,
@@ -1085,15 +1107,33 @@
 
     nonisolated private static func repositoryURL(
       under revisionURL: URL,
-      manifest: EnhancedModelManifest
+      manifest: EnhancedModelManifest,
+      localRepositoryName: String?
     ) throws -> URL {
-      guard
-        let name = manifest.modelID.split(separator: "/").last,
-        !name.isEmpty
-      else {
-        throw EnhancedModelManagerError.invalidManifest
+      let rawName: String
+      if let localRepositoryName {
+        rawName = localRepositoryName
+      } else {
+        guard
+          let name = manifest.modelID.split(separator: "/").last,
+          !name.isEmpty
+        else {
+          throw EnhancedModelManagerError.invalidManifest
+        }
+        rawName = String(name)
       }
-      return try containedURL(for: String(name), under: revisionURL)
+      let name = try validateRepositoryName(rawName)
+      return try containedURL(for: name, under: revisionURL)
+    }
+
+    nonisolated private static func validateRepositoryName(
+      _ rawName: String
+    ) throws -> String {
+      let name = try validateRelativePath(rawName)
+      guard !name.contains("/") else {
+        throw EnhancedModelManagerError.invalidManifestPath(rawName)
+      }
+      return name
     }
 
     nonisolated private static func containedURL(
@@ -1207,11 +1247,13 @@
     nonisolated private static func resumeURL(
       for file: EnhancedModelFile,
       context: FileContext,
-      manifest: EnhancedModelManifest
+      manifest: EnhancedModelManifest,
+      localRepositoryName: String?
     ) throws -> URL {
       let repository = try repositoryURL(
         under: context.resumeRevision(manifest.revision),
-        manifest: manifest
+        manifest: manifest,
+        localRepositoryName: localRepositoryName
       )
       return try containedURL(for: file.path + ".resumeData", under: repository)
     }
@@ -1229,7 +1271,8 @@
 
     nonisolated private static func commitVerifiedStaging(
       _ context: FileContext,
-      manifest: EnhancedModelManifest
+      manifest: EnhancedModelManifest,
+      localRepositoryName: String?
     ) throws -> URL {
       let staging = context.stagingRevision(manifest.revision)
       try assertOwnedPath(staging, context: context)
@@ -1241,7 +1284,11 @@
       let final = context.installedRevision(manifest.revision)
       try removeOwnedTreeIfPresent(final, context: context)
       try context.fileManager.moveItem(at: staging, to: final)
-      return try repositoryURL(under: final, manifest: manifest)
+      return try repositoryURL(
+        under: final,
+        manifest: manifest,
+        localRepositoryName: localRepositoryName
+      )
     }
 
     nonisolated private static func cleanupCommittedInstallation(

@@ -49,6 +49,10 @@ func parakeetConfigurationBindsExactManifestIdentityAndNamespace() throws {
 
   #expect(raw.role == .asr)
   #expect(raw.modelID == "FluidInference/parakeet-tdt-0.6b-v2-coreml")
+  #expect(
+    ParakeetTDTTestConfiguration.localRepositoryName
+      == "parakeet-tdt-0.6b-v2"
+  )
   #expect(raw.revision == "ee09c569f73759e6d44c9bd16766f477b2b36d39")
   #expect(raw.source.absoluteString == "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml")
   #expect(raw.runtimeABI == "FluidAudio/v0.15.5@19600a485baa4998812e4654b70d2bab8f2c9949")
