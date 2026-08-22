@@ -21,7 +21,7 @@ enum ParakeetTDTTestActivation {
     let calibrate: @MainActor () async throws -> Void
   }
 
-  static let calibrationSampleCount = 4_000
+  static let calibrationSampleCount = 4_800
 
   private static let constructionFailureMessage =
     "Enhanced Local could not be activated. Fleck continues with Apple Speech. "

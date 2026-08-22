@@ -120,7 +120,7 @@ func activationRefreshLoadsAndCalibratesThenReleasesInferenceResources() async t
   )
   #expect(probe.loadedRepositories.count == 2)
   #expect(probe.transcribedSamples.count == 1)
-  #expect(probe.transcribedSamples[0].count == ParakeetTDTTestActivation.calibrationSampleCount)
+  #expect(probe.transcribedSamples[0].count == 4_800)
   #expect(probe.releaseCount == 2)
 }
 
