@@ -338,6 +338,8 @@
     private let editorRegistry: DictationEditorRegistry
     private let availabilityProvider: @MainActor () -> DictationAvailability
     private let capsuleSleeper: @MainActor (Duration) async -> Void
+    private let stopResourceMonitoring: @MainActor () -> Void
+    private let forceEnhancedInferenceCold: @MainActor () async -> Void
     private var desiredModifier: DictationModifierKey?
     private var needsModifierApplication = false
     private var capsuleOwner: CapsuleOwner?
@@ -364,8 +366,20 @@
       applicationSupportURL: URL = AgentBridgeEndpoint.applicationSupportURL()
     ) {
       #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        let profile = DictationResourceProfile.current()
+        let monitor = DictationResourcePressureMonitor()
+        let adaptive = AdaptiveEnhancedSpeechInference(
+          inference: FluidEnhancedSpeechInference(),
+          profile: profile,
+          policy: DictationRuntimePolicy.policy(
+            memoryBytes: profile.installedMemoryBytes
+          ),
+          snapshot: { monitor.currentSnapshot() }
+        )
         let activation = ParakeetTDTTestActivation.make(
-          applicationSupportURL: applicationSupportURL
+          applicationSupportURL: applicationSupportURL,
+          modelMutationWillBegin: { await adaptive.forceCold() },
+          makeInference: { adaptive }
         )
         let modelManager = activation.manager
         let admittedModelInstaller = activation.installer
@@ -385,6 +399,28 @@
       let permissionController = DictationPermissionController()
       let editorRegistry = DictationEditorRegistry()
 
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        let makeEnhancedCapture: @MainActor () -> (any SpeechEngine)? = { [weak appState] in
+          EnhancedSpeechCapture(
+            modelManager: modelManager,
+            permissions: permissionController,
+            microphoneUID: appState?.preferences.dictationMicrophoneUID,
+            microphoneSelectionChanged: { [weak appState] selection in
+              guard case .fallbackToAutomatic = selection else { return }
+              appState?.updatePreferences { $0.dictationMicrophoneUID = nil }
+            },
+            makeInference: { adaptive },
+            recommendStandard: { [weak appState] in
+              appState?.updatePreferences {
+                $0.dictationSpeechEngine = .standard
+              }
+            }
+          )
+        }
+      #else
+        let makeEnhancedCapture: @MainActor () -> (any SpeechEngine)? = { nil }
+      #endif
+
       let engineProvider = DictationSpeechEngineProvider(
         modelManager: modelManager,
         permissionController: permissionController,
@@ -397,7 +433,8 @@
         },
         recommendStandard: { [weak appState] in
           appState?.updatePreferences { $0.dictationSpeechEngine = .standard }
-        }
+        },
+        makeEnhancedCapture: makeEnhancedCapture
       )
       let languageModel = FoundationModelDictation()
       let cleanupGenerator = FoundationModelCleanupGenerator(dictation: languageModel)
@@ -460,6 +497,22 @@
         await admittedModelSettingsViewModel.refresh()
       }
 
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        let startResourceMonitoring: @MainActor () -> Void = {
+          monitor.start(onForceCold: { await adaptive.forceCold() })
+        }
+        let stopResourceMonitoring: @MainActor () -> Void = {
+          monitor.stop()
+        }
+        let forceEnhancedInferenceCold: @MainActor () async -> Void = {
+          await adaptive.forceCold()
+        }
+      #else
+        let startResourceMonitoring: @MainActor () -> Void = {}
+        let stopResourceMonitoring: @MainActor () -> Void = {}
+        let forceEnhancedInferenceCold: @MainActor () async -> Void = {}
+      #endif
+
       self.init(
         appState: appState,
         modelManager: modelManager,
@@ -473,7 +526,10 @@
         startupAssessment: startupAssessment,
         admittedModelSettingsViewModel: admittedModelSettingsViewModel,
         personalDictionaryStore: personalDictionaryStore,
-        personalDictionarySettingsViewModel: personalDictionarySettingsViewModel
+        personalDictionarySettingsViewModel: personalDictionarySettingsViewModel,
+        startResourceMonitoring: startResourceMonitoring,
+        stopResourceMonitoring: stopResourceMonitoring,
+        forceEnhancedInferenceCold: forceEnhancedInferenceCold
       )
     }
 
@@ -494,7 +550,10 @@
       availabilityProvider: (@MainActor () -> DictationAvailability)? = nil,
       capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
         try? await Task.sleep(for: duration)
-      }
+      },
+      startResourceMonitoring: @escaping @MainActor () -> Void = {},
+      stopResourceMonitoring: @escaping @MainActor () -> Void = {},
+      forceEnhancedInferenceCold: @escaping @MainActor () async -> Void = {}
     ) {
       self.appState = appState
       self.modelManager = modelManager
@@ -513,6 +572,8 @@
       self.admittedModelSettingsViewModel = admittedModelSettingsViewModel
         ?? AdmittedModelSettingsViewModel(installer: makeAdmittedModelInstaller())
       self.capsuleSleeper = capsuleSleeper
+      self.stopResourceMonitoring = stopResourceMonitoring
+      self.forceEnhancedInferenceCold = forceEnhancedInferenceCold
       let settingsViewModel = self.admittedModelSettingsViewModel
       let resolvedAvailabilityProvider = availabilityProvider ?? {
         DictationAvailability.current(
@@ -580,6 +641,7 @@
         self.applyLoadedPreferences(appState.preferences)
       }
       synchronizePreferences()
+      startResourceMonitoring()
     }
 
     var isListening: Bool {
@@ -798,6 +860,8 @@
       }
       let coordinator = coordinator
       let shortcutController = shortcutController
+      let forceEnhancedInferenceCold = forceEnhancedInferenceCold
+      stopResourceMonitoring()
       let task = Task { @MainActor [weak self] in
         await coordinator.cancel()
         await coordinator.waitForTerminal()
@@ -805,6 +869,7 @@
         await startupAssessmentTask?.value
         await initialLoadSynchronizationTask?.value
         await terminalSynchronizationTask?.value
+        await forceEnhancedInferenceCold()
         self?.dismissCapsule()
       }
       shutdownTask = task
@@ -1275,9 +1340,14 @@
       let coordinator = coordinator
       let shortcutController = shortcutController
       let capsuleController = capsuleController
+      let stopResourceMonitoring = stopResourceMonitoring
+      let forceEnhancedInferenceCold = forceEnhancedInferenceCold
       Task { @MainActor in
         await coordinator.cancel()
+        await coordinator.waitForTerminal()
         await shortcutController.uninstall()
+        stopResourceMonitoring()
+        await forceEnhancedInferenceCold()
         capsuleController.dismiss()
       }
     }
@@ -1306,44 +1376,44 @@
   }
 
   @MainActor
-  private final class DictationSpeechEngineProvider: SpeechEngineProviding {
+  final class DictationSpeechEngineProvider: SpeechEngineProviding {
     private let modelManager: DictationModelCapability
     private let permissionController: DictationPermissionController
     private let microphoneUID: @MainActor () -> String?
     private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
     private let recommendStandard: @MainActor () -> Void
+    private let makeEnhancedCapture: @MainActor () -> (any SpeechEngine)?
 
     init(
       modelManager: DictationModelCapability,
       permissionController: DictationPermissionController,
       microphoneUID: @escaping @MainActor () -> String?,
       microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void,
-      recommendStandard: @escaping @MainActor () -> Void
+      recommendStandard: @escaping @MainActor () -> Void,
+      makeEnhancedCapture: @escaping @MainActor () -> (any SpeechEngine)? = { nil }
     ) {
       self.modelManager = modelManager
       self.permissionController = permissionController
       self.microphoneUID = microphoneUID
       self.microphoneSelectionChanged = microphoneSelectionChanged
       self.recommendStandard = recommendStandard
+      self.makeEnhancedCapture = makeEnhancedCapture
     }
 
     func engineForCapture(preferred: DictationSpeechEngine) async throws -> any SpeechEngine {
       switch preferred {
       case .standard:
-        AppleSpeechCapture(
+        return AppleSpeechCapture(
           microphoneUID: microphoneUID(),
           permissions: permissionController,
           microphoneSelectionChanged: microphoneSelectionChanged
         )
       case .enhancedLocal:
         #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        EnhancedSpeechCapture(
-          modelManager: modelManager,
-          permissions: permissionController,
-          microphoneUID: microphoneUID(),
-          microphoneSelectionChanged: microphoneSelectionChanged,
-          recommendStandard: recommendStandard
-        )
+        guard let makeEnhancedCapture = makeEnhancedCapture() else {
+          throw DictationFailure.unavailable
+        }
+        return makeEnhancedCapture
         #else
           throw DictationFailure.unavailable
         #endif

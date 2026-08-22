@@ -1555,6 +1555,41 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   #expect(weakRuntime == nil)
 }
 
+@Test @MainActor
+func DictationRuntimeStopsResourceMonitoringBeforeDrainAndCoolsAfterDrain() async throws {
+  let lifecycle = RuntimeResourceLifecycleProbe()
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    resourceLifecycle: lifecycle
+  )
+  await fixture.runtime.toggle()
+
+  let releaseGate = DictationTestGate()
+  fixture.engine.releaseGate = releaseGate
+  let shutdown = Task { await fixture.runtime.shutdown() }
+  await releaseGate.waitUntilWaiting()
+
+  #expect(lifecycle.events == [.monitorStarted, .monitorStopped])
+
+  await releaseGate.open()
+  await shutdown.value
+
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .engineReleased,
+    .forceCold,
+  ])
+
+  await fixture.runtime.shutdown()
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .engineReleased,
+    .forceCold,
+  ])
+}
+
 private func historyRecord(
   raw: String,
   cleaned: String?,
@@ -1630,6 +1665,22 @@ private actor DictationOperationLog {
   }
 }
 
+private enum RuntimeResourceLifecycleEvent: Equatable {
+  case monitorStarted
+  case monitorStopped
+  case engineReleased
+  case forceCold
+}
+
+@MainActor
+private final class RuntimeResourceLifecycleProbe {
+  private(set) var events: [RuntimeResourceLifecycleEvent] = []
+
+  func append(_ event: RuntimeResourceLifecycleEvent) {
+    events.append(event)
+  }
+}
+
 @MainActor
 private final class RuntimeFixture {
   let appState: AppState
@@ -1656,6 +1707,7 @@ private final class RuntimeFixture {
     monitorAccessGranted: Bool = true,
     monitorRequestAccessResult: Bool = true,
     permissionController: DictationPermissionController = .init(),
+    resourceLifecycle: RuntimeResourceLifecycleProbe? = nil,
     availability: DictationAvailability = .evaluate(.init(
       osMajorVersion: 26,
       architecture: .appleSilicon,
@@ -1708,7 +1760,11 @@ private final class RuntimeFixture {
     }
     monitor.accessGranted = monitorAccessGranted
     monitor.requestAccessResult = monitorRequestAccessResult
-    engine = RuntimeSpeechEngine(finalText: finalText, kind: preferredEngine)
+    engine = RuntimeSpeechEngine(
+      finalText: finalText,
+      kind: preferredEngine,
+      onRelease: { resourceLifecycle?.append(.engineReleased) }
+    )
     provider = RuntimeEngineProvider(engine: engine)
     history = DictationHistoryController(
       load: { [] },
@@ -1774,7 +1830,16 @@ private final class RuntimeFixture {
       },
       admittedModelSettingsViewModel: admittedModelSettingsViewModel,
       availabilityProvider: availabilityProvider ?? { availability },
-      capsuleSleeper: capsuleSleeper
+      capsuleSleeper: capsuleSleeper,
+      startResourceMonitoring: {
+        resourceLifecycle?.append(.monitorStarted)
+      },
+      stopResourceMonitoring: {
+        resourceLifecycle?.append(.monitorStopped)
+      },
+      forceEnhancedInferenceCold: {
+        resourceLifecycle?.append(.forceCold)
+      }
     )
   }
 
@@ -1867,10 +1932,17 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   private(set) var releaseCount = 0
   private var level: (@MainActor (Float) -> Void)?
 
-  init(finalText: String?, kind: DictationSpeechEngine = .standard) {
+  init(
+    finalText: String?,
+    kind: DictationSpeechEngine = .standard,
+    onRelease: (() -> Void)? = nil
+  ) {
     self.finalText = finalText
     self.kind = kind
+    self.onRelease = onRelease
   }
+
+  private let onRelease: (() -> Void)?
 
   func start(
     provisional: @escaping @MainActor (String) -> Void,
@@ -1889,6 +1961,7 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   func releaseResources() async {
     releaseCount += 1
     if let releaseGate { await releaseGate.wait() }
+    onRelease?()
   }
 }
 

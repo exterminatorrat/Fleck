@@ -1707,6 +1707,46 @@ private func waitForCompletion(
 }
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test @MainActor
+func DictationSpeechEngineProviderUsesEnhancedFactoryOnlyForEnhancedCapture()
+  async throws
+{
+  let repository = URL(fileURLWithPath: "/verified/parakeet")
+  let inference = EnhancedInferenceSpy()
+  let audio = EnhancedAudioSpy(samples: [0.25])
+  var enhancedFactoryCount = 0
+  let provider = DictationSpeechEngineProvider(
+    modelManager: DictationModelCapability(),
+    permissionController: grantedEnhancedPermissions(),
+    microphoneUID: { nil },
+    microphoneSelectionChanged: { _ in },
+    recommendStandard: {},
+    makeEnhancedCapture: {
+      enhancedFactoryCount += 1
+      return EnhancedSpeechCapture(
+        verifiedLoadState: { .ready(repositoryURL: repository) },
+        makeInference: { inference },
+        makeAudio: { _ in audio }
+      )
+    }
+  )
+
+  let standard = try await provider.engineForCapture(preferred: .standard)
+  #expect(standard.kind == .standard)
+  #expect(enhancedFactoryCount == 0)
+
+  let first = try await provider.engineForCapture(preferred: .enhancedLocal)
+  try await first.start(provisional: { _ in }, level: { _ in })
+  _ = try await first.finish()
+
+  let second = try await provider.engineForCapture(preferred: .enhancedLocal)
+  try await second.start(provisional: { _ in }, level: { _ in })
+  _ = try await second.finish()
+
+  #expect(enhancedFactoryCount == 2)
+  #expect(inference.loadURLs == [repository, repository])
+}
+
 @Test @MainActor func EnhancedSpeechRejectsAnUnverifiedModelWithoutStartingAudio() async {
   let inference = EnhancedInferenceSpy()
   let audio = EnhancedAudioSpy(samples: [0.25])
