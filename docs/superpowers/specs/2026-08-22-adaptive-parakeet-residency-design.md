@@ -74,9 +74,12 @@ Sleep, app termination, cancellation, inference failure, and model mutation
 always unload immediately. Waking or returning to normal pressure does not
 preload Parakeet; the next dictation loads it on demand.
 
-The reclaimable-memory sampler uses Mach VM statistics and adds free,
-inactive, speculative, and purgeable pages with checked arithmetic. If the
-sampler cannot produce a valid value, the policy fails closed to zero seconds.
+The reclaimable-memory sampler uses Mach VM statistics and adds `free_count`
+(which already includes `speculative_count`), inactive, and purgeable pages
+with checked arithmetic. It validates that speculative pages do not exceed
+free pages, reuses one host port for the sample, and deallocates that right on
+every exit. If the sampler cannot produce a valid value, the policy fails
+closed to zero seconds.
 
 ## Architecture
 

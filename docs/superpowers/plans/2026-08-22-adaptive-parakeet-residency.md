@@ -41,7 +41,8 @@
 Add table-driven tests that assert 8 GiB/8 processors returns 15 seconds,
 64 GiB/4 processors returns 5 seconds, 16 GiB/8 processors returns 30 seconds,
 24 GiB/10 processors returns 120 seconds, and 32 GiB/12 processors returns 300 seconds
-under a normal snapshot with 50% reclaimable memory.
+under a normal snapshot with 75% reclaimable memory. Separately assert that an
+8 GiB profile at 50% reclaimable memory reduces to 5 seconds.
 
 - [ ] **Step 2: Write dynamic-reduction failing tests**
 
@@ -70,9 +71,12 @@ threshold; reduced threshold; fixed ceiling.
 
 - [ ] **Step 5: Write sampler failing tests**
 
-Inject page size and VM counters. Assert free + inactive + speculative +
-purgeable pages are included; arithmetic overflow and a failed Mach provider
-return `nil`; installed memory and active processor count are captured exactly.
+Inject page size and VM counters. Assert `free_count` already includes
+`speculative_count`, so reclaimable pages are free + inactive + purgeable
+without double-counting; reject speculative greater than free. Assert page-sum
+and multiplication overflow and a failed Mach provider return `nil`; assert one
+host right is reused and deallocated exactly once on success and every failure;
+installed memory and active processor count are captured exactly.
 
 - [ ] **Step 6: Implement the production sampler**
 
