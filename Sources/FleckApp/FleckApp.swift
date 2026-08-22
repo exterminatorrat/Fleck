@@ -253,6 +253,7 @@
       let adaptiveInference: AdaptiveEnhancedSpeechInference
 
       private let monitor: DictationResourcePressureMonitor
+      private let activationInferenceFactory: @MainActor () -> any EnhancedSpeechInferring
       private let verifiedLoadState: @MainActor () -> EnhancedModelVerifiedLoadState
 
       init(
@@ -277,23 +278,27 @@
           snapshot: { monitor.currentSnapshot() },
           sleeper: sleeper
         )
+        let activationInferenceFactory: @MainActor () -> any EnhancedSpeechInferring = {
+          adaptiveInference
+        }
         let activation = ParakeetTDTTestActivation.make(
           applicationSupportURL: applicationSupportURL,
           modelMutationWillBegin: { await adaptiveInference.forceCold() },
-          makeInference: { adaptiveInference }
+          makeInference: activationInferenceFactory
         )
         let modelManager = activation.manager
         self.modelManager = modelManager
         self.installer = activation.installer
         self.adaptiveInference = adaptiveInference
         self.monitor = monitor
+        self.activationInferenceFactory = activationInferenceFactory
         self.verifiedLoadState = verifiedLoadState ?? { [weak modelManager] in
           modelManager?.verifiedLoadState ?? .unavailable
         }
       }
 
-      func makeInference() -> any EnhancedSpeechInferring {
-        adaptiveInference
+      func makeActivationInferenceForTesting() -> any EnhancedSpeechInferring {
+        activationInferenceFactory()
       }
 
       func makeEnhancedCapture(
@@ -1419,7 +1424,7 @@
       availability = availabilityProvider()
     }
 
-    deinit {
+    isolated deinit {
       let startupAssessmentTask = startupAssessmentTask
       let initialLoadSynchronizationTask = initialLoadSynchronizationTask
       let terminalSynchronizationTask = terminalSynchronizationTask
@@ -1439,9 +1444,7 @@
       let capsuleController = capsuleController
       let stopResourceMonitoring = stopResourceMonitoring
       let forceEnhancedInferenceCold = forceEnhancedInferenceCold
-      MainActor.assumeIsolated {
-        stopResourceMonitoring()
-      }
+      stopResourceMonitoring()
       Task { @MainActor in
         await coordinator.cancel()
         await coordinator.waitForTerminal()

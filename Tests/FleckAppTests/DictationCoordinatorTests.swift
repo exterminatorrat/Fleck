@@ -1716,7 +1716,7 @@ func DictationEnhancedCandidateCompositionSharesAdaptiveInferenceAcrossCaptures(
   defer { TestPaths.remove(root) }
   let repository = URL(fileURLWithPath: "/verified/parakeet")
   let inference = EnhancedInferenceSpy()
-  var snapshot = DictationResourceSnapshot(
+  let snapshotProbe = EnhancedResourceSnapshotProbe(
     reclaimableMemoryBytes: 12 * gib
   )
   let composition = DictationEnhancedCandidateComposition(
@@ -1726,14 +1726,16 @@ func DictationEnhancedCandidateCompositionSharesAdaptiveInferenceAcrossCaptures(
       activeProcessorCount: 8
     ),
     inference: inference,
-    snapshot: { snapshot },
+    snapshot: { snapshotProbe.value },
     verifiedLoadState: { .ready(repositoryURL: repository) }
   )
   defer { composition.stopResourceMonitoring() }
 
-  let activationInference = composition.makeInference()
+  let activationInference = composition.makeActivationInferenceForTesting()
   #expect(activationInference === composition.adaptiveInference)
-  #expect(activationInference === composition.makeInference())
+  #expect(
+    activationInference === composition.makeActivationInferenceForTesting()
+  )
 
   func makeCapture() -> EnhancedSpeechCapture {
     composition.makeEnhancedCapture(
@@ -1752,7 +1754,7 @@ func DictationEnhancedCandidateCompositionSharesAdaptiveInferenceAcrossCaptures(
 
   #expect(inference.loadURLs == [repository])
 
-  snapshot = DictationResourceSnapshot(reclaimableMemoryBytes: gib)
+  snapshotProbe.value = DictationResourceSnapshot(reclaimableMemoryBytes: gib)
   let lowMemoryCapture = makeCapture()
   try await lowMemoryCapture.start(provisional: { _ in }, level: { _ in })
   _ = try await lowMemoryCapture.finish()
@@ -3231,6 +3233,19 @@ private func enhancedAudioBuffer(
     channel[index] = value
   }
   return buffer
+}
+#endif
+
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@MainActor
+private final class EnhancedResourceSnapshotProbe {
+  var value: DictationResourceSnapshot
+
+  init(reclaimableMemoryBytes: UInt64) {
+    value = DictationResourceSnapshot(
+      reclaimableMemoryBytes: reclaimableMemoryBytes
+    )
+  }
 }
 #endif
 

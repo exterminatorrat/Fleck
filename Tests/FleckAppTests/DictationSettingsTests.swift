@@ -1631,6 +1631,50 @@ func DictationRuntimeDeinitDrainsStartupBeforeCoolingWithoutRetainingRuntime()
   ])
 }
 
+@Test @MainActor
+func DictationRuntimeDeinitStopsAndCoolsWhenFinalReleaseHappensOffMainActor()
+  async throws
+{
+  let lifecycle = RuntimeResourceLifecycleProbe()
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    startupBlocked: true,
+    resourceLifecycle: lifecycle
+  )
+  await fixture.startupGate.waitUntilWaiting()
+
+  weak let weakRuntime = fixture.runtime
+  let releaseBox = RuntimeOffActorReleaseBox(runtime: fixture.runtime)
+  fixture.releaseRuntime()
+  let release = Task.detached {
+    releaseBox.release()
+  }
+
+  await lifecycle.monitorStoppedGate.wait()
+  await release.value
+  #expect(weakRuntime == nil)
+  #expect(lifecycle.events == [.monitorStarted, .monitorStopped])
+
+  await Task.yield()
+  #expect(lifecycle.events == [.monitorStarted, .monitorStopped])
+
+  await fixture.startupGate.open()
+  await lifecycle.forceColdGate.wait()
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .forceCold,
+  ])
+
+  await Task.yield()
+  await Task.yield()
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .forceCold,
+  ])
+}
+
 private func historyRecord(
   raw: String,
   cleaned: String?,
@@ -1729,6 +1773,18 @@ private final class RuntimeResourceLifecycleProbe {
     case .monitorStarted, .engineReleased:
       break
     }
+  }
+}
+
+private final class RuntimeOffActorReleaseBox: @unchecked Sendable {
+  private var runtime: DictationRuntime?
+
+  init(runtime: DictationRuntime) {
+    self.runtime = runtime
+  }
+
+  func release() {
+    runtime = nil
   }
 }
 
