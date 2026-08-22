@@ -1039,9 +1039,12 @@ struct EnhancedModelManagerTests {
     ("huggingface.co", true),
     ("cdn.huggingface.co", true),
     ("transfer.xethub.hf.co", true),
+    ("us.aws.cdn.hf.co", true),
     ("evil-huggingface.co", false),
     ("huggingface.co.evil.example", false),
     ("xethub.hf.co.evil.example", false),
+    ("aws.cdn.hf.co", false),
+    ("us.aws.cdn.hf.co.evil.example", false),
   ])
   func redirectHostAllowlistUsesDNSLabels(host: String, allowed: Bool) {
     #expect(URLSessionModelDownloader.isAllowedRedirectHost(host) == allowed)
@@ -1051,8 +1054,11 @@ struct EnhancedModelManagerTests {
     ("https://huggingface.co/file", true),
     ("https://cdn.huggingface.co/file", true),
     ("https://transfer.xethub.hf.co/file", true),
+    ("https://us.aws.cdn.hf.co/file", true),
     ("http://huggingface.co/file", false),
     ("https://evil-huggingface.co/file", false),
+    ("https://aws.cdn.hf.co/file", false),
+    ("https://us.aws.cdn.hf.co.evil.example/file", false),
   ])
   func redirectsRequireHTTPSAndAnAllowedHost(value: String, allowed: Bool) {
     #expect(

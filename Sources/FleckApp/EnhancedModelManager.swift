@@ -1526,6 +1526,7 @@
       return host == "huggingface.co"
         || host.hasSuffix(".huggingface.co")
         || host.hasSuffix(".xethub.hf.co")
+        || host.hasSuffix(".aws.cdn.hf.co")
     }
 
     static func isAllowedRedirectURL(_ url: URL) -> Bool {
