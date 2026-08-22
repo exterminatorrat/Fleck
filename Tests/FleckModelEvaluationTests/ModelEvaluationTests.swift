@@ -1,0 +1,1722 @@
+import FleckModelEvaluation
+import Foundation
+import Testing
+
+@Test func scoresEnglishMandarinAndMixedInputsFromLiteralExpectations() throws {
+  let report = try ModelEvaluationScorer.score(
+    .init(
+      schemaVersion: 1,
+      modelID: "fixture-asr",
+      revision: "0123456789abcdef",
+      runtime: "fixture-runtime",
+      quantization: "none",
+      hardware: "fixture-mac",
+      unexpectedNetworkConnectionCount: 0,
+      cases: [
+        .init(
+          id: "en-1",
+          language: .english,
+          reference: "send the report now",
+          hypothesis: "send report now",
+          protectedExpectations: [],
+          timing: .init(
+            isCold: false,
+            firstPartialMilliseconds: 100,
+            stopToFinalMilliseconds: 200,
+            stopToInsertionMilliseconds: 300
+          ),
+          peakResidentBytes: 1_000
+        ),
+        .init(
+          id: "zh-1",
+          language: .mandarin,
+          reference: "今天开会",
+          hypothesis: "今天会议",
+          protectedExpectations: [],
+          timing: nil,
+          peakResidentBytes: nil
+        ),
+        .init(
+          id: "mixed-1",
+          language: .mixed,
+          reference: "请 send 2 invoices",
+          hypothesis: "请 send 3 invoices",
+          protectedExpectations: [
+            .init(kind: "number", text: "2", comparison: .exact)
+          ],
+          timing: nil,
+          peakResidentBytes: nil
+        ),
+      ]
+    ))
+
+  #expect(
+    report.languageMetrics == [
+      .init(language: .english, edits: 1, referenceUnits: 4),
+      .init(language: .mandarin, edits: 2, referenceUnits: 4),
+      .init(language: .mixed, edits: 1, referenceUnits: 4),
+    ])
+  #expect(report.protectedViolations.map(\.caseID) == ["mixed-1"])
+  #expect(report.languageMetrics[0].errorRate == 0.25)
+}
+
+@Test func keepsEnglishApostrophesAndIgnoresCaseAndPunctuation() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "english-formatting",
+        language: .english,
+        reference: "Don't stop, Alex!",
+        hypothesis: "don't stop alex",
+        protectedExpectations: []
+      )
+    ]))
+
+  #expect(
+    report.languageMetrics == [
+      .init(language: .english, edits: 0, referenceUnits: 3)
+    ])
+}
+
+@Test func excludesWhitespaceAndPunctuationFromMandarinCharacterError() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "mandarin-formatting",
+        language: .mandarin,
+        reference: "今天， 开会。",
+        hypothesis: "今天开会",
+        protectedExpectations: []
+      )
+    ]))
+
+  #expect(
+    report.languageMetrics == [
+      .init(language: .mandarin, edits: 0, referenceUnits: 4)
+    ])
+}
+
+@Test func countsEachHanGraphemeAsOneMixedLanguageToken() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "mixed-graphemes",
+        language: .mixed,
+        reference: "我 send invoices",
+        hypothesis: "我 send invoices",
+        protectedExpectations: []
+      )
+    ]))
+
+  #expect(
+    report.languageMetrics == [
+      .init(language: .mixed, edits: 0, referenceUnits: 3)
+    ])
+}
+
+@Test func separatesAdjacentLatinAndHanMixedTokens() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "mixed-latin-han-adjacent",
+        language: .mixed,
+        reference: "send请",
+        hypothesis: "send请"
+      ),
+      .init(
+        id: "mixed-han-latin-adjacent",
+        language: .mixed,
+        reference: "请send",
+        hypothesis: "请send"
+      ),
+      .init(
+        id: "mixed-apostrophe-han-adjacent",
+        language: .mixed,
+        reference: "don't请",
+        hypothesis: "don't请"
+      ),
+    ]))
+
+  #expect(
+    report.caseMetrics == [
+      .init(
+        caseID: "mixed-latin-han-adjacent",
+        language: .mixed,
+        edits: 0,
+        referenceUnits: 2
+      ),
+      .init(
+        caseID: "mixed-han-latin-adjacent",
+        language: .mixed,
+        edits: 0,
+        referenceUnits: 2
+      ),
+      .init(
+        caseID: "mixed-apostrophe-han-adjacent",
+        language: .mixed,
+        edits: 0,
+        referenceUnits: 2
+      ),
+    ])
+}
+
+@Test func aggregatesInsertionDeletionSubstitutionAndEmptyHypothesisEdits() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "insertion",
+        language: .english,
+        reference: "a b",
+        hypothesis: "a x b",
+        protectedExpectations: []
+      ),
+      .init(
+        id: "deletion",
+        language: .english,
+        reference: "a b",
+        hypothesis: "a",
+        protectedExpectations: []
+      ),
+      .init(
+        id: "empty-hypothesis",
+        language: .english,
+        reference: "a b",
+        hypothesis: "",
+        protectedExpectations: []
+      ),
+    ]))
+
+  #expect(
+    report.languageMetrics == [
+      .init(language: .english, edits: 4, referenceUnits: 6)
+    ])
+}
+
+@Test func rejectsUnsupportedSchemaVersion() {
+  expectError(.unsupportedSchemaVersion(2), input: validInput(schemaVersion: 2))
+}
+
+@Test func rejectsEmptyModelIdentityRevisionAndRuntime() {
+  expectError(.emptyModelID, input: validInput(modelID: " "))
+  expectError(.emptyRevision, input: validInput(revision: "\n"))
+  expectError(.emptyRuntime, input: validInput(runtime: ""))
+}
+
+@Test func rejectsEmptyQuantizationAndHardwareMetadata() {
+  expectError(.emptyQuantization, input: validInput(quantization: " "))
+  expectError(.emptyHardware, input: validInput(hardware: "\n"))
+}
+
+@Test func rejectsEmptyCaseArray() {
+  expectError(.emptyCases, input: validInput(cases: []))
+}
+
+@Test func rejectsEmptyAndDuplicateCaseIDs() {
+  expectError(
+    .emptyCaseID,
+    input: validInput(cases: [
+      .init(id: "  ", language: .english, reference: "a", hypothesis: "")
+    ])
+  )
+  expectError(
+    .duplicateCaseID("same"),
+    input: validInput(cases: [
+      .init(id: "same", language: .english, reference: "a", hypothesis: ""),
+      .init(id: "same", language: .english, reference: "b", hypothesis: ""),
+    ])
+  )
+}
+
+@Test func rejectsDuplicateProtectedExpectationIdentities() {
+  let expectation = ModelEvaluationProtectedExpectation(
+    kind: "number",
+    text: "2",
+    comparison: .exact
+  )
+  do {
+    _ = try ModelEvaluationScorer.score(
+      validInput(cases: [
+        .init(
+          id: "duplicate-protected",
+          language: .english,
+          reference: "send 2",
+          hypothesis: "send 2",
+          protectedExpectations: [expectation, expectation]
+        )
+      ]))
+    Issue.record("Expected duplicate protected expectation error.")
+  } catch let error as ModelEvaluationError {
+    #expect(
+      error.description == "Duplicate protected expectation in case duplicate-protected."
+    )
+  } catch {
+    Issue.record("Unexpected error: \(error).")
+  }
+}
+
+@Test func rejectsEmptyReferencesAndProtectedFields() {
+  expectError(
+    .emptyReference("case"),
+    input: validInput(cases: [
+      .init(id: "case", language: .english, reference: "\t", hypothesis: "")
+    ])
+  )
+  expectError(
+    .emptyProtectedKind("case"),
+    input: validInput(cases: [
+      .init(
+        id: "case",
+        language: .english,
+        reference: "a",
+        hypothesis: "a",
+        protectedExpectations: [.init(kind: " ", text: "a", comparison: .exact)]
+      )
+    ])
+  )
+  expectError(
+    .emptyProtectedText("case"),
+    input: validInput(cases: [
+      .init(
+        id: "case",
+        language: .english,
+        reference: "a",
+        hypothesis: "a",
+        protectedExpectations: [.init(kind: "name", text: "\n", comparison: .exact)]
+      )
+    ])
+  )
+}
+
+@Test func rejectsNegativeNetworkCountTimingAndPeakMemory() {
+  expectError(
+    .negativeNetworkConnectionCount,
+    input: validInput(unexpectedNetworkConnectionCount: -1)
+  )
+  expectError(
+    .negativeTiming("firstPartialMilliseconds"),
+    input: validInput(
+      cases: [
+        .init(
+          id: "case",
+          language: .english,
+          reference: "a",
+          hypothesis: "a",
+          timing: .init(isCold: false, firstPartialMilliseconds: -1)
+        )
+      ]
+    )
+  )
+  expectError(
+    .negativePeakResidentBytes("case"),
+    input: validInput(
+      cases: [
+        .init(
+          id: "case",
+          language: .english,
+          reference: "a",
+          hypothesis: "a",
+          peakResidentBytes: -1
+        )
+      ]
+    )
+  )
+}
+
+@Test func rejectsNonFiniteTiming() {
+  expectError(
+    .nonFiniteTiming("stopToFinalMilliseconds"),
+    input: validInput(
+      cases: [
+        .init(
+          id: "case",
+          language: .english,
+          reference: "a",
+          hypothesis: "a",
+          timing: .init(isCold: false, stopToFinalMilliseconds: .nan)
+        )
+      ]
+    )
+  )
+}
+
+@Test func reportsExactProtectedMeaningViolationsInExpectationOrder() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "path-case",
+        language: .english,
+        reference: "copy /fixture/Notes.txt and ticket #42",
+        hypothesis: "copy /fixture/notes.txt and ticket 42",
+        protectedExpectations: [
+          .init(kind: "path", text: "/fixture/Notes.txt", comparison: .exact),
+          .init(kind: "ticket", text: "ticket #42", comparison: .exact),
+        ]
+      )
+    ]))
+
+  #expect(
+    report.protectedViolations == [
+      .init(
+        caseID: "path-case",
+        kind: "path",
+        expectedText: "/fixture/Notes.txt",
+        observedHypothesis: "copy /fixture/notes.txt and ticket 42"
+      ),
+      .init(
+        caseID: "path-case",
+        kind: "ticket",
+        expectedText: "ticket #42",
+        observedHypothesis: "copy /fixture/notes.txt and ticket 42"
+      ),
+    ])
+}
+
+@Test func acceptsCaseAndWhitespaceInsensitiveProtectedText() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "name",
+        language: .english,
+        reference: "call Priya Shah",
+        hypothesis: "call priya   shah",
+        protectedExpectations: [
+          .init(
+            kind: "name",
+            text: "Priya Shah",
+            comparison: .caseAndWhitespaceInsensitive
+          )
+        ]
+      )
+    ]))
+
+  #expect(report.protectedViolations.isEmpty)
+}
+
+@Test func acceptsProtectedNumberBeforeTerminalSentencePunctuation() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "number-period",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2.",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      )
+    ]))
+
+  #expect(report.protectedViolations.isEmpty)
+}
+
+@Test func acceptsInsensitiveProtectedNameBeforeTerminalSentencePunctuation() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "name-period",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "Call ALEX.",
+        protectedExpectations: [
+          .init(kind: "name", text: "Alex", comparison: .caseAndWhitespaceInsensitive)
+        ]
+      )
+    ]))
+
+  #expect(report.protectedViolations.isEmpty)
+}
+
+@Test func rejectsPunctuationChangesInInsensitiveProtectedText() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "name-punctuation",
+        language: .english,
+        reference: "call Alex Morgan",
+        hypothesis: "call alex-morgan",
+        protectedExpectations: [
+          .init(
+            kind: "name",
+            text: "Alex Morgan",
+            comparison: .caseAndWhitespaceInsensitive
+          )
+        ]
+      )
+    ]))
+
+  #expect(report.protectedViolations.map(\.caseID) == ["name-punctuation"])
+  #expect(report.protectedViolations[0].kind == "name")
+  #expect(report.protectedViolations[0].expectedText == "Alex Morgan")
+  #expect(report.protectedViolations[0].observedHypothesis == "call alex-morgan")
+}
+
+@Test func reportsNearestRankWarmThenColdAndOmitsMissingMeasurements() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "warm-1",
+        language: .english,
+        reference: "a",
+        hypothesis: "a",
+        timing: .init(
+          isCold: false,
+          firstPartialMilliseconds: 300,
+          stopToFinalMilliseconds: 600,
+          stopToInsertionMilliseconds: 900
+        ),
+        peakResidentBytes: 1_000
+      ),
+      .init(
+        id: "warm-2",
+        language: .english,
+        reference: "a",
+        hypothesis: "a",
+        timing: .init(
+          isCold: false,
+          firstPartialMilliseconds: 100,
+          stopToFinalMilliseconds: 400,
+          stopToInsertionMilliseconds: 800
+        ),
+        peakResidentBytes: 4_000
+      ),
+      .init(
+        id: "warm-3",
+        language: .english,
+        reference: "a",
+        hypothesis: "a",
+        timing: .init(
+          isCold: false,
+          firstPartialMilliseconds: 200,
+          stopToFinalMilliseconds: 500,
+          stopToInsertionMilliseconds: 700
+        ),
+        peakResidentBytes: 2_000
+      ),
+      .init(
+        id: "cold-1",
+        language: .english,
+        reference: "a",
+        hypothesis: "a",
+        timing: .init(
+          isCold: true,
+          firstPartialMilliseconds: 900,
+          stopToFinalMilliseconds: 300,
+          stopToInsertionMilliseconds: 500
+        )
+      ),
+      .init(
+        id: "cold-2",
+        language: .english,
+        reference: "a",
+        hypothesis: "a",
+        timing: .init(
+          isCold: true,
+          firstPartialMilliseconds: 700,
+          stopToFinalMilliseconds: 100,
+          stopToInsertionMilliseconds: 400
+        )
+      ),
+      .init(
+        id: "missing",
+        language: .english,
+        reference: "a",
+        hypothesis: "a",
+        timing: .init(isCold: false)
+      ),
+    ]))
+
+  #expect(
+    report.latencySummaries == [
+      .init(
+        isCold: false, kind: .firstPartial, sampleCount: 3, p50Milliseconds: 200,
+        p95Milliseconds: 300),
+      .init(
+        isCold: false, kind: .stopToFinal, sampleCount: 3, p50Milliseconds: 500,
+        p95Milliseconds: 600),
+      .init(
+        isCold: false, kind: .stopToInsertion, sampleCount: 3, p50Milliseconds: 800,
+        p95Milliseconds: 900),
+      .init(
+        isCold: true, kind: .firstPartial, sampleCount: 2, p50Milliseconds: 700,
+        p95Milliseconds: 900),
+      .init(
+        isCold: true, kind: .stopToFinal, sampleCount: 2, p50Milliseconds: 100, p95Milliseconds: 300
+      ),
+      .init(
+        isCold: true, kind: .stopToInsertion, sampleCount: 2, p50Milliseconds: 400,
+        p95Milliseconds: 500),
+    ])
+  #expect(report.maximumObservedPeakResidentBytes == 4_000)
+}
+
+@Test func keepsCatastrophicCaseVisibleAlongsideAcceptableAggregate() throws {
+  let goodCases = (0..<9).map { index in
+    ModelEvaluationCaseInput(
+      id: "good-\(index)",
+      language: .english,
+      reference: "a",
+      hypothesis: "a"
+    )
+  }
+  let report = try ModelEvaluationScorer.score(
+    validInput(
+      cases: goodCases + [
+        .init(
+          id: "catastrophic",
+          language: .english,
+          reference: "a b c d",
+          hypothesis: ""
+        )
+      ]))
+
+  #expect(
+    report.languageMetrics == [
+      .init(language: .english, edits: 4, referenceUnits: 13)
+    ])
+  #expect(
+    report.caseMetrics.first
+      == .init(
+        caseID: "good-0",
+        language: .english,
+        edits: 0,
+        referenceUnits: 1
+      ))
+  #expect(
+    report.caseMetrics.last
+      == .init(
+        caseID: "catastrophic",
+        language: .english,
+        edits: 4,
+        referenceUnits: 4
+      ))
+
+  let reportObject =
+    try JSONSerialization.jsonObject(with: JSONEncoder().encode(report)) as? [String: Any]
+  guard let caseMetrics = reportObject?["caseMetrics"] as? [[String: Any]] else {
+    Issue.record("Expected deterministic per-case metrics in the report.")
+    return
+  }
+  #expect(caseMetrics.count == 10)
+  #expect(caseMetrics.first?["caseID"] as? String == "good-0")
+  #expect(caseMetrics.last?["caseID"] as? String == "catastrophic")
+  #expect(caseMetrics.last?["language"] as? String == "english")
+  #expect(caseMetrics.last?["edits"] as? Int == 4)
+  #expect(caseMetrics.last?["referenceUnits"] as? Int == 4)
+  #expect(caseMetrics.last?["errorRate"] as? Double == 1)
+}
+
+@Test func rejectsNonblankReferencesWithNoLanguageScoringUnits() {
+  expectError(
+    .emptyReferenceUnits("english-punctuation"),
+    input: validInput(cases: [
+      .init(id: "english-punctuation", language: .english, reference: "!!!", hypothesis: "")
+    ])
+  )
+  expectError(
+    .emptyReferenceUnits("mandarin-punctuation"),
+    input: validInput(cases: [
+      .init(id: "mandarin-punctuation", language: .mandarin, reference: "，。", hypothesis: "")
+    ])
+  )
+  expectError(
+    .emptyReferenceUnits("mixed-punctuation"),
+    input: validInput(cases: [
+      .init(id: "mixed-punctuation", language: .mixed, reference: "!!!", hypothesis: "")
+    ])
+  )
+}
+
+@Test func requiresProtectedNumbersToHaveLiteralBoundaries() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "number-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send 20 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-decimal-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send 2.0 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-currency-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send $2 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-percent-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send 2% invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-negative-sign-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send -2 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-positive-sign-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send +2 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-range-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send 2-3 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-non-dollar-currency-embedded",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send ₽2 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "number-embedded",
+      "number-decimal-embedded",
+      "number-currency-embedded",
+      "number-percent-embedded",
+      "number-negative-sign-embedded",
+      "number-positive-sign-embedded",
+      "number-range-embedded",
+      "number-non-dollar-currency-embedded",
+    ])
+}
+
+@Test func requiresProtectedNumbersToRejectLeadingSeparators() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "number-leading-decimal",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send .2",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-leading-slash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send /2",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-leading-colon",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send :2",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-period",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2.",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "number-leading-decimal",
+      "number-leading-slash",
+      "number-leading-colon",
+    ])
+}
+
+@Test func requiresProtectedNumbersToRejectTerminalOperators() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "number-terminal-euro",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2€",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-pound",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2£",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-slash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2/",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-colon",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2:",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-fraction-slash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2⁄",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-plus",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2+",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-minus",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2-",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-period",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2.",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "number-terminal-comma",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2,",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "number-terminal-euro",
+      "number-terminal-pound",
+      "number-terminal-slash",
+      "number-terminal-colon",
+      "number-terminal-fraction-slash",
+      "number-terminal-plus",
+      "number-terminal-minus",
+    ])
+}
+
+@Test func classifiesMultiSegmentNumericDatesAsNumeric() throws {
+  let date = "2026-08-19"
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "date-currency-leading",
+        language: .english,
+        reference: "send \(date)",
+        hypothesis: "send $\(date)",
+        protectedExpectations: [.init(kind: "date", text: date, comparison: .exact)]
+      ),
+      .init(
+        id: "date-sign-leading",
+        language: .english,
+        reference: "send \(date)",
+        hypothesis: "send +\(date)",
+        protectedExpectations: [.init(kind: "date", text: date, comparison: .exact)]
+      ),
+      .init(
+        id: "date-percent-suffix",
+        language: .english,
+        reference: "send \(date)",
+        hypothesis: "send \(date)%",
+        protectedExpectations: [.init(kind: "date", text: date, comparison: .exact)]
+      ),
+      .init(
+        id: "date-decimal-suffix",
+        language: .english,
+        reference: "send \(date)",
+        hypothesis: "send \(date).0",
+        protectedExpectations: [.init(kind: "date", text: date, comparison: .exact)]
+      ),
+      .init(
+        id: "date-terminal-period",
+        language: .english,
+        reference: "send \(date)",
+        hypothesis: "send \(date).",
+        protectedExpectations: [.init(kind: "date", text: date, comparison: .exact)]
+      ),
+      .init(
+        id: "date-repeated-leading-hyphen",
+        language: .english,
+        reference: "send --\(date)",
+        hypothesis: "send $--\(date)",
+        protectedExpectations: [.init(kind: "date", text: "--\(date)", comparison: .exact)]
+      ),
+      .init(
+        id: "date-repeated-internal-hyphen",
+        language: .english,
+        reference: "send 2026--08-19",
+        hypothesis: "send $2026--08-19",
+        protectedExpectations: [
+          .init(kind: "date", text: "2026--08-19", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "date-trailing-hyphen",
+        language: .english,
+        reference: "send 2026-08-19-",
+        hypothesis: "send $2026-08-19-",
+        protectedExpectations: [
+          .init(kind: "date", text: "2026-08-19-", comparison: .exact)
+        ]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "date-currency-leading",
+      "date-sign-leading",
+      "date-percent-suffix",
+      "date-decimal-suffix",
+    ])
+}
+
+@Test func recognizesUnicodeNumericMeaningBoundaries() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "unicode-minus-embedded",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send −2",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-range-embedded",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2–3",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-percent-embedded",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2٪",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-minus-complete",
+        language: .english,
+        reference: "send −2",
+        hypothesis: "send −2.",
+        protectedExpectations: [.init(kind: "number", text: "−2", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-range-complete",
+        language: .english,
+        reference: "send 2–3",
+        hypothesis: "send 2–3.",
+        protectedExpectations: [.init(kind: "range", text: "2–3", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-percent-complete",
+        language: .english,
+        reference: "send 2٪",
+        hypothesis: "send 2٪.",
+        protectedExpectations: [.init(kind: "percent", text: "2٪", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-range-leading-dash",
+        language: .english,
+        reference: "send –2",
+        hypothesis: "send $–2",
+        protectedExpectations: [.init(kind: "range", text: "–2", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-range-repeated-dash",
+        language: .english,
+        reference: "send 2––3",
+        hypothesis: "send $2––3",
+        protectedExpectations: [.init(kind: "range", text: "2––3", comparison: .exact)]
+      ),
+      .init(
+        id: "unicode-range-trailing-dash",
+        language: .english,
+        reference: "send 2–",
+        hypothesis: "send $2–",
+        protectedExpectations: [.init(kind: "range", text: "2–", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "unicode-minus-embedded",
+      "unicode-range-embedded",
+      "unicode-percent-embedded",
+    ])
+}
+
+@Test func rejectsMalformedAndAttachedProtectedValueContinuations() throws {
+  let exampleURL = "https:" + "//example.com"
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "numeric-leading-dash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send –2",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "numeric-trailing-dash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2–",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "numeric-repeated-dash",
+        language: .english,
+        reference: "send 2",
+        hypothesis: "send 2––3",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "path-attached-suffix",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo$backup",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "url-attached-suffix",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)!token",
+        protectedExpectations: [.init(kind: "url", text: exampleURL, comparison: .exact)]
+      ),
+      .init(
+        id: "word-dash-adjacency",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alex–Morgan",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "numeric-leading-dash",
+      "numeric-trailing-dash",
+      "numeric-repeated-dash",
+      "path-attached-suffix",
+      "url-attached-suffix",
+      "word-dash-adjacency",
+    ])
+}
+
+@Test func requiresProtectedNumericRangesToHaveLiteralBoundaries() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "range-decimal-embedded",
+        language: .english,
+        reference: "send 2-3 invoices",
+        hypothesis: "send 2-3.0 invoices",
+        protectedExpectations: [.init(kind: "range", text: "2-3", comparison: .exact)]
+      ),
+      .init(
+        id: "range-currency-embedded",
+        language: .english,
+        reference: "send 2-3 invoices",
+        hypothesis: "send $2-3 invoices",
+        protectedExpectations: [.init(kind: "range", text: "2-3", comparison: .exact)]
+      ),
+      .init(
+        id: "range-percent-embedded",
+        language: .english,
+        reference: "send 2-3 invoices",
+        hypothesis: "send 2-3% invoices",
+        protectedExpectations: [.init(kind: "range", text: "2-3", comparison: .exact)]
+      ),
+      .init(
+        id: "range-repeated-embedded",
+        language: .english,
+        reference: "send 2-3 invoices",
+        hypothesis: "send 2-3-4 invoices",
+        protectedExpectations: [.init(kind: "range", text: "2-3", comparison: .exact)]
+      ),
+      .init(
+        id: "range-boundary",
+        language: .english,
+        reference: "send 2-3 invoices",
+        hypothesis: "send 2-3.",
+        protectedExpectations: [.init(kind: "range", text: "2-3", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "range-decimal-embedded",
+      "range-currency-embedded",
+      "range-percent-embedded",
+      "range-repeated-embedded",
+    ])
+}
+
+@Test func classifiesSignedProtectedValuesAsNumeric() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "signed-negative-decimal-embedded",
+        language: .english,
+        reference: "send -2 invoices",
+        hypothesis: "send -2.0 invoices",
+        protectedExpectations: [.init(kind: "number", text: "-2", comparison: .exact)]
+      ),
+      .init(
+        id: "signed-positive-embedded",
+        language: .english,
+        reference: "send +2 invoices",
+        hypothesis: "send +20 invoices",
+        protectedExpectations: [.init(kind: "number", text: "+2", comparison: .exact)]
+      ),
+      .init(
+        id: "signed-negative-boundary",
+        language: .english,
+        reference: "send -2 invoices",
+        hypothesis: "send -2.",
+        protectedExpectations: [.init(kind: "number", text: "-2", comparison: .exact)]
+      ),
+      .init(
+        id: "signed-positive-boundary",
+        language: .english,
+        reference: "send +2 invoices",
+        hypothesis: "send +2.",
+        protectedExpectations: [.init(kind: "number", text: "+2", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "signed-negative-decimal-embedded",
+      "signed-positive-embedded",
+    ])
+}
+
+@Test func requiresProtectedWordsToHaveLiteralBoundaries() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "word-embedded",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alexander",
+        protectedExpectations: [
+          .init(kind: "name", text: "Alex", comparison: .caseAndWhitespaceInsensitive)
+        ]
+      )
+    ]))
+
+  #expect(report.protectedViolations.map(\.caseID) == ["word-embedded"])
+}
+
+@Test func requiresProtectedWordsToRespectPunctuationContext() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "word-hyphen-right",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alex-Morgan",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+      .init(
+        id: "word-hyphen-left",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Morgan-Alex",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+      .init(
+        id: "word-apostrophe-right",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alex's",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+      .init(
+        id: "word-period-right",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alex.example",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+      .init(
+        id: "word-terminal-period",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "call Alex.",
+        protectedExpectations: [.init(kind: "name", text: "Alex", comparison: .exact)]
+      ),
+      .init(
+        id: "word-insensitive-terminal-period",
+        language: .english,
+        reference: "call Alex",
+        hypothesis: "Call ALEX.",
+        protectedExpectations: [
+          .init(kind: "name", text: "Alex", comparison: .caseAndWhitespaceInsensitive)
+        ]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "word-hyphen-right",
+      "word-hyphen-left",
+      "word-apostrophe-right",
+      "word-period-right",
+    ])
+}
+
+@Test func requiresProtectedPathsToHaveLiteralBoundaries() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "path-embedded",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foobar",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-separator-embedded",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo/bar",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "path-embedded",
+      "path-separator-embedded",
+    ])
+}
+
+@Test func distinguishesTerminalPathURLPunctuationFromContinuation() throws {
+  let exampleURL = "https:" + "//example.com"
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "url-terminal-period",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL).",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "path-terminal-question",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo?",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-period-ascii-quote",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo.\"",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-question-bracket",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo?]",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "url-terminal-period-curly-quote",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL).”",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-terminal-period-parenthesis",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL).)",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-fragment-terminal",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)#",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-fragment-closing",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)#)",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-query-terminal",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)?",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-query-closing",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)?)",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "domain-terminal-query",
+        language: .english,
+        reference: "visit example.com",
+        hypothesis: "visit example.com?",
+        protectedExpectations: [
+          .init(kind: "url", text: "example.com", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "email-terminal-fragment",
+        language: .english,
+        reference: "email alex@example.com",
+        hypothesis: "email alex@example.com#",
+        protectedExpectations: [
+          .init(kind: "url", text: "alex@example.com", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "path-leading-dot",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy ./tmp/foo",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-leading-parent",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy ../tmp/foo",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "url-path-continuation",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)/path",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-query-continuation",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)?x=1",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "path-extension-continuation",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo.txt",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-child-continuation",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo/bar",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "url-fragment-terminal",
+      "url-fragment-closing",
+      "url-query-terminal",
+      "url-query-closing",
+      "domain-terminal-query",
+      "email-terminal-fragment",
+      "path-leading-dot",
+      "path-leading-parent",
+      "url-path-continuation",
+      "url-query-continuation",
+      "path-extension-continuation",
+      "path-child-continuation",
+    ])
+}
+
+@Test func classifiesSchemeLessURLPathsAsURLs() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "domain-path-query-terminal",
+        language: .english,
+        reference: "visit example.com/path",
+        hypothesis: "visit example.com/path?",
+        protectedExpectations: [
+          .init(kind: "url", text: "example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "domain-path-query-closing",
+        language: .english,
+        reference: "visit example.com/path",
+        hypothesis: "visit example.com/path?)",
+        protectedExpectations: [
+          .init(kind: "url", text: "example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "domain-path-fragment-terminal",
+        language: .english,
+        reference: "visit example.com/path",
+        hypothesis: "visit example.com/path#",
+        protectedExpectations: [
+          .init(kind: "url", text: "example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "domain-path-fragment-closing",
+        language: .english,
+        reference: "visit example.com/path",
+        hypothesis: "visit example.com/path#)",
+        protectedExpectations: [
+          .init(kind: "url", text: "example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "double-slash-query-terminal",
+        language: .english,
+        reference: "visit //example.com/path",
+        hypothesis: "visit //example.com/path?",
+        protectedExpectations: [
+          .init(kind: "url", text: "//example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "double-slash-query-closing",
+        language: .english,
+        reference: "visit //example.com/path",
+        hypothesis: "visit //example.com/path?)",
+        protectedExpectations: [
+          .init(kind: "url", text: "//example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "double-slash-fragment-terminal",
+        language: .english,
+        reference: "visit //example.com/path",
+        hypothesis: "visit //example.com/path#",
+        protectedExpectations: [
+          .init(kind: "url", text: "//example.com/path", comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "double-slash-fragment-closing",
+        language: .english,
+        reference: "visit //example.com/path",
+        hypothesis: "visit //example.com/path#)",
+        protectedExpectations: [
+          .init(kind: "url", text: "//example.com/path", comparison: .exact)
+        ]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "domain-path-query-terminal",
+      "domain-path-query-closing",
+      "domain-path-fragment-terminal",
+      "domain-path-fragment-closing",
+      "double-slash-query-terminal",
+      "double-slash-query-closing",
+      "double-slash-fragment-terminal",
+      "double-slash-fragment-closing",
+    ])
+}
+
+@Test func distinguishesURLSubdelimitersFromFilesystemSuffixes() throws {
+  let exampleURL = "https:" + "//example.com"
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "url-semicolon-parameter",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL);session=1",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-dollar-subdelimiter",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)$token",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-comma-subdelimiter",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL),part",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-terminal-semicolon",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL);",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "url-terminal-comma",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL),",
+        protectedExpectations: [
+          .init(kind: "url", text: exampleURL, comparison: .exact)
+        ]
+      ),
+      .init(
+        id: "path-terminal-tilde",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo~",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-tilde-closing",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo~)",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-plus",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo+",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-hash",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo#",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-hash-closing",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo#]",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-period",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo.",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-question",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo?",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-period-closing",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo.)",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "path-terminal-question-closing",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo?]",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+      .init(
+        id: "windows-path-terminal-question",
+        language: .english,
+        reference: "copy C:\\tmp\\foo",
+        hypothesis: "copy C:\\tmp\\foo?",
+        protectedExpectations: [.init(kind: "path", text: "C:\\tmp\\foo", comparison: .exact)]
+      ),
+      .init(
+        id: "relative-path-terminal-question",
+        language: .english,
+        reference: "copy docs/readme",
+        hypothesis: "copy docs/readme?",
+        protectedExpectations: [.init(kind: "path", text: "docs/readme", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(
+    report.protectedViolations.map(\.caseID) == [
+      "url-semicolon-parameter",
+      "url-dollar-subdelimiter",
+      "url-comma-subdelimiter",
+      "path-terminal-tilde",
+      "path-terminal-tilde-closing",
+      "path-terminal-plus",
+      "path-terminal-hash",
+      "path-terminal-hash-closing",
+    ])
+}
+
+@Test func acceptsTerminalURLExclamationPunctuation() throws {
+  let exampleURL = "https:" + "//example.com"
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "url-terminal-exclamation",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)!",
+        protectedExpectations: [.init(kind: "url", text: exampleURL, comparison: .exact)]
+      ),
+      .init(
+        id: "url-terminal-exclamation-closing",
+        language: .english,
+        reference: "visit \(exampleURL)",
+        hypothesis: "visit \(exampleURL)!)",
+        protectedExpectations: [.init(kind: "url", text: exampleURL, comparison: .exact)]
+      ),
+    ]))
+
+  #expect(report.protectedViolations.isEmpty)
+}
+
+@Test func acceptsProtectedTextAtLiteralBoundaries() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "number-boundary",
+        language: .english,
+        reference: "send 2 invoices",
+        hypothesis: "send 2 invoices",
+        protectedExpectations: [.init(kind: "number", text: "2", comparison: .exact)]
+      ),
+      .init(
+        id: "path-boundary",
+        language: .english,
+        reference: "copy /tmp/foo",
+        hypothesis: "copy /tmp/foo",
+        protectedExpectations: [.init(kind: "path", text: "/tmp/foo", comparison: .exact)]
+      ),
+    ]))
+
+  #expect(report.protectedViolations.isEmpty)
+}
+
+@Test func scoresMixedLanguageLatinWordsWithoutCaseDifferences() throws {
+  let report = try ModelEvaluationScorer.score(
+    validInput(cases: [
+      .init(
+        id: "mixed-case",
+        language: .mixed,
+        reference: "Send invoices",
+        hypothesis: "send invoices"
+      )
+    ]))
+
+  #expect(
+    report.languageMetrics == [
+      .init(language: .mixed, edits: 0, referenceUnits: 2)
+    ])
+}
+
+private func validInput(
+  schemaVersion: Int = 1,
+  modelID: String = "fixture-asr",
+  revision: String = "fixture-revision",
+  runtime: String = "fixture-runtime",
+  quantization: String = "none",
+  hardware: String = "fixture-mac",
+  unexpectedNetworkConnectionCount: Int = 0,
+  cases: [ModelEvaluationCaseInput]? = nil
+) -> ModelEvaluationRunInput {
+  ModelEvaluationRunInput(
+    schemaVersion: schemaVersion,
+    modelID: modelID,
+    revision: revision,
+    runtime: runtime,
+    quantization: quantization,
+    hardware: hardware,
+    unexpectedNetworkConnectionCount: unexpectedNetworkConnectionCount,
+    cases: cases ?? [
+      .init(id: "case", language: .english, reference: "a", hypothesis: "a")
+    ]
+  )
+}
+
+private func expectError(
+  _ expected: ModelEvaluationError,
+  input: ModelEvaluationRunInput
+) {
+  do {
+    _ = try ModelEvaluationScorer.score(input)
+    Issue.record("Expected ModelEvaluationError \(expected).")
+  } catch let error as ModelEvaluationError {
+    #expect(error == expected)
+  } catch {
+    Issue.record("Unexpected error: \(error).")
+  }
+}

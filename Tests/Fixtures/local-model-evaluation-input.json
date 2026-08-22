@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "modelID": "fixture-asr",
+  "revision": "fixture-revision",
+  "runtime": "fixture-runtime",
+  "quantization": "none",
+  "hardware": "fixture-mac",
+  "unexpectedNetworkConnectionCount": 0,
+  "cases": [
+    {
+      "id": "en-1",
+      "language": "english",
+      "reference": "send the report now",
+      "hypothesis": "send report now",
+      "protectedExpectations": [],
+      "timing": {
+        "isCold": false,
+        "firstPartialMilliseconds": 100,
+        "stopToFinalMilliseconds": 200,
+        "stopToInsertionMilliseconds": 300
+      },
+      "peakResidentBytes": 1000
+    },
+    {
+      "id": "zh-1",
+      "language": "mandarin",
+      "reference": "今天开会",
+      "hypothesis": "今天会议",
+      "protectedExpectations": [],
+      "timing": null,
+      "peakResidentBytes": null
+    },
+    {
+      "id": "mixed-1",
+      "language": "mixed",
+      "reference": "请 send 2 invoices",
+      "hypothesis": "请 send 3 invoices",
+      "protectedExpectations": [
+        {
+          "kind": "number",
+          "text": "2",
+          "comparison": "exact"
+        }
+      ],
+      "timing": null,
+      "peakResidentBytes": null
+    }
+  ]
+}

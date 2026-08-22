@@ -1,0 +1,7 @@
+{"event":"ready","modelRevision":"fixture-model","requestID":"load-1","runtimeVersion":"fixture-runtime","schemaVersion":1}
+{"event":"partial","requestID":"transcribe-1","schemaVersion":1,"sequence":0,"transcript":"partial"}
+{"event":"final","requestID":"transcribe-1","schemaVersion":1,"transcript":"final"}
+{"event":"cancelled","requestID":"cancel-1","schemaVersion":1}
+{"event":"unloaded","requestID":"unload-1","schemaVersion":1}
+{"event":"measurement","name":"decodeMilliseconds","requestID":"transcribe-1","schemaVersion":1,"unit":"ms","value":1.25}
+{"code":"fixture-failure","event":"failure","message":"failure","requestID":"failure-1","schemaVersion":1}

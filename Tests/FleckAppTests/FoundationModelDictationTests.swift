@@ -2,7 +2,48 @@ import Foundation
 import FleckCore
 import Testing
 
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
+
 @testable import FleckApp
+
+#if canImport(FoundationModels)
+@available(macOS 26, *)
+@Test
+func foundationModelDictationPassesMaximumOutputTokensToProductionResponderBoundary() async {
+  let probe = FoundationModelResponderProbe()
+  let responder = FoundationModelCleanupResponder { _, options in
+    await probe.record(options)
+    return "send the report"
+  }
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    foundationModelResponder: responder,
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = await dictation.cleanupResult(
+    "send the report",
+    maximumOutputTokens: 23
+  )
+
+  #expect(result.outcome == .cleaned)
+  #expect(await probe.calls == 1)
+  #expect(await probe.maximumResponseTokens == 23)
+}
+
+@available(macOS 26, *)
+private actor FoundationModelResponderProbe {
+  private(set) var calls = 0
+  private(set) var maximumResponseTokens: Int?
+
+  func record(_ options: GenerationOptions) {
+    calls += 1
+    maximumResponseTokens = options.maximumResponseTokens
+  }
+}
+#endif
 
 @Test func FoundationModelDictationCleansGoldenFixturesFaithfully() async throws {
   let cases = try loadCleanupCases()
@@ -10,7 +51,7 @@ import Testing
   let prompts = PromptRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { prompt in
+    cleanupGenerator: { prompt, _ in
       prompts.prompts.append(prompt)
       guard let output = outputs[prompt.rawTranscript] else { throw FixtureError.missingOutput }
       return output
@@ -43,7 +84,7 @@ import Testing
   let raw = "Do not cancel the 2 meetings with Jordan Lee on July 29."
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "Cancel the meetings with Jordan." },
+    cleanupGenerator: { _, _ in "Cancel the meetings with Jordan." },
     routingGenerator: { _, _ in .inbox }
   )
 
@@ -58,7 +99,7 @@ import Testing
     "Finishing on clarifying all the  all the stuff like  trying to make to clean up better"
   let dictation = FoundationModelDictation(
     osMajorVersion: { 25 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in .inbox }
   )
 
@@ -86,7 +127,7 @@ import Testing
   let raw = "This is very very important."
   let dictation = FoundationModelDictation(
     osMajorVersion: { 25 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in .inbox }
   )
 
@@ -100,7 +141,7 @@ import Testing
   let raw = "um, I I need to email Priya Shah about 3 invoices"
   let dictation = FoundationModelDictation(
     osMajorVersion: { 25 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in .inbox }
   )
 
@@ -301,7 +342,7 @@ import Testing
   let recorder = CallRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 25 },
-    cleanupGenerator: { _ in
+    cleanupGenerator: { _, _ in
       recorder.count += 1
       return "This must not run."
     },
@@ -325,7 +366,7 @@ import Testing
   let requests = RoutingRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { transcript, candidates in
       requests.requests.append(.init(transcript: transcript, candidates: candidates))
       return .match(noteID: project.noteID, confidence: .high)
@@ -357,7 +398,7 @@ import Testing
   let responseIndex = ResponseIndex()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in
       defer { responseIndex.value += 1 }
       return responses[responseIndex.value]
@@ -369,7 +410,7 @@ import Testing
 
   let failing = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in throw FixtureError.missingOutput }
   )
   #expect(await failing.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == inbox.noteID)
@@ -380,7 +421,7 @@ import Testing
   let recorder = CallRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 15 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in
       recorder.count += 1
       return .inbox
@@ -402,7 +443,7 @@ import Testing
   let recorder = CallRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in
       recorder.count += 1
       return .inbox
@@ -432,7 +473,7 @@ import Testing
   let recorder = CallRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in
       recorder.count += 1
       return .inbox
@@ -474,7 +515,7 @@ private func cleanupResult(
 ) async -> FoundationModelCleanupResult {
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in modelOutput },
+    cleanupGenerator: { _, _ in modelOutput },
     routingGenerator: { _, _ in .inbox }
   )
   return await dictation.cleanupResult(raw)

@@ -35,6 +35,40 @@ protocol TranscriptCleaning: Sendable {
   func clean(_ rawTranscript: String) async throws -> String
 }
 
+@MainActor
+protocol DictationProcessing: AnyObject {
+  func prepare(for intent: DictationPreparationIntent) async
+  func begin(
+    configuration: DictationProcessingConfiguration,
+    level: @escaping @MainActor @Sendable (Float) -> Void
+  ) async throws -> any DictationProcessingSession
+  func handle(_ signal: DictationRuntimeSignal) async
+}
+
+@MainActor
+protocol DictationProcessingSession: AnyObject {
+  var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
+  func finish() async throws -> DictationProcessingResult
+  // All callers await one source-unblocking/finalization/cleanup cancellation
+  // task before terminal cancellation returns.
+  func cancel() async
+}
+
+protocol TranscriptDictionaryResolving: Sendable {
+  func resolve(_ rawTranscript: String) async throws -> PersonalDictionaryResolution
+}
+
+@MainActor
+protocol StreamingSpeechSource: AnyObject {
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void
+  ) async throws
+  func finish() async throws -> String?
+  func cancel() async
+  func releaseResources() async
+}
+
 protocol DestinationRouting: Sendable {
   func route(
     transcript: String,

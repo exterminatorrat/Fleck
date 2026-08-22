@@ -50,14 +50,21 @@ final class DictationCoordinator {
   private struct Capture {
     let id: UUID
     let mode: DictationMode
+    let selectedEngine: DictationSpeechEngine
     let editor: (any FocusedDictationEditing)?
     let destination: DictationDestination?
     let startedAt: Date
     var engine: (any SpeechEngine)?
+    var processingSession: (any DictationProcessingSession)?
+    var processingUpdatesTask: Task<Void, Never>?
+    var generation: UInt64 = 0
+    var stablePrefix = ""
     var isStarting = true
     var isFinishing = false
+    var isSourceFinishing = false
     var releaseRequested = false
     var cancelRequested = false
+    var processingSessionCancellationTask: Task<Void, Never>?
     var isTerminating = false
     var editorCancelled = false
     var focusedCommitReceipt: FocusedDictationCommitReceipt?
@@ -73,6 +80,7 @@ final class DictationCoordinator {
   private let saver: any DictationSaving
   private let historyController: DictationHistoryController
   private let historyEnabled: @MainActor () -> Bool
+  private let processing: (any DictationProcessing)?
   private let holdThreshold: Duration
   private let holdSleeper: @Sendable (Duration) async -> Void
 
@@ -106,6 +114,7 @@ final class DictationCoordinator {
     saver: any DictationSaving,
     historyStore: DictationHistoryStore,
     historyEnabled: @escaping @MainActor () -> Bool,
+    processing: (any DictationProcessing)? = nil,
     holdThreshold: Duration = .milliseconds(180),
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
@@ -118,6 +127,7 @@ final class DictationCoordinator {
     self.saver = saver
     historyController = DictationHistoryController(store: historyStore)
     self.historyEnabled = historyEnabled
+    self.processing = processing
     self.holdThreshold = holdThreshold
     self.holdSleeper = holdSleeper
   }
@@ -130,6 +140,7 @@ final class DictationCoordinator {
     saver: any DictationSaving,
     historyController: DictationHistoryController,
     historyEnabled: @escaping @MainActor () -> Bool,
+    processing: (any DictationProcessing)? = nil,
     holdThreshold: Duration = .milliseconds(180),
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
@@ -142,6 +153,7 @@ final class DictationCoordinator {
     self.saver = saver
     self.historyController = historyController
     self.historyEnabled = historyEnabled
+    self.processing = processing
     self.holdThreshold = holdThreshold
     self.holdSleeper = holdSleeper
   }
@@ -297,6 +309,7 @@ final class DictationCoordinator {
     guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
       return false
     }
+    let selectedEngine = preferredEngine()
     copyableTranscript = nil
     recoveryReceipt = nil
     recoveryAction = nil
@@ -306,6 +319,7 @@ final class DictationCoordinator {
     capture = Capture(
       id: id,
       mode: mode,
+      selectedEngine: selectedEngine,
       editor: focusedEditor,
       destination: mode == .focused ? destination : nil,
       startedAt: Date()
@@ -327,9 +341,19 @@ final class DictationCoordinator {
   private func startReservedCapture(_ id: UUID) async {
     guard let reservedCapture = capture, reservedCapture.id == id else { return }
     let mode = reservedCapture.mode
+    let selectedEngine = reservedCapture.selectedEngine
+    if let processing {
+      await startProcessingCapture(
+        id,
+        mode: mode,
+        engine: selectedEngine,
+        processing: processing
+      )
+      return
+    }
     let engine: any SpeechEngine
     do {
-      engine = try await engineProvider.engineForCapture(preferred: preferredEngine())
+      engine = try await engineProvider.engineForCapture(preferred: selectedEngine)
     } catch {
       guard finishStarting(id) != nil else { return }
       guard await continueCapture(id) else { return }
@@ -373,6 +397,110 @@ final class DictationCoordinator {
     if current.releaseRequested { await finish() }
   }
 
+  private func startProcessingCapture(
+    _ id: UUID,
+    mode: DictationMode,
+    engine: DictationSpeechEngine,
+    processing: any DictationProcessing
+  ) async {
+    await processing.prepare(for: .immediateCapture)
+    guard await continueCapture(id) else { return }
+
+    let session: any DictationProcessingSession
+    do {
+      session = try await processing.begin(
+        configuration: .init(
+          captureID: id,
+          mode: mode,
+          recognitionContext: .englishDefault,
+          engine: engine
+        ),
+        level: { [weak self] level in
+          guard let self, self.isActive(id) else { return }
+          self.levelObserver?(level)
+        }
+      )
+    } catch {
+      guard finishStarting(id) != nil else { return }
+      guard await continueCapture(id) else { return }
+      await terminate(
+        id,
+        phase: .failed(message(for: error)),
+        cancelEditor: mode == .focused
+      )
+      return
+    }
+
+    guard var activeCapture = capture, activeCapture.id == id else {
+      await session.cancel()
+      return
+    }
+    activeCapture.processingSession = session
+    activeCapture.isStarting = false
+    capture = activeCapture
+    guard await continueCapture(id) else { return }
+    startProcessingUpdates(id, session: session)
+    guard let current = capture, current.id == id else { return }
+    guard await continueCapture(id) else { return }
+    setPhase(.listening(mode: mode, engine: engine))
+    if current.releaseRequested { await finish() }
+  }
+
+  private func startProcessingUpdates(
+    _ id: UUID,
+    session: any DictationProcessingSession
+  ) {
+    guard var capture, capture.id == id else { return }
+    capture.processingUpdatesTask = Task { @MainActor [weak self] in
+      do {
+        for try await update in session.updates {
+          guard let self else { return }
+          guard self.applyProcessingUpdate(update, to: id) else { return }
+        }
+      } catch {
+        return
+      }
+    }
+    self.capture = capture
+  }
+
+  private func applyProcessingUpdate(
+    _ update: DictationTextUpdate,
+    to id: UUID
+  ) -> Bool {
+    guard var capture, capture.id == id else { return false }
+    guard !capture.cancelRequested,
+      !capture.isTerminating,
+      !capture.isFinishing
+    else { return false }
+    guard update.generation > capture.generation,
+      update.stableText.hasPrefix(capture.stablePrefix)
+    else {
+      return true
+    }
+    capture.generation = update.generation
+    capture.stablePrefix = update.stableText
+    let editor = capture.editor
+    let mode = capture.mode
+    self.capture = capture
+    if mode == .focused {
+      editor?.updateFocusedDictation(provisionalText: update.displayText)
+    }
+    return true
+  }
+
+  private func drainProcessingUpdates(_ id: UUID) async {
+    guard let activeCapture = capture,
+      activeCapture.id == id,
+      let task = activeCapture.processingUpdatesTask
+    else { return }
+    task.cancel()
+    await task.value
+    guard var capture, capture.id == id else { return }
+    capture.processingUpdatesTask = nil
+    self.capture = capture
+  }
+
   func finish() async {
     guard var capture, !capture.isTerminating, !capture.cancelRequested else { return }
     if capture.isStarting {
@@ -380,15 +508,26 @@ final class DictationCoordinator {
       self.capture = capture
       return
     }
-    guard !capture.isFinishing, let engine = capture.engine else { return }
+    guard !capture.isFinishing else { return }
+    guard capture.engine != nil || capture.processingSession != nil else { return }
     capture.isFinishing = true
     self.capture = capture
     setPhase(.finalizing)
 
+    if let processingSession = capture.processingSession {
+      await finishProcessingCapture(capture.id, session: processingSession)
+      return
+    }
+
+    guard let engine = capture.engine else { return }
+
+    setSourceFinishing(capture.id, true)
     let rawText: String?
     do {
       rawText = try await engine.finish()
+      setSourceFinishing(capture.id, false)
     } catch {
+      setSourceFinishing(capture.id, false)
       guard await continueCapture(capture.id) else { return }
       await terminate(capture.id, phase: .failed(message(for: error)), cancelEditor: capture.mode == .focused)
       return
@@ -449,6 +588,68 @@ final class DictationCoordinator {
     }
   }
 
+  private func finishProcessingCapture(
+    _ id: UUID,
+    session: any DictationProcessingSession
+  ) async {
+    let result: DictationProcessingResult
+    do {
+      result = try await session.finish()
+    } catch {
+      await drainProcessingUpdates(id)
+      guard await continueCapture(id) else { return }
+      guard let capture, capture.id == id else { return }
+      await terminate(
+        id,
+        phase: .failed(message(for: error)),
+        cancelEditor: capture.mode == .focused
+      )
+      return
+    }
+
+    await drainProcessingUpdates(id)
+    guard await continueCapture(id) else { return }
+    guard let capture, capture.id == id else { return }
+
+    let savesHistory = historyEnabled()
+    let record = DictationHistoryRecord(
+      id: id,
+      mode: capture.mode,
+      engine: capture.selectedEngine,
+      startedAt: capture.startedAt,
+      completedAt: Date(),
+      rawTranscript: result.rawTranscript,
+      cleanedTranscript: result.cleanedTranscript,
+      cleanupOutcome: result.cleanupOutcome,
+      destination: capture.mode == .focused ? capture.destination : nil,
+      insertionOutcome: .pending
+    )
+    setPhase(.cleaning)
+    guard let historyIsDurable = await updateHistory(
+      record,
+      captureID: id,
+      enabled: savesHistory
+    ) else { return }
+
+    if capture.mode == .focused {
+      await finishFocused(
+        id,
+        text: result.insertedText,
+        record: record,
+        savesHistory: savesHistory,
+        historyIsDurable: historyIsDurable
+      )
+    } else {
+      await finishSmart(
+        id,
+        text: result.insertedText,
+        record: record,
+        savesHistory: savesHistory,
+        historyIsDurable: historyIsDurable
+      )
+    }
+  }
+
   func cancel() async {
     if let id = shortcutID {
       shortcutID = nil
@@ -459,14 +660,44 @@ final class DictationCoordinator {
       completeShortcutSession(id)
       publishTerminal(phase: .idle, outcome: .cancelled)
     }
-    guard var capture, !capture.isTerminating, !capture.cancelRequested else { return }
+    guard let capture, !capture.isTerminating, !capture.cancelRequested else {
+      return
+    }
+    await cancelActiveCapture(capture.id)
+  }
+
+  private func cancelActiveCapture(_ id: UUID) async {
+    guard var capture, capture.id == id, !capture.cancelRequested else { return }
+    guard capture.processingSession != nil || !capture.isSourceFinishing else {
+      return
+    }
+    let hasProcessingSession = capture.processingSession != nil
     capture.cancelRequested = true
+    if hasProcessingSession { capture.generation &+= 1 }
     self.capture = capture
-    rollbackEditor(capture.id)
-    _ = await compensateFocusedPersistence(capture.id)
-    guard let current = self.capture, current.id == capture.id, !current.isTerminating else { return }
-    guard !current.isStarting, !current.isFinishing else { return }
-    await completeCancellation(capture.id)
+
+    rollbackEditor(id)
+
+    guard let current = self.capture, current.id == id, !current.isTerminating else {
+      return
+    }
+    if current.processingSession != nil {
+      await cancelProcessingSession(id)
+      await completeCancellation(id)
+    } else {
+      _ = await compensateFocusedPersistence(id)
+      guard let current = self.capture, current.id == id, !current.isTerminating else {
+        return
+      }
+      guard !current.isStarting, !current.isFinishing else { return }
+      await completeCancellation(id)
+    }
+  }
+
+  private func setSourceFinishing(_ id: UUID, _ isFinishing: Bool) {
+    guard var capture, capture.id == id else { return }
+    capture.isSourceFinishing = isFinishing
+    self.capture = capture
   }
 
   private func holdThresholdElapsed(_ id: UUID) async {
@@ -699,8 +930,15 @@ final class DictationCoordinator {
   private func completeCancellation(_ id: UUID) async {
     guard isCancellationRequested(id) else { return }
     guard let capture, capture.id == id else { return }
-    guard capture.focusedCommitReceipt == nil
-      || capture.focusedEditorRollbackSucceeded
+    if capture.processingSession != nil {
+      await cancelProcessingSession(id)
+      guard let current = self.capture, current.id == id, !current.isTerminating else {
+        return
+      }
+    }
+    guard let current = self.capture, current.id == id else { return }
+    guard current.focusedCommitReceipt == nil
+      || current.focusedEditorRollbackSucceeded
     else {
       await failUnsafeFocusedCancellation(id)
       return
@@ -710,6 +948,23 @@ final class DictationCoordinator {
       return
     }
     await terminate(id, phase: .idle, cancelEditor: true, deleteHistory: true)
+  }
+
+  private func cancelProcessingSession(_ id: UUID) async {
+    guard var capture, capture.id == id,
+      let session = capture.processingSession
+    else { return }
+    if let task = capture.processingSessionCancellationTask {
+      await task.value
+      return
+    }
+    let task = Task { @MainActor [weak self, session] in
+      await session.cancel()
+      await self?.drainProcessingUpdates(id)
+    }
+    capture.processingSessionCancellationTask = task
+    self.capture = capture
+    await task.value
   }
 
   private func failUnsafeFocusedCancellation(_ id: UUID) async {
@@ -872,7 +1127,10 @@ final class DictationCoordinator {
   }
 
   private func message(for error: Error) -> String {
-    (error as NSError).localizedDescription
+    if case StreamingDictationProcessorError.noSpeech = error {
+      return "No speech detected."
+    }
+    return (error as NSError).localizedDescription
   }
 
   private func completeShortcutSession(_ id: UUID) {

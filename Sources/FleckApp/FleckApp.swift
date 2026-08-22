@@ -300,7 +300,6 @@
     private enum CapsuleOwner: Equatable {
       case idle
       case dictation
-      case model(UUID)
     }
 
     private enum CapsuleUpdate {
@@ -317,15 +316,17 @@
     }
 
     let modelManager: DictationModelCapability
+    let admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
     let engineProvider: any SpeechEngineProviding
     let coordinator: DictationCoordinator
     let shortcutController: GlobalHoldShortcut
     let capsuleController: DictationCapsuleController
     let historyController: DictationHistoryController
+    let personalDictionaryStore: PersonalDictionaryStore
+    let personalDictionarySettingsViewModel: PersonalDictionarySettingsViewModel
 
     @Published private(set) var phase = DictationPhase.idle
     @Published private(set) var modifierMonitorState = ModifierMonitorState.stopped
-    @Published private(set) var modelError: String?
     @Published private(set) var availability: DictationAvailability
     @Published private(set) var recoveryAction: DictationCapsuleAction?
     @Published private(set) var recoveryActionInFlight = false
@@ -335,24 +336,16 @@
     private weak var appState: AppState?
     private let permissionController: DictationPermissionController
     private let editorRegistry: DictationEditorRegistry
-    private let enhancedIsReady: @MainActor () -> Bool
     private let availabilityProvider: @MainActor () -> DictationAvailability
     private let capsuleSleeper: @MainActor (Duration) async -> Void
     private var desiredModifier: DictationModifierKey?
     private var needsModifierApplication = false
-    private var modelStateAssessed = false
-    private var modelOperation: Task<Void, Never>?
-    private var modelOperationID: UUID?
-    private var modelOperations: [UUID: Task<Void, Never>] = [:]
     private var capsuleOwner: CapsuleOwner?
     private var capsuleDock = DictationCapsuleDock.bottom
     private var appliedCapsuleEnabled: Bool?
     private var capsuleReturnTask: Task<Void, Never>?
     private var capsuleGeneration: UInt64 = 0
     private var preloadCapsuleUpdate: CapsuleUpdate?
-    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-      private var activeModelRepairOwner: CapsuleOwner?
-    #endif
     private var startupAssessmentTask: Task<Void, Never>?
     private var initialLoadSynchronizationTask: Task<Void, Never>?
     private var terminalSynchronizationTask: Task<Void, Never>?
@@ -371,15 +364,22 @@
       applicationSupportURL: URL = AgentBridgeEndpoint.applicationSupportURL()
     ) {
       #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        let modelManager = DictationModelCapability(
-          modelRootURL: applicationSupportURL.appendingPathComponent(
-            "DictationModels",
-            isDirectory: true
-          )
+        let activation = ParakeetTDTTestActivation.make(
+          applicationSupportURL: applicationSupportURL
         )
+        let modelManager = activation.manager
+        let admittedModelInstaller = activation.installer
       #else
         let modelManager = DictationModelCapability()
+        let admittedModelInstaller = makeAdmittedModelInstaller()
       #endif
+      let admittedModelSettingsViewModel = AdmittedModelSettingsViewModel(
+        installer: admittedModelInstaller
+      )
+      let personalDictionaryStore = PersonalDictionaryStore(rootURL: applicationSupportURL)
+      let personalDictionarySettingsViewModel = PersonalDictionarySettingsViewModel(
+        store: personalDictionaryStore
+      )
       let historyStore = DictationHistoryStore(rootURL: applicationSupportURL)
       let historyController = DictationHistoryController(store: historyStore)
       let permissionController = DictationPermissionController()
@@ -400,10 +400,37 @@
         }
       )
       let languageModel = FoundationModelDictation()
+      let cleanupGenerator = FoundationModelCleanupGenerator(dictation: languageModel)
+      let incrementalCleaner = IncrementalTranscriptCleaner(
+        generator: cleanupGenerator,
+        clock: .live
+      )
+      let processing = StreamingDictationProcessor(
+        makeSource: { configuration in
+          let engine = try await engineProvider.engineForCapture(
+            preferred: configuration.engine
+          )
+          return AppleSpeechStreamingAdapter(engine: engine)
+        },
+        dictionaryResolver: PersonalDictionaryTranscriptResolver(entries: {
+          try await personalDictionaryStore.snapshot().entries
+        }),
+        cleaner: incrementalCleaner,
+        runtime: nil
+      )
       let coordinator = DictationCoordinator(
         engineProvider: engineProvider,
-        preferredEngine: { [weak appState] in
-          appState?.preferences.dictationSpeechEngine ?? .standard
+        preferredEngine: { [weak appState, admittedModelSettingsViewModel, modelManager] in
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+          let enhancedRuntimeHealthy = modelManager.state == .ready
+#else
+          let enhancedRuntimeHealthy = true
+#endif
+          return Self.effectiveEngine(
+            preference: appState?.preferences.dictationSpeechEngine,
+            presentation: admittedModelSettingsViewModel.presentation,
+            enhancedRuntimeHealthy: enhancedRuntimeHealthy
+          )
         },
         cleaner: languageModel,
         router: languageModel,
@@ -411,7 +438,8 @@
         historyController: historyController,
         historyEnabled: { [weak appState] in
           appState?.preferences.dictationHistoryEnabled ?? true
-        }
+        },
+        processing: processing
       )
       let capsuleController = DictationCapsuleController()
       let shortcutController = GlobalHoldShortcut(
@@ -428,13 +456,9 @@
           appState?.saveError = "Dictation shortcut: \(Self.shortcutMessage(error))"
         }
       )
-      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        let startupAssessment: @MainActor () async -> Void = {
-          await modelManager.refreshState()
-        }
-      #else
-        let startupAssessment: @MainActor () async -> Void = {}
-      #endif
+      let startupAssessment: @MainActor () async -> Void = {
+        await admittedModelSettingsViewModel.refresh()
+      }
 
       self.init(
         appState: appState,
@@ -447,13 +471,9 @@
         permissionController: permissionController,
         editorRegistry: editorRegistry,
         startupAssessment: startupAssessment,
-        enhancedIsReady: {
-          #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-            modelManager.verifiedLoadState.isReady
-          #else
-            modelManager.isReady
-          #endif
-        }
+        admittedModelSettingsViewModel: admittedModelSettingsViewModel,
+        personalDictionaryStore: personalDictionaryStore,
+        personalDictionarySettingsViewModel: personalDictionarySettingsViewModel
       )
     }
 
@@ -468,7 +488,9 @@
       permissionController: DictationPermissionController,
       editorRegistry: DictationEditorRegistry,
       startupAssessment: @escaping @MainActor () async -> Void,
-      enhancedIsReady: @escaping @MainActor () -> Bool,
+      admittedModelSettingsViewModel: AdmittedModelSettingsViewModel? = nil,
+      personalDictionaryStore: PersonalDictionaryStore? = nil,
+      personalDictionarySettingsViewModel: PersonalDictionarySettingsViewModel? = nil,
       availabilityProvider: (@MainActor () -> DictationAvailability)? = nil,
       capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
         try? await Task.sleep(for: duration)
@@ -483,12 +505,19 @@
       self.coordinator = coordinator
       self.shortcutController = shortcutController
       self.capsuleController = capsuleController
-      self.enhancedIsReady = enhancedIsReady
+      let resolvedPersonalDictionaryStore = personalDictionaryStore
+        ?? PersonalDictionaryStore(rootURL: AgentBridgeEndpoint.applicationSupportURL())
+      self.personalDictionaryStore = resolvedPersonalDictionaryStore
+      self.personalDictionarySettingsViewModel = personalDictionarySettingsViewModel
+        ?? PersonalDictionarySettingsViewModel(store: resolvedPersonalDictionaryStore)
+      self.admittedModelSettingsViewModel = admittedModelSettingsViewModel
+        ?? AdmittedModelSettingsViewModel(installer: makeAdmittedModelInstaller())
       self.capsuleSleeper = capsuleSleeper
+      let settingsViewModel = self.admittedModelSettingsViewModel
       let resolvedAvailabilityProvider = availabilityProvider ?? {
         DictationAvailability.current(
           permissions: permissionController,
-          enhancedModelReady: enhancedIsReady()
+          enhancedModelReady: settingsViewModel.presentation.allowsEnhancedPreference
         )
       }
       self.availabilityProvider = resolvedAvailabilityProvider
@@ -542,7 +571,6 @@
       startupAssessmentTask = Task { @MainActor [weak self] in
         await assessment()
         guard !Task.isCancelled else { return }
-        self?.modelStateAssessed = true
         self?.refreshAvailability()
         self?.synchronizePreferences()
       }
@@ -614,8 +642,11 @@
       case .idle, .saved, .failed:
         captureFailure = nil
         refreshAvailability()
-        let preferredEngine =
-          appState?.preferences.dictationSpeechEngine ?? .standard
+        let preferredEngine = effectivePreferredEngine
+        if preferredEngine == .standard,
+           appState?.preferences.dictationSpeechEngine == .enhancedLocal {
+          appState?.updatePreferences { $0.dictationSpeechEngine = .standard }
+        }
         if preferredEngine == .standard, !availability.standardAvailable {
           let message =
             availability.standardFailureCopy
@@ -736,51 +767,10 @@
 
     func requestPermissionsAfterShortcutSetup() async {
       _ = await permissionController.requestAccess(
-        for: appState?.preferences.dictationSpeechEngine ?? .standard,
+        for: effectivePreferredEngine,
         after: .shortcutSetupCompleted
       )
       refreshAvailability()
-    }
-
-    func downloadModel() {
-      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        runModelOperation(operation: { try await $0.download() })
-      #endif
-    }
-
-    func repairModel() {
-      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        runModelOperation(
-          showsRepairStatus: true,
-          operation: { try await $0.repair() }
-        )
-      #endif
-    }
-
-    func updateModel() {
-      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        runModelOperation(operation: { try await $0.update() })
-      #endif
-    }
-
-    func deleteModel() {
-      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        runModelOperation(
-          operation: { try await $0.deleteModel() },
-          onSuccess: { [weak self] in
-            self?.appState?.updatePreferences { $0.dictationSpeechEngine = .standard }
-            self?.synchronizePreferences()
-          }
-        )
-      #endif
-    }
-
-    func cancelModelOperation() {
-      modelOperation?.cancel()
-    }
-
-    func clearModelError() {
-      modelError = nil
     }
 
     func shutdown() async {
@@ -790,11 +780,9 @@
       }
       shutdownCount += 1
       invalidateCapsuleReturn()
-      let modelOperations = Array(modelOperations.values)
       let startupAssessmentTask = startupAssessmentTask
       let initialLoadSynchronizationTask = initialLoadSynchronizationTask
       let terminalSynchronizationTask = terminalSynchronizationTask
-      modelOperations.forEach { $0.cancel() }
       startupAssessmentTask?.cancel()
       initialLoadSynchronizationTask?.cancel()
       terminalSynchronizationTask?.cancel()
@@ -814,9 +802,6 @@
         await coordinator.cancel()
         await coordinator.waitForTerminal()
         await shortcutController.uninstall()
-        for modelOperation in modelOperations {
-          await modelOperation.value
-        }
         await startupAssessmentTask?.value
         await initialLoadSynchronizationTask?.value
         await terminalSynchronizationTask?.value
@@ -834,11 +819,8 @@
       {
         appState.updatePreferences { $0.dictationSpeechEngine = .standard }
       }
-      if
-        modelStateAssessed,
-        appState.preferences.dictationSpeechEngine == .enhancedLocal,
-        !enhancedIsReady()
-      {
+      if appState.preferences.dictationSpeechEngine == .enhancedLocal,
+         !admittedModelSettingsViewModel.presentation.allowsEnhancedPreference {
         appState.updatePreferences { $0.dictationSpeechEngine = .standard }
       }
 
@@ -874,8 +856,7 @@
         case .arming:
           captureEngine =
             captureEngine
-            ?? appState?.preferences.dictationSpeechEngine
-            ?? .standard
+            ?? effectivePreferredEngine
           captureReachedListening = false
         case .listening(_, let engine):
           captureEngine = engine
@@ -1048,70 +1029,6 @@
       }
     }
 
-    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-      @discardableResult
-      func runModelOperation(
-      showsRepairStatus: Bool = false,
-      operation: @escaping @MainActor (DictationModelCapability) async throws -> Void,
-      onSuccess: @escaping @MainActor () -> Void = {}
-    ) -> Task<Void, Never> {
-      guard CleanDictationFeatures.enhancedLocalCandidateEnabled else {
-        return Task {}
-      }
-      modelOperation?.cancel()
-      let operationID = UUID()
-      modelOperationID = operationID
-      let owner = CapsuleOwner.model(operationID)
-      if showsRepairStatus {
-        activeModelRepairOwner = owner
-        if appState?.preferences.dictationCapsuleEnabled == true {
-          showCapsule(.repairingModel, owner: owner)
-        }
-      }
-      let task = Task { @MainActor [weak self, modelManager] in
-        defer {
-          if self?.activeModelRepairOwner == owner {
-            self?.activeModelRepairOwner = nil
-          }
-          self?.modelOperationDidFinish(operationID)
-        }
-        do {
-          try await operation(modelManager)
-          guard self?.modelOperationID == operationID else { return }
-          onSuccess()
-          self?.modelError = nil
-          if showsRepairStatus {
-            self?.showIdleCapsule(ifOwnedBy: owner)
-          }
-        } catch is CancellationError {
-          guard self?.modelOperationID == operationID else { return }
-          if showsRepairStatus {
-            self?.showIdleCapsule(ifOwnedBy: owner)
-          }
-        } catch ModelDownloadError.cancelled {
-          guard self?.modelOperationID == operationID else { return }
-          if showsRepairStatus {
-            self?.showIdleCapsule(ifOwnedBy: owner)
-          }
-        } catch {
-          guard self?.modelOperationID == operationID else { return }
-          self?.modelError = error.localizedDescription
-          if
-            showsRepairStatus,
-            self?.appState?.preferences.dictationCapsuleEnabled == true,
-            self?.capsuleOwner == owner
-          {
-            self?.showCapsule(.failed("Enhanced model repair failed."), owner: owner)
-            self?.scheduleIdle(after: Self.failureCapsuleDuration, owner: owner)
-          }
-        }
-      }
-      modelOperation = task
-      modelOperations[operationID] = task
-      return task
-      }
-    #endif
-
     private static func shortcutMessage(
       _ error: GlobalHoldShortcut.RegistrationError
     ) -> String {
@@ -1244,12 +1161,6 @@
       case .idle, .saved, .failed:
         break
       }
-      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        if let activeModelRepairOwner {
-          showCapsule(.repairingModel, owner: activeModelRepairOwner)
-          return
-        }
-      #endif
       showIdleCapsule()
     }
 
@@ -1345,19 +1256,11 @@
       capsuleController.dismiss()
     }
 
-    private func modelOperationDidFinish(_ operationID: UUID) {
-      modelOperations.removeValue(forKey: operationID)
-      guard modelOperationID == operationID else { return }
-      modelOperation = nil
-      modelOperationID = nil
-    }
-
     private func refreshAvailability() {
       availability = availabilityProvider()
     }
 
     deinit {
-      modelOperations.values.forEach { $0.cancel() }
       capsuleReturnTask?.cancel()
       startupAssessmentTask?.cancel()
       initialLoadSynchronizationTask?.cancel()
@@ -1377,6 +1280,28 @@
         await shortcutController.uninstall()
         capsuleController.dismiss()
       }
+    }
+
+    private var effectivePreferredEngine: DictationSpeechEngine {
+      Self.effectiveEngine(
+        preference: appState?.preferences.dictationSpeechEngine,
+        presentation: admittedModelSettingsViewModel.presentation
+      )
+    }
+
+    static func effectiveEngine(
+      preference _: DictationSpeechEngine?,
+      presentation: AdmittedModelSettingsPresentation,
+      enhancedRuntimeHealthy: Bool = true
+    ) -> DictationSpeechEngine {
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+      guard presentation.allowsEnhancedPreference, enhancedRuntimeHealthy else {
+        return .standard
+      }
+      return .enhancedLocal
+      #else
+      return .standard
+      #endif
     }
   }
 

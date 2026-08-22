@@ -36,132 +36,31 @@
     }
   }
 
-  #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-    enum DictationModelAction: Equatable {
-    case download
-    case cancel
-    case repair
-    case delete
-    case update
-
-    var title: String {
-      switch self {
-      case .download: "Download Enhanced Model"
-      case .cancel: "Cancel"
-      case .repair: "Repair"
-      case .delete: "Delete"
-      case .update: "Update"
-      }
-    }
-    }
-
-    struct DictationModelConsentPresentation: Equatable {
-    let downloadSize: String
-    let installedSize: String
-    let requirement: String
-    let language: String
-    let attribution: String
-    let privacyCopy: String
-
-    static let standard = Self(
-      downloadSize: "442.9 MiB",
-      installedSize: "442.9 MiB",
-      requirement: "Apple silicon",
-      language: "English",
-      attribution: "Parakeet TDT 0.6B V2 by NVIDIA, adapted for Core ML by FluidInference.",
-      privacyCopy:
-        "Fleck downloads model files only after you confirm. It does not upload audio, transcripts, notes, titles, history, routing inputs, or other dictation data."
-    )
-    }
-
-    struct DictationSettingsPresentation {
-    let selectedEngine: DictationSpeechEngine
-    let enhancedChoiceEnabled: Bool
-    let primaryAction: DictationModelAction?
-    let secondaryAction: DictationModelAction?
-    let downloadProgress: Double?
-    let statusCopy: String
-    let architectureCopy: String?
-
-    init(
-      preferences: AppPreferences,
-      modelState: EnhancedModelState,
-      isArchitectureSupported: Bool,
-      enhancedIsReady: Bool
-    ) {
-      enhancedChoiceEnabled = isArchitectureSupported && enhancedIsReady
-      selectedEngine =
-        preferences.dictationSpeechEngine == .enhancedLocal && enhancedChoiceEnabled
-        ? .enhancedLocal : .standard
-      architectureCopy =
-        isArchitectureSupported ? nil : "Enhanced dictation requires Apple silicon."
-
-      switch modelState {
-      case .notInstalled:
-        primaryAction = isArchitectureSupported ? .download : nil
-        secondaryAction = nil
-        downloadProgress = nil
-        statusCopy = "Not Installed"
-      case .downloading(let progress):
-        primaryAction = .cancel
-        secondaryAction = nil
-        downloadProgress = progress
-        statusCopy = "Downloading"
-      case .verifying:
-        primaryAction = nil
-        secondaryAction = nil
-        downloadProgress = nil
-        statusCopy = "Verifying"
-      case .installing:
-        primaryAction = nil
-        secondaryAction = nil
-        downloadProgress = nil
-        statusCopy = "Installing"
-      case .ready:
-        primaryAction = .delete
-        secondaryAction = nil
-        downloadProgress = nil
-        statusCopy = "Ready"
-      case .updateAvailable:
-        primaryAction = .update
-        secondaryAction = .delete
-        downloadProgress = nil
-        statusCopy = "Update Available"
-      case .repairRequired(let message):
-        primaryAction = isArchitectureSupported ? .repair : nil
-        secondaryAction = nil
-        downloadProgress = nil
-        statusCopy = message
-      case .removing:
-        primaryAction = nil
-        secondaryAction = nil
-        downloadProgress = nil
-        statusCopy = "Removing"
-      }
-    }
-    }
-  #endif
-
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var runtime: DictationRuntime
-    @ObservedObject private var modelManager: DictationModelCapability
+    @ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
+    @ObservedObject private var personalDictionarySettingsViewModel:
+      PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     @State private var selectedSection = SettingsSection.appearance
-    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-      @State private var showsModelConsent = false
-      @State private var showsModelDeleteConfirmation = false
-    #endif
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
     @State private var recordingSelection = SettingsShortcutRecordingState()
+    @State private var personalDictionaryPreferredForm = ""
+    @State private var personalDictionaryAliases = ""
     @Namespace private var selectedSectionHighlight
 
     init(runtime: DictationRuntime) {
       self.runtime = runtime
-      _modelManager = ObservedObject(wrappedValue: runtime.modelManager)
+      _admittedModelSettingsViewModel = ObservedObject(
+        wrappedValue: runtime.admittedModelSettingsViewModel
+      )
+      _personalDictionarySettingsViewModel = ObservedObject(
+        wrappedValue: runtime.personalDictionarySettingsViewModel
+      )
       _historyController = ObservedObject(wrappedValue: runtime.historyController)
     }
 
@@ -194,33 +93,14 @@
       .onDisappear { recordingSelection.cancel() }
       .task {
         await runtime.awaitStartupAssessment()
+        await admittedModelSettingsViewModel.refresh()
+        await personalDictionarySettingsViewModel.load()
         recoveryActions = runtime.permissionRecoveryActions()
         microphones = DictationMicrophoneOption.available()
         runtime.preferencesDidChange()
         await appState.refreshAgentProfiles()
         appState.refreshAgentActivity()
       }
-      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-      .sheet(isPresented: $showsModelConsent) {
-        ModelConsentView {
-          showsModelConsent = false
-        } onConfirm: {
-          showsModelConsent = false
-          runModelOperation(.download)
-        }
-      }
-      .confirmationDialog(
-        "Delete the Enhanced model?",
-        isPresented: $showsModelDeleteConfirmation
-      ) {
-        Button("Delete Model", role: .destructive) {
-          runModelOperation(.delete)
-        }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        Text("Enhanced dictation returns to Standard. You can download the model again later.")
-      }
-      #endif
       .confirmationDialog(
         "Clear all dictation history?",
         isPresented: $showsHistoryClearConfirmation
@@ -237,28 +117,19 @@
       .alert(
         "Dictation",
         isPresented: Binding(
-          get: {
-            runtime.modelError != nil
-              || historyController.errorMessage != nil
-          },
+          get: { historyController.errorMessage != nil },
           set: {
             if !$0 {
-              runtime.clearModelError()
               historyController.errorMessage = nil
             }
           }
         )
       ) {
         Button("OK") {
-          runtime.clearModelError()
           historyController.errorMessage = nil
         }
       } message: {
-        Text(
-          runtime.modelError
-            ?? historyController.errorMessage
-            ?? ""
-        )
+        Text(historyController.errorMessage ?? "")
       }
     }
 
@@ -414,17 +285,6 @@
       }
     }
 
-    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-      private var dictationPresentation: DictationSettingsPresentation {
-        DictationSettingsPresentation(
-          preferences: appState.preferences,
-          modelState: modelManager.state,
-          isArchitectureSupported: modelManager.isArchitectureSupported,
-          enhancedIsReady: modelManager.verifiedLoadState.isReady
-        )
-      }
-    #endif
-
     @ViewBuilder
     private var dictation: some View {
       Section("Availability") {
@@ -453,79 +313,9 @@
             }
           }
         }
-        #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-          if let architectureCopy = dictationPresentation.architectureCopy {
-            Label(architectureCopy, systemImage: "desktopcomputer.trianglebadge.exclamationmark")
-              .foregroundStyle(.secondary)
-          }
-        #endif
       }
 
-      Section("Speech Engine") {
-        Picker("Engine", selection: dictationEngineBinding) {
-          Text("Standard — Apple Speech").tag(DictationSpeechEngine.standard)
-          #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-          Text("Enhanced Local")
-            .tag(DictationSpeechEngine.enhancedLocal)
-            .disabled(!dictationPresentation.enhancedChoiceEnabled)
-          #endif
-        }
-        .pickerStyle(.radioGroup)
-
-        #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        HStack {
-          Text("Enhanced model")
-          Spacer()
-          Text(dictationPresentation.statusCopy)
-            .foregroundStyle(.secondary)
-        }
-
-        if let progress = dictationPresentation.downloadProgress {
-          ProgressView(value: progress)
-            .accessibilityLabel("Enhanced model download")
-            .accessibilityValue(progress.formatted(.percent.precision(.fractionLength(0))))
-        }
-
-        HStack {
-          if let action = dictationPresentation.primaryAction {
-            Button(action.title) {
-              handleModelAction(action)
-            }
-          }
-          if let action = dictationPresentation.secondaryAction {
-            Button(action.title, role: action == .delete ? .destructive : nil) {
-              handleModelAction(action)
-            }
-          }
-        }
-
-        let consent = DictationModelConsentPresentation.standard
-        LabeledContent("Download size", value: consent.downloadSize)
-        LabeledContent("Installed size", value: consent.installedSize)
-        LabeledContent("Requirement", value: consent.requirement)
-        LabeledContent("Language", value: consent.language)
-        Text(consent.attribution)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        HStack {
-          Link(
-            "Model attribution",
-            destination: URL(
-              string:
-                "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml"
-            )!
-          )
-          Button("Third-Party Notices") {
-            if let notices = Bundle.module.url(
-              forResource: "ThirdPartyNotices",
-              withExtension: "md"
-            ) {
-              NSWorkspace.shared.open(notices)
-            }
-          }
-        }
-        #endif
-      }
+      models
 
       Section("Controls") {
         Picker("Modifier key", selection: dictationModifierBinding) {
@@ -583,10 +373,9 @@
         }
       }
 
+      personalDictionary
+
       Section("Privacy") {
-        #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-        Text(DictationModelConsentPresentation.standard.privacyCopy)
-        #endif
         Text(
           "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
         )
@@ -595,25 +384,136 @@
       .foregroundStyle(.secondary)
     }
 
-    private var dictationEngineBinding: Binding<DictationSpeechEngine> {
-      Binding(
-        get: {
-          #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-            dictationPresentation.selectedEngine
-          #else
-            .standard
-          #endif
-        },
-        set: { engine in
-          #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-          guard engine == .standard || dictationPresentation.enhancedChoiceEnabled else { return }
-          #else
-            guard engine == .standard else { return }
-          #endif
-          appState.updatePreferences { $0.dictationSpeechEngine = engine }
-          runtime.preferencesDidChange()
+    private var personalDictionary: some View {
+      Section("Personal Dictionary") {
+        TextField("Preferred form", text: $personalDictionaryPreferredForm)
+          .accessibilityLabel("Preferred form")
+        TextField("Aliases", text: $personalDictionaryAliases)
+          .accessibilityLabel("Aliases")
+        Text("Separate aliases with commas or new lines.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+        Button("Add Entry") {
+          let preferredForm = personalDictionaryPreferredForm
+          let aliases = personalDictionaryAliases
+          Task { @MainActor in
+            await personalDictionarySettingsViewModel.add(
+              preferredForm: preferredForm,
+              aliases: aliases
+            )
+            guard personalDictionarySettingsViewModel.errorMessage == nil else { return }
+            personalDictionaryPreferredForm = ""
+            personalDictionaryAliases = ""
+          }
         }
-      )
+        .buttonStyle(.borderedProminent)
+        .disabled(
+          personalDictionaryPreferredForm
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        )
+        .accessibilityHint("Adds the preferred form and its aliases to the dictionary")
+
+        if let errorMessage = personalDictionarySettingsViewModel.errorMessage {
+          Label(errorMessage, systemImage: "exclamationmark.triangle")
+            .foregroundStyle(.red)
+            .font(.caption)
+        }
+
+        if personalDictionarySettingsViewModel.entries.isEmpty {
+          Text("No entries yet.")
+            .foregroundStyle(.secondary)
+        } else {
+          ForEach(personalDictionarySettingsViewModel.entries) { entry in
+            HStack(alignment: .firstTextBaseline) {
+              Toggle(isOn: Binding(
+                get: { entry.isEnabled },
+                set: { enabled in
+                  Task { @MainActor in
+                    await personalDictionarySettingsViewModel.setEnabled(
+                      enabled,
+                      id: entry.id
+                    )
+                  }
+                }
+              )) {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(entry.preferredForm)
+                  if !entry.aliases.isEmpty {
+                    Text(entry.aliases.joined(separator: ", "))
+                      .font(.caption)
+                      .foregroundStyle(.secondary)
+                  }
+                }
+              }
+              .accessibilityLabel("Enable \(entry.preferredForm)")
+              .accessibilityValue(entry.isEnabled ? "Enabled" : "Disabled")
+
+              Button("Delete", role: .destructive) {
+                Task { @MainActor in
+                  await personalDictionarySettingsViewModel.delete(id: entry.id)
+                }
+              }
+              .accessibilityLabel("Delete \(entry.preferredForm)")
+            }
+          }
+        }
+      }
+    }
+
+    private var models: some View {
+      let presentation: AdmittedModelSettingsPresentation =
+        admittedModelSettingsViewModel.presentation
+
+      return Section("Models") {
+        LabeledContent("Dictation") {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Model: \(presentation.modelLabel)")
+              .font(.caption.weight(.medium))
+            if presentation.showsStatus {
+              Text(presentation.compactStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            if presentation.showsDetail {
+              Text(presentation.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let progress = presentation.progress {
+              ProgressView(value: progress)
+                .accessibilityLabel("Enhanced local dictation installation progress")
+                .accessibilityValue(presentation.progressAccessibilityValue ?? "")
+            }
+            if let action = presentation.primaryAction,
+               let label = presentation.primaryActionLabel {
+              Button(label) { perform(action) }
+                .focusable(presentation.isKeyboardFocusable)
+                .buttonStyle(.borderedProminent)
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel(presentation.accessibilityLabel)
+          .accessibilityValue(presentation.accessibilityValue)
+        }
+
+        LabeledContent("Cleanup", value: cleanupModelLabel)
+          .accessibilityLabel("Cleanup")
+          .accessibilityValue(cleanupModelLabel)
+      }
+    }
+
+    private var cleanupModelLabel: String {
+      switch runtime.availability.foundationModelAvailability {
+      case .available:
+        "Apple On-Device"
+      default:
+        "Deterministic Fallback"
+      }
     }
 
     private var dictationModifierPresentation: DictationModifierSettingsPresentation {
@@ -659,35 +559,9 @@
       )
     }
 
-    #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-      private func handleModelAction(_ action: DictationModelAction) {
-      switch action {
-      case .download:
-        showsModelConsent = true
-      case .cancel:
-        runtime.cancelModelOperation()
-      case .delete:
-        showsModelDeleteConfirmation = true
-      case .repair, .update:
-        runModelOperation(action)
-      }
-      }
-
-      private func runModelOperation(_ action: DictationModelAction) {
-      switch action {
-      case .download:
-        runtime.downloadModel()
-      case .repair:
-        runtime.repairModel()
-      case .update:
-        runtime.updateModel()
-      case .delete:
-        runtime.deleteModel()
-      case .cancel:
-        runtime.cancelModelOperation()
-      }
-      }
-    #endif
+    private func perform(_ action: AdmittedModelSettingsAction) {
+      admittedModelSettingsViewModel.perform(action)
+    }
 
     private func preferenceBinding<Value>(_ keyPath: WritableKeyPath<AppPreferences, Value>)
       -> Binding<Value>
@@ -811,50 +685,5 @@
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
   }
-
-  #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-    private struct ModelConsentView: View {
-    let onCancel: () -> Void
-    let onConfirm: () -> Void
-
-    private let consent = DictationModelConsentPresentation.standard
-
-    var body: some View {
-      VStack(alignment: .leading, spacing: 16) {
-        Text("Download Enhanced Model?")
-          .font(.title2.weight(.semibold))
-        Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
-          GridRow {
-            Text("Download")
-            Text(consent.downloadSize)
-          }
-          GridRow {
-            Text("Installed")
-            Text(consent.installedSize)
-          }
-          GridRow {
-            Text("Requirement")
-            Text(consent.requirement)
-          }
-          GridRow {
-            Text("Language")
-            Text(consent.language)
-          }
-        }
-        Text(consent.attribution)
-        Text(consent.privacyCopy)
-          .foregroundStyle(.secondary)
-        HStack {
-          Spacer()
-          Button("Cancel", role: .cancel, action: onCancel)
-          Button("Download", action: onConfirm)
-            .keyboardShortcut(.defaultAction)
-        }
-      }
-      .padding(24)
-      .frame(width: 460)
-    }
-    }
-  #endif
 
 #endif

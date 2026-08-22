@@ -96,6 +96,7 @@ swift build -c release --product Fleck
 swift build -c release --product fleck-agent
 Scripts/audit-agent-boundary.sh
 Scripts/check-release-size.sh .build/release/Fleck
+Scripts/test-release-model-asset-exclusion.sh
 Scripts/validate-macos.sh
 Scripts/test-enhanced-candidate-pin.sh
 Scripts/resolve-enhanced-candidate.sh .build-candidate \
@@ -239,6 +240,7 @@ swift package resolve
 swift test --disable-automatic-resolution --no-parallel
 swift build -c release
 Scripts/check-release-size.sh
+Scripts/test-release-model-asset-exclusion.sh
 Scripts/validate-macos.sh
 git diff --check
 git status --short
@@ -250,8 +252,9 @@ profleck an executable path inside `.app` to the enclosing bundle, including
 when an executable symlink outside the bundle resolves into it. It resolves
 command-line directory symlinks to a physical root, inspects nested symlink
 targets without following arbitrary cycles, fails closed on traversal errors,
-and scans case-insensitively for `.mlmodel`, `.mlpackage`, `.mlmodelc`, exact
-`coremldata.bin`/`weight.bin`/`weights.bin` names, and `.bin` files under model
+and scans case-insensitively for `.mlmodel`, `.mlpackage`, `.mlmodelc`,
+`.safetensors`, `.gguf`, and `.onnx` files anywhere in the artifact; exact
+`coremldata.bin`/`weight.bin`/`weights.bin` names; and `.bin` files under model
 bundle or model directory paths relative to each artifact or queued scan root.
 When a model-named symlink resolves to a neutral external directory, the
 logical model context follows that queued physical root.
@@ -260,6 +263,15 @@ ancestor happens to be named `models`. The same gate restricts searches to
 Swift sources accepted through regular files, file symlinks, or directory
 symlinks under `Sources`; resolves and deduplicates their physical targets;
 and fails closed on broken links, cycles, or traversal errors.
+
+`Scripts/test-release-model-asset-exclusion.sh` builds a temporary minimal
+`.app` with `Fleck` and `fleck-agent` fixtures. It separately verifies
+case-insensitive neutral-path rejection for each new suffix, rejection through
+a symlinked directory, and acceptance of an unrelated neutral `.bin`; no
+fixture files are kept in the repository. Candidate SDK/runtime symbol checks
+use these additional case-insensitive `nm` substrings: `Qwen`, `SherpaOnnx`,
+`MLX` (including the `mlx_lm` prefix), `Nemotron`, `nemo_speech`, `whisper_`,
+`ggml_`, and `llama_`. Broad tokens such as `model` and `onnx` are not used.
 
 For source assertions, the gate generates and compiles a temporary structural
 inspector using the active Xcode toolchain's host `SwiftSyntax`, `SwiftParser`,

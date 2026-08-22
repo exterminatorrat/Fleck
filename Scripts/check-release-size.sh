@@ -76,7 +76,8 @@ is_forbidden_model_path() {
   path="$(lowercase "$path")"
   filename="${path##*/}"
   case "$filename" in
-    *.mlmodel|*.mlpackage|*.mlmodelc|coremldata.bin|weight.bin|weights.bin)
+    *.mlmodel|*.mlpackage|*.mlmodelc|*.safetensors|*.gguf|*.onnx|\
+      coremldata.bin|weight.bin|weights.bin)
       return 0
       ;;
   esac
@@ -239,7 +240,8 @@ while (( scan_index < ${#scan_roots[@]} )); do
   set +e
   find "$scan_root" \
     \( -type l -o -iname '*.mlmodel' -o -iname '*.mlpackage' \
-      -o -iname '*.mlmodelc' -o -iname '*.bin' \
+      -o -iname '*.mlmodelc' -o -iname '*.safetensors' \
+      -o -iname '*.gguf' -o -iname '*.onnx' -o -iname '*.bin' \
       -o -iname 'EnhancedModelManifest.json' \
       -o -iname 'ThirdPartyNotices.md' \) \
     -print0 >"$scan_output" 2>"$scan_errors"
@@ -1121,7 +1123,15 @@ for forbidden_sdk_symbol in \
   'FluidEnhancedSpeech' \
   'EnhancedModelManager' \
   'EnhancedModelManifest' \
-  'URLSessionModelDownloader'
+  'URLSessionModelDownloader' \
+  'Qwen' \
+  'SherpaOnnx' \
+  'MLX' \
+  'Nemotron' \
+  'nemo_speech' \
+  'whisper_' \
+  'ggml_' \
+  'llama_'
 do
   if grep -Fiq "$forbidden_sdk_symbol" "$scan_output"; then
     printf 'error: release executable contains candidate SDK symbol: %s\n' \

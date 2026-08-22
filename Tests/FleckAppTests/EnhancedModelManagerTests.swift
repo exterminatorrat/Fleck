@@ -7,6 +7,42 @@ import Testing
 
 @testable import FleckApp
 
+private let testSourceRepository = URL(
+  string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml"
+)!
+
+@MainActor
+private func testArtifactIdentity(
+  for manifest: EnhancedModelManifest
+) -> EnhancedModelArtifactIdentity {
+  EnhancedModelArtifactIdentity(
+    sourceRepository: testSourceRepository,
+    modelID: manifest.modelID,
+    revision: manifest.revision,
+    license: "test-license",
+    runtimeABI: "test-runtime",
+    conversion: "test-conversion",
+    quantization: "test-quantization",
+    files: manifest.files.map {
+      .init(path: $0.path, byteCount: $0.byteCount, sha256: $0.sha256)
+    },
+    downloadBytes: manifest.totalByteCount,
+    installedBytes: manifest.totalByteCount,
+    requiredCapacityBytes: EnhancedModelManager.requiredAvailableCapacity
+  )
+}
+
+private func testRemoteURL(
+  for file: EnhancedModelFile,
+  manifest: EnhancedModelManifest
+) throws -> URL {
+  try EnhancedModelManager.remoteURL(
+    for: file,
+    sourceRepository: testSourceRepository,
+    revision: manifest.revision
+  )
+}
+
 @Suite(.serialized)
 struct EnhancedModelManagerTests {
   @Test @MainActor func missingInstallIsNotInstalled() async throws {
@@ -51,6 +87,7 @@ struct EnhancedModelManagerTests {
     let manager = EnhancedModelManager(
       modelRootURL: root,
       manifest: testManifest,
+      artifactIdentity: testArtifactIdentity(for: testManifest),
       candidateEnabled: true,
       capacityProvider: {
         capacity.increment()
@@ -145,7 +182,7 @@ struct EnhancedModelManagerTests {
       let fixture = try Fixture()
       defer { fixture.remove() }
       let data = validResumeData()
-      let remoteURL = try EnhancedModelManager.remoteURL(
+      let remoteURL = try testRemoteURL(
         for: testManifest.files[0],
         manifest: testManifest
       )
@@ -187,7 +224,7 @@ struct EnhancedModelManagerTests {
       withIntermediateDirectories: true
     )
     try validResumeData().write(to: resumeFile)
-    let expectedURL = try EnhancedModelManager.remoteURL(
+    let expectedURL = try testRemoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
@@ -207,7 +244,7 @@ struct EnhancedModelManagerTests {
 
   @Test func productionResumeValidatorRejectsEverySyntheticPlist() throws {
     let downloader = URLSessionModelDownloader()
-    let pinnedURL = try EnhancedModelManager.remoteURL(
+    let pinnedURL = try testRemoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
@@ -262,7 +299,7 @@ struct EnhancedModelManagerTests {
   @Test func productionResumeTokenIsConsumedWhenIssued() throws {
     let downloader = URLSessionModelDownloader()
     let data = validResumeData()
-    let pinnedURL = try EnhancedModelManager.remoteURL(
+    let pinnedURL = try testRemoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
@@ -286,7 +323,7 @@ struct EnhancedModelManagerTests {
     let fixture = try Fixture()
     defer { fixture.remove() }
     let data = validResumeData()
-    let remoteURL = try EnhancedModelManager.remoteURL(
+    let remoteURL = try testRemoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
@@ -310,6 +347,7 @@ struct EnhancedModelManagerTests {
     let restartedManager = EnhancedModelManager(
       modelRootURL: fixture.root,
       manifest: testManifest,
+      artifactIdentity: testArtifactIdentity(for: testManifest),
       candidateEnabled: true,
       capacityProvider: { .max },
       architectureProvider: { true },
@@ -326,7 +364,7 @@ struct EnhancedModelManagerTests {
     let fixture = try Fixture()
     defer { fixture.remove() }
     let data = validResumeData()
-    let remoteURL = try EnhancedModelManager.remoteURL(
+    let remoteURL = try testRemoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
@@ -360,6 +398,7 @@ struct EnhancedModelManagerTests {
     let restartedManager = EnhancedModelManager(
       modelRootURL: fixture.root,
       manifest: testManifest,
+      artifactIdentity: testArtifactIdentity(for: testManifest),
       candidateEnabled: true,
       capacityProvider: { .max },
       architectureProvider: { true },
@@ -430,6 +469,37 @@ struct EnhancedModelManagerTests {
     #expect(FileManager.default.fileExists(atPath: installedFile.path))
     #expect(filesBelow(fixture.stagingURL).isEmpty)
     #expect(fixture.manager.state == .ready)
+  }
+
+  @Test @MainActor
+  func customLocalRepositoryNameIsUsedForVerifiedInstallAndLoad() async throws {
+    let fixture = try Fixture(localRepositoryName: "parakeet-tdt-0.6b-v2")
+    defer { fixture.remove() }
+    let expectedRemoteURL = try testRemoteURL(
+      for: testManifest.files[0],
+      manifest: testManifest
+    )
+    fixture.transport.handler = { receivedURL, _, _ in
+      #expect(receivedURL == expectedRemoteURL)
+      return ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+
+    try await fixture.manager.download()
+
+    #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL)
+    #expect(
+      fixture.manager.verifiedLoadState
+        == .ready(repositoryURL: fixture.repositoryURL)
+    )
+    #expect(FileManager.default.fileExists(atPath: fixture.fileURL.path))
+
+    await fixture.manager.refreshState()
+
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL)
   }
 
   @Test @MainActor func deleteRemovesOnlyOwnedModelTrees() async throws {
@@ -896,6 +966,7 @@ struct EnhancedModelManagerTests {
         .appendingPathComponent("nested", isDirectory: true)
         .appendingPathComponent("DictationModels", isDirectory: true),
       manifest: testManifest,
+      artifactIdentity: testArtifactIdentity(for: testManifest),
       candidateEnabled: true,
       capacityProvider: { .max },
       architectureProvider: { true },
@@ -948,7 +1019,7 @@ struct EnhancedModelManagerTests {
       files: [file]
     )
 
-    let url = try EnhancedModelManager.remoteURL(for: file, manifest: manifest)
+    let url = try testRemoteURL(for: file, manifest: manifest)
 
     #expect(url.host == "huggingface.co")
     #expect(url.path.contains("/resolve/immutable-revision/folder/a file#1.bin"))
@@ -961,7 +1032,7 @@ struct EnhancedModelManagerTests {
     let file = EnhancedModelFile(path: path, byteCount: 0, sha256: sha256(Data()))
 
     #expect(throws: EnhancedModelManagerError.self) {
-      try EnhancedModelManager.remoteURL(for: file, manifest: testManifest)
+      try testRemoteURL(for: file, manifest: testManifest)
     }
   }
 
@@ -999,9 +1070,12 @@ struct EnhancedModelManagerTests {
     ("huggingface.co", true),
     ("cdn.huggingface.co", true),
     ("transfer.xethub.hf.co", true),
+    ("us.aws.cdn.hf.co", true),
     ("evil-huggingface.co", false),
     ("huggingface.co.evil.example", false),
     ("xethub.hf.co.evil.example", false),
+    ("aws.cdn.hf.co", false),
+    ("us.aws.cdn.hf.co.evil.example", false),
   ])
   func redirectHostAllowlistUsesDNSLabels(host: String, allowed: Bool) {
     #expect(URLSessionModelDownloader.isAllowedRedirectHost(host) == allowed)
@@ -1011,8 +1085,11 @@ struct EnhancedModelManagerTests {
     ("https://huggingface.co/file", true),
     ("https://cdn.huggingface.co/file", true),
     ("https://transfer.xethub.hf.co/file", true),
+    ("https://us.aws.cdn.hf.co/file", true),
     ("http://huggingface.co/file", false),
     ("https://evil-huggingface.co/file", false),
+    ("https://aws.cdn.hf.co/file", false),
+    ("https://us.aws.cdn.hf.co.evil.example/file", false),
   ])
   func redirectsRequireHTTPSAndAnAllowedHost(value: String, allowed: Bool) {
     #expect(
@@ -1051,11 +1128,13 @@ private let testManifest = EnhancedModelManifest(
 private final class Fixture {
   let root: URL
   let manifest: EnhancedModelManifest
+  let localRepositoryName: String
   let transport: TestTransport
   let manager: EnhancedModelManager
 
   init(
     manifest: EnhancedModelManifest = testManifest,
+    localRepositoryName: String? = nil,
     capacity: Int64 = .max,
     trustedManifests: [EnhancedModelManifest]? = nil,
     assessmentDidComplete: @escaping @Sendable () -> Void = {},
@@ -1065,10 +1144,14 @@ private final class Fixture {
   ) throws {
     root = temporaryRoot()
     self.manifest = manifest
+    let selectedLocalRepositoryName = localRepositoryName
+      ?? manifest.modelID.split(separator: "/").last.map(String.init)!
+    self.localRepositoryName = selectedLocalRepositoryName
     transport = TestTransport()
     manager = EnhancedModelManager(
       modelRootURL: root,
       manifest: manifest,
+      artifactIdentity: testArtifactIdentity(for: manifest),
       trustedManifests: trustedManifests,
       candidateEnabled: true,
       capacityProvider: { capacity },
@@ -1078,7 +1161,8 @@ private final class Fixture {
       assessmentDidComplete: assessmentDidComplete,
       cleanupWillBegin: cleanupWillBegin,
       removalWillBegin: removalWillBegin,
-      resumeAuthenticationKeyProvider: { resumeAuthenticationKey }
+      resumeAuthenticationKeyProvider: { resumeAuthenticationKey },
+      localRepositoryName: selectedLocalRepositoryName
     )
   }
 
@@ -1101,7 +1185,7 @@ private final class Fixture {
   var resumeFileURL: URL {
     resumeURL
       .appendingPathComponent(manifest.revision, isDirectory: true)
-      .appendingPathComponent(manifest.modelID.split(separator: "/").last.map(String.init)!)
+      .appendingPathComponent(localRepositoryName)
       .appendingPathComponent(manifest.files[0].path + ".resumeData")
   }
 
@@ -1116,7 +1200,7 @@ private final class Fixture {
   func repositoryURL(for manifest: EnhancedModelManifest) -> URL {
     installedURL
       .appendingPathComponent(manifest.revision, isDirectory: true)
-      .appendingPathComponent(manifest.modelID.split(separator: "/").last.map(String.init)!)
+      .appendingPathComponent(localRepositoryName)
   }
 
   func fileURL(for manifest: EnhancedModelManifest) -> URL {

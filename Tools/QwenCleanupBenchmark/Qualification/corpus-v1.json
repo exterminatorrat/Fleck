@@ -1,0 +1,2172 @@
+{
+  "schemaVersion": 1,
+  "corpusID": "fleck-qwen-cleanup-qualification-corpus-v1",
+  "revision": "af49c07-qwen-whisper-final-retained-v1",
+  "expectedCounts": {
+    "byLanguage": {
+      "english": 33,
+      "mandarin": 25,
+      "mixed": 25
+    },
+    "asrByEngine": {
+      "qwen": 36,
+      "whisper": 36
+    },
+    "asrByLanguage": {
+      "english": 24,
+      "mandarin": 24,
+      "mixed": 24
+    },
+    "protectedStress": 11,
+    "total": 83
+  },
+  "cases": [
+    {
+      "id": "qwen-asr-en_us-01",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "One hundred and eight plates of chapati, bong, and Hinduism—fifty-six different edible items like sweet fruits, nuts, dishes, etc.—which are offered to deity—were served to Baba Shyam.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "65c65c2f3f01266d5551076135494c8744b93f802d7ea8ef5c21912c904bb9d5",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-01",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-02",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "Many common formats, EPS family of formats, for example, are equal to or closely approximate this aspect ratio.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "d89869e19fba50ce3e998e6240fb5d470aecae7a1f01ec9058dabc64f86b934d",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-02",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-03",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "The largest tournament of the year takes place in December at the Polo Fields in Las Canitas.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "0fa327ea3a2ee2f24ecc8f168edbe6d058283f19dae2148bcf70804f6f6bc4fe",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-03",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-04",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "The report opens with plea for open debate and the formation of a consensus in the United States about the policy towards the Middle East.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "3d8ddfba77c98faafb92bd3cefe2760949521627395da35259a2b0664ec418e7",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-04",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-05",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "The Arabs also brought Islam to the lands, and it took in a big way in Comoros and Myat.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "417fee0dad20562352aa591b6ed5b1f10752eba60ef2d9f95389e8ba34272191",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-05",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-06",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "She came to this conclusion due to the multitude of positive comments and encouragement sent to her by both female and male individuals urging that contraception medication be considered a medical necessity.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "e1a0d114c4a7be8f01b945397134aa6061abfefee27d06b53f8178baf1248dc5",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-06",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-07",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "Air accidents are common in Iran, which has an aging fleet that is poorly maintained, both for civil and military operations.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "802d85c39741ed508ea6edc51eec0a41826fdf15f9d713d44614731ad6595c5b",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-07",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-08",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "Robin Uppa made the innings highest score: seventy runs in just forty-one balls by hitting eleven fours and two sixes.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "347228b0381efa21d8cb445be239ec3c7073b71af53ea4fb35d9112be2ddb430",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-08",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-09",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "Ancient Roman meals couldn't have included foods that came from Europe, that came to Europe from America or from Asia in later centuries.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "927c771e8c06fe6217c6abc2b094c4195568ac41e05145e411d3d0a061c6fdcc",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-09",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-10",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "Arley Velasquez of Mexico finished 15th in the men's sitting super G. New Zealand's Adam Hall finished 9th in the men's standing super G.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "e85aef051308d5afd533ce01d5c94baea3d9b785b0d0c57e64e3c183e1556b30",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-10",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-11",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "The Spaniards started the colonization period, which lasted for three centuries.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "24c7a270684158bce7990aa97de9f9c2b3a996752a24b4ee973b7ea85dda7090",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-11",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-en_us-12",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "The park covers 19,500 kilometers and is divided in 14 different ecozones, each supporting different wildlife.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "a5957dc0ca5f920cefc62c043e1db3bf3eebb7bf63c4ddd727b2a7cec49c40d3",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-12",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-01",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "咖喱饭菜既可以是干的，也可以是湿的，干湿情况取决于水量多少。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "fa862f5f1f65b37a25e7f6442517b8b209a965f2447cb169899e518f0a5964bf",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-01",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-02",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "滑雪是许多滑雪爱好者的主要旅游活动。这些爱好者有时也被称为滑雪狂人，他们计划整个假期都在某个地点滑雪。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "a372d82814ace5362a35c762095f371a9496c245173c692b9fa54fbf316f4216",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-02",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-03",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "这成了普遍做法，但铁片会使木质的马车轮子磨损更严重。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "c1f8d3b9e74686dceb4a75c1219b3ce66d5bd1ca322b1021e54077614262eada",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-03",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-04",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "然后，拉卡辛格带头唱了《拜赞歌》。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "eba0b68aa12dd62c40f78ea201be03e51f790c1811c8f6b5a646c17a1a9691ed",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-04",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-05",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "亚马逊河也是地球上最宽的河流，有些河段的宽度可达六英里。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "eb0a6184ddd9ae748141c91152ec4254739925e6058e4952a99f14a243346284",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-05",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-06",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "据报道，由于执法人员不在场，比什凯克街道的大规模抢劫持续了一夜。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "eee36a4e6e40cddeb9c886dcfa9f6e1f234924d319f3ab8bade700e797dd97f9",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-06",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-07",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "藏传佛教以佛陀的教义为基础，但通过大乘佛教的普世之爱和印度瑜伽的许多技巧得到了拓展。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "039f8c152695ced4fc6abc8954c41b9deea2421b9f11f198acfda9fc7e4e9f8a",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-07",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-08",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "罗宾·乌萨帕取得了本局的最高分，投出了十一个四分球和两个六分球，仅投出四十一个球便赢得七十分。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "195fc20aebd14c9444b5807de60d3e40dc5cbaf8022fb9cd97ed60b223e86a4f",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-08",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-09",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "如今，科学表明，这种大规模的碳经济再也无法让过去两百万年来支持人类进化发展的生物圈保持稳定的状态。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "aad5dc88eb2301f03f74669f6ef6b1d1290afb565b577aedce0ff6113cf66ed1",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-09",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-10",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "美国总统乔治·沃克·布什对这一公告表示支持。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "efd0f37c756ca8a60bb55dd2d86210bdecc895ac168114fc21c02308884454f5",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-10",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-11",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "全国各地的著名歌手都唱祈祷歌，献给叙利亚美羊。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "9e4a8bc38f90cd6fcfceb00eddf388e908c1bb85ebecf3a123ea6935d4a9ec92",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-11",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-cmn_hans_cn-12",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "学生往往是最挑剔的读者，所以博客作者开始努力提高写作水平，避免受到批判。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "c9951cfec2d8848618a8cda2691d461e1fad7fcf8c305ada844422ba58ca870a",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-12",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-01",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "One hundred and eight plates of chapin bong in Hinduism. Fifty-six different edible items, like sweet fruits, nuts, dishes, etc., which are offered to deity, were served to Baba Shyam. Curry饭菜既可以是干的，也可以是湿的。干湿情况取决于水量多少。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "dbd01634c1338ba7b6b0501cadb65f9fb7870cbf096ad31f161ce876e17a5056",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-01",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-02",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "滑雪是许多滑雪爱好者的主要旅游活动。这些爱好者有时也被称为“滑雪狂人”，他们计划整个假期都在某个地点滑雪。Many common formats, EPS family of formats, for example, are equal to or closely approximate this aspect ratio.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "0dabf7d8b642a4e87b09f44f80ca0bfb691324a1fd57b6dc58d3db0bef2aa6c8",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-02",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-03",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "The largest tournament of the year takes place in December at the Polo Fields in Las Caminas。这成了普遍做法，但铁片会使木质的马车轮子磨损更严重。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "7b816bdeb59534daafa7822b3c4c1b977910afff5a9c707a025519f3c4907720",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-03",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-04",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "Then, Larkins led the charge with the \"Battalion\" song. The report opens with plea for open debate and the formation of a consensus in the United States about the policy towards the Middle East.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "ccf02a512176a4015499384d7669f1167bc2dc6339b70ef0367d0f9335ee428c",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-04",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-05",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "The Arabs also brought Islam to the lands, and it took in a big way in Comoros and Malaya.亚马逊河也是地球上最宽的河流，有些河段的宽度可达六英里。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "e8503377fab6fb3b7cf937c8c52964d97a56536114d5033220533a282cebb33e",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-05",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-06",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "据报道，由于执法人员不在场，比什凯克接到的大规模抢劫持续了一夜。She came to this conclusion due to the multitude of positive comments and encouragement sent to her by both female and male individuals urging that contraception medication be considered a medical necessity.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "fabdcb389228c219df55d5d5925bff0a59b06d18f043bf60b06a9ffd41c5e4e6",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-06",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-07",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "Air accidents are common in Iran, which has an aging fleet that is poorly maintained, both for civil and military operations.藏传佛教以佛陀的教义为基础，但通过大乘佛教的普世之爱和印度瑜伽的许多技巧得到了拓展。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "cce23f1a62a0ba8f21ce9a1ed4bf9427d09d4ead65697b89bfe908d6c3a2effc",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-07",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-08",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "罗宾·乌萨帕取得了本局的最高分，投出了十一个四分球和两个六分球，仅投出四十一个球便赢得七十分。罗宾·乌哈帕made innings high score，70 runs in just 41 balls by hitting 11 fours and two sixes.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "9de730308760aca16368748455b7f7aab42fb6621e541598e59db85c5cfe558e",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-08",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-09",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "Ancient Roman meals couldn't have included foods that came from Europe, that came to Europe from America or from Asia in later centuries.如今，科学表明，这种大规模的碳经济再也无法让过去两百万年来支持人类进化发展的生物圈保持稳定的状态。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "36df3b45fc5f19309c4352d073bcf1648fbcf27badb30e24234c1ed57a4c4598",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-09",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-10",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "美国总统乔治·沃克·布什对这一公告表示支持。阿莱·巴拉斯克在墨西哥完成第15名的男子单打Super G，新泽西的阿德姆·豪尔完成第9名的男子单打Super G。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "7cd49229ef89455347e6b9e84daf1051b8a458e6e1a73486ba00150195abd564",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-10",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-11",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "全国各地的著名歌手都唱祈祷歌，献给叙利亚美阳。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "51ed0ea05ea0e3ec162604bf365c6ca4cbe38f68a048b80d9066161878a8c5ef",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-11",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "qwen-asr-mixed-12",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "学生往往是最挑剔的读者，所以博客作者开始努力提高写作水平，避免受到批判。The park covers 19,500 kilometers and is divided in 14 different ecozones, each supporting different wildlife.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "366b463150e1d4f8fed44ab32baad2d295d55515b867ce22a4007dbf9a1037d9",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "mixed-12",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "qwen",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-01",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " 108 plates of Chap-n-Bong in Hinduism, 56 different edible items like sweet fruits, nuts, dishes, etc. which are offered to deity were served to Baba Shyam.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "65c65c2f3f01266d5551076135494c8744b93f802d7ea8ef5c21912c904bb9d5",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-01",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-02",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " Many common formats, EPS family of formats for example, are equal to or closely approximate this aspect ratio.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "d89869e19fba50ce3e998e6240fb5d470aecae7a1f01ec9058dabc64f86b934d",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-02",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-03",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " The largest tournament of the year takes place in December at the Polo Fields in Las Canitas.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "0fa327ea3a2ee2f24ecc8f168edbe6d058283f19dae2148bcf70804f6f6bc4fe",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-03",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-04",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " The report opens with plea for open debate and the formation of a consensus in the United States about the policy towards the Middle East.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "3d8ddfba77c98faafb92bd3cefe2760949521627395da35259a2b0664ec418e7",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-04",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-05",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " The Arabs also brought it along to the lands and it took in a big way in comoros and mayat.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "417fee0dad20562352aa591b6ed5b1f10752eba60ef2d9f95389e8ba34272191",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-05",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-06",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " She came to this conclusion due to the multitude of positive comments and encouragement sent to her by both female and male individuals urging that contraception medication be considered a medical necessity.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "e1a0d114c4a7be8f01b945397134aa6061abfefee27d06b53f8178baf1248dc5",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-06",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-07",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " Air accidents are common in Iran which has an aging fleet that is poorly maintained both for civil and military operations.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "802d85c39741ed508ea6edc51eec0a41826fdf15f9d713d44614731ad6595c5b",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-07",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-08",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " Robin Ujapa made the innings high score. 70 runs in just 41 balls by hitting 11 forwards and two sixes.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "347228b0381efa21d8cb445be239ec3c7073b71af53ea4fb35d9112be2ddb430",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-08",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-09",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " Ancient Roman meals couldn't have included foods that came to Europe from America or from Asia in later centuries.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "927c771e8c06fe6217c6abc2b094c4195568ac41e05145e411d3d0a061c6fdcc",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-09",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-10",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " Arlie Velazquez of Mexico finished 15th in the Men's Sitting Super G. New Zealand's Adam Hall finished 9th in the Men's Standing Super G.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "e85aef051308d5afd533ce01d5c94baea3d9b785b0d0c57e64e3c183e1556b30",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-10",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-11",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " The Spaniards started the colonization period which lasted for three centuries.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "24c7a270684158bce7990aa97de9f9c2b3a996752a24b4ee973b7ea85dda7090",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-11",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-en_us-12",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "rawBaseline": " The park covers 19,500 kilometers and is divided in 14 different eco zones, each supporting different wildlife.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "a5957dc0ca5f920cefc62c043e1db3bf3eebb7bf63c4ddd727b2a7cec49c40d3",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-12",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-01",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "咖哩飯菜既可以是乾的也可以是濕的乾濕情況取決於水量多少",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "fa862f5f1f65b37a25e7f6442517b8b209a965f2447cb169899e518f0a5964bf",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-01",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-02",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "滑雪是许多滑雪爱好者的主要旅游活动这些爱好者有时也被称为滑雪狂人他们计划整个假期都在某个地点滑雪",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "a372d82814ace5362a35c762095f371a9496c245173c692b9fa54fbf316f4216",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-02",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-03",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "這成了普遍做法但鐵片會使木製的馬車輪子磨損更嚴重",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "c1f8d3b9e74686dceb4a75c1219b3ce66d5bd1ca322b1021e54077614262eada",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-03",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-04",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "然後拉卡星格帶頭唱了半戰歌",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "eba0b68aa12dd62c40f78ea201be03e51f790c1811c8f6b5a646c17a1a9691ed",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-04",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-05",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "雅玛遜河也是地球上最宽的河流有些河段的宽度可大又6英里",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "eb0a6184ddd9ae748141c91152ec4254739925e6058e4952a99f14a243346284",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-05",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-06",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "據報導,由於知法人員不在場,比斯凱克街道的大規模搶劫持續了一夜。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "eee36a4e6e40cddeb9c886dcfa9f6e1f234924d319f3ab8bade700e797dd97f9",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-06",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-07",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "藏傳佛教義佛陀的教義為基礎但通過大臣佛教的普世之愛和印度瑜下的許多技巧得到了拓展",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "039f8c152695ced4fc6abc8954c41b9deea2421b9f11f198acfda9fc7e4e9f8a",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-07",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-08",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "罗宾、乌萨帕取得了本局的最高分投出了11个4分球和2个6分球请投出41个球便赢得70分",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "195fc20aebd14c9444b5807de60d3e40dc5cbaf8022fb9cd97ed60b223e86a4f",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-08",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-09",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "如今科學表明這種大規模的碳經濟再也無法讓過去兩百萬年來支持人類進化發展的生物圈保持穩定的狀態",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "aad5dc88eb2301f03f74669f6ef6b1d1290afb565b577aedce0ff6113cf66ed1",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-09",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-10",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "美國總統喬治沃克布什對這一公告表示支持",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "efd0f37c756ca8a60bb55dd2d86210bdecc895ac168114fc21c02308884454f5",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-10",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-11",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "全國各地的著名歌手都唱祈禱歌獻給Siri Shamiyang。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "9e4a8bc38f90cd6fcfceb00eddf388e908c1bb85ebecf3a123ea6935d4a9ec92",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-11",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-cmn_hans_cn-12",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "rawBaseline": "學生往往是最挑剔的讀者所以博客作者開始努力提高學作水平避免受到批判",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "c9951cfec2d8848618a8cda2691d461e1fad7fcf8c305ada844422ba58ca870a",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "cmn_hans_cn-12",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mandarin",
+        "public-human"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-01",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "咖喱饭菜既可以是干的,也可以是湿的,干湿情况取决于水量多少。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "dbd01634c1338ba7b6b0501cadb65f9fb7870cbf096ad31f161ce876e17a5056",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-01",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-02",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "滑雪是许多滑雪爱好者的主要旅游活动,这些爱好者有时也被称为滑雪狂人,他们计划整个假期都在某个地点滑雪。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "0dabf7d8b642a4e87b09f44f80ca0bfb691324a1fd57b6dc58d3db0bef2aa6c8",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-02",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-03",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "這成了普遍作法但鐵片會使木製的馬車輪子磨損更嚴重",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "7b816bdeb59534daafa7822b3c4c1b977910afff5a9c707a025519f3c4907720",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-03",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-04",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "然後拉卡新格帶頭唱了半戰歌",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "ccf02a512176a4015499384d7669f1167bc2dc6339b70ef0367d0f9335ee428c",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-04",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-05",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "亚马逊河也是地球上最宽的河流有些河段的宽度可大又六英里",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "e8503377fab6fb3b7cf937c8c52964d97a56536114d5033220533a282cebb33e",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-05",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-06",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "據報導,由於知法人員不在場,彼斯凱克街道的大規模搶劫持續了一夜。她來到這個結束,因此,她的多數,她的 positive comments, and encouragement, 和勇敢地送給她, 由於她的 both female and male individuals, 和女性的拒絕, 讓她的 contraception medication, 讓她的醫療需要更加重要。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "fabdcb389228c219df55d5d5925bff0a59b06d18f043bf60b06a9ffd41c5e4e6",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-06",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-07",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": " Air accidents are common in Iran which has an aging fleet that is poorly maintained both for civil and military operations.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "cce23f1a62a0ba8f21ce9a1ed4bf9427d09d4ead65697b89bfe908d6c3a2effc",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-07",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-08",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "羅賓·烏薩帕取得了本局的最高分投出了11個4分球和兩個6分球請投出41個球便贏得70分",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "9de730308760aca16368748455b7f7aab42fb6621e541598e59db85c5cfe558e",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-08",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-09",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "如今科學表明,這種大規模的探經濟再也無法讓過去兩百萬年來支持人類進化發展的生物圈保持穩定的狀態。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "36df3b45fc5f19309c4352d073bcf1648fbcf27badb30e24234c1ed57a4c4598",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-09",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-10",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "美國總統喬治沃克不時對這一公告表示支持",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "7cd49229ef89455347e6b9e84daf1051b8a458e6e1a73486ba00150195abd564",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-10",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-11",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "\"The Spaniard started the colonization period, which lasted for three centuries.\"全國各地的著名歌手都唱起稿歌獻給Series Shamet Yang。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "51ed0ea05ea0e3ec162604bf365c6ca4cbe38f68a048b80d9066161878a8c5ef",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-11",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "whisper-asr-mixed-12",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "rawBaseline": "學生往往是最挑剔的讀者,所以博客作者開始努力提高學作水平,避免受到批判。",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "sourceEvidence": {
+        "audioSHA256": "366b463150e1d4f8fed44ab32baad2d295d55515b867ce22a4007dbf9a1037d9",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "mixed-12",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "asr",
+        "whisper",
+        "mixed",
+        "public-human-composite"
+      ]
+    },
+    {
+      "id": "stress-name-destination",
+      "language": "english",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "um, send the report to Alice at Office",
+      "protectedForms": [
+        "Alice",
+        "Office"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "name",
+          "text": "Alice"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "destination",
+          "text": "Office"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "stress",
+        "english",
+        "filler",
+        "name",
+        "destination"
+      ]
+    },
+    {
+      "id": "stress-number-words-digits",
+      "language": "english",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "use twenty screws and 20 washers",
+      "protectedForms": [
+        "twenty",
+        "20"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "number-word",
+          "text": "twenty"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "number-digit",
+          "text": "20"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "stress",
+        "english",
+        "number-word",
+        "number-digit"
+      ]
+    },
+    {
+      "id": "stress-price-unit",
+      "language": "english",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "pay $20.00 for 3 kg",
+      "protectedForms": [
+        "$20.00",
+        "3 kg"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "price",
+          "text": "$20.00"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "unit",
+          "text": "3 kg"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "stress",
+        "english",
+        "price",
+        "unit"
+      ]
+    },
+    {
+      "id": "stress-date-time",
+      "language": "english",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "meet on 2026-08-21 at 3pm",
+      "protectedForms": [
+        "2026-08-21",
+        "3pm"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "date",
+          "text": "2026-08-21"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "time",
+          "text": "3pm"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "stress",
+        "english",
+        "date",
+        "time"
+      ]
+    },
+    {
+      "id": "stress-url-path",
+      "language": "english",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "open https://fleck.app and read /tmp/Fleck.md",
+      "protectedForms": [
+        "https://fleck.app",
+        "/tmp/Fleck.md"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "url",
+          "text": "https://fleck.app"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "path",
+          "text": "/tmp/Fleck.md"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "stress",
+        "english",
+        "url",
+        "path"
+      ]
+    },
+    {
+      "id": "stress-command-code",
+      "language": "english",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "run git status --short and inspect foo.bar()",
+      "protectedForms": [
+        "git status --short",
+        "foo.bar()"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "command",
+          "text": "git status --short"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "code",
+          "text": "foo.bar()"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "stress",
+        "english",
+        "command",
+        "code"
+      ]
+    },
+    {
+      "id": "stress-destination-recipient",
+      "language": "english",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "send it to Jordan at Office",
+      "protectedForms": [
+        "Jordan",
+        "Office"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "recipient",
+          "text": "Jordan"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "destination",
+          "text": "Office"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "stress",
+        "english",
+        "recipient",
+        "destination"
+      ]
+    },
+    {
+      "id": "stress-commitment-modality",
+      "language": "english",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "I will ship the patch but I might wait",
+      "protectedForms": [
+        "will",
+        "might"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "commitment",
+          "text": "will"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "modality",
+          "text": "might"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "stress",
+        "english",
+        "commitment",
+        "modality"
+      ]
+    },
+    {
+      "id": "stress-negation",
+      "language": "english",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "do not send the email",
+      "protectedForms": [
+        "do not"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "negation",
+          "text": "do not"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "stress",
+        "english",
+        "negation"
+      ]
+    },
+    {
+      "id": "stress-mandarin-negation-modality",
+      "language": "mandarin",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "我不要发送邮件，我可能明天完成",
+      "protectedForms": [
+        "不要",
+        "可能"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "negation",
+          "text": "不要"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "modality",
+          "text": "可能"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "stress",
+        "mandarin",
+        "negation",
+        "modality"
+      ]
+    },
+    {
+      "id": "stress-mixed-url-command",
+      "language": "mixed",
+      "sourceClass": "protectedStress",
+      "rawBaseline": "明天 review https://fleck.app and run npm test",
+      "protectedForms": [
+        "明天",
+        "https://fleck.app",
+        "npm test"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "time",
+          "text": "明天"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "url",
+          "text": "https://fleck.app"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "command",
+          "text": "npm test"
+        }
+      ],
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "deterministicCleanupExpectedToChange": false,
+      "tags": [
+        "stress",
+        "mixed",
+        "mandarin",
+        "url",
+        "command"
+      ]
+    }
+  ]
+}

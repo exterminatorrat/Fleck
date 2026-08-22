@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fleck immutable local dictation corpus manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestID",
+    "immutable",
+    "source",
+    "cases"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "manifestID": {
+      "type": "string",
+      "minLength": 1
+    },
+    "immutable": {
+      "const": true
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 41,
+      "maxItems": 41,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "repository",
+        "revision",
+        "license",
+        "licenseURL",
+        "licenseMetadataURL",
+        "files"
+      ],
+      "properties": {
+        "dataset": {
+          "const": "google/fleurs"
+        },
+        "repository": {
+          "const": "https://huggingface.co/datasets/google/fleurs"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "license": {
+          "const": "CC-BY-4.0"
+        },
+        "licenseURL": {
+          "const": "https://creativecommons.org/licenses/by/4.0/"
+        },
+        "licenseMetadataURL": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "files": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "englishValidation",
+            "mandarinValidation"
+          ],
+          "properties": {
+            "englishValidation": {
+              "$ref": "#/$defs/sourceFile"
+            },
+            "mandarinValidation": {
+              "$ref": "#/$defs/sourceFile"
+            }
+          }
+        }
+      }
+    },
+    "sourceFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "url",
+        "sha256",
+        "byteCount"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https://huggingface\\.co/datasets/google/fleurs/resolve/[0-9a-f]{40}/"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "byteCount": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sourceFile",
+        "language",
+        "sourceClass",
+        "audioSHA256",
+        "audioDurationMilliseconds",
+        "audioBytes",
+        "reference",
+        "protectedExpectations",
+        "naturalCodeSwitch"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "language": {
+          "enum": [
+            "english",
+            "mandarin",
+            "mixed",
+            "none"
+          ]
+        },
+        "sourceClass": {
+          "enum": [
+            "synthetic",
+            "publicHuman",
+            "publicHumanComposite",
+            "operatorLiveHuman"
+          ]
+        },
+        "audioSHA256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "audioDurationMilliseconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "audioBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reference": {
+          "type": "string"
+        },
+        "protectedExpectations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/protectedExpectation"
+          }
+        },
+        "naturalCodeSwitch": {
+          "type": "boolean"
+        },
+        "codeSwitchSpans": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/codeSwitchSpan"
+          }
+        },
+        "construction": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "sourceClass": {
+                "const": "publicHumanComposite"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "codeSwitchSpans"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "codeSwitchSpans"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "codeSwitchSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "language",
+        "sourceCaseID",
+        "startSample",
+        "endSample",
+        "reference"
+      ],
+      "properties": {
+        "language": {
+          "enum": [
+            "en_us",
+            "cmn_hans_cn"
+          ]
+        },
+        "sourceCaseID": {
+          "type": "string",
+          "pattern": "^(en_us|cmn_hans_cn)-[0-9]{2}$"
+        },
+        "startSample": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "endSample": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "protectedExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "text",
+        "comparison"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "comparison": {
+          "enum": [
+            "exact",
+            "caseAndWhitespaceInsensitive"
+          ]
+        }
+      }
+    }
+  }
+}

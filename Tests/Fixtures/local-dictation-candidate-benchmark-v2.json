@@ -1,0 +1,291 @@
+{
+  "schemaVersion": 2,
+  "runID": "synthetic-fixture-run",
+  "claimScope": "candidateBenchmark",
+  "evidenceClasses": [
+    "publicHuman",
+    "publicHumanComposite",
+    "synthetic"
+  ],
+  "candidate": {
+    "modelID": "synthetic-fixture-candidate",
+    "modelRevision": "synthetic-fixture-model-revision",
+    "runtimeID": "synthetic-fixture-runtime",
+    "runtimeRevision": "synthetic-fixture-runtime-revision",
+    "quantization": "synthetic-test-only",
+    "license": "synthetic-test-only"
+  },
+  "artifacts": {
+    "archiveReceipt": {
+      "id": "synthetic-fixture-archive",
+      "revision": "synthetic-archive-revision",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "byteCount": 128
+    },
+    "artifactReceipt": {
+      "id": "synthetic-fixture-artifact",
+      "revision": "synthetic-artifact-revision",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "byteCount": 64
+    },
+    "installedFiles": [
+      {
+        "path": "synthetic/runtime.bin",
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "byteCount": 32
+      },
+      {
+        "path": "synthetic/manifest.json",
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "byteCount": 16
+      }
+    ],
+    "totalInstalledBytes": 48
+  },
+  "hardware": {
+    "hwModel": "synthetic-hardware",
+    "chip": "synthetic-chip",
+    "architecture": "arm64",
+    "memoryBytes": 17179869184,
+    "osBuild": "synthetic-os-build"
+  },
+  "corpus": {
+    "manifestID": "synthetic-fixture-corpus",
+    "revision": "synthetic-corpus-revision",
+    "license": "synthetic-test-only",
+    "caseBindings": [
+      {
+        "caseID": "none-silence",
+        "audioSHA256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "caseID": "public-human",
+        "audioSHA256": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      {
+        "caseID": "composite-mixed",
+        "audioSHA256": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      {
+        "caseID": "english-cancel",
+        "audioSHA256": "4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      {
+        "caseID": "english-transcribed",
+        "audioSHA256": "5555555555555555555555555555555555555555555555555555555555555555"
+      }
+    ]
+  },
+  "privacy": {
+    "policy": "synthetic test-only offline policy",
+    "mechanism": "in-memory fixture transport",
+    "enforced": true,
+    "claimsVerifiedOffline": true,
+    "unexpectedConnectionCount": 0
+  },
+  "aggregate": {
+    "accuracy": {
+      "englishWER": 0.0,
+      "mandarinCER": 0.0,
+      "mixedMER": 0.0,
+      "codeSwitchSpanAccuracy": 1.0,
+      "protectedViolationCount": 0
+    },
+    "latency": {
+      "coldP50Milliseconds": 1.0,
+      "coldP95Milliseconds": 2.0,
+      "warmP50Milliseconds": 1.5,
+      "warmP95Milliseconds": 1.75
+    },
+    "fileDecodeRTF": 0.0025,
+    "peakResidentBytes": 10240,
+    "peakPhysicalFootprintBytes": 11264,
+    "totalStorageBytes": 48,
+    "lifecycleSummary": {
+      "loadSucceeded": true,
+      "inferSucceeded": true,
+      "unloadSucceeded": true,
+      "reloadSucceeded": true,
+      "allSucceeded": true
+    }
+  },
+  "gate": {
+    "automatedCandidatePass": false,
+    "failureReasons": [
+      "synthetic test-only fixture has no real candidate result"
+    ],
+    "releaseAdmitted": false
+  },
+  "cases": [
+    {
+      "id": "none-silence",
+      "language": "none",
+      "sourceClass": "synthetic",
+      "audioSHA256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "audioDurationMilliseconds": 400.0,
+      "reference": "",
+      "hypothesis": "",
+      "protectedExpectations": [],
+      "claimsNaturalCodeSwitch": false,
+      "codeSwitchSpans": [],
+      "captureTemperature": 0.0,
+      "timing": {
+        "fileDecodeMilliseconds": 1.0,
+        "firstPartialMilliseconds": null,
+        "isCold": true
+      },
+      "peakResidentBytes": 1024,
+      "peakPhysicalFootprintBytes": 2048,
+      "outcome": "silence",
+      "cancellation": {
+        "outcome": "notCancelled",
+        "noLateOutput": false
+      }
+    },
+    {
+      "id": "public-human",
+      "language": "mandarin",
+      "sourceClass": "publicHuman",
+      "audioSHA256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "audioDurationMilliseconds": 800.0,
+      "reference": "今天开会",
+      "hypothesis": "今天开会",
+      "protectedExpectations": [],
+      "claimsNaturalCodeSwitch": false,
+      "codeSwitchSpans": [],
+      "captureTemperature": 0.0,
+      "timing": {
+        "fileDecodeMilliseconds": 1.5,
+        "firstPartialMilliseconds": 210.0,
+        "isCold": false
+      },
+      "peakResidentBytes": 2048,
+      "peakPhysicalFootprintBytes": 3072,
+      "outcome": "transcribed",
+      "cancellation": {
+        "outcome": "notCancelled",
+        "noLateOutput": false
+      }
+    },
+    {
+      "id": "composite-mixed",
+      "language": "mixed",
+      "sourceClass": "publicHumanComposite",
+      "audioSHA256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "audioDurationMilliseconds": 600.0,
+      "reference": "hello 你好",
+      "hypothesis": "hello 你好",
+      "protectedExpectations": [
+        {
+          "kind": "phrase",
+          "text": "hello",
+          "comparison": "exact"
+        }
+      ],
+      "claimsNaturalCodeSwitch": false,
+      "codeSwitchSpans": [
+        {
+          "startMilliseconds": 0.0,
+          "endMilliseconds": 300.0,
+          "language": "english",
+          "matched": true
+        },
+        {
+          "startMilliseconds": 300.0,
+          "endMilliseconds": 600.0,
+          "language": "mandarin",
+          "matched": true
+        }
+      ],
+      "captureTemperature": 0.0,
+      "timing": {
+        "fileDecodeMilliseconds": 2.0,
+        "firstPartialMilliseconds": 250.0,
+        "isCold": true
+      },
+      "peakResidentBytes": 4096,
+      "peakPhysicalFootprintBytes": 5120,
+      "outcome": "transcribed",
+      "cancellation": {
+        "outcome": "notCancelled",
+        "noLateOutput": false
+      }
+    },
+    {
+      "id": "english-transcribed",
+      "language": "english",
+      "sourceClass": "publicHuman",
+      "audioSHA256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "audioDurationMilliseconds": 700.0,
+      "reference": "hello world",
+      "hypothesis": "hello world",
+      "protectedExpectations": [],
+      "claimsNaturalCodeSwitch": false,
+      "codeSwitchSpans": [],
+      "captureTemperature": 0.0,
+      "timing": {
+        "fileDecodeMilliseconds": 1.75,
+        "firstPartialMilliseconds": 180.0,
+        "isCold": false
+      },
+      "peakResidentBytes": 3584,
+      "peakPhysicalFootprintBytes": 4608,
+      "outcome": "transcribed",
+      "cancellation": {
+        "outcome": "notCancelled",
+        "noLateOutput": false
+      }
+    },
+    {
+      "id": "english-cancel",
+      "language": "english",
+      "sourceClass": "synthetic",
+      "audioSHA256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "audioDurationMilliseconds": 900.0,
+      "reference": "cancel this",
+      "hypothesis": "",
+      "protectedExpectations": [],
+      "claimsNaturalCodeSwitch": false,
+      "codeSwitchSpans": [],
+      "captureTemperature": 0.0,
+      "timing": {
+        "fileDecodeMilliseconds": 1.25,
+        "firstPartialMilliseconds": null,
+        "isCold": false
+      },
+      "peakResidentBytes": 3072,
+      "peakPhysicalFootprintBytes": 4096,
+      "outcome": "cancelled",
+      "cancellation": {
+        "outcome": "cooperative",
+        "noLateOutput": true
+      }
+    }
+  ],
+  "lifecycle": {
+    "load": {
+      "outcome": "succeeded",
+      "durationMilliseconds": 10.0,
+      "peakResidentBytes": 8192,
+      "peakPhysicalFootprintBytes": 9216
+    },
+    "infer": {
+      "outcome": "succeeded",
+      "durationMilliseconds": 20.0,
+      "peakResidentBytes": 10240,
+      "peakPhysicalFootprintBytes": 11264
+    },
+    "unload": {
+      "outcome": "succeeded",
+      "durationMilliseconds": 5.0,
+      "peakResidentBytes": 4096,
+      "peakPhysicalFootprintBytes": 5120
+    },
+    "reload": {
+      "outcome": "succeeded",
+      "durationMilliseconds": 11.0,
+      "peakResidentBytes": 8192,
+      "peakPhysicalFootprintBytes": 9216
+    }
+  }
+}

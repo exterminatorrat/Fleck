@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "candidateID": "qwen3-asr-0.6b-int8",
+  "model": {
+    "id": "Qwen/Qwen3-ASR-0.6B",
+    "ownerRevision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+    "convertedRevision": "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+    "license": "Apache-2.0",
+    "ownerModelFile": "model.safetensors",
+    "ownerModelFileSHA256": "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea",
+    "archive": {
+      "id": "sherpa-onnx-qwen3-asr-0.6B-int8",
+      "fileName": "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+      "revision": "2026-03-25",
+      "sha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+      "sizeBytes": 878702423
+    }
+  },
+  "runtime": {
+    "id": "sherpa-onnx",
+    "revision": "v1.13.4",
+    "sourceCommit": "142807252687d81b40d6315f23470a1512a00de3",
+    "license": "Apache-2.0",
+    "architecture": "arm64",
+    "provider": "cpu",
+    "threadCount": 2,
+    "cAPI": "sherpa-onnx C API",
+    "archive": {
+      "id": "sherpa-onnx-v1.13.4",
+      "fileName": "sherpa-onnx-v1.13.4-macos-shared-onnxruntime-static.xcframework.zip",
+      "revision": "v1.13.4",
+      "sha256": "ef7daa86a1e5f5dcb0ccf53e4e475c3ae24414652c9ae9c3912a82140c86fb1a",
+      "sizeBytes": 17716081
+    }
+  },
+  "helperBuild": {
+    "id": "qwen-sherpa-native-evaluation-20260821",
+    "executableFileName": "qwen-sherpa-native-evaluation",
+    "sha256": "3ce3332a265e72acee78e6bd3975f96262b7f3c54bce3dacccd2418659db2eab",
+    "sizeBytes": 333920,
+    "modelID": "Qwen/Qwen3-ASR-0.6B",
+    "modelRevision": "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+    "runtimeID": "sherpa-onnx",
+    "runtimeRevision": "v1.13.4",
+    "status": "accepted-development-build-unadmitted"
+  },
+  "inventory": {
+    "path": "installed-artifact-inventory.json",
+    "sha256": "27fa7f977fbfaeedc02c3a4dadef42411883349af6750f417700b9967a37a5d1",
+    "sizeBytes": 7680,
+    "candidate": "qwen3-asr-0.6b-int8",
+    "status": "verified-extracted-artifacts-only-unadmitted",
+    "releaseAdmitted": false
+  },
+  "capabilities": {
+    "resultSemantics": "batch-final-only",
+    "supportsTrueStreaming": false,
+    "emitsRollingWindowPartials": false,
+    "supportsCancellation": false,
+    "supportsCooperativeDecodeCancellation": false,
+    "supportsContext": false,
+    "supportsHotwords": false
+  },
+  "truthFlags": {
+    "automatedCandidatePass": false,
+    "productionIntegrated": false,
+    "packagedAppVerified": false,
+    "releaseAdmitted": false
+  }
+}

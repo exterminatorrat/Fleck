@@ -59,15 +59,18 @@
     private final class Resources {
       let inference: any EnhancedSpeechInferring
       let audio: any EnhancedAudioCapturing
+      let repositoryURL: URL
       var transcriptionTask: Task<String, Error>?
       var released = false
 
       init(
         inference: any EnhancedSpeechInferring,
-        audio: any EnhancedAudioCapturing
+        audio: any EnhancedAudioCapturing,
+        repositoryURL: URL
       ) {
         self.inference = inference
         self.audio = audio
+        self.repositoryURL = repositoryURL
       }
     }
 
@@ -187,6 +190,8 @@
         try await inference.load(from: repositoryURL)
       } catch {
         let wasCancelled = self.lifecycleID != lifecycleID
+          || error is CancellationError
+          || Task.isCancelled
         if self.lifecycleID == lifecycleID {
           self.lifecycleID = nil
         }
@@ -216,13 +221,17 @@
 
       do {
         let audio = try makeAudio(.inference)
-        let resources = Resources(inference: inference, audio: audio)
+        let resources = Resources(
+          inference: inference,
+          audio: audio,
+          repositoryURL: repositoryURL
+        )
         self.resources = resources
         microphoneSelectionChanged(audio.selectMicrophone(savedUID: microphoneUID))
         try audio.start(level: level)
         self.loadingResources = nil
       } catch {
-        let wasCancelled = error is CancellationError
+        let wasCancelled = error is CancellationError || Task.isCancelled
         let resources = self.resources
         self.resources = nil
         self.lifecycleID = nil
@@ -230,6 +239,7 @@
         resources?.audio.releaseResources()
         await release(loadingResources, cancelling: true)
         if !wasCancelled {
+          markRepairRequired(error.localizedDescription, repositoryURL)
           recommendStandard()
         }
         throw error
@@ -245,7 +255,12 @@
       do {
         samples = try resources.audio.stopAndTakeSamples()
       } catch {
+        let wasCancelled = error is CancellationError || Task.isCancelled
         await release(resources, cancelling: true)
+        if !wasCancelled {
+          markRepairRequired(error.localizedDescription, resources.repositoryURL)
+          recommendStandard()
+        }
         throw error
       }
       guard !samples.isEmpty else {
@@ -267,7 +282,12 @@
           .trimmingCharacters(in: .whitespacesAndNewlines)
           .nilIfEmpty
       } catch {
+        let wasCancelled = error is CancellationError || Task.isCancelled
         await release(resources, cancelling: true)
+        if !wasCancelled {
+          markRepairRequired(error.localizedDescription, resources.repositoryURL)
+          recommendStandard()
+        }
         throw error
       }
     }
