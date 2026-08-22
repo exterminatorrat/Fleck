@@ -522,6 +522,31 @@ struct EnhancedModelManagerTests {
     #expect(FileManager.default.fileExists(atPath: sibling.path))
   }
 
+  @Test @MainActor
+  func deleteWaitsForAsyncRemovalBarrierBeforeMutatingOwnedTrees() async throws {
+    let removal = AsyncModelMutationGate()
+    let fixture = try Fixture(removalWillBegin: { await removal.wait() })
+    defer { fixture.remove() }
+    try fixture.install()
+    await fixture.manager.refreshState()
+
+    let deletion = Task { @MainActor in
+      try await fixture.manager.deleteModel()
+    }
+    await removal.waitUntilEntered()
+
+    #expect(await removal.invocationCount == 1)
+    #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL)
+    #expect(FileManager.default.fileExists(atPath: fixture.fileURL.path))
+    #expect(try Data(contentsOf: fixture.fileURL) == testContents)
+
+    await removal.release()
+    try await deletion.value
+
+    #expect(fixture.manager.state == .notInstalled)
+    #expect(!FileManager.default.fileExists(atPath: fixture.fileURL.path))
+  }
+
   @Test @MainActor func lifecycleOperationsCannotOverlap() async throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
@@ -740,14 +765,9 @@ struct EnhancedModelManagerTests {
   }
 
   @Test @MainActor func inferenceFailureDuringDeleteCannotResurrectRepairState() async throws {
-    let removal = CleanupControl()
-    let fixture = try Fixture(removalWillBegin: {
-      removal.pause()
-    })
-    defer {
-      removal.resume()
-      fixture.remove()
-    }
+    let removal = AsyncModelMutationGate()
+    let fixture = try Fixture(removalWillBegin: { await removal.wait() })
+    defer { fixture.remove() }
     try fixture.install()
     await fixture.manager.refreshState()
     let deletedRepository = try #require(fixture.manager.verifiedRepositoryURL)
@@ -755,12 +775,12 @@ struct EnhancedModelManagerTests {
     let deletion = Task { @MainActor in
       try await fixture.manager.deleteModel()
     }
-    await removal.waitUntilPaused()
+    await removal.waitUntilEntered()
     fixture.manager.markInferenceLoadFailure(
       message: "stale load failure",
       failedRepositoryURL: deletedRepository
     )
-    removal.resume()
+    await removal.release()
     try await deletion.value
 
     #expect(fixture.manager.state == .notInstalled)
@@ -879,7 +899,8 @@ struct EnhancedModelManagerTests {
     )
   }
 
-  @Test @MainActor func publishesNewRepositoryBeforeOldCleanupBegins() async throws {
+  @Test @MainActor
+  func preservesPreviousRepositoryUntilCleanupBarrierReleases() async throws {
     let current = EnhancedModelManifest(
       schemaVersion: 1,
       modelID: testManifest.modelID,
@@ -887,18 +908,13 @@ struct EnhancedModelManagerTests {
       totalByteCount: testManifest.totalByteCount,
       files: testManifest.files
     )
-    let cleanup = CleanupControl()
+    let cleanup = AsyncModelMutationGate()
     let fixture = try Fixture(
       manifest: current,
       trustedManifests: [testManifest, current],
-      cleanupWillBegin: {
-        cleanup.pause()
-      }
+      cleanupWillBegin: { await cleanup.wait() }
     )
-    defer {
-      cleanup.resume()
-      fixture.remove()
-    }
+    defer { fixture.remove() }
     try fixture.install(manifest: testManifest)
     await fixture.manager.refreshState()
     fixture.transport.handler = { _, _, _ in
@@ -911,26 +927,152 @@ struct EnhancedModelManagerTests {
       try await fixture.manager.update()
     }
 
-    await cleanup.waitUntilPaused()
+    await cleanup.waitUntilEntered()
+    #expect(await cleanup.invocationCount == 1)
 
+    let previousRepository = fixture.repositoryURL(for: testManifest)
     let newRepository = fixture.repositoryURL(for: current)
-    #expect(fixture.manager.verifiedRepositoryURL == newRepository)
+    let stagingFile = fixture.stagingURL
+      .appendingPathComponent(current.revision, isDirectory: true)
+      .appendingPathComponent(fixture.localRepositoryName, isDirectory: true)
+      .appendingPathComponent(current.files[0].path)
+    #expect(fixture.manager.state == .installing)
+    #expect(fixture.manager.verifiedRepositoryURL == previousRepository)
+    #expect(fixture.manager.verifiedLoadState == .unavailable)
     #expect(
-      fixture.manager.verifiedLoadState == .ready(repositoryURL: newRepository)
+      FileManager.default.fileExists(atPath: previousRepository.path)
     )
-    #expect(
-      FileManager.default.fileExists(
-        atPath: fixture.installedURL
-          .appendingPathComponent(testManifest.revision)
-          .path
-      )
-    )
+    #expect(try Data(contentsOf: fixture.fileURL(for: testManifest)) == testContents)
+    #expect(try Data(contentsOf: stagingFile) == testContents)
 
-    cleanup.resume()
+    await cleanup.release()
     try await update.value
 
     #expect(fixture.manager.state == .ready)
-    #expect(fixture.manager.verifiedRepositoryURL == newRepository)
+    #expect(fixture.manager.verifiedRepositoryURL?.path == newRepository.path)
+    guard case .ready(let loadedRepository) = fixture.manager.verifiedLoadState else {
+      Issue.record("Expected enhanced model to be loadable after update")
+      return
+    }
+    #expect(loadedRepository.path == newRepository.path)
+    #expect(try Data(contentsOf: fixture.fileURL(for: current)) == testContents)
+    #expect(!FileManager.default.fileExists(atPath: stagingFile.path))
+  }
+
+  @Test @MainActor
+  func sameRevisionRepairWaitsBeforeReplacingInstalledRepository() async throws {
+    let cleanup = AsyncModelMutationGate()
+    let fixture = try Fixture(cleanupWillBegin: { await cleanup.wait() })
+    defer { fixture.remove() }
+    try fixture.install()
+    await fixture.manager.refreshState()
+
+    let previousRepository = try #require(fixture.manager.verifiedRepositoryURL)
+    let sentinel = previousRepository.appendingPathComponent("installed-sentinel")
+    let sentinelContents = Data("sentinel".utf8)
+    try sentinelContents.write(to: sentinel, options: .atomic)
+    fixture.transport.handler = { _, _, _ in
+      ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+    let stagingFile = fixture.stagingURL
+      .appendingPathComponent(testManifest.revision, isDirectory: true)
+      .appendingPathComponent(fixture.localRepositoryName, isDirectory: true)
+      .appendingPathComponent(testManifest.files[0].path)
+    let repair = Task { @MainActor in
+      try await fixture.manager.repair()
+    }
+
+    await cleanup.waitUntilEntered()
+
+    #expect(await cleanup.invocationCount == 1)
+    #expect(fixture.manager.state == .installing)
+    #expect(fixture.manager.verifiedRepositoryURL == previousRepository)
+    #expect(fixture.manager.verifiedLoadState == .unavailable)
+    #expect(FileManager.default.fileExists(atPath: previousRepository.path))
+    #expect(try Data(contentsOf: fixture.fileURL) == testContents)
+    #expect(try Data(contentsOf: sentinel) == sentinelContents)
+    #expect(try Data(contentsOf: stagingFile) == testContents)
+
+    await cleanup.release()
+    try await repair.value
+
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == previousRepository)
+    guard case .ready(let loadedRepository) = fixture.manager.verifiedLoadState else {
+      Issue.record("Expected enhanced model to be loadable after repair")
+      return
+    }
+    #expect(loadedRepository.path == previousRepository.path)
+    #expect(try Data(contentsOf: fixture.fileURL) == testContents)
+    #expect(!FileManager.default.fileExists(atPath: sentinel.path))
+    #expect(!FileManager.default.fileExists(atPath: stagingFile.path))
+  }
+
+  @Test @MainActor
+  func cancellationAtMutationBarrierRestoresPreviousUpdateStateWithoutInstallingNewRevision() async throws {
+    let current = EnhancedModelManifest(
+      schemaVersion: 1,
+      modelID: testManifest.modelID,
+      revision: "new-revision",
+      totalByteCount: testManifest.totalByteCount,
+      files: testManifest.files
+    )
+    let cleanup = AsyncModelMutationGate()
+    let fixture = try Fixture(
+      manifest: current,
+      trustedManifests: [testManifest, current],
+      cleanupWillBegin: { await cleanup.wait() }
+    )
+    defer { fixture.remove() }
+    try fixture.install(manifest: testManifest)
+    await fixture.manager.refreshState()
+    let previousRepository = try #require(fixture.manager.verifiedRepositoryURL)
+    let previousFile = fixture.fileURL(for: testManifest)
+    fixture.transport.handler = { _, _, _ in
+      ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+    let stagingFile = fixture.stagingURL
+      .appendingPathComponent(current.revision, isDirectory: true)
+      .appendingPathComponent(fixture.localRepositoryName, isDirectory: true)
+      .appendingPathComponent(current.files[0].path)
+    let update = Task { @MainActor in
+      try await fixture.manager.update()
+    }
+
+    await cleanup.waitUntilEntered()
+
+    #expect(await cleanup.invocationCount == 1)
+    #expect(fixture.manager.state == .installing)
+    #expect(fixture.manager.verifiedLoadState == .unavailable)
+    #expect(fixture.manager.verifiedRepositoryURL == previousRepository)
+    #expect(try Data(contentsOf: previousFile) == testContents)
+    #expect(try Data(contentsOf: stagingFile) == testContents)
+
+    update.cancel()
+    await cleanup.release()
+    await #expect(throws: CancellationError.self) {
+      try await update.value
+    }
+
+    #expect(fixture.manager.state == .updateAvailable)
+    #expect(fixture.manager.verifiedRepositoryURL == previousRepository)
+    guard case .ready(let loadedRepository) = fixture.manager.verifiedLoadState else {
+      Issue.record("Expected the previous enhanced model to remain loadable")
+      return
+    }
+    #expect(loadedRepository.path == previousRepository.path)
+    #expect(try Data(contentsOf: previousFile) == testContents)
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: fixture.repositoryURL(for: current).path
+      )
+    )
   }
 
   @Test @MainActor func installedManifestCannotAuthorizeAnUnshippedRevision() async throws {
@@ -1138,8 +1280,8 @@ private final class Fixture {
     capacity: Int64 = .max,
     trustedManifests: [EnhancedModelManifest]? = nil,
     assessmentDidComplete: @escaping @Sendable () -> Void = {},
-    cleanupWillBegin: @escaping @Sendable () -> Void = {},
-    removalWillBegin: @escaping @Sendable () -> Void = {},
+    cleanupWillBegin: @escaping @Sendable () async -> Void = {},
+    removalWillBegin: @escaping @Sendable () async -> Void = {},
     resumeAuthenticationKey: SymmetricKey = testResumeAuthenticationKey
   ) throws {
     root = temporaryRoot()
@@ -1401,46 +1543,36 @@ private final class LockedCounter: @unchecked Sendable {
   }
 }
 
-private final class CleanupControl: @unchecked Sendable {
-  private let resumeCleanup = DispatchSemaphore(value: 0)
-  private let lock = NSLock()
-  private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
-  private var isPaused = false
-  private var didResume = false
+actor AsyncModelMutationGate {
+  private var entered = false
+  private var released = false
+  private var count = 0
+  private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+  private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
 
-  func pause() {
-    let waiters = lock.withLock {
-      isPaused = true
-      defer { pauseWaiters.removeAll() }
-      return pauseWaiters
-    }
+  func wait() async {
+    count += 1
+    entered = true
+    let waiters = enteredWaiters
+    enteredWaiters.removeAll()
     waiters.forEach { $0.resume() }
-    resumeCleanup.wait()
+    guard !released else { return }
+    await withCheckedContinuation { releaseWaiters.append($0) }
   }
 
-  func waitUntilPaused() async {
-    await withCheckedContinuation { continuation in
-      let resumeNow = lock.withLock {
-        guard !isPaused else { return true }
-        pauseWaiters.append(continuation)
-        return false
-      }
-      if resumeNow {
-        continuation.resume()
-      }
-    }
+  func waitUntilEntered() async {
+    guard !entered else { return }
+    await withCheckedContinuation { enteredWaiters.append($0) }
   }
 
-  func resume() {
-    let shouldSignal = lock.withLock {
-      guard !didResume else { return false }
-      didResume = true
-      return true
-    }
-    if shouldSignal {
-      resumeCleanup.signal()
-    }
+  func release() {
+    released = true
+    let waiters = releaseWaiters
+    releaseWaiters.removeAll()
+    waiters.forEach { $0.resume() }
   }
+
+  var invocationCount: Int { count }
 }
 
 private final class StateRecorder: @unchecked Sendable {

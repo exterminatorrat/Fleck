@@ -191,9 +191,9 @@
         return .unavailable
       }
       switch state {
-      case .ready, .updateAvailable, .downloading, .verifying, .installing:
+      case .ready, .updateAvailable, .downloading, .verifying:
         return .ready(repositoryURL: verifiedRepositoryURL)
-      case .notInstalled, .repairRequired, .removing:
+      case .notInstalled, .repairRequired, .removing, .installing:
         return .unavailable
       }
     }
@@ -209,8 +209,8 @@
     private let clock: @Sendable () -> Date
     private let transport: any ModelDownloading
     private let assessmentDidComplete: @Sendable () -> Void
-    private let cleanupWillBegin: @Sendable () -> Void
-    private let removalWillBegin: @Sendable () -> Void
+    private let cleanupWillBegin: @Sendable () async -> Void
+    private let removalWillBegin: @Sendable () async -> Void
     private let resumeAuthenticationKeyProvider: @Sendable () throws -> SymmetricKey
     private let admittedStorageNamespace: AdmittedModelStorageNamespace?
     private let localRepositoryName: String?
@@ -255,8 +255,8 @@
       clock: @escaping @Sendable () -> Date = { Date() },
       transport: any ModelDownloading = URLSessionModelDownloader(),
       assessmentDidComplete: @escaping @Sendable () -> Void = {},
-      cleanupWillBegin: @escaping @Sendable () -> Void = {},
-      removalWillBegin: @escaping @Sendable () -> Void = {},
+      cleanupWillBegin: @escaping @Sendable () async -> Void = {},
+      removalWillBegin: @escaping @Sendable () async -> Void = {},
       resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
         try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
       },
@@ -305,8 +305,8 @@
       clock: @escaping @Sendable () -> Date = { Date() },
       transport: any ModelDownloading = URLSessionModelDownloader(),
       assessmentDidComplete: @escaping @Sendable () -> Void = {},
-      cleanupWillBegin: @escaping @Sendable () -> Void = {},
-      removalWillBegin: @escaping @Sendable () -> Void = {},
+      cleanupWillBegin: @escaping @Sendable () async -> Void = {},
+      removalWillBegin: @escaping @Sendable () async -> Void = {},
       resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
         try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
       },
@@ -440,8 +440,8 @@
       clock: @escaping @Sendable () -> Date = { Date() },
       transport: any ModelDownloading = URLSessionModelDownloader(),
       assessmentDidComplete: @escaping @Sendable () -> Void = {},
-      cleanupWillBegin: @escaping @Sendable () -> Void = {},
-      removalWillBegin: @escaping @Sendable () -> Void = {},
+      cleanupWillBegin: @escaping @Sendable () async -> Void = {},
+      removalWillBegin: @escaping @Sendable () async -> Void = {},
       resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
         try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
       },
@@ -594,8 +594,10 @@
       let context = context
       let removalWillBegin = removalWillBegin
       do {
+        try Task.checkCancellation()
+        await removalWillBegin()
+        try Task.checkCancellation()
         try await Task.detached {
-          removalWillBegin()
           for url in [
             context.installedRoot,
             context.stagingRoot,
@@ -797,6 +799,10 @@
         }
 
         setState(.installing)
+        let cleanupWillBegin = cleanupWillBegin
+        try Task.checkCancellation()
+        await cleanupWillBegin()
+        try Task.checkCancellation()
         let installedRepository = try await Task.detached {
           try Self.commitVerifiedStaging(
             context,
@@ -805,9 +811,7 @@
           )
         }.value
         verifiedRepositoryURL = installedRepository
-        let cleanupWillBegin = cleanupWillBegin
         try await Task.detached {
-          cleanupWillBegin()
           try Self.cleanupCommittedInstallation(
             context,
             manifest: manifest,

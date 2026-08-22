@@ -10,6 +10,14 @@ private enum ActivationTestError: Error {
   case decode
 }
 
+private actor ActivationMutationProbe {
+  private(set) var invocationCount = 0
+
+  func record() {
+    invocationCount += 1
+  }
+}
+
 @MainActor
 private final class ActivationInferenceProbe: EnhancedSpeechInferring {
   var loadedRepositories: [URL] = []
@@ -56,6 +64,22 @@ func activationSharesOneManagerWithInstallerAndBindsExactRecommendation() throws
   #expect(installer.descriptor.revision == "ee09c569f73759e6d44c9bd16766f477b2b36d39")
   #expect(installer.descriptor.runtimeABI == ParakeetTDTTestConfiguration.runtimeABI)
   #expect(installer.snapshot.phase == .notInstalled)
+}
+
+@Test @MainActor
+func activationPropagatesModelMutationHookThroughDefaultConfiguration() async throws {
+  let root = TestPaths.temporaryDirectory()
+  defer { TestPaths.remove(root) }
+  let probe = ActivationMutationProbe()
+
+  let activation = ParakeetTDTTestActivation.make(
+    applicationSupportURL: root,
+    modelMutationWillBegin: { await probe.record() }
+  )
+
+  try await activation.manager.deleteModel()
+
+  #expect(await probe.invocationCount == 1)
 }
 
 @Test @MainActor

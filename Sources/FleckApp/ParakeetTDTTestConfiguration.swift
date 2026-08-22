@@ -37,6 +37,7 @@ enum ParakeetTDTTestConfiguration {
     architectureProvider: @escaping @Sendable () -> Bool = {
       EnhancedModelManager.isAppleSilicon()
     },
+    modelMutationWillBegin: @escaping @Sendable () async -> Void = {},
     startup: @escaping @MainActor () async throws -> Void,
     calibrate: @escaping @MainActor () async throws -> Void,
     applicationResourceRoot: URL? = Bundle.main.resourceURL,
@@ -117,6 +118,8 @@ enum ParakeetTDTTestConfiguration {
       trustedManifests: [manifest],
       capacityProvider: capacityProvider,
       architectureProvider: { architectureSupported },
+      cleanupWillBegin: modelMutationWillBegin,
+      removalWillBegin: modelMutationWillBegin,
       localRepositoryName: localRepositoryName
     )
     return AdmittedModelSignedConfiguration(

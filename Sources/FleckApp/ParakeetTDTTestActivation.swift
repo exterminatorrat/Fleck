@@ -19,6 +19,7 @@ enum ParakeetTDTTestActivation {
   struct ConfigurationHooks {
     let startup: @MainActor () async throws -> Void
     let calibrate: @MainActor () async throws -> Void
+    let modelMutationWillBegin: @Sendable () async -> Void
   }
 
   static let calibrationSampleCount = 4_800
@@ -124,9 +125,11 @@ enum ParakeetTDTTestActivation {
 
   static func make(
     applicationSupportURL: URL,
+    modelMutationWillBegin: @escaping @Sendable () async -> Void = {},
     configurationFactory: @escaping ConfigurationFactory = { baseRoot, hooks in
       try ParakeetTDTTestConfiguration.make(
         admittedBaseRoot: baseRoot,
+        modelMutationWillBegin: hooks.modelMutationWillBegin,
         startup: hooks.startup,
         calibrate: hooks.calibrate
       )
@@ -144,7 +147,8 @@ enum ParakeetTDTTestActivation {
         admittedBaseRoot,
         ConfigurationHooks(
           startup: { try await runtime.startup() },
-          calibrate: { try await runtime.calibrate() }
+          calibrate: { try await runtime.calibrate() },
+          modelMutationWillBegin: modelMutationWillBegin
         )
       )
       runtime.manager = configuration.manager

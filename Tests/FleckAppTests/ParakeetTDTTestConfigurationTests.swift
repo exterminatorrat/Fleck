@@ -110,6 +110,33 @@ func architectureProviderIsSampledOnceAndManagerMatchesHardwareProfile() throws 
 }
 
 @Test @MainActor
+func configurationAwaitsInjectedModelMutationHookBeforeRemoval() async throws {
+  let gate = AsyncModelMutationGate()
+  let baseRoot = TestPaths.temporaryDirectory()
+  let test = try ParakeetTDTTestConfiguration.make(
+    admittedBaseRoot: baseRoot,
+    capacityProvider: { .max },
+    architectureProvider: { true },
+    modelMutationWillBegin: { await gate.wait() },
+    startup: {},
+    calibrate: {}
+  )
+  defer { removeTestRoot(baseRoot) }
+
+  let deletion = Task { @MainActor in
+    try await test.manager.deleteModel()
+  }
+  await gate.waitUntilEntered()
+
+  #expect(await gate.invocationCount == 1)
+  #expect(test.manager.state == .removing)
+
+  await gate.release()
+  try await deletion.value
+  #expect(test.manager.state == .notInstalled)
+}
+
+@Test @MainActor
 func unsupportedArchitectureFallsBackBeforeInstallerOperation() throws {
   let test = try makeTestConfiguration(architectureSupported: false)
   defer { removeTestRoot(test.baseRoot) }
