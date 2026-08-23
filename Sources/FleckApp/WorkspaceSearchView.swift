@@ -82,7 +82,7 @@
   }
 
   enum WorkspaceSearchPresentationKind: Equatable {
-    case morph
+    case inline
     case crossfade
     case instant
 
@@ -92,7 +92,7 @@
     ) -> Self {
       switch activation {
       case .pointer:
-        return reduceMotion ? .crossfade : .morph
+        return reduceMotion ? .crossfade : .inline
       case .keyboard:
         return .instant
       }
@@ -101,11 +101,6 @@
     var usesAnimatedDismissal: Bool {
       self != .instant
     }
-  }
-
-  enum WorkspaceSearchTransition {
-    static let shellID = "workspace-search-shell"
-    static let magnifierID = "workspace-search-magnifier"
   }
 
   @MainActor
@@ -631,7 +626,6 @@
     @ObservedObject var controller: WorkspaceSearchController
     let notes: [Note]
     let accent: Color
-    let transitionNamespace: Namespace.ID
     let presentationID: UInt64
     let reduceMotion: Bool
     let currentNoteIDs: () -> Set<UUID>
@@ -640,7 +634,7 @@
     @FocusState private var isQueryFocused: Bool
 
     var body: some View {
-      ZStack(alignment: .top) {
+      ZStack(alignment: .topTrailing) {
         Color.clear
           .contentShape(Rectangle())
           .onTapGesture {
@@ -649,20 +643,9 @@
 
         VStack(alignment: .leading, spacing: 8) {
           HStack(spacing: 8) {
-            if controller.presentationKind == .morph && !reduceMotion {
-              Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .matchedGeometryEffect(
-                  id: WorkspaceSearchTransition.magnifierID,
-                  in: transitionNamespace,
-                  isSource: true
-                )
-                .accessibilityHidden(true)
-            } else {
-              Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            }
+            Image(systemName: "magnifyingglass")
+              .foregroundStyle(.secondary)
+              .accessibilityHidden(true)
             TextField("Search notes", text: $controller.query)
               .textFieldStyle(.roundedBorder)
               .focused($isQueryFocused)
@@ -818,36 +801,24 @@
           }
         }
         .padding(12)
-        .frame(maxWidth: 560, alignment: .leading)
+        .frame(maxWidth: 360, alignment: .leading)
         .background {
-          if controller.presentationKind == .morph && !reduceMotion {
-            RoundedRectangle(cornerRadius: 12)
-              .fill(.regularMaterial)
-              .matchedGeometryEffect(
-                id: WorkspaceSearchTransition.shellID,
-                in: transitionNamespace,
-                isSource: true
-              )
-              .accessibilityHidden(true)
-              .allowsHitTesting(false)
-          } else {
-            RoundedRectangle(cornerRadius: 12)
-              .fill(.regularMaterial)
-              .accessibilityHidden(true)
-              .allowsHitTesting(false)
-          }
+          RoundedRectangle(cornerRadius: 10)
+            .fill(.regularMaterial)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
         }
         .overlay {
-          RoundedRectangle(cornerRadius: 12)
+          RoundedRectangle(cornerRadius: 10)
             .strokeBorder(.quaternary)
             .accessibilityHidden(true)
             .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
+        .shadow(color: .black.opacity(0.14), radius: 8, y: 4)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-      .padding(.horizontal, 20)
-      .padding(.top, 48)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
       .onMoveCommand { direction in
         switch direction {
         case .up:

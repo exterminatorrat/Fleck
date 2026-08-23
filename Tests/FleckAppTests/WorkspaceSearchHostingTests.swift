@@ -6,13 +6,16 @@ import Testing
 
 @testable import FleckApp
 
+@Suite(.serialized)
+struct WorkspaceSearchHostingTests {
+
 @Test @MainActor
 func WorkspaceSearchPresentationSelectsPointerAndKeyboardMotionKinds() {
   #expect(
     WorkspaceSearchPresentationKind.resolve(
       activation: .pointer,
       reduceMotion: false
-    ) == .morph
+    ) == .inline
   )
   #expect(
     WorkspaceSearchPresentationKind.resolve(
@@ -32,20 +35,20 @@ func WorkspaceSearchPresentationSelectsPointerAndKeyboardMotionKinds() {
       reduceMotion: true
     ) == .instant
   )
-  #expect(WorkspaceSearchPresentationKind.morph.usesAnimatedDismissal)
+  #expect(WorkspaceSearchPresentationKind.inline.usesAnimatedDismissal)
   #expect(WorkspaceSearchPresentationKind.crossfade.usesAnimatedDismissal)
   #expect(!WorkspaceSearchPresentationKind.instant.usesAnimatedDismissal)
 
   let controller = WorkspaceSearchController()
-  controller.present(presentation: .morph)
-  #expect(controller.presentationKind == .morph)
+  controller.present(presentation: .inline)
+  #expect(controller.presentationKind == .inline)
   controller.dismiss()
   controller.present(presentation: .crossfade)
   #expect(controller.presentationKind == .crossfade)
 }
 
 @Test
-func WorkspaceSearchMatchedGeometryDeclaresMutuallyExclusiveIDs() throws {
+func WorkspaceSearchHostingUsesNoMatchedGeometryWiring() throws {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -59,18 +62,110 @@ func WorkspaceSearchMatchedGeometryDeclaresMutuallyExclusiveIDs() throws {
     encoding: .utf8
   )
 
-  for id in ["shellID", "magnifierID"] {
-    #expect(
-      notesPanel.components(separatedBy: "id: WorkspaceSearchTransition.\(id)").count - 1 == 1
+  #expect(!notesPanel.contains("WorkspaceSearchTransition"))
+  #expect(!searchView.contains("WorkspaceSearchTransition"))
+  #expect(!searchView.contains("matchedGeometryEffect"))
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingUsesACompactTrailingSurfaceAt640Points() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-compact-640-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
     )
-    #expect(
-      searchView.components(separatedBy: "id: WorkspaceSearchTransition.\(id)").count - 1 == 1
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  searchController.present(presentation: .inline)
+  await settleWorkspaceSearchHost(host)
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  let queryFrame = queryField.convert(queryField.bounds, to: host)
+
+  #expect(queryFrame.width <= 320)
+  #expect(queryFrame.minX >= host.bounds.maxX - 370)
+  #expect(queryFrame.maxX <= host.bounds.maxX - 10)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-compact-380-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
     )
-  }
-  #expect(notesPanel.contains("if !searchController.isPresented && !reduceMotion"))
-  #expect(searchView.contains("if controller.presentationKind == .morph && !reduceMotion"))
-  #expect(!notesPanel.contains("isSource: false"))
-  #expect(!searchView.contains("isSource: false"))
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 380, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  searchController.present(presentation: .inline)
+  await settleWorkspaceSearchHost(host)
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  let queryFrame = queryField.convert(queryField.bounds, to: host)
+  let buttons = hostedWorkspaceSearchDescendants(in: host, as: NSButton.self)
+  let dismissButton = try #require(
+    buttons.first {
+      let frame = $0.convert($0.bounds, to: host)
+      return frame.minX >= host.bounds.maxX - 40
+        && frame.maxX <= host.bounds.maxX - 10
+    }
+  )
+  let dismissFrame = dismissButton.convert(dismissButton.bounds, to: host)
+
+  #expect(queryFrame.width <= 320)
+  #expect(queryFrame.minX >= 10)
+  #expect(queryFrame.maxX <= host.bounds.maxX - 10)
+  #expect(dismissFrame.minX >= 10)
+  #expect(dismissFrame.maxX <= host.bounds.maxX - 10)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
 }
 
 @Test
@@ -144,7 +239,7 @@ func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
   await settleWorkspaceSearchHost(host)
 
   #expect(searchController.isPresented)
-  #expect(searchController.presentationKind == .morph)
+  #expect(searchController.presentationKind == .inline)
   sendWorkspaceSearchEscape(to: window)
   await settleWorkspaceSearchHost(host)
 
@@ -189,7 +284,7 @@ func WorkspaceSearchHostingImmediateReopenSurvivesOldDisappearance() async throw
   window.makeKeyAndOrderFront(nil)
   await settleWorkspaceSearchHost(host)
 
-  searchController.present(presentation: .morph)
+  searchController.present(presentation: .inline)
   let firstPresentationID = searchController.presentationID
   await settleWorkspaceSearchHost(host)
   searchController.dismiss()
@@ -1254,6 +1349,8 @@ func WorkspaceSearchHostingDismissPreservesFocusScopeWorkspaceAndSaveGeneration(
   window.contentView = nil
   window.orderOut(nil)
   await runtime.shutdown()
+}
+
 }
 
 @MainActor

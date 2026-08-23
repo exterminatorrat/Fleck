@@ -328,7 +328,6 @@
     @StateObject private var noteLinkPickerController: NoteLinkPickerController
     @StateObject private var backlinkController: BacklinkController
     @Namespace private var selectedTabHighlight
-    @Namespace private var workspaceSearchTransition
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var isShowingTrash = false
@@ -644,7 +643,6 @@
               controller: searchController,
               notes: appState.workspace.notes,
               accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
-              transitionNamespace: workspaceSearchTransition,
               presentationID: searchController.presentationID,
               reduceMotion: reduceMotion,
               currentNoteIDs: {
@@ -657,11 +655,7 @@
             )
             .id(searchController.presentationID)
             .zIndex(2)
-            .transition(
-              searchController.presentationKind == .instant
-                ? .identity
-                : .opacity
-            )
+            .transition(workspaceSearchPresentationTransition)
           }
         }
         .animation(
@@ -860,19 +854,9 @@
             presentWorkspaceSearch(activation: .keyboard)
           }
         } label: {
-          if !searchController.isPresented && !reduceMotion {
-            Image(systemName: "magnifyingglass")
-              .matchedGeometryEffect(
-                id: WorkspaceSearchTransition.magnifierID,
-                in: workspaceSearchTransition,
-                isSource: true
-              )
-              .accessibilityHidden(true)
-          } else {
-            Image(systemName: "magnifyingglass")
-              .opacity(searchController.isPresented ? 0 : 1)
-              .accessibilityHidden(true)
-          }
+          Image(systemName: "magnifyingglass")
+            .opacity(searchController.isPresented ? 0 : 1)
+            .accessibilityHidden(true)
         }
         .keyboardShortcut("f", modifiers: .command)
         .accessibilityLabel("Search notes")
@@ -885,25 +869,6 @@
             presentWorkspaceSearch(activation: .pointer)
           }
         )
-        .background {
-          if !searchController.isPresented && !reduceMotion {
-            RoundedRectangle(cornerRadius: 8)
-              .fill(.regularMaterial.opacity(0.32))
-              .matchedGeometryEffect(
-                id: WorkspaceSearchTransition.shellID,
-                in: workspaceSearchTransition,
-                isSource: true
-              )
-              .accessibilityHidden(true)
-              .allowsHitTesting(false)
-          } else {
-            RoundedRectangle(cornerRadius: 8)
-              .fill(.regularMaterial.opacity(0.32))
-              .opacity(searchController.isPresented ? 0 : 1)
-              .accessibilityHidden(true)
-              .allowsHitTesting(false)
-          }
-        }
         Button {
           appState.addNote(inFolderID: activeFolderID)
         } label: {
@@ -1264,6 +1229,19 @@
 
     private var motion: AppMotion {
       AppMotion(reduceMotion: reduceMotion)
+    }
+
+    private var workspaceSearchPresentationTransition: AnyTransition {
+      switch searchController.presentationKind {
+      case .inline:
+        return .opacity.combined(
+          with: .scale(scale: 0.98, anchor: .topTrailing)
+        )
+      case .crossfade:
+        return .opacity
+      case .instant:
+        return .identity
+      }
     }
 
     private func presentWorkspaceSearch(activation: WorkspaceSearchActivation) {
@@ -2771,7 +2749,7 @@
         .padding(.vertical, 9)
       }
       .frame(maxWidth: .infinity)
-      .background(.thinMaterial)
+      .background(.bar)
       .disabled(!isEditorVisible)
       .accessibilityLabel("Editor toolbar")
       .accessibilityHidden(!isEditorVisible)

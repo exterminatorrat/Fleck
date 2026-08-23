@@ -5,6 +5,38 @@ import Testing
 
 @testable import FleckApp
 
+@Test @MainActor
+func WorkspaceSearchPresentationSelectsInlinePointerAndInstantKeyboard() {
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .pointer,
+      reduceMotion: false
+    ) == .inline
+  )
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .pointer,
+      reduceMotion: true
+    ) == .crossfade
+  )
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .keyboard,
+      reduceMotion: false
+    ) == .instant
+  )
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .keyboard,
+      reduceMotion: true
+    ) == .instant
+  )
+
+  let controller = WorkspaceSearchController()
+  controller.present(presentation: .inline)
+  #expect(controller.presentationKind == .inline)
+}
+
 @Test
 func WorkspaceSearchHighlightedTextExpandsPartialModifierAndZWJGraphemeMatches() {
   let accent = Color(red: 0.9, green: 0.2, blue: 0.1)
