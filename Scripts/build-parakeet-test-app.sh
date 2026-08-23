@@ -593,7 +593,13 @@ extract_rpaths() {
 
 is_allowed_rpath() {
   case "$1" in
-    /usr/lib/swift|@executable_path/*|@loader_path/*)
+    /usr/lib/swift)
+      return 0
+      ;;
+    @executable_path/*|@loader_path/*)
+      if [[ "$1" == *".."* ]]; then
+        return 1
+      fi
       return 0
       ;;
     *)

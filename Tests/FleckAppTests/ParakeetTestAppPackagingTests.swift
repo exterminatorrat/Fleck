@@ -323,12 +323,23 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
         printf '      cmd LC_RPATH\n'
         printf '      cmdsize 32\n'
         printf '      path /usr/lib/swift (offset 12)\n'
-        path_state="$FAKE_RPATH_STATE.$(/usr/bin/basename "$path")"
-        if [[ ! -e "$path_state" ]]; then
-          printf 'Load command 1\n'
+        printf 'Load command 1\n'
+        printf '      cmd LC_RPATH\n'
+        printf '      cmdsize 48\n'
+        printf '      path @loader_path/Frameworks (offset 12)\n'
+        name="$(/usr/bin/basename "$path")"
+        if [[ ! -e "$FAKE_RPATH_STATE.absolute.$name" ]]; then
+          printf 'Load command 2\n'
           printf '      cmd LC_RPATH\n'
           printf '      cmdsize 80\n'
           printf '      path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx (offset 12)\n'
+        fi
+        if [[ "$name" == "gemma-cleanup-helper" \
+          && ! -e "$FAKE_RPATH_STATE.escape.$name" ]]; then
+          printf 'Load command 3\n'
+          printf '      cmd LC_RPATH\n'
+          printf '      cmdsize 48\n'
+          printf '      path @executable_path/../lib (offset 12)\n'
         fi
         ;;
       -L)
@@ -345,8 +356,14 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     path="${@: -1}"
     printf 'install_name_tool|-delete_rpath|%s|%s\n' "$2" "$path" \
       >> "$FAKE_HELPER_TOOL_LOG"
-    printf '%s\n' "$2" > "$FAKE_RPATH_STATE"
-    : > "$FAKE_RPATH_STATE.$(/usr/bin/basename "$path")"
+    case "$2" in
+      /Applications/*) state="absolute" ;;
+      @executable_path/../lib) state="escape" ;;
+      *) exit 3 ;;
+    esac
+    if [[ "$FAKE_RPATH_SURVIVES" != "1" || "$state" != "escape" ]]; then
+      : > "$FAKE_RPATH_STATE.$state.$(/usr/bin/basename "$path")"
+    fi
     """#, to: tools.appendingPathComponent("install_name_tool"))
   try writeExecutable(#"""
     #!/bin/bash
@@ -450,7 +467,8 @@ private func environment(
   runID: String,
   unsafeStaging: Bool = false,
   gemmaBuildFails: Bool = false,
-  gemmaBuildMutatesLock: Bool = false
+  gemmaBuildMutatesLock: Bool = false,
+  escapingRpathSurvives: Bool = false
 ) -> [String: String] {
   var environment = ProcessInfo.processInfo.environment
   let existingPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -481,6 +499,7 @@ private func environment(
   environment["FAKE_RESOLVER_ENTERED"] = fixture.resolverEntered.path
   environment["FAKE_ENTRIES"] = fixture.entries.path
   environment["FAKE_RPATH_STATE"] = fixture.rpathState.path
+  environment["FAKE_RPATH_SURVIVES"] = escapingRpathSurvives ? "1" : "0"
   environment["FAKE_UNSAFE_STAGING"] = unsafeStaging ? "1" : "0"
   environment["FAKE_UNSAFE_STAGING_PATH"] = fixture.unsafeStaging.path
   return environment
@@ -491,7 +510,8 @@ private func launchPackager(
   runID: String,
   unsafeStaging: Bool = false,
   gemmaBuildFails: Bool = false,
-  gemmaBuildMutatesLock: Bool = false
+  gemmaBuildMutatesLock: Bool = false,
+  escapingRpathSurvives: Bool = false
 ) throws -> RunningPackager {
   let standardError = Pipe()
   let process = Process()
@@ -502,7 +522,8 @@ private func launchPackager(
     runID: runID,
     unsafeStaging: unsafeStaging,
     gemmaBuildFails: gemmaBuildFails,
-    gemmaBuildMutatesLock: gemmaBuildMutatesLock
+    gemmaBuildMutatesLock: gemmaBuildMutatesLock,
+    escapingRpathSurvives: escapingRpathSurvives
   )
   process.standardOutput = FileHandle.nullDevice
   process.standardError = standardError
@@ -585,6 +606,7 @@ func parakeetTestAppPackagingScriptUsesContentsResourcesBundle() {
   #expect(source.contains("/usr/lib/swift"))
   #expect(source.contains("@executable_path/"))
   #expect(source.contains("@loader_path/"))
+  #expect(source.contains(#"if [[ "$1" == *".."* ]]; then"#))
   #expect(source.contains("Tools/GemmaCleanupBenchmark/NativeRuntime"))
   #expect(source.contains("gemma-cleanup-helper"))
   #expect(source.contains("Contents/SharedSupport/gemma-cleanup-helper"))
@@ -717,6 +739,10 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   #expect(helperToolEvents.contains {
     $0.hasPrefix("install_name_tool|-delete_rpath|") && $0.hasSuffix(helperSuffix)
   })
+  #expect(helperToolEvents.contains {
+    $0.contains("|@executable_path/../lib|") && $0.hasSuffix(helperSuffix)
+  })
+  #expect(!helperToolEvents.contains { $0.contains("|@loader_path/Frameworks|") })
 
   let signEvents = try String(contentsOf: fixture.codesignLog, encoding: .utf8)
     .split(whereSeparator: \.isNewline)
@@ -733,6 +759,29 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   let buildChildren = try fileManager.contentsOfDirectory(atPath: fixture.build.path)
   #expect(!buildChildren.contains(where: { $0.hasPrefix(".parakeet-test.") }))
   #expect(!buildChildren.contains(where: { $0.hasPrefix(".parakeet-gemma-cleanup.") }))
+}
+
+@Test
+func parakeetPackagerRejectsEscapingRpathThatSurvivesStripping() throws {
+  let fixture = try makeFakeFixture()
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(
+    fixture: fixture,
+    runID: "surviving-rpath",
+    escapingRpathSurvives: true
+  )
+  waitForExit(running)
+  let error = output(from: running.standardError)
+
+  #expect(running.process.terminationStatus != 0)
+  #expect(error.contains("unpermitted LC_RPATH"))
+  #expect(error.contains("@executable_path/../lib"))
+  #expect(!fileManager.fileExists(
+    atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
+  ))
+  #expect(!fileManager.fileExists(atPath: fixture.codesignLog.path))
 }
 
 @Test
