@@ -14,10 +14,15 @@ private struct FakeFixture {
   let candidateLock: URL
   let originalLock: URL
   let originalGemmaLock: URL
-  let gemmaBuildLog: URL
+  let xcodeBuildLog: URL
+  let xcodeBuildEntered: URL
+  let xcodeHoldFile: URL
+  let helperToolLog: URL
   let codesignLog: URL
+  let codesignVerifyLog: URL
   let rpathState: URL
   let unsafeStaging: URL
+  let gemmaResourceMode: String
   let appScript: URL
 }
 
@@ -44,7 +49,7 @@ private func writeExecutable(_ source: String, to url: URL) throws {
   try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o755)], ofItemAtPath: url.path)
 }
 
-private func makeFakeFixture() throws -> FakeFixture {
+private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> FakeFixture {
   let sourceRoot = repositoryRoot()
   guard fileManager.fileExists(atPath: sourceRoot.appendingPathComponent("Package.resolved").path) else {
     throw FixtureError.missingRepositoryRoot
@@ -120,8 +125,12 @@ private func makeFakeFixture() throws -> FakeFixture {
   )
   let holdFile = root.appendingPathComponent("hold")
   try Data().write(to: holdFile)
-  let gemmaBuildLog = root.appendingPathComponent("gemma-build.log")
+  let xcodeBuildLog = root.appendingPathComponent("xcode-build.log")
+  let xcodeBuildEntered = root.appendingPathComponent("xcode-build-entered")
+  let xcodeHoldFile = root.appendingPathComponent("xcode-hold")
+  let helperToolLog = root.appendingPathComponent("helper-tool.log")
   let codesignLog = root.appendingPathComponent("codesign.log")
+  let codesignVerifyLog = root.appendingPathComponent("codesign-verify.log")
 
   try writeExecutable(#"""
     #!/bin/bash
@@ -129,6 +138,7 @@ private func makeFakeFixture() throws -> FakeFixture {
     [[ "$1" == "--find" ]]
     case "$2" in
       swift) printf '%s\n' "$FAKE_TOOLS/swift" ;;
+      xcodebuild) printf '%s\n' "$FAKE_TOOLS/xcodebuild" ;;
       codesign) printf '%s\n' "$FAKE_TOOLS/codesign" ;;
       lipo) printf '%s\n' "$FAKE_TOOLS/lipo" ;;
       otool) printf '%s\n' "$FAKE_TOOLS/otool" ;;
@@ -149,12 +159,14 @@ private func makeFakeFixture() throws -> FakeFixture {
       exit 0
     fi
     scratch=""
-    package_path=""
     product=""
     show_bin=0
     while (($#)); do
       case "$1" in
-        --package-path) package_path="$2"; shift 2 ;;
+        --package-path)
+          printf '%s\n' 'unsupported Swift-package build route' >&2
+          exit 92
+          ;;
         --scratch-path) scratch="$2"; shift 2 ;;
         --product) product="$2"; shift 2 ;;
         --show-bin-path) show_bin=1; shift ;;
@@ -172,15 +184,6 @@ private func makeFakeFixture() throws -> FakeFixture {
     elif [[ "$product" == "fleck-agent" ]]; then
       printf '%s\n' "$FAKE_RUN_ID" > "$bin/fleck-agent"
       /bin/chmod 755 "$bin/fleck-agent"
-    elif [[ "$product" == "gemma-cleanup-helper" ]]; then
-      [[ "$package_path" == "$FAKE_GEMMA_PACKAGE" ]]
-      printf 'package=%s\nscratch=%s\nproduct=%s\n' \
-        "$package_path" "$scratch" "$product" > "$FAKE_GEMMA_BUILD_LOG"
-      if [[ "${FAKE_GEMMA_BUILD_FAIL:-0}" == "1" ]]; then
-        exit 77
-      fi
-      printf 'gemma-helper-%s\n' "$FAKE_RUN_ID" > "$bin/gemma-cleanup-helper"
-      /bin/chmod 755 "$bin/gemma-cleanup-helper"
     fi
     if (( show_bin )); then
       printf '%s\n' "$bin"
@@ -189,13 +192,101 @@ private func makeFakeFixture() throws -> FakeFixture {
   try writeExecutable(#"""
     #!/bin/bash
     set -euo pipefail
+    if [[ "${1:-}" == "-version" ]]; then
+      printf '%s\n' 'Xcode 16.4'
+      exit 0
+    fi
+    scheme=""
+    configuration=""
+    destination=""
+    derived_data=""
+    action=""
+    while (($#)); do
+      case "$1" in
+        -scheme) scheme="$2"; shift 2 ;;
+        -configuration) configuration="$2"; shift 2 ;;
+        -destination) destination="$2"; shift 2 ;;
+        -derivedDataPath) derived_data="$2"; shift 2 ;;
+        build) action="build"; shift ;;
+        *) shift ;;
+      esac
+    done
+    [[ "$action" == "build" ]]
+    [[ "$(pwd -P)" == "$FAKE_GEMMA_PACKAGE" ]]
+    [[ "$scheme" == "gemma-cleanup-helper" ]]
+    [[ "$configuration" == "Release" ]]
+    [[ "$destination" == "generic/platform=macOS" ]]
+    printf 'cwd=%s\nscheme=%s\nconfiguration=%s\ndestination=%s\nderivedData=%s\n' \
+      "$(pwd -P)" "$scheme" "$configuration" "$destination" "$derived_data" \
+      > "$FAKE_XCODE_BUILD_LOG"
+    : > "$FAKE_XCODE_BUILD_ENTERED"
+    if [[ "${FAKE_GEMMA_MUTATE_LOCK:-0}" == "1" ]]; then
+      printf 'mutated by xcodebuild\n' > "$FAKE_GEMMA_PACKAGE/Package.resolved"
+    fi
+    while [[ -e "$FAKE_XCODE_HOLD" ]]; do
+      /bin/sleep 0.02
+    done
+    product="$derived_data/Build/Products/Release/actual-product"
+    /bin/mkdir -p "$product"
+    if [[ "${FAKE_GEMMA_BUILD_FAIL:-0}" == "1" ]]; then
+      exit 77
+    fi
+    printf 'gemma-helper-%s\n' "$FAKE_RUN_ID" > "$product/gemma-cleanup-helper"
+    /bin/chmod 755 "$product/gemma-cleanup-helper"
+    case "$FAKE_GEMMA_RESOURCE_MODE" in
+      valid)
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
+        printf 'default-metallib-%s\n' "$FAKE_RUN_ID" \
+          > "$product/mlx-swift_Cmlx.bundle/default.metallib"
+        ;;
+      missing-bundle)
+        ;;
+      missing-metallib)
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
+        ;;
+      wrong-resource)
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
+        printf 'wrong-resource\n' > "$product/mlx-swift_Cmlx.bundle/wrong.metallib"
+        ;;
+      extra-resource)
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
+        printf 'default-metallib-%s\n' "$FAKE_RUN_ID" \
+          > "$product/mlx-swift_Cmlx.bundle/default.metallib"
+        printf 'extra\n' > "$product/mlx-swift_Cmlx.bundle/extra.txt"
+        ;;
+      symlink-resource)
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
+        /bin/ln -s /tmp/missing-metallib \
+          "$product/mlx-swift_Cmlx.bundle/default.metallib"
+        ;;
+      duplicate-product)
+        /bin/mkdir -p "$derived_data/Build/Products/Release/other-product"
+        /bin/cp "$product/gemma-cleanup-helper" \
+          "$derived_data/Build/Products/Release/other-product/gemma-cleanup-helper"
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
+        printf 'default-metallib-%s\n' "$FAKE_RUN_ID" \
+          > "$product/mlx-swift_Cmlx.bundle/default.metallib"
+        ;;
+      *) exit 91 ;;
+    esac
+    printf 'product=%s\nresource=%s\n' \
+      "$product/gemma-cleanup-helper" "$product/mlx-swift_Cmlx.bundle" \
+      >> "$FAKE_XCODE_BUILD_LOG"
+    """#, to: tools.appendingPathComponent("xcodebuild"))
+  try writeExecutable(#"""
+    #!/bin/bash
+    set -euo pipefail
+    operation="$1"
+    path="$2"
+    printf 'otool|%s|%s\n' "$operation" "$path" >> "$FAKE_HELPER_TOOL_LOG"
     case "$1" in
       -l)
         printf 'Load command 0\n'
         printf '      cmd LC_RPATH\n'
         printf '      cmdsize 32\n'
         printf '      path /usr/lib/swift (offset 12)\n'
-        if [[ ! -e "$FAKE_RPATH_STATE" ]]; then
+        path_state="$FAKE_RPATH_STATE.$(/usr/bin/basename "$path")"
+        if [[ ! -e "$path_state" ]]; then
           printf 'Load command 1\n'
           printf '      cmd LC_RPATH\n'
           printf '      cmdsize 80\n'
@@ -213,7 +304,11 @@ private func makeFakeFixture() throws -> FakeFixture {
     #!/bin/bash
     set -euo pipefail
     [[ "$1" == "-delete_rpath" ]]
+    path="${@: -1}"
+    printf 'install_name_tool|-delete_rpath|%s|%s\n' "$2" "$path" \
+      >> "$FAKE_HELPER_TOOL_LOG"
     printf '%s\n' "$2" > "$FAKE_RPATH_STATE"
+    : > "$FAKE_RPATH_STATE.$(/usr/bin/basename "$path")"
     """#, to: tools.appendingPathComponent("install_name_tool"))
   try writeExecutable(#"""
     #!/bin/bash
@@ -231,7 +326,11 @@ private func makeFakeFixture() throws -> FakeFixture {
     fi
     case "$1" in
       --force) exit 0 ;;
-      --verify) exit 0 ;;
+      --verify)
+        path="${@: -1}"
+        printf '%s\n' "$path" >> "$FAKE_CODESIGN_VERIFY_LOG"
+        exit 0
+        ;;
       -dv)
         args=("$@")
         path="${args[$(( $# - 1 ))]}"
@@ -249,7 +348,13 @@ private func makeFakeFixture() throws -> FakeFixture {
       *) exit 2 ;;
     esac
     """#, to: tools.appendingPathComponent("codesign"))
-  try writeExecutable("#!/bin/bash\nprintf 'arm64\\n'\n", to: tools.appendingPathComponent("lipo"))
+  try writeExecutable(#"""
+    #!/bin/bash
+    set -euo pipefail
+    [[ "$1" == "-archs" ]]
+    printf 'lipo|%s\n' "$2" >> "$FAKE_HELPER_TOOL_LOG"
+    printf 'arm64\n'
+    """#, to: tools.appendingPathComponent("lipo"))
   try writeExecutable(#"""
     #!/bin/bash
     set -euo pipefail
@@ -289,10 +394,15 @@ private func makeFakeFixture() throws -> FakeFixture {
     candidateLock: root.appendingPathComponent("candidate.Package.resolved"),
     originalLock: originalLock,
     originalGemmaLock: originalGemmaLock,
-    gemmaBuildLog: gemmaBuildLog,
+    xcodeBuildLog: xcodeBuildLog,
+    xcodeBuildEntered: xcodeBuildEntered,
+    xcodeHoldFile: xcodeHoldFile,
+    helperToolLog: helperToolLog,
     codesignLog: codesignLog,
+    codesignVerifyLog: codesignVerifyLog,
     rpathState: root.appendingPathComponent("rpath-state"),
     unsafeStaging: root.appendingPathComponent("unsafe-staging"),
+    gemmaResourceMode: gemmaResourceMode,
     appScript: appScript
   )
 }
@@ -301,7 +411,8 @@ private func environment(
   for fixture: FakeFixture,
   runID: String,
   unsafeStaging: Bool = false,
-  gemmaBuildFails: Bool = false
+  gemmaBuildFails: Bool = false,
+  gemmaBuildMutatesLock: Bool = false
 ) -> [String: String] {
   var environment = ProcessInfo.processInfo.environment
   let existingPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -313,9 +424,15 @@ private func environment(
   environment["FAKE_MANIFEST"] = fixture.root.appendingPathComponent("Sources/FleckApp/Resources/EnhancedModelManifest.json").path
   environment["FAKE_NOTICES"] = fixture.root.appendingPathComponent("Sources/FleckApp/Resources/ThirdPartyNotices.md").path
   environment["FAKE_GEMMA_PACKAGE"] = fixture.gemmaPackage.path
-  environment["FAKE_GEMMA_BUILD_LOG"] = fixture.gemmaBuildLog.path
+  environment["FAKE_XCODE_BUILD_LOG"] = fixture.xcodeBuildLog.path
+  environment["FAKE_XCODE_BUILD_ENTERED"] = fixture.xcodeBuildEntered.path
+  environment["FAKE_XCODE_HOLD"] = fixture.xcodeHoldFile.path
+  environment["FAKE_HELPER_TOOL_LOG"] = fixture.helperToolLog.path
   environment["FAKE_GEMMA_BUILD_FAIL"] = gemmaBuildFails ? "1" : "0"
+  environment["FAKE_GEMMA_MUTATE_LOCK"] = gemmaBuildMutatesLock ? "1" : "0"
+  environment["FAKE_GEMMA_RESOURCE_MODE"] = fixture.gemmaResourceMode
   environment["FAKE_CODESIGN_LOG"] = fixture.codesignLog.path
+  environment["FAKE_CODESIGN_VERIFY_LOG"] = fixture.codesignVerifyLog.path
   environment["FAKE_CANDIDATE_LOCK"] = fixture.candidateLock.path
   environment["FAKE_ORIGINAL_LOCK"] = fixture.originalLock.path
   environment["FAKE_HOLD"] = unsafeStaging
@@ -333,7 +450,8 @@ private func launchPackager(
   fixture: FakeFixture,
   runID: String,
   unsafeStaging: Bool = false,
-  gemmaBuildFails: Bool = false
+  gemmaBuildFails: Bool = false,
+  gemmaBuildMutatesLock: Bool = false
 ) throws -> RunningPackager {
   let standardError = Pipe()
   let process = Process()
@@ -343,7 +461,8 @@ private func launchPackager(
     for: fixture,
     runID: runID,
     unsafeStaging: unsafeStaging,
-    gemmaBuildFails: gemmaBuildFails
+    gemmaBuildFails: gemmaBuildFails,
+    gemmaBuildMutatesLock: gemmaBuildMutatesLock
   )
   process.standardOutput = FileHandle.nullDevice
   process.standardError = standardError
@@ -458,16 +577,20 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   let originalGemmaLock = try Data(contentsOf: fixture.originalGemmaLock)
   #expect(restoredGemmaLock == originalGemmaLock)
 
-  let gemmaBuildLines = try String(contentsOf: fixture.gemmaBuildLog, encoding: .utf8)
+  let gemmaBuildLines = try String(contentsOf: fixture.xcodeBuildLog, encoding: .utf8)
     .split(whereSeparator: \.isNewline)
     .map(String.init)
   func normalizedTemporaryPath(_ path: String) -> String {
     path.replacingOccurrences(of: "/private/var/", with: "/var/")
   }
-  #expect(gemmaBuildLines.count == 3)
-  #expect(normalizedTemporaryPath(gemmaBuildLines[0]) == "package=\(normalizedTemporaryPath(fixture.gemmaPackage.path))")
-  #expect(normalizedTemporaryPath(gemmaBuildLines[1]).hasPrefix("scratch=\(normalizedTemporaryPath(fixture.build.path))/.parakeet-gemma-cleanup."))
-  #expect(gemmaBuildLines[2] == "product=gemma-cleanup-helper")
+  #expect(gemmaBuildLines.count == 7)
+  #expect(normalizedTemporaryPath(gemmaBuildLines[0]) == "cwd=\(normalizedTemporaryPath(fixture.gemmaPackage.path))")
+  #expect(gemmaBuildLines[1] == "scheme=gemma-cleanup-helper")
+  #expect(gemmaBuildLines[2] == "configuration=Release")
+  #expect(gemmaBuildLines[3] == "destination=generic/platform=macOS")
+  #expect(normalizedTemporaryPath(gemmaBuildLines[4]).contains("/.parakeet-gemma-cleanup."))
+  #expect(gemmaBuildLines[5].contains("/Build/Products/Release/actual-product/gemma-cleanup-helper"))
+  #expect(gemmaBuildLines[6].contains("/Build/Products/Release/actual-product/mlx-swift_Cmlx.bundle"))
 
   let app = fixture.build.appendingPathComponent("parakeet-test/Fleck.app")
   let executableContents = try String(
@@ -478,8 +601,24 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   let helper = app.appendingPathComponent("Contents/SharedSupport/gemma-cleanup-helper")
   #expect(fileManager.isExecutableFile(atPath: helper.path))
   #expect(try String(contentsOf: helper, encoding: .utf8) == "gemma-helper-first\n")
+  let metallib = app.appendingPathComponent(
+    "Contents/SharedSupport/mlx-swift_Cmlx.bundle/default.metallib"
+  )
+  #expect(try String(contentsOf: metallib, encoding: .utf8) == "default-metallib-first\n")
   let appContents = fileManager.subpaths(atPath: app.path) ?? []
   #expect(appContents.filter { $0 == "Contents/SharedSupport/gemma-cleanup-helper" }.count == 1)
+  #expect(appContents.filter { $0 == "Contents/SharedSupport/mlx-swift_Cmlx.bundle/default.metallib" }.count == 1)
+
+  let helperToolEvents = try String(contentsOf: fixture.helperToolLog, encoding: .utf8)
+    .split(whereSeparator: \.isNewline)
+    .map(String.init)
+  let helperSuffix = "/Contents/SharedSupport/gemma-cleanup-helper"
+  #expect(helperToolEvents.contains { $0.hasPrefix("lipo|") && $0.hasSuffix(helperSuffix) })
+  #expect(helperToolEvents.contains { $0.hasPrefix("otool|-l|") && $0.hasSuffix(helperSuffix) })
+  #expect(helperToolEvents.contains { $0.hasPrefix("otool|-L|") && $0.hasSuffix(helperSuffix) })
+  #expect(helperToolEvents.contains {
+    $0.hasPrefix("install_name_tool|-delete_rpath|") && $0.hasSuffix(helperSuffix)
+  })
 
   let signEvents = try String(contentsOf: fixture.codesignLog, encoding: .utf8)
     .split(whereSeparator: \.isNewline)
@@ -488,6 +627,8 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   #expect(signEvents[0].hasSuffix("/Contents/SharedSupport/gemma-cleanup-helper|com.harryjin.fleck.gemma-cleanup-helper"))
   #expect(signEvents[1].hasSuffix("/Contents/SharedSupport/fleck-agent|com.harryjin.fleck.agent"))
   #expect(signEvents[2].hasSuffix("/Fleck.app|com.harryjin.fleck"))
+  let verifyEvents = try String(contentsOf: fixture.codesignVerifyLog, encoding: .utf8)
+  #expect(verifyEvents.contains(helperSuffix))
   #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent("Fleck_FleckApp.bundle").path))
   #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent(".parakeet-test.lock").path))
   #expect((try? fileManager.contentsOfDirectory(atPath: fixture.temporaryDirectory.path))?.isEmpty == true)
@@ -500,11 +641,18 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
 func parakeetPackagerCleansHelperBuildAfterFailure() throws {
   let fixture = try makeFakeFixture()
   defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
 
-  let running = try launchPackager(fixture: fixture, runID: "failed", gemmaBuildFails: true)
+  let running = try launchPackager(
+    fixture: fixture,
+    runID: "failed",
+    gemmaBuildFails: true,
+    gemmaBuildMutatesLock: true
+  )
   waitForExit(running)
   #expect(!running.process.isRunning)
   #expect(running.process.terminationStatus != 0)
+  #expect(fileManager.fileExists(atPath: fixture.xcodeBuildEntered.path))
   #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path))
   #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent(".parakeet-test.lock").path))
   #expect(!fileManager.fileExists(atPath: fixture.codesignLog.path))
@@ -518,6 +666,97 @@ func parakeetPackagerCleansHelperBuildAfterFailure() throws {
   let restoredGemmaLock = try Data(contentsOf: fixture.gemmaPackage.appendingPathComponent("Package.resolved"))
   let originalGemmaLock = try Data(contentsOf: fixture.originalGemmaLock)
   #expect(restoredGemmaLock == originalGemmaLock)
+}
+
+@Test(arguments: [
+  "missing-bundle",
+  "missing-metallib",
+  "wrong-resource",
+  "extra-resource",
+  "symlink-resource",
+  "duplicate-product",
+])
+func parakeetPackagerRejectsIncompleteOrAmbiguousGemmaRuntime(_ resourceMode: String) throws {
+  let fixture = try makeFakeFixture(gemmaResourceMode: resourceMode)
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(fixture: fixture, runID: resourceMode)
+  waitForExit(running)
+  let error = output(from: running.standardError)
+
+  #expect(running.process.terminationStatus != 0)
+  #expect(fileManager.fileExists(atPath: fixture.xcodeBuildEntered.path))
+  switch resourceMode {
+  case "missing-bundle":
+    #expect(error.contains("exactly one MLX resource bundle"))
+  case "missing-metallib", "wrong-resource", "symlink-resource":
+    #expect(error.contains("MLX resource is missing or unsafe"))
+  case "extra-resource":
+    #expect(error.contains("MLX resource bundle contains unexpected entries"))
+  case "duplicate-product":
+    #expect(error.contains("exactly one executable"))
+  default:
+    Issue.record("Unexpected Gemma resource fixture mode")
+  }
+  #expect(!fileManager.fileExists(
+    atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
+  ))
+  #expect(try Data(contentsOf: fixture.gemmaPackage.appendingPathComponent("Package.resolved"))
+    == Data(contentsOf: fixture.originalGemmaLock))
+  #expect(try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
+    == Data(contentsOf: fixture.originalLock))
+  let buildChildren = try fileManager.contentsOfDirectory(atPath: fixture.build.path)
+  #expect(!buildChildren.contains(where: { $0.hasPrefix(".parakeet-gemma-cleanup.") }))
+}
+
+@Test
+func parakeetPackagerRejectsAndRestoresDetectedNestedLockMutation() throws {
+  let fixture = try makeFakeFixture()
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(
+    fixture: fixture,
+    runID: "mutated",
+    gemmaBuildMutatesLock: true
+  )
+  waitForExit(running)
+  let error = output(from: running.standardError)
+
+  #expect(running.process.terminationStatus != 0)
+  #expect(error.contains("changed NativeRuntime Package.resolved"))
+  #expect(try Data(contentsOf: fixture.gemmaPackage.appendingPathComponent("Package.resolved"))
+    == Data(contentsOf: fixture.originalGemmaLock))
+  #expect(try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
+    == Data(contentsOf: fixture.originalLock))
+}
+
+@Test
+func parakeetPackagerRestoresNestedLockWhenInterruptedDuringXcodeBuild() throws {
+  let fixture = try makeFakeFixture()
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+  try Data().write(to: fixture.xcodeHoldFile)
+
+  let running = try launchPackager(
+    fixture: fixture,
+    runID: "interrupted",
+    gemmaBuildMutatesLock: true
+  )
+  #expect(waitForPath(fixture.xcodeBuildEntered))
+  running.process.terminate()
+  try fileManager.removeItem(at: fixture.xcodeHoldFile)
+  waitForExit(running)
+
+  #expect(running.process.terminationStatus != 0)
+  #expect(try Data(contentsOf: fixture.gemmaPackage.appendingPathComponent("Package.resolved"))
+    == Data(contentsOf: fixture.originalGemmaLock))
+  #expect(try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
+    == Data(contentsOf: fixture.originalLock))
+  #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent(".parakeet-test.lock").path))
+  let buildChildren = try fileManager.contentsOfDirectory(atPath: fixture.build.path)
+  #expect(!buildChildren.contains(where: { $0.hasPrefix(".parakeet-gemma-cleanup.") }))
 }
 
 @Test
