@@ -9,6 +9,11 @@ enum AdmittedModelSettingsAction: Equatable, Sendable {
   case remove
 }
 
+enum AdmittedModelSettingsContext: Equatable, Sendable {
+  case dictation
+  case cleanup(fallbackLabel: String)
+}
+
 struct AdmittedModelSettingsPresentation: Equatable {
   let detail: String
   let phase: AdmittedModelInstallPhase
@@ -38,7 +43,10 @@ struct AdmittedModelSettingsPresentation: Equatable {
     Self.compactStatus(for: phase)
   }
 
-  init(snapshot: AdmittedModelInstallationSnapshot) {
+  init(
+    snapshot: AdmittedModelInstallationSnapshot,
+    context: AdmittedModelSettingsContext = .dictation
+  ) {
     phase = snapshot.phase
 
     let descriptor: AdmittedModelDescriptor?
@@ -50,7 +58,12 @@ struct AdmittedModelSettingsPresentation: Equatable {
     }
 
     identity = descriptor?.modelID
-    modelLabel = descriptor == nil ? "Apple Speech" : "Parakeet TDT 0.6B v2"
+    switch context {
+    case .dictation:
+      modelLabel = descriptor == nil ? "Apple Speech" : "Parakeet TDT 0.6B v2"
+    case .cleanup(let fallbackLabel):
+      modelLabel = descriptor == nil ? fallbackLabel : "Gemma 3 1B"
+    }
 
     switch snapshot.phase {
     case .downloading(let receivedBytes, let totalBytes) where totalBytes > 0:
@@ -71,13 +84,20 @@ struct AdmittedModelSettingsPresentation: Equatable {
     isKeyboardFocusable = primaryAction != nil
     detail = Self.detail(
       for: snapshot.phase,
-      lastError: snapshot.lastError
+      lastError: snapshot.lastError,
+      context: context
     )
-    accessibilityLabel = "Dictation model"
+    switch context {
+    case .dictation:
+      accessibilityLabel = "Dictation model"
+    case .cleanup:
+      accessibilityLabel = "Cleanup model"
+    }
     accessibilityValue = Self.accessibilityValue(
       for: snapshot.phase,
       modelLabel: modelLabel,
-      lastError: snapshot.lastError
+      lastError: snapshot.lastError,
+      context: context
     )
   }
 
@@ -134,38 +154,14 @@ struct AdmittedModelSettingsPresentation: Equatable {
 
   private static func detail(
     for phase: AdmittedModelInstallPhase,
-    lastError: String?
+    lastError: String?,
+    context: AdmittedModelSettingsContext
   ) -> String {
-    let phaseDetail: String
-    switch phase {
-    case .builtIn:
-      phaseDetail = "No custom model is installed. On-device recognition uses Apple Speech on this Mac."
-    case .notInstalled:
-      phaseDetail = "The experimental enhanced local model candidate is available to install."
-    case .downloading:
-      phaseDetail = "Downloading the experimental enhanced local model candidate."
-    case .verifying:
-      phaseDetail = "Verifying the downloaded experimental enhanced local model candidate."
-    case .installing:
-      phaseDetail = "Installing the verified experimental enhanced local model candidate."
-    case .ready:
-      phaseDetail = "The experimental enhanced local model candidate is prepared to start."
-    case .starting:
-      phaseDetail = "Starting the experimental enhanced local model candidate."
-    case .calibrating:
-      phaseDetail = "Calibrating the experimental enhanced local model candidate."
-    case .installed:
-      phaseDetail = "The experimental enhanced local model candidate is installed and available."
-    case .updateAvailable:
-      phaseDetail = "An update is available for the experimental enhanced local model candidate."
-    case .repairRequired(let message):
-      phaseDetail = "The experimental enhanced local model candidate needs repair: \(message)"
-    case .removing:
-      phaseDetail = "Removing the experimental enhanced local model candidate and returning to Apple Speech."
-    case .cancelled:
-      phaseDetail = "Experimental enhanced local model candidate installation was cancelled. You can install it again when ready."
-    case .failed(let message):
-      phaseDetail = "Enhanced local dictation failed: \(message) Fleck continues with Apple Speech."
+    let phaseDetail: String = switch context {
+    case .dictation:
+      dictationDetail(for: phase)
+    case .cleanup(let fallbackLabel):
+      cleanupDetail(for: phase, fallbackLabel: fallbackLabel)
     }
 
     guard let lastError, !lastError.isEmpty, !phaseDetail.contains(lastError) else {
@@ -174,10 +170,81 @@ struct AdmittedModelSettingsPresentation: Equatable {
     return "\(phaseDetail) Error: \(lastError)"
   }
 
+  private static func dictationDetail(for phase: AdmittedModelInstallPhase) -> String {
+    switch phase {
+    case .builtIn:
+      "No custom model is installed. On-device recognition uses Apple Speech on this Mac."
+    case .notInstalled:
+      "The experimental enhanced local model candidate is available to install."
+    case .downloading:
+      "Downloading the experimental enhanced local model candidate."
+    case .verifying:
+      "Verifying the downloaded experimental enhanced local model candidate."
+    case .installing:
+      "Installing the verified experimental enhanced local model candidate."
+    case .ready:
+      "The experimental enhanced local model candidate is prepared to start."
+    case .starting:
+      "Starting the experimental enhanced local model candidate."
+    case .calibrating:
+      "Calibrating the experimental enhanced local model candidate."
+    case .installed:
+      "The experimental enhanced local model candidate is installed and available."
+    case .updateAvailable:
+      "An update is available for the experimental enhanced local model candidate."
+    case .repairRequired(let message):
+      "The experimental enhanced local model candidate needs repair: \(message)"
+    case .removing:
+      "Removing the experimental enhanced local model candidate and returning to Apple Speech."
+    case .cancelled:
+      "Experimental enhanced local model candidate installation was cancelled. You can install it again when ready."
+    case .failed(let message):
+      "Enhanced local dictation failed: \(message) Fleck continues with Apple Speech."
+    }
+  }
+
+  private static func cleanupDetail(
+    for phase: AdmittedModelInstallPhase,
+    fallbackLabel: String
+  ) -> String {
+    let fallback = "Fleck continues with faithful local fallback (\(fallbackLabel))."
+    return switch phase {
+    case .builtIn:
+      "No custom cleanup model is installed. \(fallback)"
+    case .notInstalled:
+      "The experimental enhanced local cleanup model is available to install."
+    case .downloading:
+      "Downloading the experimental enhanced local cleanup model."
+    case .verifying:
+      "Verifying the downloaded experimental enhanced local cleanup model."
+    case .installing:
+      "Installing the verified experimental enhanced local cleanup model."
+    case .ready:
+      "The experimental enhanced local cleanup model is prepared to start."
+    case .starting:
+      "Starting the experimental enhanced local cleanup model."
+    case .calibrating:
+      "Calibrating the experimental enhanced local cleanup model."
+    case .installed:
+      "The experimental enhanced local cleanup model is installed and available."
+    case .updateAvailable:
+      "An update is available for the experimental enhanced local cleanup model."
+    case .repairRequired(let message):
+      "The experimental enhanced local cleanup model needs repair: \(message). \(fallback)"
+    case .removing:
+      "Removing the experimental enhanced local cleanup model. \(fallback)"
+    case .cancelled:
+      "Enhanced local cleanup model installation was cancelled. \(fallback) You can install it again when ready."
+    case .failed(let message):
+      "Enhanced local cleanup failed: \(message) \(fallback)"
+    }
+  }
+
   private static func accessibilityValue(
     for phase: AdmittedModelInstallPhase,
     modelLabel: String,
-    lastError: String?
+    lastError: String?,
+    context: AdmittedModelSettingsContext
   ) -> String {
     let state: String
     if case .downloading(let receivedBytes, let totalBytes) = phase,
@@ -188,7 +255,7 @@ struct AdmittedModelSettingsPresentation: Equatable {
       )
       state = "Downloading, \(progress)"
     } else if showsDetail(for: phase) {
-      state = detail(for: phase, lastError: lastError)
+      state = detail(for: phase, lastError: lastError, context: context)
     } else {
       state = compactStatus(for: phase)
     }
@@ -289,14 +356,22 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
   @Published private(set) var presentation: AdmittedModelSettingsPresentation
 
   private let installer: any AdmittedModelInstalling
+  private let context: AdmittedModelSettingsContext
   private let cancellationRelay: AdmittedModelSettingsCancellationRelay
   private var updatesTask: Task<Void, Never>?
   private var actionTask: Task<Void, Never>?
 
-  init(installer: any AdmittedModelInstalling) {
+  init(
+    installer: any AdmittedModelInstalling,
+    context: AdmittedModelSettingsContext = .dictation
+  ) {
     self.installer = installer
+    self.context = context
     cancellationRelay = AdmittedModelSettingsCancellationRelay(installer: installer)
-    presentation = AdmittedModelSettingsPresentation(snapshot: installer.snapshot)
+    presentation = AdmittedModelSettingsPresentation(
+      snapshot: installer.snapshot,
+      context: context
+    )
     subscribeToUpdates()
   }
 
@@ -352,7 +427,7 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
   }
 
   private func apply(_ snapshot: AdmittedModelInstallationSnapshot) {
-    presentation = AdmittedModelSettingsPresentation(snapshot: snapshot)
+    presentation = AdmittedModelSettingsPresentation(snapshot: snapshot, context: context)
   }
 
   deinit {

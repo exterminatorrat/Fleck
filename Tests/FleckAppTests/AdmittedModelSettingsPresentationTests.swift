@@ -84,6 +84,109 @@ private enum AdmittedModelSettingsTestDescriptors {
   #expect(builtIn.modelLabel == "Apple Speech")
 }
 
+@Test func cleanupContextNamesGemmaAndCurrentFaithfulFallback() {
+  let context = AdmittedModelSettingsContext.cleanup(
+    fallbackLabel: "Deterministic Fallback"
+  )
+  let recommended = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .recommended(AdmittedModelSettingsTestDescriptors.tinyAdmittedASR),
+      phase: .notInstalled,
+      lastError: nil
+    ),
+    context: context
+  )
+  let builtIn = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .builtIn,
+      phase: .builtIn,
+      lastError: nil
+    ),
+    context: context
+  )
+
+  #expect(recommended.modelLabel == "Gemma 3 1B")
+  #expect(recommended.accessibilityLabel == "Cleanup model")
+  #expect(recommended.accessibilityValue == "Gemma 3 1B, Available to install")
+  #expect(builtIn.modelLabel == "Deterministic Fallback")
+  #expect(builtIn.accessibilityLabel == "Cleanup model")
+  #expect(builtIn.accessibilityValue == "Deterministic Fallback, Built in")
+  #expect(builtIn.detail == "No custom cleanup model is installed. Fleck continues with faithful local fallback (Deterministic Fallback).")
+}
+
+@Test func cleanupExceptionalCopyAlwaysKeepsFaithfulLocalFallback() {
+  let context = AdmittedModelSettingsContext.cleanup(
+    fallbackLabel: "Apple On-Device"
+  )
+  let phases: [AdmittedModelInstallPhase] = [
+    .removing,
+    .cancelled,
+    .failed(message: "startup failed")
+  ]
+
+  for phase in phases {
+    let presentation = AdmittedModelSettingsPresentation(
+      snapshot: .init(
+        recommendation: .recommended(AdmittedModelSettingsTestDescriptors.tinyAdmittedASR),
+        phase: phase,
+        lastError: nil
+      ),
+      context: context
+    )
+
+    #expect(presentation.detail.contains("faithful local fallback (Apple On-Device)"))
+    #expect(!presentation.detail.contains("Apple Speech"))
+    #expect(!presentation.detail.localizedCaseInsensitiveContains("dictation"))
+    #expect(!presentation.accessibilityValue.contains("Apple Speech"))
+    #expect(!presentation.accessibilityValue.localizedCaseInsensitiveContains("dictation"))
+  }
+}
+
+@Test func cleanupContextPreservesSharedProgressAndSingleActionMapping() {
+  let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
+  let context = AdmittedModelSettingsContext.cleanup(
+    fallbackLabel: "Deterministic Fallback"
+  )
+  let expectations: [
+    (phase: AdmittedModelInstallPhase, action: AdmittedModelSettingsAction, label: String)
+  ] = [
+    (.notInstalled, .install, "Install"),
+    (.downloading(receivedBytes: 25, totalBytes: 100), .cancel, "Cancel"),
+    (.ready, .cancel, "Cancel"),
+    (.installed, .remove, "Remove"),
+    (.updateAvailable, .update, "Update"),
+    (.repairRequired(message: "repair required"), .repair, "Repair"),
+    (.cancelled, .install, "Install"),
+    (.failed(message: "startup failed"), .repair, "Retry")
+  ]
+
+  for expectation in expectations {
+    let presentation = AdmittedModelSettingsPresentation(
+      snapshot: .init(
+        recommendation: .recommended(descriptor),
+        phase: expectation.phase,
+        lastError: nil
+      ),
+      context: context
+    )
+
+    #expect(presentation.primaryAction == expectation.action)
+    #expect(presentation.primaryActionLabel == expectation.label)
+  }
+
+  let downloading = AdmittedModelSettingsPresentation(
+    snapshot: .init(
+      recommendation: .recommended(descriptor),
+      phase: .downloading(receivedBytes: 25, totalBytes: 100),
+      lastError: nil
+    ),
+    context: context
+  )
+  #expect(downloading.progress == 0.25)
+  #expect(downloading.progressAccessibilityValue == "25%")
+  #expect(downloading.accessibilityValue == "Gemma 3 1B, Downloading, 25%")
+}
+
 @Test func ordinaryStatesStayCompactWithOnlyRelevantActions() {
   let descriptor = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
   let presentations: [(AdmittedModelSettingsPresentation, AdmittedModelSettingsAction?)] = [
@@ -676,6 +779,26 @@ func orderedInstallerUpdatesLeaveFinalPresentationAtInstalled() async {
   await waitForPresentation(viewModel, phase: .installed)
 
   #expect(viewModel.presentation.phase == .installed)
+}
+
+@Test @MainActor
+func cleanupViewModelRetainsContextAcrossActionUpdates() async {
+  let probe = InstallerActionProbe()
+  let viewModel = AdmittedModelSettingsViewModel(
+    installer: probe,
+    context: .cleanup(fallbackLabel: "Deterministic Fallback")
+  )
+
+  #expect(viewModel.presentation.modelLabel == "Gemma 3 1B")
+  #expect(viewModel.presentation.accessibilityLabel == "Cleanup model")
+
+  viewModel.perform(.install)
+  await probe.waitUntilPhase(.ready)
+  await waitForPresentation(viewModel, phase: .ready)
+
+  #expect(viewModel.presentation.modelLabel == "Gemma 3 1B")
+  #expect(viewModel.presentation.accessibilityLabel == "Cleanup model")
+  #expect(!viewModel.presentation.detail.localizedCaseInsensitiveContains("dictation"))
 }
 
 @Test @MainActor
