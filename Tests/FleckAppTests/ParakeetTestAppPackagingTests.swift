@@ -169,6 +169,7 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     scratch=""
     product=""
     show_bin=0
+    skip_update=0
     while (($#)); do
       case "$1" in
         --package-path)
@@ -178,9 +179,11 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
         --scratch-path) scratch="$2"; shift 2 ;;
         --product) product="$2"; shift 2 ;;
         --show-bin-path) show_bin=1; shift ;;
+        --skip-update) skip_update=1; shift ;;
         *) shift ;;
       esac
     done
+    [[ "$skip_update" == "1" ]]
     bin="$scratch/arm64-apple-macosx/debug"
     /bin/mkdir -p "$bin"
     if [[ "$product" == "Fleck" ]]; then
@@ -214,6 +217,7 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     architectures=""
     only_active_arch=""
     package_plugin_validation=""
+    package_updates=""
     action=""
     while (($#)); do
       case "$1" in
@@ -225,6 +229,7 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
         ARCHS=*) architectures="${1#*=}"; shift ;;
         ONLY_ACTIVE_ARCH=*) only_active_arch="${1#*=}"; shift ;;
         -skipPackagePluginValidation) package_plugin_validation="skipped"; shift ;;
+        -skipPackageUpdates) package_updates="skipped"; shift ;;
         build) action="build"; shift ;;
         *) shift ;;
       esac
@@ -238,9 +243,11 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     [[ "$architectures" == "arm64" ]]
     [[ "$only_active_arch" == "YES" ]]
     [[ "$package_plugin_validation" == "skipped" ]]
-    printf 'cwd=%s\nscheme=%s\nconfiguration=%s\ndestination=%s\nderivedData=%s\nproducts=%s\narchitectures=%s\nonlyActiveArch=%s\npackagePluginValidation=%s\n' \
+    [[ "$package_updates" == "skipped" ]]
+    printf 'cwd=%s\nscheme=%s\nconfiguration=%s\ndestination=%s\nderivedData=%s\nproducts=%s\narchitectures=%s\nonlyActiveArch=%s\npackagePluginValidation=%s\npackageUpdates=%s\n' \
       "$(pwd -P)" "$scheme" "$configuration" "$destination" "$derived_data" \
       "$products" "$architectures" "$only_active_arch" "$package_plugin_validation" \
+      "$package_updates" \
       > "$FAKE_XCODE_BUILD_LOG"
     : > "$FAKE_XCODE_BUILD_ENTERED"
     if [[ "${FAKE_GEMMA_MUTATE_LOCK:-0}" == "1" ]]; then
@@ -575,6 +582,8 @@ func parakeetPackagerUsesNativeRuntimeSchemeForGemmaExecutableProduct() throws {
   #expect(script.contains(#"gemma_products_root/gemma-cleanup-helper"#))
   #expect(!script.contains("-scheme gemma-cleanup-helper"))
   #expect(script.components(separatedBy: "-skipPackagePluginValidation").count == 2)
+  #expect(script.components(separatedBy: "--skip-update").count == 4)
+  #expect(script.components(separatedBy: "-skipPackageUpdates").count == 2)
 }
 
 @Test
@@ -667,7 +676,7 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   func normalizedTemporaryPath(_ path: String) -> String {
     path.replacingOccurrences(of: "/private/var/", with: "/var/")
   }
-  try #require(gemmaBuildLines.count == 12)
+  try #require(gemmaBuildLines.count == 13)
   #expect(normalizedTemporaryPath(gemmaBuildLines[0]) == "cwd=\(normalizedTemporaryPath(fixture.gemmaPackage.path))")
   #expect(gemmaBuildLines[1] == "scheme=GemmaCleanupNativeRuntime")
   #expect(gemmaBuildLines[2] == "configuration=Release")
@@ -677,11 +686,12 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   #expect(gemmaBuildLines[6] == "architectures=arm64")
   #expect(gemmaBuildLines[7] == "onlyActiveArch=YES")
   #expect(gemmaBuildLines[8] == "packagePluginValidation=skipped")
-  #expect(gemmaBuildLines[9].hasSuffix(
+  #expect(gemmaBuildLines[9] == "packageUpdates=skipped")
+  #expect(gemmaBuildLines[10].hasSuffix(
     "/Products/gemma-cleanup-helper.dSYM/Contents/Resources/DWARF/gemma-cleanup-helper"
   ))
-  #expect(gemmaBuildLines[10].hasSuffix("/Products/gemma-cleanup-helper"))
-  #expect(gemmaBuildLines[11].hasSuffix("/Products/mlx-swift_Cmlx.bundle"))
+  #expect(gemmaBuildLines[11].hasSuffix("/Products/gemma-cleanup-helper"))
+  #expect(gemmaBuildLines[12].hasSuffix("/Products/mlx-swift_Cmlx.bundle"))
 
   let app = fixture.build.appendingPathComponent("parakeet-test/Fleck.app")
   let executableContents = try String(

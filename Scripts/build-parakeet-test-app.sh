@@ -349,11 +349,11 @@ readonly bin_marker="$scratch_parent/bin-path"
 "$resolver" "$candidate_scratch" /bin/sh -c '
   set -eu
   "$3" build -c debug --product Fleck \
-    --disable-automatic-resolution --scratch-path "$1"
+    --disable-automatic-resolution --skip-update --scratch-path "$1"
   "$3" build -c debug --product fleck-agent \
-    --disable-automatic-resolution --scratch-path "$1"
+    --disable-automatic-resolution --skip-update --scratch-path "$1"
   "$3" build -c debug --show-bin-path \
-    --disable-automatic-resolution --scratch-path "$1" >"$2"
+    --disable-automatic-resolution --skip-update --scratch-path "$1" >"$2"
 ' /bin/sh "$candidate_scratch" "$bin_marker" "$swift_path"
 
 if ! /usr/bin/cmp -s "$resolved" "$lock_backup"; then
@@ -412,6 +412,7 @@ readonly gemma_products_root="$gemma_derived_data/Products"
     -destination 'generic/platform=macOS' \
     -derivedDataPath "$gemma_derived_data" \
     -disableAutomaticPackageResolution \
+    -skipPackageUpdates \
     -skipPackagePluginValidation \
     "CONFIGURATION_BUILD_DIR=$gemma_products_root" \
     ARCHS=arm64 \
