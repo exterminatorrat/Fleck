@@ -403,14 +403,16 @@ fi
 readonly gemma_derived_data="$gemma_scratch_parent/DerivedData"
 readonly gemma_products_root="$gemma_derived_data/Products"
 
+# NativeRuntime is lock-verified; noninteractive packaging cannot accept Xcode's plug-in prompt.
 (
   cd -- "$gemma_cleanup_package"
   "$xcodebuild_path" \
-    -scheme gemma-cleanup-helper \
+    -scheme GemmaCleanupNativeRuntime \
     -configuration Release \
     -destination 'generic/platform=macOS' \
     -derivedDataPath "$gemma_derived_data" \
     -disableAutomaticPackageResolution \
+    -skipPackagePluginValidation \
     "CONFIGURATION_BUILD_DIR=$gemma_products_root" \
     ARCHS=arm64 \
     ONLY_ACTIVE_ARCH=YES \
