@@ -830,6 +830,60 @@ func supportedHardwareProfileReachesRecommendedInstallerWithoutStartingTransport
 }
 
 @Test @MainActor
+func defaultASRFactoryRejectsCleanupConfigurationBeforeAnyAction() throws {
+  let asr = TestDescriptors.tinyAdmittedASR
+  let cleanupRaw = TestDescriptors.make(
+    asr,
+    modelID: asr.modelID,
+    role: .cleanup
+  )
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let fixture = try TestManagers.manager(
+    descriptor: asr,
+    artifactIdentity: TestArtifacts.identity(matching: asr),
+    manifest: TestManifests.tiny,
+    transport: transport
+  )
+  defer { fixture.cleanup() }
+  var startupCalls = 0
+  var calibrationCalls = 0
+  let configuration = AdmittedModelSignedConfiguration(
+    rawDescriptor: cleanupRaw,
+    hardware: supportedHardware(for: asr),
+    manager: fixture.manager,
+    startup: { startupCalls += 1 },
+    calibrate: { calibrationCalls += 1 }
+  )
+
+  let installer = makeAdmittedModelInstaller(signedConfiguration: configuration)
+
+  #expect(installer.snapshot.recommendation == .builtIn)
+  #expect(startupCalls == 0)
+  #expect(calibrationCalls == 0)
+  #expect(transport.downloadCalls == 0)
+}
+
+@Test @MainActor
+func cleanupFactoryRejectsASRConfigurationBeforeAnyAction() throws {
+  let asr = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let test = signedConfiguration(
+    descriptor: asr,
+    hardware: supportedHardware(for: asr),
+    transport: transport
+  )
+  defer { test.fixture.cleanup() }
+
+  let installer = makeAdmittedModelInstaller(
+    signedConfiguration: test.value,
+    expectedRole: .cleanup
+  )
+
+  #expect(installer.snapshot.recommendation == .builtIn)
+  #expect(transport.downloadCalls == 0)
+}
+
+@Test @MainActor
 func invalidSignedDescriptorIsCaughtAsNonOperatingBuiltInFailure() {
   let raw = TestDescriptors.make(TestDescriptors.neutralAdmitted, modelID: "")
   let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)

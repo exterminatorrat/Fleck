@@ -372,7 +372,8 @@ struct AdmittedModelSignedConfiguration {
 
 @MainActor
 func makeAdmittedModelInstaller(
-  signedConfiguration: AdmittedModelSignedConfiguration? = nil
+  signedConfiguration: AdmittedModelSignedConfiguration? = nil,
+  expectedRole: AdmittedModelRole = .asr
 ) -> any AdmittedModelInstalling {
   guard let signedConfiguration else {
     return BuiltInAdmittedModelInstaller()
@@ -390,7 +391,8 @@ func makeAdmittedModelInstaller(
 
   let catalog = AdmittedModelCatalog(
     signedDescriptor: descriptor,
-    hardware: signedConfiguration.hardware
+    hardware: signedConfiguration.hardware,
+    expectedRole: expectedRole
   )
   guard case .recommended(let recommended) = catalog.recommendation(),
         recommended == descriptor else {
@@ -417,6 +419,7 @@ func makeAdmittedModelInstaller(
     return try EnhancedModelManagerInstaller(
       manager: signedConfiguration.manager,
       descriptor: descriptor,
+      expectedRole: expectedRole,
       startup: signedConfiguration.startup,
       calibrate: signedConfiguration.calibrate
     )
@@ -429,7 +432,9 @@ func makeAdmittedModelInstaller(
 }
 #else
 @MainActor
-func makeAdmittedModelInstaller() -> any AdmittedModelInstalling {
+func makeAdmittedModelInstaller(
+  expectedRole: AdmittedModelRole = .asr
+) -> any AdmittedModelInstalling {
   BuiltInAdmittedModelInstaller()
 }
 #endif

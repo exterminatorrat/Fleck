@@ -95,6 +95,7 @@ final class FailedAdmittedModelInstaller: AdmittedModelInstalling {
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 struct EnhancedModelArtifactIdentity: Equatable, Sendable {
+  let role: AdmittedModelRole
   let sourceRepository: URL
   let modelID: String
   let revision: String
@@ -107,8 +108,37 @@ struct EnhancedModelArtifactIdentity: Equatable, Sendable {
   let installedBytes: Int64
   let requiredCapacityBytes: Int64
 
+  init(
+    role: AdmittedModelRole = .asr,
+    sourceRepository: URL,
+    modelID: String,
+    revision: String,
+    license: String,
+    runtimeABI: String,
+    conversion: String,
+    quantization: String,
+    files: [AdmittedModelFile],
+    downloadBytes: Int64,
+    installedBytes: Int64,
+    requiredCapacityBytes: Int64
+  ) {
+    self.role = role
+    self.sourceRepository = sourceRepository
+    self.modelID = modelID
+    self.revision = revision
+    self.license = license
+    self.runtimeABI = runtimeABI
+    self.conversion = conversion
+    self.quantization = quantization
+    self.files = files
+    self.downloadBytes = downloadBytes
+    self.installedBytes = installedBytes
+    self.requiredCapacityBytes = requiredCapacityBytes
+  }
+
   var immutableIdentity: AdmittedModelImmutableIdentity {
     .init(
+      role: role,
       sourceRepository: sourceRepository,
       modelID: modelID,
       revision: revision,
@@ -214,9 +244,14 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   init(
     manager: EnhancedModelManager,
     descriptor: AdmittedModelDescriptor,
+    expectedRole: AdmittedModelRole = .asr,
     startup: @escaping @MainActor () async throws -> Void,
     calibrate: @escaping @MainActor () async throws -> Void
   ) throws {
+    guard descriptor.role == expectedRole,
+          manager.admittedArtifactIdentity.role == expectedRole else {
+      throw AdmittedModelArtifactMismatch.descriptorArtifactMismatch
+    }
     try AdmittedModelArtifactBinding.validate(
       descriptor: descriptor,
       artifact: manager.admittedArtifactIdentity,

@@ -66,10 +66,11 @@ enum TestDescriptors {
 
   static func make(
     _ descriptor: AdmittedModelDescriptor,
-    modelID: String
+    modelID: String,
+    role: AdmittedModelRole? = nil
   ) -> RawAdmittedModelDescriptor {
     RawAdmittedModelDescriptor(
-      role: descriptor.role,
+      role: role ?? descriptor.role,
       modelID: modelID,
       revision: descriptor.revision,
       runtimeABI: descriptor.runtimeABI,
@@ -85,6 +86,30 @@ enum TestDescriptors {
       architectures: descriptor.architectures
     )
   }
+}
+
+@Test
+func admittedStorageNamespaceSeparatesOtherwiseIdenticalRoles() throws {
+  let asr = TestDescriptors.tinyAdmittedASR
+  let cleanup = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+    asr,
+    modelID: asr.modelID,
+    role: .cleanup
+  ))
+  let baseRoot = TestPaths.temporaryDirectory()
+  defer { TestPaths.remove(baseRoot) }
+
+  let asrNamespace = try AdmittedModelStorageNamespace(
+    baseRootURL: baseRoot,
+    descriptor: asr
+  )
+  let cleanupNamespace = try AdmittedModelStorageNamespace(
+    baseRootURL: baseRoot,
+    descriptor: cleanup
+  )
+
+  #expect(asrNamespace.identityKey != cleanupNamespace.identityKey)
+  #expect(asrNamespace.rootURL != cleanupNamespace.rootURL)
 }
 
 enum TestManifests {
@@ -129,6 +154,7 @@ enum TestArtifacts {
     matching descriptor: AdmittedModelDescriptor
   ) -> EnhancedModelArtifactIdentity {
     EnhancedModelArtifactIdentity(
+      role: descriptor.role,
       sourceRepository: descriptor.source,
       modelID: descriptor.modelID,
       revision: descriptor.revision,
@@ -144,6 +170,7 @@ enum TestArtifacts {
   }
 
   static func identityWith(
+    role: AdmittedModelRole? = nil,
     sourceRepository: URL? = nil,
     modelID: String? = nil,
     revision: String? = nil,
@@ -160,6 +187,7 @@ enum TestArtifacts {
       identity(
         matching: TestDescriptors.tinyAdmittedASR
       ),
+      role: role,
       sourceRepository: sourceRepository,
       modelID: modelID,
       revision: revision,
@@ -176,6 +204,7 @@ enum TestArtifacts {
 
   static func identity(
     _ base: EnhancedModelArtifactIdentity,
+    role: AdmittedModelRole? = nil,
     sourceRepository: URL? = nil,
     modelID: String? = nil,
     revision: String? = nil,
@@ -189,6 +218,7 @@ enum TestArtifacts {
     requiredCapacityBytes: Int64? = nil
   ) -> EnhancedModelArtifactIdentity {
     EnhancedModelArtifactIdentity(
+      role: role ?? base.role,
       sourceRepository: sourceRepository ?? base.sourceRepository,
       modelID: modelID ?? base.modelID,
       revision: revision ?? base.revision,
@@ -996,6 +1026,54 @@ func descriptorArtifactMismatchFailsBeforeTransport() async {
       calibrate: { }
     )
   }
+  #expect(transport.downloadCalls == 0)
+}
+
+@Test
+func descriptorArtifactBindingRejectsRoleMismatch() throws {
+  let asr = TestDescriptors.tinyAdmittedASR
+  let cleanup = try AdmittedModelDescriptor(validating: TestDescriptors.make(
+    asr,
+    modelID: asr.modelID,
+    role: .cleanup
+  ))
+  let asrArtifact = TestArtifacts.identity(matching: asr)
+  let cleanupArtifact = TestArtifacts.identity(asrArtifact, role: .cleanup)
+
+  #expect(asrArtifact.immutableIdentity != cleanupArtifact.immutableIdentity)
+  #expect(throws: AdmittedModelArtifactMismatch.descriptorArtifactMismatch) {
+    try AdmittedModelArtifactBinding.validate(
+      descriptor: cleanup,
+      artifact: asrArtifact,
+      manifest: TestManifests.tiny
+    )
+  }
+}
+
+@Test @MainActor
+func installerRejectsManagerRoleMismatchBeforeAnyAction() throws {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(bytes: TestFixtures.tinyBytes)
+  let fixture = try TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identityWith(role: .cleanup),
+    manifest: TestManifests.tiny,
+    transport: transport
+  )
+  defer { fixture.cleanup() }
+  var startupCalls = 0
+  var calibrationCalls = 0
+
+  #expect(throws: AdmittedModelArtifactMismatch.descriptorArtifactMismatch) {
+    _ = try EnhancedModelManagerInstaller(
+      manager: fixture.manager,
+      descriptor: descriptor,
+      startup: { startupCalls += 1 },
+      calibrate: { calibrationCalls += 1 }
+    )
+  }
+  #expect(startupCalls == 0)
+  #expect(calibrationCalls == 0)
   #expect(transport.downloadCalls == 0)
 }
 

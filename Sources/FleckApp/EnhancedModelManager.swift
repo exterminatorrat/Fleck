@@ -127,6 +127,7 @@
       }
       let identity = descriptor.immutableIdentity
       let material = [
+        identity.role.identityComponent,
         identity.sourceRepository.absoluteString,
         identity.modelID,
         identity.revision,

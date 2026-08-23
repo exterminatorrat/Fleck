@@ -9,6 +9,13 @@ struct AdmittedModelFile: Codable, Equatable, Sendable {
 enum AdmittedModelRole: Codable, Equatable, Sendable {
   case asr
   case cleanup
+
+  var identityComponent: String {
+    switch self {
+    case .asr: "asr"
+    case .cleanup: "cleanup"
+    }
+  }
 }
 
 struct RawAdmittedModelDescriptor: Codable, Equatable, Sendable {
@@ -211,6 +218,7 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
 
   var immutableIdentity: AdmittedModelImmutableIdentity {
     .init(
+      role: role,
       sourceRepository: source,
       modelID: modelID,
       revision: revision,
@@ -227,6 +235,7 @@ struct AdmittedModelDescriptor: Equatable, Sendable {
 }
 
 struct AdmittedModelImmutableIdentity: Equatable, Sendable {
+  let role: AdmittedModelRole
   let sourceRepository: URL
   let modelID: String
   let revision: String
@@ -321,18 +330,22 @@ enum AdmittedModelRecommendation: Equatable, Sendable {
 struct AdmittedModelCatalog: Sendable {
   private let signedDescriptor: AdmittedModelDescriptor?
   private let hardware: AdmittedModelHardwareProfile
+  private let expectedRole: AdmittedModelRole
 
   init(
     signedDescriptor: AdmittedModelDescriptor?,
-    hardware: AdmittedModelHardwareProfile
+    hardware: AdmittedModelHardwareProfile,
+    expectedRole: AdmittedModelRole = .asr
   ) {
     self.signedDescriptor = signedDescriptor
     self.hardware = hardware
+    self.expectedRole = expectedRole
   }
 
   func recommendation() -> AdmittedModelRecommendation {
     let supportedLanguages = Set(signedDescriptor?.languages ?? [])
     guard let descriptor = signedDescriptor,
+          descriptor.role == expectedRole,
           descriptor.architectures.contains(hardware.architecture),
           (hardware.requestedLanguages.isEmpty
             || hardware.requestedLanguages.isSubset(of: supportedLanguages)),

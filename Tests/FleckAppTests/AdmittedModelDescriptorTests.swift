@@ -109,6 +109,61 @@ private enum DescriptorValidationFixtures {
   #expect(catalog.recommendation() == .recommended(descriptor))
 }
 
+@Test func descriptorRoleIsPartOfImmutableIdentity() throws {
+  let asr = DescriptorValidationFixtures.admittedASR
+  let cleanup = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
+    asr,
+    role: .cleanup
+  ))
+
+  #expect(asr.immutableIdentity != cleanup.immutableIdentity)
+}
+
+@Test func defaultASRCatalogRejectsCleanupDescriptor() throws {
+  let asr = DescriptorValidationFixtures.admittedASR
+  let cleanup = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
+    asr,
+    role: .cleanup
+  ))
+  let catalog = AdmittedModelCatalog(
+    signedDescriptor: cleanup,
+    hardware: .init(
+      architecture: cleanup.architectures[0],
+      requestedLanguages: [cleanup.languages[0]],
+      availableBytes: cleanup.requiredCapacityBytes
+    )
+  )
+
+  #expect(catalog.recommendation() == .builtIn)
+}
+
+@Test func cleanupCatalogAcceptsOnlyCleanupDescriptor() throws {
+  let asr = DescriptorValidationFixtures.admittedASR
+  let cleanup = try AdmittedModelDescriptor(validating: DescriptorValidationFixtures.make(
+    asr,
+    role: .cleanup
+  ))
+  let hardware = AdmittedModelHardwareProfile(
+    architecture: cleanup.architectures[0],
+    requestedLanguages: [cleanup.languages[0]],
+    availableBytes: cleanup.requiredCapacityBytes
+  )
+
+  let cleanupCatalog = AdmittedModelCatalog(
+    signedDescriptor: cleanup,
+    hardware: hardware,
+    expectedRole: .cleanup
+  )
+  let mismatchedCatalog = AdmittedModelCatalog(
+    signedDescriptor: asr,
+    hardware: hardware,
+    expectedRole: .cleanup
+  )
+
+  #expect(cleanupCatalog.recommendation() == .recommended(cleanup))
+  #expect(mismatchedCatalog.recommendation() == .builtIn)
+}
+
 @Test func mixedRequestedLanguagesDoNotPassAnEnglishOnlyDescriptor() {
   let descriptor = DescriptorValidationFixtures.admittedASR
   #expect(descriptor.languages == ["en-US"])
