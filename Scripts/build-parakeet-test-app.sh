@@ -12,6 +12,8 @@ readonly info_plist="$repo_root/Sources/FleckApp/Info.plist"
 readonly canonical_mark="$repo_root/website/public/fleck-mark.png"
 readonly manifest="$repo_root/Sources/FleckApp/Resources/EnhancedModelManifest.json"
 readonly notices="$repo_root/Sources/FleckApp/Resources/ThirdPartyNotices.md"
+readonly gemma_cleanup_manifest="$repo_root/Sources/FleckApp/Resources/GemmaCleanupModelManifest.json"
+readonly gemma_cleanup_notice="$repo_root/Sources/FleckApp/Resources/GemmaCleanupNotice.md"
 readonly build_root="$repo_root/.build"
 readonly output_root="$build_root/parakeet-test"
 readonly app_destination="$output_root/Fleck.app"
@@ -52,7 +54,9 @@ for required_tool in \
   fi
 done
 
-for required_input in "$resolved" "$info_plist" "$canonical_mark" "$manifest" "$notices"; do
+for required_input in \
+  "$resolved" "$info_plist" "$canonical_mark" "$manifest" "$notices" \
+  "$gemma_cleanup_manifest" "$gemma_cleanup_notice"; do
   if [[ -L "$required_input" ]]; then
     printf 'error: required input must not be a symlink: %s\n' "$required_input" >&2
     exit 2
@@ -511,7 +515,7 @@ for forbidden_suffix in \
   fi
 done
 
-expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/Resources/mlx-swift_Cmlx.bundle\nContents/Resources/mlx-swift_Cmlx.bundle/Contents\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Info.plist\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib\nContents/SharedSupport\nContents/SharedSupport/fleck-agent\nContents/SharedSupport/gemma-cleanup-helper'
+expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupNotice.md\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/Resources/mlx-swift_Cmlx.bundle\nContents/Resources/mlx-swift_Cmlx.bundle/Contents\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Info.plist\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib\nContents/SharedSupport\nContents/SharedSupport/fleck-agent\nContents/SharedSupport/gemma-cleanup-helper'
 actual_app_contents="$(
   /usr/bin/find "$staged_app" ! -path "$staged_app" -print \
     | /usr/bin/sed "s#^$staged_app/##" \
@@ -531,7 +535,7 @@ if [[ -n "$(/usr/bin/find "$staged_bundle" ! -path "$staged_bundle" ! -type f -p
   printf '%s\n' 'error: staged resource bundle contains a directory or symlink' >&2
   exit 1
 fi
-expected_bundle_contents=$'EnhancedModelManifest.json\nThirdPartyNotices.md'
+expected_bundle_contents=$'EnhancedModelManifest.json\nGemmaCleanupModelManifest.json\nGemmaCleanupNotice.md\nThirdPartyNotices.md'
 actual_bundle_contents="$(
   /usr/bin/find "$staged_bundle" -type f -print \
     | /usr/bin/sed "s#^$staged_bundle/##" \
@@ -548,6 +552,8 @@ for exact_pair in \
   "$canonical_mark|$staged_app/Contents/Resources/fleck-mark.png" \
   "$manifest|$staged_bundle/EnhancedModelManifest.json" \
   "$notices|$staged_bundle/ThirdPartyNotices.md" \
+  "$gemma_cleanup_manifest|$staged_bundle/GemmaCleanupModelManifest.json" \
+  "$gemma_cleanup_notice|$staged_bundle/GemmaCleanupNotice.md" \
   "$gemma_resource_metadata|$staged_gemma_resource_bundle/Contents/Info.plist" \
   "$gemma_metallib|$staged_gemma_resource_bundle/Contents/Resources/default.metallib"; do
   source_path="${exact_pair%%|*}"
@@ -889,7 +895,9 @@ if [[ -e "$app_destination/Fleck_FleckApp.bundle" \
 fi
 for published_resource in \
   "$app_destination/Contents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json" \
-  "$app_destination/Contents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md"; do
+  "$app_destination/Contents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md" \
+  "$app_destination/Contents/Resources/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json" \
+  "$app_destination/Contents/Resources/Fleck_FleckApp.bundle/GemmaCleanupNotice.md"; do
   if [[ ! -f "$published_resource" ]]; then
     printf 'error: embedded resource missing after publication: %s\n' \
       "$published_resource" >&2
@@ -906,6 +914,18 @@ if ! /usr/bin/cmp -s \
   "$notices" \
   "$app_destination/Contents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md"; then
   printf '%s\n' 'error: published notices differ from source' >&2
+  exit 1
+fi
+if ! /usr/bin/cmp -s \
+  "$gemma_cleanup_manifest" \
+  "$app_destination/Contents/Resources/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json"; then
+  printf '%s\n' 'error: published Gemma cleanup manifest differs from source' >&2
+  exit 1
+fi
+if ! /usr/bin/cmp -s \
+  "$gemma_cleanup_notice" \
+  "$app_destination/Contents/Resources/Fleck_FleckApp.bundle/GemmaCleanupNotice.md"; then
+  printf '%s\n' 'error: published Gemma cleanup notice differs from source' >&2
   exit 1
 fi
 

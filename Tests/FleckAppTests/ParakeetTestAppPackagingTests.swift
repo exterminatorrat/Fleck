@@ -105,6 +105,14 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     to: sources.appendingPathComponent("ThirdPartyNotices.md")
   )
   try fileManager.copyItem(
+    at: sourceRoot.appendingPathComponent("Sources/FleckApp/Resources/GemmaCleanupModelManifest.json"),
+    to: sources.appendingPathComponent("GemmaCleanupModelManifest.json")
+  )
+  try fileManager.copyItem(
+    at: sourceRoot.appendingPathComponent("Sources/FleckApp/Resources/GemmaCleanupNotice.md"),
+    to: sources.appendingPathComponent("GemmaCleanupNotice.md")
+  )
+  try fileManager.copyItem(
     at: sourceRoot.appendingPathComponent("Tools/GemmaCleanupBenchmark/NativeRuntime/Package.swift"),
     to: gemmaPackage.appendingPathComponent("Package.swift")
   )
@@ -181,6 +189,8 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
       /bin/mkdir -p "$bin/Fleck_FleckApp.bundle"
       /bin/cp "$FAKE_MANIFEST" "$bin/Fleck_FleckApp.bundle/EnhancedModelManifest.json"
       /bin/cp "$FAKE_NOTICES" "$bin/Fleck_FleckApp.bundle/ThirdPartyNotices.md"
+      /bin/cp "$FAKE_GEMMA_MANIFEST" "$bin/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json"
+      /bin/cp "$FAKE_GEMMA_NOTICE" "$bin/Fleck_FleckApp.bundle/GemmaCleanupNotice.md"
     elif [[ "$product" == "fleck-agent" ]]; then
       printf '%s\n' "$FAKE_RUN_ID" > "$bin/fleck-agent"
       /bin/chmod 755 "$bin/fleck-agent"
@@ -448,6 +458,8 @@ private func environment(
   environment["FAKE_RUN_ID"] = runID
   environment["FAKE_MANIFEST"] = fixture.root.appendingPathComponent("Sources/FleckApp/Resources/EnhancedModelManifest.json").path
   environment["FAKE_NOTICES"] = fixture.root.appendingPathComponent("Sources/FleckApp/Resources/ThirdPartyNotices.md").path
+  environment["FAKE_GEMMA_MANIFEST"] = fixture.root.appendingPathComponent("Sources/FleckApp/Resources/GemmaCleanupModelManifest.json").path
+  environment["FAKE_GEMMA_NOTICE"] = fixture.root.appendingPathComponent("Sources/FleckApp/Resources/GemmaCleanupNotice.md").path
   environment["FAKE_GEMMA_PACKAGE"] = fixture.gemmaPackage.path
   environment["FAKE_XCODE_BUILD_LOG"] = fixture.xcodeBuildLog.path
   environment["FAKE_XCODE_BUILD_ENTERED"] = fixture.xcodeBuildEntered.path
@@ -534,6 +546,8 @@ func parakeetTestAppPackagingScriptUsesContentsResourcesBundle() {
   #expect(source.contains(#"readonly staged_bundle="$staged_app/Contents/Resources/Fleck_FleckApp.bundle""#))
   #expect(source.contains("Contents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json"))
   #expect(source.contains("Contents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md"))
+  #expect(source.contains("Contents/Resources/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json"))
+  #expect(source.contains("Contents/Resources/Fleck_FleckApp.bundle/GemmaCleanupNotice.md"))
   #expect(source.contains(#"publish_atomic "$staged_app" "$app_destination""#))
   #expect(!source.contains(#"publish_atomic "$staged_app/Fleck_FleckApp.bundle""#))
   #expect(!source.contains(#"publish_atomic "$sibling_resource_output""#))
@@ -640,6 +654,28 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   )
   #expect(try String(contentsOf: metallib, encoding: .utf8) == "default-metallib-first\n")
   #expect(try String(contentsOf: bundleMetadata, encoding: .utf8) == "mlx-bundle-info-first\n")
+  let packagedResources = app.appendingPathComponent(
+    "Contents/Resources/Fleck_FleckApp.bundle",
+    isDirectory: true
+  )
+  let expectedResourceNames = [
+    "EnhancedModelManifest.json",
+    "GemmaCleanupModelManifest.json",
+    "GemmaCleanupNotice.md",
+    "ThirdPartyNotices.md",
+  ]
+  #expect(try fileManager.contentsOfDirectory(atPath: packagedResources.path).sorted()
+    == expectedResourceNames)
+  for resourceName in expectedResourceNames {
+    #expect(
+      try Data(contentsOf: packagedResources.appendingPathComponent(resourceName))
+        == Data(
+          contentsOf: fixture.root.appendingPathComponent(
+            "Sources/FleckApp/Resources/\(resourceName)"
+          )
+        )
+    )
+  }
   let appContents = fileManager.subpaths(atPath: app.path) ?? []
   #expect(appContents.filter { $0 == "Contents/SharedSupport/gemma-cleanup-helper" }.count == 1)
   #expect(appContents.filter {
