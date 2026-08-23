@@ -50,7 +50,7 @@ struct GemmaCleanupAppCompositionTests {
 
     fixture.verifiedRepositoryURL = fixture.repositoryURL
     fixture.installer.publish(phase: .installed)
-    await fixture.waitForPresentation(.installed)
+    await fixture.waitForPresentation(composition, .installed)
     composition.reconcileGate()
     #expect(composition.isGemmaReady)
     _ = try composition.cleanupGenerator.start(cleanupRequest(), maximumOutputTokens: 24)
@@ -150,11 +150,21 @@ struct GemmaCleanupAppCompositionTests {
       await mutation.run()
       drained.finish()
     }
-    await Task.yield()
+    for _ in 0..<1_000 where composition.isGemmaReady {
+      await Task.yield()
+    }
 
+    #expect(!composition.isGemmaReady)
     #expect(!drained.isFinished)
-    #expect(throws: DynamicCleanupGeneratorError.gemmaUnavailable) {
-      _ = try composition.cleanupGenerator.start(cleanupRequest(), maximumOutputTokens: 24)
+    do {
+      let unexpectedSession = try composition.cleanupGenerator.start(
+        cleanupRequest(),
+        maximumOutputTokens: 24
+      )
+      unexpectedSession.forceTerminate()
+      Issue.record("Expected Gemma to be unavailable during model mutation")
+    } catch {
+      #expect(error as? DynamicCleanupGeneratorError == .gemmaUnavailable)
     }
 
     fixture.transport.releaseAcknowledgement()
@@ -164,11 +174,71 @@ struct GemmaCleanupAppCompositionTests {
   }
 
   @Test @MainActor
-  func foundationAvailabilitySelectsTruthfulCleanupFallbackLabel() {
+  func mutationSuppressionRequiresNonInstalledBeforeFreshInstalledReopens() async throws {
+    let fixture = CompositionFixture(phase: .installed, verified: true)
+    let mutation = MutationCallbackProbe()
+    let composition = fixture.makeActivatedComposition(mutation: mutation)
+
+    await mutation.run()
+    fixture.installer.publish(phase: .installed)
+    await fixture.drainPresentationUpdates()
+    #expect(throws: DynamicCleanupGeneratorError.gemmaUnavailable) {
+      _ = try composition.cleanupGenerator.start(cleanupRequest(), maximumOutputTokens: 24)
+    }
+
+    fixture.installer.publish(phase: .removing)
+    await fixture.waitForPresentation(composition, .removing)
+    #expect(throws: DynamicCleanupGeneratorError.gemmaUnavailable) {
+      _ = try composition.cleanupGenerator.start(cleanupRequest(), maximumOutputTokens: 24)
+    }
+
+    fixture.installer.publish(phase: .installed)
+    await fixture.waitForPresentation(composition, .installed)
+    let session = try composition.cleanupGenerator.start(
+      cleanupRequest(),
+      maximumOutputTokens: 24
+    )
+    #expect(try await session.result().cleaned == "gemma")
+  }
+
+  @Test @MainActor
+  func disableAndShutdownKeepLateInstalledPublicationsClosed() async {
+    let disabledFixture = CompositionFixture(phase: .installed, verified: true)
+    let disabledComposition = disabledFixture.makeComposition()
+
+    disabledComposition.disable()
+    disabledFixture.installer.publish(phase: .removing)
+    await disabledFixture.waitForPresentation(disabledComposition, .removing)
+    disabledFixture.installer.publish(phase: .installed)
+    await disabledFixture.waitForPresentation(disabledComposition, .installed)
+    #expect(throws: DynamicCleanupGeneratorError.gemmaUnavailable) {
+      _ = try disabledComposition.cleanupGenerator.start(
+        cleanupRequest(),
+        maximumOutputTokens: 24
+      )
+    }
+
+    let shutdownFixture = CompositionFixture(phase: .installed, verified: true)
+    let shutdownComposition = shutdownFixture.makeComposition()
+    await shutdownComposition.shutdown()
+    shutdownFixture.installer.publish(phase: .removing)
+    await shutdownFixture.waitForPresentation(shutdownComposition, .removing)
+    shutdownFixture.installer.publish(phase: .installed)
+    await shutdownFixture.waitForPresentation(shutdownComposition, .installed)
+    #expect(throws: DynamicCleanupGeneratorError.gemmaUnavailable) {
+      _ = try shutdownComposition.cleanupGenerator.start(
+        cleanupRequest(),
+        maximumOutputTokens: 24
+      )
+    }
+  }
+
+  @Test @MainActor
+  func cleanupUsesStableTruthfulFallbackLabel() {
     let fixture = CompositionFixture(phase: .builtIn, verified: false)
     let composition = fixture.makeComposition(foundationIsAvailable: { true })
 
-    #expect(composition.settingsViewModel.presentation.modelLabel == "Apple On-Device")
+    #expect(composition.settingsViewModel.presentation.modelLabel == "Faithful Local Fallback")
   }
 
   @Test @MainActor
@@ -189,6 +259,29 @@ struct GemmaCleanupAppCompositionTests {
     #expect(runtime.admittedModelSettingsViewModel.presentation.accessibilityLabel == "Dictation model")
     #expect(runtime.cleanupAdmittedModelSettingsViewModel.presentation.accessibilityLabel == "Cleanup model")
     await runtime.shutdown()
+  }
+
+  @Test @MainActor
+  func cleanupPresentationTransitionsRefreshRuntimeAvailability() async throws {
+    let fixture = try await CleanupAvailabilityRuntimeFixture()
+    defer { fixture.removeTemporaryFiles() }
+
+    #expect(!fixture.runtime.availability.cleanupAvailable)
+    #expect(fixture.runtime.availability.routing == .inbox)
+
+    fixture.cleanupReady.value = true
+    fixture.installer.publish(phase: .installed)
+    await fixture.drainPresentationUpdates()
+    #expect(fixture.runtime.availability.cleanupAvailable)
+    #expect(fixture.runtime.availability.routing == .inbox)
+
+    fixture.cleanupReady.value = false
+    fixture.installer.publish(phase: .repairRequired(message: "Verification failed"))
+    await fixture.drainPresentationUpdates()
+    #expect(!fixture.runtime.availability.cleanupAvailable)
+    #expect(fixture.runtime.availability.routing == .inbox)
+
+    await fixture.runtime.shutdown()
   }
 
   @Test
@@ -256,6 +349,26 @@ private final class CompositionFixture {
     )
   }
 
+  func makeActivatedComposition(
+    mutation: MutationCallbackProbe
+  ) -> GemmaCleanupCandidateComposition {
+    let activation = activation
+    return GemmaCleanupCandidateComposition(
+      applicationSupportURL: URL(fileURLWithPath: "/tmp/fleck-app-support"),
+      foundationIsAvailable: { false },
+      foundationGenerator: CleanupGeneratorProbe(text: "foundation"),
+      prepareForGeneration: {},
+      verifiedLoadState: { [weak self] in
+        self?.verifiedRepositoryURL.map(EnhancedModelVerifiedLoadState.ready)
+          ?? .unavailable
+      },
+      makeActivation: { _, callback in
+        mutation.install(callback)
+        return activation
+      }
+    )
+  }
+
   var activation: GemmaCleanupTestActivation.Result {
     GemmaCleanupTestActivation.Result(
       manager: manager,
@@ -265,11 +378,109 @@ private final class CompositionFixture {
     )
   }
 
-  func waitForPresentation(_ phase: AdmittedModelInstallPhase) async {
-    while installer.snapshot.phase != phase { await Task.yield() }
+  func waitForPresentation(
+    _ composition: GemmaCleanupCandidateComposition,
+    _ phase: AdmittedModelInstallPhase
+  ) async {
+    for _ in 0..<100 where composition.settingsViewModel.presentation.phase != phase {
+      await Task.yield()
+    }
+    #expect(composition.settingsViewModel.presentation.phase == phase)
+  }
+
+  func drainPresentationUpdates() async {
     for _ in 0..<100 {
       await Task.yield()
     }
+  }
+}
+
+@MainActor
+private final class CleanupAvailabilityRuntimeFixture {
+  let root: URL
+  let installer = CompositionInstaller(phase: .notInstalled)
+  let cleanupReady = BoolProbe(false)
+  let runtime: DictationRuntime
+
+  init() async throws {
+    root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("cleanup-availability-runtime-" + UUID().uuidString)
+    let appState = AppState(
+      store: LocalStore(rootURL: root),
+      saveOperation: { _, _, _ in }
+    )
+    await appState.waitUntilInitialLoad()
+    let provider = UnavailableEngineProvider()
+    let history = DictationHistoryController(
+      load: { [] },
+      save: { _ in },
+      delete: { _ in },
+      clear: {}
+    )
+    let admittedSettings = AdmittedModelSettingsViewModel(
+      installer: BuiltInAdmittedModelInstaller()
+    )
+    let cleanupSettings = AdmittedModelSettingsViewModel(
+      installer: installer,
+      context: .cleanup(fallbackLabel: "Faithful Local Fallback")
+    )
+    let coordinator = DictationCoordinator(
+      engineProvider: provider,
+      preferredEngine: { .standard },
+      cleaner: IdentityCleaner(),
+      router: InboxRouter(),
+      saver: appState,
+      historyController: history,
+      historyEnabled: { true }
+    )
+    let shortcut = GlobalHoldShortcut(
+      handler: coordinator,
+      monitor: InertModifierMonitor(),
+      escapeRegistrar: InertEscapeRegistrar()
+    )
+    let ready = cleanupReady
+    runtime = DictationRuntime(
+      appState: appState,
+      modelManager: DictationModelCapability(
+        modelRootURL: root.appendingPathComponent("model", isDirectory: true),
+        candidateEnabled: true,
+        architectureProvider: { true }
+      ),
+      engineProvider: provider,
+      coordinator: coordinator,
+      shortcutController: shortcut,
+      capsuleController: DictationCapsuleController(),
+      historyController: history,
+      permissionController: DictationPermissionController(),
+      editorRegistry: DictationEditorRegistry(),
+      startupAssessment: {},
+      admittedModelSettingsViewModel: admittedSettings,
+      cleanupAdmittedModelSettingsViewModel: cleanupSettings,
+      availabilityProvider: {
+        DictationAvailability.evaluate(.init(
+          osMajorVersion: 14,
+          architecture: .appleSilicon,
+          microphonePermission: .authorized,
+          speechPermission: .authorized,
+          appleOnDeviceRecognitionSupported: true,
+          enhancedModelReady: false,
+          foundationModelAvailability: .unsupportedOS,
+          cleanupModelReady: ready.value
+        ))
+      },
+      cleanupModelReady: { _ in ready.value }
+    )
+    await runtime.awaitStartupAssessment()
+  }
+
+  func drainPresentationUpdates() async {
+    for _ in 0..<100 {
+      await Task.yield()
+    }
+  }
+
+  func removeTemporaryFiles() {
+    try? FileManager.default.removeItem(at: root)
   }
 }
 
@@ -350,6 +561,45 @@ private final class MutationCallbackProbe: @unchecked Sendable {
     let callback = lock.withLock { self.callback }
     await callback?()
   }
+}
+
+@MainActor
+private final class UnavailableEngineProvider: SpeechEngineProviding {
+  func engineForCapture(preferred _: DictationSpeechEngine) async throws -> any SpeechEngine {
+    throw DictationFailure.unavailable
+  }
+}
+
+private struct IdentityCleaner: TranscriptCleaning {
+  func clean(_ rawTranscript: String) async throws -> String { rawTranscript }
+}
+
+private struct InboxRouter: DestinationRouting {
+  func route(
+    transcript _: String,
+    candidates _: [DictationDestination],
+    inboxID _: UUID?
+  ) async -> UUID? {
+    nil
+  }
+}
+
+@MainActor
+private final class InertModifierMonitor: ModifierKeyMonitoring {
+  var transitionHandler: ((ModifierKeyTransition) -> Void)?
+  var stateHandler: ((ModifierMonitorState) -> Void)?
+  let accessGranted = true
+
+  func start() { stateHandler?(.running) }
+  func stop() { stateHandler?(.stopped) }
+  func requestAccess() -> Bool { true }
+}
+
+@MainActor
+private final class InertEscapeRegistrar: EscapeHotKeyRegistering {
+  var eventHandler: (() -> Void)?
+  func register() {}
+  func unregister() {}
 }
 
 private struct CleanupGeneratorProbe: BoundedCleanupGenerating {

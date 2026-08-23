@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import Combine
   import SwiftUI
   import FleckAgentProtocol
   import FleckCore
@@ -454,7 +455,8 @@
     private weak var appState: AppState?
     private let permissionController: DictationPermissionController
     private let editorRegistry: DictationEditorRegistry
-    private let availabilityProvider: @MainActor () -> DictationAvailability
+    private let availabilityProvider:
+      @MainActor (AdmittedModelSettingsPresentation) -> DictationAvailability
     private let capsuleSleeper: @MainActor (Duration) async -> Void
     private let stopResourceMonitoring: @MainActor () -> Void
     private let forceEnhancedInferenceCold: @MainActor () async -> Void
@@ -475,6 +477,7 @@
     private var historyWindowController: NSWindowController?
     private var terminationObserver: ObserverToken?
     private var activationObserver: ObserverToken?
+    private var cleanupPresentationSubscription: AnyCancellable?
     #if CLEAN_DICTATION_ENHANCED_CANDIDATE
       private var captureEngine: DictationSpeechEngine?
       private var captureReachedListening = false
@@ -556,7 +559,7 @@
       #else
         let cleanupAdmittedModelSettingsViewModel = AdmittedModelSettingsViewModel(
           installer: BuiltInAdmittedModelInstaller(),
-          context: .cleanup(fallbackLabel: "Deterministic Fallback")
+          context: .cleanup(fallbackLabel: "Faithful Local Fallback")
         )
         let cleanupGenerator = foundationCleanupGenerator
       #endif
@@ -634,8 +637,8 @@
         let forceEnhancedInferenceCold: @MainActor () async -> Void = {
           await enhancedComposition.forceCold()
         }
-        let cleanupModelReady: @MainActor () -> Bool = {
-          cleanupComposition.isGemmaReady
+        let cleanupModelReady: @MainActor (AdmittedModelSettingsPresentation) -> Bool = {
+          cleanupComposition.isGemmaReady(for: $0)
         }
         let disableCleanup: @MainActor () -> Void = {
           cleanupComposition.disable()
@@ -647,7 +650,9 @@
         let startResourceMonitoring: @MainActor () -> Void = {}
         let stopResourceMonitoring: @MainActor () -> Void = {}
         let forceEnhancedInferenceCold: @MainActor () async -> Void = {}
-        let cleanupModelReady: @MainActor () -> Bool = { false }
+        let cleanupModelReady: @MainActor (AdmittedModelSettingsPresentation) -> Bool = { _ in
+          false
+        }
         let disableCleanup: @MainActor () -> Void = {}
         let drainCleanup: @MainActor () async -> Void = {}
       #endif
@@ -698,7 +703,9 @@
       startResourceMonitoring: @escaping @MainActor () -> Void = {},
       stopResourceMonitoring: @escaping @MainActor () -> Void = {},
       forceEnhancedInferenceCold: @escaping @MainActor () async -> Void = {},
-      cleanupModelReady: @escaping @MainActor () -> Bool = { false },
+      cleanupModelReady: @escaping @MainActor (AdmittedModelSettingsPresentation) -> Bool = {
+        _ in false
+      },
       disableCleanup: @escaping @MainActor () -> Void = {},
       drainCleanup: @escaping @MainActor () async -> Void = {}
     ) {
@@ -721,7 +728,7 @@
       self.cleanupAdmittedModelSettingsViewModel = cleanupAdmittedModelSettingsViewModel
         ?? AdmittedModelSettingsViewModel(
           installer: BuiltInAdmittedModelInstaller(),
-          context: .cleanup(fallbackLabel: "Deterministic Fallback")
+          context: .cleanup(fallbackLabel: "Faithful Local Fallback")
         )
       self.capsuleSleeper = capsuleSleeper
       self.stopResourceMonitoring = stopResourceMonitoring
@@ -729,17 +736,32 @@
       self.disableCleanup = disableCleanup
       self.drainCleanup = drainCleanup
       let settingsViewModel = self.admittedModelSettingsViewModel
-      let resolvedAvailabilityProvider = availabilityProvider ?? {
-        DictationAvailability.current(
-          permissions: permissionController,
-          enhancedModelReady: settingsViewModel.presentation.allowsEnhancedPreference,
-          cleanupModelReady: cleanupModelReady()
-        )
+      let resolvedAvailabilityProvider: @MainActor (
+        AdmittedModelSettingsPresentation
+      ) -> DictationAvailability
+      if let availabilityProvider {
+        resolvedAvailabilityProvider = { _ in availabilityProvider() }
+      } else {
+        resolvedAvailabilityProvider = { cleanupPresentation in
+          DictationAvailability.current(
+            permissions: permissionController,
+            enhancedModelReady: settingsViewModel.presentation.allowsEnhancedPreference,
+            cleanupModelReady: cleanupModelReady(cleanupPresentation)
+          )
+        }
       }
       self.availabilityProvider = resolvedAvailabilityProvider
-      availability = resolvedAvailabilityProvider()
+      availability = resolvedAvailabilityProvider(
+        self.cleanupAdmittedModelSettingsViewModel.presentation
+      )
       phase = coordinator.phase
       modifierMonitorState = shortcutController.monitorState
+
+      cleanupPresentationSubscription = self.cleanupAdmittedModelSettingsViewModel
+        .$presentation
+        .sink { [weak self] presentation in
+          self?.refreshAvailability(cleanupPresentation: presentation)
+        }
 
       coordinator.setEventObserver { [weak self] event in
         self?.receive(event)
@@ -1003,6 +1025,8 @@
       startupAssessmentTask?.cancel()
       initialLoadSynchronizationTask?.cancel()
       terminalSynchronizationTask?.cancel()
+      cleanupPresentationSubscription?.cancel()
+      cleanupPresentationSubscription = nil
       coordinator.setEventObserver(nil)
       coordinator.setLevelObserver(nil)
       if let terminationObserver {
@@ -1479,8 +1503,12 @@
       capsuleController.dismiss()
     }
 
-    private func refreshAvailability() {
-      availability = availabilityProvider()
+    private func refreshAvailability(
+      cleanupPresentation: AdmittedModelSettingsPresentation? = nil
+    ) {
+      availability = availabilityProvider(
+        cleanupPresentation ?? cleanupAdmittedModelSettingsViewModel.presentation
+      )
     }
 
     isolated deinit {
@@ -1491,6 +1519,7 @@
       startupAssessmentTask?.cancel()
       initialLoadSynchronizationTask?.cancel()
       terminalSynchronizationTask?.cancel()
+      cleanupPresentationSubscription?.cancel()
       if let terminationObserver {
         NotificationCenter.default.removeObserver(terminationObserver.value)
       }
