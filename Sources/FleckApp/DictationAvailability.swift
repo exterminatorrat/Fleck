@@ -81,6 +81,7 @@ struct DictationAvailability: Equatable, Sendable {
     let appleOnDeviceRecognitionSupported: Bool
     let enhancedModelReady: Bool
     let foundationModelAvailability: DictationFoundationModelAvailability
+    let cleanupModelReady: Bool
 
     init(
       osMajorVersion: Int,
@@ -89,7 +90,8 @@ struct DictationAvailability: Equatable, Sendable {
       speechPermission: DictationPermissionStatus,
       appleOnDeviceRecognitionSupported: Bool,
       enhancedModelReady: Bool,
-      foundationModelAvailability: DictationFoundationModelAvailability
+      foundationModelAvailability: DictationFoundationModelAvailability,
+      cleanupModelReady: Bool = false
     ) {
       self.osMajorVersion = osMajorVersion
       self.architecture = architecture
@@ -98,6 +100,7 @@ struct DictationAvailability: Equatable, Sendable {
       self.appleOnDeviceRecognitionSupported = appleOnDeviceRecognitionSupported
       self.enhancedModelReady = enhancedModelReady
       self.foundationModelAvailability = foundationModelAvailability
+      self.cleanupModelReady = cleanupModelReady
     }
 
     init(
@@ -107,7 +110,8 @@ struct DictationAvailability: Equatable, Sendable {
       speechPermission: DictationPermissionStatus,
       appleOnDeviceRecognitionSupported: Bool,
       enhancedModelReady: Bool,
-      foundationModelAvailable: Bool
+      foundationModelAvailable: Bool,
+      cleanupModelReady: Bool = false
     ) {
       self.init(
         osMajorVersion: osMajorVersion,
@@ -119,7 +123,8 @@ struct DictationAvailability: Equatable, Sendable {
         foundationModelAvailability:
           osMajorVersion < 26
           ? .unsupportedOS
-          : foundationModelAvailable ? .available : .unknown
+          : foundationModelAvailable ? .available : .unknown,
+        cleanupModelReady: cleanupModelReady
       )
     }
   }
@@ -147,6 +152,7 @@ struct DictationAvailability: Equatable, Sendable {
     let microphoneAvailable = input.microphonePermission.permitsRequestOrUse
     let speechAvailable = input.speechPermission.permitsRequestOrUse
     let foundationModelAvailable = input.foundationModelAvailability == .available
+    let cleanupAvailable = foundationModelAvailable || input.cleanupModelReady
     let enhancedAvailable = supportedOS
       && enhancedCandidateEnabled
       && input.architecture == .appleSilicon
@@ -171,7 +177,7 @@ struct DictationAvailability: Equatable, Sendable {
       return .init(
         standardAvailable: standardAvailable,
         enhancedAvailable: enhancedAvailable,
-        cleanupAvailable: foundationModelAvailable,
+        cleanupAvailable: cleanupAvailable,
         routing: routing,
         foundationModelAvailability: input.foundationModelAvailability,
         microphonePermission: input.microphonePermission,
@@ -190,7 +196,7 @@ struct DictationAvailability: Equatable, Sendable {
       return .init(
         standardAvailable: standardAvailable,
         enhancedAvailable: enhancedAvailable,
-        cleanupAvailable: foundationModelAvailable,
+        cleanupAvailable: cleanupAvailable,
         routing: routing,
         foundationModelAvailability: input.foundationModelAvailability,
         microphonePermission: input.microphonePermission,
@@ -205,7 +211,8 @@ struct DictationAvailability: Equatable, Sendable {
   @MainActor
   static func current(
     permissions: DictationPermissionController,
-    enhancedModelReady: Bool
+    enhancedModelReady: Bool,
+    cleanupModelReady: Bool = false
   ) -> Self {
     let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     return evaluate(.init(
@@ -215,7 +222,8 @@ struct DictationAvailability: Equatable, Sendable {
       speechPermission: permissions.currentSpeechStatus,
       appleOnDeviceRecognitionSupported: recognizer?.supportsOnDeviceRecognition == true,
       enhancedModelReady: enhancedModelReady,
-      foundationModelAvailability: foundationModelAvailability
+      foundationModelAvailability: currentFoundationModelAvailability,
+      cleanupModelReady: cleanupModelReady
     ))
   }
 
@@ -265,7 +273,7 @@ struct DictationAvailability: Equatable, Sendable {
     return machine == "arm64" ? .appleSilicon : .intel
   }
 
-  private static var foundationModelAvailability: DictationFoundationModelAvailability {
+  static var currentFoundationModelAvailability: DictationFoundationModelAvailability {
     #if canImport(FoundationModels)
       if #available(macOS 26.0, *) {
         switch SystemLanguageModel.default.availability {
@@ -320,19 +328,23 @@ struct DictationCompatibilityPresentation: Equatable, Sendable {
     )
 
     let cleanupDetail: String
-    switch availability.foundationModelAvailability {
-    case .available:
+    if availability.cleanupAvailable {
       cleanupDetail = "Available"
-    case .unsupportedOS:
-      cleanupDetail = "Requires macOS 26 or later"
-    case .deviceNotEligible:
-      cleanupDetail = "Requires a Mac that supports Apple Intelligence"
-    case .appleIntelligenceNotEnabled:
-      cleanupDetail = "Turn on Apple Intelligence in System Settings"
-    case .modelNotReady:
-      cleanupDetail = "Apple Intelligence model is not ready"
-    case .unknown:
-      cleanupDetail = "Unavailable"
+    } else {
+      switch availability.foundationModelAvailability {
+      case .available:
+        cleanupDetail = "Available"
+      case .unsupportedOS:
+        cleanupDetail = "Requires macOS 26 or later"
+      case .deviceNotEligible:
+        cleanupDetail = "Requires a Mac that supports Apple Intelligence"
+      case .appleIntelligenceNotEnabled:
+        cleanupDetail = "Turn on Apple Intelligence in System Settings"
+      case .modelNotReady:
+        cleanupDetail = "Apple Intelligence model is not ready"
+      case .unknown:
+        cleanupDetail = "Unavailable"
+      }
     }
     cleanup = .init(
       title: "AI cleanup",

@@ -434,6 +434,7 @@
 
     let modelManager: DictationModelCapability
     let admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
+    let cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel
     let engineProvider: any SpeechEngineProviding
     let coordinator: DictationCoordinator
     let shortcutController: GlobalHoldShortcut
@@ -457,6 +458,8 @@
     private let capsuleSleeper: @MainActor (Duration) async -> Void
     private let stopResourceMonitoring: @MainActor () -> Void
     private let forceEnhancedInferenceCold: @MainActor () async -> Void
+    private let disableCleanup: @MainActor () -> Void
+    private let drainCleanup: @MainActor () async -> Void
     private var desiredModifier: DictationModifierKey?
     private var needsModifierApplication = false
     private var capsuleOwner: CapsuleOwner?
@@ -536,7 +539,27 @@
         makeEnhancedCapture: makeEnhancedCapture
       )
       let languageModel = FoundationModelDictation()
-      let cleanupGenerator = FoundationModelCleanupGenerator(dictation: languageModel)
+      let foundationCleanupGenerator = FoundationModelCleanupGenerator(dictation: languageModel)
+      #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+        let cleanupComposition = GemmaCleanupCandidateComposition(
+          applicationSupportURL: applicationSupportURL,
+          foundationIsAvailable: {
+            DictationAvailability.currentFoundationModelAvailability == .available
+          },
+          foundationGenerator: foundationCleanupGenerator,
+          prepareForGeneration: {
+            await enhancedComposition.forceCold()
+          }
+        )
+        let cleanupAdmittedModelSettingsViewModel = cleanupComposition.settingsViewModel
+        let cleanupGenerator = cleanupComposition.cleanupGenerator
+      #else
+        let cleanupAdmittedModelSettingsViewModel = AdmittedModelSettingsViewModel(
+          installer: BuiltInAdmittedModelInstaller(),
+          context: .cleanup(fallbackLabel: "Deterministic Fallback")
+        )
+        let cleanupGenerator = foundationCleanupGenerator
+      #endif
       let incrementalCleaner = IncrementalTranscriptCleaner(
         generator: cleanupGenerator,
         clock: .live
@@ -594,6 +617,11 @@
       )
       let startupAssessment: @MainActor () async -> Void = {
         await admittedModelSettingsViewModel.refresh()
+        #if CLEAN_DICTATION_ENHANCED_CANDIDATE
+          await cleanupComposition.refresh()
+        #else
+          await cleanupAdmittedModelSettingsViewModel.refresh()
+        #endif
       }
 
       #if CLEAN_DICTATION_ENHANCED_CANDIDATE
@@ -606,10 +634,22 @@
         let forceEnhancedInferenceCold: @MainActor () async -> Void = {
           await enhancedComposition.forceCold()
         }
+        let cleanupModelReady: @MainActor () -> Bool = {
+          cleanupComposition.isGemmaReady
+        }
+        let disableCleanup: @MainActor () -> Void = {
+          cleanupComposition.disable()
+        }
+        let drainCleanup: @MainActor () async -> Void = {
+          await cleanupComposition.shutdown()
+        }
       #else
         let startResourceMonitoring: @MainActor () -> Void = {}
         let stopResourceMonitoring: @MainActor () -> Void = {}
         let forceEnhancedInferenceCold: @MainActor () async -> Void = {}
+        let cleanupModelReady: @MainActor () -> Bool = { false }
+        let disableCleanup: @MainActor () -> Void = {}
+        let drainCleanup: @MainActor () async -> Void = {}
       #endif
 
       self.init(
@@ -624,11 +664,15 @@
         editorRegistry: editorRegistry,
         startupAssessment: startupAssessment,
         admittedModelSettingsViewModel: admittedModelSettingsViewModel,
+        cleanupAdmittedModelSettingsViewModel: cleanupAdmittedModelSettingsViewModel,
         personalDictionaryStore: personalDictionaryStore,
         personalDictionarySettingsViewModel: personalDictionarySettingsViewModel,
         startResourceMonitoring: startResourceMonitoring,
         stopResourceMonitoring: stopResourceMonitoring,
-        forceEnhancedInferenceCold: forceEnhancedInferenceCold
+        forceEnhancedInferenceCold: forceEnhancedInferenceCold,
+        cleanupModelReady: cleanupModelReady,
+        disableCleanup: disableCleanup,
+        drainCleanup: drainCleanup
       )
     }
 
@@ -644,6 +688,7 @@
       editorRegistry: DictationEditorRegistry,
       startupAssessment: @escaping @MainActor () async -> Void,
       admittedModelSettingsViewModel: AdmittedModelSettingsViewModel? = nil,
+      cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel? = nil,
       personalDictionaryStore: PersonalDictionaryStore? = nil,
       personalDictionarySettingsViewModel: PersonalDictionarySettingsViewModel? = nil,
       availabilityProvider: (@MainActor () -> DictationAvailability)? = nil,
@@ -652,7 +697,10 @@
       },
       startResourceMonitoring: @escaping @MainActor () -> Void = {},
       stopResourceMonitoring: @escaping @MainActor () -> Void = {},
-      forceEnhancedInferenceCold: @escaping @MainActor () async -> Void = {}
+      forceEnhancedInferenceCold: @escaping @MainActor () async -> Void = {},
+      cleanupModelReady: @escaping @MainActor () -> Bool = { false },
+      disableCleanup: @escaping @MainActor () -> Void = {},
+      drainCleanup: @escaping @MainActor () async -> Void = {}
     ) {
       self.appState = appState
       self.modelManager = modelManager
@@ -670,14 +718,22 @@
         ?? PersonalDictionarySettingsViewModel(store: resolvedPersonalDictionaryStore)
       self.admittedModelSettingsViewModel = admittedModelSettingsViewModel
         ?? AdmittedModelSettingsViewModel(installer: makeAdmittedModelInstaller())
+      self.cleanupAdmittedModelSettingsViewModel = cleanupAdmittedModelSettingsViewModel
+        ?? AdmittedModelSettingsViewModel(
+          installer: BuiltInAdmittedModelInstaller(),
+          context: .cleanup(fallbackLabel: "Deterministic Fallback")
+        )
       self.capsuleSleeper = capsuleSleeper
       self.stopResourceMonitoring = stopResourceMonitoring
       self.forceEnhancedInferenceCold = forceEnhancedInferenceCold
+      self.disableCleanup = disableCleanup
+      self.drainCleanup = drainCleanup
       let settingsViewModel = self.admittedModelSettingsViewModel
       let resolvedAvailabilityProvider = availabilityProvider ?? {
         DictationAvailability.current(
           permissions: permissionController,
-          enhancedModelReady: settingsViewModel.presentation.allowsEnhancedPreference
+          enhancedModelReady: settingsViewModel.presentation.allowsEnhancedPreference,
+          cleanupModelReady: cleanupModelReady()
         )
       }
       self.availabilityProvider = resolvedAvailabilityProvider
@@ -961,9 +1017,12 @@
       let shortcutController = shortcutController
       let forceEnhancedInferenceCold = forceEnhancedInferenceCold
       stopResourceMonitoring()
+      disableCleanup()
+      let drainCleanup = drainCleanup
       let task = Task { @MainActor [weak self] in
         await coordinator.cancel()
         await coordinator.waitForTerminal()
+        await drainCleanup()
         await shortcutController.uninstall()
         await startupAssessmentTask?.value
         await initialLoadSynchronizationTask?.value
@@ -1444,10 +1503,14 @@
       let capsuleController = capsuleController
       let stopResourceMonitoring = stopResourceMonitoring
       let forceEnhancedInferenceCold = forceEnhancedInferenceCold
+      let disableCleanup = disableCleanup
+      let drainCleanup = drainCleanup
       stopResourceMonitoring()
+      disableCleanup()
       Task { @MainActor in
         await coordinator.cancel()
         await coordinator.waitForTerminal()
+        await drainCleanup()
         await shortcutController.uninstall()
         await startupAssessmentTask?.value
         await initialLoadSynchronizationTask?.value
