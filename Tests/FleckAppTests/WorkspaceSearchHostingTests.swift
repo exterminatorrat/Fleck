@@ -147,21 +147,22 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
       .first { $0.placeholderString == "Search notes" }
   )
   let queryFrame = queryField.convert(queryField.bounds, to: host)
-  let buttons = hostedWorkspaceSearchDescendants(in: host, as: NSButton.self)
-  let dismissButton = try #require(
-    buttons.first {
-      let frame = $0.convert($0.bounds, to: host)
-      return frame.minX >= host.bounds.maxX - 40
-        && frame.maxX <= host.bounds.maxX - 10
-    }
-  )
-  let dismissFrame = dismissButton.convert(dismissButton.bounds, to: host)
 
   #expect(queryFrame.width <= 320)
   #expect(queryFrame.minX >= 10)
   #expect(queryFrame.maxX <= host.bounds.maxX - 10)
-  #expect(dismissFrame.minX >= 10)
-  #expect(dismissFrame.maxX <= host.bounds.maxX - 10)
+
+  let hStackSpacing: CGFloat = 8
+  let closeGlyphWidth: CGFloat = 15
+  let dismissPoint = NSPoint(
+    x: queryFrame.maxX + hStackSpacing + closeGlyphWidth / 2,
+    y: queryFrame.midY
+  )
+  #expect(dismissPoint.x >= host.bounds.maxX - 40)
+  #expect(dismissPoint.x <= host.bounds.maxX - 10)
+  clickWorkspaceSearchControl(host.convert(dismissPoint, to: nil), in: window)
+  await settleWorkspaceSearchHost(host)
+  #expect(!searchController.isPresented)
 
   window.contentView = nil
   window.orderOut(nil)
@@ -1404,10 +1405,16 @@ private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow)
     NSPoint(x: control.bounds.midX, y: control.bounds.midY),
     to: nil
   )
+  clickWorkspaceSearchControl(point, in: window)
+}
+
+@MainActor
+private func clickWorkspaceSearchControl(_ point: NSPoint, in window: NSWindow) {
+  let screenPoint = window.convertPoint(toScreen: point)
   for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
     guard let event = NSEvent.mouseEvent(
       with: eventType,
-      location: point,
+      location: screenPoint,
       modifierFlags: [],
       timestamp: ProcessInfo.processInfo.systemUptime,
       windowNumber: window.windowNumber,
@@ -1416,7 +1423,7 @@ private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow)
       clickCount: 1,
       pressure: eventType == .leftMouseDown ? 1 : 0
     ) else { continue }
-    window.sendEvent(event)
+    NSApp.sendEvent(event)
   }
 }
 
