@@ -41,6 +41,7 @@
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
+    @ObservedObject private var cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel
     @ObservedObject private var personalDictionarySettingsViewModel:
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
@@ -57,6 +58,9 @@
       self.runtime = runtime
       _admittedModelSettingsViewModel = ObservedObject(
         wrappedValue: runtime.admittedModelSettingsViewModel
+      )
+      _cleanupAdmittedModelSettingsViewModel = ObservedObject(
+        wrappedValue: runtime.cleanupAdmittedModelSettingsViewModel
       )
       _personalDictionarySettingsViewModel = ObservedObject(
         wrappedValue: runtime.personalDictionarySettingsViewModel
@@ -94,6 +98,7 @@
       .task {
         await runtime.awaitStartupAssessment()
         await admittedModelSettingsViewModel.refresh()
+        await cleanupAdmittedModelSettingsViewModel.refresh()
         await personalDictionarySettingsViewModel.load()
         recoveryActions = runtime.permissionRecoveryActions()
         microphones = DictationMicrophoneOption.available()
@@ -463,57 +468,61 @@
     }
 
     private var models: some View {
-      let presentation: AdmittedModelSettingsPresentation =
-        admittedModelSettingsViewModel.presentation
-
-      return Section("Models") {
+      Section("Models") {
         LabeledContent("Dictation") {
-          VStack(alignment: .leading, spacing: 6) {
-            Text("Model: \(presentation.modelLabel)")
-              .font(.caption.weight(.medium))
-            if presentation.showsStatus {
-              Text(presentation.compactStatus)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            if presentation.showsDetail {
-              Text(presentation.detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let progress = presentation.progress {
-              ProgressView(value: progress)
-                .accessibilityLabel("Enhanced local dictation installation progress")
-                .accessibilityValue(presentation.progressAccessibilityValue ?? "")
-            }
-            if let action = presentation.primaryAction,
-               let label = presentation.primaryActionLabel {
-              Button(label) { perform(action) }
-                .focusable(presentation.isKeyboardFocusable)
-                .buttonStyle(.borderedProminent)
-            }
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .accessibilityElement(children: .contain)
-          .accessibilityLabel(presentation.accessibilityLabel)
-          .accessibilityValue(presentation.accessibilityValue)
+          modelRow(
+            presentation: admittedModelSettingsViewModel.presentation,
+            viewModel: admittedModelSettingsViewModel,
+            progressAccessibilityLabel: "Enhanced local dictation installation progress"
+          )
         }
 
-        LabeledContent("Cleanup", value: cleanupModelLabel)
-          .accessibilityLabel("Cleanup")
-          .accessibilityValue(cleanupModelLabel)
+        LabeledContent("Cleanup") {
+          modelRow(
+            presentation: cleanupAdmittedModelSettingsViewModel.presentation,
+            viewModel: cleanupAdmittedModelSettingsViewModel,
+            progressAccessibilityLabel: "Enhanced local cleanup installation progress"
+          )
+        }
       }
     }
 
-    private var cleanupModelLabel: String {
-      switch runtime.availability.foundationModelAvailability {
-      case .available:
-        "Apple On-Device"
-      default:
-        "Deterministic Fallback"
+    private func modelRow(
+      presentation: AdmittedModelSettingsPresentation,
+      viewModel: AdmittedModelSettingsViewModel,
+      progressAccessibilityLabel: String
+    ) -> some View {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Model: \(presentation.modelLabel)")
+          .font(.caption.weight(.medium))
+        if presentation.showsStatus {
+          Text(presentation.compactStatus)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        if presentation.showsDetail {
+          Text(presentation.detail)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        if let progress = presentation.progress {
+          ProgressView(value: progress)
+            .accessibilityLabel(progressAccessibilityLabel)
+            .accessibilityValue(presentation.progressAccessibilityValue ?? "")
+        }
+        if let action = presentation.primaryAction,
+           let label = presentation.primaryActionLabel {
+          Button(label) { viewModel.perform(action) }
+            .focusable(presentation.isKeyboardFocusable)
+            .buttonStyle(.borderedProminent)
+        }
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel(presentation.accessibilityLabel)
+      .accessibilityValue(presentation.accessibilityValue)
     }
 
     private var dictationModifierPresentation: DictationModifierSettingsPresentation {
@@ -557,10 +566,6 @@
           runtime.preferencesDidChange()
         }
       )
-    }
-
-    private func perform(_ action: AdmittedModelSettingsAction) {
-      admittedModelSettingsViewModel.perform(action)
     }
 
     private func preferenceBinding<Value>(_ keyPath: WritableKeyPath<AppPreferences, Value>)

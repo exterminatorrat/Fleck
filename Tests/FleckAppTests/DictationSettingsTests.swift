@@ -19,11 +19,28 @@ import Testing
     encoding: .utf8
   )
 
-  #expect(source.contains("AdmittedModelSettingsViewModel"))
+  #expect(source.contains(
+    "@ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel"
+  ))
+  #expect(source.contains(
+    "@ObservedObject private var cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel"
+  ))
+  #expect(source.contains("_admittedModelSettingsViewModel = ObservedObject("))
+  #expect(source.contains("wrappedValue: runtime.admittedModelSettingsViewModel"))
+  #expect(source.contains("_cleanupAdmittedModelSettingsViewModel = ObservedObject("))
+  #expect(source.contains("wrappedValue: runtime.cleanupAdmittedModelSettingsViewModel"))
   #expect(source.contains("AdmittedModelSettingsPresentation"))
   #expect(source.contains(#"Section("Models")"#))
   #expect(source.contains(#"LabeledContent("Dictation")"#))
-  #expect(source.contains(#"LabeledContent("Cleanup", value: cleanupModelLabel)"#))
+  #expect(source.contains(#"LabeledContent("Cleanup")"#))
+  #expect(source.contains(
+    "presentation: admittedModelSettingsViewModel.presentation,\n" +
+      "            viewModel: admittedModelSettingsViewModel,"
+  ))
+  #expect(source.contains(
+    "presentation: cleanupAdmittedModelSettingsViewModel.presentation,\n" +
+      "            viewModel: cleanupAdmittedModelSettingsViewModel,"
+  ))
   #expect(!source.contains(#"Section("Speech Engine")"#))
   #expect(!source.contains(#"Text("Active engine:"#))
   #expect(source.contains(#"Text("Model: \(presentation.modelLabel)")"#))
@@ -35,12 +52,20 @@ import Testing
   #expect(source.contains(".accessibilityLabel(presentation.accessibilityLabel)"))
   #expect(source.contains(".accessibilityValue(presentation.accessibilityValue)"))
   #expect(source.contains("await admittedModelSettingsViewModel.refresh()"))
-  #expect(source.contains("runtime.availability.foundationModelAvailability"))
-  #expect(source.contains("Apple On-Device"))
-  #expect(source.contains("Deterministic Fallback"))
+  #expect(source.contains("await cleanupAdmittedModelSettingsViewModel.refresh()"))
+  #expect(source.contains("Button(label) { viewModel.perform(action) }"))
   #expect(source.contains(
-    #".accessibilityLabel("Enhanced local dictation installation progress")"#
+    #"progressAccessibilityLabel: "Enhanced local dictation installation progress""#
   ))
+  #expect(source.contains(
+    #"progressAccessibilityLabel: "Enhanced local cleanup installation progress""#
+  ))
+  #expect(source.contains(".accessibilityLabel(progressAccessibilityLabel)"))
+  #expect(!source.contains("cleanupModelLabel"))
+  #expect(!source.contains("runtime.availability.foundationModelAvailability"))
+  #expect(!source.contains(#"LabeledContent("Cleanup", value:"#))
+  #expect(!source.contains("private func perform(_ action: AdmittedModelSettingsAction)"))
+  #expect(!source.contains("Button(label) { perform(action) }"))
   #expect(!source.contains("License"))
   #expect(!source.contains("Checksums"))
   #expect(!source.contains("Supported architectures"))
@@ -93,7 +118,7 @@ import Testing
     "Enhanced local dictation failed:"
   ))
   #expect(sources[1].1.contains(
-    #".accessibilityLabel("Enhanced local dictation installation progress")"#
+    #"progressAccessibilityLabel: "Enhanced local dictation installation progress""#
   ))
   #expect(sources[2].1.contains(
     "Repair the experimental enhanced local model candidate in Dictation Settings"
