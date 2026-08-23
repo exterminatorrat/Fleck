@@ -397,6 +397,7 @@ if ! validate_direct_child_directory "$gemma_scratch_parent" "$canonical_build_r
   exit 1
 fi
 readonly gemma_derived_data="$gemma_scratch_parent/DerivedData"
+readonly gemma_products_root="$gemma_derived_data/Products"
 
 (
   cd -- "$gemma_cleanup_package"
@@ -406,6 +407,9 @@ readonly gemma_derived_data="$gemma_scratch_parent/DerivedData"
     -destination 'generic/platform=macOS' \
     -derivedDataPath "$gemma_derived_data" \
     -disableAutomaticPackageResolution \
+    "CONFIGURATION_BUILD_DIR=$gemma_products_root" \
+    ARCHS=arm64 \
+    ONLY_ACTIVE_ARCH=YES \
     build
 )
 
@@ -414,22 +418,12 @@ if ! /usr/bin/cmp -s "$gemma_cleanup_resolved" "$gemma_lock_backup"; then
   exit 1
 fi
 
-readonly gemma_products_root="$gemma_derived_data/Build/Products"
 if [[ -L "$gemma_products_root" || ! -d "$gemma_products_root" ]]; then
   printf 'error: Gemma cleanup helper product root not found: %s\n' \
     "$gemma_products_root" >&2
   exit 1
 fi
-gemma_helper_matches="$(
-  /usr/bin/find "$gemma_products_root" -name gemma-cleanup-helper -print \
-    | LC_ALL=C /usr/bin/sort
-)"
-if [[ "$(/usr/bin/awk 'NF { count += 1 } END { print count + 0 }' \
-  <<<"$gemma_helper_matches")" != "1" ]]; then
-  printf '%s\n' 'error: Gemma cleanup helper build did not produce exactly one executable' >&2
-  exit 1
-fi
-readonly gemma_helper_executable="$gemma_helper_matches"
+readonly gemma_helper_executable="$gemma_products_root/gemma-cleanup-helper"
 if [[ -L "$gemma_helper_executable" || ! -f "$gemma_helper_executable" \
   || ! -x "$gemma_helper_executable" ]]; then
   printf 'error: Gemma cleanup helper build input is unsafe: %s\n' \
@@ -437,23 +431,26 @@ if [[ -L "$gemma_helper_executable" || ! -f "$gemma_helper_executable" \
   exit 1
 fi
 
-gemma_resource_matches="$(
-  /usr/bin/find "$gemma_products_root" -name mlx-swift_Cmlx.bundle -print \
-    | LC_ALL=C /usr/bin/sort
-)"
-if [[ "$(/usr/bin/awk 'NF { count += 1 } END { print count + 0 }' \
-  <<<"$gemma_resource_matches")" != "1" ]]; then
+readonly gemma_resource_bundle="$gemma_products_root/mlx-swift_Cmlx.bundle"
+if [[ -L "$gemma_resource_bundle" || ! -d "$gemma_resource_bundle" ]]; then
   printf '%s\n' 'error: Gemma cleanup helper build did not produce exactly one MLX resource bundle' >&2
   exit 1
 fi
-readonly gemma_resource_bundle="$gemma_resource_matches"
-if [[ -L "$gemma_resource_bundle" || ! -d "$gemma_resource_bundle" \
-  || "$(dirname -- "$gemma_resource_bundle")" != "$(dirname -- "$gemma_helper_executable")" ]]; then
-  printf 'error: Gemma cleanup helper MLX resource bundle is unsafe or misplaced: %s\n' \
-    "$gemma_resource_bundle" >&2
+first_gemma_resource_symlink="$(
+  /usr/bin/find "$gemma_resource_bundle" -type l -print -quit
+)"
+if [[ -n "$first_gemma_resource_symlink" ]]; then
+  printf 'error: Gemma cleanup helper MLX resource bundle contains a symlink: %s\n' \
+    "$first_gemma_resource_symlink" >&2
   exit 1
 fi
-readonly gemma_metallib="$gemma_resource_bundle/default.metallib"
+readonly gemma_resource_metadata="$gemma_resource_bundle/Contents/Info.plist"
+if [[ -L "$gemma_resource_metadata" || ! -f "$gemma_resource_metadata" ]]; then
+  printf 'error: Gemma cleanup helper MLX resource metadata is missing or unsafe: %s\n' \
+    "$gemma_resource_metadata" >&2
+  exit 1
+fi
+readonly gemma_metallib="$gemma_resource_bundle/Contents/Resources/default.metallib"
 if [[ -L "$gemma_metallib" || ! -f "$gemma_metallib" ]]; then
   printf 'error: Gemma cleanup helper MLX resource is missing or unsafe: %s\n' \
     "$gemma_metallib" >&2
@@ -464,7 +461,8 @@ actual_gemma_resource_contents="$(
     | /usr/bin/sed "s#^$gemma_resource_bundle/##" \
     | LC_ALL=C /usr/bin/sort
 )"
-if [[ "$actual_gemma_resource_contents" != "default.metallib" ]]; then
+expected_gemma_resource_contents=$'Contents\nContents/Info.plist\nContents/Resources\nContents/Resources/default.metallib'
+if [[ "$actual_gemma_resource_contents" != "$expected_gemma_resource_contents" ]]; then
   printf '%s\n' 'error: Gemma cleanup helper MLX resource bundle contains unexpected entries' >&2
   printf 'actual:\n%s\n' "$actual_gemma_resource_contents" >&2
   exit 1
@@ -478,7 +476,7 @@ if ! validate_direct_child_directory "$staging_root" "$canonical_build_root" 'st
 fi
 readonly staged_app="$staging_root/Fleck.app"
 readonly staged_bundle="$staged_app/Contents/Resources/Fleck_FleckApp.bundle"
-readonly staged_gemma_resource_bundle="$staged_app/Contents/SharedSupport/mlx-swift_Cmlx.bundle"
+readonly staged_gemma_resource_bundle="$staged_app/Contents/Resources/mlx-swift_Cmlx.bundle"
 /bin/mkdir -p \
   "$staged_app/Contents/MacOS" \
   "$staged_app/Contents/SharedSupport" \
@@ -513,7 +511,7 @@ for forbidden_suffix in \
   fi
 done
 
-expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/SharedSupport\nContents/SharedSupport/fleck-agent\nContents/SharedSupport/gemma-cleanup-helper\nContents/SharedSupport/mlx-swift_Cmlx.bundle\nContents/SharedSupport/mlx-swift_Cmlx.bundle/default.metallib'
+expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/Resources/mlx-swift_Cmlx.bundle\nContents/Resources/mlx-swift_Cmlx.bundle/Contents\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Info.plist\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib\nContents/SharedSupport\nContents/SharedSupport/fleck-agent\nContents/SharedSupport/gemma-cleanup-helper'
 actual_app_contents="$(
   /usr/bin/find "$staged_app" ! -path "$staged_app" -print \
     | /usr/bin/sed "s#^$staged_app/##" \
@@ -550,7 +548,8 @@ for exact_pair in \
   "$canonical_mark|$staged_app/Contents/Resources/fleck-mark.png" \
   "$manifest|$staged_bundle/EnhancedModelManifest.json" \
   "$notices|$staged_bundle/ThirdPartyNotices.md" \
-  "$gemma_metallib|$staged_gemma_resource_bundle/default.metallib"; do
+  "$gemma_resource_metadata|$staged_gemma_resource_bundle/Contents/Info.plist" \
+  "$gemma_metallib|$staged_gemma_resource_bundle/Contents/Resources/default.metallib"; do
   source_path="${exact_pair%%|*}"
   staged_path="${exact_pair#*|}"
   if ! /usr/bin/cmp -s "$source_path" "$staged_path"; then

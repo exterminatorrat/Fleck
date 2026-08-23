@@ -200,6 +200,9 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     configuration=""
     destination=""
     derived_data=""
+    products=""
+    architectures=""
+    only_active_arch=""
     action=""
     while (($#)); do
       case "$1" in
@@ -207,6 +210,9 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
         -configuration) configuration="$2"; shift 2 ;;
         -destination) destination="$2"; shift 2 ;;
         -derivedDataPath) derived_data="$2"; shift 2 ;;
+        CONFIGURATION_BUILD_DIR=*) products="${1#*=}"; shift ;;
+        ARCHS=*) architectures="${1#*=}"; shift ;;
+        ONLY_ACTIVE_ARCH=*) only_active_arch="${1#*=}"; shift ;;
         build) action="build"; shift ;;
         *) shift ;;
       esac
@@ -216,8 +222,12 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     [[ "$scheme" == "gemma-cleanup-helper" ]]
     [[ "$configuration" == "Release" ]]
     [[ "$destination" == "generic/platform=macOS" ]]
-    printf 'cwd=%s\nscheme=%s\nconfiguration=%s\ndestination=%s\nderivedData=%s\n' \
+    [[ "$products" == "$derived_data/Products" ]]
+    [[ "$architectures" == "arm64" ]]
+    [[ "$only_active_arch" == "YES" ]]
+    printf 'cwd=%s\nscheme=%s\nconfiguration=%s\ndestination=%s\nderivedData=%s\nproducts=%s\narchitectures=%s\nonlyActiveArch=%s\n' \
       "$(pwd -P)" "$scheme" "$configuration" "$destination" "$derived_data" \
+      "$products" "$architectures" "$only_active_arch" \
       > "$FAKE_XCODE_BUILD_LOG"
     : > "$FAKE_XCODE_BUILD_ENTERED"
     if [[ "${FAKE_GEMMA_MUTATE_LOCK:-0}" == "1" ]]; then
@@ -226,46 +236,61 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     while [[ -e "$FAKE_XCODE_HOLD" ]]; do
       /bin/sleep 0.02
     done
-    product="$derived_data/Build/Products/Release/actual-product"
+    product="$products"
     /bin/mkdir -p "$product"
     if [[ "${FAKE_GEMMA_BUILD_FAIL:-0}" == "1" ]]; then
       exit 77
     fi
     printf 'gemma-helper-%s\n' "$FAKE_RUN_ID" > "$product/gemma-cleanup-helper"
     /bin/chmod 755 "$product/gemma-cleanup-helper"
+    /bin/mkdir -p \
+      "$product/gemma-cleanup-helper.dSYM/Contents/Resources/DWARF"
+    /bin/cp "$product/gemma-cleanup-helper" \
+      "$product/gemma-cleanup-helper.dSYM/Contents/Resources/DWARF/gemma-cleanup-helper"
+    printf 'dSYM=%s\n' \
+      "$product/gemma-cleanup-helper.dSYM/Contents/Resources/DWARF/gemma-cleanup-helper" \
+      >> "$FAKE_XCODE_BUILD_LOG"
     case "$FAKE_GEMMA_RESOURCE_MODE" in
       valid)
-        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle/Contents/Resources"
+        printf 'mlx-bundle-info-%s\n' "$FAKE_RUN_ID" \
+          > "$product/mlx-swift_Cmlx.bundle/Contents/Info.plist"
         printf 'default-metallib-%s\n' "$FAKE_RUN_ID" \
-          > "$product/mlx-swift_Cmlx.bundle/default.metallib"
+          > "$product/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
         ;;
       missing-bundle)
         ;;
+      missing-metadata)
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle/Contents/Resources"
+        printf 'default-metallib-%s\n' "$FAKE_RUN_ID" \
+          > "$product/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+        ;;
       missing-metallib)
-        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle/Contents/Resources"
+        printf 'mlx-bundle-info-%s\n' "$FAKE_RUN_ID" \
+          > "$product/mlx-swift_Cmlx.bundle/Contents/Info.plist"
         ;;
       wrong-resource)
-        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
-        printf 'wrong-resource\n' > "$product/mlx-swift_Cmlx.bundle/wrong.metallib"
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle/Contents/Resources"
+        printf 'mlx-bundle-info-%s\n' "$FAKE_RUN_ID" \
+          > "$product/mlx-swift_Cmlx.bundle/Contents/Info.plist"
+        printf 'wrong-resource\n' \
+          > "$product/mlx-swift_Cmlx.bundle/Contents/Resources/wrong.metallib"
         ;;
       extra-resource)
-        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle/Contents/Resources"
+        printf 'mlx-bundle-info-%s\n' "$FAKE_RUN_ID" \
+          > "$product/mlx-swift_Cmlx.bundle/Contents/Info.plist"
         printf 'default-metallib-%s\n' "$FAKE_RUN_ID" \
-          > "$product/mlx-swift_Cmlx.bundle/default.metallib"
-        printf 'extra\n' > "$product/mlx-swift_Cmlx.bundle/extra.txt"
+          > "$product/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+        printf 'extra\n' > "$product/mlx-swift_Cmlx.bundle/Contents/Resources/extra.txt"
         ;;
       symlink-resource)
-        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
+        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle/Contents/Resources"
+        printf 'mlx-bundle-info-%s\n' "$FAKE_RUN_ID" \
+          > "$product/mlx-swift_Cmlx.bundle/Contents/Info.plist"
         /bin/ln -s /tmp/missing-metallib \
-          "$product/mlx-swift_Cmlx.bundle/default.metallib"
-        ;;
-      duplicate-product)
-        /bin/mkdir -p "$derived_data/Build/Products/Release/other-product"
-        /bin/cp "$product/gemma-cleanup-helper" \
-          "$derived_data/Build/Products/Release/other-product/gemma-cleanup-helper"
-        /bin/mkdir -p "$product/mlx-swift_Cmlx.bundle"
-        printf 'default-metallib-%s\n' "$FAKE_RUN_ID" \
-          > "$product/mlx-swift_Cmlx.bundle/default.metallib"
+          "$product/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
         ;;
       *) exit 91 ;;
     esac
@@ -583,14 +608,20 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   func normalizedTemporaryPath(_ path: String) -> String {
     path.replacingOccurrences(of: "/private/var/", with: "/var/")
   }
-  #expect(gemmaBuildLines.count == 7)
+  try #require(gemmaBuildLines.count == 11)
   #expect(normalizedTemporaryPath(gemmaBuildLines[0]) == "cwd=\(normalizedTemporaryPath(fixture.gemmaPackage.path))")
   #expect(gemmaBuildLines[1] == "scheme=gemma-cleanup-helper")
   #expect(gemmaBuildLines[2] == "configuration=Release")
   #expect(gemmaBuildLines[3] == "destination=generic/platform=macOS")
   #expect(normalizedTemporaryPath(gemmaBuildLines[4]).contains("/.parakeet-gemma-cleanup."))
-  #expect(gemmaBuildLines[5].contains("/Build/Products/Release/actual-product/gemma-cleanup-helper"))
-  #expect(gemmaBuildLines[6].contains("/Build/Products/Release/actual-product/mlx-swift_Cmlx.bundle"))
+  #expect(gemmaBuildLines[5].hasSuffix("/Products"))
+  #expect(gemmaBuildLines[6] == "architectures=arm64")
+  #expect(gemmaBuildLines[7] == "onlyActiveArch=YES")
+  #expect(gemmaBuildLines[8].hasSuffix(
+    "/Products/gemma-cleanup-helper.dSYM/Contents/Resources/DWARF/gemma-cleanup-helper"
+  ))
+  #expect(gemmaBuildLines[9].hasSuffix("/Products/gemma-cleanup-helper"))
+  #expect(gemmaBuildLines[10].hasSuffix("/Products/mlx-swift_Cmlx.bundle"))
 
   let app = fixture.build.appendingPathComponent("parakeet-test/Fleck.app")
   let executableContents = try String(
@@ -602,12 +633,19 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   #expect(fileManager.isExecutableFile(atPath: helper.path))
   #expect(try String(contentsOf: helper, encoding: .utf8) == "gemma-helper-first\n")
   let metallib = app.appendingPathComponent(
-    "Contents/SharedSupport/mlx-swift_Cmlx.bundle/default.metallib"
+    "Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+  )
+  let bundleMetadata = app.appendingPathComponent(
+    "Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Info.plist"
   )
   #expect(try String(contentsOf: metallib, encoding: .utf8) == "default-metallib-first\n")
+  #expect(try String(contentsOf: bundleMetadata, encoding: .utf8) == "mlx-bundle-info-first\n")
   let appContents = fileManager.subpaths(atPath: app.path) ?? []
   #expect(appContents.filter { $0 == "Contents/SharedSupport/gemma-cleanup-helper" }.count == 1)
-  #expect(appContents.filter { $0 == "Contents/SharedSupport/mlx-swift_Cmlx.bundle/default.metallib" }.count == 1)
+  #expect(appContents.filter {
+    $0 == "Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+  }.count == 1)
+  #expect(!appContents.contains("Contents/SharedSupport/mlx-swift_Cmlx.bundle"))
 
   let helperToolEvents = try String(contentsOf: fixture.helperToolLog, encoding: .utf8)
     .split(whereSeparator: \.isNewline)
@@ -670,11 +708,11 @@ func parakeetPackagerCleansHelperBuildAfterFailure() throws {
 
 @Test(arguments: [
   "missing-bundle",
+  "missing-metadata",
   "missing-metallib",
   "wrong-resource",
   "extra-resource",
   "symlink-resource",
-  "duplicate-product",
 ])
 func parakeetPackagerRejectsIncompleteOrAmbiguousGemmaRuntime(_ resourceMode: String) throws {
   let fixture = try makeFakeFixture(gemmaResourceMode: resourceMode)
@@ -690,12 +728,14 @@ func parakeetPackagerRejectsIncompleteOrAmbiguousGemmaRuntime(_ resourceMode: St
   switch resourceMode {
   case "missing-bundle":
     #expect(error.contains("exactly one MLX resource bundle"))
-  case "missing-metallib", "wrong-resource", "symlink-resource":
+  case "missing-metadata":
+    #expect(error.contains("MLX resource metadata is missing or unsafe"))
+  case "missing-metallib", "wrong-resource":
     #expect(error.contains("MLX resource is missing or unsafe"))
+  case "symlink-resource":
+    #expect(error.contains("MLX resource bundle contains a symlink"))
   case "extra-resource":
     #expect(error.contains("MLX resource bundle contains unexpected entries"))
-  case "duplicate-product":
-    #expect(error.contains("exactly one executable"))
   default:
     Issue.record("Unexpected Gemma resource fixture mode")
   }
