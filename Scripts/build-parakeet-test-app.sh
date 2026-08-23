@@ -5,6 +5,9 @@ readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 readonly resolver="$script_dir/resolve-enhanced-candidate.sh"
 readonly resolved="$repo_root/Package.resolved"
+readonly gemma_cleanup_package="$repo_root/Tools/GemmaCleanupBenchmark/NativeRuntime"
+readonly gemma_cleanup_package_manifest="$gemma_cleanup_package/Package.swift"
+readonly gemma_cleanup_resolved="$gemma_cleanup_package/Package.resolved"
 readonly info_plist="$repo_root/Sources/FleckApp/Info.plist"
 readonly canonical_mark="$repo_root/website/public/fleck-mark.png"
 readonly manifest="$repo_root/Sources/FleckApp/Resources/EnhancedModelManifest.json"
@@ -49,6 +52,21 @@ for required_tool in \
 done
 
 for required_input in "$resolved" "$info_plist" "$canonical_mark" "$manifest" "$notices"; do
+  if [[ -L "$required_input" ]]; then
+    printf 'error: required input must not be a symlink: %s\n' "$required_input" >&2
+    exit 2
+  fi
+  if [[ ! -f "$required_input" ]]; then
+    printf 'error: required input not found: %s\n' "$required_input" >&2
+    exit 2
+  fi
+done
+if [[ -L "$gemma_cleanup_package" || ! -d "$gemma_cleanup_package" ]]; then
+  printf 'error: Gemma cleanup helper package is not a directory: %s\n' \
+    "$gemma_cleanup_package" >&2
+  exit 2
+fi
+for required_input in "$gemma_cleanup_package_manifest" "$gemma_cleanup_resolved"; do
   if [[ -L "$required_input" ]]; then
     printf 'error: required input must not be a symlink: %s\n' "$required_input" >&2
     exit 2
@@ -168,8 +186,10 @@ cleanup_owned_directory() {
 }
 
 scratch_parent=""
+gemma_scratch_parent=""
 staging_root=""
 scratch_marker=""
+gemma_scratch_marker=""
 staging_marker=""
 lock_owner_marker=""
 lock_acquired=0
@@ -228,6 +248,12 @@ cleanup() {
   if [[ -n "$staging_root" && -e "$staging_root" ]]; then
     if ! cleanup_owned_directory "$staging_root" "$canonical_build_root" \
       "$staging_marker" 'staging directory'; then
+      cleanup_status=1
+    fi
+  fi
+  if [[ -n "$gemma_scratch_parent" && -e "$gemma_scratch_parent" ]]; then
+    if ! cleanup_owned_directory "$gemma_scratch_parent" "$canonical_build_root" \
+      "$gemma_scratch_marker" 'Gemma cleanup helper scratch directory'; then
       cleanup_status=1
     fi
   fi
@@ -343,6 +369,40 @@ if [[ -n "$(/usr/bin/find "$resource_bundle" -type l -print -quit)" ]]; then
   exit 1
 fi
 
+readonly gemma_lock_backup="$scratch_parent/NativeRuntime.Package.resolved"
+/bin/cp -p "$gemma_cleanup_resolved" "$gemma_lock_backup"
+gemma_scratch_parent="$(mktemp -d "$canonical_build_root/.parakeet-gemma-cleanup.XXXXXX")"
+gemma_scratch_marker="$gemma_scratch_parent/$cleanup_marker_name"
+if ! validate_direct_child_directory "$gemma_scratch_parent" "$canonical_build_root" \
+  'Gemma cleanup helper scratch directory' \
+  || ! write_cleanup_marker "$gemma_scratch_marker"; then
+  exit 1
+fi
+readonly gemma_scratch="$gemma_scratch_parent/build"
+
+"$swift_path" build \
+  --package-path "$gemma_cleanup_package" \
+  --product gemma-cleanup-helper \
+  --disable-automatic-resolution \
+  --scratch-path "$gemma_scratch"
+
+if ! /usr/bin/cmp -s "$gemma_cleanup_resolved" "$gemma_lock_backup"; then
+  printf '%s\n' 'error: Gemma cleanup helper build changed NativeRuntime Package.resolved' >&2
+  exit 1
+fi
+
+readonly gemma_helper_executable="$gemma_scratch/arm64-apple-macosx/debug/gemma-cleanup-helper"
+if [[ -L "$gemma_helper_executable" || ! -e "$gemma_helper_executable" ]]; then
+  printf 'error: Gemma cleanup helper build input not found: %s\n' \
+    "$gemma_helper_executable" >&2
+  exit 1
+fi
+if [[ ! -x "$gemma_helper_executable" ]]; then
+  printf 'error: Gemma cleanup helper build input is not executable: %s\n' \
+    "$gemma_helper_executable" >&2
+  exit 1
+fi
+
 staging_root="$(mktemp -d "$canonical_build_root/.parakeet-test.XXXXXX")"
 staging_marker="$staging_root/$cleanup_marker_name"
 if ! validate_direct_child_directory "$staging_root" "$canonical_build_root" 'staging directory' \
@@ -357,12 +417,15 @@ readonly staged_bundle="$staged_app/Contents/Resources/Fleck_FleckApp.bundle"
   "$staged_app/Contents/Resources"
 /bin/cp "$app_executable" "$staged_app/Contents/MacOS/Fleck"
 /bin/cp "$helper_executable" "$staged_app/Contents/SharedSupport/fleck-agent"
+/bin/cp "$gemma_helper_executable" \
+  "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 /bin/cp "$info_plist" "$staged_app/Contents/Info.plist"
 /bin/cp "$canonical_mark" "$staged_app/Contents/Resources/fleck-mark.png"
 /bin/cp -R "$resource_bundle" "$staged_bundle"
 /bin/chmod 755 \
   "$staged_app/Contents/MacOS/Fleck" \
-  "$staged_app/Contents/SharedSupport/fleck-agent"
+  "$staged_app/Contents/SharedSupport/fleck-agent" \
+  "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 
 first_symlink="$(/usr/bin/find "$staging_root" -type l -print -quit)"
 if [[ -n "$first_symlink" ]]; then
@@ -381,7 +444,7 @@ for forbidden_suffix in \
   fi
 done
 
-expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/SharedSupport\nContents/SharedSupport/fleck-agent'
+expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/SharedSupport\nContents/SharedSupport/fleck-agent\nContents/SharedSupport/gemma-cleanup-helper'
 actual_app_contents="$(
   /usr/bin/find "$staged_app" ! -path "$staged_app" -print \
     | /usr/bin/sed "s#^$staged_app/##" \
@@ -613,16 +676,22 @@ print_rpath_evidence() {
 
 verify_arm64 "$staged_app/Contents/MacOS/Fleck"
 verify_arm64 "$staged_app/Contents/SharedSupport/fleck-agent"
+verify_arm64 "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 strip_disallowed_rpaths "$staged_app/Contents/MacOS/Fleck"
 strip_disallowed_rpaths "$staged_app/Contents/SharedSupport/fleck-agent"
+strip_disallowed_rpaths "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 verify_rpaths "$staged_app/Contents/MacOS/Fleck"
 verify_rpaths "$staged_app/Contents/SharedSupport/fleck-agent"
+verify_rpaths "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 verify_dynamic_dependencies "$staged_app/Contents/MacOS/Fleck"
 verify_dynamic_dependencies "$staged_app/Contents/SharedSupport/fleck-agent"
+verify_dynamic_dependencies "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 verify_rpath_dependencies "$staged_app/Contents/MacOS/Fleck"
 verify_rpath_dependencies "$staged_app/Contents/SharedSupport/fleck-agent"
+verify_rpath_dependencies "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 print_rpath_evidence "$staged_app/Contents/MacOS/Fleck"
 print_rpath_evidence "$staged_app/Contents/SharedSupport/fleck-agent"
+print_rpath_evidence "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 
 readonly bundle_identifier="$(
   /usr/bin/plutil -extract CFBundleIdentifier raw -o - \
@@ -655,6 +724,9 @@ fi
 
 readonly designated_requirement="=designated => identifier \"$bundle_identifier\""
 "$codesign_path" --force --sign - \
+  --identifier "$bundle_identifier.gemma-cleanup-helper" \
+  "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
+"$codesign_path" --force --sign - \
   --identifier "$bundle_identifier.agent" \
   "$staged_app/Contents/SharedSupport/fleck-agent"
 "$codesign_path" --force --sign - \
@@ -663,6 +735,8 @@ readonly designated_requirement="=designated => identifier \"$bundle_identifier\
   "$staged_app"
 "$codesign_path" --verify --strict \
   "$staged_app/Contents/SharedSupport/fleck-agent"
+"$codesign_path" --verify --strict \
+  "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 "$codesign_path" --verify --deep --strict "$staged_app"
 
 app_signature_details="$(
@@ -672,9 +746,17 @@ helper_signature_details="$(
   "$codesign_path" -dv --verbose=4 \
     "$staged_app/Contents/SharedSupport/fleck-agent" 2>&1
 )"
+gemma_signature_details="$(
+  "$codesign_path" -dv --verbose=4 \
+    "$staged_app/Contents/SharedSupport/gemma-cleanup-helper" 2>&1
+)"
 if ! /usr/bin/grep -Fq 'Signature=adhoc' <<<"$app_signature_details" \
   || ! /usr/bin/grep -Fq 'Signature=adhoc' <<<"$helper_signature_details"; then
   printf '%s\n' 'error: test app and helper must use ad-hoc signatures' >&2
+  exit 1
+fi
+if ! /usr/bin/grep -Fq 'Signature=adhoc' <<<"$gemma_signature_details"; then
+  printf '%s\n' 'error: Gemma cleanup helper must use an ad-hoc signature' >&2
   exit 1
 fi
 if [[ "$(/usr/bin/sed -n 's/^Identifier=//p' <<<"$app_signature_details")" \
@@ -685,6 +767,11 @@ fi
 if [[ "$(/usr/bin/sed -n 's/^Identifier=//p' <<<"$helper_signature_details")" \
   != "$bundle_identifier.agent" ]]; then
   printf '%s\n' 'error: helper signature identifier does not match the stable app identifier' >&2
+  exit 1
+fi
+if [[ "$(/usr/bin/sed -n 's/^Identifier=//p' <<<"$gemma_signature_details")" \
+  != "$bundle_identifier.gemma-cleanup-helper" ]]; then
+  printf '%s\n' 'error: Gemma cleanup helper signature identifier is not subordinate to the app identifier' >&2
   exit 1
 fi
 app_signature_requirement="$(

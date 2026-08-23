@@ -6,12 +6,16 @@ private struct FakeFixture {
   let root: URL
   let build: URL
   let tools: URL
+  let gemmaPackage: URL
   let temporaryDirectory: URL
   let holdFile: URL
   let resolverEntered: URL
   let entries: URL
   let candidateLock: URL
   let originalLock: URL
+  let originalGemmaLock: URL
+  let gemmaBuildLog: URL
+  let codesignLog: URL
   let rpathState: URL
   let unsafeStaging: URL
   let appScript: URL
@@ -51,11 +55,16 @@ private func makeFakeFixture() throws -> FakeFixture {
   let scripts = root.appendingPathComponent("Scripts", isDirectory: true)
   let sources = root.appendingPathComponent("Sources/FleckApp/Resources", isDirectory: true)
   let tools = root.appendingPathComponent("tools", isDirectory: true)
+  let gemmaPackage = root.appendingPathComponent(
+    "Tools/GemmaCleanupBenchmark/NativeRuntime",
+    isDirectory: true
+  )
   let build = root.appendingPathComponent(".build", isDirectory: true)
   let temporaryDirectory = root.appendingPathComponent("tmp", isDirectory: true)
   try fileManager.createDirectory(at: scripts, withIntermediateDirectories: true)
   try fileManager.createDirectory(at: sources, withIntermediateDirectories: true)
   try fileManager.createDirectory(at: tools, withIntermediateDirectories: true)
+  try fileManager.createDirectory(at: gemmaPackage, withIntermediateDirectories: true)
   try fileManager.createDirectory(at: build, withIntermediateDirectories: true)
   try fileManager.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
   try fileManager.createDirectory(
@@ -90,14 +99,29 @@ private func makeFakeFixture() throws -> FakeFixture {
     at: sourceRoot.appendingPathComponent("Sources/FleckApp/Resources/ThirdPartyNotices.md"),
     to: sources.appendingPathComponent("ThirdPartyNotices.md")
   )
+  try fileManager.copyItem(
+    at: sourceRoot.appendingPathComponent("Tools/GemmaCleanupBenchmark/NativeRuntime/Package.swift"),
+    to: gemmaPackage.appendingPathComponent("Package.swift")
+  )
+  try fileManager.copyItem(
+    at: sourceRoot.appendingPathComponent("Tools/GemmaCleanupBenchmark/NativeRuntime/Package.resolved"),
+    to: gemmaPackage.appendingPathComponent("Package.resolved")
+  )
 
   let originalLock = root.appendingPathComponent("original.Package.resolved")
   try fileManager.copyItem(
     at: root.appendingPathComponent("Package.resolved"),
     to: originalLock
   )
+  let originalGemmaLock = root.appendingPathComponent("original.NativeRuntime.Package.resolved")
+  try fileManager.copyItem(
+    at: gemmaPackage.appendingPathComponent("Package.resolved"),
+    to: originalGemmaLock
+  )
   let holdFile = root.appendingPathComponent("hold")
   try Data().write(to: holdFile)
+  let gemmaBuildLog = root.appendingPathComponent("gemma-build.log")
+  let codesignLog = root.appendingPathComponent("codesign.log")
 
   try writeExecutable(#"""
     #!/bin/bash
@@ -125,10 +149,12 @@ private func makeFakeFixture() throws -> FakeFixture {
       exit 0
     fi
     scratch=""
+    package_path=""
     product=""
     show_bin=0
     while (($#)); do
       case "$1" in
+        --package-path) package_path="$2"; shift 2 ;;
         --scratch-path) scratch="$2"; shift 2 ;;
         --product) product="$2"; shift 2 ;;
         --show-bin-path) show_bin=1; shift ;;
@@ -146,6 +172,15 @@ private func makeFakeFixture() throws -> FakeFixture {
     elif [[ "$product" == "fleck-agent" ]]; then
       printf '%s\n' "$FAKE_RUN_ID" > "$bin/fleck-agent"
       /bin/chmod 755 "$bin/fleck-agent"
+    elif [[ "$product" == "gemma-cleanup-helper" ]]; then
+      [[ "$package_path" == "$FAKE_GEMMA_PACKAGE" ]]
+      printf 'package=%s\nscratch=%s\nproduct=%s\n' \
+        "$package_path" "$scratch" "$product" > "$FAKE_GEMMA_BUILD_LOG"
+      if [[ "${FAKE_GEMMA_BUILD_FAIL:-0}" == "1" ]]; then
+        exit 77
+      fi
+      printf 'gemma-helper-%s\n' "$FAKE_RUN_ID" > "$bin/gemma-cleanup-helper"
+      /bin/chmod 755 "$bin/gemma-cleanup-helper"
     fi
     if (( show_bin )); then
       printf '%s\n' "$bin"
@@ -183,13 +218,26 @@ private func makeFakeFixture() throws -> FakeFixture {
   try writeExecutable(#"""
     #!/bin/bash
     set -euo pipefail
+    if [[ "$1" == "--force" ]]; then
+      args=("$@")
+      path="${args[$(( $# - 1 ))]}"
+      identifier=""
+      for ((index = 0; index < $#; index++)); do
+        if [[ "${args[$index]}" == "--identifier" ]]; then
+          identifier="${args[$((index + 1))]}"
+        fi
+      done
+      printf '%s|%s\n' "$path" "$identifier" >> "$FAKE_CODESIGN_LOG"
+    fi
     case "$1" in
       --force) exit 0 ;;
       --verify) exit 0 ;;
       -dv)
         args=("$@")
         path="${args[$(( $# - 1 ))]}"
-        if [[ "$path" == *"fleck-agent" ]]; then
+        if [[ "$path" == *"gemma-cleanup-helper" ]]; then
+          printf 'Identifier=com.harryjin.fleck.gemma-cleanup-helper\nSignature=adhoc\n' >&2
+        elif [[ "$path" == *"fleck-agent" ]]; then
           printf 'Identifier=com.harryjin.fleck.agent\nSignature=adhoc\n' >&2
         else
           printf 'Identifier=com.harryjin.fleck\nSignature=adhoc\n' >&2
@@ -233,19 +281,28 @@ private func makeFakeFixture() throws -> FakeFixture {
     root: root,
     build: build,
     tools: tools,
+    gemmaPackage: gemmaPackage,
     temporaryDirectory: temporaryDirectory,
     holdFile: holdFile,
     resolverEntered: root.appendingPathComponent("resolver-entered"),
     entries: root.appendingPathComponent("entries"),
     candidateLock: root.appendingPathComponent("candidate.Package.resolved"),
     originalLock: originalLock,
+    originalGemmaLock: originalGemmaLock,
+    gemmaBuildLog: gemmaBuildLog,
+    codesignLog: codesignLog,
     rpathState: root.appendingPathComponent("rpath-state"),
     unsafeStaging: root.appendingPathComponent("unsafe-staging"),
     appScript: appScript
   )
 }
 
-private func environment(for fixture: FakeFixture, runID: String, unsafeStaging: Bool = false) -> [String: String] {
+private func environment(
+  for fixture: FakeFixture,
+  runID: String,
+  unsafeStaging: Bool = false,
+  gemmaBuildFails: Bool = false
+) -> [String: String] {
   var environment = ProcessInfo.processInfo.environment
   let existingPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
   environment["PATH"] = "\(fixture.tools.path):\(existingPath)"
@@ -255,6 +312,10 @@ private func environment(for fixture: FakeFixture, runID: String, unsafeStaging:
   environment["FAKE_RUN_ID"] = runID
   environment["FAKE_MANIFEST"] = fixture.root.appendingPathComponent("Sources/FleckApp/Resources/EnhancedModelManifest.json").path
   environment["FAKE_NOTICES"] = fixture.root.appendingPathComponent("Sources/FleckApp/Resources/ThirdPartyNotices.md").path
+  environment["FAKE_GEMMA_PACKAGE"] = fixture.gemmaPackage.path
+  environment["FAKE_GEMMA_BUILD_LOG"] = fixture.gemmaBuildLog.path
+  environment["FAKE_GEMMA_BUILD_FAIL"] = gemmaBuildFails ? "1" : "0"
+  environment["FAKE_CODESIGN_LOG"] = fixture.codesignLog.path
   environment["FAKE_CANDIDATE_LOCK"] = fixture.candidateLock.path
   environment["FAKE_ORIGINAL_LOCK"] = fixture.originalLock.path
   environment["FAKE_HOLD"] = unsafeStaging
@@ -271,13 +332,19 @@ private func environment(for fixture: FakeFixture, runID: String, unsafeStaging:
 private func launchPackager(
   fixture: FakeFixture,
   runID: String,
-  unsafeStaging: Bool = false
+  unsafeStaging: Bool = false,
+  gemmaBuildFails: Bool = false
 ) throws -> RunningPackager {
   let standardError = Pipe()
   let process = Process()
   process.executableURL = fixture.appScript
   process.currentDirectoryURL = fixture.root
-  process.environment = environment(for: fixture, runID: runID, unsafeStaging: unsafeStaging)
+  process.environment = environment(
+    for: fixture,
+    runID: runID,
+    unsafeStaging: unsafeStaging,
+    gemmaBuildFails: gemmaBuildFails
+  )
   process.standardOutput = FileHandle.nullDevice
   process.standardError = standardError
   try process.run()
@@ -337,6 +404,11 @@ func parakeetTestAppPackagingScriptUsesContentsResourcesBundle() {
   #expect(source.contains("/usr/lib/swift"))
   #expect(source.contains("@executable_path/"))
   #expect(source.contains("@loader_path/"))
+  #expect(source.contains("Tools/GemmaCleanupBenchmark/NativeRuntime"))
+  #expect(source.contains("gemma-cleanup-helper"))
+  #expect(source.contains("Contents/SharedSupport/gemma-cleanup-helper"))
+  #expect(source.contains("$bundle_identifier.gemma-cleanup-helper"))
+  #expect(source.contains("--disable-automatic-resolution"))
   #expect(!source.contains("admitted Enhanced Local Parakeet model"))
   #expect(source.contains("pinned experimental Parakeet candidate"))
 }
@@ -382,6 +454,20 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   let restoredLock = try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
   let originalLock = try Data(contentsOf: fixture.originalLock)
   #expect(restoredLock == originalLock)
+  let restoredGemmaLock = try Data(contentsOf: fixture.gemmaPackage.appendingPathComponent("Package.resolved"))
+  let originalGemmaLock = try Data(contentsOf: fixture.originalGemmaLock)
+  #expect(restoredGemmaLock == originalGemmaLock)
+
+  let gemmaBuildLines = try String(contentsOf: fixture.gemmaBuildLog, encoding: .utf8)
+    .split(whereSeparator: \.isNewline)
+    .map(String.init)
+  func normalizedTemporaryPath(_ path: String) -> String {
+    path.replacingOccurrences(of: "/private/var/", with: "/var/")
+  }
+  #expect(gemmaBuildLines.count == 3)
+  #expect(normalizedTemporaryPath(gemmaBuildLines[0]) == "package=\(normalizedTemporaryPath(fixture.gemmaPackage.path))")
+  #expect(normalizedTemporaryPath(gemmaBuildLines[1]).hasPrefix("scratch=\(normalizedTemporaryPath(fixture.build.path))/.parakeet-gemma-cleanup."))
+  #expect(gemmaBuildLines[2] == "product=gemma-cleanup-helper")
 
   let app = fixture.build.appendingPathComponent("parakeet-test/Fleck.app")
   let executableContents = try String(
@@ -389,11 +475,49 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
     encoding: .utf8
   )
   #expect(executableContents == "first\n")
+  let helper = app.appendingPathComponent("Contents/SharedSupport/gemma-cleanup-helper")
+  #expect(fileManager.isExecutableFile(atPath: helper.path))
+  #expect(try String(contentsOf: helper, encoding: .utf8) == "gemma-helper-first\n")
+  let appContents = fileManager.subpaths(atPath: app.path) ?? []
+  #expect(appContents.filter { $0 == "Contents/SharedSupport/gemma-cleanup-helper" }.count == 1)
+
+  let signEvents = try String(contentsOf: fixture.codesignLog, encoding: .utf8)
+    .split(whereSeparator: \.isNewline)
+    .map(String.init)
+  #expect(signEvents.count == 3)
+  #expect(signEvents[0].hasSuffix("/Contents/SharedSupport/gemma-cleanup-helper|com.harryjin.fleck.gemma-cleanup-helper"))
+  #expect(signEvents[1].hasSuffix("/Contents/SharedSupport/fleck-agent|com.harryjin.fleck.agent"))
+  #expect(signEvents[2].hasSuffix("/Fleck.app|com.harryjin.fleck"))
   #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent("Fleck_FleckApp.bundle").path))
   #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent(".parakeet-test.lock").path))
   #expect((try? fileManager.contentsOfDirectory(atPath: fixture.temporaryDirectory.path))?.isEmpty == true)
   let buildChildren = try fileManager.contentsOfDirectory(atPath: fixture.build.path)
   #expect(!buildChildren.contains(where: { $0.hasPrefix(".parakeet-test.") }))
+  #expect(!buildChildren.contains(where: { $0.hasPrefix(".parakeet-gemma-cleanup.") }))
+}
+
+@Test
+func parakeetPackagerCleansHelperBuildAfterFailure() throws {
+  let fixture = try makeFakeFixture()
+  defer { try? fileManager.removeItem(at: fixture.root) }
+
+  let running = try launchPackager(fixture: fixture, runID: "failed", gemmaBuildFails: true)
+  waitForExit(running)
+  #expect(!running.process.isRunning)
+  #expect(running.process.terminationStatus != 0)
+  #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path))
+  #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent(".parakeet-test.lock").path))
+  #expect(!fileManager.fileExists(atPath: fixture.codesignLog.path))
+  #expect((try? fileManager.contentsOfDirectory(atPath: fixture.temporaryDirectory.path))?.isEmpty == true)
+  let buildChildren = try fileManager.contentsOfDirectory(atPath: fixture.build.path)
+  #expect(!buildChildren.contains(where: { $0.hasPrefix(".parakeet-gemma-cleanup.") }))
+
+  let restoredLock = try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
+  let originalLock = try Data(contentsOf: fixture.originalLock)
+  #expect(restoredLock == originalLock)
+  let restoredGemmaLock = try Data(contentsOf: fixture.gemmaPackage.appendingPathComponent("Package.resolved"))
+  let originalGemmaLock = try Data(contentsOf: fixture.originalGemmaLock)
+  #expect(restoredGemmaLock == originalGemmaLock)
 }
 
 @Test
