@@ -907,9 +907,11 @@ import Testing
 @Test func gemmaExpiredDeadlineDoesNotCreateOrStartTransport() async throws {
   let transport = GemmaFakeTransport()
   let fixed = GemmaTestClock.instant
+  let preparation = GemmaTestPreparation()
   let generator = GemmaCleanupGenerator(
     transportFactory: { transport.makeTransport() },
-    clock: GemmaTestClock.clock(now: fixed)
+    clock: GemmaTestClock.clock(now: fixed),
+    prepareForGeneration: { try await preparation.prepare() }
   )
   let session = try generator.start(
     GemmaTestRequest.make(deadline: fixed),
@@ -920,8 +922,402 @@ import Testing
     try await session.result()
   }
   await session.acknowledgement()
+  #expect(preparation.invocationCount == 0)
   #expect(transport.factoryUseCount == 0)
   #expect(transport.startCount == 0)
+}
+
+@Test func gemmaPreparationRunsOnceBeforeTransportStart() async throws {
+  let transport = GemmaFakeTransport()
+  let preparation = GemmaTestPreparation()
+  let preparationCompleted = GemmaTestObservation()
+  let generator = GemmaCleanupGenerator(
+    transportFactory: { transport.makeTransport() },
+    clock: GemmaTestClock.clock(),
+    prepareForGeneration: {
+      try await preparation.prepare()
+      await preparationCompleted.mark()
+    }
+  )
+  let session = try generator.start(GemmaTestRequest.make(), maximumOutputTokens: 40)
+
+  await session.acknowledgement()
+  #expect(preparation.invocationCount == 0)
+
+  let resultTask = Task { try await session.result() }
+  await preparation.waitUntilEntered()
+  #expect(preparation.invocationCount == 1)
+  #expect(transport.startCount == 0)
+
+  preparation.release()
+  await transport.waitUntilRequestCount(1)
+  #expect(await preparationCompleted.value)
+  #expect(preparation.invocationCount == 1)
+
+  let (wire, helper) = transport.requestAndSession(at: 0)
+  helper.yield(GemmaTestEvent.started(wire.requestID))
+  helper.yield(GemmaTestEvent.completed(wire.requestID, #"{"text":"done"}"#))
+  helper.finish()
+  _ = try await resultTask.value
+}
+
+@Test func gemmaPreparationDoesNotRunForPreResultCancellation() async throws {
+  let transport = GemmaFakeTransport()
+  let preparation = GemmaTestPreparation()
+  let generator = GemmaCleanupGenerator(
+    transportFactory: { transport.makeTransport() },
+    clock: GemmaTestClock.clock(),
+    prepareForGeneration: { try await preparation.prepare() }
+  )
+  let session = try generator.start(GemmaTestRequest.make(), maximumOutputTokens: 40)
+
+  session.requestCancellation()
+  await session.acknowledgement()
+  await #expect(throws: CleanupGenerationError.requestCancelled) {
+    try await session.result()
+  }
+  #expect(preparation.invocationCount == 0)
+  #expect(transport.factoryUseCount == 0)
+  #expect(transport.startCount == 0)
+}
+
+@Test func gemmaPreparationFailureFailsClosedWithoutTransportWork() async throws {
+  let transport = GemmaFakeTransport()
+  let preparationCalled = GemmaTestObservation()
+  let generator = GemmaCleanupGenerator(
+    transportFactory: { transport.makeTransport() },
+    clock: GemmaTestClock.clock(),
+    prepareForGeneration: {
+      await preparationCalled.mark()
+      throw GemmaFakeError.startFailed
+    }
+  )
+  let session = try generator.start(GemmaTestRequest.make(), maximumOutputTokens: 40)
+
+  await #expect(throws: CleanupGenerationError.generationFailed) {
+    try await session.result()
+  }
+  await session.acknowledgement()
+  #expect(await preparationCalled.value)
+  #expect(transport.factoryUseCount == 0)
+  #expect(transport.startCount == 0)
+}
+
+@Test func gemmaCancellationBeforeAtomicPreparationEntrySkipsHook() async throws {
+  for _ in 0..<20 {
+    let race = GemmaPreparationEntryRace()
+    let preparation = GemmaTestPreparation()
+    let transport = GemmaFakeTransport()
+    let generator = GemmaCleanupGenerator(
+      transportFactory: { transport.makeTransport() },
+      clock: race.cleanupClock,
+      prepareForGeneration: { try await preparation.prepare() }
+    )
+    let session = try generator.start(GemmaTestRequest.make(), maximumOutputTokens: 40)
+    race.arm(onClockCall: 2)
+
+    let resultTask = Task { try await session.result() }
+    await race.waitUntilPaused()
+    session.requestCancellation()
+    race.release()
+    preparation.release()
+    await #expect(throws: CleanupGenerationError.requestCancelled) {
+      try await resultTask.value
+    }
+    await session.acknowledgement()
+    #expect(preparation.invocationCount == 0)
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+  }
+}
+
+@Test func gemmaForceBeforeAtomicPreparationEntrySkipsHook() async throws {
+  for _ in 0..<20 {
+    let race = GemmaPreparationEntryRace()
+    let preparation = GemmaTestPreparation()
+    let transport = GemmaFakeTransport()
+    let generator = GemmaCleanupGenerator(
+      transportFactory: { transport.makeTransport() },
+      clock: race.cleanupClock,
+      prepareForGeneration: { try await preparation.prepare() }
+    )
+    let session = try generator.start(GemmaTestRequest.make(), maximumOutputTokens: 40)
+    race.arm(onClockCall: 2)
+
+    let resultTask = Task { () -> CleanupGenerationError? in
+      do {
+        _ = try await session.result()
+        return nil
+      } catch let error as CleanupGenerationError {
+        return error
+      } catch {
+        return CleanupGenerationError.generationFailed
+      }
+    }
+    await race.waitUntilPaused()
+    session.forceTerminate()
+    race.release()
+    preparation.release()
+    #expect(await resultTask.value == CleanupGenerationError.terminated)
+    await session.acknowledgement()
+    #expect(preparation.invocationCount == 0)
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+  }
+}
+
+@Test func gemmaCancellationAtPostPreparationStartupBoundarySkipsFactory() async throws {
+  for _ in 0..<20 {
+    let race = GemmaPreparationEntryRace()
+    let preparation = GemmaTestPreparation()
+    let transport = GemmaFakeTransport()
+    let generator = GemmaCleanupGenerator(
+      transportFactory: { transport.makeTransport() },
+      clock: race.cleanupClock,
+      prepareForGeneration: { try await preparation.prepare() }
+    )
+    let session = try generator.start(GemmaTestRequest.make(), maximumOutputTokens: 40)
+    let resultCompleted = GemmaTestObservation()
+    let resultTask = Task { () -> CleanupGenerationError? in
+      do {
+        _ = try await session.result()
+        await resultCompleted.mark()
+        return nil
+      } catch let error as CleanupGenerationError {
+        await resultCompleted.mark()
+        return error
+      } catch {
+        await resultCompleted.mark()
+        return CleanupGenerationError.generationFailed
+      }
+    }
+    let acknowledgementCompleted = GemmaTestObservation()
+    let acknowledgementTask = Task {
+      await session.acknowledgement()
+      await acknowledgementCompleted.mark()
+    }
+
+    await preparation.waitUntilEntered()
+    race.arm(onClockCall: 3)
+    preparation.release()
+    await race.waitUntilPaused()
+    session.requestCancellation()
+    #expect(await waitForGemmaObservation(resultCompleted, timeout: .milliseconds(100)))
+    #expect(await waitForGemmaObservation(acknowledgementCompleted, timeout: .milliseconds(100)))
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+    race.release()
+
+    #expect(await resultTask.value == CleanupGenerationError.requestCancelled)
+    await acknowledgementTask.value
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+  }
+}
+
+@Test func gemmaForceAtPostPreparationStartupBoundarySkipsFactory() async throws {
+  for _ in 0..<20 {
+    let race = GemmaPreparationEntryRace()
+    let preparation = GemmaTestPreparation()
+    let transport = GemmaFakeTransport()
+    let generator = GemmaCleanupGenerator(
+      transportFactory: { transport.makeTransport() },
+      clock: race.cleanupClock,
+      prepareForGeneration: { try await preparation.prepare() }
+    )
+    let session = try generator.start(GemmaTestRequest.make(), maximumOutputTokens: 40)
+    let resultCompleted = GemmaTestObservation()
+    let resultTask = Task { () -> CleanupGenerationError? in
+      do {
+        _ = try await session.result()
+        await resultCompleted.mark()
+        return nil
+      } catch let error as CleanupGenerationError {
+        await resultCompleted.mark()
+        return error
+      } catch {
+        await resultCompleted.mark()
+        return CleanupGenerationError.generationFailed
+      }
+    }
+    let acknowledgementCompleted = GemmaTestObservation()
+    let acknowledgementTask = Task {
+      await session.acknowledgement()
+      await acknowledgementCompleted.mark()
+    }
+
+    await preparation.waitUntilEntered()
+    race.arm(onClockCall: 3)
+    preparation.release()
+    await race.waitUntilPaused()
+    session.forceTerminate()
+    #expect(await waitForGemmaObservation(resultCompleted, timeout: .milliseconds(100)))
+    #expect(await waitForGemmaObservation(acknowledgementCompleted, timeout: .milliseconds(100)))
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+    race.release()
+
+    #expect(await resultTask.value == CleanupGenerationError.terminated)
+    await acknowledgementTask.value
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+  }
+}
+
+@Test func gemmaDeadlineAtPostPreparationStartupBoundarySkipsFactory() async throws {
+  for _ in 0..<20 {
+    let race = GemmaPreparationEntryRace()
+    let deadline = GemmaTestClock.instant.advanced(by: .seconds(1))
+    let preparation = GemmaTestPreparation()
+    let transport = GemmaFakeTransport()
+    let generator = GemmaCleanupGenerator(
+      transportFactory: { transport.makeTransport() },
+      clock: race.cleanupClock,
+      prepareForGeneration: { try await preparation.prepare() }
+    )
+    let session = try generator.start(
+      GemmaTestRequest.make(deadline: deadline),
+      maximumOutputTokens: 40
+    )
+    let resultTask = Task { try await session.result() }
+
+    await preparation.waitUntilEntered()
+    race.arm(onClockCall: 3)
+    preparation.release()
+    await race.waitUntilPaused()
+    race.advance(to: deadline)
+    race.release()
+
+    await #expect(throws: CleanupGenerationError.requestCancelled) {
+      try await resultTask.value
+    }
+    await session.acknowledgement()
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+  }
+}
+
+@Test func gemmaCancellationWhilePreparationBlockedClosesBoundedSessionWithoutLateStart() async throws {
+  for _ in 0..<20 {
+    let transport = GemmaFakeTransport()
+    let preparation = GemmaTestPreparation()
+    let generator = GemmaCleanupGenerator(
+      transportFactory: { transport.makeTransport() },
+      clock: GemmaTestClock.clock(),
+      prepareForGeneration: { try await preparation.prepare() }
+    )
+    let session = try generator.start(GemmaTestRequest.make(), maximumOutputTokens: 40)
+    let resultCompleted = GemmaTestObservation()
+    let resultTask = Task { () -> CleanupGenerationError? in
+      let outcome: CleanupGenerationError?
+      do {
+        _ = try await session.result()
+        outcome = nil
+      } catch let error as CleanupGenerationError {
+        outcome = error
+      } catch {
+        outcome = CleanupGenerationError.generationFailed
+      }
+      await resultCompleted.mark()
+      return outcome
+    }
+    await preparation.waitUntilEntered()
+
+    let acknowledgementCompleted = GemmaTestObservation()
+    let acknowledgementTask = Task {
+      await session.acknowledgement()
+      await acknowledgementCompleted.mark()
+    }
+    session.requestCancellation()
+
+    #expect(await waitForGemmaObservation(resultCompleted))
+    #expect(await waitForGemmaObservation(acknowledgementCompleted))
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+
+    preparation.release()
+    #expect(await resultTask.value == CleanupGenerationError.requestCancelled)
+    await acknowledgementTask.value
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+  }
+}
+
+@Test func gemmaForceWhilePreparationBlockedClosesForcedSessionWithoutLateStart() async throws {
+  for _ in 0..<20 {
+    let transport = GemmaFakeTransport()
+    let preparation = GemmaTestPreparation()
+    let generator = GemmaCleanupGenerator(
+      transportFactory: { transport.makeTransport() },
+      clock: GemmaTestClock.clock(),
+      prepareForGeneration: { try await preparation.prepare() }
+    )
+    let session = try generator.start(GemmaTestRequest.make(), maximumOutputTokens: 40)
+    let resultCompleted = GemmaTestObservation()
+    let resultTask = Task { () -> CleanupGenerationError? in
+      let outcome: CleanupGenerationError?
+      do {
+        _ = try await session.result()
+        outcome = nil
+      } catch let error as CleanupGenerationError {
+        outcome = error
+      } catch {
+        outcome = CleanupGenerationError.generationFailed
+      }
+      await resultCompleted.mark()
+      return outcome
+    }
+    await preparation.waitUntilEntered()
+
+    let acknowledgementCompleted = GemmaTestObservation()
+    let acknowledgementTask = Task {
+      await session.acknowledgement()
+      await acknowledgementCompleted.mark()
+    }
+    session.forceTerminate()
+    session.forceTerminate()
+
+    #expect(await waitForGemmaObservation(resultCompleted))
+    #expect(await waitForGemmaObservation(acknowledgementCompleted))
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+
+    preparation.release()
+    #expect(await resultTask.value == CleanupGenerationError.terminated)
+    await acknowledgementTask.value
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+  }
+}
+
+@Test func gemmaDeadlineDuringPreparationFailsClosedWithoutLateStart() async throws {
+  for _ in 0..<20 {
+    let clock = GemmaManualClock()
+    let deadline = clock.now.advanced(by: .seconds(1))
+    let transport = GemmaFakeTransport()
+    let preparation = GemmaTestPreparation()
+    let generator = GemmaCleanupGenerator(
+      transportFactory: { transport.makeTransport() },
+      clock: clock.cleanupClock,
+      prepareForGeneration: { try await preparation.prepare() }
+    )
+    let session = try generator.start(
+      GemmaTestRequest.make(deadline: deadline),
+      maximumOutputTokens: 40
+    )
+    let resultTask = Task { try await session.result() }
+    await preparation.waitUntilEntered()
+
+    clock.advance(to: deadline)
+    preparation.release()
+
+    await #expect(throws: CleanupGenerationError.requestCancelled) {
+      try await resultTask.value
+    }
+    await session.acknowledgement()
+    #expect(transport.factoryUseCount == 0)
+    #expect(transport.startCount == 0)
+  }
 }
 
 @Test func gemmaAcknowledgementBeforeResultDoesNotStartTransport() async throws {
@@ -1110,6 +1506,137 @@ private actor GemmaTestObservation {
 
   var value: Bool {
     observed
+  }
+}
+
+private func waitForGemmaObservation(
+  _ observation: GemmaTestObservation,
+  timeout: Duration = .seconds(1)
+) async -> Bool {
+  let deadline = ContinuousClock().now.advanced(by: timeout)
+  while !(await observation.value) {
+    guard ContinuousClock().now < deadline else { return false }
+    await Task.yield()
+  }
+  return true
+}
+
+private final class GemmaTestPreparation: @unchecked Sendable {
+  private let lock = NSLock()
+  private var invocationCountStorage = 0
+  private var enteredStorage = false
+  private var released = false
+  private var continuations: [CheckedContinuation<Void, Never>] = []
+
+  func prepare() async throws {
+    await withCheckedContinuation { continuation in
+      lock.lock()
+      invocationCountStorage += 1
+      enteredStorage = true
+      if released {
+        lock.unlock()
+        continuation.resume()
+      } else {
+        continuations.append(continuation)
+        lock.unlock()
+      }
+    }
+  }
+
+  func waitUntilEntered() async {
+    while !entered {
+      await Task.yield()
+    }
+  }
+
+  func release() {
+    lock.lock()
+    released = true
+    let continuations = continuations
+    self.continuations = []
+    lock.unlock()
+    for continuation in continuations {
+      continuation.resume()
+    }
+  }
+
+  var invocationCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return invocationCountStorage
+  }
+
+  private var entered: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return enteredStorage
+  }
+}
+
+private final class GemmaPreparationEntryRace: @unchecked Sendable {
+  private let lock = NSLock()
+  private let releaseSemaphore = DispatchSemaphore(value: 0)
+  private var nowStorage = GemmaTestClock.instant
+  private var pauseCall: Int?
+  private var callCount = 0
+  private var pausedStorage = false
+
+  var cleanupClock: CleanupClock {
+    let race = self
+    return CleanupClock(
+      now: { race.now() },
+      sleepUntil: { deadline in
+        try await ContinuousClock().sleep(until: deadline)
+      },
+      sleepFor: { duration in
+        try await ContinuousClock().sleep(for: duration)
+      }
+    )
+  }
+
+  func arm(onClockCall: Int) {
+    lock.lock()
+    pauseCall = onClockCall
+    lock.unlock()
+  }
+
+  func waitUntilPaused() async {
+    while !paused {
+      await Task.yield()
+    }
+  }
+
+  func advance(to instant: ContinuousClock.Instant) {
+    lock.lock()
+    nowStorage = instant
+    lock.unlock()
+  }
+
+  func release() {
+    releaseSemaphore.signal()
+  }
+
+  private func now() -> ContinuousClock.Instant {
+    var shouldPause = false
+    lock.lock()
+    callCount += 1
+    if callCount == pauseCall {
+      pausedStorage = true
+      shouldPause = true
+    }
+    lock.unlock()
+
+    if shouldPause { releaseSemaphore.wait() }
+    lock.lock()
+    let instant = nowStorage
+    lock.unlock()
+    return instant
+  }
+
+  private var paused: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return pausedStorage
   }
 }
 

@@ -118,13 +118,16 @@ typealias GemmaCleanupTransportFactory = @Sendable () -> any GemmaCleanupTranspo
 struct GemmaCleanupGenerator: BoundedCleanupGenerating {
   private let transportFactory: GemmaCleanupTransportFactory
   private let clock: CleanupClock
+  private let prepareForGeneration: @Sendable () async throws -> Void
 
   init(
     transportFactory: @escaping GemmaCleanupTransportFactory,
-    clock: CleanupClock = .live
+    clock: CleanupClock = .live,
+    prepareForGeneration: @escaping @Sendable () async throws -> Void = {}
   ) {
     self.transportFactory = transportFactory
     self.clock = clock
+    self.prepareForGeneration = prepareForGeneration
   }
 
   func start(
@@ -135,7 +138,8 @@ struct GemmaCleanupGenerator: BoundedCleanupGenerating {
       request: request,
       maximumOutputTokens: maximumOutputTokens,
       transportFactory: transportFactory,
-      clock: clock
+      clock: clock,
+      prepareForGeneration: prepareForGeneration
     )
   }
 }
@@ -145,6 +149,7 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
   private let maximumOutputTokens: Int
   private let transportFactory: GemmaCleanupTransportFactory
   private let clock: CleanupClock
+  private let prepareForGeneration: @Sendable () async throws -> Void
   private let gate = GemmaCleanupPublicationGate()
   private let lock = NSLock()
 
@@ -166,18 +171,21 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
   private var forceRequested = false
   private var cancellationSent = false
   private var forceSent = false
+  private var preparationInFlight = false
   private var finished = false
 
   init(
     request: IncrementalCleanupRequest,
     maximumOutputTokens: Int,
     transportFactory: @escaping GemmaCleanupTransportFactory,
-    clock: CleanupClock
+    clock: CleanupClock,
+    prepareForGeneration: @escaping @Sendable () async throws -> Void
   ) {
     self.request = request
     self.maximumOutputTokens = maximumOutputTokens
     self.transportFactory = transportFactory
     self.clock = clock
+    self.prepareForGeneration = prepareForGeneration
   }
 
   func result() async throws -> GeneratedCleanupCandidate {
@@ -195,6 +203,7 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
 
   func requestCancellation() {
     var cancellationTarget: (any GemmaCleanupTransportSession)?
+    var generationTaskToCancel: Task<Void, Never>?
     var acknowledgeImmediately = false
 
     lock.lock()
@@ -207,12 +216,14 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
       cancellationSent = true
       cancellationTarget = transport
     }
-    if generationTask == nil, transport == nil {
+    if transport == nil, generationTask == nil || preparationInFlight {
       finished = true
       acknowledgeImmediately = true
+      generationTaskToCancel = generationTask
     }
     lock.unlock()
 
+    generationTaskToCancel?.cancel()
     gate.resolve(.failure(.requestCancelled))
     if acknowledgeImmediately {
       gate.acknowledge()
@@ -222,6 +233,7 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
 
   func forceTerminate() {
     var forceTarget: (any GemmaCleanupTransportSession)?
+    var generationTaskToCancel: Task<Void, Never>?
     var acknowledgeImmediately = false
 
     lock.lock()
@@ -235,9 +247,10 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
       forceSent = true
       forceTarget = transport
     }
-    if generationTask == nil, transport == nil {
+    if transport == nil, generationTask == nil || preparationInFlight {
       finished = true
       acknowledgeImmediately = true
+      generationTaskToCancel = generationTask
     } else {
       _ = makeForcedDrainWatcherLocked()
     }
@@ -245,10 +258,12 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
     lock.unlock()
 
     deadlineTask?.cancel()
+    generationTaskToCancel?.cancel()
     if let forceTarget {
       forceTarget.forceTerminate()
       markForcedTransportReady()
     } else if acknowledgeImmediately {
+      markForcedTransportUnavailableIfNeeded()
       gate.resolve(.failure(.terminated))
       gate.acknowledge()
     }
@@ -279,6 +294,47 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
 
     guard let helperRequest = makeRequest(budgetMilliseconds: budgetMilliseconds) else {
       finish(.failure(.generationFailed))
+      return
+    }
+
+    if let error = abortError() {
+      finish(.failure(error))
+      return
+    }
+    guard !Task.isCancelled, request.deadline > clock.now() else {
+      finish(.failure(.generationFailed))
+      return
+    }
+
+    guard beginPreparationIfAllowed() else {
+      finish(.failure(abortError() ?? .generationFailed))
+      return
+    }
+
+    var preparationSucceeded = false
+    do {
+      try await prepareForGeneration()
+      preparationSucceeded = true
+    } catch {
+      // Preparation is a fail-closed handoff; its error is not transport data.
+    }
+
+    if clock.now() >= request.deadline {
+      requestCancellation()
+    }
+    if let error = abortError() {
+      setPreparationInFlight(false)
+      finish(.failure(error))
+      return
+    }
+    guard preparationSucceeded, !Task.isCancelled else {
+      setPreparationInFlight(false)
+      finish(.failure(.generationFailed))
+      return
+    }
+
+    guard beginTransportStartupIfAllowed() else {
+      finish(.failure(abortError() ?? .generationFailed))
       return
     }
 
@@ -686,6 +742,31 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
     lock.lock()
     defer { lock.unlock() }
     return cancellationRequested
+  }
+
+  private func beginPreparationIfAllowed() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !finished, !cancellationRequested, !forceRequested else { return false }
+    preparationInFlight = true
+    return true
+  }
+
+  private func beginTransportStartupIfAllowed() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !finished, !cancellationRequested, !forceRequested else {
+      preparationInFlight = false
+      return false
+    }
+    preparationInFlight = false
+    return true
+  }
+
+  private func setPreparationInFlight(_ value: Bool) {
+    lock.lock()
+    preparationInFlight = value
+    lock.unlock()
   }
 
   private func currentHelperRequestID() -> String? {
