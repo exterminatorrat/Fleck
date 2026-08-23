@@ -483,7 +483,7 @@ if ! validate_direct_child_directory "$staging_root" "$canonical_build_root" 'st
 fi
 readonly staged_app="$staging_root/Fleck.app"
 readonly staged_bundle="$staged_app/Contents/Resources/Fleck_FleckApp.bundle"
-readonly staged_gemma_resource_bundle="$staged_app/Contents/Resources/mlx-swift_Cmlx.bundle"
+readonly staged_gemma_resource_bundle="$staged_app/Contents/SharedSupport/mlx-swift_Cmlx.bundle"
 /bin/mkdir -p \
   "$staged_app/Contents/MacOS" \
   "$staged_app/Contents/SharedSupport" \
@@ -518,7 +518,7 @@ for forbidden_suffix in \
   fi
 done
 
-expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupNotice.md\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/Resources/mlx-swift_Cmlx.bundle\nContents/Resources/mlx-swift_Cmlx.bundle/Contents\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Info.plist\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources\nContents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib\nContents/SharedSupport\nContents/SharedSupport/fleck-agent\nContents/SharedSupport/gemma-cleanup-helper'
+expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupNotice.md\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/SharedSupport\nContents/SharedSupport/fleck-agent\nContents/SharedSupport/gemma-cleanup-helper\nContents/SharedSupport/mlx-swift_Cmlx.bundle\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Info.plist\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib'
 actual_app_contents="$(
   /usr/bin/find "$staged_app" ! -path "$staged_app" -print \
     | /usr/bin/sed "s#^$staged_app/##" \

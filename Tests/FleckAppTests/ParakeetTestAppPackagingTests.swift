@@ -626,6 +626,28 @@ func parakeetTestAppPackagingScriptUsesContentsResourcesBundle() {
 }
 
 @Test
+func parakeetPackagerPlacesMLXResourceBundleBesideStandaloneGemmaHelper() throws {
+  let fixture = try makeFakeFixture()
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(fixture: fixture, runID: "colocated-resource")
+  waitForExit(running)
+
+  #expect(running.process.terminationStatus == 0)
+  let sharedSupport = fixture.build.appendingPathComponent(
+    "parakeet-test/Fleck.app/Contents/SharedSupport",
+    isDirectory: true
+  )
+  let helper = sharedSupport.appendingPathComponent("gemma-cleanup-helper")
+  let metallib = sharedSupport.appendingPathComponent(
+    "mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+  )
+  #expect(fileManager.isExecutableFile(atPath: helper.path))
+  #expect(try String(contentsOf: metallib, encoding: .utf8) == "default-metallib-colocated-resource\n")
+}
+
+@Test
 func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   let fixture = try makeFakeFixture()
   defer { try? fileManager.removeItem(at: fixture.root) }
@@ -703,10 +725,10 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   #expect(fileManager.isExecutableFile(atPath: helper.path))
   #expect(try String(contentsOf: helper, encoding: .utf8) == "gemma-helper-first\n")
   let metallib = app.appendingPathComponent(
-    "Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+    "Contents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
   )
   let bundleMetadata = app.appendingPathComponent(
-    "Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Info.plist"
+    "Contents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Info.plist"
   )
   #expect(try String(contentsOf: metallib, encoding: .utf8) == "default-metallib-first\n")
   #expect(try String(contentsOf: bundleMetadata, encoding: .utf8) == "mlx-bundle-info-first\n")
@@ -735,9 +757,9 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   let appContents = fileManager.subpaths(atPath: app.path) ?? []
   #expect(appContents.filter { $0 == "Contents/SharedSupport/gemma-cleanup-helper" }.count == 1)
   #expect(appContents.filter {
-    $0 == "Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+    $0 == "Contents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
   }.count == 1)
-  #expect(!appContents.contains("Contents/SharedSupport/mlx-swift_Cmlx.bundle"))
+  #expect(!appContents.contains("Contents/Resources/mlx-swift_Cmlx.bundle"))
 
   let helperToolEvents = try String(contentsOf: fixture.helperToolLog, encoding: .utf8)
     .split(whereSeparator: \.isNewline)
