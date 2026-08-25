@@ -27,6 +27,25 @@ import Testing
   }
 }
 
+@Test func faithfulValidatorAcceptsMultipleIsolatedFillerDeletions() {
+  let baseline = "I feel like the main things um that we really need to work on for my um chemistry is the lab report."
+  let candidate = "I feel like the main things that we really need to work on for my chemistry is the lab report."
+
+  #expect(
+    FaithfulCleanupValidator().validate(
+      candidate: candidate,
+      against: .init(
+        baseline: baseline,
+        protectedForms: ["chemistry"],
+        replacements: 0
+      )
+    ) == .accepted(
+      text: candidate,
+      operations: [.deleteFiller("um"), .deleteFiller("um")]
+    )
+  )
+}
+
 @Test func faithfulValidatorRejectsSpacedInterposedNumericAffixes() {
   let validator = FaithfulCleanupValidator()
   for (baseline, candidate) in [

@@ -88,7 +88,7 @@ actor IncrementalTranscriptCleaner {
     let inputCount = CleanupLexeme.tokenCount(request.baseline)
     guard inputCount <= 80 else { return .baseline(reason: .targetTooLarge) }
     guard request.deadline > clock.now() else {
-      return .baseline(reason: .deadlineExpired)
+      return deterministicFallbackOrBaseline(for: request, reason: .deadlineExpired)
     }
 
     let box = CleanupSessionBox()
@@ -108,7 +108,7 @@ actor IncrementalTranscriptCleaner {
           cancellationBudget: cancellationBudget
         )
         try Task.checkCancellation()
-        return .baseline(reason: .deadlineExpired)
+        return deterministicFallbackOrBaseline(for: request, reason: .deadlineExpired)
       }
 
       let event = await withTaskCancellationHandler(operation: {
@@ -126,13 +126,13 @@ actor IncrementalTranscriptCleaner {
 
       switch event {
       case .deadline:
-        return .baseline(reason: .deadlineExpired)
+        return deterministicFallbackOrBaseline(for: request, reason: .deadlineExpired)
       case .requestCancelled, .terminated:
         return .baseline(reason: .requestCancelled)
       case .callerCancelled:
         throw CancellationError()
       case .generationFailed:
-        return .baseline(reason: .generationFailed)
+        return deterministicFallbackOrBaseline(for: request, reason: .generationFailed)
       case .candidate(let candidate):
         guard request.deadline > clock.now() else {
           box.requestCancellation()
@@ -143,13 +143,13 @@ actor IncrementalTranscriptCleaner {
             cancellationBudget: cancellationBudget
           )
           try Task.checkCancellation()
-          return .baseline(reason: .deadlineExpired)
+          return deterministicFallbackOrBaseline(for: request, reason: .deadlineExpired)
         }
         guard !candidate.cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-          return .baseline(reason: .malformedOutput)
+          return deterministicFallbackOrBaseline(for: request, reason: .malformedOutput)
         }
         guard CleanupLexeme.tokenCount(candidate.cleaned) <= inputCount + 32 else {
-          return .baseline(reason: .outputTooLarge)
+          return deterministicFallbackOrBaseline(for: request, reason: .outputTooLarge)
         }
         let resolution = PersonalDictionaryResolution(
           baseline: request.baseline,
@@ -159,8 +159,14 @@ actor IncrementalTranscriptCleaner {
         let validation = validator.validate(candidate: candidate.cleaned, against: resolution)
         try Task.checkCancellation()
         switch validation {
-        case .accepted(let text, _): return .accepted(text)
-        case .rejected: return .baseline(reason: .validationRejected)
+        case .accepted(let text, _):
+          if candidate.cleaned == request.baseline,
+             let fallback = deterministicFillerFallback(for: request) {
+            return .accepted(fallback)
+          }
+          return .accepted(text)
+        case .rejected:
+          return deterministicFallbackOrBaseline(for: request, reason: .validationRejected)
         }
       }
     } catch is CancellationError {
@@ -189,8 +195,30 @@ actor IncrementalTranscriptCleaner {
         }
         throw CancellationError()
       }
-      return .baseline(reason: .generationFailed)
+      return deterministicFallbackOrBaseline(for: request, reason: .generationFailed)
     }
+  }
+
+  private func deterministicFallbackOrBaseline(
+    for request: IncrementalCleanupRequest,
+    reason: IncrementalCleanupFallbackReason
+  ) -> IncrementalCleanupDecision {
+    if let fallback = deterministicFillerFallback(for: request) {
+      return .accepted(fallback)
+    }
+    return .baseline(reason: reason)
+  }
+
+  private func deterministicFillerFallback(
+    for request: IncrementalCleanupRequest
+  ) -> String? {
+    validator.deterministicFillerFallback(
+      against: PersonalDictionaryResolution(
+        baseline: request.baseline,
+        protectedForms: request.protectedForms,
+        replacements: request.replacements
+      )
+    )
   }
 }
 

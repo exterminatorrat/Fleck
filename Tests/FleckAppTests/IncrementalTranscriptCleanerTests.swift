@@ -23,6 +23,20 @@ import Testing
   #expect(generator.resultCount == 1)
 }
 
+@Test func unchangedModelOutputUsesTheValidatedDeterministicFillerFallback() async throws {
+  let baseline = "I feel like the main things um that we really need to work on for my um chemistry is the lab report."
+  let expected = "I feel like the main things that we really need to work on for my chemistry is the lab report."
+  let generator = CleanupGeneratorProbe(result: baseline)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(request(baseline))
+
+  #expect(decision == .accepted(expected))
+}
+
 @Test func cleanerForwardsTheBoundedOutputBudgetFromTheCleanRequest() async throws {
   let baseline = "send the report"
   let generator = CleanupGeneratorProbe(result: "Send the report.")
@@ -106,6 +120,20 @@ import Testing
 
   #expect(decision == .baseline(reason: .generationFailed))
   #expect(generator.startCount == 1)
+}
+
+@Test func generationFailureUsesTheValidatedDeterministicFillerFallback() async throws {
+  let baseline = "I feel like the main things um that we really need to work on for my um chemistry is the lab report."
+  let expected = "I feel like the main things that we really need to work on for my chemistry is the lab report."
+  let generator = CleanupGeneratorProbe(startError: .generationFailed)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(request(baseline))
+
+  #expect(decision == .accepted(expected))
 }
 
 @Test func generationFailureFromTheSessionReturnsTheExactBaseline() async throws {
@@ -212,6 +240,33 @@ import Testing
   #expect(session.acknowledgementCallCount == 1)
   #expect(session.acknowledgementFinished)
   #expect(session.forceTerminateCount == 0)
+}
+
+@Test func deadlineExpiryUsesTheValidatedDeterministicFillerFallback() async throws {
+  let now = TestCleanupClock.fixedInstant
+  let deadline = now.advanced(by: .seconds(1))
+  let baseline = "I feel like the main things um that we really need to work on for my um chemistry is the lab report."
+  let expected = "I feel like the main things that we really need to work on for my chemistry is the lab report."
+  let session = CleanupGenerationSessionProbe(
+    result: .success(.init(cleaned: baseline)),
+    waitsForCancellation: true
+  )
+  let generator = CleanupGeneratorProbe(session: session)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.sequence([now, deadline])
+  )
+
+  let decision = try await cleaner.clean(.init(
+    baseline: baseline,
+    protectedForms: [],
+    replacements: 0,
+    deadline: deadline
+  ))
+
+  #expect(decision == .accepted(expected))
+  #expect(session.requestCancellationCount == 1)
+  #expect(session.acknowledgementFinished)
 }
 
 @Test func callerCancellationThrowsAndMakesLateCandidateUnusable() async {
