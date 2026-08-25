@@ -49,7 +49,12 @@ import Testing
 @Test func deterministicFillerFallbackRejectsNonSentenceInitialPunctuationAdjacentFillers() {
   let validator = FaithfulCleanupValidator()
 
-  for baseline in ["hello, um, world", "hello, uh, world", "hello, erm, world"] {
+  for baseline in [
+    "hello, um, world",
+    "hello, uh, world",
+    "hello, erm, world",
+    "Hello. um, next"
+  ] {
     #expect(
       validator.deterministicFillerFallback(
         against: .init(baseline: baseline, protectedForms: [], replacements: 0)
