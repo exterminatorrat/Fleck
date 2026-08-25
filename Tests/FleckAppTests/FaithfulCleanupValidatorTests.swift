@@ -99,17 +99,23 @@ import Testing
   }
 }
 
-@Test func deterministicFillerFallbackRemovesOnlyExactButLikeFiller() {
+@Test func deterministicFillerFallbackRequiresLowercaseLikeToken() {
   let validator = FaithfulCleanupValidator()
 
-  for (baseline, expected) in [
-    ("works, but like, can", "works, but can"),
-    ("works, BUT LIKE, can", "works, BUT can")
-  ] {
+  #expect(
+    validator.deterministicFillerFallback(
+      against: .init(
+        baseline: "works, but like, can",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == "works, but can"
+  )
+  for baseline in ["works, BUT LIKE, can", "works, but Like, can"] {
     #expect(
       validator.deterministicFillerFallback(
         against: .init(baseline: baseline, protectedForms: [], replacements: 0)
-      ) == expected
+      ) == nil
     )
   }
 }
