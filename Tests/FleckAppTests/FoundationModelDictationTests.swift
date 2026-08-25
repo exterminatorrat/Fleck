@@ -461,6 +461,29 @@ private actor FoundationModelResponderProbe {
   #expect(recorder.count == 0)
 }
 
+@Test func FoundationModelDictationDoesNotLocallyMatchPunctuatedTitle() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let cPlusPlus = DictationDestination(noteID: UUID(), title: "C++")
+  let recorder = CallRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 14 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in
+      recorder.count += 1
+      return .inbox
+    }
+  )
+
+  let destination = await dictation.route(
+    transcript: "I need help with C.",
+    candidates: [inbox, cPlusPlus],
+    inboxID: inbox.noteID
+  )
+
+  #expect(destination == inbox.noteID)
+  #expect(recorder.count == 0)
+}
+
 @Test func FoundationModelDictationRoutesAmbiguousExactEligibleTitlesToInboxWithoutFoundationModel() async {
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")

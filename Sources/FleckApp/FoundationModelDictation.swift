@@ -338,7 +338,11 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
   ) -> [DictationDestination] {
     let transcriptLexemes = parseTranscript(transcript).lexemes
     return candidates.filter { candidate in
-      let titleLexemes = parseTranscript(normalizedTitle(candidate.title)).lexemes
+      let normalizedTitle = normalizedTitle(candidate.title)
+      guard normalizedTitle.allSatisfy({ $0.isLetter || $0.isNumber || $0.isWhitespace }) else {
+        return false
+      }
+      let titleLexemes = parseTranscript(normalizedTitle).lexemes
       guard !titleLexemes.isEmpty, titleLexemes.count <= transcriptLexemes.count else { return false }
       return transcriptLexemes.indices.dropLast(titleLexemes.count - 1).contains { index in
         Array(transcriptLexemes[index..<(index + titleLexemes.count)]) == titleLexemes
