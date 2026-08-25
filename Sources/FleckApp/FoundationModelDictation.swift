@@ -114,8 +114,9 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     let osMajorVersion = osMajorVersion()
     if osMajorVersion >= 14 {
       let exactMatches = Self.exactTitleMatches(in: transcript, candidates: eligible)
-      if exactMatches.count == 1 { return exactMatches[0].noteID }
-      if exactMatches.count > 1 { return inboxID }
+      if exactMatches.count == 1, exactMatches[0].occurrenceCount == 1 {
+        return exactMatches[0].destination.noteID
+      }
     }
 
     guard osMajorVersion >= 26 else { return inboxID }
@@ -335,19 +336,39 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
   private static func exactTitleMatches(
     in transcript: String,
     candidates: [DictationDestination]
-  ) -> [DictationDestination] {
-    let transcriptLexemes = parseTranscript(transcript).lexemes
-    return candidates.filter { candidate in
-      let normalizedTitle = normalizedTitle(candidate.title)
-      guard normalizedTitle.allSatisfy({ $0.isLetter || $0.isNumber || $0.isWhitespace }) else {
-        return false
+  ) -> [(destination: DictationDestination, occurrenceCount: Int)] {
+    let normalizedTranscript = normalizedTitle(transcript)
+    return candidates.compactMap { candidate in
+      let title = normalizedTitle(candidate.title)
+      guard title.allSatisfy({ $0.isLetter || $0.isNumber || $0.isWhitespace }) else {
+        return nil
       }
-      let titleLexemes = parseTranscript(normalizedTitle).lexemes
-      guard !titleLexemes.isEmpty, titleLexemes.count <= transcriptLexemes.count else { return false }
-      return transcriptLexemes.indices.dropLast(titleLexemes.count - 1).contains { index in
-        Array(transcriptLexemes[index..<(index + titleLexemes.count)]) == titleLexemes
-      }
+      let occurrenceCount = exactTitleOccurrenceCount(title, in: normalizedTranscript)
+      guard occurrenceCount > 0 else { return nil }
+      return (destination: candidate, occurrenceCount: occurrenceCount)
     }
+  }
+
+  private static func exactTitleOccurrenceCount(_ title: String, in transcript: String) -> Int {
+    var count = 0
+    var searchStart = transcript.startIndex
+    while searchStart < transcript.endIndex,
+      let range = transcript.range(of: title, range: searchStart..<transcript.endIndex)
+    {
+      let precededByWordCharacter = range.lowerBound > transcript.startIndex
+        && isWordCharacter(transcript[transcript.index(before: range.lowerBound)])
+      let followedByWordCharacter = range.upperBound < transcript.endIndex
+        && isWordCharacter(transcript[range.upperBound])
+      if !precededByWordCharacter && !followedByWordCharacter {
+        count += 1
+      }
+      searchStart = transcript.index(after: range.lowerBound)
+    }
+    return count
+  }
+
+  private static func isWordCharacter(_ character: Character) -> Bool {
+    character.isLetter || character.isNumber || character == "'" || character == "’"
   }
 
   private static let genericTitles: Set<String> = [
