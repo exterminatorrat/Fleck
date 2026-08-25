@@ -1588,6 +1588,7 @@ struct FaithfulCleanupValidator: Sendable {
           lexemes[rawIndex - 1].kind == .whitespace,
           lexemes[rawIndex - 2].kind == .word,
           lexemes[rawIndex - 2].canonical == "but",
+          lexemes[rawIndex - 2].original == "but",
           lexemes.indices.contains(rawIndex + 2),
           lexemes[rawIndex + 1].kind == .punctuation,
           lexemes[rawIndex + 1].original == ",",

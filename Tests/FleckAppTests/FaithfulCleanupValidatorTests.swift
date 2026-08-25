@@ -111,7 +111,11 @@ import Testing
       )
     ) == "works, but can"
   )
-  for baseline in ["works, BUT LIKE, can", "works, but Like, can"] {
+  for baseline in [
+    "works, BUT LIKE, can",
+    "works, but Like, can",
+    "works, BUT like, can"
+  ] {
     #expect(
       validator.deterministicFillerFallback(
         against: .init(baseline: baseline, protectedForms: [], replacements: 0)
