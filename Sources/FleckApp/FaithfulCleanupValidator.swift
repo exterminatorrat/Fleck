@@ -34,25 +34,29 @@ struct FaithfulCleanupValidator: Sendable {
     against resolution: PersonalDictionaryResolution
   ) -> String? {
     let baselineLexemes = CleanupLexeme.scan(resolution.baseline)
-    let protectedSpans = CleanupProtectedSpan.extract(
+    let protectedSpans = Self.protectedSpans(
       from: resolution.baseline,
       protectedForms: resolution.protectedForms
     )
     let removableRawIndices = baselineLexemes.indices.filter { index in
-      guard Self.deterministicEnglishFillerWords.contains(baselineLexemes[index].canonical),
-            !protectedSpans.contains(where: { $0.lexemeRange.contains(index) }) else {
+      guard !protectedSpans.contains(where: { $0.lexemeRange.contains(index) }) else {
         return false
       }
-      return true
+      if Self.deterministicEnglishFillerWords.contains(baselineLexemes[index].canonical) {
+        return Self.isWhitespaceDelimitedFiller(at: index, in: baselineLexemes)
+          || Self.isSentenceInitialCommaFiller(at: index, in: baselineLexemes)
+      }
+      return Self.isButLikeFiller(at: index, in: baselineLexemes)
     }
     guard !removableRawIndices.isEmpty else { return nil }
-    guard removableRawIndices.allSatisfy({
-      Self.isWhitespaceDelimitedFiller(at: $0, in: baselineLexemes)
-    }) else { return nil }
 
     var omittedRawIndices = Set(removableRawIndices)
     for index in removableRawIndices {
-      if baselineLexemes.indices.contains(index + 1),
+      if Self.isSentenceInitialCommaFiller(at: index, in: baselineLexemes)
+        || Self.isButLikeFiller(at: index, in: baselineLexemes) {
+        omittedRawIndices.insert(index + 1)
+        omittedRawIndices.insert(index + 2)
+      } else if baselineLexemes.indices.contains(index + 1),
          baselineLexemes[index + 1].kind == .whitespace {
         omittedRawIndices.insert(index + 1)
       } else if index > baselineLexemes.startIndex,
@@ -108,11 +112,11 @@ struct FaithfulCleanupValidator: Sendable {
       in: candidate
     ) else { return .rejected(.protectedContentChanged) }
 
-    let baselineSpans = CleanupProtectedSpan.extract(
+    let baselineSpans = Self.protectedSpans(
       from: resolution.baseline,
       protectedForms: resolution.protectedForms
     )
-    let candidateSpans = CleanupProtectedSpan.extract(
+    let candidateSpans = Self.protectedSpans(
       from: candidate,
       protectedForms: resolution.protectedForms
     )
@@ -122,6 +126,7 @@ struct FaithfulCleanupValidator: Sendable {
     let duplicate = Self.immediateDuplicateRemoval(
       baselineLexemes, candidateValues, baselineValues, baselineSpans
     )
+    let removedBaselineLexicalOrdinals = filler?.removedOrdinals ?? duplicate?.removedOrdinals
     let candidateToBaselineLexicalOrdinals = Self.candidateToBaselineLexicalOrdinals(
       baselineValues: baselineValues,
       candidateValues: candidateValues,
@@ -129,7 +134,11 @@ struct FaithfulCleanupValidator: Sendable {
       candidateLexemes: candidateLexemes,
       ordinalMarkerPairs: ordinalMarkerPairs,
       correction: correction,
-      removedBaselineLexicalOrdinals: filler?.removedOrdinals ?? duplicate?.removedOrdinals
+      removedBaselineLexicalOrdinals: removedBaselineLexicalOrdinals
+    )
+    let allowsUnchangedNameTransitions = Self.hasSentenceInitialCommaFillerRemoval(
+      in: baselineLexemes,
+      removedBaselineLexicalOrdinals: removedBaselineLexicalOrdinals
     )
     guard let comparableCandidateSpans = Self.reconcileCaseOnlyNameSpans(
       baseline: baselineSpans,
@@ -137,7 +146,8 @@ struct FaithfulCleanupValidator: Sendable {
       baselineLexemes: baselineLexemes,
       candidateLexemes: candidateLexemes,
       ordinalMarkerPairs: ordinalMarkerPairs,
-      candidateToBaselineLexicalOrdinals: candidateToBaselineLexicalOrdinals
+      candidateToBaselineLexicalOrdinals: candidateToBaselineLexicalOrdinals,
+      allowsUnchangedNameTransitions: allowsUnchangedNameTransitions
     ) else { return .rejected(.protectedContentChanged) }
     guard Self.protectedSpansMatch(
       baselineSpans,
@@ -146,7 +156,8 @@ struct FaithfulCleanupValidator: Sendable {
       candidateLexemes: candidateLexemes,
       candidateToBaselineLexicalOrdinals: candidateToBaselineLexicalOrdinals,
       ordinalMarkerPairs: ordinalMarkerPairs,
-      correction: correction
+      correction: correction,
+      allowsUnchangedNameTransitions: allowsUnchangedNameTransitions
     ) else { return .rejected(.protectedContentChanged) }
 
     if baselineValues == candidateValues {
@@ -1142,7 +1153,8 @@ struct FaithfulCleanupValidator: Sendable {
     baselineLexemes: [CleanupLexeme],
     candidateLexemes: [CleanupLexeme],
     ordinalMarkerPairs: PairedOrdinalMarkerIndices?,
-    candidateToBaselineLexicalOrdinals: [Int]?
+    candidateToBaselineLexicalOrdinals: [Int]?,
+    allowsUnchangedNameTransitions: Bool
   ) -> [CleanupProtectedSpan]? {
     guard let candidateToBaselineLexicalOrdinals else { return candidate }
     let ignoredBaselineRawRanges = ordinalMarkerPairs?.baselineRawRanges ?? []
@@ -1181,7 +1193,15 @@ struct FaithfulCleanupValidator: Sendable {
         )
       }
     )
-    guard baselineNames.isSubset(of: candidateNames) else { return nil }
+    guard baselineNames.allSatisfy({ name in
+      candidateNames.contains(name)
+        || (allowsUnchangedNameTransitions && candidateLexemeMatches(
+          name,
+          in: candidateLexemes,
+          mappedFrom: candidateToBaselineLexicalOrdinals,
+          ignoring: ignoredCandidateRawRanges
+        ))
+    }) else { return nil }
 
     return candidate.filter { span in
       guard let occurrence = singleNameOccurrence(
@@ -1224,6 +1244,48 @@ struct FaithfulCleanupValidator: Sendable {
     }
   }
 
+  private static func candidateLexemeMatches(
+    _ name: NameOccurrence,
+    in lexemes: [CleanupLexeme],
+    mappedFrom candidateToBaselineLexicalOrdinals: [Int],
+    ignoring ignoredRawRanges: [Range<Int>]
+  ) -> Bool {
+    guard let candidateOrdinal = candidateToBaselineLexicalOrdinals.firstIndex(
+      of: name.lexicalOrdinal
+    ),
+      let candidateIndex = lexicalIndex(
+        atOrdinal: candidateOrdinal,
+        in: lexemes,
+        ignoring: ignoredRawRanges
+      ),
+      lexemes.indices.contains(candidateIndex) else {
+      return false
+    }
+    return lexemes[candidateIndex].canonical == name.canonical
+  }
+
+  private static func candidateNameSpanMatches(
+    _ name: NameOccurrence,
+    in spans: [CleanupProtectedSpan],
+    lexemes: [CleanupLexeme],
+    mappedFrom candidateToBaselineLexicalOrdinals: [Int],
+    ignoring ignoredRawRanges: [Range<Int>]
+  ) -> Bool {
+    spans.contains { span in
+      guard let candidateName = singleNameOccurrence(
+        span,
+        in: lexemes,
+        ignoring: ignoredRawRanges
+      ),
+        candidateToBaselineLexicalOrdinals.indices.contains(candidateName.lexicalOrdinal) else {
+        return false
+      }
+      return candidateToBaselineLexicalOrdinals[candidateName.lexicalOrdinal]
+          == name.lexicalOrdinal
+        && candidateName.canonical == name.canonical
+    }
+  }
+
   private static func protectedSpansMatch(
     _ baseline: [CleanupProtectedSpan],
     _ candidate: [CleanupProtectedSpan],
@@ -1231,12 +1293,35 @@ struct FaithfulCleanupValidator: Sendable {
     candidateLexemes: [CleanupLexeme],
     candidateToBaselineLexicalOrdinals: [Int]?,
     ordinalMarkerPairs: PairedOrdinalMarkerIndices?,
-    correction: ExplicitCorrection?
+    correction: ExplicitCorrection?,
+    allowsUnchangedNameTransitions: Bool
   ) -> Bool {
     let comparableBaseline = baseline.filter { span in
-      guard let correction,
-            correction.markerCanonical == "no" else { return true }
-      return !(span.category == .negation && span.lexemeRange == correction.markerRawRange)
+      if let correction,
+         correction.markerCanonical == "no",
+         span.category == .negation,
+         span.lexemeRange == correction.markerRawRange {
+        return false
+      }
+      guard allowsUnchangedNameTransitions,
+            let candidateToBaselineLexicalOrdinals,
+            let name = singleNameOccurrence(span, in: baselineLexemes),
+            candidateLexemeMatches(
+              name,
+              in: candidateLexemes,
+              mappedFrom: candidateToBaselineLexicalOrdinals,
+              ignoring: ordinalMarkerPairs?.candidateRawRanges ?? []
+            ),
+            !candidateNameSpanMatches(
+              name,
+              in: candidate,
+              lexemes: candidateLexemes,
+              mappedFrom: candidateToBaselineLexicalOrdinals,
+              ignoring: ordinalMarkerPairs?.candidateRawRanges ?? []
+            ) else {
+        return true
+      }
+      return false
     }
     let exemptCandidateNumbers = ordinalMarkerPairs?.candidateNumberRawRanges ?? []
     let comparableCandidate = candidate.filter { span in
@@ -1421,12 +1506,15 @@ struct FaithfulCleanupValidator: Sendable {
     let lexicalIndices = baseline.indices.filter { baseline[$0].isLexical }
     var removableOrdinals = Set<Int>()
     for ordinal in baselineValues.indices {
-      guard fillerWords.contains(baselineValues[ordinal]) else { continue }
       guard lexicalIndices.indices.contains(ordinal) else { continue }
       let rawIndex = lexicalIndices[ordinal]
+      let isContextualLike = Self.isButLikeFiller(at: rawIndex, in: baseline)
+      guard fillerWords.contains(baselineValues[ordinal]) || isContextualLike else { continue }
       guard !spans.contains(where: { $0.lexemeRange.contains(rawIndex) }) else { continue }
 
-      guard Self.isStandaloneFiller(at: rawIndex, in: baseline) else { continue }
+      guard isContextualLike || Self.isStandaloneFiller(at: rawIndex, in: baseline) else {
+        continue
+      }
       removableOrdinals.insert(ordinal)
     }
     guard !removableOrdinals.isEmpty else { return nil }
@@ -1477,6 +1565,75 @@ struct FaithfulCleanupValidator: Sendable {
     let isEndDelimited = !lexemes.indices.contains(rawIndex + 1)
       || lexemes[rawIndex + 1].kind == .whitespace
     return isStartDelimited && isEndDelimited
+  }
+
+  private static func protectedSpans(
+    from text: String,
+    protectedForms: [String]
+  ) -> [CleanupProtectedSpan] {
+    let lexemes = CleanupLexeme.scan(text)
+    return CleanupProtectedSpan.extract(from: text, protectedForms: protectedForms).filter { span in
+      guard span.category == .name,
+            span.lexemeRange.count == 1,
+            let rawIndex = span.lexemeRange.first,
+            lexemes.indices.contains(rawIndex) else {
+        return true
+      }
+      return !isSentenceInitialCommaFiller(at: rawIndex, in: lexemes)
+        && !isButLikeFiller(at: rawIndex, in: lexemes)
+    }
+  }
+
+  private static func hasSentenceInitialCommaFillerRemoval(
+    in lexemes: [CleanupLexeme],
+    removedBaselineLexicalOrdinals: [Int]?
+  ) -> Bool {
+    guard let removedBaselineLexicalOrdinals else { return false }
+    let lexicalIndices = lexemes.indices.filter { lexemes[$0].isLexical }
+    return removedBaselineLexicalOrdinals.contains { ordinal in
+      guard lexicalIndices.indices.contains(ordinal) else { return false }
+      return isSentenceInitialCommaFiller(at: lexicalIndices[ordinal], in: lexemes)
+    }
+  }
+
+  private static func isSentenceInitialCommaFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(rawIndex),
+          deterministicEnglishFillerWords.contains(lexemes[rawIndex].canonical),
+          lexemes[rawIndex].kind == .word,
+          lexemes.indices.contains(rawIndex + 2),
+          lexemes[rawIndex + 1].kind == .punctuation,
+          lexemes[rawIndex + 1].original == ",",
+          lexemes[rawIndex + 2].kind == .whitespace else {
+      return false
+    }
+    if rawIndex == lexemes.startIndex { return true }
+    return rawIndex >= 2
+      && lexemes[rawIndex - 1].kind == .whitespace
+      && lexemes[rawIndex - 2].kind == .punctuation
+      && sentenceTerminalPunctuation.contains(lexemes[rawIndex - 2].original)
+  }
+
+  private static func isButLikeFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(rawIndex),
+          lexemes[rawIndex].kind == .word,
+          lexemes[rawIndex].canonical == "like",
+          rawIndex >= 2,
+          lexemes[rawIndex - 1].kind == .whitespace,
+          lexemes[rawIndex - 2].kind == .word,
+          lexemes[rawIndex - 2].canonical == "but",
+          lexemes.indices.contains(rawIndex + 2),
+          lexemes[rawIndex + 1].kind == .punctuation,
+          lexemes[rawIndex + 1].original == ",",
+          lexemes[rawIndex + 2].kind == .whitespace else {
+      return false
+    }
+    return true
   }
 
   private static func immediateDuplicateRemoval(

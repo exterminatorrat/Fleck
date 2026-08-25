@@ -46,16 +46,123 @@ import Testing
   )
 }
 
-@Test func deterministicFillerFallbackRejectsPunctuationAdjacentFillers() {
+@Test func deterministicFillerFallbackRejectsNonSentenceInitialPunctuationAdjacentFillers() {
   let validator = FaithfulCleanupValidator()
 
-  for baseline in ["um, hello", "hello, um, world"] {
+  for baseline in ["hello, um, world", "hello, uh, world", "hello, erm, world"] {
     #expect(
       validator.deterministicFillerFallback(
         against: .init(baseline: baseline, protectedForms: [], replacements: 0)
       ) == nil
     )
   }
+}
+
+@Test func deterministicFillerFallbackCleansTheGemmaSecondTranscript() {
+  let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
+  let expected = "I'm not really sure how this works, but can we make it so that it's more technical"
+  let resolution = PersonalDictionaryResolution(
+    baseline: baseline,
+    protectedForms: [],
+    replacements: 0
+  )
+  let validator = FaithfulCleanupValidator()
+
+  #expect(
+    validator.deterministicFillerFallback(against: resolution) == expected
+  )
+  let decision = validator.validate(candidate: expected, against: resolution)
+  guard case .accepted = decision else {
+    Issue.record("Expected the deterministic candidate to validate, got \(decision)")
+    return
+  }
+}
+
+@Test func deterministicFillerFallbackRemovesSentenceInitialCommaFillers() {
+  let validator = FaithfulCleanupValidator()
+
+  for (baseline, expected) in [
+    ("um, hello", "hello"),
+    ("uh, hello", "hello"),
+    ("ERM, hello", "hello")
+  ] {
+    #expect(
+      validator.deterministicFillerFallback(
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == expected
+    )
+  }
+}
+
+@Test func deterministicFillerFallbackRemovesOnlyExactButLikeFiller() {
+  let validator = FaithfulCleanupValidator()
+
+  for (baseline, expected) in [
+    ("works, but like, can", "works, but can"),
+    ("works, BUT LIKE, can", "works, BUT can")
+  ] {
+    #expect(
+      validator.deterministicFillerFallback(
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == expected
+    )
+  }
+}
+
+@Test func deterministicFillerFallbackProducesWellFormedPunctuation() {
+  let validator = FaithfulCleanupValidator()
+
+  for baseline in ["um, hello", "works, but like, can"] {
+    guard let fallback = validator.deterministicFillerFallback(
+      against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+    ) else {
+      Issue.record("Expected a deterministic fallback for \(baseline)")
+      continue
+    }
+    #expect(!fallback.hasPrefix(","))
+    #expect(!fallback.contains(",,"))
+  }
+}
+
+@Test func deterministicFillerFallbackPreservesMeaningfulLikeUses() {
+  let validator = FaithfulCleanupValidator()
+
+  for baseline in ["I like chemistry", "things like chemistry", "it looks like rain"] {
+    #expect(
+      validator.deterministicFillerFallback(
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == nil
+    )
+  }
+}
+
+@Test func deterministicFillerFallbackRejectsNearMissAndProtectedLikeUses() {
+  let validator = FaithfulCleanupValidator()
+
+  for baseline in [
+    "but like chemistry",
+    "but like,can",
+    "but like , can",
+    "but-like, can",
+    "but, like, can",
+    "works, but like; can"
+  ] {
+    #expect(
+      validator.deterministicFillerFallback(
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == nil
+    )
+  }
+
+  #expect(
+    validator.deterministicFillerFallback(
+      against: .init(
+        baseline: "works, but like, can",
+        protectedForms: ["like"],
+        replacements: 0
+      )
+    ) == nil
+  )
 }
 
 @Test func deterministicFillerFallbackPreservesProtectedUppercaseFiller() {
