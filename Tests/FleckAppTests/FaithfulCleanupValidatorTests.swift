@@ -46,6 +46,42 @@ import Testing
   )
 }
 
+@Test func deterministicFillerFallbackRejectsPunctuationAdjacentFillers() {
+  let validator = FaithfulCleanupValidator()
+
+  for baseline in ["um, hello", "hello, um, world"] {
+    #expect(
+      validator.deterministicFillerFallback(
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == nil
+    )
+  }
+}
+
+@Test func deterministicFillerFallbackPreservesProtectedUppercaseFiller() {
+  #expect(
+    FaithfulCleanupValidator().deterministicFillerFallback(
+      against: .init(
+        baseline: "UM send the report",
+        protectedForms: ["UM"],
+        replacements: 0
+      )
+    ) == nil
+  )
+}
+
+@Test func deterministicFillerFallbackDoesNotRemoveWordContainingFiller() {
+  #expect(
+    FaithfulCleanupValidator().deterministicFillerFallback(
+      against: .init(
+        baseline: "umami is a flavor",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == nil
+  )
+}
+
 @Test func faithfulValidatorRejectsSpacedInterposedNumericAffixes() {
   let validator = FaithfulCleanupValidator()
   for (baseline, candidate) in [

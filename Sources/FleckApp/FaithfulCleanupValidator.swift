@@ -40,13 +40,15 @@ struct FaithfulCleanupValidator: Sendable {
     )
     let removableRawIndices = baselineLexemes.indices.filter { index in
       guard Self.deterministicEnglishFillerWords.contains(baselineLexemes[index].canonical),
-            Self.isStandaloneFiller(at: index, in: baselineLexemes),
             !protectedSpans.contains(where: { $0.lexemeRange.contains(index) }) else {
         return false
       }
       return true
     }
     guard !removableRawIndices.isEmpty else { return nil }
+    guard removableRawIndices.allSatisfy({
+      Self.isWhitespaceDelimitedFiller(at: $0, in: baselineLexemes)
+    }) else { return nil }
 
     var omittedRawIndices = Set(removableRawIndices)
     for index in removableRawIndices {
@@ -1429,38 +1431,19 @@ struct FaithfulCleanupValidator: Sendable {
     }
     guard !removableOrdinals.isEmpty else { return nil }
 
-    var memo = Array(
-      repeating: Array(repeating: Optional<[Int]>.none, count: candidateValues.count + 1),
-      count: baselineValues.count + 1
-    )
-    var computed = Array(
-      repeating: Array(repeating: false, count: candidateValues.count + 1),
-      count: baselineValues.count + 1
-    )
-    func align(_ baselineOrdinal: Int, _ candidateOrdinal: Int) -> [Int]? {
-      guard baselineOrdinal < baselineValues.count else {
-        return candidateOrdinal == candidateValues.count ? [] : nil
-      }
-      if computed[baselineOrdinal][candidateOrdinal] {
-        return memo[baselineOrdinal][candidateOrdinal]
-      }
-
-      var result: [Int]?
+    var candidateOrdinal = 0
+    var removedOrdinals: [Int] = []
+    for baselineOrdinal in baselineValues.indices {
       if candidateOrdinal < candidateValues.count,
          baselineValues[baselineOrdinal] == candidateValues[candidateOrdinal] {
-        result = align(baselineOrdinal + 1, candidateOrdinal + 1)
+        candidateOrdinal += 1
+        continue
       }
-      if result == nil, removableOrdinals.contains(baselineOrdinal) {
-        result = align(baselineOrdinal + 1, candidateOrdinal).map {
-          [baselineOrdinal] + $0
-        }
-      }
-      computed[baselineOrdinal][candidateOrdinal] = true
-      memo[baselineOrdinal][candidateOrdinal] = result
-      return result
+      guard removableOrdinals.contains(baselineOrdinal) else { return nil }
+      removedOrdinals.append(baselineOrdinal)
     }
 
-    guard let removedOrdinals = align(0, 0), !removedOrdinals.isEmpty else { return nil }
+    guard candidateOrdinal == candidateValues.count, !removedOrdinals.isEmpty else { return nil }
     return .init(
       removedOrdinals: removedOrdinals,
       values: removedOrdinals.map { baselineValues[$0] }
@@ -1480,6 +1463,20 @@ struct FaithfulCleanupValidator: Sendable {
     }
     return isBoundaryWhitespaceOrPunctuation(rawIndex - 1)
       && isBoundaryWhitespaceOrPunctuation(rawIndex + 1)
+  }
+
+  private static func isWhitespaceDelimitedFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(rawIndex), lexemes[rawIndex].kind == .word else {
+      return false
+    }
+    let isStartDelimited = rawIndex == lexemes.startIndex
+      || lexemes[rawIndex - 1].kind == .whitespace
+    let isEndDelimited = !lexemes.indices.contains(rawIndex + 1)
+      || lexemes[rawIndex + 1].kind == .whitespace
+    return isStartDelimited && isEndDelimited
   }
 
   private static func immediateDuplicateRemoval(
