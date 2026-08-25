@@ -108,9 +108,17 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     candidates: [DictationDestination],
     inboxID: UUID?
   ) async -> UUID? {
-    guard osMajorVersion() >= 26 else { return inboxID }
     let eligible = Self.eligibleDestinations(from: candidates)
     guard !eligible.isEmpty else { return inboxID }
+
+    let osMajorVersion = osMajorVersion()
+    if osMajorVersion >= 14 {
+      let exactMatches = Self.exactTitleMatches(in: transcript, candidates: eligible)
+      if exactMatches.count == 1 { return exactMatches[0].noteID }
+      if exactMatches.count > 1 { return inboxID }
+    }
+
+    guard osMajorVersion >= 26 else { return inboxID }
 
     do {
       switch try await routingGenerator(transcript, eligible) {
@@ -321,6 +329,20 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
         return nil
       }
       return destination
+    }
+  }
+
+  private static func exactTitleMatches(
+    in transcript: String,
+    candidates: [DictationDestination]
+  ) -> [DictationDestination] {
+    let transcriptLexemes = parseTranscript(transcript).lexemes
+    return candidates.filter { candidate in
+      let titleLexemes = parseTranscript(normalizedTitle(candidate.title)).lexemes
+      guard !titleLexemes.isEmpty, titleLexemes.count <= transcriptLexemes.count else { return false }
+      return transcriptLexemes.indices.dropLast(titleLexemes.count - 1).contains { index in
+        Array(transcriptLexemes[index..<(index + titleLexemes.count)]) == titleLexemes
+      }
     }
   }
 
