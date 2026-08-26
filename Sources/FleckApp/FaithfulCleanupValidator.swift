@@ -56,6 +56,7 @@ struct FaithfulCleanupValidator: Sendable {
       if Self.deterministicEnglishFillerWords.contains(baselineLexemes[index].canonical) {
         return Self.isWhitespaceDelimitedFiller(at: index, in: baselineLexemes)
           || Self.isSentenceInitialCommaFiller(at: index, in: baselineLexemes)
+          || Self.isCommaSeparatedFiller(at: index, in: baselineLexemes)
       }
       return Self.isButLikeFiller(at: index, in: baselineLexemes)
     }
@@ -64,9 +65,13 @@ struct FaithfulCleanupValidator: Sendable {
     var omittedRawIndices = Set(removableRawIndices)
     for index in removableRawIndices {
       if Self.isSentenceInitialCommaFiller(at: index, in: baselineLexemes)
+        || Self.isCommaSeparatedFiller(at: index, in: baselineLexemes)
         || Self.isButLikeFiller(at: index, in: baselineLexemes) {
         omittedRawIndices.insert(index + 1)
         omittedRawIndices.insert(index + 2)
+        if Self.isTitleCaseButLikeFiller(at: index, in: baselineLexemes) {
+          omittedRawIndices.insert(index - 2)
+        }
       } else if baselineLexemes.indices.contains(index + 1),
          baselineLexemes[index + 1].kind == .whitespace {
         omittedRawIndices.insert(index + 1)
@@ -1499,7 +1504,37 @@ struct FaithfulCleanupValidator: Sendable {
       || lexemes[rawIndex - 1].kind == .whitespace
     let isEndDelimited = !lexemes.indices.contains(rawIndex + 1)
       || lexemes[rawIndex + 1].kind == .whitespace
-    return isStartDelimited && isEndDelimited
+    guard isStartDelimited && isEndDelimited else { return false }
+    var next = rawIndex + 1
+    while lexemes.indices.contains(next), lexemes[next].kind == .whitespace {
+      next += 1
+    }
+    return !(lexemes.indices.contains(next)
+      && lexemes[next].kind == .punctuation
+      && lexemes[next].original == ",")
+  }
+
+  private static func isCommaSeparatedFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(rawIndex),
+          lexemes[rawIndex].kind == .word,
+          deterministicEnglishFillerWords.contains(lexemes[rawIndex].canonical),
+          rawIndex >= 3,
+          lexemes[rawIndex - 1].kind == .whitespace,
+          lexemes[rawIndex - 2].kind == .punctuation,
+          lexemes[rawIndex - 2].original == ",",
+          lexemes[rawIndex - 3].isLexical,
+          lexemes.indices.contains(rawIndex + 3),
+          lexemes[rawIndex + 1].kind == .punctuation,
+          lexemes[rawIndex + 1].original == ",",
+          lexemes[rawIndex + 2].kind == .whitespace,
+          lexemes[rawIndex + 3].isLexical else {
+      return false
+    }
+    return !deterministicEnglishFillerWords.contains(lexemes[rawIndex - 3].canonical)
+      && !deterministicEnglishFillerWords.contains(lexemes[rawIndex + 3].canonical)
   }
 
   private static func deterministicFallbackProtectedSpans(
@@ -1582,16 +1617,59 @@ struct FaithfulCleanupValidator: Sendable {
           lexemes[rawIndex].kind == .word,
           lexemes[rawIndex].canonical == "like",
           lexemes[rawIndex].original == "like",
-          rawIndex >= 2,
-          lexemes[rawIndex - 1].kind == .whitespace,
-          lexemes[rawIndex - 2].kind == .word,
-          lexemes[rawIndex - 2].canonical == "but",
-          lexemes[rawIndex - 2].original == "but",
           lexemes.indices.contains(rawIndex + 2),
           lexemes[rawIndex + 1].kind == .punctuation,
           lexemes[rawIndex + 1].original == ",",
           lexemes[rawIndex + 2].kind == .whitespace else {
       return false
+    }
+    if rawIndex >= 2,
+       lexemes[rawIndex - 1].kind == .whitespace,
+       lexemes[rawIndex - 2].kind == .word,
+       lexemes[rawIndex - 2].canonical == "but",
+       lexemes[rawIndex - 2].original == "but" {
+      return true
+    }
+    return rawIndex >= 3
+      && lexemes[rawIndex - 1].kind == .whitespace
+      && lexemes[rawIndex - 2].kind == .punctuation
+      && lexemes[rawIndex - 2].original == ","
+      && lexemes[rawIndex - 3].kind == .word
+      && lexemes[rawIndex - 3].canonical == "but"
+      && lexemes[rawIndex - 3].original == "But"
+      && lexemes.indices.contains(rawIndex + 3)
+      && lexemes[rawIndex + 3].isLexical
+      && isSentenceBoundary(before: rawIndex - 3, in: lexemes)
+  }
+
+  private static func isTitleCaseButLikeFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard isButLikeFiller(at: rawIndex, in: lexemes),
+          rawIndex >= 3,
+          lexemes[rawIndex - 1].kind == .whitespace,
+          lexemes[rawIndex - 2].kind == .punctuation,
+          lexemes[rawIndex - 2].original == ",",
+          lexemes[rawIndex - 3].kind == .word,
+          lexemes[rawIndex - 3].canonical == "but",
+          lexemes[rawIndex - 3].original == "But",
+          lexemes.indices.contains(rawIndex + 3),
+          lexemes[rawIndex + 3].isLexical else {
+      return false
+    }
+    return true
+  }
+
+  private static func isSentenceBoundary(
+    before rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    var index = rawIndex - 1
+    while index >= 0 {
+      if lexemes[index].isLexical { return false }
+      if sentenceTerminalPunctuation.contains(lexemes[index].original) { return true }
+      index -= 1
     }
     return true
   }

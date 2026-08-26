@@ -51,6 +51,46 @@ import Testing
   #expect(decision == .accepted(expected))
 }
 
+@Test func cleanerSendsAndPublishesThePunctuationSeparatedDeterministicBaseline() async throws {
+  let baseline = "so, um, I'm not really sure how this works. But, like, can we make it so that's more technical?"
+  let expected = "so, I'm not really sure how this works. But can we make it so that's more technical?"
+  let originalRequest = request(baseline)
+  let generator = CleanupGeneratorProbe(result: expected)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(originalRequest)
+
+  #expect(decision == .accepted(expected))
+  #expect(
+    generator.lastRequest == .init(
+      baseline: expected,
+      protectedForms: originalRequest.protectedForms,
+      replacements: originalRequest.replacements,
+      deadline: originalRequest.deadline
+    )
+  )
+}
+
+@Test func cleanerRejectsGemmaDeletionOfMeaningfulSoAndPublishesTheDeterministicBaseline() async throws {
+  let baseline = "so, um, I'm not really sure how this works. But, like, can we make it so that's more technical?"
+  let expected = "so, I'm not really sure how this works. But can we make it so that's more technical?"
+  let unsafeCandidate = "I'm not really sure how this works. But, like, can we make it so that's more technical?"
+  let originalRequest = request(baseline)
+  let generator = CleanupGeneratorProbe(result: unsafeCandidate)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(originalRequest)
+
+  #expect(decision == .accepted(expected))
+  #expect(generator.lastRequest?.baseline == expected)
+}
+
 @Test func cleanerAcceptsTheFormattedGemmaCandidateInsteadOfDeterministicFallback() async throws {
   let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
   let candidate = "I'm not really sure how this works, but can we make it so that it's more technical."

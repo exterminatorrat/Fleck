@@ -46,13 +46,14 @@ import Testing
   )
 }
 
-@Test func deterministicFillerFallbackRejectsNonSentenceInitialPunctuationAdjacentFillers() {
+@Test func deterministicFillerFallbackRejectsMalformedCommaSeparatedFillers() {
   let validator = FaithfulCleanupValidator()
 
   for baseline in [
-    "hello, um, world",
-    "hello, uh, world",
-    "hello, erm, world",
+    "hello, um,world",
+    "hello, um , world",
+    "hello, um; world",
+    "hello um, world",
     "Hello. um, next"
   ] {
     #expect(
@@ -61,6 +62,32 @@ import Testing
       ) == nil
     )
   }
+}
+
+@Test func deterministicFillerFallbackRemovesStructurallySafeCommaSeparatedFillers() {
+  let validator = FaithfulCleanupValidator()
+
+  for filler in ["um", "uh", "erm"] {
+    #expect(
+      validator.deterministicFillerFallback(
+        against: .init(
+          baseline: "so, \(filler), I'm ready",
+          protectedForms: [],
+          replacements: 0
+        )
+      ) == "so, I'm ready"
+    )
+  }
+
+  #expect(
+    validator.deterministicFillerFallback(
+      against: .init(
+        baseline: "hello, um, world",
+        protectedForms: [],
+        replacements: 0
+      )
+    ) == "hello, world"
+  )
 }
 
 @Test func deterministicFillerFallbackCleansTheGemmaSecondTranscript() {
@@ -80,6 +107,30 @@ import Testing
   guard case .accepted = decision else {
     Issue.record("Expected the deterministic candidate to validate, got \(decision)")
     return
+  }
+}
+
+@Test func deterministicFillerFallbackCleansThePunctuationSeparatedGemmaTranscript() {
+  let baseline = "so, um, I'm not really sure how this works. But, like, can we make it so that's more technical?"
+  let expected = "so, I'm not really sure how this works. But can we make it so that's more technical?"
+
+  #expect(
+    FaithfulCleanupValidator().deterministicFillerFallback(
+      against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+    ) == expected
+  )
+}
+
+@Test func faithfulValidatorRejectsGemmaDeletionOfMeaningfulSo() {
+  let baseline = "so, um, I'm not really sure how this works. But, like, can we make it so that's more technical?"
+  let unsafeCandidate = "I'm not really sure how this works. But, like, can we make it so that's more technical?"
+
+  let decision = FaithfulCleanupValidator().validate(
+    candidate: unsafeCandidate,
+    against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+  )
+  if case .accepted = decision {
+    Issue.record("Gemma must not delete the meaningful opening so")
   }
 }
 
@@ -147,7 +198,7 @@ import Testing
   }
 }
 
-@Test func deterministicFillerFallbackRequiresLowercaseLikeToken() {
+@Test func deterministicFillerFallbackRequiresExactLikeCaseAndBoundary() {
   let validator = FaithfulCleanupValidator()
 
   #expect(
@@ -159,10 +210,25 @@ import Testing
       )
     ) == "works, but can"
   )
+  for (baseline, expected) in [
+    ("But, like, can", "But can"),
+    ("works. But, like, can", "works. But can")
+  ] {
+    #expect(
+      validator.deterministicFillerFallback(
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == expected
+    )
+  }
   for baseline in [
     "works, BUT LIKE, can",
     "works, but Like, can",
-    "works, BUT like, can"
+    "works, BUT like, can",
+    "works. BUT, like, can",
+    "works. But, Like, can",
+    "But, like, ",
+    "hello, But, like, can",
+    "works, But, like, can"
   ] {
     #expect(
       validator.deterministicFillerFallback(
