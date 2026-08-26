@@ -37,9 +37,9 @@ import Testing
   #expect(decision == .accepted(expected))
 }
 
-@Test func unchangedModelOutputCleansTheGemmaSecondTranscript() async throws {
+@Test func cleanerPublishesTheUnpunctuatedGemmaSecondTranscriptWithoutStartingGenerator() async throws {
   let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
-  let expected = "I'm not really sure how this works, but can we make it so that it's more technical"
+  let expected = "I'm not really sure how this works, but can we make it so that it's more technical."
   let generator = CleanupGeneratorProbe(result: baseline)
   let cleaner = IncrementalTranscriptCleaner(
     generator: generator,
@@ -49,9 +49,11 @@ import Testing
   let decision = try await cleaner.clean(request(baseline))
 
   #expect(decision == .accepted(expected))
+  #expect(generator.startCount == 0)
+  #expect(generator.resultCount == 0)
 }
 
-@Test func cleanerSendsAndPublishesThePunctuationSeparatedDeterministicBaseline() async throws {
+@Test func cleanerPublishesThePunctuationSeparatedDeterministicBaselineWithoutStartingGenerator() async throws {
   let baseline = "so, um, I'm not really sure how this works. But, like, can we make it so that's more technical?"
   let expected = "so, I'm not really sure how this works. But can we make it so that's more technical?"
   let originalRequest = request(baseline)
@@ -64,17 +66,11 @@ import Testing
   let decision = try await cleaner.clean(originalRequest)
 
   #expect(decision == .accepted(expected))
-  #expect(
-    generator.lastRequest == .init(
-      baseline: expected,
-      protectedForms: originalRequest.protectedForms,
-      replacements: originalRequest.replacements,
-      deadline: originalRequest.deadline
-    )
-  )
+  #expect(generator.startCount == 0)
+  #expect(generator.resultCount == 0)
 }
 
-@Test func cleanerRejectsGemmaDeletionOfMeaningfulSoAndPublishesTheDeterministicBaseline() async throws {
+@Test func cleanerPublishesTheDeterministicBaselineWithoutStartingUnsafeGemma() async throws {
   let baseline = "so, um, I'm not really sure how this works. But, like, can we make it so that's more technical?"
   let expected = "so, I'm not really sure how this works. But can we make it so that's more technical?"
   let unsafeCandidate = "I'm not really sure how this works. But, like, can we make it so that's more technical?"
@@ -88,13 +84,14 @@ import Testing
   let decision = try await cleaner.clean(originalRequest)
 
   #expect(decision == .accepted(expected))
-  #expect(generator.lastRequest?.baseline == expected)
+  #expect(generator.startCount == 0)
+  #expect(generator.resultCount == 0)
 }
 
-@Test func cleanerAcceptsTheFormattedGemmaCandidateInsteadOfDeterministicFallback() async throws {
+@Test func cleanerPublishesDeterministicFillerCleanupInsteadOfStartingGemma() async throws {
   let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
-  let candidate = "I'm not really sure how this works, but can we make it so that it's more technical."
-  let generator = CleanupGeneratorProbe(result: candidate)
+  let expected = "I'm not really sure how this works, but can we make it so that it's more technical."
+  let generator = CleanupGeneratorProbe(result: "unreachable")
   let cleaner = IncrementalTranscriptCleaner(
     generator: generator,
     clock: TestCleanupClock.immediate
@@ -102,12 +99,12 @@ import Testing
 
   let decision = try await cleaner.clean(request(baseline))
 
-  #expect(decision == .accepted(candidate))
-  #expect(generator.startCount == 1)
-  #expect(generator.resultCount == 1)
+  #expect(decision == .accepted(expected))
+  #expect(generator.startCount == 0)
+  #expect(generator.resultCount == 0)
 }
 
-@Test func cleanerSendsTheDeterministicFillerFreeBaselineAndPreservesRequestMetadata() async throws {
+@Test func cleanerPublishesAnUnpunctuatedDeterministicFillerBaselineWithoutStartingGenerator() async throws {
   let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
   let deterministicBaseline = "I'm not really sure how this works, but can we make it so that it's more technical"
   let candidate = deterministicBaseline + "."
@@ -126,14 +123,8 @@ import Testing
   let decision = try await cleaner.clean(originalRequest)
 
   #expect(decision == .accepted(candidate))
-  #expect(
-    generator.lastRequest == .init(
-      baseline: deterministicBaseline,
-      protectedForms: originalRequest.protectedForms,
-      replacements: originalRequest.replacements,
-      deadline: originalRequest.deadline
-    )
-  )
+  #expect(generator.startCount == 0)
+  #expect(generator.resultCount == 0)
 }
 
 @Test func cleanerValidatesAFormattedCandidateAgainstTheOriginalResolution() async throws {
@@ -148,6 +139,7 @@ import Testing
   let decision = try await cleaner.clean(request(baseline))
 
   #expect(decision == .accepted(candidate))
+  #expect(generator.startCount == 1)
   #expect(generator.lastRequest?.baseline == "Alice sends the report,")
 }
 
@@ -177,7 +169,7 @@ import Testing
   }
 }
 
-@Test func cleanerRejectsGeneratedLexicalChangesAfterDeterministicPreCleaning() async throws {
+@Test func cleanerPublishesDeterministicCleanupBeforeConsideringLexicalGemmaChanges() async throws {
   let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
   let deterministicBaseline = "I'm not really sure how this works, but can we make it so that it's more technical"
   let candidate = "I'm not really sure how this works, but can we make it so that it's more theoretical."
@@ -189,9 +181,10 @@ import Testing
 
   let decision = try await cleaner.clean(request(baseline))
 
-  #expect(decision == .accepted(deterministicBaseline))
+  #expect(decision == .accepted(deterministicBaseline + "."))
   #expect(decision != .accepted(candidate))
-  #expect(generator.lastRequest?.baseline == deterministicBaseline)
+  #expect(generator.startCount == 0)
+  #expect(generator.resultCount == 0)
 }
 
 @Test func cleanerForwardsTheBoundedOutputBudgetFromTheCleanRequest() async throws {
@@ -293,9 +286,9 @@ import Testing
   #expect(decision == .accepted(expected))
 }
 
-@Test func generationFailureCleansTheGemmaSecondTranscript() async throws {
+@Test func deterministicFillerCleanupAvoidsGemmaGenerationFailure() async throws {
   let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
-  let expected = "I'm not really sure how this works, but can we make it so that it's more technical"
+  let expected = "I'm not really sure how this works, but can we make it so that it's more technical."
   let generator = CleanupGeneratorProbe(startError: .generationFailed)
   let cleaner = IncrementalTranscriptCleaner(
     generator: generator,
@@ -305,6 +298,7 @@ import Testing
   let decision = try await cleaner.clean(request(baseline))
 
   #expect(decision == .accepted(expected))
+  #expect(generator.startCount == 0)
 }
 
 @Test func generationFailureFromTheSessionReturnsTheExactBaseline() async throws {

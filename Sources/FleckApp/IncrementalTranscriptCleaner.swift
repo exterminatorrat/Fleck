@@ -99,6 +99,30 @@ actor IncrementalTranscriptCleaner {
     let deterministicFallback = validator.deterministicFillerFallback(
       against: resolution
     )
+    if let deterministicFallback {
+      let normalizedFallback = Self.addMissingTerminalPeriod(to: deterministicFallback)
+      let fallbackHasSafeTerminal = deterministicFallback.last {
+        !$0.isWhitespace
+      }.map { character in
+        character.isLetter
+          || character.isNumber
+          || [".", "!", "?", "。", "！", "？"].contains(character)
+      } ?? false
+      if fallbackHasSafeTerminal,
+         CleanupLexeme.tokenCount(normalizedFallback) <= inputCount + 32 {
+        let validation = validator.validate(
+          candidate: normalizedFallback,
+          against: resolution
+        )
+        if case .accepted(let text, _) = validation {
+          try Task.checkCancellation()
+          if request.deadline > clock.now() {
+            try Task.checkCancellation()
+            return .accepted(text)
+          }
+        }
+      }
+    }
     let generationRequest: IncrementalCleanupRequest
     if let deterministicFallback {
       generationRequest = .init(
