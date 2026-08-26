@@ -67,6 +67,93 @@ import Testing
   #expect(generator.resultCount == 1)
 }
 
+@Test func cleanerSendsTheDeterministicFillerFreeBaselineAndPreservesRequestMetadata() async throws {
+  let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
+  let deterministicBaseline = "I'm not really sure how this works, but can we make it so that it's more technical"
+  let candidate = deterministicBaseline + "."
+  let originalRequest = IncrementalCleanupRequest(
+    baseline: baseline,
+    protectedForms: ["technical"],
+    replacements: 2,
+    deadline: ContinuousClock().now.advanced(by: .seconds(1))
+  )
+  let generator = CleanupGeneratorProbe(result: deterministicBaseline)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(originalRequest)
+
+  #expect(decision == .accepted(candidate))
+  #expect(
+    generator.lastRequest == .init(
+      baseline: deterministicBaseline,
+      protectedForms: originalRequest.protectedForms,
+      replacements: originalRequest.replacements,
+      deadline: originalRequest.deadline
+    )
+  )
+}
+
+@Test func cleanerValidatesAFormattedCandidateAgainstTheOriginalResolution() async throws {
+  let baseline = "um, Alice sends the report, uh"
+  let candidate = "alice sends the report."
+  let generator = CleanupGeneratorProbe(result: candidate)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(request(baseline))
+
+  #expect(decision == .accepted(candidate))
+  #expect(generator.lastRequest?.baseline == "Alice sends the report,")
+}
+
+@Test func cleanerAppendsOnePeriodWhenTheGeneratedCandidateLacksTerminalPunctuation() async throws {
+  let generator = CleanupGeneratorProbe(result: "Send the report")
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(request("Send the report"))
+
+  #expect(decision == .accepted("Send the report."))
+}
+
+@Test func cleanerPreservesExistingQuestionAndExclamationTerminalPunctuation() async throws {
+  for candidate in ["Can we send the report?", "Send the report!"] {
+    let generator = CleanupGeneratorProbe(result: candidate)
+    let cleaner = IncrementalTranscriptCleaner(
+      generator: generator,
+      clock: TestCleanupClock.immediate
+    )
+
+    let decision = try await cleaner.clean(request(candidate))
+
+    #expect(decision == .accepted(candidate))
+  }
+}
+
+@Test func cleanerRejectsGeneratedLexicalChangesAfterDeterministicPreCleaning() async throws {
+  let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
+  let deterministicBaseline = "I'm not really sure how this works, but can we make it so that it's more technical"
+  let candidate = "I'm not really sure how this works, but can we make it so that it's more theoretical."
+  let generator = CleanupGeneratorProbe(result: candidate)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(request(baseline))
+
+  #expect(decision == .accepted(deterministicBaseline))
+  #expect(decision != .accepted(candidate))
+  #expect(generator.lastRequest?.baseline == deterministicBaseline)
+}
+
 @Test func cleanerForwardsTheBoundedOutputBudgetFromTheCleanRequest() async throws {
   let baseline = "send the report"
   let generator = CleanupGeneratorProbe(result: "Send the report.")
@@ -309,6 +396,14 @@ import Testing
   ))
 
   #expect(decision == .accepted(expected))
+  #expect(
+    generator.lastRequest == .init(
+      baseline: expected,
+      protectedForms: [],
+      replacements: 0,
+      deadline: deadline
+    )
+  )
   #expect(session.requestCancellationCount == 1)
   #expect(session.acknowledgementFinished)
 }

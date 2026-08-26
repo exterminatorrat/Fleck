@@ -91,10 +91,30 @@ actor IncrementalTranscriptCleaner {
       return deterministicFallbackOrBaseline(for: request, reason: .deadlineExpired)
     }
 
+    let resolution = PersonalDictionaryResolution(
+      baseline: request.baseline,
+      protectedForms: request.protectedForms,
+      replacements: request.replacements
+    )
+    let deterministicFallback = validator.deterministicFillerFallback(
+      against: resolution
+    )
+    let generationRequest: IncrementalCleanupRequest
+    if let deterministicFallback {
+      generationRequest = .init(
+        baseline: deterministicFallback,
+        protectedForms: request.protectedForms,
+        replacements: request.replacements,
+        deadline: request.deadline
+      )
+    } else {
+      generationRequest = request
+    }
+
     let box = CleanupSessionBox()
     do {
       let session = try generator.start(
-        request,
+        generationRequest,
         maximumOutputTokens: inputCount + 32
       )
       box.install(session)
@@ -148,20 +168,16 @@ actor IncrementalTranscriptCleaner {
         guard !candidate.cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
           return deterministicFallbackOrBaseline(for: request, reason: .malformedOutput)
         }
-        guard CleanupLexeme.tokenCount(candidate.cleaned) <= inputCount + 32 else {
+        let normalizedCandidate = Self.addMissingTerminalPeriod(to: candidate.cleaned)
+        guard CleanupLexeme.tokenCount(normalizedCandidate) <= inputCount + 32 else {
           return deterministicFallbackOrBaseline(for: request, reason: .outputTooLarge)
         }
-        let resolution = PersonalDictionaryResolution(
-          baseline: request.baseline,
-          protectedForms: request.protectedForms,
-          replacements: request.replacements
-        )
-        let validation = validator.validate(candidate: candidate.cleaned, against: resolution)
+        let validation = validator.validate(candidate: normalizedCandidate, against: resolution)
         try Task.checkCancellation()
         switch validation {
         case .accepted(let text, _):
           if candidate.cleaned == request.baseline,
-             let fallback = deterministicFillerFallback(for: request) {
+             let fallback = deterministicFallback {
             return .accepted(fallback)
           }
           return .accepted(text)
@@ -219,6 +235,19 @@ actor IncrementalTranscriptCleaner {
         replacements: request.replacements
       )
     )
+  }
+
+  private static func addMissingTerminalPeriod(to candidate: String) -> String {
+    guard let lastNonWhitespaceIndex = candidate.lastIndex(where: { !$0.isWhitespace }) else {
+      return candidate
+    }
+    switch candidate[lastNonWhitespaceIndex] {
+    case ".", "!", "?", "。", "！", "？":
+      return candidate
+    default:
+      let insertionIndex = candidate.index(after: lastNonWhitespaceIndex)
+      return String(candidate[..<insertionIndex]) + "." + String(candidate[insertionIndex...])
+    }
   }
 }
 
