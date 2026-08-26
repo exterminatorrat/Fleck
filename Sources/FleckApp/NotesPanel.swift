@@ -1250,7 +1250,9 @@
         activation: activation,
         reduceMotion: reduceMotion
       )
-      withAnimation(presentation == .instant ? nil : motion.quick) {
+      withAnimation(
+        motion.presentationAnimation(for: presentation.interactionSource)
+      ) {
         if presentation == .instant {
           searchController.present(for: appState.workspace.selectedNoteID)
         } else {

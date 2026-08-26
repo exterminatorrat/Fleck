@@ -98,6 +98,15 @@
       }
     }
 
+    var interactionSource: AppInteractionSource {
+      switch self {
+      case .inline, .crossfade:
+        return .pointer
+      case .instant:
+        return .keyboard
+      }
+    }
+
     var usesAnimatedDismissal: Bool {
       self != .instant
     }

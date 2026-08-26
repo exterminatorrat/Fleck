@@ -35,6 +35,9 @@ func WorkspaceSearchPresentationSelectsPointerAndKeyboardMotionKinds() {
       reduceMotion: true
     ) == .instant
   )
+  #expect(WorkspaceSearchPresentationKind.inline.interactionSource == .pointer)
+  #expect(WorkspaceSearchPresentationKind.crossfade.interactionSource == .pointer)
+  #expect(WorkspaceSearchPresentationKind.instant.interactionSource == .keyboard)
   #expect(WorkspaceSearchPresentationKind.inline.usesAnimatedDismissal)
   #expect(WorkspaceSearchPresentationKind.crossfade.usesAnimatedDismissal)
   #expect(!WorkspaceSearchPresentationKind.instant.usesAnimatedDismissal)
