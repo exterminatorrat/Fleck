@@ -189,6 +189,8 @@ func WorkspaceSearchDismissalsUseNotesPanelAnimationContract() throws {
 
   #expect(notesPanel.contains("onDismiss: dismissWorkspaceSearch"))
   #expect(notesPanel.contains("searchController.presentationKind.usesAnimatedDismissal"))
+  #expect(notesPanel.contains("motion.presentationAnimation(for: presentation.interactionSource)"))
+  #expect(!notesPanel.contains("value: searchController.isPresented"))
   #expect(searchView.contains("let onDismiss: () -> Void"))
   #expect(searchView.contains("onDismiss: onDismiss"))
   #expect(searchView.contains("onDismiss()"))

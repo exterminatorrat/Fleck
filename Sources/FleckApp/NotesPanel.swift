@@ -658,10 +658,6 @@
             .transition(workspaceSearchPresentationTransition)
           }
         }
-        .animation(
-          searchController.presentationKind == .instant ? nil : motion.quick,
-          value: searchController.isPresented
-        )
       }
       .overlay {
         if noteLinkPickerController.isPresented {
