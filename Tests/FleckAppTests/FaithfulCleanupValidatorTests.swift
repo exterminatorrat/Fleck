@@ -83,6 +83,54 @@ import Testing
   }
 }
 
+@Test func faithfulValidatorAcceptsFormattedGemmaFillerRemoval() {
+  let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
+  let candidate = "I'm not really sure how this works, but can we make it so that it's more technical."
+  let decision = FaithfulCleanupValidator().validate(
+    candidate: candidate,
+    against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+  )
+
+  guard case .accepted(let text, _) = decision else {
+    Issue.record("The formatted Gemma filler cleanup must be accepted")
+    return
+  }
+  #expect(text == candidate)
+}
+
+@Test func faithfulValidatorKeepsProtectedMeaningWhenFormattedFillerRemovalIsAllowed() {
+  let rows: [(String, String, CleanupValidationFailure)] = [
+    (
+      "um, Alice sends the report, uh",
+      "Alicia sends the report.",
+      .protectedContentChanged
+    ),
+    (
+      "um, send 20 files, uh",
+      "Send 21 files.",
+      .numberMeaningChanged
+    ),
+    (
+      "um, do not send it, uh",
+      "Do send it.",
+      .protectedContentChanged
+    )
+  ]
+
+  for (baseline, candidate, failure) in rows {
+    #expect(
+      FaithfulCleanupValidator().validate(
+        candidate: candidate,
+        against: .init(
+          baseline: baseline,
+          protectedForms: baseline.contains("Alice") ? ["Alice"] : [],
+          replacements: 0
+        )
+      ) == .rejected(failure)
+    )
+  }
+}
+
 @Test func deterministicFillerFallbackRemovesSentenceInitialCommaFillers() {
   let validator = FaithfulCleanupValidator()
 

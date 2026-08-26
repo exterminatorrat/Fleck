@@ -132,8 +132,7 @@ struct FaithfulCleanupValidator: Sendable {
       candidate: extractedCandidateSpans,
       baselineLexemes: baselineLexemes,
       candidateLexemes: candidateLexemes,
-      fallback: deterministicFallback,
-      candidateText: candidate
+      fallback: deterministicFallback
     )
     let baselineSpans = validatedSpans.baseline
     let candidateSpans = validatedSpans.candidate
@@ -1525,10 +1524,9 @@ struct FaithfulCleanupValidator: Sendable {
     candidate: [CleanupProtectedSpan],
     baselineLexemes: [CleanupLexeme],
     candidateLexemes: [CleanupLexeme],
-    fallback: (text: String, omittedRawIndices: Set<Int>)?,
-    candidateText: String
+    fallback: (text: String, omittedRawIndices: Set<Int>)?
   ) -> (baseline: [CleanupProtectedSpan], candidate: [CleanupProtectedSpan]) {
-    guard let fallback, fallback.text == candidateText else {
+    guard let fallback else {
       return (baseline, candidate)
     }
     let expectedValues = baselineLexemes.enumerated()

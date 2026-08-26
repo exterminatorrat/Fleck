@@ -26,8 +26,8 @@ import FleckCore
 }
 
 @Test func productionProcessingBudgetUsesBoundedInsertionAndCleanupWindows() {
-  #expect(DictationProcessingBudget.production.insertion == .seconds(3))
-  #expect(DictationProcessingBudget.production.cleanup == .milliseconds(1_500))
+  #expect(DictationProcessingBudget.production.insertion == .seconds(4))
+  #expect(DictationProcessingBudget.production.cleanup == .milliseconds(3_500))
 }
 
 @Test func deadlineUsesStopAsCleanupOriginAndCapsAtInsertion() {

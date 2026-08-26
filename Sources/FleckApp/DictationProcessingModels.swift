@@ -87,8 +87,8 @@ struct DictationProcessingBudget: Equatable, Sendable {
   let cleanup: Duration
 
   static let production = Self(
-    insertion: .seconds(3),
-    cleanup: .milliseconds(1_500)
+    insertion: .seconds(4),
+    cleanup: .milliseconds(3_500)
   )
 }
 

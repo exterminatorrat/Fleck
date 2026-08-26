@@ -51,6 +51,22 @@ import Testing
   #expect(decision == .accepted(expected))
 }
 
+@Test func cleanerAcceptsTheFormattedGemmaCandidateInsteadOfDeterministicFallback() async throws {
+  let baseline = "Um, I'm not really sure how this uh works, but like, can we make it so that it's more technical"
+  let candidate = "I'm not really sure how this works, but can we make it so that it's more technical."
+  let generator = CleanupGeneratorProbe(result: candidate)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(request(baseline))
+
+  #expect(decision == .accepted(candidate))
+  #expect(generator.startCount == 1)
+  #expect(generator.resultCount == 1)
+}
+
 @Test func cleanerForwardsTheBoundedOutputBudgetFromTheCleanRequest() async throws {
   let baseline = "send the report"
   let generator = CleanupGeneratorProbe(result: "Send the report.")
