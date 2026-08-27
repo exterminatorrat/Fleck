@@ -382,6 +382,7 @@ struct GemmaCleanupEvent: Codable, Equatable, Sendable {
 
 enum GemmaSupervisorRequest: Sendable {
     case cleanup(GemmaCleanupRequest)
+    case route(GemmaCleanupRequest)
     case cancel(requestID: String, targetRequestID: String)
     case shutdown(requestID: String)
 }
@@ -601,7 +602,7 @@ enum GemmaCleanupProtocol {
         }
 
         switch wire.operation {
-        case "cleanup":
+        case "cleanup", "route":
             try requireKeys(
                 data,
                 allowed: [
@@ -618,16 +619,15 @@ enum GemmaCleanupProtocol {
             else {
                 throw GemmaCleanupError(.invalidRequest)
             }
-            return .cleanup(
-                GemmaCleanupRequest(
-                    schemaVersion: wire.schemaVersion,
-                    requestID: requestID,
-                    baseline: baseline,
-                    plainPrompt: plainPrompt,
-                    maxResponseTokens: maxResponseTokens,
-                    budgetMilliseconds: budgetMilliseconds
-                )
+            let request = GemmaCleanupRequest(
+                schemaVersion: wire.schemaVersion,
+                requestID: requestID,
+                baseline: baseline,
+                plainPrompt: plainPrompt,
+                maxResponseTokens: maxResponseTokens,
+                budgetMilliseconds: budgetMilliseconds
             )
+            return wire.operation == "cleanup" ? .cleanup(request) : .route(request)
         case "cancel":
             try requireKeys(
                 data,

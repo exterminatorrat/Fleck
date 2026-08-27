@@ -279,6 +279,58 @@ private func terminalEvents(
 
 @Suite("GemmaCleanupHelperTests")
 struct GemmaCleanupHelperTests {
+    @Test func routeOperationUsesExistingBoundedGenerationRuntime() async throws {
+        let line = """
+        {"schemaVersion":1,"operation":"route","requestID":"route-1","baseline":"Fleck project update","plainPrompt":"Return one destination identifier.","maxResponseTokens":8,"budgetMilliseconds":1000}
+        """
+        let decoded = try GemmaCleanupProtocol.decodeRequestLine(line)
+        let routeRequest: GemmaCleanupRequest
+        switch decoded {
+        case .route(let request):
+            routeRequest = request
+        default:
+            Issue.record("route operation did not decode as route generation")
+            return
+        }
+
+        let engine = RecordingEngine()
+        let runtime = GemmaCleanupRuntime(engine: engine)
+        let eventsTask = Task { await terminalEvents(from: runtime.events, requestID: "route-1") }
+
+        _ = try runtime.start(routeRequest)
+        let events = await eventsTask.value
+        let requests = await engine.recordedRequests()
+
+        #expect(requests.count == 1)
+        #expect(requests.first?.baseline == "Fleck project update")
+        #expect(requests.first?.plainPrompt == "Return one destination identifier.")
+        #expect(requests.first?.maxResponseTokens == 8)
+        #expect(events.contains { $0.kind == .completed && $0.rawText == "raw model output" })
+    }
+
+    @Test func routePreservesStrictFieldAndOperationValidation() {
+        let routeWithExtraField = """
+        {"schemaVersion":1,"operation":"route","requestID":"route-extra","baseline":"one","plainPrompt":"route one","maxResponseTokens":1,"budgetMilliseconds":1000,"unexpected":true}
+        """
+        #expect(throws: GemmaCleanupError(.unknownField)) {
+            try GemmaCleanupProtocol.decodeRequestLine(routeWithExtraField)
+        }
+
+        let duplicateRouteField = """
+        {"schemaVersion":1,"operation":"route","requestID":"route-a","requestID":"route-b","baseline":"one","plainPrompt":"route one","maxResponseTokens":1,"budgetMilliseconds":1000}
+        """
+        #expect(throws: GemmaCleanupError(.duplicateJSONKey)) {
+            try GemmaCleanupProtocol.decodeRequestLine(duplicateRouteField)
+        }
+
+        let unknownOperation = """
+        {"schemaVersion":1,"operation":"classify","requestID":"unknown"}
+        """
+        #expect(throws: GemmaCleanupError(.invalidRequest)) {
+            try GemmaCleanupProtocol.decodeRequestLine(unknownOperation)
+        }
+    }
+
     @Test func oneRequestZeroRetriesAndExactTokenCapForwarding() async throws {
         let engine = RecordingEngine()
         let runtime = GemmaCleanupRuntime(engine: engine)

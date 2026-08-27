@@ -101,7 +101,7 @@ enum GemmaCleanupHelperMain {
     ) async -> Bool {
         do {
             switch try GemmaCleanupProtocol.decodeRequestData(data) {
-            case .cleanup(let request):
+            case .cleanup(let request), .route(let request):
                 do {
                     _ = try runtime.start(request)
                 } catch let error as GemmaCleanupError {
