@@ -297,7 +297,7 @@ struct GemmaCleanupHelperTests {
         let runtime = GemmaCleanupRuntime(engine: engine)
         let eventsTask = Task { await terminalEvents(from: runtime.events, requestID: "route-1") }
 
-        _ = try runtime.start(routeRequest)
+        _ = try runtime.start(routeRequest, operation: .route)
         let events = await eventsTask.value
         let requests = await engine.recordedRequests()
 
@@ -306,6 +306,34 @@ struct GemmaCleanupHelperTests {
         #expect(requests.first?.plainPrompt == "Return one destination identifier.")
         #expect(requests.first?.maxResponseTokens == 8)
         #expect(events.contains { $0.kind == .completed && $0.rawText == "raw model output" })
+    }
+
+    @Test func routeAndCleanupUseDistinctBoundedResponseCaps() async throws {
+        let engine = RecordingEngine()
+        let runtime = GemmaCleanupRuntime(engine: engine)
+
+        _ = try runtime.start(
+            request("route-64", baseline: "one", maxResponseTokens: 64),
+            operation: .route
+        )
+        _ = try runtime.start(
+            request("cleanup-64", baseline: "one", maxResponseTokens: 64),
+            operation: .cleanup
+        )
+        _ = try runtime.start(
+            request("route-absolute-cap", baseline: "one", maxResponseTokens: 200),
+            operation: .route
+        )
+
+        while await engine.recordedRequests().count < 3 {
+            await Task.yield()
+        }
+        let requests = await engine.recordedRequests()
+        let caps = Dictionary(uniqueKeysWithValues: requests.map { ($0.requestID, $0.maxResponseTokens) })
+
+        #expect(caps["route-64"] == 64)
+        #expect(caps["cleanup-64"] == 33)
+        #expect(caps["route-absolute-cap"] == 128)
     }
 
     @Test func routePreservesStrictFieldAndOperationValidation() {

@@ -53,6 +53,11 @@ enum GemmaCleanupLimits {
     static let maxBudgetMilliseconds: UInt64 = 60_000
 }
 
+enum GemmaCleanupOperation: Sendable {
+    case cleanup
+    case route
+}
+
 struct GemmaCleanupRequest: Codable, Equatable, Sendable {
     let schemaVersion: Int
     let requestID: String
@@ -77,7 +82,9 @@ struct GemmaCleanupRequest: Codable, Equatable, Sendable {
         self.budgetMilliseconds = budgetMilliseconds
     }
 
-    func validatedGenerationRequest() throws -> GemmaCleanupGenerationRequest {
+    func validatedGenerationRequest(
+        operation: GemmaCleanupOperation = .cleanup
+    ) throws -> GemmaCleanupGenerationRequest {
         guard schemaVersion == 1, Self.isValidRequestID(requestID) else {
             throw GemmaCleanupError(.invalidRequest)
         }
@@ -101,11 +108,20 @@ struct GemmaCleanupRequest: Codable, Equatable, Sendable {
             throw GemmaCleanupError(.budgetInvalid)
         }
 
-        let responseCap = min(
-            maxResponseTokens,
-            baselineLexicalCount + 32,
-            GemmaCleanupLimits.absoluteMaxResponseTokens
-        )
+        let responseCap: Int
+        switch operation {
+        case .cleanup:
+            responseCap = min(
+                maxResponseTokens,
+                baselineLexicalCount + 32,
+                GemmaCleanupLimits.absoluteMaxResponseTokens
+            )
+        case .route:
+            responseCap = min(
+                maxResponseTokens,
+                GemmaCleanupLimits.absoluteMaxResponseTokens
+            )
+        }
         guard responseCap > 0 else {
             throw GemmaCleanupError(.maxResponseTokensInvalid)
         }
@@ -873,8 +889,11 @@ final class GemmaCleanupRuntime: @unchecked Sendable {
         pair.continuation.yield(.ready())
     }
 
-    func start(_ request: GemmaCleanupRequest) throws -> GemmaCleanupRequestHandle {
-        let generationRequest = try request.validatedGenerationRequest()
+    func start(
+        _ request: GemmaCleanupRequest,
+        operation: GemmaCleanupOperation = .cleanup
+    ) throws -> GemmaCleanupRequestHandle {
+        let generationRequest = try request.validatedGenerationRequest(operation: operation)
         let execution = GemmaRequestExecution()
         let engine = self.engine
         let deadlineWaiter = hooks.deadlineWaiter

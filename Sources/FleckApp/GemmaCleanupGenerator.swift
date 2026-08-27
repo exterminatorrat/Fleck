@@ -139,7 +139,33 @@ struct GemmaCleanupGenerator: BoundedCleanupGenerating {
       maximumOutputTokens: maximumOutputTokens,
       transportFactory: transportFactory,
       clock: clock,
-      prepareForGeneration: prepareForGeneration
+      prepareForGeneration: prepareForGeneration,
+      operation: "cleanup",
+      plainPrompt: nil,
+      requestIDPrefix: "gemma-cleanup-"
+    )
+  }
+
+  func startRoute(
+    baseline: String,
+    plainPrompt: String,
+    deadline: ContinuousClock.Instant,
+    maximumOutputTokens: Int
+  ) throws -> any CleanupGenerationSession {
+    GemmaCleanupGenerationSession(
+      request: IncrementalCleanupRequest(
+        baseline: baseline,
+        protectedForms: [],
+        replacements: 0,
+        deadline: deadline
+      ),
+      maximumOutputTokens: maximumOutputTokens,
+      transportFactory: transportFactory,
+      clock: clock,
+      prepareForGeneration: prepareForGeneration,
+      operation: "route",
+      plainPrompt: plainPrompt,
+      requestIDPrefix: "gemma-route-"
     )
   }
 }
@@ -150,6 +176,9 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
   private let transportFactory: GemmaCleanupTransportFactory
   private let clock: CleanupClock
   private let prepareForGeneration: @Sendable () async throws -> Void
+  private let operation: String
+  private let plainPrompt: String?
+  private let requestIDPrefix: String
   private let gate = GemmaCleanupPublicationGate()
   private let lock = NSLock()
 
@@ -179,13 +208,19 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
     maximumOutputTokens: Int,
     transportFactory: @escaping GemmaCleanupTransportFactory,
     clock: CleanupClock,
-    prepareForGeneration: @escaping @Sendable () async throws -> Void
+    prepareForGeneration: @escaping @Sendable () async throws -> Void,
+    operation: String,
+    plainPrompt: String?,
+    requestIDPrefix: String
   ) {
     self.request = request
     self.maximumOutputTokens = maximumOutputTokens
     self.transportFactory = transportFactory
     self.clock = clock
     self.prepareForGeneration = prepareForGeneration
+    self.operation = operation
+    self.plainPrompt = plainPrompt
+    self.requestIDPrefix = requestIDPrefix
   }
 
   func result() async throws -> GeneratedCleanupCandidate {
@@ -426,37 +461,46 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
     let baselineBytes = Data(request.baseline.utf8)
     guard baselineBytes.count <= 16 * 1024 else { return nil }
 
-    let lexicalInputTokens = CleanupLexeme.tokenCount(request.baseline)
-    let responseTokens = min(
-      128,
-      maximumOutputTokens,
-      lexicalInputTokens + 32
-    )
+    let responseTokens: Int
+    if operation == "route" {
+      responseTokens = min(128, maximumOutputTokens)
+    } else {
+      let lexicalInputTokens = CleanupLexeme.tokenCount(request.baseline)
+      responseTokens = min(
+        128,
+        maximumOutputTokens,
+        lexicalInputTokens + 32
+      )
+    }
     guard responseTokens > 0 else { return nil }
 
-    let quotedBaseline: String
-    do {
-      let encoder = JSONEncoder()
-      encoder.outputFormatting = .withoutEscapingSlashes
-      quotedBaseline = String(
-        decoding: try encoder.encode(request.baseline),
-        as: UTF8.self
-      )
-    } catch {
-      return nil
+    let prompt: String
+    if let plainPrompt {
+      prompt = plainPrompt
+    } else {
+      let quotedBaseline: String
+      do {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        quotedBaseline = String(
+          decoding: try encoder.encode(request.baseline),
+          as: UTF8.self
+        )
+      } catch {
+        return nil
+      }
+      prompt = Self.promptInstructions
+        + "\n"
+        + Self.promptResponseContract
+        + "\n\nQuoted transcript JSON string:\n"
+        + quotedBaseline
     }
-
-    let prompt = Self.promptInstructions
-      + "\n"
-      + Self.promptResponseContract
-      + "\n\nQuoted transcript JSON string:\n"
-      + quotedBaseline
     guard Data(prompt.utf8).count <= 32 * 1024 else { return nil }
 
     return GemmaCleanupHelperRequest(
       schemaVersion: 1,
-      operation: "cleanup",
-      requestID: Self.makeRequestID(),
+      operation: operation,
+      requestID: requestIDPrefix + UUID().uuidString.lowercased(),
       baseline: request.baseline,
       plainPrompt: prompt,
       maxResponseTokens: responseTokens,
@@ -821,9 +865,6 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
   private static let promptResponseContract =
     "Return exactly one JSON object with one string member named \"text\". Output no markdown, explanation, or thinking."
 
-  private static func makeRequestID() -> String {
-    "gemma-cleanup-" + UUID().uuidString.lowercased()
-  }
 }
 
 private enum GemmaCleanupLifecycle {
