@@ -115,7 +115,16 @@ protocol GemmaCleanupTransport: Sendable {
 
 typealias GemmaCleanupTransportFactory = @Sendable () -> any GemmaCleanupTransport
 
-struct GemmaCleanupGenerator: BoundedCleanupGenerating {
+protocol GemmaRouteGenerating: Sendable {
+  func startRoute(
+    baseline: String,
+    plainPrompt: String,
+    deadline: ContinuousClock.Instant,
+    maximumOutputTokens: Int
+  ) throws -> any CleanupGenerationSession
+}
+
+struct GemmaCleanupGenerator: BoundedCleanupGenerating, GemmaRouteGenerating {
   private let transportFactory: GemmaCleanupTransportFactory
   private let clock: CleanupClock
   private let prepareForGeneration: @Sendable () async throws -> Void
@@ -432,7 +441,10 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
       case .cancelled:
         finish(.failure(.requestCancelled))
       case .completed(let rawText):
-        let rawBytes = Data(rawText.utf8)
+        guard let rawBytes = responseEnvelopeBytes(from: rawText) else {
+          finish(.failure(.generationFailed))
+          return
+        }
         guard let cleaned = LocalCleanupResponseEnvelope.extract(
           from: rawBytes,
           maximumInputBytes: 16 * 1024,
@@ -454,6 +466,27 @@ private final class GemmaCleanupGenerationSession: CleanupGenerationSession, @un
       _ = await beginForcedDrainWatcher().value
       finish(.failure(.generationFailed))
     }
+  }
+
+  private func responseEnvelopeBytes(from rawText: String) -> Data? {
+    let rawBytes = Data(rawText.utf8)
+    guard rawBytes.count <= 16 * 1024 else { return nil }
+    guard operation == "route" else { return rawBytes }
+
+    let bytes = Array(rawBytes)
+    let outerWhitespace: Set<UInt8> = [0x20, 0x09, 0x0A, 0x0D]
+    var start = bytes.startIndex
+    var end = bytes.endIndex
+    while start < end, outerWhitespace.contains(bytes[start]) { start += 1 }
+    while start < end, outerWhitespace.contains(bytes[end - 1]) { end -= 1 }
+    let fencedText = String(decoding: bytes[start..<end], as: UTF8.self)
+    let prefix = "```json\n"
+    guard fencedText.hasPrefix(prefix) else { return rawBytes }
+    let suffix = "\n```"
+    guard fencedText.hasSuffix(suffix) else { return nil }
+    let envelope = fencedText.dropFirst(prefix.count).dropLast(suffix.count)
+    guard !envelope.contains("```") else { return nil }
+    return Data(envelope.utf8)
   }
 
   private func makeRequest(budgetMilliseconds: Int) -> GemmaCleanupHelperRequest? {

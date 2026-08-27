@@ -26,6 +26,7 @@ enum DictationPermissionStatus: Equatable, Sendable {
 enum DictationRoutingAvailability: Equatable, Sendable {
   case exactTitle
   case foundationModel
+  case localModel
 }
 
 enum DictationFoundationModelAvailability: Equatable, Sendable {
@@ -82,6 +83,7 @@ struct DictationAvailability: Equatable, Sendable {
     let enhancedModelReady: Bool
     let foundationModelAvailability: DictationFoundationModelAvailability
     let cleanupModelReady: Bool
+    let localRoutingModelReady: Bool
 
     init(
       osMajorVersion: Int,
@@ -91,7 +93,8 @@ struct DictationAvailability: Equatable, Sendable {
       appleOnDeviceRecognitionSupported: Bool,
       enhancedModelReady: Bool,
       foundationModelAvailability: DictationFoundationModelAvailability,
-      cleanupModelReady: Bool = false
+      cleanupModelReady: Bool = false,
+      localRoutingModelReady: Bool = false
     ) {
       self.osMajorVersion = osMajorVersion
       self.architecture = architecture
@@ -101,6 +104,7 @@ struct DictationAvailability: Equatable, Sendable {
       self.enhancedModelReady = enhancedModelReady
       self.foundationModelAvailability = foundationModelAvailability
       self.cleanupModelReady = cleanupModelReady
+      self.localRoutingModelReady = localRoutingModelReady
     }
 
     init(
@@ -111,7 +115,8 @@ struct DictationAvailability: Equatable, Sendable {
       appleOnDeviceRecognitionSupported: Bool,
       enhancedModelReady: Bool,
       foundationModelAvailable: Bool,
-      cleanupModelReady: Bool = false
+      cleanupModelReady: Bool = false,
+      localRoutingModelReady: Bool = false
     ) {
       self.init(
         osMajorVersion: osMajorVersion,
@@ -124,7 +129,8 @@ struct DictationAvailability: Equatable, Sendable {
           osMajorVersion < 26
           ? .unsupportedOS
           : foundationModelAvailable ? .available : .unknown,
-        cleanupModelReady: cleanupModelReady
+        cleanupModelReady: cleanupModelReady,
+        localRoutingModelReady: localRoutingModelReady
       )
     }
   }
@@ -170,8 +176,13 @@ struct DictationAvailability: Equatable, Sendable {
       && microphoneAvailable
       && speechAvailable
       && input.appleOnDeviceRecognitionSupported
-    let routing: DictationRoutingAvailability =
-      foundationModelAvailable ? .foundationModel : .exactTitle
+    let routing: DictationRoutingAvailability = if foundationModelAvailable {
+      .foundationModel
+    } else if input.localRoutingModelReady {
+      .localModel
+    } else {
+      .exactTitle
+    }
 
     #if CLEAN_DICTATION_ENHANCED_CANDIDATE
       return .init(
@@ -212,7 +223,8 @@ struct DictationAvailability: Equatable, Sendable {
   static func current(
     permissions: DictationPermissionController,
     enhancedModelReady: Bool,
-    cleanupModelReady: Bool = false
+    cleanupModelReady: Bool = false,
+    localRoutingModelReady: Bool = false
   ) -> Self {
     let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     return evaluate(.init(
@@ -223,7 +235,8 @@ struct DictationAvailability: Equatable, Sendable {
       appleOnDeviceRecognitionSupported: recognizer?.supportsOnDeviceRecognition == true,
       enhancedModelReady: enhancedModelReady,
       foundationModelAvailability: currentFoundationModelAvailability,
-      cleanupModelReady: cleanupModelReady
+      cleanupModelReady: cleanupModelReady,
+      localRoutingModelReady: localRoutingModelReady
     ))
   }
 
@@ -355,9 +368,9 @@ struct DictationCompatibilityPresentation: Equatable, Sendable {
     smartCapture = .init(
       title: "Smart Capture",
       detail: smartCaptureAvailable
-        ? availability.routing == .foundationModel
-          ? "Available"
-          : "Say an exact note title once; otherwise Inbox."
+        ? availability.routing == .exactTitle
+          ? "Say an exact note title once; otherwise Inbox."
+          : "Matches note titles and content by topic; ambiguous captures go to Inbox."
         : "Requires macOS 14 or later",
       available: smartCaptureAvailable
     )

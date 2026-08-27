@@ -83,6 +83,14 @@ import Testing
   #expect(!source.contains("clearModelError"))
   #expect(!runtimeSource.contains("modelError"))
   #expect(!runtimeSource.contains("clearModelError"))
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+  #expect(runtimeSource.contains(
+    "let destinationRouter: any DestinationRouting = cleanupComposition.destinationRouter"
+  ))
+  #expect(runtimeSource.contains(
+    "localRoutingModelReady: localRoutingModelReady(cleanupPresentation)"
+  ))
+#endif
 }
 
 @Test func admittedModelSourcesUseNeutralUserFacingCopy() throws {

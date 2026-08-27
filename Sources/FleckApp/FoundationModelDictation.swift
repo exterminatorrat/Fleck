@@ -113,9 +113,11 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
 
     let osMajorVersion = osMajorVersion()
     if osMajorVersion >= 14 {
-      let exactMatches = Self.exactTitleMatches(in: transcript, candidates: eligible)
-      if exactMatches.count == 1, exactMatches[0].occurrenceCount == 1 {
-        return exactMatches[0].destination.noteID
+      if let destinationID = Self.exactTitleDestinationID(
+        transcript: transcript,
+        eligibleDestinations: eligible
+      ) {
+        return destinationID
       }
     }
 
@@ -361,6 +363,25 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
       guard occurrenceCount > 0 else { return nil }
       return (destination: candidate, occurrenceCount: occurrenceCount)
     }
+  }
+
+  static func exactTitleDestinationID(
+    transcript: String,
+    candidates: [DictationRoutingCandidate]
+  ) -> UUID? {
+    exactTitleDestinationID(
+      transcript: transcript,
+      eligibleDestinations: eligibleDestinations(from: candidates.map(\.destination))
+    )
+  }
+
+  private static func exactTitleDestinationID(
+    transcript: String,
+    eligibleDestinations: [DictationDestination]
+  ) -> UUID? {
+    let matches = exactTitleMatches(in: transcript, candidates: eligibleDestinations)
+    guard matches.count == 1, matches[0].occurrenceCount == 1 else { return nil }
+    return matches[0].destination.noteID
   }
 
   private static func exactTitleOccurrenceCount(_ title: String, in transcript: String) -> Int {

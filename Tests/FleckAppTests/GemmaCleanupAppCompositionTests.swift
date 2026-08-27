@@ -8,6 +8,75 @@ import Testing
 @Suite(.serialized)
 struct GemmaCleanupAppCompositionTests {
   @Test @MainActor
+  func installedVerifiedGemmaCompositionRoutesSemantically() async {
+    let fixture = CompositionFixture(phase: .installed, verified: true)
+    let inbox = compositionCandidate(title: "Inbox")
+    let project = compositionCandidate(title: "Project Delta", context: "Launch plans and deadlines")
+    fixture.transport.responseText = "high:c1"
+    let composition = fixture.makeComposition()
+
+    #expect(await composition.destinationRouter.route(
+      transcript: "Prepare the launch checklist",
+      candidates: [inbox, project],
+      inboxID: inbox.destination.noteID
+    ) == project.destination.noteID)
+    #expect(fixture.transport.startCount == 1)
+  }
+
+  @Test @MainActor
+  func compositionExactTitleMatchStartsNoSemanticHelper() async {
+    let fixture = CompositionFixture(phase: .installed, verified: true)
+    let inbox = compositionCandidate(title: "Inbox")
+    let chemistry = compositionCandidate(title: "Chemistry", context: "Lab reports")
+    let foundation = CompositionDestinationRouterProbe(result: inbox.destination.noteID)
+    let composition = fixture.makeComposition(foundationRouter: foundation)
+
+    #expect(await composition.destinationRouter.route(
+      transcript: "Save this chemistry note.",
+      candidates: [inbox, chemistry],
+      inboxID: inbox.destination.noteID
+    ) == chemistry.destination.noteID)
+    #expect(await foundation.callCount == 0)
+    #expect(fixture.transport.startCount == 0)
+  }
+
+  @Test @MainActor
+  func compositionPrefersAvailableFoundationRouterWithoutStartingLocalHelper() async {
+    let fixture = CompositionFixture(phase: .installed, verified: true)
+    let availability = BoolProbe(true)
+    let inbox = compositionCandidate(title: "Inbox")
+    let project = compositionCandidate(title: "Project Delta", context: "Launch plans and deadlines")
+    let foundation = CompositionDestinationRouterProbe(result: project.destination.noteID)
+    let composition = fixture.makeComposition(
+      foundationIsAvailable: { availability.value },
+      foundationRouter: foundation
+    )
+
+    #expect(await composition.destinationRouter.route(
+      transcript: "Prepare the launch checklist",
+      candidates: [inbox, project],
+      inboxID: inbox.destination.noteID
+    ) == project.destination.noteID)
+    #expect(await foundation.callCount == 1)
+    #expect(fixture.transport.startCount == 0)
+  }
+
+  @Test @MainActor
+  func unavailableGemmaCompositionRoutesToInboxWithoutStartingHelper() async {
+    let fixture = CompositionFixture(phase: .notInstalled, verified: false)
+    let inbox = compositionCandidate(title: "Inbox")
+    let project = compositionCandidate(title: "Project Delta", context: "Launch plans and deadlines")
+    let composition = fixture.makeComposition()
+
+    #expect(await composition.destinationRouter.route(
+      transcript: "Prepare the launch checklist",
+      candidates: [inbox, project],
+      inboxID: inbox.destination.noteID
+    ) == inbox.destination.noteID)
+    #expect(fixture.transport.startCount == 0)
+  }
+
+  @Test @MainActor
   func readyGemmaCompositionUsesCleanupContextAndFoundationPerRequest() async throws {
     let fixture = CompositionFixture(phase: .installed, verified: true)
     let foundation = CleanupGeneratorProbe(text: "foundation")
@@ -82,18 +151,23 @@ struct GemmaCleanupAppCompositionTests {
   }
 
   @Test @MainActor
-  func mutationAndShutdownDisableImmediatelyAndDrainAcknowledgedLease() async throws {
+  func shutdownDisablesImmediatelyAndDrainsAcknowledgedRouteLease() async throws {
     let fixture = CompositionFixture(
       phase: .installed,
       verified: true,
       blocksAcknowledgement: true
     )
     let composition = fixture.makeComposition()
-    let session = try composition.cleanupGenerator.start(
-      cleanupRequest(),
-      maximumOutputTokens: 24
-    )
-    let result = Task { try await session.result() }
+    let inbox = compositionCandidate(title: "Inbox")
+    let project = compositionCandidate(title: "Project Delta", context: "Launch plans")
+    fixture.transport.responseText = "high:c1"
+    let result = Task {
+      await composition.destinationRouter.route(
+        transcript: "Prepare the launch checklist",
+        candidates: [inbox, project],
+        inboxID: inbox.destination.noteID
+      )
+    }
     await fixture.transport.waitUntilAcknowledgement()
 
     let drained = CompletionProbe()
@@ -109,14 +183,14 @@ struct GemmaCleanupAppCompositionTests {
     }
 
     fixture.transport.releaseAcknowledgement()
-    #expect(try await result.value.cleaned == "gemma")
+    #expect(await result.value == project.destination.noteID)
     await shutdown.value
     #expect(drained.isFinished)
     #expect(fixture.installer.cancelCount == 1)
   }
 
   @Test @MainActor
-  func modelMutationCallbackDisablesImmediatelyAndDrainsAcknowledgedLease() async throws {
+  func modelMutationCallbackDisablesImmediatelyAndDrainsAcknowledgedRouteLease() async throws {
     let fixture = CompositionFixture(
       phase: .installed,
       verified: true,
@@ -127,6 +201,7 @@ struct GemmaCleanupAppCompositionTests {
       applicationSupportURL: URL(fileURLWithPath: "/tmp/fleck-app-support"),
       foundationIsAvailable: { false },
       foundationGenerator: CleanupGeneratorProbe(text: "foundation"),
+      foundationRouter: InboxRouter(),
       prepareForGeneration: {},
       verifiedLoadState: { [weak fixture] in
         fixture?.verifiedRepositoryURL.map(EnhancedModelVerifiedLoadState.ready)
@@ -138,11 +213,16 @@ struct GemmaCleanupAppCompositionTests {
         return fixture.activation
       }
     )
-    let session = try composition.cleanupGenerator.start(
-      cleanupRequest(),
-      maximumOutputTokens: 24
-    )
-    let result = Task { try await session.result() }
+    let inbox = compositionCandidate(title: "Inbox")
+    let project = compositionCandidate(title: "Project Delta", context: "Launch plans")
+    fixture.transport.responseText = "high:c1"
+    let result = Task {
+      await composition.destinationRouter.route(
+        transcript: "Prepare the launch checklist",
+        candidates: [inbox, project],
+        inboxID: inbox.destination.noteID
+      )
+    }
     await fixture.transport.waitUntilAcknowledgement()
 
     let drained = CompletionProbe()
@@ -168,7 +248,7 @@ struct GemmaCleanupAppCompositionTests {
     }
 
     fixture.transport.releaseAcknowledgement()
-    #expect(try await result.value.cleaned == "gemma")
+    #expect(await result.value == project.destination.noteID)
     await modelMutation.value
     #expect(drained.isFinished)
   }
@@ -304,6 +384,30 @@ struct GemmaCleanupAppCompositionTests {
     #expect(compatibility.cleanup.available)
     #expect(compatibility.smartCapture.available)
   }
+
+  @Test @MainActor
+  func localRoutingAvailabilityRequiresOperationalComposition() {
+    let fixture = CompositionFixture(phase: .installed, verified: true)
+    let composition = fixture.makeComposition()
+    let input: (Bool) -> DictationAvailability.Input = { localRoutingReady in
+      .init(
+        osMajorVersion: 14,
+        architecture: .appleSilicon,
+        microphonePermission: .authorized,
+        speechPermission: .authorized,
+        appleOnDeviceRecognitionSupported: true,
+        enhancedModelReady: false,
+        foundationModelAvailability: .unsupportedOS,
+        cleanupModelReady: composition.isGemmaReady,
+        localRoutingModelReady: localRoutingReady
+      )
+    }
+
+    #expect(DictationAvailability.evaluate(input(composition.isLocalRoutingReady)).routing == .localModel)
+    composition.disable()
+    #expect(!composition.isLocalRoutingReady)
+    #expect(DictationAvailability.evaluate(input(composition.isLocalRoutingReady)).routing == .exactTitle)
+  }
 }
 
 @MainActor
@@ -336,12 +440,14 @@ private final class CompositionFixture {
   func makeComposition(
     foundationIsAvailable: @escaping @Sendable () -> Bool = { false },
     foundationGenerator: any BoundedCleanupGenerating = CleanupGeneratorProbe(text: "foundation"),
+    foundationRouter: any DestinationRouting = InboxRouter(),
     prepareForGeneration: @escaping @Sendable () async throws -> Void = {}
   ) -> GemmaCleanupCandidateComposition {
     GemmaCleanupCandidateComposition(
       activation: activation,
       foundationIsAvailable: foundationIsAvailable,
       foundationGenerator: foundationGenerator,
+      foundationRouter: foundationRouter,
       prepareForGeneration: prepareForGeneration,
       verifiedLoadState: { [weak self] in
         self?.verifiedRepositoryURL.map(EnhancedModelVerifiedLoadState.ready) ?? .unavailable
@@ -357,6 +463,7 @@ private final class CompositionFixture {
       applicationSupportURL: URL(fileURLWithPath: "/tmp/fleck-app-support"),
       foundationIsAvailable: { false },
       foundationGenerator: CleanupGeneratorProbe(text: "foundation"),
+      foundationRouter: InboxRouter(),
       prepareForGeneration: {},
       verifiedLoadState: { [weak self] in
         self?.verifiedRepositoryURL.map(EnhancedModelVerifiedLoadState.ready)
@@ -542,6 +649,24 @@ private final class BoolProbe: @unchecked Sendable {
   }
 }
 
+private actor CompositionDestinationRouterProbe: DestinationRouting {
+  let result: UUID?
+  private(set) var callCount = 0
+
+  init(result: UUID?) {
+    self.result = result
+  }
+
+  func route(
+    transcript _: String,
+    candidates _: [DictationRoutingCandidate],
+    inboxID _: UUID?
+  ) async -> UUID? {
+    callCount += 1
+    return result
+  }
+}
+
 private final class CompletionProbe: @unchecked Sendable {
   private let lock = NSLock()
   private var storage = false
@@ -628,6 +753,7 @@ private final class CompositionTransport: GemmaCleanupTransport, @unchecked Send
   private let blocksAcknowledgement: Bool
   private var sessions: [CompositionTransportSession] = []
   private var starts = 0
+  var responseText = "gemma"
 
   init(events: EventProbe, blocksAcknowledgement: Bool) {
     eventsProbe = events
@@ -646,7 +772,7 @@ private final class CompositionTransport: GemmaCleanupTransport, @unchecked Send
       starts += 1
       sessions.append(session)
     }
-    session.complete()
+    session.complete(text: responseText)
     return session
   }
 
@@ -685,10 +811,12 @@ private final class CompositionTransportSession: GemmaCleanupTransportSession, @
 
   var acknowledgementStarted: Bool { lock.withLock { acknowledgementStartedStorage } }
 
-  func complete() {
+  func complete(text: String) {
     let requestID = terminationExpectation.cleanupRequestID
+    let rawText = String(decoding: try! JSONEncoder().encode(["text": text]), as: UTF8.self)
+    let quotedRawText = String(decoding: try! JSONEncoder().encode(rawText), as: UTF8.self)
     continuation.yield(Data(#"{"schemaVersion":1,"kind":"started","requestID":"\#(requestID)"}"#.utf8))
-    continuation.yield(Data(#"{"schemaVersion":1,"kind":"completed","requestID":"\#(requestID)","rawText":"{\"text\":\"gemma\"}"}"#.utf8))
+    continuation.yield(Data(#"{"schemaVersion":1,"kind":"completed","requestID":"\#(requestID)","rawText":\#(quotedRawText)}"#.utf8))
     continuation.finish()
   }
 
@@ -739,6 +867,16 @@ private func cleanupRequest() -> IncrementalCleanupRequest {
     protectedForms: [],
     replacements: 0,
     deadline: ContinuousClock.now.advanced(by: .seconds(5))
+  )
+}
+
+private func compositionCandidate(
+  title: String,
+  context: String = ""
+) -> DictationRoutingCandidate {
+  .init(
+    destination: .init(noteID: UUID(), title: title),
+    semanticContext: context
   )
 }
 #endif

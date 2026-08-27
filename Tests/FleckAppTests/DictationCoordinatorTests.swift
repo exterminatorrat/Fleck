@@ -1198,10 +1198,78 @@ private func waitForCompletion(
   await fixture.coordinator.start(mode: .smartCapture)
   let finishing = Task { await fixture.coordinator.finish() }
   await gate.waitUntilWaiting()
-  await fixture.coordinator.cancel()
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  await Task.yield()
   await gate.openGate()
+  await cancelling.value
   await finishing.value
 
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(try await fixture.history.list().isEmpty)
+}
+
+@Test @MainActor func processingCancelDuringRoutingCancelsAndDrainsRouterBeforeTerminal()
+  async throws
+{
+  let processing = ProcessingProbe(
+    result: .init(
+      rawTranscript: "Cancel and drain routing",
+      dictionaryBaseline: "Cancel and drain routing",
+      cleanedTranscript: "Cancel and drain routing.",
+      insertedText: "Cancel and drain routing.",
+      cleanupOutcome: .cleaned,
+      measurements: .empty
+    )
+  )
+  let fixture = try Fixture(processing: processing)
+  let routeStarted = CompletionProbe()
+  let cancellationObserved = CompletionProbe()
+  let releaseWithoutCancellation = CompletionProbe()
+  let drainGate = Gate()
+  let routeDrained = CompletionProbe()
+  let cancelReturned = CompletionProbe()
+  let terminalReached = CompletionProbe()
+  var events: [DictationCoordinatorEvent] = []
+  fixture.router.cancellationProbe = .init(
+    routeStarted: routeStarted,
+    cancellationObserved: cancellationObserved,
+    releaseWithoutCancellation: releaseWithoutCancellation,
+    drainGate: drainGate,
+    routeDrained: routeDrained
+  )
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  while !(await routeStarted.isComplete) { await Task.yield() }
+  let terminal = Task {
+    await fixture.coordinator.waitForTerminal()
+    await terminalReached.complete()
+  }
+  let cancelling = Task {
+    await fixture.coordinator.cancel()
+    await cancelReturned.complete()
+  }
+  for _ in 0..<100 where !(await cancellationObserved.isComplete) {
+    await Task.yield()
+  }
+
+  let didObserveCancellation = await cancellationObserved.isComplete
+  #expect(didObserveCancellation)
+  if !didObserveCancellation { await releaseWithoutCancellation.complete() }
+  #expect(!(await routeDrained.isComplete))
+  #expect(!(await cancelReturned.isComplete))
+  #expect(!(await terminalReached.isComplete))
+
+  await drainGate.openGate()
+  await cancelling.value
+  await finishing.value
+  await terminal.value
+
+  #expect(await routeDrained.isComplete)
+  #expect(await cancelReturned.isComplete)
+  #expect(await terminalReached.isComplete)
+  #expect(events.last?.terminal == .cancelled)
   #expect(fixture.saver.savedTexts.isEmpty)
   #expect(try await fixture.history.list().isEmpty)
 }
@@ -2891,8 +2959,17 @@ private final class FakeCleaner: TranscriptCleaning, @unchecked Sendable {
 }
 
 private final class FakeRouter: DestinationRouting, @unchecked Sendable {
+  struct CancellationProbe {
+    let routeStarted: CompletionProbe
+    let cancellationObserved: CompletionProbe
+    let releaseWithoutCancellation: CompletionProbe
+    let drainGate: Gate
+    let routeDrained: CompletionProbe
+  }
+
   var result: UUID?
   var gate: Gate?
+  var cancellationProbe: CancellationProbe?
   private(set) var callCount = 0
   private(set) var candidates: [DictationRoutingCandidate] = []
 
@@ -2903,6 +2980,17 @@ private final class FakeRouter: DestinationRouting, @unchecked Sendable {
   ) async -> UUID? {
     callCount += 1
     self.candidates = candidates
+    if let cancellationProbe {
+      await cancellationProbe.routeStarted.complete()
+      while !Task.isCancelled,
+        !(await cancellationProbe.releaseWithoutCancellation.isComplete)
+      {
+        await Task.yield()
+      }
+      if Task.isCancelled { await cancellationProbe.cancellationObserved.complete() }
+      await cancellationProbe.drainGate.wait()
+      await cancellationProbe.routeDrained.complete()
+    }
     if let gate { await gate.wait() }
     return result
   }

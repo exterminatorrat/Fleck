@@ -467,6 +467,25 @@ private actor FoundationModelResponderProbe {
   #expect(recorder.count == 0)
 }
 
+@Test func FoundationModelDictationExposesItsExactEligibleTitleMatchForDynamicRouting() {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
+  let candidates = [
+    DictationRoutingCandidate(destination: inbox, semanticContext: "General captures"),
+    DictationRoutingCandidate(
+      destination: chemistry,
+      semanticContext: "Lab reports and reaction notes"
+    ),
+  ]
+
+  let destination = FoundationModelDictation.exactTitleDestinationID(
+    transcript: "Please save this chemistry note.",
+    candidates: candidates
+  )
+
+  #expect(destination == chemistry.noteID)
+}
+
 @Test func FoundationModelDictationDoesNotLocallyMatchPunctuatedTitle() async {
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let cPlusPlus = DictationDestination(noteID: UUID(), title: "C++")

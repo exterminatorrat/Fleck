@@ -320,6 +320,118 @@ import Testing
   #expect(drained.isFinished)
 }
 
+@Test func dynamicCleanupOnlyEnableLeavesRouteUnavailable() throws {
+  let gate = GemmaCleanupLeaseGate()
+  gate.enable(DynamicCleanupGeneratorProbe(result: "gemma"))
+
+  #expect(throws: DynamicCleanupGeneratorError.gemmaUnavailable) {
+    _ = try gate.startRoute(
+      baseline: "send the report",
+      plainPrompt: "route prompt",
+      deadline: ContinuousClock().now.advanced(by: .seconds(1)),
+      maximumOutputTokens: 24
+    )
+  }
+}
+
+@Test func dynamicCleanupAndRouteShareOneDrainGate() async throws {
+  let cleanupAcknowledgement = DynamicCleanupAcknowledgementGate(blocked: true)
+  let routeAcknowledgement = DynamicCleanupAcknowledgementGate(blocked: true)
+  let cleanupSession = DynamicCleanupSessionProbe(
+    outcome: .failure(.requestCancelled),
+    acknowledgement: cleanupAcknowledgement
+  )
+  let routeSession = DynamicCleanupSessionProbe(
+    outcome: .failure(.terminated),
+    acknowledgement: routeAcknowledgement
+  )
+  let routeGenerator = DynamicRouteGeneratorProbe(
+    cleanupSession: cleanupSession,
+    routeSession: routeSession
+  )
+  let gate = GemmaCleanupLeaseGate()
+  gate.enable(routeGenerator)
+  let cleanup = try dynamicGemmaOnlyGenerator(gate: gate).start(
+    dynamicCleanupRequest(),
+    maximumOutputTokens: 24
+  )
+  let route = try gate.startRoute(
+    baseline: "send the report",
+    plainPrompt: "route prompt",
+    deadline: ContinuousClock().now.advanced(by: .seconds(1)),
+    maximumOutputTokens: 24
+  )
+
+  cleanup.requestCancellation()
+  route.forceTerminate()
+  await cleanupAcknowledgement.waitUntilStarted()
+  await routeAcknowledgement.waitUntilStarted()
+  let drained = DynamicCleanupCompletionProbe()
+  let drain = Task {
+    await gate.disableAndWait()
+    drained.finish()
+  }
+  await Task.yield()
+  #expect(!drained.isFinished)
+
+  cleanupAcknowledgement.release()
+  await cleanup.acknowledgement()
+  await Task.yield()
+  #expect(!drained.isFinished)
+
+  routeAcknowledgement.release()
+  await route.acknowledgement()
+  await drain.value
+  #expect(drained.isFinished)
+  #expect(cleanupSession.acknowledgementCount == 1)
+  #expect(routeSession.acknowledgementCount == 1)
+  #expect(cleanupSession.cancellationCount == 1)
+  #expect(routeSession.forceCount == 1)
+}
+
+@Test func dynamicRouteConcurrentTerminalCallsReleaseExactlyOnce() async throws {
+  let acknowledgement = DynamicCleanupAcknowledgementGate(blocked: true)
+  let routeSession = DynamicCleanupSessionProbe(
+    outcome: .success(.init(cleaned: "high:destination")),
+    acknowledgement: acknowledgement
+  )
+  let routeGenerator = DynamicRouteGeneratorProbe(
+    cleanupSession: DynamicCleanupSessionProbe(
+      outcome: .success(.init(cleaned: "cleanup")),
+      acknowledgement: DynamicCleanupAcknowledgementGate(blocked: false)
+    ),
+    routeSession: routeSession
+  )
+  let gate = GemmaCleanupLeaseGate()
+  gate.enable(routeGenerator)
+  let route = try gate.startRoute(
+    baseline: "send the report",
+    plainPrompt: "route prompt",
+    deadline: ContinuousClock().now.advanced(by: .seconds(1)),
+    maximumOutputTokens: 24
+  )
+
+  let result = Task { try await route.result() }
+  let firstAcknowledgement = Task { await route.acknowledgement() }
+  let secondAcknowledgement = Task { await route.acknowledgement() }
+  route.requestCancellation()
+  route.requestCancellation()
+  route.forceTerminate()
+  route.forceTerminate()
+  await acknowledgement.waitUntilStarted()
+  let drain = Task { await gate.disableAndWait() }
+
+  acknowledgement.release()
+
+  #expect(try await result.value.cleaned == "high:destination")
+  await firstAcknowledgement.value
+  await secondAcknowledgement.value
+  await drain.value
+  #expect(routeSession.acknowledgementCount == 1)
+  #expect(routeSession.cancellationCount == 1)
+  #expect(routeSession.forceCount == 1)
+}
+
 @Test func dynamicCleanupUnavailableGateFallsBackThroughIncrementalCleaner() async throws {
   let now = ContinuousClock().now
   let generator = DynamicCleanupGenerator(
@@ -413,6 +525,30 @@ private final class DynamicCleanupGeneratorProbe: BoundedCleanupGenerating, @unc
 
   var startCount: Int {
     lock.withLock { startCountStorage }
+  }
+}
+
+private struct DynamicRouteGeneratorProbe:
+  BoundedCleanupGenerating,
+  GemmaRouteGenerating
+{
+  let cleanupSession: DynamicCleanupSessionProbe
+  let routeSession: DynamicCleanupSessionProbe
+
+  func start(
+    _: IncrementalCleanupRequest,
+    maximumOutputTokens _: Int
+  ) throws -> any CleanupGenerationSession {
+    return cleanupSession
+  }
+
+  func startRoute(
+    baseline _: String,
+    plainPrompt _: String,
+    deadline _: ContinuousClock.Instant,
+    maximumOutputTokens _: Int
+  ) throws -> any CleanupGenerationSession {
+    return routeSession
   }
 }
 

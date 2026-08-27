@@ -35,24 +35,32 @@ struct DynamicCleanupGenerator: BoundedCleanupGenerating {
     )
   }
 }
-final class GemmaCleanupLeaseGate: @unchecked Sendable {
+final class GemmaCleanupLeaseGate: GemmaRouteGenerating, @unchecked Sendable {
   private let lock = NSLock()
   private var generator: (any BoundedCleanupGenerating)?
+  private var routeGenerator: (any GemmaRouteGenerating)?
   private var leases: Set<UUID> = []
   private var drainWaiters: [CheckedContinuation<Void, Never>] = []
 
   func enable(_ generator: any BoundedCleanupGenerating) {
-    lock.withLock { self.generator = generator }
+    lock.withLock {
+      self.generator = generator
+      routeGenerator = generator as? any GemmaRouteGenerating
+    }
   }
 
   func disable() {
-    lock.withLock { generator = nil }
+    lock.withLock {
+      generator = nil
+      routeGenerator = nil
+    }
   }
 
   func disableAndWait() async {
     await withCheckedContinuation { continuation in
       let resumeImmediately = lock.withLock {
         generator = nil
+        routeGenerator = nil
         guard !leases.isEmpty else { return true }
         drainWaiters.append(continuation)
         return false
@@ -60,6 +68,30 @@ final class GemmaCleanupLeaseGate: @unchecked Sendable {
       if resumeImmediately {
         continuation.resume()
       }
+    }
+  }
+
+  func startRoute(
+    baseline: String,
+    plainPrompt: String,
+    deadline: ContinuousClock.Instant,
+    maximumOutputTokens: Int
+  ) throws -> any CleanupGenerationSession {
+    let (leaseID, generator) = try acquireRoute()
+    do {
+      let session = try generator.startRoute(
+        baseline: baseline,
+        plainPrompt: plainPrompt,
+        deadline: deadline,
+        maximumOutputTokens: maximumOutputTokens
+      )
+      return GemmaLeasedCleanupSession(
+        inner: session,
+        releaseLease: { [self] in release(leaseID) }
+      )
+    } catch {
+      release(leaseID)
+      throw error
     }
   }
 
@@ -91,6 +123,17 @@ final class GemmaCleanupLeaseGate: @unchecked Sendable {
       let leaseID = UUID()
       leases.insert(leaseID)
       return (leaseID, generator)
+    }
+  }
+
+  private func acquireRoute() throws -> (UUID, any GemmaRouteGenerating) {
+    try lock.withLock {
+      guard let routeGenerator else {
+        throw DynamicCleanupGeneratorError.gemmaUnavailable
+      }
+      let leaseID = UUID()
+      leases.insert(leaseID)
+      return (leaseID, routeGenerator)
     }
   }
 

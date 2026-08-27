@@ -19,6 +19,7 @@ final class GemmaCleanupCandidateComposition {
   let installer: any AdmittedModelInstalling
   let settingsViewModel: AdmittedModelSettingsViewModel
   let cleanupGenerator: DynamicCleanupGenerator
+  let destinationRouter: DynamicDestinationRouter
 
   private let gate: GemmaCleanupLeaseGate
   private let verifiedLoadState: @MainActor () -> EnhancedModelVerifiedLoadState
@@ -30,6 +31,7 @@ final class GemmaCleanupCandidateComposition {
     applicationSupportURL: URL,
     foundationIsAvailable: @escaping @Sendable () -> Bool,
     foundationGenerator: any BoundedCleanupGenerating,
+    foundationRouter: any DestinationRouting,
     prepareForGeneration: @escaping @Sendable () async throws -> Void,
     verifiedLoadState: (@MainActor () -> EnhancedModelVerifiedLoadState)? = nil,
     makeActivation: ActivationFactory = { applicationSupportURL, mutation in
@@ -48,6 +50,7 @@ final class GemmaCleanupCandidateComposition {
       activation: activation,
       foundationIsAvailable: foundationIsAvailable,
       foundationGenerator: foundationGenerator,
+      foundationRouter: foundationRouter,
       prepareForGeneration: prepareForGeneration,
       gate: gate,
       verifiedLoadState: verifiedLoadState
@@ -59,6 +62,7 @@ final class GemmaCleanupCandidateComposition {
     activation: GemmaCleanupTestActivation.Result,
     foundationIsAvailable: @escaping @Sendable () -> Bool,
     foundationGenerator: any BoundedCleanupGenerating,
+    foundationRouter: any DestinationRouting,
     prepareForGeneration: @escaping @Sendable () async throws -> Void,
     gate: GemmaCleanupLeaseGate = GemmaCleanupLeaseGate(),
     verifiedLoadState: (@MainActor () -> EnhancedModelVerifiedLoadState)? = nil
@@ -86,6 +90,11 @@ final class GemmaCleanupCandidateComposition {
       foundationGenerator: foundationGenerator,
       gemmaGate: gate
     )
+    destinationRouter = DynamicDestinationRouter(
+      foundationIsAvailable: foundationIsAvailable,
+      foundationRouter: foundationRouter,
+      localRouter: GemmaDestinationRouter(generator: gate)
+    )
     presentationSubscription = settingsViewModel.$presentation.sink { [weak self] presentation in
       self?.reconcileGate(presentation)
     }
@@ -94,6 +103,14 @@ final class GemmaCleanupCandidateComposition {
 
   var isGemmaReady: Bool {
     isGemmaReady(for: settingsViewModel.presentation)
+  }
+
+  var isLocalRoutingReady: Bool {
+    isLocalRoutingReady(for: settingsViewModel.presentation)
+  }
+
+  func isLocalRoutingReady(for presentation: AdmittedModelSettingsPresentation) -> Bool {
+    isGemmaReady(for: presentation)
   }
 
   func isGemmaReady(for presentation: AdmittedModelSettingsPresentation) -> Bool {

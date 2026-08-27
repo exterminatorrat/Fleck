@@ -92,6 +92,36 @@ import Testing
   #expect(result.cleaned == "  Send the report.  ")
 }
 
+@Test func gemmaRouteAcceptsExactlyOneLowercaseJSONFenceAroundTheStrictEnvelope() async throws {
+  let outputs = [
+    "```json\n{\"text\":\"high:c2\"}\n```\n",
+    " \t\r\n```json\n{\"text\":\"high:c2\"}\n```\r\n\t ",
+  ]
+
+  for rawText in outputs {
+    let result = try await gemmaRouteResult(rawText: rawText)
+    #expect(result.cleaned == "high:c2")
+  }
+}
+
+@Test func gemmaRouteRejectsNonExactOrUnsafeFencedEnvelopes() async throws {
+  let outputs = [
+    "```JSON\n{\"text\":\"high:c1\"}\n```",
+    "prose\n```json\n{\"text\":\"high:c1\"}\n```",
+    "```json\n```json\n{\"text\":\"high:c1\"}\n```\n```",
+    "```json\n{\"text\":\"```json\"}\n```",
+    "```json\n{\"text\":\"high:c1\",\"extra\":\"no\"}\n```",
+    "```json\n{\"text\":\"high:c1\"}\n``` trailing",
+    "```json\r\n{\"text\":\"high:c1\"}\r\n```",
+  ]
+
+  for rawText in outputs {
+    await #expect(throws: CleanupGenerationError.generationFailed, "\(rawText)") {
+      try await gemmaRouteResult(rawText: rawText)
+    }
+  }
+}
+
 @Test func gemmaDrainCrossingDeadlineCannotPublishACandidate() async throws {
   let clock = GemmaManualClock()
   let deadline = clock.now.advanced(by: .seconds(1))
@@ -1538,6 +1568,27 @@ import Testing
 
   #expect(try await firstResult.value.cleaned == "first")
   #expect(try await secondResult.value.cleaned == "second")
+}
+
+private func gemmaRouteResult(rawText: String) async throws -> GeneratedCleanupCandidate {
+  let transport = GemmaFakeTransport()
+  let generator = GemmaCleanupGenerator(
+    transportFactory: { transport.makeTransport() },
+    clock: GemmaTestClock.clock()
+  )
+  let session = try generator.startRoute(
+    baseline: "route this",
+    plainPrompt: "route prompt",
+    deadline: GemmaTestClock.instant.advanced(by: .seconds(1)),
+    maximumOutputTokens: 64
+  )
+  let resultTask = Task { try await session.result() }
+  await transport.waitUntilRequestCount(1)
+  let (wire, helper) = transport.requestAndSession(at: 0)
+  helper.yield(GemmaTestEvent.started(wire.requestID))
+  helper.yield(GemmaTestEvent.completed(wire.requestID, rawText))
+  helper.finish()
+  return try await resultTask.value
 }
 
 private typealias GemmaFakeDispositionFactory = @Sendable (

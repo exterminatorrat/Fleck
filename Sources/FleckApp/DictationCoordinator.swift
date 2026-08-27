@@ -64,6 +64,7 @@ final class DictationCoordinator {
     var isSourceFinishing = false
     var releaseRequested = false
     var cancelRequested = false
+    var routingTask: Task<UUID?, Never>?
     var processingSessionCancellationTask: Task<Void, Never>?
     var isTerminating = false
     var editorCancelled = false
@@ -681,7 +682,15 @@ final class DictationCoordinator {
     guard let current = self.capture, current.id == id, !current.isTerminating else {
       return
     }
-    if current.processingSession != nil {
+    if let routingTask = current.routingTask {
+      routingTask.cancel()
+      _ = await routingTask.value
+      if var latest = self.capture, latest.id == id {
+        latest.routingTask = nil
+        self.capture = latest
+      }
+      await completeCancellation(id)
+    } else if current.processingSession != nil {
       await cancelProcessingSession(id)
       await completeCancellation(id)
     } else {
@@ -778,11 +787,21 @@ final class DictationCoordinator {
     let inbox = candidates.first {
       $0.destination.title.caseInsensitiveCompare("Inbox") == .orderedSame
     }
-    let routedID = await router.route(
-      transcript: text,
-      candidates: candidates,
-      inboxID: inbox?.destination.noteID
-    )
+    guard var activeCapture = capture, activeCapture.id == id else { return }
+    let routingTask = Task { [router] in
+      await router.route(
+        transcript: text,
+        candidates: candidates,
+        inboxID: inbox?.destination.noteID
+      )
+    }
+    activeCapture.routingTask = routingTask
+    capture = activeCapture
+    let routedID = await routingTask.value
+    if var latest = capture, latest.id == id {
+      latest.routingTask = nil
+      capture = latest
+    }
     guard await continueCapture(id) else { return }
     let destinationID = candidates.contains { $0.destination.noteID == routedID }
       ? routedID

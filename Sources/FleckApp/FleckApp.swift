@@ -550,18 +550,21 @@
             DictationAvailability.currentFoundationModelAvailability == .available
           },
           foundationGenerator: foundationCleanupGenerator,
+          foundationRouter: languageModel,
           prepareForGeneration: {
             await enhancedComposition.forceCold()
           }
         )
         let cleanupAdmittedModelSettingsViewModel = cleanupComposition.settingsViewModel
         let cleanupGenerator = cleanupComposition.cleanupGenerator
+        let destinationRouter: any DestinationRouting = cleanupComposition.destinationRouter
       #else
         let cleanupAdmittedModelSettingsViewModel = AdmittedModelSettingsViewModel(
           installer: BuiltInAdmittedModelInstaller(),
           context: .cleanup(fallbackLabel: "Faithful Local Fallback")
         )
         let cleanupGenerator = foundationCleanupGenerator
+        let destinationRouter: any DestinationRouting = languageModel
       #endif
       let incrementalCleaner = IncrementalTranscriptCleaner(
         generator: cleanupGenerator,
@@ -595,7 +598,7 @@
           )
         },
         cleaner: languageModel,
-        router: languageModel,
+        router: destinationRouter,
         saver: appState,
         historyController: historyController,
         historyEnabled: { [weak appState] in
@@ -640,6 +643,11 @@
         let cleanupModelReady: @MainActor (AdmittedModelSettingsPresentation) -> Bool = {
           cleanupComposition.isGemmaReady(for: $0)
         }
+        let localRoutingModelReady: @MainActor (
+          AdmittedModelSettingsPresentation
+        ) -> Bool = {
+          cleanupComposition.isLocalRoutingReady(for: $0)
+        }
         let disableCleanup: @MainActor () -> Void = {
           cleanupComposition.disable()
         }
@@ -653,6 +661,9 @@
         let cleanupModelReady: @MainActor (AdmittedModelSettingsPresentation) -> Bool = { _ in
           false
         }
+        let localRoutingModelReady: @MainActor (
+          AdmittedModelSettingsPresentation
+        ) -> Bool = { _ in false }
         let disableCleanup: @MainActor () -> Void = {}
         let drainCleanup: @MainActor () async -> Void = {}
       #endif
@@ -676,6 +687,7 @@
         stopResourceMonitoring: stopResourceMonitoring,
         forceEnhancedInferenceCold: forceEnhancedInferenceCold,
         cleanupModelReady: cleanupModelReady,
+        localRoutingModelReady: localRoutingModelReady,
         disableCleanup: disableCleanup,
         drainCleanup: drainCleanup
       )
@@ -706,6 +718,9 @@
       cleanupModelReady: @escaping @MainActor (AdmittedModelSettingsPresentation) -> Bool = {
         _ in false
       },
+      localRoutingModelReady: @escaping @MainActor (
+        AdmittedModelSettingsPresentation
+      ) -> Bool = { _ in false },
       disableCleanup: @escaping @MainActor () -> Void = {},
       drainCleanup: @escaping @MainActor () async -> Void = {}
     ) {
@@ -746,7 +761,8 @@
           DictationAvailability.current(
             permissions: permissionController,
             enhancedModelReady: settingsViewModel.presentation.allowsEnhancedPreference,
-            cleanupModelReady: cleanupModelReady(cleanupPresentation)
+            cleanupModelReady: cleanupModelReady(cleanupPresentation),
+            localRoutingModelReady: localRoutingModelReady(cleanupPresentation)
           )
         }
       }

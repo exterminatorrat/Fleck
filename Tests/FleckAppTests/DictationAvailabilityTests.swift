@@ -64,16 +64,17 @@ import Testing
         speechPermission: .authorized,
         appleOnDeviceRecognitionSupported: true,
         enhancedModelReady: true,
-        foundationModelAvailable: true
+        foundationModelAvailable: true,
+        localRoutingModelReady: true
       ),
       standard: true,
       enhanced: true,
       cleanup: false,
-      routing: .exactTitle,
+      routing: .localModel,
       settings: []
     ),
     Scenario(
-      name: "macOS 15 Intel keeps Standard but never Enhanced",
+      name: "cleanup readiness on macOS 15 does not imply semantic routing",
       input: .init(
         osMajorVersion: 15,
         architecture: .intel,
@@ -81,11 +82,12 @@ import Testing
         speechPermission: .authorized,
         appleOnDeviceRecognitionSupported: true,
         enhancedModelReady: true,
-        foundationModelAvailable: true
+        foundationModelAvailable: true,
+        cleanupModelReady: true
       ),
       standard: true,
       enhanced: false,
-      cleanup: false,
+      cleanup: true,
       routing: .exactTitle,
       settings: []
     ),
@@ -331,6 +333,46 @@ import Testing
   )
   #expect(unsupportedPresentation.smartCapture.detail == "Requires macOS 14 or later")
   #expect(!unsupportedPresentation.smartCapture.available)
+}
+
+@Test func semanticRoutingExplainsTopicMatchingForFoundationAndLocalModels() {
+  let semanticDetail =
+    "Matches note titles and content by topic; ambiguous captures go to Inbox."
+  let foundation = DictationAvailability.evaluate(.init(
+    osMajorVersion: 26,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: true,
+    localRoutingModelReady: true
+  ))
+  let local = DictationAvailability.evaluate(.init(
+    osMajorVersion: 14,
+    architecture: .appleSilicon,
+    microphonePermission: .authorized,
+    speechPermission: .authorized,
+    appleOnDeviceRecognitionSupported: true,
+    enhancedModelReady: false,
+    foundationModelAvailable: false,
+    localRoutingModelReady: true
+  ))
+
+  #expect(foundation.routing == .foundationModel)
+  #expect(local.routing == .localModel)
+  let foundationPresentation = DictationCompatibilityPresentation(
+    availability: foundation
+  )
+  let localPresentation = DictationCompatibilityPresentation(availability: local)
+  #expect(
+    foundationPresentation.smartCapture.detail == semanticDetail
+  )
+  #expect(
+    localPresentation.smartCapture.detail == semanticDetail
+  )
+  #expect(foundationPresentation.smartCapture.available)
+  #expect(localPresentation.smartCapture.available)
 }
 
 @Test @MainActor func enhancedPermissionRequestsMicrophoneOnly() async {
