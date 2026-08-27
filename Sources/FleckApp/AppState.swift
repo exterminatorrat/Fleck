@@ -437,10 +437,26 @@
       }
     }
 
-    func activeDestinations() -> [DictationDestination] {
+    func activeDestinations() -> [DictationRoutingCandidate] {
       workspace.notes.map {
-        DictationDestination(noteID: $0.id, title: $0.displayTitle)
+        DictationRoutingCandidate(
+          destination: DictationDestination(noteID: $0.id, title: $0.displayTitle),
+          semanticContext: Self.dictationSemanticContext($0.body)
+        )
       }
+    }
+
+    private static func dictationSemanticContext(_ body: String) -> String {
+      let normalized = body.split(whereSeparator: \Character.isWhitespace).joined(separator: " ")
+      let limit = 480
+      guard normalized.count > limit else { return normalized }
+      let separator = " … "
+      let contentBudget = limit - separator.count
+      let beginningCount = (contentBudget + 1) / 2
+      let endingCount = contentBudget - beginningCount
+      return String(normalized.prefix(beginningCount))
+        + separator
+        + String(normalized.suffix(endingCount))
     }
 
     func capabilityProfile(_ profileID: UUID) -> AgentProfileCapabilities? {

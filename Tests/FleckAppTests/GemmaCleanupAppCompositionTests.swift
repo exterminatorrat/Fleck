@@ -577,7 +577,7 @@ private struct IdentityCleaner: TranscriptCleaning {
 private struct InboxRouter: DestinationRouting {
   func route(
     transcript _: String,
-    candidates _: [DictationDestination],
+    candidates _: [DictationRoutingCandidate],
     inboxID _: UUID?
   ) async -> UUID? {
     nil

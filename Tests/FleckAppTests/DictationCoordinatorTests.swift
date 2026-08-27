@@ -825,6 +825,25 @@ private func waitForCompletion(
   #expect(fixture.coordinator.phase == .saved(fixture.inbox))
 }
 
+@Test @MainActor func routingContextReachesRouterButIsNotPersistedInHistory() async throws {
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Route this"
+  fixture.saver.semanticContexts[fixture.inbox.noteID] = "local-only routing context"
+  fixture.router.result = fixture.inbox.noteID
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.router.candidates.first?.semanticContext == "local-only routing context")
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.destination == fixture.inbox)
+  let historyJSON = try #require(String(
+    data: JSONEncoder().encode(record),
+    encoding: .utf8
+  ))
+  #expect(!historyJSON.contains("local-only routing context"))
+}
+
 @Test @MainActor func saveFailureIsRecordedAsUnsavedWhenHistoryIsEnabled() async throws {
   let fixture = try Fixture()
   fixture.standard.finalText = "Keep this"
@@ -2875,9 +2894,15 @@ private final class FakeRouter: DestinationRouting, @unchecked Sendable {
   var result: UUID?
   var gate: Gate?
   private(set) var callCount = 0
+  private(set) var candidates: [DictationRoutingCandidate] = []
 
-  func route(transcript: String, candidates: [DictationDestination], inboxID: UUID?) async -> UUID? {
+  func route(
+    transcript: String,
+    candidates: [DictationRoutingCandidate],
+    inboxID: UUID?
+  ) async -> UUID? {
     callCount += 1
+    self.candidates = candidates
     if let gate { await gate.wait() }
     return result
   }
@@ -2886,6 +2911,7 @@ private final class FakeRouter: DestinationRouting, @unchecked Sendable {
 @MainActor
 private final class FakeSaver: DictationSaving {
   var destinations: [DictationDestination] = []
+  var semanticContexts: [UUID: String] = [:]
   var saveError: Error?
   var saveGate: Gate?
   var flushGate: Gate?
@@ -2898,7 +2924,14 @@ private final class FakeSaver: DictationSaving {
   var undoSucceeds = true
   var undoGate: Gate?
 
-  func activeDestinations() -> [DictationDestination] { destinations }
+  func activeDestinations() -> [DictationRoutingCandidate] {
+    destinations.map {
+      DictationRoutingCandidate(
+        destination: $0,
+        semanticContext: semanticContexts[$0.noteID] ?? ""
+      )
+    }
+  }
 
   func saveSmartCapture(text: String, captureID: UUID, destinationID: UUID?) async throws -> DictationInsertionReceipt {
     if let saveGate { await saveGate.wait() }

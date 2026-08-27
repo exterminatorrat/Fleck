@@ -105,10 +105,10 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
 
   func route(
     transcript: String,
-    candidates: [DictationDestination],
+    candidates: [DictationRoutingCandidate],
     inboxID: UUID?
   ) async -> UUID? {
-    let eligible = Self.eligibleDestinations(from: candidates)
+    let eligible = Self.eligibleDestinations(from: candidates.map(\.destination))
     guard !eligible.isEmpty else { return inboxID }
 
     let osMajorVersion = osMajorVersion()
@@ -131,6 +131,20 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     } catch {
       return inboxID
     }
+  }
+
+  func route(
+    transcript: String,
+    candidates: [DictationDestination],
+    inboxID: UUID?
+  ) async -> UUID? {
+    await route(
+      transcript: transcript,
+      candidates: candidates.map {
+        DictationRoutingCandidate(destination: $0, semanticContext: "")
+      },
+      inboxID: inboxID
+    )
   }
 
   private static let cleanupInstructions = """

@@ -58,6 +58,11 @@ protocol TranscriptDictionaryResolving: Sendable {
   func resolve(_ rawTranscript: String) async throws -> PersonalDictionaryResolution
 }
 
+struct DictationRoutingCandidate: Equatable, Sendable {
+  let destination: DictationDestination
+  let semanticContext: String
+}
+
 @MainActor
 protocol StreamingSpeechSource: AnyObject {
   func start(
@@ -72,7 +77,7 @@ protocol StreamingSpeechSource: AnyObject {
 protocol DestinationRouting: Sendable {
   func route(
     transcript: String,
-    candidates: [DictationDestination],
+    candidates: [DictationRoutingCandidate],
     inboxID: UUID?
   ) async -> UUID?
 }
@@ -90,7 +95,7 @@ protocol FocusedDictationEditing: AnyObject {
 
 @MainActor
 protocol DictationSaving: AnyObject {
-  func activeDestinations() -> [DictationDestination]
+  func activeDestinations() -> [DictationRoutingCandidate]
   func saveSmartCapture(
     text: String,
     captureID: UUID,

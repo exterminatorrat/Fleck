@@ -775,14 +775,18 @@ final class DictationCoordinator {
     var record = record
     setPhase(.routing)
     let candidates = saver.activeDestinations()
-    let inbox = candidates.first { $0.title.caseInsensitiveCompare("Inbox") == .orderedSame }
+    let inbox = candidates.first {
+      $0.destination.title.caseInsensitiveCompare("Inbox") == .orderedSame
+    }
     let routedID = await router.route(
       transcript: text,
       candidates: candidates,
-      inboxID: inbox?.noteID
+      inboxID: inbox?.destination.noteID
     )
     guard await continueCapture(id) else { return }
-    let destinationID = candidates.contains { $0.noteID == routedID } ? routedID : inbox?.noteID
+    let destinationID = candidates.contains { $0.destination.noteID == routedID }
+      ? routedID
+      : inbox?.destination.noteID
 
     do {
       // A receipt is the save commit boundary: a later cancellation must compensate it.
@@ -792,7 +796,7 @@ final class DictationCoordinator {
         destinationID: destinationID
       )
       record.insertionOutcome = .saved
-      record.destination = candidates.first { $0.noteID == receipt.noteID }
+      record.destination = candidates.first { $0.destination.noteID == receipt.noteID }?.destination
       if isCancellationRequested(id) {
         await cancelCommittedSmartCapture(
           id,
@@ -848,7 +852,7 @@ final class DictationCoordinator {
     } catch {
       guard await continueCapture(id) else { return }
       record.insertionOutcome = .unsaved
-      record.destination = candidates.first { $0.noteID == destinationID }
+      record.destination = candidates.first { $0.destination.noteID == destinationID }?.destination
       guard let durable = await updateHistory(record, captureID: id, enabled: savesHistory)
       else { return }
       await unsaved(id, text: text, historyIsDurable: durable || historyIsDurable)
@@ -871,13 +875,13 @@ final class DictationCoordinator {
     record: DictationHistoryRecord,
     text: String,
     receipt: DictationInsertionReceipt,
-    candidates: [DictationDestination],
+    candidates: [DictationRoutingCandidate],
     savesHistory: Bool
   ) async {
     guard let capture, capture.id == id, !capture.isTerminating else { return }
     var record = record
     record.insertionOutcome = .saved
-    record.destination = candidates.first { $0.noteID == receipt.noteID }
+    record.destination = candidates.first { $0.destination.noteID == receipt.noteID }?.destination
     if savesHistory { await historyController.save(record) }
     guard self.capture?.id == id else { return }
     recoveryReceipt = receipt
@@ -895,7 +899,7 @@ final class DictationCoordinator {
     record: DictationHistoryRecord,
     text: String,
     receipt: DictationInsertionReceipt,
-    candidates: [DictationDestination],
+    candidates: [DictationRoutingCandidate],
     savesHistory: Bool
   ) async {
     guard isCancellationRequested(id) else { return }

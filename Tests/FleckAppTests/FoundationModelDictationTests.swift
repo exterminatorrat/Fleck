@@ -453,7 +453,13 @@ private actor FoundationModelResponderProbe {
 
   let destination = await dictation.route(
     transcript: "Please save this chemistry note.",
-    candidates: [inbox, chemistry],
+    candidates: [
+      DictationRoutingCandidate(destination: inbox, semanticContext: "General captures"),
+      DictationRoutingCandidate(
+        destination: chemistry,
+        semanticContext: "Lab reports and reaction notes"
+      ),
+    ],
     inboxID: inbox.noteID
   )
 

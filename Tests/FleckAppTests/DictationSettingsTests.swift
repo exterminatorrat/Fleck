@@ -2136,7 +2136,7 @@ private struct RuntimeCleaner: TranscriptCleaning {
 private struct RuntimeRouter: DestinationRouting {
   func route(
     transcript: String,
-    candidates: [DictationDestination],
+    candidates: [DictationRoutingCandidate],
     inboxID: UUID?
   ) async -> UUID? {
     inboxID
