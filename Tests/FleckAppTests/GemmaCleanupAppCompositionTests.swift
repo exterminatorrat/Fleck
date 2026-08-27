@@ -267,25 +267,25 @@ struct GemmaCleanupAppCompositionTests {
     defer { fixture.removeTemporaryFiles() }
 
     #expect(!fixture.runtime.availability.cleanupAvailable)
-    #expect(fixture.runtime.availability.routing == .inbox)
+    #expect(fixture.runtime.availability.routing == .exactTitle)
 
     fixture.cleanupReady.value = true
     fixture.installer.publish(phase: .installed)
     await fixture.drainPresentationUpdates()
     #expect(fixture.runtime.availability.cleanupAvailable)
-    #expect(fixture.runtime.availability.routing == .inbox)
+    #expect(fixture.runtime.availability.routing == .exactTitle)
 
     fixture.cleanupReady.value = false
     fixture.installer.publish(phase: .repairRequired(message: "Verification failed"))
     await fixture.drainPresentationUpdates()
     #expect(!fixture.runtime.availability.cleanupAvailable)
-    #expect(fixture.runtime.availability.routing == .inbox)
+    #expect(fixture.runtime.availability.routing == .exactTitle)
 
     await fixture.runtime.shutdown()
   }
 
   @Test
-  func verifiedLocalCleanupDoesNotEnableSmartCaptureRouting() {
+  func exactTitleSmartCaptureRemainsAvailableWithVerifiedLocalCleanup() {
     let availability = DictationAvailability.evaluate(.init(
       osMajorVersion: 14,
       architecture: .appleSilicon,
@@ -299,10 +299,10 @@ struct GemmaCleanupAppCompositionTests {
     let compatibility = DictationCompatibilityPresentation(availability: availability)
 
     #expect(availability.cleanupAvailable)
-    #expect(availability.routing == .inbox)
+    #expect(availability.routing == .exactTitle)
     #expect(compatibility.cleanup.detail == "Available")
     #expect(compatibility.cleanup.available)
-    #expect(!compatibility.smartCapture.available)
+    #expect(compatibility.smartCapture.available)
   }
 }
 

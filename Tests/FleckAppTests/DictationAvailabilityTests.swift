@@ -52,7 +52,7 @@ import Testing
       standard: false,
       enhanced: false,
       cleanup: false,
-      routing: .inbox,
+      routing: .exactTitle,
       settings: []
     ),
     Scenario(
@@ -69,7 +69,7 @@ import Testing
       standard: true,
       enhanced: true,
       cleanup: false,
-      routing: .inbox,
+      routing: .exactTitle,
       settings: []
     ),
     Scenario(
@@ -86,7 +86,7 @@ import Testing
       standard: true,
       enhanced: false,
       cleanup: false,
-      routing: .inbox,
+      routing: .exactTitle,
       settings: []
     ),
     Scenario(
@@ -311,7 +311,26 @@ import Testing
   let disabledPresentation = DictationCompatibilityPresentation(
     availability: DictationAvailability.evaluate(disabled)
   )
-  #expect(disabledPresentation.smartCapture.detail == "Saves to Inbox")
+  #expect(DictationAvailability.evaluate(disabled).routing == .exactTitle)
+  #expect(
+    disabledPresentation.smartCapture.detail
+      == "Say an exact note title once; otherwise Inbox."
+  )
+  #expect(disabledPresentation.smartCapture.available)
+
+  let unsupportedPresentation = DictationCompatibilityPresentation(
+    availability: DictationAvailability.evaluate(.init(
+      osMajorVersion: 13,
+      architecture: .appleSilicon,
+      microphonePermission: .authorized,
+      speechPermission: .authorized,
+      appleOnDeviceRecognitionSupported: true,
+      enhancedModelReady: false,
+      foundationModelAvailability: .unsupportedOS
+    ))
+  )
+  #expect(unsupportedPresentation.smartCapture.detail == "Requires macOS 14 or later")
+  #expect(!unsupportedPresentation.smartCapture.available)
 }
 
 @Test @MainActor func enhancedPermissionRequestsMicrophoneOnly() async {

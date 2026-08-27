@@ -1640,7 +1640,8 @@
         guard let commands = editor as? EditorCommands, let textView = commands.textView else {
           return false
         }
-        return textView.window?.firstResponder === textView
+        return textView.window?.isKeyWindow == true
+          && textView.window?.firstResponder === textView
       }
     }
   }

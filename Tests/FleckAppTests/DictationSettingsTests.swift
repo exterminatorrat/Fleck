@@ -509,7 +509,7 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
   let bodyView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
   let titleView = NSTextField(frame: NSRect(x: 0, y: 90, width: 200, height: 24))
   let otherView = NSTextField(frame: NSRect(x: 0, y: 115, width: 80, height: 24))
-  let window = NSWindow(
+  let window = DictationKeyWindowProbe(
     contentRect: NSRect(x: 0, y: 0, width: 220, height: 140),
     styleMask: [.titled],
     backing: .buffered,
@@ -520,6 +520,7 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
   content.addSubview(titleView)
   content.addSubview(otherView)
   window.contentView = content
+  window.reportsKey = true
   body.textView = bodyView
   registry.register(body)
 
@@ -529,6 +530,33 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
   #expect(registry.focusedEditor() === body)
   window.makeFirstResponder(otherView)
   #expect(registry.focusedEditor() == nil)
+}
+
+@Test @MainActor func DictationEditorRegistryRejectsRetainedResponderInNonKeyWindow() {
+  let registry = DictationEditorRegistry()
+  let body = EditorCommands()
+  let bodyView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
+  let window = DictationKeyWindowProbe(
+    contentRect: NSRect(x: 0, y: 0, width: 220, height: 100),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = bodyView
+  window.reportsKey = false
+  body.textView = bodyView
+  registry.register(body)
+
+  #expect(window.makeFirstResponder(bodyView))
+  #expect(!window.isKeyWindow)
+  #expect(window.firstResponder === bodyView)
+  #expect(registry.focusedEditor() == nil)
+}
+
+private final class DictationKeyWindowProbe: NSWindow {
+  var reportsKey = false
+
+  override var isKeyWindow: Bool { reportsKey }
 }
 
 @Test @MainActor func DictationHistoryControllerSharesWritesAcrossPresentationsAndSettingsClear()
@@ -1060,13 +1088,14 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   let fixture = try await RuntimeFixture(finalText: "Focused")
   let commands = EditorCommands()
   let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
-  let window = NSWindow(
+  let window = DictationKeyWindowProbe(
     contentRect: NSRect(x: 0, y: 0, width: 220, height: 100),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
   window.contentView = textView
+  window.reportsKey = true
   commands.textView = textView
   fixture.editorRegistry.register(commands)
   window.makeFirstResponder(textView)
@@ -1087,13 +1116,14 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   let fixture = try await RuntimeFixture(finalText: "Focused")
   let commands = EditorCommands()
   let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
-  let window = NSWindow(
+  let window = DictationKeyWindowProbe(
     contentRect: NSRect(x: 0, y: 0, width: 220, height: 100),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
   window.contentView = textView
+  window.reportsKey = true
   commands.textView = textView
   fixture.editorRegistry.register(commands)
   window.makeFirstResponder(textView)

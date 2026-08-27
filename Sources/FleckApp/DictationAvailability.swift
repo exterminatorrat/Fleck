@@ -24,7 +24,7 @@ enum DictationPermissionStatus: Equatable, Sendable {
 }
 
 enum DictationRoutingAvailability: Equatable, Sendable {
-  case inbox
+  case exactTitle
   case foundationModel
 }
 
@@ -171,7 +171,7 @@ struct DictationAvailability: Equatable, Sendable {
       && speechAvailable
       && input.appleOnDeviceRecognitionSupported
     let routing: DictationRoutingAvailability =
-      foundationModelAvailable ? .foundationModel : .inbox
+      foundationModelAvailable ? .foundationModel : .exactTitle
 
     #if CLEAN_DICTATION_ENHANCED_CANDIDATE
       return .init(
@@ -351,10 +351,15 @@ struct DictationCompatibilityPresentation: Equatable, Sendable {
       detail: cleanupDetail,
       available: availability.cleanupAvailable
     )
+    let smartCaptureAvailable = availability.osMajorVersion >= 14
     smartCapture = .init(
       title: "Smart Capture",
-      detail: availability.routing == .foundationModel ? "Available" : "Saves to Inbox",
-      available: availability.routing == .foundationModel
+      detail: smartCaptureAvailable
+        ? availability.routing == .foundationModel
+          ? "Available"
+          : "Say an exact note title once; otherwise Inbox."
+        : "Requires macOS 14 or later",
+      available: smartCaptureAvailable
     )
   }
 }
