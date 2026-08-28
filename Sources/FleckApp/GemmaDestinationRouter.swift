@@ -26,13 +26,18 @@ struct GemmaDestinationRouter: DestinationRouting {
           candidates.count <= 24 else { return inboxID }
 
     var identities = Set<String>()
-    var titles = Set<String>()
     guard candidates.allSatisfy({ candidate in
       identities.insert(Self.canonical(candidate.destination.noteID)).inserted
-        && titles.insert(Self.normalized(candidate.destination.title)).inserted
     }) else { return inboxID }
 
-    let eligible = candidates.filter { $0.destination.noteID != inboxID }
+    var titleCounts: [String: Int] = [:]
+    for candidate in candidates {
+      titleCounts[Self.normalized(candidate.destination.title), default: 0] += 1
+    }
+    let eligible = candidates.filter { candidate in
+      candidate.destination.noteID != inboxID
+        && titleCounts[Self.normalized(candidate.destination.title)] == 1
+    }
     guard !eligible.isEmpty,
           let prompt = Self.prompt(transcript: transcript, candidates: eligible) else {
       return inboxID
@@ -136,8 +141,13 @@ struct GemmaDestinationRouter: DestinationRouting {
             term.count > 1,
             term.utf8.allSatisfy({ (97...122).contains($0) }),
             !ignoredTerms.contains(term) else { return nil }
-      return term
+      return Self.normalizedTerminalGramPlural(term)
     })
+  }
+
+  private static func normalizedTerminalGramPlural(_ term: String) -> String {
+    guard term.hasSuffix("grams") else { return term }
+    return String(term.dropLast())
   }
 
   private static let ignoredTerms: Set<String> = [

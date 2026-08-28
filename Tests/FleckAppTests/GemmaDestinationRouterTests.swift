@@ -34,6 +34,77 @@ import Testing
   }
 }
 
+@Test func gemmaRouteIgnoresDuplicateUntitledNotesAndMatchesSimplePluralTerms() async {
+  let inbox = GemmaRouteFixture.candidate(title: "Inbox")
+  let untitledOne = GemmaRouteFixture.candidate(title: "Untitled")
+  let website = GemmaRouteFixture.candidate(
+    title: "Website",
+    context: "website"
+  )
+  let untitledTwo = GemmaRouteFixture.candidate(title: " untitled\n")
+  let fleck = GemmaRouteFixture.candidate(
+    title: "Fleck",
+    context: "website hologram"
+  )
+  let transport = GemmaRouteTransport(startError: true)
+  let router = GemmaDestinationRouter(
+    generator: GemmaCleanupGenerator(transportFactory: { transport }),
+    clock: GemmaRouteFixture.clock
+  )
+
+  #expect(await router.route(
+    transcript: "Update the website with Flux holograms",
+    candidates: [inbox, untitledOne, website, untitledTwo, fleck],
+    inboxID: inbox.destination.noteID
+  ) == fleck.destination.noteID)
+  #expect(transport.startCount == 0)
+}
+
+@Test func gemmaRouteDoesNotTreatUnrelatedTrailingSWordsAsDeterministicMatches() async {
+  for (transcriptTerm, contextTerm) in [
+    ("theses", "these"),
+    ("chaos", "chao"),
+    ("species", "specie"),
+  ] {
+    let inbox = GemmaRouteFixture.candidate(title: "Inbox")
+    let target = GemmaRouteFixture.candidate(
+      title: "Target",
+      context: "website \(contextTerm)"
+    )
+    let website = GemmaRouteFixture.candidate(title: "Website", context: "website")
+    let transport = GemmaRouteTransport(startError: true)
+    let router = GemmaDestinationRouter(
+      generator: GemmaCleanupGenerator(transportFactory: { transport }),
+      clock: GemmaRouteFixture.clock
+    )
+
+    #expect(await router.route(
+      transcript: "website \(transcriptTerm)",
+      candidates: [inbox, target, website],
+      inboxID: inbox.destination.noteID
+    ) == inbox.destination.noteID)
+    #expect(transport.startCount == 1)
+  }
+}
+
+@Test func gemmaRouteDoesNotUseFalseTrailingSMatchesForModelCorroboration() async throws {
+  let fixture = GemmaRouteFixture()
+  let inbox = fixture.candidate(title: "Inbox")
+  let first = fixture.candidate(title: "First", context: "website these chao")
+  let second = fixture.candidate(title: "Second", context: "website specie")
+  let task = Task {
+    await fixture.router.route(
+      transcript: "website theses chaos species",
+      candidates: [inbox, first, second],
+      inboxID: inbox.destination.noteID
+    )
+  }
+  let (wire, session) = await fixture.transport.nextRequest()
+  session.complete(wire, text: "high:c1")
+
+  #expect(await task.value == inbox.destination.noteID)
+}
+
 @Test func gemmaRouteRejectsUnrelatedModelChoiceWithoutLexicalCorroboration() async throws {
   let fixture = GemmaRouteFixture()
   let inbox = fixture.candidate(title: "Inbox")
@@ -152,22 +223,32 @@ import Testing
   #expect(await task.value == inbox.destination.noteID)
 }
 
-@Test func gemmaRouteMapsOnlyAHighConfidenceOpaqueCandidateKeyInEligibleOrder() async throws {
+@Test func gemmaRouteMapsOpaqueKeysAfterFilteringAmbiguousDuplicateTitles() async throws {
   let fixture = GemmaRouteFixture()
   let inbox = fixture.candidate(title: "Inbox")
+  let untitledOne = fixture.candidate(
+    title: "Untitled",
+    context: "private duplicate context one"
+  )
   let first = fixture.candidate(title: "Research", context: "Reading notes")
+  let untitledTwo = fixture.candidate(
+    title: " untitled\n",
+    context: "private duplicate context two"
+  )
   let project = fixture.candidate(title: "Fleck", context: "Dictation and cleanup work")
 
   let task = Task {
     await fixture.router.route(
       transcript: "The dictation needs polish",
-      candidates: [inbox, first, project],
+      candidates: [inbox, untitledOne, first, untitledTwo, project],
       inboxID: inbox.destination.noteID
     )
   }
   let (wire, session) = await fixture.transport.nextRequest()
   #expect(wire.plainPrompt.contains(#""id":"c1","title":"Research""#))
   #expect(wire.plainPrompt.contains(#""id":"c2","title":"Fleck""#))
+  #expect(!wire.plainPrompt.contains("Untitled"))
+  #expect(!wire.plainPrompt.contains("private duplicate context"))
   #expect(wire.plainPrompt.contains(#""high:<candidate id>""#))
   #expect(wire.plainPrompt.contains("copying exactly one id present in the candidate data"))
   #expect(wire.plainPrompt.contains(#"never output the literal letters "cN""#))
@@ -177,6 +258,30 @@ import Testing
   session.complete(wire, text: "high:c2")
 
   #expect(await task.value == project.destination.noteID)
+}
+
+@Test func gemmaRouteNeverSelectsAmbiguousDuplicateTitleCandidates() async {
+  let inbox = GemmaRouteFixture.candidate(title: "Inbox")
+  let first = GemmaRouteFixture.candidate(
+    title: "Fleck Project",
+    context: "dictation cleanup"
+  )
+  let second = GemmaRouteFixture.candidate(
+    title: " fleck\nproject ",
+    context: "dictation cleanup"
+  )
+  let transport = GemmaRouteTransport(startError: true)
+  let router = GemmaDestinationRouter(
+    generator: GemmaCleanupGenerator(transportFactory: { transport }),
+    clock: GemmaRouteFixture.clock
+  )
+
+  #expect(await router.route(
+    transcript: "Improve the Fleck dictation cleanup",
+    candidates: [inbox, first, second],
+    inboxID: inbox.destination.noteID
+  ) == inbox.destination.noteID)
+  #expect(transport.startCount == 0)
 }
 
 @Test func gemmaRouteFailsClosedForInboxAndInvalidModelOutputs() async throws {
@@ -244,17 +349,12 @@ import Testing
   ) == inboxID)
 }
 
-@Test func gemmaRouteRejectsDuplicateTooManyAndOversizedInputsBeforeStartingHelper() async throws {
+@Test func gemmaRouteRejectsDuplicateIdentityTooManyAndOversizedInputsBeforeStartingHelper() async throws {
   let inboxID = UUID()
   let projectID = UUID()
   let duplicate = GemmaRouteFixture.candidate(id: projectID, title: "Fleck")
   let cases: [[DictationRoutingCandidate]] = [
     [GemmaRouteFixture.candidate(id: inboxID, title: "Inbox"), duplicate, duplicate],
-    [
-      GemmaRouteFixture.candidate(id: inboxID, title: "Inbox"),
-      GemmaRouteFixture.candidate(id: projectID, title: "Fleck   Project"),
-      GemmaRouteFixture.candidate(title: " fleck\nproject "),
-    ],
     (0..<25).map { GemmaRouteFixture.candidate(title: "Note \($0)") },
     [
       GemmaRouteFixture.candidate(id: inboxID, title: "Inbox"),
