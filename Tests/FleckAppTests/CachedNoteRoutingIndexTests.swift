@@ -203,6 +203,34 @@ import Testing
   #expect(await index.retrieve(transcript: "violetnebula", candidates: [changed]).isEmpty)
 }
 
+@Test func cachedRoutingReusesBoundedLongTitleIdentityWithoutReindexingTheBody() async {
+  let id = UUID(uuidString: "00000000-0000-0000-0000-000000000063")!
+  let longTitle = String(repeating: "Long title segment ", count: 200)
+  let original = cachedRoutingCandidate(
+    id: id,
+    title: longTitle,
+    body: "amberquartz findings",
+    revision: 7
+  )
+  let changedBody = cachedRoutingCandidate(
+    id: id,
+    title: longTitle,
+    body: "violetnebula findings",
+    revision: 7
+  )
+  let index = CachedNoteRoutingIndex()
+
+  _ = await index.retrieve(transcript: "amberquartz", candidates: [original])
+  let reused = await index.retrieve(transcript: "amberquartz", candidates: [changedBody])
+
+  #expect(reused.first?.candidate == changedBody)
+  #expect(reused.first?.excerpt.contains("amberquartz") == true)
+  #expect(await index.retrieve(
+    transcript: "violetnebula",
+    candidates: [changedBody]
+  ).isEmpty)
+}
+
 @Test func cachedRoutingReindexesAChangedTitleWithoutARevisionChange() async {
   let id = UUID(uuidString: "00000000-0000-0000-0000-000000000062")!
   let original = cachedRoutingCandidate(

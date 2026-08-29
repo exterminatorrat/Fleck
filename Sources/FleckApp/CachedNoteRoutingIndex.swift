@@ -166,8 +166,12 @@ actor CachedNoteRoutingIndex {
     for candidate in candidates {
       guard !Task.isCancelled else { return false }
       let cached = notes[candidate.destination.noteID]
+      let boundedTitle = Self.boundedText(
+        candidate.destination.title,
+        maximumUTF8Count: Self.maximumTitleUTF8Count
+      )
       guard cached?.contentRevision != candidate.contentRevision
-              || cached?.destinationTitle != candidate.destination.title else {
+              || cached?.destinationTitle != boundedTitle else {
         continue
       }
       guard let prepared = Self.prepare(candidate) else { return false }
