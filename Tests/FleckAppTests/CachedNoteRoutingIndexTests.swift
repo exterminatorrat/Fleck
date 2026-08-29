@@ -315,6 +315,47 @@ import Testing
   ) == cached)
 }
 
+@Test func cachedRoutingBoundsAggregateResourcesDeterministically() async {
+  let candidateCount = CachedNoteRoutingIndex.maximumNoteCount + 64
+  let oversizedBody = Array(repeating: "bounded evidence", count: 2_000)
+    .joined(separator: " ")
+  let candidates = (0..<candidateCount).map { index in
+    cachedRoutingCandidate(
+      id: UUID(uuidString: String(format: "00000000-0000-0000-%04x-%012x", index, index))!,
+      title: "Bounded \(index)",
+      body: index == 0 ? oversizedBody + " rareterminalmarker" : oversizedBody
+    )
+  }
+  let expectedID = candidates.first!.destination.noteID
+  let forwardIndex = CachedNoteRoutingIndex()
+  let reverseIndex = CachedNoteRoutingIndex()
+
+  let forward = await forwardIndex.retrieve(
+    transcript: "rareterminalmarker",
+    candidates: candidates,
+    limit: 1
+  )
+  let reverse = await reverseIndex.retrieve(
+    transcript: "rareterminalmarker",
+    candidates: Array(candidates.reversed()),
+    limit: 1
+  )
+  let usage = await forwardIndex.resourceUsage()
+
+  #expect(forward.first?.candidate.destination.noteID == expectedID)
+  #expect(reverse == forward)
+  #expect(await forwardIndex.retrieve(
+    transcript: "rareterminalmarker",
+    candidates: candidates,
+    limit: 1
+  ) == forward)
+  #expect(usage.noteCount == CachedNoteRoutingIndex.maximumNoteCount)
+  #expect(usage.passageCount <= CachedNoteRoutingIndex.maximumPassageCount)
+  #expect(usage.excerptUTF8Count <= CachedNoteRoutingIndex.maximumExcerptUTF8Count)
+  #expect(usage.exactPostingCount <= CachedNoteRoutingIndex.maximumExactPostingCount)
+  #expect(usage.trigramPostingCount <= CachedNoteRoutingIndex.maximumTrigramPostingCount)
+}
+
 private func cachedRoutingCandidate(
   id: UUID = UUID(),
   title: String,

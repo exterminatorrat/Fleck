@@ -7,7 +7,33 @@ struct CachedNoteRoutingMatch: Equatable, Sendable {
   let exactTermMatches: Int
 }
 
+struct CachedNoteRoutingResourceUsage: Equatable, Sendable {
+  let noteCount: Int
+  let passageCount: Int
+  let excerptUTF8Count: Int
+  let exactPostingCount: Int
+  let trigramPostingCount: Int
+}
+
 actor CachedNoteRoutingIndex {
+  static let maximumNoteCount = 256
+  static let maximumPassagesPerNote = 8
+  static let maximumPassageCount = maximumNoteCount * maximumPassagesPerNote
+  static let maximumExcerptUTF8Count = maximumPassageCount * maximumExcerptUTF8PerPassage
+  static let maximumExactPostingCount =
+    maximumNoteCount * maximumTitleTermCount
+      + maximumPassageCount * maximumPassageTermCount
+  static let maximumTrigramPostingCount =
+    maximumNoteCount * maximumTitleTrigramCount
+      + maximumPassageCount * maximumPassageTrigramCount
+
+  private static let maximumExcerptUTF8PerPassage = 2_048
+  private static let maximumTitleUTF8Count = 2_048
+  private static let maximumTitleTermCount = 32
+  private static let maximumPassageTermCount = 96
+  private static let maximumTitleTrigramCount = 256
+  private static let maximumPassageTrigramCount = 512
+
   private struct PassageID: Hashable {
     let noteID: UUID
     let ordinal: Int
@@ -49,11 +75,14 @@ actor CachedNoteRoutingIndex {
 
     let candidateIDs = candidates.map(\.destination.noteID)
     guard Set(candidateIDs).count == candidates.count else { return [] }
-    let candidatesByID = Dictionary(uniqueKeysWithValues: candidates.map {
+    let boundedCandidates = candidates
+      .sorted { $0.destination.noteID.uuidString < $1.destination.noteID.uuidString }
+      .prefix(Self.maximumNoteCount)
+    let candidatesByID = Dictionary(uniqueKeysWithValues: boundedCandidates.map {
       ($0.destination.noteID, $0)
     })
 
-    guard synchronize(candidates), !Task.isCancelled else { return [] }
+    guard synchronize(Array(boundedCandidates)), !Task.isCancelled else { return [] }
 
     let queryTrigrams = Self.trigrams(for: queryTerms)
     var matchingPassages = Set<PassageID>()
@@ -121,6 +150,16 @@ actor CachedNoteRoutingIndex {
       .map(\.match)
   }
 
+  func resourceUsage() -> CachedNoteRoutingResourceUsage {
+    CachedNoteRoutingResourceUsage(
+      noteCount: notes.count,
+      passageCount: passages.count,
+      excerptUTF8Count: passages.values.reduce(0) { $0 + $1.excerpt.utf8.count },
+      exactPostingCount: exactPostings.values.reduce(0) { $0 + $1.count },
+      trigramPostingCount: trigramPostings.values.reduce(0) { $0 + $1.count }
+    )
+  }
+
   private func synchronize(_ candidates: [DictationRoutingCandidate]) -> Bool {
     let currentIDs = Set(candidates.map(\.destination.noteID))
     var replacements: [(note: Note, passages: [Passage])] = []
@@ -148,14 +187,18 @@ actor CachedNoteRoutingIndex {
   ) -> (note: Note, passages: [Passage])? {
     guard !Task.isCancelled else { return nil }
     let noteID = candidate.destination.noteID
-    let normalizedTitle = Self.normalizedWhitespace(candidate.destination.title)
-    let titleTerms = Self.meaningfulTerms(in: normalizedTitle)
-    let titleTrigrams = Self.trigrams(for: titleTerms)
+    let boundedTitle = Self.boundedText(
+      candidate.destination.title,
+      maximumUTF8Count: Self.maximumTitleUTF8Count
+    )
+    let normalizedTitle = Self.normalizedWhitespace(boundedTitle)
+    let titleTerms = Self.meaningfulTerms(in: normalizedTitle, limit: Self.maximumTitleTermCount)
+    let titleTrigrams = Self.trigrams(for: titleTerms, limit: Self.maximumTitleTrigramCount)
     guard let bodyPassages = Self.bodyPassages(candidate.semanticContext) else { return nil }
     let passageIDs = bodyPassages.indices.map { PassageID(noteID: noteID, ordinal: $0) }
     let note = Note(
       noteID: noteID,
-      destinationTitle: candidate.destination.title,
+      destinationTitle: boundedTitle,
       contentRevision: candidate.contentRevision,
       titleTerms: titleTerms,
       titleTrigrams: titleTrigrams,
@@ -216,42 +259,97 @@ actor CachedNoteRoutingIndex {
 
   private static func bodyPassages(_ body: String) -> [Passage]? {
     guard !Task.isCancelled else { return nil }
-    let words = normalizedWhitespace(body).split(separator: " ").map(String.init)
+    let words = body.split(whereSeparator: \Character.isWhitespace)
     guard !words.isEmpty else {
       return [Passage(excerpt: "", terms: [], trigrams: [])]
     }
 
+    let passageStarts: [Int]
+    let naturalPassageCount = 1 + max(0, words.count - 96 + 71) / 72
+    if naturalPassageCount <= maximumPassagesPerNote {
+      passageStarts = (0..<naturalPassageCount).map { $0 * 72 }
+    } else {
+      let lastStart = words.count - 96
+      passageStarts = (0..<maximumPassagesPerNote).map { ordinal in
+        ordinal * lastStart / (maximumPassagesPerNote - 1)
+      }
+    }
+
     var result: [Passage] = []
-    var start = 0
-    while start < words.count {
+    result.reserveCapacity(passageStarts.count)
+    for start in passageStarts {
       guard !Task.isCancelled else { return nil }
       let end = min(start + 96, words.count)
-      let excerpt = words[start..<end].joined(separator: " ")
-      let terms = meaningfulTerms(in: excerpt)
-      result.append(Passage(excerpt: excerpt, terms: terms, trigrams: trigrams(for: terms)))
-      if end == words.count { break }
-      start += 72
+      let excerpt = boundedExcerpt(words[start..<end])
+      let terms = meaningfulTerms(in: excerpt, limit: maximumPassageTermCount)
+      result.append(Passage(
+        excerpt: excerpt,
+        terms: terms,
+        trigrams: trigrams(for: terms, limit: maximumPassageTrigramCount)
+      ))
     }
     return result
   }
 
-  private static func meaningfulTerms(in input: String) -> Set<String> {
-    Set(CleanupLexeme.scan(input).compactMap { lexeme in
-      guard lexeme.kind == .word else { return nil }
+  private static func meaningfulTerms(in input: String, limit: Int? = nil) -> Set<String> {
+    var result = Set<String>()
+    for lexeme in CleanupLexeme.scan(input) {
+      guard lexeme.kind == .word else { continue }
       let term = lexeme.canonical
-      guard term.count > 1, !ignoredTerms.contains(term) else { return nil }
-      return term
-    })
+      guard term.count > 1, !ignoredTerms.contains(term) else { continue }
+      result.insert(term)
+      if result.count == limit { break }
+    }
+    return result
   }
 
-  private static func trigrams(for terms: Set<String>) -> Set<String> {
-    Set(terms.flatMap { term -> [String] in
+  private static func trigrams(for terms: Set<String>, limit: Int? = nil) -> Set<String> {
+    var result = Set<String>()
+    for term in terms.sorted() {
       let bytes = Array(term.utf8)
-      guard bytes.count >= 4, bytes.allSatisfy({ (97...122).contains($0) }) else { return [] }
-      return (0...(bytes.count - 3)).map { index in
-        String(decoding: bytes[index..<(index + 3)], as: UTF8.self)
+      guard bytes.count >= 4, bytes.allSatisfy({ (97...122).contains($0) }) else { continue }
+      for index in 0...(bytes.count - 3) {
+        result.insert(String(decoding: bytes[index..<(index + 3)], as: UTF8.self))
+        if result.count == limit { return result }
       }
-    })
+    }
+    return result
+  }
+
+  private static func boundedExcerpt(_ words: ArraySlice<Substring>) -> String {
+    var result = ""
+    var byteCount = 0
+    for word in words {
+      if !result.isEmpty {
+        guard byteCount < maximumExcerptUTF8PerPassage else { break }
+        result.append(" ")
+        byteCount += 1
+      }
+      for character in word {
+        let characterByteCount = character.utf8.count
+        guard byteCount + characterByteCount <= maximumExcerptUTF8PerPassage else {
+          return result
+        }
+        result.append(character)
+        byteCount += characterByteCount
+      }
+    }
+    return result
+  }
+
+  private static func boundedText(
+    _ input: String,
+    maximumUTF8Count: Int
+  ) -> String {
+    var result = ""
+    var byteCount = 0
+    for character in input {
+      let characterByteCount = character.utf8.count
+      guard byteCount + characterByteCount <= maximumUTF8Count else { break }
+      result.append(character)
+      byteCount += characterByteCount
+    }
+    return result
   }
 
   private static func normalizedWhitespace(_ input: String) -> String {
