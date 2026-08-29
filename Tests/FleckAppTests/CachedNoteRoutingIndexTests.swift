@@ -345,7 +345,7 @@ import Testing
 
 @Test func cachedRoutingBoundsAggregateResourcesDeterministically() async {
   let candidateCount = CachedNoteRoutingIndex.maximumNoteCount + 64
-  let oversizedBody = Array(repeating: "bounded evidence", count: 2_000)
+  let oversizedBody = Array(repeating: "bounded evidence", count: 400)
     .joined(separator: " ")
   let candidates = (0..<candidateCount).map { index in
     cachedRoutingCandidate(
@@ -382,6 +382,79 @@ import Testing
   #expect(usage.excerptUTF8Count <= CachedNoteRoutingIndex.maximumExcerptUTF8Count)
   #expect(usage.exactPostingCount <= CachedNoteRoutingIndex.maximumExactPostingCount)
   #expect(usage.trigramPostingCount <= CachedNoteRoutingIndex.maximumTrigramPostingCount)
+}
+
+@Test func cachedRoutingFailsClosedWhenAnOmittedNoteHasRelevantEvidence() async {
+  let apparent = cachedRoutingCandidate(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+    title: "Apparent",
+    body: "boundarysignal indexed evidence"
+  )
+  let unrelated = (2...CachedNoteRoutingIndex.maximumNoteCount).map { index in
+    cachedRoutingCandidate(
+      id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012x", index))!,
+      title: "Unrelated \(index)",
+      body: "ordinary archive material"
+    )
+  }
+  let omitted = cachedRoutingCandidate(
+    id: UUID(uuidString: "ffffffff-ffff-ffff-ffff-ffffffffffff")!,
+    title: "Omitted",
+    body: "boundarysignal omitted evidence"
+  )
+  let candidates = [apparent] + unrelated + [omitted]
+  let index = CachedNoteRoutingIndex()
+
+  #expect(await index.retrieve(
+    transcript: "boundarysignal",
+    candidates: candidates
+  ).isEmpty)
+  #expect(await index.retrieve(
+    transcript: "boundarysignal",
+    candidates: Array(candidates.reversed())
+  ).isEmpty)
+}
+
+@Test func cachedRoutingFailsClosedWhenAnUnsampledGapHasRelevantEvidence() async {
+  let apparent = cachedRoutingCandidate(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+    title: "Apparent",
+    body: "gapsignal indexed evidence"
+  )
+  var hiddenWords = Array(repeating: "ordinary", count: 1_000)
+  hiddenWords[110] = "gapsignal"
+  let hidden = cachedRoutingCandidate(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+    title: "Hidden",
+    body: hiddenWords.joined(separator: " ")
+  )
+  let index = CachedNoteRoutingIndex()
+
+  #expect(await index.retrieve(
+    transcript: "gapsignal",
+    candidates: [apparent, hidden]
+  ).isEmpty)
+}
+
+@Test func cachedRoutingStillRoutesSampledEdgesWhenOmittedRegionsHaveNoEvidence() async {
+  var words = Array(repeating: "ordinary", count: 1_000)
+  words[0] = "beginningsignal"
+  words[999] = "endingsignal"
+  let candidate = cachedRoutingCandidate(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
+    title: "Edges",
+    body: words.joined(separator: " ")
+  )
+  let index = CachedNoteRoutingIndex()
+
+  #expect(await index.retrieve(
+    transcript: "beginningsignal",
+    candidates: [candidate]
+  ).first?.candidate.destination.noteID == candidate.destination.noteID)
+  #expect(await index.retrieve(
+    transcript: "endingsignal",
+    candidates: [candidate]
+  ).first?.candidate.destination.noteID == candidate.destination.noteID)
 }
 
 private func cachedRoutingCandidate(

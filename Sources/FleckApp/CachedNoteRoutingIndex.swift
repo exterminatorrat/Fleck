@@ -52,6 +52,7 @@ actor CachedNoteRoutingIndex {
     let titleTerms: Set<String>
     let titleTrigrams: Set<String>
     let passageIDs: [PassageID]
+    let requiresCompletenessGuard: Bool
   }
 
   private struct ScoredPassage {
@@ -134,6 +135,21 @@ actor CachedNoteRoutingIndex {
     }
 
     guard !Task.isCancelled else { return [] }
+    guard !bestByNote.isEmpty else { return [] }
+    for candidate in candidates {
+      guard !Task.isCancelled else { return [] }
+      if let note = notes[candidate.destination.noteID], !note.requiresCompletenessGuard {
+        continue
+      }
+      if hasUnindexedQueryEvidence(
+        in: candidate,
+        queryTerms: queryTerms,
+        queryTrigrams: queryTrigrams
+      ) {
+        return []
+      }
+    }
+    guard !Task.isCancelled else { return [] }
     return bestByNote.values
       .sorted { lhs, rhs in
         if lhs.match.score != rhs.match.score { return lhs.match.score > rhs.match.score }
@@ -196,9 +212,12 @@ actor CachedNoteRoutingIndex {
       maximumUTF8Count: Self.maximumTitleUTF8Count
     )
     let normalizedTitle = Self.normalizedWhitespace(boundedTitle)
+    let allTitleTerms = Self.meaningfulTerms(in: normalizedTitle)
     let titleTerms = Self.meaningfulTerms(in: normalizedTitle, limit: Self.maximumTitleTermCount)
+    let allTitleTrigrams = Self.trigrams(for: titleTerms)
     let titleTrigrams = Self.trigrams(for: titleTerms, limit: Self.maximumTitleTrigramCount)
-    guard let bodyPassages = Self.bodyPassages(candidate.semanticContext) else { return nil }
+    guard let preparedBody = Self.bodyPassages(candidate.semanticContext) else { return nil }
+    let bodyPassages = preparedBody.passages
     let passageIDs = bodyPassages.indices.map { PassageID(noteID: noteID, ordinal: $0) }
     let note = Note(
       noteID: noteID,
@@ -206,7 +225,11 @@ actor CachedNoteRoutingIndex {
       contentRevision: candidate.contentRevision,
       titleTerms: titleTerms,
       titleTrigrams: titleTrigrams,
-      passageIDs: passageIDs
+      passageIDs: passageIDs,
+      requiresCompletenessGuard: boundedTitle != candidate.destination.title
+        || allTitleTerms.count > titleTerms.count
+        || allTitleTrigrams.count > titleTrigrams.count
+        || preparedBody.requiresCompletenessGuard
     )
     return (note, bodyPassages)
   }
@@ -253,6 +276,35 @@ actor CachedNoteRoutingIndex {
     return max(1, notes.count - documentFrequency + 1)
   }
 
+  private func hasUnindexedQueryEvidence(
+    in candidate: DictationRoutingCandidate,
+    queryTerms: Set<String>,
+    queryTrigrams: Set<String>
+  ) -> Bool {
+    var unindexedTerms = queryTerms
+    var unindexedTrigrams = queryTrigrams
+    if let note = notes[candidate.destination.noteID] {
+      unindexedTerms.subtract(note.titleTerms)
+      unindexedTrigrams.subtract(note.titleTrigrams)
+      for passageID in note.passageIDs {
+        guard let passage = passages[passageID] else { continue }
+        unindexedTerms.subtract(passage.terms)
+        unindexedTrigrams.subtract(passage.trigrams)
+      }
+    }
+    guard !unindexedTerms.isEmpty || !unindexedTrigrams.isEmpty else { return false }
+
+    return Self.containsQueryEvidence(
+      in: candidate.destination.title,
+      queryTerms: unindexedTerms,
+      queryTrigrams: unindexedTrigrams
+    ) || Self.containsQueryEvidence(
+      in: candidate.semanticContext,
+      queryTerms: unindexedTerms,
+      queryTrigrams: unindexedTrigrams
+    )
+  }
+
   private static func precedes(_ lhs: ScoredPassage, _ rhs: ScoredPassage) -> Bool {
     if lhs.match.score != rhs.match.score { return lhs.match.score > rhs.match.score }
     if lhs.match.exactTermMatches != rhs.match.exactTermMatches {
@@ -261,11 +313,13 @@ actor CachedNoteRoutingIndex {
     return lhs.ordinal < rhs.ordinal
   }
 
-  private static func bodyPassages(_ body: String) -> [Passage]? {
+  private static func bodyPassages(
+    _ body: String
+  ) -> (passages: [Passage], requiresCompletenessGuard: Bool)? {
     guard !Task.isCancelled else { return nil }
     let words = body.split(whereSeparator: \Character.isWhitespace)
     guard !words.isEmpty else {
-      return [Passage(excerpt: "", terms: [], trigrams: [])]
+      return ([Passage(excerpt: "", terms: [], trigrams: [])], false)
     }
 
     let passageStarts: [Int]
@@ -281,18 +335,27 @@ actor CachedNoteRoutingIndex {
 
     var result: [Passage] = []
     result.reserveCapacity(passageStarts.count)
+    var requiresCompletenessGuard = naturalPassageCount > maximumPassagesPerNote
     for start in passageStarts {
       guard !Task.isCancelled else { return nil }
       let end = min(start + 96, words.count)
-      let excerpt = boundedExcerpt(words[start..<end])
+      let excerptResult = boundedExcerpt(words[start..<end])
+      let excerpt = excerptResult.text
+      let allTerms = meaningfulTerms(in: excerpt)
       let terms = meaningfulTerms(in: excerpt, limit: maximumPassageTermCount)
+      let allPassageTrigrams = trigrams(for: terms)
+      let passageTrigrams = trigrams(for: terms, limit: maximumPassageTrigramCount)
       result.append(Passage(
         excerpt: excerpt,
         terms: terms,
-        trigrams: trigrams(for: terms, limit: maximumPassageTrigramCount)
+        trigrams: passageTrigrams
       ))
+      requiresCompletenessGuard = requiresCompletenessGuard
+        || excerptResult.wasTruncated
+        || allTerms.count > terms.count
+        || allPassageTrigrams.count > passageTrigrams.count
     }
-    return result
+    return (result, requiresCompletenessGuard)
   }
 
   private static func meaningfulTerms(in input: String, limit: Int? = nil) -> Set<String> {
@@ -320,25 +383,58 @@ actor CachedNoteRoutingIndex {
     return result
   }
 
-  private static func boundedExcerpt(_ words: ArraySlice<Substring>) -> String {
+  private static func containsQueryEvidence(
+    in input: String,
+    queryTerms: Set<String>,
+    queryTrigrams: Set<String>
+  ) -> Bool {
+    guard !Task.isCancelled else { return false }
+    let words = input.split(whereSeparator: \Character.isWhitespace)
+    for start in stride(from: 0, to: words.count, by: 96) {
+      guard !Task.isCancelled else { return false }
+      let end = min(start + 96, words.count)
+      let excerptResult = boundedExcerpt(words[start..<end])
+      guard !excerptResult.wasTruncated else { return true }
+      for lexeme in CleanupLexeme.scan(excerptResult.text) {
+        guard lexeme.kind == .word else { continue }
+        let term = lexeme.canonical
+        guard term.count > 1, !ignoredTerms.contains(term) else { continue }
+        if queryTerms.contains(term) { return true }
+
+        let bytes = Array(term.utf8)
+        guard bytes.count >= 4, bytes.allSatisfy({ (97...122).contains($0) }) else {
+          continue
+        }
+        for index in 0...(bytes.count - 3) {
+          let trigram = String(decoding: bytes[index..<(index + 3)], as: UTF8.self)
+          if queryTrigrams.contains(trigram) { return true }
+        }
+      }
+    }
+    return false
+  }
+
+  private static func boundedExcerpt(
+    _ words: ArraySlice<Substring>
+  ) -> (text: String, wasTruncated: Bool) {
     var result = ""
     var byteCount = 0
     for word in words {
       if !result.isEmpty {
-        guard byteCount < maximumExcerptUTF8PerPassage else { break }
+        guard byteCount < maximumExcerptUTF8PerPassage else { return (result, true) }
         result.append(" ")
         byteCount += 1
       }
       for character in word {
         let characterByteCount = character.utf8.count
         guard byteCount + characterByteCount <= maximumExcerptUTF8PerPassage else {
-          return result
+          return (result, true)
         }
         result.append(character)
         byteCount += characterByteCount
       }
     }
-    return result
+    return (result, false)
   }
 
   private static func boundedText(
