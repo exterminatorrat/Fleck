@@ -46,6 +46,8 @@ assert_rejects_fixture_symlink() {
 }
 
 cd "$repo_root"
+canonical_session_parent="$repo_root/.build/fleck-capture-lab"
+readonly canonical_session_parent
 
 packager_test_root="$(/usr/bin/mktemp -d /tmp/fleck-packager-test.XXXXXX)"
 readonly packager_test_root
@@ -118,13 +120,43 @@ fleck_app="$(/usr/bin/plutil -extract fleckApp raw -o - "$manifest")"
 readonly fleck_app
 fleck_root="$session_root/Library/Application Support/Fleck"
 readonly fleck_root
-[[ "$session_root" =~ ^/tmp/fleck-demo\.[[:alnum:]]{6}$ ]]
+actual_session_parent="${session_root%/*}"
+if [[ "$actual_session_parent" != "$canonical_session_parent" ]]; then
+  printf 'expected skip-build prepare session parent: %s\nactual session parent: %s\n' \
+    "$canonical_session_parent" \
+    "$actual_session_parent" >&2
+  exit 1
+fi
+[[ "${session_root##*/}" =~ ^fleck-demo\.[[:alnum:]]{6}$ ]]
+test ! -L "$repo_root/.build"
+test ! -L "$canonical_session_parent"
+test ! -L "$session_root"
+test "$(cd -- "$canonical_session_parent" && pwd -P)" = "$canonical_session_parent"
+test "$(cd -- "$session_root" && pwd -P)" = "$session_root"
 test "$(printf '%s\n' "$session_output" | sed -n 's/^Session: //p')" = "$session_root"
 test "$(printf '%s\n' "$session_output" | sed -n 's/^Fleck app: //p')" = "$fleck_app"
 test "$(printf '%s\n' "$session_output" | sed -n 's/^Fake repository: //p')" = "$fake_repo"
 test -d "$session_root/Library/Application Support/Fleck"
 test -f "$session_root/NorthstarDemo/Package.swift"
 test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
+
+parent_link_test_root="$(/usr/bin/mktemp -d /tmp/fleck-parent-link-test.XXXXXX)"
+readonly parent_link_test_root
+/bin/mkdir -p "$parent_link_test_root/Scripts" "$parent_link_test_root/.build"
+/bin/cp Scripts/fleck-capture-lab.sh "$parent_link_test_root/Scripts/fleck-capture-lab.sh"
+/bin/chmod 755 "$parent_link_test_root/Scripts/fleck-capture-lab.sh"
+external_session_parent="$packager_test_root/external-session-parent"
+readonly external_session_parent
+/bin/mkdir -p "$external_session_parent"
+/bin/ln -s "$external_session_parent" "$parent_link_test_root/.build/fleck-capture-lab"
+expect_error \
+  "error: capture session parent must be a canonical non-symlink directory" \
+  /usr/bin/env \
+    PATH="$packager_test_bin:/usr/bin:/bin" \
+    FLECK_CAPTURE_LAB_SKIP_BUILD=1 \
+    FLECK_CAPTURE_LAB_FAKE_BIN_PATH="$packager_test_bin" \
+    "$parent_link_test_root/Scripts/fleck-capture-lab.sh" prepare
+
 Scripts/fleck-capture-lab.sh verify "$manifest"
 test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
 test -d "$session_root/SwiftPMBuild/NorthstarDemo"
@@ -277,19 +309,25 @@ assert_rejects_fixture_symlink codex-command \
   "$external_bridge/bin/fleck" \
   "codex-helper"
 
-readonly exact_path_error="error: capture manifest path must use /tmp/fleck-demo.XXXXXX/fleck-capture-manifest.json"
+readonly exact_path_error="error: capture manifest path must use $canonical_session_parent/fleck-demo.XXXXXX/fleck-capture-manifest.json"
 expect_error \
   "$exact_path_error" \
   Scripts/fleck-capture-lab.sh verify "$session_root/./fleck-capture-manifest.json"
 
-manifest_link_root="$(/usr/bin/mktemp -d /tmp/fleck-demo.XXXXXX)"
+legacy_session_root="$(/usr/bin/mktemp -d /tmp/fleck-demo.XXXXXX)"
+readonly legacy_session_root
+expect_error \
+  "$exact_path_error" \
+  Scripts/fleck-capture-lab.sh verify "$legacy_session_root/fleck-capture-manifest.json"
+
+manifest_link_root="$(/usr/bin/mktemp -d "$canonical_session_parent/fleck-demo.XXXXXX")"
 readonly manifest_link_root
 /bin/ln -s "$manifest" "$manifest_link_root/fleck-capture-manifest.json"
 expect_error \
   "$symlink_error" \
   Scripts/fleck-capture-lab.sh verify "$manifest_link_root/fleck-capture-manifest.json"
 
-session_link="$(/usr/bin/mktemp -d /tmp/fleck-demo.XXXXXX)"
+session_link="$(/usr/bin/mktemp -d "$canonical_session_parent/fleck-demo.XXXXXX")"
 readonly session_link
 session_link_holding="$(/usr/bin/mktemp -d /tmp/fleck-redirection.XXXXXX)"
 readonly session_link_holding

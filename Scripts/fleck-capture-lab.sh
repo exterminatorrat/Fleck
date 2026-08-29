@@ -3,6 +3,8 @@ set -euo pipefail
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+readonly build_root="$repo_root/.build"
+readonly session_parent="$build_root/fleck-capture-lab"
 readonly canonical_fleck_app="$repo_root/.build/parakeet-test/Fleck.app"
 
 die() {
@@ -17,9 +19,39 @@ usage() {
   exit 2
 }
 
+is_session_root_path() {
+  local root="$1"
+  local leaf="${root##*/}"
+  [[ "${root%/*}" == "$session_parent" \
+    && "$leaf" =~ ^fleck-demo\.[[:alnum:]]{6}$ ]]
+}
+
+require_session_parent() {
+  [[ -d "$build_root" && ! -L "$build_root" \
+    && -d "$session_parent" && ! -L "$session_parent" ]] \
+    || die "capture session parent must be a canonical non-symlink directory"
+  local canonical_parent
+  canonical_parent="$(cd -- "$session_parent" && pwd -P)"
+  [[ "$canonical_parent" == "$session_parent" ]] \
+    || die "capture session parent must be a canonical non-symlink directory"
+}
+
+prepare_session_parent() {
+  [[ ! -L "$build_root" && ! -L "$session_parent" \
+    && ( ! -e "$build_root" || -d "$build_root" ) \
+    && ( ! -e "$session_parent" || -d "$session_parent" ) ]] \
+    || die "capture session parent must be a canonical non-symlink directory"
+  /bin/mkdir -p "$session_parent"
+  require_session_parent
+}
+
 require_session_root() {
-  [[ "$1" =~ ^/tmp/fleck-demo\.[[:alnum:]]{6}$ ]] \
-    || die "capture sessions must use /tmp/fleck-demo.XXXXXX"
+  is_session_root_path "$1" \
+    || die "capture sessions must use $session_parent/fleck-demo.XXXXXX"
+  require_session_parent
+  reject_symlinks "$1"
+  [[ -d "$1" && "$(cd -- "$1" && pwd -P)" == "$1" ]] \
+    || die "capture session root must be a canonical non-symlink directory"
 }
 
 reject_symlinks() {
@@ -49,9 +81,10 @@ resolve_capture_tool() {
 
 read_manifest() {
   manifest="$1"
-  [[ "$manifest" =~ ^/tmp/fleck-demo\.[[:alnum:]]{6}/fleck-capture-manifest\.json$ ]] \
-    || die "capture manifest path must use /tmp/fleck-demo.XXXXXX/fleck-capture-manifest.json"
   session_root="${manifest%/fleck-capture-manifest.json}"
+  [[ "$session_root" != "$manifest" ]] && is_session_root_path "$session_root" \
+    || die "capture manifest path must use $session_parent/fleck-demo.XXXXXX/fleck-capture-manifest.json"
+  require_session_parent
   reject_symlinks "$session_root" "$manifest"
   [[ -d "$session_root" && -f "$manifest" ]] || die "capture manifest was not found"
 
@@ -115,7 +148,8 @@ case "${1:-}" in
     if [[ "${FLECK_CAPTURE_LAB_SKIP_BUILD:-0}" != "1" ]]; then
       "$repo_root/Scripts/build-parakeet-test-app.sh"
     fi
-    session_root="$(/usr/bin/mktemp -d /tmp/fleck-demo.XXXXXX)"
+    prepare_session_parent
+    session_root="$(/usr/bin/mktemp -d "$session_parent/fleck-demo.XXXXXX")"
     require_session_root "$session_root"
     resolve_capture_tool
     "$capture_tool" prepare --session-root "$session_root"
