@@ -2,15 +2,18 @@ import Foundation
 
 struct GemmaDestinationRouter: DestinationRouting {
   private let generator: any GemmaRouteGenerating
+  private let index: CachedNoteRoutingIndex
   private let clock: CleanupClock
   private let budget: Duration
 
   init(
     generator: any GemmaRouteGenerating,
+    index: CachedNoteRoutingIndex = CachedNoteRoutingIndex(),
     clock: CleanupClock = .live,
     budget: Duration = .seconds(3)
   ) {
     self.generator = generator
+    self.index = index
     self.clock = clock
     self.budget = budget
   }
@@ -22,8 +25,7 @@ struct GemmaDestinationRouter: DestinationRouting {
   ) async -> UUID? {
     guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           Data(transcript.utf8).count <= 16 * 1_024,
-          CleanupLexeme.tokenCount(transcript) <= 80,
-          candidates.count <= 24 else { return inboxID }
+          CleanupLexeme.tokenCount(transcript) <= 80 else { return inboxID }
 
     var identities = Set<String>()
     guard candidates.allSatisfy({ candidate in
@@ -38,19 +40,19 @@ struct GemmaDestinationRouter: DestinationRouting {
       candidate.destination.noteID != inboxID
         && titleCounts[Self.normalized(candidate.destination.title)] == 1
     }
-    guard !eligible.isEmpty,
-          let prompt = Self.prompt(transcript: transcript, candidates: eligible) else {
+    guard !eligible.isEmpty else { return inboxID }
+    let matches = await index.retrieve(
+      transcript: transcript,
+      candidates: eligible,
+      limit: 6
+    )
+    guard !matches.isEmpty,
+          let prompt = Self.prompt(transcript: transcript, matches: matches) else {
       return inboxID
     }
-    let transcriptTerms = Self.significantTerms(in: transcript)
-    let overlaps = eligible.map { candidate in
-      transcriptTerms.intersection(Self.significantTerms(
-        in: candidate.destination.title + "\n" + candidate.semanticContext
-      )).count
-    }
-    let strongMatches = overlaps.indices.filter { overlaps[$0] >= 2 }
+    let strongMatches = matches.indices.filter { matches[$0].exactTermMatches >= 2 }
     if strongMatches.count == 1 {
-      return eligible[strongMatches[0]].destination.noteID
+      return matches[strongMatches[0]].candidate.destination.noteID
     }
 
     let session: any CleanupGenerationSession
@@ -76,14 +78,14 @@ struct GemmaDestinationRouter: DestinationRouting {
       guard !Task.isCancelled, let output else { return inboxID }
       guard let selectedIndex = Self.candidateIndex(
         from: output,
-        candidateCount: eligible.count
+        candidateCount: matches.count
       ) else { return inboxID }
-      let selectedOverlap = overlaps[selectedIndex]
-      guard selectedOverlap >= 1,
-            overlaps.indices.allSatisfy({ index in
-              index == selectedIndex || overlaps[index] < selectedOverlap
+      let selectedExactTerms = matches[selectedIndex].exactTermMatches
+      guard selectedExactTerms >= 1,
+            matches.indices.allSatisfy({ index in
+              index == selectedIndex || matches[index].exactTermMatches < selectedExactTerms
             }) else { return inboxID }
-      return eligible[selectedIndex].destination.noteID
+      return matches[selectedIndex].candidate.destination.noteID
     } onCancel: {
       session.requestCancellation()
     }
@@ -91,15 +93,15 @@ struct GemmaDestinationRouter: DestinationRouting {
 
   private static func prompt(
     transcript: String,
-    candidates: [DictationRoutingCandidate]
+    matches: [CachedNoteRoutingMatch]
   ) -> String? {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    let data = candidates.enumerated().map { index, candidate in
+    let data = matches.enumerated().map { index, match in
       PromptCandidate(
         id: "c\(index + 1)",
-        title: candidate.destination.title,
-        context: candidate.semanticContext
+        title: match.candidate.destination.title,
+        context: match.excerpt
       )
     }
     guard let candidateJSON = try? encoder.encode(data),
@@ -133,30 +135,6 @@ struct GemmaDestinationRouter: DestinationRouting {
           position <= candidateCount else { return nil }
     return position - 1
   }
-
-  private static func significantTerms(in input: String) -> Set<String> {
-    Set(CleanupLexeme.scan(input).compactMap { lexeme in
-      let term = lexeme.canonical
-      guard lexeme.kind == .word,
-            term.count > 1,
-            term.utf8.allSatisfy({ (97...122).contains($0) }),
-            !ignoredTerms.contains(term) else { return nil }
-      return Self.normalizedTerminalGramPlural(term)
-    })
-  }
-
-  private static func normalizedTerminalGramPlural(_ term: String) -> String {
-    guard term.hasSuffix("grams") else { return term }
-    return String(term.dropLast())
-  }
-
-  private static let ignoredTerms: Set<String> = [
-    "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "do", "for",
-    "from", "had", "has", "have", "he", "her", "his", "i", "if", "in", "is", "it",
-    "its", "like", "me", "my", "of", "on", "or", "our", "please", "she", "so", "that",
-    "the", "their", "them", "they", "this", "to", "uh", "um", "we", "were", "what",
-    "when", "where", "which", "who", "will", "with", "you", "your",
-  ]
 
   private static func canonical(_ id: UUID) -> String {
     id.uuidString.lowercased()

@@ -22,19 +22,23 @@ import Testing
     state.activeDestinations()
       == [DictationRoutingCandidate(
         destination: DictationDestination(noteID: active.id, title: "Projects"),
-        semanticContext: ""
+        semanticContext: "",
+        contentRevision: active.revision
       )]
   )
 }
 
-@Test @MainActor func appStateDictationDestinationsBoundNormalizedContextWithBothEnds() async throws {
+@Test @MainActor func appStateDictationDestinationsKeepCompleteRawBodyAndRevision() async throws {
   let root = temporaryStoreRoot()
   defer { try? FileManager.default.removeItem(at: root) }
   let beginning = "BEGINNING context"
   let ending = "ENDING context"
+  let rawBody =
+    "  \(beginning)\n\n\(String(repeating: "middle ", count: 100))\t\(ending)  "
   let note = Note(
     title: "Project",
-    body: "  \(beginning)\n\n\(String(repeating: "middle ", count: 100))\t\(ending)  "
+    body: rawBody,
+    revision: 47
   )
   let store = LocalStore(rootURL: root)
   try await store.save(
@@ -46,12 +50,9 @@ import Testing
   let candidate = try #require(state.activeDestinations().first)
 
   #expect(candidate.destination == DictationDestination(noteID: note.id, title: "Project"))
-  #expect(candidate.semanticContext.count <= 480)
-  #expect(candidate.semanticContext.hasPrefix(beginning))
-  #expect(candidate.semanticContext.hasSuffix(ending))
-  #expect(!candidate.semanticContext.contains("\n"))
-  #expect(!candidate.semanticContext.contains("\t"))
-  #expect(!candidate.semanticContext.contains("  "))
+  #expect(candidate.semanticContext == rawBody)
+  #expect(candidate.semanticContext.contains("middle middle middle"))
+  #expect(candidate.contentRevision == 47)
 }
 
 @Test @MainActor func appStateDictationReusesCaseInsensitiveInboxWithoutPinningOrDuplicating()
