@@ -34,6 +34,7 @@
         [Note]
       ) async throws -> Void
     typealias LoadTrashOperation = @Sendable () async throws -> [TrashedNote]
+    typealias BeforeSaveOperation = @Sendable () async -> Void
     typealias AgentProfileProvisionOperation =
       @Sendable (UUID, Data) async throws -> Void
     typealias AgentProfileDisconnectOperation =
@@ -95,6 +96,7 @@
     private let store: LocalStore
     private let snapshotWriter: LocalStoreSnapshotWriter
     private let saveOperation: SaveOperation
+    private let beforeSaveOperation: BeforeSaveOperation?
     private let loadTrashOperation: LoadTrashOperation
     let agentProfileStore: AgentProfileStore
     let agentActivityStore: AgentActivityStore
@@ -118,6 +120,8 @@
     private var noteAccessTransactionLocks: [UUID: NoteAccessTransactionLock] = [:]
     private var committedSmartCaptures: [UUID: CommittedSmartCapture] = [:]
     private var smartCaptureTransferNoteIDs: Set<UUID> = []
+    private var smartCaptureTransferOwnerID: UUID?
+    private var smartCaptureTransferWaiters: [CheckedContinuation<Void, Never>] = []
     private var pendingRestoreNoteIDs: Set<UUID> = []
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
@@ -136,6 +140,7 @@
     init(
       store: LocalStore? = nil,
       saveOperation: SaveOperation? = nil,
+      beforeSaveOperation: BeforeSaveOperation? = nil,
       loadTrashOperation: LoadTrashOperation? = nil,
       restoreOperation: RestoreOperation? = nil,
       agentProfileStore: AgentProfileStore? = nil,
@@ -168,6 +173,7 @@
             generation: generation
           )
         }
+      self.beforeSaveOperation = beforeSaveOperation
       self.loadTrashOperation =
         loadTrashOperation ?? {
           try await store.loadTrash()
@@ -260,6 +266,7 @@
     convenience init(
       store: LocalStore? = nil,
       saveOperation: @escaping LegacySaveOperation,
+      beforeSaveOperation: BeforeSaveOperation? = nil,
       loadTrashOperation: LoadTrashOperation? = nil
     ) {
       self.init(
@@ -268,6 +275,7 @@
           try await saveOperation(workspace, preferences, trashedNotes)
           return .committed
         },
+        beforeSaveOperation: beforeSaveOperation,
         loadTrashOperation: loadTrashOperation
       )
     }
@@ -378,18 +386,41 @@
       return true
     }
 
-    private func acquireSmartCaptureTransferLock(for noteIDs: Set<UUID>) -> Bool {
+    private func acquireSmartCaptureTransferLock(
+      for noteIDs: Set<UUID>,
+      ownerID: UUID
+    ) -> Bool {
       guard
+        smartCaptureTransferOwnerID == nil,
         smartCaptureTransferNoteIDs.isDisjoint(with: noteIDs),
         pendingRestoreNoteIDs.isDisjoint(with: noteIDs),
         noteIDs.allSatisfy({ noteAccessTransactionLocks[$0] == nil })
       else { return false }
+      smartCaptureTransferOwnerID = ownerID
       smartCaptureTransferNoteIDs.formUnion(noteIDs)
       return true
     }
 
-    private func releaseSmartCaptureTransferLock(for noteIDs: Set<UUID>) {
+    private func releaseSmartCaptureTransferLock(
+      for noteIDs: Set<UUID>,
+      ownerID: UUID
+    ) {
+      guard smartCaptureTransferOwnerID == ownerID else { return }
+      smartCaptureTransferOwnerID = nil
       smartCaptureTransferNoteIDs.subtract(noteIDs)
+      let waiters = smartCaptureTransferWaiters
+      smartCaptureTransferWaiters.removeAll()
+      for waiter in waiters {
+        waiter.resume()
+      }
+    }
+
+    private func waitForSmartCaptureTransfer() async {
+      while smartCaptureTransferOwnerID != nil {
+        await withCheckedContinuation { continuation in
+          smartCaptureTransferWaiters.append(continuation)
+        }
+      }
     }
 
     private func releaseNoteAccessTransactionLocks(
@@ -781,8 +812,17 @@
         )
       )
       let lockedNoteIDs: Set<UUID> = [source.id, destination.id]
-      guard acquireSmartCaptureTransferLock(for: lockedNoteIDs) else { return nil }
-      defer { releaseSmartCaptureTransferLock(for: lockedNoteIDs) }
+      let transferOwnerID = UUID()
+      guard acquireSmartCaptureTransferLock(
+        for: lockedNoteIDs,
+        ownerID: transferOwnerID
+      ) else { return nil }
+      defer {
+        releaseSmartCaptureTransferLock(
+          for: lockedNoteIDs,
+          ownerID: transferOwnerID
+        )
+      }
       let previousDestinationCapture = committedSmartCaptures[destinationID]
 
       beginAwaitedSave()
@@ -803,7 +843,7 @@
         noteID: destination.id,
         insertedSuffix: appended.insertedSuffix
       )
-      let saveTask = saveNow(transactionOwned: true)
+      let saveTask = saveSmartCaptureTransfer(ownerID: transferOwnerID)
       do {
         try await withTaskCancellationHandler {
           try await saveTask.value
@@ -1255,15 +1295,29 @@
       debouncedSaveTask?.cancel()
       markSaveStarted()
       if transactionOwned {
-        let snapshot = saveSnapshot()
         return Task {
-          try await persist(snapshot)
+          await waitForSmartCaptureTransfer()
+          try await persist(saveSnapshot())
         }
       }
       return Task {
         await waitForAwaitedSaves()
         try Task.checkCancellation()
         try await persist(saveSnapshot())
+      }
+    }
+
+    private func saveSmartCaptureTransfer(ownerID: UUID) -> Task<Void, Error> {
+      guard startupMigrationError == nil,
+        smartCaptureTransferOwnerID == ownerID
+      else {
+        return Task { throw SmartCaptureTransferBusy() }
+      }
+      debouncedSaveTask?.cancel()
+      markSaveStarted()
+      let snapshot = saveSnapshot()
+      return Task {
+        try await persist(snapshot)
       }
     }
 
@@ -1292,9 +1346,6 @@
       let originalNote = workspace.notes.first(where: { $0.id == trashedNote.id })
       let originalSelectedNoteID = workspace.selectedNoteID
       workspace.addRestoredNote(trashedNote.note)
-      let optimisticWorkspace = workspace
-      let preferences = preferences
-      let generation = persistenceGeneration
       let restoreOperation = self.restoreOperation
       let loadTrashOperation = self.loadTrashOperation
       return Task { @MainActor in
@@ -1302,6 +1353,10 @@
           pendingRestoreNoteIDs.remove(trashedNote.id)
           setAgentCapabilityNoteExclusion(trashedNote.id, excluded: false)
         }
+        await waitForSmartCaptureTransfer()
+        let optimisticWorkspace = workspace
+        let preferences = preferences
+        let generation = persistenceGeneration
         do {
           let restoreOutcome = try await restoreOperation(
             trashedNote,
@@ -1452,6 +1507,10 @@
 
     private func persist(_ snapshot: SaveSnapshot) async throws {
       do {
+        if let beforeSaveOperation {
+          await beforeSaveOperation()
+        }
+        try Task.checkCancellation()
         _ = try await saveOperation(
           snapshot.workspace,
           snapshot.preferences,

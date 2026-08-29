@@ -865,7 +865,69 @@ import Testing
   #expect(state.workspace.selectedNoteID == destination.id)
 }
 
-@Test @MainActor func appStateDictationCancelledMoveLeavesSourceAuthoritative() async throws {
+@Test @MainActor func appStateDictationFailedMoveGatesUnrelatedTransactionOwnedSave()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox", body: "Existing Inbox")
+  let destination = Note(title: "Projects", body: "Existing Project")
+  let third = Note(title: "Third")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(
+      notes: [inbox, destination, third],
+      selectedNoteID: third.id
+    ),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store, blockedAttempt: 2)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [inbox.id, destination.id, third.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let moveTask = Task { @MainActor in
+    await state.moveSmartCapture(receipt, to: destination.id)
+  }
+  await blockedSave.waitUntilStarted()
+  state.updateSelected(body: "Third-note edit")
+  let flushTask = Task { @MainActor in
+    try await state.flushFocusedDictationSave()
+  }
+  for _ in 0..<10 { await Task.yield() }
+
+  #expect(await blockedSave.currentSaveCount() == 2)
+  await blockedSave.fail()
+  #expect(await moveTask.value == nil)
+  try await flushTask.value
+
+  let persisted = try await store.loadWorkspace()
+  #expect(
+    persisted.notes.first(where: { $0.id == inbox.id })?.body
+      == "Existing Inbox\n\nCaptured"
+  )
+  #expect(
+    persisted.notes.first(where: { $0.id == destination.id })?.body
+      == "Existing Project"
+  )
+  #expect(persisted.notes.first(where: { $0.id == third.id })?.body == "Third-note edit")
+}
+
+@Test @MainActor func appStateDictationPrecommitCancellationNeverEntersSaveOperation()
+  async throws
+{
   let root = temporaryStoreRoot()
   defer { try? FileManager.default.removeItem(at: root) }
   let inbox = Note(title: "Inbox", body: "Existing Inbox")
@@ -875,7 +937,60 @@ import Testing
     workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
     preferences: .init()
   )
-  let blockedSave = CancellationAwareBlockedSave(store: store)
+  let saveRecorder = BlockingFailureSave(store: store, blockedAttempt: .max)
+  let precommitGate = PrecommitGate(blockedAttempt: 2)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await saveRecorder.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    },
+    beforeSaveOperation: {
+      await precommitGate.run()
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let committedWorkspace = state.workspace
+  let task = Task { @MainActor in
+    await state.moveSmartCapture(receipt, to: destination.id)
+  }
+  await precommitGate.waitUntilStarted()
+  task.cancel()
+  await precommitGate.release()
+
+  #expect(await task.value == nil)
+  #expect(await saveRecorder.currentSaveCount() == 1)
+  #expect(state.workspace == committedWorkspace)
+  let persisted = try await store.loadWorkspace()
+  #expect(
+    persisted.notes.first(where: { $0.id == inbox.id })?.body
+      == "Existing Inbox\n\nCaptured"
+  )
+  #expect(
+    persisted.notes.first(where: { $0.id == destination.id })?.body
+      == "Existing Project"
+  )
+}
+
+@Test @MainActor func appStateDictationCancellationAfterSaveEntryIsAuthoritative() async throws {
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox", body: "Existing Inbox")
+  let destination = Note(title: "Projects", body: "Existing Project")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let blockedSave = SaveEntryBlockedSave(store: store)
   let state = AppState(
     store: store,
     saveOperation: { workspace, preferences, trashedNotes in
@@ -892,7 +1007,6 @@ import Testing
     captureID: UUID(),
     destinationID: inbox.id
   )
-  let committedWorkspace = state.workspace
   let task = Task { @MainActor in
     await state.moveSmartCapture(receipt, to: destination.id)
   }
@@ -900,18 +1014,17 @@ import Testing
   task.cancel()
   await blockedSave.release()
 
-  #expect(await task.value == nil)
-  #expect(state.workspace == committedWorkspace)
+  let moved = try #require(await task.value)
+  #expect(moved.noteID == destination.id)
   let persisted = try await store.loadWorkspace()
   #expect(
     persisted.notes.first(where: { $0.id == inbox.id })?.body
-      == "Existing Inbox\n\nCaptured"
+      == "Existing Inbox"
   )
   #expect(
     persisted.notes.first(where: { $0.id == destination.id })?.body
-      == "Existing Project"
+      == "Existing Project\n\nCaptured"
   )
-  #expect(await state.moveSmartCapture(receipt, to: destination.id)?.noteID == destination.id)
 }
 
 @Test @MainActor func appStateDictationCommittedMoveWinsLateCallerCancellation() async throws {
@@ -1305,6 +1418,10 @@ private actor BlockingFailureSave {
     continuation = nil
   }
 
+  func currentSaveCount() -> Int {
+    saveCount
+  }
+
   private func signalSaveCountIfNeeded() {
     guard let saveCountTarget, saveCount >= saveCountTarget else { return }
     self.saveCountTarget = nil
@@ -1313,7 +1430,7 @@ private actor BlockingFailureSave {
   }
 }
 
-private actor CancellationAwareBlockedSave {
+private actor SaveEntryBlockedSave {
   private let store: LocalStore
   private var saveCount = 0
   private var started = false
@@ -1335,13 +1452,43 @@ private actor CancellationAwareBlockedSave {
       startedContinuation?.resume()
       startedContinuation = nil
       await withCheckedContinuation { releaseContinuation = $0 }
-      try Task.checkCancellation()
     }
     try await store.save(
       workspace: workspace,
       preferences: preferences,
       trashedNotes: trashedNotes
     )
+  }
+
+  func waitUntilStarted() async {
+    guard !started else { return }
+    await withCheckedContinuation { startedContinuation = $0 }
+  }
+
+  func release() {
+    releaseContinuation?.resume()
+    releaseContinuation = nil
+  }
+}
+
+private actor PrecommitGate {
+  private let blockedAttempt: Int
+  private var attempt = 0
+  private var started = false
+  private var startedContinuation: CheckedContinuation<Void, Never>?
+  private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+  init(blockedAttempt: Int) {
+    self.blockedAttempt = blockedAttempt
+  }
+
+  func run() async {
+    attempt += 1
+    guard attempt == blockedAttempt else { return }
+    started = true
+    startedContinuation?.resume()
+    startedContinuation = nil
+    await withCheckedContinuation { releaseContinuation = $0 }
   }
 
   func waitUntilStarted() async {
