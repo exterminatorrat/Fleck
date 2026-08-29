@@ -110,6 +110,28 @@ import Testing
   #expect(selections.count == 2)
   controller.selectRoutingChoice(captureID: secondCaptureID, noteID: noteID)
   #expect(selections.last?.0 == secondCaptureID)
+
+  controller.render(
+    .saved(destination: "Projects"),
+    chooser: .init(
+      ambiguity: .init(
+        captureID: secondCaptureID,
+        choices: [
+          .init(
+            destination: .init(noteID: noteID, title: "Projects"),
+            contextHint: "Roadmap"
+          )
+        ]
+      ),
+      currentDestinationID: noteID,
+      currentDestinationTitle: "Projects",
+      allowsKeepInInbox: false
+    ),
+    onChoice: { selections.append(($0, $1)) }
+  )
+  let movedSelectionCount = selections.count
+  controller.selectRoutingChoice(captureID: secondCaptureID, noteID: nil)
+  #expect(selections.count == movedSelectionCount)
 }
 
 @Test @MainActor func DictationAccessibilityChooserSurvivesDockReinstallationWithUndo() {

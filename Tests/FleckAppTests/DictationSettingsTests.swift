@@ -1034,6 +1034,34 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   await fixture.runtime.cancel()
 }
 
+@Test @MainActor func DictationRuntimeReplaysRawFallbackChooserAfterDisableAndReenable()
+  async throws
+{
+  let project = Note(title: "Projects", body: "Roadmap")
+  let personal = Note(title: "Personal", body: "Weekend")
+  let fixture = try await RuntimeFixture(
+    finalText: "Raw fallback capture",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true,
+    cleanupFails: true
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Inbox"))
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Inbox"))
+  #expect(fixture.runtime.capsuleController.currentChooser?.captureID == captureID)
+}
+
 @Test @MainActor func DictationRuntimeKeepInboxCompletesChooserWithoutMovingCapture()
   async throws
 {
@@ -1118,6 +1146,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     capsuleEnabled: true,
     routingNotes: [project, personal],
     ambiguousRouting: true,
+    cleanupFails: true,
     historySaveFailureAttempt: 3,
     capsuleSleeper: { duration in await sleeper.sleep(duration) }
   )
@@ -1137,8 +1166,16 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
 
   #expect(fixture.history.errorMessage != nil)
   #expect(fixture.runtime.coordinator.routingAmbiguity?.captureID == captureID)
-  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Projects"))
-  #expect(fixture.runtime.capsuleController.currentChooser?.captureID == captureID)
+  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Projects"))
+  let chooser = try #require(fixture.runtime.capsuleController.currentChooser)
+  #expect(chooser.captureID == captureID)
+  #expect(!chooser.allowsKeepInInbox)
+  #expect(!chooser.menuAccessibilityHint.contains("Inbox"))
+  #expect(chooser.choices.allSatisfy { !$0.accessibilityHint.contains("from Inbox") })
+  fixture.runtime.capsuleController.selectRoutingChoice(captureID: captureID, noteID: nil)
+  for _ in 0..<100 { await Task.yield() }
+  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Projects"))
+  #expect(fixture.runtime.coordinator.routingAmbiguity?.captureID == captureID)
   #expect(await sleeper.requestedDurations.isEmpty)
   #expect(fixture.appState.workspace.notes.first(where: { $0.id == project.id })?.body.contains("Moved before history failed") == true)
   #expect(fixture.appState.workspace.notes.first(where: {
@@ -2090,6 +2127,7 @@ private final class RuntimeFixture {
     availabilityProvider: (@MainActor () -> DictationAvailability)? = nil,
     routingNotes: [Note] = [],
     ambiguousRouting: Bool = false,
+    cleanupFails: Bool = false,
     historySaveFailureAttempt: Int? = nil,
     capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
@@ -2162,7 +2200,7 @@ private final class RuntimeFixture {
           presentation: admittedModelSettingsViewModel.presentation
         )
       },
-      cleaner: RuntimeCleaner(),
+      cleaner: RuntimeCleaner(fails: cleanupFails),
       router: RuntimeRouter(returnsAmbiguity: ambiguousRouting),
       saver: appState,
       historyController: history,
@@ -2345,8 +2383,15 @@ private final class RuntimeSpeechEngine: SpeechEngine {
 }
 
 private struct RuntimeCleaner: TranscriptCleaning {
+  let fails: Bool
+
+  init(fails: Bool = false) {
+    self.fails = fails
+  }
+
   func clean(_ transcript: String) async throws -> String {
-    transcript
+    if fails { throw DictationSettingsTestError.failed }
+    return transcript
   }
 }
 

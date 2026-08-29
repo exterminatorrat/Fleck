@@ -109,6 +109,8 @@
     let title: String
     let contextHint: String
     let showsContextHint: Bool
+    let currentDestinationTitle: String
+    let isCurrentDestination: Bool
 
     var menuTitle: String {
       guard showsContextHint, !contextHint.isEmpty else { return title }
@@ -118,23 +120,43 @@
     }
 
     var accessibilityLabel: String {
-      guard !contextHint.isEmpty else { return "Move dictation to \(title)" }
-      return "Move dictation to \(title). Context: \(contextHint)"
+      let action = isCurrentDestination
+        ? "Retry saving dictation in \(title)"
+        : "Move dictation to \(title)"
+      guard !contextHint.isEmpty else { return action }
+      return "\(action). Context: \(contextHint)"
     }
 
     var accessibilityHint: String {
-      "Moves this saved dictation from Inbox to \(title)."
+      if isCurrentDestination {
+        return "Retries completion for this saved dictation in \(title)."
+      }
+      return "Moves this saved dictation from \(currentDestinationTitle) to \(title)."
     }
   }
 
   struct DictationCapsuleChooser: Equatable {
     let captureID: UUID
     let choices: [DictationCapsuleChoice]
+    let allowsKeepInInbox: Bool
     let keepInboxTitle = "Keep in Inbox"
     let keepInboxAccessibilityLabel = "Keep dictation in Inbox"
 
-    init(ambiguity: DictationRoutingAmbiguity) {
+    var menuAccessibilityHint: String {
+      if allowsKeepInInbox {
+        return "Choose a note for this saved dictation or keep it in Inbox."
+      }
+      return "Choose a note for this saved dictation."
+    }
+
+    init(
+      ambiguity: DictationRoutingAmbiguity,
+      currentDestinationID: UUID? = nil,
+      currentDestinationTitle: String = "Inbox",
+      allowsKeepInInbox: Bool = true
+    ) {
       captureID = ambiguity.captureID
+      self.allowsKeepInInbox = allowsKeepInInbox
       let supported = Array(ambiguity.choices.prefix(4))
       let titleCounts = Dictionary(grouping: supported) {
         Self.normalizedTitle($0.destination.title)
@@ -145,7 +167,9 @@
           id: choice.destination.noteID,
           title: title,
           contextHint: choice.contextHint,
-          showsContextHint: titleCounts[Self.normalizedTitle(title), default: 0] > 1
+          showsContextHint: titleCounts[Self.normalizedTitle(title), default: 0] > 1,
+          currentDestinationTitle: Self.displayTitle(currentDestinationTitle),
+          isCurrentDestination: choice.destination.noteID == currentDestinationID
         )
       }
     }
@@ -339,9 +363,12 @@
     func selectRoutingChoice(captureID: UUID, noteID: UUID?) {
       guard
         let currentChooser,
-        currentChooser.captureID == captureID,
-        noteID == nil || currentChooser.choices.contains(where: { $0.id == noteID })
+        currentChooser.captureID == captureID
       else { return }
+      let isValidChoice = noteID.map { noteID in
+        currentChooser.choices.contains(where: { $0.id == noteID })
+      } ?? currentChooser.allowsKeepInInbox
+      guard isValidChoice else { return }
       currentChoiceHandler(captureID, noteID)
     }
 
@@ -688,17 +715,19 @@
             .accessibilityLabel(choice.accessibilityLabel)
             .accessibilityHint(choice.accessibilityHint)
           }
-          Divider()
-          Button(chooser.keepInboxTitle) {
-            onChoice(chooser.captureID, nil)
+          if chooser.allowsKeepInInbox {
+            Divider()
+            Button(chooser.keepInboxTitle) {
+              onChoice(chooser.captureID, nil)
+            }
+            .accessibilityLabel(chooser.keepInboxAccessibilityLabel)
+            .accessibilityHint("Leaves this saved dictation in Inbox.")
           }
-          .accessibilityLabel(chooser.keepInboxAccessibilityLabel)
-          .accessibilityHint("Leaves this saved dictation in Inbox.")
         }
         .menuStyle(.borderlessButton)
         .font(.system(size: 11, weight: .semibold))
         .accessibilityLabel("Choose note")
-        .accessibilityHint("Choose a note for this saved dictation or keep it in Inbox.")
+        .accessibilityHint(chooser.menuAccessibilityHint)
       }
     }
 

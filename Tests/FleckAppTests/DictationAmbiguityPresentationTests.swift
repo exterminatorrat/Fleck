@@ -56,3 +56,36 @@ import Testing
   #expect(unique.menuTitle == "Ideas")
   #expect(unique.accessibilityLabel.contains("Unique context"))
 }
+
+@Test func DictationAmbiguityPresentationUsesMovedReceiptAsTruthfulOrigin() throws {
+  let inboxID = UUID()
+  let projectsID = UUID()
+  let personalID = UUID()
+  let chooser = DictationCapsuleChooser(
+    ambiguity: .init(
+      captureID: UUID(),
+      choices: [
+        .init(
+          destination: .init(noteID: projectsID, title: "Projects"),
+          contextHint: "Roadmap"
+        ),
+        .init(
+          destination: .init(noteID: personalID, title: "Personal"),
+          contextHint: "Weekend"
+        ),
+      ]
+    ),
+    currentDestinationID: projectsID,
+    currentDestinationTitle: "Projects",
+    allowsKeepInInbox: projectsID == inboxID
+  )
+
+  #expect(!chooser.allowsKeepInInbox)
+  #expect(!chooser.menuAccessibilityHint.contains("Inbox"))
+  #expect(chooser.choices.allSatisfy { !$0.accessibilityHint.contains("from Inbox") })
+  let current = try #require(chooser.choices.first(where: { $0.id == projectsID }))
+  let alternative = try #require(chooser.choices.first(where: { $0.id == personalID }))
+  #expect(current.accessibilityLabel.hasPrefix("Retry saving dictation in Projects"))
+  #expect(current.accessibilityHint == "Retries completion for this saved dictation in Projects.")
+  #expect(alternative.accessibilityHint == "Moves this saved dictation from Projects to Personal.")
+}
