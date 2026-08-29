@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import FleckCore
 import Testing
@@ -19,6 +20,51 @@ private struct TemporaryDirectory {
     )
     url = path
   }
+}
+
+private enum TestCommandError: Error {
+  case failed(Int32, String)
+}
+
+@discardableResult
+private func replaceAmbientGitEnvironment(
+  with replacement: [String: String]
+) -> [String: String] {
+  let current = ProcessInfo.processInfo.environment
+  let previous = current.filter { $0.key.uppercased().hasPrefix("GIT_") }
+  for key in current.keys where key.uppercased().hasPrefix("GIT_") {
+    unsetenv(key)
+  }
+  for (key, value) in replacement {
+    setenv(key, value, 1)
+  }
+  return previous
+}
+
+private func gitOutput(_ arguments: [String], repository: URL) throws -> String {
+  let process = Process()
+  let output = Pipe()
+  let errors = Pipe()
+  process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+  process.arguments = arguments
+  process.currentDirectoryURL = repository
+  process.standardOutput = output
+  process.standardError = errors
+  var environment = ProcessInfo.processInfo.environment
+  for key in Array(environment.keys) where key.uppercased().hasPrefix("GIT_") {
+    environment.removeValue(forKey: key)
+  }
+  environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+  environment["GIT_CONFIG_NOSYSTEM"] = "1"
+  process.environment = environment
+  try process.run()
+  process.waitUntilExit()
+  let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+  guard process.terminationStatus == 0 else {
+    let error = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    throw TestCommandError.failed(process.terminationStatus, error)
+  }
+  return text.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 private func regularFilePaths(in root: URL) throws -> [String] {
@@ -124,7 +170,65 @@ private func regularFilePaths(in root: URL) throws -> [String] {
   #expect(object["fleckApp"] as? String == manifest.fleckApp.path)
 }
 
-@Test func generatesOnlyTheSyntheticRepositoryFiles() async throws {
+@Test func verifierRejectsUnsafeSessionRootsBeforeWorkspaceAccess() async throws {
+  let session = try TemporaryDirectory()
+  let validManifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+  let unsafeRoots = [
+    URL(fileURLWithPath: "/", isDirectory: true),
+    FileManager.default.homeDirectoryForCurrentUser,
+  ]
+
+  for (index, unsafeRoot) in unsafeRoots.enumerated() {
+    let craftedManifest = WebsiteDemoManifest(
+      sessionRoot: unsafeRoot,
+      fleckRoot: unsafeRoot
+        .appendingPathComponent("Library/Application Support/Fleck", isDirectory: true),
+      fakeRepository: unsafeRoot.appendingPathComponent("NorthstarDemo", isDirectory: true),
+      fleckApp: validManifest.fleckApp,
+      projectNames: validManifest.projectNames,
+      captureCommands: validManifest.captureCommands
+    )
+    let craftedURL = session.url.appendingPathComponent("unsafe-manifest-\(index).json")
+    try JSONEncoder().encode(craftedManifest).write(to: craftedURL)
+
+    await #expect(throws: WebsiteDemoError.unsafeSessionRoot) {
+      try await WebsiteDemoSession.verify(manifestAt: craftedURL)
+    }
+  }
+}
+
+@Test func ignoresPoisonedAmbientGitRedirectors() async throws {
+  let session = try TemporaryDirectory()
+  let poison = try TemporaryDirectory()
+  let poisonWorkTree = poison.url.appendingPathComponent("worktree", isDirectory: true)
+  try FileManager.default.createDirectory(at: poisonWorkTree, withIntermediateDirectories: true)
+  let poisonGitDirectory = poison.url.appendingPathComponent("external.git", isDirectory: true)
+  let poisonIndex = poison.url.appendingPathComponent("external.index")
+  let poisonObjects = poison.url.appendingPathComponent("objects", isDirectory: true)
+  let previousEnvironment = replaceAmbientGitEnvironment(with: [
+    "GIT_DIR": poisonGitDirectory.path,
+    "GIT_WORK_TREE": poisonWorkTree.path,
+    "GIT_INDEX_FILE": poisonIndex.path,
+    "GIT_OBJECT_DIRECTORY": poisonObjects.path,
+  ])
+  defer { replaceAmbientGitEnvironment(with: previousEnvironment) }
+
+  let manifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+
+  #expect(try gitOutput(["branch", "--show-current"], repository: manifest.fakeRepository) == "main")
+  #expect(!FileManager.default.fileExists(atPath: poisonGitDirectory.path))
+  #expect(!FileManager.default.fileExists(atPath: poisonIndex.path))
+  #expect(!FileManager.default.fileExists(atPath: poisonObjects.path))
+  #expect(try FileManager.default.contentsOfDirectory(atPath: poisonWorkTree.path).isEmpty)
+}
+
+@Test func generatesExactSyntheticRepositoryContract() async throws {
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
@@ -139,6 +243,95 @@ private func regularFilePaths(in root: URL) throws -> [String] {
   ])
   let gitHead = manifest.fakeRepository.appendingPathComponent(".git/HEAD")
   #expect(FileManager.default.fileExists(atPath: gitHead.path))
+
+  #expect(try gitOutput(["branch", "--show-current"], repository: manifest.fakeRepository) == "main")
+  #expect(try gitOutput(["rev-list", "--count", "HEAD"], repository: manifest.fakeRepository) == "1")
+  #expect(
+    try gitOutput(["log", "-1", "--format=%s"], repository: manifest.fakeRepository)
+      == "chore: seed synthetic Northstar demo"
+  )
+  #expect(
+    try gitOutput(["config", "--local", "--get", "user.name"], repository: manifest.fakeRepository)
+      == "Fleck Demo"
+  )
+  #expect(
+    try gitOutput(["config", "--local", "--get", "user.email"], repository: manifest.fakeRepository)
+      == "demo@invalid.example"
+  )
+  #expect(
+    try gitOutput(["log", "-1", "--format=%an <%ae>"], repository: manifest.fakeRepository)
+      == "Fleck Demo <demo@invalid.example>"
+  )
+  #expect(try gitOutput(["remote"], repository: manifest.fakeRepository).isEmpty)
+
+  #expect(
+    try String(
+      contentsOf: manifest.fakeRepository.appendingPathComponent("Package.swift"),
+      encoding: .utf8
+    )
+      == """
+      // swift-tools-version: 6.0
+
+      import PackageDescription
+
+      let package = Package(
+        name: "NorthstarDemo",
+        platforms: [.macOS(.v14)],
+        products: [
+          .library(name: "NorthstarDemo", targets: ["NorthstarDemo"]),
+        ],
+        targets: [
+          .target(name: "NorthstarDemo"),
+          .testTarget(name: "NorthstarDemoTests", dependencies: ["NorthstarDemo"]),
+        ]
+      )
+      """
+  )
+  #expect(
+    try String(
+      contentsOf: manifest.fakeRepository.appendingPathComponent("README.md"),
+      encoding: .utf8
+    )
+      == """
+      # Northstar Demo
+
+      This repository contains only synthetic website-demo data for Fleck captures.
+      """
+  )
+  #expect(
+    try String(
+      contentsOf: manifest.fakeRepository
+        .appendingPathComponent("Sources/NorthstarDemo/OnboardingFlow.swift"),
+      encoding: .utf8
+    )
+      == """
+      public enum PermissionRequestPoint: Equatable, Sendable {
+        case firstLaunch
+        case afterWelcome
+      }
+
+      public struct OnboardingFlow: Sendable {
+        public init() {}
+        public var permissionRequestPoint: PermissionRequestPoint { .firstLaunch }
+        public var welcomeStepCount: Int { 3 }
+      }
+      """
+  )
+  #expect(
+    try String(
+      contentsOf: manifest.fakeRepository
+        .appendingPathComponent("Tests/NorthstarDemoTests/OnboardingFlowTests.swift"),
+      encoding: .utf8
+    )
+      == """
+      import NorthstarDemo
+      import Testing
+
+      @Test func welcomeFlowHasThreeSteps() {
+        #expect(OnboardingFlow().welcomeStepCount == 3)
+      }
+      """
+  )
 }
 
 @Test func verifiesOpenAndCompletedCanonicalTaskStates() async throws {

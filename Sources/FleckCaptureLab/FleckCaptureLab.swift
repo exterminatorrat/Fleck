@@ -226,16 +226,8 @@ enum WebsiteDemoFixture {
 
 enum WebsiteDemoSession {
   static func prepare(at root: URL, now: Date = Date()) async throws -> WebsiteDemoManifest {
-    guard root.isFileURL, root.path.hasPrefix("/") else {
-      throw WebsiteDemoError.sessionRootMustBeAbsolute
-    }
     let fileManager = FileManager.default
-    let sessionRoot = root.standardizedFileURL.resolvingSymlinksInPath()
-    let userHome = fileManager.homeDirectoryForCurrentUser
-      .standardizedFileURL.resolvingSymlinksInPath()
-    guard sessionRoot.path != "/", sessionRoot != userHome else {
-      throw WebsiteDemoError.unsafeSessionRoot
-    }
+    let sessionRoot = try safeSessionRoot(root)
     try fileManager.createDirectory(at: sessionRoot, withIntermediateDirectories: true)
 
     let fleckRoot = sessionRoot
@@ -285,7 +277,7 @@ enum WebsiteDemoSession {
       throw WebsiteDemoError.invalidManifest
     }
 
-    let sessionRoot = manifest.sessionRoot.standardizedFileURL.resolvingSymlinksInPath()
+    let sessionRoot = try safeSessionRoot(manifest.sessionRoot)
     let expectedFleckRoot = sessionRoot
       .appendingPathComponent("Library/Application Support/Fleck", isDirectory: true)
     let expectedRepository = sessionRoot.appendingPathComponent("NorthstarDemo", isDirectory: true)
@@ -350,6 +342,19 @@ enum WebsiteDemoSession {
     "Sources/NorthstarDemo/OnboardingFlow.swift",
     "Tests/NorthstarDemoTests/OnboardingFlowTests.swift",
   ]
+
+  private static func safeSessionRoot(_ root: URL) throws -> URL {
+    guard root.isFileURL, root.path.hasPrefix("/") else {
+      throw WebsiteDemoError.sessionRootMustBeAbsolute
+    }
+    let sessionRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+    let userHome = FileManager.default.homeDirectoryForCurrentUser
+      .standardizedFileURL.resolvingSymlinksInPath()
+    guard sessionRoot.path != "/", sessionRoot != userHome else {
+      throw WebsiteDemoError.unsafeSessionRoot
+    }
+    return sessionRoot
+  }
 
   private static func write(_ manifest: WebsiteDemoManifest) throws {
     let encoder = JSONEncoder()
@@ -436,6 +441,9 @@ enum WebsiteDemoSession {
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     var environment = ProcessInfo.processInfo.environment
+    for key in Array(environment.keys) where key.uppercased().hasPrefix("GIT_") {
+      environment.removeValue(forKey: key)
+    }
     environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
     environment["GIT_CONFIG_NOSYSTEM"] = "1"
     environment["GIT_AUTHOR_NAME"] = "Fleck Demo"
