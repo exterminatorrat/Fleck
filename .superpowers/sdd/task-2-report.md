@@ -4,6 +4,8 @@
 
 Implemented and verified from accepted baseline `768655b`. No push, pull request, merge, publication, or deployment was performed.
 
+The fix-first hardening pass was implemented from Task 2 commit `6722a59`.
+
 ## RED and GREEN evidence
 
 ### Pure state mapper
@@ -19,6 +21,14 @@ Implemented and verified from accepted baseline `768655b`. No push, pull request
 - RED result: exit 1 with Vite `ERR_LOAD_URL` for `src/HeroStory.jsx`, the expected failure because the production component did not exist.
 - GREEN command: `node --test src/HeroStory.test.js`
 - GREEN result: 1 test passed. The real server-rendered component contains the exact required hero copy, synthetic Northstar Demo transcript, Codex demo label, all accepted media paths, and neither prohibited completion claim.
+
+### Fix-first copy and capsule posters
+
+- The test was changed before production to require the lowercase `Northstar Demo: move the location permission request until after onboarding.` sentence and all three exact poster paths.
+- RED command: `node --test src/HeroStory.test.js`
+- RED result: exit 1. The first failing assertion showed the old capitalized `Move` sentence did not match the new exact lowercase expectation. The same red test already contained the three new poster-path assertions; execution stopped at the earlier copy mismatch.
+- GREEN command: `node --test src/HeroStory.test.js`
+- GREEN result: 1 test passed after the visible copy, poster attributes, and accepted still assets were added.
 
 ### Final verification
 
@@ -36,6 +46,10 @@ Implemented and verified from accepted baseline `768655b`. No push, pull request
 - GSAP 3.15.0 and ScrollTrigger are dynamically imported inside the effect. Server rendering does not evaluate browser-only code.
 - Continuous scroll values never enter React state. The root `data-hero-state` changes only when the mapped state crosses a threshold.
 - On each state change, only the matching listening, processing, saved, or writeback clip is played; every other clip is paused.
+- On desktop, only the capsule take matching the listening, processing, or saved state is exposed to assistive technology. The other capsule takes receive `aria-hidden="true"` and `inert`.
+- Mobile and reduced-motion normal flow removes `aria-hidden` and `inert` from all three capsule takes while keeping the clips paused.
+- The hero page keeps the approved site navigation fixed above the sticky stage, with the simulated macOS bar directly below it.
+- Each capsule video uses the matching accepted real still as its poster so static and paused layouts retain the correct state.
 - The effect kills the active ScrollTrigger, pauses media, and removes both media-query listeners during cleanup.
 - At 767px and below, and under reduced motion, the same scenes become a normal vertical narrative. No pinned miniature, wheel interception, smooth scrolling, or scroll snapping is used.
 - New hero CSS uses a pure white page and desktop, native system typography, visible focus states, opacity and transform motion only, and no generated wallpaper, gradient hero background, laptop shell, scroll cue, metrics, numbered sections, or decorative card grid.
@@ -59,8 +73,11 @@ The source masters and derivatives were not altered. Destination hashes match th
 - `capsule-saved.webm`: `f13614639d34cbd68b6f77f57ed8d59598c3582d53601fa46f17b9886fdd0c1a`
 - `agent-writeback.mp4`: `99ba037699efff2c1b3e321cd17e9a835656a5a7610f3ee3eeee87f7db989ae0`
 - `agent-writeback.webm`: `a1d35c4ced6f20a30b888da154266075b3f478387c373722bdbb0d6a676a3a5f`
+- `capsule-listening.png`: `7aa83f5c340b8133b03fed5f824f65f58b1d4469e22790faf65d147a818ad02b`
+- `capsule-processing.png`: `58cbd3bcc37857d754767fe8b25c0f4ffab5b89e46e7c31402f2df724770d5f3`
+- `capsule-saved.png`: `f5306dc57292de9b0a671ee925490143be2779caa8730959f5a9f9af9ef417c7`
 
-The stills are declared at 894 by 596 and capped at 894 CSS pixels. Capsule clips are declared at 360 by 96 and capped at 360 CSS pixels. Writeback clips are declared at 894 by 596 and capped at 894 CSS pixels.
+The product stills are declared at 894 by 596 and capped at 894 CSS pixels. Capsule clips and posters are 360 by 96 and capped at 360 CSS pixels. Writeback clips are declared at 894 by 596 and capped at 894 CSS pixels.
 
 ## Browser evidence
 
@@ -68,6 +85,9 @@ Focused local Chromium checks used the required viewports:
 
 - 1440 by 900: inspected intro, shortcut, listening, memory, Codex, writeback, and close states. The mapped `data-hero-state` changed at scroll thresholds, the active video was the only unpaused video, captures remained at or below native size, and the console had no errors or warnings.
 - 390 by 844: confirmed normal document flow with the complete semantic sequence, all videos paused, no pinned `420svh` miniature, no horizontal overflow, and capsule frames rendering as their section entered view.
+- Fix-first desktop check at `scrollY = 1040`: `data-hero-state` was `processing`; the navigation had computed `position: fixed`, top `0`, bottom `72`, and height `72`; the macOS bar started at top `72`, directly beneath it. Listening and saved had `aria-hidden="true"` plus `inert`; processing had `aria-hidden="false"` and no `inert`. Only the processing video was unpaused.
+- Fix-first mobile check at 390 by 844: every capsule take had no `aria-hidden` and no `inert`; all four hero videos were paused; the three poster attributes matched `/hero/capsule-listening.png`, `/hero/capsule-processing.png`, and `/hero/capsule-saved.png`. The processing still and adjacent label both visibly read `Cleaning up`.
+- The fix-first Chromium console contained 0 errors and 0 warnings.
 
 Temporary Playwright session artifacts were removed before commit.
 
@@ -87,16 +107,20 @@ Temporary Playwright session artifacts were removed before commit.
 - `website/public/hero/fleck-agent-writeback.png`
 - `website/public/hero/capsule-listening.mp4`
 - `website/public/hero/capsule-listening.webm`
+- `website/public/hero/capsule-listening.png`
 - `website/public/hero/capsule-processing.mp4`
 - `website/public/hero/capsule-processing.webm`
+- `website/public/hero/capsule-processing.png`
 - `website/public/hero/capsule-saved.mp4`
 - `website/public/hero/capsule-saved.webm`
+- `website/public/hero/capsule-saved.png`
 - `website/public/hero/agent-writeback.mp4`
 - `website/public/hero/agent-writeback.webm`
 
 ## Self-review
 
 - `Navigation.jsx` is unchanged, and hero styles were appended after the accepted navigation styles.
+- The only navigation behavior change is the hero-scoped fixed-position override; its existing selectors, layout, and visual styling are unchanged.
 - Visible hero copy contains no em dash or en dash characters.
 - `Completed by Codex` and `Tests passing` occur only as negative test assertions, never in rendered content.
 - All demo content is the approved synthetic Northstar Demo fixture. No real repository, note, credential, token, or user data appears.

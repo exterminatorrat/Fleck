@@ -10,6 +10,7 @@ function CapsuleVideo({ state, label }) {
         muted
         playsInline
         preload="metadata"
+        poster={`/hero/capsule-${state}.png`}
         aria-label={label}
         data-hero-video={state}
       >
@@ -31,6 +32,7 @@ export default function HeroStory({ downloadProps }) {
     const desktopQuery = window.matchMedia("(min-width: 768px)");
     const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
     const scenes = [...story.querySelectorAll("[data-hero-scene]")];
+    const capsuleTakes = [...story.querySelectorAll("[data-capsule-state]")];
     const videos = [...story.querySelectorAll("video[data-hero-video]")];
     let activeState;
     let activeTrigger;
@@ -46,6 +48,11 @@ export default function HeroStory({ downloadProps }) {
         scene.removeAttribute("aria-hidden");
         scene.removeAttribute("inert");
       }
+
+      for (const take of capsuleTakes) {
+        take.removeAttribute("aria-hidden");
+        take.removeAttribute("inert");
+      }
     }
 
     function setHeroState(nextState) {
@@ -58,6 +65,13 @@ export default function HeroStory({ downloadProps }) {
         scene.setAttribute("aria-hidden", String(!isActive));
         if (isActive) scene.removeAttribute("inert");
         else scene.setAttribute("inert", "");
+      }
+
+      for (const take of capsuleTakes) {
+        const isActive = take.dataset.capsuleState === nextState;
+        take.setAttribute("aria-hidden", String(!isActive));
+        if (isActive) take.removeAttribute("inert");
+        else take.setAttribute("inert", "");
       }
 
       for (const video of videos) {
@@ -206,7 +220,7 @@ export default function HeroStory({ downloadProps }) {
                 <CapsuleVideo state="saved" label="Saved to Northstar Demo" />
               </div>
               <figcaption>
-                Northstar Demo: Move the location permission request until after onboarding.
+                Northstar Demo: move the location permission request until after onboarding.
               </figcaption>
             </figure>
           </section>

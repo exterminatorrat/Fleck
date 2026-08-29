@@ -479,6 +479,10 @@ a {
   white-space: nowrap;
 }
 
+.page:has(.hero-story) .site-nav {
+  position: fixed;
+}
+
 .hero-story {
   --site-nav-offset: 72px;
   --macos-menu-height: 30px;

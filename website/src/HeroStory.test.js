@@ -24,7 +24,7 @@ test("renders the complete synthetic voice-to-agent hero story", async () => {
   assert.match(markup, /Fleck is a lightweight shared memory for you and your agents\./);
   assert.match(markup, /One shared memory\. For you and your agents\./);
   assert.match(markup, /Right Option/);
-  assert.match(markup, /Northstar Demo: Move the location permission request until after onboarding\./);
+  assert.match(markup, /Northstar Demo: move the location permission request until after onboarding\./);
   assert.match(markup, /Pick up where I left off\./);
   assert.match(markup, /Do it\./);
   assert.match(markup, /Codex demo/);
@@ -33,6 +33,9 @@ test("renders the complete synthetic voice-to-agent hero story", async () => {
     "/hero/fleck-northstar-open.png",
     "/hero/fleck-northstar-saved.png",
     "/hero/fleck-agent-writeback.png",
+    "/hero/capsule-listening.png",
+    "/hero/capsule-processing.png",
+    "/hero/capsule-saved.png",
     "/hero/capsule-listening.mp4",
     "/hero/capsule-listening.webm",
     "/hero/capsule-processing.mp4",
