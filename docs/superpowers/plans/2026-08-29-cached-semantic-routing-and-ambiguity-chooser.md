@@ -1,6 +1,6 @@
 # Cached Semantic Routing and Ambiguity Chooser Implementation Plan
 
-> **For agentic workers:** REQUIRED ROUTE: Execute each task through Fleck's mandatory Sol Advisor user-visible GPT-5.6 Luna/Max lane. Each numbered task is one dependent implementation packet. The primary Sol session inspects every diff, reruns verification, and obtains a fresh `sol_advisor_sol_reviewer` verdict exactly `ship` before the next task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** USER-OVERRIDDEN ROUTE: For this implementation, the user's explicit 2026-08-29 instruction replaces the repository's default Luna/Max lane with Codex-native GPT-5.6 Sol implementers at High reasoning. Each numbered task is one dependent implementation packet in the existing isolated worktree. The primary Sol session inspects every diff, reruns verification, and obtains a fresh read-only Sol/High reviewer verdict exactly `ship` before the next task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Search the full local note workspace through a revision-aware cache, auto-file only uniquely supported dictation, and let the user move ambiguous captures from durable Inbox storage through the bottom dictation capsule.
 
@@ -31,7 +31,7 @@
 
 ## Task 1: Revision-aware cached note retrieval
 
-**User-visible task title:** `Agent - cached note routing index`
+**Native worker task:** `cached_note_routing_index`
 
 **Files:**
 
@@ -149,7 +149,7 @@ Expected: exactly the three owned paths differ and the commit SHA is reported.
 
 ## Task 2: Full-note cached shortlist and bounded Gemma routing
 
-**User-visible task title:** `Agent - cached Gemma destination shortlist`
+**Native worker task:** `cached_gemma_destination_shortlist`
 
 **Dependency:** Task 1 parent verification and fresh Sol verdict `ship`.
 
@@ -213,7 +213,7 @@ git commit -m "feat: route from cached full-note context"
 
 ## Task 3: Receipt-bound Inbox transfer
 
-**User-visible task title:** `Agent - ambiguous capture transfer contract`
+**Native worker task:** `ambiguous_capture_transfer_contract`
 
 **Dependency:** Task 2 parent verification and fresh Sol verdict `ship`.
 
@@ -275,7 +275,7 @@ git commit -m "feat: move receipt-bound Inbox captures"
 
 ## Task 4: Structured ambiguity and coordinator lifecycle
 
-**User-visible task title:** `Agent - durable ambiguous routing lifecycle`
+**Native worker task:** `durable_ambiguous_routing_lifecycle`
 
 **Dependency:** Task 3 parent verification and fresh Sol verdict `ship`.
 
@@ -350,7 +350,7 @@ git commit -m "feat: preserve ambiguous captures for user routing"
 
 ## Task 5: Bottom-capsule chooser and integrated verification
 
-**User-visible task title:** `Agent - dictation capsule note chooser`
+**Native worker task:** `dictation_capsule_note_chooser`
 
 **Dependency:** Task 4 parent verification and fresh Sol verdict `ship`.
 
