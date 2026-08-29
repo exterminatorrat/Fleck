@@ -1158,3 +1158,164 @@ import Testing
     )
   }
 }
+
+@Test func cleanupRegressionAcceptsCombinedFillersAndImmediateStutterRemoval() {
+  let candidate = "Send the chemistry report."
+  #expect(
+    FaithfulCleanupValidator().validate(
+      candidate: candidate,
+      against: .init(
+        baseline: "um, send send the chemistry report, uh",
+        protectedForms: ["chemistry"],
+        replacements: 0
+      )
+    ) == .accepted(
+      text: candidate,
+      operations: [
+        .deleteFiller("um"),
+        .deleteImmediateDuplicate(["send"]),
+        .deleteFiller("uh")
+      ]
+    )
+  )
+}
+
+@Test func cleanupRegressionDistinguishesExplicitCorrectionFromAmbiguousFalseStart() {
+  let validator = FaithfulCleanupValidator()
+  let candidate = "Please email the final report to Priya."
+  #expect(
+    validator.validate(
+      candidate: candidate,
+      against: .init(
+        baseline: "Please email the draft, no, the final report to Priya.",
+        protectedForms: ["Priya"],
+        replacements: 0
+      )
+    ) == .accepted(
+      text: candidate,
+      operations: [
+        .selectExplicitCorrection(
+          removed: ["the", "draft"],
+          kept: ["the", "final", "report", "to", "priya"]
+        )
+      ]
+    )
+  )
+
+  if case .accepted = validator.validate(
+    candidate: candidate,
+    against: .init(
+      baseline: "Please email the draft, the final report to Priya.",
+      protectedForms: ["Priya"],
+      replacements: 0
+    )
+  ) {
+    Issue.record("An unmarked false start must remain ambiguous")
+  }
+}
+
+@Test func cleanupRegressionPreservesThreeItemChemistryList() {
+  let validator = FaithfulCleanupValidator()
+  let baseline = "first sodium chloride second potassium iodide third copper sulfate"
+  let protectedForms = ["sodium chloride", "potassium iodide", "copper sulfate"]
+  let candidate = "1. sodium chloride\n2. potassium iodide\n3. copper sulfate"
+  #expect(
+    validator.validate(
+      candidate: candidate,
+      against: .init(
+        baseline: baseline,
+        protectedForms: protectedForms,
+        replacements: 0
+      )
+    ) == .accepted(text: candidate, operations: [.formatList])
+  )
+  if case .accepted = validator.validate(
+    candidate: "1. sodium chloride\n2. potassium iodide",
+    against: .init(
+      baseline: baseline,
+      protectedForms: protectedForms,
+      replacements: 0
+    )
+  ) {
+    Issue.record("List formatting must not drop the third chemical")
+  }
+}
+
+@Test func cleanupRegressionPreservesTechnicalIdentifiersDuringFormatting() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate, protectedForms) in [
+    ("use H2SO4 in the assay", "Use H2SO4 in the assay.", ["H2SO4"]),
+    ("use NaCl with C++ and AC/DC", "Use NaCl with C++ and AC/DC.", ["NaCl", "C++", "AC/DC"])
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(
+          baseline: baseline,
+          protectedForms: protectedForms,
+          replacements: 0
+        )
+      ) == .accepted(text: candidate, operations: [.caseChange, .punctuation])
+    )
+  }
+  if case .accepted = validator.validate(
+    candidate: "Use H2SO3 in the assay.",
+    against: .init(
+      baseline: "use H2SO4 in the assay",
+      protectedForms: ["H2SO4"],
+      replacements: 0
+    )
+  ) {
+    Issue.record("A chemical identifier mutation must be rejected")
+  }
+}
+
+@Test func cleanupRegressionPreservesISODateAndURLIdentityDuringFormatting() {
+  let validator = FaithfulCleanupValidator()
+  for (baseline, candidate) in [
+    ("meet on 2026-09-14", "Meet on 2026-09-14."),
+    ("open https://fleck.app/docs", "Open https://fleck.app/docs.")
+  ] {
+    #expect(
+      validator.validate(
+        candidate: candidate,
+        against: .init(baseline: baseline, protectedForms: [], replacements: 0)
+      ) == .accepted(text: candidate, operations: [.caseChange, .punctuation])
+    )
+  }
+  if case .accepted = validator.validate(
+    candidate: "Meet on 2026-09-15.",
+    against: .init(baseline: "meet on 2026-09-14", protectedForms: [], replacements: 0)
+  ) {
+    Issue.record("An ISO date mutation must be rejected")
+  }
+  if case .accepted = validator.validate(
+    candidate: "Open https://fleck.app/help.",
+    against: .init(baseline: "open https://fleck.app/docs", protectedForms: [], replacements: 0)
+  ) {
+    Issue.record("A URL mutation must be rejected")
+  }
+}
+
+@Test func cleanupRegressionPreservesLongTailAndRejectsTruncation() {
+  let prefix = String(repeating: "context ", count: 60)
+  let baseline = prefix + "might not send the final draft to Priya on Friday"
+  let candidate = "Context " + String(repeating: "context ", count: 59)
+    + "might not send the final draft to Priya on Friday."
+  let resolution = PersonalDictionaryResolution(
+    baseline: baseline,
+    protectedForms: ["Priya"],
+    replacements: 0
+  )
+  #expect(CleanupLexeme.tokenCount(baseline) == 70)
+  #expect(
+    FaithfulCleanupValidator().validate(candidate: candidate, against: resolution)
+      == .accepted(text: candidate, operations: [.caseChange, .punctuation])
+  )
+  if case .accepted = FaithfulCleanupValidator().validate(
+    candidate: prefix + "might not send the final draft.",
+    against: resolution
+  ) {
+    Issue.record("A long-tail candidate must not drop its recipient and date")
+  }
+}
