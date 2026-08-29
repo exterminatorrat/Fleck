@@ -138,4 +138,3 @@
 - [ ] **Step 9: Self-review and commit**
 
   Re-read every visible string, scan for em-dash characters, confirm no unapproved claim or real user data, review the full diff, then commit with message: `feat: integrate Fleck hero product story`
-
