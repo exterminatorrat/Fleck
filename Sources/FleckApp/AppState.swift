@@ -392,8 +392,9 @@
     ) -> Bool {
       guard
         smartCaptureTransferOwnerID == nil,
+        awaitedSaveCount == 0,
+        pendingRestoreNoteIDs.isEmpty,
         smartCaptureTransferNoteIDs.isDisjoint(with: noteIDs),
-        pendingRestoreNoteIDs.isDisjoint(with: noteIDs),
         noteIDs.allSatisfy({ noteAccessTransactionLocks[$0] == nil })
       else { return false }
       smartCaptureTransferOwnerID = ownerID

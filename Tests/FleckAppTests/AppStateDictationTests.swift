@@ -925,6 +925,116 @@ import Testing
   #expect(persisted.notes.first(where: { $0.id == third.id })?.body == "Third-note edit")
 }
 
+@Test @MainActor func appStateDictationMoveRefusesUnrelatedAwaitedCaptureFailure()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox")
+  let destination = Note(title: "Projects")
+  let third = Note(title: "Third")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination, third], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store, blockedAttempt: 2)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [inbox.id, destination.id, third.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let thirdCaptureTask = Task { @MainActor in
+    do {
+      _ = try await state.saveSmartCapture(
+        text: "Other",
+        captureID: UUID(),
+        destinationID: third.id
+      )
+      return false
+    } catch {
+      return true
+    }
+  }
+  await blockedSave.waitUntilStarted()
+  let workspaceDuringThirdCapture = state.workspace
+
+  #expect(await state.moveSmartCapture(receipt, to: destination.id) == nil)
+  #expect(state.workspace == workspaceDuringThirdCapture)
+  #expect(await blockedSave.currentSaveCount() == 2)
+
+  await blockedSave.fail()
+  #expect(await thirdCaptureTask.value)
+  let persisted = try await store.loadWorkspace()
+  #expect(persisted.notes.first(where: { $0.id == inbox.id })?.body == "Captured")
+  #expect(persisted.notes.first(where: { $0.id == destination.id })?.body.isEmpty == true)
+  #expect(persisted.notes.first(where: { $0.id == third.id })?.body.isEmpty == true)
+}
+
+@Test @MainActor func appStateDictationMoveRefusesUnrelatedPendingRestoreSuccess()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox")
+  let destination = Note(title: "Projects")
+  let restored = Note(title: "Restored")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init(),
+    trashedNotes: [restored]
+  )
+  let restoreGate = BlockingRestoreOperation(store: store)
+  let saveRecorder = PrecommitGate(blockedAttempt: .max)
+  let state = AppState(
+    store: store,
+    beforeSaveOperation: {
+      await saveRecorder.run()
+    },
+    restoreOperation: { trashedNote, workspace, preferences, generation in
+      try await restoreGate.restore(
+        trashedNote,
+        into: workspace,
+        preferences: preferences,
+        generation: generation
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let trashed = try #require(state.trashedNotes.first(where: { $0.id == restored.id }))
+  let restoreTask = try #require(state.restore(trashed))
+  await restoreGate.waitUntilStarted()
+  let workspaceDuringRestore = state.workspace
+
+  #expect(await state.moveSmartCapture(receipt, to: destination.id) == nil)
+  #expect(state.workspace == workspaceDuringRestore)
+  #expect(await saveRecorder.currentAttemptCount() == 1)
+
+  await restoreGate.release()
+  await restoreTask.value
+  let persisted = try await store.loadWorkspace()
+  #expect(persisted.notes.first(where: { $0.id == inbox.id })?.body == "Captured")
+  #expect(persisted.notes.first(where: { $0.id == destination.id })?.body.isEmpty == true)
+  #expect(persisted.notes.contains(where: { $0.id == restored.id }))
+}
+
 @Test @MainActor func appStateDictationPrecommitCancellationNeverEntersSaveOperation()
   async throws
 {
@@ -1489,6 +1599,49 @@ private actor PrecommitGate {
     startedContinuation?.resume()
     startedContinuation = nil
     await withCheckedContinuation { releaseContinuation = $0 }
+  }
+
+  func waitUntilStarted() async {
+    guard !started else { return }
+    await withCheckedContinuation { startedContinuation = $0 }
+  }
+
+  func release() {
+    releaseContinuation?.resume()
+    releaseContinuation = nil
+  }
+
+  func currentAttemptCount() -> Int {
+    attempt
+  }
+}
+
+private actor BlockingRestoreOperation {
+  private let store: LocalStore
+  private var started = false
+  private var startedContinuation: CheckedContinuation<Void, Never>?
+  private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+  init(store: LocalStore) {
+    self.store = store
+  }
+
+  func restore(
+    _ trashedNote: TrashedNote,
+    into workspace: Workspace,
+    preferences: AppPreferences,
+    generation: UInt64
+  ) async throws -> LocalStore.RestoreOutcome {
+    started = true
+    startedContinuation?.resume()
+    startedContinuation = nil
+    await withCheckedContinuation { releaseContinuation = $0 }
+    return try await store.restore(
+      trashedNote,
+      into: workspace,
+      preferences: preferences,
+      generation: generation
+    )
   }
 
   func waitUntilStarted() async {
