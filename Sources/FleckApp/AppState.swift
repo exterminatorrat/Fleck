@@ -114,8 +114,10 @@
       let receipt: DictationInsertionReceipt
       let noteRevision: UInt64
     }
+    private struct SmartCaptureTransferBusy: Error {}
     private var noteAccessTransactionLocks: [UUID: NoteAccessTransactionLock] = [:]
     private var committedSmartCaptures: [UUID: CommittedSmartCapture] = [:]
+    private var smartCaptureTransferNoteIDs: Set<UUID> = []
     private var pendingRestoreNoteIDs: Set<UUID> = []
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
@@ -295,7 +297,10 @@
       noteID: UUID,
       targetFolderID: UUID?
     ) -> Bool {
-      guard !pendingRestoreNoteIDs.contains(noteID) else { return true }
+      guard
+        !pendingRestoreNoteIDs.contains(noteID),
+        !smartCaptureTransferNoteIDs.contains(noteID)
+      else { return true }
       guard noteAccessTransactionLocks[noteID] != nil else { return false }
       let currentContext = AgentCapabilityPresentation.noteAccessContext(
         for: noteID,
@@ -308,10 +313,14 @@
     private func isLockedNote(_ noteID: UUID) -> Bool {
       pendingRestoreNoteIDs.contains(noteID)
         || noteAccessTransactionLocks[noteID] != nil
+        || smartCaptureTransferNoteIDs.contains(noteID)
     }
 
     private func isLockedFolder(_ folderID: UUID) -> Bool {
       noteAccessTransactionLocks.values.contains { $0.folderID == folderID }
+        || smartCaptureTransferNoteIDs.contains { noteID in
+          workspace.notes.first(where: { $0.id == noteID })?.folderID == folderID
+        }
         || pendingRestoreNoteIDs.contains { noteID in
           workspace.notes.first(where: { $0.id == noteID })?.folderID == folderID
         }
@@ -346,7 +355,10 @@
       ownerID: UUID,
       capturedContexts: [UUID: AgentNoteAccessContext] = [:]
     ) -> Bool {
-      guard noteIDs.allSatisfy({ noteAccessTransactionLocks[$0] == nil }) else {
+      guard
+        smartCaptureTransferNoteIDs.isDisjoint(with: noteIDs),
+        noteIDs.allSatisfy({ noteAccessTransactionLocks[$0] == nil })
+      else {
         return false
       }
       for noteID in noteIDs {
@@ -364,6 +376,20 @@
         )
       }
       return true
+    }
+
+    private func acquireSmartCaptureTransferLock(for noteIDs: Set<UUID>) -> Bool {
+      guard
+        smartCaptureTransferNoteIDs.isDisjoint(with: noteIDs),
+        pendingRestoreNoteIDs.isDisjoint(with: noteIDs),
+        noteIDs.allSatisfy({ noteAccessTransactionLocks[$0] == nil })
+      else { return false }
+      smartCaptureTransferNoteIDs.formUnion(noteIDs)
+      return true
+    }
+
+    private func releaseSmartCaptureTransferLock(for noteIDs: Set<UUID>) {
+      smartCaptureTransferNoteIDs.subtract(noteIDs)
     }
 
     private func releaseNoteAccessTransactionLocks(
@@ -682,6 +708,9 @@
         )
       )
       let noteID = workspace.notes[destinationIndex].id
+      guard !smartCaptureTransferNoteIDs.contains(noteID) else {
+        throw SmartCaptureTransferBusy()
+      }
       workspace.updateContent(
         id: noteID,
         body: appended.body,
@@ -751,6 +780,9 @@
           fontSize: preferences.fontSize
         )
       )
+      let lockedNoteIDs: Set<UUID> = [source.id, destination.id]
+      guard acquireSmartCaptureTransferLock(for: lockedNoteIDs) else { return nil }
+      defer { releaseSmartCaptureTransferLock(for: lockedNoteIDs) }
       let previousDestinationCapture = committedSmartCaptures[destinationID]
 
       beginAwaitedSave()
@@ -778,7 +810,6 @@
         } onCancel: {
           saveTask.cancel()
         }
-        try Task.checkCancellation()
       } catch {
         rollbackSmartCaptureMove(
           source: source,
@@ -807,6 +838,7 @@
       guard let index = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }) else {
         return false
       }
+      guard !smartCaptureTransferNoteIDs.contains(receipt.noteID) else { return false }
       beginAwaitedSave()
       defer { endAwaitedSave() }
       workspace.selectedNoteID = receipt.noteID
@@ -1058,6 +1090,7 @@
       if suppressConfirmation {
         preferences.confirmBeforeMovingNotesToTrash = false
       }
+      committedSmartCaptures.removeValue(forKey: id)
       pendingTrashNotes[id] = note
       workspace.deleteNote(id: id)
       saveNow()
@@ -1080,6 +1113,7 @@
       if suppressConfirmation {
         preferences.confirmBeforeMovingNotesToTrash = false
       }
+      committedSmartCaptures.removeValue(forKey: id)
       pendingTrashNotes[id] = note
       var updated = workspace
       updated.deleteNote(id: id)
@@ -1123,12 +1157,14 @@
     }
 
     func togglePinned(_ id: UUID) {
+      guard !smartCaptureTransferNoteIDs.contains(id) else { return }
       workspace.togglePinned(id: id)
       scheduleSave()
     }
 
     func updateSelected(title: String? = nil, body: String? = nil) {
       guard let id = workspace.selectedNoteID else { return }
+      guard !smartCaptureTransferNoteIDs.contains(id) else { return }
       let originalWorkspace = workspace
       if let title {
         workspace.updateNote(id: id, title: title)
@@ -1144,6 +1180,7 @@
 
     func updateSelected(body: String, richTextRTF: Data?) {
       guard let id = workspace.selectedNoteID else { return }
+      guard !smartCaptureTransferNoteIDs.contains(id) else { return }
       let originalWorkspace = workspace
       workspace.updateContent(id: id, body: body, rtf: richTextRTF)
       guard workspace != originalWorkspace else { return }
@@ -1157,12 +1194,14 @@
 
     func setSelectedTabColor(_ hex: String?) {
       guard let id = workspace.selectedNoteID else { return }
+      guard !smartCaptureTransferNoteIDs.contains(id) else { return }
       workspace.setTabColor(id: id, hex: hex)
       scheduleSave()
     }
 
     func setSelectedTitleFontFamily(_ family: String?) {
       guard let id = workspace.selectedNoteID else { return }
+      guard !smartCaptureTransferNoteIDs.contains(id) else { return }
       let originalWorkspace = workspace
       workspace.setTitleFontFamily(id: id, family: family)
       guard workspace != originalWorkspace else { return }
@@ -1245,6 +1284,7 @@
         return nil
       }
       setAgentCapabilityNoteExclusion(trashedNote.id, excluded: true)
+      committedSmartCaptures.removeValue(forKey: trashedNote.id)
       debouncedSaveTask?.cancel()
       resetSaveStatus()
       pendingTrashNotes.removeValue(forKey: trashedNote.id)
@@ -1318,6 +1358,7 @@
     private func load() async -> Bool {
       do {
         let snapshot = try await store.loadSnapshot()
+        committedSmartCaptures.removeAll()
         workspace = snapshot.workspace
         preferences = snapshot.preferences
         initialSnapshotSource = snapshot.source
@@ -1489,6 +1530,9 @@
           recoveryAction: "Wait for Trash to finish saving, then retry."
         )
       }
+      guard smartCaptureTransferNoteIDs.isEmpty else {
+        throw AgentWorkspaceError(code: .revisionConflict)
+      }
       guard isLockedContextUnchanged(in: self.workspace),
         isLockedContextUnchanged(in: workspace)
       else {
@@ -1512,6 +1556,7 @@
         throw AgentWorkspaceError(code: .internalSaveFailure)
       }
 
+      committedSmartCaptures.removeAll()
       self.workspace = workspace
       persistenceGeneration = committedGeneration
       agentCommitProofs.removeAll {

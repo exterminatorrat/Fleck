@@ -795,7 +795,7 @@ import Testing
   #expect(retry?.noteID == destination.id)
 }
 
-@Test @MainActor func appStateDictationFailedMoveDoesNotOverwriteInterleavedEditAfterReorder()
+@Test @MainActor func appStateDictationMoveLocksProductEditsButPreservesReorderOnFailure()
   async throws
 {
   let root = temporaryStoreRoot()
@@ -829,12 +829,27 @@ import Testing
   }
   await blockedSave.waitUntilStarted()
   state.moveNote(destination.id, to: 0)
-  let later = NoteTextAppender.appending("Later destination edit", to: Note())
-  state.workspace.updateContent(
-    id: destination.id,
-    body: later.body,
-    rtf: later.richTextRTF
+  state.select(inbox.id)
+  state.updateSelected(body: "Source-side edit")
+  #expect(
+    state.workspace.notes.first(where: { $0.id == inbox.id })?.body
+      == "Existing Inbox"
   )
+  state.select(destination.id)
+  let destinationDuringMove = try #require(
+    state.workspace.notes.first(where: { $0.id == destination.id })
+  )
+  let appendedEdit = NoteTextAppender.appending("Later edit", to: destinationDuringMove)
+  state.updateSelected(body: appendedEdit.body, richTextRTF: appendedEdit.richTextRTF)
+  state.setSelectedTabColor("#123456")
+  state.togglePinned(destination.id)
+  #expect(
+    state.workspace.notes.first(where: { $0.id == destination.id })?.body
+      == "Existing Project\n\nCaptured"
+  )
+  #expect(state.workspace.notes.first(where: { $0.id == destination.id })?.tabColorHex == nil)
+  #expect(state.workspace.notes.first(where: { $0.id == destination.id })?.isPinned == false)
+  #expect(!state.moveToTrash(inbox.id))
   await blockedSave.fail()
 
   #expect(await task.value == nil)
@@ -845,8 +860,9 @@ import Testing
   )
   #expect(
     state.workspace.notes.first(where: { $0.id == destination.id })?.body
-      == "Later destination edit"
+      == "Existing Project"
   )
+  #expect(state.workspace.selectedNoteID == destination.id)
 }
 
 @Test @MainActor func appStateDictationCancelledMoveLeavesSourceAuthoritative() async throws {
@@ -896,6 +912,90 @@ import Testing
       == "Existing Project"
   )
   #expect(await state.moveSmartCapture(receipt, to: destination.id)?.noteID == destination.id)
+}
+
+@Test @MainActor func appStateDictationCommittedMoveWinsLateCallerCancellation() async throws {
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox", body: "Existing Inbox")
+  let destination = Note(title: "Projects", body: "Existing Project")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let blockedSave = PostCommitBlockedSave(store: store)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let task = Task { @MainActor in
+    await state.moveSmartCapture(receipt, to: destination.id)
+  }
+  await blockedSave.waitUntilCommitted()
+  task.cancel()
+  await blockedSave.release()
+
+  let moved = try #require(await task.value)
+  #expect(moved.noteID == destination.id)
+  #expect(
+    state.workspace.notes.first(where: { $0.id == inbox.id })?.body
+      == "Existing Inbox"
+  )
+  #expect(
+    state.workspace.notes.first(where: { $0.id == destination.id })?.body
+      == "Existing Project\n\nCaptured"
+  )
+  let persisted = try await store.loadWorkspace()
+  #expect(persisted.notes.first(where: { $0.id == inbox.id })?.body == "Existing Inbox")
+  #expect(
+    persisted.notes.first(where: { $0.id == destination.id })?.body
+      == "Existing Project\n\nCaptured"
+  )
+}
+
+@Test @MainActor func appStateDictationTrashRestoreInvalidatesReceiptBinding() async throws {
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox")
+  let destination = Note(title: "Projects")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let state = try await loadedState(store: store, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+
+  #expect(state.moveToTrash(inbox.id))
+  try await state.flushFocusedDictationSave()
+  await state.refreshTrash()
+  let trashed = try #require(state.trashedNotes.first(where: { $0.id == inbox.id }))
+  let restoreTask = try #require(state.restore(trashed))
+  await restoreTask.value
+  let restored = try #require(state.workspace.notes.first(where: { $0.id == inbox.id }))
+  #expect(restored.body == "Captured")
+  #expect(restored.revision == 1)
+
+  #expect(await state.moveSmartCapture(receipt, to: destination.id) == nil)
+  #expect(state.workspace.notes.first(where: { $0.id == inbox.id })?.body == "Captured")
+  #expect(state.workspace.notes.first(where: { $0.id == destination.id })?.body.isEmpty == true)
 }
 
 @Test @MainActor func appStateDictationUndoRemovesOnlyTheRecordedSuffixAndPersists() async throws {
@@ -1247,6 +1347,47 @@ private actor CancellationAwareBlockedSave {
   func waitUntilStarted() async {
     guard !started else { return }
     await withCheckedContinuation { startedContinuation = $0 }
+  }
+
+  func release() {
+    releaseContinuation?.resume()
+    releaseContinuation = nil
+  }
+}
+
+private actor PostCommitBlockedSave {
+  private let store: LocalStore
+  private var saveCount = 0
+  private var committed = false
+  private var committedContinuation: CheckedContinuation<Void, Never>?
+  private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+  init(store: LocalStore) {
+    self.store = store
+  }
+
+  func save(
+    workspace: Workspace,
+    preferences: AppPreferences,
+    trashedNotes: [Note]
+  ) async throws {
+    saveCount += 1
+    try await store.save(
+      workspace: workspace,
+      preferences: preferences,
+      trashedNotes: trashedNotes
+    )
+    if saveCount == 2 {
+      committed = true
+      committedContinuation?.resume()
+      committedContinuation = nil
+      await withCheckedContinuation { releaseContinuation = $0 }
+    }
+  }
+
+  func waitUntilCommitted() async {
+    guard !committed else { return }
+    await withCheckedContinuation { committedContinuation = $0 }
   }
 
   func release() {
