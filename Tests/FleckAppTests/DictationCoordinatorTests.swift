@@ -986,7 +986,8 @@ private func waitForCompletion(
     captureID: captureID,
     noteID: personal.noteID
   ) == .failed(
-    "Still saved to Inbox. Personal is no longer available. Choose another note or keep this dictation in Inbox."
+    status: "Inbox saved · retry",
+    message: "Still saved to Inbox. Personal is no longer available. Choose another note or keep this dictation in Inbox."
   ))
   #expect(fixture.coordinator.routingAmbiguity?.choices.map(\.destination) == [project])
 
@@ -1027,7 +1028,8 @@ private func waitForCompletion(
     captureID: captureID,
     noteID: project.noteID
   ) == .failed(
-    "Still saved to Inbox. Could not move to Project. Choose a destination to retry or keep this dictation in Inbox."
+    status: "Inbox saved · retry",
+    message: "Still saved to Inbox. Could not move to Project. Choose a destination to retry or keep this dictation in Inbox."
   ))
   #expect(fixture.coordinator.recoveryReceipt == inboxReceipt)
   #expect(fixture.coordinator.routingAmbiguity?.captureID == captureID)
@@ -1062,7 +1064,8 @@ private func waitForCompletion(
     captureID: captureID,
     noteID: project.noteID
   ) == .failed(
-    "Still saved to Project. Dictation History could not be updated. Retry Project or choose another note."
+    status: "Project saved · retry",
+    message: "Still saved to Project. Dictation History could not be updated. Retry Project or choose another note."
   ))
   #expect(fixture.coordinator.recoveryReceipt?.noteID == project.noteID)
   #expect(fixture.coordinator.recoveryAction == .undo)
@@ -1079,9 +1082,25 @@ private func waitForCompletion(
     captureID: captureID,
     noteID: project.noteID
   ) == .failed(
-    "Still saved to Project. Dictation History could not be updated. Retry Project or choose another note."
+    status: "Project saved · retry",
+    message: "Still saved to Project. Dictation History could not be updated. Retry Project or choose another note."
   ))
   #expect(fixture.saver.moveCount == 1)
+
+  fixture.saver.destinations.removeAll()
+  let unavailableResult = await fixture.coordinator.chooseDestination(
+    captureID: captureID,
+    noteID: personal.noteID
+  )
+  guard case .failed(let status, let message) = unavailableResult else {
+    Issue.record("Expected an actionable failure after every choice was deleted")
+    return
+  }
+  #expect(status == "Project saved · undo")
+  #expect(message.contains("Undo"))
+  #expect(!message.contains("Choose another note"))
+  #expect(fixture.coordinator.routingAmbiguity?.choices.isEmpty == true)
+  #expect(fixture.coordinator.recoveryAction == .undo)
 }
 
 @Test @MainActor func newCaptureAndUndoClearOnlyTheirCaptureBoundChooser() async throws {

@@ -47,7 +47,7 @@ enum DictationRecoveryResult: Equatable {
 
 enum DictationDestinationChoiceResult: Equatable {
   case completed
-  case failed(String)
+  case failed(status: String, message: String)
 }
 
 @MainActor
@@ -1238,15 +1238,31 @@ final class DictationCoordinator {
     let savedSummary = pending.record.cleanupOutcome == .cleaned
       ? "Still saved to \(currentTitle)."
       : "Still saved to \(currentTitle) without cleanup."
+    let visibleSavedSummary = pending.record.cleanupOutcome == .cleaned
+      ? "\(currentTitle) saved"
+      : "\(currentTitle) saved raw"
     let canKeepCurrent = pending.receipt.noteID == pending.inboxID
     guard let choice = activeChoices.first(where: {
       $0.destination == requestedChoice.destination
     }) else {
-      let recovery = canKeepCurrent
-        ? "Choose another note or keep this dictation in Inbox."
-        : "Choose another note."
+      let hasAlternative = !activeChoices.isEmpty
+      let recovery: String
+      let visibleRecovery: String
+      if hasAlternative {
+        recovery = canKeepCurrent
+          ? "Choose another note or keep this dictation in Inbox."
+          : "Choose another note."
+        visibleRecovery = "retry"
+      } else if canKeepCurrent {
+        recovery = "Keep this dictation in Inbox or use Undo."
+        visibleRecovery = "keep/undo"
+      } else {
+        recovery = "Use Undo to recover this dictation."
+        visibleRecovery = "undo"
+      }
       return .failed(
-        "\(savedSummary) \(requestedChoice.destination.title) is no longer available. \(recovery)"
+        status: "\(visibleSavedSummary) · \(visibleRecovery)",
+        message: "\(savedSummary) \(requestedChoice.destination.title) is no longer available. \(recovery)"
       )
     }
 
@@ -1261,7 +1277,8 @@ final class DictationCoordinator {
           ? "Choose a destination to retry or keep this dictation in Inbox."
           : "Choose a destination to retry."
         return .failed(
-          "\(savedSummary) Could not move to \(choice.destination.title). \(recovery)"
+          status: "\(visibleSavedSummary) · retry",
+          message: "\(savedSummary) Could not move to \(choice.destination.title). \(recovery)"
         )
       }
       pending.receipt = movedReceipt
@@ -1280,8 +1297,12 @@ final class DictationCoordinator {
       let movedSummary = pending.record.cleanupOutcome == .cleaned
         ? "Still saved to \(choice.destination.title)."
         : "Still saved to \(choice.destination.title) without cleanup."
+      let visibleMovedSummary = pending.record.cleanupOutcome == .cleaned
+        ? "\(choice.destination.title) saved"
+        : "\(choice.destination.title) saved raw"
       return .failed(
-        "\(movedSummary) Dictation History could not be updated. Retry \(choice.destination.title) or choose another note."
+        status: "\(visibleMovedSummary) · retry",
+        message: "\(movedSummary) Dictation History could not be updated. Retry \(choice.destination.title) or choose another note."
       )
     }
     clearRoutingAmbiguity(captureID: captureID)

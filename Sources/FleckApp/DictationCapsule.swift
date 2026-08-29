@@ -12,6 +12,7 @@
     case saved(destination: String)
     case savedWithoutCleanup(destination: String)
     case repairingModel
+    case routingFailure(status: String, message: String)
     case failed(String)
 
     var presentation: DictationCapsulePresentation {
@@ -73,6 +74,13 @@
           voiceOverText: "Repairing enhanced dictation model",
           symbolName: "wrench.and.screwdriver.fill",
           visualMode: .progress
+        )
+      case .routingFailure(let status, let message):
+        .init(
+          visibleText: status,
+          voiceOverText: "Dictation routing needs attention: \(message)",
+          symbolName: "exclamationmark.circle.fill",
+          visualMode: .failure
         )
       case .failed(let message):
         .init(
@@ -384,7 +392,7 @@
       case .listening:
         listeningSize
       case .finalizing, .cleaning, .routing, .saved, .savedWithoutCleanup,
-        .repairingModel, .failed:
+        .repairingModel, .routingFailure, .failed:
         activeSize
       }
     }
@@ -475,7 +483,9 @@
     ) {
       contentGeneration &+= 1
       let generation = contentGeneration
-      panel.allowsActions = action != nil || chooser?.choices.isEmpty == false
+      panel.allowsActions = action != nil
+        || chooser?.choices.isEmpty == false
+        || chooser?.allowsKeepInInbox == true
       let view = AnyView(
         DictationCapsuleView(
           presentation: status.presentation,
@@ -706,8 +716,8 @@
 
     @ViewBuilder
     private var chooserMenu: some View {
-      if let chooser, !chooser.choices.isEmpty {
-        Menu("Choose note") {
+      if let chooser, !chooser.choices.isEmpty || chooser.allowsKeepInInbox {
+        Menu(chooser.choices.isEmpty ? "Keep in Inbox" : "Choose note") {
           ForEach(chooser.choices) { choice in
             Button(choice.menuTitle) {
               onChoice(chooser.captureID, choice.id)

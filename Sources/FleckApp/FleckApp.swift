@@ -484,7 +484,11 @@
     private var capsuleGeneration: UInt64 = 0
     private var routingChoiceInFlightCaptureID: UUID?
     private var routingChooserSnapshot: RoutingChooserSnapshot?
-    private var routingChoiceFailure: (captureID: UUID, message: String)?
+    private var routingChoiceFailure: (
+      captureID: UUID,
+      status: String,
+      message: String
+    )?
     private var preloadCapsuleUpdate: CapsuleUpdate?
     private var startupAssessmentTask: Task<Void, Never>?
     private var initialLoadSynchronizationTask: Task<Void, Never>?
@@ -1221,6 +1225,7 @@
           coordinator.recoveryReceipt?.noteID == destination.noteID
         {
           snapshot.destination = destination
+          routingChoiceFailure = nil
         }
         routingChooserSnapshot = snapshot
         return
@@ -1260,7 +1265,9 @@
       }
       return (
         routingChoiceFailure.flatMap { failure in
-          failure.captureID == ambiguity.captureID ? .failed(failure.message) : nil
+          failure.captureID == ambiguity.captureID
+            ? .routingFailure(status: failure.status, message: failure.message)
+            : nil
         } ?? snapshot.status,
         DictationCapsuleChooser(
           ambiguity: ambiguity,
@@ -1615,8 +1622,8 @@
         replayLiveCapsuleOrIdle()
         return
       }
-      if case .failed(let message) = result {
-        routingChoiceFailure = (captureID, message)
+      if case .failed(let status, let message) = result {
+        routingChoiceFailure = (captureID, status, message)
         replayLiveCapsuleOrIdle()
         return
       }
