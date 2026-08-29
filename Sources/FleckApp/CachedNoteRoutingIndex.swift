@@ -51,6 +51,7 @@ actor CachedNoteRoutingIndex {
   private struct Note {
     let noteID: UUID
     let destinationTitle: String
+    let destinationTitleWasTruncated: Bool
     let contentRevision: UInt64
     let titleTerms: Set<String>
     let titleTrigrams: Set<String>
@@ -206,8 +207,10 @@ actor CachedNoteRoutingIndex {
         candidate.destination.title,
         maximumUTF8Count: Self.maximumTitleUTF8Count
       )
+      let titleWasTruncated = boundedTitle != candidate.destination.title
       guard cached?.contentRevision != candidate.contentRevision
-              || cached?.destinationTitle != boundedTitle else {
+              || cached?.destinationTitle != boundedTitle
+              || cached?.destinationTitleWasTruncated != titleWasTruncated else {
         continue
       }
       guard let prepared = Self.prepare(candidate) else { return false }
@@ -231,6 +234,7 @@ actor CachedNoteRoutingIndex {
       candidate.destination.title,
       maximumUTF8Count: Self.maximumTitleUTF8Count
     )
+    let titleWasTruncated = boundedTitle != candidate.destination.title
     let normalizedTitle = Self.normalizedWhitespace(boundedTitle)
     let boundedTitleTerms = Self.boundedMeaningfulTerms(
       in: normalizedTitle,
@@ -248,11 +252,12 @@ actor CachedNoteRoutingIndex {
     let note = Note(
       noteID: noteID,
       destinationTitle: boundedTitle,
+      destinationTitleWasTruncated: titleWasTruncated,
       contentRevision: candidate.contentRevision,
       titleTerms: titleTerms,
       titleTrigrams: titleTrigrams,
       passageIDs: passageIDs,
-      requiresCompletenessGuard: boundedTitle != candidate.destination.title
+      requiresCompletenessGuard: titleWasTruncated
         || boundedTitleTerms.wasTruncated
         || boundedTitleTrigrams.wasTruncated
         || preparedBody.requiresCompletenessGuard

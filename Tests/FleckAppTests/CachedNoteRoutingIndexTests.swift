@@ -231,6 +231,44 @@ import Testing
   ).isEmpty)
 }
 
+@Test func cachedRoutingReindexesWhenATitleCrossesTheBoundedIdentityBoundary() async {
+  let apparent = cachedRoutingCandidate(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000064")!,
+    title: "Apparent",
+    body: "zxqvbp indexed evidence",
+    revision: 7
+  )
+  let boundaryID = UUID(uuidString: "00000000-0000-0000-0000-000000000065")!
+  let boundaryTitle = String(repeating: " ", count: 2_041) + "Archive"
+  let original = cachedRoutingCandidate(
+    id: boundaryID,
+    title: boundaryTitle,
+    body: "ordinary archive material",
+    revision: 7
+  )
+  let appended = cachedRoutingCandidate(
+    id: boundaryID,
+    title: boundaryTitle + " zxqvbp",
+    body: "ordinary archive material",
+    revision: 7
+  )
+  let index = CachedNoteRoutingIndex()
+
+  #expect(boundaryTitle.utf8.count == 2_048)
+  #expect(await index.retrieve(
+    transcript: "zxqvbp",
+    candidates: [apparent, original]
+  ).first?.candidate == apparent)
+  #expect(await index.retrieve(
+    transcript: "zxqvbp",
+    candidates: [appended, apparent]
+  ).isEmpty)
+  #expect(await index.retrieve(
+    transcript: "zxqvbp",
+    candidates: [apparent]
+  ).first?.candidate == apparent)
+}
+
 @Test func cachedRoutingReindexesAChangedTitleWithoutARevisionChange() async {
   let id = UUID(uuidString: "00000000-0000-0000-0000-000000000062")!
   let original = cachedRoutingCandidate(
