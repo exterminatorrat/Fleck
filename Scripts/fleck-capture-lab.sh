@@ -28,6 +28,15 @@ reject_symlinks() {
   done
 }
 
+reject_tree_symlinks() {
+  local root
+  local symlinks
+  for root in "$@"; do
+    symlinks="$(/usr/bin/find -P "$root" -type l -print)"
+    [[ -z "$symlinks" ]] || die "capture session paths must not be symlinks"
+  done
+}
+
 resolve_capture_tool() {
   cd "$repo_root"
   swift build --product fleck-capture-lab --disable-automatic-resolution
@@ -113,6 +122,7 @@ case "${1:-}" in
   verify)
     [[ $# -eq 2 ]] || usage
     read_manifest "$2"
+    reject_tree_symlinks "$fleck_root" "$fake_repo"
     resolve_capture_tool
     "$capture_tool" verify --manifest "$manifest"
     scratch_path="$session_root/SwiftPMBuild/NorthstarDemo"

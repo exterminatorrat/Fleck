@@ -12,7 +12,27 @@ expect_error() {
     printf 'expected command to fail: %s\n' "$*" >&2
     exit 1
   fi
-  test "$actual" = "$expected"
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'expected error: %s\nactual error: %s\n' "$expected" "$actual" >&2
+    exit 1
+  fi
+}
+
+assert_rejects_fixture_symlink() {
+  local operation="$1"
+  local fixture_path="$2"
+  local sentinel_target="$3"
+  local label="$4"
+  local holding_path="$symlink_sentinel_root/original-$label"
+  local rejected_link="$symlink_sentinel_root/rejected-$label"
+
+  /bin/mv "$fixture_path" "$holding_path"
+  /bin/ln -s "$sentinel_target" "$fixture_path"
+  expect_error \
+    "$symlink_error" \
+    Scripts/fleck-capture-lab.sh "$operation" "$manifest"
+  /bin/mv "$fixture_path" "$rejected_link"
+  /bin/mv "$holding_path" "$fixture_path"
 }
 
 cd "$repo_root"
@@ -31,6 +51,8 @@ fake_repo="$(/usr/bin/plutil -extract fakeRepository raw -o - "$manifest")"
 readonly fake_repo
 fleck_app="$(/usr/bin/plutil -extract fleckApp raw -o - "$manifest")"
 readonly fleck_app
+fleck_root="$session_root/Library/Application Support/Fleck"
+readonly fleck_root
 [[ "$session_root" =~ ^/tmp/fleck-demo\.[[:alnum:]]{6}$ ]]
 test "$(printf '%s\n' "$session_output" | sed -n 's/^Session: //p')" = "$session_root"
 test "$(printf '%s\n' "$session_output" | sed -n 's/^Fleck app: //p')" = "$fleck_app"
@@ -41,6 +63,45 @@ test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
 Scripts/fleck-capture-lab.sh verify "$manifest"
 test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
 test -d "$session_root/SwiftPMBuild/NorthstarDemo"
+
+readonly symlink_error="error: capture session paths must not be symlinks"
+symlink_sentinel_root="$(/usr/bin/mktemp -d /tmp/fleck-symlink-sentinel.XXXXXX)"
+readonly symlink_sentinel_root
+sentinel_file="$symlink_sentinel_root/external-file"
+readonly sentinel_file
+sentinel_directory="$symlink_sentinel_root/external-directory"
+readonly sentinel_directory
+printf 'external sentinel\n' > "$sentinel_file"
+/bin/mkdir -p "$sentinel_directory"
+printf 'external directory sentinel\n' > "$sentinel_directory/sentinel"
+
+assert_rejects_fixture_symlink verify \
+  "$fleck_root/11111111-1111-4111-8111-111111111111.md" \
+  "$sentinel_file" \
+  "fleck-note"
+assert_rejects_fixture_symlink verify \
+  "$fake_repo/Package.swift" \
+  "$sentinel_file" \
+  "northstar-package"
+assert_rejects_fixture_symlink verify \
+  "$fake_repo/Sources" \
+  "$sentinel_directory" \
+  "northstar-sources"
+assert_rejects_fixture_symlink verify \
+  "$fake_repo/Tests" \
+  "$sentinel_directory" \
+  "northstar-tests"
+assert_rejects_fixture_symlink verify \
+  "$fake_repo/README.md" \
+  "$sentinel_file" \
+  "northstar-readme"
+assert_rejects_fixture_symlink verify \
+  "$fake_repo/.git" \
+  "$sentinel_directory" \
+  "northstar-git"
+test "$(<"$sentinel_file")" = "external sentinel"
+test "$(<"$sentinel_directory/sentinel")" = "external directory sentinel"
+test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
 
 fake_bin="$session_root/TestBin"
 readonly fake_bin
@@ -92,8 +153,41 @@ readonly expected_codex_output
 test "$codex_output" = "$expected_codex_output"
 [[ "$codex_output" != *"codex mcp add"* ]]
 
+external_integrations="$symlink_sentinel_root/ExternalAgentIntegrations"
+readonly external_integrations
+/bin/mkdir -p "$external_integrations"
+printf 'external profile sentinel\n' > "$external_integrations/profiles.json"
+external_bridge="$symlink_sentinel_root/ExternalAgentBridge"
+readonly external_bridge
+/bin/mkdir -p "$external_bridge/bin"
+printf '#!/bin/sh\nexit 0\n' > "$external_bridge/bin/fleck"
+/bin/chmod 755 "$external_bridge/bin/fleck"
+
+test ! -L "$session_root/Library"
+test ! -L "$session_root/Library/Application Support"
+test ! -L "$fleck_root"
+assert_rejects_fixture_symlink codex-command \
+  "$profiles_dir" \
+  "$external_integrations" \
+  "codex-agent-integrations"
+assert_rejects_fixture_symlink codex-command \
+  "$profiles" \
+  "$external_integrations/profiles.json" \
+  "codex-profiles"
+assert_rejects_fixture_symlink codex-command \
+  "$fleck_root/AgentBridge" \
+  "$external_bridge" \
+  "codex-agent-bridge"
+assert_rejects_fixture_symlink codex-command \
+  "$(dirname -- "$installed_helper")" \
+  "$external_bridge/bin" \
+  "codex-agent-bridge-bin"
+assert_rejects_fixture_symlink codex-command \
+  "$installed_helper" \
+  "$external_bridge/bin/fleck" \
+  "codex-helper"
+
 readonly exact_path_error="error: capture manifest path must use /tmp/fleck-demo.XXXXXX/fleck-capture-manifest.json"
-readonly symlink_error="error: capture session paths must not be symlinks"
 expect_error \
   "$exact_path_error" \
   Scripts/fleck-capture-lab.sh verify "$session_root/./fleck-capture-manifest.json"
@@ -115,8 +209,6 @@ expect_error \
   "$symlink_error" \
   Scripts/fleck-capture-lab.sh verify "$session_link/fleck-capture-manifest.json"
 
-fleck_root="$session_root/Library/Application Support/Fleck"
-readonly fleck_root
 fleck_redirect="$(/usr/bin/mktemp -d /tmp/fleck-redirection.XXXXXX)"
 readonly fleck_redirect
 /bin/mv "$fleck_root" "$fleck_redirect/Fleck"
