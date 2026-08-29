@@ -139,7 +139,7 @@ The primary session must inspect each diff, rerun required verification, and the
    - Rebuild the newest accepted Fleck source at the exact Packet 1 commit and record a reproducible receipt.
    - Use the capture-lab wrapper and actual Fleck UI. Use actual Codex CLI connected through Fleck's real MCP connector in the synthetic `NorthstarDemo` repository.
    - Use Fleck dark appearance, a clean dark Terminal/Codex appearance, a generic non-personal dark landscape desktop, the actual menu bar, Dock, and cursor.
-   - Source the complete Space Black MacBook Pro M3 2023 mockup from Unio Creative Solutions via the documented Free Design Resources page that labels the asset `100% Free`. Do not accept an account agreement, purchase a license, or reuse Apple.com imagery. If the stated license or author cannot be preserved in provenance, stop this packet rather than substitute an unlicensed device.
+   - Render the complete Space Black MacBook from William Laverty's pinned `rigged-macbook-3d` GLB at commit `74771a18884dade35cdf79c7614628100f0f893a`. Verify the expected source SHA-256 `558e34c8371297dccb75786e77f2246a4604effe5937288ff4f73f97dd81d6a0`; retain jackbaeten and William Laverty attribution, CC BY 4.0 link, derivative notice, source commit, and render changes in provenance. This is a local-development asset subject to the texture-quality and public-release gates in the design brief.
    - Do not fabricate Fleck, Codex, cursor, test, writeback, or completion states.
 4. **Verification commands and expected evidence**
    - `Scripts/fleck-capture-lab.sh verify <manifest>` passes before the real workflow.
@@ -150,7 +150,7 @@ The primary session must inspect each diff, rerun required verification, and the
    - Keyframe inspection confirms a maximum 0.2 second interval.
    - SHA-256 hashes exist for the rebuilt Fleck executable, raw master, web media, poster, and hardware asset.
 5. **Authority boundaries and required handoff**
-   - Launching the isolated app, creating an isolated profile, running Codex against the fake project, recording the screen, temporarily staging a generic background, restoring prior visual state, downloading the already-free asset, and generating local media are in scope.
+   - Launching the isolated app, creating an isolated profile, running Codex against the fake project, recording the screen, temporarily staging a generic background, restoring prior visual state, downloading the pinned CC BY model, using disposable local rendering dependencies, and generating local media are in scope.
    - Never expose or transmit personal data, modify a real repository, add a remote, alter the user's normal Fleck workspace, publish media, or agree to new legal terms.
    - Commit message: `feat: add authentic cinematic hero media`
    - Return the manifest path, build receipt, recording steps, media metadata, hashes, privacy checks, asset provenance, commit SHA, and any editorial cuts.
@@ -211,11 +211,11 @@ The primary session must inspect each diff, rerun required verification, and the
 
 - [ ] **Step 6: Stage a private capture desktop**
 
-  Close unrelated windows and hide personal notifications. Temporarily use a generic dark landscape background only for the capture, retaining enough information to restore the previous appearance immediately afterward. Do not capture account names, notification contents, recent files, personal Dock badges, or unrelated menu-bar utilities.
+  Keep the display at its verified native `2560x1440` resolution. After the Mac is unlocked, visually verify or temporarily stage a licensed generic dark landscape, note and temporarily enable an existing Do Not Disturb state, hide unrelated windows, and remove nonessential status utilities from the capture region without disrupting networking. Do not capture account names, notification contents, recent files, personal Dock badges, or unrelated menu-bar utilities. Record every reversible staging action and restore it after capture.
 
 - [ ] **Step 7: Record real source takes**
 
-  Record native-resolution 60fps source takes through FFmpeg's AVFoundation `Capture screen 0` input with `-framerate 60`, `-capture_cursor 1`, no audio device, and a high-quality intraframe master codec. Capture the real chronological states listed in the design brief. Source takes may be separate so model/build latency can be removed honestly, but each take must show real UI and real state transitions. Use `/usr/sbin/screencapture -v -C` only as a documented fallback if AVFoundation capture fails, and do not accept a fallback master until its frame timing is conformed and visually verified at 60fps.
+  Record a native-pixel `2304x1440` 16:10 crop from `Capture screen 0` through FFmpeg AVFoundation at 60fps with `-capture_cursor 1`, `-capture_mouse_clicks 0`, no audio device, `-n`, constant frame rate, and a ProRes intraframe master. Crop the verified `2560x1440` display with `crop=2304:1440:0:0`; do not change display resolution or scaling. Capture the real chronological states listed in the design brief. Source takes may be separate so model/build latency can be removed honestly, but each take must show real UI and real state transitions. Use `/usr/sbin/screencapture -v -C` only as a documented fallback if AVFoundation capture fails, and do not accept a fallback master until its frame timing is conformed and visually verified at 60fps.
 
 - [ ] **Step 8: Edit the truthful continuous master**
 
@@ -223,7 +223,7 @@ The primary session must inspect each diff, rerun required verification, and the
 
 - [ ] **Step 9: Acquire and prepare the hardware asset**
 
-  Download the Unio Creative Solutions `Macbook Pro 16.2 M3 2023 Mockup` through its stated free-download path. Preserve the original download outside public assets, extract a front-facing complete Space Black device layer at a minimum 3000px source width, and export losslessly to WebP with a transparent or true-white background. Record source page, author, stated license, download date, original hash, derived hash, dimensions, and screen-aperture coordinates.
+  Download `assets/macbook-rigged.glb` directly from pinned commit `74771a18884dade35cdf79c7614628100f0f893a` and reject it unless its SHA-256 is exactly `558e34c8371297dccb75786e77f2246a4604effe5937288ff4f73f97dd81d6a0`. In ignored capture storage, use a reproducible headless Three.js/Chromium renderer with `GLTFLoader` and `MeshoptDecoder` to produce a perfectly straight-on orthographic render at a minimum 3000px width on transparent or true-white output. Keep the complete base, keyboard, trackpad, hinge, and lid visible; derive the exact screen-aperture coordinates from the isolated `Screen` node. Inspect at the final website size and stop if the embedded textures look soft or artificial. Record the pinned source, authors, CC BY 4.0 attribution, derivative notice, download date, source/render hashes, renderer versions, camera, dimensions, and aperture.
 
 - [ ] **Step 10: Encode web outputs**
 

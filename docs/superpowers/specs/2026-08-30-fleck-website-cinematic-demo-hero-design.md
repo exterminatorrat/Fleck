@@ -119,6 +119,10 @@ Asset requirements:
 - The source must permit local design use and commercial website presentation.
 - Before public launch, revalidate the source license and Apple trademark/marketing requirements. Local implementation does not constitute approval to publish.
 
+For the local development proof, use the pinned `rigged-macbook-3d` Space Black derivative at commit `74771a18884dade35cdf79c7614628100f0f893a`. Its isolated `Base`, `Lid`, and `Screen` nodes permit a straight-on orthographic render and exact screen compositing. The embedded model remains CC BY 4.0: preserve attribution to original author jackbaeten, William Laverty's documented derivative changes, the license link, the pinned source commit, and both source and rendered hashes in provenance.
+
+This model is provisional because its embedded texture ceiling is 1024px. Render at a minimum 3000px output width and inspect the keyboard, speaker grilles, hinge, screen edge, and lower base at the actual maximum website size. If those details do not survive inspection, stop rather than sharpen, hallucinate, or disguise them. Public launch still requires a separately cleared production asset or original straight-on photograph plus Apple trademark and marketing review.
+
 Use the hardware art as supplied. Do not add a fake Apple logo, reflections, exaggerated shadows, floating elements, or effects that appear to leave the display.
 
 ## 6. Authentic Demo Environment
