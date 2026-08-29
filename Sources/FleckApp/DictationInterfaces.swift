@@ -61,6 +61,17 @@ protocol TranscriptDictionaryResolving: Sendable {
 struct DictationRoutingCandidate: Equatable, Sendable {
   let destination: DictationDestination
   let semanticContext: String
+  let contentRevision: UInt64
+
+  init(
+    destination: DictationDestination,
+    semanticContext: String,
+    contentRevision: UInt64 = 0
+  ) {
+    self.destination = destination
+    self.semanticContext = semanticContext
+    self.contentRevision = contentRevision
+  }
 }
 
 @MainActor
