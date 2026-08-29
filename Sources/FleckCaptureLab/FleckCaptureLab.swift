@@ -375,6 +375,32 @@ enum WebsiteDemoSession {
     "Tests/NorthstarDemoTests/OnboardingFlowTests.swift",
   ]
 
+  private static let completedOnboardingSource = """
+    public enum PermissionRequestPoint: Equatable, Sendable {
+      case firstLaunch
+      case afterWelcome
+    }
+
+    public struct OnboardingFlow: Sendable {
+      public init() {}
+      public var permissionRequestPoint: PermissionRequestPoint { .afterWelcome }
+      public var welcomeStepCount: Int { 3 }
+    }
+    """
+
+  private static let completedOnboardingTests = """
+    import NorthstarDemo
+    import Testing
+
+    @Test func welcomeFlowHasThreeSteps() {
+      #expect(OnboardingFlow().welcomeStepCount == 3)
+    }
+
+    @Test func requestsLocationAfterWelcome() {
+      #expect(OnboardingFlow().permissionRequestPoint == .afterWelcome)
+    }
+    """
+
   private static func safeSessionRoot(_ root: URL) throws -> URL {
     guard root.isFileURL, root.path.hasPrefix("/") else {
       throw WebsiteDemoError.sessionRootMustBeAbsolute
@@ -494,13 +520,8 @@ enum WebsiteDemoSession {
       try gitOutput(["ls-files", "--others", "--ignored", "--exclude-standard"], at: root)
         .isEmpty,
       try gitOutput(["diff", "--check", "--"], at: root).isEmpty,
-      source.contains(
-        "public var permissionRequestPoint: PermissionRequestPoint { .afterWelcome }"
-      ),
-      !source.contains(
-        "public var permissionRequestPoint: PermissionRequestPoint { .firstLaunch }"
-      ),
-      tests.contains("#expect(OnboardingFlow().permissionRequestPoint == .afterWelcome)")
+      source == completedOnboardingSource,
+      tests == completedOnboardingTests
     else {
       throw WebsiteDemoError.verificationFailed
     }

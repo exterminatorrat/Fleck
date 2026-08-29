@@ -507,10 +507,85 @@ readonly installed_helper
 
 codex_output="$(Scripts/fleck-capture-lab.sh codex-command "$manifest")"
 readonly codex_output
-expected_codex_output="Codex command: codex exec --ephemeral --ignore-user-config -C '$fake_repo' -s workspace-write -a never -c 'mcp_servers.fleck.command=\"$installed_helper\"' -c 'mcp_servers.fleck.args=[\"mcp\",\"--profile\",\"$profile_id\"]' -c 'mcp_servers.fleck.env.CFFIXED_USER_HOME=\"$session_root\"' 'Pick up where I left off.'"
+expected_codex_output="Codex command: codex -a never exec --ephemeral --ignore-user-config -C '$fake_repo' -s workspace-write -c 'mcp_servers.fleck.command=\"$installed_helper\"' -c 'mcp_servers.fleck.args=[\"mcp\",\"--profile\",\"$profile_id\"]' -c 'mcp_servers.fleck.env.CFFIXED_USER_HOME=\"$session_root\"' 'Pick up where I left off.'"
 readonly expected_codex_output
 test "$codex_output" = "$expected_codex_output"
 [[ "$codex_output" != *"codex mcp add"* ]]
+
+codex_binary="$(command -v codex)"
+readonly codex_binary
+[[ -x "$codex_binary" ]]
+codex_parser_output="$(
+  "$codex_binary" -a never exec \
+    --ephemeral \
+    --ignore-user-config \
+    -C "$fake_repo" \
+    -s workspace-write \
+    -c "mcp_servers.fleck.command=\"$installed_helper\"" \
+    -c "mcp_servers.fleck.args=[\"mcp\",\"--profile\",\"$profile_id\"]" \
+    -c "mcp_servers.fleck.env.CFFIXED_USER_HOME=\"$session_root\"" \
+    --help
+)"
+readonly codex_parser_output
+[[ "$codex_parser_output" == *"Usage: codex exec"* ]]
+
+quoted_test_parent="$(/usr/bin/mktemp -d /tmp/q.XXXXXX)"
+quoted_test_parent="$(cd -- "$quoted_test_parent" && pwd -P)"
+readonly quoted_test_parent
+quoted_checkout="$quoted_test_parent/q'q"
+readonly quoted_checkout
+initialize_fixture_repository "$quoted_checkout"
+/bin/mkdir -p "$quoted_checkout/Scripts" "$quoted_checkout/.build"
+/bin/chmod 700 "$quoted_checkout/.build"
+/bin/cp Scripts/fleck-capture-lab.sh "$quoted_checkout/Scripts/fleck-capture-lab.sh"
+/bin/chmod 755 "$quoted_checkout/Scripts/fleck-capture-lab.sh"
+quoted_session="$quoted_checkout/.build/f.QUOTE1"
+readonly quoted_session
+quoted_fleck_root="$quoted_session/Library/Application Support/Fleck"
+readonly quoted_fleck_root
+quoted_fake_repo="$quoted_session/NorthstarDemo"
+readonly quoted_fake_repo
+quoted_manifest="$quoted_session/fleck-capture-manifest.json"
+readonly quoted_manifest
+/bin/mkdir -p "$quoted_fleck_root/AgentIntegrations" \
+  "$quoted_fleck_root/AgentBridge/bin" \
+  "$quoted_fake_repo"
+/bin/chmod 700 "$quoted_session"
+printf '%s\n' \
+  '{' \
+  "  \"fakeRepository\" : \"$quoted_fake_repo\"," \
+  "  \"fleckApp\" : \"$quoted_checkout/.build/parakeet-test/Fleck.app\"," \
+  "  \"fleckRoot\" : \"$quoted_fleck_root\"," \
+  "  \"sessionRoot\" : \"$quoted_session\"" \
+  '}' > "$quoted_manifest"
+printf '%s\n' \
+  '[' \
+  '  {' \
+  '    "createdAt": 0,' \
+  '    "displayName": "Codex",' \
+  "    \"id\": \"$profile_id\"" \
+  '  }' \
+  ']' > "$quoted_fleck_root/AgentIntegrations/profiles.json"
+quoted_helper="$quoted_fleck_root/AgentBridge/bin/fleck"
+readonly quoted_helper
+/usr/bin/touch "$quoted_helper"
+/bin/chmod 755 "$quoted_helper"
+
+quoted_output="$(
+  "$quoted_checkout/Scripts/fleck-capture-lab.sh" codex-command "$quoted_manifest"
+)"
+readonly quoted_output
+escaped_quote_checkout="$quoted_test_parent/q'\\''q"
+readonly escaped_quote_checkout
+expected_quoted_output="Codex command: codex -a never exec --ephemeral --ignore-user-config -C '$escaped_quote_checkout/.build/f.QUOTE1/NorthstarDemo' -s workspace-write -c 'mcp_servers.fleck.command=\"$escaped_quote_checkout/.build/f.QUOTE1/Library/Application Support/Fleck/AgentBridge/bin/fleck\"' -c 'mcp_servers.fleck.args=[\"mcp\",\"--profile\",\"$profile_id\"]' -c 'mcp_servers.fleck.env.CFFIXED_USER_HOME=\"$escaped_quote_checkout/.build/f.QUOTE1\"' 'Pick up where I left off.'"
+readonly expected_quoted_output
+if [[ "$quoted_output" != "$expected_quoted_output" ]]; then
+  printf 'apostrophe-safe Codex command quoting mismatch\n' >&2
+  exit 1
+fi
+quoted_command="${quoted_output#Codex command: }"
+readonly quoted_command
+/bin/sh -n -c "$quoted_command"
 
 readonly duplicate_profile_id="FEDCBA98-7654-3210-FEDC-BA9876543210"
 printf '%s\n' \

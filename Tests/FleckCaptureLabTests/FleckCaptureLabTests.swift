@@ -39,6 +39,8 @@ enum PostflightContamination: CaseIterable, Equatable {
   case wrongProfileID
   case wrongRevision
   case extraPath
+  case extraExecutableSource
+  case extraExecutableTest
   case malformedPatch
   case remote
   case wrongBehavior
@@ -217,6 +219,11 @@ private func completeWorkflow(
     .appendingPathComponent("Tests/NorthstarDemoTests/OnboardingFlowTests.swift")
   let source: String
   switch contamination {
+  case .extraExecutableSource:
+    source = completedOnboardingSource + """
+
+      public func unexpectedExecutableSource() -> Bool { true }
+      """
   case .malformedPatch:
     source = completedOnboardingSource.replacingOccurrences(
       of: "{ .afterWelcome }",
@@ -231,7 +238,15 @@ private func completeWorkflow(
     source = completedOnboardingSource
   }
   try Data(source.utf8).write(to: sourceURL, options: .atomic)
-  try Data(completedOnboardingTests.utf8).write(to: testURL, options: .atomic)
+  let tests = contamination == .extraExecutableTest
+    ? completedOnboardingTests + """
+
+      @Test func unexpectedExecutableTest() {
+        #expect(OnboardingFlow().welcomeStepCount == 3)
+      }
+      """
+    : completedOnboardingTests
+  try Data(tests.utf8).write(to: testURL, options: .atomic)
 
   if contamination == .extraPath {
     try Data("unexpected tracked change\n".utf8).write(

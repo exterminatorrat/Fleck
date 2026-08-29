@@ -27,6 +27,12 @@ usage() {
   exit 2
 }
 
+shell_quote() {
+  printf "'"
+  printf '%s' "$1" | /usr/bin/sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
 is_session_root_path() {
   local root="$1"
   local leaf="${root##*/}"
@@ -252,12 +258,15 @@ case "${1:-}" in
     installed_helper="$fleck_root/AgentBridge/bin/fleck"
     find_codex_profile
     [[ -x "$installed_helper" ]] || die "isolated Agent Connector was not found"
-    printf \
-      'Codex command: codex exec --ephemeral --ignore-user-config -C '\''%s'\'' -s workspace-write -a never -c '\''mcp_servers.fleck.command="%s"'\'' -c '\''mcp_servers.fleck.args=["mcp","--profile","%s"]'\'' -c '\''mcp_servers.fleck.env.CFFIXED_USER_HOME="%s"'\'' '\''Pick up where I left off.'\''\n' \
-      "$fake_repo" \
-      "$installed_helper" \
-      "$profile_id" \
-      "$session_root"
+    printf 'Codex command: codex -a never exec --ephemeral --ignore-user-config -C '
+    shell_quote "$fake_repo"
+    printf ' -s workspace-write -c '
+    shell_quote "mcp_servers.fleck.command=\"$installed_helper\""
+    printf ' -c '
+    shell_quote "mcp_servers.fleck.args=[\"mcp\",\"--profile\",\"$profile_id\"]"
+    printf ' -c '
+    shell_quote "mcp_servers.fleck.env.CFFIXED_USER_HOME=\"$session_root\""
+    printf ' '\''Pick up where I left off.'\''\n'
     ;;
   *)
     usage
