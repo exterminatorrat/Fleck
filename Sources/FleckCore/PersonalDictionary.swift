@@ -289,15 +289,10 @@ public struct PersonalDictionarySnapshotV2: Codable, Equatable, Sendable {
     )
   }
 
-  func nextRevision() throws -> PersonalDictionarySnapshotV2 {
+  func nextRevision() throws -> UInt64 {
     let (nextRevision, overflow) = revision.addingReportingOverflow(1)
     guard !overflow else { throw PersonalDictionaryRevisionError.overflow }
-    return PersonalDictionarySnapshotV2(
-      schemaVersion: schemaVersion,
-      revision: nextRevision,
-      entries: entries,
-      suggestions: suggestions
-    )
+    return nextRevision
   }
 }
 

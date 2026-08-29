@@ -198,13 +198,10 @@ import Testing
     entries: [PersonalDictionaryEntry(preferredForm: "Synthetic Fixture")]
   )
 
-  let next = try current.nextRevision()
+  let nextRevision: UInt64 = try current.nextRevision()
 
   #expect(current.revision == 41)
-  #expect(next.revision == 42)
-  #expect(next.schemaVersion == current.schemaVersion)
-  #expect(next.entries == current.entries)
-  #expect(next.suggestions == current.suggestions)
+  #expect(nextRevision == 42)
 }
 
 @Test func personalDictionaryV2RevisionRejectsOverflow() {
