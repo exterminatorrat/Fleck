@@ -64,13 +64,75 @@ struct DictationTextUpdate: Equatable, Sendable {
 }
 
 struct DictationRuntimeMeasurements: Equatable, Sendable {
-  var firstMeaningfulPartialMilliseconds: Double? = nil
-  var finalASRMilliseconds: Double? = nil
-  var cleanupMilliseconds: Double? = nil
-  var stopToInsertionMilliseconds: Double? = nil
-  var cancellationMilliseconds: Double? = nil
+  enum Integrity: Equatable, Sendable {
+    case valid
+    case nonMonotonicClock
+  }
+
+  let integrity: Integrity
+  let processorStartedAt: ContinuousClock.Instant?
+  let sourceStartRequestedAt: ContinuousClock.Instant?
+  let firstMeaningfulPartialAt: ContinuousClock.Instant?
+  let stopRequestedAt: ContinuousClock.Instant?
+  let asrFinalAt: ContinuousClock.Instant?
+  let dictionaryCompletedAt: ContinuousClock.Instant?
+  let cleanupDecisionCompletedAt: ContinuousClock.Instant?
+  let cancellationRequestedAt: ContinuousClock.Instant?
+  let cancellationDrainedAt: ContinuousClock.Instant?
+
+  init(
+    integrity: Integrity = .valid,
+    processorStartedAt: ContinuousClock.Instant? = nil,
+    sourceStartRequestedAt: ContinuousClock.Instant? = nil,
+    firstMeaningfulPartialAt: ContinuousClock.Instant? = nil,
+    stopRequestedAt: ContinuousClock.Instant? = nil,
+    asrFinalAt: ContinuousClock.Instant? = nil,
+    dictionaryCompletedAt: ContinuousClock.Instant? = nil,
+    cleanupDecisionCompletedAt: ContinuousClock.Instant? = nil,
+    cancellationRequestedAt: ContinuousClock.Instant? = nil,
+    cancellationDrainedAt: ContinuousClock.Instant? = nil
+  ) {
+    self.integrity = integrity
+    self.processorStartedAt = processorStartedAt
+    self.sourceStartRequestedAt = sourceStartRequestedAt
+    self.firstMeaningfulPartialAt = firstMeaningfulPartialAt
+    self.stopRequestedAt = stopRequestedAt
+    self.asrFinalAt = asrFinalAt
+    self.dictionaryCompletedAt = dictionaryCompletedAt
+    self.cleanupDecisionCompletedAt = cleanupDecisionCompletedAt
+    self.cancellationRequestedAt = cancellationRequestedAt
+    self.cancellationDrainedAt = cancellationDrainedAt
+  }
+
+  var firstMeaningfulPartialMilliseconds: Double? {
+    milliseconds(from: processorStartedAt, to: firstMeaningfulPartialAt)
+  }
+
+  var finalASRMilliseconds: Double? {
+    milliseconds(from: stopRequestedAt, to: asrFinalAt)
+  }
+
+  var cleanupMilliseconds: Double? {
+    milliseconds(from: dictionaryCompletedAt, to: cleanupDecisionCompletedAt)
+  }
+
+  var stopToInsertionMilliseconds: Double? { nil }
+
+  var cancellationMilliseconds: Double? {
+    milliseconds(from: cancellationRequestedAt, to: cancellationDrainedAt)
+  }
 
   static let empty = Self()
+
+  private func milliseconds(
+    from start: ContinuousClock.Instant?,
+    to end: ContinuousClock.Instant?
+  ) -> Double? {
+    guard integrity == .valid, let start, let end, end >= start else { return nil }
+    let components = start.duration(to: end).components
+    return Double(components.seconds) * 1_000
+      + Double(components.attoseconds) / 1_000_000_000_000_000
+  }
 }
 
 struct DictationProcessingResult: Equatable, Sendable {

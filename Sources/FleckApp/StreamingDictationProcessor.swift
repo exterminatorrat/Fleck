@@ -6,6 +6,93 @@ enum StreamingDictationProcessorError: Error, Equatable {
 }
 
 @MainActor
+private final class ProcessorMeasurementRecorder {
+  enum Stage: Equatable {
+    case processorStarted
+    case sourceStartRequested
+    case firstMeaningfulPartial
+    case stopRequested
+    case asrFinal
+    case dictionaryCompleted
+    case cleanupDecisionCompleted
+    case cancellationRequested
+    case cancellationDrained
+  }
+
+  private var integrity: DictationRuntimeMeasurements.Integrity = .valid
+  private var lastAcceptedAt: ContinuousClock.Instant?
+  private var processorStartedAt: ContinuousClock.Instant?
+  private var sourceStartRequestedAt: ContinuousClock.Instant?
+  private var firstMeaningfulPartialAt: ContinuousClock.Instant?
+  private var stopRequestedAt: ContinuousClock.Instant?
+  private var asrFinalAt: ContinuousClock.Instant?
+  private var dictionaryCompletedAt: ContinuousClock.Instant?
+  private var cleanupDecisionCompletedAt: ContinuousClock.Instant?
+  private var cancellationRequestedAt: ContinuousClock.Instant?
+  private var cancellationDrainedAt: ContinuousClock.Instant?
+
+  func record(_ stage: Stage, at instant: ContinuousClock.Instant) {
+    guard integrity == .valid, value(for: stage) == nil else { return }
+    if cancellationRequestedAt != nil,
+      stage != .cancellationRequested,
+      stage != .cancellationDrained
+    {
+      return
+    }
+    if let lastAcceptedAt, instant < lastAcceptedAt {
+      integrity = .nonMonotonicClock
+      return
+    }
+    if stage == .cancellationDrained, cancellationRequestedAt == nil { return }
+    assign(instant, to: stage)
+    lastAcceptedAt = instant
+  }
+
+  var snapshot: DictationRuntimeMeasurements {
+    DictationRuntimeMeasurements(
+      integrity: integrity,
+      processorStartedAt: processorStartedAt,
+      sourceStartRequestedAt: sourceStartRequestedAt,
+      firstMeaningfulPartialAt: firstMeaningfulPartialAt,
+      stopRequestedAt: stopRequestedAt,
+      asrFinalAt: asrFinalAt,
+      dictionaryCompletedAt: dictionaryCompletedAt,
+      cleanupDecisionCompletedAt: cleanupDecisionCompletedAt,
+      cancellationRequestedAt: cancellationRequestedAt,
+      cancellationDrainedAt: cancellationDrainedAt
+    )
+  }
+
+  private func value(for stage: Stage) -> ContinuousClock.Instant? {
+    switch stage {
+    case .processorStarted: processorStartedAt
+    case .sourceStartRequested: sourceStartRequestedAt
+    case .firstMeaningfulPartial: firstMeaningfulPartialAt
+    case .stopRequested: stopRequestedAt
+    case .asrFinal: asrFinalAt
+    case .dictionaryCompleted: dictionaryCompletedAt
+    case .cleanupDecisionCompleted: cleanupDecisionCompletedAt
+    case .cancellationRequested: cancellationRequestedAt
+    case .cancellationDrained: cancellationDrainedAt
+    }
+  }
+
+  private func assign(_ instant: ContinuousClock.Instant, to stage: Stage) {
+    switch stage {
+    case .processorStarted: processorStartedAt = instant
+    case .sourceStartRequested: sourceStartRequestedAt = instant
+    case .firstMeaningfulPartial: firstMeaningfulPartialAt = instant
+    case .stopRequested: stopRequestedAt = instant
+    case .asrFinal: asrFinalAt = instant
+    case .dictionaryCompleted: dictionaryCompletedAt = instant
+    case .cleanupDecisionCompleted: cleanupDecisionCompletedAt = instant
+    case .cancellationRequested: cancellationRequestedAt = instant
+    case .cancellationDrained: cancellationDrainedAt = instant
+    }
+  }
+}
+
+@MainActor
 final class StreamingDictationProcessor: DictationProcessing {
   typealias SourceFactory =
     @MainActor (DictationProcessingConfiguration) async throws -> any StreamingSpeechSource
@@ -54,17 +141,21 @@ final class StreamingDictationProcessor: DictationProcessing {
     configuration: DictationProcessingConfiguration,
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession {
+    let measurements = ProcessorMeasurementRecorder()
+    measurements.record(.processorStarted, at: clock.now())
     let source = try await makeSource(configuration)
     let callbackBuffer = StreamingDictationCallbackBuffer()
     do {
+      measurements.record(.sourceStartRequested, at: clock.now())
       try await source.start(
-        provisional: { callbackBuffer.provisional($0) },
+        provisional: { callbackBuffer.provisional($0, receivedAt: self.clock.now()) },
         level: level
       )
       return StreamingDictationSession(
         configuration: configuration,
         source: source,
         callbackBuffer: callbackBuffer,
+        measurements: measurements,
         dictionaryResolver: dictionaryResolver,
         cleaner: cleaner,
         runtime: runtime,
@@ -83,14 +174,14 @@ final class StreamingDictationProcessor: DictationProcessing {
 
 @MainActor
 fileprivate final class StreamingDictationCallbackBuffer {
-  private var provisionalTexts: [String] = []
+  private var provisionalTexts: [(text: String, receivedAt: ContinuousClock.Instant)] = []
   private weak var session: StreamingDictationSession?
 
-  func provisional(_ text: String) {
+  func provisional(_ text: String, receivedAt: ContinuousClock.Instant) {
     if let session {
-      session.receiveProvisional(text)
+      session.receiveProvisional(text, receivedAt: receivedAt)
     } else {
-      provisionalTexts.append(text)
+      provisionalTexts.append((text, receivedAt))
     }
   }
 
@@ -98,13 +189,14 @@ fileprivate final class StreamingDictationCallbackBuffer {
     self.session = session
     let buffered = provisionalTexts
     provisionalTexts.removeAll(keepingCapacity: false)
-    buffered.forEach { session.receiveProvisional($0) }
+    buffered.forEach { session.receiveProvisional($0.text, receivedAt: $0.receivedAt) }
   }
 }
 
 @MainActor
 final class StreamingDictationSession: DictationProcessingSession {
   private let source: any StreamingSpeechSource
+  private let measurements: ProcessorMeasurementRecorder
   private let dictionaryResolver: any TranscriptDictionaryResolving
   private let cleaner: IncrementalTranscriptCleaner
   private let runtime: LocalDictationRuntime?
@@ -132,6 +224,7 @@ final class StreamingDictationSession: DictationProcessingSession {
     configuration: DictationProcessingConfiguration,
     source: any StreamingSpeechSource,
     callbackBuffer: StreamingDictationCallbackBuffer,
+    measurements: ProcessorMeasurementRecorder,
     dictionaryResolver: any TranscriptDictionaryResolving,
     cleaner: IncrementalTranscriptCleaner,
     runtime: LocalDictationRuntime?,
@@ -143,6 +236,7 @@ final class StreamingDictationSession: DictationProcessingSession {
   ) {
     _ = configuration
     self.source = source
+    self.measurements = measurements
     self.dictionaryResolver = dictionaryResolver
     self.cleaner = cleaner
     self.runtime = runtime
@@ -161,7 +255,23 @@ final class StreamingDictationSession: DictationProcessingSession {
     updateStream
   }
 
+  var runtimeMeasurements: DictationRuntimeMeasurements {
+    measurements.snapshot
+  }
+
   func finish() async throws -> DictationProcessingResult {
+    try await finishUsingDeadlineOrigin(nil)
+  }
+
+  func finish(
+    deadlineOrigin: ContinuousClock.Instant
+  ) async throws -> DictationProcessingResult {
+    try await finishUsingDeadlineOrigin(deadlineOrigin)
+  }
+
+  private func finishUsingDeadlineOrigin(
+    _ suppliedDeadlineOrigin: ContinuousClock.Instant?
+  ) async throws -> DictationProcessingResult {
     if let finalizationTask {
       return try await finalizationTask.value
     }
@@ -171,9 +281,11 @@ final class StreamingDictationSession: DictationProcessingSession {
 
     // Capture the stop boundary before any task suspension or source finalization.
     let stopInstant = clock.now()
-    let insertionDeadline = stopInstant.advanced(by: budget.insertion)
+    measurements.record(.stopRequested, at: stopInstant)
+    let deadlineOrigin = suppliedDeadlineOrigin ?? stopInstant
+    let insertionDeadline = deadlineOrigin.advanced(by: budget.insertion)
     let deadline = DictationDeadline(
-      stopInstant: stopInstant,
+      stopInstant: deadlineOrigin,
       insertionDeadline: insertionDeadline,
       cleanupBudget: budget.cleanup
     )
@@ -197,6 +309,7 @@ final class StreamingDictationSession: DictationProcessingSession {
 
     // This actor turn is the cancellation winner. No suspension occurs between
     // invalidation and storing the shared task.
+    measurements.record(.cancellationRequested, at: clock.now())
     isCancelled = true
     generation &+= 1
     continuation.finish()
@@ -210,7 +323,10 @@ final class StreamingDictationSession: DictationProcessingSession {
     await task.value
   }
 
-  fileprivate func receiveProvisional(_ text: String) {
+  fileprivate func receiveProvisional(
+    _ text: String,
+    receivedAt: ContinuousClock.Instant
+  ) {
     guard !isCancelled, !isTerminal else { return }
     generation &+= 1
     guard let update = try? transcriptState.accept(
@@ -218,6 +334,9 @@ final class StreamingDictationSession: DictationProcessingSession {
       fullText: text
     ) else { return }
     guard !isCancelled, !isTerminal else { return }
+    if update.displayText.contains(where: { !$0.isWhitespace }) {
+      measurements.record(.firstMeaningfulPartial, at: receivedAt)
+    }
     continuation.yield(update)
   }
 
@@ -232,6 +351,7 @@ final class StreamingDictationSession: DictationProcessingSession {
     if let finalizationTask {
       _ = try? await finalizationTask.value
     }
+    measurements.record(.cancellationDrained, at: clock.now())
     onCancellationDrained?()
     markTerminal()
   }
@@ -263,6 +383,7 @@ final class StreamingDictationSession: DictationProcessingSession {
     do {
       let returnedText = try await source.finish()
       try Task.checkCancellation()
+      measurements.record(.asrFinal, at: clock.now())
       rawText = returnedText
       if sourceTerminalization == .open {
         sourceTerminalization = .finished
@@ -284,9 +405,11 @@ final class StreamingDictationSession: DictationProcessingSession {
       resolution = try await dictionaryResolver.resolve(rawText)
     } catch {
       try Task.checkCancellation()
+      measurements.record(.dictionaryCompleted, at: clock.now())
       return rawRecoveryResult(rawText)
     }
     try Task.checkCancellation()
+    measurements.record(.dictionaryCompleted, at: clock.now())
 
     let request = IncrementalCleanupRequest(
       baseline: resolution.baseline,
@@ -296,6 +419,7 @@ final class StreamingDictationSession: DictationProcessingSession {
     )
     let decision = try await cleaner.clean(request)
     try Task.checkCancellation()
+    measurements.record(.cleanupDecisionCompleted, at: clock.now())
 
     switch decision {
     case .accepted(let text):
@@ -305,7 +429,7 @@ final class StreamingDictationSession: DictationProcessingSession {
         cleanedTranscript: text,
         insertedText: text,
         cleanupOutcome: .cleaned,
-        measurements: .empty
+        measurements: runtimeMeasurements
       )
     case .baseline:
       return DictationProcessingResult(
@@ -314,7 +438,7 @@ final class StreamingDictationSession: DictationProcessingSession {
         cleanedTranscript: nil,
         insertedText: resolution.baseline,
         cleanupOutcome: .usedRaw,
-        measurements: .empty
+        measurements: runtimeMeasurements
       )
     }
   }
@@ -326,7 +450,7 @@ final class StreamingDictationSession: DictationProcessingSession {
       cleanedTranscript: nil,
       insertedText: rawText,
       cleanupOutcome: .usedRaw,
-      measurements: .empty
+      measurements: runtimeMeasurements
     )
   }
 

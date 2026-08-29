@@ -59,6 +59,40 @@ import FleckCore
   #expect(measurements.cancellationMilliseconds == nil)
 }
 
+@Test func processorMeasurementsUseContinuousClockInstantsAndDeriveLegacyDurations() {
+  let start = ContinuousClock().now
+  let measurements = DictationRuntimeMeasurements(
+    processorStartedAt: start,
+    sourceStartRequestedAt: start.advanced(by: .milliseconds(1)),
+    firstMeaningfulPartialAt: start.advanced(by: .milliseconds(10)),
+    stopRequestedAt: start.advanced(by: .milliseconds(20)),
+    asrFinalAt: start.advanced(by: .milliseconds(50)),
+    dictionaryCompletedAt: start.advanced(by: .milliseconds(60)),
+    cleanupDecisionCompletedAt: start.advanced(by: .milliseconds(100)),
+    cancellationRequestedAt: start.advanced(by: .milliseconds(110)),
+    cancellationDrainedAt: start.advanced(by: .milliseconds(125))
+  )
+
+  #expect(measurements.integrity == .valid)
+  #expect(measurements.firstMeaningfulPartialMilliseconds == 10)
+  #expect(measurements.finalASRMilliseconds == 30)
+  #expect(measurements.cleanupMilliseconds == 40)
+  #expect(measurements.stopToInsertionMilliseconds == nil)
+  #expect(measurements.cancellationMilliseconds == 15)
+
+  let reversed = DictationRuntimeMeasurements(
+    stopRequestedAt: start.advanced(by: .seconds(1)),
+    asrFinalAt: start
+  )
+  #expect(reversed.finalASRMilliseconds == nil)
+  let invalid = DictationRuntimeMeasurements(
+    integrity: .nonMonotonicClock,
+    processorStartedAt: start,
+    firstMeaningfulPartialAt: start.advanced(by: .milliseconds(1))
+  )
+  #expect(invalid.firstMeaningfulPartialMilliseconds == nil)
+}
+
 @Test func recognitionContextFiltersDeduplicatesAndBoundsTerms() {
   let terms = [" ", "Fleck", "Fleck"] + (0..<105).map { "term\($0)" }
   let context = DictationRecognitionContext(
