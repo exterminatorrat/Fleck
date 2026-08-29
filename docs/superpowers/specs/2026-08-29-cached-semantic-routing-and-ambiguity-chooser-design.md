@@ -1,5 +1,7 @@
 # Cached Semantic Routing and Ambiguity Chooser Design
 
+**Status:** Implemented checkpoint; query-evidence semantics are superseded by `2026-08-29-dictation-cleanup-and-sorting-quality-design.md` where noted below.
+
 ## Summary
 
 Fleck will replace narrow keyword exceptions and bounded whole-workspace prompt
@@ -31,8 +33,10 @@ rewrite the dictated transcript.
 - Automatically save only when one destination is clearly stronger.
 - Make close matches recoverable through a small, local, non-blocking chooser.
 - Keep all note content, retrieval features, prompts, and model results local.
-- Preserve Inbox, Apple Speech, deterministic cleanup, cancellation, and raw or
-  dictionary-baseline fallback behavior.
+- Preserve Inbox, Apple Speech, cancellation, and the latest whole
+  validator-accepted faithful baseline after dictionary resolution; an ASR
+  failure before any text baseline publishes nothing and selects Apple Speech
+  for the next capture.
 - Make routing decisions testable independently of ASR and cleanup.
 
 ## Non-Goals
@@ -130,11 +134,15 @@ removed in the same accepted implementation sequence.
 
 ### Query behavior
 
-At Smart Capture completion, the index builds query features from the faithful
-cleanup result, or from the unchanged dictionary baseline when cleanup falls
-back. It searches cached passages and returns a small ordered union of the best
-notes. The implementation will benchmark and fix the shortlist size; it will
-not expose it as a user setting.
+At Smart Capture completion, the index builds separate query evidence from the
+immutable dictionary baseline and the accepted cleanup result. If cleanup is
+unchanged, the baseline alone may pass the existing unique corroboration gates.
+If cleanup is distinct, the dictionary baseline must independently corroborate
+the same destination; cleanup may not invent the only routing term. Disagreement
+or close evidence yields the durable Inbox chooser. The index searches cached
+passages and returns a small ordered union of the best notes. The implementation
+will benchmark and fix the shortlist size; it will not expose it as a user
+setting.
 
 Gemma receives only those candidate IDs, titles, and best excerpts. Its result
 must select an opaque candidate key already present in the request. The final
