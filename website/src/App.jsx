@@ -1,4 +1,5 @@
 import Navigation from "./Navigation";
+import HeroStory from "./HeroStory";
 
 const APP_STORE_URL = import.meta.env.VITE_APP_STORE_URL?.trim();
 
@@ -21,7 +22,9 @@ export default function App() {
   return (
     <div className="page">
       <Navigation downloadProps={downloadProps} />
-      <main className="blank-canvas" />
+      <main>
+        <HeroStory downloadProps={downloadProps} />
+      </main>
     </div>
   );
 }

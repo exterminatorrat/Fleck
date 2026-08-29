@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test worker/index.test.js src/Navigation.test.js",
+    "test": "node --test --test-concurrency=1 worker/index.test.js src/Navigation.test.js src/heroStates.test.js src/HeroStory.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
+    "gsap": "3.15.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
