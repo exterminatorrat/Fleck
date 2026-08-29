@@ -534,6 +534,370 @@ import Testing
   try await state.flushFocusedDictationSave()
 }
 
+@Test @MainActor func appStateDictationMovesCommittedCaptureFromNonemptySource() async throws {
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox", body: "Existing Inbox")
+  let destination = Note(title: "Projects", body: "Existing Project")
+  let selected = Note(title: "Selected")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(
+      notes: [inbox, destination, selected],
+      selectedNoteID: selected.id
+    ),
+    preferences: .init()
+  )
+  let state = try await loadedState(
+    store: store,
+    noteIDs: [inbox.id, destination.id, selected.id]
+  )
+  let captureID = UUID()
+  let receipt = try await state.saveSmartCapture(
+    text: "\n\nCaptured",
+    captureID: captureID,
+    destinationID: inbox.id
+  )
+
+  let moved = await state.moveSmartCapture(receipt, to: destination.id)
+
+  #expect(
+    moved
+      == DictationInsertionReceipt(
+        captureID: captureID,
+        noteID: destination.id,
+        insertedSuffix: "\n\n\n\nCaptured"
+      )
+  )
+  #expect(state.workspace.selectedNoteID == selected.id)
+  #expect(state.workspace.notes.first(where: { $0.id == inbox.id })?.body == "Existing Inbox")
+  #expect(
+    state.workspace.notes.first(where: { $0.id == destination.id })?.body
+      == "Existing Project\n\n\n\nCaptured"
+  )
+  let persisted = try await store.loadWorkspace()
+  #expect(persisted.notes.first(where: { $0.id == inbox.id })?.body == "Existing Inbox")
+  #expect(
+    persisted.notes.first(where: { $0.id == destination.id })?.body
+      == "Existing Project\n\n\n\nCaptured"
+  )
+}
+
+@Test @MainActor func appStateDictationMovesEmptyInboxCaptureWithRichText() async throws {
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox")
+  let destinationBody = "Existing Project"
+  let destination = Note(
+    title: "Projects",
+    body: destinationBody,
+    richTextRTF: NoteTextAppender.appending(destinationBody, to: Note()).richTextRTF
+  )
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let state = try await loadedState(store: store, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+
+  let moved = try #require(await state.moveSmartCapture(receipt, to: destination.id))
+
+  #expect(moved.insertedSuffix == "\n\nCaptured")
+  let source = try #require(state.workspace.notes.first(where: { $0.id == inbox.id }))
+  let target = try #require(state.workspace.notes.first(where: { $0.id == destination.id }))
+  #expect(source.body.isEmpty)
+  #expect(try attributedString(from: #require(source.richTextRTF)).string.isEmpty)
+  #expect(target.body == "Existing Project\n\nCaptured")
+  #expect(
+    try attributedString(from: #require(target.richTextRTF)).string
+      == "Existing Project\n\nCaptured"
+  )
+  #expect(state.workspace.notes.contains(where: { $0.id == inbox.id }))
+}
+
+@Test @MainActor func appStateDictationMoveRefusesStaleBodyOrRichText() async throws {
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox", body: "Existing")
+  let destination = Note(title: "Projects")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let state = try await loadedState(store: store, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let sourceIndex = try #require(state.workspace.notes.firstIndex(where: { $0.id == inbox.id }))
+  let committedBody = state.workspace.notes[sourceIndex].body
+  let committedRTF = state.workspace.notes[sourceIndex].richTextRTF
+  state.workspace.notes[sourceIndex].body += " later"
+
+  #expect(await state.moveSmartCapture(receipt, to: destination.id) == nil)
+
+  state.workspace.notes[sourceIndex].body = committedBody
+  state.workspace.notes[sourceIndex].richTextRTF = NoteTextAppender.appending(
+    "Different",
+    to: Note(body: "Existing")
+  ).richTextRTF
+  #expect(await state.moveSmartCapture(receipt, to: destination.id) == nil)
+  #expect(state.workspace.notes[sourceIndex].body == committedBody)
+  #expect(state.workspace.notes[sourceIndex].richTextRTF != committedRTF)
+  #expect(state.workspace.notes.first(where: { $0.id == destination.id })?.body.isEmpty == true)
+}
+
+@Test @MainActor func appStateDictationMoveRefusesInvalidReceiptOrDestination() async throws {
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox")
+  let destination = Note(title: "Projects")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let state = try await loadedState(store: store, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let committedWorkspace = state.workspace
+
+  #expect(
+    await state.moveSmartCapture(
+      DictationInsertionReceipt(
+        captureID: receipt.captureID,
+        noteID: UUID(),
+        insertedSuffix: receipt.insertedSuffix
+      ),
+      to: destination.id
+    ) == nil
+  )
+  #expect(await state.moveSmartCapture(receipt, to: UUID()) == nil)
+  #expect(await state.moveSmartCapture(receipt, to: inbox.id) == nil)
+  #expect(
+    await state.moveSmartCapture(
+      DictationInsertionReceipt(
+        captureID: receipt.captureID,
+        noteID: receipt.noteID,
+        insertedSuffix: ""
+      ),
+      to: destination.id
+    ) == nil
+  )
+  #expect(state.workspace == committedWorkspace)
+}
+
+@Test @MainActor func appStateDictationMoveRejectsDuplicateCallback() async throws {
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox")
+  let destination = Note(title: "Projects")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let state = try await loadedState(store: store, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  _ = try #require(await state.moveSmartCapture(receipt, to: destination.id))
+  let movedWorkspace = state.workspace
+
+  #expect(await state.moveSmartCapture(receipt, to: destination.id) == nil)
+  #expect(state.workspace == movedWorkspace)
+}
+
+@Test @MainActor func appStateDictationOlderIdenticalReceiptCannotMoveNewerTail() async throws {
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox")
+  let destination = Note(title: "Projects")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let state = try await loadedState(store: store, noteIDs: [inbox.id, destination.id])
+  let older = try await state.saveSmartCapture(
+    text: "Same",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  _ = try await state.saveSmartCapture(
+    text: "Same",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let committedWorkspace = state.workspace
+
+  #expect(await state.moveSmartCapture(older, to: destination.id) == nil)
+  #expect(state.workspace == committedWorkspace)
+}
+
+@Test @MainActor func appStateDictationFailedMoveRestoresNotesSelectionAndReceiptBinding()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox", body: "Existing Inbox")
+  let destination = Note(title: "Projects", body: "Existing Project")
+  let selected = Note(title: "Selected")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(
+      notes: [inbox, destination, selected],
+      selectedNoteID: selected.id
+    ),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store, blockedAttempt: 2)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [inbox.id, destination.id, selected.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let committedWorkspace = state.workspace
+  let task = Task { @MainActor in
+    await state.moveSmartCapture(receipt, to: destination.id)
+  }
+  await blockedSave.waitUntilStarted()
+  await blockedSave.fail()
+
+  #expect(await task.value == nil)
+  #expect(state.workspace == committedWorkspace)
+  #expect(state.workspace.selectedNoteID == selected.id)
+
+  let retry = await state.moveSmartCapture(receipt, to: destination.id)
+  #expect(retry?.noteID == destination.id)
+}
+
+@Test @MainActor func appStateDictationFailedMoveDoesNotOverwriteInterleavedEditAfterReorder()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox", body: "Existing Inbox")
+  let destination = Note(title: "Projects", body: "Existing Project")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store, blockedAttempt: 2)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let task = Task { @MainActor in
+    await state.moveSmartCapture(receipt, to: destination.id)
+  }
+  await blockedSave.waitUntilStarted()
+  state.moveNote(destination.id, to: 0)
+  let later = NoteTextAppender.appending("Later destination edit", to: Note())
+  state.workspace.updateContent(
+    id: destination.id,
+    body: later.body,
+    rtf: later.richTextRTF
+  )
+  await blockedSave.fail()
+
+  #expect(await task.value == nil)
+  #expect(state.workspace.notes.map(\.id) == [destination.id, inbox.id])
+  #expect(
+    state.workspace.notes.first(where: { $0.id == inbox.id })?.body
+      == "Existing Inbox\n\nCaptured"
+  )
+  #expect(
+    state.workspace.notes.first(where: { $0.id == destination.id })?.body
+      == "Later destination edit"
+  )
+}
+
+@Test @MainActor func appStateDictationCancelledMoveLeavesSourceAuthoritative() async throws {
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox", body: "Existing Inbox")
+  let destination = Note(title: "Projects", body: "Existing Project")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let blockedSave = CancellationAwareBlockedSave(store: store)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let committedWorkspace = state.workspace
+  let task = Task { @MainActor in
+    await state.moveSmartCapture(receipt, to: destination.id)
+  }
+  await blockedSave.waitUntilStarted()
+  task.cancel()
+  await blockedSave.release()
+
+  #expect(await task.value == nil)
+  #expect(state.workspace == committedWorkspace)
+  let persisted = try await store.loadWorkspace()
+  #expect(
+    persisted.notes.first(where: { $0.id == inbox.id })?.body
+      == "Existing Inbox\n\nCaptured"
+  )
+  #expect(
+    persisted.notes.first(where: { $0.id == destination.id })?.body
+      == "Existing Project"
+  )
+  #expect(await state.moveSmartCapture(receipt, to: destination.id)?.noteID == destination.id)
+}
+
 @Test @MainActor func appStateDictationUndoRemovesOnlyTheRecordedSuffixAndPersists() async throws {
   let root = temporaryStoreRoot()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -561,6 +925,37 @@ import Testing
   #expect(try attributedString(from: #require(restored.richTextRTF)).string == "Existing")
   let persisted = try await store.loadWorkspace()
   #expect(persisted.notes.first(where: { $0.id == destination.id })?.body == "Existing")
+}
+
+@Test @MainActor func appStateDictationUndoClearsReceiptBindingForIdenticalPriorTail()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox")
+  let destination = Note(title: "Projects")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let state = try await loadedState(store: store, noteIDs: [inbox.id, destination.id])
+  let older = try await state.saveSmartCapture(
+    text: "Same",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let newer = try await state.saveSmartCapture(
+    text: "Same",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+
+  #expect(await state.undoSmartCapture(newer))
+  let afterUndo = state.workspace
+  #expect(await state.moveSmartCapture(older, to: destination.id) == nil)
+  #expect(!(await state.undoSmartCapture(older)))
+  #expect(state.workspace == afterUndo)
 }
 
 @Test @MainActor func appStateDictationUndoRefusesAfterLaterEditsAndSelectsDestination()
@@ -815,6 +1210,48 @@ private actor BlockingFailureSave {
     self.saveCountTarget = nil
     saveCountContinuation?.resume()
     saveCountContinuation = nil
+  }
+}
+
+private actor CancellationAwareBlockedSave {
+  private let store: LocalStore
+  private var saveCount = 0
+  private var started = false
+  private var startedContinuation: CheckedContinuation<Void, Never>?
+  private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+  init(store: LocalStore) {
+    self.store = store
+  }
+
+  func save(
+    workspace: Workspace,
+    preferences: AppPreferences,
+    trashedNotes: [Note]
+  ) async throws {
+    saveCount += 1
+    if saveCount == 2 {
+      started = true
+      startedContinuation?.resume()
+      startedContinuation = nil
+      await withCheckedContinuation { releaseContinuation = $0 }
+      try Task.checkCancellation()
+    }
+    try await store.save(
+      workspace: workspace,
+      preferences: preferences,
+      trashedNotes: trashedNotes
+    )
+  }
+
+  func waitUntilStarted() async {
+    guard !started else { return }
+    await withCheckedContinuation { startedContinuation = $0 }
+  }
+
+  func release() {
+    releaseContinuation?.resume()
+    releaseContinuation = nil
   }
 }
 

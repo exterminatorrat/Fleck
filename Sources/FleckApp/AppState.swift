@@ -110,7 +110,12 @@
       let capturedContext: AgentNoteAccessContext
       let folderID: UUID?
     }
+    private struct CommittedSmartCapture: Equatable {
+      let receipt: DictationInsertionReceipt
+      let noteRevision: UInt64
+    }
     private var noteAccessTransactionLocks: [UUID: NoteAccessTransactionLock] = [:]
+    private var committedSmartCaptures: [UUID: CommittedSmartCapture] = [:]
     private var pendingRestoreNoteIDs: Set<UUID> = []
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
@@ -694,11 +699,108 @@
         )
         throw error
       }
-      return DictationInsertionReceipt(
+      let receipt = DictationInsertionReceipt(
         captureID: captureID,
         noteID: noteID,
         insertedSuffix: appended.insertedSuffix
       )
+      if workspace.notes.first(where: { $0.id == noteID }) == insertedNote {
+        committedSmartCaptures[noteID] = CommittedSmartCapture(
+          receipt: receipt,
+          noteRevision: insertedNote.revision
+        )
+      }
+      return receipt
+    }
+
+    func moveSmartCapture(
+      _ receipt: DictationInsertionReceipt,
+      to destinationID: UUID
+    ) async -> DictationInsertionReceipt? {
+      guard
+        !Task.isCancelled,
+        !receipt.insertedSuffix.isEmpty,
+        receipt.noteID != destinationID,
+        let sourceIndex = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }),
+        let destinationIndex = workspace.notes.firstIndex(where: { $0.id == destinationID })
+      else { return nil }
+
+      let source = workspace.notes[sourceIndex]
+      let destination = workspace.notes[destinationIndex]
+      guard
+        let committedCapture = committedSmartCaptures[receipt.noteID],
+        committedCapture.receipt == receipt,
+        committedCapture.noteRevision == source.revision,
+        source.body.hasSuffix(receipt.insertedSuffix),
+        let sourceRTF = removingSuffix(receipt.insertedSuffix, from: source.richTextRTF)
+      else { return nil }
+
+      let priorSourceBody = String(source.body.dropLast(receipt.insertedSuffix.count))
+      let capturedText: String
+      if priorSourceBody.isEmpty {
+        capturedText = receipt.insertedSuffix
+      } else {
+        guard receipt.insertedSuffix.hasPrefix("\n\n") else { return nil }
+        capturedText = String(receipt.insertedSuffix.dropFirst(2))
+      }
+      let appended = NoteTextAppender.appending(
+        capturedText,
+        to: destination,
+        defaults: NoteTextAppendDefaults(
+          fontFamily: preferences.fontFamily,
+          fontSize: preferences.fontSize
+        )
+      )
+      let previousDestinationCapture = committedSmartCaptures[destinationID]
+
+      beginAwaitedSave()
+      defer { endAwaitedSave() }
+      workspace.updateContent(id: source.id, body: priorSourceBody, rtf: sourceRTF)
+      workspace.updateContent(
+        id: destination.id,
+        body: appended.body,
+        rtf: appended.richTextRTF
+      )
+      guard
+        let attemptedSource = workspace.notes.first(where: { $0.id == source.id }),
+        let attemptedDestination = workspace.notes.first(where: { $0.id == destination.id })
+      else { return nil }
+
+      let movedReceipt = DictationInsertionReceipt(
+        captureID: receipt.captureID,
+        noteID: destination.id,
+        insertedSuffix: appended.insertedSuffix
+      )
+      let saveTask = saveNow(transactionOwned: true)
+      do {
+        try await withTaskCancellationHandler {
+          try await saveTask.value
+        } onCancel: {
+          saveTask.cancel()
+        }
+        try Task.checkCancellation()
+      } catch {
+        rollbackSmartCaptureMove(
+          source: source,
+          attemptedSource: attemptedSource,
+          destination: destination,
+          attemptedDestination: attemptedDestination
+        )
+        return nil
+      }
+
+      if committedSmartCaptures[source.id] == committedCapture {
+        committedSmartCaptures.removeValue(forKey: source.id)
+      }
+      if workspace.notes.first(where: { $0.id == destination.id }) == attemptedDestination,
+        committedSmartCaptures[destination.id] == previousDestinationCapture
+      {
+        committedSmartCaptures[destination.id] = CommittedSmartCapture(
+          receipt: movedReceipt,
+          noteRevision: attemptedDestination.revision
+        )
+      }
+      return movedReceipt
     }
 
     func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
@@ -710,6 +812,9 @@
       workspace.selectedNoteID = receipt.noteID
       let note = workspace.notes[index]
       guard
+        let committedCapture = committedSmartCaptures[receipt.noteID],
+        committedCapture.receipt == receipt,
+        committedCapture.noteRevision == note.revision,
         !receipt.insertedSuffix.isEmpty,
         note.body.hasSuffix(receipt.insertedSuffix),
         let richTextRTF = removingSuffix(receipt.insertedSuffix, from: note.richTextRTF)
@@ -725,6 +830,9 @@
       let attemptedUndoNote = workspace.notes[index]
       do {
         try await saveNow(transactionOwned: true).value
+        if committedSmartCaptures[receipt.noteID] == committedCapture {
+          committedSmartCaptures.removeValue(forKey: receipt.noteID)
+        }
         return true
       } catch {
         if let currentIndex = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }) {
@@ -1610,6 +1718,24 @@
         pendingTrashNotes.removeValue(forKey: noteID)
       } else {
         pendingTrashNotes[noteID] = originalNote
+      }
+    }
+
+    private func rollbackSmartCaptureMove(
+      source: Note,
+      attemptedSource: Note,
+      destination: Note,
+      attemptedDestination: Note
+    ) {
+      if let index = workspace.notes.firstIndex(where: { $0.id == source.id }),
+        workspace.notes[index] == attemptedSource
+      {
+        workspace.notes[index] = source
+      }
+      if let index = workspace.notes.firstIndex(where: { $0.id == destination.id }),
+        workspace.notes[index] == attemptedDestination
+      {
+        workspace.notes[index] = destination
       }
     }
 

@@ -112,6 +112,10 @@ protocol DictationSaving: AnyObject {
     captureID: UUID,
     destinationID: UUID?
   ) async throws -> DictationInsertionReceipt
+  func moveSmartCapture(
+    _ receipt: DictationInsertionReceipt,
+    to destinationID: UUID
+  ) async -> DictationInsertionReceipt?
   func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool
   func flushFocusedDictationSave(
     captureID: UUID
@@ -119,4 +123,13 @@ protocol DictationSaving: AnyObject {
   func compensateFocusedDictationSave(
     _ receipt: FocusedDictationPersistenceReceipt
   ) async -> Bool
+}
+
+extension DictationSaving {
+  func moveSmartCapture(
+    _ receipt: DictationInsertionReceipt,
+    to destinationID: UUID
+  ) async -> DictationInsertionReceipt? {
+    nil
+  }
 }
