@@ -20,7 +20,9 @@ actor CachedNoteRoutingIndex {
   }
 
   private struct Note {
-    let candidate: DictationRoutingCandidate
+    let noteID: UUID
+    let destinationTitle: String
+    let contentRevision: UInt64
     let titleTerms: Set<String>
     let titleTrigrams: Set<String>
     let passageIDs: [PassageID]
@@ -45,13 +47,13 @@ actor CachedNoteRoutingIndex {
     let queryTerms = Self.meaningfulTerms(in: transcript)
     guard !queryTerms.isEmpty else { return [] }
 
-    var candidateIDs = Set<UUID>()
-    guard candidates.allSatisfy({ candidateIDs.insert($0.destination.noteID).inserted }) else {
-      return []
-    }
+    let candidateIDs = candidates.map(\.destination.noteID)
+    guard Set(candidateIDs).count == candidates.count else { return [] }
+    let candidatesByID = Dictionary(uniqueKeysWithValues: candidates.map {
+      ($0.destination.noteID, $0)
+    })
 
-    synchronize(candidates)
-    guard !Task.isCancelled else { return [] }
+    guard synchronize(candidates), !Task.isCancelled else { return [] }
 
     let queryTrigrams = Self.trigrams(for: queryTerms)
     var matchingPassages = Set<PassageID>()
@@ -65,7 +67,10 @@ actor CachedNoteRoutingIndex {
 
     var bestByNote: [UUID: ScoredPassage] = [:]
     for passageID in matchingPassages {
-      guard let note = notes[passageID.noteID], let passage = passages[passageID] else {
+      guard !Task.isCancelled else { return [] }
+      guard let candidate = candidatesByID[passageID.noteID],
+            let note = notes[passageID.noteID],
+            let passage = passages[passageID] else {
         continue
       }
       let titleExact = queryTerms.intersection(note.titleTerms)
@@ -85,7 +90,7 @@ actor CachedNoteRoutingIndex {
 
       let scored = ScoredPassage(
         match: CachedNoteRoutingMatch(
-          candidate: note.candidate,
+          candidate: candidate,
           excerpt: passage.excerpt,
           score: score,
           exactTermMatches: exactMatches
@@ -116,36 +121,57 @@ actor CachedNoteRoutingIndex {
       .map(\.match)
   }
 
-  private func synchronize(_ candidates: [DictationRoutingCandidate]) {
+  private func synchronize(_ candidates: [DictationRoutingCandidate]) -> Bool {
     let currentIDs = Set(candidates.map(\.destination.noteID))
-    for noteID in notes.keys where !currentIDs.contains(noteID) {
-      remove(noteID)
+    var replacements: [(note: Note, passages: [Passage])] = []
+    for candidate in candidates {
+      guard !Task.isCancelled else { return false }
+      let cached = notes[candidate.destination.noteID]
+      guard cached?.contentRevision != candidate.contentRevision
+              || cached?.destinationTitle != candidate.destination.title else {
+        continue
+      }
+      guard let prepared = Self.prepare(candidate) else { return false }
+      replacements.append(prepared)
     }
-    for candidate in candidates where notes[candidate.destination.noteID]?.candidate != candidate {
-      remove(candidate.destination.noteID)
-      insert(candidate)
-    }
+    guard !Task.isCancelled else { return false }
+
+    let replacementIDs = Set(replacements.map(\.note.noteID))
+    let removedIDs = Set(notes.keys).subtracting(currentIDs).union(replacementIDs)
+    for noteID in removedIDs { remove(noteID) }
+    for replacement in replacements { insert(replacement.note, passages: replacement.passages) }
+    return !Task.isCancelled
   }
 
-  private func insert(_ candidate: DictationRoutingCandidate) {
+  private static func prepare(
+    _ candidate: DictationRoutingCandidate
+  ) -> (note: Note, passages: [Passage])? {
+    guard !Task.isCancelled else { return nil }
     let noteID = candidate.destination.noteID
     let normalizedTitle = Self.normalizedWhitespace(candidate.destination.title)
     let titleTerms = Self.meaningfulTerms(in: normalizedTitle)
     let titleTrigrams = Self.trigrams(for: titleTerms)
-    let bodyPassages = Self.bodyPassages(candidate.semanticContext)
+    guard let bodyPassages = Self.bodyPassages(candidate.semanticContext) else { return nil }
     let passageIDs = bodyPassages.indices.map { PassageID(noteID: noteID, ordinal: $0) }
     let note = Note(
-      candidate: candidate,
+      noteID: noteID,
+      destinationTitle: candidate.destination.title,
+      contentRevision: candidate.contentRevision,
       titleTerms: titleTerms,
       titleTrigrams: titleTrigrams,
       passageIDs: passageIDs
     )
+    return (note, bodyPassages)
+  }
+
+  private func insert(_ note: Note, passages bodyPassages: [Passage]) {
+    let noteID = note.noteID
     notes[noteID] = note
 
-    for (passageID, passage) in zip(passageIDs, bodyPassages) {
+    for (passageID, passage) in zip(note.passageIDs, bodyPassages) {
       passages[passageID] = passage
-      let indexedTitleTerms = passageID.ordinal == 0 ? titleTerms : []
-      let indexedTitleTrigrams = passageID.ordinal == 0 ? titleTrigrams : []
+      let indexedTitleTerms = passageID.ordinal == 0 ? note.titleTerms : []
+      let indexedTitleTrigrams = passageID.ordinal == 0 ? note.titleTrigrams : []
       for term in indexedTitleTerms.union(passage.terms) {
         exactPostings[term, default: []].insert(passageID)
       }
@@ -188,7 +214,8 @@ actor CachedNoteRoutingIndex {
     return lhs.ordinal < rhs.ordinal
   }
 
-  private static func bodyPassages(_ body: String) -> [Passage] {
+  private static func bodyPassages(_ body: String) -> [Passage]? {
+    guard !Task.isCancelled else { return nil }
     let words = normalizedWhitespace(body).split(separator: " ").map(String.init)
     guard !words.isEmpty else {
       return [Passage(excerpt: "", terms: [], trigrams: [])]
@@ -197,6 +224,7 @@ actor CachedNoteRoutingIndex {
     var result: [Passage] = []
     var start = 0
     while start < words.count {
+      guard !Task.isCancelled else { return nil }
       let end = min(start + 96, words.count)
       let excerpt = words[start..<end].joined(separator: " ")
       let terms = meaningfulTerms(in: excerpt)

@@ -179,28 +179,53 @@ import Testing
   ).first?.candidate.destination.noteID == id)
 }
 
-@Test func cachedRoutingReindexesSameRevisionWhenIdentityChanges() async {
+@Test func cachedRoutingTreatsRevisionAsTheAuthoritativeBodyIdentity() async {
   let id = UUID(uuidString: "00000000-0000-0000-0000-000000000061")!
   let original = cachedRoutingCandidate(
     id: id,
-    title: "First title",
+    title: "Research",
     body: "amberquartz findings",
     revision: 7
   )
   let changed = cachedRoutingCandidate(
     id: id,
-    title: "Second title",
+    title: "Research",
     body: "violetnebula findings",
     revision: 7
   )
   let index = CachedNoteRoutingIndex()
 
   _ = await index.retrieve(transcript: "amberquartz", candidates: [original])
-  #expect(await index.retrieve(transcript: "amberquartz", candidates: [changed]).isEmpty)
+  let reused = await index.retrieve(transcript: "amberquartz", candidates: [changed])
+
+  #expect(reused.first?.candidate == changed)
+  #expect(reused.first?.excerpt.contains("amberquartz") == true)
+  #expect(await index.retrieve(transcript: "violetnebula", candidates: [changed]).isEmpty)
+}
+
+@Test func cachedRoutingReindexesAChangedTitleWithoutARevisionChange() async {
+  let id = UUID(uuidString: "00000000-0000-0000-0000-000000000062")!
+  let original = cachedRoutingCandidate(
+    id: id,
+    title: "Amberquartz",
+    body: "stable findings",
+    revision: 7
+  )
+  let renamed = cachedRoutingCandidate(
+    id: id,
+    title: "Violetnebula",
+    body: "stable findings",
+    revision: 7
+  )
+  let index = CachedNoteRoutingIndex()
+
+  _ = await index.retrieve(transcript: "amberquartz", candidates: [original])
+
+  #expect(await index.retrieve(transcript: "amberquartz", candidates: [renamed]).isEmpty)
   #expect(await index.retrieve(
     transcript: "violetnebula",
-    candidates: [changed]
-  ).first?.candidate.destination.noteID == id)
+    candidates: [renamed]
+  ).first?.candidate == renamed)
 }
 
 @Test func cachedRoutingReusesAnUnchangedRevisionDeterministically() async {
@@ -272,17 +297,22 @@ import Testing
   ).isEmpty)
 }
 
-@Test func cachedRoutingReturnsEmptyWhenTheRetrievalTaskIsCancelled() async {
+@Test func cachedRoutingPreCancellationReturnsEmptyAndPreservesCachedResults() async {
   let candidate = cachedRoutingCandidate(title: "Cancel", body: "cancelled evidence")
   let index = CachedNoteRoutingIndex()
+  let cached = await index.retrieve(transcript: "cancelled evidence", candidates: [candidate])
   let task = Task {
-    await Task.yield()
+    while !Task.isCancelled { await Task.yield() }
     return await index.retrieve(transcript: "cancelled evidence", candidates: [candidate])
   }
 
   task.cancel()
 
   #expect(await task.value.isEmpty)
+  #expect(await index.retrieve(
+    transcript: "cancelled evidence",
+    candidates: [candidate]
+  ) == cached)
 }
 
 private func cachedRoutingCandidate(
