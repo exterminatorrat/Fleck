@@ -102,6 +102,65 @@
     var isSuccess = false
   }
 
+  struct DictationCapsuleChoice: Equatable, Identifiable {
+    private static let visibleContextLimit = 48
+
+    let id: UUID
+    let title: String
+    let contextHint: String
+    let showsContextHint: Bool
+
+    var menuTitle: String {
+      guard showsContextHint, !contextHint.isEmpty else { return title }
+      let prefix = String(contextHint.prefix(Self.visibleContextLimit))
+      let suffix = contextHint.count > Self.visibleContextLimit ? "…" : ""
+      return "\(title) — \(prefix)\(suffix)"
+    }
+
+    var accessibilityLabel: String {
+      guard !contextHint.isEmpty else { return "Move dictation to \(title)" }
+      return "Move dictation to \(title). Context: \(contextHint)"
+    }
+
+    var accessibilityHint: String {
+      "Moves this saved dictation from Inbox to \(title)."
+    }
+  }
+
+  struct DictationCapsuleChooser: Equatable {
+    let captureID: UUID
+    let choices: [DictationCapsuleChoice]
+    let keepInboxTitle = "Keep in Inbox"
+    let keepInboxAccessibilityLabel = "Keep dictation in Inbox"
+
+    init(ambiguity: DictationRoutingAmbiguity) {
+      captureID = ambiguity.captureID
+      let supported = Array(ambiguity.choices.prefix(4))
+      let titleCounts = Dictionary(grouping: supported) {
+        Self.normalizedTitle($0.destination.title)
+      }.mapValues(\.count)
+      choices = supported.map { choice in
+        let title = Self.displayTitle(choice.destination.title)
+        return DictationCapsuleChoice(
+          id: choice.destination.noteID,
+          title: title,
+          contextHint: choice.contextHint,
+          showsContextHint: titleCounts[Self.normalizedTitle(title), default: 0] > 1
+        )
+      }
+    }
+
+    private static func displayTitle(_ title: String) -> String {
+      let normalized = title.split(whereSeparator: \Character.isWhitespace)
+        .joined(separator: " ")
+      return normalized.isEmpty ? "Untitled" : normalized
+    }
+
+    private static func normalizedTitle(_ title: String) -> String {
+      displayTitle(title).lowercased()
+    }
+  }
+
   enum DictationCapsuleTransition: Equatable {
     case opacity
     case scaleAndOpacity
@@ -178,9 +237,12 @@
     let panel: DictationCapsulePanel
     let waveformModel: DictationWaveformModel
     private(set) var currentDock = DictationCapsuleDock.bottom
+    private(set) var currentChooser: DictationCapsuleChooser?
     private var currentStatus = DictationCapsuleStatus.idle
     private var currentAction: DictationCapsuleAction?
     private var currentActionHandler: @MainActor () -> Void = {}
+    private var currentChoiceHandler: @MainActor (UUID, UUID?) -> Void = { _, _ in }
+    private var contentGeneration: UInt64 = 0
     private var currentScreen: NSScreen?
     private var onOpenFleck: (@MainActor () -> Void)?
     private var onDockChanged: (@MainActor (DictationCapsuleDock) -> Void)?
@@ -215,9 +277,11 @@
       waveformModel.reset()
       currentAction = nil
       currentActionHandler = {}
+      currentChooser = nil
+      currentChoiceHandler = { _, _ in }
       self.onOpenFleck = onOpenFleck
       self.onDockChanged = onDockChanged
-      installContent(status: .idle, action: nil, onAction: {})
+      installContent(status: .idle, action: nil, chooser: nil, onAction: {})
       applyCurrentFrame(animated: panel.isVisible)
       panel.orderFrontRegardless()
     }
@@ -225,7 +289,9 @@
     func render(
       _ status: DictationCapsuleStatus,
       action: DictationCapsuleAction? = nil,
-      onAction: @escaping @MainActor () -> Void = {}
+      chooser: DictationCapsuleChooser? = nil,
+      onAction: @escaping @MainActor () -> Void = {},
+      onChoice: @escaping @MainActor (UUID, UUID?) -> Void = { _, _ in }
     ) {
       let wasListening = currentStatus == .listening
       currentStatus = status
@@ -238,7 +304,14 @@
       }
       currentAction = action
       currentActionHandler = onAction
-      installContent(status: status, action: action, onAction: onAction)
+      currentChooser = chooser
+      currentChoiceHandler = onChoice
+      installContent(
+        status: status,
+        action: action,
+        chooser: chooser,
+        onAction: onAction
+      )
       applyCurrentFrame(animated: panel.isVisible)
       panel.orderFrontRegardless()
     }
@@ -248,6 +321,7 @@
       installContent(
         status: currentStatus,
         action: currentAction,
+        chooser: currentChooser,
         onAction: currentActionHandler
       )
       applyCurrentFrame(animated: panel.isVisible)
@@ -255,8 +329,20 @@
 
     func dismiss() {
       waveformModel.reset()
+      contentGeneration &+= 1
+      currentChooser = nil
+      currentChoiceHandler = { _, _ in }
       panel.allowsActions = false
       panel.orderOut(nil)
+    }
+
+    func selectRoutingChoice(captureID: UUID, noteID: UUID?) {
+      guard
+        let currentChooser,
+        currentChooser.captureID == captureID,
+        noteID == nil || currentChooser.choices.contains(where: { $0.id == noteID })
+      else { return }
+      currentChoiceHandler(captureID, noteID)
     }
 
     func updateAudioLevel(_ level: Float) {
@@ -357,16 +443,24 @@
     private func installContent(
       status: DictationCapsuleStatus,
       action: DictationCapsuleAction?,
+      chooser: DictationCapsuleChooser?,
       onAction: @escaping @MainActor () -> Void
     ) {
-      panel.allowsActions = action != nil
+      contentGeneration &+= 1
+      let generation = contentGeneration
+      panel.allowsActions = action != nil || chooser?.choices.isEmpty == false
       let view = AnyView(
         DictationCapsuleView(
           presentation: status.presentation,
           dock: currentDock,
           waveformModel: waveformModel,
           action: action,
+          chooser: chooser,
           onAction: onAction,
+          onChoice: { [weak self] captureID, noteID in
+            guard let self, self.contentGeneration == generation else { return }
+            self.selectRoutingChoice(captureID: captureID, noteID: noteID)
+          },
           onOpenFleck: onOpenFleck
         )
       )
@@ -428,6 +522,7 @@
       installContent(
         status: currentStatus,
         action: currentAction,
+        chooser: currentChooser,
         onAction: currentActionHandler
       )
       applyCurrentFrame(animated: true)
@@ -466,7 +561,9 @@
     let dock: DictationCapsuleDock
     @ObservedObject var waveformModel: DictationWaveformModel
     let action: DictationCapsuleAction?
+    let chooser: DictationCapsuleChooser?
     let onAction: @MainActor () -> Void
+    let onChoice: @MainActor (UUID, UUID?) -> Void
     let onOpenFleck: (@MainActor () -> Void)?
 
     var body: some View {
@@ -482,7 +579,7 @@
           Capsule().fill(.regularMaterial)
         }
       }
-      .accessibilityElement(children: action == nil ? .ignore : .contain)
+      .accessibilityElement(children: action == nil && chooser == nil ? .ignore : .contain)
       .accessibilityLabel(presentation.voiceOverText)
       .accessibilityAction(named: Text("Open Fleck")) {
         guard presentation.visibleText == nil else { return }
@@ -499,6 +596,7 @@
         HStack(spacing: 8) {
           progressDots
           statusText
+          chooserMenu
           actionButton
         }
       case .idle, .success, .warning, .failure:
@@ -507,6 +605,7 @@
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(iconColor)
           statusText
+          chooserMenu
           actionButton
         }
       }
@@ -575,6 +674,31 @@
           .buttonStyle(.borderless)
           .font(.system(size: 11, weight: .semibold))
           .accessibilityLabel(action.accessibilityLabel)
+      }
+    }
+
+    @ViewBuilder
+    private var chooserMenu: some View {
+      if let chooser, !chooser.choices.isEmpty {
+        Menu("Choose note") {
+          ForEach(chooser.choices) { choice in
+            Button(choice.menuTitle) {
+              onChoice(chooser.captureID, choice.id)
+            }
+            .accessibilityLabel(choice.accessibilityLabel)
+            .accessibilityHint(choice.accessibilityHint)
+          }
+          Divider()
+          Button(chooser.keepInboxTitle) {
+            onChoice(chooser.captureID, nil)
+          }
+          .accessibilityLabel(chooser.keepInboxAccessibilityLabel)
+          .accessibilityHint("Leaves this saved dictation in Inbox.")
+        }
+        .menuStyle(.borderlessButton)
+        .font(.system(size: 11, weight: .semibold))
+        .accessibilityLabel("Choose note")
+        .accessibilityHint("Choose a note for this saved dictation or keep it in Inbox.")
       }
     }
 

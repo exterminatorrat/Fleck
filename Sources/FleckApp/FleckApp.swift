@@ -469,6 +469,7 @@
     private var appliedCapsuleEnabled: Bool?
     private var capsuleReturnTask: Task<Void, Never>?
     private var capsuleGeneration: UInt64 = 0
+    private var routingChoiceInFlightCaptureID: UUID?
     private var preloadCapsuleUpdate: CapsuleUpdate?
     private var startupAssessmentTask: Task<Void, Never>?
     private var initialLoadSynchronizationTask: Task<Void, Never>?
@@ -1113,6 +1114,11 @@
 
     private func receive(_ event: DictationCoordinatorEvent) {
       phase = event.phase
+      if let captureID = routingChoiceInFlightCaptureID,
+        coordinator.routingAmbiguity?.captureID != captureID
+      {
+        routingChoiceInFlightCaptureID = nil
+      }
       recoveryAction = capsuleAction(for: coordinator.recoveryAction)
       #if CLEAN_DICTATION_ENHANCED_CANDIDATE
         switch event.phase {
@@ -1163,18 +1169,21 @@
     private func renderCoordinatorCapsule(_ event: DictationCoordinatorEvent) {
       let action = capsuleAction(for: coordinator.recoveryAction)
       let status = Self.capsuleStatus(for: event)
+      let chooser = coordinator.routingAmbiguity.map(DictationCapsuleChooser.init)
       if let terminal = event.terminal {
         switch terminal {
         case .saved:
-          showCapsule(status, owner: .dictation, action: action)
-          scheduleIdle(after: Self.savedCapsuleDuration, owner: .dictation)
+          showCapsule(status, owner: .dictation, action: action, chooser: chooser)
+          if chooser == nil {
+            scheduleIdle(after: Self.savedCapsuleDuration, owner: .dictation)
+          }
         case .failed(let message):
           showFailureCapsule(message, action: action)
         case .cancelled:
           showIdleCapsule()
         }
       } else {
-        showCapsule(status, owner: .dictation, action: action)
+        showCapsule(status, owner: .dictation, action: action, chooser: chooser)
       }
     }
 
@@ -1333,7 +1342,8 @@
     private func showCapsule(
       _ status: DictationCapsuleStatus,
       owner: CapsuleOwner,
-      action: DictationCapsuleAction? = nil
+      action: DictationCapsuleAction? = nil,
+      chooser: DictationCapsuleChooser? = nil
     ) {
       guard appState?.hasFinishedInitialLoad == true else { return }
       invalidateCapsuleReturn()
@@ -1342,9 +1352,15 @@
       capsuleController.render(
         status,
         action: action,
+        chooser: chooser,
         onAction: { [weak self] in
           Task { @MainActor [weak self] in
             await self?.performRecoveryAction()
+          }
+        },
+        onChoice: { [weak self] captureID, noteID in
+          Task { @MainActor [weak self] in
+            await self?.chooseRoutingDestination(captureID: captureID, noteID: noteID)
           }
         }
       )
@@ -1358,6 +1374,7 @@
         return
       }
       invalidateCapsuleReturn()
+      routingChoiceInFlightCaptureID = nil
       capsuleOwner = .idle
       currentCapsuleStatus = .idle
       capsuleController.presentIdle(
@@ -1417,6 +1434,16 @@
     }
 
     private func replayLiveCapsuleOrIdle() {
+      if let ambiguity = coordinator.routingAmbiguity {
+        let status = Self.capsuleStatus(for: .init(phase: coordinator.phase, terminal: nil))
+        showCapsule(
+          status,
+          owner: .dictation,
+          action: capsuleAction(for: coordinator.recoveryAction),
+          chooser: .init(ambiguity: ambiguity)
+        )
+        return
+      }
       switch phase {
       case .arming, .listening, .finalizing, .cleaning, .routing:
         renderCoordinatorCapsule(.init(phase: phase, terminal: nil))
@@ -1474,6 +1501,51 @@
       }
     }
 
+    private func chooseRoutingDestination(captureID: UUID, noteID: UUID?) async {
+      guard
+        routingChoiceInFlightCaptureID == nil,
+        capsuleController.currentChooser?.captureID == captureID,
+        coordinator.routingAmbiguity?.captureID == captureID
+      else { return }
+      let selectedTitle = noteID.flatMap { noteID in
+        capsuleController.currentChooser?.choices.first(where: { $0.id == noteID })?.title
+      } ?? "Inbox"
+      let usedRawCleanup: Bool
+      if case .savedWithoutCleanup = currentCapsuleStatus {
+        usedRawCleanup = true
+      } else {
+        usedRawCleanup = false
+      }
+      routingChoiceInFlightCaptureID = captureID
+      let result = await coordinator.chooseDestination(captureID: captureID, noteID: noteID)
+      guard routingChoiceInFlightCaptureID == captureID else { return }
+      routingChoiceInFlightCaptureID = nil
+      guard appState?.preferences.dictationCapsuleEnabled == true else { return }
+
+      guard result == .completed else {
+        guard let ambiguity = coordinator.routingAmbiguity else {
+          replayLiveCapsuleOrIdle()
+          return
+        }
+        let status = currentCapsuleStatus
+          ?? Self.capsuleStatus(for: .init(phase: coordinator.phase, terminal: nil))
+        showCapsule(
+          status,
+          owner: .dictation,
+          action: capsuleAction(for: coordinator.recoveryAction),
+          chooser: .init(ambiguity: ambiguity)
+        )
+        return
+      }
+
+      let status: DictationCapsuleStatus = usedRawCleanup
+        ? .savedWithoutCleanup(destination: selectedTitle)
+        : .saved(destination: selectedTitle)
+      recoveryAction = capsuleAction(for: coordinator.recoveryAction)
+      showCapsule(status, owner: .dictation, action: recoveryAction)
+      scheduleIdle(after: Self.savedCapsuleDuration, owner: .dictation)
+    }
+
     private func openDestination(_ noteID: UUID) {
       guard appState?.workspace.notes.contains(where: { $0.id == noteID }) == true else {
         return
@@ -1514,6 +1586,7 @@
     private func dismissCapsule(ifOwnedBy owner: CapsuleOwner? = nil) {
       guard owner == nil || capsuleOwner == owner else { return }
       invalidateCapsuleReturn()
+      routingChoiceInFlightCaptureID = nil
       currentCapsuleStatus = nil
       capsuleOwner = nil
       capsuleController.dismiss()

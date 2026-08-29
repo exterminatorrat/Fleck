@@ -58,6 +58,93 @@ import Testing
   #expect(!panel.canBecomeMain)
 }
 
+@Test @MainActor func DictationAccessibilityChooserRemainsCaptureBoundAndNonactivating() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  let firstCaptureID = UUID()
+  let secondCaptureID = UUID()
+  let noteID = UUID()
+  var selections: [(UUID, UUID?)] = []
+  let chooser = DictationCapsuleChooser(
+    ambiguity: .init(
+      captureID: firstCaptureID,
+      choices: [
+        .init(
+          destination: .init(noteID: noteID, title: "Projects"),
+          contextHint: "Roadmap"
+        )
+      ]
+    )
+  )
+
+  controller.render(
+    .saved(destination: "Inbox"),
+    chooser: chooser,
+    onChoice: { selections.append(($0, $1)) }
+  )
+
+  #expect(panel.allowsActions)
+  #expect(!panel.canBecomeKey)
+  #expect(!panel.canBecomeMain)
+  controller.selectRoutingChoice(captureID: firstCaptureID, noteID: noteID)
+  controller.selectRoutingChoice(captureID: firstCaptureID, noteID: nil)
+  #expect(selections.count == 2)
+  #expect(selections[0].0 == firstCaptureID)
+  #expect(selections[0].1 == noteID)
+  #expect(selections[1].0 == firstCaptureID)
+  #expect(selections[1].1 == nil)
+
+  controller.render(
+    .saved(destination: "Inbox"),
+    chooser: .init(
+      ambiguity: .init(captureID: secondCaptureID, choices: chooser.choices.map {
+        .init(
+          destination: .init(noteID: $0.id, title: $0.title),
+          contextHint: $0.contextHint
+        )
+      })
+    ),
+    onChoice: { selections.append(($0, $1)) }
+  )
+  controller.selectRoutingChoice(captureID: firstCaptureID, noteID: noteID)
+  #expect(selections.count == 2)
+  controller.selectRoutingChoice(captureID: secondCaptureID, noteID: noteID)
+  #expect(selections.last?.0 == secondCaptureID)
+}
+
+@Test @MainActor func DictationAccessibilityChooserSurvivesDockReinstallationWithUndo() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  let captureID = UUID()
+  let noteID = UUID()
+  var selectedCaptureID: UUID?
+  let chooser = DictationCapsuleChooser(
+    ambiguity: .init(
+      captureID: captureID,
+      choices: [
+        .init(
+          destination: .init(noteID: noteID, title: "Projects"),
+          contextHint: "Roadmap"
+        )
+      ]
+    )
+  )
+
+  controller.render(
+    .saved(destination: "Inbox"),
+    action: .undo,
+    chooser: chooser,
+    onChoice: { captureID, _ in selectedCaptureID = captureID }
+  )
+  controller.setDock(.left)
+  controller.selectRoutingChoice(captureID: captureID, noteID: noteID)
+
+  #expect(panel.allowsActions)
+  #expect(selectedCaptureID == captureID)
+  #expect(!panel.canBecomeKey)
+  #expect(!panel.canBecomeMain)
+}
+
 @Test func DictationAccessibilityRecoveryActionsHaveKeyboardAndVoiceOverLabels() {
   let actions: [(DictationCapsuleAction, String)] = [
     (.undo, "Undo"),
