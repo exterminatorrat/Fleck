@@ -51,7 +51,8 @@ struct GemmaDestinationRouter: DestinationRouting {
       return inboxID
     }
     let strongMatches = matches.indices.filter { matches[$0].exactTermMatches >= 2 }
-    if strongMatches.count == 1 {
+    if strongMatches.count == 1,
+       Self.hasUniqueHighestScore(strongMatches[0], in: matches) {
       return matches[strongMatches[0]].candidate.destination.noteID
     }
 
@@ -84,7 +85,8 @@ struct GemmaDestinationRouter: DestinationRouting {
       guard selectedExactTerms >= 1,
             matches.indices.allSatisfy({ index in
               index == selectedIndex || matches[index].exactTermMatches < selectedExactTerms
-            }) else { return inboxID }
+            }),
+            Self.hasUniqueHighestScore(selectedIndex, in: matches) else { return inboxID }
       return matches[selectedIndex].candidate.destination.noteID
     } onCancel: {
       session.requestCancellation()
@@ -134,6 +136,15 @@ struct GemmaDestinationRouter: DestinationRouting {
           key == "c\(position)",
           position <= candidateCount else { return nil }
     return position - 1
+  }
+
+  private static func hasUniqueHighestScore(
+    _ selectedIndex: Int,
+    in matches: [CachedNoteRoutingMatch]
+  ) -> Bool {
+    matches.indices.allSatisfy { index in
+      index == selectedIndex || matches[index].score < matches[selectedIndex].score
+    }
   }
 
   private static func canonical(_ id: UUID) -> String {

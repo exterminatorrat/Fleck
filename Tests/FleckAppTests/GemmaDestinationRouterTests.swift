@@ -34,6 +34,66 @@ import Testing
   }
 }
 
+@Test func gemmaRouteDoesNotFastRouteMoreExactTermsBelowTheUniqueHighestScore() async {
+  let inbox = GemmaRouteFixture.candidate(title: "Inbox")
+  let lowerScore = GemmaRouteFixture.candidate(
+    title: "Body Match",
+    context: "common shared"
+  )
+  let highestScore = GemmaRouteFixture.candidate(title: "Singular")
+  let fillers = (0..<8).map { index in
+    GemmaRouteFixture.candidate(
+      title: "Filler \(index)",
+      context: index.isMultiple(of: 2) ? "common" : "shared"
+    )
+  }
+  let transport = GemmaRouteTransport(startError: true)
+  let router = GemmaDestinationRouter(
+    generator: GemmaCleanupGenerator(transportFactory: { transport }),
+    clock: GemmaRouteFixture.clock
+  )
+
+  #expect(await router.route(
+    transcript: "common shared singular",
+    candidates: [inbox, lowerScore, highestScore] + fillers,
+    inboxID: inbox.destination.noteID
+  ) == inbox.destination.noteID)
+  #expect(transport.startCount == 1)
+}
+
+@Test func gemmaRouteRejectsModelSelectedExactLeaderBelowTheUniqueHighestScore() async throws {
+  let fixture = GemmaRouteFixture()
+  let inbox = fixture.candidate(title: "Inbox")
+  let lowerScoreExactLeader = fixture.candidate(
+    title: "Body Match",
+    context: "common shared third"
+  )
+  let highestScore = fixture.candidate(title: "Singular")
+  let supportingPairs = [
+    "common shared", "common shared", "common shared",
+    "common third", "common third", "common third",
+    "shared third", "shared third",
+  ].enumerated().map { index, context in
+    fixture.candidate(
+      title: "Support \(index)",
+      context: context
+    )
+  }
+  let task = Task {
+    await fixture.router.route(
+      transcript: "common shared third singular",
+      candidates: [inbox, lowerScoreExactLeader, highestScore] + supportingPairs,
+      inboxID: inbox.destination.noteID
+    )
+  }
+  let (wire, session) = await fixture.transport.nextRequest()
+  #expect(wire.plainPrompt.contains(#""id":"c1","title":"Singular""#))
+  #expect(wire.plainPrompt.contains(#""id":"c2","title":"Body Match""#))
+  session.complete(wire, text: "high:c2")
+
+  #expect(await task.value == inbox.destination.noteID)
+}
+
 @Test func gemmaRouteFuzzyOnlySupportUsesHelperAndCannotAutoRoute() async throws {
   let inbox = GemmaRouteFixture.candidate(title: "Inbox")
   let target = GemmaRouteFixture.candidate(title: "Optics", context: "hologram")
