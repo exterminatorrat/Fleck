@@ -36,7 +36,7 @@ xcodebuild -version
 swift --version
 
 printf '%s\n' '--- Tests ---'
-swift test --disable-automatic-resolution --no-parallel
+"$script_dir/run-nonempty-swift-tests.sh" '^.+$'
 
 printf '%s\n' '--- Release build ---'
 swift package clean
