@@ -125,7 +125,8 @@
     private var pendingRestoreNoteIDs: Set<UUID> = []
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
-    private var awaitedSaveWaiters: [CheckedContinuation<Void, Never>] = []
+    private var transactionOwnedSaveCount = 0
+    private var persistenceTransactionWaiters: [CheckedContinuation<Void, Never>] = []
     private var initialLoadWaiters: [CheckedContinuation<Void, Never>] = []
     private var saveStatusResetTask: Task<Void, Never>?
     private var agentConnectorStatusGeneration: UInt64 = 0
@@ -393,6 +394,7 @@
       guard
         smartCaptureTransferOwnerID == nil,
         awaitedSaveCount == 0,
+        transactionOwnedSaveCount == 0,
         pendingRestoreNoteIDs.isEmpty,
         smartCaptureTransferNoteIDs.isDisjoint(with: noteIDs),
         noteIDs.allSatisfy({ noteAccessTransactionLocks[$0] == nil })
@@ -1296,13 +1298,15 @@
       debouncedSaveTask?.cancel()
       markSaveStarted()
       if transactionOwned {
+        beginTransactionOwnedSave()
         return Task {
+          defer { endTransactionOwnedSave() }
           await waitForSmartCaptureTransfer()
           try await persist(saveSnapshot())
         }
       }
       return Task {
-        await waitForAwaitedSaves()
+        await waitForPersistenceTransactions()
         try Task.checkCancellation()
         try await persist(saveSnapshot())
       }
@@ -1456,7 +1460,7 @@
       markSaveStarted()
       let task = Task {
         try await Task.sleep(for: .milliseconds(350))
-        await waitForAwaitedSaves()
+        await waitForPersistenceTransactions()
         try Task.checkCancellation()
         try await persist(saveSnapshot())
       }
@@ -1779,7 +1783,7 @@
 
     private func drainPersistenceForAgent() async throws {
       while true {
-        await waitForAwaitedSaves()
+        await waitForPersistenceTransactions()
         debouncedSaveTask?.cancel()
         let generation = persistenceGeneration
         do {
@@ -1850,18 +1854,32 @@
 
     private func endAwaitedSave() {
       awaitedSaveCount -= 1
-      guard awaitedSaveCount == 0 else { return }
-      let waiters = awaitedSaveWaiters
-      awaitedSaveWaiters.removeAll()
+      resumePersistenceTransactionWaitersIfIdle()
+    }
+
+    private func beginTransactionOwnedSave() {
+      transactionOwnedSaveCount += 1
+    }
+
+    private func endTransactionOwnedSave() {
+      transactionOwnedSaveCount -= 1
+      resumePersistenceTransactionWaitersIfIdle()
+    }
+
+    private func resumePersistenceTransactionWaitersIfIdle() {
+      guard awaitedSaveCount == 0, transactionOwnedSaveCount == 0 else { return }
+      let waiters = persistenceTransactionWaiters
+      persistenceTransactionWaiters.removeAll()
       for waiter in waiters {
         waiter.resume()
       }
     }
 
-    private func waitForAwaitedSaves() async {
-      guard awaitedSaveCount > 0 else { return }
-      await withCheckedContinuation { continuation in
-        awaitedSaveWaiters.append(continuation)
+    private func waitForPersistenceTransactions() async {
+      while awaitedSaveCount > 0 || transactionOwnedSaveCount > 0 {
+        await withCheckedContinuation { continuation in
+          persistenceTransactionWaiters.append(continuation)
+        }
       }
     }
 

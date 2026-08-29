@@ -1035,6 +1035,127 @@ import Testing
   #expect(persisted.notes.contains(where: { $0.id == restored.id }))
 }
 
+@Test @MainActor func appStateDictationMoveRefusesUnregisteredOnboardingFailure()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox")
+  let destination = Note(title: "Projects")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store, blockedAttempt: 2)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let progress = OnboardingProgress(status: .inProgress(step: .welcome))
+  let onboardingTask = Task { @MainActor in
+    do {
+      try await state.persistOnboardingProgress(progress)
+      return false
+    } catch {
+      return true
+    }
+  }
+  await blockedSave.waitUntilStarted()
+  let workspaceDuringOnboarding = state.workspace
+
+  #expect(await state.moveSmartCapture(receipt, to: destination.id) == nil)
+  #expect(state.workspace == workspaceDuringOnboarding)
+  #expect(await blockedSave.currentSaveCount() == 2)
+
+  await blockedSave.fail()
+  #expect(await onboardingTask.value)
+  #expect(state.preferences.onboardingProgress == nil)
+  let persisted = try await store.loadSnapshot()
+  #expect(persisted.preferences.onboardingProgress == nil)
+  #expect(persisted.workspace.notes.first(where: { $0.id == inbox.id })?.body == "Captured")
+  #expect(
+    persisted.workspace.notes.first(where: { $0.id == destination.id })?.body.isEmpty == true
+  )
+  #expect(await state.moveSmartCapture(receipt, to: destination.id)?.noteID == destination.id)
+}
+
+@Test @MainActor func appStateDictationOnboardingStartedDuringMoveBlocksNextMove()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let inbox = Note(title: "Inbox")
+  let destination = Note(title: "Projects")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [inbox, destination], selectedNoteID: inbox.id),
+    preferences: .init()
+  )
+  let blockedSave = BlockingFailureSave(store: store, blockedAttempt: 2)
+  let precommitGate = PrecommitGate(blockedAttempt: 3)
+  let state = AppState(
+    store: store,
+    saveOperation: { workspace, preferences, trashedNotes in
+      try await blockedSave.save(
+        workspace: workspace,
+        preferences: preferences,
+        trashedNotes: trashedNotes
+      )
+    },
+    beforeSaveOperation: {
+      await precommitGate.run()
+    }
+  )
+  try await waitUntilLoaded(state, noteIDs: [inbox.id, destination.id])
+  let receipt = try await state.saveSmartCapture(
+    text: "Captured",
+    captureID: UUID(),
+    destinationID: inbox.id
+  )
+  let firstMoveTask = Task { @MainActor in
+    await state.moveSmartCapture(receipt, to: destination.id)
+  }
+  await blockedSave.waitUntilStarted()
+  let progress = OnboardingProgress(status: .inProgress(step: .welcome))
+  let onboardingTask = Task { @MainActor in
+    try await state.persistOnboardingProgress(progress)
+  }
+  for _ in 0..<20 where state.preferences.onboardingProgress != progress {
+    await Task.yield()
+  }
+  #expect(state.preferences.onboardingProgress == progress)
+
+  await blockedSave.fail()
+  #expect(await firstMoveTask.value == nil)
+  await precommitGate.waitUntilStarted()
+
+  #expect(await state.moveSmartCapture(receipt, to: destination.id) == nil)
+  #expect(await blockedSave.currentSaveCount() == 2)
+
+  await precommitGate.release()
+  try await onboardingTask.value
+  let persisted = try await store.loadSnapshot()
+  #expect(persisted.preferences.onboardingProgress == progress)
+  #expect(persisted.workspace.notes.first(where: { $0.id == inbox.id })?.body == "Captured")
+  #expect(
+    persisted.workspace.notes.first(where: { $0.id == destination.id })?.body.isEmpty == true
+  )
+  #expect(await state.moveSmartCapture(receipt, to: destination.id)?.noteID == destination.id)
+}
+
 @Test @MainActor func appStateDictationPrecommitCancellationNeverEntersSaveOperation()
   async throws
 {
