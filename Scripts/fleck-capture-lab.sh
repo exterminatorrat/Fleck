@@ -21,6 +21,13 @@ require_session_root() {
     || die "capture sessions must use /tmp/fleck-demo.XXXXXX"
 }
 
+reject_symlinks() {
+  local path
+  for path in "$@"; do
+    [[ ! -L "$path" ]] || die "capture session paths must not be symlinks"
+  done
+}
+
 resolve_capture_tool() {
   cd "$repo_root"
   swift build --product fleck-capture-lab --disable-automatic-resolution
@@ -32,18 +39,30 @@ resolve_capture_tool() {
 
 read_manifest() {
   manifest="$1"
-  [[ "$manifest" == /* && -f "$manifest" ]] || die "capture manifest was not found"
+  [[ "$manifest" =~ ^/tmp/fleck-demo\.[[:alnum:]]{6}/fleck-capture-manifest\.json$ ]] \
+    || die "capture manifest path must use /tmp/fleck-demo.XXXXXX/fleck-capture-manifest.json"
+  session_root="${manifest%/fleck-capture-manifest.json}"
+  reject_symlinks "$session_root" "$manifest"
+  [[ -d "$session_root" && -f "$manifest" ]] || die "capture manifest was not found"
 
-  session_root="$(/usr/bin/plutil -extract sessionRoot raw -o - "$manifest")"
+  manifest_session_root="$(/usr/bin/plutil -extract sessionRoot raw -o - "$manifest")"
+  fleck_root="$(/usr/bin/plutil -extract fleckRoot raw -o - "$manifest")"
   fake_repo="$(/usr/bin/plutil -extract fakeRepository raw -o - "$manifest")"
   fleck_app="$(/usr/bin/plutil -extract fleckApp raw -o - "$manifest")"
   require_session_root "$session_root"
-  [[ "$manifest" == "$session_root/fleck-capture-manifest.json" ]] \
+  [[ "$manifest_session_root" == "$session_root" ]] \
     || die "capture manifest is outside its session"
+  [[ "$fleck_root" == "$session_root/Library/Application Support/Fleck" ]] \
+    || die "Fleck data is outside its session"
   [[ "$fake_repo" == "$session_root/NorthstarDemo" ]] \
     || die "fake repository is outside its session"
   [[ "$fleck_app" == "$repo_root/.build/Fleck.app" ]] \
     || die "capture manifest names the wrong Fleck app"
+  reject_symlinks \
+    "$session_root/Library" \
+    "$session_root/Library/Application Support" \
+    "$fleck_root" \
+    "$fake_repo"
 }
 
 find_codex_profile() {
@@ -96,14 +115,16 @@ case "${1:-}" in
     read_manifest "$2"
     resolve_capture_tool
     "$capture_tool" verify --manifest "$manifest"
-    swift test --package-path "$fake_repo"
+    scratch_path="$session_root/SwiftPMBuild/NorthstarDemo"
+    reject_symlinks "$session_root/SwiftPMBuild" "$scratch_path"
+    swift test --package-path "$fake_repo" --scratch-path "$scratch_path"
     ;;
   launch)
     [[ $# -eq 2 ]] || usage
+    read_manifest "$2"
     if pgrep -x Fleck >/dev/null 2>&1; then
       die "Fleck is already running; leave it open and use this session later"
     fi
-    read_manifest "$2"
     [[ -d "$repo_root/.build/Fleck.app" ]] || die "packaged Fleck app was not found"
     /usr/bin/open -n \
       --env "CFFIXED_USER_HOME=$session_root" \
@@ -112,8 +133,15 @@ case "${1:-}" in
   codex-command)
     [[ $# -eq 2 ]] || usage
     read_manifest "$2"
+    profiles="$fleck_root/AgentIntegrations/profiles.json"
+    installed_helper="$fleck_root/AgentBridge/bin/fleck"
+    reject_symlinks \
+      "$fleck_root/AgentIntegrations" \
+      "$profiles" \
+      "$fleck_root/AgentBridge" \
+      "$fleck_root/AgentBridge/bin" \
+      "$installed_helper"
     find_codex_profile
-    installed_helper="$session_root/Library/Application Support/Fleck/AgentBridge/bin/fleck"
     [[ -x "$installed_helper" ]] || die "isolated Agent Connector was not found"
     printf \
       'Codex command: codex -C '\''%s'\'' -c '\''mcp_servers.fleck.command="%s"'\'' -c '\''mcp_servers.fleck.args=["mcp","--profile","%s"]'\'' -c '\''mcp_servers.fleck.env.CFFIXED_USER_HOME="%s"'\''\n' \

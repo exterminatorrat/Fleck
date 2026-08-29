@@ -4,6 +4,17 @@ set -euo pipefail
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
 
+expect_error() {
+  local expected="$1"
+  shift
+  local actual
+  if actual="$("$@" 2>&1)"; then
+    printf 'expected command to fail: %s\n' "$*" >&2
+    exit 1
+  fi
+  test "$actual" = "$expected"
+}
+
 cd "$repo_root"
 session_output="$(
   FLECK_CAPTURE_LAB_SKIP_BUILD=1 \
@@ -26,7 +37,10 @@ test "$(printf '%s\n' "$session_output" | sed -n 's/^Fleck app: //p')" = "$fleck
 test "$(printf '%s\n' "$session_output" | sed -n 's/^Fake repository: //p')" = "$fake_repo"
 test -d "$session_root/Library/Application Support/Fleck"
 test -f "$session_root/NorthstarDemo/Package.swift"
+test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
 Scripts/fleck-capture-lab.sh verify "$manifest"
+test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
+test -d "$session_root/SwiftPMBuild/NorthstarDemo"
 
 fake_bin="$session_root/TestBin"
 readonly fake_bin
@@ -77,3 +91,40 @@ expected_codex_output="Codex command: codex -C '$fake_repo' -c 'mcp_servers.flec
 readonly expected_codex_output
 test "$codex_output" = "$expected_codex_output"
 [[ "$codex_output" != *"codex mcp add"* ]]
+
+readonly exact_path_error="error: capture manifest path must use /tmp/fleck-demo.XXXXXX/fleck-capture-manifest.json"
+readonly symlink_error="error: capture session paths must not be symlinks"
+expect_error \
+  "$exact_path_error" \
+  Scripts/fleck-capture-lab.sh verify "$session_root/./fleck-capture-manifest.json"
+
+manifest_link_root="$(/usr/bin/mktemp -d /tmp/fleck-demo.XXXXXX)"
+readonly manifest_link_root
+/bin/ln -s "$manifest" "$manifest_link_root/fleck-capture-manifest.json"
+expect_error \
+  "$symlink_error" \
+  Scripts/fleck-capture-lab.sh verify "$manifest_link_root/fleck-capture-manifest.json"
+
+session_link="$(/usr/bin/mktemp -d /tmp/fleck-demo.XXXXXX)"
+readonly session_link
+session_link_holding="$(/usr/bin/mktemp -d /tmp/fleck-redirection.XXXXXX)"
+readonly session_link_holding
+/bin/mv "$session_link" "$session_link_holding/unused-session"
+/bin/ln -s "$session_root" "$session_link"
+expect_error \
+  "$symlink_error" \
+  Scripts/fleck-capture-lab.sh verify "$session_link/fleck-capture-manifest.json"
+
+fleck_root="$session_root/Library/Application Support/Fleck"
+readonly fleck_root
+fleck_redirect="$(/usr/bin/mktemp -d /tmp/fleck-redirection.XXXXXX)"
+readonly fleck_redirect
+/bin/mv "$fleck_root" "$fleck_redirect/Fleck"
+/bin/ln -s "$fleck_redirect/Fleck" "$fleck_root"
+expect_error \
+  "$symlink_error" \
+  /usr/bin/env PATH="$fake_bin:/usr/bin:/bin" \
+    Scripts/fleck-capture-lab.sh launch "$manifest"
+expect_error \
+  "$symlink_error" \
+  Scripts/fleck-capture-lab.sh codex-command "$manifest"
