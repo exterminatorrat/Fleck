@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+readonly canonical_fleck_app="$repo_root/.build/parakeet-test/Fleck.app"
 
 die() {
   printf 'error: %s\n' "$1" >&2
@@ -65,7 +66,7 @@ read_manifest() {
     || die "Fleck data is outside its session"
   [[ "$fake_repo" == "$session_root/NorthstarDemo" ]] \
     || die "fake repository is outside its session"
-  [[ "$fleck_app" == "$repo_root/.build/Fleck.app" ]] \
+  [[ "$fleck_app" == "$canonical_fleck_app" ]] \
     || die "capture manifest names the wrong Fleck app"
   reject_symlinks \
     "$session_root/Library" \
@@ -112,7 +113,7 @@ case "${1:-}" in
   prepare)
     [[ $# -eq 1 ]] || usage
     if [[ "${FLECK_CAPTURE_LAB_SKIP_BUILD:-0}" != "1" ]]; then
-      "$repo_root/Scripts/build-fleck-app.sh"
+      "$repo_root/Scripts/build-parakeet-test-app.sh"
     fi
     session_root="$(/usr/bin/mktemp -d /tmp/fleck-demo.XXXXXX)"
     require_session_root "$session_root"
@@ -136,10 +137,10 @@ case "${1:-}" in
     if pgrep -x Fleck >/dev/null 2>&1; then
       die "Fleck is already running; leave it open and use this session later"
     fi
-    [[ -d "$repo_root/.build/Fleck.app" ]] || die "packaged Fleck app was not found"
+    [[ -d "$fleck_app" ]] || die "packaged Fleck app was not found"
     /usr/bin/open -n \
       --env "CFFIXED_USER_HOME=$session_root" \
-      "$repo_root/.build/Fleck.app"
+      "$fleck_app"
     ;;
   codex-command)
     [[ $# -eq 2 ]] || usage

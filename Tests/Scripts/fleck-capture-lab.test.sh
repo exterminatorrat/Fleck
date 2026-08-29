@@ -46,6 +46,61 @@ assert_rejects_fixture_symlink() {
 }
 
 cd "$repo_root"
+
+packager_test_root="$(/usr/bin/mktemp -d /tmp/fleck-packager-test.XXXXXX)"
+readonly packager_test_root
+packager_test_scripts="$packager_test_root/Scripts"
+readonly packager_test_scripts
+packager_test_bin="$packager_test_root/bin"
+readonly packager_test_bin
+/bin/mkdir -p "$packager_test_scripts" "$packager_test_bin"
+/bin/cp Scripts/fleck-capture-lab.sh "$packager_test_scripts/fleck-capture-lab.sh"
+
+enhanced_packager_sentinel="$packager_test_root/enhanced-packager-called"
+readonly enhanced_packager_sentinel
+lightweight_packager_sentinel="$packager_test_root/lightweight-packager-called"
+readonly lightweight_packager_sentinel
+printf '%s\n' \
+  '#!/bin/sh' \
+  '/usr/bin/touch "$FLECK_CAPTURE_LAB_ENHANCED_PACKAGER_SENTINEL"' \
+  > "$packager_test_scripts/build-parakeet-test-app.sh"
+printf '%s\n' \
+  '#!/bin/sh' \
+  '/usr/bin/touch "$FLECK_CAPTURE_LAB_LIGHTWEIGHT_PACKAGER_SENTINEL"' \
+  > "$packager_test_scripts/build-fleck-app.sh"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'if [ "${1:-}" = "build" ] && [ "${2:-}" = "--show-bin-path" ]; then' \
+  '  printf "%s\n" "$FLECK_CAPTURE_LAB_FAKE_BIN_PATH"' \
+  'fi' \
+  > "$packager_test_bin/swift"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'test "$1" = "prepare"' \
+  'test "$2" = "--session-root"' \
+  > "$packager_test_bin/fleck-capture-lab"
+/bin/chmod 755 \
+  "$packager_test_scripts/fleck-capture-lab.sh" \
+  "$packager_test_scripts/build-parakeet-test-app.sh" \
+  "$packager_test_scripts/build-fleck-app.sh" \
+  "$packager_test_bin/swift" \
+  "$packager_test_bin/fleck-capture-lab"
+
+PATH="$packager_test_bin:/usr/bin:/bin" \
+  FLECK_CAPTURE_LAB_SKIP_BUILD=0 \
+  FLECK_CAPTURE_LAB_ENHANCED_PACKAGER_SENTINEL="$enhanced_packager_sentinel" \
+  FLECK_CAPTURE_LAB_LIGHTWEIGHT_PACKAGER_SENTINEL="$lightweight_packager_sentinel" \
+  FLECK_CAPTURE_LAB_FAKE_BIN_PATH="$packager_test_bin" \
+  "$packager_test_scripts/fleck-capture-lab.sh" prepare >/dev/null
+if [[ ! -e "$enhanced_packager_sentinel" ]]; then
+  printf 'expected default prepare to invoke build-parakeet-test-app.sh\n' >&2
+  exit 1
+fi
+if [[ -e "$lightweight_packager_sentinel" ]]; then
+  printf 'default prepare invoked build-fleck-app.sh\n' >&2
+  exit 1
+fi
+
 session_output="$(
   FLECK_CAPTURE_LAB_SKIP_BUILD=1 \
     Scripts/fleck-capture-lab.sh prepare

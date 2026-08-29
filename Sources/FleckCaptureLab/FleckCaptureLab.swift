@@ -237,7 +237,7 @@ enum WebsiteDemoSession {
       sessionRoot: sessionRoot,
       fleckRoot: fleckRoot,
       fakeRepository: fakeRepository,
-      fleckApp: packageRoot.appendingPathComponent(".build/Fleck.app", isDirectory: true),
+      fleckApp: canonicalFleckApp,
       projectNames: WebsiteDemoFixture.projectNames,
       captureCommands: WebsiteDemoFixture.captureCommands
     )
@@ -281,12 +281,10 @@ enum WebsiteDemoSession {
     let expectedFleckRoot = sessionRoot
       .appendingPathComponent("Library/Application Support/Fleck", isDirectory: true)
     let expectedRepository = sessionRoot.appendingPathComponent("NorthstarDemo", isDirectory: true)
-    let expectedFleckApp = packageRoot
-      .appendingPathComponent(".build/Fleck.app", isDirectory: true)
     guard manifestURL == manifest.manifestURL.standardizedFileURL.resolvingSymlinksInPath(),
       manifest.fleckRoot.standardizedFileURL == expectedFleckRoot.standardizedFileURL,
       manifest.fakeRepository.standardizedFileURL == expectedRepository.standardizedFileURL,
-      manifest.fleckApp.standardizedFileURL == expectedFleckApp.standardizedFileURL,
+      manifest.fleckApp.standardizedFileURL == canonicalFleckApp.standardizedFileURL,
       manifest.projectNames == WebsiteDemoFixture.projectNames,
       manifest.captureCommands == WebsiteDemoFixture.captureCommands,
       !containsForbiddenMaterial(data)
@@ -335,6 +333,9 @@ enum WebsiteDemoSession {
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
+
+  private static let canonicalFleckApp = packageRoot
+    .appendingPathComponent(".build/parakeet-test/Fleck.app", isDirectory: true)
 
   private static let requiredRepositoryFiles = [
     "Package.swift",

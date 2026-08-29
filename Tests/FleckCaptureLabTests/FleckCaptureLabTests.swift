@@ -170,6 +170,39 @@ private func regularFilePaths(in root: URL) throws -> [String] {
   #expect(object["fleckApp"] as? String == manifest.fleckApp.path)
 }
 
+@Test func manifestUsesEnhancedAppAndRejectsLightweightApp() async throws {
+  let session = try TemporaryDirectory()
+  let manifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+  let packageRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let enhancedApp = packageRoot
+    .appendingPathComponent(".build/parakeet-test/Fleck.app", isDirectory: true)
+  let lightweightApp = packageRoot
+    .appendingPathComponent(".build/Fleck.app", isDirectory: true)
+
+  #expect(manifest.fleckApp.standardizedFileURL == enhancedApp.standardizedFileURL)
+  #expect(manifest.fleckApp.standardizedFileURL != lightweightApp.standardizedFileURL)
+
+  let lightweightManifest = WebsiteDemoManifest(
+    sessionRoot: manifest.sessionRoot,
+    fleckRoot: manifest.fleckRoot,
+    fakeRepository: manifest.fakeRepository,
+    fleckApp: lightweightApp,
+    projectNames: manifest.projectNames,
+    captureCommands: manifest.captureCommands
+  )
+  try JSONEncoder().encode(lightweightManifest).write(to: manifest.manifestURL, options: .atomic)
+
+  await #expect(throws: WebsiteDemoError.invalidManifest) {
+    try await WebsiteDemoSession.verify(manifestAt: manifest.manifestURL)
+  }
+}
+
 @Test func verifierRejectsUnsafeSessionRootsBeforeWorkspaceAccess() async throws {
   let session = try TemporaryDirectory()
   let validManifest = try await WebsiteDemoSession.prepare(
