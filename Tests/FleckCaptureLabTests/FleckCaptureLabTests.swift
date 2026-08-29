@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 import FleckCore
 import Testing
@@ -31,6 +32,47 @@ enum RepositoryContamination: CaseIterable {
   case extraUntrackedFile
   case remote
 }
+
+enum PostflightContamination: CaseIterable, Equatable {
+  case missingProof
+  case wrongActor
+  case wrongProfileID
+  case wrongRevision
+  case extraPath
+  case malformedPatch
+  case remote
+  case wrongBehavior
+}
+
+private let approvedAgentInstructions = """
+  When asked to pick up where the user left off, inspect the available Fleck tools for the open Northstar Demo handoff. Make the requested change in this synthetic repository, run its tests, and only after they pass update the originating Fleck task to reflect the completed work. Do not use network access or add a git remote.
+  """
+
+private let completedOnboardingSource = """
+  public enum PermissionRequestPoint: Equatable, Sendable {
+    case firstLaunch
+    case afterWelcome
+  }
+
+  public struct OnboardingFlow: Sendable {
+    public init() {}
+    public var permissionRequestPoint: PermissionRequestPoint { .afterWelcome }
+    public var welcomeStepCount: Int { 3 }
+  }
+  """
+
+private let completedOnboardingTests = """
+  import NorthstarDemo
+  import Testing
+
+  @Test func welcomeFlowHasThreeSteps() {
+    #expect(OnboardingFlow().welcomeStepCount == 3)
+  }
+
+  @Test func requestsLocationAfterWelcome() {
+    #expect(OnboardingFlow().permissionRequestPoint == .afterWelcome)
+  }
+  """
 
 @discardableResult
 private func replaceAmbientGitEnvironment(
@@ -96,6 +138,115 @@ private func regularFilePaths(in root: URL) throws -> [String] {
   return files.sorted()
 }
 
+private func bodySHA256(_ body: String) -> String {
+  SHA256.hash(data: Data(body.utf8))
+    .map { String(format: "%02x", $0) }
+    .joined()
+}
+
+private func completeWorkflow(
+  in manifest: WebsiteDemoManifest,
+  contamination: PostflightContamination? = nil
+) async throws {
+  let store = LocalStore(rootURL: manifest.fleckRoot)
+  let snapshot = try await store.loadSnapshot()
+  var workspace = snapshot.workspace
+  let task = try #require(AgentNoteMutationEngine.tasks(in: workspace.notes[0].body).first)
+  let mutation = try AgentNoteMutationEngine.setTaskState(
+    task,
+    completed: true,
+    in: workspace.notes[0].body
+  )
+  workspace.updateNote(
+    id: WebsiteDemoFixture.northstarNoteID,
+    body: mutation.body,
+    now: Date(timeIntervalSince1970: 1_725_000_001)
+  )
+  let northstar = try #require(
+    workspace.notes.first(where: { $0.id == WebsiteDemoFixture.northstarNoteID })
+  )
+  let activeProfileID = UUID(uuidString: "99999999-9999-4999-8999-999999999999")!
+  let profilesURL = manifest.fleckRoot
+    .appendingPathComponent("AgentIntegrations/profiles.json")
+  try FileManager.default.createDirectory(
+    at: profilesURL.deletingLastPathComponent(),
+    withIntermediateDirectories: true
+  )
+  let profilesData = try JSONSerialization.data(
+    withJSONObject: [[
+      "createdAt": 0,
+      "displayName": "Codex",
+      "id": activeProfileID.uuidString,
+    ]],
+    options: [.prettyPrinted, .sortedKeys]
+  )
+  try profilesData.write(to: profilesURL, options: .atomic)
+  let actor: AgentActivityActor =
+    contamination == .wrongActor
+    ? .integration(
+      profileID: activeProfileID,
+      displayName: "Codex Demo"
+    )
+    : .integration(
+      profileID: contamination == .wrongProfileID
+        ? UUID(uuidString: "66666666-6666-4666-8666-666666666666")!
+        : activeProfileID,
+      displayName: "Codex"
+    )
+  let proof = AgentWorkspaceCommitProof(
+    changeID: UUID(uuidString: "77777777-7777-4777-8777-777777777777")!,
+    noteID: WebsiteDemoFixture.northstarNoteID,
+    resultingRevision: contamination == .wrongRevision
+      ? northstar.revision + 1
+      : northstar.revision,
+    bodySHA256: bodySHA256(northstar.body),
+    actor: actor,
+    operationID: UUID(uuidString: "88888888-8888-4888-8888-888888888888")!,
+    expiresAt: Date(timeIntervalSince1970: 4_000_000_000)
+  )
+  try await store.save(
+    workspace: workspace,
+    preferences: snapshot.preferences,
+    generation: 1,
+    commitProof: contamination == .missingProof ? nil : proof
+  )
+
+  let sourceURL = manifest.fakeRepository
+    .appendingPathComponent("Sources/NorthstarDemo/OnboardingFlow.swift")
+  let testURL = manifest.fakeRepository
+    .appendingPathComponent("Tests/NorthstarDemoTests/OnboardingFlowTests.swift")
+  let source: String
+  switch contamination {
+  case .malformedPatch:
+    source = completedOnboardingSource.replacingOccurrences(
+      of: "{ .afterWelcome }",
+      with: "{ .afterWelcome }  "
+    )
+  case .wrongBehavior:
+    source = completedOnboardingSource.replacingOccurrences(
+      of: "{ .afterWelcome }",
+      with: "{ .firstLaunch }\n"
+    )
+  default:
+    source = completedOnboardingSource
+  }
+  try Data(source.utf8).write(to: sourceURL, options: .atomic)
+  try Data(completedOnboardingTests.utf8).write(to: testURL, options: .atomic)
+
+  if contamination == .extraPath {
+    try Data("unexpected tracked change\n".utf8).write(
+      to: manifest.fakeRepository.appendingPathComponent("README.md"),
+      options: .atomic
+    )
+  }
+  if contamination == .remote {
+    _ = try gitOutput(
+      ["remote", "add", "origin", "https://invalid.example/northstar.git"],
+      repository: manifest.fakeRepository
+    )
+  }
+}
+
 @Test func preparesOnlySyntheticCaptureData() async throws {
   let session = try TemporaryDirectory()
   let now = Date(timeIntervalSince1970: 1_725_000_000)
@@ -112,6 +263,7 @@ private func regularFilePaths(in root: URL) throws -> [String] {
   #expect(tasks.count == 1)
   #expect(tasks.first?.text == "Update onboarding permission order and add regression coverage.")
   #expect(tasks.first?.completed == false)
+  #expect(snapshot.preferences.theme == .dark)
   #expect(snapshot.preferences.onboardingProgress?.status == .completed)
 }
 
@@ -297,6 +449,7 @@ private func regularFilePaths(in root: URL) throws -> [String] {
   )
   let files = try regularFilePaths(in: manifest.fakeRepository)
   #expect(files == [
+    "AGENTS.md",
     "Package.swift",
     "README.md",
     "Sources/NorthstarDemo/OnboardingFlow.swift",
@@ -304,6 +457,13 @@ private func regularFilePaths(in root: URL) throws -> [String] {
   ])
   let gitHead = manifest.fakeRepository.appendingPathComponent(".git/HEAD")
   #expect(FileManager.default.fileExists(atPath: gitHead.path))
+
+  #expect(
+    try String(
+      contentsOf: manifest.fakeRepository.appendingPathComponent("AGENTS.md"),
+      encoding: .utf8
+    ) == approvedAgentInstructions
+  )
 
   #expect(try gitOutput(["branch", "--show-current"], repository: manifest.fakeRepository) == "main")
   #expect(try gitOutput(["rev-list", "--count", "HEAD"], repository: manifest.fakeRepository) == "1")
@@ -502,6 +662,63 @@ func verifierRejectsRepositoryContamination(_ contamination: RepositoryContamina
 
   let completedState = try await WebsiteDemoSession.verify(manifestAt: manifest.manifestURL)
   #expect(completedState == .completed)
+}
+
+@Test func seedVerifierRejectsCompletedSupportedAgentWorkflow() async throws {
+  let session = try TemporaryDirectory()
+  let manifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+  try await completeWorkflow(in: manifest)
+  for path in [
+    "Sources/NorthstarDemo/OnboardingFlow.swift",
+    "Tests/NorthstarDemoTests/OnboardingFlowTests.swift",
+  ] {
+    let seed = try gitOutput(["show", "HEAD:\(path)"], repository: manifest.fakeRepository)
+    try Data(seed.utf8).write(
+      to: manifest.fakeRepository.appendingPathComponent(path),
+      options: .atomic
+    )
+  }
+  #expect(
+    try gitOutput(
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      repository: manifest.fakeRepository
+    ).isEmpty
+  )
+
+  await #expect(throws: WebsiteDemoError.verificationFailed) {
+    try await WebsiteDemoSession.verify(manifestAt: manifest.manifestURL)
+  }
+}
+
+@Test func postflightAcceptsExactCompletedSupportedAgentWorkflow() async throws {
+  let session = try TemporaryDirectory()
+  let manifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+  try await completeWorkflow(in: manifest)
+
+  let state = try await WebsiteDemoSession.postflight(manifestAt: manifest.manifestURL)
+  #expect(state == .completed)
+}
+
+@Test(arguments: PostflightContamination.allCases)
+func postflightRejectsIncompleteOrIncoherentWorkflow(
+  _ contamination: PostflightContamination
+) async throws {
+  let session = try TemporaryDirectory()
+  let manifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+  try await completeWorkflow(in: manifest, contamination: contamination)
+
+  await #expect(throws: WebsiteDemoError.verificationFailed) {
+    try await WebsiteDemoSession.postflight(manifestAt: manifest.manifestURL)
+  }
 }
 
 @Test func commandLineRejectsRelativeSessionRoots() async {

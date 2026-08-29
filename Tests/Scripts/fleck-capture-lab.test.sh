@@ -18,6 +18,20 @@ expect_error() {
   fi
 }
 
+expect_failure() {
+  if "$@" >/dev/null 2>&1; then
+    printf 'expected command to fail: %s\n' "$*" >&2
+    exit 1
+  fi
+}
+
+initialize_fixture_repository() {
+  local root="$1"
+  /bin/mkdir -p "$root"
+  /usr/bin/git -C "$root" init --quiet --initial-branch=main
+  printf '.build/\n' > "$root/.gitignore"
+}
+
 assert_rejects_fixture_symlink() {
   local operation="$1"
   local fixture_path="$2"
@@ -46,16 +60,25 @@ assert_rejects_fixture_symlink() {
 }
 
 cd "$repo_root"
-canonical_session_parent="$repo_root/.build/fleck-capture-lab"
+canonical_common_git_dir="$(
+  /usr/bin/git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir
+)"
+canonical_common_git_dir="$(cd -- "$canonical_common_git_dir" && pwd -P)"
+readonly canonical_common_git_dir
+canonical_common_checkout="$(cd -- "$canonical_common_git_dir/.." && pwd -P)"
+readonly canonical_common_checkout
+canonical_session_parent="$canonical_common_checkout/.build"
 readonly canonical_session_parent
 
-packager_test_root="$(/usr/bin/mktemp -d /tmp/fleck-packager-test.XXXXXX)"
+packager_test_root="$(/usr/bin/mktemp -d /tmp/fp.XXXXXX)"
+packager_test_root="$(cd -- "$packager_test_root" && pwd -P)"
 readonly packager_test_root
 packager_test_scripts="$packager_test_root/Scripts"
 readonly packager_test_scripts
 packager_test_bin="$packager_test_root/bin"
 readonly packager_test_bin
 /bin/mkdir -p "$packager_test_scripts" "$packager_test_bin"
+initialize_fixture_repository "$packager_test_root"
 /bin/cp Scripts/fleck-capture-lab.sh "$packager_test_scripts/fleck-capture-lab.sh"
 
 enhanced_packager_sentinel="$packager_test_root/enhanced-packager-called"
@@ -72,14 +95,26 @@ printf '%s\n' \
   > "$packager_test_scripts/build-fleck-app.sh"
 printf '%s\n' \
   '#!/bin/sh' \
+  'if [ "${1:-}" = "test" ]; then' \
+  '  if [ -n "${FLECK_CAPTURE_LAB_FAKE_TEST_SENTINEL:-}" ]; then' \
+  '    /usr/bin/touch "$FLECK_CAPTURE_LAB_FAKE_TEST_SENTINEL"' \
+  '  fi' \
+  '  exit "${FLECK_CAPTURE_LAB_FAKE_TEST_STATUS:-0}"' \
+  'fi' \
   'if [ "${1:-}" = "build" ] && [ "${2:-}" = "--show-bin-path" ]; then' \
   '  printf "%s\n" "$FLECK_CAPTURE_LAB_FAKE_BIN_PATH"' \
   'fi' \
   > "$packager_test_bin/swift"
 printf '%s\n' \
   '#!/bin/sh' \
-  'test "$1" = "prepare"' \
-  'test "$2" = "--session-root"' \
+  'case "${1:-} ${2:-}" in' \
+  '  "prepare --session-root"|"postflight --manifest")' \
+  '    if [ -n "${FLECK_CAPTURE_LAB_FAKE_TOOL_SENTINEL:-}" ]; then' \
+  '      /usr/bin/touch "$FLECK_CAPTURE_LAB_FAKE_TOOL_SENTINEL"' \
+  '    fi' \
+  '    ;;' \
+  '  *) exit 1 ;;' \
+  'esac' \
   > "$packager_test_bin/fleck-capture-lab"
 /bin/chmod 755 \
   "$packager_test_scripts/fleck-capture-lab.sh" \
@@ -103,9 +138,57 @@ if [[ -e "$lightweight_packager_sentinel" ]]; then
   exit 1
 fi
 
-prebuild_test_root="$(/usr/bin/mktemp -d /tmp/fleck-prebuild-test.XXXXXX)"
+fake_postflight_root="$packager_test_root/.build/f.POST01"
+readonly fake_postflight_root
+fake_postflight_fleck_root="$fake_postflight_root/Library/Application Support/Fleck"
+readonly fake_postflight_fleck_root
+fake_postflight_repo="$fake_postflight_root/NorthstarDemo"
+readonly fake_postflight_repo
+fake_postflight_manifest="$fake_postflight_root/fleck-capture-manifest.json"
+readonly fake_postflight_manifest
+/bin/mkdir -p "$fake_postflight_fleck_root" "$fake_postflight_repo"
+/bin/chmod 700 "$fake_postflight_root"
+printf '%s\n' \
+  '{' \
+  "  \"fakeRepository\" : \"$fake_postflight_repo\"," \
+  "  \"fleckApp\" : \"$packager_test_root/.build/parakeet-test/Fleck.app\"," \
+  "  \"fleckRoot\" : \"$fake_postflight_fleck_root\"," \
+  "  \"sessionRoot\" : \"$fake_postflight_root\"" \
+  '}' > "$fake_postflight_manifest"
+fake_postflight_tool_sentinel="$packager_test_root/postflight-tool-called"
+readonly fake_postflight_tool_sentinel
+fake_postflight_test_sentinel="$packager_test_root/postflight-tests-called"
+readonly fake_postflight_test_sentinel
+PATH="$packager_test_bin:/usr/bin:/bin" \
+  FLECK_CAPTURE_LAB_FAKE_BIN_PATH="$packager_test_bin" \
+  FLECK_CAPTURE_LAB_FAKE_TOOL_SENTINEL="$fake_postflight_tool_sentinel" \
+  FLECK_CAPTURE_LAB_FAKE_TEST_SENTINEL="$fake_postflight_test_sentinel" \
+  FLECK_CAPTURE_LAB_FAKE_TEST_STATUS=0 \
+  "$packager_test_scripts/fleck-capture-lab.sh" \
+    postflight "$fake_postflight_manifest" >/dev/null
+test -e "$fake_postflight_tool_sentinel"
+test -e "$fake_postflight_test_sentinel"
+
+failing_postflight_tool_sentinel="$packager_test_root/failing-postflight-tool-called"
+readonly failing_postflight_tool_sentinel
+failing_postflight_test_sentinel="$packager_test_root/failing-postflight-tests-called"
+readonly failing_postflight_test_sentinel
+expect_failure \
+  /usr/bin/env \
+    PATH="$packager_test_bin:/usr/bin:/bin" \
+    FLECK_CAPTURE_LAB_FAKE_BIN_PATH="$packager_test_bin" \
+    FLECK_CAPTURE_LAB_FAKE_TOOL_SENTINEL="$failing_postflight_tool_sentinel" \
+    FLECK_CAPTURE_LAB_FAKE_TEST_SENTINEL="$failing_postflight_test_sentinel" \
+    FLECK_CAPTURE_LAB_FAKE_TEST_STATUS=1 \
+    "$packager_test_scripts/fleck-capture-lab.sh" \
+      postflight "$fake_postflight_manifest"
+test -e "$failing_postflight_tool_sentinel"
+test -e "$failing_postflight_test_sentinel"
+
+prebuild_test_root="$(/usr/bin/mktemp -d /tmp/fb.XXXXXX)"
 prebuild_test_root="$(cd -- "$prebuild_test_root" && pwd -P)"
 readonly prebuild_test_root
+initialize_fixture_repository "$prebuild_test_root"
 /bin/mkdir -p "$prebuild_test_root/Scripts"
 /bin/cp Scripts/fleck-capture-lab.sh "$prebuild_test_root/Scripts/fleck-capture-lab.sh"
 /bin/cp \
@@ -121,7 +204,7 @@ readonly prebuild_external_root
 prebuild_packager_sentinel="$packager_test_root/prebuild-packager-called"
 readonly prebuild_packager_sentinel
 expect_error \
-  "error: capture session parent must be a canonical non-symlink directory" \
+  "error: capture common build root must be a canonical non-symlink directory" \
   /usr/bin/env \
     PATH="$packager_test_bin:/usr/bin:/bin" \
     FLECK_CAPTURE_LAB_SKIP_BUILD=0 \
@@ -132,6 +215,22 @@ if [[ -e "$prebuild_packager_sentinel" ]]; then
   printf 'enhanced packager ran before redirected build root was rejected\n' >&2
   exit 1
 fi
+
+long_checkout="$packager_test_root/$(
+  /usr/bin/printf 'capture-path-%070d' 0
+)"
+readonly long_checkout
+initialize_fixture_repository "$long_checkout"
+/bin/mkdir -p "$long_checkout/Scripts"
+/bin/cp Scripts/fleck-capture-lab.sh "$long_checkout/Scripts/fleck-capture-lab.sh"
+/bin/chmod 755 "$long_checkout/Scripts/fleck-capture-lab.sh"
+expect_error \
+  "error: capture session socket path exceeds the 104-byte AF_UNIX limit" \
+  /usr/bin/env \
+    PATH="$packager_test_bin:/usr/bin:/bin" \
+    FLECK_CAPTURE_LAB_SKIP_BUILD=1 \
+    FLECK_CAPTURE_LAB_FAKE_BIN_PATH="$packager_test_bin" \
+    "$long_checkout/Scripts/fleck-capture-lab.sh" prepare
 
 session_output="$(
   FLECK_CAPTURE_LAB_SKIP_BUILD=1 \
@@ -157,12 +256,28 @@ if [[ "$actual_session_parent" != "$canonical_session_parent" ]]; then
     "$actual_session_parent" >&2
   exit 1
 fi
-[[ "${session_root##*/}" =~ ^fleck-demo\.[[:alnum:]]{6}$ ]]
-test ! -L "$repo_root/.build"
+[[ "${session_root##*/}" =~ ^f\.[[:alnum:]]{6}$ ]]
+test ! -L "$canonical_common_git_dir"
+test ! -L "$canonical_common_checkout"
 test ! -L "$canonical_session_parent"
 test ! -L "$session_root"
 test "$(cd -- "$canonical_session_parent" && pwd -P)" = "$canonical_session_parent"
 test "$(cd -- "$session_root" && pwd -P)" = "$session_root"
+test "$(/usr/bin/stat -f '%u' "$canonical_session_parent")" = "$(/usr/bin/id -u)"
+test "$(/usr/bin/stat -f '%u' "$session_root")" = "$(/usr/bin/id -u)"
+test "$(/usr/bin/stat -f '%Lp' "$canonical_session_parent")" = "700"
+test "$(/usr/bin/stat -f '%Lp' "$session_root")" = "700"
+relative_session_root="${session_root#"$canonical_common_checkout/"}"
+readonly relative_session_root
+/usr/bin/git -C "$canonical_common_checkout" check-ignore --quiet -- .build
+/usr/bin/git -C "$canonical_common_checkout" check-ignore --quiet -- "$relative_session_root"
+socket_path="$session_root/Library/Application Support/Fleck/AgentBridge/fleck.sock"
+readonly socket_path
+socket_path_bytes="$(
+  /usr/bin/printf '%s' "$socket_path" | LC_ALL=C /usr/bin/wc -c | /usr/bin/tr -d ' '
+)"
+readonly socket_path_bytes
+test "$((socket_path_bytes + 1))" -le 104
 test "$(printf '%s\n' "$session_output" | sed -n 's/^Session: //p')" = "$session_root"
 test "$(printf '%s\n' "$session_output" | sed -n 's/^Fleck app: //p')" = "$fleck_app"
 test "$(printf '%s\n' "$session_output" | sed -n 's/^Fake repository: //p')" = "$fake_repo"
@@ -170,26 +285,37 @@ test -d "$session_root/Library/Application Support/Fleck"
 test -f "$session_root/NorthstarDemo/Package.swift"
 test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
 
-parent_link_test_root="$(/usr/bin/mktemp -d /tmp/fleck-parent-link-test.XXXXXX)"
-readonly parent_link_test_root
-/bin/mkdir -p "$parent_link_test_root/Scripts" "$parent_link_test_root/.build"
-/bin/cp Scripts/fleck-capture-lab.sh "$parent_link_test_root/Scripts/fleck-capture-lab.sh"
-/bin/chmod 755 "$parent_link_test_root/Scripts/fleck-capture-lab.sh"
-external_session_parent="$packager_test_root/external-session-parent"
-readonly external_session_parent
-/bin/mkdir -p "$external_session_parent"
-/bin/ln -s "$external_session_parent" "$parent_link_test_root/.build/fleck-capture-lab"
+leaf_link_test_root="$(/usr/bin/mktemp -d /tmp/fl.XXXXXX)"
+leaf_link_test_root="$(cd -- "$leaf_link_test_root" && pwd -P)"
+readonly leaf_link_test_root
+initialize_fixture_repository "$leaf_link_test_root"
+/bin/mkdir -p "$leaf_link_test_root/Scripts" "$leaf_link_test_root/.build"
+/bin/chmod 700 "$leaf_link_test_root/.build"
+/bin/cp Scripts/fleck-capture-lab.sh "$leaf_link_test_root/Scripts/fleck-capture-lab.sh"
+/bin/chmod 755 "$leaf_link_test_root/Scripts/fleck-capture-lab.sh"
+external_session_leaf="$packager_test_root/external-session-leaf"
+readonly external_session_leaf
+/bin/mkdir -p "$external_session_leaf"
+/bin/ln -s "$external_session_leaf" "$leaf_link_test_root/.build/f.ABC123"
 expect_error \
-  "error: capture session parent must be a canonical non-symlink directory" \
+  "error: capture session paths must not be symlinks" \
   /usr/bin/env \
     PATH="$packager_test_bin:/usr/bin:/bin" \
-    FLECK_CAPTURE_LAB_SKIP_BUILD=1 \
     FLECK_CAPTURE_LAB_FAKE_BIN_PATH="$packager_test_bin" \
-    "$parent_link_test_root/Scripts/fleck-capture-lab.sh" prepare
+    "$leaf_link_test_root/Scripts/fleck-capture-lab.sh" \
+      verify "$leaf_link_test_root/.build/f.ABC123/fleck-capture-manifest.json"
 
 Scripts/fleck-capture-lab.sh verify "$manifest"
 test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
 test -d "$session_root/SwiftPMBuild/NorthstarDemo"
+
+seed_readme_backup="$(/usr/bin/mktemp /tmp/fleck-seed-readme.XXXXXX)"
+readonly seed_readme_backup
+/bin/cp "$fake_repo/README.md" "$seed_readme_backup"
+printf 'mutated synthetic repository\n' > "$fake_repo/README.md"
+expect_failure Scripts/fleck-capture-lab.sh verify "$manifest"
+/bin/cp "$seed_readme_backup" "$fake_repo/README.md"
+test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
 
 readonly symlink_error="error: capture session paths must not be symlinks"
 symlink_sentinel_root="$(/usr/bin/mktemp -d /tmp/fleck-symlink-sentinel.XXXXXX)"
@@ -223,9 +349,21 @@ assert_rejects_fixture_symlink verify \
   "$sentinel_file" \
   "northstar-readme"
 assert_rejects_fixture_symlink verify \
+  "$fake_repo/AGENTS.md" \
+  "$sentinel_file" \
+  "northstar-agents"
+assert_rejects_fixture_symlink verify \
   "$fake_repo/.git" \
   "$sentinel_directory" \
   "northstar-git"
+assert_rejects_fixture_symlink postflight \
+  "$fleck_root/workspace.json" \
+  "$sentinel_file" \
+  "postflight-nested-fleck"
+assert_rejects_fixture_symlink postflight \
+  "$fake_repo/AGENTS.md" \
+  "$sentinel_file" \
+  "postflight-nested-northstar"
 test "$(<"$sentinel_file")" = "external sentinel"
 test "$(<"$sentinel_directory/sentinel")" = "external directory sentinel"
 test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
@@ -249,13 +387,14 @@ if ! /usr/bin/grep -Fq \
   exit 1
 fi
 
-app_link_test_root="$(/usr/bin/mktemp -d /tmp/fleck-app-link-test.XXXXXX)"
+app_link_test_root="$(/usr/bin/mktemp -d /tmp/fa.XXXXXX)"
 app_link_test_root="$(cd -- "$app_link_test_root" && pwd -P)"
 readonly app_link_test_root
+initialize_fixture_repository "$app_link_test_root"
 /bin/mkdir -p "$app_link_test_root/Scripts"
 /bin/cp Scripts/fleck-capture-lab.sh "$app_link_test_root/Scripts/fleck-capture-lab.sh"
 /bin/chmod 755 "$app_link_test_root/Scripts/fleck-capture-lab.sh"
-app_link_session_root="$app_link_test_root/.build/fleck-capture-lab/fleck-demo.ABC123"
+app_link_session_root="$app_link_test_root/.build/f.ABC123"
 readonly app_link_session_root
 app_link_fleck_root="$app_link_session_root/Library/Application Support/Fleck"
 readonly app_link_fleck_root
@@ -266,6 +405,7 @@ readonly app_link_fleck_app
 app_link_manifest="$app_link_session_root/fleck-capture-manifest.json"
 readonly app_link_manifest
 /bin/mkdir -p "$app_link_fleck_root" "$app_link_fake_repo"
+/bin/chmod 700 "$app_link_test_root/.build" "$app_link_session_root"
 printf '%s\n' \
   '{' \
   '  "captureCommands" : {' \
@@ -326,11 +466,11 @@ assert_rejects_fixture_symlink launch \
   "launch-nested-northstar"
 
 if profile_error="$(Scripts/fleck-capture-lab.sh codex-command "$manifest" 2>&1)"; then
-  printf 'expected codex-command to require a Codex Demo profile\n' >&2
+  printf 'expected codex-command to require a Codex profile\n' >&2
   exit 1
 fi
 readonly profile_error
-test "$profile_error" = "error: Codex Demo profile was not found"
+test "$profile_error" = "error: Codex profile was not found"
 
 readonly profile_id="01234567-89AB-CDEF-0123-456789ABCDEF"
 profiles_dir="$session_root/Library/Application Support/Fleck/AgentIntegrations"
@@ -346,6 +486,18 @@ printf '%s\n' \
   "    \"id\": \"$profile_id\"" \
   '  }' \
   ']' > "$profiles"
+expect_error \
+  "error: Codex profile was not found" \
+  Scripts/fleck-capture-lab.sh codex-command "$manifest"
+
+printf '%s\n' \
+  '[' \
+  '  {' \
+  '    "createdAt": 0,' \
+  '    "displayName": "Codex",' \
+  "    \"id\": \"$profile_id\"" \
+  '  }' \
+  ']' > "$profiles"
 
 installed_helper="$session_root/Library/Application Support/Fleck/AgentBridge/bin/fleck"
 readonly installed_helper
@@ -355,10 +507,36 @@ readonly installed_helper
 
 codex_output="$(Scripts/fleck-capture-lab.sh codex-command "$manifest")"
 readonly codex_output
-expected_codex_output="Codex command: codex -C '$fake_repo' -c 'mcp_servers.fleck.command=\"$installed_helper\"' -c 'mcp_servers.fleck.args=[\"mcp\",\"--profile\",\"$profile_id\"]' -c 'mcp_servers.fleck.env.CFFIXED_USER_HOME=\"$session_root\"'"
+expected_codex_output="Codex command: codex exec --ephemeral --ignore-user-config -C '$fake_repo' -s workspace-write -a never -c 'mcp_servers.fleck.command=\"$installed_helper\"' -c 'mcp_servers.fleck.args=[\"mcp\",\"--profile\",\"$profile_id\"]' -c 'mcp_servers.fleck.env.CFFIXED_USER_HOME=\"$session_root\"' 'Pick up where I left off.'"
 readonly expected_codex_output
 test "$codex_output" = "$expected_codex_output"
 [[ "$codex_output" != *"codex mcp add"* ]]
+
+readonly duplicate_profile_id="FEDCBA98-7654-3210-FEDC-BA9876543210"
+printf '%s\n' \
+  '[' \
+  '  {' \
+  '    "createdAt": 0,' \
+  '    "displayName": "Codex",' \
+  "    \"id\": \"$profile_id\"" \
+  '  },' \
+  '  {' \
+  '    "createdAt": 1,' \
+  '    "displayName": "Codex",' \
+  "    \"id\": \"$duplicate_profile_id\"" \
+  '  }' \
+  ']' > "$profiles"
+expect_error \
+  "error: multiple active Codex profiles were found" \
+  Scripts/fleck-capture-lab.sh codex-command "$manifest"
+printf '%s\n' \
+  '[' \
+  '  {' \
+  '    "createdAt": 0,' \
+  '    "displayName": "Codex",' \
+  "    \"id\": \"$profile_id\"" \
+  '  }' \
+  ']' > "$profiles"
 
 assert_rejects_fixture_symlink codex-command \
   "$fleck_root/workspace.json" \
@@ -403,25 +581,25 @@ assert_rejects_fixture_symlink codex-command \
   "$external_bridge/bin/fleck" \
   "codex-helper"
 
-readonly exact_path_error="error: capture manifest path must use $canonical_session_parent/fleck-demo.XXXXXX/fleck-capture-manifest.json"
+readonly exact_path_error="error: capture manifest path must use $canonical_session_parent/f.XXXXXX/fleck-capture-manifest.json"
 expect_error \
   "$exact_path_error" \
   Scripts/fleck-capture-lab.sh verify "$session_root/./fleck-capture-manifest.json"
 
-legacy_session_root="$(/usr/bin/mktemp -d /tmp/fleck-demo.XXXXXX)"
+legacy_session_root="$(/usr/bin/mktemp -d /tmp/f.XXXXXX)"
 readonly legacy_session_root
 expect_error \
   "$exact_path_error" \
   Scripts/fleck-capture-lab.sh verify "$legacy_session_root/fleck-capture-manifest.json"
 
-manifest_link_root="$(/usr/bin/mktemp -d "$canonical_session_parent/fleck-demo.XXXXXX")"
+manifest_link_root="$(/usr/bin/mktemp -d "$canonical_session_parent/f.XXXXXX")"
 readonly manifest_link_root
 /bin/ln -s "$manifest" "$manifest_link_root/fleck-capture-manifest.json"
 expect_error \
   "$symlink_error" \
   Scripts/fleck-capture-lab.sh verify "$manifest_link_root/fleck-capture-manifest.json"
 
-session_link="$(/usr/bin/mktemp -d "$canonical_session_parent/fleck-demo.XXXXXX")"
+session_link="$(/usr/bin/mktemp -d "$canonical_session_parent/f.XXXXXX")"
 readonly session_link
 session_link_holding="$(/usr/bin/mktemp -d /tmp/fleck-redirection.XXXXXX)"
 readonly session_link_holding

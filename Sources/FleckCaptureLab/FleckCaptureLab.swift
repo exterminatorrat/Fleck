@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import FleckCore
@@ -39,6 +40,11 @@ enum FleckCaptureLab {
         manifestAt: URL(fileURLWithPath: path)
       )
       return "Task state: \(state.rawValue)\n"
+    case ("postflight", "--manifest"):
+      let state = try await WebsiteDemoSession.postflight(
+        manifestAt: URL(fileURLWithPath: path)
+      )
+      return "Task state: \(state.rawValue)\n"
     default:
       throw WebsiteDemoError.invalidArguments
     }
@@ -59,7 +65,7 @@ extension WebsiteDemoError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .invalidArguments:
-      "Use prepare --session-root <absolute-path> or verify --manifest <absolute-path>."
+      "Use prepare --session-root <absolute-path>, verify --manifest <absolute-path>, or postflight --manifest <absolute-path>."
     case .sessionRootMustBeAbsolute:
       "The capture-lab path must be absolute."
     case .unsafeSessionRoot:
@@ -252,7 +258,7 @@ enum WebsiteDemoSession {
     guard try await store.save(
       workspace: WebsiteDemoFixture.workspace(now: now),
       preferences: AppPreferences(
-        theme: .light,
+        theme: .dark,
         onboardingProgress: OnboardingProgress(status: .completed)
       )
     ) == .committed else {
@@ -264,6 +270,22 @@ enum WebsiteDemoSession {
   }
 
   static func verify(manifestAt url: URL) async throws -> WebsiteDemoTaskState {
+    try await verify(manifestAt: url, kind: .seed)
+  }
+
+  static func postflight(manifestAt url: URL) async throws -> WebsiteDemoTaskState {
+    try await verify(manifestAt: url, kind: .postflight)
+  }
+
+  private enum VerificationKind {
+    case seed
+    case postflight
+  }
+
+  private static func verify(
+    manifestAt url: URL,
+    kind: VerificationKind
+  ) async throws -> WebsiteDemoTaskState {
     guard url.isFileURL, url.path.hasPrefix("/") else {
       throw WebsiteDemoError.sessionRootMustBeAbsolute
     }
@@ -306,8 +328,24 @@ enum WebsiteDemoSession {
     }
     let state: WebsiteDemoTaskState
     do {
-      state = try verifiedTaskState(in: snapshot)
-      try verifySyntheticRepository(at: expectedRepository)
+      let codexProfileID: UUID?
+      switch kind {
+      case .seed:
+        codexProfileID = nil
+      case .postflight:
+        codexProfileID = try verifiedCodexProfileID(at: expectedFleckRoot)
+      }
+      state = try verifiedTaskState(
+        in: snapshot,
+        kind: kind,
+        codexProfileID: codexProfileID
+      )
+      switch kind {
+      case .seed:
+        try verifySyntheticRepository(at: expectedRepository)
+      case .postflight:
+        try verifyCompletedSyntheticRepository(at: expectedRepository)
+      }
     } catch {
       throw WebsiteDemoError.verificationFailed
     }
@@ -323,13 +361,19 @@ enum WebsiteDemoSession {
     .appendingPathComponent(".build/parakeet-test/Fleck.app", isDirectory: true)
 
   private static let requiredRepositoryFiles = [
+    "AGENTS.md",
     "Package.swift",
     "README.md",
     "Sources/NorthstarDemo/OnboardingFlow.swift",
     "Tests/NorthstarDemoTests/OnboardingFlowTests.swift",
   ]
 
-  private static let syntheticRepositoryTreeID = "e1d95947fe4671c8f6ff140b1621c8fad9d5daa8"
+  private static let syntheticRepositoryTreeID = "a44703c57fe485f3491d0826f21bce8146d3ae4e"
+
+  private static let completedRepositoryFiles = [
+    "Sources/NorthstarDemo/OnboardingFlow.swift",
+    "Tests/NorthstarDemoTests/OnboardingFlowTests.swift",
+  ]
 
   private static func safeSessionRoot(_ root: URL) throws -> URL {
     guard root.isFileURL, root.path.hasPrefix("/") else {
@@ -355,14 +399,15 @@ enum WebsiteDemoSession {
   }
 
   private static func verifiedTaskState(
-    in snapshot: LocalStoreSnapshot
+    in snapshot: LocalStoreSnapshot,
+    kind: VerificationKind,
+    codexProfileID: UUID?
   ) throws -> WebsiteDemoTaskState {
     let expectedPreferences = AppPreferences(
-      theme: .light,
+      theme: .dark,
       onboardingProgress: OnboardingProgress(status: .completed)
     )
     guard snapshot.preferences == expectedPreferences,
-      snapshot.commitProofs.isEmpty,
       snapshot.source == .root,
       snapshot.folderMigrationWarnings.isEmpty,
       let fixtureDate = snapshot.workspace.notes.first?.createdAt
@@ -371,34 +416,97 @@ enum WebsiteDemoSession {
     }
 
     let openWorkspace = try WebsiteDemoFixture.workspace(now: fixtureDate)
+    let state: WebsiteDemoTaskState
     if snapshot.workspace == openWorkspace, snapshot.generation == 0 {
-      return .open
+      state = .open
+    } else {
+      guard let actualNorthstar = snapshot.workspace.notes.first,
+        actualNorthstar.modifiedAt >= actualNorthstar.createdAt,
+        let task = AgentNoteMutationEngine.tasks(in: openWorkspace.notes[0].body).first
+      else {
+        throw WebsiteDemoError.verificationFailed
+      }
+      let mutation = try AgentNoteMutationEngine.setTaskState(
+        task,
+        completed: true,
+        in: openWorkspace.notes[0].body
+      )
+      var completedWorkspace = openWorkspace
+      completedWorkspace.updateNote(
+        id: WebsiteDemoFixture.northstarNoteID,
+        body: mutation.body,
+        now: actualNorthstar.modifiedAt
+      )
+      guard snapshot.workspace == completedWorkspace, snapshot.generation == 1 else {
+        throw WebsiteDemoError.verificationFailed
+      }
+      state = .completed
     }
 
-    guard let actualNorthstar = snapshot.workspace.notes.first,
-      actualNorthstar.modifiedAt >= actualNorthstar.createdAt,
-      let task = AgentNoteMutationEngine.tasks(in: openWorkspace.notes[0].body).first
-    else {
-      throw WebsiteDemoError.verificationFailed
+    switch kind {
+    case .seed:
+      guard snapshot.commitProofs.isEmpty else {
+        throw WebsiteDemoError.verificationFailed
+      }
+    case .postflight:
+      guard state == .completed,
+        let northstar = snapshot.workspace.notes.first,
+        let codexProfileID,
+        verifiesPostflightProof(
+          snapshot.commitProofs,
+          northstar: northstar,
+          codexProfileID: codexProfileID
+        )
+      else {
+        throw WebsiteDemoError.verificationFailed
+      }
     }
-    let mutation = try AgentNoteMutationEngine.setTaskState(
-      task,
-      completed: true,
-      in: openWorkspace.notes[0].body
-    )
-    var completedWorkspace = openWorkspace
-    completedWorkspace.updateNote(
-      id: WebsiteDemoFixture.northstarNoteID,
-      body: mutation.body,
-      now: actualNorthstar.modifiedAt
-    )
-    guard snapshot.workspace == completedWorkspace, snapshot.generation == 1 else {
-      throw WebsiteDemoError.verificationFailed
-    }
-    return .completed
+    return state
   }
 
   private static func verifySyntheticRepository(at root: URL) throws {
+    try verifyRepositoryIdentity(at: root)
+    guard try gitOutput(
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      at: root
+    ).isEmpty,
+      try gitOutput(["ls-files", "--others", "--ignored", "--exclude-standard"], at: root)
+        .isEmpty
+    else {
+      throw WebsiteDemoError.verificationFailed
+    }
+  }
+
+  private static func verifyCompletedSyntheticRepository(at root: URL) throws {
+    try verifyRepositoryIdentity(at: root)
+    let source = try String(
+      contentsOf: root.appendingPathComponent(completedRepositoryFiles[0]),
+      encoding: .utf8
+    )
+    let tests = try String(
+      contentsOf: root.appendingPathComponent(completedRepositoryFiles[1]),
+      encoding: .utf8
+    )
+    guard try gitOutput(["diff", "--name-only", "--"], at: root)
+      == completedRepositoryFiles.joined(separator: "\n"),
+      try gitOutput(["diff", "--cached", "--name-only", "--"], at: root).isEmpty,
+      try gitOutput(["ls-files", "--others", "--exclude-standard"], at: root).isEmpty,
+      try gitOutput(["ls-files", "--others", "--ignored", "--exclude-standard"], at: root)
+        .isEmpty,
+      try gitOutput(["diff", "--check", "--"], at: root).isEmpty,
+      source.contains(
+        "public var permissionRequestPoint: PermissionRequestPoint { .afterWelcome }"
+      ),
+      !source.contains(
+        "public var permissionRequestPoint: PermissionRequestPoint { .firstLaunch }"
+      ),
+      tests.contains("#expect(OnboardingFlow().permissionRequestPoint == .afterWelcome)")
+    else {
+      throw WebsiteDemoError.verificationFailed
+    }
+  }
+
+  private static func verifyRepositoryIdentity(at root: URL) throws {
     let gitDirectory = root.appendingPathComponent(".git", isDirectory: true)
     let gitValues = try gitDirectory.resourceValues(
       forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
@@ -409,13 +517,7 @@ enum WebsiteDemoSession {
       throw WebsiteDemoError.verificationFailed
     }
 
-    guard try gitOutput(
-      ["status", "--porcelain=v1", "--untracked-files=all"],
-      at: root
-    ).isEmpty,
-      try gitOutput(["ls-files", "--others", "--ignored", "--exclude-standard"], at: root)
-        .isEmpty,
-      try gitOutput(["remote"], at: root).isEmpty,
+    guard try gitOutput(["remote"], at: root).isEmpty,
       try gitOutput(["rev-parse", "HEAD^{tree}"], at: root) == syntheticRepositoryTreeID,
       try gitOutput(["branch", "--show-current"], at: root) == "main",
       try gitOutput(["rev-list", "--count", "HEAD"], at: root) == "1",
@@ -432,8 +534,58 @@ enum WebsiteDemoSession {
     }
   }
 
+  private static func verifiesPostflightProof(
+    _ proofs: [AgentWorkspaceCommitProof],
+    northstar: Note,
+    codexProfileID: UUID
+  ) -> Bool {
+    guard proofs.count == 1, let proof = proofs.first,
+      northstar.id == WebsiteDemoFixture.northstarNoteID,
+      northstar.revision == 1,
+      proof.noteID == northstar.id,
+      proof.resultingRevision == northstar.revision,
+      proof.bodySHA256 == bodySHA256(northstar.body),
+      proof.expiresAt > northstar.modifiedAt,
+      case .integration(let proofProfileID, let displayName) = proof.actor,
+      proofProfileID == codexProfileID,
+      displayName == "Codex"
+    else {
+      return false
+    }
+    return true
+  }
+
+  private static func verifiedCodexProfileID(at fleckRoot: URL) throws -> UUID {
+    let profilesURL = fleckRoot.appendingPathComponent("AgentIntegrations/profiles.json")
+    let object = try JSONSerialization.jsonObject(with: Data(contentsOf: profilesURL))
+    guard let profiles = object as? [[String: Any]] else {
+      throw WebsiteDemoError.verificationFailed
+    }
+    var profileIDs: [UUID] = []
+    for profile in profiles
+    where profile["displayName"] as? String == "Codex" && profile["revokedAt"] == nil {
+      guard let id = profile["id"] as? String, let profileID = UUID(uuidString: id) else {
+        throw WebsiteDemoError.verificationFailed
+      }
+      profileIDs.append(profileID)
+    }
+    guard profileIDs.count == 1, let profileID = profileIDs.first else {
+      throw WebsiteDemoError.verificationFailed
+    }
+    return profileID
+  }
+
+  private static func bodySHA256(_ body: String) -> String {
+    SHA256.hash(data: Data(body.utf8))
+      .map { String(format: "%02x", $0) }
+      .joined()
+  }
+
   private static func createSyntheticRepository(at root: URL, now: Date) throws {
     let files = [
+      "AGENTS.md": """
+      When asked to pick up where the user left off, inspect the available Fleck tools for the open Northstar Demo handoff. Make the requested change in this synthetic repository, run its tests, and only after they pass update the originating Fleck task to reflect the completed work. Do not use network access or add a git remote.
+      """,
       "Package.swift": """
       // swift-tools-version: 6.0
 
