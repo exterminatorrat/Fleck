@@ -150,7 +150,16 @@
     let keepInboxTitle = "Keep in Inbox"
     let keepInboxAccessibilityLabel = "Keep dictation in Inbox"
 
+    var menuAccessibilityLabel: String {
+      choices.isEmpty && allowsKeepInInbox
+        ? keepInboxAccessibilityLabel
+        : "Choose note"
+    }
+
     var menuAccessibilityHint: String {
+      if choices.isEmpty, allowsKeepInInbox {
+        return "Keeps this saved dictation in Inbox."
+      }
       if allowsKeepInInbox {
         return "Choose a note for this saved dictation or keep it in Inbox."
       }
@@ -736,7 +745,7 @@
         }
         .menuStyle(.borderlessButton)
         .font(.system(size: 11, weight: .semibold))
-        .accessibilityLabel("Choose note")
+        .accessibilityLabel(chooser.menuAccessibilityLabel)
         .accessibilityHint(chooser.menuAccessibilityHint)
       }
     }

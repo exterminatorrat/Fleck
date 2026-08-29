@@ -21,6 +21,8 @@ import Testing
   #expect(chooser.choices.map(\.title) == ["Note 1", "Note 2", "Note 3", "Note 4"])
   #expect(chooser.keepInboxTitle == "Keep in Inbox")
   #expect(chooser.keepInboxAccessibilityLabel == "Keep dictation in Inbox")
+  #expect(chooser.menuAccessibilityLabel == "Choose note")
+  #expect(chooser.menuAccessibilityHint == "Choose a note for this saved dictation or keep it in Inbox.")
 }
 
 @Test func DictationAmbiguityPresentationDisambiguatesDuplicateTitlesAccessibly() throws {
@@ -88,4 +90,14 @@ import Testing
   #expect(current.accessibilityLabel.hasPrefix("Retry saving dictation in Projects"))
   #expect(current.accessibilityHint == "Retries completion for this saved dictation in Projects.")
   #expect(alternative.accessibilityHint == "Moves this saved dictation from Projects to Personal.")
+}
+
+@Test func DictationAmbiguityPresentationAnnouncesKeepWhenNoNoteChoicesRemain() {
+  let chooser = DictationCapsuleChooser(
+    ambiguity: .init(captureID: UUID(), choices: []),
+    allowsKeepInInbox: true
+  )
+
+  #expect(chooser.menuAccessibilityLabel == "Keep dictation in Inbox")
+  #expect(chooser.menuAccessibilityHint == "Keeps this saved dictation in Inbox.")
 }
