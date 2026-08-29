@@ -173,14 +173,20 @@ init(
 
 **Required behavior:**
 
-- `AppState.activeDestinations()` supplies each active note's complete whitespace-normalized body and `Note.revision`; Trash remains excluded.
+- `AppState.activeDestinations()` supplies each active note's complete raw body by
+  value plus `Note.revision`; Trash remains excluded. It does not normalize or
+  truncate bodies, so unchanged notes avoid another full-text scan before the
+  cache decides whether reindexing is required. The cache normalizes only changed
+  revisions.
 - Gemma removes the 24-candidate guard and asks the index for at most six notes. Inbox is excluded from retrieval and prompts.
 - The prompt contains shortlisted titles and bounded best excerpts, not all note bodies.
 - A single clearly supported match may keep the deterministic fast path. Multiple supported matches require Gemma plus a unique highest retrieval score; ties and lower-scored choices return Inbox.
 - Remove `normalizedTerminalGramPlural`; cached generic trigram evidence replaces the exception.
 - Preserve opaque candidate keys, JSON encoding, the 32 KiB prompt cap, three-second budget, acknowledgement, and cancellation drain.
 
-- [ ] **Step 1: Write red tests.** Replace the 480-character AppState assertion with complete normalized body and revision checks. Add 40-note, middle-of-note, bounded-shortlist, cache-reuse, and no-hard-coded-`grams` tests.
+- [ ] **Step 1: Write red tests.** Replace the 480-character AppState assertion
+  with exact complete raw-body and revision checks. Add 40-note, middle-of-note,
+  bounded-shortlist, cache-reuse, and no-hard-coded-`grams` tests.
 - [ ] **Step 2: Run red.**
 
 ```bash
