@@ -231,6 +231,61 @@ retain only sanitized evidence.
 
 ## Clean Dictation release gates
 
+### Baseline evidence at `63a0832` — 2026-08-29
+
+These commands ran in a clean
+`codex/local-writing-phase0-doc-truth` worktree at exact commit
+`63a0832728f57d6a18a4fb46d25199d90c154e71` on arm64 macOS 26.6.2 (25G83)
+with Swift 6.3.3. Automatic resolution was disabled for every test command;
+this host did not require `--disable-sandbox`.
+
+```sh
+swift test --disable-automatic-resolution --no-parallel \
+  --filter 'FleckAppTests\.(cachedRouting|dynamicDestinationRouter|gemmaRoute|routingContext|routingFailure|ambiguousRouting|processingCancelDuringRouting|cancelDuringRouting)'
+
+swift test --disable-automatic-resolution --no-parallel \
+  --filter 'FleckAppTests\.(FoundationModelDictation|cleaner|deterministicFiller|faithfulValidator|extractedFaithful|dynamicCleanup|cleanupFailureUsesRawTranscript|processorUsesExactBaseline|deadlineUsesStop|productionProcessingBudget|nonemptyFinalCreatesPendingHistoryBeforeCleanup|cancelDuringCleanup)'
+
+Scripts/resolve-enhanced-candidate.sh .build-candidate-0c \
+  swift test --disable-automatic-resolution --no-parallel \
+    --scratch-path .build-candidate-0c \
+    --filter 'FleckAppTests\.(Parakeet|EnhancedSpeech|gemmaActivation|gemmaCleanupAppComposition|gemmaCleanupConfiguration|gemmaCleanupModelManifest|gemmaProcessTransport|gemmaRoute|dynamicCleanup|dynamicDestinationRouter)'
+```
+
+The focused routing command exited 0 with 63 tests, the focused cleanup command
+exited 0 with 123 tests, and the enhanced candidate command exited 0 with 96
+tests. These are non-empty deterministic/synthetic integration checks. The
+enhanced command resolved only the pinned candidate dependency graph from local
+package caches; it did not download model weights, build or launch a packaged
+app, inject audio, or use a microphone.
+
+The full ordinary command is currently a reproducible failing baseline:
+
+```sh
+swift test --disable-automatic-resolution --no-parallel
+```
+
+It ran 1,674 tests in 17 suites and failed with three issues in two tests:
+
+- `FleckAppTests.completedChecklistMarkerContainsAccentFillAndWhiteCheck()`:
+  `ChecklistMarkerDrawingTests.swift:70` observed `accentPixels == 0`, failing
+  `accentPixels > 80`.
+- `FleckAppTests.processorCapturesStopBeforeDelayedSourceFinalization()`:
+  `StreamingDictationProcessorTests.swift:875-876` failed both deadline
+  expectations.
+
+An immediate isolated rerun with the same flags and a filter containing those
+two exact identifiers reproduced both failures and all three issues. No source
+or test was changed in this documentation packet. `Package.resolved` remained
+byte-identical with SHA-256
+`ccf30f62d44719e9859266a373bb0219dbbd1e0f73d17667b50d7d87715a09f7`.
+
+The proof boundary is explicit: these results establish deterministic/synthetic
+contract behavior only. There is no recorded private human-audio model replay,
+exact packaged injected-audio run, packaged live-human real-microphone run,
+identical-artifact two-device acceptance, signed/notarized distribution
+acceptance, or owner release admission for Parakeet or Gemma.
+
 ### Automated gate
 
 Run from the repository root:
@@ -488,15 +543,20 @@ do not change the status from pending based on CI alone.
   180 ms hold, short tap, double-tap hands-free, finish, and Escape; active,
   hidden, pinned, and behind-another-app windows; all Spaces, full-screen apps,
   multiple displays, display removal, and docking; focused rollback/Undo;
-  title-only routing/Inbox; history copy/open/delete/purge/clear; and ordinary
+  exact-title plus bounded full-note semantic routing/Inbox/chooser behavior;
+  history copy/open/delete/purge/clear; and ordinary
   notes with no model installed.
 - **Exact procedure:** Run every interaction from both idle and active capture
   states. Confirm the persistent bar remains non-activating and shows neither a
-  transcript nor a shortcut hint at idle. Use uniquely identifiable note-body
-  secrets to confirm routing sees titles only. Force failed cleanup and
-  low-confidence routing, verify raw/Inbox fallback, advance a test clock or
-  use dated fixtures for 30-day purge, and inspect the saved note/history after
-  each terminal path.
+  transcript nor a shortcut hint at idle. In disposable notes, verify exact
+  title routing separately from unique body-context routing, ambiguous body
+  evidence, and no-match evidence. Record Foundation Models availability and
+  the active routing implementation; full-note cases require the debug-gated
+  local Gemma route, because the available Foundation route remains title-based
+  at this base. Force failed cleanup and low-confidence routing, verify
+  faithful-baseline/Inbox fallback, advance a test clock or use dated fixtures
+  for 30-day purge, and inspect the saved note/history after each terminal path.
+  Do not use private everyday notes as routing fixtures.
 
 #### VoiceOver and Reduce Motion
 

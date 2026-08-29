@@ -36,6 +36,29 @@ This document distinguishes implemented behavior from work that still requires n
   assembly, launch smoke testing, release executable size, resident-memory
   budgets, and agent-boundary enforcement.
 
+## Local writing candidate status at `63a0832`
+
+- Standard Apple on-device speech, deterministic dictionary resolution,
+  faithful cleanup fallback, focused insertion, Smart Capture persistence, and
+  history are present in the ordinary source graph. The coordinator also owns
+  the receipt-bound Inbox-first chooser mechanics used by an ambiguous router.
+- The enhanced debug graph contains Parakeet TDT 0.6B v2 dictation and Gemma 3
+  1B cleanup/local routing as candidate/test integrations. It supplies complete
+  local note bodies and revisions to a bounded memory-only routing index;
+  deterministic unique evidence may resolve a note, while supported close
+  matches are saved to Inbox before a chooser. The available Foundation Models
+  route remains title-based at this base.
+- The 2026-08-29 baseline at exact commit
+  `63a0832728f57d6a18a4fb46d25199d90c154e71` recorded 63 focused routing tests
+  passing, 123 focused cleanup tests passing, and 96 focused enhanced-candidate
+  integration tests passing. The ordinary 1,674-test suite has two
+  reproducible pre-existing failing tests (three recorded issues); the exact
+  commands and failures are in `TESTING.md`.
+- This is source plus deterministic/synthetic contract evidence only. No
+  real-model human-audio replay, packaged injected-audio run, packaged
+  live-human microphone run, two-device candidate acceptance, signed
+  distribution acceptance, or release admission is recorded.
+
 ## MCP Capability Foundation Phase A
 
 The accepted Phase A implementation adds a narrow, profile-scoped capability
