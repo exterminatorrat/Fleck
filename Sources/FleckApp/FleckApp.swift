@@ -1656,7 +1656,6 @@
     private func dismissCapsule(ifOwnedBy owner: CapsuleOwner? = nil) {
       guard owner == nil || capsuleOwner == owner else { return }
       invalidateCapsuleReturn()
-      routingChoiceInFlightCaptureID = nil
       currentCapsuleStatus = nil
       capsuleOwner = nil
       capsuleController.dismiss()

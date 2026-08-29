@@ -1183,6 +1183,53 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   })?.body.contains("Moved before history failed") == false)
 }
 
+@Test @MainActor func DictationRuntimeCompletesChoiceReplayedDuringInFlightDisableAndReenable()
+  async throws
+{
+  let sleeper = RuntimeCapsuleSleeper()
+  let project = Note(title: "Projects", body: "Roadmap")
+  let personal = Note(title: "Personal", body: "Weekend")
+  let fixture = try await RuntimeFixture(
+    finalText: "Move while capsule is hidden",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true,
+    historySaveBlockingAttempt: 3,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: project.id
+  )
+  await fixture.historySaveGate.waitUntilWaiting()
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Projects"))
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.capsuleController.currentChooser?.captureID == captureID)
+
+  await fixture.historySaveGate.open()
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+  for _ in 0..<100 { await Task.yield() }
+
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Projects"))
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+}
+
 @Test @MainActor func DictationRuntimeDoesNotReplayTerminalUpdatesReceivedWhileDisabled()
   async throws
 {
@@ -2098,6 +2145,7 @@ private final class RuntimeFixture {
   let engine: RuntimeSpeechEngine
   let provider: RuntimeEngineProvider
   let history: DictationHistoryController
+  let historySaveGate = DictationTestGate()
   let editorRegistry = DictationEditorRegistry()
   let initialLoadBlocker: RuntimeBlockingFileManager?
   var runtime: DictationRuntime!
@@ -2129,6 +2177,7 @@ private final class RuntimeFixture {
     ambiguousRouting: Bool = false,
     cleanupFails: Bool = false,
     historySaveFailureAttempt: Int? = nil,
+    historySaveBlockingAttempt: Int? = nil,
     capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
     }
@@ -2181,7 +2230,9 @@ private final class RuntimeFixture {
     )
     provider = RuntimeEngineProvider(engine: engine)
     let historySaveProbe = RuntimeHistorySaveProbe(
-      failureAttempt: historySaveFailureAttempt
+      failureAttempt: historySaveFailureAttempt,
+      blockingAttempt: historySaveBlockingAttempt,
+      gate: historySaveGate
     )
     history = DictationHistoryController(
       load: { [] },
@@ -2429,14 +2480,25 @@ private actor RuntimeCounter {
 
 private actor RuntimeHistorySaveProbe {
   let failureAttempt: Int?
+  let blockingAttempt: Int?
+  let gate: DictationTestGate
   private var attempts = 0
 
-  init(failureAttempt: Int?) {
+  init(
+    failureAttempt: Int?,
+    blockingAttempt: Int?,
+    gate: DictationTestGate
+  ) {
     self.failureAttempt = failureAttempt
+    self.blockingAttempt = blockingAttempt
+    self.gate = gate
   }
 
-  func save() throws {
+  func save() async throws {
     attempts += 1
+    if attempts == blockingAttempt {
+      await gate.wait()
+    }
     if attempts == failureAttempt {
       throw DictationSettingsTestError.failed
     }
