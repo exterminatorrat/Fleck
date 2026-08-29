@@ -2146,8 +2146,8 @@ private struct RuntimeRouter: DestinationRouting {
     transcript: String,
     candidates: [DictationRoutingCandidate],
     inboxID: UUID?
-  ) async -> UUID? {
-    inboxID
+  ) async -> DictationRoutingDecision {
+    .inbox
   }
 }
 

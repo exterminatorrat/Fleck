@@ -4,6 +4,69 @@ import Testing
 
 @testable import FleckApp
 
+@Test func gemmaRouteReturnsStableAmbiguityOnlyForValidOutputWithMultipleExactMatches() async throws {
+  let fixture = GemmaRouteFixture()
+  let inbox = fixture.candidate(title: "Inbox")
+  let alpha = fixture.candidate(title: "Alpha", context: "launch roadmap details")
+  let beta = fixture.candidate(title: "Beta", context: "launch schedule details")
+  let task = Task {
+    await fixture.router.route(
+      transcript: "Review the launch roadmap and schedule",
+      candidates: [inbox, beta, alpha],
+      inboxID: inbox.destination.noteID
+    )
+  }
+  let (wire, session) = await fixture.transport.nextRequest()
+  session.complete(wire, text: "inbox")
+
+  guard case .ambiguous(let choices) = await task.value else {
+    Issue.record("Expected exact-supported ambiguity.")
+    return
+  }
+  #expect(choices.map(\.destination) == [beta.destination, alpha.destination])
+  #expect(choices.map(\.contextHint) == ["launch schedule details", "launch roadmap details"])
+}
+
+@Test func gemmaRouteOffersSupportedDuplicateTitlesButNeverAutoResolvesThem() async throws {
+  let fixture = GemmaRouteFixture()
+  let inbox = fixture.candidate(title: "Inbox")
+  let first = fixture.candidate(title: "Project", context: "launch roadmap first")
+  let second = fixture.candidate(title: " project ", context: "launch schedule second")
+  let task = Task {
+    await fixture.router.route(
+      transcript: "Review the launch roadmap and schedule",
+      candidates: [inbox, second, first],
+      inboxID: inbox.destination.noteID
+    )
+  }
+  let (wire, session) = await fixture.transport.nextRequest()
+  session.complete(wire, text: "high:c1")
+
+  guard case .ambiguous(let choices) = await task.value else {
+    Issue.record("Expected duplicate-title ambiguity.")
+    return
+  }
+  #expect(choices.map(\.destination.noteID) == [second.destination.noteID, first.destination.noteID])
+}
+
+@Test func gemmaRouteDoesNotManufactureAmbiguityForMalformedOutput() async throws {
+  let fixture = GemmaRouteFixture()
+  let inbox = fixture.candidate(title: "Inbox")
+  let alpha = fixture.candidate(title: "Alpha", context: "launch roadmap details")
+  let beta = fixture.candidate(title: "Beta", context: "launch schedule details")
+  let task = Task {
+    await fixture.router.route(
+      transcript: "Review the launch roadmap and schedule",
+      candidates: [inbox, alpha, beta],
+      inboxID: inbox.destination.noteID
+    )
+  }
+  let (wire, session) = await fixture.transport.nextRequest()
+  session.complete(wire, text: "not-json-choice")
+
+  #expect(await task.value == .inbox)
+}
+
 @Test func gemmaRouteUsesUniqueTwoTermLexicalCorroborationWithoutStartingHelper() async {
   let inbox = GemmaRouteFixture.candidate(title: "Inbox")
   let chemistry = GemmaRouteFixture.candidate(
@@ -29,9 +92,26 @@ import Testing
       transcript: transcript,
       candidates: [inbox, chemistry, fleck],
       inboxID: inbox.destination.noteID
-    ) == expected)
+    ) == .resolved(expected))
     #expect(transport.startCount == 0)
   }
+}
+
+@Test func gemmaRouteNeverResolvesABlankTitle() async {
+  let inbox = GemmaRouteFixture.candidate(title: "Inbox")
+  let blank = GemmaRouteFixture.candidate(title: " \n ", context: "launch roadmap")
+  let transport = GemmaRouteTransport(startError: true)
+  let router = GemmaDestinationRouter(
+    generator: GemmaCleanupGenerator(transportFactory: { transport }),
+    clock: GemmaRouteFixture.clock
+  )
+
+  #expect(await router.route(
+    transcript: "Review the launch roadmap",
+    candidates: [inbox, blank],
+    inboxID: inbox.destination.noteID
+  ) == .inbox)
+  #expect(transport.startCount == 1)
 }
 
 @Test func gemmaRouteDoesNotFastRouteMoreExactTermsBelowTheUniqueHighestScore() async {
@@ -57,7 +137,7 @@ import Testing
     transcript: "common shared singular",
     candidates: [inbox, lowerScore, highestScore] + fillers,
     inboxID: inbox.destination.noteID
-  ) == inbox.destination.noteID)
+  ) == .inbox)
   #expect(transport.startCount == 1)
 }
 
@@ -91,7 +171,13 @@ import Testing
   #expect(wire.plainPrompt.contains(#""id":"c2","title":"Body Match""#))
   session.complete(wire, text: "high:c2")
 
-  #expect(await task.value == inbox.destination.noteID)
+  guard case .ambiguous(let choices) = await task.value else {
+    Issue.record("Expected bounded ambiguity for valid inbox output.")
+    return
+  }
+  #expect(choices.count == 4)
+  #expect(choices.allSatisfy { $0.contextHint.count <= 160 })
+  #expect(choices.allSatisfy { !$0.contextHint.contains("private-tail-") })
 }
 
 @Test func gemmaRouteFuzzyOnlySupportUsesHelperAndCannotAutoRoute() async throws {
@@ -114,7 +200,7 @@ import Testing
   #expect(wire.plainPrompt.contains(#""title":"Optics""#))
   session.complete(wire, text: "high:c1")
 
-  #expect(await task.value == inbox.destination.noteID)
+  #expect(await task.value == .inbox)
   #expect(transport.startCount == 1)
 }
 
@@ -137,7 +223,7 @@ import Testing
     transcript: "Record the quasar observatory result",
     candidates: [inbox] + unrelated + [target],
     inboxID: inbox.destination.noteID
-  ) == target.destination.noteID)
+  ) == .resolved(target.destination.noteID))
   #expect(transport.startCount == 0)
 }
 
@@ -162,7 +248,7 @@ import Testing
   #expect(wire.plainPrompt.contains("midpointquasar recognitionmarker"))
   #expect(!wire.plainPrompt.contains(String(repeating: "leading ", count: 100)))
   session.complete(wire, text: "inbox")
-  #expect(await task.value == inbox.destination.noteID)
+  #expect(await task.value == .inbox)
 }
 
 @Test func gemmaRoutePromptsAtMostSixBoundedRelevantExcerpts() async throws {
@@ -193,7 +279,11 @@ import Testing
   #expect(!wire.plainPrompt.contains("unrelated-full-body-marker"))
   #expect(!wire.plainPrompt.contains("private-tail-"))
   session.complete(wire, text: "inbox")
-  #expect(await task.value == inbox.destination.noteID)
+  guard case .ambiguous(let choices) = await task.value else {
+    Issue.record("Expected bounded ambiguity for valid inbox output.")
+    return
+  }
+  #expect(choices.count == 4)
 }
 
 @Test func gemmaRouteReusesItsIndexAcrossUnchangedRevisions() async throws {
@@ -226,7 +316,7 @@ import Testing
   }
   let (firstWire, firstSession) = await transport.request(number: 1)
   firstSession.complete(firstWire, text: "inbox")
-  #expect(await first.value == inbox.destination.noteID)
+  #expect(await first.value == .inbox)
 
   let second = Task {
     await router.route(
@@ -239,7 +329,7 @@ import Testing
   #expect(secondWire.plainPrompt.contains("old-cache-marker"))
   #expect(!secondWire.plainPrompt.contains("new-body-marker"))
   secondSession.complete(secondWire, text: "inbox")
-  #expect(await second.value == inbox.destination.noteID)
+  #expect(await second.value == .inbox)
 }
 
 @Test func gemmaRouteDoesNotTreatUnrelatedTrailingSWordsAsDeterministicMatches() async {
@@ -264,7 +354,7 @@ import Testing
       transcript: "website \(transcriptTerm)",
       candidates: [inbox, target, website],
       inboxID: inbox.destination.noteID
-    ) == inbox.destination.noteID)
+    ) == .inbox)
     #expect(transport.startCount == 1)
   }
 }
@@ -284,7 +374,11 @@ import Testing
   let (wire, session) = await fixture.transport.nextRequest()
   session.complete(wire, text: "high:c1")
 
-  #expect(await task.value == inbox.destination.noteID)
+  guard case .ambiguous(let choices) = await task.value else {
+    Issue.record("Expected ambiguity from the shared exact support.")
+    return
+  }
+  #expect(choices.count == 2)
 }
 
 @Test func gemmaRouteRejectsUnrelatedModelChoiceWithoutLexicalCorroboration() async throws {
@@ -302,7 +396,7 @@ import Testing
   let (wire, session) = await fixture.transport.nextRequest()
   session.complete(wire, text: "high:c2")
 
-  #expect(await task.value == inbox.destination.noteID)
+  #expect(await task.value == .inbox)
 }
 
 @Test func gemmaRouteRejectsLowerScoringModelChoiceWhenOverlapIsAmbiguous() async throws {
@@ -321,7 +415,11 @@ import Testing
   let (wire, session) = await fixture.transport.nextRequest()
   session.complete(wire, text: "high:c2")
 
-  #expect(await task.value == inbox.destination.noteID)
+  guard case .ambiguous(let choices) = await task.value else {
+    Issue.record("Expected ambiguity for the unsafe lower-scoring choice.")
+    return
+  }
+  #expect(choices.count == 3)
 }
 
 @Test func gemmaRouteAcceptsModelSelectedExactTermLeader() async throws {
@@ -346,7 +444,7 @@ import Testing
   #expect(wire.plainPrompt.contains(#""id":"c1","title":"Alpha""#))
   session.complete(wire, text: "high:c1")
 
-  #expect(await task.value == leader.destination.noteID)
+  #expect(await task.value == .resolved(leader.destination.noteID))
 }
 
 @Test func gemmaRouteRejectsBiasedLaterModelChoiceTiedAtTheTopScore() async throws {
@@ -364,7 +462,11 @@ import Testing
   let (wire, session) = await fixture.transport.nextRequest()
   session.complete(wire, text: "high:c2")
 
-  #expect(await task.value == inbox.destination.noteID)
+  guard case .ambiguous(let choices) = await task.value else {
+    Issue.record("Expected ambiguity for tied exact-supported matches.")
+    return
+  }
+  #expect(choices.count == 2)
 }
 
 @Test func gemmaRouteAcceptsTheSharedLeaseGateAndFailsClosedWhileDisabled() async {
@@ -376,7 +478,7 @@ import Testing
     transcript: "Fleck project work",
     candidates: GemmaRouteFixture.candidates(inboxID: inboxID, projectID: UUID()),
     inboxID: inboxID
-  ) == inboxID)
+  ) == .inbox)
 }
 
 @Test func gemmaRouteUsesBoundedRouteOperationAndJSONQuotesUntrustedCandidateData() async throws {
@@ -409,7 +511,7 @@ import Testing
   #expect(wire.plainPrompt.contains("one unambiguous primary-topic match"))
 
   session.complete(wire, text: "inbox")
-  #expect(await task.value == inbox.destination.noteID)
+  #expect(await task.value == .inbox)
 }
 
 @Test func gemmaOneWordRouteRetainsTheBoundedRouteResponseCapacity() async throws {
@@ -427,7 +529,7 @@ import Testing
 
   #expect(wire.maxResponseTokens == 64)
   session.complete(wire, text: "inbox")
-  #expect(await task.value == inbox.destination.noteID)
+  #expect(await task.value == .inbox)
 }
 
 @Test func gemmaRouteMapsOpaqueKeysAfterFilteringAmbiguousDuplicateTitles() async throws {
@@ -464,7 +566,7 @@ import Testing
   #expect(!wire.plainPrompt.contains(project.destination.noteID.uuidString.lowercased()))
   session.complete(wire, text: "high:c1")
 
-  #expect(await task.value == project.destination.noteID)
+  #expect(await task.value == .resolved(project.destination.noteID))
 }
 
 @Test func gemmaRouteNeverSelectsAmbiguousDuplicateTitleCandidates() async {
@@ -487,8 +589,8 @@ import Testing
     transcript: "Improve the Fleck dictation cleanup",
     candidates: [inbox, first, second],
     inboxID: inbox.destination.noteID
-  ) == inbox.destination.noteID)
-  #expect(transport.startCount == 0)
+  ) == .inbox)
+  #expect(transport.startCount == 1)
 }
 
 @Test func gemmaRouteFailsClosedForInboxAndInvalidModelOutputs() async throws {
@@ -522,7 +624,7 @@ import Testing
     }
     let (wire, session) = await fixture.transport.nextRequest()
     session.complete(wire, text: output)
-    #expect(await task.value == inboxID, "output: \(output)")
+    #expect(await task.value == .inbox, "output: \(output)")
   }
 }
 
@@ -541,7 +643,7 @@ import Testing
     }
     let (wire, session) = await fixture.transport.nextRequest()
     session.completeRaw(wire, rawText: "high:c1")
-    #expect(await task.value == inboxID)
+    #expect(await task.value == .inbox)
   }
 
   let failedTransport = GemmaRouteTransport(startError: true)
@@ -553,7 +655,7 @@ import Testing
     transcript: "Fleck project work",
     candidates: GemmaRouteFixture.candidates(inboxID: inboxID, projectID: projectID),
     inboxID: inboxID
-  ) == inboxID)
+  ) == .inbox)
 }
 
 @Test func gemmaRouteRejectsDuplicateIdentityAndOversizedInputsBeforeStartingHelper() async throws {
@@ -582,7 +684,7 @@ import Testing
       transcript: "Fleck project work",
       candidates: candidates,
       inboxID: inboxID
-    ) == inboxID)
+    ) == .inbox)
     #expect(transport.startCount == 0)
   }
 
@@ -600,7 +702,7 @@ import Testing
       transcript: transcript,
       candidates: GemmaRouteFixture.candidates(inboxID: inboxID, projectID: projectID),
       inboxID: inboxID
-    ) == inboxID)
+    ) == .inbox)
     #expect(transport.startCount == 0)
   }
 }
@@ -622,7 +724,7 @@ import Testing
   await session.waitForCancellation()
   session.cancel(wire)
 
-  #expect(await task.value == inbox.destination.noteID)
+  #expect(await task.value == .inbox)
   #expect(session.cancellationCount == 1)
   #expect(session.terminationPhases == [.graceful(requireCancellationAcknowledgement: true)])
 }
@@ -640,7 +742,7 @@ import Testing
     transcript: "Fleck project work",
     candidates: GemmaRouteFixture.candidates(inboxID: inboxID, projectID: UUID()),
     inboxID: inboxID
-  ) == inboxID)
+  ) == .inbox)
   #expect(transport.startCount == 0)
 }
 

@@ -379,7 +379,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == project.noteID)
+  #expect(destination == .resolved(project.noteID))
   guard let request = requests.requests.first else {
     Issue.record("Expected a routing request.")
     return
@@ -405,15 +405,15 @@ private actor FoundationModelResponderProbe {
     }
   )
 
-  #expect(await dictation.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == inbox.noteID)
-  #expect(await dictation.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == inbox.noteID)
+  #expect(await dictation.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == .inbox)
+  #expect(await dictation.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == .inbox)
 
   let failing = FoundationModelDictation(
     osMajorVersion: { 26 },
     cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in throw FixtureError.missingOutput }
   )
-  #expect(await failing.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == inbox.noteID)
+  #expect(await failing.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == .inbox)
 }
 
 @Test func FoundationModelDictationRoutesOlderMacOSToInboxWithoutInvokingAModel() async {
@@ -434,7 +434,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 
@@ -463,7 +463,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == chemistry.noteID)
+  #expect(destination == .resolved(chemistry.noteID))
   #expect(recorder.count == 0)
 }
 
@@ -505,7 +505,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 
@@ -528,7 +528,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 
@@ -551,7 +551,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 
@@ -575,7 +575,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 
@@ -599,7 +599,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == biology.noteID)
+  #expect(destination == .resolved(biology.noteID))
   guard let request = requests.requests.first else {
     Issue.record("Expected Foundation routing for ambiguous candidate matches.")
     return
@@ -626,7 +626,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == chemistry.noteID)
+  #expect(destination == .resolved(chemistry.noteID))
   #expect(requests.requests.count == 1)
 }
 
@@ -649,7 +649,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 
@@ -679,7 +679,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 
@@ -705,7 +705,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 

@@ -4,11 +4,71 @@ import Testing
 
 @testable import FleckApp
 
+@Test func dynamicDestinationRouterValidatesAmbiguousPayload() async {
+  let inbox = dynamicCandidate(title: "Inbox")
+  let alpha = dynamicCandidate(title: "Alpha", context: "alpha context")
+  let beta = dynamicCandidate(title: "Beta", context: "beta context")
+  let valid: DictationRoutingDecision = .ambiguous([
+    .init(destination: alpha.destination, contextHint: "alpha context"),
+    .init(destination: beta.destination, contextHint: "beta context"),
+  ])
+  let router = DynamicDestinationRouter(
+    foundationIsAvailable: { false },
+    foundationRouter: DynamicDestinationRouterProbe(result: .inbox),
+    localRouter: DynamicDestinationRouterProbe(result: valid)
+  )
+
+  #expect(await router.route(
+    transcript: "Choose a destination",
+    candidates: [inbox, alpha, beta],
+    inboxID: inbox.destination.noteID
+  ) == valid)
+
+  let malformed = DynamicDestinationRouter(
+    foundationIsAvailable: { false },
+    foundationRouter: DynamicDestinationRouterProbe(result: .inbox),
+    localRouter: DynamicDestinationRouterProbe(result: .ambiguous([
+      .init(destination: alpha.destination, contextHint: "alpha context"),
+      .init(destination: alpha.destination, contextHint: "duplicate"),
+    ]))
+  )
+  #expect(await malformed.route(
+    transcript: "Choose a destination",
+    candidates: [inbox, alpha, beta],
+    inboxID: inbox.destination.noteID
+  ) == .inbox)
+
+  for invalid in [
+    DictationRoutingDecision.ambiguous([
+      .init(destination: alpha.destination, contextHint: "only one"),
+    ]),
+    .ambiguous([
+      .init(destination: inbox.destination, contextHint: "inbox"),
+      .init(destination: beta.destination, contextHint: "beta"),
+    ]),
+    .ambiguous([
+      .init(destination: alpha.destination, contextHint: String(repeating: "x", count: 161)),
+      .init(destination: beta.destination, contextHint: "beta"),
+    ]),
+  ] {
+    let invalidRouter = DynamicDestinationRouter(
+      foundationIsAvailable: { false },
+      foundationRouter: DynamicDestinationRouterProbe(result: .inbox),
+      localRouter: DynamicDestinationRouterProbe(result: invalid)
+    )
+    #expect(await invalidRouter.route(
+      transcript: "Choose a destination",
+      candidates: [inbox, alpha, beta],
+      inboxID: inbox.destination.noteID
+    ) == .inbox)
+  }
+}
+
 @Test func dynamicDestinationRouterExactTitleMatchInvokesNeitherSemanticRouter() async {
   let inbox = dynamicCandidate(title: "Inbox", context: "General captures")
   let chemistry = dynamicCandidate(title: "Chemistry", context: "Lab reports")
-  let foundation = DynamicDestinationRouterProbe(result: chemistry.destination.noteID)
-  let local = DynamicDestinationRouterProbe(result: chemistry.destination.noteID)
+  let foundation = DynamicDestinationRouterProbe(result: .resolved(chemistry.destination.noteID))
+  let local = DynamicDestinationRouterProbe(result: .resolved(chemistry.destination.noteID))
   let router = DynamicDestinationRouter(
     foundationIsAvailable: { true },
     foundationRouter: foundation,
@@ -21,7 +81,7 @@ import Testing
     inboxID: inbox.destination.noteID
   )
 
-  #expect(destination == chemistry.destination.noteID)
+  #expect(destination == .resolved(chemistry.destination.noteID))
   #expect(await foundation.callCount == 0)
   #expect(await local.callCount == 0)
 }
@@ -31,8 +91,8 @@ import Testing
   let inbox = dynamicCandidate(title: "Inbox", context: "General captures")
   let project = dynamicCandidate(title: "Project Delta", context: "Launch plans and deadlines")
   let candidates = [inbox, project]
-  let foundation = DynamicDestinationRouterProbe(result: project.destination.noteID)
-  let local = DynamicDestinationRouterProbe(result: project.destination.noteID)
+  let foundation = DynamicDestinationRouterProbe(result: .resolved(project.destination.noteID))
+  let local = DynamicDestinationRouterProbe(result: .resolved(project.destination.noteID))
   let router = DynamicDestinationRouter(
     foundationIsAvailable: { availability.value },
     foundationRouter: foundation,
@@ -43,7 +103,7 @@ import Testing
     transcript: "Prepare the launch checklist.",
     candidates: candidates,
     inboxID: inbox.destination.noteID
-  ) == project.destination.noteID)
+  ) == .resolved(project.destination.noteID))
   #expect(await local.candidates == candidates)
   #expect(await foundation.callCount == 0)
 
@@ -53,7 +113,7 @@ import Testing
     transcript: "Review the launch schedule.",
     candidates: candidates,
     inboxID: inbox.destination.noteID
-  ) == project.destination.noteID)
+  ) == .resolved(project.destination.noteID))
   #expect(await foundation.candidates == candidates)
   #expect(await local.callCount == 1)
 }
@@ -62,7 +122,7 @@ import Testing
   let inbox = dynamicCandidate(title: "Inbox")
   let project = dynamicCandidate(title: "Project Delta")
   let candidates = [inbox, project]
-  let local = DynamicDestinationRouterProbe(result: project.destination.noteID)
+  let local = DynamicDestinationRouterProbe(result: .resolved(project.destination.noteID))
   let failingFoundation = FoundationModelDictation(
     osMajorVersion: { 26 },
     cleanupGenerator: { _, _ in "unused" },
@@ -78,9 +138,9 @@ import Testing
     transcript: "Prepare the launch checklist.",
     candidates: candidates,
     inboxID: inbox.destination.noteID
-  ) == inbox.destination.noteID)
+  ) == .inbox)
 
-  let malformedFoundation = DynamicDestinationRouterProbe(result: UUID())
+  let malformedFoundation = DynamicDestinationRouterProbe(result: .resolved(UUID()))
   let malformedRouter = DynamicDestinationRouter(
     foundationIsAvailable: { true },
     foundationRouter: malformedFoundation,
@@ -90,7 +150,7 @@ import Testing
     transcript: "Review the launch schedule.",
     candidates: candidates,
     inboxID: inbox.destination.noteID
-  ) == inbox.destination.noteID)
+  ) == .inbox)
   #expect(await local.callCount == 0)
 }
 
@@ -99,12 +159,12 @@ import Testing
   let project = dynamicCandidate(title: "Project Delta")
   let gate = DynamicDestinationRouterGate()
   let local = DynamicDestinationRouterBlockingProbe(
-    result: project.destination.noteID,
+    result: .resolved(project.destination.noteID),
     gate: gate
   )
   let router = DynamicDestinationRouter(
     foundationIsAvailable: { false },
-    foundationRouter: DynamicDestinationRouterProbe(result: project.destination.noteID),
+    foundationRouter: DynamicDestinationRouterProbe(result: .resolved(project.destination.noteID)),
     localRouter: local
   )
   let task = Task {
@@ -119,7 +179,7 @@ import Testing
   task.cancel()
   await gate.release()
 
-  #expect(await task.value == inbox.destination.noteID)
+  #expect(await task.value == .inbox)
 }
 
 private func dynamicCandidate(
@@ -133,11 +193,11 @@ private func dynamicCandidate(
 }
 
 private actor DynamicDestinationRouterProbe: DestinationRouting {
-  let result: UUID?
+  let result: DictationRoutingDecision
   private(set) var callCount = 0
   private(set) var candidates: [DictationRoutingCandidate] = []
 
-  init(result: UUID?) {
+  init(result: DictationRoutingDecision) {
     self.result = result
   }
 
@@ -145,7 +205,7 @@ private actor DynamicDestinationRouterProbe: DestinationRouting {
     transcript _: String,
     candidates: [DictationRoutingCandidate],
     inboxID _: UUID?
-  ) async -> UUID? {
+  ) async -> DictationRoutingDecision {
     callCount += 1
     self.candidates = candidates
     return result
@@ -153,14 +213,14 @@ private actor DynamicDestinationRouterProbe: DestinationRouting {
 }
 
 private struct DynamicDestinationRouterBlockingProbe: DestinationRouting {
-  let result: UUID?
+  let result: DictationRoutingDecision
   let gate: DynamicDestinationRouterGate
 
   func route(
     transcript _: String,
     candidates _: [DictationRoutingCandidate],
     inboxID _: UUID?
-  ) async -> UUID? {
+  ) async -> DictationRoutingDecision {
     await gate.wait()
     return result
   }

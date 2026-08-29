@@ -19,7 +19,7 @@ struct GemmaCleanupAppCompositionTests {
       transcript: "Prepare the launch checklist",
       candidates: [inbox, project],
       inboxID: inbox.destination.noteID
-    ) == project.destination.noteID)
+    ) == .resolved(project.destination.noteID))
     #expect(fixture.transport.startCount == 1)
   }
 
@@ -28,14 +28,14 @@ struct GemmaCleanupAppCompositionTests {
     let fixture = CompositionFixture(phase: .installed, verified: true)
     let inbox = compositionCandidate(title: "Inbox")
     let chemistry = compositionCandidate(title: "Chemistry", context: "Lab reports")
-    let foundation = CompositionDestinationRouterProbe(result: inbox.destination.noteID)
+    let foundation = CompositionDestinationRouterProbe(result: .resolved(inbox.destination.noteID))
     let composition = fixture.makeComposition(foundationRouter: foundation)
 
     #expect(await composition.destinationRouter.route(
       transcript: "Save this chemistry note.",
       candidates: [inbox, chemistry],
       inboxID: inbox.destination.noteID
-    ) == chemistry.destination.noteID)
+    ) == .resolved(chemistry.destination.noteID))
     #expect(await foundation.callCount == 0)
     #expect(fixture.transport.startCount == 0)
   }
@@ -46,7 +46,7 @@ struct GemmaCleanupAppCompositionTests {
     let availability = BoolProbe(true)
     let inbox = compositionCandidate(title: "Inbox")
     let project = compositionCandidate(title: "Project Delta", context: "Launch plans and deadlines")
-    let foundation = CompositionDestinationRouterProbe(result: project.destination.noteID)
+    let foundation = CompositionDestinationRouterProbe(result: .resolved(project.destination.noteID))
     let composition = fixture.makeComposition(
       foundationIsAvailable: { availability.value },
       foundationRouter: foundation
@@ -56,7 +56,7 @@ struct GemmaCleanupAppCompositionTests {
       transcript: "Prepare the launch checklist",
       candidates: [inbox, project],
       inboxID: inbox.destination.noteID
-    ) == project.destination.noteID)
+    ) == .resolved(project.destination.noteID))
     #expect(await foundation.callCount == 1)
     #expect(fixture.transport.startCount == 0)
   }
@@ -72,7 +72,7 @@ struct GemmaCleanupAppCompositionTests {
       transcript: "Prepare the launch checklist",
       candidates: [inbox, project],
       inboxID: inbox.destination.noteID
-    ) == inbox.destination.noteID)
+    ) == .inbox)
     #expect(fixture.transport.startCount == 0)
   }
 
@@ -183,7 +183,7 @@ struct GemmaCleanupAppCompositionTests {
     }
 
     fixture.transport.releaseAcknowledgement()
-    #expect(await result.value == project.destination.noteID)
+    #expect(await result.value == .resolved(project.destination.noteID))
     await shutdown.value
     #expect(drained.isFinished)
     #expect(fixture.installer.cancelCount == 1)
@@ -248,7 +248,7 @@ struct GemmaCleanupAppCompositionTests {
     }
 
     fixture.transport.releaseAcknowledgement()
-    #expect(await result.value == project.destination.noteID)
+    #expect(await result.value == .resolved(project.destination.noteID))
     await modelMutation.value
     #expect(drained.isFinished)
   }
@@ -650,10 +650,10 @@ private final class BoolProbe: @unchecked Sendable {
 }
 
 private actor CompositionDestinationRouterProbe: DestinationRouting {
-  let result: UUID?
+  let result: DictationRoutingDecision
   private(set) var callCount = 0
 
-  init(result: UUID?) {
+  init(result: DictationRoutingDecision) {
     self.result = result
   }
 
@@ -661,7 +661,7 @@ private actor CompositionDestinationRouterProbe: DestinationRouting {
     transcript _: String,
     candidates _: [DictationRoutingCandidate],
     inboxID _: UUID?
-  ) async -> UUID? {
+  ) async -> DictationRoutingDecision {
     callCount += 1
     return result
   }
@@ -704,8 +704,8 @@ private struct InboxRouter: DestinationRouting {
     transcript _: String,
     candidates _: [DictationRoutingCandidate],
     inboxID _: UUID?
-  ) async -> UUID? {
-    nil
+  ) async -> DictationRoutingDecision {
+    .inbox
   }
 }
 

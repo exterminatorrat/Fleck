@@ -816,7 +816,7 @@ private func waitForCompletion(
 @Test @MainActor func routingFailureUsesInbox() async throws {
   let fixture = try Fixture()
   fixture.standard.finalText = "Put this somewhere"
-  fixture.router.result = nil
+  fixture.router.result = .inbox
 
   await fixture.coordinator.start(mode: .smartCapture)
   await fixture.coordinator.finish()
@@ -829,7 +829,7 @@ private func waitForCompletion(
   let fixture = try Fixture()
   fixture.standard.finalText = "Route this"
   fixture.saver.semanticContexts[fixture.inbox.noteID] = "local-only routing context"
-  fixture.router.result = fixture.inbox.noteID
+  fixture.router.result = .resolved(fixture.inbox.noteID)
 
   await fixture.coordinator.start(mode: .smartCapture)
   await fixture.coordinator.finish()
@@ -842,6 +842,225 @@ private func waitForCompletion(
     encoding: .utf8
   ))
   #expect(!historyJSON.contains("local-only routing context"))
+}
+
+@Test @MainActor func ambiguousRoutingSavesInboxOnceBeforeExposingChoices() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "Ambiguous capture"
+  fixture.saver.saveGate = gate
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project context"),
+    .init(destination: personal, contextHint: "personal context"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+
+  #expect(fixture.coordinator.routingAmbiguity == nil)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  await gate.openGate()
+  await finishing.value
+
+  #expect(fixture.saver.savedTexts == ["Ambiguous capture"])
+  #expect(fixture.saver.destinationIDs == [fixture.inbox.noteID])
+  #expect(fixture.coordinator.routingAmbiguity?.captureID == fixture.coordinator.recoveryReceipt?.captureID)
+}
+
+@Test @MainActor func choosingAmbiguousDestinationMovesExactReceiptAndUpdatesSameHistoryRecord() async throws {
+  let fixture = try Fixture()
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "Choose Project"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project context"),
+    .init(destination: personal, contextHint: "personal context"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let captureID = try #require(fixture.coordinator.routingAmbiguity?.captureID)
+  let originalReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  let result = await fixture.coordinator.chooseDestination(
+    captureID: captureID,
+    noteID: project.noteID
+  )
+
+  #expect(result == .completed)
+  #expect(fixture.saver.moveReceipts == [originalReceipt])
+  #expect(fixture.saver.savedTexts == ["Choose Project"])
+  #expect(fixture.coordinator.recoveryReceipt?.noteID == project.noteID)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
+  let records = try await fixture.history.list()
+  #expect(records.count == 1)
+  #expect(records[0].id == captureID)
+  #expect(records[0].destination == project)
+}
+
+@Test @MainActor func keepingAmbiguousCaptureInInboxClearsOnlyChooser() async throws {
+  let fixture = try Fixture()
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "Keep this"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project context"),
+    .init(destination: personal, contextHint: "personal context"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let captureID = try #require(fixture.coordinator.routingAmbiguity?.captureID)
+  let receipt = try #require(fixture.coordinator.recoveryReceipt)
+
+  #expect(await fixture.coordinator.chooseDestination(captureID: captureID, noteID: nil) == .completed)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
+  #expect(fixture.coordinator.recoveryReceipt == receipt)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.saver.savedTexts == ["Keep this"])
+  #expect(try await fixture.history.list().first?.destination == fixture.inbox)
+}
+
+@Test @MainActor func ambiguousChoiceRejectsStaleDeletedAndConcurrentCallbacks() async throws {
+  let gate = Gate()
+  let fixture = try Fixture()
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "Route once"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let captureID = try #require(fixture.coordinator.routingAmbiguity?.captureID)
+
+  #expect(await fixture.coordinator.chooseDestination(captureID: UUID(), noteID: project.noteID) == nil)
+  fixture.saver.destinations.removeAll { $0.noteID == personal.noteID }
+  #expect(await fixture.coordinator.chooseDestination(captureID: captureID, noteID: personal.noteID) == nil)
+
+  fixture.saver.moveGate = gate
+  let first = Task {
+    await fixture.coordinator.chooseDestination(captureID: captureID, noteID: project.noteID)
+  }
+  await gate.waitUntilWaiting()
+  let duplicate = Task {
+    await fixture.coordinator.chooseDestination(captureID: captureID, noteID: project.noteID)
+  }
+  await Task.yield()
+  await gate.openGate()
+
+  #expect(await first.value == .completed)
+  #expect(await duplicate.value == nil)
+  #expect(fixture.saver.moveCount == 1)
+}
+
+@Test @MainActor func failedAmbiguousMovePreservesInboxReceiptAndRetries() async throws {
+  let fixture = try Fixture()
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "Retry move"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let captureID = try #require(fixture.coordinator.routingAmbiguity?.captureID)
+  let inboxReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  fixture.saver.moveSucceeds = false
+
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: captureID,
+    noteID: project.noteID
+  ) == nil)
+  #expect(fixture.coordinator.recoveryReceipt == inboxReceipt)
+  #expect(fixture.coordinator.routingAmbiguity?.captureID == captureID)
+
+  fixture.saver.moveSucceeds = true
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: captureID,
+    noteID: project.noteID
+  ) == .completed)
+  #expect(fixture.saver.moveCount == 2)
+  #expect(fixture.coordinator.recoveryReceipt?.noteID == project.noteID)
+}
+
+@Test @MainActor func committedMoveWithHistoryFailureKeepsAuthoritativeReceiptAndRetryState()
+  async throws
+{
+  let fixture = try Fixture(historyMovedSaveError: TestError.failed)
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "History retry"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let captureID = try #require(fixture.coordinator.routingAmbiguity?.captureID)
+
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: captureID,
+    noteID: project.noteID
+  ) == nil)
+  #expect(fixture.coordinator.recoveryReceipt?.noteID == project.noteID)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.routingAmbiguity?.captureID == captureID)
+  #expect(fixture.coordinator.phase == .saved(project))
+  #expect(try await fixture.history.list().first?.destination == fixture.inbox)
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: captureID,
+    noteID: nil
+  ) == nil)
+  #expect(fixture.coordinator.routingAmbiguity?.captureID == captureID)
+
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: captureID,
+    noteID: project.noteID
+  ) == nil)
+  #expect(fixture.saver.moveCount == 1)
+}
+
+@Test @MainActor func newCaptureAndUndoClearOnlyTheirCaptureBoundChooser() async throws {
+  let fixture = try Fixture()
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "First"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let firstCaptureID = try #require(fixture.coordinator.routingAmbiguity?.captureID)
+
+  fixture.standard.finalText = "Second"
+  await fixture.coordinator.start(mode: .smartCapture)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: firstCaptureID,
+    noteID: project.noteID
+  ) == nil)
+  await fixture.coordinator.finish()
+  #expect(fixture.saver.savedTexts == ["First", "Second"])
+  #expect(await fixture.coordinator.performRecoveryAction() == .completed)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
 }
 
 @Test @MainActor func saveFailureIsRecordedAsUnsavedWhenHistoryIsEnabled() async throws {
@@ -1192,8 +1411,15 @@ private func waitForCompletion(
 @Test @MainActor func cancelDuringRoutingPreventsSavingAndHistoryUpdate() async throws {
   let gate = Gate()
   let fixture = try Fixture()
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
   fixture.standard.finalText = "Cancel during routing"
   fixture.router.gate = gate
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
 
   await fixture.coordinator.start(mode: .smartCapture)
   let finishing = Task { await fixture.coordinator.finish() }
@@ -1206,6 +1432,7 @@ private func waitForCompletion(
 
   #expect(fixture.saver.savedTexts.isEmpty)
   #expect(try await fixture.history.list().isEmpty)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
 }
 
 @Test @MainActor func processingCancelDuringRoutingCancelsAndDrainsRouterBeforeTerminal()
@@ -1469,8 +1696,15 @@ private func waitForCompletion(
 @Test @MainActor func cancelDuringSaveCompensatesTheReceiptAndDeletesHistory() async throws {
   let gate = Gate()
   let fixture = try Fixture()
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
   fixture.standard.finalText = "Cancel during save"
   fixture.saver.saveGate = gate
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
 
   await fixture.coordinator.start(mode: .smartCapture)
   let finishing = Task { await fixture.coordinator.finish() }
@@ -1483,6 +1717,7 @@ private func waitForCompletion(
   #expect(fixture.saver.savedTexts.isEmpty)
   #expect(try await fixture.history.list().isEmpty)
   #expect(fixture.coordinator.phase == .idle)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
 }
 
 @Test @MainActor func cancelDuringFinalSmartHistoryWriteCompensatesCommittedInsertion()
@@ -1490,7 +1725,14 @@ private func waitForCompletion(
 {
   let gate = Gate()
   let fixture = try Fixture(historyFinalSaveGate: gate)
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
   fixture.standard.finalText = "Committed before final history"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
 
   await fixture.coordinator.start(mode: .smartCapture)
   let finishing = Task { await fixture.coordinator.finish() }
@@ -1503,6 +1745,7 @@ private func waitForCompletion(
   #expect(fixture.saver.savedTexts.isEmpty)
   #expect(try await fixture.history.list().isEmpty)
   #expect(fixture.coordinator.phase == .idle)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
 }
 
 @Test @MainActor func unsafeCancelDuringFinalSmartHistoryWriteOpensCommittedDestination()
@@ -2502,6 +2745,7 @@ private final class Fixture {
     preferred: DictationSpeechEngine = .standard,
     historyEnabled: Bool = true,
     historySaveError: Error? = nil,
+    historyMovedSaveError: Error? = nil,
     historyFinalSaveGate: Gate? = nil,
     historyDeleteError: Error? = nil,
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { _ in }
@@ -2519,6 +2763,9 @@ private final class Fixture {
           await historyFinalSaveGate.wait()
         }
         if let historySaveError { throw historySaveError }
+        if record.destination?.title != "Inbox", let historyMovedSaveError {
+          throw historyMovedSaveError
+        }
         try await history.save(record)
       },
       delete: { [history] id in
@@ -2967,7 +3214,7 @@ private final class FakeRouter: DestinationRouting, @unchecked Sendable {
     let routeDrained: CompletionProbe
   }
 
-  var result: UUID?
+  var result: DictationRoutingDecision = .inbox
   var gate: Gate?
   var cancellationProbe: CancellationProbe?
   private(set) var callCount = 0
@@ -2977,7 +3224,7 @@ private final class FakeRouter: DestinationRouting, @unchecked Sendable {
     transcript: String,
     candidates: [DictationRoutingCandidate],
     inboxID: UUID?
-  ) async -> UUID? {
+  ) async -> DictationRoutingDecision {
     callCount += 1
     self.candidates = candidates
     if let cancellationProbe {
@@ -3011,6 +3258,10 @@ private final class FakeSaver: DictationSaving {
   var compensateFocusedCount = 0
   var undoSucceeds = true
   var undoGate: Gate?
+  var moveSucceeds = true
+  var moveGate: Gate?
+  var moveReceipts: [DictationInsertionReceipt] = []
+  var moveCount = 0
 
   func activeDestinations() -> [DictationRoutingCandidate] {
     destinations.map {
@@ -3035,6 +3286,22 @@ private final class FakeSaver: DictationSaving {
     if let undoGate { await undoGate.wait() }
     if undoSucceeds, !savedTexts.isEmpty { savedTexts.removeLast() }
     return undoSucceeds
+  }
+
+  func moveSmartCapture(
+    _ receipt: DictationInsertionReceipt,
+    to destinationID: UUID
+  ) async -> DictationInsertionReceipt? {
+    moveCount += 1
+    moveReceipts.append(receipt)
+    if let moveGate { await moveGate.wait() }
+    guard moveSucceeds else { return nil }
+    if !destinationIDs.isEmpty { destinationIDs[destinationIDs.count - 1] = destinationID }
+    return DictationInsertionReceipt(
+      captureID: receipt.captureID,
+      noteID: destinationID,
+      insertedSuffix: receipt.insertedSuffix
+    )
   }
   func flushFocusedDictationSave(
     captureID: UUID

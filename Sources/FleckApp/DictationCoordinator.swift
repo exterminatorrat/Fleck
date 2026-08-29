@@ -47,6 +47,14 @@ enum DictationRecoveryResult: Equatable {
 
 @MainActor
 final class DictationCoordinator {
+  private struct PendingRoutingAmbiguity {
+    let ambiguity: DictationRoutingAmbiguity
+    var receipt: DictationInsertionReceipt
+    var record: DictationHistoryRecord
+    let inboxID: UUID
+    let savesHistory: Bool
+  }
+
   private struct Capture {
     let id: UUID
     let mode: DictationMode
@@ -64,7 +72,7 @@ final class DictationCoordinator {
     var isSourceFinishing = false
     var releaseRequested = false
     var cancelRequested = false
-    var routingTask: Task<UUID?, Never>?
+    var routingTask: Task<DictationRoutingDecision, Never>?
     var processingSessionCancellationTask: Task<Void, Never>?
     var isTerminating = false
     var editorCancelled = false
@@ -95,12 +103,14 @@ final class DictationCoordinator {
   private var terminalWaiters: [CheckedContinuation<Void, Never>] = []
   private var eventObserver: (@MainActor (DictationCoordinatorEvent) -> Void)?
   private var levelObserver: (@MainActor (Float) -> Void)?
+  private var pendingRoutingAmbiguity: PendingRoutingAmbiguity?
 
   private(set) var phase: DictationPhase = .idle
   private(set) var copyableTranscript: String?
   private(set) var recoveryReceipt: DictationInsertionReceipt?
   private(set) var recoveryAction: DictationRecoveryAction?
   private(set) var recoveryOperationInFlight = false
+  private(set) var routingAmbiguity: DictationRoutingAmbiguity?
 
   var canConfigureShortcut: Bool {
     capture == nil && shortcutID == nil && activeShortcutSessions.isEmpty
@@ -314,6 +324,8 @@ final class DictationCoordinator {
     copyableTranscript = nil
     recoveryReceipt = nil
     recoveryAction = nil
+    pendingRoutingAmbiguity = nil
+    routingAmbiguity = nil
     setPhase(.arming)
 
     let focusedEditor = mode == .focused ? editor : nil
@@ -797,15 +809,27 @@ final class DictationCoordinator {
     }
     activeCapture.routingTask = routingTask
     capture = activeCapture
-    let routedID = await routingTask.value
+    let routingDecision = await routingTask.value
     if var latest = capture, latest.id == id {
       latest.routingTask = nil
       capture = latest
     }
     guard await continueCapture(id) else { return }
-    let destinationID = candidates.contains { $0.destination.noteID == routedID }
-      ? routedID
-      : inbox?.destination.noteID
+    let ambiguityChoices: [DictationRoutingChoice]?
+    let destinationID: UUID?
+    switch routingDecision {
+    case .resolved(let routedID)
+      where routedID != inbox?.destination.noteID
+        && candidates.contains(where: { $0.destination.noteID == routedID }):
+      destinationID = routedID
+      ambiguityChoices = nil
+    case .ambiguous(let choices):
+      destinationID = inbox?.destination.noteID
+      ambiguityChoices = choices
+    default:
+      destinationID = inbox?.destination.noteID
+      ambiguityChoices = nil
+    }
 
     do {
       // A receipt is the save commit boundary: a later cancellation must compensate it.
@@ -845,6 +869,20 @@ final class DictationCoordinator {
         return
       }
       guard isActive(id) else { return }
+      if let ambiguityChoices, receipt.noteID == inbox?.destination.noteID {
+        let ambiguity = DictationRoutingAmbiguity(
+          captureID: id,
+          choices: Array(ambiguityChoices.prefix(4))
+        )
+        pendingRoutingAmbiguity = PendingRoutingAmbiguity(
+          ambiguity: ambiguity,
+          receipt: receipt,
+          record: record,
+          inboxID: receipt.noteID,
+          savesHistory: savesHistory
+        )
+        routingAmbiguity = ambiguity
+      }
       if let destination = record.destination {
         await terminate(
           id,
@@ -925,6 +963,7 @@ final class DictationCoordinator {
     if await saver.undoSmartCapture(receipt) {
       recoveryReceipt = nil
       recoveryAction = nil
+      clearRoutingAmbiguity(captureID: id)
       await completeCancellation(id)
     } else {
       await preserveFailedUndoRecovery(
@@ -1131,6 +1170,7 @@ final class DictationCoordinator {
       if await saver.undoSmartCapture(receipt) {
         recoveryReceipt = nil
         copyableTranscript = nil
+        clearRoutingAmbiguity(captureID: receipt.captureID)
         guard await historyController.delete(receipt.captureID) else {
           recoveryAction = .openHistory
           return .openHistory
@@ -1147,6 +1187,63 @@ final class DictationCoordinator {
     case .openDestination(let noteID):
       return .openDestination(noteID)
     }
+  }
+
+  func chooseDestination(
+    captureID: UUID,
+    noteID: UUID?
+  ) async -> DictationRecoveryResult? {
+    guard canConfigureShortcut,
+      var pending = pendingRoutingAmbiguity,
+      pending.ambiguity.captureID == captureID,
+      pending.receipt.captureID == captureID,
+      recoveryReceipt == pending.receipt
+    else { return nil }
+
+    recoveryOperationInFlight = true
+    defer { recoveryOperationInFlight = false }
+
+    guard let noteID else {
+      guard pending.receipt.noteID == pending.inboxID else { return nil }
+      clearRoutingAmbiguity(captureID: captureID)
+      return pending.record.destination.map { _ in .completed }
+    }
+    guard let choice = pending.ambiguity.choices.first(where: {
+      $0.destination.noteID == noteID
+    }), saver.activeDestinations().contains(where: {
+      $0.destination == choice.destination
+    }) else { return nil }
+
+    if pending.receipt.noteID != noteID {
+      guard let movedReceipt = await saver.moveSmartCapture(
+        pending.receipt,
+        to: noteID
+      ), movedReceipt.captureID == captureID,
+        movedReceipt.noteID == noteID
+      else { return nil }
+      pending.receipt = movedReceipt
+      pending.record.destination = choice.destination
+      pendingRoutingAmbiguity = pending
+      recoveryReceipt = movedReceipt
+      recoveryAction = .undo
+      setPhase(.saved(choice.destination))
+    }
+
+    if pending.savesHistory,
+      !(await historyController.save(pending.record))
+    {
+      pendingRoutingAmbiguity = pending
+      routingAmbiguity = pending.ambiguity
+      return nil
+    }
+    clearRoutingAmbiguity(captureID: captureID)
+    return .completed
+  }
+
+  private func clearRoutingAmbiguity(captureID: UUID) {
+    guard pendingRoutingAmbiguity?.ambiguity.captureID == captureID else { return }
+    pendingRoutingAmbiguity = nil
+    routingAmbiguity = nil
   }
 
   private func message(for error: Error) -> String {

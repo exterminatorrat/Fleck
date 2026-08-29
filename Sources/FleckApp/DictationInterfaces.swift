@@ -74,6 +74,27 @@ struct DictationRoutingCandidate: Equatable, Sendable {
   }
 }
 
+struct DictationRoutingChoice: Equatable, Sendable {
+  let destination: DictationDestination
+  let contextHint: String
+
+  static func boundedContextHint(from excerpt: String) -> String {
+    let normalized = excerpt.split(whereSeparator: \Character.isWhitespace).joined(separator: " ")
+    return String(normalized.prefix(160))
+  }
+}
+
+enum DictationRoutingDecision: Equatable, Sendable {
+  case resolved(UUID)
+  case ambiguous([DictationRoutingChoice])
+  case inbox
+}
+
+struct DictationRoutingAmbiguity: Equatable, Sendable {
+  let captureID: UUID
+  let choices: [DictationRoutingChoice]
+}
+
 @MainActor
 protocol StreamingSpeechSource: AnyObject {
   func start(
@@ -90,7 +111,7 @@ protocol DestinationRouting: Sendable {
     transcript: String,
     candidates: [DictationRoutingCandidate],
     inboxID: UUID?
-  ) async -> UUID?
+  ) async -> DictationRoutingDecision
 }
 
 @MainActor

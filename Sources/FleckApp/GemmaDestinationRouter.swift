@@ -22,25 +22,22 @@ struct GemmaDestinationRouter: DestinationRouting {
     transcript: String,
     candidates: [DictationRoutingCandidate],
     inboxID: UUID?
-  ) async -> UUID? {
+  ) async -> DictationRoutingDecision {
     guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           Data(transcript.utf8).count <= 16 * 1_024,
-          CleanupLexeme.tokenCount(transcript) <= 80 else { return inboxID }
+          CleanupLexeme.tokenCount(transcript) <= 80 else { return .inbox }
 
     var identities = Set<String>()
     guard candidates.allSatisfy({ candidate in
       identities.insert(Self.canonical(candidate.destination.noteID)).inserted
-    }) else { return inboxID }
+    }) else { return .inbox }
 
     var titleCounts: [String: Int] = [:]
     for candidate in candidates {
       titleCounts[Self.normalized(candidate.destination.title), default: 0] += 1
     }
-    let eligible = candidates.filter { candidate in
-      candidate.destination.noteID != inboxID
-        && titleCounts[Self.normalized(candidate.destination.title)] == 1
-    }
-    guard !eligible.isEmpty else { return inboxID }
+    let eligible = candidates.filter { $0.destination.noteID != inboxID }
+    guard !eligible.isEmpty else { return .inbox }
     let matches = await index.retrieve(
       transcript: transcript,
       candidates: eligible,
@@ -48,12 +45,15 @@ struct GemmaDestinationRouter: DestinationRouting {
     )
     guard !matches.isEmpty,
           let prompt = Self.prompt(transcript: transcript, matches: matches) else {
-      return inboxID
+      return .inbox
     }
-    let strongMatches = matches.indices.filter { matches[$0].exactTermMatches >= 2 }
+    let strongMatches = matches.indices.filter {
+      matches[$0].exactTermMatches >= 2
+        && Self.hasUniqueTitle(matches[$0], titleCounts: titleCounts)
+    }
     if strongMatches.count == 1,
        Self.hasUniqueHighestScore(strongMatches[0], in: matches) {
-      return matches[strongMatches[0]].candidate.destination.noteID
+      return .resolved(matches[strongMatches[0]].candidate.destination.noteID)
     }
 
     let session: any CleanupGenerationSession
@@ -65,7 +65,7 @@ struct GemmaDestinationRouter: DestinationRouting {
         maximumOutputTokens: 64
       )
     } catch {
-      return inboxID
+      return .inbox
     }
 
     return await withTaskCancellationHandler {
@@ -76,18 +76,32 @@ struct GemmaDestinationRouter: DestinationRouting {
         output = nil
       }
       await session.acknowledgement()
-      guard !Task.isCancelled, let output else { return inboxID }
-      guard let selectedIndex = Self.candidateIndex(
-        from: output,
-        candidateCount: matches.count
-      ) else { return inboxID }
-      let selectedExactTerms = matches[selectedIndex].exactTermMatches
-      guard selectedExactTerms >= 1,
-            matches.indices.allSatisfy({ index in
-              index == selectedIndex || matches[index].exactTermMatches < selectedExactTerms
-            }),
-            Self.hasUniqueHighestScore(selectedIndex, in: matches) else { return inboxID }
-      return matches[selectedIndex].candidate.destination.noteID
+      guard !Task.isCancelled, let output else { return .inbox }
+      let selectedIndex = Self.candidateIndex(from: output, candidateCount: matches.count)
+      guard output == "inbox" || selectedIndex != nil else { return .inbox }
+      if let selectedIndex {
+        let selected = matches[selectedIndex]
+        let selectedExactTerms = selected.exactTermMatches
+        if Self.hasUniqueTitle(selected, titleCounts: titleCounts),
+          selectedExactTerms >= 1,
+          matches.indices.allSatisfy({ index in
+            index == selectedIndex || matches[index].exactTermMatches < selectedExactTerms
+          }),
+          Self.hasUniqueHighestScore(selectedIndex, in: matches)
+        {
+          return .resolved(selected.candidate.destination.noteID)
+        }
+      }
+      let choices = matches
+        .filter { $0.exactTermMatches >= 1 }
+        .prefix(4)
+        .map {
+          DictationRoutingChoice(
+            destination: $0.candidate.destination,
+            contextHint: DictationRoutingChoice.boundedContextHint(from: $0.excerpt)
+          )
+        }
+      return choices.count >= 2 ? .ambiguous(choices) : .inbox
     } onCancel: {
       session.requestCancellation()
     }
@@ -145,6 +159,14 @@ struct GemmaDestinationRouter: DestinationRouting {
     matches.indices.allSatisfy { index in
       index == selectedIndex || matches[index].score < matches[selectedIndex].score
     }
+  }
+
+  private static func hasUniqueTitle(
+    _ match: CachedNoteRoutingMatch,
+    titleCounts: [String: Int]
+  ) -> Bool {
+    let title = normalized(match.candidate.destination.title)
+    return !title.isEmpty && titleCounts[title] == 1
   }
 
   private static func canonical(_ id: UUID) -> String {

@@ -107,9 +107,9 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     transcript: String,
     candidates: [DictationRoutingCandidate],
     inboxID: UUID?
-  ) async -> UUID? {
+  ) async -> DictationRoutingDecision {
     let eligible = Self.eligibleDestinations(from: candidates.map(\.destination))
-    guard !eligible.isEmpty else { return inboxID }
+    guard !eligible.isEmpty else { return .inbox }
 
     let osMajorVersion = osMajorVersion()
     if osMajorVersion >= 14 {
@@ -117,21 +117,21 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
         transcript: transcript,
         eligibleDestinations: eligible
       ) {
-        return destinationID
+        return .resolved(destinationID)
       }
     }
 
-    guard osMajorVersion >= 26 else { return inboxID }
+    guard osMajorVersion >= 26 else { return .inbox }
 
     do {
       switch try await routingGenerator(transcript, eligible) {
       case .match(let noteID, .high) where eligible.contains(where: { $0.noteID == noteID }):
-        return noteID
+        return .resolved(noteID)
       default:
-        return inboxID
+        return .inbox
       }
     } catch {
-      return inboxID
+      return .inbox
     }
   }
 
@@ -139,7 +139,7 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     transcript: String,
     candidates: [DictationDestination],
     inboxID: UUID?
-  ) async -> UUID? {
+  ) async -> DictationRoutingDecision {
     await route(
       transcript: transcript,
       candidates: candidates.map {
