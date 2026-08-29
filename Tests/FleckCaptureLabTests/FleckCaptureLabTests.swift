@@ -26,6 +26,12 @@ private enum TestCommandError: Error {
   case failed(Int32, String)
 }
 
+enum RepositoryContamination: CaseIterable {
+  case modifiedTrackedFile
+  case extraUntrackedFile
+  case remote
+}
+
 @discardableResult
 private func replaceAmbientGitEnvironment(
   with replacement: [String: String]
@@ -168,6 +174,28 @@ private func regularFilePaths(in root: URL) throws -> [String] {
   #expect(object["fleckRoot"] as? String == manifest.fleckRoot.path)
   #expect(object["fakeRepository"] as? String == manifest.fakeRepository.path)
   #expect(object["fleckApp"] as? String == manifest.fleckApp.path)
+}
+
+@Test func verifierRejectsUnknownManifestFields() async throws {
+  let session = try TemporaryDirectory()
+  let manifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+  var object = try #require(
+    JSONSerialization.jsonObject(with: Data(contentsOf: manifest.manifestURL))
+      as? [String: Any]
+  )
+  object["unexpectedField"] = true
+  let contaminated = try JSONSerialization.data(
+    withJSONObject: object,
+    options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+  )
+  try contaminated.write(to: manifest.manifestURL, options: .atomic)
+
+  await #expect(throws: WebsiteDemoError.invalidManifest) {
+    try await WebsiteDemoSession.verify(manifestAt: manifest.manifestURL)
+  }
 }
 
 @Test func manifestUsesEnhancedAppAndRejectsLightweightApp() async throws {
@@ -365,6 +393,81 @@ private func regularFilePaths(in root: URL) throws -> [String] {
       }
       """
   )
+}
+
+@Test func verifierRejectsContaminatedNoteBody() async throws {
+  let session = try TemporaryDirectory()
+  let manifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+  let store = LocalStore(rootURL: manifest.fleckRoot)
+  let snapshot = try await store.loadSnapshot()
+  var workspace = snapshot.workspace
+  workspace.updateNote(
+    id: WebsiteDemoFixture.northstarNoteID,
+    body: workspace.notes[0].body + "\n\nInjected capture data.",
+    now: Date(timeIntervalSince1970: 1_725_000_001)
+  )
+  try await store.save(
+    workspace: workspace,
+    preferences: snapshot.preferences,
+    generation: snapshot.generation + 1
+  )
+
+  await #expect(throws: WebsiteDemoError.verificationFailed) {
+    try await WebsiteDemoSession.verify(manifestAt: manifest.manifestURL)
+  }
+}
+
+@Test(arguments: RepositoryContamination.allCases)
+func verifierRejectsRepositoryContamination(_ contamination: RepositoryContamination) async throws {
+  let session = try TemporaryDirectory()
+  let manifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+
+  switch contamination {
+  case .modifiedTrackedFile:
+    try Data("modified synthetic readme\n".utf8).write(
+      to: manifest.fakeRepository.appendingPathComponent("README.md"),
+      options: .atomic
+    )
+  case .extraUntrackedFile:
+    try Data("unexpected file\n".utf8).write(
+      to: manifest.fakeRepository.appendingPathComponent("EXTRA.md"),
+      options: .atomic
+    )
+  case .remote:
+    _ = try gitOutput(
+      ["remote", "add", "origin", "https://invalid.example/northstar.git"],
+      repository: manifest.fakeRepository
+    )
+  }
+
+  await #expect(throws: WebsiteDemoError.verificationFailed) {
+    try await WebsiteDemoSession.verify(manifestAt: manifest.manifestURL)
+  }
+}
+
+@Test func verifierToleratesModelRuntimeDirectories() async throws {
+  let session = try TemporaryDirectory()
+  let manifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+  for directory in ["DictationModels", "CleanupModels"] {
+    let root = manifest.fleckRoot.appendingPathComponent(directory, isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("synthetic runtime marker\n".utf8).write(
+      to: root.appendingPathComponent("runtime-marker.txt"),
+      options: .atomic
+    )
+  }
+
+  let state = try await WebsiteDemoSession.verify(manifestAt: manifest.manifestURL)
+  #expect(state == .open)
 }
 
 @Test func verifiesOpenAndCompletedCanonicalTaskStates() async throws {

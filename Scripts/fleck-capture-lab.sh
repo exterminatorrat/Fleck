@@ -70,6 +70,29 @@ reject_tree_symlinks() {
   done
 }
 
+require_canonical_fleck_app() {
+  local app_parent="$build_root/parakeet-test"
+  local resolved_build_root
+  local resolved_app_parent
+  local resolved_fleck_app
+  local app_symlinks
+  [[ -d "$build_root" && ! -L "$build_root" \
+    && -d "$app_parent" && ! -L "$app_parent" \
+    && -d "$canonical_fleck_app" && ! -L "$canonical_fleck_app" ]] \
+    || die "packaged Fleck app must be a canonical non-symlink tree"
+  resolved_build_root="$(cd -- "$build_root" && pwd -P)"
+  resolved_app_parent="$(cd -- "$app_parent" && pwd -P)"
+  resolved_fleck_app="$(cd -- "$canonical_fleck_app" && pwd -P)"
+  [[ "$resolved_build_root" == "$build_root" \
+    && "$resolved_app_parent" == "$app_parent" \
+    && "$resolved_fleck_app" == "$canonical_fleck_app" ]] \
+    || die "packaged Fleck app must be a canonical non-symlink tree"
+  app_symlinks="$(/usr/bin/find -P "$canonical_fleck_app" -type l -print)" \
+    || die "packaged Fleck app must be a canonical non-symlink tree"
+  [[ -z "$app_symlinks" ]] \
+    || die "packaged Fleck app must be a canonical non-symlink tree"
+}
+
 resolve_capture_tool() {
   cd "$repo_root"
   swift build --product fleck-capture-lab --disable-automatic-resolution
@@ -145,10 +168,10 @@ find_codex_profile() {
 case "${1:-}" in
   prepare)
     [[ $# -eq 1 ]] || usage
+    prepare_session_parent
     if [[ "${FLECK_CAPTURE_LAB_SKIP_BUILD:-0}" != "1" ]]; then
       "$repo_root/Scripts/build-parakeet-test-app.sh"
     fi
-    prepare_session_parent
     session_root="$(/usr/bin/mktemp -d "$session_parent/fleck-demo.XXXXXX")"
     require_session_root "$session_root"
     resolve_capture_tool
@@ -168,10 +191,10 @@ case "${1:-}" in
     [[ $# -eq 2 ]] || usage
     read_manifest "$2"
     reject_tree_symlinks "$fleck_root" "$fake_repo"
-    if pgrep -x Fleck >/dev/null 2>&1; then
+    require_canonical_fleck_app
+    if /usr/bin/pgrep -x Fleck >/dev/null 2>&1; then
       die "Fleck is already running; leave it open and use this session later"
     fi
-    [[ -d "$fleck_app" ]] || die "packaged Fleck app was not found"
     /usr/bin/open -n \
       --env "CFFIXED_USER_HOME=$session_root" \
       "$fleck_app"

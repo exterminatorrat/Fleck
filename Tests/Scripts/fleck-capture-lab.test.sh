@@ -103,6 +103,36 @@ if [[ -e "$lightweight_packager_sentinel" ]]; then
   exit 1
 fi
 
+prebuild_test_root="$(/usr/bin/mktemp -d /tmp/fleck-prebuild-test.XXXXXX)"
+prebuild_test_root="$(cd -- "$prebuild_test_root" && pwd -P)"
+readonly prebuild_test_root
+/bin/mkdir -p "$prebuild_test_root/Scripts"
+/bin/cp Scripts/fleck-capture-lab.sh "$prebuild_test_root/Scripts/fleck-capture-lab.sh"
+/bin/cp \
+  "$packager_test_scripts/build-parakeet-test-app.sh" \
+  "$prebuild_test_root/Scripts/build-parakeet-test-app.sh"
+/bin/chmod 755 \
+  "$prebuild_test_root/Scripts/fleck-capture-lab.sh" \
+  "$prebuild_test_root/Scripts/build-parakeet-test-app.sh"
+prebuild_external_root="$packager_test_root/prebuild-external-root"
+readonly prebuild_external_root
+/bin/mkdir -p "$prebuild_external_root"
+/bin/ln -s "$prebuild_external_root" "$prebuild_test_root/.build"
+prebuild_packager_sentinel="$packager_test_root/prebuild-packager-called"
+readonly prebuild_packager_sentinel
+expect_error \
+  "error: capture session parent must be a canonical non-symlink directory" \
+  /usr/bin/env \
+    PATH="$packager_test_bin:/usr/bin:/bin" \
+    FLECK_CAPTURE_LAB_SKIP_BUILD=0 \
+    FLECK_CAPTURE_LAB_ENHANCED_PACKAGER_SENTINEL="$prebuild_packager_sentinel" \
+    FLECK_CAPTURE_LAB_FAKE_BIN_PATH="$packager_test_bin" \
+    "$prebuild_test_root/Scripts/fleck-capture-lab.sh" prepare
+if [[ -e "$prebuild_packager_sentinel" ]]; then
+  printf 'enhanced packager ran before redirected build root was rejected\n' >&2
+  exit 1
+fi
+
 session_output="$(
   FLECK_CAPTURE_LAB_SKIP_BUILD=1 \
     Scripts/fleck-capture-lab.sh prepare
@@ -212,15 +242,79 @@ printf '%s\n' \
 /bin/chmod 755 "$fake_bin/pgrep"
 pgrep_sentinel="$symlink_sentinel_root/pgrep-called"
 readonly pgrep_sentinel
-if launch_error="$(
-  PATH="$fake_bin:/usr/bin:/bin" \
-    Scripts/fleck-capture-lab.sh launch "$manifest" 2>&1
-)"; then
-  printf 'expected launch to refuse a running Fleck process\n' >&2
+if ! /usr/bin/grep -Fq \
+  'if /usr/bin/pgrep -x Fleck >/dev/null 2>&1; then' \
+  Scripts/fleck-capture-lab.sh; then
+  printf 'expected launch guard to use /usr/bin/pgrep\n' >&2
   exit 1
 fi
-readonly launch_error
-test "$launch_error" = "error: Fleck is already running; leave it open and use this session later"
+
+app_link_test_root="$(/usr/bin/mktemp -d /tmp/fleck-app-link-test.XXXXXX)"
+app_link_test_root="$(cd -- "$app_link_test_root" && pwd -P)"
+readonly app_link_test_root
+/bin/mkdir -p "$app_link_test_root/Scripts"
+/bin/cp Scripts/fleck-capture-lab.sh "$app_link_test_root/Scripts/fleck-capture-lab.sh"
+/bin/chmod 755 "$app_link_test_root/Scripts/fleck-capture-lab.sh"
+app_link_session_root="$app_link_test_root/.build/fleck-capture-lab/fleck-demo.ABC123"
+readonly app_link_session_root
+app_link_fleck_root="$app_link_session_root/Library/Application Support/Fleck"
+readonly app_link_fleck_root
+app_link_fake_repo="$app_link_session_root/NorthstarDemo"
+readonly app_link_fake_repo
+app_link_fleck_app="$app_link_test_root/.build/parakeet-test/Fleck.app"
+readonly app_link_fleck_app
+app_link_manifest="$app_link_session_root/fleck-capture-manifest.json"
+readonly app_link_manifest
+/bin/mkdir -p "$app_link_fleck_root" "$app_link_fake_repo"
+printf '%s\n' \
+  '{' \
+  '  "captureCommands" : {' \
+  '    "agentPrompt" : "Pick up where I left off.",' \
+  '    "approval" : "Do it.",' \
+  '    "dictation" : "Northstar Demo: move the location permission request until after onboarding."' \
+  '  },' \
+  "  \"fakeRepository\" : \"$app_link_fake_repo\"," \
+  "  \"fleckApp\" : \"$app_link_fleck_app\"," \
+  "  \"fleckRoot\" : \"$app_link_fleck_root\"," \
+  '  "projectNames" : [' \
+  '    "Northstar Demo",' \
+  '    "Relay Demo",' \
+  '    "Canvas Demo"' \
+  '  ],' \
+  "  \"sessionRoot\" : \"$app_link_session_root\"" \
+  '}' > "$app_link_manifest"
+
+app_link_external_root="$symlink_sentinel_root/app-link-external"
+readonly app_link_external_root
+/bin/mkdir -p "$app_link_external_root/Fleck.app/Contents"
+/bin/ln -s "$app_link_external_root" "$app_link_test_root/.build/parakeet-test"
+readonly app_tree_error="error: packaged Fleck app must be a canonical non-symlink tree"
+expect_error \
+  "$app_tree_error" \
+  /usr/bin/env PATH="$fake_bin:/usr/bin:/bin" \
+    FLECK_CAPTURE_LAB_PGREP_SENTINEL="$pgrep_sentinel" \
+    "$app_link_test_root/Scripts/fleck-capture-lab.sh" launch "$app_link_manifest"
+test ! -e "$pgrep_sentinel"
+
+/bin/mv "$app_link_test_root/.build/parakeet-test" "$app_link_external_root/parent-link"
+/bin/mkdir -p "$app_link_test_root/.build/parakeet-test"
+/bin/ln -s "$app_link_external_root/Fleck.app" "$app_link_fleck_app"
+expect_error \
+  "$app_tree_error" \
+  /usr/bin/env PATH="$fake_bin:/usr/bin:/bin" \
+    FLECK_CAPTURE_LAB_PGREP_SENTINEL="$pgrep_sentinel" \
+    "$app_link_test_root/Scripts/fleck-capture-lab.sh" launch "$app_link_manifest"
+test ! -e "$pgrep_sentinel"
+
+/bin/mv "$app_link_fleck_app" "$app_link_external_root/app-link"
+/bin/mkdir -p "$app_link_fleck_app/Contents"
+/bin/ln -s "$sentinel_file" "$app_link_fleck_app/Contents/redirected-resource"
+expect_error \
+  "$app_tree_error" \
+  /usr/bin/env PATH="$fake_bin:/usr/bin:/bin" \
+    FLECK_CAPTURE_LAB_PGREP_SENTINEL="$pgrep_sentinel" \
+    "$app_link_test_root/Scripts/fleck-capture-lab.sh" launch "$app_link_manifest"
+test ! -e "$pgrep_sentinel"
 
 assert_rejects_fixture_symlink launch \
   "$fleck_root/workspace.json" \

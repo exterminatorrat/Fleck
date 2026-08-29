@@ -278,16 +278,22 @@ enum WebsiteDemoSession {
     }
 
     let sessionRoot = try safeSessionRoot(manifest.sessionRoot)
+    let canonicalManifestData: Data
+    do {
+      canonicalManifestData = try encodedManifest(manifest)
+    } catch {
+      throw WebsiteDemoError.invalidManifest
+    }
     let expectedFleckRoot = sessionRoot
       .appendingPathComponent("Library/Application Support/Fleck", isDirectory: true)
     let expectedRepository = sessionRoot.appendingPathComponent("NorthstarDemo", isDirectory: true)
-    guard manifestURL == manifest.manifestURL.standardizedFileURL.resolvingSymlinksInPath(),
+    guard data == canonicalManifestData,
+      manifestURL == manifest.manifestURL.standardizedFileURL.resolvingSymlinksInPath(),
       manifest.fleckRoot.standardizedFileURL == expectedFleckRoot.standardizedFileURL,
       manifest.fakeRepository.standardizedFileURL == expectedRepository.standardizedFileURL,
       manifest.fleckApp.standardizedFileURL == canonicalFleckApp.standardizedFileURL,
       manifest.projectNames == WebsiteDemoFixture.projectNames,
-      manifest.captureCommands == WebsiteDemoFixture.captureCommands,
-      !containsForbiddenMaterial(data)
+      manifest.captureCommands == WebsiteDemoFixture.captureCommands
     else {
       throw WebsiteDemoError.invalidManifest
     }
@@ -298,35 +304,14 @@ enum WebsiteDemoSession {
     } catch {
       throw WebsiteDemoError.verificationFailed
     }
-    let notes = snapshot.workspace.notes
-    guard notes.map(\.id) == [
-      WebsiteDemoFixture.northstarNoteID,
-      WebsiteDemoFixture.relayNoteID,
-      WebsiteDemoFixture.canvasNoteID,
-      WebsiteDemoFixture.inboxNoteID,
-    ],
-      notes.map(\.title) == ["Northstar Demo", "Relay Demo", "Canvas Demo", "Inbox"],
-      snapshot.workspace.selectedNoteID == WebsiteDemoFixture.northstarNoteID,
-      notes[0].isPinned,
-      notes.filter(\.agentAccess).map(\.id) == [WebsiteDemoFixture.northstarNoteID],
-      snapshot.preferences.theme == .light,
-      snapshot.preferences.onboardingProgress?.status == .completed,
-      requiredRepositoryFiles.allSatisfy({ relativePath in
-        FileManager.default.fileExists(
-          atPath: expectedRepository.appendingPathComponent(relativePath).path
-        )
-      })
-    else {
+    let state: WebsiteDemoTaskState
+    do {
+      state = try verifiedTaskState(in: snapshot)
+      try verifySyntheticRepository(at: expectedRepository)
+    } catch {
       throw WebsiteDemoError.verificationFailed
     }
-
-    let tasks = AgentNoteMutationEngine.tasks(in: notes[0].body)
-    guard tasks.count == 1,
-      tasks[0].text == "Update onboarding permission order and add regression coverage."
-    else {
-      throw WebsiteDemoError.verificationFailed
-    }
-    return tasks[0].completed ? .completed : .open
+    return state
   }
 
   private static let packageRoot = URL(fileURLWithPath: #filePath)
@@ -344,6 +329,8 @@ enum WebsiteDemoSession {
     "Tests/NorthstarDemoTests/OnboardingFlowTests.swift",
   ]
 
+  private static let syntheticRepositoryTreeID = "e1d95947fe4671c8f6ff140b1621c8fad9d5daa8"
+
   private static func safeSessionRoot(_ root: URL) throws -> URL {
     guard root.isFileURL, root.path.hasPrefix("/") else {
       throw WebsiteDemoError.sessionRootMustBeAbsolute
@@ -357,16 +344,92 @@ enum WebsiteDemoSession {
     return sessionRoot
   }
 
-  private static func write(_ manifest: WebsiteDemoManifest) throws {
+  private static func encodedManifest(_ manifest: WebsiteDemoManifest) throws -> Data {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-    try encoder.encode(manifest).write(to: manifest.manifestURL, options: .atomic)
+    return try encoder.encode(manifest)
   }
 
-  private static func containsForbiddenMaterial(_ data: Data) -> Bool {
-    let text = String(decoding: data, as: UTF8.self).lowercased()
-    return ["token", "credential", "verifier", "api_key", "footprint"]
-      .contains(where: text.contains)
+  private static func write(_ manifest: WebsiteDemoManifest) throws {
+    try encodedManifest(manifest).write(to: manifest.manifestURL, options: .atomic)
+  }
+
+  private static func verifiedTaskState(
+    in snapshot: LocalStoreSnapshot
+  ) throws -> WebsiteDemoTaskState {
+    let expectedPreferences = AppPreferences(
+      theme: .light,
+      onboardingProgress: OnboardingProgress(status: .completed)
+    )
+    guard snapshot.preferences == expectedPreferences,
+      snapshot.commitProofs.isEmpty,
+      snapshot.source == .root,
+      snapshot.folderMigrationWarnings.isEmpty,
+      let fixtureDate = snapshot.workspace.notes.first?.createdAt
+    else {
+      throw WebsiteDemoError.verificationFailed
+    }
+
+    let openWorkspace = try WebsiteDemoFixture.workspace(now: fixtureDate)
+    if snapshot.workspace == openWorkspace, snapshot.generation == 0 {
+      return .open
+    }
+
+    guard let actualNorthstar = snapshot.workspace.notes.first,
+      actualNorthstar.modifiedAt >= actualNorthstar.createdAt,
+      let task = AgentNoteMutationEngine.tasks(in: openWorkspace.notes[0].body).first
+    else {
+      throw WebsiteDemoError.verificationFailed
+    }
+    let mutation = try AgentNoteMutationEngine.setTaskState(
+      task,
+      completed: true,
+      in: openWorkspace.notes[0].body
+    )
+    var completedWorkspace = openWorkspace
+    completedWorkspace.updateNote(
+      id: WebsiteDemoFixture.northstarNoteID,
+      body: mutation.body,
+      now: actualNorthstar.modifiedAt
+    )
+    guard snapshot.workspace == completedWorkspace, snapshot.generation == 1 else {
+      throw WebsiteDemoError.verificationFailed
+    }
+    return .completed
+  }
+
+  private static func verifySyntheticRepository(at root: URL) throws {
+    let gitDirectory = root.appendingPathComponent(".git", isDirectory: true)
+    let gitValues = try gitDirectory.resourceValues(
+      forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+    )
+    guard gitValues.isDirectory == true,
+      gitValues.isSymbolicLink != true
+    else {
+      throw WebsiteDemoError.verificationFailed
+    }
+
+    guard try gitOutput(
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      at: root
+    ).isEmpty,
+      try gitOutput(["ls-files", "--others", "--ignored", "--exclude-standard"], at: root)
+        .isEmpty,
+      try gitOutput(["remote"], at: root).isEmpty,
+      try gitOutput(["rev-parse", "HEAD^{tree}"], at: root) == syntheticRepositoryTreeID,
+      try gitOutput(["branch", "--show-current"], at: root) == "main",
+      try gitOutput(["rev-list", "--count", "HEAD"], at: root) == "1",
+      try gitOutput(["for-each-ref", "--format=%(refname)"], at: root) == "refs/heads/main",
+      try gitOutput(["log", "-1", "--format=%s"], at: root)
+        == "chore: seed synthetic Northstar demo",
+      try gitOutput(["log", "-1", "--format=%an <%ae>"], at: root)
+        == "Fleck Demo <demo@invalid.example>",
+      try gitOutput(["config", "--local", "--get", "user.name"], at: root) == "Fleck Demo",
+      try gitOutput(["config", "--local", "--get", "user.email"], at: root)
+        == "demo@invalid.example"
+    else {
+      throw WebsiteDemoError.verificationFailed
+    }
   }
 
   private static func createSyntheticRepository(at root: URL, now: Date) throws {
@@ -441,6 +504,34 @@ enum WebsiteDemoSession {
     process.currentDirectoryURL = root
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
+    process.environment = gitEnvironment(now: now)
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+      throw WebsiteDemoError.gitCommandFailed
+    }
+  }
+
+  private static func gitOutput(_ arguments: [String], at root: URL) throws -> String {
+    let process = Process()
+    let output = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    process.arguments = arguments
+    process.currentDirectoryURL = root
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    process.environment = gitEnvironment(now: nil)
+    try process.run()
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+      throw WebsiteDemoError.gitCommandFailed
+    }
+    return String(decoding: data, as: UTF8.self)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private static func gitEnvironment(now: Date?) -> [String: String] {
     var environment = ProcessInfo.processInfo.environment
     for key in Array(environment.keys) where key.uppercased().hasPrefix("GIT_") {
       environment.removeValue(forKey: key)
@@ -456,11 +547,6 @@ enum WebsiteDemoSession {
       environment["GIT_AUTHOR_DATE"] = date
       environment["GIT_COMMITTER_DATE"] = date
     }
-    process.environment = environment
-    try process.run()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-      throw WebsiteDemoError.gitCommandFailed
-    }
+    return environment
   }
 }
