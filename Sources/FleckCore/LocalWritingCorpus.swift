@@ -665,9 +665,7 @@ public struct LocalWritingCorpusCase: Equatable, Sendable {
       else { throw LocalWritingCorpusError.invalidEligibility }
     }
     if sourceClass == .humanSilence {
-      guard !humanSpeechEligible, referenceTranscript.isEmpty,
-        scoringEligibility == .diagnosticOnlyPostExposure
-      else {
+      guard !humanSpeechEligible, referenceTranscript.isEmpty else {
         throw LocalWritingCorpusError.invalidEligibility
       }
     }
@@ -698,7 +696,7 @@ public struct LocalWritingCorpusCase: Equatable, Sendable {
 
 public struct LocalWritingCorpusPayload: Equatable, Sendable {
   public let language: String
-  public let claimScope: [LocalWritingClaimScope]
+  public let claimScope: LocalWritingClaimScope
   public let consentReceiptSHA256: String
   public let createdAtUnixMilliseconds: Int64
   public let controlledWorkspaces: [LocalWritingControlledWorkspaceManifestEnvelope]
@@ -706,14 +704,14 @@ public struct LocalWritingCorpusPayload: Equatable, Sendable {
 
   public init(
     language: String,
-    claimScope: [LocalWritingClaimScope],
+    claimScope: LocalWritingClaimScope,
     consentReceiptSHA256: String,
     createdAtUnixMilliseconds: Int64,
     controlledWorkspaces: [LocalWritingControlledWorkspaceManifestEnvelope],
     cases: [LocalWritingCorpusCase]
   ) throws {
     guard language == "en-US" else { throw LocalWritingCorpusError.invalidLanguage }
-    guard claimScope == [.ownerPrivateBeta] else {
+    guard claimScope == .ownerPrivateBeta else {
       throw LocalWritingCorpusError.invalidClaimScope
     }
     guard Self.isValidSHA256(consentReceiptSHA256) else {
@@ -877,11 +875,8 @@ public enum LocalWritingCorpusCodec {
         "controlledWorkspaces", "cases",
       ]
     )
-    let claimScope = try payloadObject.required("claimScope").array().map {
-      try $0.string()
-    }
-    let parsedClaimScope = claimScope.compactMap(LocalWritingClaimScope.init(rawValue:))
-    guard parsedClaimScope.count == claimScope.count else {
+    let claimScope = try payloadObject.required("claimScope").string()
+    guard let parsedClaimScope = LocalWritingClaimScope(rawValue: claimScope) else {
       throw LocalWritingCorpusError.invalidClaimScope
     }
     let workspaceValues = try payloadObject.required("controlledWorkspaces").array()
@@ -913,7 +908,7 @@ public enum LocalWritingCorpusCodec {
   private static func payloadWire(_ payload: LocalWritingCorpusPayload) -> CorpusPayloadWire {
     CorpusPayloadWire(
       language: payload.language,
-      claimScope: payload.claimScope.map(\.rawValue),
+      claimScope: payload.claimScope.rawValue,
       consentReceiptSHA256: payload.consentReceiptSHA256,
       createdAtUnixMilliseconds: payload.createdAtUnixMilliseconds,
       controlledWorkspaces: payload.controlledWorkspaces.map(workspaceWire),
@@ -1418,7 +1413,7 @@ private struct CorpusEnvelopeWire: Codable {
 
 private struct CorpusPayloadWire: Codable {
   let language: String
-  let claimScope: [String]
+  let claimScope: String
   let consentReceiptSHA256: String
   let createdAtUnixMilliseconds: Int64
   let controlledWorkspaces: [ControlledWorkspaceEnvelopeWire]

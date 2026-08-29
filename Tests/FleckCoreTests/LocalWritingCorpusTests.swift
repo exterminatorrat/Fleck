@@ -12,6 +12,13 @@ struct LocalWritingCorpusTests {
     let encoded = try LocalWritingCorpusCodec.canonicalData(for: manifest)
     let decoded = try LocalWritingCorpusCodec.decodeCanonical(encoded)
 
+    #expect(manifest.payload.claimScope == .ownerPrivateBeta)
+    #expect(String(decoding: encoded, as: UTF8.self).contains(
+      #""claimScope":"ownerPrivateBeta""#
+    ))
+    #expect(!String(decoding: encoded, as: UTF8.self).contains(
+      #""claimScope":["#
+    ))
     #expect(decoded == manifest)
     #expect(try LocalWritingCorpusCodec.canonicalData(for: decoded) == encoded)
   }
@@ -19,10 +26,10 @@ struct LocalWritingCorpusTests {
   @Test
   func localWritingCorpusDigestCoversOnlyCanonicalPayloadBytes() throws {
     let manifest = try makeMinimalManifest()
-    let expectedPayload = #"{"cases":[],"claimScope":["ownerPrivateBeta"],"consentReceiptSHA256":"1111111111111111111111111111111111111111111111111111111111111111","controlledWorkspaces":[],"createdAtUnixMilliseconds":1,"language":"en-US"}"#
-    let expectedEnvelope = #"{"corpusID":"00000000-0000-0000-0000-000000000001","payload":{"cases":[],"claimScope":["ownerPrivateBeta"],"consentReceiptSHA256":"1111111111111111111111111111111111111111111111111111111111111111","controlledWorkspaces":[],"createdAtUnixMilliseconds":1,"language":"en-US"},"revisionSHA256":"78930601a37a05ced1ecd0040ca74d021c41b8d33ab80a385b3e2ae60a65abc6","schemaVersion":1}"#
+    let expectedPayload = #"{"cases":[],"claimScope":"ownerPrivateBeta","consentReceiptSHA256":"1111111111111111111111111111111111111111111111111111111111111111","controlledWorkspaces":[],"createdAtUnixMilliseconds":1,"language":"en-US"}"#
+    let expectedEnvelope = #"{"corpusID":"00000000-0000-0000-0000-000000000001","payload":{"cases":[],"claimScope":"ownerPrivateBeta","consentReceiptSHA256":"1111111111111111111111111111111111111111111111111111111111111111","controlledWorkspaces":[],"createdAtUnixMilliseconds":1,"language":"en-US"},"revisionSHA256":"2b06eb3d6fa3e3cf543a303f0dae81774f8ffa74bd7dad000adbff6f32cfe8d8","schemaVersion":1}"#
 
-    #expect(manifest.revisionSHA256 == "78930601a37a05ced1ecd0040ca74d021c41b8d33ab80a385b3e2ae60a65abc6")
+    #expect(manifest.revisionSHA256 == "2b06eb3d6fa3e3cf543a303f0dae81774f8ffa74bd7dad000adbff6f32cfe8d8")
     #expect(Data(expectedPayload.utf8).count < Data(expectedEnvelope.utf8).count)
     #expect(try LocalWritingCorpusCodec.canonicalData(for: manifest) == Data(expectedEnvelope.utf8))
   }
@@ -105,8 +112,12 @@ struct LocalWritingCorpusTests {
     let schema = text.replacingOccurrences(of: #""schemaVersion":1"#, with: #""schemaVersion":2"#)
     let language = text.replacingOccurrences(of: #""language":"en-US""#, with: #""language":"en-GB""#)
     let claim = text.replacingOccurrences(
-      of: #""claimScope":["ownerPrivateBeta"]"#,
-      with: #""claimScope":["publicBenchmark"]"#
+      of: #""claimScope":"ownerPrivateBeta""#,
+      with: #""claimScope":"publicBenchmark""#
+    )
+    let legacyArrayClaim = text.replacingOccurrences(
+      of: #""claimScope":"ownerPrivateBeta""#,
+      with: #""claimScope":["ownerPrivateBeta"]"#
     )
     let identifier = text.replacingOccurrences(
       of: "00000000-0000-0000-0000-000000000001",
@@ -126,6 +137,9 @@ struct LocalWritingCorpusTests {
     #expect(throws: LocalWritingCorpusError.invalidClaimScope) {
       try LocalWritingCorpusCodec.decodeCanonical(Data(claim.utf8))
     }
+    #expect(throws: LocalWritingCorpusError.invalidValue) {
+      try LocalWritingCorpusCodec.decodeCanonical(Data(legacyArrayClaim.utf8))
+    }
     #expect(throws: LocalWritingCorpusError.invalidIdentifier) {
       try LocalWritingCorpusCodec.decodeCanonical(Data(identifier.utf8))
     }
@@ -135,7 +149,7 @@ struct LocalWritingCorpusTests {
     #expect(throws: LocalWritingCorpusError.invalidLanguage) {
       try LocalWritingCorpusPayload(
         language: "en-GB",
-        claimScope: [.ownerPrivateBeta],
+        claimScope: .ownerPrivateBeta,
         consentReceiptSHA256: String(repeating: "1", count: 64),
         createdAtUnixMilliseconds: 1,
         controlledWorkspaces: [],
@@ -179,7 +193,7 @@ struct LocalWritingCorpusTests {
     )
     let payload = try LocalWritingCorpusPayload(
       language: "en-US",
-      claimScope: [.ownerPrivateBeta],
+      claimScope: .ownerPrivateBeta,
       consentReceiptSHA256: consent,
       createdAtUnixMilliseconds: 2,
       controlledWorkspaces: [],
@@ -212,7 +226,7 @@ struct LocalWritingCorpusTests {
     #expect(throws: LocalWritingCorpusError.invalidAudioConsent) {
       try LocalWritingCorpusPayload(
         language: "en-US",
-        claimScope: [.ownerPrivateBeta],
+        claimScope: .ownerPrivateBeta,
         consentReceiptSHA256: String(repeating: "5", count: 64),
         createdAtUnixMilliseconds: 2,
         controlledWorkspaces: [],
@@ -277,12 +291,47 @@ struct LocalWritingCorpusTests {
         executionVariants: []
       )
     }
-    #expect(throws: LocalWritingCorpusError.invalidEligibility) {
+    let admissionSilence = try LocalWritingCorpusCase(
+      id: self.uuid("00000000-0000-0000-0000-000000000037"),
+      materialLineageID: self.uuid("00000000-0000-0000-0000-000000000038"),
+      sourceClass: .humanSilence,
+      humanSpeechEligible: false,
+      scoringEligibility: .admissionEligible,
+      audio: silenceAudio,
+      referenceTranscript: "",
+      tags: [.silence],
+      protectedExpectations: [],
+      cleanupOracle: .unchangedRequired,
+      routingOracle: nil,
+      executionVariants: []
+    )
+    #expect(admissionSilence.audio == silenceAudio)
+    #expect(admissionSilence.referenceTranscript == "")
+    #expect(!admissionSilence.humanSpeechEligible)
+    #expect(admissionSilence.scoringEligibility == .admissionEligible)
+
+    #expect(throws: LocalWritingCorpusError.invalidAudio) {
       try LocalWritingCorpusCase(
-        id: self.uuid("00000000-0000-0000-0000-000000000037"),
-        materialLineageID: self.uuid("00000000-0000-0000-0000-000000000038"),
+        id: self.uuid("00000000-0000-0000-0000-000000000039"),
+        materialLineageID: self.uuid("00000000-0000-0000-0000-00000000003a"),
         sourceClass: .humanSilence,
         humanSpeechEligible: false,
+        scoringEligibility: .admissionEligible,
+        audio: nil,
+        referenceTranscript: "",
+        tags: [.silence],
+        protectedExpectations: [],
+        cleanupOracle: .unchangedRequired,
+        routingOracle: nil,
+        executionVariants: []
+      )
+    }
+    #expect(throws: LocalWritingCorpusError.invalidEligibility) {
+      try LocalWritingCorpusCase(
+        id: self.uuid("00000000-0000-0000-0000-00000000003b"),
+        materialLineageID: self.uuid("00000000-0000-0000-0000-00000000003c"),
+        sourceClass: .humanSilence,
+        humanSpeechEligible: true,
         scoringEligibility: .admissionEligible,
         audio: silenceAudio,
         referenceTranscript: "",
@@ -536,7 +585,7 @@ struct LocalWritingCorpusTests {
     )
     let validPayload = try LocalWritingCorpusPayload(
       language: "en-US",
-      claimScope: [.ownerPrivateBeta],
+      claimScope: .ownerPrivateBeta,
       consentReceiptSHA256: String(repeating: "2", count: 64),
       createdAtUnixMilliseconds: 5,
       controlledWorkspaces: [workspace],
@@ -568,7 +617,7 @@ struct LocalWritingCorpusTests {
       #expect(throws: LocalWritingCorpusError.invalidRouting) {
         try LocalWritingCorpusPayload(
           language: "en-US",
-          claimScope: [.ownerPrivateBeta],
+          claimScope: .ownerPrivateBeta,
           consentReceiptSHA256: String(repeating: "2", count: 64),
           createdAtUnixMilliseconds: 5,
           controlledWorkspaces: [workspace],
@@ -624,7 +673,7 @@ struct LocalWritingCorpusTests {
       corpusID: uuid("00000000-0000-0000-0000-000000000084"),
       payload: LocalWritingCorpusPayload(
         language: "en-US",
-        claimScope: [.ownerPrivateBeta],
+        claimScope: .ownerPrivateBeta,
         consentReceiptSHA256: String(repeating: "2", count: 64),
         createdAtUnixMilliseconds: 6,
         controlledWorkspaces: [workspace],
@@ -790,7 +839,7 @@ struct LocalWritingCorpusTests {
     )
     let payload = try LocalWritingCorpusPayload(
       language: "en-US",
-      claimScope: [.ownerPrivateBeta],
+      claimScope: .ownerPrivateBeta,
       consentReceiptSHA256: String(repeating: "2", count: 64),
       createdAtUnixMilliseconds: 7,
       controlledWorkspaces: [laterWorkspace, earlierWorkspace],
@@ -833,7 +882,7 @@ struct LocalWritingCorpusTests {
   private func makeMinimalManifest() throws -> LocalWritingCorpusManifestEnvelope {
     let payload = try LocalWritingCorpusPayload(
       language: "en-US",
-      claimScope: [.ownerPrivateBeta],
+      claimScope: .ownerPrivateBeta,
       consentReceiptSHA256: String(repeating: "1", count: 64),
       createdAtUnixMilliseconds: 1,
       controlledWorkspaces: [],
@@ -900,7 +949,7 @@ struct LocalWritingCorpusTests {
   ) throws -> LocalWritingCorpusPayload {
     try LocalWritingCorpusPayload(
       language: "en-US",
-      claimScope: [.ownerPrivateBeta],
+      claimScope: .ownerPrivateBeta,
       consentReceiptSHA256: String(repeating: "2", count: 64),
       createdAtUnixMilliseconds: 4,
       controlledWorkspaces: [],
