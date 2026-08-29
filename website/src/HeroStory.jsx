@@ -153,25 +153,6 @@ export default function HeroStory({ downloadProps }) {
       ref={storyRef}
     >
       <div className="hero-stage">
-        <div className="macos-menu-bar" aria-hidden="true">
-          <div className="macos-menu-left">
-            <span className="macos-apple"></span>
-            <strong>Fleck</strong>
-            <span>File</span>
-            <span>Edit</span>
-            <span>Format</span>
-            <span>View</span>
-            <span>Window</span>
-            <span>Help</span>
-          </div>
-          <div className="macos-menu-right">
-            <strong>Fleck</strong>
-            <span className="macos-status-wide">Wi-Fi</span>
-            <span className="macos-status-wide">100%</span>
-            <time dateTime="09:41">9:41</time>
-          </div>
-        </div>
-
         <div className="hero-desktop">
           <section className="hero-scene hero-intro" data-hero-scene="intro">
             <div className="hero-copy">

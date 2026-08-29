@@ -50,4 +50,5 @@ test("renders the complete synthetic voice-to-agent hero story", async () => {
 
   assert.doesNotMatch(markup, /Completed by Codex/);
   assert.doesNotMatch(markup, /Tests passing/);
+  assert.doesNotMatch(markup, /macos-menu-bar/);
 });

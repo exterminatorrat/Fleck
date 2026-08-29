@@ -485,8 +485,7 @@ a {
 
 .hero-story {
   --site-nav-offset: 72px;
-  --macos-menu-height: 30px;
-  --story-top: calc(var(--site-nav-offset) + var(--macos-menu-height));
+  --story-top: var(--site-nav-offset);
   position: relative;
   height: 420svh;
   background: #fff;
@@ -500,49 +499,6 @@ a {
   width: 100%;
   height: 100svh;
   background: #fff;
-}
-
-.macos-menu-bar {
-  position: absolute;
-  z-index: 8;
-  top: var(--site-nav-offset);
-  left: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  height: var(--macos-menu-height);
-  padding: 0 18px;
-  border-top: 1px solid #efedf1;
-  border-bottom: 1px solid #dedce1;
-  background: #fff;
-  color: #2d2a31;
-  font-size: 0.75rem;
-  letter-spacing: -0.01em;
-  line-height: 1;
-  user-select: none;
-}
-
-.macos-menu-left,
-.macos-menu-right {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 17px;
-  white-space: nowrap;
-}
-
-.macos-menu-right {
-  gap: 15px;
-}
-
-.macos-menu-left strong,
-.macos-menu-right strong {
-  font-weight: 650;
-}
-
-.macos-apple {
-  font-size: 0.9rem;
 }
 
 .hero-desktop {
@@ -1062,22 +1018,6 @@ a {
 @media (max-width: 767px) {
   .hero-story {
     --site-nav-offset: 60px;
-    --macos-menu-height: 28px;
-  }
-
-  .macos-menu-bar {
-    padding: 0 12px;
-    font-size: 0.6875rem;
-  }
-
-  .macos-menu-left,
-  .macos-menu-right {
-    gap: 10px;
-  }
-
-  .macos-menu-left span:not(.macos-apple),
-  .macos-status-wide {
-    display: none;
   }
 
   .hero-scene {

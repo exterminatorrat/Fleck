@@ -6,6 +6,8 @@ Implemented and verified from accepted baseline `768655b`. No push, pull request
 
 The fix-first hardening pass was implemented from Task 2 commit `6722a59`.
 
+The later user-approved correction from `88decaf` removed the simulated macOS menu bar entirely.
+
 ## RED and GREEN evidence
 
 ### Pure state mapper
@@ -30,6 +32,15 @@ The fix-first hardening pass was implemented from Task 2 commit `6722a59`.
 - GREEN command: `node --test src/HeroStory.test.js`
 - GREEN result: 1 test passed after the visible copy, poster attributes, and accepted still assets were added.
 
+### User-approved simulated menu-bar removal
+
+- The server-render regression assertion was added before production to require that `macos-menu-bar` be absent.
+- RED command: `node --test src/HeroStory.test.js`
+- RED result: exit 1 because the current rendered markup still contained `class="macos-menu-bar"`.
+- GREEN command: `node --test src/HeroStory.test.js`
+- GREEN result: 1 test passed after deleting the simulated menu-bar JSX and dedicated CSS and reducing `--story-top` to the existing site-navigation offset.
+- Production source scan found no remaining `macos-menu`, `macos-apple`, `macos-status-wide`, or `macos-menu-height` identifier in `HeroStory.jsx` or `styles.css`.
+
 ### Final verification
 
 - Command: `npm test && npm run build`
@@ -41,14 +52,14 @@ The fix-first hardening pass was implemented from Task 2 commit `6722a59`.
 
 - Added a pure `heroStateForProgress(progress)` mapper with the approved thresholds.
 - Added one semantic `HeroStory` component and integrated it below the approved `Navigation` without changing `Navigation.jsx` or its selectors.
-- Added a full-width white simulated macOS menu bar directly beneath the website navigation.
+- A later user-approved correction superseded the simulated macOS menu-bar requirement and removed that fake OS chrome entirely.
 - Added one CSS-sticky `420svh` desktop story with a `100svh` stage and one GSAP `ScrollTrigger` controller.
 - GSAP 3.15.0 and ScrollTrigger are dynamically imported inside the effect. Server rendering does not evaluate browser-only code.
 - Continuous scroll values never enter React state. The root `data-hero-state` changes only when the mapped state crosses a threshold.
 - On each state change, only the matching listening, processing, saved, or writeback clip is played; every other clip is paused.
 - On desktop, only the capsule take matching the listening, processing, or saved state is exposed to assistive technology. The other capsule takes receive `aria-hidden="true"` and `inert`.
 - Mobile and reduced-motion normal flow removes `aria-hidden` and `inert` from all three capsule takes while keeping the clips paused.
-- The hero page keeps the approved site navigation fixed above the sticky stage, with the simulated macOS bar directly below it.
+- The hero page keeps the approved site navigation fixed above the sticky stage, and hero content begins directly below it without a fake OS strip or blank band.
 - Each capsule video uses the matching accepted real still as its poster so static and paused layouts retain the correct state.
 - The effect kills the active ScrollTrigger, pauses media, and removes both media-query listeners during cleanup.
 - At 767px and below, and under reduced motion, the same scenes become a normal vertical narrative. No pinned miniature, wheel interception, smooth scrolling, or scroll snapping is used.
@@ -85,7 +96,7 @@ Focused local Chromium checks used the required viewports:
 
 - 1440 by 900: inspected intro, shortcut, listening, memory, Codex, writeback, and close states. The mapped `data-hero-state` changed at scroll thresholds, the active video was the only unpaused video, captures remained at or below native size, and the console had no errors or warnings.
 - 390 by 844: confirmed normal document flow with the complete semantic sequence, all videos paused, no pinned `420svh` miniature, no horizontal overflow, and capsule frames rendering as their section entered view.
-- Fix-first desktop check at `scrollY = 1040`: `data-hero-state` was `processing`; the navigation had computed `position: fixed`, top `0`, bottom `72`, and height `72`; the macOS bar started at top `72`, directly beneath it. Listening and saved had `aria-hidden="true"` plus `inert`; processing had `aria-hidden="false"` and no `inert`. Only the processing video was unpaused.
+- Pre-correction fix-first desktop check at `scrollY = 1040`: `data-hero-state` was `processing`; the navigation had computed `position: fixed`, top `0`, bottom `72`, and height `72`. Listening and saved had `aria-hidden="true"` plus `inert`; processing had `aria-hidden="false"` and no `inert`. Only the processing video was unpaused.
 - Fix-first mobile check at 390 by 844: every capsule take had no `aria-hidden` and no `inert`; all four hero videos were paused; the three poster attributes matched `/hero/capsule-listening.png`, `/hero/capsule-processing.png`, and `/hero/capsule-saved.png`. The processing still and adjacent label both visibly read `Cleaning up`.
 - The fix-first Chromium console contained 0 errors and 0 warnings.
 
@@ -94,6 +105,7 @@ Temporary Playwright session artifacts were removed before commit.
 ## Changed files
 
 - `.superpowers/sdd/task-2-report.md`
+- `docs/superpowers/plans/2026-08-29-fleck-website-hero-integration.md`
 - `website/src/heroStates.js`
 - `website/src/heroStates.test.js`
 - `website/src/HeroStory.jsx`
@@ -127,6 +139,7 @@ Temporary Playwright session artifacts were removed before commit.
 - The Codex section is labeled `Codex demo`, uses semantic transcript markup, and has no fake window chrome.
 - Exactly one `ScrollTrigger.create` call exists. No scroll event listener, React scroll state, wheel handler, or frame-by-frame scrubbing exists.
 - The page remains exactly white. No ImageGen output, wallpaper, mesh, gradient hero background, glow, or decorative status dot was added.
+- No simulated OS menu bar or replacement system chrome remains in the hero.
 - The full diff contains only Task 2 owned paths.
 
 ## Concerns and boundaries

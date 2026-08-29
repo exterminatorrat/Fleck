@@ -129,6 +129,8 @@
 
   Retain the approved navigation styles, add the full-width macOS mini bar immediately below it, keep the backdrop exactly white, use real Fleck captures at a non-upscaled size, render the fictional Codex transcript without fake browser chrome, and provide explicit 1440x900 and 390x844 layouts. Animate only opacity and transform. Keep visible focus states and contrast.
 
+  Later user-approved correction: the simulated macOS mini bar requirement above is superseded. Remove it entirely so the hero begins directly below the fixed website navigation, with no fake OS chrome or blank band.
+
 - [ ] **Step 8: Verify GREEN and build**
 
   Update the test script, install a pinned GSAP version through npm, then run `npm test && npm run build` from `website/`.
