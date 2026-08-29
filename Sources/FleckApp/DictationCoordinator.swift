@@ -45,10 +45,15 @@ enum DictationRecoveryResult: Equatable {
   case openDestination(UUID)
 }
 
+enum DictationDestinationChoiceResult: Equatable {
+  case completed
+  case failed(String)
+}
+
 @MainActor
 final class DictationCoordinator {
   private struct PendingRoutingAmbiguity {
-    let ambiguity: DictationRoutingAmbiguity
+    var ambiguity: DictationRoutingAmbiguity
     var receipt: DictationInsertionReceipt
     var record: DictationHistoryRecord
     let inboxID: UUID
@@ -1199,7 +1204,7 @@ final class DictationCoordinator {
   func chooseDestination(
     captureID: UUID,
     noteID: UUID?
-  ) async -> DictationRecoveryResult? {
+  ) async -> DictationDestinationChoiceResult? {
     guard canConfigureShortcut,
       var pending = pendingRoutingAmbiguity,
       pending.ambiguity.captureID == captureID,
@@ -1215,11 +1220,35 @@ final class DictationCoordinator {
       clearRoutingAmbiguity(captureID: captureID)
       return .completed
     }
-    guard let choice = pending.ambiguity.choices.first(where: {
+    guard let requestedChoice = pending.ambiguity.choices.first(where: {
       $0.destination.noteID == noteID
-    }), saver.activeDestinations().contains(where: {
-      $0.destination == choice.destination
     }) else { return nil }
+
+    let activeDestinations = saver.activeDestinations()
+    let activeChoices = pending.ambiguity.choices.filter { choice in
+      activeDestinations.contains { $0.destination == choice.destination }
+    }
+    if activeChoices != pending.ambiguity.choices {
+      pending.ambiguity = .init(captureID: captureID, choices: activeChoices)
+      pendingRoutingAmbiguity = pending
+      routingAmbiguity = pending.ambiguity
+    }
+
+    let currentTitle = pending.record.destination?.title ?? "Inbox"
+    let savedSummary = pending.record.cleanupOutcome == .cleaned
+      ? "Still saved to \(currentTitle)."
+      : "Still saved to \(currentTitle) without cleanup."
+    let canKeepCurrent = pending.receipt.noteID == pending.inboxID
+    guard let choice = activeChoices.first(where: {
+      $0.destination == requestedChoice.destination
+    }) else {
+      let recovery = canKeepCurrent
+        ? "Choose another note or keep this dictation in Inbox."
+        : "Choose another note."
+      return .failed(
+        "\(savedSummary) \(requestedChoice.destination.title) is no longer available. \(recovery)"
+      )
+    }
 
     if pending.receipt.noteID != noteID {
       guard let movedReceipt = await saver.moveSmartCapture(
@@ -1227,7 +1256,14 @@ final class DictationCoordinator {
         to: noteID
       ), movedReceipt.captureID == captureID,
         movedReceipt.noteID == noteID
-      else { return nil }
+      else {
+        let recovery = canKeepCurrent
+          ? "Choose a destination to retry or keep this dictation in Inbox."
+          : "Choose a destination to retry."
+        return .failed(
+          "\(savedSummary) Could not move to \(choice.destination.title). \(recovery)"
+        )
+      }
       pending.receipt = movedReceipt
       pending.record.destination = choice.destination
       pendingRoutingAmbiguity = pending
@@ -1241,7 +1277,12 @@ final class DictationCoordinator {
     {
       pendingRoutingAmbiguity = pending
       routingAmbiguity = pending.ambiguity
-      return nil
+      let movedSummary = pending.record.cleanupOutcome == .cleaned
+        ? "Still saved to \(choice.destination.title)."
+        : "Still saved to \(choice.destination.title) without cleanup."
+      return .failed(
+        "\(movedSummary) Dictation History could not be updated. Retry \(choice.destination.title) or choose another note."
+      )
     }
     clearRoutingAmbiguity(captureID: captureID)
     return .completed

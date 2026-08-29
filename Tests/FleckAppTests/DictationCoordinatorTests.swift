@@ -964,7 +964,7 @@ private func waitForCompletion(
   #expect(try await fixture.history.list().first?.destination == fixture.inbox)
 }
 
-@Test @MainActor func ambiguousChoiceRejectsStaleDeletedAndConcurrentCallbacks() async throws {
+@Test @MainActor func ambiguousChoiceReportsDeletedDestinationAndRejectsStaleConcurrentCallbacks() async throws {
   let gate = Gate()
   let fixture = try Fixture()
   let project = DictationDestination(noteID: UUID(), title: "Project")
@@ -982,7 +982,13 @@ private func waitForCompletion(
 
   #expect(await fixture.coordinator.chooseDestination(captureID: UUID(), noteID: project.noteID) == nil)
   fixture.saver.destinations.removeAll { $0.noteID == personal.noteID }
-  #expect(await fixture.coordinator.chooseDestination(captureID: captureID, noteID: personal.noteID) == nil)
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: captureID,
+    noteID: personal.noteID
+  ) == .failed(
+    "Still saved to Inbox. Personal is no longer available. Choose another note or keep this dictation in Inbox."
+  ))
+  #expect(fixture.coordinator.routingAmbiguity?.choices.map(\.destination) == [project])
 
   fixture.saver.moveGate = gate
   let first = Task {
@@ -1020,7 +1026,9 @@ private func waitForCompletion(
   #expect(await fixture.coordinator.chooseDestination(
     captureID: captureID,
     noteID: project.noteID
-  ) == nil)
+  ) == .failed(
+    "Still saved to Inbox. Could not move to Project. Choose a destination to retry or keep this dictation in Inbox."
+  ))
   #expect(fixture.coordinator.recoveryReceipt == inboxReceipt)
   #expect(fixture.coordinator.routingAmbiguity?.captureID == captureID)
 
@@ -1053,7 +1061,9 @@ private func waitForCompletion(
   #expect(await fixture.coordinator.chooseDestination(
     captureID: captureID,
     noteID: project.noteID
-  ) == nil)
+  ) == .failed(
+    "Still saved to Project. Dictation History could not be updated. Retry Project or choose another note."
+  ))
   #expect(fixture.coordinator.recoveryReceipt?.noteID == project.noteID)
   #expect(fixture.coordinator.recoveryAction == .undo)
   #expect(fixture.coordinator.routingAmbiguity?.captureID == captureID)
@@ -1068,7 +1078,9 @@ private func waitForCompletion(
   #expect(await fixture.coordinator.chooseDestination(
     captureID: captureID,
     noteID: project.noteID
-  ) == nil)
+  ) == .failed(
+    "Still saved to Project. Dictation History could not be updated. Retry Project or choose another note."
+  ))
   #expect(fixture.saver.moveCount == 1)
 }
 

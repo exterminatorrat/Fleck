@@ -484,6 +484,7 @@
     private var capsuleGeneration: UInt64 = 0
     private var routingChoiceInFlightCaptureID: UUID?
     private var routingChooserSnapshot: RoutingChooserSnapshot?
+    private var routingChoiceFailure: (captureID: UUID, message: String)?
     private var preloadCapsuleUpdate: CapsuleUpdate?
     private var startupAssessmentTask: Task<Void, Never>?
     private var initialLoadSynchronizationTask: Task<Void, Never>?
@@ -1206,7 +1207,11 @@
     private func updateRoutingChooserSnapshot(for event: DictationCoordinatorEvent) {
       guard let ambiguity = coordinator.routingAmbiguity else {
         routingChooserSnapshot = nil
+        routingChoiceFailure = nil
         return
+      }
+      if routingChoiceFailure?.captureID != ambiguity.captureID {
+        routingChoiceFailure = nil
       }
       if var snapshot = routingChooserSnapshot,
         snapshot.captureID == ambiguity.captureID
@@ -1254,7 +1259,9 @@
         routingChooserSnapshot = snapshot
       }
       return (
-        snapshot.status,
+        routingChoiceFailure.flatMap { failure in
+          failure.captureID == ambiguity.captureID ? .failed(failure.message) : nil
+        } ?? snapshot.status,
         DictationCapsuleChooser(
           ambiguity: ambiguity,
           currentDestinationID: receipt.noteID,
@@ -1454,6 +1461,7 @@
       routingChoiceInFlightCaptureID = nil
       if coordinator.routingAmbiguity == nil {
         routingChooserSnapshot = nil
+        routingChoiceFailure = nil
       }
       capsuleOwner = .idle
       currentCapsuleStatus = .idle
@@ -1603,10 +1611,16 @@
       routingChoiceInFlightCaptureID = nil
       guard appState?.preferences.dictationCapsuleEnabled == true else { return }
 
-      guard result == .completed else {
+      guard let result else {
         replayLiveCapsuleOrIdle()
         return
       }
+      if case .failed(let message) = result {
+        routingChoiceFailure = (captureID, message)
+        replayLiveCapsuleOrIdle()
+        return
+      }
+      routingChoiceFailure = nil
 
       let status: DictationCapsuleStatus = cleanup == .cleaned
         ? .saved(destination: selectedTitle)

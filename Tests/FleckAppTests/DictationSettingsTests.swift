@@ -1101,7 +1101,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   await sleeper.resumeAll()
 }
 
-@Test @MainActor func DictationRuntimeFailedChoiceKeepsTruthfulCurrentChooserWithoutTimer()
+@Test @MainActor func DictationRuntimeDeletedChoiceShowsActionableFailureWithOnlyValidChoices()
   async throws
 {
   let sleeper = RuntimeCapsuleSleeper()
@@ -1127,12 +1127,43 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   for _ in 0..<100 { await Task.yield() }
 
   #expect(fixture.runtime.coordinator.routingAmbiguity?.captureID == captureID)
-  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Inbox"))
-  #expect(fixture.runtime.capsuleController.currentChooser?.captureID == captureID)
+  #expect(fixture.runtime.currentCapsuleStatus == .failed(
+    "Still saved to Inbox. Projects is no longer available. Choose another note or keep this dictation in Inbox."
+  ))
+  let chooser = try #require(fixture.runtime.capsuleController.currentChooser)
+  #expect(chooser.captureID == captureID)
+  #expect(chooser.choices.map(\.id) == [personal.id])
+  #expect(chooser.allowsKeepInInbox)
   #expect(await sleeper.requestedDurations.isEmpty)
   #expect(fixture.appState.workspace.notes.first(where: {
     $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
   })?.body.contains("Still in Inbox") == true)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+  fixture.runtime.preferencesDidChange()
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == .failed(
+    "Still saved to Inbox. Projects is no longer available. Choose another note or keep this dictation in Inbox."
+  ))
+  #expect(fixture.runtime.capsuleController.currentChooser?.choices.map(\.id) == [personal.id])
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: personal.id
+  )
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Personal"))
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+  #expect(fixture.appState.workspace.notes.first(where: { $0.id == personal.id })?.body.contains("Still in Inbox") == true)
+  await sleeper.waitForRequest()
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+  await sleeper.resumeAll()
 }
 
 @Test @MainActor func DictationRuntimeHistoryFailureKeepsMovedDestinationTruthfulAndRetryable()
@@ -1163,10 +1194,16 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     if fixture.history.errorMessage != nil { break }
     await Task.yield()
   }
+  for _ in 0..<1_000 {
+    if case .failed? = fixture.runtime.currentCapsuleStatus { break }
+    await Task.yield()
+  }
 
   #expect(fixture.history.errorMessage != nil)
   #expect(fixture.runtime.coordinator.routingAmbiguity?.captureID == captureID)
-  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Projects"))
+  #expect(fixture.runtime.currentCapsuleStatus == .failed(
+    "Still saved to Projects without cleanup. Dictation History could not be updated. Retry Projects or choose another note."
+  ))
   let chooser = try #require(fixture.runtime.capsuleController.currentChooser)
   #expect(chooser.captureID == captureID)
   #expect(!chooser.allowsKeepInInbox)
@@ -1174,9 +1211,23 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   #expect(chooser.choices.allSatisfy { !$0.accessibilityHint.contains("from Inbox") })
   fixture.runtime.capsuleController.selectRoutingChoice(captureID: captureID, noteID: nil)
   for _ in 0..<100 { await Task.yield() }
-  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Projects"))
+  #expect(fixture.runtime.currentCapsuleStatus == .failed(
+    "Still saved to Projects without cleanup. Dictation History could not be updated. Retry Projects or choose another note."
+  ))
   #expect(fixture.runtime.coordinator.routingAmbiguity?.captureID == captureID)
   #expect(await sleeper.requestedDurations.isEmpty)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(captureID: captureID, noteID: project.id)
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Projects"))
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+  await sleeper.waitForRequest()
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+  await sleeper.resumeAll()
   #expect(fixture.appState.workspace.notes.first(where: { $0.id == project.id })?.body.contains("Moved before history failed") == true)
   #expect(fixture.appState.workspace.notes.first(where: {
     $0.title.caseInsensitiveCompare("Inbox") == .orderedSame

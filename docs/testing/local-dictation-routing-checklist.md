@@ -8,6 +8,8 @@ Use a packaged Fleck build with Dictation Capsule and local routing enabled. Pre
 - [ ] Duplicate titles: include duplicate note titles and confirm each menu row shows a distinct context hint; with VoiceOver, confirm each row announces the full title/context and move hint.
 - [ ] Keep Inbox: choose `Keep in Inbox`; confirm the chooser clears, the capture remains in Inbox, and the normal saved-dismiss delay resumes.
 - [ ] Exact move: choose a note; confirm only this capture moves from Inbox to that note, the destination message is truthful, and no neighboring text moves.
+- [ ] Deleted choice: delete one offered note before selecting it; confirm the capsule reports that the dictation is still saved, removes the deleted note from the chooser, and still offers another valid note plus `Keep in Inbox`.
+- [ ] History retry: force or simulate a Dictation History write failure after a move; confirm the capsule names the authoritative saved destination and cleanup state, disables `Keep in Inbox`, and lets the current destination or another valid note be retried.
 - [ ] Undo: while the chooser is visible and after a move, confirm Undo remains reachable and reverses the exact receipt-owned capture.
 - [ ] New capture: leave a chooser open, start another capture, and confirm the old chooser disappears and cannot move the previous Inbox capture.
 - [ ] Disable/re-enable: disable the capsule with a chooser visible, then re-enable it; confirm the still-valid chooser returns for the same capture.
