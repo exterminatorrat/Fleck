@@ -6,11 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/brainModel.test.js src/ideasContent.test.js src/journeyContent.test.js worker/index.test.js",
+    "test": "node --test worker/index.test.js src/Navigation.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@fontsource/outfit": "5.3.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
