@@ -28,9 +28,19 @@ assert_rejects_fixture_symlink() {
 
   /bin/mv "$fixture_path" "$holding_path"
   /bin/ln -s "$sentinel_target" "$fixture_path"
-  expect_error \
-    "$symlink_error" \
-    Scripts/fleck-capture-lab.sh "$operation" "$manifest"
+  if [[ "$operation" == "launch" ]]; then
+    expect_error \
+      "$symlink_error" \
+      /usr/bin/env \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        FLECK_CAPTURE_LAB_PGREP_SENTINEL="$pgrep_sentinel" \
+        Scripts/fleck-capture-lab.sh launch "$manifest"
+    test ! -e "$pgrep_sentinel"
+  else
+    expect_error \
+      "$symlink_error" \
+      Scripts/fleck-capture-lab.sh "$operation" "$manifest"
+  fi
   /bin/mv "$fixture_path" "$rejected_link"
   /bin/mv "$holding_path" "$fixture_path"
 }
@@ -106,8 +116,15 @@ test -z "$(/usr/bin/git -C "$fake_repo" status --porcelain)"
 fake_bin="$session_root/TestBin"
 readonly fake_bin
 /bin/mkdir -p "$fake_bin"
-printf '#!/bin/sh\nexit 0\n' > "$fake_bin/pgrep"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'if [ -n "${FLECK_CAPTURE_LAB_PGREP_SENTINEL:-}" ]; then' \
+  '  /usr/bin/touch "$FLECK_CAPTURE_LAB_PGREP_SENTINEL"' \
+  'fi' \
+  'exit 0' > "$fake_bin/pgrep"
 /bin/chmod 755 "$fake_bin/pgrep"
+pgrep_sentinel="$symlink_sentinel_root/pgrep-called"
+readonly pgrep_sentinel
 if launch_error="$(
   PATH="$fake_bin:/usr/bin:/bin" \
     Scripts/fleck-capture-lab.sh launch "$manifest" 2>&1
@@ -117,6 +134,15 @@ if launch_error="$(
 fi
 readonly launch_error
 test "$launch_error" = "error: Fleck is already running; leave it open and use this session later"
+
+assert_rejects_fixture_symlink launch \
+  "$fleck_root/workspace.json" \
+  "$sentinel_file" \
+  "launch-nested-fleck"
+assert_rejects_fixture_symlink launch \
+  "$fake_repo/README.md" \
+  "$sentinel_file" \
+  "launch-nested-northstar"
 
 if profile_error="$(Scripts/fleck-capture-lab.sh codex-command "$manifest" 2>&1)"; then
   printf 'expected codex-command to require a Codex Demo profile\n' >&2
@@ -152,6 +178,15 @@ expected_codex_output="Codex command: codex -C '$fake_repo' -c 'mcp_servers.flec
 readonly expected_codex_output
 test "$codex_output" = "$expected_codex_output"
 [[ "$codex_output" != *"codex mcp add"* ]]
+
+assert_rejects_fixture_symlink codex-command \
+  "$fleck_root/workspace.json" \
+  "$sentinel_file" \
+  "codex-nested-fleck"
+assert_rejects_fixture_symlink codex-command \
+  "$fake_repo/README.md" \
+  "$sentinel_file" \
+  "codex-nested-northstar"
 
 external_integrations="$symlink_sentinel_root/ExternalAgentIntegrations"
 readonly external_integrations

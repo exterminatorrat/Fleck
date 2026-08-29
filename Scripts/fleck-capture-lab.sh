@@ -132,6 +132,7 @@ case "${1:-}" in
   launch)
     [[ $# -eq 2 ]] || usage
     read_manifest "$2"
+    reject_tree_symlinks "$fleck_root" "$fake_repo"
     if pgrep -x Fleck >/dev/null 2>&1; then
       die "Fleck is already running; leave it open and use this session later"
     fi
@@ -143,14 +144,9 @@ case "${1:-}" in
   codex-command)
     [[ $# -eq 2 ]] || usage
     read_manifest "$2"
+    reject_tree_symlinks "$fleck_root" "$fake_repo"
     profiles="$fleck_root/AgentIntegrations/profiles.json"
     installed_helper="$fleck_root/AgentBridge/bin/fleck"
-    reject_symlinks \
-      "$fleck_root/AgentIntegrations" \
-      "$profiles" \
-      "$fleck_root/AgentBridge" \
-      "$fleck_root/AgentBridge/bin" \
-      "$installed_helper"
     find_codex_profile
     [[ -x "$installed_helper" ]] || die "isolated Agent Connector was not found"
     printf \
