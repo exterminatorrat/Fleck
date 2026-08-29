@@ -839,7 +839,12 @@ final class DictationCoordinator {
         destinationID: destinationID
       )
       record.insertionOutcome = .saved
-      record.destination = candidates.first { $0.destination.noteID == receipt.noteID }?.destination
+      let createdInbox = destinationID == nil
+        ? DictationDestination(noteID: receipt.noteID, title: "Inbox")
+        : nil
+      record.destination = candidates.first {
+        $0.destination.noteID == receipt.noteID
+      }?.destination ?? createdInbox
       if isCancellationRequested(id) {
         await cancelCommittedSmartCapture(
           id,
@@ -869,7 +874,9 @@ final class DictationCoordinator {
         return
       }
       guard isActive(id) else { return }
-      if let ambiguityChoices, receipt.noteID == inbox?.destination.noteID {
+      if let ambiguityChoices,
+        receipt.noteID == (inbox?.destination.noteID ?? createdInbox?.noteID)
+      {
         let ambiguity = DictationRoutingAmbiguity(
           captureID: id,
           choices: Array(ambiguityChoices.prefix(4))
@@ -1206,7 +1213,7 @@ final class DictationCoordinator {
     guard let noteID else {
       guard pending.receipt.noteID == pending.inboxID else { return nil }
       clearRoutingAmbiguity(captureID: captureID)
-      return pending.record.destination.map { _ in .completed }
+      return .completed
     }
     guard let choice = pending.ambiguity.choices.first(where: {
       $0.destination.noteID == noteID

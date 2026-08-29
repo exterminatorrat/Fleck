@@ -1184,7 +1184,11 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     if finalText == nil {
       #expect(fixture.runtime.phase == .failed("No speech detected."))
     } else {
-      #expect(fixture.runtime.phase == .idle)
+      guard case .saved(let destination) = fixture.runtime.phase else {
+        Issue.record("Expected saved Inbox phase, got \(fixture.runtime.phase)")
+        continue
+      }
+      #expect(destination.title == "Inbox")
     }
   }
 }

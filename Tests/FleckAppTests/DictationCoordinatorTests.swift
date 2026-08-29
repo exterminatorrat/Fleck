@@ -871,6 +871,43 @@ private func waitForCompletion(
   #expect(fixture.coordinator.routingAmbiguity?.captureID == fixture.coordinator.recoveryReceipt?.captureID)
 }
 
+@Test @MainActor func ambiguousRoutingUsesTheNewlyCreatedInboxReceiptWhenInboxDoesNotExist()
+  async throws
+{
+  let fixture = try Fixture()
+  let createdInboxID = UUID()
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations = [project, personal]
+  fixture.saver.createdInboxID = createdInboxID
+  fixture.standard.finalText = "Create Inbox once"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  let ambiguity = try #require(fixture.coordinator.routingAmbiguity)
+  #expect(ambiguity.captureID == fixture.coordinator.recoveryReceipt?.captureID)
+  #expect(ambiguity.choices.map(\.destination) == [project, personal])
+  #expect(fixture.saver.savedTexts == ["Create Inbox once"])
+  #expect(fixture.saver.destinationIDs == [nil])
+  #expect(fixture.coordinator.recoveryReceipt?.noteID == createdInboxID)
+  #expect(fixture.coordinator.phase == .saved(.init(noteID: createdInboxID, title: "Inbox")))
+  let record = try #require(await fixture.history.list().first)
+  #expect(record.destination == .init(noteID: createdInboxID, title: "Inbox"))
+
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: ambiguity.captureID,
+    noteID: nil
+  ) == .completed)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
+  #expect(fixture.saver.savedTexts == ["Create Inbox once"])
+  #expect(fixture.coordinator.recoveryReceipt?.noteID == createdInboxID)
+}
+
 @Test @MainActor func choosingAmbiguousDestinationMovesExactReceiptAndUpdatesSameHistoryRecord() async throws {
   let fixture = try Fixture()
   let project = DictationDestination(noteID: UUID(), title: "Project")
@@ -3262,6 +3299,7 @@ private final class FakeSaver: DictationSaving {
   var moveGate: Gate?
   var moveReceipts: [DictationInsertionReceipt] = []
   var moveCount = 0
+  var createdInboxID: UUID?
 
   func activeDestinations() -> [DictationRoutingCandidate] {
     destinations.map {
@@ -3277,7 +3315,7 @@ private final class FakeSaver: DictationSaving {
     savedTexts.append(text)
     destinationIDs.append(destinationID)
     if let saveError { throw saveError }
-    let noteID = destinationID ?? UUID()
+    let noteID = destinationID ?? createdInboxID ?? UUID()
     return DictationInsertionReceipt(captureID: captureID, noteID: noteID, insertedSuffix: text)
   }
 
