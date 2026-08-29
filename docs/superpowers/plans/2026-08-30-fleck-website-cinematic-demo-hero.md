@@ -6,7 +6,7 @@
 
 **Architecture:** Harden the existing synthetic capture lab so it can run from a short canonical user-owned root under the common checkout's ignored `.build`, uses Fleck dark appearance, and provisions a normal Codex profile. Record real Fleck and Codex interactions into one truthful edited master, encode browser-seekable MP4/WebM outputs, then replace the current nine-state `HeroStory` with one video, one hardware frame, one pure playback mapper, and one GSAP ScrollTrigger. Mobile and Reduced Motion use explicit playback instead of scroll scrubbing.
 
-**Tech Stack:** Swift 6, Swift Testing, Bash, macOS `screencapture`, Codex CLI, ffmpeg/ffprobe, React 19, Vite 8, GSAP 3 ScrollTrigger, native HTML video, plain CSS, Node test runner
+**Tech Stack:** Swift 6, Swift Testing, Bash, FFmpeg AVFoundation screen capture, Codex CLI, ffmpeg/ffprobe, React 19, Vite 8, GSAP 3 ScrollTrigger, native HTML video, plain CSS, Node test runner
 
 **Spec:** `/Users/harryjin/Fleck/.worktrees/fleck-website-demo-capture-lab-current/docs/superpowers/specs/2026-08-30-fleck-website-cinematic-demo-hero-design.md`
 
@@ -215,7 +215,7 @@ The primary session must inspect each diff, rerun required verification, and the
 
 - [ ] **Step 7: Record real source takes**
 
-  Record native-resolution 60fps source takes with cursor and click indicators using `/usr/sbin/screencapture -v -C -k`. Capture the real chronological states listed in the design brief. Source takes may be separate so model/build latency can be removed honestly, but each take must show real UI and real state transitions.
+  Record native-resolution 60fps source takes through FFmpeg's AVFoundation `Capture screen 0` input with `-framerate 60`, `-capture_cursor 1`, no audio device, and a high-quality intraframe master codec. Capture the real chronological states listed in the design brief. Source takes may be separate so model/build latency can be removed honestly, but each take must show real UI and real state transitions. Use `/usr/sbin/screencapture -v -C` only as a documented fallback if AVFoundation capture fails, and do not accept a fallback master until its frame timing is conformed and visually verified at 60fps.
 
 - [ ] **Step 8: Edit the truthful continuous master**
 
