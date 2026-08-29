@@ -36,6 +36,7 @@ The primary session must inspect each diff, rerun required verification, and the
    - Create sessions as `<common-checkout>/.build/f.XXXXXX`, where `<common-checkout>` resolves from Git's canonical common directory. This keeps the full connector socket path below the 104-byte AF_UNIX limit without symlinks, a globally writable temporary parent, or an unhardened clone.
    - Require the exact active profile name produced by Fleck's current `Add Codex` UI: `Codex`.
    - Add a synthetic `AGENTS.md` that tells the real Codex agent how to retrieve the open Fleck handoff and write the result back after verified work.
+   - Keep seed verification strict and add a distinct postflight contract that admits only the expected completed Fleck task, supported-agent proof, bounded synthetic source/test diff, empty remote list, and passing fake-package tests.
    - Preserve all privacy, canonical-path, symlink, no-remote, deterministic-data, and contamination checks.
 2. **Owned files, interfaces, and constraints**
    - Modify: `Sources/FleckCaptureLab/FleckCaptureLab.swift`
@@ -49,6 +50,7 @@ The primary session must inspect each diff, rerun required verification, and the
    - Change only the capture session parent to the short common-checkout build root. Require the parent and leaf to be canonical, non-symlink, owned by the current UID, ignored by Git, and mode `700`; retain root, leaf, and nested symlink rejection.
    - Update exact-profile discovery and diagnostics from `Codex Demo` to `Codex`.
    - Make `codex-command` emit an isolated non-interactive invocation using `codex exec --ephemeral --ignore-user-config -C <fake-repository> -s workspace-write -a never` plus the exact Fleck MCP overrides. Authentication may be reused, but user config and task persistence may not.
+   - Add `postflight <manifest>` without weakening `verify <manifest>`. It must require the completed Northstar task, one coherent integration proof for that note, only the expected onboarding source/test paths modified, no untracked/ignored files or remote, a clean patch, the expected `.afterWelcome` behavior and regression assertion, and passing Swift package tests in the session scratch root.
    - Do not weaken the app-tree checks, manifest binding, repository integrity, credential boundaries, or profile uniqueness requirement.
 4. **Verification commands and expected evidence**
    - `swift test --filter FleckCaptureLabTests`
@@ -89,6 +91,9 @@ The primary session must inspect each diff, rerun required verification, and the
   - no active `Codex` profile,
   - duplicate active `Codex` profiles,
   - an active profile with a different display name.
+  - seed `verify` rejecting a mutated repository and supported-agent proof,
+  - `postflight` accepting only the exact completed task, coherent proof, bounded source/test diff, empty remote, clean patch, expected behavior/test assertion, and passing package tests,
+  - `postflight` rejecting a missing or incoherent proof, extra file/path, malformed patch, remote, wrong behavior, or failing test.
 
 - [ ] **Step 4: Run focused tests and record RED**
 
@@ -137,7 +142,8 @@ The primary session must inspect each diff, rerun required verification, and the
    - Source the complete Space Black MacBook Pro M3 2023 mockup from Unio Creative Solutions via the documented Free Design Resources page that labels the asset `100% Free`. Do not accept an account agreement, purchase a license, or reuse Apple.com imagery. If the stated license or author cannot be preserved in provenance, stop this packet rather than substitute an unlicensed device.
    - Do not fabricate Fleck, Codex, cursor, test, writeback, or completion states.
 4. **Verification commands and expected evidence**
-   - `Scripts/fleck-capture-lab.sh verify <manifest>` passes before and after the real workflow.
+   - `Scripts/fleck-capture-lab.sh verify <manifest>` passes before the real workflow.
+   - `Scripts/fleck-capture-lab.sh postflight <manifest>` passes after the real workflow; the seed verifier continues to reject the mutated session.
    - `swift test --package-path <fake-repository> --scratch-path <session-root>/SwiftPMBuild/NorthstarDemo` passes after the Codex change.
    - `git -C <fake-repository> diff --check` passes and `git -C <fake-repository> remote` is empty.
    - `ffprobe` confirms matching dimensions/duration, 60fps, no audio, and expected codecs.
@@ -174,7 +180,7 @@ The primary session must inspect each diff, rerun required verification, and the
   Scripts/fleck-capture-lab.sh verify <manifest>
   ```
 
-  Confirm the canonical short path, mode `700`, dark preference, exact synthetic files, clean fake repository, empty remote list, and open Fleck task.
+  Confirm the canonical short path, mode `700`, dark preference, exact synthetic files, clean fake repository, empty remote list, and open Fleck task. The strict seed verifier must pass here.
 
 - [ ] **Step 4: Launch Fleck and provision the isolated connector**
 
@@ -201,7 +207,7 @@ The primary session must inspect each diff, rerun required verification, and the
   - runs the fake package tests,
   - updates the originating Fleck task only after the tests pass.
 
-  Reset by creating a brand-new capture session, not by copying a mutated data tree or running destructive Git commands.
+  Run `Scripts/fleck-capture-lab.sh postflight <manifest>` and confirm it passes while the strict seed verifier rejects the now-mutated session. Reset by creating a brand-new capture session, not by copying a mutated data tree or running destructive Git commands.
 
 - [ ] **Step 6: Stage a private capture desktop**
 
