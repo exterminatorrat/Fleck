@@ -93,6 +93,7 @@ let package = Package(
             name: "fleck-model-eval",
             targets: ["FleckModelEvaluator"]
         ),
+        .executable(name: "fleck-capture-lab", targets: ["FleckCaptureLab"]),
     ],
     dependencies: packageDependencies,
     targets: [
@@ -132,6 +133,10 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
+        .executableTarget(
+            name: "FleckCaptureLab",
+            dependencies: ["FleckCore"]
+        ),
         .testTarget(
             name: "FleckCoreTests",
             dependencies: ["FleckCore"]
@@ -152,6 +157,10 @@ let package = Package(
         .testTarget(
             name: "FleckAgentBridgeTests",
             dependencies: ["FleckAgentBridge"]
+        ),
+        .testTarget(
+            name: "FleckCaptureLabTests",
+            dependencies: ["FleckCaptureLab", "FleckCore"]
         ),
     ]
 )
