@@ -98,6 +98,6 @@ import Testing
     allowsKeepInInbox: true
   )
 
-  #expect(chooser.menuAccessibilityLabel == "Keep dictation in Inbox")
-  #expect(chooser.menuAccessibilityHint == "Keeps this saved dictation in Inbox.")
+  #expect(chooser.menuAccessibilityLabel == "Keep in Inbox")
+  #expect(chooser.menuAccessibilityHint == "Opens the action to keep this saved dictation in Inbox.")
 }

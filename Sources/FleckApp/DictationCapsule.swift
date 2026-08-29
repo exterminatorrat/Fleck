@@ -152,13 +152,13 @@
 
     var menuAccessibilityLabel: String {
       choices.isEmpty && allowsKeepInInbox
-        ? keepInboxAccessibilityLabel
+        ? keepInboxTitle
         : "Choose note"
     }
 
     var menuAccessibilityHint: String {
       if choices.isEmpty, allowsKeepInInbox {
-        return "Keeps this saved dictation in Inbox."
+        return "Opens the action to keep this saved dictation in Inbox."
       }
       if allowsKeepInInbox {
         return "Choose a note for this saved dictation or keep it in Inbox."
