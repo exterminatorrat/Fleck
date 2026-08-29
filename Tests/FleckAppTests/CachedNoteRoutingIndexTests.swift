@@ -351,10 +351,13 @@ import Testing
     cachedRoutingCandidate(
       id: UUID(uuidString: String(format: "00000000-0000-0000-%04x-%012x", index, index))!,
       title: "Bounded \(index)",
-      body: index == 0 ? oversizedBody + " rareterminalmarker" : oversizedBody
+      body: index == 0
+        ? oversizedBody + " rareterminalmarker"
+        : (index < CachedNoteRoutingIndex.maximumNoteCount
+          ? oversizedBody
+          : "ordinary archive material")
     )
   }
-  let expectedID = candidates.first!.destination.noteID
   let forwardIndex = CachedNoteRoutingIndex()
   let reverseIndex = CachedNoteRoutingIndex()
 
@@ -370,7 +373,7 @@ import Testing
   )
   let usage = await forwardIndex.resourceUsage()
 
-  #expect(forward.first?.candidate.destination.noteID == expectedID)
+  #expect(forward.isEmpty)
   #expect(reverse == forward)
   #expect(await forwardIndex.retrieve(
     transcript: "rareterminalmarker",
@@ -382,6 +385,8 @@ import Testing
   #expect(usage.excerptUTF8Count <= CachedNoteRoutingIndex.maximumExcerptUTF8Count)
   #expect(usage.exactPostingCount <= CachedNoteRoutingIndex.maximumExactPostingCount)
   #expect(usage.trigramPostingCount <= CachedNoteRoutingIndex.maximumTrigramPostingCount)
+  #expect(usage.completenessScanUTF8Count
+    <= CachedNoteRoutingIndex.maximumCompletenessScanUTF8Count)
 }
 
 @Test func cachedRoutingFailsClosedWhenAnOmittedNoteHasRelevantEvidence() async {
@@ -455,6 +460,70 @@ import Testing
     transcript: "endingsignal",
     candidates: [candidate]
   ).first?.candidate.destination.noteID == candidate.destination.noteID)
+  #expect(await index.resourceUsage().completenessScanUTF8Count == 0)
+}
+
+@Test func cachedRoutingFailsClosedAtThePerCandidateCompletenessScanBudget() async {
+  let apparent = cachedRoutingCandidate(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+    title: "Apparent",
+    body: "zxqvbp indexed evidence"
+  )
+  let unrelated = (2...CachedNoteRoutingIndex.maximumNoteCount).map { index in
+    cachedRoutingCandidate(
+      id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012x", index))!,
+      title: "Unrelated \(index)",
+      body: "ordinary archive material"
+    )
+  }
+  let omitted = cachedRoutingCandidate(
+    id: UUID(uuidString: "ffffffff-ffff-ffff-ffff-ffffffffffff")!,
+    title: "Omitted",
+    body: String(
+      repeating: "ordinary archive material ",
+      count: CachedNoteRoutingIndex.maximumCompletenessScanUTF8PerCandidate / 8
+    ) + " zxqvbp"
+  )
+  let index = CachedNoteRoutingIndex()
+
+  #expect(await index.retrieve(
+    transcript: "zxqvbp",
+    candidates: [apparent] + unrelated + [omitted]
+  ).isEmpty)
+  let usage = await index.resourceUsage()
+  #expect(usage.completenessScanUTF8Count
+    == CachedNoteRoutingIndex.maximumCompletenessScanUTF8PerCandidate)
+}
+
+@Test func cachedRoutingFailsClosedAtTheGlobalCompletenessScanBudget() async {
+  let apparent = cachedRoutingCandidate(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+    title: "Apparent",
+    body: "zxqvbp indexed evidence"
+  )
+  let unrelated = (2...CachedNoteRoutingIndex.maximumNoteCount).map { index in
+    cachedRoutingCandidate(
+      id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012x", index))!,
+      title: "Unrelated \(index)",
+      body: "ordinary archive material"
+    )
+  }
+  let omitted = (0..<20).map { index in
+    cachedRoutingCandidate(
+      id: UUID(uuidString: String(format: "ffffffff-ffff-ffff-ffff-%012x", index))!,
+      title: "Omitted \(index)",
+      body: String(repeating: "ordinary archive material ", count: 400)
+    )
+  }
+  let index = CachedNoteRoutingIndex()
+
+  #expect(await index.retrieve(
+    transcript: "zxqvbp",
+    candidates: [apparent] + unrelated + omitted
+  ).isEmpty)
+  let usage = await index.resourceUsage()
+  #expect(usage.completenessScanUTF8Count
+    == CachedNoteRoutingIndex.maximumCompletenessScanUTF8Count)
 }
 
 private func cachedRoutingCandidate(

@@ -13,6 +13,7 @@ struct CachedNoteRoutingResourceUsage: Equatable, Sendable {
   let excerptUTF8Count: Int
   let exactPostingCount: Int
   let trigramPostingCount: Int
+  let completenessScanUTF8Count: Int
 }
 
 actor CachedNoteRoutingIndex {
@@ -26,6 +27,8 @@ actor CachedNoteRoutingIndex {
   static let maximumTrigramPostingCount =
     maximumNoteCount * maximumTitleTrigramCount
       + maximumPassageCount * maximumPassageTrigramCount
+  static let maximumCompletenessScanUTF8PerCandidate = 32 * 1_024
+  static let maximumCompletenessScanUTF8Count = 128 * 1_024
 
   private static let maximumExcerptUTF8PerPassage = 2_048
   private static let maximumTitleUTF8Count = 2_048
@@ -60,16 +63,29 @@ actor CachedNoteRoutingIndex {
     let ordinal: Int
   }
 
+  private struct BoundedFeatureSet {
+    let values: Set<String>
+    let wasTruncated: Bool
+  }
+
+  private enum CompletenessScanResult: Equatable {
+    case noEvidence
+    case evidence
+    case exhausted
+  }
+
   private var notes: [UUID: Note] = [:]
   private var passages: [PassageID: Passage] = [:]
   private var exactPostings: [String: Set<PassageID>] = [:]
   private var trigramPostings: [String: Set<PassageID>] = [:]
+  private var lastCompletenessScanUTF8Count = 0
 
   func retrieve(
     transcript: String,
     candidates: [DictationRoutingCandidate],
     limit: Int = 6
   ) -> [CachedNoteRoutingMatch] {
+    lastCompletenessScanUTF8Count = 0
     guard !Task.isCancelled, limit > 0 else { return [] }
     let queryTerms = Self.meaningfulTerms(in: transcript)
     guard !queryTerms.isEmpty else { return [] }
@@ -136,16 +152,19 @@ actor CachedNoteRoutingIndex {
 
     guard !Task.isCancelled else { return [] }
     guard !bestByNote.isEmpty else { return [] }
+    var remainingCompletenessScanUTF8Count = Self.maximumCompletenessScanUTF8Count
     for candidate in candidates {
       guard !Task.isCancelled else { return [] }
       if let note = notes[candidate.destination.noteID], !note.requiresCompletenessGuard {
         continue
       }
-      if hasUnindexedQueryEvidence(
+      let scanResult = scanForUnindexedQueryEvidence(
         in: candidate,
         queryTerms: queryTerms,
-        queryTrigrams: queryTrigrams
-      ) {
+        queryTrigrams: queryTrigrams,
+        remainingGlobalUTF8Count: &remainingCompletenessScanUTF8Count
+      )
+      if scanResult != .noEvidence {
         return []
       }
     }
@@ -172,7 +191,8 @@ actor CachedNoteRoutingIndex {
       passageCount: passages.count,
       excerptUTF8Count: passages.values.reduce(0) { $0 + $1.excerpt.utf8.count },
       exactPostingCount: exactPostings.values.reduce(0) { $0 + $1.count },
-      trigramPostingCount: trigramPostings.values.reduce(0) { $0 + $1.count }
+      trigramPostingCount: trigramPostings.values.reduce(0) { $0 + $1.count },
+      completenessScanUTF8Count: lastCompletenessScanUTF8Count
     )
   }
 
@@ -212,10 +232,16 @@ actor CachedNoteRoutingIndex {
       maximumUTF8Count: Self.maximumTitleUTF8Count
     )
     let normalizedTitle = Self.normalizedWhitespace(boundedTitle)
-    let allTitleTerms = Self.meaningfulTerms(in: normalizedTitle)
-    let titleTerms = Self.meaningfulTerms(in: normalizedTitle, limit: Self.maximumTitleTermCount)
-    let allTitleTrigrams = Self.trigrams(for: titleTerms)
-    let titleTrigrams = Self.trigrams(for: titleTerms, limit: Self.maximumTitleTrigramCount)
+    let boundedTitleTerms = Self.boundedMeaningfulTerms(
+      in: normalizedTitle,
+      limit: Self.maximumTitleTermCount
+    )
+    let titleTerms = boundedTitleTerms.values
+    let boundedTitleTrigrams = Self.boundedTrigrams(
+      for: titleTerms,
+      limit: Self.maximumTitleTrigramCount
+    )
+    let titleTrigrams = boundedTitleTrigrams.values
     guard let preparedBody = Self.bodyPassages(candidate.semanticContext) else { return nil }
     let bodyPassages = preparedBody.passages
     let passageIDs = bodyPassages.indices.map { PassageID(noteID: noteID, ordinal: $0) }
@@ -227,8 +253,8 @@ actor CachedNoteRoutingIndex {
       titleTrigrams: titleTrigrams,
       passageIDs: passageIDs,
       requiresCompletenessGuard: boundedTitle != candidate.destination.title
-        || allTitleTerms.count > titleTerms.count
-        || allTitleTrigrams.count > titleTrigrams.count
+        || boundedTitleTerms.wasTruncated
+        || boundedTitleTrigrams.wasTruncated
         || preparedBody.requiresCompletenessGuard
     )
     return (note, bodyPassages)
@@ -276,11 +302,12 @@ actor CachedNoteRoutingIndex {
     return max(1, notes.count - documentFrequency + 1)
   }
 
-  private func hasUnindexedQueryEvidence(
+  private func scanForUnindexedQueryEvidence(
     in candidate: DictationRoutingCandidate,
     queryTerms: Set<String>,
-    queryTrigrams: Set<String>
-  ) -> Bool {
+    queryTrigrams: Set<String>,
+    remainingGlobalUTF8Count: inout Int
+  ) -> CompletenessScanResult {
     var unindexedTerms = queryTerms
     var unindexedTrigrams = queryTrigrams
     if let note = notes[candidate.destination.noteID] {
@@ -292,17 +319,45 @@ actor CachedNoteRoutingIndex {
         unindexedTrigrams.subtract(passage.trigrams)
       }
     }
-    guard !unindexedTerms.isEmpty || !unindexedTrigrams.isEmpty else { return false }
+    guard !unindexedTerms.isEmpty || !unindexedTrigrams.isEmpty else { return .noEvidence }
 
-    return Self.containsQueryEvidence(
+    var remainingCandidateUTF8Count = Self.maximumCompletenessScanUTF8PerCandidate
+    let titleResult = scanQueryEvidence(
       in: candidate.destination.title,
       queryTerms: unindexedTerms,
-      queryTrigrams: unindexedTrigrams
-    ) || Self.containsQueryEvidence(
+      queryTrigrams: unindexedTrigrams,
+      remainingCandidateUTF8Count: &remainingCandidateUTF8Count,
+      remainingGlobalUTF8Count: &remainingGlobalUTF8Count
+    )
+    guard titleResult == .noEvidence else { return titleResult }
+    return scanQueryEvidence(
       in: candidate.semanticContext,
       queryTerms: unindexedTerms,
-      queryTrigrams: unindexedTrigrams
+      queryTrigrams: unindexedTrigrams,
+      remainingCandidateUTF8Count: &remainingCandidateUTF8Count,
+      remainingGlobalUTF8Count: &remainingGlobalUTF8Count
     )
+  }
+
+  private func scanQueryEvidence(
+    in input: String,
+    queryTerms: Set<String>,
+    queryTrigrams: Set<String>,
+    remainingCandidateUTF8Count: inout Int,
+    remainingGlobalUTF8Count: inout Int
+  ) -> CompletenessScanResult {
+    guard !Task.isCancelled else { return .exhausted }
+    let allowedUTF8Count = min(remainingCandidateUTF8Count, remainingGlobalUTF8Count)
+    let bounded = Self.boundedScanText(input, maximumUTF8Count: allowedUTF8Count)
+    remainingCandidateUTF8Count -= bounded.utf8Count
+    remainingGlobalUTF8Count -= bounded.utf8Count
+    lastCompletenessScanUTF8Count += bounded.utf8Count
+    guard !bounded.wasTruncated, !Task.isCancelled else { return .exhausted }
+    return Self.containsQueryEvidence(
+      in: bounded.text,
+      queryTerms: queryTerms,
+      queryTrigrams: queryTrigrams
+    ) ? .evidence : .noEvidence
   }
 
   private static func precedes(_ lhs: ScoredPassage, _ rhs: ScoredPassage) -> Bool {
@@ -341,10 +396,13 @@ actor CachedNoteRoutingIndex {
       let end = min(start + 96, words.count)
       let excerptResult = boundedExcerpt(words[start..<end])
       let excerpt = excerptResult.text
-      let allTerms = meaningfulTerms(in: excerpt)
-      let terms = meaningfulTerms(in: excerpt, limit: maximumPassageTermCount)
-      let allPassageTrigrams = trigrams(for: terms)
-      let passageTrigrams = trigrams(for: terms, limit: maximumPassageTrigramCount)
+      let boundedTerms = boundedMeaningfulTerms(in: excerpt, limit: maximumPassageTermCount)
+      let terms = boundedTerms.values
+      let boundedPassageTrigrams = boundedTrigrams(
+        for: terms,
+        limit: maximumPassageTrigramCount
+      )
+      let passageTrigrams = boundedPassageTrigrams.values
       result.append(Passage(
         excerpt: excerpt,
         terms: terms,
@@ -352,35 +410,53 @@ actor CachedNoteRoutingIndex {
       ))
       requiresCompletenessGuard = requiresCompletenessGuard
         || excerptResult.wasTruncated
-        || allTerms.count > terms.count
-        || allPassageTrigrams.count > passageTrigrams.count
+        || boundedTerms.wasTruncated
+        || boundedPassageTrigrams.wasTruncated
     }
     return (result, requiresCompletenessGuard)
   }
 
-  private static func meaningfulTerms(in input: String, limit: Int? = nil) -> Set<String> {
+  private static func meaningfulTerms(in input: String) -> Set<String> {
+    boundedMeaningfulTerms(in: input, limit: .max).values
+  }
+
+  private static func boundedMeaningfulTerms(
+    in input: String,
+    limit: Int
+  ) -> BoundedFeatureSet {
     var result = Set<String>()
     for lexeme in CleanupLexeme.scan(input) {
       guard lexeme.kind == .word else { continue }
       let term = lexeme.canonical
-      guard term.count > 1, !ignoredTerms.contains(term) else { continue }
+      guard term.count > 1, !ignoredTerms.contains(term), !result.contains(term) else { continue }
+      guard result.count < limit else { return BoundedFeatureSet(values: result, wasTruncated: true) }
       result.insert(term)
-      if result.count == limit { break }
     }
-    return result
+    return BoundedFeatureSet(values: result, wasTruncated: false)
   }
 
-  private static func trigrams(for terms: Set<String>, limit: Int? = nil) -> Set<String> {
+  private static func trigrams(for terms: Set<String>) -> Set<String> {
+    boundedTrigrams(for: terms, limit: .max).values
+  }
+
+  private static func boundedTrigrams(
+    for terms: Set<String>,
+    limit: Int
+  ) -> BoundedFeatureSet {
     var result = Set<String>()
     for term in terms.sorted() {
       let bytes = Array(term.utf8)
       guard bytes.count >= 4, bytes.allSatisfy({ (97...122).contains($0) }) else { continue }
       for index in 0...(bytes.count - 3) {
-        result.insert(String(decoding: bytes[index..<(index + 3)], as: UTF8.self))
-        if result.count == limit { return result }
+        let trigram = String(decoding: bytes[index..<(index + 3)], as: UTF8.self)
+        guard !result.contains(trigram) else { continue }
+        guard result.count < limit else {
+          return BoundedFeatureSet(values: result, wasTruncated: true)
+        }
+        result.insert(trigram)
       }
     }
-    return result
+    return BoundedFeatureSet(values: result, wasTruncated: false)
   }
 
   private static func containsQueryEvidence(
@@ -389,29 +465,41 @@ actor CachedNoteRoutingIndex {
     queryTrigrams: Set<String>
   ) -> Bool {
     guard !Task.isCancelled else { return false }
-    let words = input.split(whereSeparator: \Character.isWhitespace)
-    for start in stride(from: 0, to: words.count, by: 96) {
+    for lexeme in CleanupLexeme.scan(input) {
       guard !Task.isCancelled else { return false }
-      let end = min(start + 96, words.count)
-      let excerptResult = boundedExcerpt(words[start..<end])
-      guard !excerptResult.wasTruncated else { return true }
-      for lexeme in CleanupLexeme.scan(excerptResult.text) {
-        guard lexeme.kind == .word else { continue }
-        let term = lexeme.canonical
-        guard term.count > 1, !ignoredTerms.contains(term) else { continue }
-        if queryTerms.contains(term) { return true }
+      guard lexeme.kind == .word else { continue }
+      let term = lexeme.canonical
+      guard term.count > 1, !ignoredTerms.contains(term) else { continue }
+      if queryTerms.contains(term) { return true }
 
-        let bytes = Array(term.utf8)
-        guard bytes.count >= 4, bytes.allSatisfy({ (97...122).contains($0) }) else {
-          continue
-        }
-        for index in 0...(bytes.count - 3) {
-          let trigram = String(decoding: bytes[index..<(index + 3)], as: UTF8.self)
-          if queryTrigrams.contains(trigram) { return true }
-        }
+      let bytes = Array(term.utf8)
+      guard bytes.count >= 4, bytes.allSatisfy({ (97...122).contains($0) }) else {
+        continue
+      }
+      for index in 0...(bytes.count - 3) {
+        let trigram = String(decoding: bytes[index..<(index + 3)], as: UTF8.self)
+        if queryTrigrams.contains(trigram) { return true }
       }
     }
     return false
+  }
+
+  private static func boundedScanText(
+    _ input: String,
+    maximumUTF8Count: Int
+  ) -> (text: String, utf8Count: Int, wasTruncated: Bool) {
+    var result = ""
+    var byteCount = 0
+    for character in input {
+      guard !Task.isCancelled else { return (result, byteCount, true) }
+      let characterByteCount = character.utf8.count
+      guard byteCount + characterByteCount <= maximumUTF8Count else {
+        return (result, byteCount, true)
+      }
+      result.append(character)
+      byteCount += characterByteCount
+    }
+    return (result, byteCount, false)
   }
 
   private static func boundedExcerpt(
