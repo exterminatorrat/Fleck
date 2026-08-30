@@ -441,8 +441,8 @@
     private func requestCancel(_ ownership: DictationShortcutOwnership) async {
       guard
         activeOwnership?.session == ownership.session,
-        !finishRequested,
-        !cancelRequested
+        !cancelRequested,
+        (!finishRequested || ownership.isHandsFree)
       else { return }
       cancelRequested = true
       clearTapState()

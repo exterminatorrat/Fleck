@@ -358,14 +358,14 @@ import Testing
   }
 }
 
-@Test @MainActor func pointerStartClaimsPointerOwnershipAndBeginsHandsFreeOnce() {
+@Test @MainActor func pointerStartClaimsPointerOwnershipAndBeginsHandsFreeOnce() throws {
   let fixture = ShortcutFixture()
 
   #expect(fixture.shortcut.startPointerHandsFree())
   #expect(fixture.handler.handsFreeBeginCount == 1)
-  #expect(fixture.handler.lastSession != nil)
+  let session = try #require(fixture.handler.lastSession)
   #expect(fixture.shortcut.activeOwnership == DictationShortcutOwnership(
-    session: fixture.handler.lastSession!,
+    session: session,
     trigger: .pointer,
     mode: .smartCapture,
     isHandsFree: true
@@ -384,10 +384,10 @@ import Testing
   #expect(published.isEmpty)
 }
 
-@Test @MainActor func pointerOwnershipRejectsCompetingPointerAndKeyboardStarts() async {
+@Test @MainActor func pointerOwnershipRejectsCompetingPointerAndKeyboardStarts() async throws {
   let fixture = ShortcutFixture()
   fixture.handler.autoCompleteTerminal = false
-  try? fixture.shortcut.configure(.rightOption)
+  try fixture.shortcut.configure(.rightOption)
 
   #expect(fixture.shortcut.startPointerHandsFree())
   #expect(!fixture.shortcut.startPointerHandsFree())
@@ -430,6 +430,49 @@ import Testing
   #expect(fixture.shortcut.activeOwnership == nil)
   #expect(fixture.escape.unregisterCount == 1)
   #expect(published == [ownership, nil])
+}
+
+@Test @MainActor func escapeAfterFinishPendingDispatchesOneCancel() async throws {
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  #expect(fixture.shortcut.startPointerHandsFree())
+
+  await fixture.shortcut.finishOwnedHandsFree()
+  fixture.escape.emit()
+  fixture.escape.emit()
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.handsFreeFinishCount == 1)
+  #expect(fixture.handler.cancelCount == 1)
+  #expect(fixture.shortcut.activeOwnership != nil)
+
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+}
+
+@Test @MainActor func uninstallAfterFinishPendingDispatchesCancelAndWaitsForTerminal()
+  async throws
+{
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  #expect(fixture.shortcut.startPointerHandsFree())
+
+  await fixture.shortcut.finishOwnedHandsFree()
+  let uninstallTask = Task { @MainActor in
+    await fixture.shortcut.uninstall()
+  }
+  for _ in 0..<100 where fixture.handler.cancelCount == 0 {
+    await Task.yield()
+  }
+
+  #expect(fixture.handler.handsFreeFinishCount == 1)
+  #expect(fixture.handler.cancelCount == 1)
+  #expect(fixture.shortcut.activeOwnership != nil)
+
+  fixture.handler.completeCurrentTerminal()
+  await uninstallTask.value
+  #expect(fixture.shortcut.activeOwnership == nil)
+  #expect(fixture.escape.unregisterCount == 1)
 }
 
 @Test @MainActor func selectedModifierPressFinishesPointerSessionAndIgnoresRelease() async throws {
