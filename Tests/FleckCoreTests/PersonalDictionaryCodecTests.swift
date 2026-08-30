@@ -138,7 +138,10 @@ import Testing
     isPriority: true,
     isEnabled: false,
     origin: .suggested,
-    usage: .init(useCount: 7, lastUsedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    usage: .init(
+      useCount: 7,
+      lastUsedAt: Date(timeIntervalSince1970: 1_700_000_000.001953125)
+    )
   )
   let earlierEntry = dictionaryCodecEntry(
     id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
@@ -170,10 +173,36 @@ import Testing
     entries: [earlierEntry, laterEntry],
     suggestions: [earlierSuggestion, laterSuggestion]
   )
-  let expected = #"{"entries":[{"aliases":[],"id":"00000000-0000-0000-0000-000000000001","isEnabled":true,"isPriority":false,"localeIdentifier":"en-US","origin":"manual","preferredForm":"Fleck","usage":{"useCount":0}},{"aliases":["second","First\nline"],"id":"00000000-0000-0000-0000-000000000002","isEnabled":false,"isPriority":true,"localeIdentifier":"zh-CN","origin":"suggested","preferredForm":"小/明","usage":{"lastUsedAt":"2023-11-14T22:13:20.000000000Z","useCount":7}}],"revision":9,"schemaVersion":2,"suggestions":[{"id":"00000000-0000-0000-0000-000000000011","lastObservedAt":"2023-11-14T22:13:22.000000000Z","localeIdentifier":"fr-CA","observationCount":1,"observedForms":["A/one"],"preferredForm":"Alpha"},{"id":"00000000-0000-0000-0000-000000000012","lastObservedAt":"2023-11-14T22:13:21.000000000Z","localeIdentifier":"en-US","observationCount":2,"observedForms":["b","bee"],"preferredForm":"Beta"}]}"#
+  let expected = #"{"entries":[{"aliases":[],"id":"00000000-0000-0000-0000-000000000001","isEnabled":true,"isPriority":false,"localeIdentifier":"en-US","origin":"manual","preferredForm":"Fleck","usage":{"useCount":0}},{"aliases":["second","First\nline"],"id":"00000000-0000-0000-0000-000000000002","isEnabled":false,"isPriority":true,"localeIdentifier":"zh-CN","origin":"suggested","preferredForm":"小/明","usage":{"lastUsedAt":"2023-11-14T22:13:20.001953125Z","useCount":7}}],"revision":9,"schemaVersion":2,"suggestions":[{"id":"00000000-0000-0000-0000-000000000011","lastObservedAt":"2023-11-14T22:13:22.000000000Z","localeIdentifier":"fr-CA","observationCount":1,"observedForms":["A/one"],"preferredForm":"Alpha"},{"id":"00000000-0000-0000-0000-000000000012","lastObservedAt":"2023-11-14T22:13:21.000000000Z","localeIdentifier":"en-US","observationCount":2,"observedForms":["b","bee"],"preferredForm":"Beta"}]}"#
 
   #expect(try PersonalDictionaryCodec.encodeCanonicalJSON(reversed) == Data(expected.utf8))
   #expect(try PersonalDictionaryCodec.encodeCanonicalJSON(sorted) == Data(expected.utf8))
+
+  let edgeSnapshot = PersonalDictionarySnapshotV2(
+    entries: [
+      PersonalDictionaryEntry(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
+        preferredForm: "Edge",
+        usage: .init(lastUsedAt: Date(timeIntervalSince1970: -0.001953125))
+      )
+    ],
+    suggestions: [
+      PersonalDictionarySuggestion(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000013")!,
+        preferredForm: "Edge",
+        observedForms: ["edge"],
+        observationCount: 1,
+        lastObservedAt: Date(timeIntervalSinceReferenceDate: 0.9999999996)
+      )
+    ]
+  )
+  let edgeExpected = #"{"entries":[{"aliases":[],"id":"00000000-0000-0000-0000-000000000003","isEnabled":true,"isPriority":false,"localeIdentifier":"en-US","origin":"manual","preferredForm":"Edge","usage":{"lastUsedAt":"1969-12-31T23:59:59.998046875Z","useCount":0}}],"revision":0,"schemaVersion":2,"suggestions":[{"id":"00000000-0000-0000-0000-000000000013","lastObservedAt":"2001-01-01T00:00:01.000000000Z","localeIdentifier":"en-US","observationCount":1,"observedForms":["edge"],"preferredForm":"Edge"}]}"#
+  #expect(try PersonalDictionaryCodec.encodeCanonicalJSON(edgeSnapshot) == Data(edgeExpected.utf8))
+  #expect(
+    try PersonalDictionaryCodec.encodeCanonicalJSON(
+      PersonalDictionaryCodec.decodeCandidateJSON(Data(edgeExpected.utf8))
+    ) == Data(edgeExpected.utf8)
+  )
 }
 
 @Test func personalDictionaryV2CodecDecodesCanonicalV1AsRevisionOneCandidate() throws {
@@ -224,7 +253,7 @@ import Testing
 }
 
 @Test func personalDictionaryV2CodecDecodesCanonicalV2WithoutChangingRevision() throws {
-  let canonicalV2 = #"{"entries":[{"aliases":["second","First"],"id":"00000000-0000-0000-0000-000000000031","isEnabled":false,"isPriority":true,"localeIdentifier":"en-GB","origin":"suggested","preferredForm":"Fleck","usage":{"lastUsedAt":"2023-11-14T22:13:20.000000000Z","useCount":4}}],"revision":42,"schemaVersion":2,"suggestions":[{"id":"00000000-0000-0000-0000-000000000032","lastObservedAt":"2023-11-14T22:13:21.000000000Z","localeIdentifier":"en-GB","observationCount":2,"observedForms":["second","First"],"preferredForm":"Fleck"}]}"#
+  let canonicalV2 = #"{"entries":[{"aliases":["second","First"],"id":"00000000-0000-0000-0000-000000000031","isEnabled":false,"isPriority":true,"localeIdentifier":"en-GB","origin":"suggested","preferredForm":"Fleck","usage":{"lastUsedAt":"2023-11-14T22:13:20.001953125Z","useCount":4}}],"revision":42,"schemaVersion":2,"suggestions":[{"id":"00000000-0000-0000-0000-000000000032","lastObservedAt":"2023-11-14T22:13:21.000000000Z","localeIdentifier":"en-GB","observationCount":2,"observedForms":["second","First"],"preferredForm":"Fleck"}]}"#
 
   let candidate = try PersonalDictionaryCodec.decodeCandidateJSON(Data(canonicalV2.utf8))
 
@@ -302,6 +331,8 @@ import Testing
     canonical.replacingOccurrences(of: "00000000006a", with: "00000000006A"),
     canonical.replacingOccurrences(of: "F/leck", with: #"F\/leck"#),
     canonical.replacingOccurrences(of: "2023-11-14T22:13:20.000000000Z", with: "2023-11-14T22:13:20.000Z"),
+    canonical.replacingOccurrences(of: "2023-11-14T22:13:20.000000000Z", with: "2023-02-30T22:13:20.000000000Z"),
+    canonical.replacingOccurrences(of: "2023-11-14T22:13:20.000000000Z", with: "2023-11-14T22:13:20.000000001Z"),
     canonical.replacingOccurrences(of: "2023-11-14T22:13:21.000000000Z", with: "2023-11-14T17:13:21.000000000-05:00"),
     #"{"entries":[\#(secondEntry),\#(firstEntry)],"revision":0,"schemaVersion":2,"suggestions":[\#(firstSuggestion),\#(secondSuggestion)]}"#,
     #"{"entries":[\#(firstEntry),\#(secondEntry)],"revision":0,"schemaVersion":2,"suggestions":[\#(secondSuggestion),\#(firstSuggestion)]}"#,

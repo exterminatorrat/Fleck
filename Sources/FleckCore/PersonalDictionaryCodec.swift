@@ -418,13 +418,60 @@ public enum PersonalDictionaryCodec {
   }
 
   private static func strictDate(_ value: StrictJSONValue) -> Date? {
-    guard case .string(let string) = value, string.utf8.count == 30 else { return nil }
-    let formatter = makeCanonicalDateFormatter()
-    guard let date = formatter.date(from: string),
-      date.timeIntervalSinceReferenceDate.isFinite,
-      formatter.string(from: date) == string
+    guard case .string(let string) = value else { return nil }
+    let bytes = Array(string.utf8)
+    guard bytes.count == 30,
+      bytes[4] == 0x2D, bytes[7] == 0x2D, bytes[10] == 0x54,
+      bytes[13] == 0x3A, bytes[16] == 0x3A, bytes[19] == 0x2E, bytes[29] == 0x5A,
+      let year = parseDecimal(bytes, in: 0..<4),
+      let month = parseDecimal(bytes, in: 5..<7),
+      let day = parseDecimal(bytes, in: 8..<10),
+      let hour = parseDecimal(bytes, in: 11..<13),
+      let minute = parseDecimal(bytes, in: 14..<16),
+      let second = parseDecimal(bytes, in: 17..<19),
+      let nanosecond = parseDecimal(bytes, in: 20..<29),
+      (1...9999).contains(year),
+      (1...12).contains(month),
+      (1...31).contains(day),
+      (0...23).contains(hour),
+      (0...59).contains(minute),
+      (0...59).contains(second)
     else { return nil }
+
+    let calendar = utcGregorianCalendar()
+    var components = DateComponents()
+    components.calendar = calendar
+    components.timeZone = calendar.timeZone
+    components.year = year
+    components.month = month
+    components.day = day
+    components.hour = hour
+    components.minute = minute
+    components.second = second
+    guard let wholeSecondDate = calendar.date(from: components) else { return nil }
+    let verified = calendar.dateComponents(
+      [.year, .month, .day, .hour, .minute, .second],
+      from: wholeSecondDate
+    )
+    guard verified.year == year, verified.month == month, verified.day == day,
+      verified.hour == hour, verified.minute == minute, verified.second == second
+    else { return nil }
+
+    let interval = wholeSecondDate.timeIntervalSinceReferenceDate
+      + Double(nanosecond) / 1_000_000_000
+    let date = Date(timeIntervalSinceReferenceDate: interval)
+    guard let canonical = try? canonicalDateString(date), canonical == string else { return nil }
     return date
+  }
+
+  private static func parseDecimal(_ bytes: [UInt8], in range: Range<Int>) -> Int? {
+    var value = 0
+    for index in range {
+      let byte = bytes[index]
+      guard (0x30...0x39).contains(byte) else { return nil }
+      value = value * 10 + Int(byte - 0x30)
+    }
+    return value
   }
 
   private static func strictInt(_ value: StrictJSONValue) -> Int? {
@@ -499,27 +546,53 @@ public enum PersonalDictionaryCodec {
   }
 
   private static func canonicalDateString(_ date: Date) throws -> String {
-    guard date.timeIntervalSinceReferenceDate.isFinite else {
+    let interval = date.timeIntervalSinceReferenceDate
+    guard interval.isFinite else {
       throw PersonalDictionaryCodecError.invalidSnapshot
     }
-    let formatter = makeCanonicalDateFormatter()
-    let string = formatter.string(from: date)
-    guard string.utf8.count == 30,
-      let decoded = formatter.date(from: string),
-      formatter.string(from: decoded) == string
+
+    let flooredSeconds = interval.rounded(.down)
+    guard var wholeSeconds = Int64(exactly: flooredSeconds),
+      var nanoseconds = Int64(exactly: ((interval - flooredSeconds) * 1_000_000_000).rounded()),
+      (0...1_000_000_000).contains(nanoseconds)
     else {
       throw PersonalDictionaryCodecError.invalidSnapshot
     }
-    return string
+    if nanoseconds == 1_000_000_000 {
+      let result = wholeSeconds.addingReportingOverflow(1)
+      guard !result.overflow else { throw PersonalDictionaryCodecError.invalidSnapshot }
+      wholeSeconds = result.partialValue
+      nanoseconds = 0
+    }
+
+    let calendar = utcGregorianCalendar()
+    let wholeSecondDate = Date(timeIntervalSinceReferenceDate: Double(wholeSeconds))
+    let components = calendar.dateComponents(
+      [.year, .month, .day, .hour, .minute, .second],
+      from: wholeSecondDate
+    )
+    guard let year = components.year, (1...9999).contains(year),
+      let month = components.month, let day = components.day,
+      let hour = components.hour, let minute = components.minute, let second = components.second
+    else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    return "\(paddedDecimal(year, width: 4))-\(paddedDecimal(month, width: 2))"
+      + "-\(paddedDecimal(day, width: 2))T\(paddedDecimal(hour, width: 2))"
+      + ":\(paddedDecimal(minute, width: 2)):\(paddedDecimal(second, width: 2))"
+      + ".\(paddedDecimal(Int(nanoseconds), width: 9))Z"
   }
 
-  private static func makeCanonicalDateFormatter() -> DateFormatter {
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
-    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSS'Z'"
-    return formatter
+  private static func utcGregorianCalendar() -> Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.locale = Locale(identifier: "en_US_POSIX")
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    return calendar
+  }
+
+  private static func paddedDecimal(_ value: Int, width: Int) -> String {
+    let decimal = String(value)
+    return String(repeating: "0", count: width - decimal.count) + decimal
   }
 
   private static func strictInteger(_ token: String) -> Int? {
