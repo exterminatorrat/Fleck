@@ -140,6 +140,9 @@ struct LocalModelBuildEnvironment: Equatable, Sendable {
   let osMajor: Int
   let languages: Set<String>
   let buildCapability: LocalModelBuildCapability
+  let claimScope: LocalModelClaimScope
+  let speakerCohort: LocalModelSpeakerCohort
+  let acousticCohort: LocalModelAcousticCohort
 }
 
 struct LocalModelArtifactFile: Equatable, Sendable {
@@ -230,6 +233,10 @@ enum LocalModelCatalog {
     guard isConfigurationKey(raw.key) else {
       throw LocalModelCatalogError.invalidConfigurationKey
     }
+    guard !environment.languages.isEmpty,
+          environment.languages.allSatisfy(isSupportedEnglishLanguage) else {
+      throw LocalModelCatalogError.incompatibleLanguage
+    }
 
     var requiredRoles = Set<LocalModelCatalogRole>()
     for rawRole in raw.requiredRoles {
@@ -238,7 +245,7 @@ enum LocalModelCatalog {
         throw LocalModelCatalogError.duplicateRole(role)
       }
     }
-    let mandatoryRoles: Set<LocalModelCatalogRole> = [.dictation, .cleanup]
+    let mandatoryRoles: Set<LocalModelCatalogRole> = [.dictation, .cleanup, .routing]
     for role in mandatoryRoles where !requiredRoles.contains(role) {
       throw LocalModelCatalogError.missingMandatoryRole(role)
     }
@@ -272,10 +279,19 @@ enum LocalModelCatalog {
     guard Set(profiles.map(\.claimScope)).count == 1 else {
       throw LocalModelCatalogError.claimScopeMismatch
     }
+    guard profiles.first?.claimScope == environment.claimScope else {
+      throw LocalModelCatalogError.claimScopeMismatch
+    }
     guard Set(profiles.map(\.speakerCohort)).count == 1 else {
       throw LocalModelCatalogError.speakerCohortMismatch
     }
+    guard profiles.first?.speakerCohort == environment.speakerCohort else {
+      throw LocalModelCatalogError.speakerCohortMismatch
+    }
     guard Set(profiles.map(\.acousticCohort)).count == 1 else {
+      throw LocalModelCatalogError.acousticCohortMismatch
+    }
+    guard profiles.first?.acousticCohort == environment.acousticCohort else {
       throw LocalModelCatalogError.acousticCohortMismatch
     }
     guard Set(profiles.map(\.buildCapability)).count == 1 else {
@@ -404,6 +420,9 @@ enum LocalModelCatalog {
     }
     guard architectures == [.arm64], environment.architecture == .arm64 else {
       throw LocalModelCatalogError.incompatibleHardware
+    }
+    guard languages.allSatisfy(isSupportedEnglishLanguage) else {
+      throw LocalModelCatalogError.incompatibleLanguage
     }
     guard (raw.compatibility.minimumOSMajor...raw.compatibility.maximumOSMajor)
       .contains(environment.osMajor) else {
@@ -574,8 +593,6 @@ enum LocalModelCatalog {
           .deterministic, .signedDistributionCandidate, .general),
          (.deterministic, .notAdmitted,
           .deterministic, .signedDistributionCandidate, .ownerPrivate),
-         (.documented, .notAdmitted, .fleckManaged, .developmentQuality, .general),
-         (.documented, .notAdmitted, .fleckManaged, .developmentQuality, .ownerPrivate),
          (.identityVerified, .notAdmitted, .fleckManaged, .developmentQuality, .general),
          (.identityVerified, .notAdmitted, .fleckManaged, .developmentQuality, .ownerPrivate),
          (.labCompatible, .notAdmitted, .fleckManaged, .developmentQuality, .general),
@@ -588,12 +605,7 @@ enum LocalModelCatalog {
          (.twoDeviceAccepted, .twoDeviceAccepted,
           .fleckManaged, .signedDistributionCandidate, .general),
          (.twoDeviceAccepted, .twoDeviceAccepted,
-          .fleckManaged, .signedDistributionCandidate, .ownerPrivate),
-         (.signedDistributionAccepted, .signedDistributionAccepted,
-          .fleckManaged, .signedDistributionCandidate, .general),
-         (.signedDistributionAccepted, .signedDistributionAccepted,
-          .fleckManaged, .signedDistributionCandidate, .ownerPrivate),
-         (.releaseAdmitted, .releaseAdmitted, .fleckManaged, .ordinarySafe, .general):
+          .fleckManaged, .signedDistributionCandidate, .ownerPrivate):
       return true
     default:
       return false
@@ -620,6 +632,16 @@ enum LocalModelCatalog {
     return key.allSatisfy {
       $0.isASCII && ($0.isLowercase || $0.isNumber || ".-_".contains($0))
     }
+  }
+
+  private static func isSupportedEnglishLanguage(_ language: String) -> Bool {
+    language == "en"
+      || (language.hasPrefix("en-")
+        && language.count > 3
+        && !language.contains("--")
+        && language.dropFirst(3).allSatisfy {
+          $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-")
+        })
   }
 
   private static func canonicalDigest(
