@@ -690,6 +690,7 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
     #expect(frame.maxX <= host.bounds.maxX)
     #expect(frame.minY >= host.bounds.minY)
     #expect(frame.maxY <= host.bounds.maxY)
+    #expect(rendered.hitTest(NSPoint(x: rendered.bounds.midX, y: rendered.bounds.midY)) == nil)
   }
   controller.dismiss()
 }

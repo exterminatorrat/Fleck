@@ -742,16 +742,30 @@
     }
   }
 
+  private final class FleckRailFrameProbeView: NSView {
+    init(identifier: String) {
+      super.init(frame: .zero)
+      self.identifier = NSUserInterfaceItemIdentifier(identifier)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+      fatalError("init(coder:) has not been implemented")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+      nil
+    }
+  }
+
   private struct FleckRailFrameProbe: NSViewRepresentable {
     let identifier: String
 
-    func makeNSView(context: Context) -> NSView {
-      let view = NSView(frame: .zero)
-      view.identifier = NSUserInterfaceItemIdentifier(identifier)
-      return view
+    func makeNSView(context: Context) -> FleckRailFrameProbeView {
+      FleckRailFrameProbeView(identifier: identifier)
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: FleckRailFrameProbeView, context: Context) {}
   }
 
   enum DictationCapsuleTransition: Equatable {
