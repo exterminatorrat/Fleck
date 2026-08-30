@@ -359,7 +359,7 @@ enum LocalModelCatalog {
       artifact = nil
     }
 
-    if claimScope == .ownerPrivate && buildCapability != .developmentQuality {
+    if claimScope == .ownerPrivate && buildCapability == .ordinarySafe {
       throw LocalModelCatalogError.ownerPrivateEvidenceForbidden
     }
     guard evidenceMatchesState(
@@ -546,7 +546,18 @@ enum LocalModelCatalog {
   ) -> Bool {
     switch (evidence, admission, distribution, buildCapability, claimScope) {
     case (.platform, .notAdmitted, .system, .ordinarySafe, .general),
+         (.platform, .notAdmitted, .system, .developmentQuality, .general),
+         (.platform, .notAdmitted, .system, .developmentQuality, .ownerPrivate),
+         (.platform, .notAdmitted, .system, .signedDistributionCandidate, .general),
+         (.platform, .notAdmitted, .system, .signedDistributionCandidate, .ownerPrivate),
          (.deterministic, .notAdmitted, .deterministic, .ordinarySafe, .general),
+         (.deterministic, .notAdmitted, .deterministic, .developmentQuality, .general),
+         (.deterministic, .notAdmitted,
+          .deterministic, .developmentQuality, .ownerPrivate),
+         (.deterministic, .notAdmitted,
+          .deterministic, .signedDistributionCandidate, .general),
+         (.deterministic, .notAdmitted,
+          .deterministic, .signedDistributionCandidate, .ownerPrivate),
          (.documented, .notAdmitted, .fleckManaged, .developmentQuality, .general),
          (.documented, .notAdmitted, .fleckManaged, .developmentQuality, .ownerPrivate),
          (.identityVerified, .notAdmitted, .fleckManaged, .developmentQuality, .general),
@@ -558,8 +569,14 @@ enum LocalModelCatalog {
          (.twoDeviceAccepted, .twoDeviceAccepted, .fleckManaged, .developmentQuality, .general),
          (.twoDeviceAccepted, .twoDeviceAccepted,
           .fleckManaged, .developmentQuality, .ownerPrivate),
+         (.twoDeviceAccepted, .twoDeviceAccepted,
+          .fleckManaged, .signedDistributionCandidate, .general),
+         (.twoDeviceAccepted, .twoDeviceAccepted,
+          .fleckManaged, .signedDistributionCandidate, .ownerPrivate),
          (.signedDistributionAccepted, .signedDistributionAccepted,
           .fleckManaged, .signedDistributionCandidate, .general),
+         (.signedDistributionAccepted, .signedDistributionAccepted,
+          .fleckManaged, .signedDistributionCandidate, .ownerPrivate),
          (.releaseAdmitted, .releaseAdmitted, .fleckManaged, .ordinarySafe, .general):
       return true
     default:

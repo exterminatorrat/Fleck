@@ -384,7 +384,7 @@ private enum LocalCatalogFixtures {
     }
   }
 
-  @Test func catalogRejectsIncompatibleCompoundRoles() {
+  @Test func catalogRejectsIncompatibleCompoundRoles() throws {
     let duplicate = LocalCatalogFixtures.replacing(
       LocalCatalogFixtures.cleanup(),
       profileID: "other.cleanup",
@@ -433,6 +433,50 @@ private enum LocalCatalogFixtures {
       _ = try LocalModelCatalog.validate(
         LocalCatalogFixtures.configuration(profiles: ordinaryProfiles),
         for: LocalCatalogFixtures.environment()
+      )
+    }
+
+    let deterministicDevelopmentCleanup = LocalCatalogFixtures.profile(
+      family: "rules",
+      profileID: "fleck.deterministic.cleanup",
+      role: "cleanup",
+      distribution: "deterministic",
+      artifact: nil,
+      license: "fleckOwned",
+      evidence: "deterministic",
+      admission: "notAdmitted"
+    )
+    let development = try LocalModelCatalog.validate(
+      LocalCatalogFixtures.configuration(profiles: [
+        LocalCatalogFixtures.profile(), deterministicDevelopmentCleanup
+      ]),
+      for: LocalCatalogFixtures.environment()
+    )
+    #expect(development.profiles.map(\.role) == [.cleanup, .dictation])
+
+    let notAdmittedSigned = LocalCatalogFixtures.replacing(
+      LocalCatalogFixtures.profile(),
+      buildCapability: "signedDistributionCandidate"
+    )
+    #expect(throws: LocalModelCatalogError.evidenceAdmissionMismatch) {
+      _ = try LocalModelCatalog.validate(
+        LocalCatalogFixtures.configuration(profiles: [
+          notAdmittedSigned,
+          LocalCatalogFixtures.profile(
+            family: "rules",
+            profileID: "fleck.signed-fallback.cleanup",
+            role: "cleanup",
+            distribution: "deterministic",
+            artifact: nil,
+            license: "fleckOwned",
+            evidence: "deterministic",
+            admission: "notAdmitted",
+            buildCapability: "signedDistributionCandidate"
+          )
+        ]),
+        for: LocalCatalogFixtures.environment(
+          buildCapability: .signedDistributionCandidate
+        )
       )
     }
   }
@@ -494,7 +538,7 @@ private enum LocalCatalogFixtures {
     }
   }
 
-  @Test func catalogRejectsOwnerPrivateEvidenceInOrdinaryBuilds() {
+  @Test func catalogRejectsOwnerPrivateEvidenceInOrdinaryBuilds() throws {
     let privateProfile = LocalCatalogFixtures.replacing(
       LocalCatalogFixtures.profile(),
       evidence: "identityVerified",
@@ -508,6 +552,36 @@ private enum LocalCatalogFixtures {
         for: LocalCatalogFixtures.environment(buildCapability: .ordinarySafe)
       )
     }
+
+    let signedManaged = LocalCatalogFixtures.replacing(
+      LocalCatalogFixtures.profile(),
+      evidence: "twoDeviceAccepted",
+      admission: "twoDeviceAccepted",
+      claimScope: "ownerPrivate",
+      buildCapability: "signedDistributionCandidate"
+    )
+    let signedDeterministic = LocalCatalogFixtures.profile(
+      family: "rules",
+      profileID: "fleck.signed-fallback.cleanup",
+      role: "cleanup",
+      distribution: "deterministic",
+      artifact: nil,
+      license: "fleckOwned",
+      evidence: "deterministic",
+      admission: "notAdmitted",
+      claimScope: "ownerPrivate",
+      buildCapability: "signedDistributionCandidate"
+    )
+    let signed = try LocalModelCatalog.validate(
+      LocalCatalogFixtures.configuration(profiles: [signedManaged, signedDeterministic]),
+      for: LocalCatalogFixtures.environment(
+        buildCapability: .signedDistributionCandidate
+      )
+    )
+    #expect(signed.profiles.allSatisfy { $0.claimScope == .ownerPrivate })
+    #expect(signed.profiles.allSatisfy {
+      $0.buildCapability == .signedDistributionCandidate
+    })
   }
 
   @Test func configurationDigestIsCanonicalAcrossInputOrder() throws {
