@@ -64,6 +64,14 @@ final class DictationCoordinator {
     let savesHistory: Bool
   }
 
+  private struct PreviousPresentation {
+    let copyableTranscript: String?
+    let recoveryReceipt: DictationInsertionReceipt?
+    let recoveryAction: DictationRecoveryAction?
+    let pendingRoutingAmbiguity: PendingRoutingAmbiguity?
+    let routingAmbiguity: DictationRoutingAmbiguity?
+  }
+
   private struct Capture {
     let id: UUID
     let mode: DictationMode
@@ -95,6 +103,7 @@ final class DictationCoordinator {
     var focusedEditorRollbackSucceeded = false
     var focusedPersistenceCompensated = false
     var stopOrigin: DictationStopOrigin?
+    var previousPresentation: PreviousPresentation?
   }
 
   private let engineProvider: any SpeechEngineProviding
@@ -221,6 +230,7 @@ final class DictationCoordinator {
     let selectedEngine = preferredEngine()
     let contextGeneration = allocateCaptureContextGeneration()
     let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
+    let previousPresentation = previousPresentationSnapshot()
     guard reserveCapture(
       id: id,
       mode: focusedEditor == nil ? .smartCapture : .focused,
@@ -245,6 +255,7 @@ final class DictationCoordinator {
     if var active = capture, active.id == id {
       active.holdAccepted = false
       active.captureContextTask = contextTask
+      active.previousPresentation = previousPresentation
       capture = active
     }
     activeShortcutSessions.insert(id)
@@ -321,6 +332,9 @@ final class DictationCoordinator {
       if shortcutID == session.id {
         await cancelArmedShortcut(session.id)
       } else if capture?.id == session.id {
+        if let previousPresentation = takePreviousPresentation(session.id) {
+          restorePreviousPresentation(previousPresentation)
+        }
         await cancelActiveCapture(session.id)
       }
       return
@@ -337,6 +351,7 @@ final class DictationCoordinator {
     }
     guard capture?.id == session.id else { return }
     if let releasedAt = physicalGesture.releasedAt {
+      _ = takePreviousPresentation(session.id)
       recordMeasurement(.physicalRelease, at: releasedAt, captureID: session.id)
       await finish(stopOrigin: .physicalRelease(releasedAt))
     }
@@ -978,6 +993,32 @@ final class DictationCoordinator {
     recoveryAction = nil
     pendingRoutingAmbiguity = nil
     routingAmbiguity = nil
+  }
+
+  private func previousPresentationSnapshot() -> PreviousPresentation {
+    PreviousPresentation(
+      copyableTranscript: copyableTranscript,
+      recoveryReceipt: recoveryReceipt,
+      recoveryAction: recoveryAction,
+      pendingRoutingAmbiguity: pendingRoutingAmbiguity,
+      routingAmbiguity: routingAmbiguity
+    )
+  }
+
+  private func takePreviousPresentation(_ id: UUID) -> PreviousPresentation? {
+    guard var active = capture, active.id == id else { return nil }
+    let previousPresentation = active.previousPresentation
+    active.previousPresentation = nil
+    capture = active
+    return previousPresentation
+  }
+
+  private func restorePreviousPresentation(_ previousPresentation: PreviousPresentation) {
+    copyableTranscript = previousPresentation.copyableTranscript
+    recoveryReceipt = previousPresentation.recoveryReceipt
+    recoveryAction = previousPresentation.recoveryAction
+    pendingRoutingAmbiguity = previousPresentation.pendingRoutingAmbiguity
+    routingAmbiguity = previousPresentation.routingAmbiguity
   }
 
   private func allocateCaptureContextGeneration() -> UInt64 {

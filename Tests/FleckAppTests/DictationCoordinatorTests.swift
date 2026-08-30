@@ -280,6 +280,50 @@ func captureFirstShortReleasePreservesPriorRecoveryAndChooser() async throws {
 }
 
 @Test @MainActor
+func captureFirstShortReleaseRestoresPriorPresentationAfterThresholdWins() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "Keep prior presentation"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  let priorAmbiguity = try #require(fixture.coordinator.routingAmbiguity)
+  var recoverySeenAtTerminal: DictationRecoveryAction?
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil {
+      recoverySeenAtTerminal = fixture.coordinator.recoveryAction
+    }
+  }
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+  #expect(fixture.coordinator.routingAmbiguity == priorAmbiguity)
+  #expect(recoverySeenAtTerminal == .undo)
+}
+
+@Test @MainActor
 func captureFirstEscapeDuringArmingPreservesPriorRecovery() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
