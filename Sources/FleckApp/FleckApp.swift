@@ -118,26 +118,26 @@
 
     var body: some Scene {
       MenuBarExtra {
-        DictationSettingsEnvironmentBridge(runtime: dictationRuntime) {
-          FleckMenuBarRoot(
-            onboarding: onboarding,
-            dictationRuntime: dictationRuntime
-          )
-            .environmentObject(appState)
-            .preferredColorScheme(colorScheme)
-        }
+        FleckMenuBarRoot(
+          onboarding: onboarding,
+          dictationRuntime: dictationRuntime
+        )
+          .environmentObject(appState)
+          .preferredColorScheme(colorScheme)
       }
       label: {
-        Group {
-          switch FleckMark.load(template: true) {
-          case .image(let mark):
-            Image(nsImage: mark)
-          case .missingPackagedResource:
-            Text("!")
-              .accessibilityLabel("Fleck mark missing")
+        DictationSettingsEnvironmentBridge(runtime: dictationRuntime) {
+          Group {
+            switch FleckMark.load(template: true) {
+            case .image(let mark):
+              Image(nsImage: mark)
+            case .missingPackagedResource:
+              Text("!")
+                .accessibilityLabel("Fleck mark missing")
+            }
           }
+          .accessibilityLabel("Fleck")
         }
-        .accessibilityLabel("Fleck")
       }
       .menuBarExtraStyle(.window)
 

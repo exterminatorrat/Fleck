@@ -1134,10 +1134,22 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   eventHost.mouseDown(with: down)
   eventHost.mouseDragged(with: smallDrag)
   #expect(!controller.presentationModel.showsDockIndicators)
+  #expect(renderedView(with: "fleck-dock-indicators", in: host) == nil)
   eventHost.mouseDragged(with: thresholdDrag)
   #expect(controller.presentationModel.showsDockIndicators)
+  host.layoutSubtreeIfNeeded()
+  guard let indicators = renderedView(with: "fleck-dock-indicators", in: host) else {
+    Issue.record("Expected rendered dock indicators after the drag threshold")
+    controller.dismiss()
+    return
+  }
+  #expect(indicators.bounds.width > 0)
+  #expect(indicators.bounds.height > 0)
+  #expect(indicators.hitTest(NSPoint(x: indicators.bounds.midX, y: indicators.bounds.midY)) == nil)
   eventHost.mouseUp(with: up)
   #expect(!controller.presentationModel.showsDockIndicators)
+  host.layoutSubtreeIfNeeded()
+  #expect(renderedView(with: "fleck-dock-indicators", in: host) == nil)
   controller.dismiss()
 }
 
@@ -1152,6 +1164,259 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   #expect(host.hitTest(NSPoint(x: host.bounds.midX, y: host.bounds.midY)) != nil)
   #expect(host.hitTest(NSPoint(x: host.bounds.minX, y: host.bounds.minY)) == nil)
   #expect(host.hitTest(NSPoint(x: host.bounds.maxX + 1, y: host.bounds.midY)) == nil)
+  controller.dismiss()
+}
+
+@Test @MainActor func DictationAccessibilityHostedButtonsConsumeTheirExactRegions() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  var primaryClicks = 0
+  var stopActions = 0
+  var cancelActions = 0
+  var dismissActions = 0
+  var recoveryActions = 0
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  controller.configureInteraction(
+    onPrimaryClick: { primaryClicks += 1 },
+    onStop: { stopActions += 1 },
+    onCancel: { cancelActions += 1 },
+    onOpenFleck: {},
+    onOpenHistory: {},
+    onOpenSettings: {},
+    onDismiss: { dismissActions += 1 },
+    onRecovery: { recoveryActions += 1 }
+  )
+
+  let listening = DictationCapsuleContext(
+    status: .listening,
+    sessionID: UUID(),
+    trigger: .pointer,
+    mode: .smartCapture,
+    isHandsFree: true,
+    pipelineStage: .capture
+  )
+  controller.render(listening)
+  guard let host = panel.contentView else {
+    Issue.record("Expected the persistent listening host")
+    return
+  }
+  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.listeningSize)
+  host.layoutSubtreeIfNeeded()
+  guard let eventHost = host.subviews.first else {
+    Issue.record("Expected the event host")
+    return
+  }
+
+  func click(identifier: String, eventNumber: Int) {
+    guard let probe = renderedView(with: identifier, in: host) else {
+      Issue.record("Expected rendered action probe \(identifier)")
+      return
+    }
+    let frame = probe.convert(probe.bounds, to: eventHost)
+    let point = NSPoint(x: frame.midX, y: frame.midY)
+    #expect(probe.hitTest(NSPoint(x: probe.bounds.midX, y: probe.bounds.midY)) == nil)
+    let down = NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: point,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: panel.windowNumber,
+      context: nil,
+      eventNumber: eventNumber,
+      clickCount: 1,
+      pressure: 0
+    )!
+    let up = NSEvent.mouseEvent(
+      with: .leftMouseUp,
+      location: point,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: panel.windowNumber,
+      context: nil,
+      eventNumber: eventNumber + 1,
+      clickCount: 1,
+      pressure: 0
+    )!
+    eventHost.mouseDown(with: down)
+    eventHost.mouseUp(with: up)
+  }
+
+  click(identifier: "fleck-rail-stop", eventNumber: 98)
+  #expect(primaryClicks == 1)
+  #expect(stopActions == 0)
+  primaryClicks = 0
+  controller.presentationModel.setListeningHover(true)
+  host.layoutSubtreeIfNeeded()
+  click(identifier: "fleck-rail-stop", eventNumber: 100)
+  #expect(stopActions == 1)
+  #expect(cancelActions == 0)
+  #expect(primaryClicks == 0)
+
+  controller.render(listening)
+  controller.presentationModel.setListeningHover(true)
+  host.layoutSubtreeIfNeeded()
+  click(identifier: "fleck-rail-cancel", eventNumber: 102)
+  #expect(stopActions == 1)
+  #expect(cancelActions == 1)
+  #expect(primaryClicks == 0)
+
+  controller.render(.saved(destination: "Inbox"), action: .undo) {
+    recoveryActions += 1
+  }
+  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.savedSize)
+  host.layoutSubtreeIfNeeded()
+  click(identifier: "fleck-rail-recovery", eventNumber: 104)
+  #expect(recoveryActions == 1)
+  #expect(dismissActions == 0)
+  #expect(primaryClicks == 0)
+  controller.dismiss()
+}
+
+@Test @MainActor func DictationAccessibilityActionsAreConditionalByContext() {
+  let idle = DictationCapsuleContext(
+    status: .idle
+  )
+  let handsFreeListening = DictationCapsuleContext(
+    status: .listening,
+    mode: .smartCapture,
+    isHandsFree: true
+  )
+  let holdListening = DictationCapsuleContext(
+    status: .listening,
+    trigger: .hold,
+    mode: .smartCapture,
+    isHandsFree: false
+  )
+  let processing = DictationCapsuleContext(
+    status: .cleaning,
+    mode: .smartCapture
+  )
+  let repairing = DictationCapsuleContext(
+    status: .repairingModel,
+    mode: .smartCapture
+  )
+  let saved = DictationCapsuleContext(
+    status: .saved(destination: "Inbox"),
+    mode: .smartCapture
+  )
+  let noSpeech = DictationCapsuleContext(status: .noSpeech)
+  let failed = DictationCapsuleContext(status: .failed("save failed"))
+
+  #expect(FleckRailAccessibility.actions(for: idle).isEmpty)
+  #expect(FleckRailAccessibility.actions(for: handsFreeListening) == [.stop, .cancel])
+  #expect(FleckRailAccessibility.actions(for: holdListening).isEmpty)
+  #expect(FleckRailAccessibility.actions(for: processing).isEmpty)
+  #expect(FleckRailAccessibility.actions(for: repairing).isEmpty)
+  #expect(FleckRailAccessibility.actions(for: saved) == [.dismiss])
+  #expect(FleckRailAccessibility.actions(for: noSpeech) == [.dismiss])
+  #expect(FleckRailAccessibility.actions(for: failed) == [.dismiss])
+}
+
+@Test @MainActor func DictationAccessibilityDragRightClickRestoresDockedFrame() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  var primaryClicks = 0
+  var stopActions = 0
+  var cancelActions = 0
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  controller.configureInteraction(
+    onPrimaryClick: { primaryClicks += 1 },
+    onStop: { stopActions += 1 },
+    onCancel: { cancelActions += 1 },
+    onOpenFleck: {},
+    onOpenHistory: {},
+    onOpenSettings: {},
+    onDismiss: {},
+    onRecovery: {}
+  )
+
+  guard let host = panel.contentView, let eventHost = host.subviews.first else {
+    Issue.record("Expected the persistent event host")
+    return
+  }
+  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.idleSize)
+  host.layoutSubtreeIfNeeded()
+  let originalFrame = panel.frame
+  let start = NSPoint(x: host.bounds.midX, y: host.bounds.midY)
+  let down = NSEvent.mouseEvent(
+    with: .leftMouseDown,
+    location: start,
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: panel.windowNumber,
+    context: nil,
+    eventNumber: 200,
+    clickCount: 1,
+    pressure: 0
+  )!
+  let thresholdDrag = NSEvent.mouseEvent(
+    with: .leftMouseDragged,
+    location: NSPoint(x: start.x + 4, y: start.y),
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: panel.windowNumber,
+    context: nil,
+    eventNumber: 201,
+    clickCount: 1,
+    pressure: 0
+  )!
+  let drag = NSEvent.mouseEvent(
+    with: .leftMouseDragged,
+    location: NSPoint(x: start.x + 12, y: start.y),
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: panel.windowNumber,
+    context: nil,
+    eventNumber: 202,
+    clickCount: 1,
+    pressure: 0
+  )!
+  let rightDown = NSEvent.mouseEvent(
+    with: .rightMouseDown,
+    location: NSPoint(x: start.x + 12, y: start.y),
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: panel.windowNumber,
+    context: nil,
+    eventNumber: 203,
+    clickCount: 1,
+    pressure: 0
+  )!
+
+  eventHost.mouseDown(with: down)
+  eventHost.mouseDragged(with: thresholdDrag)
+  eventHost.mouseDragged(with: drag)
+  #expect(controller.presentationModel.showsDockIndicators)
+  #expect(panel.frame != originalFrame)
+  let menu = eventHost.menu
+  let parentMenu = host.menu
+  eventHost.menu = nil
+  host.menu = nil
+  eventHost.rightMouseDown(with: rightDown)
+  eventHost.menu = menu
+  host.menu = parentMenu
+
+  let lateUp = NSEvent.mouseEvent(
+    with: .leftMouseUp,
+    location: NSPoint(x: start.x + 12, y: start.y),
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: panel.windowNumber,
+    context: nil,
+    eventNumber: 204,
+    clickCount: 1,
+    pressure: 0
+  )!
+  eventHost.mouseUp(with: lateUp)
+
+  #expect(panel.frame == originalFrame)
+  #expect(controller.currentDock == .bottom)
+  #expect(!controller.presentationModel.showsDockIndicators)
+  host.layoutSubtreeIfNeeded()
+  #expect(renderedView(with: "fleck-dock-indicators", in: host) == nil)
+  #expect(primaryClicks == 0)
+  #expect(stopActions == 0)
+  #expect(cancelActions == 0)
   controller.dismiss()
 }
 

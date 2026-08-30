@@ -515,9 +515,31 @@
   }
 
   enum FleckRailAccessibility {
+    enum Action: Equatable {
+      case stop
+      case cancel
+      case dismiss
+    }
+
     static func usesIncreasedContrast(_ contrast: ColorSchemeContrast) -> Bool {
       contrast == .increased
     }
+
+    static func actions(for context: DictationCapsuleContext) -> [Action] {
+      if context.status == .listening, context.isHandsFree {
+        return [.stop, .cancel]
+      }
+      if context.status.isTerminalResult {
+        return [.dismiss]
+      }
+      return []
+    }
+  }
+
+  private enum FleckRailInteractionRegion: String, Equatable {
+    case stop = "fleck-rail-stop"
+    case cancel = "fleck-rail-cancel"
+    case recovery = "fleck-rail-recovery"
   }
 
   enum FleckRailContentElement: Equatable {
@@ -830,6 +852,16 @@
 
     func makeNSView(context: Context) -> FleckRailFrameProbeView {
       FleckRailFrameProbeView(identifier: identifier)
+    }
+
+    func updateNSView(_ nsView: FleckRailFrameProbeView, context: Context) {}
+  }
+
+  private struct FleckRailInteractionProbe: NSViewRepresentable {
+    let region: FleckRailInteractionRegion
+
+    func makeNSView(context: Context) -> FleckRailFrameProbeView {
+      FleckRailFrameProbeView(identifier: region.rawValue)
     }
 
     func updateNSView(_ nsView: FleckRailFrameProbeView, context: Context) {}
@@ -1174,10 +1206,15 @@
 
     private func dragEnded(at point: CGPoint, cancelled: Bool) {
       guard dragOrigin != nil else { return }
+      let originalFrameOrigin = dragFrameOrigin
       defer {
         dragOrigin = nil
         dragFrameOrigin = nil
         presentationModel.setDragActive(false)
+      }
+      if cancelled, let originalFrameOrigin {
+        panel.setFrameOrigin(originalFrameOrigin)
+        return
       }
       guard !cancelled, currentContext.status == .idle,
         let screen = screen(containing: point) ?? resolvedScreen()
@@ -1426,6 +1463,38 @@
     }
 
     var body: some View {
+      accessibilityContent
+        .onHover { isHovering in
+          model.setListeningHover(
+            isHovering
+              && model.context.status == .listening
+              && model.context.isHandsFree
+          )
+        }
+    }
+
+    @ViewBuilder
+    private var accessibilityContent: some View {
+      let actions = FleckRailAccessibility.actions(for: model.context)
+      if actions.contains(.stop) {
+        shellContent
+          .accessibilityAction(named: "Stop") {
+            model.stopHandler()
+          }
+          .accessibilityAction(named: "Cancel") {
+            model.cancelHandler()
+          }
+      } else if actions.contains(.dismiss) {
+        shellContent
+          .accessibilityAction(named: "Dismiss") {
+            model.dismissHandler()
+          }
+      } else {
+        shellContent
+      }
+    }
+
+    private var shellContent: some View {
       railContent
         .foregroundStyle(model.colors.primaryTextColor)
         .padding(.horizontal, 8)
@@ -1453,6 +1522,11 @@
               .padding(.horizontal, 10)
           }
         }
+        .overlay {
+          if model.showsDockIndicators {
+            FleckRailDockIndicators(colors: model.colors)
+          }
+        }
         .clipShape(
           RoundedRectangle(
             cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
@@ -1462,25 +1536,33 @@
         .accessibilityElement(children: model.action == nil ? .ignore : .contain)
         .accessibilityLabel(presentation.voiceOverText)
         .accessibilityAddTraits(.isStaticText)
-        .accessibilityAction(named: "Stop") {
-          guard model.context.status == .listening, model.context.isHandsFree else { return }
-          model.stopHandler()
+    }
+
+    private struct FleckRailDockIndicators: View {
+      let colors: FleckRailColors
+
+      var body: some View {
+        ZStack {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(colors.coreColor.opacity(0.48), lineWidth: 1)
+            .padding(2)
+          Capsule()
+            .fill(colors.coreColor)
+            .frame(width: 8, height: 2)
+            .offset(y: 9)
+          Capsule()
+            .fill(colors.coreColor)
+            .frame(width: 2, height: 8)
+            .offset(x: -20)
+          Capsule()
+            .fill(colors.coreColor)
+            .frame(width: 2, height: 8)
+            .offset(x: 20)
         }
-        .accessibilityAction(named: "Cancel") {
-          guard model.context.status == .listening, model.context.isHandsFree else { return }
-          model.cancelHandler()
-        }
-        .accessibilityAction(named: "Dismiss") {
-          guard model.context.status.isTerminalResult else { return }
-          model.dismissHandler()
-        }
-        .onHover { isHovering in
-          model.setListeningHover(
-            isHovering
-              && model.context.status == .listening
-              && model.context.isHandsFree
-          )
-        }
+        .background(FleckRailFrameProbe(identifier: "fleck-dock-indicators"))
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+      }
     }
 
     private var railContent: some View {
@@ -1558,9 +1640,11 @@
           Button("Stop", action: model.stopHandler)
             .buttonStyle(.borderless)
             .frame(width: 28, height: 28)
+            .background(FleckRailInteractionProbe(region: .stop))
           Button("Cancel", action: model.cancelHandler)
             .buttonStyle(.borderless)
             .frame(width: 28, height: 28)
+            .background(FleckRailInteractionProbe(region: .cancel))
         }
         .opacity(model.isListeningHover && model.context.isHandsFree ? 1 : 0)
         .allowsHitTesting(model.isListeningHover && model.context.isHandsFree)
@@ -1697,6 +1781,7 @@
             alignment: .center
           )
           .fixedSize(horizontal: false, vertical: true)
+          .background(FleckRailInteractionProbe(region: .recovery))
           .accessibilityLabel(action.accessibilityLabel)
       }
     }
@@ -1762,6 +1847,7 @@
       self.onDockSelected = onDockSelected
       self.hostingView = DictationCapsuleEventHostingView(
         rootView: DictationCapsuleView(model: model, waveformModel: waveformModel),
+        model: model,
         inputRouter: inputRouter
       )
       super.init(frame: .zero)
@@ -1860,19 +1946,25 @@
 
   @MainActor
   private final class DictationCapsuleEventHostingView: NSHostingView<DictationCapsuleView> {
+    private let model: DictationCapsulePresentationModel
     private let inputRouter: DictationCapsuleInputRouter
     private var gesture = FleckRailPointerGesture()
     private var consumedGesture = false
+    private var consumedRegion: FleckRailInteractionRegion?
+    private weak var consumedTarget: NSView?
 
     init(
       rootView: DictationCapsuleView,
+      model: DictationCapsulePresentationModel,
       inputRouter: DictationCapsuleInputRouter
     ) {
+      self.model = model
       self.inputRouter = inputRouter
       super.init(rootView: rootView)
     }
 
     required init(rootView: DictationCapsuleView) {
+      self.model = rootView.model
       self.inputRouter = DictationCapsuleInputRouter()
       super.init(rootView: rootView)
     }
@@ -1884,19 +1976,17 @@
 
     override func mouseDown(with event: NSEvent) {
       let point = convert(event.locationInWindow, from: nil)
-      let consumed = isActionRegion(at: point)
-      consumedGesture = consumed
-      gesture.mouseDown(at: point, consumed: consumed)
-      if consumed {
-        super.mouseDown(with: event)
-      }
+      let region = actionRegion(at: point)
+      consumedRegion = region
+      consumedGesture = region != nil
+      consumedTarget = region == nil ? nil : actionTarget(at: point)
+      gesture.mouseDown(at: point, consumed: consumedGesture)
     }
 
     override func mouseDragged(with event: NSEvent) {
       let point = convert(event.locationInWindow, from: nil)
       gesture.mouseDragged(to: point)
       if consumedGesture {
-        super.mouseDragged(with: event)
         return
       }
       guard gesture.isDragging else { return }
@@ -1909,14 +1999,18 @@
       let point = convert(event.locationInWindow, from: nil)
       let wasDragging = gesture.isDragging
       let wasConsumed = consumedGesture
+      let region = consumedRegion
       consumedGesture = false
+      consumedRegion = nil
+      let target = consumedTarget
+      consumedTarget = nil
       let result = gesture.mouseUp(at: point)
       let screenPoint = window?.convertPoint(toScreen: event.locationInWindow)
         ?? NSEvent.mouseLocation
       switch result {
       case .none:
-        if wasConsumed {
-          super.mouseUp(with: event)
+        if wasConsumed, let region, actionRegion(at: point) == region {
+          forwardAction(to: target)
         }
         inputRouter.onDragEnded(screenPoint, true)
       case .primaryClick:
@@ -1941,21 +2035,70 @@
     func cancelPointerGesture() {
       let wasDragging = gesture.isDragging
       consumedGesture = false
+      consumedRegion = nil
+      consumedTarget = nil
       gesture.cancel()
       if wasDragging {
         inputRouter.onDragEnded(NSEvent.mouseLocation, true)
       }
     }
 
-    private func isActionRegion(at point: NSPoint) -> Bool {
-      var view = super.hitTest(point)
-      while let candidate = view {
-        if candidate is NSButton {
-          return true
+    private func actionRegion(at point: NSPoint) -> FleckRailInteractionRegion? {
+      let actions = FleckRailAccessibility.actions(for: model.context)
+      let regions: [FleckRailInteractionRegion] = {
+        var regions: [FleckRailInteractionRegion] = []
+        if actions.contains(.stop), model.isListeningHover {
+          regions += [.stop, .cancel]
         }
-        view = candidate.superview
+        if model.action != nil, model.context.status.isTerminalResult {
+          regions.append(.recovery)
+        }
+        return regions
+      }()
+      for region in regions {
+        guard let probe = descendant(with: region.rawValue) else { continue }
+        let frame = probe.convert(probe.bounds, to: self)
+        if frame.contains(point) {
+          return region
+        }
       }
-      return false
+      return nil
+    }
+
+    private func actionTarget(at point: NSPoint) -> NSView? {
+      var candidate = super.hitTest(point)
+      let performClick = #selector(NSButton.performClick(_:))
+      while let view = candidate {
+        if view.responds(to: performClick) {
+          return view
+        }
+        if view === self { break }
+        candidate = view.superview
+      }
+      return nil
+    }
+
+    private func forwardAction(to target: NSView?) {
+      let performClick = #selector(NSButton.performClick(_:))
+      guard let target, target.responds(to: performClick) else { return }
+      // SwiftUI's AppKit button owns this selector but its mouse tracking loop
+      // cannot be re-entered from the persistent rail host.
+      _ = target.perform(performClick, with: nil)
+    }
+
+  }
+
+  private extension NSView {
+    func descendant(with identifier: String) -> NSView? {
+      for subview in subviews {
+        if subview.identifier?.rawValue == identifier {
+          return subview
+        }
+        if let descendant = subview.descendant(with: identifier) {
+          return descendant
+        }
+      }
+      return nil
     }
   }
 #endif

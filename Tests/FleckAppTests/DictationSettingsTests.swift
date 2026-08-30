@@ -121,18 +121,33 @@ import Testing
 
 @Test @MainActor func DictationSettingsPendingRouteIsDurableAndConsumedOnce() async throws {
   let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
-  var openSettingsCalls = 0
   fixture.runtime.requestSettings(.dictation)
   #expect(fixture.runtime.pendingSettingsSection == .dictation)
-  fixture.runtime.installOpenSettingsBridge {
-    openSettingsCalls += 1
-  }
-  #expect(openSettingsCalls == 1)
   #expect(fixture.runtime.consumePendingSettingsSection() == .dictation)
   #expect(fixture.runtime.consumePendingSettingsSection() == nil)
+}
 
-  fixture.runtime.requestSettings(.dictation)
-  #expect(openSettingsCalls == 2)
+@Test func DictationSettingsBridgeIsMountedOnResidentMenuBarLabel() throws {
+  let sourceRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: sourceRoot.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
+    encoding: .utf8
+  )
+  guard
+    let menuBarStart = source.range(of: "MenuBarExtra {"),
+    let labelStart = source.range(of: "label: {", range: menuBarStart.upperBound..<source.endIndex),
+    let menuBarStyle = source.range(of: ".menuBarExtraStyle", range: labelStart.upperBound..<source.endIndex)
+  else {
+    Issue.record("Expected the Fleck MenuBarExtra label")
+    return
+  }
+  let menuBarContent = source[menuBarStart.upperBound..<labelStart.lowerBound]
+  let labelContent = source[labelStart.lowerBound..<menuBarStyle.lowerBound]
+  #expect(!menuBarContent.contains("DictationSettingsEnvironmentBridge"))
+  #expect(labelContent.contains("DictationSettingsEnvironmentBridge"))
 }
 
 @Test @MainActor func DictationRuntimeUpdatesRailAccentWithoutRewritingPreference() async throws {
