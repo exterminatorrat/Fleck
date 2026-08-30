@@ -39,6 +39,7 @@ struct DictationRecognitionContext: Equatable, Sendable {
 
 enum LocalWritingCaptureContextError: Error, Equatable, Sendable {
   case dictionaryRevisionMismatch
+  case dictionaryContentMismatch
   case localeMismatch
 }
 
@@ -70,12 +71,36 @@ struct LocalWritingCaptureContext: Equatable, Sendable {
     guard localeIdentifier == compiledDictionary.localeIdentifier else {
       throw LocalWritingCaptureContextError.localeMismatch
     }
+    guard (try? CompiledPersonalDictionary.compile(snapshot)) == compiledDictionary else {
+      throw LocalWritingCaptureContextError.dictionaryContentMismatch
+    }
     self.captureID = captureID
     self.generation = generation
     self.localeIdentifier = localeIdentifier
     self.speechEngine = speechEngine
     self.snapshot = snapshot
     self.compiledDictionary = compiledDictionary
+  }
+
+  init(
+    captureID: UUID,
+    generation: UInt64,
+    localeIdentifier: String,
+    speechEngine: DictationSpeechEngine,
+    publishedSnapshot: PersonalDictionaryPublishedSnapshot
+  ) throws {
+    guard publishedSnapshot.snapshot.revision == publishedSnapshot.compiled.revision else {
+      throw LocalWritingCaptureContextError.dictionaryRevisionMismatch
+    }
+    guard localeIdentifier == publishedSnapshot.compiled.localeIdentifier else {
+      throw LocalWritingCaptureContextError.localeMismatch
+    }
+    self.captureID = captureID
+    self.generation = generation
+    self.localeIdentifier = localeIdentifier
+    self.speechEngine = speechEngine
+    snapshot = publishedSnapshot.snapshot
+    compiledDictionary = publishedSnapshot.compiled
   }
 }
 

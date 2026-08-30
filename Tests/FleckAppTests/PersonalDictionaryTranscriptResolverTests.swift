@@ -81,6 +81,30 @@ func resolverDictionaryContextRejectsIdentityMismatches() throws {
 }
 
 @Test
+func resolverDictionaryContextRejectsSameRevisionContentDrift() throws {
+  let revision: UInt64 = 9
+  let snapshot = PersonalDictionarySnapshotV2(
+    revision: revision,
+    entries: [PersonalDictionaryEntry(preferredForm: "FleckApp", aliases: ["fleck app"])]
+  )
+  let differentSnapshot = PersonalDictionarySnapshotV2(
+    revision: revision,
+    entries: [PersonalDictionaryEntry(preferredForm: "Fleck", aliases: ["fleck app"])]
+  )
+
+  #expect(throws: LocalWritingCaptureContextError.dictionaryContentMismatch) {
+    try LocalWritingCaptureContext(
+      captureID: UUID(),
+      generation: 1,
+      localeIdentifier: "en-US",
+      speechEngine: .standard,
+      snapshot: snapshot,
+      compiledDictionary: CompiledPersonalDictionary.compile(differentSnapshot)
+    )
+  }
+}
+
+@Test
 func resolverPreservesTheRawBaselineWithNoEntries() async throws {
   let resolver = PersonalDictionaryTranscriptResolver(entries: { [] })
 

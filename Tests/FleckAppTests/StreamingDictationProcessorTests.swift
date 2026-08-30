@@ -1342,6 +1342,31 @@ func processorRejectedDictionaryRecognitionConsumesNoAudio() async throws {
 }
 
 @Test @MainActor
+func processorThrowingDictionaryAcknowledgementReleasesSourceWithoutAudio() async throws {
+  let context = try processorDictionaryContext()
+  let source = StreamingSpeechSourceProbe()
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    recognitionContextAcknowledgement: { _ in throw StreamingSpeechSourceProbeError.failed },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "unused"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+
+  await #expect(throws: StreamingSpeechSourceProbeError.failed) {
+    _ = try await processor.begin(
+      configuration: processorDictionaryConfiguration(context),
+      level: { _ in }
+    )
+  }
+  #expect(source.startCount == 0)
+  #expect(source.releaseHookCount == 1)
+}
+
+@Test @MainActor
 func processorMismatchedDictionaryAcknowledgementConsumesNoAudio() async throws {
   let context = try processorDictionaryContext(captureID: UUID())
   let mismatches = try [

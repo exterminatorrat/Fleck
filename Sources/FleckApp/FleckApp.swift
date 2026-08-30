@@ -632,8 +632,7 @@
             generation: generation,
             localeIdentifier: published.compiled.localeIdentifier,
             speechEngine: engine,
-            snapshot: published.snapshot,
-            compiledDictionary: published.compiled
+            publishedSnapshot: published
           )
         }
       )

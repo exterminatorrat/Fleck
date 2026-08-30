@@ -156,15 +156,18 @@ final class StreamingDictationProcessor: DictationProcessing {
     let source = try await makeSource(configuration)
     let acknowledgement: DictationRecognitionContextAcknowledgement?
     if let context = configuration.captureContext {
-      acknowledgement = try await recognitionContextAcknowledgement?(configuration)
-        ?? .unsupported(context)
-      guard acknowledgement?.context == context else {
+      do {
+        acknowledgement = try await recognitionContextAcknowledgement?(configuration)
+          ?? .unsupported(context)
+        guard acknowledgement?.context == context else {
+          throw StreamingDictationProcessorError.recognitionContextMismatch
+        }
+        if case .rejected? = acknowledgement {
+          throw StreamingDictationProcessorError.recognitionContextRejected
+        }
+      } catch {
         await source.releaseResources()
-        throw StreamingDictationProcessorError.recognitionContextMismatch
-      }
-      if case .rejected? = acknowledgement {
-        await source.releaseResources()
-        throw StreamingDictationProcessorError.recognitionContextRejected
+        throw error
       }
     } else {
       acknowledgement = nil
