@@ -111,12 +111,45 @@ import FleckCore
     .routingDecision,
     at: start.advanced(by: .milliseconds(1))
   )
+  let physical = DictationRuntimeMeasurements.empty
+    .recording(.physicalPress, at: start)
+    .recording(.physicalRelease, at: start.advanced(by: .milliseconds(10)))
+  let processor = DictationRuntimeMeasurements(
+    processorStartedAt: start.advanced(by: .milliseconds(1)),
+    sourceStartRequestedAt: start.advanced(by: .milliseconds(2)),
+    firstMeaningfulPartialAt: start.advanced(by: .milliseconds(3)),
+    stopRequestedAt: start.advanced(by: .milliseconds(10))
+  )
+  let overlaid = physical.overlaying(processor)
+  let backwards = physical.overlaying(DictationRuntimeMeasurements(
+    processorStartedAt: start.advanced(by: .milliseconds(4)),
+    sourceStartRequestedAt: start.advanced(by: .milliseconds(3))
+  ))
+  let firstWrite = overlaid.overlaying(DictationRuntimeMeasurements(
+    processorStartedAt: start.advanced(by: .milliseconds(2))
+  ))
+  let terminalOverlay = physical.terminal().overlaying(processor)
+  let propagated = physical.overlaying(DictationRuntimeMeasurements(
+    integrity: .nonMonotonicClock,
+    processorStartedAt: start.advanced(by: .milliseconds(1))
+  ))
 
   #expect(backward.integrity == .nonMonotonicClock)
   #expect(backward.routingDecisionAt == nil)
   #expect(equal.routingDecisionAt == start)
   #expect(repeated == equal)
   #expect(late == terminal)
+  #expect(overlaid.integrity == .valid)
+  #expect(overlaid.processorStartedAt == start.advanced(by: .milliseconds(1)))
+  #expect(overlaid.physicalReleaseAt == start.advanced(by: .milliseconds(10)))
+  #expect(overlaid.stopRequestedAt == start.advanced(by: .milliseconds(10)))
+  #expect(backwards.integrity == .nonMonotonicClock)
+  #expect(backwards.processorStartedAt == start.advanced(by: .milliseconds(4)))
+  #expect(backwards.sourceStartRequestedAt == nil)
+  #expect(firstWrite == overlaid)
+  #expect(terminalOverlay == physical.terminal())
+  #expect(propagated.integrity == .nonMonotonicClock)
+  #expect(propagated.processorStartedAt == start.advanced(by: .milliseconds(1)))
 }
 
 @Test func recognitionContextFiltersDeduplicatesAndBoundsTerms() {

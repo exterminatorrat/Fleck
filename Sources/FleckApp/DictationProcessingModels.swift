@@ -214,14 +214,30 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
   func overlaying(_ measurements: Self) -> Self {
     guard integrity == .valid, !isTerminal else { return self }
     var result = self
-    for stage in Stage.allCases {
-      if result.value(for: stage) == nil,
-        let instant = measurements.value(for: stage)
-      {
-        result.assign(instant, to: stage)
+    var previous: ContinuousClock.Instant?
+    var hasViolation = measurements.integrity == .nonMonotonicClock
+    for (index, stage) in Stage.allCases.enumerated() {
+      if let existing = value(for: stage) {
+        if let previous, existing < previous {
+          hasViolation = true
+        }
+        previous = max(previous ?? existing, existing)
+        continue
       }
+      guard let incoming = measurements.value(for: stage) else { continue }
+      let nextExisting = Stage.allCases.dropFirst(index + 1)
+        .compactMap { value(for: $0) }
+        .first
+      if previous.map({ incoming < $0 }) == true
+        || nextExisting.map({ incoming > $0 }) == true
+      {
+        hasViolation = true
+        continue
+      }
+      result.assign(incoming, to: stage)
+      previous = incoming
     }
-    if measurements.integrity == .nonMonotonicClock {
+    if hasViolation {
       result.integrity = .nonMonotonicClock
     }
     return result
