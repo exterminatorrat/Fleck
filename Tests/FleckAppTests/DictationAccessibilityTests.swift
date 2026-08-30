@@ -62,6 +62,11 @@ private func renderedActionButton(in host: NSView) -> NSView? {
   return descendants(of: host).first { $0.responds(to: performClick) }
 }
 
+@MainActor
+private func renderedView(with identifier: String, in host: NSView) -> NSView? {
+  descendants(of: host).first { $0.identifier?.rawValue == identifier }
+}
+
 @Test @MainActor func DictationAccessibilityUsesApprovedStatusTiersAndCopy() {
   let expected: [(DictationCapsuleStatus, CGSize, String?)] = [
     (.idle, CGSize(width: 46, height: 24), nil),
@@ -644,6 +649,48 @@ private func renderedActionButton(in host: NSView) -> NSView? {
     status: .saved(destination: String(repeating: "Long destination ", count: 20)),
     action: .undo
   )
+  controller.dismiss()
+}
+
+@Test @MainActor func DictationAccessibilityNoSpeechWithoutActionFitsHostedFrame() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+
+  controller.render(.noSpeech, action: nil)
+  let presentation = DictationCapsulePresentation(status: .noSpeech, action: nil)
+  let expectedSize = DictationCapsuleController.size(
+    for: .noSpeech,
+    measuredWidth: presentation.measuredWidth
+  )
+  #expect(abs(panel.frame.width - expectedSize.width) < 0.1)
+  #expect(panel.frame.width <= DictationCapsuleController.noSpeechSize.width)
+
+  guard let host = panel.contentView else {
+    Issue.record("Expected the persistent no-speech host")
+    controller.dismiss()
+    return
+  }
+  host.frame = CGRect(origin: .zero, size: panel.frame.size)
+  host.layoutSubtreeIfNeeded()
+
+  let identifiers = [
+    "fleck-rail-mark",
+    "fleck-terminal-glyph",
+    "fleck-terminal-text",
+  ]
+  for identifier in identifiers {
+    guard let rendered = renderedView(with: identifier, in: host) else {
+      Issue.record("Expected rendered no-speech view with identifier \(identifier)")
+      continue
+    }
+    let frame = rendered.convert(rendered.bounds, to: host)
+    #expect(frame.width > 0)
+    #expect(frame.height > 0)
+    #expect(frame.minX >= host.bounds.minX)
+    #expect(frame.maxX <= host.bounds.maxX)
+    #expect(frame.minY >= host.bounds.minY)
+    #expect(frame.maxY <= host.bounds.maxY)
+  }
   controller.dismiss()
 }
 

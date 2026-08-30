@@ -738,7 +738,20 @@
         height: Self.layoutFrameSize(for: layout).height
       )
       .accessibilityHidden(true)
+      .background(FleckRailFrameProbe(identifier: "fleck-rail-mark"))
     }
+  }
+
+  private struct FleckRailFrameProbe: NSViewRepresentable {
+    let identifier: String
+
+    func makeNSView(context: Context) -> NSView {
+      let view = NSView(frame: .zero)
+      view.identifier = NSUserInterfaceItemIdentifier(identifier)
+      return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
   }
 
   enum DictationCapsuleTransition: Equatable {
@@ -1374,11 +1387,13 @@
               ? model.colors.warningColor
               : model.colors.failureColor
           )
+          .background(FleckRailFrameProbe(identifier: "fleck-terminal-glyph"))
           .accessibilityHidden(true)
       } else if model.context.status == .repairingModel {
         Image(systemName: presentation.symbolName)
           .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(model.colors.liveColor)
+          .background(FleckRailFrameProbe(identifier: "fleck-terminal-glyph"))
           .accessibilityHidden(true)
       } else {
         Image(systemName: presentation.symbolName)
@@ -1388,6 +1403,7 @@
               ? model.colors.warningColor
               : model.colors.successColor
           )
+          .background(FleckRailFrameProbe(identifier: "fleck-terminal-glyph"))
           .accessibilityHidden(true)
       }
     }
@@ -1400,6 +1416,7 @@
           .lineLimit(1)
           .truncationMode(.tail)
           .foregroundStyle(model.colors.primaryTextColor)
+          .background(FleckRailFrameProbe(identifier: "fleck-terminal-text"))
       }
     }
 
