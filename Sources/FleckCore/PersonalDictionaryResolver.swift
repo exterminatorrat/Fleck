@@ -157,7 +157,9 @@ public enum PersonalDictionaryResolver {
       copiedThrough = match.range.upperBound
       index = match.range.upperBound
       replacements += 1
-      appliedEntryIDs.append(match.candidate.entryID)
+      if dictionaryRevision != nil {
+        appliedEntryIDs.append(match.candidate.entryID)
+      }
     }
 
     baseline += rawTranscript[copiedThrough..<rawTranscript.endIndex]

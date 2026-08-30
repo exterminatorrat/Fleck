@@ -240,7 +240,7 @@ import Testing
     compiled: compiled
   )
   let noReplacement = PersonalDictionaryResolver.resolve("nothing to replace", compiled: compiled)
-  let legacy = try PersonalDictionaryResolver.resolve("nothing to replace", entries: entries)
+  let legacy = try PersonalDictionaryResolver.resolve("fleck app", entries: entries)
 
   #expect(result.dictionaryRevision == 42)
   #expect(result.dictionaryContentDigest == compiled.contentDigest)
@@ -248,6 +248,8 @@ import Testing
   #expect(noReplacement.dictionaryRevision == 42)
   #expect(noReplacement.dictionaryContentDigest == compiled.contentDigest)
   #expect(noReplacement.appliedEntryIDs.isEmpty)
+  #expect(legacy.baseline == "FleckApp")
+  #expect(legacy.replacements == 1)
   #expect(legacy.dictionaryRevision == nil)
   #expect(legacy.dictionaryContentDigest == nil)
   #expect(legacy.appliedEntryIDs.isEmpty)

@@ -176,7 +176,7 @@ public struct CompiledPersonalDictionary: Equatable, Sendable {
       revision: snapshot.revision,
       contentDigest: digest(
         recognitionStrings: recognitionStrings,
-        resolverRules: resolverRules,
+        resolverRules: resolverRules.filter { !$0.isBlocker },
         protectedLexicon: protectedLexicon,
         routingLexicon: routingLexicon
       ),

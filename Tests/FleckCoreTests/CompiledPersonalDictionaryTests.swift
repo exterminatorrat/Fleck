@@ -210,6 +210,32 @@ import Testing
     #expect(first.recognitionStrings == second.recognitionStrings)
     #expect(first.protectedLexicon == second.protectedLexicon)
     #expect(first.routingLexicon == second.routingLexicon)
+
+    let firstConflict = try CompiledPersonalDictionary.compile(
+      PersonalDictionarySnapshotV2(
+        entries: [
+          compiledEntry(1, preferredForm: "York"),
+          compiledEntry(10, preferredForm: "Blocked", aliases: ["new york"]),
+          compiledEntry(11, preferredForm: "BLOCKED", aliases: ["NEW YORK"]),
+        ]
+      )
+    )
+    let secondConflict = try CompiledPersonalDictionary.compile(
+      PersonalDictionarySnapshotV2(
+        entries: [
+          compiledEntry(1, preferredForm: "York"),
+          compiledEntry(20, preferredForm: "Blocked", aliases: ["NeW YoRk"]),
+          compiledEntry(21, preferredForm: "BLOCKED", aliases: ["new YORK"]),
+        ]
+      )
+    )
+
+    #expect(firstConflict.recognitionStrings == secondConflict.recognitionStrings)
+    #expect(firstConflict.protectedLexicon == secondConflict.protectedLexicon)
+    #expect(firstConflict.routingLexicon == secondConflict.routingLexicon)
+    #expect(firstConflict.contentDigest == secondConflict.contentDigest)
+    #expect(PersonalDictionaryResolver.resolve("new york", compiled: firstConflict).baseline == "new york")
+    #expect(PersonalDictionaryResolver.resolve("new york", compiled: secondConflict).baseline == "new york")
   }
 
   @Test func compilerOmitsDisabledAndUnsupportedLocaleClaims() throws {
