@@ -105,6 +105,24 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
   let referenceRoles: [LocalModelTransitionReferenceRole]
   let rollback: LocalModelRollbackPolicy
 
+  private init(
+    identityDigest: String,
+    predecessor: LocalModelTransitionReleaseIdentity,
+    successor: LocalModelTransitionReleaseIdentity,
+    successorPromotionRecordDigest: String,
+    predecessorCorpusDependencies: [LocalModelPredecessorCorpusDependency],
+    referenceRoles: [LocalModelTransitionReferenceRole],
+    rollback: LocalModelRollbackPolicy
+  ) {
+    self.identityDigest = identityDigest
+    self.predecessor = predecessor
+    self.successor = successor
+    self.successorPromotionRecordDigest = successorPromotionRecordDigest
+    self.predecessorCorpusDependencies = predecessorCorpusDependencies
+    self.referenceRoles = referenceRoles
+    self.rollback = rollback
+  }
+
   static func validating(
     _ raw: RawLocalModelUpdateTransition,
     expectedSuccessor: LocalModelTransitionReleaseIdentity,

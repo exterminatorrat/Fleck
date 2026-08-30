@@ -230,6 +230,29 @@ private enum TransitionFixtures {
 }
 
 @Suite struct LocalModelUpdateTransitionTests {
+  @Test func transitionConstructionAuthorityIsPrivateAndValidatingRemainsUsable() throws {
+    let sourceURL = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp/LocalModelUpdateTransition.swift")
+    let source = try String(contentsOf: sourceURL, encoding: .utf8)
+    let transitionBody = try #require(source.components(
+      separatedBy: "struct LocalModelUpdateTransition: Equatable, Sendable {"
+    ).last)
+    let declaration = try #require(transitionBody.components(
+      separatedBy: "  static func validating("
+    ).first)
+
+    #expect(declaration.components(separatedBy: "\n  private init(").count - 1 == 1)
+    #expect(!declaration.contains("\n  init("))
+
+    let transition = try TransitionFixtures.validate()
+    #expect(transition.predecessor == TransitionFixtures.predecessor)
+    #expect(transition.successor == TransitionFixtures.successor)
+    #expect(transition.identityDigest.count == 64)
+  }
+
   @Test func transitionRejectsWrongReleaseAndTrustAuthority() {
     #expect(throws: LocalModelUpdateTransitionError.predecessorEqualsSuccessor) {
       _ = try TransitionFixtures.validate(TransitionFixtures.raw(
