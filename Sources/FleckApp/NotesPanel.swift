@@ -2747,7 +2747,9 @@
         .padding(.vertical, 9)
       }
       .frame(maxWidth: .infinity)
-      .background(.bar)
+      .modifier(FormattingBarSurface())
+      .padding(.horizontal, 10)
+      .padding(.top, 8)
       .disabled(!isEditorVisible)
       .accessibilityLabel("Editor toolbar")
       .accessibilityHidden(!isEditorVisible)
@@ -2807,6 +2809,27 @@
       guard !isMixed else { return "Mixed" }
       guard let color else { return emptyName }
       return FleckPaletteOption.paletteName(for: color) ?? "Custom"
+    }
+  }
+
+  private struct FormattingBarSurface: ViewModifier {
+    func body(content: Content) -> some View {
+      if #available(macOS 26, *) {
+        content.glassEffect(
+          Glass.regular.tint(Color.black.opacity(0.18)),
+          in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+      } else {
+        content
+          .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+              .fill(.ultraThinMaterial)
+              .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                  .fill(Color.black.opacity(0.10))
+              }
+          }
+      }
     }
   }
 

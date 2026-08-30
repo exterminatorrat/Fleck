@@ -71,9 +71,9 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
   #expect(searchView.contains(".padding(.horizontal, 10)"))
   #expect(searchView.contains(".padding(.top, 8)"))
 
-  let formattingBar = try #require(notesPanel.components(separatedBy: "private struct FormattingBar").last)
-  #expect(formattingBar.contains(".background(.bar)"))
-  #expect(!formattingBar.contains(".background(.thinMaterial)"))
+  let formattingBar = try #require(notesPanel.components(separatedBy: "private struct FormattingBar: View").last)
+  #expect(!formattingBar.contains(".background(.bar)"))
+  #expect(formattingBar.contains(".modifier(FormattingBarSurface())"))
 }
 
 @Test

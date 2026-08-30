@@ -111,6 +111,46 @@ import Testing
   #expect(trigger.contains("accessibilityValue(tabColorAccessibilityValue(for: note.tabColorHex))"))
 }
 
+@Test func formattingBarUsesInsetDarkLiquidGlassSurface() throws {
+  let source = try fleckSource("Sources/FleckApp/NotesPanel.swift")
+  let formattingBar = try #require(
+    source
+      .components(separatedBy: "private struct FormattingBar: View")
+      .last?
+      .components(separatedBy: "private struct FormattingBarSurface: ViewModifier")
+      .first
+  )
+  let normalizedFormattingBar = formattingBar
+    .split(whereSeparator: \.isWhitespace)
+    .joined(separator: " ")
+  let surface = source
+    .components(separatedBy: "private struct FormattingBarSurface: ViewModifier")
+    .dropFirst()
+    .first?
+    .components(separatedBy: "private struct CrispToolbarButtonStyle")
+    .first ?? ""
+  let normalizedSurface = surface
+    .split(whereSeparator: \.isWhitespace)
+    .joined(separator: " ")
+
+  #expect(!formattingBar.contains(".background(.bar)"))
+  #expect(normalizedFormattingBar.contains(
+    "frame(maxWidth: .infinity) .modifier(FormattingBarSurface()) "
+      + ".padding(.horizontal, 10) .padding(.top, 8)"
+  ))
+  #expect(surface.contains("if #available(macOS 26, *)"))
+  #expect(normalizedSurface.contains(
+    "content.glassEffect( Glass.regular.tint(Color.black.opacity(0.18)), "
+      + "in: RoundedRectangle(cornerRadius: 12, style: .continuous) )"
+  ))
+  #expect(normalizedSurface.contains(
+    "content .background { RoundedRectangle(cornerRadius: 12, style: .continuous) "
+      + ".fill(.ultraThinMaterial) .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous) "
+      + ".fill(Color.black.opacity(0.10)) } }"
+  ))
+  #expect(!surface.contains("GlassEffectContainer"))
+}
+
 private func fleckSource(_ relativePath: String) throws -> String {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
