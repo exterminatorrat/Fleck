@@ -33,7 +33,15 @@ import Testing
     at: dictionaryURL,
     includingPropertiesForKeys: nil
   )
-  #expect(files.map(\.lastPathComponent) == ["dictionary-v1.json"])
+  #expect(
+    files.map(\.lastPathComponent).sorted() == [
+      "dictionary-v1.json",
+      "dictionary-v1.json.lock",
+    ]
+  )
+  #expect(
+    try PersonalDictionaryCodec.decodePublishedJSON(Data(contentsOf: first.fileURL)).revision == 1
+  )
 }
 
 @Test func personalDictionaryStoreSupportsCRUDAndStateChanges() async throws {

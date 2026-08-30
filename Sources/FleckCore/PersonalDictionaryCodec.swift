@@ -121,6 +121,16 @@ public enum PersonalDictionaryCodec {
     }
   }
 
+  public static func decodePublishedJSON(
+    _ data: Data
+  ) throws -> PersonalDictionarySnapshotV2 {
+    let snapshot = try decodeCandidateJSON(data)
+    guard try encodeCanonicalJSON(snapshot) == data else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+    return snapshot
+  }
+
   public static func decodeJSON(_ data: Data) throws -> PersonalDictionarySnapshot {
     guard let object = try? JSONSerialization.jsonObject(with: data) else {
       throw PersonalDictionaryCodecError.invalidJSON

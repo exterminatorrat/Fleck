@@ -250,6 +250,9 @@ import Testing
   #expect(candidate.entries.first?.aliases == ["FLECK"])
   #expect(candidate.suggestions.first?.localeIdentifier == "und-X-private")
   #expect(candidate.suggestions.first?.observedForms == ["fleck", "Flek"])
+  #expect(throws: PersonalDictionaryCodecError.invalidJSON) {
+    try PersonalDictionaryCodec.decodePublishedJSON(Data(canonicalV1.utf8))
+  }
 }
 
 @Test func personalDictionaryV2CodecDecodesCanonicalV2WithoutChangingRevision() throws {
