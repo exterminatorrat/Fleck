@@ -256,6 +256,8 @@ import FleckCore
   #expect(tabStrip.contains(".frame(width: tabViewportWidth, alignment: .leading)"))
   #expect(tabStrip.contains(".frame(height: 37)"))
   #expect(scrollViewport.contains("HStack(spacing: 6) {"))
+  #expect(scrollViewport.contains(".id(TabScrollTarget.leading)"))
+  #expect(scrollViewport.contains(".id(TabScrollTarget.trailing)"))
   #expect(!tabStrip.contains("TabContentLeadingEdgePreferenceKey"))
   #expect(!tabStrip.contains("TabContentTrailingEdgePreferenceKey"))
   #expect(!tabStrip.contains(".coordinateSpace(name: \"tab-scroll-viewport\")"))
@@ -272,8 +274,10 @@ import FleckCore
 
   #expect(tabStrip.contains("chevron.left"))
   #expect(tabStrip.contains("chevron.right"))
-  #expect(tabStrip.contains("scrollProxy.scrollTo(firstNoteID, anchor: .leading)"))
-  #expect(tabStrip.contains("scrollProxy.scrollTo(lastNoteID, anchor: .trailing)"))
+  #expect(tabStrip.contains("scrollProxy.scrollTo(TabScrollTarget.leading, anchor: .leading)"))
+  #expect(tabStrip.contains("scrollProxy.scrollTo(TabScrollTarget.trailing, anchor: .trailing)"))
+  #expect(!tabStrip.contains("scrollProxy.scrollTo(firstNoteID, anchor: .leading)"))
+  #expect(!tabStrip.contains("scrollProxy.scrollTo(lastNoteID, anchor: .trailing)"))
   #expect(tabStrip.contains("accessibilityLabel(\"Reveal earlier tabs\")"))
   #expect(tabStrip.contains("accessibilityLabel(\"Reveal later tabs\")"))
   #expect(tabStrip.contains(".help(\"Show earlier tabs\")"))
@@ -344,7 +348,9 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
 
   let tabScrollView = try #require(hostedTabScrollView(in: host))
   let clipView = tabScrollView.contentView
+  let documentView = try #require(tabScrollView.documentView)
   let leadingOffset = clipView.bounds.origin.x
+  let maximumOffset = documentView.frame.maxX - clipView.bounds.width
   let tabFrame = tabScrollView.convert(tabScrollView.bounds, to: host)
   clickHostedTabControl(
     at: NSPoint(x: tabFrame.maxX + 42, y: tabFrame.midY),
@@ -353,7 +359,7 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
   )
   await settleTabStripHost(host)
   let trailingOffset = clipView.bounds.origin.x
-  #expect(trailingOffset > leadingOffset + 10)
+  #expect(abs(trailingOffset - maximumOffset) <= 1)
 
   clickHostedTabControl(
     at: NSPoint(x: tabFrame.maxX + 14, y: tabFrame.midY),
@@ -363,7 +369,7 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
   await settleTabStripHost(host)
 
   #expect(clipView.bounds.origin.x < trailingOffset - 1)
-  #expect(clipView.bounds.origin.x <= leadingOffset + 13)
+  #expect(abs(clipView.bounds.origin.x - leadingOffset) <= 1)
 
   window.contentView = nil
   window.orderOut(nil)

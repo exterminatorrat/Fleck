@@ -303,6 +303,11 @@
       case body
     }
 
+    private enum TabScrollTarget: Hashable {
+      case leading
+      case trailing
+    }
+
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
@@ -1009,7 +1014,11 @@
         HStack(spacing: 0) {
           ZStack(alignment: .trailing) {
             ScrollView(.horizontal, showsIndicators: false) {
-              HStack(spacing: 6) {
+              HStack(spacing: 0) {
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .id(TabScrollTarget.leading)
+                HStack(spacing: 6) {
                 ForEach(visibleNotes) { note in
             Button {
               _ = activateNoteAndScope(note.id)
@@ -1155,15 +1164,17 @@
               .frame(height: 37, alignment: .center)
               .animation(motion.spatial, value: appState.workspace.selectedNoteID)
               .animation(motion.spatial, value: visibleNotes.map(\.id))
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .id(TabScrollTarget.trailing)
+              }
             }
           }
           .frame(width: tabViewportWidth, alignment: .leading)
 
           HStack(spacing: 0) {
             Button {
-              if let firstNoteID = visibleNotes.first?.id {
-                scrollProxy.scrollTo(firstNoteID, anchor: .leading)
-              }
+              scrollProxy.scrollTo(TabScrollTarget.leading, anchor: .leading)
             } label: {
               Image(systemName: "chevron.left")
                 .font(.caption)
@@ -1175,9 +1186,7 @@
             .disabled(visibleNotes.isEmpty)
 
             Button {
-              if let lastNoteID = visibleNotes.last?.id {
-                scrollProxy.scrollTo(lastNoteID, anchor: .trailing)
-              }
+              scrollProxy.scrollTo(TabScrollTarget.trailing, anchor: .trailing)
             } label: {
               Image(systemName: "chevron.right")
                 .font(.caption)
