@@ -95,28 +95,19 @@ public actor PersonalDictionaryStore {
   }
 
   public func publishedSnapshot() throws -> PersonalDictionaryPublishedSnapshot {
-    if let cachedPublished { return cachedPublished }
-    guard fileManager.fileExists(atPath: fileURL.path) else {
-      let empty = PersonalDictionarySnapshotV2()
-      let published = try compile(empty)
-      cachedPublished = published
-      return published
+    if cachedPublished == nil, !fileManager.fileExists(atPath: fileURL.path) {
+      return try cachedOrCompiled(PersonalDictionarySnapshotV2())
     }
 
     return try withMutationLock {
       removeStaleStages()
       guard let authority = try readAuthority() else {
-        let empty = PersonalDictionarySnapshotV2()
-        let published = try compile(empty)
-        cachedPublished = published
-        return published
+        return try cachedOrCompiled(PersonalDictionarySnapshotV2())
       }
       if authority.isLegacy {
         return try stageAndPublish(authority.snapshot, priorBytes: authority.bytes)
       }
-      let published = try compile(authority.snapshot)
-      cachedPublished = published
-      return published
+      return try cachedOrCompiled(authority.snapshot)
     }
   }
 
@@ -181,6 +172,12 @@ public actor PersonalDictionaryStore {
       let current = authority?.snapshot ?? PersonalDictionarySnapshotV2()
       if let expectedRevision, expectedRevision != current.revision {
         throw PersonalDictionaryStoreError.revisionConflict
+      }
+      if expectedRevision == nil,
+        case .delete(let id) = mutation,
+        !current.entries.contains(where: { $0.id == id })
+      {
+        return try cachedOrCompiled(current)
       }
       let revision: UInt64
       if authority?.isLegacy == true {
@@ -334,6 +331,17 @@ public actor PersonalDictionaryStore {
     }
   }
 
+  private func cachedOrCompiled(
+    _ snapshot: PersonalDictionarySnapshotV2
+  ) throws -> PersonalDictionaryPublishedSnapshot {
+    if let cachedPublished, cachedPublished.snapshot == snapshot {
+      return cachedPublished
+    }
+    let published = try compile(snapshot)
+    cachedPublished = published
+    return published
+  }
+
   private struct Authority {
     let snapshot: PersonalDictionarySnapshotV2
     let bytes: Data
@@ -413,16 +421,35 @@ public actor PersonalDictionaryStore {
       throw PersonalDictionaryStoreError.publicationFailed
     }
     let lockURL = fileURL.appendingPathExtension("lock")
-    let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+    let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
     guard descriptor >= 0 else { throw PersonalDictionaryStoreError.publicationFailed }
     defer { _ = Darwin.close(descriptor) }
-    guard Darwin.fchmod(descriptor, 0o600) == 0,
-      Darwin.lockf(descriptor, F_LOCK, 0) == 0
+    var opened = stat()
+    guard Darwin.fstat(descriptor, &opened) == 0,
+      opened.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+      opened.st_uid == Darwin.geteuid(),
+      Darwin.fchmod(descriptor, 0o600) == 0
     else {
       throw PersonalDictionaryStoreError.publicationFailed
     }
-    defer { _ = Darwin.lockf(descriptor, F_ULOCK, 0) }
+    var secured = stat()
+    guard Darwin.fstat(descriptor, &secured) == 0,
+      secured.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+      secured.st_uid == Darwin.geteuid(),
+      secured.st_mode & mode_t(0o7777) == 0o600,
+      Self.retryingLockf(descriptor, operation: F_LOCK)
+    else {
+      throw PersonalDictionaryStoreError.publicationFailed
+    }
+    defer { _ = Self.retryingLockf(descriptor, operation: F_ULOCK) }
     return try body()
+  }
+
+  private static func retryingLockf(_ descriptor: Int32, operation: Int32) -> Bool {
+    while true {
+      if Darwin.lockf(descriptor, operation, 0) == 0 { return true }
+      if errno != EINTR { return false }
+    }
   }
 
   private func removeStaleStages() {

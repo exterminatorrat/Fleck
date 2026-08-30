@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 
@@ -39,9 +40,22 @@ import Testing
       "dictionary-v1.json.lock",
     ]
   )
+  let lockAttributes = try FileManager.default.attributesOfItem(
+    atPath: first.fileURL.appendingPathExtension("lock").path
+  )
+  #expect(lockAttributes[.type] as? FileAttributeType == .typeRegular)
+  #expect(lockAttributes[.ownerAccountID] as? NSNumber == NSNumber(value: geteuid()))
+  #expect(lockAttributes[.posixPermissions] as? NSNumber == NSNumber(value: 0o600))
   #expect(
     try PersonalDictionaryCodec.decodePublishedJSON(Data(contentsOf: first.fileURL)).revision == 1
   )
+
+  let concurrentEntry = dictionaryStoreEntry(preferredForm: "OpenAI")
+  try await second.upsert(concurrentEntry)
+  let refreshed = try await first.publishedSnapshot()
+  #expect(refreshed.snapshot.revision == 2)
+  #expect(Set(refreshed.snapshot.entries.map(\.id)) == [entry.id, concurrentEntry.id])
+  #expect(refreshed.compiled == (try CompiledPersonalDictionary.compile(refreshed.snapshot)))
 }
 
 @Test func personalDictionaryStoreSupportsCRUDAndStateChanges() async throws {
@@ -64,6 +78,12 @@ import Testing
 
   try await store.delete(id: entry.id)
   #expect(try await store.snapshot().entries.isEmpty)
+
+  let publishedBeforeMissingDelete = try await store.publishedSnapshot()
+  let bytesBeforeMissingDelete = try Data(contentsOf: store.fileURL)
+  try await store.delete(id: UUID())
+  #expect(try Data(contentsOf: store.fileURL) == bytesBeforeMissingDelete)
+  #expect(try await store.publishedSnapshot() == publishedBeforeMissingDelete)
 }
 
 @Test func personalDictionaryStoreApprovesAndDismissesSuggestionsExplicitly() async throws {
@@ -126,6 +146,34 @@ import Testing
     try await futureStore.upsert(dictionaryStoreEntry(preferredForm: "Fleck"))
   }
   #expect(try Data(contentsOf: file) == futureBytes)
+
+  let symlinkRoot = temporaryDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: symlinkRoot) }
+  let symlinkDirectory = symlinkRoot.appendingPathComponent(
+    "PersonalDictionary",
+    isDirectory: true
+  )
+  try FileManager.default.createDirectory(
+    at: symlinkDirectory,
+    withIntermediateDirectories: true
+  )
+  let lockTarget = symlinkRoot.appendingPathComponent("lock-target")
+  try Data("lock sentinel".utf8).write(to: lockTarget)
+  let originalTargetAttributes = try FileManager.default.attributesOfItem(atPath: lockTarget.path)
+  try FileManager.default.createSymbolicLink(
+    at: symlinkDirectory.appendingPathComponent("dictionary-v1.json.lock"),
+    withDestinationURL: lockTarget
+  )
+
+  let symlinkStore = PersonalDictionaryStore(rootURL: symlinkRoot)
+  await #expect(throws: PersonalDictionaryStoreError.publicationFailed) {
+    try await symlinkStore.upsert(dictionaryStoreEntry(preferredForm: "Fleck"))
+  }
+  #expect(try Data(contentsOf: lockTarget) == Data("lock sentinel".utf8))
+  #expect(
+    try FileManager.default.attributesOfItem(atPath: lockTarget.path)[.posixPermissions]
+      as? NSNumber == originalTargetAttributes[.posixPermissions] as? NSNumber
+  )
 }
 
 @Test func personalDictionaryStoreReplacesOnlyValidSnapshots() async throws {
