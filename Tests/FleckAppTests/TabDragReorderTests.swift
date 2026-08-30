@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 import Testing
@@ -247,26 +248,18 @@ import FleckCore
       .components(separatedBy: "private var motion").first
   )
   let scrollViewport = try #require(
-    tabStrip.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").last?
-      .components(separatedBy: "if hasHiddenTrailingTabs").first
-  )
-  let tabContent = try #require(
-    scrollViewport.components(separatedBy: "HStack(spacing: 6) {").last?
-      .components(separatedBy: ".padding(.horizontal, 12)").first
+    tabStrip.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").last
   )
 
   #expect(tabStrip.contains("GeometryReader { proxy in"))
   #expect(tabStrip.contains("TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)"))
   #expect(tabStrip.contains(".frame(width: tabViewportWidth, alignment: .leading)"))
   #expect(tabStrip.contains(".frame(height: 37)"))
-  #expect(tabStrip.contains("visibleTrailingEdge: tabViewportWidth"))
-  #expect(scrollViewport.contains(".coordinateSpace(name: \"tab-scroll-viewport\")"))
-  #expect(tabContent.contains("Color.clear"))
-  #expect(tabContent.contains(".frame(width: 0, height: 0)"))
-  #expect(tabContent.contains("value: proxy.frame(in: .named(\"tab-scroll-viewport\")).maxX + 6"))
-  #expect(tabContent.contains("value: proxy.frame(in: .named(\"tab-scroll-viewport\")).minX - 6"))
-  #expect(!tabStrip.contains("TabViewportTrailingEdgePreferenceKey"))
-  #expect(tabStrip.contains(".coordinateSpace(name: \"tab-strip\")"))
+  #expect(scrollViewport.contains("HStack(spacing: 6) {"))
+  #expect(!tabStrip.contains("TabContentLeadingEdgePreferenceKey"))
+  #expect(!tabStrip.contains("TabContentTrailingEdgePreferenceKey"))
+  #expect(!tabStrip.contains(".coordinateSpace(name: \"tab-scroll-viewport\")"))
+  #expect(!tabStrip.contains(".coordinateSpace(name: \"tab-strip\")"))
   #expect(!tabStrip.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
 }
 
@@ -290,21 +283,22 @@ import FleckCore
   #expect(!tabStrip.contains(".opacity(hasHidden"))
 }
 
-@Test func tabStripMeasuresLeadingAndTrailingEdgesAndCentersItsContent() throws {
+@Test func tabStripCentersItsContentAndAvoidsStaleGeometryGates() throws {
   let source = try tabNotesPanelSource()
   let tabStrip = try #require(
     source.components(separatedBy: "private var tabStrip").last?
       .components(separatedBy: "private var motion").first
   )
 
-  #expect(source.contains("@State private var tabContentLeadingEdge"))
-  #expect(tabStrip.contains("TabContentLeadingEdgePreferenceKey"))
-  #expect(tabStrip.contains("hasHiddenLeadingTabs"))
-  #expect(tabStrip.contains("contentLeadingEdge: tabContentLeadingEdge"))
-  #expect(tabStrip.contains(".onPreferenceChange(TabContentLeadingEdgePreferenceKey.self)"))
-  #expect(tabStrip.contains(".onPreferenceChange(TabContentTrailingEdgePreferenceKey.self)"))
   #expect(tabStrip.contains(".frame(height: 37, alignment: .center)"))
   #expect(!tabStrip.contains(".padding(.bottom, 9)"))
+  #expect(!source.contains("@State private var tabContentLeadingEdge"))
+  #expect(!source.contains("@State private var tabContentTrailingEdge"))
+  #expect(!tabStrip.contains("hasHiddenLeadingTabs"))
+  #expect(!tabStrip.contains("hasHiddenTrailingTabs"))
+  #expect(!tabStrip.contains("onPreferenceChange(TabContentLeadingEdgePreferenceKey"))
+  #expect(!tabStrip.contains("onPreferenceChange(TabContentTrailingEdgePreferenceKey"))
+  #expect(tabStrip.components(separatedBy: ".disabled(visibleNotes.isEmpty)").count - 1 == 2)
 }
 
 @Test func tabStripRemovesTheWindowBackgroundFade() throws {
@@ -316,6 +310,64 @@ import FleckCore
 
   #expect(!tabStrip.contains("LinearGradient"))
   #expect(!tabStrip.contains("windowBackgroundColor"))
+}
+
+@Test @MainActor
+func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("tab-strip-left-control-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let notes = (0..<12).map { index in
+    Note(title: "Note " + String(index) + " " + String(repeating: "Long title ", count: 8))
+  }
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: notes, selectedNoteID: notes[0].id)
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(
+    rootView: NotesPanel(dictationRuntime: runtime, sizing: .container)
+      .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 380, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleTabStripHost(host)
+
+  let tabScrollView = try #require(hostedTabScrollView(in: host))
+  let clipView = tabScrollView.contentView
+  let leadingOffset = clipView.bounds.origin.x
+  let tabFrame = tabScrollView.convert(tabScrollView.bounds, to: host)
+  clickHostedTabControl(
+    at: NSPoint(x: tabFrame.maxX + 42, y: tabFrame.midY),
+    in: window,
+    root: host
+  )
+  await settleTabStripHost(host)
+  let trailingOffset = clipView.bounds.origin.x
+  #expect(trailingOffset > leadingOffset + 10)
+
+  clickHostedTabControl(
+    at: NSPoint(x: tabFrame.maxX + 14, y: tabFrame.midY),
+    in: window,
+    root: host
+  )
+  await settleTabStripHost(host)
+
+  #expect(clipView.bounds.origin.x < trailingOffset - 1)
+  #expect(clipView.bounds.origin.x <= leadingOffset + 13)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
 }
 
 @Test func tabDragProductionPathUsesOneNativeSourceForReorderAndFolderTransfer() throws {
@@ -868,68 +920,56 @@ private func tabNotesPanelSource() throws -> String {
   )
 }
 
-@Test func tabOverflowShowsOnlyWhenTrailingContentExceedsVisibleEdge() {
-  #expect(
-    !TabOverflowPresentation.hasHiddenTrailingContent(
-      contentTrailingEdge: 100,
-      visibleTrailingEdge: 100
-    )
-  )
-  #expect(
-    !TabOverflowPresentation.hasHiddenTrailingContent(
-      contentTrailingEdge: 99,
-      visibleTrailingEdge: 100
-    )
-  )
-  #expect(
-    TabOverflowPresentation.hasHiddenTrailingContent(
-      contentTrailingEdge: 101,
-      visibleTrailingEdge: 100
-    )
-  )
+@MainActor
+private func hostedTabScrollView(in view: NSView) -> NSScrollView? {
+  if let scrollView = view as? NSScrollView,
+    let documentView = scrollView.documentView,
+    scrollView.frame.height <= 50,
+    documentView.frame.width > scrollView.contentView.bounds.width + 1
+  {
+    return scrollView
+  }
+  for subview in view.subviews {
+    if let scrollView = hostedTabScrollView(in: subview) {
+      return scrollView
+    }
+  }
+  return nil
 }
 
-@Test func tabOverflowShowsOnlyWhenLeadingContentExceedsVisibleEdge() {
-  #expect(
-    !TabOverflowPresentation.hasHiddenLeadingContent(
-      contentLeadingEdge: 0,
-      visibleLeadingEdge: 0
-    )
-  )
-  #expect(
-    !TabOverflowPresentation.hasHiddenLeadingContent(
-      contentLeadingEdge: -0.5,
-      visibleLeadingEdge: 0
-    )
-  )
-  #expect(
-    TabOverflowPresentation.hasHiddenLeadingContent(
-      contentLeadingEdge: -0.51,
-      visibleLeadingEdge: 0
-    )
-  )
-  #expect(
-    !TabOverflowPresentation.hasHiddenLeadingContent(
-      contentLeadingEdge: 1,
-      visibleLeadingEdge: 0
-    )
-  )
+@MainActor
+private func clickHostedTabControl(at point: NSPoint, in window: NSWindow, root: NSView) {
+  let location = root.convert(point, to: nil)
+  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    guard let event = NSEvent.mouseEvent(
+      with: eventType,
+      location: location,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 0,
+      clickCount: 1,
+      pressure: eventType == .leftMouseDown ? 1 : 0
+    ) else { continue }
+    window.sendEvent(event)
+  }
 }
 
-@Test func tabOverflowDoesNotInferHiddenTrailingContentFromLeadingOffset() {
-  #expect(
-    !TabOverflowPresentation.hasHiddenTrailingContent(
-      contentTrailingEdge: 180,
-      visibleTrailingEdge: 180
-    )
-  )
+@MainActor
+private func settleTabStripHost(_ view: NSView) async {
+  for _ in 0..<40 {
+    view.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
 }
 
-@Test func tabOverflowHidesWhenTheRealLastTabTrailingEdgeIsRevealed() {
-  #expect(
-    !TabOverflowPresentation.hasHiddenTrailingContent(
-      contentTrailingEdge: 492,
-      visibleTrailingEdge: 492
-    )
+@Test func tabOverflowEndpointControlsStayEnabledForVisibleNotes() throws {
+  let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
   )
+
+  #expect(tabStrip.components(separatedBy: ".disabled(visibleNotes.isEmpty)").count - 1 == 2)
 }
