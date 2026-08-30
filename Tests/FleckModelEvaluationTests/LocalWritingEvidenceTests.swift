@@ -210,6 +210,15 @@ struct LocalWritingEvidenceTests {
     #expect(throws: LocalWritingEvidenceError.invalidOutcome) {
       try values.caseResult.replacing(measurements: networkFailure, outcome: .pass)
     }
+    #expect(throws: LocalWritingEvidenceError.invalidOutcome) {
+      try values.caseResult.replacingWithNotApplicableOutcome(accuracy: failedAccuracy)
+    }
+    #expect(throws: LocalWritingEvidenceError.invalidOutcome) {
+      try values.caseResult.replacingWithNotApplicableOutcome(
+        measurements: networkFailure,
+        accuracy: .notApplicable
+      )
+    }
   }
 
   @Test
@@ -511,6 +520,27 @@ private extension LocalWritingCaseOutcomeReference {
       cleanupOutcome: cleanupOutcome ?? self.cleanupOutcome,
       cancellationOutcome: cancellationOutcome,
       packageOutcome: packageOutcome
+    )
+  }
+
+  func replacingWithNotApplicableOutcome(
+    measurements: LocalWritingStageMeasurements? = nil,
+    accuracy: LocalWritingAccuracyObservation
+  ) throws -> Self {
+    try Self(
+      caseID: caseID,
+      materialLineageID: materialLineageID,
+      exposure: exposure,
+      executionVariant: executionVariant,
+      measurements: measurements ?? self.measurements,
+      accuracy: accuracy,
+      outcome: .notApplicable,
+      protectedMeaningOutcome: .notApplicable,
+      faithfulnessOutcome: .notApplicable,
+      routingOutcome: .notApplicable,
+      cleanupOutcome: .notApplicable,
+      cancellationOutcome: .notApplicable,
+      packageOutcome: .notApplicable
     )
   }
 }

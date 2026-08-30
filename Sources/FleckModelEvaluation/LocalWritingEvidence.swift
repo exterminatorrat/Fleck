@@ -369,9 +369,12 @@ public struct LocalWritingCaseOutcomeReference: Equatable, Sendable {
     if componentOutcomes.contains(.fail), outcome != .fail {
       throw LocalWritingEvidenceError.invalidOutcome
     }
-    if outcome == .pass,
-      (accuracy.outcome == .fail || measurements.unexpectedNetworkConnectionCount > 0)
+    if (accuracy.outcome == .fail || measurements.unexpectedNetworkConnectionCount > 0),
+      outcome != .fail
     {
+      throw LocalWritingEvidenceError.invalidOutcome
+    }
+    if outcome == .notApplicable, accuracy.outcome != .notApplicable {
       throw LocalWritingEvidenceError.invalidOutcome
     }
     if outcome == .notApplicable,
