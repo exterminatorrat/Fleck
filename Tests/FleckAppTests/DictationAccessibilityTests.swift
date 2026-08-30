@@ -1,5 +1,6 @@
 import AppKit
 import FleckCore
+import SwiftUI
 import Testing
 
 @testable import FleckApp
@@ -24,6 +25,35 @@ private func capsuleContext(
     failureStage: failureStage,
     failureKind: failureKind
   )
+}
+
+private final class LayoutProbeView: NSView {
+  let probeIdentifier: String
+
+  init(identifier: String) {
+    self.probeIdentifier = identifier
+    super.init(frame: .zero)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+}
+
+private struct LayoutProbe: NSViewRepresentable {
+  let identifier: String
+
+  func makeNSView(context: Context) -> LayoutProbeView {
+    LayoutProbeView(identifier: identifier)
+  }
+
+  func updateNSView(_ nsView: LayoutProbeView, context: Context) {}
+}
+
+@MainActor
+private func descendants(of view: NSView) -> [NSView] {
+  view.subviews + view.subviews.flatMap(descendants)
 }
 
 @Test @MainActor func DictationAccessibilityUsesApprovedStatusTiersAndCopy() {
@@ -74,53 +104,99 @@ private func capsuleContext(
 
 @Test @MainActor func DictationAccessibilityResultSizingUsesControllerFrameSource() {
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
-  let results: [(DictationCapsuleStatus, DictationCapsuleAction, CGSize)] = [
-    (.saved(destination: "Inbox"), .undo, CGSize(width: 264, height: 36)),
+  let results: [(
+    shortStatus: DictationCapsuleStatus,
+    longStatus: DictationCapsuleStatus,
+    action: DictationCapsuleAction,
+    ceiling: CGSize
+  )] = [
+    (
+      .saved(destination: "Inbox"),
+      .saved(destination: String(repeating: "Long destination ", count: 20)),
+      .undo,
+      CGSize(width: 264, height: 36)
+    ),
     (
       .savedWithoutCleanup(destination: "Inbox"),
+      .savedWithoutCleanup(destination: String(repeating: "Long destination ", count: 20)),
       .copy,
       CGSize(width: 288, height: 36)
     ),
+    (
+      .failed("short technical detail"),
+      .failed("long technical detail"),
+      .copy,
+      CGSize(width: 264, height: 36)
+    ),
+    (
+      .noSpeech,
+      .noSpeech,
+      .copy,
+      CGSize(width: 192, height: 36)
+    ),
   ]
 
-  for (status, action, expectedSize) in results {
-    let presentation = DictationCapsulePresentation(status: status, action: action)
-    let size = DictationCapsuleController.size(
-      for: status,
-      measuredWidth: presentation.measuredWidth
-    )
-    let frame = DictationCapsuleController.frame(
+  for (shortStatus, longStatus, action, expectedSize) in results {
+    let shortPresentation = DictationCapsulePresentation(status: shortStatus, action: action)
+    let shortFrame = DictationCapsuleController.frame(
       for: .bottom,
-      size: size,
+      status: shortStatus,
+      measuredWidth: shortPresentation.measuredWidth,
+      in: visibleFrame
+    )
+    let longPresentation = DictationCapsulePresentation(status: longStatus, action: action)
+    let longMeasuredWidth: CGFloat = {
+      switch longStatus {
+      case .failed, .noSpeech:
+        expectedSize.width + 100
+      default:
+        longPresentation.measuredWidth
+      }
+    }()
+    let longFrame = DictationCapsuleController.frame(
+      for: .bottom,
+      status: longStatus,
+      measuredWidth: longMeasuredWidth,
       in: visibleFrame
     )
 
-    #expect(size.height == expectedSize.height)
-    #expect(size.width <= expectedSize.width)
-    #expect(frame.size == size)
-    #expect(presentation.measuredWidth <= expectedSize.width)
+    #expect(shortFrame.height == expectedSize.height)
+    if case .noSpeech = shortStatus {
+      #expect(shortFrame.width == expectedSize.width)
+    } else {
+      #expect(shortFrame.width < expectedSize.width)
+    }
+    #expect(longFrame.size == expectedSize)
+    if case .noSpeech = shortStatus {
+      #expect(shortPresentation.measuredWidth <= expectedSize.width)
+    } else {
+      #expect(shortPresentation.measuredWidth < expectedSize.width)
+    }
+    #expect(longPresentation.measuredWidth <= expectedSize.width)
   }
 
-  let short = DictationCapsulePresentation(
-    status: .saved(destination: "Inbox"),
-    action: .undo
+  let noSpeechCeiling = DictationCapsuleController.noSpeechSize.width
+  let clampedNoSpeechFrame = DictationCapsuleController.frame(
+    for: .bottom,
+    status: .noSpeech,
+    measuredWidth: noSpeechCeiling + 100,
+    in: visibleFrame
   )
-  let long = DictationCapsulePresentation(
-    status: .saved(destination: String(repeating: "Long destination ", count: 20)),
-    action: .undo
-  )
-  #expect(
-    DictationCapsuleController.size(
-      for: .saved(destination: "Inbox"),
-      measuredWidth: short.measuredWidth
-    ).width < DictationCapsuleController.savedSize.width
-  )
-  #expect(
-    DictationCapsuleController.size(
-      for: .saved(destination: "Long destination"),
-      measuredWidth: long.measuredWidth
-    ).width == DictationCapsuleController.savedSize.width
-  )
+  #expect(clampedNoSpeechFrame.width == noSpeechCeiling)
+
+  let fixedStatuses: [DictationCapsuleStatus] = [
+    .idle, .arming, .listening, .finalizing, .cleaning, .routing, .saving, .repairingModel,
+  ]
+  for status in fixedStatuses {
+    #expect(
+      DictationCapsuleController.frame(
+        for: .bottom,
+        status: status,
+        measuredWidth: 1,
+        in: visibleFrame
+      ).size == DictationCapsuleController.size(for: status)
+    )
+  }
 }
 
 @Test func DictationAccessibilityUsesAuthoritativePipelineTreatment() {
@@ -313,10 +389,10 @@ private func capsuleContext(
   #expect(FleckRailContentOrder.listening(for: .left) == [.mark, .waveform, .timer])
   #expect(FleckRailContentOrder.listening(for: .right) == [.timer, .waveform, .mark])
   #expect(FleckRailContentOrder.terminal(for: .left, includesAction: true) == [
-    .mark, .terminalGlyph, .statusText, .action,
+    .mark, .terminalGlyph, .statusText, .divider, .action,
   ])
   #expect(FleckRailContentOrder.terminal(for: .right, includesAction: true) == [
-    .action, .statusText, .terminalGlyph, .mark,
+    .action, .divider, .statusText, .terminalGlyph, .mark,
   ])
   #expect(FleckRailContentOrder.terminal(for: .left, includesAction: false) == [
     .mark, .terminalGlyph, .statusText,
@@ -324,6 +400,46 @@ private func capsuleContext(
   #expect(FleckRailContentOrder.terminal(for: .right, includesAction: false) == [
     .statusText, .terminalGlyph, .mark,
   ])
+}
+
+@Test @MainActor func DictationAccessibilityPlacesMarkAtEachOuterDockEdge() {
+  func placedFrames(
+    for dock: DictationCapsuleDock
+  ) -> (mark: CGRect, content: CGRect)? {
+    let root = FleckRailLayout(
+      order: FleckRailContentOrder.markAndContent(for: dock),
+      spacing: 7
+    ) {
+      LayoutProbe(identifier: "mark")
+        .frame(width: 14, height: 14)
+      LayoutProbe(identifier: "content")
+        .frame(width: 40, height: 20)
+    }
+    let hostingView = NSHostingView(rootView: root)
+    hostingView.frame = CGRect(x: 0, y: 0, width: 100, height: 40)
+    hostingView.layoutSubtreeIfNeeded()
+    guard
+      let mark = descendants(of: hostingView)
+        .compactMap({ $0 as? LayoutProbeView })
+        .first(where: { $0.probeIdentifier == "mark" }),
+      let content = descendants(of: hostingView)
+        .compactMap({ $0 as? LayoutProbeView })
+        .first(where: { $0.probeIdentifier == "content" })
+    else {
+      return nil
+    }
+    return (
+      mark: mark.convert(mark.bounds, to: hostingView),
+      content: content.convert(content.bounds, to: hostingView)
+    )
+  }
+
+  guard let left = placedFrames(for: .left), let right = placedFrames(for: .right) else {
+    Issue.record("Expected both custom-layout probe views to be rendered")
+    return
+  }
+  #expect(left.mark.minX < left.content.minX)
+  #expect(right.mark.maxX > right.content.maxX)
 }
 
 @Test func DictationAccessibilityInstallsOnePersistentFleckMarkSubtree() throws {
@@ -372,8 +488,27 @@ private func capsuleContext(
   if let descendant {
     #expect(hit === descendant || hit?.isDescendant(of: descendant) == true)
   }
-  #expect(controller.presentationModel.action != nil)
-  controller.presentationModel.actionHandler()
+  host.layoutSubtreeIfNeeded()
+  let performClick = #selector(NSButton.performClick(_:))
+  guard let actionButton = descendants(of: host)
+    .first(where: { $0.responds(to: performClick) })
+  else {
+    Issue.record("Expected the rendered Undo action button to be discoverable")
+    controller.dismiss()
+    return
+  }
+  let actionFrame = actionButton.convert(actionButton.bounds, to: host)
+  let actionHit = host.hitTest(NSPoint(x: actionFrame.midX, y: actionFrame.midY))
+  #expect(actionHit != nil)
+  #expect(actionHit !== host)
+  #expect(
+    actionHit === actionButton
+      || actionHit?.isDescendant(of: actionButton) == true
+      || actionButton.isDescendant(of: actionHit ?? host)
+  )
+  #expect(actionButton.responds(to: performClick))
+  #expect(actions == 0)
+  _ = actionButton.perform(performClick, with: nil)
   #expect(actions == 1)
   controller.dismiss()
 }

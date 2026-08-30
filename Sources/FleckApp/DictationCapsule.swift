@@ -213,11 +213,15 @@
       let markWidth: CGFloat = 14
       let glyphWidth: CGFloat = status == .finalizing || status == .cleaning
         || status == .routing || status == .saving ? 0 : 14
-      let actionWidth = action.map { CGFloat(max($0.title.count * 6, 24)) } ?? 0
-      let dividerWidth: CGFloat = action == nil ? 0 : actionDividerSize.width + 7
+      let actionWidth = action.map(Self.actionWidth(for:)) ?? 0
+      let dividerWidth: CGFloat = action == nil ? 0 : actionDividerSize.width + 14
       let estimate = 16 + markWidth + 7 + glyphWidth + (glyphWidth > 0 ? 7 : 0)
-        + CGFloat(visible.count) * 6.2 + dividerWidth + actionWidth
+        + CGFloat(visible.count) * 7 + dividerWidth + actionWidth
       return min(ceiling, max(ceil(estimate), 1))
+    }
+
+    static func actionWidth(for action: DictationCapsuleAction) -> CGFloat {
+      max(CGFloat(action.title.count) * 7 + 4, 28)
     }
   }
 
@@ -455,6 +459,7 @@
     case timer
     case terminalGlyph
     case statusText
+    case divider
     case action
   }
 
@@ -472,13 +477,13 @@
       includesAction: Bool
     ) -> [FleckRailContentElement] {
       let left: [FleckRailContentElement] = includesAction
-        ? [.mark, .terminalGlyph, .statusText, .action]
+        ? [.mark, .terminalGlyph, .statusText, .divider, .action]
         : [.mark, .terminalGlyph, .statusText]
       return dock == .right ? Array(left.reversed()) : left
     }
   }
 
-  private struct FleckRailLayout: Layout {
+  struct FleckRailLayout: Layout {
     let order: [FleckRailContentElement]
     let spacing: CGFloat
 
@@ -513,9 +518,7 @@
       let visibleIndices = subviews.indices.filter {
         sizes[$0].width > 0 && sizes[$0].height > 0
       }
-      let orderedIndices = isReversed
-        ? Array(visibleIndices.reversed())
-        : Array(visibleIndices)
+      let orderedIndices = Array(visibleIndices)
       var cursor = isReversed ? bounds.maxX : bounds.minX
 
       for index in orderedIndices {
@@ -924,7 +927,7 @@
       }
 
       switch status {
-      case .saved, .savedWithoutCleanup:
+      case .saved, .savedWithoutCleanup, .failed, .noSpeech:
         guard let measuredWidth else { return ceiling }
         return CGSize(
           width: min(max(measuredWidth, 0), ceiling.width),
@@ -933,6 +936,19 @@
       default:
         return ceiling
       }
+    }
+
+    static func frame(
+      for dock: DictationCapsuleDock,
+      status: DictationCapsuleStatus,
+      measuredWidth: CGFloat? = nil,
+      in visibleFrame: CGRect
+    ) -> CGRect {
+      frame(
+        for: dock,
+        size: size(for: status, measuredWidth: measuredWidth),
+        in: visibleFrame
+      )
     }
 
     static func frame(
@@ -1048,10 +1064,8 @@
       )
       let finalFrame = Self.frame(
         for: currentDock,
-        size: Self.size(
-          for: currentContext.status,
-          measuredWidth: presentation.measuredWidth
-        ),
+        status: currentContext.status,
+        measuredWidth: presentation.measuredWidth,
         in: screen.visibleFrame
       )
       let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -1283,7 +1297,8 @@
       )
       if order.first == .action || order.first == .statusText {
         HStack(spacing: 7) {
-          terminalAction
+          terminalButton
+          terminalDivider
           terminalText
           terminalGlyph
         }
@@ -1291,7 +1306,8 @@
         HStack(spacing: 7) {
           terminalGlyph
           terminalText
-          terminalAction
+          terminalDivider
+          terminalButton
         }
       }
     }
@@ -1336,7 +1352,7 @@
     }
 
     @ViewBuilder
-    private var terminalAction: some View {
+    private var terminalDivider: some View {
       if model.action != nil {
         Rectangle()
           .fill(model.colors.secondaryTextColor.opacity(0.25))
@@ -1345,16 +1361,25 @@
             height: DictationCapsulePresentation.actionDividerSize.height
           )
           .accessibilityHidden(true)
-        if let action = model.action {
-          Button(action.title, action: model.actionHandler)
-            .buttonStyle(.borderless)
-            .font(.system(size: 11, weight: .semibold, design: .default))
-            .foregroundStyle(model.colors.coreColor)
-            .tint(model.colors.coreColor)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .accessibilityLabel(action.accessibilityLabel)
-        }
+      }
+    }
+
+    @ViewBuilder
+    private var terminalButton: some View {
+      if let action = model.action {
+        Button(action.title, action: model.actionHandler)
+          .buttonStyle(.borderless)
+          .font(.system(size: 11, weight: .semibold, design: .default))
+          .foregroundStyle(model.colors.coreColor)
+          .tint(model.colors.coreColor)
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .frame(
+            width: DictationCapsulePresentation.actionWidth(for: action),
+            alignment: .center
+          )
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityLabel(action.accessibilityLabel)
       }
     }
   }
