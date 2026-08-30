@@ -191,6 +191,12 @@
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }
+      .onAppear {
+        consumePendingSettingsRoute()
+      }
+      .onChange(of: runtime.pendingSettingsSection) { _, _ in
+        consumePendingSettingsRoute()
+      }
       .onDisappear { recordingSelection.cancel() }
       .task {
         await runtime.awaitStartupAssessment()
@@ -303,6 +309,13 @@
       AppMotion(reduceMotion: reduceMotion)
     }
 
+    private func consumePendingSettingsRoute() {
+      guard let section = runtime.consumePendingSettingsSection() else { return }
+      withAnimation(motion.spatial) {
+        selectedSection = section
+      }
+    }
+
     private var appearance: some View {
       Section("Editor") {
         Picker("Theme", selection: preferenceBinding(\.theme)) {
@@ -317,6 +330,7 @@
         ) { hex in
           guard let hex else { return }
           appState.updatePreferences { $0.accentHex = hex }
+          runtime.preferencesDidChange()
         }
         SettingsColorButton(
           title: "Editor text color",

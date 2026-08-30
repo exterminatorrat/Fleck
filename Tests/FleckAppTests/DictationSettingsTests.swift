@@ -119,6 +119,82 @@ import Testing
   #expect(SettingsSection.selectionEffectID == "settings-section")
 }
 
+@Test @MainActor func DictationSettingsPendingRouteIsDurableAndConsumedOnce() async throws {
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  var openSettingsCalls = 0
+  fixture.runtime.requestSettings(.dictation)
+  #expect(fixture.runtime.pendingSettingsSection == .dictation)
+  fixture.runtime.installOpenSettingsBridge {
+    openSettingsCalls += 1
+  }
+  #expect(openSettingsCalls == 1)
+  #expect(fixture.runtime.consumePendingSettingsSection() == .dictation)
+  #expect(fixture.runtime.consumePendingSettingsSection() == nil)
+
+  fixture.runtime.requestSettings(.dictation)
+  #expect(openSettingsCalls == 2)
+}
+
+@Test @MainActor func DictationRuntimeUpdatesRailAccentWithoutRewritingPreference() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  let accentHex = "#E64A19"
+  fixture.appState.updatePreferences { $0.accentHex = accentHex }
+  fixture.runtime.preferencesDidChange()
+
+  #expect(fixture.runtime.capsuleController.presentationModel.colors.accentHex == accentHex)
+  #expect(fixture.appState.preferences.accentHex == accentHex)
+}
+
+@Test @MainActor func DictationRuntimePointerStartPublishesOwnerContextImmediately() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.runtime.shortcutController.startPointerHandsFree())
+  for _ in 0..<100 {
+    if fixture.runtime.capsuleController.currentContext.sessionID != nil { break }
+    await Task.yield()
+  }
+
+  let context = fixture.runtime.capsuleController.currentContext
+  #expect(context.status == .arming || context.status == .listening)
+  #expect(context.sessionID != nil)
+  #expect(context.trigger == .pointer)
+  #expect(context.mode == .smartCapture)
+  #expect(context.isHandsFree)
+
+  await fixture.runtime.shortcutController.cancelOwnedSession()
+  await fixture.runtime.shortcutController.waitForTerminalObservation()
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+}
+
+@Test @MainActor func DictationRuntimeActionBearingFailureDoesNotScheduleReturnTimer() async throws {
+  let sleeper = RuntimeCapsuleSleeper()
+  let saver = RuntimeSaving(error: DictationFailure.saveFailed)
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    capsuleEnabled: true,
+    saving: saver,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  for _ in 0..<100 {
+    if fixture.runtime.phase == .failed("Unable to save dictation.") { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.phase == .failed("Unable to save dictation."))
+  #expect(fixture.runtime.recoveryAction == .openHistory)
+  #expect(await sleeper.requestedDurations.isEmpty)
+  await fixture.runtime.shortcutController.waitForTerminalObservation()
+  #expect(fixture.runtime.currentCapsuleStatus == .failed("Unable to save dictation."))
+  await fixture.runtime.cancel()
+}
+
 @Test @MainActor func DictationSettingsHistoryClearRequiresConfirmation() {
   let record = DictationHistoryRecord(
     id: UUID(),
@@ -1881,6 +1957,7 @@ private final class RuntimeFixture {
       foundationModelAvailable: true
     )),
     availabilityProvider: (@MainActor () -> DictationAvailability)? = nil,
+    saving: (any DictationSaving)? = nil,
     capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
     }
@@ -1939,7 +2016,7 @@ private final class RuntimeFixture {
       },
       cleaner: RuntimeCleaner(),
       router: RuntimeRouter(),
-      saver: appState,
+      saver: saving ?? appState,
       historyController: history,
       historyEnabled: { true },
       holdThreshold: .zero,
@@ -2105,6 +2182,49 @@ private final class RuntimeSpeechEngine: SpeechEngine {
 private struct RuntimeCleaner: TranscriptCleaning {
   func clean(_ transcript: String) async throws -> String {
     transcript
+  }
+}
+
+@MainActor
+private final class RuntimeSaving: DictationSaving {
+  let error: Error?
+  let destination = DictationDestination(noteID: UUID(), title: "Inbox")
+
+  init(error: Error? = nil) {
+    self.error = error
+  }
+
+  func activeDestinations() -> [DictationDestination] {
+    [destination]
+  }
+
+  func saveSmartCapture(
+    text: String,
+    captureID: UUID,
+    destinationID: UUID?
+  ) async throws -> DictationInsertionReceipt {
+    if let error { throw error }
+    return DictationInsertionReceipt(
+      captureID: captureID,
+      noteID: destination.noteID,
+      insertedSuffix: text
+    )
+  }
+
+  func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
+    true
+  }
+
+  func flushFocusedDictationSave(
+    captureID: UUID
+  ) async throws -> FocusedDictationPersistenceReceipt {
+    FocusedDictationPersistenceReceipt(captureID: captureID)
+  }
+
+  func compensateFocusedDictationSave(
+    _ receipt: FocusedDictationPersistenceReceipt
+  ) async -> Bool {
+    true
   }
 }
 

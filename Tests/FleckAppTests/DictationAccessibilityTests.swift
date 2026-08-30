@@ -801,11 +801,14 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   )
 
   #expect(panel.contentView?.menu?.items.map(\.title) == [
+    "Open Fleck",
+    "Dictation History",
+    "Dictation Settings",
     "Dock Bottom",
     "Dock Left",
     "Dock Right",
   ])
-  panel.contentView?.menu?.performActionForItem(at: 1)
+  panel.contentView?.menu?.performActionForItem(at: 4)
   #expect(controller.currentDock == .left)
   #expect(dockChanges == [.left])
   controller.render(.failed("Unavailable"), action: .copy)
@@ -859,4 +862,323 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
     pointer: "pointer",
     primary: "primary"
   ) == "pointer")
+}
+
+@Test func DictationAccessibilityPointerGestureCommitsOnlyBelowFourPoints() {
+  var click = FleckRailPointerGesture()
+  click.mouseDown(at: CGPoint(x: 10, y: 10), consumed: false)
+  click.mouseDragged(to: CGPoint(x: 13, y: 12))
+  #expect(click.mouseUp(at: CGPoint(x: 13, y: 12)) == .primaryClick)
+
+  var threshold = FleckRailPointerGesture()
+  threshold.mouseDown(at: CGPoint(x: 10, y: 10), consumed: false)
+  threshold.mouseDragged(to: CGPoint(x: 14, y: 10))
+  #expect(threshold.mouseUp(at: CGPoint(x: 14, y: 10)) == .drag)
+
+  var consumed = FleckRailPointerGesture()
+  consumed.mouseDown(at: CGPoint(x: 10, y: 10), consumed: true)
+  consumed.mouseDragged(to: CGPoint(x: 30, y: 30))
+  #expect(consumed.mouseUp(at: CGPoint(x: 30, y: 30)) == .none)
+}
+
+@Test @MainActor func DictationAccessibilityRuntimeMapsAuthoritativeContext() {
+  let id = UUID(uuidString: "E871F2A0-5B1B-45BE-9D61-2B27E31C6324")!
+  let ownership = DictationShortcutOwnership(
+    session: DictationShortcutSession(id: id),
+    trigger: .pointer,
+    mode: .smartCapture,
+    isHandsFree: true
+  )
+  let event = DictationCoordinatorEvent(
+    phase: .failed("Unable to save dictation."),
+    terminal: .failed("Unable to save dictation."),
+    context: DictationCoordinatorContext(
+      sessionID: id,
+      mode: .smartCapture,
+      pipelineStage: .save,
+      cleanupOutcome: .cleaned,
+      failureStage: .save
+    )
+  )
+
+  let context = DictationRuntime.capsuleContext(for: event, ownership: ownership)
+  #expect(context.status == .failed("Unable to save dictation."))
+  #expect(context.sessionID == id)
+  #expect(context.trigger == .pointer)
+  #expect(context.mode == DictationMode.smartCapture)
+  #expect(context.isHandsFree)
+  #expect(context.pipelineStage == DictationPipelineStage.save)
+  #expect(context.failureStage == DictationPipelineStage.save)
+  #expect(context.failureKind == DictationCapsuleFailureKind.save)
+}
+
+@Test @MainActor func DictationAccessibilityMapsArmingNoSpeechAndMissingDestination() {
+  let id = UUID(uuidString: "D5F9D8A0-6F3A-4FA0-BBB4-7A3E86F5031C")!
+  let ownership = DictationShortcutOwnership(
+    session: DictationShortcutSession(id: id),
+    trigger: .pointer,
+    mode: .smartCapture,
+    isHandsFree: true
+  )
+  let arming = DictationRuntime.capsuleContext(
+    for: .init(
+      phase: .arming,
+      terminal: nil,
+      context: DictationCoordinatorContext(
+        sessionID: id,
+        mode: .smartCapture,
+        pipelineStage: .capture,
+        cleanupOutcome: nil,
+        failureStage: nil
+      )
+    ),
+    ownership: ownership
+  )
+  #expect(arming.status == .arming)
+  #expect(arming.sessionID == id)
+  #expect(arming.trigger == .pointer)
+  #expect(arming.isHandsFree)
+
+  let noSpeech = DictationRuntime.capsuleContext(
+    for: .init(
+      phase: .idle,
+      terminal: .noSpeech,
+      context: DictationCoordinatorContext(
+        sessionID: id,
+        mode: .smartCapture,
+        pipelineStage: .capture,
+        cleanupOutcome: nil,
+        failureStage: nil
+      )
+    ),
+    ownership: ownership
+  )
+  #expect(noSpeech.status == .noSpeech)
+  #expect(noSpeech.status.presentation.visualMode == .warning)
+
+  let missingDestination = DictationRuntime.capsuleContext(
+    for: .init(
+      phase: .idle,
+      terminal: .saved(mode: .smartCapture, cleanup: .cleaned, destination: nil),
+      context: DictationCoordinatorContext(
+        sessionID: id,
+        mode: .smartCapture,
+        pipelineStage: .save,
+        cleanupOutcome: .cleaned,
+        failureStage: nil
+      )
+    ),
+    ownership: ownership
+  )
+  #expect(missingDestination.status == .saved(destination: "your notes"))
+
+  let fallback = DictationRuntime.capsuleContext(
+    for: .init(
+      phase: .idle,
+      terminal: .saved(mode: .smartCapture, cleanup: .usedRaw, destination: nil),
+      context: DictationCoordinatorContext(
+        sessionID: id,
+        mode: .smartCapture,
+        pipelineStage: .save,
+        cleanupOutcome: .usedRaw,
+        failureStage: nil
+      )
+    ),
+    ownership: ownership
+  )
+  #expect(fallback.status == .savedWithoutCleanup(destination: "your notes"))
+}
+
+@Test @MainActor func DictationAccessibilityContextMenuKeepsDismissAndRecoveryAfterBaseItems() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  controller.configureInteraction(
+    onPrimaryClick: {},
+    onStop: {},
+    onCancel: {},
+    onOpenFleck: {},
+    onOpenHistory: {},
+    onOpenSettings: {},
+    onDismiss: {},
+    onRecovery: {}
+  )
+  controller.render(.failed("Unable to save dictation."), action: .copy)
+
+  #expect(panel.contentView?.menu?.items.map(\.title) == [
+    "Open Fleck",
+    "Dictation History",
+    "Dictation Settings",
+    "Dock Bottom",
+    "Dock Left",
+    "Dock Right",
+    "Dismiss",
+    "Copy",
+  ])
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  #expect(panel.contentView?.menu?.items.map(\.title) == [
+    "Open Fleck",
+    "Dictation History",
+    "Dictation Settings",
+    "Dock Bottom",
+    "Dock Left",
+    "Dock Right",
+  ])
+  controller.dismiss()
+}
+
+@Test @MainActor func DictationAccessibilityIdleShellRoutesOnePrimaryClick() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  var primaryClicks = 0
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  controller.configureInteraction(
+    onPrimaryClick: { primaryClicks += 1 },
+    onStop: {},
+    onCancel: {},
+    onOpenFleck: {},
+    onOpenHistory: {},
+    onOpenSettings: {},
+    onDismiss: {},
+    onRecovery: {}
+  )
+
+  let host = panel.contentView!
+  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.idleSize)
+  host.layoutSubtreeIfNeeded()
+  let eventHost = host.subviews.first!
+  let point = NSPoint(x: host.bounds.midX, y: host.bounds.midY)
+  let mouseDown = NSEvent.mouseEvent(
+    with: .leftMouseDown,
+    location: point,
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: 0,
+    context: nil,
+    eventNumber: 1,
+    clickCount: 1,
+    pressure: 0
+  )!
+  let mouseUp = NSEvent.mouseEvent(
+    with: .leftMouseUp,
+    location: point,
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: 0,
+    context: nil,
+    eventNumber: 2,
+    clickCount: 1,
+    pressure: 0
+  )!
+  eventHost.mouseDown(with: mouseDown)
+  eventHost.mouseUp(with: mouseUp)
+  #expect(primaryClicks == 1)
+  controller.dismiss()
+}
+
+@Test @MainActor func DictationAccessibilityIdleDragTogglesIndicatorsOnlyAfterThreshold() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+
+  let host = panel.contentView!
+  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.idleSize)
+  host.layoutSubtreeIfNeeded()
+  let eventHost = host.subviews.first!
+  let start = NSPoint(x: host.bounds.midX, y: host.bounds.midY)
+  let down = NSEvent.mouseEvent(
+    with: .leftMouseDown,
+    location: start,
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: 0,
+    context: nil,
+    eventNumber: 3,
+    clickCount: 1,
+    pressure: 0
+  )!
+  let smallDrag = NSEvent.mouseEvent(
+    with: .leftMouseDragged,
+    location: NSPoint(x: start.x + 3, y: start.y),
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: 0,
+    context: nil,
+    eventNumber: 4,
+    clickCount: 1,
+    pressure: 0
+  )!
+  let thresholdDrag = NSEvent.mouseEvent(
+    with: .leftMouseDragged,
+    location: NSPoint(x: start.x + 4, y: start.y),
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: 0,
+    context: nil,
+    eventNumber: 5,
+    clickCount: 1,
+    pressure: 0
+  )!
+  let up = NSEvent.mouseEvent(
+    with: .leftMouseUp,
+    location: NSPoint(x: start.x + 4, y: start.y),
+    modifierFlags: [],
+    timestamp: 0,
+    windowNumber: 0,
+    context: nil,
+    eventNumber: 6,
+    clickCount: 1,
+    pressure: 0
+  )!
+
+  eventHost.mouseDown(with: down)
+  eventHost.mouseDragged(with: smallDrag)
+  #expect(!controller.presentationModel.showsDockIndicators)
+  eventHost.mouseDragged(with: thresholdDrag)
+  #expect(controller.presentationModel.showsDockIndicators)
+  eventHost.mouseUp(with: up)
+  #expect(!controller.presentationModel.showsDockIndicators)
+  controller.dismiss()
+}
+
+@Test @MainActor func DictationAccessibilityIdleHitTestMatchesRoundedShell() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  let host = panel.contentView!
+  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.idleSize)
+  host.layoutSubtreeIfNeeded()
+
+  #expect(host.hitTest(NSPoint(x: host.bounds.midX, y: host.bounds.midY)) != nil)
+  #expect(host.hitTest(NSPoint(x: host.bounds.minX, y: host.bounds.minY)) == nil)
+  #expect(host.hitTest(NSPoint(x: host.bounds.maxX + 1, y: host.bounds.midY)) == nil)
+  controller.dismiss()
+}
+
+@Test func DictationAccessibilityFailureKindAdapterKeepsConciseCopyPure() {
+  #expect(
+    DictationCapsuleFailureKind.resolve(
+      message: DictationFailure.permissionDenied.localizedDescription,
+      failureStage: .capture
+    ) == .microphoneAccess
+  )
+  #expect(
+    DictationCapsuleFailureKind.resolve(
+      message: "Any persistence detail",
+      failureStage: .save
+    ) == .save
+  )
+  #expect(
+    DictationCapsuleFailureKind.resolve(
+      message: "Checksum mismatch",
+      failureStage: nil,
+      isModelRepair: true
+    ) == .modelRepair
+  )
+  #expect(
+    DictationCapsuleFailureKind.resolve(
+      message: "A technical detail",
+      failureStage: .capture
+    ) == nil
+  )
 }

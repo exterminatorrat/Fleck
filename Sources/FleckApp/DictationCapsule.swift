@@ -23,6 +23,58 @@
     }
   }
 
+  enum FleckRailPointerResult: Equatable {
+    case none
+    case primaryClick
+    case drag
+  }
+
+  struct FleckRailPointerGesture {
+    static let dragThreshold: CGFloat = 4
+
+    private var startPoint: CGPoint?
+    private var consumed = false
+    private(set) var isDragging = false
+
+    var isTracking: Bool { startPoint != nil }
+
+    mutating func mouseDown(at point: CGPoint, consumed: Bool) {
+      startPoint = point
+      self.consumed = consumed
+      isDragging = false
+    }
+
+    mutating func mouseDragged(to point: CGPoint) {
+      guard let startPoint, !consumed, !isDragging else { return }
+      let dx = point.x - startPoint.x
+      let dy = point.y - startPoint.y
+      if (dx * dx + dy * dy).squareRoot() >= Self.dragThreshold {
+        isDragging = true
+      }
+    }
+
+    mutating func mouseUp(at point: CGPoint) -> FleckRailPointerResult {
+      defer {
+        startPoint = nil
+        consumed = false
+        isDragging = false
+      }
+      guard let startPoint, !consumed else { return .none }
+      if isDragging { return .drag }
+      let dx = point.x - startPoint.x
+      let dy = point.y - startPoint.y
+      return (dx * dx + dy * dy).squareRoot() < Self.dragThreshold
+        ? .primaryClick
+        : .drag
+    }
+
+    mutating func cancel() {
+      startPoint = nil
+      consumed = false
+      isDragging = false
+    }
+  }
+
   struct DictationCapsuleContext: Equatable {
     let status: DictationCapsuleStatus
     let sessionID: UUID?
@@ -63,6 +115,21 @@
     case save
     case modelRepair
     case generic
+
+    static func resolve(
+      message: String,
+      failureStage: DictationPipelineStage?,
+      isModelRepair: Bool = false
+    ) -> Self? {
+      if isModelRepair { return .modelRepair }
+      if failureStage == .save { return .save }
+      if message == DictationFailure.permissionDenied.localizedDescription
+        || message == DictationFailure.unavailable.localizedDescription
+      {
+        return .microphoneAccess
+      }
+      return nil
+    }
   }
 
   enum DictationCapsuleVisualMode: Equatable {
@@ -807,30 +874,54 @@
     @Published private(set) var action: DictationCapsuleAction?
     @Published private(set) var dock: DictationCapsuleDock
     @Published private(set) var colors: FleckRailColors
+    @Published private(set) var isListeningHover = false
+    @Published private(set) var isDragActive = false
     private(set) var actionHandler: @MainActor () -> Void
+    private(set) var stopHandler: @MainActor () -> Void
+    private(set) var cancelHandler: @MainActor () -> Void
+    private(set) var dismissHandler: @MainActor () -> Void
 
     init(
       context: DictationCapsuleContext = DictationCapsuleContext(status: .idle),
       dock: DictationCapsuleDock = .bottom,
       colors: FleckRailColors = FleckRailColors(),
       action: DictationCapsuleAction? = nil,
-      onAction: @escaping @MainActor () -> Void = {}
+      onAction: @escaping @MainActor () -> Void = {},
+      onStop: @escaping @MainActor () -> Void = {},
+      onCancel: @escaping @MainActor () -> Void = {},
+      onDismiss: @escaping @MainActor () -> Void = {}
     ) {
       self.context = context
       self.dock = dock
       self.colors = colors
       self.action = action
       self.actionHandler = onAction
+      self.stopHandler = onStop
+      self.cancelHandler = onCancel
+      self.dismissHandler = onDismiss
+      if context.status != .listening || !context.isHandsFree {
+        isListeningHover = false
+      }
     }
 
     func update(
       context: DictationCapsuleContext,
       action: DictationCapsuleAction?,
-      onAction: @escaping @MainActor () -> Void
+      onAction: @escaping @MainActor () -> Void,
+      onStop: (@MainActor () -> Void)? = nil,
+      onCancel: (@MainActor () -> Void)? = nil
     ) {
       self.context = context
       self.action = action
       self.actionHandler = onAction
+      if let onStop { self.stopHandler = onStop }
+      if let onCancel { self.cancelHandler = onCancel }
+      if context.status != .listening || !context.isHandsFree {
+        isListeningHover = false
+      }
+      if context.status != .idle {
+        isDragActive = false
+      }
     }
 
     func updateDock(_ dock: DictationCapsuleDock) {
@@ -840,6 +931,40 @@
     func updateAccentHex(_ accentHex: String) {
       colors = FleckRailColors(accentHex: accentHex)
     }
+
+    func setListeningHover(_ isHovering: Bool) {
+      isListeningHover = isHovering
+    }
+
+    func setDragActive(_ isActive: Bool) {
+      isDragActive = isActive
+    }
+
+    func updateListeningActions(
+      onStop: @escaping @MainActor () -> Void,
+      onCancel: @escaping @MainActor () -> Void
+    ) {
+      stopHandler = onStop
+      cancelHandler = onCancel
+    }
+
+    func updateDismissHandler(_ onDismiss: @escaping @MainActor () -> Void) {
+      dismissHandler = onDismiss
+    }
+
+    var showsDockIndicators: Bool { isDragActive }
+  }
+
+  @MainActor
+  private final class DictationCapsuleInputRouter {
+    var onPrimaryClick: @MainActor () -> Void = {}
+    var onOpenFleck: @MainActor () -> Void = {}
+    var onOpenHistory: @MainActor () -> Void = {}
+    var onOpenSettings: @MainActor () -> Void = {}
+    var onDismiss: @MainActor () -> Void = {}
+    var onRecovery: @MainActor () -> Void = {}
+    var onDragChanged: @MainActor (CGPoint) -> Void = { _ in }
+    var onDragEnded: @MainActor (CGPoint, Bool) -> Void = { _, _ in }
   }
 
   final class DictationCapsulePanel: NSPanel {
@@ -888,11 +1013,15 @@
     let panel: DictationCapsulePanel
     let waveformModel: DictationWaveformModel
     let presentationModel: DictationCapsulePresentationModel
+    private let inputRouter: DictationCapsuleInputRouter
+    private var hostingView: DictationCapsuleHostingView!
     private(set) var currentDock = DictationCapsuleDock.bottom
     private(set) var currentContext = DictationCapsuleContext(status: .idle)
     private var currentScreen: NSScreen?
     private var onDockChanged: (@MainActor (DictationCapsuleDock) -> Void)?
     private var screenParametersObserver: DictationCapsuleObserverToken?
+    private var dragOrigin: CGPoint?
+    private var dragFrameOrigin: CGPoint?
 
     init(
       panel: DictationCapsulePanel = DictationCapsulePanel(),
@@ -904,6 +1033,8 @@
       self.presentationModel = DictationCapsulePresentationModel(
         colors: FleckRailColors(accentHex: accentHex)
       )
+      let inputRouter = DictationCapsuleInputRouter()
+      self.inputRouter = inputRouter
       screenParametersObserver = DictationCapsuleObserverToken(
         NotificationCenter.default.addObserver(
           forName: NSApplication.didChangeScreenParametersNotification,
@@ -915,11 +1046,20 @@
           }
         }
       )
-      panel.contentView = DictationCapsuleHostingView(
+      let hostingView = DictationCapsuleHostingView(
         model: presentationModel,
         waveformModel: waveformModel,
+        inputRouter: inputRouter,
         onDockSelected: { [weak self] dock in self?.selectDock(dock) }
       )
+      self.hostingView = hostingView
+      panel.contentView = hostingView
+      inputRouter.onDragChanged = { [weak self] point in
+        self?.dragChanged(to: point)
+      }
+      inputRouter.onDragEnded = { [weak self] point, cancelled in
+        self?.dragEnded(at: point, cancelled: cancelled)
+      }
     }
 
     func presentIdle(
@@ -927,16 +1067,41 @@
       onOpenFleck: @escaping @MainActor () -> Void,
       onDockChanged: @escaping @MainActor (DictationCapsuleDock) -> Void
     ) {
-      // Keep the pre-Task-4 call shape; the persistent host does not own gestures.
-      _ = onOpenFleck
       currentDock = dock
       currentContext = DictationCapsuleContext(status: .idle)
       waveformModel.reset()
+      dragOrigin = nil
+      dragFrameOrigin = nil
+      presentationModel.setDragActive(false)
+      hostingView.cancelPointerGesture()
       self.onDockChanged = onDockChanged
       presentationModel.updateDock(dock)
       presentationModel.update(context: currentContext, action: nil, onAction: {})
+      inputRouter.onOpenFleck = onOpenFleck
+      hostingView.refreshMenu()
       applyCurrentFrame(animated: panel.isVisible)
       panel.orderFrontRegardless()
+    }
+
+    func configureInteraction(
+      onPrimaryClick: @escaping @MainActor () -> Void,
+      onStop: @escaping @MainActor () -> Void,
+      onCancel: @escaping @MainActor () -> Void,
+      onOpenFleck: @escaping @MainActor () -> Void,
+      onOpenHistory: @escaping @MainActor () -> Void,
+      onOpenSettings: @escaping @MainActor () -> Void,
+      onDismiss: @escaping @MainActor () -> Void,
+      onRecovery: @escaping @MainActor () -> Void
+    ) {
+      inputRouter.onPrimaryClick = onPrimaryClick
+      inputRouter.onOpenFleck = onOpenFleck
+      inputRouter.onOpenHistory = onOpenHistory
+      inputRouter.onOpenSettings = onOpenSettings
+      inputRouter.onDismiss = onDismiss
+      inputRouter.onRecovery = onRecovery
+      presentationModel.updateListeningActions(onStop: onStop, onCancel: onCancel)
+      presentationModel.updateDismissHandler(onDismiss)
+      hostingView.refreshMenu()
     }
 
     func render(
@@ -963,6 +1128,7 @@
         waveformModel.reset()
       }
       presentationModel.update(context: context, action: action, onAction: onAction)
+      hostingView.refreshMenu()
       applyCurrentFrame(animated: panel.isVisible)
       panel.orderFrontRegardless()
     }
@@ -970,6 +1136,7 @@
     func setDock(_ dock: DictationCapsuleDock) {
       currentDock = dock
       presentationModel.updateDock(dock)
+      hostingView.refreshMenu()
       applyCurrentFrame(animated: panel.isVisible)
     }
 
@@ -979,12 +1146,43 @@
 
     func dismiss() {
       waveformModel.reset()
+      dragOrigin = nil
+      dragFrameOrigin = nil
+      presentationModel.setDragActive(false)
+      hostingView.cancelPointerGesture()
       panel.orderOut(nil)
     }
 
     func updateAudioLevel(_ level: Float) {
       guard currentContext.status == .listening, panel.isVisible else { return }
       waveformModel.receive(level: level)
+    }
+
+    private func dragChanged(to point: CGPoint) {
+      guard currentContext.status == .idle else { return }
+      if dragOrigin == nil {
+        dragOrigin = point
+        dragFrameOrigin = panel.frame.origin
+        presentationModel.setDragActive(true)
+      }
+      guard let dragOrigin, let dragFrameOrigin else { return }
+      panel.setFrameOrigin(CGPoint(
+        x: dragFrameOrigin.x + point.x - dragOrigin.x,
+        y: dragFrameOrigin.y + point.y - dragOrigin.y
+      ))
+    }
+
+    private func dragEnded(at point: CGPoint, cancelled: Bool) {
+      guard dragOrigin != nil else { return }
+      defer {
+        dragOrigin = nil
+        dragFrameOrigin = nil
+        presentationModel.setDragActive(false)
+      }
+      guard !cancelled, currentContext.status == .idle,
+        let screen = screen(containing: point) ?? resolvedScreen()
+      else { return }
+      selectDock(Self.nearestDock(to: point, in: screen.visibleFrame), on: screen)
     }
 
     nonisolated static func size(
@@ -1264,6 +1462,25 @@
         .accessibilityElement(children: model.action == nil ? .ignore : .contain)
         .accessibilityLabel(presentation.voiceOverText)
         .accessibilityAddTraits(.isStaticText)
+        .accessibilityAction(named: "Stop") {
+          guard model.context.status == .listening, model.context.isHandsFree else { return }
+          model.stopHandler()
+        }
+        .accessibilityAction(named: "Cancel") {
+          guard model.context.status == .listening, model.context.isHandsFree else { return }
+          model.cancelHandler()
+        }
+        .accessibilityAction(named: "Dismiss") {
+          guard model.context.status.isTerminalResult else { return }
+          model.dismissHandler()
+        }
+        .onHover { isHovering in
+          model.setListeningHover(
+            isHovering
+              && model.context.status == .listening
+              && model.context.isHandsFree
+          )
+        }
     }
 
     private var railContent: some View {
@@ -1319,18 +1536,36 @@
         let order = FleckRailContentOrder.listening(for: model.dock)
         if order.first == .timer {
           HStack(spacing: 7) {
-            elapsedText(at: context.date)
+            listeningActionZone(at: context.date)
             waveform(at: context.date)
           }
           .accessibilityLabel("Dictation listening")
         } else {
           HStack(spacing: 7) {
             waveform(at: context.date)
-            elapsedText(at: context.date)
+            listeningActionZone(at: context.date)
           }
           .accessibilityLabel("Dictation listening")
         }
       }
+    }
+
+    private func listeningActionZone(at date: Date) -> some View {
+      ZStack {
+        elapsedText(at: date)
+          .opacity(model.isListeningHover && model.context.isHandsFree ? 0 : 1)
+        HStack(spacing: 2) {
+          Button("Stop", action: model.stopHandler)
+            .buttonStyle(.borderless)
+            .frame(width: 28, height: 28)
+          Button("Cancel", action: model.cancelHandler)
+            .buttonStyle(.borderless)
+            .frame(width: 28, height: 28)
+        }
+        .opacity(model.isListeningHover && model.context.isHandsFree ? 1 : 0)
+        .allowsHitTesting(model.isListeningHover && model.context.isHandsFree)
+      }
+      .frame(width: 58, height: 28)
     }
 
     private func waveform(at date: Date) -> some View {
@@ -1486,6 +1721,15 @@
       if case .savedWithoutCleanup = self { return true }
       return false
     }
+
+    var isTerminalResult: Bool {
+      switch self {
+      case .saved, .savedWithoutCleanup, .noSpeech, .failed:
+        true
+      default:
+        false
+      }
+    }
   }
 
   private extension FleckRailColors {
@@ -1503,18 +1747,22 @@
   @MainActor
   private final class DictationCapsuleHostingView: NSView {
     private let model: DictationCapsulePresentationModel
+    private let inputRouter: DictationCapsuleInputRouter
     private let onDockSelected: @MainActor (DictationCapsuleDock) -> Void
-    private let hostingView: NSHostingView<DictationCapsuleView>
+    private let hostingView: DictationCapsuleEventHostingView
 
     init(
       model: DictationCapsulePresentationModel,
       waveformModel: DictationWaveformModel,
+      inputRouter: DictationCapsuleInputRouter,
       onDockSelected: @escaping @MainActor (DictationCapsuleDock) -> Void
     ) {
       self.model = model
+      self.inputRouter = inputRouter
       self.onDockSelected = onDockSelected
-      self.hostingView = NSHostingView(
-        rootView: DictationCapsuleView(model: model, waveformModel: waveformModel)
+      self.hostingView = DictationCapsuleEventHostingView(
+        rootView: DictationCapsuleView(model: model, waveformModel: waveformModel),
+        inputRouter: inputRouter
       )
       super.init(frame: .zero)
       hostingView.translatesAutoresizingMaskIntoConstraints = false
@@ -1525,7 +1773,8 @@
         hostingView.topAnchor.constraint(equalTo: topAnchor),
         hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
       ])
-      menu = makeDockMenu()
+      menu = makeContextMenu()
+      hostingView.menu = menu
     }
 
     @available(*, unavailable)
@@ -1543,18 +1792,57 @@
       return path.contains(point) ? super.hitTest(point) : nil
     }
 
-    private func makeDockMenu() -> NSMenu {
+    func refreshMenu() {
+      menu = makeContextMenu()
+      hostingView.menu = menu
+    }
+
+    func cancelPointerGesture() {
+      hostingView.cancelPointerGesture()
+    }
+
+    private func makeContextMenu() -> NSMenu {
       let menu = NSMenu()
-      for (title, action) in [
-        ("Dock Bottom", #selector(dockBottom)),
-        ("Dock Left", #selector(dockLeft)),
-        ("Dock Right", #selector(dockRight)),
-      ] {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
+      addItem("Open Fleck", action: #selector(openFleck), to: menu)
+      addItem("Dictation History", action: #selector(openHistory), to: menu)
+      addItem("Dictation Settings", action: #selector(openSettings), to: menu)
+      addItem("Dock Bottom", action: #selector(dockBottom), to: menu)
+      addItem("Dock Left", action: #selector(dockLeft), to: menu)
+      addItem("Dock Right", action: #selector(dockRight), to: menu)
+
+      if model.context.status.isFailure || model.context.status.isTerminalResult {
+        addItem("Dismiss", action: #selector(dismiss), to: menu)
+      }
+      if let action = model.action, action != .openHistory {
+        addItem(action.title, action: #selector(recovery), to: menu)
       }
       return menu
+    }
+
+    private func addItem(_ title: String, action: Selector, to menu: NSMenu) {
+      let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+      item.target = self
+      menu.addItem(item)
+    }
+
+    @objc private func openFleck() {
+      inputRouter.onOpenFleck()
+    }
+
+    @objc private func openHistory() {
+      inputRouter.onOpenHistory()
+    }
+
+    @objc private func openSettings() {
+      inputRouter.onOpenSettings()
+    }
+
+    @objc private func dismiss() {
+      inputRouter.onDismiss()
+    }
+
+    @objc private func recovery() {
+      inputRouter.onRecovery()
     }
 
     @objc private func dockBottom() {
@@ -1567,6 +1855,107 @@
 
     @objc private func dockRight() {
       onDockSelected(.right)
+    }
+  }
+
+  @MainActor
+  private final class DictationCapsuleEventHostingView: NSHostingView<DictationCapsuleView> {
+    private let inputRouter: DictationCapsuleInputRouter
+    private var gesture = FleckRailPointerGesture()
+    private var consumedGesture = false
+
+    init(
+      rootView: DictationCapsuleView,
+      inputRouter: DictationCapsuleInputRouter
+    ) {
+      self.inputRouter = inputRouter
+      super.init(rootView: rootView)
+    }
+
+    required init(rootView: DictationCapsuleView) {
+      self.inputRouter = DictationCapsuleInputRouter()
+      super.init(rootView: rootView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+      fatalError("init(coder:) has not been implemented")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+      let point = convert(event.locationInWindow, from: nil)
+      let consumed = isActionRegion(at: point)
+      consumedGesture = consumed
+      gesture.mouseDown(at: point, consumed: consumed)
+      if consumed {
+        super.mouseDown(with: event)
+      }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+      let point = convert(event.locationInWindow, from: nil)
+      gesture.mouseDragged(to: point)
+      if consumedGesture {
+        super.mouseDragged(with: event)
+        return
+      }
+      guard gesture.isDragging else { return }
+      let screenPoint = window?.convertPoint(toScreen: event.locationInWindow)
+        ?? NSEvent.mouseLocation
+      inputRouter.onDragChanged(screenPoint)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+      let point = convert(event.locationInWindow, from: nil)
+      let wasDragging = gesture.isDragging
+      let wasConsumed = consumedGesture
+      consumedGesture = false
+      let result = gesture.mouseUp(at: point)
+      let screenPoint = window?.convertPoint(toScreen: event.locationInWindow)
+        ?? NSEvent.mouseLocation
+      switch result {
+      case .none:
+        if wasConsumed {
+          super.mouseUp(with: event)
+        }
+        inputRouter.onDragEnded(screenPoint, true)
+      case .primaryClick:
+        inputRouter.onPrimaryClick()
+      case .drag:
+        if !wasDragging {
+          inputRouter.onDragChanged(screenPoint)
+        }
+        inputRouter.onDragEnded(screenPoint, false)
+      }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+      cancelPointerGesture()
+      super.rightMouseDown(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+      menu
+    }
+
+    func cancelPointerGesture() {
+      let wasDragging = gesture.isDragging
+      consumedGesture = false
+      gesture.cancel()
+      if wasDragging {
+        inputRouter.onDragEnded(NSEvent.mouseLocation, true)
+      }
+    }
+
+    private func isActionRegion(at point: NSPoint) -> Bool {
+      var view = super.hitTest(point)
+      while let candidate = view {
+        if candidate is NSButton {
+          return true
+        }
+        view = candidate.superview
+      }
+      return false
     }
   }
 #endif
