@@ -4,18 +4,27 @@ import Testing
 
 @testable import FleckCore
 
-@Test func personalDictionaryStoreMissingFileLoadsEmptyWithoutCreatingDirectory() async throws {
+@Test func personalDictionaryStoreMissingFileLoadsEmptyUnderPersistentLock() async throws {
   let root = temporaryDictionaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
 
-  let store = PersonalDictionaryStore(rootURL: root)
+  let first = PersonalDictionaryStore(rootURL: root)
 
-  #expect(try await store.snapshot() == PersonalDictionarySnapshot())
+  #expect(try await first.snapshot() == PersonalDictionarySnapshot())
+  #expect(!FileManager.default.fileExists(atPath: first.fileURL.path))
   #expect(
-    !FileManager.default.fileExists(
-      atPath: root.appendingPathComponent("PersonalDictionary").path
+    FileManager.default.fileExists(
+      atPath: first.fileURL.appendingPathExtension("lock").path
     )
   )
+
+  let entry = dictionaryStoreEntry(preferredForm: "Fleck")
+  let second = PersonalDictionaryStore(rootURL: root)
+  try await second.upsert(entry)
+  let refreshed = try await first.publishedSnapshot()
+  #expect(refreshed.snapshot.revision == 1)
+  #expect(refreshed.snapshot.entries == [entry])
+  #expect(refreshed.compiled == (try CompiledPersonalDictionary.compile(refreshed.snapshot)))
 }
 
 @Test func personalDictionaryStoreRoundTripsAcrossRelaunchAndUsesOneAtomicFile() async throws {

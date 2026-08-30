@@ -95,10 +95,6 @@ public actor PersonalDictionaryStore {
   }
 
   public func publishedSnapshot() throws -> PersonalDictionaryPublishedSnapshot {
-    if cachedPublished == nil, !fileManager.fileExists(atPath: fileURL.path) {
-      return try cachedOrCompiled(PersonalDictionarySnapshotV2())
-    }
-
     return try withMutationLock {
       removeStaleStages()
       guard let authority = try readAuthority() else {
