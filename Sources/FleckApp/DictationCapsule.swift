@@ -472,13 +472,21 @@
       dock == .right ? [.timer, .waveform, .mark] : [.mark, .waveform, .timer]
     }
 
-    static func terminal(
+    static func terminalCluster(
       for dock: DictationCapsuleDock,
       includesAction: Bool
     ) -> [FleckRailContentElement] {
       let left: [FleckRailContentElement] = includesAction
-        ? [.mark, .terminalGlyph, .statusText, .divider, .action]
-        : [.mark, .terminalGlyph, .statusText]
+        ? [.terminalGlyph, .statusText, .divider, .action]
+        : [.terminalGlyph, .statusText]
+      return dock == .right ? Array(left.reversed()) : left
+    }
+
+    static func terminal(
+      for dock: DictationCapsuleDock,
+      includesAction: Bool
+    ) -> [FleckRailContentElement] {
+      let left = [.mark] + terminalCluster(for: .left, includesAction: includesAction)
       return dock == .right ? Array(left.reversed()) : left
     }
   }
@@ -490,6 +498,53 @@
     private var isReversed: Bool {
       order.first == .statusText
     }
+
+    func sizeThatFits(
+      proposal: ProposedViewSize,
+      subviews: Subviews,
+      cache: inout ()
+    ) -> CGSize {
+      let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+      let visible = sizes.filter { $0.width > 0 && $0.height > 0 }
+      guard let maxHeight = visible.map(\.height).max() else {
+        return .zero
+      }
+      let intrinsicWidth = visible.map(\.width).reduce(0, +)
+        + spacing * CGFloat(max(visible.count - 1, 0))
+      let width = proposal.width.flatMap { $0.isFinite ? max($0, intrinsicWidth) : nil }
+        ?? intrinsicWidth
+      return CGSize(width: width, height: maxHeight)
+    }
+
+    func placeSubviews(
+      in bounds: CGRect,
+      proposal: ProposedViewSize,
+      subviews: Subviews,
+      cache: inout ()
+    ) {
+      let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+      let visibleIndices = subviews.indices.filter {
+        sizes[$0].width > 0 && sizes[$0].height > 0
+      }
+      let orderedIndices = Array(visibleIndices)
+      var cursor = isReversed ? bounds.maxX : bounds.minX
+
+      for index in orderedIndices {
+        let size = sizes[index]
+        let x = isReversed ? cursor - size.width : cursor
+        subviews[index].place(
+          at: CGPoint(x: x, y: bounds.midY - size.height / 2),
+          proposal: ProposedViewSize(size)
+        )
+        cursor += isReversed ? -(size.width + spacing) : size.width + spacing
+      }
+    }
+  }
+
+  struct FleckRailTerminalLayout: Layout {
+    let elements: [FleckRailContentElement]
+    let order: [FleckRailContentElement]
+    let spacing: CGFloat
 
     func sizeThatFits(
       proposal: ProposedViewSize,
@@ -515,20 +570,23 @@
       cache: inout ()
     ) {
       let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
-      let visibleIndices = subviews.indices.filter {
-        sizes[$0].width > 0 && sizes[$0].height > 0
+      let orderedIndices: [Int] = order.compactMap { element -> Int? in
+        guard let index = elements.firstIndex(of: element),
+          sizes[index].width > 0,
+          sizes[index].height > 0
+        else {
+          return nil
+        }
+        return index
       }
-      let orderedIndices = Array(visibleIndices)
-      var cursor = isReversed ? bounds.maxX : bounds.minX
-
+      var cursor = bounds.minX
       for index in orderedIndices {
         let size = sizes[index]
-        let x = isReversed ? cursor - size.width : cursor
         subviews[index].place(
-          at: CGPoint(x: x, y: bounds.midY - size.height / 2),
+          at: CGPoint(x: cursor, y: bounds.midY - size.height / 2),
           proposal: ProposedViewSize(size)
         )
-        cursor += isReversed ? -(size.width + spacing) : size.width + spacing
+        cursor += size.width + spacing
       }
     }
   }
@@ -1291,24 +1349,18 @@
 
     @ViewBuilder
     private var terminalContent: some View {
-      let order = FleckRailContentOrder.terminal(
-        for: model.dock,
-        includesAction: model.action != nil
-      )
-      if order.first == .action || order.first == .statusText {
-        HStack(spacing: 7) {
-          terminalButton
-          terminalDivider
-          terminalText
-          terminalGlyph
-        }
-      } else {
-        HStack(spacing: 7) {
-          terminalGlyph
-          terminalText
-          terminalDivider
-          terminalButton
-        }
+      FleckRailTerminalLayout(
+        elements: [.terminalGlyph, .statusText, .divider, .action],
+        order: FleckRailContentOrder.terminalCluster(
+          for: model.dock,
+          includesAction: model.action != nil
+        ),
+        spacing: 7
+      ) {
+        terminalGlyph
+        terminalText
+        terminalDivider
+        terminalButton
       }
     }
 
