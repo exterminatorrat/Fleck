@@ -24,6 +24,11 @@ struct LocalWritingExposureLedgerTests {
     #expect(checkpoint.currentHeadSHA256 == secondCheckpoint.currentHeadSHA256)
     #expect(checkpoint.currentHeadSHA256 != otherCheckpoint.currentHeadSHA256)
     #expect(try first.ledger.verify(expectedCorpusID: corpusID).checkpoint == checkpoint)
+    let decoded = try LocalWritingExposureLedger.verifyCheckpoint(
+      canonicalData: checkpoint.canonicalData
+    )
+    #expect(decoded == checkpoint)
+    #expect(decoded.canonicalData == checkpoint.canonicalData)
     #expect(try ledgerMode(at: first.url) == 0o600)
     #expect(try ledgerMode(at: first.ledger.lockURL) == 0o600)
 
@@ -288,6 +293,43 @@ struct LocalWritingExposureLedgerTests {
   func wrongCorpusAndNoncanonicalBytesFailClosed() throws {
     let fixture = try makeLedger()
     defer { fixture.cleanup() }
+    let checkpoint = try fixture.ledger.checkpoint()
+    let checkpointBytes = checkpoint.canonicalData
+    let duplicateKey = Data(
+      String(decoding: checkpointBytes, as: UTF8.self).replacingOccurrences(
+        of: "{",
+        with: "{\"schemaVersion\":1,"
+      ).utf8
+    )
+    let reordered = Data(
+      "{\"schemaVersion\":1,\"eventCount\":\(checkpoint.eventCount),\"currentHeadSHA256\":\"\(checkpoint.currentHeadSHA256)\",\"corpusID\":\"\(canonicalUUIDString(checkpoint.corpusID))\"}".utf8
+    )
+    let unknownKey = try rewriteExtension(checkpointBytes) { object in
+      object["unknown"] = true
+    }
+    let badCorpus = try rewriteExtension(checkpointBytes) { object in
+      object["corpusID"] = "not-a-uuid"
+    }
+    let badDigest = try rewriteExtension(checkpointBytes) { object in
+      object["currentHeadSHA256"] = String(repeating: "A", count: 64)
+    }
+    let badVersion = try rewriteExtension(checkpointBytes) { object in
+      object["schemaVersion"] = 2
+    }
+    let negativeCount = try rewriteExtension(checkpointBytes) { object in
+      object["eventCount"] = -1
+    }
+    let fractionalCount = try rewriteExtension(checkpointBytes) { object in
+      object["eventCount"] = 1.5
+    }
+    for bytes in [
+      Data([0x20]) + checkpointBytes, duplicateKey, reordered, unknownKey,
+      badCorpus, badDigest, badVersion, negativeCount, fractionalCount,
+    ] {
+      #expect(throws: LocalWritingExposureLedgerError.self) {
+        try LocalWritingExposureLedger.verifyCheckpoint(canonicalData: bytes)
+      }
+    }
     #expect(throws: LocalWritingExposureLedgerError.identityMismatch) {
       try fixture.ledger.verify(expectedCorpusID: otherCorpusID)
     }
@@ -447,6 +489,16 @@ struct LocalWritingExposureLedgerTests {
       )
     }
 
+    let stickyRoot = try makePrivateRoot()
+    defer { try? FileManager.default.removeItem(at: stickyRoot) }
+    #expect(Darwin.chmod(stickyRoot.path, 0o1700) == 0)
+    #expect(throws: LocalWritingExposureLedgerError.permissions) {
+      try LocalWritingExposureLedger.create(
+        at: stickyRoot.appendingPathComponent("ledger.jsonl"),
+        corpusID: corpusID
+      )
+    }
+
     let symlinkTarget = try makePrivateRoot()
     defer { try? FileManager.default.removeItem(at: symlinkTarget) }
     let symlinkRoot = temporaryRoot()
@@ -515,6 +567,20 @@ struct LocalWritingExposureLedgerTests {
       try LocalWritingExposureLedger.open(at: permissionFixture.url)
     }
 
+    let setUserIDFixture = try makeLedger()
+    defer { setUserIDFixture.cleanup() }
+    #expect(Darwin.chmod(setUserIDFixture.url.path, 0o4600) == 0)
+    #expect(throws: LocalWritingExposureLedgerError.permissions) {
+      try LocalWritingExposureLedger.open(at: setUserIDFixture.url)
+    }
+
+    let setGroupIDFixture = try makeLedger()
+    defer { setGroupIDFixture.cleanup() }
+    #expect(Darwin.chmod(setGroupIDFixture.ledger.lockURL.path, 0o2600) == 0)
+    #expect(throws: LocalWritingExposureLedgerError.permissions) {
+      try LocalWritingExposureLedger.open(at: setGroupIDFixture.url)
+    }
+
     let lockReplacementFixture = try makeLedger()
     defer { lockReplacementFixture.cleanup() }
     lockReplacementFixture.ledger.faultHook = { point in
@@ -541,7 +607,7 @@ struct LocalWritingExposureLedgerTests {
     let stageReplacementFixture = try makeLedger()
     defer { stageReplacementFixture.cleanup() }
     stageReplacementFixture.ledger.faultHook = { point in
-      if point == .afterStageSync {
+      if point == .afterStageWriteCloseBeforeReadOpen {
         let stageURL = try #require(
           FileManager.default.contentsOfDirectory(
             at: stageReplacementFixture.root,

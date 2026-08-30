@@ -247,6 +247,7 @@ public struct LocalWritingExposureLedgerVerification: Equatable, Sendable {
 enum LocalWritingExposureLedgerFaultPoint: Equatable, Sendable {
   case afterLockAcquired
   case afterStageSync
+  case afterStageWriteCloseBeforeReadOpen
   case beforeRename
   case afterRenameBeforeDirectorySync
 }
@@ -472,6 +473,19 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
     try verifyExtensionData(canonicalData)
   }
 
+  public static func verifyCheckpoint(
+    canonicalData: Data
+  ) throws -> LocalWritingExposureLedgerCheckpoint {
+    guard !canonicalData.isEmpty, canonicalData.count <= maximumLineBytes else {
+      throw LocalWritingExposureLedgerError.corruption
+    }
+    let wire: CheckpointWire = try decodeCanonical(
+      CheckpointWire.self,
+      from: canonicalData
+    )
+    return try wire.checkpoint()
+  }
+
   public func exportExtension(
     after parentCheckpoint: LocalWritingExposureLedgerCheckpoint
   ) throws -> LocalWritingExposureLedgerExtension {
@@ -627,35 +641,46 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
     replacing ledgerIdentity: AuthorityIdentity
   ) throws -> LocalWritingExposureLedgerCheckpoint {
     let stageName = ".\(ledgerName).stage-\(UUID().uuidString)"
-    let descriptor = Darwin.openat(
+    let writeDescriptor = Darwin.openat(
       directoryDescriptor,
       stageName,
-      O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW,
+      O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
       mode_t(0o600)
     )
-    guard descriptor >= 0 else { throw Self.mappedSystemError() }
+    guard writeDescriptor >= 0 else { throw Self.mappedSystemError() }
+    var writeDescriptorOpen = true
+    var readDescriptor: Int32 = -1
+    var readDescriptorOpen = false
     var stageExists = true
+    var pinnedStageIdentity: AuthorityIdentity?
     defer {
+      if readDescriptorOpen { Darwin.close(readDescriptor) }
+      if writeDescriptorOpen { Darwin.close(writeDescriptor) }
       if stageExists,
+        let pinnedStageIdentity,
         let pathIdentity = try? Self.authorityIdentity(
           name: stageName,
           in: directoryDescriptor
         ),
-        let descriptorIdentity = try? Self.validateAuthorityDescriptor(descriptor),
-        pathIdentity == descriptorIdentity
+        pathIdentity == pinnedStageIdentity
       {
         Darwin.unlinkat(directoryDescriptor, stageName, 0)
       }
-      Darwin.close(descriptor)
     }
-    guard fchmod(descriptor, 0o600) == 0 else {
+    guard fchmod(writeDescriptor, 0o600) == 0 else {
       throw LocalWritingExposureLedgerError.ioFailure
     }
-    try Self.writeAll(stagedBytes, to: descriptor)
-    guard fsync(descriptor) == 0 else {
+    let stageIdentity = try Self.validateAuthorityDescriptor(writeDescriptor)
+    pinnedStageIdentity = stageIdentity
+    try Self.requireNamedIdentity(
+      stageIdentity,
+      name: stageName,
+      in: directoryDescriptor
+    )
+    try Self.writeAll(stagedBytes, to: writeDescriptor)
+    guard fsync(writeDescriptor) == 0 else {
       throw LocalWritingExposureLedgerError.ioFailure
     }
-    let stageIdentity = try Self.validateAuthorityDescriptor(descriptor)
     try Self.requireNamedIdentity(
       stageIdentity,
       name: stageName,
@@ -668,14 +693,38 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
       name: stageName,
       in: directoryDescriptor
     )
+    let writeCloseResult = Darwin.close(writeDescriptor)
+    writeDescriptorOpen = false
+    guard writeCloseResult == 0 else {
+      throw LocalWritingExposureLedgerError.ioFailure
+    }
+    try faultHook?(.afterStageWriteCloseBeforeReadOpen)
+    try validateHeldAuthority(ledgerIdentity: ledgerIdentity)
 
-    let reread = try Self.readAuthorityDescriptor(descriptor)
+    readDescriptor = try Self.openAuthorityDescriptor(
+      name: stageName,
+      expectedIdentity: stageIdentity,
+      flags: O_RDONLY,
+      in: directoryDescriptor
+    )
+    readDescriptorOpen = true
+    let reread = try Self.readAuthorityDescriptor(readDescriptor)
     guard reread == stagedBytes else {
       throw LocalWritingExposureLedgerError.corruption
     }
     let verified = try Self.verifyData(reread, expectedCorpusID: corpusID)
     guard verified.checkpoint == verifiedCheckpoint else {
       throw LocalWritingExposureLedgerError.corruption
+    }
+    try Self.requireNamedIdentity(
+      stageIdentity,
+      name: stageName,
+      in: directoryDescriptor
+    )
+    let readCloseResult = Darwin.close(readDescriptor)
+    readDescriptorOpen = false
+    guard readCloseResult == 0 else {
+      throw LocalWritingExposureLedgerError.ioFailure
     }
     try faultHook?(.beforeRename)
     try validateHeldAuthority(ledgerIdentity: ledgerIdentity)
@@ -1173,7 +1222,7 @@ extension LocalWritingExposureLedger {
     ) == 0,
       status.st_mode & S_IFMT == S_IFREG,
       status.st_uid == geteuid(),
-      status.st_mode & 0o777 == 0o600
+      status.st_mode & 0o7777 == 0o600
     else { throw LocalWritingExposureLedgerError.permissions }
     return AuthorityIdentity(status)
   }
@@ -1185,7 +1234,7 @@ extension LocalWritingExposureLedger {
     guard fstat(descriptor, &status) == 0,
       status.st_mode & S_IFMT == S_IFREG,
       status.st_uid == geteuid(),
-      status.st_mode & 0o777 == 0o600
+      status.st_mode & 0o7777 == 0o600
     else { throw LocalWritingExposureLedgerError.permissions }
     return AuthorityIdentity(status)
   }
@@ -1197,7 +1246,7 @@ extension LocalWritingExposureLedger {
     guard fstat(descriptor, &status) == 0,
       status.st_mode & S_IFMT == S_IFDIR,
       status.st_uid == geteuid(),
-      status.st_mode & 0o777 == 0o700
+      status.st_mode & 0o7777 == 0o700
     else { throw LocalWritingExposureLedgerError.permissions }
     return AuthorityIdentity(status)
   }
@@ -1224,7 +1273,7 @@ extension LocalWritingExposureLedger {
     guard lstat(url.path, &status) == 0,
       status.st_mode & S_IFMT == S_IFDIR,
       status.st_uid == geteuid(),
-      status.st_mode & 0o777 == 0o700,
+      status.st_mode & 0o7777 == 0o700,
       AuthorityIdentity(status) == expectedIdentity
     else { throw LocalWritingExposureLedgerError.permissions }
   }
@@ -1369,12 +1418,20 @@ private struct CheckpointWire: Codable {
   func checkpoint(
     expectedCorpusID: UUID
   ) throws -> LocalWritingExposureLedgerCheckpoint {
+    let checkpoint = try checkpoint()
+    guard checkpoint.corpusID == expectedCorpusID else {
+      throw LocalWritingExposureLedgerError.identityMismatch
+    }
+    return checkpoint
+  }
+
+  func checkpoint() throws -> LocalWritingExposureLedgerCheckpoint {
     guard schemaVersion == 1,
-      canonicalUUID(corpusID) == expectedCorpusID,
+      let verifiedCorpusID = canonicalUUID(corpusID),
       isExposureDigest(currentHeadSHA256)
     else { throw LocalWritingExposureLedgerError.identityMismatch }
     return LocalWritingExposureLedgerCheckpoint(
-      corpusID: expectedCorpusID,
+      corpusID: verifiedCorpusID,
       eventCount: eventCount,
       currentHeadSHA256: currentHeadSHA256
     )
