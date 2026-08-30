@@ -16,6 +16,69 @@ enum AdmittedModelRole: Codable, Equatable, Sendable {
     case .cleanup: "cleanup"
     }
   }
+
+  var catalogRole: LocalModelCatalogRole {
+    switch self {
+    case .asr: .dictation
+    case .cleanup: .cleanup
+    }
+  }
+}
+
+extension RawLocalModelProfile {
+  init(
+    adapting descriptor: AdmittedModelDescriptor,
+    family: LocalModelFamily,
+    profileID: String,
+    configurationABI: String,
+    minimumOSMajor: Int,
+    maximumOSMajor: Int,
+    resources: LocalModelResourceEnvelope,
+    license: LocalModelLicenseState,
+    evidence: LocalModelEvidenceTier,
+    admission: LocalModelAdmissionState,
+    claimScope: LocalModelClaimScope,
+    speakerCohort: LocalModelSpeakerCohort,
+    acousticCohort: LocalModelAcousticCohort,
+    buildCapability: LocalModelBuildCapability
+  ) {
+    self.init(
+      family: family.rawValue,
+      profileID: profileID,
+      role: descriptor.role.catalogRole.rawValue,
+      distribution: LocalModelDistribution.fleckManaged.rawValue,
+      artifact: .init(
+        sourceRepository: descriptor.source,
+        artifactURL: nil,
+        modelID: descriptor.modelID,
+        revision: descriptor.revision,
+        runtimeABI: descriptor.runtimeABI,
+        conversion: descriptor.conversion,
+        quantization: descriptor.quantization,
+        requiredPaths: descriptor.files.map(\.path),
+        files: descriptor.files.map {
+          .init(path: $0.path, byteCount: $0.byteCount, sha256: $0.sha256)
+        },
+        downloadBytes: descriptor.downloadBytes,
+        installedBytes: descriptor.installedBytes
+      ),
+      compatibility: .init(
+        configurationABI: configurationABI,
+        architectures: descriptor.architectures,
+        minimumOSMajor: minimumOSMajor,
+        maximumOSMajor: maximumOSMajor,
+        languages: descriptor.languages
+      ),
+      resources: resources,
+      license: license.rawValue,
+      evidence: evidence.rawValue,
+      admission: admission.rawValue,
+      claimScope: claimScope.rawValue,
+      speakerCohort: speakerCohort.rawValue,
+      acousticCohort: acousticCohort.rawValue,
+      buildCapability: buildCapability.rawValue
+    )
+  }
 }
 
 struct RawAdmittedModelDescriptor: Codable, Equatable, Sendable {
