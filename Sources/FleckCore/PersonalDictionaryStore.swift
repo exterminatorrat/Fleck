@@ -166,10 +166,12 @@ public actor PersonalDictionaryStore {
       removeStaleStages()
       let authority = try readAuthority()
       let current = authority?.snapshot ?? PersonalDictionarySnapshotV2()
-      if let expectedRevision, expectedRevision != current.revision {
+      let expectedAuthorityRevision: UInt64 = authority?.isLegacy == true ? 0 : current.revision
+      if let expectedRevision, expectedRevision != expectedAuthorityRevision {
         throw PersonalDictionaryStoreError.revisionConflict
       }
       if expectedRevision == nil,
+        authority?.isLegacy != true,
         case .delete(let id) = mutation,
         !current.entries.contains(where: { $0.id == id })
       {

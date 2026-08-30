@@ -96,6 +96,44 @@ import Testing
 
     #expect(try Data(contentsOf: first.fileURL) == winnerBytes)
     #expect(try await PersonalDictionaryStore(rootURL: root).publishedSnapshot() == winner)
+
+    let legacyRoot = publicationRoot()
+    defer { try? FileManager.default.removeItem(at: legacyRoot) }
+    let legacyFile = publicationFile(in: legacyRoot)
+    try FileManager.default.createDirectory(
+      at: legacyFile.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    let legacy = PersonalDictionarySnapshot(entries: [publicationEntry(10, "Legacy")])
+    let legacyBytes = try PersonalDictionaryCodec.encodeJSON(legacy)
+    try legacyBytes.write(to: legacyFile)
+    let guessed = PersonalDictionaryStore(rootURL: legacyRoot)
+
+    await #expect(throws: PersonalDictionaryStoreError.revisionConflict) {
+      try await guessed.mutate(
+        expectedRevision: 1,
+        .upsert(publicationEntry(11, "Guessed"))
+      )
+    }
+    #expect(try Data(contentsOf: legacyFile) == legacyBytes)
+
+    let legacyFirst = PersonalDictionaryStore(rootURL: legacyRoot)
+    let legacyStale = PersonalDictionaryStore(rootURL: legacyRoot)
+    let legacyWinner = try await legacyFirst.mutate(
+      expectedRevision: 0,
+      .upsert(publicationEntry(12, "Legacy winner"))
+    )
+    let legacyWinnerBytes = try Data(contentsOf: legacyFile)
+
+    await #expect(throws: PersonalDictionaryStoreError.revisionConflict) {
+      try await legacyStale.mutate(
+        expectedRevision: 0,
+        .upsert(publicationEntry(13, "Legacy loser"))
+      )
+    }
+    #expect(legacyWinner.snapshot.revision == 1)
+    #expect(try Data(contentsOf: legacyFile) == legacyWinnerBytes)
+    #expect(try PersonalDictionaryCodec.decodePublishedJSON(legacyWinnerBytes) == legacyWinner.snapshot)
   }
 
   @Test func revisionOverflowPreservesAuthorityAndCompiledSnapshot() async throws {
@@ -178,6 +216,26 @@ import Testing
     #expect(published.compiled == (try CompiledPersonalDictionary.compile(decoded)))
     #expect(try await store.snapshot().entries.map(\.id) == [publicationID(1), publicationID(2)])
     #expect(try await store.snapshot().suggestions == legacy.suggestions)
+
+    let deleteRoot = publicationRoot()
+    defer { try? FileManager.default.removeItem(at: deleteRoot) }
+    let deleteFile = publicationFile(in: deleteRoot)
+    try FileManager.default.createDirectory(
+      at: deleteFile.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try PersonalDictionaryCodec.encodeJSON(legacy).write(to: deleteFile)
+    let deleteStore = PersonalDictionaryStore(rootURL: deleteRoot)
+
+    try await deleteStore.delete(id: publicationID(99))
+
+    let deleteBytes = try Data(contentsOf: deleteFile)
+    let deleteDecoded = try PersonalDictionaryCodec.decodePublishedJSON(deleteBytes)
+    let deletePublished = try await deleteStore.publishedSnapshot()
+    #expect(deleteDecoded.revision == 1)
+    #expect(try PersonalDictionaryCodec.encodeCanonicalJSON(deleteDecoded) == deleteBytes)
+    #expect(deletePublished.snapshot == deleteDecoded)
+    #expect(deletePublished.compiled == (try CompiledPersonalDictionary.compile(deleteDecoded)))
   }
 
   @Test func concurrentImportAndSuggestionEditHasExactlyOneWinner() async throws {

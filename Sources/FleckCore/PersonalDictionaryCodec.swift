@@ -121,7 +121,7 @@ public enum PersonalDictionaryCodec {
     }
   }
 
-  public static func decodePublishedJSON(
+  static func decodePublishedJSON(
     _ data: Data
   ) throws -> PersonalDictionarySnapshotV2 {
     let snapshot = try decodeCandidateJSON(data)
