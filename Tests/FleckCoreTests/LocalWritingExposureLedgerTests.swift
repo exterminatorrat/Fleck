@@ -50,6 +50,27 @@ struct LocalWritingExposureLedgerTests {
 
     #expect(observed == published)
     #expect(published.eventCount == 1)
+
+    var verification = try fixture.ledger.verify(expectedCorpusID: corpusID)
+    #expect(verification.scoringEligibility(
+      exposure: try exposure(),
+      consumedAt: published.currentHeadSHA256
+    ) == .admissionEligible)
+    #expect(verification.scoringEligibility(
+      exposure: try exposure(executionDigest: String(repeating: "5", count: 64)),
+      consumedAt: published.currentHeadSHA256
+    ) == .diagnosticOnlyPostExposure)
+
+    let laterExposure = try exposure(executionDigest: String(repeating: "5", count: 64))
+    _ = try fixture.ledger.appendExposure(
+      laterExposure,
+      expectedHead: published.currentHeadSHA256
+    )
+    verification = try fixture.ledger.verify(expectedCorpusID: corpusID)
+    #expect(verification.scoringEligibility(
+      exposure: laterExposure,
+      consumedAt: published.currentHeadSHA256
+    ) == .diagnosticOnlyPostExposure)
   }
 
   @Test
@@ -178,6 +199,89 @@ struct LocalWritingExposureLedgerTests {
         try fixture.ledger.verify(expectedCorpusID: corpusID)
       }
     }
+
+    let source = try makeLedger()
+    defer { source.cleanup() }
+    let parent = try source.ledger.appendExposure(
+      exposure(),
+      expectedHead: try source.ledger.checkpoint().currentHeadSHA256
+    )
+    let second = try source.ledger.appendExposure(
+      exposure(executionDigest: String(repeating: "5", count: 64)),
+      expectedHead: parent.currentHeadSHA256
+    )
+    let child = try source.ledger.appendExposure(
+      exposure(caseID: caseID2, materialLineageID: materialLineageID2),
+      expectedHead: second.currentHeadSHA256
+    )
+    let ledgerExtension = try source.ledger.exportExtension(after: parent)
+    #expect(ledgerExtension.parentCheckpoint == parent)
+    #expect(ledgerExtension.childCheckpoint == child)
+    #expect(try LocalWritingExposureLedger.verifyExtension(
+      canonicalData: ledgerExtension.canonicalData
+    ) == ledgerExtension)
+    #expect(throws: LocalWritingExposureLedgerError.invalidOrder) {
+      try source.ledger.exportExtension(after: child)
+    }
+
+    let destination = try makeLedger()
+    defer { destination.cleanup() }
+    #expect(try destination.ledger.appendExposure(
+      exposure(),
+      expectedHead: try destination.ledger.checkpoint().currentHeadSHA256
+    ) == parent)
+    #expect(try destination.ledger.fastForward(ledgerExtension) == child)
+    #expect(throws: LocalWritingExposureLedgerError.conflict) {
+      try destination.ledger.fastForward(ledgerExtension)
+    }
+
+    let staleDestination = try makeLedger()
+    defer { staleDestination.cleanup() }
+    #expect(throws: LocalWritingExposureLedgerError.conflict) {
+      try staleDestination.ledger.fastForward(ledgerExtension)
+    }
+
+    let extensionBytes = ledgerExtension.canonicalData
+    let missing = try rewriteExtension(extensionBytes) { object in
+      var events = object["events"] as! [String]
+      events.removeLast()
+      object["events"] = events
+    }
+    let extra = try rewriteExtension(extensionBytes) { object in
+      var events = object["events"] as! [String]
+      events.append(events[0])
+      object["events"] = events
+    }
+    let extensionReordered = try rewriteExtension(extensionBytes) { object in
+      object["events"] = Array((object["events"] as! [String]).reversed())
+    }
+    let extensionForked = try rewriteExtension(extensionBytes) { object in
+      var events = object["events"] as! [String]
+      var eventText = String(decoding: Data(base64Encoded: events[0])!, as: UTF8.self)
+      eventText = eventText.replacingOccurrences(
+        of: #""previousEventSHA256":"[0-9a-f]{64}""#,
+        with: #""previousEventSHA256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff""#,
+        options: .regularExpression
+      )
+      events[0] = Data(eventText.utf8).base64EncodedString()
+      object["events"] = events
+    }
+    let wrongCorpus = try rewriteExtension(extensionBytes) { object in
+      object["corpusID"] = canonicalUUIDString(otherCorpusID)
+    }
+    let wrongChild = try rewriteExtension(extensionBytes) { object in
+      var checkpoint = object["childCheckpoint"] as! [String: Any]
+      checkpoint["eventCount"] = 99
+      object["childCheckpoint"] = checkpoint
+    }
+    for bytes in [
+      Data(extensionBytes.dropLast()), Data([0x20]) + extensionBytes,
+      missing, extra, extensionReordered, extensionForked, wrongCorpus, wrongChild,
+    ] {
+      #expect(throws: LocalWritingExposureLedgerError.self) {
+        try LocalWritingExposureLedger.verifyExtension(canonicalData: bytes)
+      }
+    }
   }
 
   @Test
@@ -252,7 +356,7 @@ struct LocalWritingExposureLedgerTests {
       after: exposureHead.currentHeadSHA256
     ))
     #expect(verification.scoringEligibility(
-      materialLineageID: materialLineageID,
+      exposure: try exposure(),
       consumedAt: exposureHead.currentHeadSHA256
     ) == .diagnosticOnlyPostExposure)
   }
@@ -278,7 +382,7 @@ struct LocalWritingExposureLedgerTests {
     #expect(verification.checkpoint == suffix)
     #expect(verification.isAncestor(invalidated.currentHeadSHA256))
     #expect(verification.scoringEligibility(
-      materialLineageID: materialLineageID,
+      exposure: try exposure(),
       consumedAt: consumed.currentHeadSHA256
     ) == .diagnosticOnlyPostExposure)
   }
@@ -301,7 +405,7 @@ struct LocalWritingExposureLedgerTests {
     )
 
     #expect(try fixture.ledger.verify(expectedCorpusID: corpusID).scoringEligibility(
-      materialLineageID: materialLineageID,
+      exposure: try exposure(candidateDigest: String(repeating: "4", count: 64)),
       consumedAt: reexposed.currentHeadSHA256
     ) == .diagnosticOnlyPostExposure)
   }
@@ -325,7 +429,7 @@ struct LocalWritingExposureLedgerTests {
 
     let verification = try fixture.ledger.verify(expectedCorpusID: corpusID)
     #expect(verification.scoringEligibility(
-      materialLineageID: materialLineageID2,
+      exposure: try exposure(caseID: caseID2, materialLineageID: materialLineageID2),
       consumedAt: fresh.currentHeadSHA256
     ) == .admissionEligible)
   }
@@ -410,15 +514,90 @@ struct LocalWritingExposureLedgerTests {
     #expect(throws: LocalWritingExposureLedgerError.permissions) {
       try LocalWritingExposureLedger.open(at: permissionFixture.url)
     }
+
+    let lockReplacementFixture = try makeLedger()
+    defer { lockReplacementFixture.cleanup() }
+    lockReplacementFixture.ledger.faultHook = { point in
+      if point == .afterLockAcquired {
+        try replaceLedger(Data(), at: lockReplacementFixture.ledger.lockURL)
+      }
+    }
+    #expect(throws: LocalWritingExposureLedgerError.permissions) {
+      try lockReplacementFixture.ledger.checkpoint()
+    }
+
+    let ledgerReplacementFixture = try makeLedger()
+    defer { ledgerReplacementFixture.cleanup() }
+    ledgerReplacementFixture.ledger.faultHook = { point in
+      if point == .afterLockAcquired {
+        let bytes = try Data(contentsOf: ledgerReplacementFixture.url)
+        try replaceLedger(bytes, at: ledgerReplacementFixture.url)
+      }
+    }
+    #expect(throws: LocalWritingExposureLedgerError.permissions) {
+      try ledgerReplacementFixture.ledger.checkpoint()
+    }
+
+    let stageReplacementFixture = try makeLedger()
+    defer { stageReplacementFixture.cleanup() }
+    stageReplacementFixture.ledger.faultHook = { point in
+      if point == .afterStageSync {
+        let stageURL = try #require(
+          FileManager.default.contentsOfDirectory(
+            at: stageReplacementFixture.root,
+            includingPropertiesForKeys: nil
+          ).first { $0.lastPathComponent.contains(".stage-") }
+        )
+        try replaceLedger(Data(contentsOf: stageURL), at: stageURL)
+      }
+    }
+    #expect(throws: LocalWritingExposureLedgerError.permissions) {
+      try stageReplacementFixture.ledger.appendExposure(
+        exposure(),
+        expectedHead: try stageReplacementFixture.ledger.checkpoint().currentHeadSHA256
+      )
+    }
+
+    let rootReplacementFixture = try makeLedger()
+    let displacedRoot = temporaryRoot()
+    defer {
+      rootReplacementFixture.cleanup()
+      try? FileManager.default.removeItem(at: displacedRoot)
+    }
+    rootReplacementFixture.ledger.faultHook = { point in
+      if point == .afterLockAcquired {
+        try FileManager.default.moveItem(at: rootReplacementFixture.root, to: displacedRoot)
+        try FileManager.default.createDirectory(
+          at: rootReplacementFixture.root,
+          withIntermediateDirectories: false
+        )
+        try FileManager.default.setAttributes(
+          [.posixPermissions: 0o700],
+          ofItemAtPath: rootReplacementFixture.root.path
+        )
+        for name in [
+          rootReplacementFixture.url.lastPathComponent,
+          rootReplacementFixture.ledger.lockURL.lastPathComponent,
+        ] {
+          let source = displacedRoot.appendingPathComponent(name)
+          let destination = rootReplacementFixture.root.appendingPathComponent(name)
+          try replaceLedger(Data(contentsOf: source), at: destination)
+        }
+      }
+    }
+    #expect(throws: LocalWritingExposureLedgerError.permissions) {
+      try rootReplacementFixture.ledger.checkpoint()
+    }
   }
 
   @Test
   func canonicalEventsCannotEncodePrivateContentOrPaths() throws {
     let fixture = try makeLedger()
     defer { fixture.cleanup() }
+    let initial = try fixture.ledger.checkpoint()
     let exposed = try fixture.ledger.appendExposure(
       exposure(),
-      expectedHead: try fixture.ledger.checkpoint().currentHeadSHA256
+      expectedHead: initial.currentHeadSHA256
     )
     _ = try fixture.ledger.appendInvalidation(
       invalidation(),
@@ -426,11 +605,15 @@ struct LocalWritingExposureLedgerTests {
     )
 
     let text = try String(decoding: Data(contentsOf: fixture.url), as: UTF8.self)
+    let extensionText = try String(decoding: fixture.ledger.exportExtension(
+      after: initial
+    ).canonicalData, as: UTF8.self)
     for forbidden in [
       "transcript", "prompt", "noteTitle", "noteBody", "term", "audioPath",
       "modelOutput", "metadata", "/Users/", "https://", "file://",
     ] {
       #expect(!text.contains(forbidden))
+      #expect(!extensionText.contains(forbidden))
     }
     #expect(text.split(separator: "\n").count == 3)
   }
@@ -548,4 +731,22 @@ private func ledgerMode(at url: URL) throws -> mode_t {
   var status = stat()
   guard lstat(url.path, &status) == 0 else { throw TestFailure.injected }
   return status.st_mode & 0o777
+}
+
+private func canonicalUUIDString(_ value: UUID) -> String {
+  value.uuidString.lowercased()
+}
+
+private func rewriteExtension(
+  _ data: Data,
+  mutation: (inout [String: Any]) throws -> Void
+) throws -> Data {
+  var object = try #require(
+    JSONSerialization.jsonObject(with: data) as? [String: Any]
+  )
+  try mutation(&object)
+  return try JSONSerialization.data(
+    withJSONObject: object,
+    options: [.sortedKeys, .withoutEscapingSlashes]
+  )
 }

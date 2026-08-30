@@ -146,6 +146,27 @@ public struct LocalWritingExposureLedgerCheckpoint: Equatable, Sendable {
   }
 }
 
+public struct LocalWritingExposureLedgerExtension: Equatable, Sendable {
+  public let schemaVersion: Int
+  public let corpusID: UUID
+  public let parentCheckpoint: LocalWritingExposureLedgerCheckpoint
+  public let childCheckpoint: LocalWritingExposureLedgerCheckpoint
+  public let canonicalData: Data
+
+  fileprivate init(
+    corpusID: UUID,
+    parentCheckpoint: LocalWritingExposureLedgerCheckpoint,
+    childCheckpoint: LocalWritingExposureLedgerCheckpoint,
+    canonicalData: Data
+  ) {
+    schemaVersion = 1
+    self.corpusID = corpusID
+    self.parentCheckpoint = parentCheckpoint
+    self.childCheckpoint = childCheckpoint
+    self.canonicalData = canonicalData
+  }
+}
+
 public struct LocalWritingExposureLedgerVerification: Equatable, Sendable {
   public let checkpoint: LocalWritingExposureLedgerCheckpoint
   public let events: [LocalWritingExposureEventEnvelope]
@@ -179,17 +200,26 @@ public struct LocalWritingExposureLedgerVerification: Equatable, Sendable {
   }
 
   public func scoringEligibility(
-    materialLineageID: UUID,
+    exposure: LocalWritingCandidateExposure,
     consumedAt consumedHeadSHA256: String
   ) -> LocalWritingScoringEligibility {
-    guard isAncestor(consumedHeadSHA256) else {
+    guard exposure.corpusID == checkpoint.corpusID,
+      let consumedIndex = index(of: consumedHeadSHA256),
+      events.enumerated().contains(where: { index, event in
+        guard index <= consumedIndex,
+          case .candidateExposure(let existing) = event.payload
+        else { return false }
+        return existing == exposure
+      })
+    else {
       return .diagnosticOnlyPostExposure
     }
     let invalidated = events.contains { event in
       guard case .materialLineageInvalidation(let invalidation) = event.payload else {
         return false
       }
-      return invalidation.materialLineageID == materialLineageID
+      return invalidation.caseID == exposure.caseID
+        && invalidation.materialLineageID == exposure.materialLineageID
     }
     return invalidated ? .diagnosticOnlyPostExposure : .admissionEligible
   }
@@ -198,9 +228,24 @@ public struct LocalWritingExposureLedgerVerification: Equatable, Sendable {
     if headSHA256 == genesisSHA256 { return -1 }
     return events.firstIndex { $0.eventSHA256 == headSHA256 }
   }
+
+  fileprivate func checkpoint(
+    at eventCount: UInt64
+  ) -> LocalWritingExposureLedgerCheckpoint? {
+    guard eventCount <= UInt64(events.count) else { return nil }
+    let head = eventCount == 0
+      ? genesisSHA256
+      : events[Int(eventCount - 1)].eventSHA256
+    return LocalWritingExposureLedgerCheckpoint(
+      corpusID: checkpoint.corpusID,
+      eventCount: eventCount,
+      currentHeadSHA256: head
+    )
+  }
 }
 
 enum LocalWritingExposureLedgerFaultPoint: Equatable, Sendable {
+  case afterLockAcquired
   case afterStageSync
   case beforeRename
   case afterRenameBeforeDirectorySync
@@ -215,70 +260,191 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
   public let corpusID: UUID
   var faultHook: ((LocalWritingExposureLedgerFaultPoint) throws -> Void)?
   var directorySyncObserver: (() -> Void)?
+  private let directoryURL: URL
+  private let directoryDescriptor: Int32
+  private let directoryIdentity: AuthorityIdentity
+  private let ledgerName: String
+  private let lockName: String
+  private let lockIdentity: AuthorityIdentity
 
-  private init(ledgerURL: URL, corpusID: UUID) {
+  private init(
+    ledgerURL: URL,
+    corpusID: UUID,
+    directoryDescriptor: Int32,
+    directoryIdentity: AuthorityIdentity,
+    lockIdentity: AuthorityIdentity
+  ) {
     self.ledgerURL = ledgerURL
     lockURL = ledgerURL.appendingPathExtension("lock")
     self.corpusID = corpusID
+    directoryURL = ledgerURL.deletingLastPathComponent()
+    self.directoryDescriptor = directoryDescriptor
+    self.directoryIdentity = directoryIdentity
+    ledgerName = ledgerURL.lastPathComponent
+    lockName = lockURL.lastPathComponent
+    self.lockIdentity = lockIdentity
+  }
+
+  deinit {
+    Darwin.close(directoryDescriptor)
   }
 
   public static func create(at ledgerURL: URL, corpusID: UUID) throws -> Self {
-    try validateLedgerURL(ledgerURL)
+    let directory = try openDirectoryAuthority(for: ledgerURL)
+    var directoryTransferred = false
+    defer {
+      if !directoryTransferred { Darwin.close(directory.descriptor) }
+    }
+    let ledgerName = ledgerURL.lastPathComponent
     let lockURL = ledgerURL.appendingPathExtension("lock")
-    try requireAbsent(ledgerURL)
-    try requireAbsent(lockURL)
+    let lockName = lockURL.lastPathComponent
+    try requireAbsent(name: ledgerName, in: directory.descriptor)
+    try requireAbsent(name: lockName, in: directory.descriptor)
+    try requireDirectoryIdentity(
+      directory.identity,
+      descriptor: directory.descriptor,
+      url: ledgerURL.deletingLastPathComponent()
+    )
 
-    let lockDescriptor = Darwin.open(
-      lockURL.path,
+    let lockDescriptor = Darwin.openat(
+      directory.descriptor,
+      lockName,
       O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW,
       mode_t(0o600)
     )
     guard lockDescriptor >= 0 else { throw mappedSystemError() }
     var keepLock = false
+    var createdLockIdentity: AuthorityIdentity?
     defer {
       Darwin.close(lockDescriptor)
-      if !keepLock { Darwin.unlink(lockURL.path) }
+      if !keepLock,
+        let createdLockIdentity,
+        (try? authorityIdentity(name: lockName, in: directory.descriptor))
+          == createdLockIdentity
+      {
+        Darwin.unlinkat(directory.descriptor, lockName, 0)
+      }
     }
-    guard fchmod(lockDescriptor, 0o600) == 0,
-      fsync(lockDescriptor) == 0
-    else { throw LocalWritingExposureLedgerError.ioFailure }
+    guard fchmod(lockDescriptor, 0o600) == 0 else {
+      throw LocalWritingExposureLedgerError.ioFailure
+    }
+    let lockIdentity = try validateAuthorityDescriptor(lockDescriptor)
+    createdLockIdentity = lockIdentity
+    guard fsync(lockDescriptor) == 0 else {
+      throw LocalWritingExposureLedgerError.ioFailure
+    }
+    try requireNamedIdentity(
+      lockIdentity,
+      name: lockName,
+      in: directory.descriptor
+    )
+    try requireDirectoryIdentity(
+      directory.identity,
+      descriptor: directory.descriptor,
+      url: ledgerURL.deletingLastPathComponent()
+    )
 
     let header = try canonicalHeader(corpusID: corpusID)
-    let ledgerDescriptor = Darwin.open(
-      ledgerURL.path,
+    let ledgerDescriptor = Darwin.openat(
+      directory.descriptor,
+      ledgerName,
       O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
       mode_t(0o600)
     )
     guard ledgerDescriptor >= 0 else { throw mappedSystemError() }
     var keepLedger = false
+    var createdLedgerIdentity: AuthorityIdentity?
     defer {
       Darwin.close(ledgerDescriptor)
-      if !keepLedger { Darwin.unlink(ledgerURL.path) }
+      if !keepLedger,
+        let createdLedgerIdentity,
+        (try? authorityIdentity(name: ledgerName, in: directory.descriptor))
+          == createdLedgerIdentity
+      {
+        Darwin.unlinkat(directory.descriptor, ledgerName, 0)
+      }
     }
     guard fchmod(ledgerDescriptor, 0o600) == 0 else {
       throw LocalWritingExposureLedgerError.ioFailure
     }
+    let ledgerIdentity = try validateAuthorityDescriptor(ledgerDescriptor)
+    createdLedgerIdentity = ledgerIdentity
     try writeAll(header, to: ledgerDescriptor)
     guard fsync(ledgerDescriptor) == 0 else {
       throw LocalWritingExposureLedgerError.ioFailure
     }
-    try syncContainingDirectory(of: ledgerURL)
+    try requireNamedIdentity(
+      ledgerIdentity,
+      name: ledgerName,
+      in: directory.descriptor
+    )
+    try requireDirectoryIdentity(
+      directory.identity,
+      descriptor: directory.descriptor,
+      url: ledgerURL.deletingLastPathComponent()
+    )
+    try requireNamedIdentity(
+      lockIdentity,
+      name: lockName,
+      in: directory.descriptor
+    )
+    try syncDirectory(directory.descriptor)
     keepLedger = true
     keepLock = true
 
-    let store = Self(ledgerURL: ledgerURL, corpusID: corpusID)
+    let store = Self(
+      ledgerURL: ledgerURL,
+      corpusID: corpusID,
+      directoryDescriptor: directory.descriptor,
+      directoryIdentity: directory.identity,
+      lockIdentity: lockIdentity
+    )
+    directoryTransferred = true
     _ = try store.verify(expectedCorpusID: corpusID)
     return store
   }
 
   public static func open(at ledgerURL: URL) throws -> Self {
-    try validateLedgerURL(ledgerURL)
+    let directory = try openDirectoryAuthority(for: ledgerURL)
+    var directoryTransferred = false
+    defer {
+      if !directoryTransferred { Darwin.close(directory.descriptor) }
+    }
     let lockURL = ledgerURL.appendingPathExtension("lock")
-    try validateAuthorityFile(at: ledgerURL)
-    try validateAuthorityFile(at: lockURL)
-    let data = try readAuthorityFile(at: ledgerURL)
+    let ledgerName = ledgerURL.lastPathComponent
+    let lockName = lockURL.lastPathComponent
+    let ledgerIdentity = try authorityIdentity(
+      name: ledgerName,
+      in: directory.descriptor
+    )
+    let lockIdentity = try authorityIdentity(
+      name: lockName,
+      in: directory.descriptor
+    )
+    let data = try readAuthorityFile(
+      name: ledgerName,
+      expectedIdentity: ledgerIdentity,
+      in: directory.descriptor
+    )
+    try requireDirectoryIdentity(
+      directory.identity,
+      descriptor: directory.descriptor,
+      url: ledgerURL.deletingLastPathComponent()
+    )
+    try requireNamedIdentity(
+      lockIdentity,
+      name: lockName,
+      in: directory.descriptor
+    )
     let verification = try verifyData(data, expectedCorpusID: nil)
-    let store = Self(ledgerURL: ledgerURL, corpusID: verification.checkpoint.corpusID)
+    let store = Self(
+      ledgerURL: ledgerURL,
+      corpusID: verification.checkpoint.corpusID,
+      directoryDescriptor: directory.descriptor,
+      directoryIdentity: directory.identity,
+      lockIdentity: lockIdentity
+    )
+    directoryTransferred = true
     _ = try store.verify(expectedCorpusID: verification.checkpoint.corpusID)
     return store
   }
@@ -290,9 +456,87 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
   public func verify(
     expectedCorpusID: UUID
   ) throws -> LocalWritingExposureLedgerVerification {
-    try withExclusiveLock {
-      let bytes = try Self.readAuthorityFile(at: ledgerURL)
+    try withExclusiveLock { ledgerIdentity in
+      let bytes = try Self.readAuthorityFile(
+        name: ledgerName,
+        expectedIdentity: ledgerIdentity,
+        in: directoryDescriptor
+      )
       return try Self.verifyData(bytes, expectedCorpusID: expectedCorpusID)
+    }
+  }
+
+  public static func verifyExtension(
+    canonicalData: Data
+  ) throws -> LocalWritingExposureLedgerExtension {
+    try verifyExtensionData(canonicalData)
+  }
+
+  public func exportExtension(
+    after parentCheckpoint: LocalWritingExposureLedgerCheckpoint
+  ) throws -> LocalWritingExposureLedgerExtension {
+    try withExclusiveLock { ledgerIdentity in
+      let bytes = try Self.readAuthorityFile(
+        name: ledgerName,
+        expectedIdentity: ledgerIdentity,
+        in: directoryDescriptor
+      )
+      let verification = try Self.verifyData(bytes, expectedCorpusID: corpusID)
+      guard parentCheckpoint.corpusID == corpusID,
+        parentCheckpoint.eventCount < verification.checkpoint.eventCount,
+        verification.checkpoint(at: parentCheckpoint.eventCount) == parentCheckpoint
+      else { throw LocalWritingExposureLedgerError.invalidOrder }
+      return try Self.makeExtension(
+        parent: parentCheckpoint,
+        child: verification.checkpoint,
+        events: Array(verification.events.dropFirst(Int(parentCheckpoint.eventCount)))
+      )
+    }
+  }
+
+  public func fastForward(
+    _ ledgerExtension: LocalWritingExposureLedgerExtension
+  ) throws -> LocalWritingExposureLedgerCheckpoint {
+    try withExclusiveLock { ledgerIdentity in
+      let verifiedExtension = try Self.verifyExtensionData(
+        ledgerExtension.canonicalData
+      )
+      guard verifiedExtension == ledgerExtension,
+        verifiedExtension.corpusID == corpusID
+      else { throw LocalWritingExposureLedgerError.identityMismatch }
+      let currentBytes = try Self.readAuthorityFile(
+        name: ledgerName,
+        expectedIdentity: ledgerIdentity,
+        in: directoryDescriptor
+      )
+      let current = try Self.verifyData(currentBytes, expectedCorpusID: corpusID)
+      guard current.checkpoint == verifiedExtension.parentCheckpoint else {
+        throw LocalWritingExposureLedgerError.conflict
+      }
+      let wire: ExtensionWire = try Self.decodeCanonical(
+        ExtensionWire.self,
+        from: verifiedExtension.canonicalData
+      )
+      var stagedBytes = currentBytes
+      for encoded in wire.events {
+        guard let event = Data(base64Encoded: encoded) else {
+          throw LocalWritingExposureLedgerError.corruption
+        }
+        stagedBytes.append(event)
+        stagedBytes.append(0x0A)
+      }
+      guard stagedBytes.count <= Self.maximumLedgerBytes else {
+        throw LocalWritingExposureLedgerError.corruption
+      }
+      let resulting = try Self.verifyData(stagedBytes, expectedCorpusID: corpusID)
+      guard resulting.checkpoint == verifiedExtension.childCheckpoint else {
+        throw LocalWritingExposureLedgerError.invalidOrder
+      }
+      return try commit(
+        stagedBytes,
+        verifiedCheckpoint: resulting.checkpoint,
+        replacing: ledgerIdentity
+      )
     }
   }
 
@@ -342,8 +586,12 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
     _ payload: LocalWritingExposureEventPayload,
     expectedHead: String
   ) throws -> LocalWritingExposureLedgerCheckpoint {
-    try withExclusiveLock {
-      let currentBytes = try Self.readAuthorityFile(at: ledgerURL)
+    try withExclusiveLock { ledgerIdentity in
+      let currentBytes = try Self.readAuthorityFile(
+        name: ledgerName,
+        expectedIdentity: ledgerIdentity,
+        in: directoryDescriptor
+      )
       let current = try Self.verifyData(currentBytes, expectedCorpusID: corpusID)
       guard current.checkpoint.currentHeadSHA256 == expectedHead else {
         throw LocalWritingExposureLedgerError.conflict
@@ -364,50 +612,100 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
         throw LocalWritingExposureLedgerError.corruption
       }
 
-      let stageURL = ledgerURL.deletingLastPathComponent().appendingPathComponent(
-        ".\(ledgerURL.lastPathComponent).stage-\(UUID().uuidString)"
+      let verified = try Self.verifyData(stagedBytes, expectedCorpusID: corpusID)
+      return try commit(
+        stagedBytes,
+        verifiedCheckpoint: verified.checkpoint,
+        replacing: ledgerIdentity
       )
-      let descriptor = Darwin.open(
-        stageURL.path,
-        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
-        mode_t(0o600)
-      )
-      guard descriptor >= 0 else { throw Self.mappedSystemError() }
-      var stageExists = true
-      var descriptorOpen = true
-      defer {
-        if descriptorOpen { Darwin.close(descriptor) }
-        if stageExists { Darwin.unlink(stageURL.path) }
-      }
-      guard fchmod(descriptor, 0o600) == 0 else {
-        throw LocalWritingExposureLedgerError.ioFailure
-      }
-      try Self.writeAll(stagedBytes, to: descriptor)
-      guard fsync(descriptor) == 0 else {
-        throw LocalWritingExposureLedgerError.ioFailure
-      }
-      try faultHook?(.afterStageSync)
-      guard Darwin.close(descriptor) == 0 else {
-        descriptorOpen = false
-        throw LocalWritingExposureLedgerError.ioFailure
-      }
-      descriptorOpen = false
-
-      let reread = try Self.readAuthorityFile(at: stageURL)
-      guard reread == stagedBytes else {
-        throw LocalWritingExposureLedgerError.corruption
-      }
-      let verified = try Self.verifyData(reread, expectedCorpusID: corpusID)
-      try faultHook?(.beforeRename)
-      guard Darwin.rename(stageURL.path, ledgerURL.path) == 0 else {
-        throw Self.mappedSystemError()
-      }
-      stageExists = false
-      try faultHook?(.afterRenameBeforeDirectorySync)
-      try Self.syncContainingDirectory(of: ledgerURL)
-      directorySyncObserver?()
-      return verified.checkpoint
     }
+  }
+
+  private func commit(
+    _ stagedBytes: Data,
+    verifiedCheckpoint: LocalWritingExposureLedgerCheckpoint,
+    replacing ledgerIdentity: AuthorityIdentity
+  ) throws -> LocalWritingExposureLedgerCheckpoint {
+    let stageName = ".\(ledgerName).stage-\(UUID().uuidString)"
+    let descriptor = Darwin.openat(
+      directoryDescriptor,
+      stageName,
+      O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW,
+      mode_t(0o600)
+    )
+    guard descriptor >= 0 else { throw Self.mappedSystemError() }
+    var stageExists = true
+    defer {
+      if stageExists,
+        let pathIdentity = try? Self.authorityIdentity(
+          name: stageName,
+          in: directoryDescriptor
+        ),
+        let descriptorIdentity = try? Self.validateAuthorityDescriptor(descriptor),
+        pathIdentity == descriptorIdentity
+      {
+        Darwin.unlinkat(directoryDescriptor, stageName, 0)
+      }
+      Darwin.close(descriptor)
+    }
+    guard fchmod(descriptor, 0o600) == 0 else {
+      throw LocalWritingExposureLedgerError.ioFailure
+    }
+    try Self.writeAll(stagedBytes, to: descriptor)
+    guard fsync(descriptor) == 0 else {
+      throw LocalWritingExposureLedgerError.ioFailure
+    }
+    let stageIdentity = try Self.validateAuthorityDescriptor(descriptor)
+    try Self.requireNamedIdentity(
+      stageIdentity,
+      name: stageName,
+      in: directoryDescriptor
+    )
+    try faultHook?(.afterStageSync)
+    try validateHeldAuthority(ledgerIdentity: ledgerIdentity)
+    try Self.requireNamedIdentity(
+      stageIdentity,
+      name: stageName,
+      in: directoryDescriptor
+    )
+
+    let reread = try Self.readAuthorityDescriptor(descriptor)
+    guard reread == stagedBytes else {
+      throw LocalWritingExposureLedgerError.corruption
+    }
+    let verified = try Self.verifyData(reread, expectedCorpusID: corpusID)
+    guard verified.checkpoint == verifiedCheckpoint else {
+      throw LocalWritingExposureLedgerError.corruption
+    }
+    try faultHook?(.beforeRename)
+    try validateHeldAuthority(ledgerIdentity: ledgerIdentity)
+    try Self.requireNamedIdentity(
+      stageIdentity,
+      name: stageName,
+      in: directoryDescriptor
+    )
+    guard Darwin.renameat(
+      directoryDescriptor,
+      stageName,
+      directoryDescriptor,
+      ledgerName
+    ) == 0 else { throw Self.mappedSystemError() }
+    stageExists = false
+    try Self.requireNamedIdentity(
+      stageIdentity,
+      name: ledgerName,
+      in: directoryDescriptor
+    )
+    try faultHook?(.afterRenameBeforeDirectorySync)
+    try validateRootAndLock()
+    try Self.requireNamedIdentity(
+      stageIdentity,
+      name: ledgerName,
+      in: directoryDescriptor
+    )
+    try Self.syncDirectory(directoryDescriptor)
+    directorySyncObserver?()
+    return verifiedCheckpoint
   }
 
   private func validate(
@@ -461,22 +759,51 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
     }
   }
 
-  private func withExclusiveLock<T>(_ body: () throws -> T) throws -> T {
-    try Self.validateLedgerURL(ledgerURL)
-    try Self.validateAuthorityFile(at: ledgerURL)
-    try Self.validateAuthorityFile(at: lockURL)
-    let descriptor = Darwin.open(lockURL.path, O_RDWR | O_NOFOLLOW)
-    guard descriptor >= 0 else { throw Self.mappedSystemError() }
+  private func withExclusiveLock<T>(
+    _ body: (AuthorityIdentity) throws -> T
+  ) throws -> T {
+    try validateRootAndLock()
+    let descriptor = try Self.openAuthorityDescriptor(
+      name: lockName,
+      expectedIdentity: lockIdentity,
+      flags: O_RDWR,
+      in: directoryDescriptor
+    )
     defer { Darwin.close(descriptor) }
-    try Self.validateOpenAuthorityDescriptor(descriptor)
     while flock(descriptor, LOCK_EX) != 0 {
       guard errno == EINTR else { throw Self.mappedSystemError() }
     }
     defer { flock(descriptor, LOCK_UN) }
-    try Self.validateLedgerURL(ledgerURL)
-    try Self.validateAuthorityFile(at: ledgerURL)
-    try Self.validateAuthorityFile(at: lockURL)
-    return try body()
+    try validateRootAndLock()
+    let ledgerIdentity = try Self.authorityIdentity(
+      name: ledgerName,
+      in: directoryDescriptor
+    )
+    try faultHook?(.afterLockAcquired)
+    try validateHeldAuthority(ledgerIdentity: ledgerIdentity)
+    return try body(ledgerIdentity)
+  }
+
+  private func validateRootAndLock() throws {
+    try Self.requireDirectoryIdentity(
+      directoryIdentity,
+      descriptor: directoryDescriptor,
+      url: directoryURL
+    )
+    try Self.requireNamedIdentity(
+      lockIdentity,
+      name: lockName,
+      in: directoryDescriptor
+    )
+  }
+
+  private func validateHeldAuthority(ledgerIdentity: AuthorityIdentity) throws {
+    try validateRootAndLock()
+    try Self.requireNamedIdentity(
+      ledgerIdentity,
+      name: ledgerName,
+      in: directoryDescriptor
+    )
   }
 }
 
@@ -536,6 +863,86 @@ extension LocalWritingExposureLedger {
     }
   }
 
+  private static func makeExtension(
+    parent: LocalWritingExposureLedgerCheckpoint,
+    child: LocalWritingExposureLedgerCheckpoint,
+    events: [LocalWritingExposureEventEnvelope]
+  ) throws -> LocalWritingExposureLedgerExtension {
+    let encodedEvents = try events.map { event in
+      try canonicalEventData(
+        payload: event.payload,
+        sequence: event.sequence,
+        previousEventSHA256: event.previousEventSHA256
+      ).base64EncodedString()
+    }
+    let data = try encode(ExtensionWire(
+      schemaVersion: 1,
+      corpusID: canonicalExposureUUID(parent.corpusID),
+      parentCheckpoint: CheckpointWire(parent),
+      childCheckpoint: CheckpointWire(child),
+      events: encodedEvents
+    ))
+    return try verifyExtensionData(data)
+  }
+
+  private static func verifyExtensionData(
+    _ data: Data
+  ) throws -> LocalWritingExposureLedgerExtension {
+    guard !data.isEmpty, data.count <= maximumLedgerBytes * 2 else {
+      throw LocalWritingExposureLedgerError.corruption
+    }
+    let wire: ExtensionWire = try decodeCanonical(ExtensionWire.self, from: data)
+    guard wire.schemaVersion == 1,
+      let corpusID = canonicalUUID(wire.corpusID)
+    else { throw LocalWritingExposureLedgerError.corruption }
+    let parent = try wire.parentCheckpoint.checkpoint(expectedCorpusID: corpusID)
+    let child = try wire.childCheckpoint.checkpoint(expectedCorpusID: corpusID)
+    guard parent.eventCount < child.eventCount,
+      child.eventCount - parent.eventCount == UInt64(wire.events.count),
+      !wire.events.isEmpty
+    else { throw LocalWritingExposureLedgerError.invalidOrder }
+
+    var previous = parent.currentHeadSHA256
+    var sequence = parent.eventCount
+    var exposures = Set<ExposureIdentity>()
+    var invalidations = Set<InvalidationIdentity>()
+    for encoded in wire.events {
+      guard let eventData = Data(base64Encoded: encoded),
+        eventData.base64EncodedString() == encoded,
+        !eventData.isEmpty,
+        eventData.count <= maximumLineBytes
+      else { throw LocalWritingExposureLedgerError.corruption }
+      let (event, eventCorpusID) = try decodeEvent(eventData)
+      let (next, overflow) = sequence.addingReportingOverflow(1)
+      guard !overflow,
+        eventCorpusID == corpusID,
+        event.sequence == next,
+        event.previousEventSHA256 == previous
+      else { throw LocalWritingExposureLedgerError.invalidOrder }
+      switch event.payload {
+      case .candidateExposure(let exposure):
+        guard exposures.insert(ExposureIdentity(exposure)).inserted else {
+          throw LocalWritingExposureLedgerError.invalidOrder
+        }
+      case .materialLineageInvalidation(let invalidation):
+        guard invalidations.insert(InvalidationIdentity(invalidation)).inserted else {
+          throw LocalWritingExposureLedgerError.invalidOrder
+        }
+      }
+      sequence = next
+      previous = event.eventSHA256
+    }
+    guard sequence == child.eventCount,
+      previous == child.currentHeadSHA256
+    else { throw LocalWritingExposureLedgerError.invalidOrder }
+    return LocalWritingExposureLedgerExtension(
+      corpusID: corpusID,
+      parentCheckpoint: parent,
+      childCheckpoint: child,
+      canonicalData: data
+    )
+  }
+
   private static func verifyData(
     _ data: Data,
     expectedCorpusID: UUID?
@@ -577,23 +984,9 @@ extension LocalWritingExposureLedger {
     var lineageCases: [UUID: UUID] = [:]
 
     for line in lines.dropFirst() {
-      let kind = try eventKind(in: line)
-      let (event, corpus): (LocalWritingExposureEventEnvelope, UUID)
-      switch kind {
-      case .candidateExposure:
-        let wire: ExposureEventWire = try decodeCanonical(ExposureEventWire.self, from: line)
-        let exposure = try wire.exposure()
-        let digest = sha256(try encode(wire.digest))
-        guard wire.eventSHA256 == digest else {
-          throw LocalWritingExposureLedgerError.corruption
-        }
-        event = LocalWritingExposureEventEnvelope(
-          sequence: wire.digest.sequence,
-          previousEventSHA256: wire.digest.previousEventSHA256,
-          eventSHA256: wire.eventSHA256,
-          payload: .candidateExposure(exposure)
-        )
-        corpus = exposure.corpusID
+      let (event, eventCorpusID) = try decodeEvent(line)
+      switch event.payload {
+      case .candidateExposure(let exposure):
         let identity = ExposureIdentity(exposure)
         guard exposures.insert(identity).inserted else {
           throw LocalWritingExposureLedgerError.invalidOrder
@@ -605,23 +998,7 @@ extension LocalWritingExposureLedger {
         }
         lineageCases[exposure.materialLineageID] = exposure.caseID
 
-      case .materialLineageInvalidation:
-        let wire: InvalidationEventWire = try decodeCanonical(
-          InvalidationEventWire.self,
-          from: line
-        )
-        let invalidation = try wire.invalidation()
-        let digest = sha256(try encode(wire.digest))
-        guard wire.eventSHA256 == digest else {
-          throw LocalWritingExposureLedgerError.corruption
-        }
-        event = LocalWritingExposureEventEnvelope(
-          sequence: wire.digest.sequence,
-          previousEventSHA256: wire.digest.previousEventSHA256,
-          eventSHA256: wire.eventSHA256,
-          payload: .materialLineageInvalidation(invalidation)
-        )
-        corpus = invalidation.corpusID
+      case .materialLineageInvalidation(let invalidation):
         guard lineageCases[invalidation.materialLineageID] == invalidation.caseID else {
           throw LocalWritingExposureLedgerError.invalidOrder
         }
@@ -635,7 +1012,7 @@ extension LocalWritingExposureLedger {
         event.schemaVersion == 1,
         event.sequence == next,
         event.previousEventSHA256 == previous,
-        corpus == corpusID,
+        eventCorpusID == corpusID,
         isExposureDigest(event.eventSHA256)
       else { throw LocalWritingExposureLedgerError.invalidOrder }
       sequence = next
@@ -652,6 +1029,47 @@ extension LocalWritingExposureLedger {
       events: events,
       genesisSHA256: header.genesisSHA256
     )
+  }
+
+  private static func decodeEvent(
+    _ data: Data
+  ) throws -> (LocalWritingExposureEventEnvelope, UUID) {
+    switch try eventKind(in: data) {
+    case .candidateExposure:
+      let wire: ExposureEventWire = try decodeCanonical(ExposureEventWire.self, from: data)
+      let exposure = try wire.exposure()
+      guard wire.eventSHA256 == sha256(try encode(wire.digest)) else {
+        throw LocalWritingExposureLedgerError.corruption
+      }
+      return (
+        LocalWritingExposureEventEnvelope(
+          sequence: wire.sequence,
+          previousEventSHA256: wire.previousEventSHA256,
+          eventSHA256: wire.eventSHA256,
+          payload: .candidateExposure(exposure)
+        ),
+        exposure.corpusID
+      )
+
+    case .materialLineageInvalidation:
+      let wire: InvalidationEventWire = try decodeCanonical(
+        InvalidationEventWire.self,
+        from: data
+      )
+      let invalidation = try wire.invalidation()
+      guard wire.eventSHA256 == sha256(try encode(wire.digest)) else {
+        throw LocalWritingExposureLedgerError.corruption
+      }
+      return (
+        LocalWritingExposureEventEnvelope(
+          sequence: wire.sequence,
+          previousEventSHA256: wire.previousEventSHA256,
+          eventSHA256: wire.eventSHA256,
+          payload: .materialLineageInvalidation(invalidation)
+        ),
+        invalidation.corpusID
+      )
+    }
   }
 
   private static func eventKind(in data: Data) throws -> LocalWritingExposureEventKind {
@@ -697,56 +1115,178 @@ extension LocalWritingExposureLedger {
 }
 
 extension LocalWritingExposureLedger {
-  private static func validateLedgerURL(_ ledgerURL: URL) throws {
+  private static func openDirectoryAuthority(
+    for ledgerURL: URL
+  ) throws -> (descriptor: Int32, identity: AuthorityIdentity) {
     guard ledgerURL.isFileURL,
       ledgerURL.path.hasPrefix("/"),
       ledgerURL.path == ledgerURL.standardizedFileURL.path,
       !ledgerURL.lastPathComponent.isEmpty,
       ledgerURL.lastPathComponent != ".",
-      ledgerURL.lastPathComponent != ".."
+      ledgerURL.lastPathComponent != "..",
+      !ledgerURL.lastPathComponent.contains("/"),
+      !ledgerURL.appendingPathExtension("lock").lastPathComponent.contains("/")
     else { throw LocalWritingExposureLedgerError.permissions }
-    let root = ledgerURL.deletingLastPathComponent()
-    var status = stat()
-    guard lstat(root.path, &status) == 0,
-      status.st_mode & S_IFMT == S_IFDIR,
-      status.st_uid == geteuid(),
-      status.st_mode & 0o777 == 0o700
-    else { throw LocalWritingExposureLedgerError.permissions }
+    let directoryURL = ledgerURL.deletingLastPathComponent()
+    let descriptor = Darwin.open(
+      directoryURL.path,
+      O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+    )
+    guard descriptor >= 0 else { throw mappedSystemError() }
+    var keepDescriptor = false
+    defer {
+      if !keepDescriptor { Darwin.close(descriptor) }
+    }
+    let identity = try validateDirectoryDescriptor(descriptor)
+    try requireDirectoryIdentity(
+      identity,
+      descriptor: descriptor,
+      url: directoryURL
+    )
+    keepDescriptor = true
+    return (descriptor, identity)
   }
 
-  private static func requireAbsent(_ url: URL) throws {
+  private static func requireAbsent(name: String, in directoryDescriptor: Int32) throws {
     var status = stat()
-    guard lstat(url.path, &status) != 0 else {
+    guard fstatat(
+      directoryDescriptor,
+      name,
+      &status,
+      AT_SYMLINK_NOFOLLOW
+    ) != 0 else {
       throw LocalWritingExposureLedgerError.conflict
     }
     guard errno == ENOENT else { throw mappedSystemError() }
   }
 
-  private static func validateAuthorityFile(at url: URL) throws {
+  private static func authorityIdentity(
+    name: String,
+    in directoryDescriptor: Int32
+  ) throws -> AuthorityIdentity {
     var status = stat()
-    guard lstat(url.path, &status) == 0,
+    guard fstatat(
+      directoryDescriptor,
+      name,
+      &status,
+      AT_SYMLINK_NOFOLLOW
+    ) == 0,
       status.st_mode & S_IFMT == S_IFREG,
       status.st_uid == geteuid(),
       status.st_mode & 0o777 == 0o600
     else { throw LocalWritingExposureLedgerError.permissions }
+    return AuthorityIdentity(status)
   }
 
-  private static func validateOpenAuthorityDescriptor(_ descriptor: Int32) throws {
+  private static func validateAuthorityDescriptor(
+    _ descriptor: Int32
+  ) throws -> AuthorityIdentity {
     var status = stat()
     guard fstat(descriptor, &status) == 0,
       status.st_mode & S_IFMT == S_IFREG,
       status.st_uid == geteuid(),
       status.st_mode & 0o777 == 0o600
     else { throw LocalWritingExposureLedgerError.permissions }
+    return AuthorityIdentity(status)
   }
 
-  private static func readAuthorityFile(at url: URL) throws -> Data {
-    try validateAuthorityFile(at: url)
-    let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW)
-    guard descriptor >= 0 else { throw mappedSystemError() }
-    defer { Darwin.close(descriptor) }
-    try validateOpenAuthorityDescriptor(descriptor)
+  private static func validateDirectoryDescriptor(
+    _ descriptor: Int32
+  ) throws -> AuthorityIdentity {
+    var status = stat()
+    guard fstat(descriptor, &status) == 0,
+      status.st_mode & S_IFMT == S_IFDIR,
+      status.st_uid == geteuid(),
+      status.st_mode & 0o777 == 0o700
+    else { throw LocalWritingExposureLedgerError.permissions }
+    return AuthorityIdentity(status)
+  }
 
+  private static func requireNamedIdentity(
+    _ expectedIdentity: AuthorityIdentity,
+    name: String,
+    in directoryDescriptor: Int32
+  ) throws {
+    guard try authorityIdentity(name: name, in: directoryDescriptor) == expectedIdentity else {
+      throw LocalWritingExposureLedgerError.permissions
+    }
+  }
+
+  private static func requireDirectoryIdentity(
+    _ expectedIdentity: AuthorityIdentity,
+    descriptor: Int32,
+    url: URL
+  ) throws {
+    guard try validateDirectoryDescriptor(descriptor) == expectedIdentity else {
+      throw LocalWritingExposureLedgerError.permissions
+    }
+    var status = stat()
+    guard lstat(url.path, &status) == 0,
+      status.st_mode & S_IFMT == S_IFDIR,
+      status.st_uid == geteuid(),
+      status.st_mode & 0o777 == 0o700,
+      AuthorityIdentity(status) == expectedIdentity
+    else { throw LocalWritingExposureLedgerError.permissions }
+  }
+
+  private static func openAuthorityDescriptor(
+    name: String,
+    expectedIdentity: AuthorityIdentity,
+    flags: Int32,
+    in directoryDescriptor: Int32
+  ) throws -> Int32 {
+    try requireNamedIdentity(
+      expectedIdentity,
+      name: name,
+      in: directoryDescriptor
+    )
+    let descriptor = Darwin.openat(
+      directoryDescriptor,
+      name,
+      flags | O_NOFOLLOW
+    )
+    guard descriptor >= 0 else { throw mappedSystemError() }
+    var keepDescriptor = false
+    defer {
+      if !keepDescriptor { Darwin.close(descriptor) }
+    }
+    guard try validateAuthorityDescriptor(descriptor) == expectedIdentity else {
+      throw LocalWritingExposureLedgerError.permissions
+    }
+    try requireNamedIdentity(
+      expectedIdentity,
+      name: name,
+      in: directoryDescriptor
+    )
+    keepDescriptor = true
+    return descriptor
+  }
+
+  private static func readAuthorityFile(
+    name: String,
+    expectedIdentity: AuthorityIdentity,
+    in directoryDescriptor: Int32
+  ) throws -> Data {
+    let descriptor = try openAuthorityDescriptor(
+      name: name,
+      expectedIdentity: expectedIdentity,
+      flags: O_RDONLY,
+      in: directoryDescriptor
+    )
+    defer { Darwin.close(descriptor) }
+    let result = try readAuthorityDescriptor(descriptor)
+    try requireNamedIdentity(
+      expectedIdentity,
+      name: name,
+      in: directoryDescriptor
+    )
+    return result
+  }
+
+  private static func readAuthorityDescriptor(_ descriptor: Int32) throws -> Data {
+    guard lseek(descriptor, 0, SEEK_SET) == 0 else {
+      throw LocalWritingExposureLedgerError.ioFailure
+    }
     var result = Data()
     var buffer = [UInt8](repeating: 0, count: 8_192)
     while true {
@@ -784,21 +1324,8 @@ extension LocalWritingExposureLedger {
     }
   }
 
-  private static func syncContainingDirectory(of url: URL) throws {
-    let directoryURL = url.deletingLastPathComponent()
-    let descriptor = Darwin.open(
-      directoryURL.path,
-      O_RDONLY | O_DIRECTORY | O_NOFOLLOW
-    )
-    guard descriptor >= 0 else { throw mappedSystemError() }
-    defer { Darwin.close(descriptor) }
-
-    var status = stat()
-    guard fstat(descriptor, &status) == 0,
-      status.st_mode & S_IFMT == S_IFDIR,
-      status.st_uid == geteuid(),
-      status.st_mode & 0o777 == 0o700
-    else { throw LocalWritingExposureLedgerError.permissions }
+  private static func syncDirectory(_ descriptor: Int32) throws {
+    _ = try validateDirectoryDescriptor(descriptor)
     guard fsync(descriptor) == 0 else {
       throw LocalWritingExposureLedgerError.ioFailure
     }
@@ -806,7 +1333,7 @@ extension LocalWritingExposureLedger {
 
   private static func mappedSystemError() -> LocalWritingExposureLedgerError {
     switch errno {
-    case EACCES, EPERM, ELOOP, EISDIR, ENOTDIR:
+    case EACCES, EPERM, ELOOP, EISDIR, ENOTDIR, ENOENT:
       .permissions
     case EEXIST:
       .conflict
@@ -814,6 +1341,52 @@ extension LocalWritingExposureLedger {
       .ioFailure
     }
   }
+}
+
+private struct AuthorityIdentity: Equatable {
+  let device: UInt64
+  let inode: UInt64
+
+  init(_ status: stat) {
+    device = UInt64(status.st_dev)
+    inode = UInt64(status.st_ino)
+  }
+}
+
+private struct CheckpointWire: Codable {
+  let schemaVersion: Int
+  let corpusID: String
+  let eventCount: UInt64
+  let currentHeadSHA256: String
+
+  init(_ checkpoint: LocalWritingExposureLedgerCheckpoint) {
+    schemaVersion = checkpoint.schemaVersion
+    corpusID = canonicalExposureUUID(checkpoint.corpusID)
+    eventCount = checkpoint.eventCount
+    currentHeadSHA256 = checkpoint.currentHeadSHA256
+  }
+
+  func checkpoint(
+    expectedCorpusID: UUID
+  ) throws -> LocalWritingExposureLedgerCheckpoint {
+    guard schemaVersion == 1,
+      canonicalUUID(corpusID) == expectedCorpusID,
+      isExposureDigest(currentHeadSHA256)
+    else { throw LocalWritingExposureLedgerError.identityMismatch }
+    return LocalWritingExposureLedgerCheckpoint(
+      corpusID: expectedCorpusID,
+      eventCount: eventCount,
+      currentHeadSHA256: currentHeadSHA256
+    )
+  }
+}
+
+private struct ExtensionWire: Codable {
+  let schemaVersion: Int
+  let corpusID: String
+  let parentCheckpoint: CheckpointWire
+  let childCheckpoint: CheckpointWire
+  let events: [String]
 }
 
 private struct GenesisWire: Codable {
