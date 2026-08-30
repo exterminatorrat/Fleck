@@ -78,6 +78,40 @@ import Testing
   #expect(fixture.handler.handsFreeBeginCount == 0)
 }
 
+@Test @MainActor
+func physicalGestureReceiptPreservesPressAndReleaseAcrossQueuedDelivery() async throws {
+  let fixture = ShortcutFixture()
+  let deliveryGate = TerminalGate()
+  fixture.handler.endGate = deliveryGate
+  try fixture.shortcut.configure(.rightOption)
+
+  let firstPress = fixture.clock.now
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.clock.advance(by: .milliseconds(200))
+  fixture.monitor.emit(.released(.rightOption))
+  while fixture.handler.endCount == 0 { await Task.yield() }
+
+  fixture.clock.advance(by: .milliseconds(50))
+  let queuedPress = fixture.clock.now
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.clock.advance(by: .milliseconds(30))
+  let queuedRelease = fixture.clock.now
+  fixture.monitor.emit(.released(.rightOption))
+  fixture.clock.advance(by: .seconds(2))
+
+  deliveryGate.open()
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.beginGestures == [
+    .init(pressedAt: firstPress),
+    .init(pressedAt: queuedPress),
+  ])
+  #expect(fixture.handler.endGestures.last == .init(
+    pressedAt: queuedPress,
+    releasedAt: queuedRelease
+  ))
+}
+
 @Test @MainActor func doubleTapStartsHandsFreeAndLaterPressFinishesIt() async throws {
   let fixture = ShortcutFixture()
   try fixture.shortcut.configure(.rightOption)
@@ -400,6 +434,9 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
   var acceptsShortcut = true
   var acceptsHandsFree = true
   private(set) var events: [Event] = []
+  private(set) var beginGestures: [DictationPhysicalGesture] = []
+  private(set) var endGestures: [DictationPhysicalGesture] = []
+  var endGate: TerminalGate?
   private var sessions: [UUID: TerminalGate] = [:]
   private var currentSession: DictationShortcutSession?
 
@@ -411,24 +448,32 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
 
   func beginShortcut(
     editor: (any FocusedDictationEditing)?,
-    destination: DictationDestination?
+    destination: DictationDestination?,
+    physicalGesture: DictationPhysicalGesture
   ) -> DictationShortcutSession? {
     events.append(.begin)
+    beginGestures.append(physicalGesture)
     guard acceptsShortcut else { return nil }
     return makeSession()
   }
 
   func beginHandsFreeShortcut(
     editor: (any FocusedDictationEditing)?,
-    destination: DictationDestination?
+    destination: DictationDestination?,
+    physicalGesture: DictationPhysicalGesture
   ) -> DictationShortcutSession? {
     events.append(.handsFreeBegin)
     guard acceptsHandsFree else { return nil }
     return makeSession()
   }
 
-  func endShortcut(_ session: DictationShortcutSession) async {
+  func endShortcut(
+    _ session: DictationShortcutSession,
+    physicalGesture: DictationPhysicalGesture
+  ) async {
     events.append(.end)
+    endGestures.append(physicalGesture)
+    await endGate?.wait()
     sessions[session.id]?.open()
   }
 

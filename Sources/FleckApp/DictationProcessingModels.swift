@@ -63,45 +63,110 @@ struct DictationTextUpdate: Equatable, Sendable {
   var displayText: String { stableText + provisionalTail }
 }
 
+struct DictationPhysicalGesture: Equatable, Sendable {
+  let pressedAt: ContinuousClock.Instant?
+  let releasedAt: ContinuousClock.Instant?
+
+  init(
+    pressedAt: ContinuousClock.Instant? = nil,
+    releasedAt: ContinuousClock.Instant? = nil
+  ) {
+    self.pressedAt = pressedAt
+    self.releasedAt = releasedAt
+  }
+
+  static let absent = Self()
+}
+
 struct DictationRuntimeMeasurements: Equatable, Sendable {
   enum Integrity: Equatable, Sendable {
     case valid
     case nonMonotonicClock
   }
 
-  let integrity: Integrity
-  let processorStartedAt: ContinuousClock.Instant?
-  let sourceStartRequestedAt: ContinuousClock.Instant?
-  let firstMeaningfulPartialAt: ContinuousClock.Instant?
-  let stopRequestedAt: ContinuousClock.Instant?
-  let asrFinalAt: ContinuousClock.Instant?
-  let dictionaryCompletedAt: ContinuousClock.Instant?
-  let cleanupDecisionCompletedAt: ContinuousClock.Instant?
-  let cancellationRequestedAt: ContinuousClock.Instant?
-  let cancellationDrainedAt: ContinuousClock.Instant?
+  enum Stage: CaseIterable, Equatable, Sendable {
+    case physicalPress
+    case processorStarted
+    case sourceStartRequested
+    case firstMeaningfulPartial
+    case physicalRelease
+    case stopRequested
+    case asrFinal
+    case dictionaryCompleted
+    case cleanupDecisionCompleted
+    case routingRequested
+    case routingDecision
+    case insertionCommitted
+    case persistenceCompleted
+    case ambiguityPresented
+    case ambiguityMoved
+    case cancellationRequested
+    case compensationCompleted
+    case cancellationDrained
+  }
+
+  private(set) var integrity: Integrity
+  private(set) var physicalPressAt: ContinuousClock.Instant?
+  private(set) var processorStartedAt: ContinuousClock.Instant?
+  private(set) var sourceStartRequestedAt: ContinuousClock.Instant?
+  private(set) var firstMeaningfulPartialAt: ContinuousClock.Instant?
+  private(set) var physicalReleaseAt: ContinuousClock.Instant?
+  private(set) var stopRequestedAt: ContinuousClock.Instant?
+  private(set) var asrFinalAt: ContinuousClock.Instant?
+  private(set) var dictionaryCompletedAt: ContinuousClock.Instant?
+  private(set) var cleanupDecisionCompletedAt: ContinuousClock.Instant?
+  private(set) var routingRequestedAt: ContinuousClock.Instant?
+  private(set) var routingDecisionAt: ContinuousClock.Instant?
+  private(set) var insertionCommittedAt: ContinuousClock.Instant?
+  private(set) var persistenceCompletedAt: ContinuousClock.Instant?
+  private(set) var ambiguityPresentedAt: ContinuousClock.Instant?
+  private(set) var ambiguityMovedAt: ContinuousClock.Instant?
+  private(set) var cancellationRequestedAt: ContinuousClock.Instant?
+  private(set) var compensationCompletedAt: ContinuousClock.Instant?
+  private(set) var cancellationDrainedAt: ContinuousClock.Instant?
+  private var isTerminal: Bool
 
   init(
     integrity: Integrity = .valid,
+    physicalPressAt: ContinuousClock.Instant? = nil,
     processorStartedAt: ContinuousClock.Instant? = nil,
     sourceStartRequestedAt: ContinuousClock.Instant? = nil,
     firstMeaningfulPartialAt: ContinuousClock.Instant? = nil,
+    physicalReleaseAt: ContinuousClock.Instant? = nil,
     stopRequestedAt: ContinuousClock.Instant? = nil,
     asrFinalAt: ContinuousClock.Instant? = nil,
     dictionaryCompletedAt: ContinuousClock.Instant? = nil,
     cleanupDecisionCompletedAt: ContinuousClock.Instant? = nil,
+    routingRequestedAt: ContinuousClock.Instant? = nil,
+    routingDecisionAt: ContinuousClock.Instant? = nil,
+    insertionCommittedAt: ContinuousClock.Instant? = nil,
+    persistenceCompletedAt: ContinuousClock.Instant? = nil,
+    ambiguityPresentedAt: ContinuousClock.Instant? = nil,
+    ambiguityMovedAt: ContinuousClock.Instant? = nil,
     cancellationRequestedAt: ContinuousClock.Instant? = nil,
+    compensationCompletedAt: ContinuousClock.Instant? = nil,
     cancellationDrainedAt: ContinuousClock.Instant? = nil
   ) {
     self.integrity = integrity
+    self.physicalPressAt = physicalPressAt
     self.processorStartedAt = processorStartedAt
     self.sourceStartRequestedAt = sourceStartRequestedAt
     self.firstMeaningfulPartialAt = firstMeaningfulPartialAt
+    self.physicalReleaseAt = physicalReleaseAt
     self.stopRequestedAt = stopRequestedAt
     self.asrFinalAt = asrFinalAt
     self.dictionaryCompletedAt = dictionaryCompletedAt
     self.cleanupDecisionCompletedAt = cleanupDecisionCompletedAt
+    self.routingRequestedAt = routingRequestedAt
+    self.routingDecisionAt = routingDecisionAt
+    self.insertionCommittedAt = insertionCommittedAt
+    self.persistenceCompletedAt = persistenceCompletedAt
+    self.ambiguityPresentedAt = ambiguityPresentedAt
+    self.ambiguityMovedAt = ambiguityMovedAt
     self.cancellationRequestedAt = cancellationRequestedAt
+    self.compensationCompletedAt = compensationCompletedAt
     self.cancellationDrainedAt = cancellationDrainedAt
+    isTerminal = false
   }
 
   var firstMeaningfulPartialMilliseconds: Double? {
@@ -116,13 +181,106 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
     milliseconds(from: dictionaryCompletedAt, to: cleanupDecisionCompletedAt)
   }
 
-  var stopToInsertionMilliseconds: Double? { nil }
+  var stopToInsertionMilliseconds: Double? {
+    milliseconds(
+      from: physicalReleaseAt ?? stopRequestedAt,
+      to: insertionCommittedAt
+    )
+  }
 
   var cancellationMilliseconds: Double? {
     milliseconds(from: cancellationRequestedAt, to: cancellationDrainedAt)
   }
 
   static let empty = Self()
+
+  func recording(
+    _ stage: Stage,
+    at instant: ContinuousClock.Instant
+  ) -> Self {
+    guard integrity == .valid, !isTerminal, value(for: stage) == nil else { return self }
+    var candidate = self
+    if let latest = Stage.allCases.compactMap({ value(for: $0) }).max(),
+      instant < latest
+    {
+      candidate = self
+      candidate.integrity = .nonMonotonicClock
+      return candidate
+    }
+    candidate.assign(instant, to: stage)
+    return candidate
+  }
+
+  func overlaying(_ measurements: Self) -> Self {
+    guard integrity == .valid, !isTerminal else { return self }
+    var result = self
+    for stage in Stage.allCases {
+      if result.value(for: stage) == nil,
+        let instant = measurements.value(for: stage)
+      {
+        result.assign(instant, to: stage)
+      }
+    }
+    if measurements.integrity == .nonMonotonicClock {
+      result.integrity = .nonMonotonicClock
+    }
+    return result
+  }
+
+  func terminal() -> Self {
+    var result = self
+    result.isTerminal = true
+    return result
+  }
+
+  private func value(for stage: Stage) -> ContinuousClock.Instant? {
+    switch stage {
+    case .physicalPress: physicalPressAt
+    case .processorStarted: processorStartedAt
+    case .sourceStartRequested: sourceStartRequestedAt
+    case .firstMeaningfulPartial: firstMeaningfulPartialAt
+    case .physicalRelease: physicalReleaseAt
+    case .stopRequested: stopRequestedAt
+    case .asrFinal: asrFinalAt
+    case .dictionaryCompleted: dictionaryCompletedAt
+    case .cleanupDecisionCompleted: cleanupDecisionCompletedAt
+    case .routingRequested: routingRequestedAt
+    case .routingDecision: routingDecisionAt
+    case .insertionCommitted: insertionCommittedAt
+    case .persistenceCompleted: persistenceCompletedAt
+    case .ambiguityPresented: ambiguityPresentedAt
+    case .ambiguityMoved: ambiguityMovedAt
+    case .cancellationRequested: cancellationRequestedAt
+    case .compensationCompleted: compensationCompletedAt
+    case .cancellationDrained: cancellationDrainedAt
+    }
+  }
+
+  private mutating func assign(
+    _ instant: ContinuousClock.Instant,
+    to stage: Stage
+  ) {
+    switch stage {
+    case .physicalPress: physicalPressAt = instant
+    case .processorStarted: processorStartedAt = instant
+    case .sourceStartRequested: sourceStartRequestedAt = instant
+    case .firstMeaningfulPartial: firstMeaningfulPartialAt = instant
+    case .physicalRelease: physicalReleaseAt = instant
+    case .stopRequested: stopRequestedAt = instant
+    case .asrFinal: asrFinalAt = instant
+    case .dictionaryCompleted: dictionaryCompletedAt = instant
+    case .cleanupDecisionCompleted: cleanupDecisionCompletedAt = instant
+    case .routingRequested: routingRequestedAt = instant
+    case .routingDecision: routingDecisionAt = instant
+    case .insertionCommitted: insertionCommittedAt = instant
+    case .persistenceCompleted: persistenceCompletedAt = instant
+    case .ambiguityPresented: ambiguityPresentedAt = instant
+    case .ambiguityMoved: ambiguityMovedAt = instant
+    case .cancellationRequested: cancellationRequestedAt = instant
+    case .compensationCompleted: compensationCompletedAt = instant
+    case .cancellationDrained: cancellationDrainedAt = instant
+    }
+  }
 
   private func milliseconds(
     from start: ContinuousClock.Instant?,

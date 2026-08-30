@@ -49,9 +49,20 @@ protocol DictationProcessing: AnyObject {
 protocol DictationProcessingSession: AnyObject {
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
   func finish() async throws -> DictationProcessingResult
+  func finish(
+    deadlineOrigin: ContinuousClock.Instant
+  ) async throws -> DictationProcessingResult
   // All callers await one source-unblocking/finalization/cleanup cancellation
   // task before terminal cancellation returns.
   func cancel() async
+}
+
+extension DictationProcessingSession {
+  func finish(
+    deadlineOrigin: ContinuousClock.Instant
+  ) async throws -> DictationProcessingResult {
+    try await finish()
+  }
 }
 
 protocol TranscriptDictionaryResolving: Sendable {

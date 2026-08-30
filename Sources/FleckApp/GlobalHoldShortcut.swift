@@ -7,13 +7,18 @@
     var canConfigureShortcut: Bool { get }
     func beginShortcut(
       editor: (any FocusedDictationEditing)?,
-      destination: DictationDestination?
+      destination: DictationDestination?,
+      physicalGesture: DictationPhysicalGesture
     ) -> DictationShortcutSession?
     func beginHandsFreeShortcut(
       editor: (any FocusedDictationEditing)?,
-      destination: DictationDestination?
+      destination: DictationDestination?,
+      physicalGesture: DictationPhysicalGesture
     ) -> DictationShortcutSession?
-    func endShortcut(_ session: DictationShortcutSession) async
+    func endShortcut(
+      _ session: DictationShortcutSession,
+      physicalGesture: DictationPhysicalGesture
+    ) async
     func finishHandsFreeShortcut(_ session: DictationShortcutSession) async
     func cancelShortcut(_ session: DictationShortcutSession) async
     func waitForShortcutTerminal(_ session: DictationShortcutSession) async
@@ -73,6 +78,7 @@
     private var escapeCancellationRequested = false
     private var physicalPrimaryDown = false
     private var pressStartedAt: ContinuousClock.Instant?
+    private var acceptedPressAt: ContinuousClock.Instant?
     private var lastShortRelease: ContinuousClock.Instant?
     private var acceptedSession: DictationShortcutSession?
     private var handsFreeSession: DictationShortcutSession?
@@ -260,7 +266,8 @@
           guard
             let session = handler?.beginHandsFreeShortcut(
               editor: editorProvider(),
-              destination: destinationProvider()
+              destination: destinationProvider(),
+              physicalGesture: .init(pressedAt: now)
             )
           else { return }
           acceptedSession = session
@@ -277,10 +284,12 @@
       guard
         let session = handler?.beginShortcut(
           editor: editorProvider(),
-          destination: destinationProvider()
+          destination: destinationProvider(),
+          physicalGesture: .init(pressedAt: now)
         )
       else { return }
       acceptedSession = session
+      acceptedPressAt = now
       escapeCancellationRequested = false
       registerEscape()
       observeTerminal(session)
@@ -301,7 +310,14 @@
       pressStartedAt = nil
       escapeCancellationRequested = false
       unregisterEscape()
-      await handler?.endShortcut(session)
+      await handler?.endShortcut(
+        session,
+        physicalGesture: .init(
+          pressedAt: acceptedPressAt,
+          releasedAt: now
+        )
+      )
+      acceptedPressAt = nil
       lastShortRelease = isShort ? now : nil
     }
 
@@ -342,6 +358,7 @@
     private func clearTapState() {
       lastShortRelease = nil
       pressStartedAt = nil
+      acceptedPressAt = nil
       ignoresReleaseAfterHandsFreeStart = false
     }
 

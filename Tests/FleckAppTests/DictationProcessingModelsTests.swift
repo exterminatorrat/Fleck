@@ -93,6 +93,32 @@ import FleckCore
   #expect(invalid.firstMeaningfulPartialMilliseconds == nil)
 }
 
+@Test func physicalGestureReceiptRejectsLateTimestampAfterTerminalCancellation() {
+  let start = ContinuousClock().now
+  let accepted = DictationRuntimeMeasurements.empty
+    .recording(.routingRequested, at: start)
+  let backward = accepted.recording(
+    .routingDecision,
+    at: start.advanced(by: .milliseconds(-1))
+  )
+  let equal = accepted.recording(.routingDecision, at: start)
+  let repeated = equal.recording(
+    .routingDecision,
+    at: start.advanced(by: .milliseconds(2))
+  )
+  let terminal = accepted.terminal()
+  let late = terminal.recording(
+    .routingDecision,
+    at: start.advanced(by: .milliseconds(1))
+  )
+
+  #expect(backward.integrity == .nonMonotonicClock)
+  #expect(backward.routingDecisionAt == nil)
+  #expect(equal.routingDecisionAt == start)
+  #expect(repeated == equal)
+  #expect(late == terminal)
+}
+
 @Test func recognitionContextFiltersDeduplicatesAndBoundsTerms() {
   let terms = [" ", "Fleck", "Fleck"] + (0..<105).map { "term\($0)" }
   let context = DictationRecognitionContext(

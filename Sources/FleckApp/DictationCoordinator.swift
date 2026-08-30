@@ -85,6 +85,7 @@ final class DictationCoordinator {
     var focusedPersistenceReceipt: FocusedDictationPersistenceReceipt?
     var focusedEditorRollbackSucceeded = false
     var focusedPersistenceCompensated = false
+    var deadlineOrigin: ContinuousClock.Instant?
   }
 
   private let engineProvider: any SpeechEngineProviding
@@ -95,6 +96,7 @@ final class DictationCoordinator {
   private let historyController: DictationHistoryController
   private let historyEnabled: @MainActor () -> Bool
   private let processing: (any DictationProcessing)?
+  private let clock: DictationClock
   private let holdThreshold: Duration
   private let holdSleeper: @Sendable (Duration) async -> Void
 
@@ -102,6 +104,7 @@ final class DictationCoordinator {
   private var shortcutID: UUID?
   private var shortcutEditor: (any FocusedDictationEditing)?
   private var shortcutDestination: DictationDestination?
+  private var shortcutPhysicalGesture = DictationPhysicalGesture.absent
   private var holdTask: Task<Void, Never>?
   private var activeShortcutSessions = Set<UUID>()
   private var shortcutTerminalWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
@@ -116,6 +119,8 @@ final class DictationCoordinator {
   private(set) var recoveryAction: DictationRecoveryAction?
   private(set) var recoveryOperationInFlight = false
   private(set) var routingAmbiguity: DictationRoutingAmbiguity?
+  private(set) var latestRuntimeMeasurements = DictationRuntimeMeasurements.empty
+  private var latestMeasurementCaptureID: UUID?
 
   var canConfigureShortcut: Bool {
     capture == nil && shortcutID == nil && activeShortcutSessions.isEmpty
@@ -131,6 +136,7 @@ final class DictationCoordinator {
     historyStore: DictationHistoryStore,
     historyEnabled: @escaping @MainActor () -> Bool,
     processing: (any DictationProcessing)? = nil,
+    clock: DictationClock = .live,
     holdThreshold: Duration = .milliseconds(180),
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
@@ -144,6 +150,7 @@ final class DictationCoordinator {
     historyController = DictationHistoryController(store: historyStore)
     self.historyEnabled = historyEnabled
     self.processing = processing
+    self.clock = clock
     self.holdThreshold = holdThreshold
     self.holdSleeper = holdSleeper
   }
@@ -157,6 +164,7 @@ final class DictationCoordinator {
     historyController: DictationHistoryController,
     historyEnabled: @escaping @MainActor () -> Bool,
     processing: (any DictationProcessing)? = nil,
+    clock: DictationClock = .live,
     holdThreshold: Duration = .milliseconds(180),
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
@@ -170,6 +178,7 @@ final class DictationCoordinator {
     self.historyController = historyController
     self.historyEnabled = historyEnabled
     self.processing = processing
+    self.clock = clock
     self.holdThreshold = holdThreshold
     self.holdSleeper = holdSleeper
   }
@@ -189,7 +198,8 @@ final class DictationCoordinator {
   @discardableResult
   func beginShortcut(
     editor: (any FocusedDictationEditing)?,
-    destination: DictationDestination? = nil
+    destination: DictationDestination? = nil,
+    physicalGesture: DictationPhysicalGesture = .absent
   ) -> DictationShortcutSession? {
     guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
       return nil
@@ -198,6 +208,7 @@ final class DictationCoordinator {
     shortcutID = id
     shortcutEditor = editor
     shortcutDestination = destination
+    shortcutPhysicalGesture = physicalGesture
     activeShortcutSessions.insert(id)
     setPhase(.arming)
     holdTask = Task { [weak self, holdSleeper, holdThreshold] in
@@ -210,7 +221,8 @@ final class DictationCoordinator {
 
   func beginHandsFreeShortcut(
     editor: (any FocusedDictationEditing)?,
-    destination: DictationDestination? = nil
+    destination: DictationDestination? = nil,
+    physicalGesture: DictationPhysicalGesture = .absent
   ) -> DictationShortcutSession? {
     guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
       return nil
@@ -222,7 +234,8 @@ final class DictationCoordinator {
       id: session.id,
       mode: focusedEditor == nil ? .smartCapture : .focused,
       editor: focusedEditor,
-      destination: focusedEditor == nil ? nil : destination
+      destination: focusedEditor == nil ? nil : destination,
+      physicalGesture: physicalGesture
     ) else {
       return nil
     }
@@ -247,12 +260,16 @@ final class DictationCoordinator {
     await finish()
   }
 
-  func endShortcut(_ session: DictationShortcutSession) async {
+  func endShortcut(
+    _ session: DictationShortcutSession,
+    physicalGesture: DictationPhysicalGesture = .absent
+  ) async {
     guard activeShortcutSessions.contains(session.id) else { return }
     if shortcutID == session.id {
       shortcutID = nil
       shortcutEditor = nil
       shortcutDestination = nil
+      shortcutPhysicalGesture = .absent
       holdTask?.cancel()
       holdTask = nil
       completeShortcutSession(session.id)
@@ -260,7 +277,10 @@ final class DictationCoordinator {
       return
     }
     guard capture?.id == session.id else { return }
-    await finish()
+    if let releasedAt = physicalGesture.releasedAt {
+      recordMeasurement(.physicalRelease, at: releasedAt, captureID: session.id)
+    }
+    await finish(deadlineOrigin: physicalGesture.releasedAt)
   }
 
   func cancelShortcut(_ session: DictationShortcutSession) async {
@@ -303,13 +323,15 @@ final class DictationCoordinator {
     id: UUID,
     mode: DictationMode,
     editor: (any FocusedDictationEditing)?,
-    destination: DictationDestination?
+    destination: DictationDestination?,
+    physicalGesture: DictationPhysicalGesture = .absent
   ) async {
     guard reserveCapture(
       id: id,
       mode: mode,
       editor: editor,
-      destination: destination
+      destination: destination,
+      physicalGesture: physicalGesture
     ) else {
       return
     }
@@ -320,7 +342,8 @@ final class DictationCoordinator {
     id: UUID,
     mode: DictationMode,
     editor: (any FocusedDictationEditing)?,
-    destination: DictationDestination?
+    destination: DictationDestination?,
+    physicalGesture: DictationPhysicalGesture
   ) -> Bool {
     guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
       return false
@@ -331,6 +354,14 @@ final class DictationCoordinator {
     recoveryAction = nil
     pendingRoutingAmbiguity = nil
     routingAmbiguity = nil
+    latestMeasurementCaptureID = id
+    latestRuntimeMeasurements = .empty
+    if let pressedAt = physicalGesture.pressedAt {
+      recordMeasurement(.physicalPress, at: pressedAt, captureID: id)
+    }
+    if let releasedAt = physicalGesture.releasedAt {
+      recordMeasurement(.physicalRelease, at: releasedAt, captureID: id)
+    }
     setPhase(.arming)
 
     let focusedEditor = mode == .focused ? editor : nil
@@ -520,9 +551,14 @@ final class DictationCoordinator {
   }
 
   func finish() async {
+    await finish(deadlineOrigin: nil)
+  }
+
+  private func finish(deadlineOrigin: ContinuousClock.Instant?) async {
     guard var capture, !capture.isTerminating, !capture.cancelRequested else { return }
     if capture.isStarting {
       capture.releaseRequested = true
+      capture.deadlineOrigin = deadlineOrigin ?? capture.deadlineOrigin
       self.capture = capture
       return
     }
@@ -533,7 +569,11 @@ final class DictationCoordinator {
     setPhase(.finalizing)
 
     if let processingSession = capture.processingSession {
-      await finishProcessingCapture(capture.id, session: processingSession)
+      await finishProcessingCapture(
+        capture.id,
+        session: processingSession,
+        deadlineOrigin: deadlineOrigin ?? capture.deadlineOrigin
+      )
       return
     }
 
@@ -608,11 +648,16 @@ final class DictationCoordinator {
 
   private func finishProcessingCapture(
     _ id: UUID,
-    session: any DictationProcessingSession
+    session: any DictationProcessingSession,
+    deadlineOrigin: ContinuousClock.Instant?
   ) async {
     let result: DictationProcessingResult
     do {
-      result = try await session.finish()
+      if let deadlineOrigin {
+        result = try await session.finish(deadlineOrigin: deadlineOrigin)
+      } else {
+        result = try await session.finish()
+      }
     } catch {
       await drainProcessingUpdates(id)
       guard await continueCapture(id) else { return }
@@ -628,6 +673,7 @@ final class DictationCoordinator {
     await drainProcessingUpdates(id)
     guard await continueCapture(id) else { return }
     guard let capture, capture.id == id else { return }
+    overlay(result.measurements, captureID: id)
 
     let savesHistory = historyEnabled()
     let record = DictationHistoryRecord(
@@ -673,6 +719,7 @@ final class DictationCoordinator {
       shortcutID = nil
       shortcutEditor = nil
       shortcutDestination = nil
+      shortcutPhysicalGesture = .absent
       holdTask?.cancel()
       holdTask = nil
       completeShortcutSession(id)
@@ -693,6 +740,7 @@ final class DictationCoordinator {
     capture.cancelRequested = true
     if hasProcessingSession { capture.generation &+= 1 }
     self.capture = capture
+    recordMeasurement(.cancellationRequested, at: clock.now(), captureID: id)
 
     rollbackEditor(id)
 
@@ -730,15 +778,18 @@ final class DictationCoordinator {
     guard shortcutID == id else { return }
     let editor = shortcutEditor
     let destination = shortcutDestination
+    let physicalGesture = shortcutPhysicalGesture
     shortcutID = nil
     shortcutEditor = nil
     shortcutDestination = nil
+    shortcutPhysicalGesture = .absent
     holdTask = nil
     await startCapture(
       id: id,
       mode: editor == nil ? .smartCapture : .focused,
       editor: editor,
-      destination: destination
+      destination: destination,
+      physicalGesture: physicalGesture
     )
   }
 
@@ -758,9 +809,11 @@ final class DictationCoordinator {
       await unsaved(id, text: text, historyIsDurable: durable || historyIsDurable)
       return
     }
+    recordMeasurement(.insertionCommitted, at: clock.now(), captureID: id)
     setFocusedCommitReceipt(commitReceipt, captureID: id)
     do {
       let persistenceReceipt = try await saver.flushFocusedDictationSave(captureID: id)
+      recordMeasurement(.persistenceCompleted, at: clock.now(), captureID: id)
       setFocusedPersistenceReceipt(persistenceReceipt, captureID: id)
       if isCancellationRequested(id) {
         _ = await compensateFocusedPersistence(id)
@@ -805,6 +858,7 @@ final class DictationCoordinator {
       $0.destination.title.caseInsensitiveCompare("Inbox") == .orderedSame
     }
     guard var activeCapture = capture, activeCapture.id == id else { return }
+    recordMeasurement(.routingRequested, at: clock.now(), captureID: id)
     let routingTask = Task { [router] in
       await router.route(
         transcript: text,
@@ -820,6 +874,7 @@ final class DictationCoordinator {
       capture = latest
     }
     guard await continueCapture(id) else { return }
+    recordMeasurement(.routingDecision, at: clock.now(), captureID: id)
     let ambiguityChoices: [DictationRoutingChoice]?
     let destinationID: UUID?
     switch routingDecision {
@@ -843,6 +898,9 @@ final class DictationCoordinator {
         captureID: id,
         destinationID: destinationID
       )
+      let saveCompletedAt = clock.now()
+      recordMeasurement(.insertionCommitted, at: saveCompletedAt, captureID: id)
+      recordMeasurement(.persistenceCompleted, at: saveCompletedAt, captureID: id)
       record.insertionOutcome = .saved
       let createdInbox = destinationID == nil
         ? DictationDestination(noteID: receipt.noteID, title: "Inbox")
@@ -894,6 +952,7 @@ final class DictationCoordinator {
           savesHistory: savesHistory
         )
         routingAmbiguity = ambiguity
+        recordMeasurement(.ambiguityPresented, at: clock.now(), captureID: id)
       }
       if let destination = record.destination {
         await terminate(
@@ -973,6 +1032,7 @@ final class DictationCoordinator {
   ) async {
     guard isCancellationRequested(id) else { return }
     if await saver.undoSmartCapture(receipt) {
+      recordMeasurement(.compensationCompleted, at: clock.now(), captureID: id)
       recoveryReceipt = nil
       recoveryAction = nil
       clearRoutingAmbiguity(captureID: id)
@@ -1022,6 +1082,8 @@ final class DictationCoordinator {
       return
     }
     await terminate(id, phase: .idle, cancelEditor: true, deleteHistory: true)
+    recordMeasurement(.cancellationDrained, at: clock.now(), captureID: id)
+    freezeMeasurements(captureID: id)
   }
 
   private func cancelProcessingSession(_ id: UUID) async {
@@ -1126,6 +1188,9 @@ final class DictationCoordinator {
     guard !current.focusedPersistenceCompensated else { return true }
     guard current.focusedEditorRollbackSucceeded else { return false }
     let compensated = await saver.compensateFocusedDictationSave(receipt)
+    if compensated {
+      recordMeasurement(.compensationCompleted, at: clock.now(), captureID: id)
+    }
     guard var latest = capture, latest.id == id else { return false }
     latest.focusedPersistenceCompensated = compensated
     capture = latest
@@ -1180,6 +1245,7 @@ final class DictationCoordinator {
     case .undo:
       guard let receipt = recoveryReceipt else { return nil }
       if await saver.undoSmartCapture(receipt) {
+        recordMeasurement(.compensationCompleted, at: clock.now(), captureID: receipt.captureID)
         recoveryReceipt = nil
         copyableTranscript = nil
         clearRoutingAmbiguity(captureID: receipt.captureID)
@@ -1281,6 +1347,7 @@ final class DictationCoordinator {
           message: "\(savedSummary) Could not move to \(choice.destination.title). \(recovery)"
         )
       }
+      recordMeasurement(.ambiguityMoved, at: clock.now(), captureID: captureID)
       pending.receipt = movedReceipt
       pending.record.destination = choice.destination
       pendingRoutingAmbiguity = pending
@@ -1313,6 +1380,28 @@ final class DictationCoordinator {
     guard pendingRoutingAmbiguity?.ambiguity.captureID == captureID else { return }
     pendingRoutingAmbiguity = nil
     routingAmbiguity = nil
+  }
+
+  private func recordMeasurement(
+    _ stage: DictationRuntimeMeasurements.Stage,
+    at instant: ContinuousClock.Instant,
+    captureID: UUID
+  ) {
+    guard latestMeasurementCaptureID == captureID else { return }
+    latestRuntimeMeasurements = latestRuntimeMeasurements.recording(stage, at: instant)
+  }
+
+  private func overlay(
+    _ measurements: DictationRuntimeMeasurements,
+    captureID: UUID
+  ) {
+    guard latestMeasurementCaptureID == captureID else { return }
+    latestRuntimeMeasurements = latestRuntimeMeasurements.overlaying(measurements)
+  }
+
+  private func freezeMeasurements(captureID: UUID) {
+    guard latestMeasurementCaptureID == captureID else { return }
+    latestRuntimeMeasurements = latestRuntimeMeasurements.terminal()
   }
 
   private func message(for error: Error) -> String {
