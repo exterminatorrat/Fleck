@@ -175,7 +175,10 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
       throw LocalModelUpdateTransitionError.invalidatedCorpusLineage
     }
 
-    let dependencies = try validateDependencies(raw.predecessorCorpusDependencies)
+    let dependencies = try validateDependencies(
+      raw.predecessorCorpusDependencies,
+      predecessorAdmissionDigest: predecessor.admissionRecordDigest
+    )
     let roles = try validateReferenceRoles(raw.referenceRoles)
     let rollback = try validateRollback(
       raw.rollback,
@@ -258,7 +261,8 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
   }
 
   private static func validateDependencies(
-    _ dependencies: [LocalModelPredecessorCorpusDependency]
+    _ dependencies: [LocalModelPredecessorCorpusDependency],
+    predecessorAdmissionDigest: String
   ) throws -> [LocalModelPredecessorCorpusDependency] {
     guard !dependencies.isEmpty else {
       throw LocalModelUpdateTransitionError.missingCorpusDependency
@@ -288,6 +292,9 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
       guard !dependency.invalidated else {
         throw LocalModelUpdateTransitionError.invalidatedCorpusLineage
       }
+    }
+    guard dependencies[0].predecessorAdmissionDigest == predecessorAdmissionDigest else {
+      throw LocalModelUpdateTransitionError.invalidatedCorpusLineage
     }
     return dependencies
   }

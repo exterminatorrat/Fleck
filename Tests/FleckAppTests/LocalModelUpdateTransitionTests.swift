@@ -76,7 +76,7 @@ private enum TransitionFixtures {
 
   static func dependency(
     position: Int = 0,
-    admissionDigest: String = digestA,
+    admissionDigest: String = digestB,
     checkpointDigest: String = digestB,
     headDigest: String = digestC,
     sealDigest: String = digestD,
@@ -369,7 +369,7 @@ private enum TransitionFixtures {
     let invalid: [([LocalModelPredecessorCorpusDependency], LocalModelUpdateTransitionError)] = [
       ([], .missingCorpusDependency),
       ([TransitionFixtures.dependency(), duplicate],
-       .duplicateCorpusDependency(TransitionFixtures.digestA)),
+       .duplicateCorpusDependency(TransitionFixtures.digestB)),
       ([reorderedFirst, reorderedSecond], .reorderedCorpusDependency),
       ([TransitionFixtures.dependency(isCurrent: false)], .staleCorpusDependency),
       ([TransitionFixtures.dependency(invalidated: true)], .invalidatedCorpusLineage),
@@ -383,6 +383,18 @@ private enum TransitionFixtures {
     }
     #expect(throws: LocalModelUpdateTransitionError.invalidatedCorpusLineage) {
       _ = try TransitionFixtures.validate(TransitionFixtures.raw(lineageValid: false))
+    }
+  }
+
+  @Test func transitionRejectsCurrentCorpusEvidenceForAnotherRelease() {
+    let currentEvidenceForY = TransitionFixtures.dependency(
+      admissionDigest: TransitionFixtures.successor.admissionRecordDigest
+    )
+
+    #expect(throws: LocalModelUpdateTransitionError.invalidatedCorpusLineage) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        dependencies: [currentEvidenceForY]
+      ))
     }
   }
 
@@ -524,11 +536,19 @@ private enum TransitionFixtures {
       TransitionFixtures.dependency(),
       TransitionFixtures.dependency(
         position: 1,
-        admissionDigest: TransitionFixtures.digestB,
+        admissionDigest: TransitionFixtures.digestA,
         checkpointDigest: TransitionFixtures.digestC,
         headDigest: TransitionFixtures.digestD,
         sealDigest: String(repeating: "e", count: 64),
         signerDigest: String(repeating: "f", count: 64)
+      ),
+      TransitionFixtures.dependency(
+        position: 2,
+        admissionDigest: TransitionFixtures.digestC,
+        checkpointDigest: TransitionFixtures.digestD,
+        headDigest: String(repeating: "e", count: 64),
+        sealDigest: String(repeating: "f", count: 64),
+        signerDigest: TransitionFixtures.digestA
       ),
     ]
     let first = try TransitionFixtures.validate(TransitionFixtures.raw(
@@ -549,21 +569,22 @@ private enum TransitionFixtures {
     ))
     #expect(first.identityDigest == setsReordered.identityDigest)
 
-    let reversedDependencies = Array(dependencies.reversed().enumerated()).map {
-      LocalModelPredecessorCorpusDependency(
-        position: $0.offset,
-        predecessorAdmissionDigest: $0.element.predecessorAdmissionDigest,
-        corpusLedgerCheckpointDigest: $0.element.corpusLedgerCheckpointDigest,
-        corpusLedgerHeadEventDigest: $0.element.corpusLedgerHeadEventDigest,
-        corpusAdmissionSealDigest: $0.element.corpusAdmissionSealDigest,
-        evaluationSignerFingerprintDigest: $0.element.evaluationSignerFingerprintDigest,
-        isCurrent: true,
-        invalidated: false
-      )
-    }
+    let transitiveOrderChanged = [dependencies[0], dependencies[2], dependencies[1]]
+      .enumerated().map {
+        LocalModelPredecessorCorpusDependency(
+          position: $0.offset,
+          predecessorAdmissionDigest: $0.element.predecessorAdmissionDigest,
+          corpusLedgerCheckpointDigest: $0.element.corpusLedgerCheckpointDigest,
+          corpusLedgerHeadEventDigest: $0.element.corpusLedgerHeadEventDigest,
+          corpusAdmissionSealDigest: $0.element.corpusAdmissionSealDigest,
+          evaluationSignerFingerprintDigest: $0.element.evaluationSignerFingerprintDigest,
+          isCurrent: true,
+          invalidated: false
+        )
+      }
     let orderChanged = try TransitionFixtures.validate(TransitionFixtures.raw(
       predecessor: predecessor,
-      dependencies: reversedDependencies,
+      dependencies: transitiveOrderChanged,
       referenceRoles: ["install", "retainForRollback", "shared"],
       sideBySideBytes: 140,
       rollbackBytes: 80,
