@@ -283,6 +283,30 @@ public struct ModelEvaluationReport: Codable, Equatable, Sendable {
   }
 }
 
+extension ModelEvaluationReport {
+  public func localWritingAccuracyObservation(
+    for caseID: UUID,
+    outcome: LocalWritingEvidenceOutcome
+  ) -> LocalWritingAccuracyObservation? {
+    let canonicalID = caseID.uuidString.lowercased()
+    guard outcome != .notApplicable,
+      let metric = caseMetrics.first(where: { $0.caseID == canonicalID }),
+      metric.edits >= 0, metric.referenceUnits > 0
+    else { return nil }
+    return try? LocalWritingAccuracyObservation(
+      outcome: outcome,
+      edits: UInt64(metric.edits),
+      referenceUnits: UInt64(metric.referenceUnits)
+    )
+  }
+
+  public var localWritingEvidenceLevel: LocalWritingEvidenceLevel? { nil }
+
+  public var localWritingAdmissionOutcome: LocalWritingEvidenceOutcome {
+    .notApplicable
+  }
+}
+
 public enum ModelEvaluationError: Error, Equatable, Sendable, CustomStringConvertible {
   case unsupportedSchemaVersion(Int)
   case emptyModelID

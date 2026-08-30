@@ -104,7 +104,10 @@ let package = Package(
             name: "FleckAgentProtocol",
             dependencies: ["FleckCore"]
         ),
-        .target(name: "FleckModelEvaluation"),
+        .target(
+            name: "FleckModelEvaluation",
+            dependencies: ["FleckCore"]
+        ),
         .executableTarget(
             name: "FleckModelEvaluator",
             dependencies: ["FleckModelEvaluation"]
