@@ -110,6 +110,7 @@ final class DictationCoordinator {
     var stopOrigin: DictationStopOrigin?
     var previousPresentation: PreviousPresentation?
     var physicalReleaseReceipt: PhysicalReleaseReceipt?
+    var deferredStartupFailureMessage: String?
   }
 
   private let engineProvider: any SpeechEngineProviding
@@ -349,6 +350,9 @@ final class DictationCoordinator {
     capture = active
     guard receipt.isShort else {
       recordMeasurement(.physicalRelease, at: releasedAt, captureID: session.id)
+      if active.deferredStartupFailureMessage != nil {
+        acceptArmedShortcut(session.id)
+      }
       return
     }
 
@@ -743,7 +747,9 @@ final class DictationCoordinator {
   }
 
   private func finish(stopOrigin proposedOrigin: DictationStopOrigin) async {
-    guard var capture, !capture.isTerminating, !capture.cancelRequested else { return }
+    guard var capture, !capture.isTerminating, !capture.cancelRequested,
+      capture.deferredStartupFailureMessage == nil
+    else { return }
     if capture.stopOrigin == nil {
       capture.stopOrigin = proposedOrigin
       if let releasedAt = proposedOrigin.physicalReleaseAt {
@@ -991,6 +997,17 @@ final class DictationCoordinator {
     active.holdAccepted = true
     capture = active
     clearArmedShortcut()
+    if let failureMessage = active.deferredStartupFailureMessage {
+      let cancelEditor = active.mode == .focused
+      Task { @MainActor [weak self] in
+        await self?.terminate(
+          id,
+          phase: .failed(failureMessage),
+          cancelEditor: cancelEditor
+        )
+      }
+      return
+    }
     if let session = active.processingSession {
       startProcessingUpdates(id, session: session)
     }
@@ -1460,15 +1477,13 @@ final class DictationCoordinator {
         cancelEditor: current.mode == .focused
       )
     } else {
-      holdTask?.cancel()
-      current.captureContextTask?.cancel()
-      clearArmedShortcut()
-      await terminate(
-        id,
-        phase: .idle,
-        cancelEditor: true,
-        outcome: .cancelled
-      )
+      guard var active = capture, active.id == id else { return }
+      active.deferredStartupFailureMessage = message(for: error)
+      let physicalReleaseAccepted = active.physicalReleaseReceipt?.isShort == false
+      capture = active
+      if physicalReleaseAccepted {
+        acceptArmedShortcut(id)
+      }
     }
   }
 

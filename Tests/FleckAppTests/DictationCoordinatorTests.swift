@@ -575,21 +575,76 @@ func captureFirstEscapeDuringArmingPreservesPriorRecovery() async throws {
 }
 
 @Test @MainActor
-func captureFirstArmingStartupFailurePreservesPriorRecovery() async throws {
+func captureFirstDeferredStartupFailurePublishesWhenThresholdAccepts() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
   fixture.standard.finalText = "Keep this recovery"
   await fixture.coordinator.start(mode: .smartCapture)
   await fixture.coordinator.finish()
-  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  #expect(fixture.coordinator.recoveryAction == .undo)
   fixture.standard.startError = TestError.failed
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let priorStartCount = fixture.standard.startCount
   let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  for _ in 0..<100 where fixture.standard.startCount == priorStartCount { await Task.yield() }
+
+  #expect(terminalEvents.isEmpty)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  await threshold.openGate()
 
   await fixture.coordinator.waitForShortcutTerminal(session)
 
-  #expect(fixture.coordinator.phase == .idle)
-  #expect(fixture.coordinator.recoveryAction == .undo)
-  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+  let publishedFailure = terminalEvents.contains { event in
+    if case .failed = event.terminal { return true }
+    return false
+  }
+  #expect(terminalEvents.count == 1)
+  #expect(publishedFailure)
+  #expect(fixture.coordinator.recoveryAction == nil)
+}
+
+@Test @MainActor
+func captureFirstLongReceiptAcceptsDeferredStartupFailureExactlyOnce() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.startError = TestError.failed
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where fixture.standard.startCount == 0 { await Task.yield() }
+
+  #expect(terminalEvents.isEmpty)
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await threshold.openGate()
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  await Task.yield()
+
+  let publishedFailure = terminalEvents.contains { event in
+    if case .failed = event.terminal { return true }
+    return false
+  }
+  #expect(terminalEvents.count == 1)
+  #expect(publishedFailure)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.physicalReleaseAt == release)
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
 }
 
 @Test @MainActor
