@@ -3,7 +3,9 @@ import Foundation
 
 enum LocalModelFamily: String, Equatable, Sendable {
   case appleSpeech
+  case appleFoundation
   case parakeetTDT
+  case parakeetTDTCTC
   case gemma3
   case lexicon
   case rules
@@ -229,17 +231,29 @@ enum LocalModelCatalog {
       throw LocalModelCatalogError.invalidConfigurationKey
     }
 
-    let requiredRoles = try Set(raw.requiredRoles.map {
-      try parse(LocalModelCatalogRole.self, $0, field: "requiredRole")
-    })
+    var requiredRoles = Set<LocalModelCatalogRole>()
+    for rawRole in raw.requiredRoles {
+      let role = try parse(LocalModelCatalogRole.self, rawRole, field: "requiredRole")
+      guard requiredRoles.insert(role).inserted else {
+        throw LocalModelCatalogError.duplicateRole(role)
+      }
+    }
     let mandatoryRoles: Set<LocalModelCatalogRole> = [.dictation, .cleanup]
     for role in mandatoryRoles where !requiredRoles.contains(role) {
       throw LocalModelCatalogError.missingMandatoryRole(role)
     }
 
+    var profileIDs = Set<String>()
     var profiles: [LocalModelProfile] = []
     for rawProfile in raw.profiles {
-      profiles.append(try validateProfile(rawProfile, for: environment))
+      let profile = try validateProfile(rawProfile, for: environment)
+      guard profileIDs.insert(profile.profileID).inserted else {
+        throw LocalModelCatalogError.invalidValue(
+          field: "profileID",
+          value: profile.profileID
+        )
+      }
+      profiles.append(profile)
     }
 
     var roles = Set<LocalModelCatalogRole>()
@@ -372,14 +386,17 @@ enum LocalModelCatalog {
       throw LocalModelCatalogError.evidenceAdmissionMismatch
     }
 
-    let architectures = try Set(raw.compatibility.architectures.map {
+    let parsedArchitectures = try raw.compatibility.architectures.map {
       try parse(LocalModelHardwareArchitecture.self, $0, field: "architecture")
-    })
+    }
+    let architectures = Set(parsedArchitectures)
     let languages = Set(raw.compatibility.languages)
     guard !architectures.isEmpty,
+          architectures.count == parsedArchitectures.count,
           raw.compatibility.minimumOSMajor > 0,
           raw.compatibility.maximumOSMajor >= raw.compatibility.minimumOSMajor,
           !languages.isEmpty,
+          languages.count == raw.compatibility.languages.count,
           languages.allSatisfy({
             !$0.isEmpty && $0 == $0.trimmingCharacters(in: .whitespacesAndNewlines)
           }) else {
@@ -436,10 +453,9 @@ enum LocalModelCatalog {
     guard validRepository(raw.sourceRepository) else {
       throw LocalModelCatalogError.invalidSourceRepository
     }
-    guard !raw.modelID.isEmpty,
-          !raw.runtimeABI.isEmpty,
-          !raw.conversion.isEmpty,
-          !raw.quantization.isEmpty,
+    guard [raw.modelID, raw.runtimeABI, raw.conversion, raw.quantization].allSatisfy({
+            !$0.isEmpty && $0 == $0.trimmingCharacters(in: .whitespacesAndNewlines)
+          }),
           !raw.files.isEmpty else {
       throw LocalModelCatalogError.invalidArtifactIdentity
     }

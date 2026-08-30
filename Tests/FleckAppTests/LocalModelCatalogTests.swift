@@ -14,6 +14,8 @@ private enum LocalCatalogFixtures {
     revision: String = revisionA,
     artifactURL: URL? = nil,
     runtimeABI: String = "runtime-a",
+    conversion: String = "native",
+    quantization: String = "fp16",
     requiredPaths: [String] = ["model.bin"],
     files: [RawLocalModelArtifactFile] = [
       .init(path: "model.bin", byteCount: 4, sha256: checksumA)
@@ -27,8 +29,8 @@ private enum LocalCatalogFixtures {
       modelID: modelID,
       revision: revision,
       runtimeABI: runtimeABI,
-      conversion: "native",
-      quantization: "fp16",
+      conversion: conversion,
+      quantization: quantization,
       requiredPaths: requiredPaths,
       files: files,
       downloadBytes: downloadBytes,
@@ -108,11 +110,12 @@ private enum LocalCatalogFixtures {
   }
 
   static func configuration(
+    requiredRoles: [String] = ["dictation", "cleanup"],
     profiles: [RawLocalModelProfile]? = nil
   ) -> RawLocalModelConfiguration {
     .init(
       key: "parakeet-gemma.en.v1",
-      requiredRoles: ["dictation", "cleanup"],
+      requiredRoles: requiredRoles,
       profiles: profiles ?? [profile(), cleanup()]
     )
   }
@@ -225,6 +228,23 @@ private enum LocalCatalogFixtures {
         for: LocalCatalogFixtures.environment()
       )
     }
+
+    let whitespaceIdentities = [
+      LocalCatalogFixtures.artifact(modelID: " example/parakeet"),
+      LocalCatalogFixtures.artifact(runtimeABI: "runtime-a "),
+      LocalCatalogFixtures.artifact(conversion: " native"),
+      LocalCatalogFixtures.artifact(quantization: "fp16\n")
+    ]
+    for artifact in whitespaceIdentities {
+      #expect(throws: LocalModelCatalogError.invalidArtifactIdentity) {
+        _ = try LocalModelCatalog.validate(
+          LocalCatalogFixtures.configuration(profiles: [
+            LocalCatalogFixtures.profile(artifact: artifact), LocalCatalogFixtures.cleanup()
+          ]),
+          for: LocalCatalogFixtures.environment()
+        )
+      }
+    }
   }
 
   @Test func catalogRejectsUnsafeArtifactPathsAndManifestCollisions() {
@@ -315,6 +335,9 @@ private enum LocalCatalogFixtures {
   }
 
   @Test func catalogRejectsUnknownLicenseEvidenceAndAdmissionValues() {
+    #expect(LocalModelFamily(rawValue: "appleFoundation") != nil)
+    #expect(LocalModelFamily(rawValue: "parakeetTDTCTC") != nil)
+
     let invalidValues: [(RawLocalModelProfile, LocalModelCatalogError)] = [
       (
         LocalCatalogFixtures.replacing(LocalCatalogFixtures.profile(), license: "unknown"),
@@ -385,6 +408,31 @@ private enum LocalCatalogFixtures {
   }
 
   @Test func catalogRejectsIncompatibleCompoundRoles() throws {
+    #expect(throws: LocalModelCatalogError.duplicateRole(.dictation)) {
+      _ = try LocalModelCatalog.validate(
+        LocalCatalogFixtures.configuration(
+          requiredRoles: ["dictation", "cleanup", "dictation"]
+        ),
+        for: LocalCatalogFixtures.environment()
+      )
+    }
+
+    let duplicateProfileID = LocalCatalogFixtures.replacing(
+      LocalCatalogFixtures.cleanup(),
+      profileID: LocalCatalogFixtures.profile().profileID
+    )
+    #expect(throws: LocalModelCatalogError.invalidValue(
+      field: "profileID",
+      value: "parakeet.en.dictation"
+    )) {
+      _ = try LocalModelCatalog.validate(
+        LocalCatalogFixtures.configuration(profiles: [
+          LocalCatalogFixtures.profile(), duplicateProfileID
+        ]),
+        for: LocalCatalogFixtures.environment()
+      )
+    }
+
     let duplicate = LocalCatalogFixtures.replacing(
       LocalCatalogFixtures.cleanup(),
       profileID: "other.cleanup",
@@ -499,6 +547,34 @@ private enum LocalCatalogFixtures {
       )
     }
 
+    let duplicateCompatibilityValues: [RawLocalModelProfile] = [
+      LocalCatalogFixtures.replacing(
+        LocalCatalogFixtures.profile(),
+        architectures: ["arm64", "arm64"]
+      ),
+      LocalCatalogFixtures.replacing(
+        LocalCatalogFixtures.profile(),
+        languages: ["en", "en"]
+      ),
+      LocalCatalogFixtures.replacing(
+        LocalCatalogFixtures.profile(),
+        languages: ["en "]
+      )
+    ]
+    for profile in duplicateCompatibilityValues {
+      #expect(throws: LocalModelCatalogError.invalidValue(
+        field: "compatibility",
+        value: profile.profileID
+      )) {
+        _ = try LocalModelCatalog.validate(
+          LocalCatalogFixtures.configuration(profiles: [
+            profile, LocalCatalogFixtures.cleanup()
+          ]),
+          for: LocalCatalogFixtures.environment()
+        )
+      }
+    }
+
     let mismatches: [(LocalModelBuildEnvironment, LocalModelCatalogError)] = [
       (LocalCatalogFixtures.environment(osMajor: 17), .incompatibleOS),
       (LocalCatalogFixtures.environment(languages: ["zh-Hans"]), .incompatibleLanguage)
@@ -591,8 +667,11 @@ private enum LocalCatalogFixtures {
         .init(path: "tokenizer.json", byteCount: 2, sha256: LocalCatalogFixtures.checksumB),
         .init(path: "model.bin", byteCount: 2, sha256: LocalCatalogFixtures.checksumA)
       ]
-    ))
-    let cleanup = LocalCatalogFixtures.cleanup()
+    ), languages: ["en", "en-US"])
+    let cleanup = LocalCatalogFixtures.replacing(
+      LocalCatalogFixtures.cleanup(),
+      languages: ["en", "en-US"]
+    )
     let first = try LocalModelCatalog.validate(
       LocalCatalogFixtures.configuration(profiles: [dictation, cleanup]),
       for: LocalCatalogFixtures.environment()
@@ -603,9 +682,16 @@ private enum LocalCatalogFixtures {
         .init(path: "model.bin", byteCount: 2, sha256: LocalCatalogFixtures.checksumA),
         .init(path: "tokenizer.json", byteCount: 2, sha256: LocalCatalogFixtures.checksumB)
       ]
-    ))
+    ), languages: ["en-US", "en"])
+    let reorderedCleanup = LocalCatalogFixtures.replacing(
+      cleanup,
+      languages: ["en-US", "en"]
+    )
     let second = try LocalModelCatalog.validate(
-      LocalCatalogFixtures.configuration(profiles: [cleanup, reorderedDictation]),
+      LocalCatalogFixtures.configuration(
+        requiredRoles: ["cleanup", "dictation"],
+        profiles: [reorderedCleanup, reorderedDictation]
+      ),
       for: LocalCatalogFixtures.environment()
     )
     let laterEvidenceProfiles = [dictation, cleanup].map {
