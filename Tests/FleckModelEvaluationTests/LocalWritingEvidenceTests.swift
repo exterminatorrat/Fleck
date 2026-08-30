@@ -101,6 +101,42 @@ struct LocalWritingEvidenceTests {
   }
 
   @Test
+  func validatorRejectsReexposedDiagnosticLineageInvalidatedBeforeConsumption() throws {
+    let fixture = try EvidenceFixture(
+      scoringEligibility: .diagnosticOnlyPostExposure,
+      initialExecutionIdentitySHA256: String(repeating: "9", count: 64)
+    )
+    defer { fixture.cleanup() }
+    let invalidated = try fixture.ledger.appendInvalidation(
+      LocalWritingMaterialLineageInvalidation(
+        corpusID: LocalWritingEvaluationFixture.corpusID,
+        caseID: LocalWritingEvaluationFixture.caseID,
+        materialLineageID: LocalWritingEvaluationFixture.lineageID,
+        reason: .oracleCorrectedAfterExposure
+      ),
+      expectedHead: fixture.consumedHead.currentHeadSHA256
+    )
+    let reexposed = try fixture.ledger.appendExposure(
+      fixture.defaultExposure(),
+      expectedHead: invalidated.currentHeadSHA256
+    )
+    let verification = try fixture.ledger.verify(
+      expectedCorpusID: LocalWritingEvaluationFixture.corpusID
+    )
+    let consumption = try LocalWritingLedgerConsumptionHead(
+      verification: verification,
+      consumedHeadSHA256: reexposed.currentHeadSHA256
+    )
+
+    #expect(throws: LocalWritingEvidenceError.invalidatedLineage) {
+      try fixture.makeEvidence(
+        verification: verification,
+        consumption: consumption
+      )
+    }
+  }
+
+  @Test
   func validatorRequiresTheExactExposureAtOrBeforeTheConsumedHead() throws {
     let fixture = try EvidenceFixture(
       recordExposure: false,
@@ -184,7 +220,7 @@ struct LocalWritingEvidenceTests {
   }
 
   @Test
-  func accuracyAndNetworkFailuresCannotHideBehindAPassingCase() throws {
+  func accuracyComponentAndNetworkDetailsMustAgreeWithCaseOutcome() throws {
     let fixture = try EvidenceFixture()
     defer { fixture.cleanup() }
     let values = try fixture.values()
@@ -211,13 +247,22 @@ struct LocalWritingEvidenceTests {
       try values.caseResult.replacing(measurements: networkFailure, outcome: .pass)
     }
     #expect(throws: LocalWritingEvidenceError.invalidOutcome) {
-      try values.caseResult.replacingWithNotApplicableOutcome(accuracy: failedAccuracy)
+      try values.caseResult.replacingWithAllDetailsNotApplicable(accuracy: failedAccuracy)
     }
     #expect(throws: LocalWritingEvidenceError.invalidOutcome) {
-      try values.caseResult.replacingWithNotApplicableOutcome(
+      try values.caseResult.replacingWithAllDetailsNotApplicable(
         measurements: networkFailure,
         accuracy: .notApplicable
       )
+    }
+    #expect(throws: LocalWritingEvidenceError.invalidOutcome) {
+      try values.caseResult.replacingWithAllDetailsNotApplicable(
+        outcome: .pass,
+        accuracy: .notApplicable
+      )
+    }
+    #expect(throws: LocalWritingEvidenceError.invalidOutcome) {
+      try values.caseResult.replacing(outcome: .fail)
     }
   }
 
@@ -315,7 +360,8 @@ private final class EvidenceFixture {
 
   init(
     recordExposure: Bool = true,
-    scoringEligibility: LocalWritingScoringEligibility = .admissionEligible
+    scoringEligibility: LocalWritingScoringEligibility = .admissionEligible,
+    initialExecutionIdentitySHA256: String? = nil
   ) throws {
     corpus = try LocalWritingEvaluationFixture(scoringEligibility: scoringEligibility)
     directory = FileManager.default.temporaryDirectory
@@ -332,7 +378,7 @@ private final class EvidenceFixture {
     let initial = try ledger.checkpoint()
     if recordExposure {
       consumedHead = try ledger.appendExposure(
-        try Self.exposure(),
+        try Self.exposure(executionIdentitySHA256: initialExecutionIdentitySHA256),
         expectedHead: initial.currentHeadSHA256
       )
     } else {
@@ -342,6 +388,10 @@ private final class EvidenceFixture {
 
   func cleanup() {
     try? FileManager.default.removeItem(at: directory)
+  }
+
+  func defaultExposure() throws -> LocalWritingCandidateExposure {
+    try Self.exposure()
   }
 
   func consumption() throws -> LocalWritingLedgerConsumptionHead {
@@ -471,7 +521,9 @@ private final class EvidenceFixture {
     )
   }
 
-  private static func exposure() throws -> LocalWritingCandidateExposure {
+  private static func exposure(
+    executionIdentitySHA256: String? = nil
+  ) throws -> LocalWritingCandidateExposure {
     let identity = try identity()
     return try LocalWritingCandidateExposure(
       corpusID: LocalWritingEvaluationFixture.corpusID,
@@ -480,7 +532,7 @@ private final class EvidenceFixture {
       candidateIdentitySHA256: identity.candidateIdentitySHA256,
       configurationIdentitySHA256: identity.configurationIdentitySHA256,
       roleProfileIdentitySHA256: identity.roleProfileIdentitySHA256,
-      executionIdentitySHA256: identity.executionIdentitySHA256,
+      executionIdentitySHA256: executionIdentitySHA256 ?? identity.executionIdentitySHA256,
       executionStratum: .e1
     )
   }
@@ -523,7 +575,8 @@ private extension LocalWritingCaseOutcomeReference {
     )
   }
 
-  func replacingWithNotApplicableOutcome(
+  func replacingWithAllDetailsNotApplicable(
+    outcome: LocalWritingEvidenceOutcome = .notApplicable,
     measurements: LocalWritingStageMeasurements? = nil,
     accuracy: LocalWritingAccuracyObservation
   ) throws -> Self {
@@ -534,7 +587,7 @@ private extension LocalWritingCaseOutcomeReference {
       executionVariant: executionVariant,
       measurements: measurements ?? self.measurements,
       accuracy: accuracy,
-      outcome: .notApplicable,
+      outcome: outcome,
       protectedMeaningOutcome: .notApplicable,
       faithfulnessOutcome: .notApplicable,
       routingOutcome: .notApplicable,

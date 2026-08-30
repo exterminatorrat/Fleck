@@ -366,21 +366,21 @@ public struct LocalWritingCaseOutcomeReference: Equatable, Sendable {
       protectedMeaningOutcome, faithfulnessOutcome, routingOutcome,
       cleanupOutcome, cancellationOutcome, packageOutcome,
     ]
-    if componentOutcomes.contains(.fail), outcome != .fail {
-      throw LocalWritingEvidenceError.invalidOutcome
-    }
-    if (accuracy.outcome == .fail || measurements.unexpectedNetworkConnectionCount > 0),
-      outcome != .fail
-    {
-      throw LocalWritingEvidenceError.invalidOutcome
-    }
-    if outcome == .notApplicable, accuracy.outcome != .notApplicable {
-      throw LocalWritingEvidenceError.invalidOutcome
-    }
-    if outcome == .notApplicable,
-      componentOutcomes.contains(where: { $0 != .notApplicable })
-    {
-      throw LocalWritingEvidenceError.invalidOutcome
+    let hasFailure = accuracy.outcome == .fail
+      || componentOutcomes.contains(.fail)
+      || measurements.unexpectedNetworkConnectionCount > 0
+    switch outcome {
+    case .pass:
+      guard !hasFailure,
+        accuracy.outcome == .pass || componentOutcomes.contains(.pass)
+      else { throw LocalWritingEvidenceError.invalidOutcome }
+    case .fail:
+      guard hasFailure else { throw LocalWritingEvidenceError.invalidOutcome }
+    case .notApplicable:
+      guard accuracy.outcome == .notApplicable,
+        componentOutcomes.allSatisfy({ $0 == .notApplicable }),
+        measurements.unexpectedNetworkConnectionCount == 0
+      else { throw LocalWritingEvidenceError.invalidOutcome }
     }
     self.caseID = caseID
     self.materialLineageID = materialLineageID
@@ -821,15 +821,30 @@ public struct LocalWritingEvaluationEvidence: Equatable, Sendable {
           atOrBefore: consumedHeadSHA256,
           in: ledgerVerification
         ) else { throw LocalWritingEvidenceError.missingExposure }
-        guard !ledgerVerification.hasLaterInvalidation(
+        guard !lineageWasInvalidated(
+          caseID: result.caseID,
           materialLineageID: result.materialLineageID,
-          after: consumedHeadSHA256
+          in: ledgerVerification
         ), ledgerVerification.scoringEligibility(
           exposure: exposure,
           consumedAt: consumedHeadSHA256
         ) == corpusCase.scoringEligibility
         else { throw LocalWritingEvidenceError.invalidatedLineage }
       }
+    }
+  }
+
+  private static func lineageWasInvalidated(
+    caseID: UUID,
+    materialLineageID: UUID,
+    in verification: LocalWritingExposureLedgerVerification
+  ) -> Bool {
+    verification.events.contains { event in
+      guard case .materialLineageInvalidation(let invalidation) = event.payload else {
+        return false
+      }
+      return invalidation.caseID == caseID
+        && invalidation.materialLineageID == materialLineageID
     }
   }
 
