@@ -1,92 +1,70 @@
 #if os(macOS)
   import AppKit
+  import Combine
   import FleckCore
   import SwiftUI
 
   enum DictationCapsuleStatus: Equatable {
     case idle
+    case arming
     case listening
     case finalizing
     case cleaning
     case routing
+    case saving
     case saved(destination: String)
     case savedWithoutCleanup(destination: String)
+    case noSpeech
     case repairingModel
     case failed(String)
 
     var presentation: DictationCapsulePresentation {
-      switch self {
-      case .idle:
-        .init(
-          visibleText: nil,
-          voiceOverText: "Fleck dictation ready",
-          symbolName: "waveform",
-          visualMode: .idle
-        )
-      case .listening:
-        .init(
-          visibleText: nil,
-          voiceOverText: "Dictation listening",
-          symbolName: "waveform",
-          visualMode: .listening
-        )
-      case .finalizing:
-        .init(
-          visibleText: "Finishing",
-          voiceOverText: "Finishing dictation",
-          symbolName: "ellipsis.circle",
-          visualMode: .progress
-        )
-      case .cleaning:
-        .init(
-          visibleText: "Cleaning up",
-          voiceOverText: "Cleaning up dictation",
-          symbolName: "sparkles",
-          visualMode: .progress
-        )
-      case .routing:
-        .init(
-          visibleText: "Finding note",
-          voiceOverText: "Finding a note for dictation",
-          symbolName: "arrow.triangle.branch",
-          visualMode: .progress
-        )
-      case .saved(let destination):
-        .init(
-          visibleText: "Saved to \(destination)",
-          voiceOverText: "Dictation saved to \(destination)",
-          symbolName: "checkmark.circle.fill",
-          visualMode: .success,
-          isSuccess: true
-        )
-      case .savedWithoutCleanup(let destination):
-        .init(
-          visibleText: "Saved to \(destination) without cleanup",
-          voiceOverText: "Dictation saved to \(destination) without cleanup",
-          symbolName: "exclamationmark.triangle.fill",
-          visualMode: .warning,
-          isSuccess: true
-        )
-      case .repairingModel:
-        .init(
-          visibleText: "Repairing enhanced model",
-          voiceOverText: "Repairing enhanced dictation model",
-          symbolName: "wrench.and.screwdriver.fill",
-          visualMode: .progress
-        )
-      case .failed(let message):
-        .init(
-          visibleText: "Dictation failed",
-          voiceOverText: "Dictation failed: \(message)",
-          symbolName: "exclamationmark.circle.fill",
-          visualMode: .failure
-        )
-      }
+      DictationCapsulePresentation(status: self)
+    }
+  }
+
+  struct DictationCapsuleContext: Equatable {
+    let status: DictationCapsuleStatus
+    let sessionID: UUID?
+    let trigger: DictationShortcutTrigger?
+    let mode: DictationMode?
+    let isHandsFree: Bool
+    let pipelineStage: DictationPipelineStage?
+    let cleanupOutcome: DictationCleanupOutcome?
+    let failureStage: DictationPipelineStage?
+
+    init(
+      status: DictationCapsuleStatus,
+      sessionID: UUID? = nil,
+      trigger: DictationShortcutTrigger? = nil,
+      mode: DictationMode? = nil,
+      isHandsFree: Bool = false,
+      pipelineStage: DictationPipelineStage? = nil,
+      cleanupOutcome: DictationCleanupOutcome? = nil,
+      failureStage: DictationPipelineStage? = nil
+    ) {
+      self.status = status
+      self.sessionID = sessionID
+      self.trigger = trigger
+      self.mode = mode
+      self.isHandsFree = isHandsFree
+      self.pipelineStage = pipelineStage
+      self.cleanupOutcome = cleanupOutcome
+      self.failureStage = failureStage
+    }
+
+    var presentation: DictationCapsulePresentation {
+      DictationCapsulePresentation(status: status, context: self)
+    }
+
+    var stageTreatments: [FleckRailStageTreatment] {
+      FleckRailStageTreatment.forContext(self)
     }
   }
 
   enum DictationCapsuleVisualMode: Equatable {
     case idle
+    case arming
     case listening
     case progress
     case success
@@ -95,11 +73,458 @@
   }
 
   struct DictationCapsulePresentation: Equatable {
+    static let actionDividerSize = CGSize(width: 1, height: 16)
+
+    let context: DictationCapsuleContext
     let visibleText: String?
     let voiceOverText: String
     let symbolName: String
     let visualMode: DictationCapsuleVisualMode
+    let widthCeiling: CGFloat
+    let measuredWidth: CGFloat
+    let stageTreatments: [FleckRailStageTreatment]
+    let usesFleckMark: Bool
     var isSuccess = false
+
+    init(
+      status: DictationCapsuleStatus,
+      action: DictationCapsuleAction? = nil,
+      context: DictationCapsuleContext? = nil
+    ) {
+      let context = context ?? DictationCapsuleContext(status: status)
+      let treatments = FleckRailStageTreatment.forContext(context)
+      let copy = Self.copy(for: status)
+      let visualMode: DictationCapsuleVisualMode
+      let symbolName: String
+      let usesFleckMark: Bool
+      switch status {
+      case .idle:
+        visualMode = .idle
+        symbolName = "square.grid.2x2"
+        usesFleckMark = true
+      case .arming:
+        visualMode = .arming
+        symbolName = "square.grid.2x2"
+        usesFleckMark = true
+      case .listening:
+        visualMode = .listening
+        symbolName = "waveform"
+        usesFleckMark = true
+      case .finalizing, .cleaning, .routing, .saving:
+        visualMode = .progress
+        symbolName = "circle"
+        usesFleckMark = true
+      case .saved:
+        visualMode = .success
+        symbolName = "checkmark"
+        usesFleckMark = true
+      case .savedWithoutCleanup:
+        visualMode = .warning
+        symbolName = "exclamationmark.triangle"
+        usesFleckMark = true
+      case .noSpeech:
+        visualMode = .warning
+        symbolName = "waveform.slash"
+        usesFleckMark = false
+      case .repairingModel:
+        visualMode = .progress
+        symbolName = "wrench.and.screwdriver"
+        usesFleckMark = true
+      case .failed:
+        visualMode = .failure
+        symbolName = "exclamationmark.circle"
+        usesFleckMark = false
+      }
+
+      let widthCeiling = Self.widthCeiling(for: status)
+      let measuredWidth = Self.measuredWidth(
+        for: copy,
+        status: status,
+        action: action,
+        ceiling: widthCeiling
+      )
+      self.visibleText = copy.visible
+      self.context = context
+      self.voiceOverText = copy.voiceOver
+      self.symbolName = symbolName
+      self.visualMode = visualMode
+      self.widthCeiling = widthCeiling
+      self.measuredWidth = measuredWidth
+      self.stageTreatments = treatments
+      self.usesFleckMark = usesFleckMark
+      self.isSuccess = status.isSuccess
+    }
+
+    static func result(
+      status: DictationCapsuleStatus,
+      action: DictationCapsuleAction? = nil
+    ) -> Self {
+      Self(status: status, action: action)
+    }
+
+    static func widthCeiling(for status: DictationCapsuleStatus) -> CGFloat {
+      switch status {
+      case .idle, .arming:
+        46
+      case .listening:
+        176
+      case .finalizing, .cleaning, .routing, .saving, .noSpeech:
+        192
+      case .saved:
+        264
+      case .savedWithoutCleanup:
+        288
+      case .repairingModel:
+        224
+      case .failed:
+        264
+      }
+    }
+
+    static func tailTruncated(_ text: String, maxCharacters: Int) -> String {
+      guard text.count > maxCharacters, maxCharacters > 1 else {
+        return text
+      }
+      return String(text.prefix(maxCharacters - 1)) + "…"
+    }
+
+    private static func copy(for status: DictationCapsuleStatus) -> (visible: String?, voiceOver: String) {
+      switch status {
+      case .idle:
+        return (nil, "Fleck dictation ready")
+      case .arming:
+        return (nil, "Starting dictation")
+      case .listening:
+        return (nil, "Dictation listening")
+      case .finalizing:
+        return ("Finishing", "Finishing dictation")
+      case .cleaning:
+        return ("Polishing", "Polishing dictation")
+      case .routing:
+        return ("Organizing", "Organizing dictation")
+      case .saving:
+        return ("Saving", "Saving dictation")
+      case .saved(let destination):
+        let destination = tailTruncated(destination, maxCharacters: 30)
+        let text = "Saved to \(destination)"
+        return (text, text)
+      case .savedWithoutCleanup(let destination):
+        let destination = tailTruncated(destination, maxCharacters: 27)
+        let text = "Saved original to \(destination)"
+        return (text, text)
+      case .noSpeech:
+        return ("No speech heard", "No speech heard")
+      case .repairingModel:
+        return ("Repairing enhanced model", "Repairing enhanced dictation model")
+      case .failed(let message):
+        let text = failureCopy(for: message)
+        return (text, text)
+      }
+    }
+
+    private static func failureCopy(for message: String) -> String {
+      let normalized = message.lowercased()
+      if normalized.contains("microphone")
+        || normalized.contains("permission")
+        || normalized.contains("audio")
+        || normalized.contains("speech recognition")
+      {
+        return "Microphone access needed"
+      }
+      if normalized.contains("repair") && normalized.contains("model") {
+        return "Model repair failed"
+      }
+      if normalized.contains("save")
+        || normalized.contains("persist")
+        || normalized.contains("insert")
+        || normalized.contains("commit")
+      {
+        return "Couldn't save"
+      }
+      return "Couldn't save"
+    }
+
+    private static func measuredWidth(
+      for copy: (visible: String?, voiceOver: String),
+      status: DictationCapsuleStatus,
+      action: DictationCapsuleAction?,
+      ceiling: CGFloat
+    ) -> CGFloat {
+      guard let visible = copy.visible else { return ceiling }
+      let markWidth: CGFloat = 14
+      let glyphWidth: CGFloat = status == .finalizing || status == .cleaning
+        || status == .routing || status == .saving ? 0 : 14
+      let actionWidth = action.map { CGFloat(max($0.title.count * 6, 24)) } ?? 0
+      let dividerWidth: CGFloat = action == nil ? 0 : actionDividerSize.width + 7
+      let estimate = 16 + markWidth + 7 + glyphWidth + (glyphWidth > 0 ? 7 : 0)
+        + CGFloat(visible.count) * 6.2 + dividerWidth + actionWidth
+      return min(ceiling, max(ceil(estimate), 1))
+    }
+  }
+
+  private extension DictationCapsuleStatus {
+    var isSuccess: Bool {
+      switch self {
+      case .saved, .savedWithoutCleanup:
+        true
+      default:
+        false
+      }
+    }
+  }
+
+  enum FleckRailStageTreatment: Equatable {
+    case pending
+    case active
+    case complete
+    case skipped
+    case fallback
+    case failed
+
+    static let stages: [DictationPipelineStage] = [
+      .capture, .polish, .organize, .save,
+    ]
+
+    static func forContext(_ context: DictationCapsuleContext) -> [Self] {
+      var result = Array(repeating: Self.pending, count: stages.count)
+      let status = context.status
+      let isTerminalSuccess: Bool
+      switch status {
+      case .saved, .savedWithoutCleanup:
+        isTerminalSuccess = true
+      default:
+        isTerminalSuccess = false
+      }
+
+      if isTerminalSuccess {
+        result = Array(repeating: .complete, count: stages.count)
+      } else {
+        switch status {
+        case .arming, .listening:
+          result[0] = .active
+        case .finalizing:
+          result[0] = .complete
+        case .cleaning:
+          result[0] = .complete
+          result[1] = .active
+        case .routing:
+          result[0] = .complete
+          result[1] = .complete
+          result[2] = .active
+        case .saving:
+          result[0] = .complete
+          result[1] = .complete
+          result[2] = .complete
+          result[3] = .active
+        case .failed:
+          if let failureStage = context.failureStage,
+            let failedIndex = stages.firstIndex(of: failureStage)
+          {
+            for index in 0..<failedIndex {
+              result[index] = .complete
+            }
+            result[failedIndex] = .failed
+          }
+        case .idle, .noSpeech, .repairingModel, .saved, .savedWithoutCleanup:
+          break
+        }
+      }
+
+      if context.cleanupOutcome == .usedRaw,
+        result[1] != .failed
+      {
+        result[1] = .fallback
+      }
+
+      if context.mode == .focused,
+        result[2] != .failed
+      {
+        result[2] = .skipped
+      }
+      return result
+    }
+
+    static func treatments(for context: DictationCapsuleContext) -> [Self] {
+      forContext(context)
+    }
+  }
+
+  struct FleckRailRGB: Equatable {
+    let red: Double
+    let green: Double
+    let blue: Double
+
+    init(red: Double, green: Double, blue: Double) {
+      self.red = min(max(red, 0), 1)
+      self.green = min(max(green, 0), 1)
+      self.blue = min(max(blue, 0), 1)
+    }
+
+    init?(hex: String) {
+      let value = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "#", with: "")
+      guard value.count == 6, let integer = UInt64(value, radix: 16) else {
+        return nil
+      }
+      self.init(
+        red: Double((integer >> 16) & 0xFF) / 255,
+        green: Double((integer >> 8) & 0xFF) / 255,
+        blue: Double(integer & 0xFF) / 255
+      )
+    }
+
+    var hex: String {
+      String(
+        format: "#%02X%02X%02X",
+        Int((red * 255).rounded()),
+        Int((green * 255).rounded()),
+        Int((blue * 255).rounded())
+      )
+    }
+
+    func mixed(with other: Self, amount: Double) -> Self {
+      let amount = min(max(amount, 0), 1)
+      return Self(
+        red: red + (other.red - red) * amount,
+        green: green + (other.green - green) * amount,
+        blue: blue + (other.blue - blue) * amount
+      )
+    }
+
+    var luminance: Double {
+      func linear(_ value: Double) -> Double {
+        value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+      }
+      return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    }
+  }
+
+  struct FleckRailColors: Equatable {
+    static let defaultAccentHex = "#7C6CF2"
+    static let defaultLiveHex = "#A79DFF"
+    static let shellHex = "#17151C"
+    static let shellOpacity = 0.96
+    static let primaryTextHex = "#F7F5FA"
+    static let secondaryTextHex = "#B6B1BF"
+    static let successHex = "#5DD68A"
+    static let warningHex = "#FFB24A"
+    static let failureHex = "#FF6B70"
+
+    let accentHex: String
+    let shell: FleckRailRGB
+    let displayCore: FleckRailRGB
+    let displayLive: FleckRailRGB
+
+    init(accentHex: String = Self.defaultAccentHex) {
+      self.accentHex = accentHex
+      self.shell = FleckRailRGB(hex: Self.shellHex)!
+      let base = FleckRailRGB(hex: accentHex) ?? FleckRailRGB(hex: Self.defaultAccentHex)!
+      if accentHex.uppercased() == Self.defaultAccentHex {
+        self.displayCore = base
+        self.displayLive = FleckRailRGB(hex: Self.defaultLiveHex)!
+      } else {
+        let core = Self.contrastSafe(base, against: shell, minimum: 3)
+        self.displayCore = core
+        self.displayLive = Self.contrastSafe(
+          core.mixed(with: FleckRailRGB(red: 1, green: 1, blue: 1), amount: 0.22),
+          against: shell,
+          minimum: 3
+        )
+      }
+    }
+
+    var displayCoreHex: String { displayCore.hex }
+    var displayLiveHex: String { displayLive.hex }
+    var coreHex: String { displayCoreHex }
+    var liveHex: String { displayLiveHex }
+    var storedAccentHex: String { accentHex }
+    var shellHex: String { Self.shellHex }
+    var shellOpacity: Double { Self.shellOpacity }
+    var primaryText: FleckRailRGB { FleckRailRGB(hex: Self.primaryTextHex)! }
+    var secondaryText: FleckRailRGB { FleckRailRGB(hex: Self.secondaryTextHex)! }
+    var success: FleckRailRGB { FleckRailRGB(hex: Self.successHex)! }
+    var warning: FleckRailRGB { FleckRailRGB(hex: Self.warningHex)! }
+    var failure: FleckRailRGB { FleckRailRGB(hex: Self.failureHex)! }
+
+    var shellColor: Color { Color(red: shell.red, green: shell.green, blue: shell.blue) }
+    var coreColor: Color {
+      Color(red: displayCore.red, green: displayCore.green, blue: displayCore.blue)
+    }
+    var liveColor: Color {
+      Color(red: displayLive.red, green: displayLive.green, blue: displayLive.blue)
+    }
+    var primaryTextColor: Color {
+      Color(red: primaryText.red, green: primaryText.green, blue: primaryText.blue)
+    }
+    var secondaryTextColor: Color {
+      Color(red: secondaryText.red, green: secondaryText.green, blue: secondaryText.blue)
+    }
+
+    static func contrastRatio(_ foreground: FleckRailRGB, against background: FleckRailRGB) -> Double {
+      let lighter = max(foreground.luminance, background.luminance)
+      let darker = min(foreground.luminance, background.luminance)
+      return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    private static func contrastSafe(
+      _ color: FleckRailRGB,
+      against background: FleckRailRGB,
+      minimum: Double
+    ) -> FleckRailRGB {
+      guard contrastRatio(color, against: background) < minimum else { return color }
+      var low = 0.0
+      var high = 1.0
+      for _ in 0..<24 {
+        let amount = (low + high) / 2
+        let candidate = color.mixed(with: FleckRailRGB(red: 1, green: 1, blue: 1), amount: amount)
+        if contrastRatio(candidate, against: background) >= minimum {
+          high = amount
+        } else {
+          low = amount
+        }
+      }
+      return color.mixed(with: FleckRailRGB(red: 1, green: 1, blue: 1), amount: high)
+    }
+  }
+
+  struct FleckRailMark: View {
+    static let frameSize = CGSize(width: 14, height: 14)
+    static let tileIDs = [0, 1, 2, 3]
+    static let tileFrames = [
+      CGRect(x: 0, y: 0, width: 6, height: 6),
+      CGRect(x: 8, y: 0, width: 6, height: 6),
+      CGRect(x: 0, y: 8, width: 6, height: 6),
+      CGRect(x: 8, y: 8, width: 6, height: 6),
+    ]
+    static let innerHighlightThickness: CGFloat = 1
+
+    let color: Color
+    let activeTile: Int?
+
+    init(color: Color = FleckRailColors().coreColor, activeTile: Int? = nil) {
+      self.color = color
+      self.activeTile = activeTile
+    }
+
+    var body: some View {
+      ZStack(alignment: .topLeading) {
+        ForEach(Self.tileIDs, id: \.self) { tileID in
+          let frame = Self.tileFrames[tileID]
+          RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(tileID == activeTile ? color : color.opacity(activeTile == nil ? 1 : 0.28))
+            .frame(width: frame.width, height: frame.height)
+            .overlay(alignment: .top) {
+              Rectangle()
+                .fill(Color.white.opacity(0.10))
+                .frame(height: Self.innerHighlightThickness)
+                .clipShape(RoundedRectangle(cornerRadius: 1, style: .continuous))
+            }
+            .offset(x: frame.minX, y: frame.minY)
+        }
+      }
+      .frame(width: Self.frameSize.width, height: Self.frameSize.height)
+      .accessibilityHidden(true)
+    }
   }
 
   enum DictationCapsuleTransition: Equatable {
@@ -122,6 +547,7 @@
     case copy
     case openHistory
     case openDestination
+    case dismiss
 
     var title: String {
       switch self {
@@ -129,10 +555,52 @@
       case .copy: "Copy"
       case .openHistory: "Open Dictation History"
       case .openDestination: "Open Destination"
+      case .dismiss: "Dismiss"
       }
     }
 
     var accessibilityLabel: String { title }
+  }
+
+  @MainActor
+  final class DictationCapsulePresentationModel: ObservableObject {
+    @Published private(set) var context: DictationCapsuleContext
+    @Published private(set) var action: DictationCapsuleAction?
+    @Published private(set) var dock: DictationCapsuleDock
+    @Published private(set) var colors: FleckRailColors
+    private(set) var actionHandler: @MainActor () -> Void
+
+    init(
+      context: DictationCapsuleContext = DictationCapsuleContext(status: .idle),
+      dock: DictationCapsuleDock = .bottom,
+      colors: FleckRailColors = FleckRailColors(),
+      action: DictationCapsuleAction? = nil,
+      onAction: @escaping @MainActor () -> Void = {}
+    ) {
+      self.context = context
+      self.dock = dock
+      self.colors = colors
+      self.action = action
+      self.actionHandler = onAction
+    }
+
+    func update(
+      context: DictationCapsuleContext,
+      action: DictationCapsuleAction?,
+      onAction: @escaping @MainActor () -> Void
+    ) {
+      self.context = context
+      self.action = action
+      self.actionHandler = onAction
+    }
+
+    func updateDock(_ dock: DictationCapsuleDock) {
+      self.dock = dock
+    }
+
+    func updateAccentHex(_ accentHex: String) {
+      colors = FleckRailColors(accentHex: accentHex)
+    }
   }
 
   final class DictationCapsulePanel: NSPanel {
@@ -170,15 +638,21 @@
 
   @MainActor
   final class DictationCapsuleController {
-    static let idleSize = CGSize(width: 40, height: 26)
-    static let listeningSize = CGSize(width: 196, height: 32)
-    static let activeSize = CGSize(width: 280, height: 32)
-    static let edgeInset: CGFloat = 24
+    static let idleSize = CGSize(width: 46, height: 24)
+    static let listeningSize = CGSize(width: 176, height: 36)
+    static let activeSize = CGSize(width: 192, height: 36)
+    static let savedSize = CGSize(width: 264, height: 36)
+    static let savedWithoutCleanupSize = CGSize(width: 288, height: 36)
+    static let noSpeechSize = CGSize(width: 192, height: 36)
+    static let repairingModelSize = CGSize(width: 224, height: 36)
+    static let failureSize = CGSize(width: 264, height: 36)
+    static let edgeInset: CGFloat = 10
 
     let panel: DictationCapsulePanel
     let waveformModel: DictationWaveformModel
+    let presentationModel: DictationCapsulePresentationModel
     private(set) var currentDock = DictationCapsuleDock.bottom
-    private var currentStatus = DictationCapsuleStatus.idle
+    private(set) var currentContext = DictationCapsuleContext(status: .idle)
     private var currentAction: DictationCapsuleAction?
     private var currentActionHandler: @MainActor () -> Void = {}
     private var currentScreen: NSScreen?
@@ -188,10 +662,14 @@
 
     init(
       panel: DictationCapsulePanel = DictationCapsulePanel(),
-      waveformModel: DictationWaveformModel = DictationWaveformModel()
+      waveformModel: DictationWaveformModel = DictationWaveformModel(),
+      accentHex: String = FleckRailColors.defaultAccentHex
     ) {
       self.panel = panel
       self.waveformModel = waveformModel
+      self.presentationModel = DictationCapsulePresentationModel(
+        colors: FleckRailColors(accentHex: accentHex)
+      )
       screenParametersObserver = DictationCapsuleObserverToken(
         NotificationCenter.default.addObserver(
           forName: NSApplication.didChangeScreenParametersNotification,
@@ -203,6 +681,13 @@
           }
         }
       )
+      panel.contentView = DictationCapsuleHostingView(
+        model: presentationModel,
+        waveformModel: waveformModel,
+        onOpenFleck: { [weak self] in self?.onOpenFleck?() },
+        onDragEnded: { [weak self] in self?.finishDrag() },
+        onDockSelected: { [weak self] dock in self?.selectDock(dock) }
+      )
     }
 
     func presentIdle(
@@ -211,13 +696,15 @@
       onDockChanged: @escaping @MainActor (DictationCapsuleDock) -> Void
     ) {
       currentDock = dock
-      currentStatus = .idle
+      currentContext = DictationCapsuleContext(status: .idle)
       waveformModel.reset()
       currentAction = nil
       currentActionHandler = {}
       self.onOpenFleck = onOpenFleck
       self.onDockChanged = onDockChanged
-      installContent(status: .idle, action: nil, onAction: {})
+      presentationModel.updateDock(dock)
+      presentationModel.update(context: currentContext, action: nil, onAction: {})
+      panel.allowsActions = false
       applyCurrentFrame(animated: panel.isVisible)
       panel.orderFrontRegardless()
     }
@@ -227,9 +714,18 @@
       action: DictationCapsuleAction? = nil,
       onAction: @escaping @MainActor () -> Void = {}
     ) {
-      let wasListening = currentStatus == .listening
-      currentStatus = status
-      if status == .listening {
+      let context = context(for: status)
+      render(context, action: action, onAction: onAction)
+    }
+
+    func render(
+      _ context: DictationCapsuleContext,
+      action: DictationCapsuleAction? = nil,
+      onAction: @escaping @MainActor () -> Void = {}
+    ) {
+      let wasListening = currentContext.status == .listening
+      currentContext = context
+      if context.status == .listening {
         if !wasListening {
           waveformModel.beginListening()
         }
@@ -238,19 +734,20 @@
       }
       currentAction = action
       currentActionHandler = onAction
-      installContent(status: status, action: action, onAction: onAction)
+      presentationModel.update(context: context, action: action, onAction: onAction)
+      panel.allowsActions = action != nil
       applyCurrentFrame(animated: panel.isVisible)
       panel.orderFrontRegardless()
     }
 
     func setDock(_ dock: DictationCapsuleDock) {
       currentDock = dock
-      installContent(
-        status: currentStatus,
-        action: currentAction,
-        onAction: currentActionHandler
-      )
+      presentationModel.updateDock(dock)
       applyCurrentFrame(animated: panel.isVisible)
+    }
+
+    func updateAccentHex(_ accentHex: String) {
+      presentationModel.updateAccentHex(accentHex)
     }
 
     func dismiss() {
@@ -260,20 +757,33 @@
     }
 
     func updateAudioLevel(_ level: Float) {
-      guard currentStatus == .listening, panel.isVisible else { return }
+      guard currentContext.status == .listening, panel.isVisible else { return }
       waveformModel.receive(level: level)
     }
 
     static func size(for status: DictationCapsuleStatus) -> CGSize {
       switch status {
-      case .idle:
+      case .idle, .arming:
         idleSize
       case .listening:
         listeningSize
-      case .finalizing, .cleaning, .routing, .saved, .savedWithoutCleanup,
-        .repairingModel, .failed:
+      case .finalizing, .cleaning, .routing, .saving:
         activeSize
+      case .saved:
+        savedSize
+      case .savedWithoutCleanup:
+        savedWithoutCleanupSize
+      case .noSpeech:
+        noSpeechSize
+      case .repairingModel:
+        repairingModelSize
+      case .failed:
+        failureSize
       }
+    }
+
+    static func size(for context: DictationCapsuleContext) -> CGSize {
+      size(for: context.status)
     }
 
     static func frame(
@@ -281,6 +791,37 @@
       in visibleFrame: CGRect
     ) -> CGRect {
       frame(for: dock, size: idleSize, in: visibleFrame)
+    }
+
+    static func frame(
+      for dock: DictationCapsuleDock,
+      size: CGSize,
+      in visibleFrame: CGRect
+    ) -> CGRect {
+      let width = min(max(size.width, 0), max(visibleFrame.width, 0))
+      let height = min(max(size.height, 0), max(visibleFrame.height, 0))
+      let fittedSize = CGSize(width: width, height: height)
+      let horizontalInset = min(edgeInset, max((visibleFrame.width - width) / 2, 0))
+      let verticalInset = min(edgeInset, max((visibleFrame.height - height) / 2, 0))
+      let origin: CGPoint
+      switch dock {
+      case .bottom:
+        origin = CGPoint(
+          x: visibleFrame.midX - width / 2,
+          y: visibleFrame.minY + verticalInset
+        )
+      case .left:
+        origin = CGPoint(
+          x: visibleFrame.minX + horizontalInset,
+          y: visibleFrame.midY - height / 2
+        )
+      case .right:
+        origin = CGPoint(
+          x: visibleFrame.maxX - horizontalInset - width,
+          y: visibleFrame.midY - height / 2
+        )
+      }
+      return CGRect(origin: origin, size: fittedSize)
     }
 
     static func nearestDock(
@@ -304,6 +845,39 @@
       keyboardFocus ?? pointer ?? primary
     }
 
+    private func context(for status: DictationCapsuleStatus) -> DictationCapsuleContext {
+      switch status {
+      case .idle:
+        DictationCapsuleContext(status: status)
+      default:
+        DictationCapsuleContext(
+          status: status,
+          sessionID: currentContext.sessionID,
+          trigger: currentContext.trigger,
+          mode: currentContext.mode,
+          isHandsFree: currentContext.isHandsFree,
+          pipelineStage: pipelineStage(for: status) ?? currentContext.pipelineStage,
+          cleanupOutcome: currentContext.cleanupOutcome,
+          failureStage: currentContext.failureStage
+        )
+      }
+    }
+
+    private func pipelineStage(for status: DictationCapsuleStatus) -> DictationPipelineStage? {
+      switch status {
+      case .arming, .listening, .finalizing:
+        .capture
+      case .cleaning:
+        .polish
+      case .routing:
+        .organize
+      case .saving:
+        .save
+      default:
+        nil
+      }
+    }
+
     private func activeScreen() -> NSScreen? {
       let pointer = NSEvent.mouseLocation
       let pointerScreen = NSScreen.screens.first { $0.frame.contains(pointer) }
@@ -314,81 +888,12 @@
       )
     }
 
-    private static func frame(
-      for dock: DictationCapsuleDock,
-      size: CGSize,
-      in visibleFrame: CGRect
-    ) -> CGRect {
-      var orientedSize =
-        dock == .bottom
-        ? size
-        : CGSize(width: size.height, height: size.width)
-      orientedSize.width = min(orientedSize.width, max(visibleFrame.width, 0))
-      orientedSize.height = min(orientedSize.height, max(visibleFrame.height, 0))
-      let horizontalInset = min(
-        edgeInset,
-        max((visibleFrame.width - orientedSize.width) / 2, 0)
-      )
-      let verticalInset = min(
-        edgeInset,
-        max((visibleFrame.height - orientedSize.height) / 2, 0)
-      )
-      let origin: CGPoint
-      switch dock {
-      case .bottom:
-        origin = CGPoint(
-          x: visibleFrame.midX - orientedSize.width / 2,
-          y: visibleFrame.minY + verticalInset
-        )
-      case .left:
-        origin = CGPoint(
-          x: visibleFrame.minX + horizontalInset,
-          y: visibleFrame.midY - orientedSize.height / 2
-        )
-      case .right:
-        origin = CGPoint(
-          x: visibleFrame.maxX - horizontalInset - orientedSize.width,
-          y: visibleFrame.midY - orientedSize.height / 2
-        )
-      }
-      return CGRect(origin: origin, size: orientedSize)
-    }
-
-    private func installContent(
-      status: DictationCapsuleStatus,
-      action: DictationCapsuleAction?,
-      onAction: @escaping @MainActor () -> Void
-    ) {
-      panel.allowsActions = action != nil
-      let view = AnyView(
-        DictationCapsuleView(
-          presentation: status.presentation,
-          dock: currentDock,
-          waveformModel: waveformModel,
-          action: action,
-          onAction: onAction,
-          onOpenFleck: onOpenFleck
-        )
-      )
-      if status == .idle {
-        panel.contentView = DictationCapsuleIdleHostingView(
-          rootView: view,
-          onOpenFleck: { [weak self] in self?.onOpenFleck?() },
-          onDragEnded: { [weak self] in self?.finishDrag() },
-          onDockSelected: { [weak self] dock in self?.selectDock(dock) }
-        )
-      } else {
-        panel.contentView = NSHostingView(rootView: view)
-      }
-    }
-
     private func applyCurrentFrame(animated: Bool) {
       guard let screen = resolvedScreen() else { return }
       currentScreen = screen
-      let size = Self.size(for: currentStatus)
       let finalFrame = Self.frame(
         for: currentDock,
-        size: size,
+        size: Self.size(for: currentContext.status),
         in: screen.visibleFrame
       )
       let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -398,11 +903,10 @@
         return
       }
       if reduceMotion {
-        panel.alphaValue = 0
         panel.setFrame(finalFrame, display: true)
       }
       NSAnimationContext.runAnimationGroup { context in
-        context.duration = reduceMotion ? 0.08 : 0.12
+        context.duration = reduceMotion ? 0.1 : 0.12
         context.timingFunction = CAMediaTimingFunction(name: .easeOut)
         panel.animator().alphaValue = 1
         if !reduceMotion {
@@ -425,11 +929,7 @@
     ) {
       currentDock = dock
       if let screen { currentScreen = screen }
-      installContent(
-        status: currentStatus,
-        action: currentAction,
-        onAction: currentActionHandler
-      )
+      presentationModel.updateDock(dock)
       applyCurrentFrame(animated: true)
       onDockChanged?(dock)
     }
@@ -461,53 +961,86 @@
   private struct DictationCapsuleView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var increaseContrast
 
-    let presentation: DictationCapsulePresentation
-    let dock: DictationCapsuleDock
+    @ObservedObject var model: DictationCapsulePresentationModel
     @ObservedObject var waveformModel: DictationWaveformModel
-    let action: DictationCapsuleAction?
-    let onAction: @MainActor () -> Void
-    let onOpenFleck: (@MainActor () -> Void)?
+
+    private var presentation: DictationCapsulePresentation {
+      DictationCapsulePresentation(
+        status: model.context.status,
+        action: model.action,
+        context: model.context
+      )
+    }
 
     var body: some View {
-      content
-        .rotationEffect(dock == .bottom ? .zero : .degrees(90))
-      .foregroundStyle(.primary)
-      .padding(.horizontal, presentation.visualMode == .idle ? 8 : 10)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background {
-        if reduceTransparency {
-          Capsule().fill(Color(nsColor: .windowBackgroundColor))
-        } else {
-          Capsule().fill(.regularMaterial)
+      railContent
+        .foregroundStyle(model.colors.primaryTextColor)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+          RoundedRectangle(
+            cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
+            style: .continuous
+          )
+          .fill(model.colors.shellColor.opacity(reduceTransparency ? 1 : FleckRailColors.shellOpacity))
+          .overlay {
+            RoundedRectangle(
+              cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
+              style: .continuous
+            )
+            .stroke(
+              Color.white.opacity(increaseContrast ? 0.35 : 0.0),
+              lineWidth: increaseContrast ? 1 : 0
+            )
+          }
+          .overlay(alignment: .top) {
+            Rectangle()
+              .fill(Color.white.opacity(0.10))
+              .frame(height: 1)
+              .padding(.horizontal, 10)
+          }
         }
-      }
-      .accessibilityElement(children: action == nil ? .ignore : .contain)
-      .accessibilityLabel(presentation.voiceOverText)
-      .accessibilityAction(named: Text("Open Fleck")) {
-        guard presentation.visibleText == nil else { return }
-        onOpenFleck?()
+        .clipShape(
+          RoundedRectangle(
+            cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
+            style: .continuous
+          )
+        )
+        .accessibilityElement(children: model.action == nil ? .ignore : .contain)
+        .accessibilityLabel(presentation.voiceOverText)
+        .accessibilityAddTraits(.isStaticText)
+    }
+
+    @ViewBuilder
+    private var railContent: some View {
+      switch model.context.status {
+      case .idle, .arming:
+        FleckRailMark(
+          color: model.colors.coreColor,
+          activeTile: model.context.status == .arming ? 0 : nil
+        )
+      case .listening:
+        mirroredContent(listeningContent)
+      case .finalizing, .cleaning, .routing, .saving:
+        processingLayout
+      case .saved, .savedWithoutCleanup, .noSpeech, .repairingModel, .failed:
+        mirroredContent(terminalContent)
       }
     }
 
     @ViewBuilder
-    private var content: some View {
-      switch presentation.visualMode {
-      case .listening:
-        listeningContent
-      case .progress:
-        HStack(spacing: 8) {
-          progressDots
-          statusText
-          actionButton
+    private func mirroredContent<Content: View>(_ content: Content) -> some View {
+      if model.dock == .right {
+        HStack(spacing: 7) {
+          content
+          FleckRailMark(color: model.colors.coreColor)
         }
-      case .idle, .success, .warning, .failure:
-        HStack(spacing: 8) {
-          Image(systemName: presentation.symbolName)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(iconColor)
-          statusText
-          actionButton
+      } else {
+        HStack(spacing: 7) {
+          FleckRailMark(color: model.colors.coreColor)
+          content
         }
       }
     }
@@ -519,96 +1052,217 @@
           by: DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)
         )
       ) { context in
-        HStack(spacing: 9) {
-          Circle()
-            .fill(Color.accentColor)
-            .frame(width: 6, height: 6)
-          HStack(alignment: .center, spacing: 3) {
+        HStack(spacing: 7) {
+          HStack(alignment: .center, spacing: 2) {
             ForEach(
               Array(
                 waveformModel.barLevels(
                   at: context.date,
                   reduceMotion: reduceMotion
-                ).enumerated()
+                ).prefix(7).enumerated()
               ),
               id: \.offset
             ) { _, level in
               Capsule()
-                .fill(Color.accentColor)
-                .frame(width: 3, height: 4 + (level * 15))
+                .fill(model.colors.liveColor)
+                .frame(width: 2.5, height: 4 + (level * 13))
             }
           }
+          .accessibilityHidden(true)
           Text(waveformModel.elapsedText(at: context.date))
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+            .foregroundStyle(
+              increaseContrast ? model.colors.primaryTextColor : model.colors.secondaryTextColor
+            )
             .monospacedDigit()
             .frame(width: 34, alignment: .trailing)
+            .accessibilityHidden(true)
+        }
+        .accessibilityLabel("Dictation listening")
+      }
+    }
+
+    @ViewBuilder
+    private var processingLayout: some View {
+      if model.dock == .right {
+        HStack(spacing: 7) {
+          processingText
+          FleckRailStageView(
+            treatments: presentation.stageTreatments,
+            colors: model.colors,
+            reversed: true
+          )
+        }
+      } else {
+        HStack(spacing: 7) {
+          FleckRailStageView(
+            treatments: presentation.stageTreatments,
+            colors: model.colors,
+            reversed: false
+          )
+          processingText
         }
       }
     }
 
-    private var progressDots: some View {
-      Image(systemName: "ellipsis")
-        .font(.system(size: 12, weight: .bold))
-        .foregroundStyle(Color.accentColor)
-        .symbolEffect(
-          .variableColor.iterative,
-          options: .repeating,
-          isActive: !reduceMotion
-        )
-        .frame(width: 18)
-    }
-
     @ViewBuilder
-    private var statusText: some View {
+    private var processingText: some View {
       if let visibleText = presentation.visibleText {
         Text(visibleText)
-          .font(.system(size: 12, weight: .semibold))
+          .font(.system(size: 12, weight: .medium, design: .default))
           .lineLimit(1)
+          .truncationMode(.tail)
+          .foregroundStyle(model.colors.primaryTextColor)
       }
     }
 
-    @ViewBuilder
-    private var actionButton: some View {
-      if let action {
-        Button(action.title, action: onAction)
-          .buttonStyle(.borderless)
-          .font(.system(size: 11, weight: .semibold))
-          .accessibilityLabel(action.accessibilityLabel)
-      }
-    }
-
-    private var iconColor: Color {
-      switch presentation.visualMode {
-      case .success:
-        .green
-      case .warning:
-        .orange
-      case .failure:
-        .red
-      case .idle, .listening, .progress:
-        .accentColor
+    private var terminalContent: some View {
+      HStack(spacing: 7) {
+        if model.context.status == .noSpeech || model.context.status.isFailure {
+          Image(systemName: presentation.symbolName)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(model.context.status == .noSpeech ? model.colors.warningColor : model.colors.failureColor)
+            .accessibilityHidden(true)
+        } else if model.context.status == .repairingModel {
+          Image(systemName: presentation.symbolName)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(model.colors.liveColor)
+            .accessibilityHidden(true)
+        } else {
+          Image(systemName: presentation.symbolName)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(model.context.status.isSavedWithoutCleanup ? model.colors.warningColor : model.colors.successColor)
+            .accessibilityHidden(true)
+        }
+        if let visibleText = presentation.visibleText {
+          Text(visibleText)
+            .font(.system(size: 12, weight: .medium, design: .default))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .foregroundStyle(model.colors.primaryTextColor)
+        }
+        if model.action != nil {
+          Rectangle()
+            .fill(Color.white.opacity(0.10))
+            .frame(width: DictationCapsulePresentation.actionDividerSize.width, height: DictationCapsulePresentation.actionDividerSize.height)
+            .accessibilityHidden(true)
+          if let action = model.action {
+            Button(action.title, action: model.actionHandler)
+              .buttonStyle(.borderless)
+              .font(.system(size: 11, weight: .semibold, design: .default))
+              .accessibilityLabel(action.accessibilityLabel)
+          }
+        }
       }
     }
   }
 
+  private struct FleckRailStageView: View {
+    let treatments: [FleckRailStageTreatment]
+    let colors: FleckRailColors
+    let reversed: Bool
+
+    var body: some View {
+      HStack(spacing: 3) {
+        ForEach(Array((reversed ? treatments.reversed() : treatments).enumerated()), id: \.offset) { index, treatment in
+          let active = treatment == .active
+          RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(fillColor(for: treatment))
+            .overlay {
+              if treatment == .skipped || treatment == .fallback {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                  .stroke(strokeColor(for: treatment), lineWidth: 1)
+                  .padding(1)
+              }
+              if treatment == .failed {
+                Path { path in
+                  path.move(to: CGPoint(x: 1, y: 1))
+                  path.addLine(to: CGPoint(x: 5, y: 5))
+                }
+                .stroke(Color.white.opacity(0.8), lineWidth: 1)
+              }
+            }
+            .frame(width: active ? 7 : 6, height: active ? 7 : 6)
+            .accessibilityHidden(true)
+            .id(index)
+        }
+      }
+      .frame(height: 14)
+      .accessibilityHidden(true)
+    }
+
+    private func fillColor(for treatment: FleckRailStageTreatment) -> Color {
+      switch treatment {
+      case .pending:
+        colors.secondaryTextColor.opacity(0.35)
+      case .active:
+        colors.liveColor
+      case .complete:
+        colors.coreColor
+      case .skipped, .fallback, .failed:
+        .clear
+      }
+    }
+
+    private func strokeColor(for treatment: FleckRailStageTreatment) -> Color {
+      switch treatment {
+      case .fallback:
+        colors.warningColor
+      case .skipped:
+        colors.secondaryTextColor.opacity(0.8)
+      default:
+        .clear
+      }
+    }
+  }
+
+  private extension DictationCapsuleStatus {
+    var isFailure: Bool {
+      if case .failed = self { return true }
+      return false
+    }
+
+    var isSavedWithoutCleanup: Bool {
+      if case .savedWithoutCleanup = self { return true }
+      return false
+    }
+  }
+
+  private extension FleckRailColors {
+    var warningColor: Color {
+      Color(red: warning.red, green: warning.green, blue: warning.blue)
+    }
+    var failureColor: Color {
+      Color(red: failure.red, green: failure.green, blue: failure.blue)
+    }
+    var successColor: Color {
+      Color(red: success.red, green: success.green, blue: success.blue)
+    }
+  }
+
   @MainActor
-  private final class DictationCapsuleIdleHostingView: NSView {
+  private final class DictationCapsuleHostingView: NSView {
+    private let model: DictationCapsulePresentationModel
     private let onOpenFleck: @MainActor () -> Void
     private let onDragEnded: @MainActor () -> Void
     private let onDockSelected: @MainActor (DictationCapsuleDock) -> Void
+    private let hostingView: NSHostingView<DictationCapsuleView>
 
     init(
-      rootView: AnyView,
+      model: DictationCapsulePresentationModel,
+      waveformModel: DictationWaveformModel,
       onOpenFleck: @escaping @MainActor () -> Void,
       onDragEnded: @escaping @MainActor () -> Void,
       onDockSelected: @escaping @MainActor (DictationCapsuleDock) -> Void
     ) {
+      self.model = model
       self.onOpenFleck = onOpenFleck
       self.onDragEnded = onDragEnded
       self.onDockSelected = onDockSelected
+      self.hostingView = NSHostingView(
+        rootView: DictationCapsuleView(model: model, waveformModel: waveformModel)
+      )
       super.init(frame: .zero)
-      let hostingView = NSHostingView(rootView: rootView)
       hostingView.translatesAutoresizingMaskIntoConstraints = false
       addSubview(hostingView)
       NSLayoutConstraint.activate([
@@ -639,7 +1293,13 @@
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-      bounds.contains(point) ? self : nil
+      let radius: CGFloat = model.context.status == .idle || model.context.status == .arming ? 10 : 12
+      let path = NSBezierPath(
+        roundedRect: bounds,
+        xRadius: radius,
+        yRadius: radius
+      )
+      return path.contains(point) ? self : nil
     }
 
     private func makeDockMenu() -> NSMenu {
