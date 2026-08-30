@@ -74,13 +74,13 @@ The program never collapses these states:
 | 1 | 2B2 dictionary publication | 6A catalog schema | 1A2 exposure ledger | Three missing, disjoint foundations accepted. |
 | 2 | 2C capture-pinned dictionary | 6B exact catalog snapshot | 1A3 evaluation evidence contracts | Capture identity, truthful build catalogs, and the complete 1A evidence vocabulary exist. |
 | 3 | 2B3 dictionary transfer | 3A capture-first arming | 6B2 historical archive | Transfer, first-word architecture, and evidence history progress independently. |
-| 4 | 2D dictionary Settings | 7D private corpus storage | 6B3 release-evidence vocabulary | Dictionary UX, private storage, and strict release verification exist. |
-| 5 | 3C1 Apple terminology | 7D4 corpus templates/oracles | 6C hardware recommender | Apple context, corpus preparation, and deterministic recommendation advance. |
+| 4 | 2D dictionary Settings | 7D1 private corpus workspace | available repair lane | Dictionary UX and the secure empty-corpus authority exist without inventing premature release schemas. |
+| 5 | 3C1 Apple terminology | 7D5 private-material lifecycle | 6C hardware recommender | Apple context, secure corpus mutation/export, and deterministic recommendation advance. |
 | 6 | 3B Parakeet audio-first | 3C2 Apple release tail | 4B1 Gemma cleanup contract | Both ASR paths and faithful local cleanup improve independently. |
-| 7 | 4B2 Gemma harness parity | 4C history baselines | 7D3 controlled routing workspaces | Product/helper parity, correction provenance, and routing fixtures exist. |
-| 8 | 3D Parakeet context truth | 4D receipt-safe correction | 7E quality recorder | ASR context, safe correction, and private recording contracts progress. |
-| 9 | 4E correction UI | 5A dictionary-aware retrieval | 3E packaged first-word smoke | User correction and retrieval proceed while the physical smoke gate runs. |
-| 10 | 5B dual-evidence routing | available repair lane | available repair lane | Cleanup cannot invent routing evidence; ambiguity goes to Inbox. |
+| 7 | 4B2 Gemma harness parity | 4C history baselines | 7D4 corpus templates/oracles | Product/helper parity, correction provenance, and corpus preparation advance. |
+| 8 | 3D Parakeet context truth | 4D receipt-safe correction | 7D3 controlled routing workspaces | ASR context, safe correction, and routing fixtures progress. |
+| 9 | 4E correction UI | 5A dictionary-aware retrieval | 7E quality recorder | User correction, retrieval, and private recording contracts progress. |
+| 10 | 5B dual-evidence routing | 3E packaged first-word smoke | available repair lane | Cleanup cannot invent routing evidence; ambiguity goes to Inbox while the physical smoke gate runs. |
 | 11 | 5C content-free feedback | 6D1 joint lifecycle policy | available repair lane | Feedback and adaptive residency become possible after their distinct prerequisites. |
 | 12 | 6D2 pinned model identity | available repair lane | available repair lane | Every stage and history row carries one exact configuration identity. |
 | 13 | 6D3 runtime composition | 7A corpus runner/scorer | 7D2 feedback review bridge | Product runtime and private evidence tooling become connected but remain separate. |
@@ -194,6 +194,31 @@ The full exact owned paths, implementation requirements, red cases, and gates fo
   - **6E1** owns configuration-level installer/reference/update/rollback orchestration, including `EnhancedModelManager.swift`, `AdmittedModelInstallation.swift`, and their focused tests.
   - **6E2** owns `AdmittedModelSettingsPresentation.swift`, `SettingsView.swift`, presentation tests, Settings regressions, and accessibility tests.
   - 6E2 consumes 6E1 and cannot delete or stage artifact files itself.
+- Correct the premature Packet 6B3 schedule. Full D6/D7, trust-policy, CMS, notary,
+  package, transition, and update-predecessor verification is postponed until the
+  canonical package/notary/transition receipt schemas it verifies exist. Wave 4
+  must not create placeholder schemas, duplicate Core's private strict JSON parser,
+  or make the executable target import inaccessible test-only vocabulary. Before
+  its later dispatch, the primary must re-freeze its exact public receipt inputs,
+  command grammar, byte/NFC bounds, package target dependency, and CMS policy from
+  accepted 7G/9A-era authorities. Downstream dependencies on 6B3 are therefore
+  provisional and must be re-sequenced before dispatch rather than satisfied by a
+  speculative verifier.
+- Split Packet 7D before execution:
+  - **7D1** owns the same two 7D paths but implements only the actor-backed secure
+    workspace authority: a user-selected external container, one exact managed
+    corpus child, canonical content-free consent receipt, an empty canonical Core
+    manifest, the Core exposure ledger, and a derived checkpoint cache repaired
+    from the ledger on open. It enforces exact modes, no-follow/identity-pinned
+    bounded I/O, broad/repository/app-bundle root rejection, canonical readback,
+    rollback/fork rejection, and caller-owned security-scoped access. Empty Core
+    manifests are valid. It records no audio or human case, offers no importer,
+    and performs no per-case or whole-corpus deletion.
+  - **7D5** follows accepted 7D1 and adds private case/audio mutation, exact export
+    and import, invalidation-before-erasure, and a durable whole-corpus retirement
+    authority whose old exports and dependent receipts cannot regain eligibility.
+    Its retirement/tombstone schema and crash boundaries must be frozen before
+    delegation. Packet 7D4 follows accepted 7D5, not merely 7D1.
 - Packet 7J remains absent unless qualified Parakeet v2 fails the frozen dictionary-accuracy gate and an exact auxiliary artifact/license/runtime/files/tests amendment is accepted.
 - Packet 7K remains absent unless live partials become a measured hard requirement and an exact Unified/EOU profile amendment is accepted.
 - Packet 7L2 remains absent unless Gemma 1B misses a frozen resource or latency objective and an exact 270M artifact/runtime/files/tests amendment is accepted.
