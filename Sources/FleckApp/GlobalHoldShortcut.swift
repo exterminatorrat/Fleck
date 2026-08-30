@@ -15,6 +15,10 @@
       destination: DictationDestination?,
       physicalGesture: DictationPhysicalGesture
     ) -> DictationShortcutSession?
+    func recordPhysicalRelease(
+      _ session: DictationShortcutSession,
+      physicalGesture: DictationPhysicalGesture
+    )
     func endShortcut(
       _ session: DictationShortcutSession,
       physicalGesture: DictationPhysicalGesture
@@ -120,7 +124,9 @@
       monitorStateHandler = onMonitorStateChange
       monitor.transitionHandler = { [weak self] transition in
         guard let self else { return }
-        self.enqueue(.transition(transition, self.clock.now))
+        let instant = self.clock.now
+        self.recordPhysicalReleaseIfNeeded(transition, at: instant)
+        self.enqueue(.transition(transition, instant))
       }
       monitor.stateHandler = { [weak self] state in
         self?.monitorDidChange(state)
@@ -223,6 +229,24 @@
         await previous?.value
         await self?.deliver(delivery)
       }
+    }
+
+    private func recordPhysicalReleaseIfNeeded(
+      _ transition: ModifierKeyTransition,
+      at instant: ContinuousClock.Instant
+    ) {
+      guard case .released(let modifier) = transition,
+        modifier == registeredModifier,
+        physicalPrimaryDown,
+        handsFreeSession == nil,
+        !ignoresReleaseAfterHandsFreeStart,
+        let session = acceptedSession,
+        let pressedAt = acceptedPressAt
+      else { return }
+      handler?.recordPhysicalRelease(
+        session,
+        physicalGesture: .init(pressedAt: pressedAt, releasedAt: instant)
+      )
     }
 
     private func deliver(_ delivery: Delivery) async {

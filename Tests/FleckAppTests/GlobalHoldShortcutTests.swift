@@ -112,6 +112,26 @@ func physicalGestureReceiptPreservesPressAndReleaseAcrossQueuedDelivery() async 
   ))
 }
 
+@Test @MainActor
+func physicalGestureReceiptReachesHandlerBeforeQueuedEndDelivery() async throws {
+  let fixture = ShortcutFixture()
+  try fixture.shortcut.configure(.rightOption)
+  fixture.monitor.emit(.pressed(.rightOption))
+  await fixture.shortcut.drainEvents()
+  let press = try #require(fixture.handler.beginGestures.last?.pressedAt)
+
+  fixture.clock.advance(by: .milliseconds(179))
+  let release = fixture.clock.now
+  fixture.monitor.emit(.released(.rightOption))
+
+  #expect(fixture.handler.events == [.begin, .releaseReceipt])
+  #expect(fixture.handler.releaseGestures == [
+    .init(pressedAt: press, releasedAt: release)
+  ])
+  await fixture.shortcut.drainEvents()
+  #expect(fixture.handler.events == [.begin, .releaseReceipt, .end])
+}
+
 @Test @MainActor func doubleTapStartsHandsFreeAndLaterPressFinishesIt() async throws {
   let fixture = ShortcutFixture()
   try fixture.shortcut.configure(.rightOption)
@@ -439,6 +459,7 @@ private final class ShortcutFixture {
 private final class ShortcutHoldSpy: ShortcutHoldHandling {
   enum Event: Equatable {
     case begin
+    case releaseReceipt
     case end
     case handsFreeBegin
     case handsFreeFinish
@@ -450,6 +471,7 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
   var acceptsHandsFree = true
   private(set) var events: [Event] = []
   private(set) var beginGestures: [DictationPhysicalGesture] = []
+  private(set) var releaseGestures: [DictationPhysicalGesture] = []
   private(set) var endGestures: [DictationPhysicalGesture] = []
   private(set) var handsFreeStopOrigins: [DictationStopOrigin] = []
   var endGate: TerminalGate?
@@ -481,6 +503,14 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
     events.append(.handsFreeBegin)
     guard acceptsHandsFree else { return nil }
     return makeSession()
+  }
+
+  func recordPhysicalRelease(
+    _ session: DictationShortcutSession,
+    physicalGesture: DictationPhysicalGesture
+  ) {
+    events.append(.releaseReceipt)
+    releaseGestures.append(physicalGesture)
   }
 
   func endShortcut(

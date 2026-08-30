@@ -72,6 +72,11 @@ final class DictationCoordinator {
     let routingAmbiguity: DictationRoutingAmbiguity?
   }
 
+  private struct PhysicalReleaseReceipt {
+    let gesture: DictationPhysicalGesture
+    let isShort: Bool
+  }
+
   private struct Capture {
     let id: UUID
     let mode: DictationMode
@@ -104,6 +109,7 @@ final class DictationCoordinator {
     var focusedPersistenceCompensated = false
     var stopOrigin: DictationStopOrigin?
     var previousPresentation: PreviousPresentation?
+    var physicalReleaseReceipt: PhysicalReleaseReceipt?
   }
 
   private let engineProvider: any SpeechEngineProviding
@@ -320,13 +326,43 @@ final class DictationCoordinator {
     await finish()
   }
 
+  func recordPhysicalRelease(
+    _ session: DictationShortcutSession,
+    physicalGesture: DictationPhysicalGesture
+  ) {
+    guard activeShortcutSessions.contains(session.id),
+      var active = capture,
+      active.id == session.id,
+      active.previousPresentation != nil,
+      active.physicalReleaseReceipt == nil,
+      let pressedAt = physicalGesture.pressedAt,
+      let releasedAt = physicalGesture.releasedAt
+    else { return }
+    let receipt = PhysicalReleaseReceipt(
+      gesture: physicalGesture,
+      isShort: pressedAt.duration(to: releasedAt) < holdThreshold
+    )
+    active.physicalReleaseReceipt = receipt
+    capture = active
+    guard receipt.isShort else { return }
+
+    requestCancellation(session.id, at: clock.now())
+    holdTask?.cancel()
+    if let previousPresentation = capture?.previousPresentation {
+      restorePreviousPresentation(previousPresentation)
+    }
+  }
+
   func endShortcut(
     _ session: DictationShortcutSession,
     physicalGesture: DictationPhysicalGesture = .absent
   ) async {
     guard activeShortcutSessions.contains(session.id) else { return }
-    if let pressedAt = physicalGesture.pressedAt,
-      let releasedAt = physicalGesture.releasedAt,
+    let resolvedGesture = capture?.id == session.id
+      ? capture?.physicalReleaseReceipt?.gesture ?? physicalGesture
+      : physicalGesture
+    if let pressedAt = resolvedGesture.pressedAt,
+      let releasedAt = resolvedGesture.releasedAt,
       pressedAt.duration(to: releasedAt) < holdThreshold
     {
       if shortcutID == session.id {
@@ -340,8 +376,8 @@ final class DictationCoordinator {
       return
     }
     if shortcutID == session.id {
-      guard let pressedAt = physicalGesture.pressedAt,
-        let releasedAt = physicalGesture.releasedAt,
+      guard let pressedAt = resolvedGesture.pressedAt,
+        let releasedAt = resolvedGesture.releasedAt,
         pressedAt.duration(to: releasedAt) >= holdThreshold
       else {
         await cancelArmedShortcut(session.id)
@@ -350,7 +386,7 @@ final class DictationCoordinator {
       acceptArmedShortcut(session.id)
     }
     guard capture?.id == session.id else { return }
-    if let releasedAt = physicalGesture.releasedAt {
+    if let releasedAt = resolvedGesture.releasedAt {
       _ = takePreviousPresentation(session.id)
       recordMeasurement(.physicalRelease, at: releasedAt, captureID: session.id)
       await finish(stopOrigin: .physicalRelease(releasedAt))
@@ -893,19 +929,13 @@ final class DictationCoordinator {
   }
 
   private func cancelActiveCapture(_ id: UUID) async {
-    guard var capture, capture.id == id, !capture.cancelRequested else { return }
+    guard let capture, capture.id == id, !capture.isTerminating else { return }
     guard capture.processingSession != nil || !capture.isSourceFinishing else {
       return
     }
-    let hasProcessingSession = capture.processingSession != nil
     let captureContextTask = capture.captureContextTask
     let startupTask = capture.startupTask
-    capture.cancelRequested = true
-    if hasProcessingSession { capture.generation &+= 1 }
-    self.capture = capture
-    recordMeasurement(.cancellationRequested, at: clock.now(), captureID: id)
-
-    rollbackEditor(id)
+    requestCancellation(id, at: clock.now())
 
     captureContextTask?.cancel()
     startupTask?.cancel()
@@ -948,7 +978,9 @@ final class DictationCoordinator {
   }
 
   private func acceptArmedShortcut(_ id: UUID) {
-    guard shortcutID == id, var active = capture, active.id == id else { return }
+    guard shortcutID == id, var active = capture, active.id == id,
+      !active.cancelRequested
+    else { return }
     clearPreviousPresentation()
     active.holdAccepted = true
     capture = active
@@ -962,15 +994,11 @@ final class DictationCoordinator {
   }
 
   private func cancelArmedShortcut(_ id: UUID) async {
-    guard shortcutID == id, var active = capture, active.id == id else { return }
+    guard shortcutID == id, let active = capture, active.id == id else { return }
     let pendingContext = active.captureContextTask
     let pendingStartup = active.startupTask
     let pendingThreshold = holdTask
-    active.cancelRequested = true
-    active.generation &+= 1
-    capture = active
-    recordMeasurement(.cancellationRequested, at: clock.now(), captureID: id)
-    rollbackEditor(id)
+    requestCancellation(id, at: clock.now())
     clearArmedShortcut()
     pendingThreshold?.cancel()
     pendingContext?.cancel()
@@ -993,6 +1021,17 @@ final class DictationCoordinator {
     recoveryAction = nil
     pendingRoutingAmbiguity = nil
     routingAmbiguity = nil
+  }
+
+  private func requestCancellation(_ id: UUID, at instant: ContinuousClock.Instant) {
+    guard var active = capture, active.id == id, !active.cancelRequested else { return }
+    active.cancelRequested = true
+    if active.processingSession != nil {
+      active.generation &+= 1
+    }
+    capture = active
+    recordMeasurement(.cancellationRequested, at: instant, captureID: id)
+    rollbackEditor(id)
   }
 
   private func previousPresentationSnapshot() -> PreviousPresentation {
