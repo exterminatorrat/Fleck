@@ -49,7 +49,10 @@ struct LocalWritingEvaluationFixture {
   let manifest: LocalWritingCorpusManifestEnvelope
   let canonicalCorpusData: Data
 
-  init(sourceClass: LocalWritingSourceClass = .humanRead) throws {
+  init(
+    sourceClass: LocalWritingSourceClass = .humanRead,
+    scoringEligibility: LocalWritingScoringEligibility = .admissionEligible
+  ) throws {
     let isSynthetic = sourceClass == .synthetic || sourceClass == .faultInjection
     let consent = String(repeating: "1", count: 64)
     let audio: LocalWritingAudioReceipt?
@@ -79,7 +82,7 @@ struct LocalWritingEvaluationFixture {
       materialLineageID: Self.lineageID,
       sourceClass: sourceClass,
       humanSpeechEligible: !isSynthetic && sourceClass != .humanSilence,
-      scoringEligibility: .admissionEligible,
+      scoringEligibility: scoringEligibility,
       audio: audio,
       referenceTranscript: reference,
       tags: isSynthetic ? [.cancellationBoundary] : [.properName],

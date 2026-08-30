@@ -369,6 +369,11 @@ public struct LocalWritingCaseOutcomeReference: Equatable, Sendable {
     if componentOutcomes.contains(.fail), outcome != .fail {
       throw LocalWritingEvidenceError.invalidOutcome
     }
+    if outcome == .pass,
+      (accuracy.outcome == .fail || measurements.unexpectedNetworkConnectionCount > 0)
+    {
+      throw LocalWritingEvidenceError.invalidOutcome
+    }
     if outcome == .notApplicable,
       componentOutcomes.contains(where: { $0 != .notApplicable })
     {
@@ -724,6 +729,7 @@ public struct LocalWritingEvaluationEvidence: Equatable, Sendable {
     }
     _ = try evaluationIdentity.validated()
     _ = try executionProof.validated()
+    _ = try publicSummary.validated()
     try Self.validateCases(
       cases,
       manifest: manifest,
@@ -807,6 +813,11 @@ public struct LocalWritingEvaluationEvidence: Equatable, Sendable {
         guard exposure.executionStratum == expectedStratum(for: proof.evidenceLevel) else {
           throw LocalWritingEvidenceError.executionClassMismatch
         }
+        guard exposureExists(
+          exposure,
+          atOrBefore: consumedHeadSHA256,
+          in: ledgerVerification
+        ) else { throw LocalWritingEvidenceError.missingExposure }
         guard !ledgerVerification.hasLaterInvalidation(
           materialLineageID: result.materialLineageID,
           after: consumedHeadSHA256
@@ -816,6 +827,20 @@ public struct LocalWritingEvaluationEvidence: Equatable, Sendable {
         ) == corpusCase.scoringEligibility
         else { throw LocalWritingEvidenceError.invalidatedLineage }
       }
+    }
+  }
+
+  private static func exposureExists(
+    _ exposure: LocalWritingCandidateExposure,
+    atOrBefore consumedHeadSHA256: String,
+    in verification: LocalWritingExposureLedgerVerification
+  ) -> Bool {
+    guard let consumedIndex = verification.events.firstIndex(where: {
+      $0.eventSHA256 == consumedHeadSHA256
+    }) else { return false }
+    return verification.events.prefix(through: consumedIndex).contains { event in
+      guard case .candidateExposure(let recorded) = event.payload else { return false }
+      return recorded == exposure
     }
   }
 

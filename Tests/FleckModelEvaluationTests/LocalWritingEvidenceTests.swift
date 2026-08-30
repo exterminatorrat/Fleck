@@ -101,6 +101,19 @@ struct LocalWritingEvidenceTests {
   }
 
   @Test
+  func validatorRequiresTheExactExposureAtOrBeforeTheConsumedHead() throws {
+    let fixture = try EvidenceFixture(
+      recordExposure: false,
+      scoringEligibility: .diagnosticOnlyPostExposure
+    )
+    defer { fixture.cleanup() }
+
+    #expect(throws: LocalWritingEvidenceError.missingExposure) {
+      try fixture.makeEvidence()
+    }
+  }
+
+  @Test
   func proofLevelsCannotPromoteReplaySyntheticOrInjectedEvidence() throws {
     let fixture = try EvidenceFixture()
     defer { fixture.cleanup() }
@@ -171,6 +184,35 @@ struct LocalWritingEvidenceTests {
   }
 
   @Test
+  func accuracyAndNetworkFailuresCannotHideBehindAPassingCase() throws {
+    let fixture = try EvidenceFixture()
+    defer { fixture.cleanup() }
+    let values = try fixture.values()
+    let failedAccuracy = try LocalWritingAccuracyObservation(
+      outcome: .fail,
+      edits: 2,
+      referenceUnits: 10
+    )
+
+    #expect(throws: LocalWritingEvidenceError.invalidOutcome) {
+      try values.caseResult.replacing(accuracy: failedAccuracy, outcome: .pass)
+    }
+
+    let networkFailure = try LocalWritingStageMeasurements(
+      firstPartialMilliseconds: 100,
+      stopToFinalMilliseconds: 200,
+      stopToInsertionMilliseconds: 300,
+      peakResidentBytes: 1_024,
+      peakPhysicalFootprintBytes: 2_048,
+      installedStorageBytes: 4_096,
+      unexpectedNetworkConnectionCount: 1
+    )
+    #expect(throws: LocalWritingEvidenceError.invalidOutcome) {
+      try values.caseResult.replacing(measurements: networkFailure, outcome: .pass)
+    }
+  }
+
+  @Test
   func publicCodecRejectsUnknownPrivateFieldsUnsafePathsAndNoncanonicalBytes() throws {
     let fixture = try EvidenceFixture()
     defer { fixture.cleanup() }
@@ -187,6 +229,26 @@ struct LocalWritingEvidenceTests {
     }
     #expect(throws: LocalWritingEvidenceError.nonCanonicalSummary) {
       try LocalWritingPublicSummaryCodec.decodeCanonical(canonical + Data([0x20]))
+    }
+  }
+
+  @Test
+  func evidenceRejectsARawDecodedPublicSummaryWithInvalidSchema() throws {
+    let fixture = try EvidenceFixture()
+    defer { fixture.cleanup() }
+    let canonical = try LocalWritingPublicSummaryCodec.canonicalData(
+      for: fixture.makeEvidence().publicSummary
+    )
+    var text = try #require(String(data: canonical, encoding: .utf8))
+    let schema = try #require(text.range(of: #""schemaVersion":1"#, options: .backwards))
+    text.replaceSubrange(schema, with: #""schemaVersion":2"#)
+    let rawDecoded = try JSONDecoder().decode(
+      LocalWritingPublicAggregateSummary.self,
+      from: Data(text.utf8)
+    )
+
+    #expect(throws: LocalWritingEvidenceError.invalidSummary) {
+      try fixture.makeEvidence(publicSummary: rawDecoded)
     }
   }
 
@@ -242,8 +304,11 @@ private final class EvidenceFixture {
   let directory: URL
   let consumedHead: LocalWritingExposureLedgerCheckpoint
 
-  init() throws {
-    corpus = try LocalWritingEvaluationFixture()
+  init(
+    recordExposure: Bool = true,
+    scoringEligibility: LocalWritingScoringEligibility = .admissionEligible
+  ) throws {
+    corpus = try LocalWritingEvaluationFixture(scoringEligibility: scoringEligibility)
     directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("fleck-evidence-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -256,10 +321,14 @@ private final class EvidenceFixture {
       corpusID: LocalWritingEvaluationFixture.corpusID
     )
     let initial = try ledger.checkpoint()
-    consumedHead = try ledger.appendExposure(
-      try Self.exposure(),
-      expectedHead: initial.currentHeadSHA256
-    )
+    if recordExposure {
+      consumedHead = try ledger.appendExposure(
+        try Self.exposure(),
+        expectedHead: initial.currentHeadSHA256
+      )
+    } else {
+      consumedHead = initial
+    }
   }
 
   func cleanup() {
@@ -321,7 +390,8 @@ private final class EvidenceFixture {
     verification: LocalWritingExposureLedgerVerification? = nil,
     consumption: LocalWritingLedgerConsumptionHead? = nil,
     proof: LocalWritingExecutionProof? = nil,
-    cases: [LocalWritingCaseOutcomeReference]? = nil
+    cases: [LocalWritingCaseOutcomeReference]? = nil,
+    publicSummary: LocalWritingPublicAggregateSummary? = nil
   ) throws -> LocalWritingEvaluationEvidence {
     let values = try values()
     let selectedCases = cases ?? [values.caseResult]
@@ -347,7 +417,7 @@ private final class EvidenceFixture {
       applicableCaseCount: 0,
       failedCaseCount: 0
     )
-    let summary = try LocalWritingPublicAggregateSummary(
+    let summary = try publicSummary ?? LocalWritingPublicAggregateSummary(
       corpusIdentity: corpusIdentity,
       ledgerConsumption: selectedConsumption,
       evaluationIdentity: values.identity,
@@ -421,6 +491,8 @@ private final class EvidenceFixture {
 private extension LocalWritingCaseOutcomeReference {
   func replacing(
     exposure: LocalWritingCaseExposureReference? = nil,
+    measurements: LocalWritingStageMeasurements? = nil,
+    accuracy: LocalWritingAccuracyObservation? = nil,
     outcome: LocalWritingEvidenceOutcome? = nil,
     protectedMeaningOutcome: LocalWritingEvidenceOutcome? = nil,
     cleanupOutcome: LocalWritingEvidenceOutcome? = nil
@@ -430,8 +502,8 @@ private extension LocalWritingCaseOutcomeReference {
       materialLineageID: materialLineageID,
       exposure: exposure ?? self.exposure,
       executionVariant: executionVariant,
-      measurements: measurements,
-      accuracy: accuracy,
+      measurements: measurements ?? self.measurements,
+      accuracy: accuracy ?? self.accuracy,
       outcome: outcome ?? self.outcome,
       protectedMeaningOutcome: protectedMeaningOutcome ?? self.protectedMeaningOutcome,
       faithfulnessOutcome: faithfulnessOutcome,
