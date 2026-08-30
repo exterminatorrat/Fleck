@@ -111,6 +111,7 @@ final class DictationCoordinator {
     var previousPresentation: PreviousPresentation?
     var physicalReleaseReceipt: PhysicalReleaseReceipt?
     var deferredStartupFailureMessage: String?
+    var deferredStartupFailureTask: Task<Void, Never>?
   }
 
   private let engineProvider: any SpeechEngineProviding
@@ -317,14 +318,6 @@ final class DictationCoordinator {
       return
     }
     await finish(stopOrigin: stopOrigin)
-  }
-
-  func endShortcut() async {
-    if let shortcutID {
-      await endShortcut(DictationShortcutSession(id: shortcutID))
-      return
-    }
-    await finish()
   }
 
   func recordPhysicalRelease(
@@ -947,12 +940,15 @@ final class DictationCoordinator {
     }
     let captureContextTask = capture.captureContextTask
     let startupTask = capture.startupTask
+    let deferredStartupFailureTask = capture.deferredStartupFailureTask
     requestCancellation(id, at: clock.now())
 
     captureContextTask?.cancel()
     startupTask?.cancel()
+    deferredStartupFailureTask?.cancel()
     _ = await captureContextTask?.result
     await startupTask?.value
+    await deferredStartupFailureTask?.value
 
     guard let current = self.capture, current.id == id, !current.isTerminating else {
       return
@@ -993,21 +989,22 @@ final class DictationCoordinator {
     guard shortcutID == id, var active = capture, active.id == id,
       !active.cancelRequested
     else { return }
-    clearPreviousPresentation()
     active.holdAccepted = true
-    capture = active
     clearArmedShortcut()
     if let failureMessage = active.deferredStartupFailureMessage {
       let cancelEditor = active.mode == .focused
-      Task { @MainActor [weak self] in
-        await self?.terminate(
+      active.deferredStartupFailureTask = Task { @MainActor [weak self] in
+        await self?.completeDeferredStartupFailure(
           id,
-          phase: .failed(failureMessage),
+          message: failureMessage,
           cancelEditor: cancelEditor
         )
       }
+      capture = active
       return
     }
+    clearPreviousPresentation()
+    capture = active
     if let session = active.processingSession {
       startProcessingUpdates(id, session: session)
     }
@@ -1485,6 +1482,27 @@ final class DictationCoordinator {
         acceptArmedShortcut(id)
       }
     }
+  }
+
+  private func completeDeferredStartupFailure(
+    _ id: UUID,
+    message: String,
+    cancelEditor: Bool
+  ) async {
+    guard let current = capture, current.id == id, !current.cancelRequested else { return }
+    if let engine = current.engine {
+      await release(engine)
+    }
+    guard var active = capture, active.id == id else { return }
+    active.engine = nil
+    capture = active
+    guard !Task.isCancelled, !active.cancelRequested else { return }
+    clearPreviousPresentation()
+    await terminate(
+      id,
+      phase: .failed(message),
+      cancelEditor: cancelEditor
+    )
   }
 
   private func setStarting(_ id: UUID, _ isStarting: Bool) {

@@ -648,6 +648,60 @@ func captureFirstLongReceiptAcceptsDeferredStartupFailureExactlyOnce() async thr
 }
 
 @Test @MainActor
+func captureFirstCancellationWinsQueuedDeferredStartupFailure() async throws {
+  let threshold = Gate()
+  let releaseGate = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Keep this recovery"
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  fixture.standard.startError = TestError.failed
+  fixture.standard.releaseGate = releaseGate
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let priorStartCount = fixture.standard.startCount
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where fixture.standard.startCount == priorStartCount { await Task.yield() }
+
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await releaseGate.waitUntilWaiting()
+  let cancelling = Task { await fixture.coordinator.cancelShortcut(session) }
+  for _ in 0..<100
+  where fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil
+  {
+    await Task.yield()
+  }
+  #expect(fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt != nil)
+  await releaseGate.openGate()
+  await cancelling.value
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  await threshold.openGate()
+  await Task.yield()
+
+  let cancelled = terminalEvents.contains { $0.terminal == .cancelled }
+  let failed = terminalEvents.contains { event in
+    if case .failed = event.terminal { return true }
+    return false
+  }
+  #expect(terminalEvents.count == 1)
+  #expect(cancelled)
+  #expect(!failed)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+}
+
+@Test @MainActor
 func captureFirstPhysicalReleaseSurvivesSuspendedStartup() async throws {
   let threshold = Gate()
   let pinGate = Gate()
@@ -1578,11 +1632,21 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
 @Test @MainActor func shortShortcutHoldDrainsCaptureStartedAtPress() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  let press = ContinuousClock().now
 
-  fixture.coordinator.beginShortcut(editor: nil)
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
   await threshold.waitUntilWaiting()
   for _ in 0..<100 where fixture.standard.startCount == 0 { await Task.yield() }
-  await fixture.coordinator.endShortcut()
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
   await threshold.openGate()
   await Task.yield()
 
@@ -1597,8 +1661,12 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
   fixture.standard.finalText = "Held dictation"
+  let press = ContinuousClock().now
 
-  fixture.coordinator.beginShortcut(editor: nil)
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
   #expect(fixture.coordinator.phase == .arming)
   await threshold.waitUntilWaiting()
   await threshold.openGate()
@@ -1607,7 +1675,13 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
   #expect(fixture.standard.startCount == 1)
   #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
 
-  await fixture.coordinator.endShortcut()
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(200))
+    )
+  )
 
   #expect(fixture.standard.finishCount == 1)
   #expect(fixture.saver.savedTexts == ["Held dictation"])
@@ -1763,15 +1837,25 @@ private func waitForCompletion(
   fixture.standard.finalText = "Held dictation"
   var events: [DictationCoordinatorEvent] = []
   fixture.coordinator.setEventObserver { events.append($0) }
+  let press = ContinuousClock().now
 
-  fixture.coordinator.beginShortcut(editor: nil)
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
   await threshold.waitUntilWaiting()
   await threshold.openGate()
   for _ in 0..<20 {
     if case .listening = fixture.coordinator.phase { break }
     await Task.yield()
   }
-  await fixture.coordinator.endShortcut()
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(200))
+    )
+  )
 
   #expect(events == [
     .init(phase: .arming, terminal: nil),
@@ -2478,18 +2562,26 @@ private func waitForCompletion(
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
   fixture.standard.finalText = "Focused"
+  let press = ContinuousClock().now
 
-  fixture.coordinator.beginShortcut(
+  let session = try #require(fixture.coordinator.beginShortcut(
     editor: fixture.editor,
-    destination: fixture.inbox
-  )
+    destination: fixture.inbox,
+    physicalGesture: .init(pressedAt: press)
+  ))
   await threshold.waitUntilWaiting()
   await threshold.openGate()
   for _ in 0..<20 {
     if case .listening = fixture.coordinator.phase { break }
     await Task.yield()
   }
-  await fixture.coordinator.endShortcut()
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(200))
+    )
+  )
 
   let record = try #require(await fixture.history.list().first)
   #expect(record.destination == fixture.inbox)
