@@ -174,6 +174,26 @@ struct DictationPhysicalGesture: Equatable, Sendable {
   static let absent = Self()
 }
 
+enum DictationStopOrigin: Equatable, Sendable {
+  case physicalRelease(ContinuousClock.Instant)
+  case handsFreeKeyPress(ContinuousClock.Instant)
+  case toolbarAction(ContinuousClock.Instant)
+
+  var instant: ContinuousClock.Instant {
+    switch self {
+    case .physicalRelease(let instant),
+      .handsFreeKeyPress(let instant),
+      .toolbarAction(let instant):
+      instant
+    }
+  }
+
+  var physicalReleaseAt: ContinuousClock.Instant? {
+    guard case .physicalRelease(let instant) = self else { return nil }
+    return instant
+  }
+}
+
 struct DictationRuntimeMeasurements: Equatable, Sendable {
   enum Integrity: Equatable, Sendable {
     case valid
@@ -296,44 +316,29 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
   ) -> Self {
     guard integrity == .valid, !isTerminal, value(for: stage) == nil else { return self }
     var candidate = self
-    if let latest = Stage.allCases.compactMap({ value(for: $0) }).max(),
-      instant < latest
-    {
-      candidate = self
-      candidate.integrity = .nonMonotonicClock
-      return candidate
-    }
     candidate.assign(instant, to: stage)
+    guard candidate.hasValidCausalEdges else {
+      var invalid = self
+      invalid.integrity = .nonMonotonicClock
+      return invalid
+    }
     return candidate
   }
 
   func overlaying(_ measurements: Self) -> Self {
     guard integrity == .valid, !isTerminal else { return self }
     var result = self
-    var previous: ContinuousClock.Instant?
-    var hasViolation = measurements.integrity == .nonMonotonicClock
-    for (index, stage) in Stage.allCases.enumerated() {
-      if let existing = value(for: stage) {
-        if let previous, existing < previous {
-          hasViolation = true
-        }
-        previous = max(previous ?? existing, existing)
-        continue
-      }
+    for stage in Stage.allCases where value(for: stage) == nil {
       guard let incoming = measurements.value(for: stage) else { continue }
-      let nextExisting = Stage.allCases.dropFirst(index + 1)
-        .compactMap { value(for: $0) }
-        .first
-      if previous.map({ incoming < $0 }) == true
-        || nextExisting.map({ incoming > $0 }) == true
-      {
-        hasViolation = true
+      var candidate = result
+      candidate.assign(incoming, to: stage)
+      guard candidate.hasValidCausalEdges else {
+        result.integrity = .nonMonotonicClock
         continue
       }
-      result.assign(incoming, to: stage)
-      previous = incoming
+      result = candidate
     }
-    if hasViolation {
+    if measurements.integrity == .nonMonotonicClock {
       result.integrity = .nonMonotonicClock
     }
     return result
@@ -365,6 +370,35 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
     case .cancellationRequested: cancellationRequestedAt
     case .compensationCompleted: compensationCompletedAt
     case .cancellationDrained: cancellationDrainedAt
+    }
+  }
+
+  private var hasValidCausalEdges: Bool {
+    let edges: [(Stage, Stage)] = [
+      (.physicalPress, .physicalRelease),
+      (.physicalPress, .processorStarted),
+      (.processorStarted, .sourceStartRequested),
+      (.sourceStartRequested, .firstMeaningfulPartial),
+      (.physicalRelease, .stopRequested),
+      (.processorStarted, .stopRequested),
+      (.stopRequested, .asrFinal),
+      (.asrFinal, .dictionaryCompleted),
+      (.dictionaryCompleted, .cleanupDecisionCompleted),
+      (.cleanupDecisionCompleted, .routingRequested),
+      (.routingRequested, .routingDecision),
+      (.cleanupDecisionCompleted, .insertionCommitted),
+      (.routingDecision, .insertionCommitted),
+      (.insertionCommitted, .persistenceCompleted),
+      (.persistenceCompleted, .ambiguityPresented),
+      (.ambiguityPresented, .ambiguityMoved),
+      (.cancellationRequested, .compensationCompleted),
+      (.cancellationRequested, .cancellationDrained),
+    ]
+    return edges.allSatisfy { before, after in
+      guard let before = value(for: before), let after = value(for: after) else {
+        return true
+      }
+      return before <= after
     }
   }
 

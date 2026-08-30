@@ -19,7 +19,10 @@
       _ session: DictationShortcutSession,
       physicalGesture: DictationPhysicalGesture
     ) async
-    func finishHandsFreeShortcut(_ session: DictationShortcutSession) async
+    func finishHandsFreeShortcut(
+      _ session: DictationShortcutSession,
+      stopOrigin: DictationStopOrigin
+    ) async
     func cancelShortcut(_ session: DictationShortcutSession) async
     func waitForShortcutTerminal(_ session: DictationShortcutSession) async
   }
@@ -255,7 +258,10 @@
       if let handsFreeSession {
         lastShortRelease = nil
         ignoresReleaseAfterHandsFreeStart = true
-        await handler?.finishHandsFreeShortcut(handsFreeSession)
+        await handler?.finishHandsFreeShortcut(
+          handsFreeSession,
+          stopOrigin: .handsFreeKeyPress(now)
+        )
         return
       }
 

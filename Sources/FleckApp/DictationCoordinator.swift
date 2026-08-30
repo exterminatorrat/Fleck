@@ -75,6 +75,8 @@ final class DictationCoordinator {
     var engine: (any SpeechEngine)?
     var processingSession: (any DictationProcessingSession)?
     var captureContext: LocalWritingCaptureContext?
+    var captureContextTask: Task<LocalWritingCaptureContext, Error>?
+    var startupTask: Task<Void, Never>?
     var processingUpdatesTask: Task<Void, Never>?
     var generation: UInt64 = 0
     var stablePrefix = ""
@@ -82,6 +84,7 @@ final class DictationCoordinator {
     var isFinishing = false
     var isSourceFinishing = false
     var releaseRequested = false
+    var holdAccepted = true
     var cancelRequested = false
     var routingTask: Task<DictationRoutingDecision, Never>?
     var processingSessionCancellationTask: Task<Void, Never>?
@@ -91,7 +94,7 @@ final class DictationCoordinator {
     var focusedPersistenceReceipt: FocusedDictationPersistenceReceipt?
     var focusedEditorRollbackSucceeded = false
     var focusedPersistenceCompensated = false
-    var deadlineOrigin: ContinuousClock.Instant?
+    var stopOrigin: DictationStopOrigin?
   }
 
   private let engineProvider: any SpeechEngineProviding
@@ -109,12 +112,6 @@ final class DictationCoordinator {
 
   private var capture: Capture?
   private var shortcutID: UUID?
-  private var shortcutEditor: (any FocusedDictationEditing)?
-  private var shortcutDestination: DictationDestination?
-  private var shortcutPhysicalGesture = DictationPhysicalGesture.absent
-  private var shortcutSelectedEngine: DictationSpeechEngine?
-  private var shortcutContextGeneration: UInt64?
-  private var shortcutContextTask: Task<LocalWritingCaptureContext, Error>?
   private var holdTask: Task<Void, Never>?
   private var activeShortcutSessions = Set<UUID>()
   private var shortcutTerminalWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
@@ -221,18 +218,33 @@ final class DictationCoordinator {
       return nil
     }
     let id = UUID()
-    shortcutID = id
-    shortcutEditor = editor
-    shortcutDestination = destination
-    shortcutPhysicalGesture = physicalGesture
     let selectedEngine = preferredEngine()
     let contextGeneration = allocateCaptureContextGeneration()
-    shortcutSelectedEngine = selectedEngine
-    shortcutContextGeneration = contextGeneration
+    let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
+    guard reserveCapture(
+      id: id,
+      mode: focusedEditor == nil ? .smartCapture : .focused,
+      editor: focusedEditor,
+      destination: focusedEditor == nil ? nil : destination,
+      physicalGesture: physicalGesture,
+      selectedEngine: selectedEngine,
+      contextGeneration: contextGeneration
+    ) else {
+      return nil
+    }
+    shortcutID = id
+    let contextTask: Task<LocalWritingCaptureContext, Error>?
     if processing != nil, let captureContextProvider {
-      shortcutContextTask = Task {
+      contextTask = Task {
         try await captureContextProvider(id, contextGeneration, selectedEngine)
       }
+    } else {
+      contextTask = nil
+    }
+    if var active = capture, active.id == id {
+      active.holdAccepted = false
+      active.captureContextTask = contextTask
+      capture = active
     }
     activeShortcutSessions.insert(id)
     setPhase(.arming)
@@ -240,6 +252,14 @@ final class DictationCoordinator {
       await holdSleeper(holdThreshold)
       guard !Task.isCancelled else { return }
       await self?.holdThresholdElapsed(id)
+    }
+    let startupTask = Task { @MainActor [weak self, contextTask] in
+      guard let self else { return }
+      await self.startShortcutCapture(id, contextTask: contextTask)
+    }
+    if var active = capture, active.id == id {
+      active.startupTask = startupTask
+      capture = active
     }
     return DictationShortcutSession(id: id)
   }
@@ -270,11 +290,14 @@ final class DictationCoordinator {
     return session
   }
 
-  func finishHandsFreeShortcut(_ session: DictationShortcutSession) async {
+  func finishHandsFreeShortcut(
+    _ session: DictationShortcutSession,
+    stopOrigin: DictationStopOrigin
+  ) async {
     guard activeShortcutSessions.contains(session.id), capture?.id == session.id else {
       return
     }
-    await finish()
+    await finish(stopOrigin: stopOrigin)
   }
 
   func endShortcut() async {
@@ -290,15 +313,32 @@ final class DictationCoordinator {
     physicalGesture: DictationPhysicalGesture = .absent
   ) async {
     guard activeShortcutSessions.contains(session.id) else { return }
-    if shortcutID == session.id {
-      await cancelArmedShortcut(session.id)
+    if let pressedAt = physicalGesture.pressedAt,
+      let releasedAt = physicalGesture.releasedAt,
+      pressedAt.duration(to: releasedAt) < holdThreshold
+    {
+      if shortcutID == session.id {
+        await cancelArmedShortcut(session.id)
+      } else if capture?.id == session.id {
+        await cancelActiveCapture(session.id)
+      }
       return
+    }
+    if shortcutID == session.id {
+      guard let pressedAt = physicalGesture.pressedAt,
+        let releasedAt = physicalGesture.releasedAt,
+        pressedAt.duration(to: releasedAt) >= holdThreshold
+      else {
+        await cancelArmedShortcut(session.id)
+        return
+      }
+      acceptArmedShortcut(session.id)
     }
     guard capture?.id == session.id else { return }
     if let releasedAt = physicalGesture.releasedAt {
       recordMeasurement(.physicalRelease, at: releasedAt, captureID: session.id)
+      await finish(stopOrigin: .physicalRelease(releasedAt))
     }
-    await finish(deadlineOrigin: physicalGesture.releasedAt)
   }
 
   func cancelShortcut(_ session: DictationShortcutSession) async {
@@ -418,6 +458,32 @@ final class DictationCoordinator {
     return true
   }
 
+  private func startShortcutCapture(
+    _ id: UUID,
+    contextTask: Task<LocalWritingCaptureContext, Error>?
+  ) async {
+    if let contextTask {
+      do {
+        let context = try await contextTask.value
+        guard let current = capture, current.id == id else { return }
+        guard context.captureID == id,
+          context.generation == current.contextGeneration,
+          context.speechEngine == current.selectedEngine
+        else {
+          throw StreamingDictationProcessorError.captureContextMismatch
+        }
+        guard await continueCapture(id) else { return }
+        guard var active = capture, active.id == id else { return }
+        active.captureContext = context
+        capture = active
+      } catch {
+        await handleStartupFailure(id, error: error)
+        return
+      }
+    }
+    await startReservedCapture(id)
+  }
+
   private func startReservedCapture(_ id: UUID) async {
     guard let reservedCapture = capture, reservedCapture.id == id else { return }
     let mode = reservedCapture.mode
@@ -435,9 +501,7 @@ final class DictationCoordinator {
     do {
       engine = try await engineProvider.engineForCapture(preferred: selectedEngine)
     } catch {
-      guard finishStarting(id) != nil else { return }
-      guard await continueCapture(id) else { return }
-      await terminate(id, phase: .failed(message(for: error)), cancelEditor: mode == .focused)
+      await handleStartupFailure(id, error: error)
       return
     }
     guard var activeCapture = capture, activeCapture.id == id else {
@@ -448,33 +512,33 @@ final class DictationCoordinator {
     activeCapture.isStarting = false
     capture = activeCapture
     guard await continueCapture(id) else { return }
-    if activeCapture.releaseRequested {
-      await terminate(id, phase: .failed("No speech detected."), cancelEditor: mode == .focused)
-      return
-    }
 
     setStarting(id, true)
     do {
       try await engine.start(
         provisional: { [weak self] text in
-          guard let self, self.isActive(id), mode == .focused else { return }
+          guard let self, self.isActive(id), self.capture?.holdAccepted == true,
+            mode == .focused
+          else { return }
           self.capture?.editor?.updateFocusedDictation(provisionalText: text)
         },
         level: { [weak self] level in
-          guard let self, self.isActive(id) else { return }
+          guard let self, self.isActive(id), self.capture?.holdAccepted == true else { return }
           self.levelObserver?(level)
         }
       )
     } catch {
-      guard finishStarting(id) != nil else { return }
-      guard await continueCapture(id) else { return }
-      await terminate(id, phase: .failed(message(for: error)), cancelEditor: mode == .focused)
+      await handleStartupFailure(id, error: error)
       return
     }
     guard let current = finishStarting(id) else { return }
     guard await continueCapture(id) else { return }
-    setPhase(.listening(mode: mode, engine: engine.kind))
-    if current.releaseRequested { await finish() }
+    if current.holdAccepted {
+      setPhase(.listening(mode: mode, engine: engine.kind))
+    }
+    if current.releaseRequested, let stopOrigin = current.stopOrigin {
+      await finish(stopOrigin: stopOrigin)
+    }
   }
 
   private func startProcessingCapture(
@@ -485,12 +549,9 @@ final class DictationCoordinator {
   ) async {
     if capture?.captureContext == nil {
       guard let captureContextProvider else {
-        guard finishStarting(id) != nil else { return }
-        guard await continueCapture(id) else { return }
-        await terminate(
+        await handleStartupFailure(
           id,
-          phase: .failed(message(for: StreamingDictationProcessorError.captureContextMismatch)),
-          cancelEditor: mode == .focused
+          error: StreamingDictationProcessorError.captureContextMismatch
         )
         return
       }
@@ -509,13 +570,7 @@ final class DictationCoordinator {
           throw StreamingDictationProcessorError.captureContextMismatch
         }
       } catch {
-        guard finishStarting(id) != nil else { return }
-        guard await continueCapture(id) else { return }
-        await terminate(
-          id,
-          phase: .failed(message(for: error)),
-          cancelEditor: mode == .focused
-        )
+        await handleStartupFailure(id, error: error)
         return
       }
       guard await continueCapture(id) else { return }
@@ -539,7 +594,7 @@ final class DictationCoordinator {
       session = try await processing.begin(
         configuration: configuration,
         level: { [weak self] level in
-          guard let self, self.isActive(id) else { return }
+          guard let self, self.isActive(id), self.capture?.holdAccepted == true else { return }
           self.levelObserver?(level)
         },
         startAuthorized: { [weak self] in
@@ -547,13 +602,7 @@ final class DictationCoordinator {
         }
       )
     } catch {
-      guard finishStarting(id) != nil else { return }
-      guard await continueCapture(id) else { return }
-      await terminate(
-        id,
-        phase: .failed(message(for: error)),
-        cancelEditor: mode == .focused
-      )
+      await handleStartupFailure(id, error: error)
       return
     }
 
@@ -565,11 +614,15 @@ final class DictationCoordinator {
     activeCapture.isStarting = false
     capture = activeCapture
     guard await continueCapture(id) else { return }
-    startProcessingUpdates(id, session: session)
     guard let current = capture, current.id == id else { return }
     guard await continueCapture(id) else { return }
-    setPhase(.listening(mode: mode, engine: engine))
-    if current.releaseRequested { await finish() }
+    if current.holdAccepted {
+      startProcessingUpdates(id, session: session)
+      setPhase(.listening(mode: mode, engine: engine))
+    }
+    if current.releaseRequested, let stopOrigin = current.stopOrigin {
+      await finish(stopOrigin: stopOrigin)
+    }
   }
 
   private func startProcessingUpdates(
@@ -628,14 +681,21 @@ final class DictationCoordinator {
   }
 
   func finish() async {
-    await finish(deadlineOrigin: nil)
+    let stopOrigin = DictationStopOrigin.toolbarAction(clock.now())
+    await finish(stopOrigin: stopOrigin)
   }
 
-  private func finish(deadlineOrigin: ContinuousClock.Instant?) async {
+  private func finish(stopOrigin proposedOrigin: DictationStopOrigin) async {
     guard var capture, !capture.isTerminating, !capture.cancelRequested else { return }
+    if capture.stopOrigin == nil {
+      capture.stopOrigin = proposedOrigin
+      if let releasedAt = proposedOrigin.physicalReleaseAt {
+        recordMeasurement(.physicalRelease, at: releasedAt, captureID: capture.id)
+      }
+    }
+    guard let stopOrigin = capture.stopOrigin else { return }
     if capture.isStarting {
       capture.releaseRequested = true
-      capture.deadlineOrigin = deadlineOrigin ?? capture.deadlineOrigin
       self.capture = capture
       return
     }
@@ -649,7 +709,7 @@ final class DictationCoordinator {
       await finishProcessingCapture(
         capture.id,
         session: processingSession,
-        deadlineOrigin: deadlineOrigin ?? capture.deadlineOrigin
+        stopOrigin: stopOrigin
       )
       return
     }
@@ -659,7 +719,7 @@ final class DictationCoordinator {
     setSourceFinishing(capture.id, true)
     let rawText: String?
     do {
-      rawText = try await engine.finish()
+      rawText = try await engine.finish(stopOrigin: stopOrigin)
       setSourceFinishing(capture.id, false)
     } catch {
       setSourceFinishing(capture.id, false)
@@ -726,15 +786,11 @@ final class DictationCoordinator {
   private func finishProcessingCapture(
     _ id: UUID,
     session: any DictationProcessingSession,
-    deadlineOrigin: ContinuousClock.Instant?
+    stopOrigin: DictationStopOrigin
   ) async {
     let result: DictationProcessingResult
     do {
-      if let deadlineOrigin {
-        result = try await session.finish(deadlineOrigin: deadlineOrigin)
-      } else {
-        result = try await session.finish()
-      }
+      result = try await session.finish(stopOrigin: stopOrigin)
     } catch {
       await drainProcessingUpdates(id)
       guard await continueCapture(id) else { return }
@@ -827,12 +883,19 @@ final class DictationCoordinator {
       return
     }
     let hasProcessingSession = capture.processingSession != nil
+    let captureContextTask = capture.captureContextTask
+    let startupTask = capture.startupTask
     capture.cancelRequested = true
     if hasProcessingSession { capture.generation &+= 1 }
     self.capture = capture
     recordMeasurement(.cancellationRequested, at: clock.now(), captureID: id)
 
     rollbackEditor(id)
+
+    captureContextTask?.cancel()
+    startupTask?.cancel()
+    _ = await captureContextTask?.result
+    await startupTask?.value
 
     guard let current = self.capture, current.id == id, !current.isTerminating else {
       return
@@ -866,68 +929,45 @@ final class DictationCoordinator {
 
   private func holdThresholdElapsed(_ id: UUID) async {
     guard shortcutID == id else { return }
-    let editor = shortcutEditor
-    let destination = shortcutDestination
-    let physicalGesture = shortcutPhysicalGesture
-    guard let selectedEngine = shortcutSelectedEngine,
-      let contextGeneration = shortcutContextGeneration
-    else { return }
-    let captureContext: LocalWritingCaptureContext?
-    do {
-      captureContext = try await shortcutContextTask?.value
-      if let captureContext {
-        guard captureContext.captureID == id,
-          captureContext.generation == contextGeneration,
-          captureContext.speechEngine == selectedEngine
-        else {
-          throw StreamingDictationProcessorError.captureContextMismatch
-        }
-      }
-    } catch {
-      guard shortcutID == id else { return }
-      clearArmedShortcut()
-      completeShortcutSession(id)
-      publishTerminal(
-        phase: .failed(message(for: error)),
-        outcome: .failed(message(for: error))
-      )
-      return
-    }
-    guard shortcutID == id else { return }
+    acceptArmedShortcut(id)
+  }
+
+  private func acceptArmedShortcut(_ id: UUID) {
+    guard shortcutID == id, var active = capture, active.id == id else { return }
+    active.holdAccepted = true
+    capture = active
     clearArmedShortcut()
-    holdTask = nil
-    await startCapture(
-      id: id,
-      mode: editor == nil ? .smartCapture : .focused,
-      editor: editor,
-      destination: destination,
-      physicalGesture: physicalGesture,
-      selectedEngine: selectedEngine,
-      contextGeneration: contextGeneration,
-      captureContext: captureContext
-    )
+    if let session = active.processingSession {
+      startProcessingUpdates(id, session: session)
+    }
+    if !active.isStarting {
+      setPhase(.listening(mode: active.mode, engine: active.selectedEngine))
+    }
   }
 
   private func cancelArmedShortcut(_ id: UUID) async {
-    guard shortcutID == id else { return }
-    let pendingContext = shortcutContextTask
+    guard shortcutID == id, var active = capture, active.id == id else { return }
+    let pendingContext = active.captureContextTask
+    let pendingStartup = active.startupTask
     let pendingThreshold = holdTask
+    active.cancelRequested = true
+    active.generation &+= 1
+    capture = active
+    recordMeasurement(.cancellationRequested, at: clock.now(), captureID: id)
+    rollbackEditor(id)
     clearArmedShortcut()
     pendingThreshold?.cancel()
     pendingContext?.cancel()
+    pendingStartup?.cancel()
     _ = await pendingContext?.result
-    completeShortcutSession(id)
-    publishTerminal(phase: .idle, outcome: .cancelled)
+    await pendingStartup?.value
+    guard self.capture?.id == id else { return }
+    await cancelProcessingSession(id)
+    await completeCancellation(id)
   }
 
   private func clearArmedShortcut() {
     shortcutID = nil
-    shortcutEditor = nil
-    shortcutDestination = nil
-    shortcutPhysicalGesture = .absent
-    shortcutSelectedEngine = nil
-    shortcutContextGeneration = nil
-    shortcutContextTask = nil
     holdTask = nil
   }
 
@@ -1310,6 +1350,31 @@ final class DictationCoordinator {
     capture.isStarting = false
     self.capture = capture
     return capture
+  }
+
+  private func handleStartupFailure(_ id: UUID, error: Error) async {
+    guard let current = finishStarting(id) else { return }
+    if current.cancelRequested {
+      await completeCancellation(id)
+      return
+    }
+    if current.holdAccepted {
+      await terminate(
+        id,
+        phase: .failed(message(for: error)),
+        cancelEditor: current.mode == .focused
+      )
+    } else {
+      holdTask?.cancel()
+      current.captureContextTask?.cancel()
+      clearArmedShortcut()
+      await terminate(
+        id,
+        phase: .idle,
+        cancelEditor: true,
+        outcome: .cancelled
+      )
+    }
   }
 
   private func setStarting(_ id: UUID, _ isStarting: Bool) {

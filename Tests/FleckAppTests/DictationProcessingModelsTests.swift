@@ -4,6 +4,50 @@ import FleckCore
 
 @testable import FleckApp
 
+@Test func captureFirstStopOriginKeepsTypedInstantAndPhysicalProjection() {
+  let instant = ContinuousClock().now
+
+  #expect(DictationStopOrigin.physicalRelease(instant).instant == instant)
+  #expect(DictationStopOrigin.physicalRelease(instant).physicalReleaseAt == instant)
+  #expect(DictationStopOrigin.handsFreeKeyPress(instant).instant == instant)
+  #expect(DictationStopOrigin.handsFreeKeyPress(instant).physicalReleaseAt == nil)
+  #expect(DictationStopOrigin.toolbarAction(instant).instant == instant)
+  #expect(DictationStopOrigin.toolbarAction(instant).physicalReleaseAt == nil)
+}
+
+@Test func captureFirstMeasurementAllowsReleaseBeforeDelayedSourceStart() {
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(200))
+  let processor = release.advanced(by: .milliseconds(20))
+  let source = processor.advanced(by: .milliseconds(1))
+  let partial = source.advanced(by: .milliseconds(1))
+
+  let measurements = DictationRuntimeMeasurements()
+    .recording(.physicalPress, at: press)
+    .recording(.physicalRelease, at: release)
+    .recording(.processorStarted, at: processor)
+    .recording(.sourceStartRequested, at: source)
+    .recording(.firstMeaningfulPartial, at: partial)
+
+  #expect(measurements.integrity == .valid)
+  #expect(measurements.physicalReleaseAt == release)
+  #expect(measurements.sourceStartRequestedAt == source)
+}
+
+@Test func captureFirstMeasurementRejectsRealCausalReversal() {
+  let press = ContinuousClock().now
+  let source = press.advanced(by: .milliseconds(2))
+  let processor = source.advanced(by: .milliseconds(1))
+
+  let measurements = DictationRuntimeMeasurements()
+    .recording(.physicalPress, at: press)
+    .recording(.sourceStartRequested, at: source)
+    .recording(.processorStarted, at: processor)
+
+  #expect(measurements.integrity == .nonMonotonicClock)
+  #expect(measurements.processorStartedAt == nil)
+}
+
 @Test func updateDisplayIsStablePrefixPlusTail() {
   #expect(DictationTextUpdate(
     generation: 4,
@@ -235,8 +279,9 @@ import FleckCore
       continuation.finish()
     }
 
-    func finish() async throws -> DictationProcessingResult {
-      DictationProcessingResult(
+    func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult {
+      _ = stopOrigin
+      return DictationProcessingResult(
         rawTranscript: "",
         dictionaryBaseline: "",
         cleanedTranscript: nil,

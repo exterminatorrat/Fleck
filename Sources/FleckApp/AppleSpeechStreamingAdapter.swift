@@ -17,6 +17,10 @@ final class AppleSpeechStreamingAdapter: StreamingSpeechSource {
     try await engine.finish()
   }
 
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
+    try await engine.finish(stopOrigin: stopOrigin)
+  }
+
   func cancel() async {
     await engine.cancel()
   }

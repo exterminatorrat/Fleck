@@ -4,6 +4,12 @@ import FleckCore
 
 @testable import FleckApp
 
+private func testStopOrigin(
+  _ instant: ContinuousClock.Instant = TestDictationClock.fixedInstant
+) -> DictationStopOrigin {
+  .toolbarAction(instant)
+}
+
 private func processorDictionaryContext(
   captureID: UUID = UUID(),
   generation: UInt64 = 1,
@@ -161,6 +167,7 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
   private(set) var sourceTerminalizationCount = 0
   private(set) var callbacksWereInstalled = false
   private(set) var provisionalCallbackCount = 0
+  private(set) var stopOrigins: [DictationStopOrigin] = []
 
   func emitProvisional(_ text: String) {
     provisional?(text)
@@ -221,6 +228,11 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     finishCompleted = true
     await terminalizeFromFinish()
     return finalText
+  }
+
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
+    stopOrigins.append(stopOrigin)
+    return try await finish()
   }
 
   func cancel() async {
@@ -308,7 +320,7 @@ func processorMeasurementsRecordSuccessfulStageOrdering() async throws {
     ),
     level: { _ in }
   ) as? StreamingDictationSession)
-  let result = try await session.finish()
+  let result = try await session.finish(stopOrigin: testStopOrigin())
   let measurements = session.runtimeMeasurements
 
   #expect(measurements.processorStartedAt == samples[0])
@@ -321,6 +333,41 @@ func processorMeasurementsRecordSuccessfulStageOrdering() async throws {
   #expect(measurements.integrity == .valid)
   #expect(result.measurements == measurements)
   #expect(result.insertedText == "First.")
+}
+
+@Test @MainActor
+func captureFirstSourceReceivesExactOriginAndDeadlinesUseItsInstant() async throws {
+  let clock = TestDictationClock(values: Array(repeating: TestDictationClock.fixedInstant, count: 8))
+  let source = StreamingSpeechSourceProbe(finalText: "First")
+  let generator = CleanupGeneratorProbe(result: "First")
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: generator,
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: clock,
+    budget: .production
+  )
+  let session = try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { _ in }
+  )
+  let instant = TestDictationClock.fixedInstant.advanced(by: .seconds(3))
+  let origin = DictationStopOrigin.physicalRelease(instant)
+
+  _ = try await session.finish(stopOrigin: origin)
+
+  #expect(source.stopOrigins == [origin])
+  #expect(generator.requests.first?.deadline == instant.advanced(by: .milliseconds(3_500)))
 }
 
 @Test @MainActor
@@ -353,8 +400,8 @@ func processorMeasurementsDefaultFinishSamplesOnceAndUsesStopRequestAsDeadlineOr
     level: { _ in }
   ) as? StreamingDictationSession)
 
-  let first = try await session.finish()
-  let second = try await session.finish()
+  let first = try await session.finish(stopOrigin: testStopOrigin(samples[2]))
+  let second = try await session.finish(stopOrigin: testStopOrigin())
 
   #expect(first == second)
   #expect(session.runtimeMeasurements.stopRequestedAt == samples[2])
@@ -392,8 +439,8 @@ func processorMeasurementsExplicitDeadlineOriginControlsDeadlineSeparatelyFromSt
     level: { _ in }
   ) as? StreamingDictationSession)
 
-  let explicit = try await session.finish(deadlineOrigin: deadlineOrigin)
-  let repeated = try await session.finish()
+  let explicit = try await session.finish(stopOrigin: .physicalRelease(deadlineOrigin))
+  let repeated = try await session.finish(stopOrigin: testStopOrigin())
 
   #expect(explicit == repeated)
   #expect(session.runtimeMeasurements.stopRequestedAt == samples[2])
@@ -432,7 +479,7 @@ func processorMeasurementsRecordCleanupDecisionForRejectedCandidate() async thro
     level: { _ in }
   ) as? StreamingDictationSession)
 
-  let result = try await session.finish()
+  let result = try await session.finish(stopOrigin: testStopOrigin())
 
   #expect(result.cleanupOutcome == .usedRaw)
   #expect(result.insertedText == "Do not cancel 2 meetings")
@@ -474,7 +521,7 @@ func processorMeasurementsRecordSingleCancellationRequestAndDrainForConcurrentCa
     ),
     level: { _ in }
   ) as? StreamingDictationSession)
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await source.waitUntilFinishStarted()
 
   let firstCancellation = Task { await session.cancel() }
@@ -524,7 +571,7 @@ func processorMeasurementsLeaveFirstMeaningfulPartialAbsentWithoutGenuinePartial
     level: { _ in }
   ) as? StreamingDictationSession)
 
-  let result = try await session.finish()
+  let result = try await session.finish(stopOrigin: testStopOrigin())
 
   #expect(session.runtimeMeasurements.firstMeaningfulPartialAt == nil)
   #expect(session.runtimeMeasurements.firstMeaningfulPartialMilliseconds == nil)
@@ -559,7 +606,7 @@ func processorMeasurementsPreserveCompletedFailureBoundariesAndLeaveUnreachedSta
     ) as? StreamingDictationSession)
 
     await #expect(throws: StreamingDictationProcessorError.noSpeech) {
-      try await session.finish()
+      try await session.finish(stopOrigin: testStopOrigin())
     }
     #expect(session.runtimeMeasurements.asrFinalAt == samples[3])
     #expect(session.runtimeMeasurements.dictionaryCompletedAt == nil)
@@ -589,7 +636,7 @@ func processorMeasurementsPreserveCompletedFailureBoundariesAndLeaveUnreachedSta
       level: { _ in }
     ) as? StreamingDictationSession)
 
-    let result = try await session.finish()
+    let result = try await session.finish(stopOrigin: testStopOrigin())
 
     #expect(result.cleanupOutcome == .usedRaw)
     #expect(result.insertedText == "First")
@@ -625,7 +672,7 @@ func processorMeasurementsPreserveCompletedFailureBoundariesAndLeaveUnreachedSta
       ),
       level: { _ in }
     ) as? StreamingDictationSession)
-    let finalization = Task { try await session.finish() }
+    let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
     await generator.waitUntilStarted()
 
     await session.cancel()
@@ -672,7 +719,7 @@ func processorMeasurementsRejectBackwardClockSamplesWithoutChangingText() async 
     level: { _ in }
   ) as? StreamingDictationSession)
 
-  let result = try await session.finish()
+  let result = try await session.finish(stopOrigin: testStopOrigin())
   let measurements = session.runtimeMeasurements
 
   #expect(result.insertedText == "First.")
@@ -792,7 +839,7 @@ func successfulFinishUsesSourceOwnedTerminalizationWithoutSecondRelease() async 
     recognitionContext: .englishDefault
   ), level: { _ in })
 
-  _ = try await session.finish()
+  _ = try await session.finish(stopOrigin: testStopOrigin())
   source.emitProvisional("late")
 
   #expect(source.cancelCount == 0)
@@ -818,7 +865,7 @@ func emptyFinalTextThrowsStreamingProcessorNoSpeech() async throws {
   ), level: { _ in })
 
   await #expect(throws: StreamingDictationProcessorError.noSpeech) {
-    _ = try await session.finish()
+    _ = try await session.finish(stopOrigin: testStopOrigin())
   }
   #expect(source.finishCount == 1)
   #expect(source.physicalReleaseCount == 1)
@@ -838,7 +885,7 @@ func failedFinishUsesSourceOwnedTerminalizationAndPublishesNoLateUpdate() async 
   }
 
   await #expect(throws: StreamingSpeechSourceProbeError.failed) {
-    _ = try await session.finish()
+    _ = try await session.finish(stopOrigin: testStopOrigin())
   }
   source.emitProvisional("late")
 
@@ -895,7 +942,7 @@ func cancellingAfterSourceFinishAwaitsCleanupWithoutSecondSourceTerminalization(
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await helper.waitUntilStarted()
 
   #expect(source.finishCount == 1)
@@ -972,7 +1019,7 @@ func concurrentCancelCallersShareOneTaskDuringBlockedFinish() async throws {
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await source.waitUntilFinishStarted()
 
   let first = Task {
@@ -1037,7 +1084,7 @@ func cancellingBeforeFinalizationBodyStartsSkipsSourceFinish() async throws {
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await gate.waitUntilEntered()
   #expect(source.finishCount == 0)
 
@@ -1099,7 +1146,7 @@ func cancellingBlockedFinishReturningNilWinsWithoutNoSpeechResult() async throws
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await source.waitUntilFinishStarted()
 
   let first = Task {
@@ -1145,11 +1192,11 @@ func cancellingSessionUnblocksInFlightSourceFinishWithSourceOwnedRelease() async
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
-  let firstFinish = Task { try await session.finish() }
+  let firstFinish = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await source.waitUntilFinishStarted()
   #expect(source.finishCompleted == false)
   #expect(source.physicalReleaseCount == 0)
-  let secondFinish = Task { try await session.finish() }
+  let secondFinish = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await Task.yield()
 
   await session.cancel()
@@ -1178,7 +1225,7 @@ func cancellingBeforeFinishCannotStartFinalizationWork() async throws {
 
   await session.cancel()
 
-  await #expect(throws: CancellationError.self) { try await session.finish() }
+  await #expect(throws: CancellationError.self) { try await session.finish(stopOrigin: testStopOrigin()) }
   #expect(source.finishCount == 0)
   #expect(source.cancelCount == 1)
   #expect(source.sourceTerminalizationCount == 1)
@@ -1215,7 +1262,7 @@ func cancellationWinnerClosesTheFinishRaceBeforeAnyFinalizationOrSourceFinish() 
 
   let cancellation = Task { await session.cancel() }
   await recorder.waitUntilInvalidated()
-  let finish = Task { try await session.finish() }
+  let finish = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await cancellation.value
   await #expect(throws: CancellationError.self) { try await finish.value }
   #expect(source.finishCount == 0)
@@ -1250,7 +1297,7 @@ func processorUsesExactBaselineWhenCleanupIsRejected() async throws {
     mode: .focused,
     recognitionContext: .englishDefault
   ), level: { _ in })
-  let result = try await session.finish()
+  let result = try await session.finish(stopOrigin: testStopOrigin())
   #expect(result.insertedText == "Do not cancel 2 meetings")
   #expect(result.cleanedTranscript == nil)
 }
@@ -1277,7 +1324,7 @@ func processorUsesRawRecoveryWhenDictionaryResolutionFails() async throws {
     recognitionContext: .englishDefault
   ), level: { _ in })
 
-  let result = try await session.finish()
+  let result = try await session.finish(stopOrigin: testStopOrigin())
   #expect(result.rawTranscript == raw)
   #expect(result.dictionaryBaseline == nil)
   #expect(result.cleanedTranscript == nil)
@@ -1307,7 +1354,7 @@ func processorUnsupportedDictionaryRecognitionStillUsesPinnedResolution() async 
   let result = try await processor.begin(
     configuration: processorDictionaryConfiguration(context),
     level: { _ in }
-  ).finish()
+  ).finish(stopOrigin: testStopOrigin())
 
   #expect(source.startCount == 1)
   #expect(result.dictionaryBaseline == "open FleckApp")
@@ -1559,7 +1606,7 @@ func processorDictionaryResolutionMismatchUsesExactRawBaseline() async throws {
   let result = try await processor.begin(
     configuration: processorDictionaryConfiguration(context),
     level: { _ in }
-  ).finish()
+  ).finish(stopOrigin: testStopOrigin())
 
   #expect(result.dictionaryBaseline == nil)
   #expect(result.insertedText == raw)
@@ -1583,7 +1630,7 @@ func processorCleanupRejectedDictionaryCandidateUsesPinnedBaselineAndEvidence() 
   let result = try await processor.begin(
     configuration: processorDictionaryConfiguration(context),
     level: { _ in }
-  ).finish()
+  ).finish(stopOrigin: testStopOrigin())
 
   #expect(result.cleanupOutcome == .usedRaw)
   #expect(result.insertedText == "open FleckApp")
@@ -1629,7 +1676,7 @@ func processorDictionarySettingsMutationDoesNotAlterInflightContext() async thro
   )
 
   try await store.setEnabled(false, id: first.id)
-  let result = try await session.finish()
+  let result = try await session.finish(stopOrigin: testStopOrigin())
 
   #expect(receivedRecognitionContext?.contextualStrings == context.compiledDictionary.recognitionStrings)
   #expect(result.dictionaryBaseline == "open FleckApp")
@@ -1667,7 +1714,7 @@ func processorCapturesStopBeforeDelayedSourceFinalization() async throws {
     mode: .focused,
     recognitionContext: .englishDefault
   ), level: { _ in })
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await source.waitUntilFinishStarted()
   #expect(source.finishCompleted == false)
 

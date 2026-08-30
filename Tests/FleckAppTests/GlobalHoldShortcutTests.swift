@@ -136,6 +136,21 @@ func physicalGestureReceiptPreservesPressAndReleaseAcrossQueuedDelivery() async 
   #expect(fixture.handler.handsFreeFinishCount == 1)
 }
 
+@Test @MainActor func captureFirstHandsFreeStopPreservesPhysicalKeyDownAcrossQueueing() async throws {
+  let fixture = ShortcutFixture()
+  try fixture.shortcut.configure(.rightOption)
+  await fixture.startHandsFree()
+
+  fixture.clock.advance(by: .milliseconds(75))
+  let stoppingPress = fixture.clock.now
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.clock.advance(by: .seconds(1))
+  fixture.monitor.emit(.released(.rightOption))
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.handsFreeStopOrigins == [.handsFreeKeyPress(stoppingPress)])
+}
+
 @Test @MainActor func tapOutsideDoubleTapWindowStartsANewHold() async throws {
   let fixture = ShortcutFixture()
   try fixture.shortcut.configure(.rightOption)
@@ -436,6 +451,7 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
   private(set) var events: [Event] = []
   private(set) var beginGestures: [DictationPhysicalGesture] = []
   private(set) var endGestures: [DictationPhysicalGesture] = []
+  private(set) var handsFreeStopOrigins: [DictationStopOrigin] = []
   var endGate: TerminalGate?
   private var sessions: [UUID: TerminalGate] = [:]
   private var currentSession: DictationShortcutSession?
@@ -477,8 +493,12 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
     sessions[session.id]?.open()
   }
 
-  func finishHandsFreeShortcut(_ session: DictationShortcutSession) async {
+  func finishHandsFreeShortcut(
+    _ session: DictationShortcutSession,
+    stopOrigin: DictationStopOrigin
+  ) async {
     events.append(.handsFreeFinish)
+    handsFreeStopOrigins.append(stopOrigin)
     sessions[session.id]?.open()
   }
 

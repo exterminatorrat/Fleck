@@ -22,8 +22,16 @@ protocol SpeechEngine: AnyObject {
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws
   func finish() async throws -> String?
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String?
   func cancel() async
   func releaseResources() async
+}
+
+extension SpeechEngine {
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
+    _ = stopOrigin
+    return try await finish()
+  }
 }
 
 @MainActor
@@ -64,21 +72,10 @@ extension DictationProcessing {
 @MainActor
 protocol DictationProcessingSession: AnyObject {
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
-  func finish() async throws -> DictationProcessingResult
-  func finish(
-    deadlineOrigin: ContinuousClock.Instant
-  ) async throws -> DictationProcessingResult
+  func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult
   // All callers await one source-unblocking/finalization/cleanup cancellation
   // task before terminal cancellation returns.
   func cancel() async
-}
-
-extension DictationProcessingSession {
-  func finish(
-    deadlineOrigin: ContinuousClock.Instant
-  ) async throws -> DictationProcessingResult {
-    try await finish()
-  }
 }
 
 protocol TranscriptDictionaryResolving: Sendable {
@@ -143,8 +140,16 @@ protocol StreamingSpeechSource: AnyObject {
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws
   func finish() async throws -> String?
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String?
   func cancel() async
   func releaseResources() async
+}
+
+extension StreamingSpeechSource {
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
+    _ = stopOrigin
+    return try await finish()
+  }
 }
 
 protocol DestinationRouting: Sendable {

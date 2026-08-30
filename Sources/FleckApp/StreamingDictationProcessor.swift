@@ -343,19 +343,7 @@ final class StreamingDictationSession: DictationProcessingSession {
     measurements.snapshot
   }
 
-  func finish() async throws -> DictationProcessingResult {
-    try await finishUsingDeadlineOrigin(nil)
-  }
-
-  func finish(
-    deadlineOrigin: ContinuousClock.Instant
-  ) async throws -> DictationProcessingResult {
-    try await finishUsingDeadlineOrigin(deadlineOrigin)
-  }
-
-  private func finishUsingDeadlineOrigin(
-    _ suppliedDeadlineOrigin: ContinuousClock.Instant?
-  ) async throws -> DictationProcessingResult {
+  func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult {
     if let finalizationTask {
       return try await finalizationTask.value
     }
@@ -366,10 +354,9 @@ final class StreamingDictationSession: DictationProcessingSession {
     // Capture the stop boundary before any task suspension or source finalization.
     let stopInstant = clock.now()
     measurements.record(.stopRequested, at: stopInstant)
-    let deadlineOrigin = suppliedDeadlineOrigin ?? stopInstant
-    let insertionDeadline = deadlineOrigin.advanced(by: budget.insertion)
+    let insertionDeadline = stopOrigin.instant.advanced(by: budget.insertion)
     let deadline = DictationDeadline(
-      stopInstant: deadlineOrigin,
+      stopInstant: stopOrigin.instant,
       insertionDeadline: insertionDeadline,
       cleanupBudget: budget.cleanup
     )
@@ -378,7 +365,10 @@ final class StreamingDictationSession: DictationProcessingSession {
       if let finalizationStartGate = self.finalizationStartGate {
         await finalizationStartGate()
       }
-      return try await self.runFinalization(deadline: deadline)
+      return try await self.runFinalization(
+        deadline: deadline,
+        stopOrigin: stopOrigin
+      )
     }
     finalizationTask = task
     return try await task.value
@@ -441,10 +431,14 @@ final class StreamingDictationSession: DictationProcessingSession {
   }
 
   private func runFinalization(
-    deadline: DictationDeadline
+    deadline: DictationDeadline,
+    stopOrigin: DictationStopOrigin
   ) async throws -> DictationProcessingResult {
     do {
-      let result = try await finalizeBody(deadline: deadline)
+      let result = try await finalizeBody(
+        deadline: deadline,
+        stopOrigin: stopOrigin
+      )
       try Task.checkCancellation()
       guard !isCancelled, !isTerminal else {
         throw CancellationError()
@@ -459,13 +453,14 @@ final class StreamingDictationSession: DictationProcessingSession {
   }
 
   private func finalizeBody(
-    deadline: DictationDeadline
+    deadline: DictationDeadline,
+    stopOrigin: DictationStopOrigin
   ) async throws -> DictationProcessingResult {
     try Task.checkCancellation()
 
     let rawText: String?
     do {
-      let returnedText = try await source.finish()
+      let returnedText = try await source.finish(stopOrigin: stopOrigin)
       try Task.checkCancellation()
       measurements.record(.asrFinal, at: clock.now())
       rawText = returnedText

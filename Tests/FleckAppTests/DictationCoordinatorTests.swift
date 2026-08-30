@@ -62,6 +62,276 @@ private final class DictionaryContextBox {
 }
 
 @Test @MainActor
+func captureFirstAcceptedHoldRetainsSpeechReceivedBeforeThreshold() async throws {
+  let threshold = Gate()
+  let provisional = CompletionProbe()
+  let processing = ProcessingProbe(
+    result: processingResult("Captured from key-down")
+  )
+  let fixture = try Fixture(
+    processing: processing,
+    onFocusedProvisionalUpdate: { Task { await provisional.complete() } },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+
+  #expect(processing.beginCount == 1)
+  #expect(fixture.coordinator.phase == .arming)
+  await processing.emit(.init(
+    generation: 1,
+    stableText: "Captured ",
+    provisionalTail: "from key-down"
+  ))
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+
+  await threshold.openGate()
+  #expect(await waitForCompletion(provisional, timeout: .seconds(1)))
+  let release = press.advanced(by: .milliseconds(200))
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+
+  #expect(fixture.editor.provisionalTexts == ["Captured from key-down"])
+  #expect(fixture.editor.committedTexts == ["Captured from key-down"])
+}
+
+@Test @MainActor
+func captureFirstShortTapDrainsSourceWithoutPublishing() async throws {
+  let threshold = Gate()
+  let drained = CompletionProbe()
+  let processing = ProcessingProbe(
+    result: processingResult("must not publish"),
+    onSessionDrain: { Task { await drained.complete() } }
+  )
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  await processing.emit(.init(generation: 1, stableText: "", provisionalTail: "early"))
+
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
+
+  #expect(await waitForCompletion(drained, timeout: .seconds(1)))
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(try await fixture.history.list().isEmpty)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor
+func captureFirstReleaseRacingThresholdHasOneOutcome() async throws {
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("Boundary"))
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+
+  async let thresholdRelease: Void = threshold.openGate()
+  async let physicalRelease: Void = fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  _ = await (thresholdRelease, physicalRelease)
+
+  #expect(processing.stopOrigins == [.physicalRelease(release)])
+  #expect(fixture.editor.committedTexts == ["Boundary"])
+  #expect(fixture.saver.savedTexts.isEmpty)
+}
+
+@Test @MainActor
+func captureFirstShortReleaseWinsAfterThresholdTaskQueues() async throws {
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("must discard"))
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
+
+  #expect(processing.sessionCancelCount == 1)
+  #expect(processing.stopOrigins.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor
+func captureFirstEscapeDuringArmingDrainsSource() async throws {
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("late"))
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let session = try #require(fixture.coordinator.beginShortcut(editor: fixture.editor))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+
+  await fixture.coordinator.cancelShortcut(session)
+  await processing.emit(.init(generation: 99, stableText: "", provisionalTail: "late"))
+
+  #expect(processing.sessionCancelCount == 1)
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor
+func captureFirstCancelledGenerationPublishesNothingLate() async throws {
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("late result"))
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let session = try #require(fixture.coordinator.beginShortcut(editor: fixture.editor))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+
+  await fixture.coordinator.cancelShortcut(session)
+  await processing.emit(.init(
+    generation: 42,
+    stableText: "",
+    provisionalTail: "late generation"
+  ))
+
+  #expect(processing.publishedUpdates.isEmpty)
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+}
+
+@Test @MainActor
+func captureFirstPhysicalReleaseSurvivesSuspendedStartup() async throws {
+  let threshold = Gate()
+  let pinGate = Gate()
+  let pinStarted = CompletionProbe()
+  let processing = ProcessingProbe(result: processingResult("After startup"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      await pinStarted.complete()
+      await pinGate.wait()
+      return try coordinatorDictionaryContext(
+        captureID: captureID,
+        generation: generation,
+        engine: engine
+      )
+    },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(250))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  #expect(await waitForCompletion(pinStarted, timeout: .seconds(1)))
+
+  let finishing = Task {
+    await fixture.coordinator.endShortcut(
+      session,
+      physicalGesture: .init(pressedAt: press, releasedAt: release)
+    )
+  }
+  await Task.yield()
+  await pinGate.openGate()
+  await finishing.value
+  await fixture.coordinator.waitForShortcutTerminal(session)
+
+  #expect(processing.stopOrigins == [.physicalRelease(release)])
+  #expect(fixture.editor.committedTexts == ["After startup"])
+}
+
+@Test @MainActor
+func captureFirstToolbarSamplesOriginAtActionReceipt() async throws {
+  let clock = ManualDictationClock()
+  let processing = ProcessingProbe(result: processingResult("Toolbar"))
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let actionInstant = clock.now
+
+  await fixture.coordinator.finish()
+
+  #expect(processing.stopOrigins == [.toolbarAction(actionInstant)])
+}
+
+@Test @MainActor
+func captureFirstHandsFreeCoordinatorForwardsExactOrigin() async throws {
+  let processing = ProcessingProbe(result: processingResult("Hands free"))
+  let fixture = try Fixture(processing: processing)
+  let session = try #require(fixture.coordinator.beginHandsFreeShortcut(editor: nil))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  let instant = ContinuousClock().now
+  let origin = DictationStopOrigin.handsFreeKeyPress(instant)
+
+  await fixture.coordinator.finishHandsFreeShortcut(session, stopOrigin: origin)
+
+  #expect(processing.stopOrigins == [origin])
+  #expect(fixture.saver.savedTexts == ["Hands free"])
+}
+
+@Test @MainActor
+func captureFirstFirstStopOriginWins() async throws {
+  let clock = ManualDictationClock()
+  let flushGate = Gate()
+  let processing = ProcessingProbe(result: processingResult("First origin"))
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+  fixture.saver.flushGate = flushGate
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let first = clock.now
+
+  let finishing = Task { await fixture.coordinator.finish() }
+  await flushGate.waitUntilWaiting()
+  clock.advance(by: .milliseconds(50))
+  await fixture.coordinator.finish()
+  await flushGate.openGate()
+  await finishing.value
+
+  #expect(processing.stopOrigins == [.toolbarAction(first)])
+}
+
+@Test @MainActor
 func coordinatorMissingDictionaryContextConsumesNoAudioOrInsertion() async throws {
   let processing = ProcessingProbe(result: processingResult("must not insert"))
   let fixture = try Fixture(
@@ -899,18 +1169,21 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
   await fixture.coordinator.cancel()
 }
 
-@Test @MainActor func shortShortcutHoldDoesNotStartCapture() async throws {
+@Test @MainActor func shortShortcutHoldDrainsCaptureStartedAtPress() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
 
   fixture.coordinator.beginShortcut(editor: nil)
   await threshold.waitUntilWaiting()
+  for _ in 0..<100 where fixture.standard.startCount == 0 { await Task.yield() }
   await fixture.coordinator.endShortcut()
   await threshold.openGate()
   await Task.yield()
 
-  #expect(fixture.provider.requestedKinds.isEmpty)
-  #expect(fixture.standard.startCount == 0)
+  #expect(fixture.provider.requestedKinds == [.standard])
+  #expect(fixture.standard.startCount == 1)
+  #expect(fixture.standard.cancelCount == 1)
+  #expect(fixture.standard.releaseCount == 1)
   #expect(fixture.editor.beginCount == 0)
 }
 
@@ -949,7 +1222,10 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
     mode: .smartCapture,
     engine: .standard
   ))
-  await fixture.coordinator.finishHandsFreeShortcut(session)
+  await fixture.coordinator.finishHandsFreeShortcut(
+    session,
+    stopOrigin: .handsFreeKeyPress(ContinuousClock().now)
+  )
   await fixture.coordinator.waitForShortcutTerminal(session)
   #expect(fixture.saver.savedTexts == ["Hands free"])
 }
@@ -963,7 +1239,10 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
   let foreignSession = DictationShortcutSession(id: UUID())
 
   #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
-  await fixture.coordinator.finishHandsFreeShortcut(foreignSession)
+  await fixture.coordinator.finishHandsFreeShortcut(
+    foreignSession,
+    stopOrigin: .handsFreeKeyPress(ContinuousClock().now)
+  )
   await fixture.coordinator.cancelShortcut(foreignSession)
 
   #expect(fixture.coordinator.phase == .listening(
@@ -2381,7 +2660,11 @@ private func waitForCompletion(
   fixture.standard.finalText = "Released after start"
   fixture.saver.saveGate = saveGate
 
-  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
   let terminal = CompletionProbe()
   let terminalWait = Task {
     await fixture.coordinator.waitForShortcutTerminal(session)
@@ -2390,7 +2673,13 @@ private func waitForCompletion(
   await threshold.waitUntilWaiting()
   await threshold.openGate()
   await startGate.waitUntilWaiting()
-  await fixture.coordinator.endShortcut(session)
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(200))
+    )
+  )
 
   #expect(fixture.standard.finishCount == 0)
   #expect(fixture.coordinator.phase == .arming)
@@ -3562,6 +3851,8 @@ final class ProcessingProbe: DictationProcessing {
   private(set) var beginCount = 0
   private(set) var configurations: [DictationProcessingConfiguration] = []
   private(set) var deadlineOrigins: [ContinuousClock.Instant] = []
+  private(set) var stopOrigins: [DictationStopOrigin] = []
+  private(set) var sessionCancelCount = 0
 
   init(
     updates: [DictationTextUpdate] = [],
@@ -3616,13 +3907,17 @@ final class ProcessingProbe: DictationProcessing {
       finishBlocksUntilCancel: finishBlocksUntilCancel,
       drainGate: drainGate,
       onFinishStarted: { [weak self] in self?.markFinishStarted() },
-      onSessionCancel: onSessionCancel,
+      onSessionCancel: { [weak self] in
+        self?.sessionCancelCount += 1
+        self?.onSessionCancel?()
+      },
       onSourceCancel: onSourceCancel,
       onSourcePhysicalRelease: onSourcePhysicalRelease,
       onFinishUnblocked: onFinishUnblocked,
       onSessionDrain: onSessionDrain,
-      onDeadlineOrigin: { [weak self] instant in
-        self?.deadlineOrigins.append(instant)
+      onStopOrigin: { [weak self] origin in
+        self?.stopOrigins.append(origin)
+        self?.deadlineOrigins.append(origin.instant)
       },
       onPublishedUpdate: { [weak self] update in
         self?.publishedUpdates.append(update)
@@ -3686,7 +3981,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
   private let onSourcePhysicalRelease: (() -> Void)?
   private let onFinishUnblocked: (() -> Void)?
   private let onSessionDrain: (() -> Void)?
-  private let onDeadlineOrigin: (ContinuousClock.Instant) -> Void
+  private let onStopOrigin: (DictationStopOrigin) -> Void
   private let onPublishedUpdate: (DictationTextUpdate) -> Void
   private var result: DictationProcessingResult
   private var finishContinuation: CheckedContinuation<DictationProcessingResult, Never>?
@@ -3702,7 +3997,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
     onSourcePhysicalRelease: (() -> Void)?,
     onFinishUnblocked: (() -> Void)?,
     onSessionDrain: (() -> Void)?,
-    onDeadlineOrigin: @escaping (ContinuousClock.Instant) -> Void,
+    onStopOrigin: @escaping (DictationStopOrigin) -> Void,
     onPublishedUpdate: @escaping (DictationTextUpdate) -> Void
   ) {
     self.finishBlocksUntilCancel = finishBlocksUntilCancel
@@ -3713,7 +4008,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
     self.onSourcePhysicalRelease = onSourcePhysicalRelease
     self.onFinishUnblocked = onFinishUnblocked
     self.onSessionDrain = onSessionDrain
-    self.onDeadlineOrigin = onDeadlineOrigin
+    self.onStopOrigin = onStopOrigin
     self.onPublishedUpdate = onPublishedUpdate
     self.result = result
     var capturedContinuation: AsyncThrowingStream<DictationTextUpdate, Error>.Continuation!
@@ -3721,7 +4016,8 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
     continuation = capturedContinuation
   }
 
-  func finish() async throws -> DictationProcessingResult {
+  func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult {
+    onStopOrigin(stopOrigin)
     onFinishStarted()
     if finishBlocksUntilCancel, !isCancelled {
       return await withCheckedContinuation { continuation in
@@ -3730,13 +4026,6 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
     }
     continuation.finish()
     return result
-  }
-
-  func finish(
-    deadlineOrigin: ContinuousClock.Instant
-  ) async throws -> DictationProcessingResult {
-    onDeadlineOrigin(deadlineOrigin)
-    return try await finish()
   }
 
   func cancel() async {
