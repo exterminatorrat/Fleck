@@ -244,6 +244,260 @@ private func waitForCompletion(
   return await probe.isComplete
 }
 
+@Test @MainActor func externallyAllocatedHandsFreeSessionKeepsStableContextThroughTerminal()
+  async throws
+{
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Hands free context"
+  let session = DictationShortcutSession(id: UUID())
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  #expect(fixture.coordinator.beginHandsFreeShortcut(
+    session: session,
+    editor: nil,
+    destination: nil
+  ))
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+  await fixture.coordinator.finishHandsFreeShortcut(session)
+  await fixture.coordinator.waitForShortcutTerminal(session)
+
+  #expect(!events.isEmpty)
+  #expect(events.allSatisfy {
+    $0.context?.sessionID == session.id
+      && $0.context?.mode == .smartCapture
+  })
+  #expect(events.last?.context?.sessionID == session.id)
+}
+
+@Test @MainActor func externallyAllocatedHoldSessionNormalizesModeBeforeArming()
+  async throws
+{
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Held context"
+  let session = DictationShortcutSession(id: UUID())
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  #expect(fixture.coordinator.beginShortcut(
+    session: session,
+    editor: fixture.editor,
+    destination: fixture.inbox
+  ))
+  #expect(events.first?.context?.sessionID == session.id)
+  #expect(events.first?.context?.mode == .focused)
+  await threshold.waitUntilWaiting()
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+  await fixture.coordinator.endShortcut(session)
+  await fixture.coordinator.waitForShortcutTerminal(session)
+
+  #expect(events.allSatisfy {
+    $0.context?.sessionID == session.id
+      && $0.context?.mode == .focused
+  })
+}
+
+@Test @MainActor func smartPipelinePublishesSavingContextBeforeSaveReceipt()
+  async throws
+{
+  let saveGate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Save boundary"
+  fixture.saver.saveGate = saveGate
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await saveGate.waitUntilWaiting()
+
+  let saveIndex = try #require(events.firstIndex {
+    $0.context?.pipelineStage == .save && $0.terminal == nil
+  })
+  #expect(events[saveIndex].phase == .routing)
+  #expect(!events[..<saveIndex].contains {
+    if case .saved = $0.terminal { return true }
+    return false
+  })
+
+  await saveGate.openGate()
+  await finishing.value
+  #expect(events.last?.context?.pipelineStage == .save)
+  #expect(events.last?.context?.failureStage == nil)
+}
+
+@Test @MainActor func focusedPipelinePublishesSavingContextBeforeFlushReceipt()
+  async throws
+{
+  let flushGate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Focused save boundary"
+  fixture.saver.flushGate = flushGate
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await flushGate.waitUntilWaiting()
+
+  let saveIndex = try #require(events.firstIndex {
+    $0.context?.pipelineStage == .save && $0.terminal == nil
+  })
+  #expect(events[saveIndex].phase == .cleaning)
+  #expect(!events[..<saveIndex].contains {
+    if case .saved = $0.terminal { return true }
+    return false
+  })
+
+  await flushGate.openGate()
+  await finishing.value
+  #expect(events.last?.context?.pipelineStage == .save)
+}
+
+@Test @MainActor func cleanupFallbackContextSurvivesRoutingSavingAndTerminal()
+  async throws
+{
+  let saveGate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Raw fallback"
+  fixture.cleaner.error = TestError.failed
+  fixture.saver.saveGate = saveGate
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await saveGate.waitUntilWaiting()
+
+  #expect(events.contains {
+    $0.phase == .routing
+      && $0.context?.cleanupOutcome == .usedRaw
+      && $0.context?.pipelineStage == .organize
+  })
+  #expect(events.contains {
+    $0.context?.pipelineStage == .save
+      && $0.context?.cleanupOutcome == .usedRaw
+      && $0.terminal == nil
+  })
+
+  await saveGate.openGate()
+  await finishing.value
+  #expect(events.last?.context?.cleanupOutcome == .usedRaw)
+  #expect(events.last?.terminal == .saved(
+    mode: .smartCapture,
+    cleanup: .usedRaw,
+    destination: fixture.inbox
+  ))
+}
+
+@Test @MainActor func terminalFailuresIdentifyCaptureOrSaveStageWithoutErrorParsing()
+  async throws
+{
+  let providerFailure = try Fixture()
+  providerFailure.provider.engines.removeValue(forKey: .standard)
+  var providerEvents: [DictationCoordinatorEvent] = []
+  providerFailure.coordinator.setEventObserver { providerEvents.append($0) }
+  await providerFailure.coordinator.start(mode: .smartCapture)
+  #expect(providerEvents.last?.context?.pipelineStage == .capture)
+  #expect(providerEvents.last?.context?.failureStage == .capture)
+
+  let startFailure = try Fixture()
+  startFailure.standard.startError = TestError.failed
+  var startEvents: [DictationCoordinatorEvent] = []
+  startFailure.coordinator.setEventObserver { startEvents.append($0) }
+  await startFailure.coordinator.start(mode: .smartCapture)
+  #expect(startEvents.last?.context?.failureStage == .capture)
+
+  let finishFailure = try Fixture()
+  finishFailure.standard.finishError = TestError.failed
+  var finishEvents: [DictationCoordinatorEvent] = []
+  finishFailure.coordinator.setEventObserver { finishEvents.append($0) }
+  await finishFailure.coordinator.start(mode: .smartCapture)
+  await finishFailure.coordinator.finish()
+  #expect(finishEvents.last?.context?.failureStage == .capture)
+
+  let noSpeech = try Fixture()
+  noSpeech.standard.finalText = nil
+  var noSpeechEvents: [DictationCoordinatorEvent] = []
+  noSpeech.coordinator.setEventObserver { noSpeechEvents.append($0) }
+  await noSpeech.coordinator.start(mode: .smartCapture)
+  await noSpeech.coordinator.finish()
+  #expect(noSpeechEvents.last?.terminal == .noSpeech)
+  #expect(noSpeechEvents.last?.context?.failureStage == .capture)
+
+  let focusedSaveFailure = try Fixture()
+  focusedSaveFailure.standard.finalText = "Commit it"
+  focusedSaveFailure.saver.flushError = TestError.failed
+  var focusedSaveEvents: [DictationCoordinatorEvent] = []
+  focusedSaveFailure.coordinator.setEventObserver { focusedSaveEvents.append($0) }
+  await focusedSaveFailure.coordinator.start(
+    mode: .focused,
+    editor: focusedSaveFailure.editor
+  )
+  await focusedSaveFailure.coordinator.finish()
+  #expect(focusedSaveEvents.last?.context?.pipelineStage == .save)
+  #expect(focusedSaveEvents.last?.context?.failureStage == .save)
+
+  let smartSaveFailure = try Fixture()
+  smartSaveFailure.standard.finalText = "Save it"
+  smartSaveFailure.saver.saveError = TestError.failed
+  var smartSaveEvents: [DictationCoordinatorEvent] = []
+  smartSaveFailure.coordinator.setEventObserver { smartSaveEvents.append($0) }
+  await smartSaveFailure.coordinator.start(mode: .smartCapture)
+  await smartSaveFailure.coordinator.finish()
+  #expect(smartSaveEvents.last?.context?.pipelineStage == .save)
+  #expect(smartSaveEvents.last?.context?.failureStage == .save)
+}
+
+@Test @MainActor func finishingHandsFreeDuringEngineStartupCancelsWithoutNoSpeech()
+  async throws
+{
+  let startGate = Gate()
+  let fixture = try Fixture()
+  fixture.standard.startGate = startGate
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+  let session = try #require(fixture.coordinator.beginHandsFreeShortcut(
+    editor: nil,
+    destination: nil
+  ))
+  #expect(await waitForListening(fixture.coordinator, timeout: .milliseconds(50)) == false)
+  await fixture.coordinator.finishHandsFreeShortcut(session)
+  await startGate.openGate()
+  await fixture.coordinator.waitForShortcutTerminal(session)
+
+  #expect(fixture.standard.finishCount == 0)
+  #expect(events.last?.terminal == .cancelled)
+  #expect(!events.contains { $0.terminal == .noSpeech })
+  #expect(!events.contains { $0.terminal == .failed("No speech detected.") })
+}
+
+@Test @MainActor func finishingHandsFreeDuringProviderStartupCancelsWithoutNoSpeech()
+  async throws
+{
+  let providerGate = Gate()
+  let fixture = try Fixture()
+  fixture.provider.gate = providerGate
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+  let session = try #require(fixture.coordinator.beginHandsFreeShortcut(
+    editor: nil,
+    destination: nil
+  ))
+  await fixture.provider.waitUntilRequested()
+
+  await fixture.coordinator.finishHandsFreeShortcut(session)
+  await providerGate.openGate()
+  await fixture.coordinator.waitForShortcutTerminal(session)
+
+  #expect(fixture.standard.startCount == 0)
+  #expect(fixture.standard.finishCount == 0)
+  #expect(events.last?.terminal == .cancelled)
+  #expect(!events.contains { $0.terminal == .noSpeech })
+}
+
 @Test @MainActor func heldShortcutPublishesEachPhaseExactlyOnceInOrder() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
@@ -260,21 +514,21 @@ private func waitForCompletion(
   }
   await fixture.coordinator.endShortcut()
 
-  #expect(events == [
-    .init(phase: .arming, terminal: nil),
-    .init(phase: .listening(mode: .smartCapture, engine: .standard), terminal: nil),
-    .init(phase: .finalizing, terminal: nil),
-    .init(phase: .cleaning, terminal: nil),
-    .init(phase: .routing, terminal: nil),
-    .init(
-      phase: .saved(fixture.inbox),
-      terminal: .saved(
-        mode: .smartCapture,
-        cleanup: .cleaned,
-        destination: fixture.inbox
-      )
-    ),
+  #expect(events.map(\.phase) == [
+    .arming,
+    .listening(mode: .smartCapture, engine: .standard),
+    .finalizing,
+    .cleaning,
+    .routing,
+    .routing,
+    .saved(fixture.inbox),
   ])
+  #expect(events.last?.terminal == .saved(
+    mode: .smartCapture,
+    cleanup: .cleaned,
+    destination: fixture.inbox
+  ))
+  #expect(events.last?.context?.pipelineStage == .save)
 }
 
 @Test @MainActor func shortcutChoosesFocusedOnlyForActiveFleckEditor() async throws {
@@ -397,14 +651,13 @@ private func waitForCompletion(
   #expect(events.map(\.phase).contains(.finalizing))
   #expect(events.map(\.phase).contains(.cleaning))
   #expect(events.map(\.phase).contains(.routing))
-  #expect(events.last == DictationCoordinatorEvent(
-    phase: .saved(fixture.inbox),
-    terminal: .saved(
-      mode: .smartCapture,
-      cleanup: .cleaned,
-      destination: fixture.inbox
-    )
+  #expect(events.last?.phase == .saved(fixture.inbox))
+  #expect(events.last?.terminal == .saved(
+    mode: .smartCapture,
+    cleanup: .cleaned,
+    destination: fixture.inbox
   ))
+  #expect(events.last?.context?.pipelineStage == .save)
 }
 
 @Test @MainActor func coordinatorObserverDistinguishesFocusedRawFallbackAndFailure() async throws {
@@ -431,7 +684,7 @@ private func waitForCompletion(
   await failed.coordinator.start(mode: .smartCapture)
   await failed.coordinator.finish()
 
-  #expect(failedEvents.last?.terminal == .failed("No speech detected."))
+  #expect(failedEvents.last?.terminal == .noSpeech)
 }
 
 @Test @MainActor func coordinatorObserverDetachesAndTerminalStateAllowsShortcutConfiguration()
@@ -1146,14 +1399,11 @@ private func waitForCompletion(
   #expect(fixture.standard.releaseCount == 1)
 }
 
-@Test @MainActor func shortcutReleaseDuringSuspendedStartDefersFinishUntilStartReturns() async throws {
+@Test @MainActor func shortcutReleaseDuringSuspendedStartCancelsUntilStartReturns() async throws {
   let threshold = Gate()
   let startGate = Gate()
-  let saveGate = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
   fixture.standard.startGate = startGate
-  fixture.standard.finalText = "Released after start"
-  fixture.saver.saveGate = saveGate
 
   let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
   let terminal = CompletionProbe()
@@ -1170,14 +1420,10 @@ private func waitForCompletion(
   #expect(fixture.coordinator.phase == .arming)
   #expect(!(await terminal.isComplete))
   await startGate.openGate()
-  await saveGate.waitUntilWaiting()
-
-  #expect(fixture.standard.finishCount == 1)
-  #expect(fixture.coordinator.phase == .routing)
-  #expect(!(await terminal.isComplete))
-  await saveGate.openGate()
   await terminalWait.value
   #expect(await terminal.isComplete)
+  #expect(fixture.standard.finishCount == 0)
+  #expect(fixture.coordinator.phase == .idle)
 }
 
 @Test @MainActor func rejectedGlobalShortcutCannotFinishOrCancelToolbarCapture() async throws {

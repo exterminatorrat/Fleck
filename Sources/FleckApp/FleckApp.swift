@@ -873,6 +873,8 @@
           scheduleIdle(after: Self.savedCapsuleDuration, owner: .dictation)
         case .failed(let message):
           showFailureCapsule(message, action: action)
+        case .noSpeech:
+          showFailureCapsule("No speech detected.", action: nil)
         case .cancelled:
           showIdleCapsule()
         }
@@ -973,6 +975,8 @@
             : .savedWithoutCleanup(destination: title)
         case .failed(let message):
           return .failed(message)
+        case .noSpeech:
+          return .failed("No speech detected.")
         case .cancelled:
           return .idle
         }
