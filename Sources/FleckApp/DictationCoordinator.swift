@@ -228,7 +228,8 @@ final class DictationCoordinator {
       destination: focusedEditor == nil ? nil : destination,
       physicalGesture: physicalGesture,
       selectedEngine: selectedEngine,
-      contextGeneration: contextGeneration
+      contextGeneration: contextGeneration,
+      clearsPreviousPresentation: false
     ) else {
       return nil
     }
@@ -410,17 +411,16 @@ final class DictationCoordinator {
     physicalGesture: DictationPhysicalGesture,
     selectedEngine fixedEngine: DictationSpeechEngine? = nil,
     contextGeneration fixedContextGeneration: UInt64? = nil,
-    captureContext: LocalWritingCaptureContext? = nil
+    captureContext: LocalWritingCaptureContext? = nil,
+    clearsPreviousPresentation: Bool = true
   ) -> Bool {
     guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
       return false
     }
     let selectedEngine = fixedEngine ?? preferredEngine()
-    copyableTranscript = nil
-    recoveryReceipt = nil
-    recoveryAction = nil
-    pendingRoutingAmbiguity = nil
-    routingAmbiguity = nil
+    if clearsPreviousPresentation {
+      clearPreviousPresentation()
+    }
     latestMeasurementCaptureID = id
     latestRuntimeMeasurements = .empty
     latestProcessingResult = nil
@@ -934,6 +934,7 @@ final class DictationCoordinator {
 
   private func acceptArmedShortcut(_ id: UUID) {
     guard shortcutID == id, var active = capture, active.id == id else { return }
+    clearPreviousPresentation()
     active.holdAccepted = true
     capture = active
     clearArmedShortcut()
@@ -969,6 +970,14 @@ final class DictationCoordinator {
   private func clearArmedShortcut() {
     shortcutID = nil
     holdTask = nil
+  }
+
+  private func clearPreviousPresentation() {
+    copyableTranscript = nil
+    recoveryReceipt = nil
+    recoveryAction = nil
+    pendingRoutingAmbiguity = nil
+    routingAmbiguity = nil
   }
 
   private func allocateCaptureContextGeneration() -> UInt64 {

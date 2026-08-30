@@ -242,6 +242,79 @@ func captureFirstCancelledGenerationPublishesNothingLate() async throws {
 }
 
 @Test @MainActor
+func captureFirstShortReleasePreservesPriorRecoveryAndChooser() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "Keep this recovery"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  let priorAmbiguity = try #require(fixture.coordinator.routingAmbiguity)
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+  #expect(fixture.coordinator.routingAmbiguity == priorAmbiguity)
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+  #expect(fixture.coordinator.routingAmbiguity == priorAmbiguity)
+}
+
+@Test @MainActor
+func captureFirstEscapeDuringArmingPreservesPriorRecovery() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Keep this recovery"
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  await fixture.coordinator.cancelShortcut(session)
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+}
+
+@Test @MainActor
+func captureFirstArmingStartupFailurePreservesPriorRecovery() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Keep this recovery"
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  fixture.standard.startError = TestError.failed
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+
+  await fixture.coordinator.waitForShortcutTerminal(session)
+
+  #expect(fixture.coordinator.phase == .idle)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+}
+
+@Test @MainActor
 func captureFirstPhysicalReleaseSurvivesSuspendedStartup() async throws {
   let threshold = Gate()
   let pinGate = Gate()
