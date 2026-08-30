@@ -8,6 +8,8 @@ private enum TransitionFixtures {
   static let digestB = String(repeating: "b", count: 64)
   static let digestC = String(repeating: "c", count: 64)
   static let digestD = String(repeating: "d", count: 64)
+  static let digestE = String(repeating: "e", count: 64)
+  static let digestF = String(repeating: "f", count: 64)
   static let zeroDigest = String(repeating: "0", count: 64)
   static let revisionA = String(repeating: "1", count: 40)
   static let revisionB = String(repeating: "2", count: 40)
@@ -99,7 +101,9 @@ private enum TransitionFixtures {
   static func raw(
     schemaVersion: Int = 1,
     predecessor: LocalModelTransitionReleaseIdentity = predecessor,
+    predecessorUpdateRecordDigest: String = digestE,
     successor: LocalModelTransitionReleaseIdentity = successor,
+    successorPromotionRecordDigest: String = digestC,
     dependencies: [LocalModelPredecessorCorpusDependency] = [dependency()],
     lineageValid: Bool = true,
     referenceRoles: [String] = ["install", "retainForRollback"],
@@ -112,8 +116,9 @@ private enum TransitionFixtures {
     .init(
       schemaVersion: schemaVersion,
       predecessor: predecessor,
+      predecessorUpdateRecordDigest: predecessorUpdateRecordDigest,
       successor: successor,
-      successorPromotionRecordDigest: digestD,
+      successorPromotionRecordDigest: successorPromotionRecordDigest,
       predecessorCorpusDependencies: dependencies,
       lineageValid: lineageValid,
       referenceRoles: referenceRoles,
@@ -168,7 +173,12 @@ private enum TransitionFixtures {
         maximumOSMajor: 26,
         languages: ["en"]
       ),
-      resources: .init(minimumRAMBytes: 1, workingRAMBytes: 1, storageBytes: 0),
+      resources: .init(
+        applicability: .notApplicable,
+        minimumRAMBytes: 0,
+        workingRAMBytes: 0,
+        storageBytes: 0
+      ),
       license: LocalModelLicenseState.fleckOwned.rawValue,
       evidence: LocalModelEvidenceTier.deterministic.rawValue,
       admission: LocalModelAdmissionState.notAdmitted.rawValue,
@@ -230,6 +240,42 @@ private enum TransitionFixtures {
 }
 
 @Suite struct LocalModelUpdateTransitionTests {
+  @Test func rawTransitionCarriesPredecessorUpdateRecordIdentity() {
+    #expect(TransitionFixtures.raw().predecessorUpdateRecordDigest
+      == TransitionFixtures.digestE)
+  }
+
+  @Test func validatedTransitionCarriesPredecessorUpdateRecordIdentity() throws {
+    #expect(try TransitionFixtures.validate().predecessorUpdateRecordDigest
+      == TransitionFixtures.digestE)
+  }
+
+  @Test func transitionRejectsMissingOrInvalidPredecessorUpdateRecordDigest() {
+    for digest in ["", "not-a-digest", TransitionFixtures.zeroDigest] {
+      #expect(throws: LocalModelUpdateTransitionError.invalidDigest(digest)) {
+        _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+          predecessorUpdateRecordDigest: digest
+        ))
+      }
+    }
+  }
+
+  @Test func transitionDigestBindsPredecessorUpdateRecord() throws {
+    let first = try TransitionFixtures.validate()
+    let mutated = try TransitionFixtures.validate(TransitionFixtures.raw(
+      predecessorUpdateRecordDigest: TransitionFixtures.digestF
+    ))
+    #expect(first.identityDigest != mutated.identityDigest)
+  }
+
+  @Test func transitionRejectsPromotionDigestNotBoundToSuccessor() {
+    #expect(throws: LocalModelUpdateTransitionError.successorMismatch) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        successorPromotionRecordDigest: TransitionFixtures.digestD
+      ))
+    }
+  }
+
   @Test func transitionConstructionAuthorityIsPrivateAndValidatingRemainsUsable() throws {
     let sourceURL = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()

@@ -49,6 +49,7 @@ private enum LocalCatalogFixtures {
     minimumOSMajor: Int = 14,
     maximumOSMajor: Int = 16,
     languages: [String] = ["en"],
+    resourceApplicability: LocalModelResourceApplicability = .measured,
     minimumRAMBytes: Int64 = 4,
     workingRAMBytes: Int64 = 8,
     storageBytes: Int64 = 8,
@@ -74,6 +75,7 @@ private enum LocalCatalogFixtures {
         languages: languages
       ),
       resources: .init(
+        applicability: resourceApplicability,
         minimumRAMBytes: minimumRAMBytes,
         workingRAMBytes: workingRAMBytes,
         storageBytes: storageBytes
@@ -110,7 +112,11 @@ private enum LocalCatalogFixtures {
   }
 
   static func routing(
-    matching source: RawLocalModelProfile = profile()
+    matching source: RawLocalModelProfile = profile(),
+    resourceApplicability: LocalModelResourceApplicability = .notApplicable,
+    minimumRAMBytes: Int64 = 0,
+    workingRAMBytes: Int64 = 0,
+    storageBytes: Int64 = 0
   ) -> RawLocalModelProfile {
     profile(
       family: "rules",
@@ -123,9 +129,10 @@ private enum LocalCatalogFixtures {
       minimumOSMajor: source.compatibility.minimumOSMajor,
       maximumOSMajor: source.compatibility.maximumOSMajor,
       languages: source.compatibility.languages,
-      minimumRAMBytes: 1,
-      workingRAMBytes: 1,
-      storageBytes: 0,
+      resourceApplicability: resourceApplicability,
+      minimumRAMBytes: minimumRAMBytes,
+      workingRAMBytes: workingRAMBytes,
+      storageBytes: storageBytes,
       license: "fleckOwned",
       evidence: "deterministic",
       admission: "notAdmitted",
@@ -202,6 +209,7 @@ private enum LocalCatalogFixtures {
       minimumOSMajor: minimumOSMajor ?? source.compatibility.minimumOSMajor,
       maximumOSMajor: maximumOSMajor ?? source.compatibility.maximumOSMajor,
       languages: languages ?? source.compatibility.languages,
+      resourceApplicability: source.resources.applicability,
       minimumRAMBytes: source.resources.minimumRAMBytes,
       workingRAMBytes: source.resources.workingRAMBytes,
       storageBytes: source.resources.storageBytes,
@@ -245,6 +253,79 @@ private enum LocalCatalogFixtures {
 }
 
 @Suite struct LocalModelCatalogTests {
+  @Test func resourceEnvelopeCarriesExplicitApplicabilityIdentity() {
+    let resources = LocalModelResourceEnvelope(
+      applicability: .measured,
+      minimumRAMBytes: 1,
+      workingRAMBytes: 1,
+      storageBytes: 1
+    )
+    #expect(resources.applicability == .measured)
+  }
+
+  @Test func catalogBindsResourceApplicabilityToDistribution() {
+    let legacyMeasuredRouting = LocalCatalogFixtures.routing(
+      resourceApplicability: .measured,
+      minimumRAMBytes: 1,
+      workingRAMBytes: 1,
+      storageBytes: 1
+    )
+    let invalidProfiles: [[RawLocalModelProfile]] = [
+      [
+        LocalCatalogFixtures.profile(resourceApplicability: .notApplicable),
+        LocalCatalogFixtures.cleanup(),
+        legacyMeasuredRouting,
+      ],
+      [
+        LocalCatalogFixtures.profile(
+          family: "appleSpeech",
+          profileID: "apple.system.dictation",
+          distribution: "system",
+          artifact: nil,
+          minimumRAMBytes: 1,
+          workingRAMBytes: 1,
+          storageBytes: 1,
+          license: "system",
+          evidence: "platform"
+        ),
+        LocalCatalogFixtures.cleanup(),
+        legacyMeasuredRouting,
+      ],
+      [
+        LocalCatalogFixtures.profile(),
+        LocalCatalogFixtures.cleanup(),
+        legacyMeasuredRouting,
+      ],
+    ]
+    for profiles in invalidProfiles {
+      #expect(throws: LocalModelCatalogError.invalidResourceEnvelope) {
+        _ = try LocalModelCatalog.validate(
+          LocalCatalogFixtures.configuration(profiles: profiles),
+          for: LocalCatalogFixtures.environment()
+        )
+      }
+    }
+  }
+
+  @Test func catalogRejectsInvalidMeasuredResourceValues() {
+    let invalidManagedProfiles = [
+      LocalCatalogFixtures.profile(minimumRAMBytes: 0),
+      LocalCatalogFixtures.profile(minimumRAMBytes: 4, workingRAMBytes: 3),
+      LocalCatalogFixtures.profile(storageBytes: 0),
+    ]
+    for profile in invalidManagedProfiles {
+      #expect(throws: LocalModelCatalogError.invalidByteCount) {
+        _ = try LocalModelCatalog.validate(
+          LocalCatalogFixtures.configuration(profiles: [
+            profile,
+            LocalCatalogFixtures.cleanup(),
+          ]),
+          for: LocalCatalogFixtures.environment()
+        )
+      }
+    }
+  }
+
   @Test func catalogRejectsMutableRevisionAndArtifactURL() {
     let mutable = LocalCatalogFixtures.profile(
       artifact: LocalCatalogFixtures.artifact(revision: "main")
@@ -568,6 +649,10 @@ private enum LocalCatalogFixtures {
       role: "cleanup",
       distribution: "deterministic",
       artifact: nil,
+      resourceApplicability: .notApplicable,
+      minimumRAMBytes: 0,
+      workingRAMBytes: 0,
+      storageBytes: 0,
       license: "fleckOwned",
       evidence: "deterministic",
       admission: "notAdmitted"
@@ -594,6 +679,10 @@ private enum LocalCatalogFixtures {
             role: "cleanup",
             distribution: "deterministic",
             artifact: nil,
+            resourceApplicability: .notApplicable,
+            minimumRAMBytes: 0,
+            workingRAMBytes: 0,
+            storageBytes: 0,
             license: "fleckOwned",
             evidence: "deterministic",
             admission: "notAdmitted",
@@ -800,6 +889,10 @@ private enum LocalCatalogFixtures {
       role: "cleanup",
       distribution: "deterministic",
       artifact: nil,
+      resourceApplicability: .notApplicable,
+      minimumRAMBytes: 0,
+      workingRAMBytes: 0,
+      storageBytes: 0,
       license: "fleckOwned",
       evidence: "deterministic",
       admission: "notAdmitted",
@@ -913,7 +1006,12 @@ private enum LocalCatalogFixtures {
       configurationABI: "writing-v1",
       minimumOSMajor: 14,
       maximumOSMajor: 16,
-      resources: .init(minimumRAMBytes: 4, workingRAMBytes: 8, storageBytes: 4),
+      resources: .init(
+        applicability: .measured,
+        minimumRAMBytes: 4,
+        workingRAMBytes: 8,
+        storageBytes: 4
+      ),
       license: .ccBy40Reviewed,
       evidence: .identityVerified,
       admission: .notAdmitted,
@@ -929,7 +1027,12 @@ private enum LocalCatalogFixtures {
       configurationABI: "writing-v1",
       minimumOSMajor: 14,
       maximumOSMajor: 16,
-      resources: .init(minimumRAMBytes: 4, workingRAMBytes: 8, storageBytes: 6),
+      resources: .init(
+        applicability: .measured,
+        minimumRAMBytes: 4,
+        workingRAMBytes: 8,
+        storageBytes: 6
+      ),
       license: .gemmaTermsReviewed,
       evidence: .identityVerified,
       admission: .notAdmitted,
@@ -1008,6 +1111,12 @@ private enum LocalCatalogFixtures {
     #expect(safe.profiles.first { $0.role == .dictation }?.distribution == .system)
     #expect(safe.profiles.filter { $0.role != .dictation }
       .allSatisfy { $0.distribution == .deterministic })
+    #expect(safe.profiles.allSatisfy {
+      $0.resources.applicability == .notApplicable
+        && $0.resources.minimumRAMBytes == 0
+        && $0.resources.workingRAMBytes == 0
+        && $0.resources.storageBytes == 0
+    })
   }
 
   @Test func signedSnapshotRejectsUnpromotedOrExtraManagedProfiles() throws {
@@ -1030,6 +1139,10 @@ private enum LocalCatalogFixtures {
       role: "cleanup",
       distribution: "deterministic",
       artifact: nil,
+      resourceApplicability: .notApplicable,
+      minimumRAMBytes: 0,
+      workingRAMBytes: 0,
+      storageBytes: 0,
       license: "fleckOwned",
       evidence: "deterministic",
       admission: "notAdmitted",
@@ -1041,6 +1154,10 @@ private enum LocalCatalogFixtures {
       role: "routing",
       distribution: "deterministic",
       artifact: nil,
+      resourceApplicability: .notApplicable,
+      minimumRAMBytes: 0,
+      workingRAMBytes: 0,
+      storageBytes: 0,
       license: "fleckOwned",
       evidence: "deterministic",
       admission: "notAdmitted",

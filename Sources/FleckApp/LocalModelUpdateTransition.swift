@@ -44,6 +44,7 @@ struct RawLocalModelRollbackPolicy: Equatable, Sendable {
 struct RawLocalModelUpdateTransition: Equatable, Sendable {
   let schemaVersion: Int
   let predecessor: LocalModelTransitionReleaseIdentity
+  let predecessorUpdateRecordDigest: String
   let successor: LocalModelTransitionReleaseIdentity
   let successorPromotionRecordDigest: String
   let predecessorCorpusDependencies: [LocalModelPredecessorCorpusDependency]
@@ -99,6 +100,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
 
   let identityDigest: String
   let predecessor: LocalModelTransitionReleaseIdentity
+  let predecessorUpdateRecordDigest: String
   let successor: LocalModelTransitionReleaseIdentity
   let successorPromotionRecordDigest: String
   let predecessorCorpusDependencies: [LocalModelPredecessorCorpusDependency]
@@ -108,6 +110,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
   private init(
     identityDigest: String,
     predecessor: LocalModelTransitionReleaseIdentity,
+    predecessorUpdateRecordDigest: String,
     successor: LocalModelTransitionReleaseIdentity,
     successorPromotionRecordDigest: String,
     predecessorCorpusDependencies: [LocalModelPredecessorCorpusDependency],
@@ -116,6 +119,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
   ) {
     self.identityDigest = identityDigest
     self.predecessor = predecessor
+    self.predecessorUpdateRecordDigest = predecessorUpdateRecordDigest
     self.successor = successor
     self.successorPromotionRecordDigest = successorPromotionRecordDigest
     self.predecessorCorpusDependencies = predecessorCorpusDependencies
@@ -132,6 +136,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
     guard raw.schemaVersion == schemaVersion else {
       throw LocalModelUpdateTransitionError.unsupportedSchema
     }
+    try validateDigest(raw.predecessorUpdateRecordDigest)
     try validateDigest(raw.successorPromotionRecordDigest)
     try validateDigest(currentTrustPolicyCheckpointDigest)
 
@@ -146,7 +151,8 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
       throw LocalModelUpdateTransitionError.predecessorNotReleaseAdmitted
     }
     guard successor == expectedSuccessor,
-          successor.admission == .twoDeviceAccepted else {
+          successor.admission == .twoDeviceAccepted,
+          raw.successorPromotionRecordDigest == successor.admissionRecordDigest else {
       throw LocalModelUpdateTransitionError.successorMismatch
     }
     guard predecessor.trustPolicySequence <= currentTrustPolicySequence,
@@ -187,6 +193,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
     )
     let identityDigest = try canonicalDigest(
       predecessor: predecessor,
+      predecessorUpdateRecordDigest: raw.predecessorUpdateRecordDigest,
       successor: successor,
       successorPromotionRecordDigest: raw.successorPromotionRecordDigest,
       dependencies: dependencies,
@@ -196,6 +203,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
     return .init(
       identityDigest: identityDigest,
       predecessor: predecessor,
+      predecessorUpdateRecordDigest: raw.predecessorUpdateRecordDigest,
       successor: successor,
       successorPromotionRecordDigest: raw.successorPromotionRecordDigest,
       predecessorCorpusDependencies: dependencies,
@@ -376,6 +384,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
 
   private static func canonicalDigest(
     predecessor: LocalModelTransitionReleaseIdentity,
+    predecessorUpdateRecordDigest: String,
     successor: LocalModelTransitionReleaseIdentity,
     successorPromotionRecordDigest: String,
     dependencies: [LocalModelPredecessorCorpusDependency],
@@ -385,6 +394,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
     var encoder = LocalModelTransitionCanonicalEncoder()
     try encoder.append("fleck.local-model-update-transition.v1")
     try encoder.appendRelease(predecessor)
+    try encoder.append(predecessorUpdateRecordDigest)
     try encoder.appendRelease(successor)
     try encoder.append(successorPromotionRecordDigest)
     try encoder.appendCount(dependencies.count)

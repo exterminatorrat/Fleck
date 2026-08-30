@@ -237,7 +237,12 @@ struct LocalModelCatalogSnapshot: Equatable, Sendable {
       role: role,
       distribution: .system,
       artifact: nil,
-      resources: .init(minimumRAMBytes: 1, workingRAMBytes: 1, storageBytes: 0),
+      resources: .init(
+        applicability: .notApplicable,
+        minimumRAMBytes: 0,
+        workingRAMBytes: 0,
+        storageBytes: 0
+      ),
       license: .system,
       evidence: .platform,
       capability: capability,
@@ -256,7 +261,12 @@ struct LocalModelCatalogSnapshot: Equatable, Sendable {
       role: role,
       distribution: .deterministic,
       artifact: nil,
-      resources: .init(minimumRAMBytes: 1, workingRAMBytes: 1, storageBytes: 0),
+      resources: .init(
+        applicability: .notApplicable,
+        minimumRAMBytes: 0,
+        workingRAMBytes: 0,
+        storageBytes: 0
+      ),
       license: .fleckOwned,
       evidence: .deterministic,
       capability: capability,

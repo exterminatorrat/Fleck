@@ -106,7 +106,13 @@ struct RawLocalModelCompatibility: Equatable, Sendable {
   let languages: [String]
 }
 
+enum LocalModelResourceApplicability: String, Equatable, Sendable {
+  case measured
+  case notApplicable
+}
+
 struct LocalModelResourceEnvelope: Equatable, Sendable {
+  let applicability: LocalModelResourceApplicability
   let minimumRAMBytes: Int64
   let workingRAMBytes: Int64
   let storageBytes: Int64
@@ -206,6 +212,7 @@ enum LocalModelCatalogError: Error, Equatable, Sendable {
   case artifactSetMismatch
   case invalidArtifactIdentity
   case invalidByteCount
+  case invalidResourceEnvelope
   case byteCountOverflow
   case artifactByteCountMismatch
   case managedArtifactRequired
@@ -353,12 +360,6 @@ enum LocalModelCatalog {
             == raw.compatibility.configurationABI.trimmingCharacters(in: .whitespacesAndNewlines) else {
       throw LocalModelCatalogError.invalidValue(field: "profileIdentity", value: raw.profileID)
     }
-    guard raw.resources.minimumRAMBytes > 0,
-          raw.resources.workingRAMBytes >= raw.resources.minimumRAMBytes,
-          raw.resources.storageBytes >= 0 else {
-      throw LocalModelCatalogError.invalidByteCount
-    }
-
     let artifact: LocalModelArtifactIdentity?
     switch distribution {
     case .fleckManaged:
@@ -387,6 +388,25 @@ enum LocalModelCatalog {
         throw LocalModelCatalogError.unmanagedThirdPartyLicense
       }
       artifact = nil
+    }
+
+    switch distribution {
+    case .fleckManaged:
+      guard raw.resources.applicability == .measured else {
+        throw LocalModelCatalogError.invalidResourceEnvelope
+      }
+      guard raw.resources.minimumRAMBytes > 0,
+            raw.resources.workingRAMBytes >= raw.resources.minimumRAMBytes,
+            raw.resources.storageBytes > 0 else {
+        throw LocalModelCatalogError.invalidByteCount
+      }
+    case .system, .deterministic:
+      guard raw.resources.applicability == .notApplicable,
+            raw.resources.minimumRAMBytes == 0,
+            raw.resources.workingRAMBytes == 0,
+            raw.resources.storageBytes == 0 else {
+        throw LocalModelCatalogError.invalidResourceEnvelope
+      }
     }
 
     if claimScope == .ownerPrivate && buildCapability == .ordinarySafe {
@@ -664,6 +684,7 @@ enum LocalModelCatalog {
       try encoder.append(String(profile.compatibility.minimumOSMajor))
       try encoder.append(String(profile.compatibility.maximumOSMajor))
       try encoder.append(profile.compatibility.languages.sorted())
+      try encoder.append(profile.resources.applicability.rawValue)
       try encoder.append(String(profile.resources.minimumRAMBytes))
       try encoder.append(String(profile.resources.workingRAMBytes))
       try encoder.append(String(profile.resources.storageBytes))
