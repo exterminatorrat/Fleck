@@ -699,7 +699,7 @@
       )
       titleField.frame = titleFrame
 
-      let bodyY = titleFrame.maxY + 10
+      let bodyY = titleFrame.maxY
       textView.frame = NSRect(x: 0, y: bodyY, width: width, height: 1)
       textView.textContainer?.containerSize = NSSize(
         width: width,
@@ -857,7 +857,7 @@
       textView.isAutomaticSpellingCorrectionEnabled = true
       textView.isContinuousSpellCheckingEnabled = true
       textView.drawsBackground = false
-      textView.textContainerInset = NSSize(width: 16, height: 10)
+      textView.textContainerInset = NSSize(width: 16, height: 8)
       textView.textContainer?.lineFragmentPadding = 0
       textView.isVerticallyResizable = true
       textView.isHorizontallyResizable = false

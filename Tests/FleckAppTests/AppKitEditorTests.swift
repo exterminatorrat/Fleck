@@ -2853,6 +2853,122 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   )
 }
 
+@Test @MainActor func hostedNotesPanelTitleBodyGeometryRemainsStableAcrossFocus() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(
+    title: "Geometry title",
+    body: "First body line\nSecond body line",
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer { window.orderOut(nil) }
+  await settleHostedView(host)
+
+  let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+  let bodyTextView = try #require(hostedPanelEditor(in: host))
+  let documentView = try #require(bodyTextView.enclosingScrollView?.documentView)
+  let layoutManager = try #require(bodyTextView.layoutManager)
+  let textContainer = try #require(bodyTextView.textContainer)
+
+  func measure() throws -> HostedTitleBodyGeometry {
+    layoutManager.ensureLayout(for: textContainer)
+    var firstLineGlyphRange = NSRange(location: 0, length: 0)
+    _ = layoutManager.lineFragmentRect(
+      forGlyphAt: layoutManager.glyphIndexForCharacter(at: 0),
+      effectiveRange: &firstLineGlyphRange
+    )
+    let firstBodyLineRectInTextView = layoutManager.boundingRect(
+      forGlyphRange: firstLineGlyphRange,
+      in: textContainer
+    ).offsetBy(
+      dx: bodyTextView.textContainerOrigin.x,
+      dy: bodyTextView.textContainerOrigin.y
+    )
+    let firstBodyLineRect = documentView.convert(
+      firstBodyLineRectInTextView,
+      from: bodyTextView
+    )
+    let titleFrame = documentView.convert(titleField.bounds, from: titleField)
+    let titleCell = try #require(titleField.cell)
+    let cellTitleRect = titleCell.titleRect(forBounds: titleField.bounds)
+    let titleRenderRect: CGRect
+    if let fieldEditor = titleField.currentEditor() as? NSTextView,
+      let fieldEditorLayoutManager = fieldEditor.layoutManager,
+      let fieldEditorTextContainer = fieldEditor.textContainer,
+      fieldEditor.textStorage?.length ?? 0 > 0
+    {
+      fieldEditorLayoutManager.ensureLayout(for: fieldEditorTextContainer)
+      var titleLineGlyphRange = NSRange(location: 0, length: 0)
+      _ = fieldEditorLayoutManager.lineFragmentRect(
+        forGlyphAt: fieldEditorLayoutManager.glyphIndexForCharacter(at: 0),
+        effectiveRange: &titleLineGlyphRange
+      )
+      let titleGlyphRectInFieldEditor = fieldEditorLayoutManager.boundingRect(
+        forGlyphRange: titleLineGlyphRange,
+        in: fieldEditorTextContainer
+      ).offsetBy(
+        dx: fieldEditor.textContainerOrigin.x,
+        dy: fieldEditor.textContainerOrigin.y
+      )
+      titleRenderRect = documentView.convert(
+        titleGlyphRectInFieldEditor,
+        from: fieldEditor
+      )
+    } else {
+      titleRenderRect = documentView.convert(cellTitleRect, from: titleField)
+    }
+    let geometry = HostedTitleBodyGeometry(
+      titleFrame: titleFrame,
+      titleRenderRect: titleRenderRect,
+      firstBodyLineRect: firstBodyLineRect
+    )
+    return geometry
+  }
+
+  let initial = try measure()
+  #expect(window.makeFirstResponder(titleField))
+  await settleHostedView(host)
+  let titleFocused = try measure()
+  #expect(window.makeFirstResponder(bodyTextView))
+  await settleHostedView(host)
+  let bodyFocused = try measure()
+  #expect(window.makeFirstResponder(titleField))
+  await settleHostedView(host)
+  let titleFocusedAgain = try measure()
+
+  for geometry in [initial, titleFocused, bodyFocused, titleFocusedAgain] {
+    #expect(
+      geometry.renderedGap <= 8,
+      "rendered title/body gap \(geometry.renderedGap) pt exceeds 8 pt"
+    )
+  }
+  for geometry in [titleFocused, bodyFocused, titleFocusedAgain] {
+    #expect(
+      abs(geometry.renderedTitleMinY - initial.renderedTitleMinY) < 0.01,
+      "rendered title minY shifted from \(initial.renderedTitleMinY) to \(geometry.renderedTitleMinY)"
+    )
+    #expect(
+      abs(geometry.titleFrame.minY - initial.titleFrame.minY) < 0.01,
+      "title frame minY shifted from \(initial.titleFrame.minY) to \(geometry.titleFrame.minY)"
+    )
+    #expect(
+      abs(geometry.titleFrame.height - initial.titleFrame.height) < 0.01,
+      "title frame height shifted from \(initial.titleFrame.height) to \(geometry.titleFrame.height)"
+    )
+    #expect(
+      abs(geometry.renderedGap - initial.renderedGap) < 0.01,
+      "rendered gap shifted from \(initial.renderedGap) to \(geometry.renderedGap)"
+    )
+  }
+}
+
 @Test @MainActor func hostedNotesPanelTitleEditingUsesRealFieldEditor() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3445,6 +3561,20 @@ private func settleHostedView(_ view: NSView) async {
 private func forceHostedViewUpdate(_ view: NSView) {
   view.layoutSubtreeIfNeeded()
   view.displayIfNeeded()
+}
+
+private struct HostedTitleBodyGeometry {
+  let titleFrame: CGRect
+  let titleRenderRect: CGRect
+  let firstBodyLineRect: CGRect
+
+  var renderedGap: CGFloat {
+    firstBodyLineRect.minY - titleFrame.maxY
+  }
+
+  var renderedTitleMinY: CGFloat {
+    titleRenderRect.minY
+  }
 }
 
 private func notesPanelSource() throws -> String {
