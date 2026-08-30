@@ -982,60 +982,12 @@ private enum LocalCatalogFixtures {
     #expect(!reachableIdentities.contains { $0.localizedCaseInsensitiveContains("gemma") })
   }
 
-  @Test func developmentQualityCatalogIncludesExactCandidatesAndConfigurations() throws {
-    #if CLEAN_DICTATION_ENHANCED_CANDIDATE_REQUESTED
-    let snapshot = try LocalModelCatalogSnapshot.make(
-      for: LocalCatalogFixtures.environment(osMajor: 26)
-    )
-    let managed = snapshot.configurations.flatMap(\.profiles)
-      .filter { $0.distribution == .fleckManaged }
-    let managedIDs = Set(managed.map(\.profileID))
-
-    #expect(snapshot.configurations.count == 8)
-    #expect(managedIDs == [
-      "parakeet-v2-en-coreml-batch",
-      "gemma3-1b-it-mlx-qat4-cleanup",
-      "gemma3-1b-routing-mlx-qat4",
-    ])
-    #expect(managed.allSatisfy {
-      $0.evidence == .identityVerified && $0.admission == .notAdmitted
-    })
-    let parakeet = try #require(managed.first {
-      $0.profileID == "parakeet-v2-en-coreml-batch"
-    }?.artifact)
-    #expect(parakeet.modelID == "FluidInference/parakeet-tdt-0.6b-v2-coreml")
-    #expect(parakeet.revision == "ee09c569f73759e6d44c9bd16766f477b2b36d39")
-    #expect(parakeet.runtimeABI
-      == "FluidAudio/v0.15.5@19600a485baa4998812e4654b70d2bab8f2c9949")
-    #expect(parakeet.files.count == 21)
-    #expect(parakeet.downloadBytes == 464_413_247)
-    let gemmaArtifacts = [
-      snapshot.profile(id: "gemma3-1b-it-mlx-qat4-cleanup")?.artifact,
-      snapshot.profile(id: "gemma3-1b-routing-mlx-qat4")?.artifact,
-    ].compactMap { $0 }
-    #expect(gemmaArtifacts.count == 2)
-    #expect(gemmaArtifacts.allSatisfy {
-      $0.revision == "15fed4eafb456c6fcb2a1165f19ac609670ed14b"
-        && $0.files.count == 10
-        && $0.downloadBytes == 771_863_021
-    })
-    #expect(Set(snapshot.configurations.map(\.key)) == [
-      "built-in-safe.en.v1",
-      "apple-foundation-cleanup.en.macos26.v1",
-      "apple-foundation-routing.en.macos26.v1",
-      "apple-foundation-both.en.macos26.v1",
-      "parakeet-v2-deterministic.en.v1",
-      "parakeet-v2-gemma-cleanup.en.v1",
-      "parakeet-v2-gemma-routing.en.v1",
-      "parakeet-v2-gemma-both.en.v1",
-    ])
-    #else
-    #expect(throws: LocalModelCatalogSnapshotError.buildCapabilityUnavailable) {
+  @Test func developmentQualityCatalogFailsClosedWithoutExactResourceRecords() {
+    #expect(throws: LocalModelCatalogSnapshotError.missingValidatedResourceRecords) {
       _ = try LocalModelCatalogSnapshot.make(
         for: LocalCatalogFixtures.environment(osMajor: 26)
       )
     }
-    #endif
   }
 
   @Test func safeFallbackConfigurationsRemainTruthfulAndClosed() throws {
@@ -1046,18 +998,11 @@ private enum LocalCatalogFixtures {
       )
     )
     #expect(ordinary.configurations.map(\.key) == ["built-in-safe.en.v1"])
-    #if CLEAN_DICTATION_ENHANCED_CANDIDATE_REQUESTED
-    let development = try LocalModelCatalogSnapshot.make(
-      for: LocalCatalogFixtures.environment(osMajor: 15)
-    )
-    #expect(development.configuration(key: "built-in-safe.en.v1") != nil)
-    #else
-    #expect(throws: LocalModelCatalogSnapshotError.buildCapabilityUnavailable) {
+    #expect(throws: LocalModelCatalogSnapshotError.missingValidatedResourceRecords) {
       _ = try LocalModelCatalogSnapshot.make(
         for: LocalCatalogFixtures.environment(osMajor: 15)
       )
     }
-    #endif
     let safe = try #require(ordinary.configurations.first)
     #expect(safe.profiles.map(\.role) == [.cleanup, .dictation, .routing])
     #expect(safe.profiles.first { $0.role == .dictation }?.distribution == .system)
