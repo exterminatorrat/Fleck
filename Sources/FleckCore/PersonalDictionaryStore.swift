@@ -12,6 +12,8 @@ public enum PersonalDictionaryStoreError: Error, Equatable, Sendable, CustomStri
   case missingSuggestion
   case revisionConflict
   case revisionOverflow
+  case invalidTransfer
+  case conflictIntroduced
   case publicationFailed
 
   public var description: String {
@@ -26,6 +28,8 @@ public enum PersonalDictionaryStoreError: Error, Equatable, Sendable, CustomStri
     case .missingSuggestion: "missingSuggestion"
     case .revisionConflict: "revisionConflict"
     case .revisionOverflow: "revisionOverflow"
+    case .invalidTransfer: "invalidTransfer"
+    case .conflictIntroduced: "conflictIntroduced"
     case .publicationFailed: "publicationFailed"
     }
   }
@@ -34,6 +38,30 @@ public enum PersonalDictionaryStoreError: Error, Equatable, Sendable, CustomStri
 public struct PersonalDictionaryPublishedSnapshot: Equatable, Sendable {
   public let snapshot: PersonalDictionarySnapshotV2
   public let compiled: CompiledPersonalDictionary
+}
+
+public enum PersonalDictionaryImportChange: Equatable, Sendable {
+  case addEntry(PersonalDictionaryEntry)
+  case updateEntry(current: PersonalDictionaryEntry, imported: PersonalDictionaryEntry)
+  case omitEntry(PersonalDictionaryEntry)
+  case addSuggestion(PersonalDictionarySuggestion)
+  case updateSuggestion(
+    current: PersonalDictionarySuggestion,
+    imported: PersonalDictionarySuggestion
+  )
+  case omitSuggestion(PersonalDictionarySuggestion)
+}
+
+public struct PersonalDictionaryImportPreview: Equatable, Sendable {
+  public let sourceRevision: UInt64
+  public let expectedLocalRevision: UInt64
+  public let checkedTargetRevision: UInt64
+  public let exportedAt: Date
+  public let effectiveContentDigest: String
+  public let changes: [PersonalDictionaryImportChange]
+  public let conflictDiagnostics: [CompiledPersonalDictionary.Diagnostic]
+
+  let replacement: PersonalDictionarySnapshot
 }
 
 public enum PersonalDictionaryMutation: Equatable, Sendable {
@@ -101,7 +129,11 @@ public actor PersonalDictionaryStore {
         return try cachedOrCompiled(PersonalDictionarySnapshotV2())
       }
       if authority.isLegacy {
-        return try stageAndPublish(authority.snapshot, priorBytes: authority.bytes)
+        return try stageAndPublish(
+          authority.snapshot,
+          priorBytes: authority.bytes,
+          allowedConflictIdentities: try conflictIdentities(in: authority.snapshot)
+        )
       }
       return try cachedOrCompiled(authority.snapshot)
     }
@@ -112,6 +144,77 @@ public actor PersonalDictionaryStore {
     _ mutation: PersonalDictionaryMutation
   ) throws -> PersonalDictionaryPublishedSnapshot {
     try transact(expectedRevision: expectedRevision, mutation)
+  }
+
+  public func exportCanonicalTransfer(exportedAt: Date) throws -> Data {
+    try withMutationLock {
+      let snapshot = try readAuthority()?.snapshot ?? PersonalDictionarySnapshotV2()
+      let published = try compile(snapshot)
+      do {
+        return try PersonalDictionaryCodec.encodeCanonicalTransfer(
+          snapshot: published.snapshot,
+          compiled: published.compiled,
+          exportedAt: exportedAt
+        )
+      } catch {
+        throw PersonalDictionaryStoreError.invalidTransfer
+      }
+    }
+  }
+
+  public func previewCanonicalImport(
+    _ data: Data
+  ) throws -> PersonalDictionaryImportPreview {
+    let envelope: PersonalDictionaryTransferEnvelope
+    do {
+      envelope = try PersonalDictionaryCodec.decodeCanonicalTransfer(data)
+    } catch {
+      throw PersonalDictionaryStoreError.invalidTransfer
+    }
+    let authority = try readAuthority()
+    let current = authority?.snapshot ?? PersonalDictionarySnapshotV2()
+    let expectedLocalRevision: UInt64 = authority?.isLegacy == true ? 0 : current.revision
+    let (checkedTargetRevision, overflow) = expectedLocalRevision.addingReportingOverflow(1)
+    guard !overflow else { throw PersonalDictionaryStoreError.revisionOverflow }
+    let candidate = PersonalDictionarySnapshotV2(
+      revision: checkedTargetRevision,
+      entries: envelope.snapshot.entries,
+      suggestions: envelope.snapshot.suggestions
+    )
+    let compiled = try compile(candidate).compiled
+    guard compiled.contentDigest == envelope.contentDigest else {
+      throw PersonalDictionaryStoreError.invalidTransfer
+    }
+    return PersonalDictionaryImportPreview(
+      sourceRevision: envelope.snapshot.revision,
+      expectedLocalRevision: expectedLocalRevision,
+      checkedTargetRevision: checkedTargetRevision,
+      exportedAt: envelope.exportedAt,
+      effectiveContentDigest: envelope.contentDigest,
+      changes: importChanges(current: current, imported: envelope.snapshot),
+      conflictDiagnostics: compiled.diagnostics.filter { diagnostic in
+        switch diagnostic.code {
+        case .duplicatePreferredOwner, .aliasPreferredCollision, .ambiguousAlias:
+          true
+        default:
+          false
+        }
+      },
+      replacement: PersonalDictionarySnapshot(
+        entries: envelope.snapshot.entries,
+        suggestions: envelope.snapshot.suggestions
+      )
+    )
+  }
+
+  public func confirmCanonicalImport(
+    _ preview: PersonalDictionaryImportPreview
+  ) throws -> PersonalDictionaryPublishedSnapshot {
+    try Task.checkCancellation()
+    return try transact(
+      expectedRevision: preview.expectedLocalRevision,
+      .replace(preview.replacement)
+    )
   }
 
   public func upsert(_ entry: PersonalDictionaryEntry) throws {
@@ -186,7 +289,11 @@ public actor PersonalDictionaryStore {
         revision = next
       }
       let candidate = try applying(mutation, to: current, revision: revision)
-      return try stageAndPublish(candidate, priorBytes: authority?.bytes)
+      return try stageAndPublish(
+        candidate,
+        priorBytes: authority?.bytes,
+        allowedConflictIdentities: try conflictIdentities(in: current)
+      )
     }
   }
 
@@ -266,7 +373,8 @@ public actor PersonalDictionaryStore {
 
   private func stageAndPublish(
     _ candidate: PersonalDictionarySnapshotV2,
-    priorBytes: Data?
+    priorBytes: Data?,
+    allowedConflictIdentities: Set<CompiledPersonalDictionary.ConflictIdentity>
   ) throws -> PersonalDictionaryPublishedSnapshot {
     let bytes: Data
     do {
@@ -294,6 +402,9 @@ public actor PersonalDictionaryStore {
       }
       try publicationHook(.afterReadback, stageURL)
       let compiled = try compiler(decoded)
+      guard Set(compiled.conflictIdentities).subtracting(allowedConflictIdentities).isEmpty else {
+        throw PersonalDictionaryStoreError.conflictIntroduced
+      }
       let published = PersonalDictionaryPublishedSnapshot(snapshot: decoded, compiled: compiled)
       if let priorBytes {
         guard priorBytes.count <= Self.maximumFileBytes else {
@@ -327,6 +438,64 @@ public actor PersonalDictionaryStore {
     } catch {
       throw PersonalDictionaryStoreError.publicationFailed
     }
+  }
+
+  private func conflictIdentities(
+    in snapshot: PersonalDictionarySnapshotV2
+  ) throws -> Set<CompiledPersonalDictionary.ConflictIdentity> {
+    do {
+      return Set(try CompiledPersonalDictionary.compile(snapshot).conflictIdentities)
+    } catch {
+      throw PersonalDictionaryStoreError.publicationFailed
+    }
+  }
+
+  private func importChanges(
+    current: PersonalDictionarySnapshotV2,
+    imported: PersonalDictionarySnapshotV2
+  ) -> [PersonalDictionaryImportChange] {
+    let currentEntries = Dictionary(uniqueKeysWithValues: current.entries.map { ($0.id, $0) })
+    let importedEntries = Dictionary(uniqueKeysWithValues: imported.entries.map { ($0.id, $0) })
+    let entryIDs = Set(currentEntries.keys).union(importedEntries.keys).sorted(by: uuidLess)
+    var changes: [PersonalDictionaryImportChange] = entryIDs.compactMap { id in
+      switch (currentEntries[id], importedEntries[id]) {
+      case (nil, let imported?):
+        .addEntry(imported)
+      case (let current?, nil):
+        .omitEntry(current)
+      case (let current?, let imported?) where current != imported:
+        .updateEntry(current: current, imported: imported)
+      default:
+        nil
+      }
+    }
+
+    let currentSuggestions = Dictionary(
+      uniqueKeysWithValues: current.suggestions.map { ($0.id, $0) }
+    )
+    let importedSuggestions = Dictionary(
+      uniqueKeysWithValues: imported.suggestions.map { ($0.id, $0) }
+    )
+    let suggestionIDs = Set(currentSuggestions.keys)
+      .union(importedSuggestions.keys)
+      .sorted(by: uuidLess)
+    changes += suggestionIDs.compactMap { id in
+      switch (currentSuggestions[id], importedSuggestions[id]) {
+      case (nil, let imported?):
+        .addSuggestion(imported)
+      case (let current?, nil):
+        .omitSuggestion(current)
+      case (let current?, let imported?) where current != imported:
+        .updateSuggestion(current: current, imported: imported)
+      default:
+        nil
+      }
+    }
+    return changes
+  }
+
+  private func uuidLess(_ lhs: UUID, _ rhs: UUID) -> Bool {
+    lhs.uuidString.lowercased() < rhs.uuidString.lowercased()
   }
 
   private func cachedOrCompiled(

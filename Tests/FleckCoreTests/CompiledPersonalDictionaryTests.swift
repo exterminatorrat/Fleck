@@ -309,6 +309,112 @@ import Testing
     #expect(!reflected.contains("secret collision"))
     #expect(!reflected.contains(privateUUID.uuidString))
   }
+
+  @Test func compilerConflictIdentitiesAreStableAcrossOrderRevisionCaseAndNFC() throws {
+    let first = try CompiledPersonalDictionary.compile(
+      PersonalDictionarySnapshotV2(
+        revision: 1,
+        entries: [
+          compiledEntry(1, preferredForm: "Cafe\u{301}"),
+          compiledEntry(2, preferredForm: "CAFÉ"),
+        ]
+      )
+    )
+    let second = try CompiledPersonalDictionary.compile(
+      PersonalDictionarySnapshotV2(
+        revision: 99,
+        entries: [
+          compiledEntry(2, preferredForm: "café"),
+          compiledEntry(1, preferredForm: "CAFÉ"),
+        ]
+      )
+    )
+
+    #expect(first.conflictIdentities == second.conflictIdentities)
+    #expect(first.conflictIdentities.count == 1)
+    #expect(first.conflictIdentities[0].code == .duplicatePreferredOwner)
+    #expect(first.conflictIdentities[0].fingerprint.count == 64)
+  }
+
+  @Test func compilerConflictIdentityBindsClaimParticipantsAndRoles() throws {
+    let twoClaims = try CompiledPersonalDictionary.compile(
+      PersonalDictionarySnapshotV2(
+        entries: [
+          compiledEntry(1, preferredForm: "Left", aliases: ["shared one", "shared two"]),
+          compiledEntry(2, preferredForm: "Right", aliases: ["SHARED ONE", "SHARED TWO"]),
+        ]
+      )
+    )
+    #expect(twoClaims.conflictIdentities.count == 2)
+    #expect(Set(twoClaims.conflictIdentities.map(\.fingerprint)).count == 2)
+
+    let changedParticipant = try CompiledPersonalDictionary.compile(
+      PersonalDictionarySnapshotV2(
+        entries: [
+          compiledEntry(1, preferredForm: "Left", aliases: ["shared one"]),
+          compiledEntry(3, preferredForm: "Right", aliases: ["SHARED ONE"]),
+        ]
+      )
+    )
+    #expect(
+      changedParticipant.conflictIdentities[0].fingerprint
+        != twoClaims.conflictIdentities.first { $0.code == .ambiguousAlias }?.fingerprint
+    )
+
+    let preferredRoles = try CompiledPersonalDictionary.compile(
+      PersonalDictionarySnapshotV2(
+        entries: [
+          compiledEntry(1, preferredForm: "same"),
+          compiledEntry(2, preferredForm: "SAME"),
+        ]
+      )
+    )
+    let aliasRoles = try CompiledPersonalDictionary.compile(
+      PersonalDictionarySnapshotV2(
+        entries: [
+          compiledEntry(1, preferredForm: "Left", aliases: ["same"]),
+          compiledEntry(2, preferredForm: "Right", aliases: ["SAME"]),
+        ]
+      )
+    )
+    #expect(
+      preferredRoles.conflictIdentities[0].fingerprint
+        != aliasRoles.conflictIdentities[0].fingerprint
+    )
+  }
+
+  @Test func compilerConflictIdentityOutputIsContentFree() throws {
+    let privateUUID = compiledID(71)
+    let otherUUID = compiledID(72)
+    let privateTerm = "ConfidentialProject"
+    let compiled = try CompiledPersonalDictionary.compile(
+      PersonalDictionarySnapshotV2(
+        entries: [
+          compiledEntry(privateUUID, preferredForm: privateTerm),
+          compiledEntry(otherUUID, preferredForm: privateTerm.uppercased()),
+        ]
+      )
+    )
+
+    let reflected = String(reflecting: compiled.conflictIdentities)
+    #expect(!reflected.contains(privateTerm))
+    #expect(!reflected.contains(privateUUID.uuidString.lowercased()))
+    #expect(!reflected.contains(otherUUID.uuidString.lowercased()))
+  }
+
+  @Test func compilerConflictIdentitiesIgnoreDisabledAndUnsupportedEntries() throws {
+    let compiled = try CompiledPersonalDictionary.compile(
+      PersonalDictionarySnapshotV2(
+        entries: [
+          compiledEntry(1, preferredForm: "Active"),
+          compiledEntry(2, preferredForm: "ACTIVE", enabled: false),
+          compiledEntry(3, preferredForm: "active", locale: "en-GB"),
+        ]
+      )
+    )
+
+    #expect(compiled.conflictIdentities.isEmpty)
+  }
 }
 
 private func compiledID(_ value: Int) -> UUID {

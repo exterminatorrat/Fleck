@@ -294,6 +294,41 @@ import Testing
   #expect(try await freshStore.snapshot() == valid)
 }
 
+@Test func personalDictionaryStoreRejectsDirectConflictIntroductionAcrossMutationPaths() async throws {
+  let root = temporaryDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let first = dictionaryStoreEntry(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000031")!,
+    preferredForm: "Fleck"
+  )
+  let second = dictionaryStoreEntry(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000032")!,
+    preferredForm: "FLECK"
+  )
+  try await store.upsert(first)
+  let before = try await store.publishedSnapshot()
+  let bytes = try Data(contentsOf: store.fileURL)
+
+  await #expect(throws: PersonalDictionaryStoreError.conflictIntroduced) {
+    try await store.upsert(second)
+  }
+  #expect(try Data(contentsOf: store.fileURL) == bytes)
+  #expect(try await store.publishedSnapshot() == before)
+
+  let disabled = PersonalDictionaryEntry(
+    id: second.id,
+    preferredForm: second.preferredForm,
+    isEnabled: false
+  )
+  try await store.upsert(disabled)
+  let disabledPublished = try await store.publishedSnapshot()
+  await #expect(throws: PersonalDictionaryStoreError.conflictIntroduced) {
+    try await store.setEnabled(true, id: disabled.id)
+  }
+  #expect(try await store.publishedSnapshot() == disabledPublished)
+}
+
 private func temporaryDictionaryRoot() -> URL {
   FileManager.default.temporaryDirectory.appendingPathComponent(
     "FleckDictionaryStoreTests-\(UUID().uuidString)",

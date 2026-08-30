@@ -24,8 +24,18 @@ public enum PersonalDictionaryCodecError: Error, Equatable, Sendable, CustomStri
   }
 }
 
+struct PersonalDictionaryTransferEnvelope: Equatable, Sendable {
+  let byteCount: Int
+  let compilerPolicyRevision: Int
+  let contentDigest: String
+  let exportedAt: Date
+  let localeIdentifier: String
+  let snapshot: PersonalDictionarySnapshotV2
+}
+
 public enum PersonalDictionaryCodec {
   private static let jsonByteLimit = 64 * 1024
+  private static let transferByteLimit = jsonByteLimit + 256
 
   public static let csvHeader = [
     "id",
@@ -76,6 +86,124 @@ public enum PersonalDictionaryCodec {
       throw PersonalDictionaryCodecError.jsonByteLimitExceeded
     }
     return data
+  }
+
+  static func encodeCanonicalTransfer(
+    snapshot: PersonalDictionarySnapshotV2,
+    compiled: CompiledPersonalDictionary,
+    exportedAt: Date
+  ) throws -> Data {
+    let recompiled: CompiledPersonalDictionary
+    do {
+      recompiled = try CompiledPersonalDictionary.compile(snapshot)
+    } catch {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    guard recompiled == compiled else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    let snapshotBytes = try encodeCanonicalJSON(snapshot)
+    return try encodeCanonicalTransfer(
+      PersonalDictionaryTransferEnvelope(
+        byteCount: snapshotBytes.count,
+        compilerPolicyRevision: compiled.compilerPolicyRevision,
+        contentDigest: compiled.contentDigest,
+        exportedAt: exportedAt,
+        localeIdentifier: compiled.localeIdentifier,
+        snapshot: snapshot
+      )
+    )
+  }
+
+  static func encodeCanonicalTransfer(
+    _ envelope: PersonalDictionaryTransferEnvelope
+  ) throws -> Data {
+    let snapshotBytes = try encodeCanonicalJSON(envelope.snapshot)
+    let compiled: CompiledPersonalDictionary
+    do {
+      compiled = try CompiledPersonalDictionary.compile(envelope.snapshot)
+    } catch {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    guard envelope.byteCount == snapshotBytes.count,
+      envelope.compilerPolicyRevision == compiled.compilerPolicyRevision,
+      envelope.contentDigest == compiled.contentDigest,
+      envelope.localeIdentifier == compiled.localeIdentifier
+    else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    var json = "{\"byteCount\":\(envelope.byteCount)"
+    json += ",\"compilerPolicyRevision\":\(envelope.compilerPolicyRevision)"
+    json += ",\"contentDigest\":\(canonicalStringJSON(envelope.contentDigest))"
+    json += ",\"exportedAt\":\(canonicalStringJSON(try canonicalDateString(envelope.exportedAt)))"
+    json += ",\"localeIdentifier\":\(canonicalStringJSON(envelope.localeIdentifier))"
+    json += ",\"snapshot\":\(String(decoding: snapshotBytes, as: UTF8.self))}"
+    let data = Data(json.utf8)
+    guard data.count <= transferByteLimit else {
+      throw PersonalDictionaryCodecError.jsonByteLimitExceeded
+    }
+    return data
+  }
+
+  static func decodeCanonicalTransfer(
+    _ data: Data
+  ) throws -> PersonalDictionaryTransferEnvelope {
+    guard data.count <= transferByteLimit else {
+      throw PersonalDictionaryCodecError.jsonByteLimitExceeded
+    }
+    let root: StrictJSONValue
+    do {
+      var parser = try StrictJSONParser(data: data)
+      root = try parser.parse()
+    } catch {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+    guard case .object(let fields) = root,
+      Set(fields.keys) == [
+        "byteCount", "compilerPolicyRevision", "contentDigest", "exportedAt",
+        "localeIdentifier", "snapshot",
+      ],
+      let byteCountValue = fields["byteCount"],
+      let byteCount = strictInt(byteCountValue),
+      let policyValue = fields["compilerPolicyRevision"],
+      let compilerPolicyRevision = strictInt(policyValue),
+      case .string(let contentDigest)? = fields["contentDigest"],
+      contentDigest.count == 64,
+      contentDigest.allSatisfy({ "0123456789abcdef".contains($0) }),
+      let exportedAtValue = fields["exportedAt"],
+      let exportedAt = strictDate(exportedAtValue),
+      case .string(let localeIdentifier)? = fields["localeIdentifier"],
+      let snapshotValue = fields["snapshot"]
+    else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+    let snapshot = try decodeSnapshotV2(snapshotValue)
+    let snapshotBytes = try encodeCanonicalJSON(snapshot)
+    let compiled: CompiledPersonalDictionary
+    do {
+      compiled = try CompiledPersonalDictionary.compile(snapshot)
+    } catch {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    guard byteCount == snapshotBytes.count,
+      compilerPolicyRevision == compiled.compilerPolicyRevision,
+      contentDigest == compiled.contentDigest,
+      localeIdentifier == compiled.localeIdentifier
+    else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    let envelope = PersonalDictionaryTransferEnvelope(
+      byteCount: byteCount,
+      compilerPolicyRevision: compilerPolicyRevision,
+      contentDigest: contentDigest,
+      exportedAt: exportedAt,
+      localeIdentifier: localeIdentifier,
+      snapshot: snapshot
+    )
+    guard try encodeCanonicalTransfer(envelope) == data else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+    return envelope
   }
 
   public static func decodeCandidateJSON(

@@ -14,7 +14,7 @@ public struct CompiledPersonalDictionary: Equatable, Sendable {
     }
   }
 
-  public enum DiagnosticCode: String, Equatable, Sendable {
+  public enum DiagnosticCode: String, Equatable, Hashable, Sendable {
     case disabledEntry
     case unsupportedLocaleEntry
     case duplicatePreferredOwner
@@ -43,6 +43,7 @@ public struct CompiledPersonalDictionary: Equatable, Sendable {
   public let diagnostics: [Diagnostic]
 
   let resolverRules: [ResolverRule]
+  let conflictIdentities: [ConflictIdentity]
 
   public static func compile(
     _ snapshot: PersonalDictionarySnapshotV2
@@ -61,6 +62,15 @@ public struct CompiledPersonalDictionary: Equatable, Sendable {
     let duplicatePreferredKeys = Set(
       preferredOwners.compactMap { key, entries in entries.count > 1 ? key : nil }
     )
+    let duplicatePreferredIdentities = duplicatePreferredKeys.compactMap { claim in
+      preferredOwners[claim].map {
+        conflictIdentity(
+          code: .duplicatePreferredOwner,
+          canonicalClaim: claim,
+          participants: $0.map { ConflictParticipant(role: "preferred", entryID: $0.id) }
+        )
+      }
+    }
     let excludedEntryIDs = Set(
       effectiveEntries
         .filter { duplicatePreferredKeys.contains($0.preferred.canonical) }
@@ -72,12 +82,17 @@ public struct CompiledPersonalDictionary: Equatable, Sendable {
     )
 
     var aliasPreferredCollisionKeys = Set<String>()
+    var aliasPreferredCollisionParticipants: [String: Set<ConflictParticipant>] = [:]
     var aliasesAfterPreferredCollisions: [Claim] = []
     for entry in remainingEntries {
       for alias in entry.aliases {
         if let preferredOwner = uniquePreferredOwners[alias.canonical] {
           if preferredOwner != entry.id {
             aliasPreferredCollisionKeys.insert(alias.canonical)
+            aliasPreferredCollisionParticipants[alias.canonical, default: []].formUnion([
+              ConflictParticipant(role: "alias", entryID: entry.id),
+              ConflictParticipant(role: "preferred", entryID: preferredOwner),
+            ])
           }
           continue
         }
@@ -91,6 +106,27 @@ public struct CompiledPersonalDictionary: Equatable, Sendable {
         Set(claims.map(\.entryID)).count > 1 ? key : nil
       }
     )
+    let conflictIdentities = (
+      duplicatePreferredIdentities
+        + aliasPreferredCollisionKeys.compactMap { claim in
+          aliasPreferredCollisionParticipants[claim].map {
+            conflictIdentity(
+              code: .aliasPreferredCollision,
+              canonicalClaim: claim,
+              participants: Array($0)
+            )
+          }
+        }
+        + ambiguousAliasKeys.compactMap { claim in
+          aliasOwners[claim].map {
+            conflictIdentity(
+              code: .ambiguousAlias,
+              canonicalClaim: claim,
+              participants: $0.map { ConflictParticipant(role: "alias", entryID: $0.entryID) }
+            )
+          }
+        }
+    ).sorted(by: conflictIdentityLess)
 
     var safeClaimsByEntry: [UUID: [Claim]] = [:]
     for entry in remainingEntries {
@@ -186,7 +222,8 @@ public struct CompiledPersonalDictionary: Equatable, Sendable {
       protectedLexicon: protectedLexicon,
       routingLexicon: routingLexicon,
       diagnostics: diagnostics,
-      resolverRules: resolverRules
+      resolverRules: resolverRules,
+      conflictIdentities: conflictIdentities
     )
   }
 
@@ -289,9 +326,53 @@ public struct CompiledPersonalDictionary: Equatable, Sendable {
   private static func append(_ label: String, _ value: String, to preimage: inout String) {
     preimage += "\(label.utf8.count):\(label)\(value.utf8.count):\(value)"
   }
+
+  private static func conflictIdentity(
+    code: DiagnosticCode,
+    canonicalClaim: String,
+    participants: [ConflictParticipant]
+  ) -> ConflictIdentity {
+    let sortedParticipants = Set(participants).sorted {
+      if $0.role != $1.role { return stableLess($0.role, $1.role) }
+      return $0.entryID.uuidString.lowercased() < $1.entryID.uuidString.lowercased()
+    }
+    var preimage = ""
+    append("version", "1", to: &preimage)
+    append("compilerPolicyRevision", String(policyRevision), to: &preimage)
+    append("localeIdentifier", locale, to: &preimage)
+    append("diagnosticCode", code.rawValue, to: &preimage)
+    append("canonicalClaim", canonicalClaim, to: &preimage)
+    append("participantCount", String(sortedParticipants.count), to: &preimage)
+    for participant in sortedParticipants {
+      append("participantRole", participant.role, to: &preimage)
+      append("participantEntryID", participant.entryID.uuidString.lowercased(), to: &preimage)
+    }
+    let fingerprint = SHA256.hash(data: Data(preimage.utf8))
+      .map { String(format: "%02x", $0) }
+      .joined()
+    return ConflictIdentity(code: code, fingerprint: fingerprint)
+  }
+
+  private static func conflictIdentityLess(
+    _ lhs: ConflictIdentity,
+    _ rhs: ConflictIdentity
+  ) -> Bool {
+    if lhs.code != rhs.code { return stableLess(lhs.code.rawValue, rhs.code.rawValue) }
+    return lhs.fingerprint < rhs.fingerprint
+  }
 }
 
 extension CompiledPersonalDictionary {
+  struct ConflictIdentity: Equatable, Hashable, Sendable {
+    let code: DiagnosticCode
+    let fingerprint: String
+  }
+
+  private struct ConflictParticipant: Hashable {
+    let role: String
+    let entryID: UUID
+  }
+
   struct ResolverRule: Equatable, Sendable {
     let exactForm: String
     let canonicalClaim: String

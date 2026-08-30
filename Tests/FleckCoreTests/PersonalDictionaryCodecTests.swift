@@ -460,6 +460,40 @@ import Testing
   }
 }
 
+@Test func personalDictionaryV2CodecTransferEnvelopeIsCanonicalStrictAndBounded() throws {
+  let snapshot = PersonalDictionarySnapshotV2(
+    revision: 7,
+    entries: [
+      dictionaryCodecEntry(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000091")!,
+        preferredForm: "Fleck"
+      )
+    ]
+  )
+  let compiled = try CompiledPersonalDictionary.compile(snapshot)
+  let exportedAt = Date(timeIntervalSince1970: 1_700_000_000)
+  let data = try PersonalDictionaryCodec.encodeCanonicalTransfer(
+    snapshot: snapshot,
+    compiled: compiled,
+    exportedAt: exportedAt
+  )
+  let decoded = try PersonalDictionaryCodec.decodeCanonicalTransfer(data)
+
+  #expect(decoded.snapshot == snapshot)
+  #expect(decoded.exportedAt == exportedAt)
+  #expect(decoded.contentDigest == compiled.contentDigest)
+  #expect(decoded.byteCount == (try PersonalDictionaryCodec.encodeCanonicalJSON(snapshot)).count)
+  #expect(try PersonalDictionaryCodec.encodeCanonicalTransfer(decoded) == data)
+
+  let string = try #require(String(data: data, encoding: .utf8))
+  #expect(
+    string.hasPrefix(
+      "{\"byteCount\":\(decoded.byteCount),\"compilerPolicyRevision\":1,\"contentDigest\":"
+    )
+  )
+  #expect(string.contains("\"localeIdentifier\":\"en-US\",\"snapshot\":{\"entries\":"))
+}
+
 private func dictionaryCodecEntry(
   id: UUID,
   preferredForm: String,
