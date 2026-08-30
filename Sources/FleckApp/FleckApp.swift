@@ -461,7 +461,11 @@
         }
         switch self.phase {
         case .arming, .listening:
-          self.capsuleController.updateAudioLevel(level)
+          self.capsuleController.updateAudioLevel(
+            level,
+            presentationGeneration: self.capsuleController
+              .presentationModel.presentationGeneration
+          )
         case .idle, .finalizing, .cleaning, .routing, .saved, .failed:
           self.capsuleController.updateAudioLevel(0)
         }
@@ -1106,23 +1110,27 @@
           status = .idle
         }
       } else {
-        switch event.phase {
-        case .arming:
-          status = .arming
-        case .listening:
-          status = .listening
-        case .finalizing:
-          status = .finalizing
-        case .cleaning:
-          status = .cleaning
-        case .routing:
-          status = .routing
-        case .saved(let destination):
-          status = .saved(destination: destination.title)
-        case .failed(let message):
-          status = .failed(message)
-        case .idle:
-          status = .idle
+        if coordinatorContext?.pipelineStage == .save {
+          status = .saving
+        } else {
+          switch event.phase {
+          case .arming:
+            status = .arming
+          case .listening:
+            status = .listening
+          case .finalizing:
+            status = .finalizing
+          case .cleaning:
+            status = .cleaning
+          case .routing:
+            status = .routing
+          case .saved(let destination):
+            status = .saved(destination: destination.title)
+          case .failed(let message):
+            status = .failed(message)
+          case .idle:
+            status = .idle
+          }
         }
       }
 

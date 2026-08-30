@@ -201,6 +201,26 @@ private func settleSettingsHost(_ view: NSView) async {
   #expect(fixture.appState.preferences.accentHex == accentHex)
 }
 
+@Test @MainActor func DictationRuntimeMapsTheRealSaveBoundaryToSaving() {
+  let id = UUID(uuidString: "7EF3CE15-48DD-42E2-9A58-4F0C0A5A0783")!
+  let event = DictationCoordinatorEvent(
+    phase: .routing,
+    terminal: nil,
+    context: DictationCoordinatorContext(
+      sessionID: id,
+      mode: .smartCapture,
+      pipelineStage: .save,
+      cleanupOutcome: .cleaned,
+      failureStage: nil
+    )
+  )
+
+  let context = DictationRuntime.capsuleContext(for: event)
+  #expect(context.status == .saving)
+  #expect(context.status.presentation.visibleText == "Saving")
+  #expect(context.pipelineStage == .save)
+}
+
 @Test @MainActor func DictationRuntimePointerStartPublishesOwnerContextImmediately() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
   await fixture.runtime.awaitStartupAssessment()

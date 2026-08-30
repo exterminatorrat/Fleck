@@ -753,6 +753,243 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   #expect(DictationCapsuleTransition.forReduceMotion(false) == .scaleAndOpacity)
 }
 
+@Test func DictationAccessibilityUsesExactRestrainedMotionTimings() {
+  #expect(DictationCapsuleMotion.acknowledgement == 0)
+  #expect(DictationCapsuleMotion.colorAndOpacity == 0.09)
+  #expect(DictationCapsuleMotion.tileMorph == 0.14)
+  #expect(DictationCapsuleMotion.contentExit == 0.07)
+  #expect((0.10...0.12).contains(DictationCapsuleMotion.result))
+  #expect(DictationCapsuleMotion.dockSnap == 0.18)
+  #expect(DictationCapsuleMotion.dockSnapBounce == 0)
+  #expect(
+    DictationCapsuleMotion.transitionDuration(
+      from: .idle,
+      to: .arming,
+      reduceMotion: false
+    ) == DictationCapsuleMotion.acknowledgement
+  )
+  #expect(
+    DictationCapsuleMotion.transitionDuration(
+      from: .idle,
+      to: .listening,
+      reduceMotion: false
+    ) == DictationCapsuleMotion.colorAndOpacity
+  )
+  #expect(
+    DictationCapsuleMotion.transitionDuration(
+      from: .listening,
+      to: .cleaning,
+      reduceMotion: false
+    ) == DictationCapsuleMotion.tileMorph
+  )
+  #expect(
+    DictationCapsuleMotion.transitionDuration(
+      from: .cleaning,
+      to: .saved(destination: "Inbox"),
+      reduceMotion: false
+    ) == DictationCapsuleMotion.result
+  )
+  #expect(
+    DictationCapsuleMotion.transitionDuration(
+      from: .saved(destination: "Inbox"),
+      to: .idle,
+      reduceMotion: false
+    ) == DictationCapsuleMotion.contentExit
+  )
+  #expect(
+    DictationCapsuleMotion.transitionDuration(
+      from: .listening,
+      to: .cleaning,
+      reduceMotion: true
+    ) == DictationCapsuleMotion.reduceMotionCrossfade
+  )
+  #expect(
+    DictationCapsuleMotion.transitionDuration(
+      from: .listening,
+      to: .listening,
+      reduceMotion: false,
+      dockChange: true
+    ) == DictationCapsuleMotion.dockSnap
+  )
+}
+
+@Test func DictationAccessibilityKeepsProcessingLabelSlotAndNoAnimationLeakage() throws {
+  let sourceRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let capsuleSource = try String(
+    contentsOf: sourceRoot.appendingPathComponent("Sources/FleckApp/DictationCapsule.swift"),
+    encoding: .utf8
+  )
+  #expect(capsuleSource.contains("processingLabelDelay"))
+  #expect(capsuleSource.contains("presentationGeneration"))
+  #expect(capsuleSource.contains(".easeInOut(duration: DictationCapsuleMotion.tileMorph)"))
+  #expect(capsuleSource.contains(".easeOut(duration: DictationCapsuleMotion.colorAndOpacity)"))
+  #expect(!capsuleSource.contains(".spring("))
+  #expect(!capsuleSource.contains(".shadow("))
+  #expect(!capsuleSource.contains(".blur("))
+}
+
+@Test @MainActor func DictationAccessibilityFencesProcessingLabelToCurrentGeneration() async {
+  let gate = AccessibilitySleepGate()
+  let session = UUID(uuidString: "E58D9D42-35BC-43A5-AB26-1C346DDFAF78")!
+  let model = DictationCapsulePresentationModel(
+    processingLabelSleeper: { _ in await gate.wait() }
+  )
+  model.update(
+    context: DictationCapsuleContext(
+      status: .cleaning,
+      sessionID: session,
+      mode: .smartCapture,
+      pipelineStage: .polish
+    ),
+    action: nil,
+    onAction: {}
+  )
+  await gate.waitUntilWaiting()
+  #expect(!model.showsProcessingLabel)
+  let oldGeneration = model.presentationGeneration
+
+  model.update(
+    context: DictationCapsuleContext(
+      status: .saved(destination: "Inbox"),
+      sessionID: session,
+      mode: .smartCapture
+    ),
+    action: nil,
+    onAction: {}
+  )
+  #expect(model.presentationGeneration > oldGeneration)
+  await gate.resume()
+  for _ in 0..<10 { await Task.yield() }
+
+  #expect(!model.showsProcessingLabel)
+  #expect(model.voiceOverLabel.contains("Saved to Inbox"))
+}
+
+@Test @MainActor func DictationAccessibilityCoalescesListeningAndTerminalAnnouncements() {
+  let session = UUID(uuidString: "A90D9C4F-6B1E-4C34-8F33-4C88D18B1375")!
+  let model = DictationCapsulePresentationModel()
+  #expect(model.voiceOverLabel == "Fleck dictation ready")
+
+  model.update(
+    context: DictationCapsuleContext(
+      status: .listening,
+      sessionID: session,
+      mode: .smartCapture,
+      isHandsFree: true,
+      pipelineStage: .capture
+    ),
+    action: nil,
+    onAction: {}
+  )
+  #expect(model.voiceOverLabel == "Dictation listening")
+  let listeningGeneration = model.presentationGeneration
+  model.update(
+    context: DictationCapsuleContext(
+      status: .listening,
+      sessionID: session,
+      mode: .smartCapture,
+      isHandsFree: true,
+      pipelineStage: .capture
+    ),
+    action: nil,
+    onAction: {}
+  )
+  #expect(model.voiceOverLabel == "Dictation listening")
+  #expect(model.presentationGeneration > listeningGeneration)
+
+  model.update(
+    context: DictationCapsuleContext(
+      status: .cleaning,
+      sessionID: session,
+      mode: .smartCapture,
+      pipelineStage: .polish
+    ),
+    action: nil,
+    onAction: {}
+  )
+  #expect(model.voiceOverLabel == "Dictation listening")
+  model.update(
+    context: DictationCapsuleContext(
+      status: .saved(destination: "Inbox"),
+      sessionID: session,
+      mode: .smartCapture
+    ),
+    action: nil,
+    onAction: {}
+  )
+  #expect(model.voiceOverLabel == "Saved to Inbox")
+}
+
+@Test @MainActor func DictationAccessibilityRejectsStaleWaveformLevelsAfterSessionChange() {
+  let firstSession = UUID(uuidString: "A90D9C4F-6B1E-4C34-8F33-4C88D18B1375")!
+  let secondSession = UUID(uuidString: "E58D9D42-35BC-43A5-AB26-1C346DDFAF78")!
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+
+  controller.render(
+    DictationCapsuleContext(
+      status: .listening,
+      sessionID: firstSession,
+      mode: .smartCapture,
+      isHandsFree: true,
+      pipelineStage: .capture
+    )
+  )
+  let firstGeneration = controller.presentationModel.presentationGeneration
+  controller.updateAudioLevel(0.20, presentationGeneration: firstGeneration)
+  #expect(controller.waveformModel.energy > 0)
+
+  controller.render(
+    DictationCapsuleContext(
+      status: .listening,
+      sessionID: secondSession,
+      mode: .smartCapture,
+      isHandsFree: true,
+      pipelineStage: .capture
+    )
+  )
+  let secondGeneration = controller.presentationModel.presentationGeneration
+  #expect(secondGeneration > firstGeneration)
+  #expect(controller.waveformModel.energy == 0)
+
+  controller.updateAudioLevel(0.20, presentationGeneration: firstGeneration)
+  #expect(controller.waveformModel.energy == 0)
+  controller.updateAudioLevel(0.20, presentationGeneration: secondGeneration)
+  #expect(controller.waveformModel.energy > 0)
+  controller.dismiss()
+}
+
+private actor AccessibilitySleepGate {
+  private var waiting = false
+  private var waiter: CheckedContinuation<Void, Never>?
+  private var waitingObserver: CheckedContinuation<Void, Never>?
+
+  func wait() async {
+    waiting = true
+    waitingObserver?.resume()
+    waitingObserver = nil
+    await withCheckedContinuation { continuation in
+      waiter = continuation
+    }
+    waiting = false
+  }
+
+  func waitUntilWaiting() async {
+    if waiting { return }
+    await withCheckedContinuation { continuation in
+      waitingObserver = continuation
+    }
+  }
+
+  func resume() {
+    waiter?.resume()
+    waiter = nil
+  }
+}
+
 @Test @MainActor func DictationAccessibilityPanelNeverActivatesTheApp() {
   let panel = DictationCapsulePanel()
 

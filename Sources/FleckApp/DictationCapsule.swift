@@ -876,6 +876,72 @@
     }
   }
 
+  enum DictationCapsuleMotion {
+    static let acknowledgement: TimeInterval = 0
+    static let colorAndOpacity: TimeInterval = 0.09
+    static let tileMorph: TimeInterval = 0.14
+    static let contentExit: TimeInterval = 0.07
+    static let result: TimeInterval = 0.11
+    static let dockSnap: TimeInterval = 0.18
+    static let dockSnapBounce: CGFloat = 0
+    static let reduceMotionCrossfade: TimeInterval = 0.10
+    static let processingLabelDelay: Duration = .milliseconds(450)
+
+    static func transitionDuration(
+      from: DictationCapsuleStatus,
+      to: DictationCapsuleStatus,
+      reduceMotion: Bool,
+      dockChange: Bool = false
+    ) -> TimeInterval {
+      if reduceMotion {
+        return reduceMotionCrossfade
+      }
+      if dockChange {
+        return dockSnap
+      }
+      if to == .arming {
+        return acknowledgement
+      }
+      if isTerminal(to), !isTerminal(from) {
+        return result
+      }
+      if to == .idle, isTerminal(from) {
+        return contentExit
+      }
+      if isProgress(from) || isProgress(to) {
+        return tileMorph
+      }
+      return colorAndOpacity
+    }
+
+    static func usesTileMorph(
+      from: DictationCapsuleStatus,
+      to: DictationCapsuleStatus
+    ) -> Bool {
+      if isTerminal(to), !isTerminal(from) { return false }
+      if to == .idle, isTerminal(from) { return false }
+      return isProgress(from) || isProgress(to)
+    }
+
+    private static func isProgress(_ status: DictationCapsuleStatus) -> Bool {
+      switch status {
+      case .finalizing, .cleaning, .routing, .saving:
+        true
+      default:
+        false
+      }
+    }
+
+    private static func isTerminal(_ status: DictationCapsuleStatus) -> Bool {
+      switch status {
+      case .saved, .savedWithoutCleanup, .noSpeech, .failed:
+        true
+      default:
+        false
+      }
+    }
+  }
+
   enum DictationWaveformRefreshSchedule {
     static func interval(reduceMotion: Bool) -> TimeInterval {
       reduceMotion ? 1 / 15 : 1 / 30
@@ -908,10 +974,15 @@
     @Published private(set) var colors: FleckRailColors
     @Published private(set) var isListeningHover = false
     @Published private(set) var isDragActive = false
+    @Published private(set) var showsProcessingLabel = false
+    private(set) var presentationGeneration: UInt64 = 0
+    private(set) var voiceOverLabel = "Fleck dictation ready"
     private(set) var actionHandler: @MainActor () -> Void
     private(set) var stopHandler: @MainActor () -> Void
     private(set) var cancelHandler: @MainActor () -> Void
     private(set) var dismissHandler: @MainActor () -> Void
+    private let processingLabelSleeper: @MainActor (Duration) async -> Void
+    private var processingLabelTask: Task<Void, Never>?
 
     init(
       context: DictationCapsuleContext = DictationCapsuleContext(status: .idle),
@@ -921,7 +992,10 @@
       onAction: @escaping @MainActor () -> Void = {},
       onStop: @escaping @MainActor () -> Void = {},
       onCancel: @escaping @MainActor () -> Void = {},
-      onDismiss: @escaping @MainActor () -> Void = {}
+      onDismiss: @escaping @MainActor () -> Void = {},
+      processingLabelSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
+        try? await Task.sleep(for: duration)
+      }
     ) {
       self.context = context
       self.dock = dock
@@ -931,6 +1005,16 @@
       self.stopHandler = onStop
       self.cancelHandler = onCancel
       self.dismissHandler = onDismiss
+      self.processingLabelSleeper = processingLabelSleeper
+      switch context.status {
+      case .idle, .listening, .saved, .savedWithoutCleanup, .noSpeech, .failed:
+        self.voiceOverLabel = DictationCapsulePresentation(
+          status: context.status,
+          context: context
+        ).voiceOverText
+      default:
+        break
+      }
       if context.status != .listening || !context.isHandsFree {
         isListeningHover = false
       }
@@ -943,6 +1027,11 @@
       onStop: (@MainActor () -> Void)? = nil,
       onCancel: (@MainActor () -> Void)? = nil
     ) {
+      let previousContext = self.context
+      presentationGeneration &+= 1
+      processingLabelTask?.cancel()
+      processingLabelTask = nil
+      showsProcessingLabel = false
       self.context = context
       self.action = action
       self.actionHandler = onAction
@@ -954,6 +1043,8 @@
       if context.status != .idle {
         isDragActive = false
       }
+      updateVoiceOverLabel(from: previousContext, to: context)
+      scheduleProcessingLabel(for: context)
     }
 
     func updateDock(_ dock: DictationCapsuleDock) {
@@ -984,7 +1075,90 @@
       dismissHandler = onDismiss
     }
 
+    func invalidatePresentation() {
+      presentationGeneration &+= 1
+      processingLabelTask?.cancel()
+      processingLabelTask = nil
+      showsProcessingLabel = false
+    }
+
+    private func scheduleProcessingLabel(for context: DictationCapsuleContext) {
+      guard isProcessing(context.status), DictationCapsulePresentation(
+        status: context.status,
+        context: context
+      ).visibleText != nil
+      else {
+        return
+      }
+      let generation = presentationGeneration
+      let sleeper = processingLabelSleeper
+      processingLabelTask = Task { @MainActor [weak self] in
+        await sleeper(DictationCapsuleMotion.processingLabelDelay)
+        guard
+          !Task.isCancelled,
+          let self,
+          self.presentationGeneration == generation,
+          self.context == context,
+          self.isProcessing(self.context.status)
+        else {
+          return
+        }
+        self.showsProcessingLabel = true
+      }
+    }
+
+    private func updateVoiceOverLabel(
+      from previousContext: DictationCapsuleContext,
+      to context: DictationCapsuleContext
+    ) {
+      if context.status == .idle {
+        voiceOverLabel = DictationCapsulePresentation(status: .idle).voiceOverText
+        return
+      }
+      if context.status == .listening,
+        previousContext.status != .listening
+          || previousContext.sessionID != context.sessionID
+      {
+        voiceOverLabel = DictationCapsulePresentation(
+          status: .listening,
+          context: context
+        ).voiceOverText
+        return
+      }
+      guard isTerminal(context.status),
+        previousContext != context
+      else {
+        return
+      }
+      voiceOverLabel = DictationCapsulePresentation(
+        status: context.status,
+        context: context
+      ).voiceOverText
+    }
+
+    private func isProcessing(_ status: DictationCapsuleStatus) -> Bool {
+      switch status {
+      case .finalizing, .cleaning, .routing, .saving:
+        true
+      default:
+        false
+      }
+    }
+
+    private func isTerminal(_ status: DictationCapsuleStatus) -> Bool {
+      switch status {
+      case .saved, .savedWithoutCleanup, .noSpeech, .failed:
+        true
+      default:
+        false
+      }
+    }
+
     var showsDockIndicators: Bool { isDragActive }
+
+    deinit {
+      processingLabelTask?.cancel()
+    }
   }
 
   @MainActor
@@ -1099,6 +1273,7 @@
       onOpenFleck: @escaping @MainActor () -> Void,
       onDockChanged: @escaping @MainActor (DictationCapsuleDock) -> Void
     ) {
+      let previousStatus = currentContext.status
       currentDock = dock
       currentContext = DictationCapsuleContext(status: .idle)
       waveformModel.reset()
@@ -1111,7 +1286,10 @@
       presentationModel.update(context: currentContext, action: nil, onAction: {})
       inputRouter.onOpenFleck = onOpenFleck
       hostingView.refreshMenu()
-      applyCurrentFrame(animated: panel.isVisible)
+      applyCurrentFrame(
+        animated: panel.isVisible,
+        from: previousStatus
+      )
       panel.orderFrontRegardless()
     }
 
@@ -1150,10 +1328,13 @@
       action: DictationCapsuleAction? = nil,
       onAction: @escaping @MainActor () -> Void = {}
     ) {
-      let wasListening = currentContext.status == .listening
+      let previousStatus = currentContext.status
+      let previousSessionID = currentContext.sessionID
+      let wasListening = previousStatus == .listening
       currentContext = context
       if context.status == .listening {
-        if !wasListening {
+        let isSameListeningSession = wasListening && previousSessionID == context.sessionID
+        if !isSameListeningSession {
           waveformModel.beginListening()
         }
       } else {
@@ -1161,7 +1342,10 @@
       }
       presentationModel.update(context: context, action: action, onAction: onAction)
       hostingView.refreshMenu()
-      applyCurrentFrame(animated: panel.isVisible)
+      applyCurrentFrame(
+        animated: panel.isVisible,
+        from: previousStatus
+      )
       panel.orderFrontRegardless()
     }
 
@@ -1169,7 +1353,11 @@
       currentDock = dock
       presentationModel.updateDock(dock)
       hostingView.refreshMenu()
-      applyCurrentFrame(animated: panel.isVisible)
+      applyCurrentFrame(
+        animated: panel.isVisible,
+        from: currentContext.status,
+        dockChange: true
+      )
     }
 
     func updateAccentHex(_ accentHex: String) {
@@ -1178,6 +1366,7 @@
 
     func dismiss() {
       waveformModel.reset()
+      presentationModel.invalidatePresentation()
       dragOrigin = nil
       dragFrameOrigin = nil
       presentationModel.setDragActive(false)
@@ -1185,9 +1374,26 @@
       panel.orderOut(nil)
     }
 
-    func updateAudioLevel(_ level: Float) {
-      guard currentContext.status == .listening, panel.isVisible else { return }
-      waveformModel.receive(level: level)
+    func updateAudioLevel(
+      _ level: Float,
+      presentationGeneration: UInt64? = nil
+    ) {
+      guard
+        currentContext.status == .listening,
+        panel.isVisible,
+        presentationGeneration == nil
+          || presentationGeneration == self.presentationModel.presentationGeneration
+      else {
+        return
+      }
+      waveformModel.receive(
+        level: level,
+        reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+      )
+    }
+
+    func updateAudioLevel(_ level: Float, generation: UInt64) {
+      updateAudioLevel(level, presentationGeneration: generation)
     }
 
     private func dragChanged(to point: CGPoint) {
@@ -1374,7 +1580,11 @@
       )
     }
 
-    private func applyCurrentFrame(animated: Bool) {
+    private func applyCurrentFrame(
+      animated: Bool,
+      from previousStatus: DictationCapsuleStatus,
+      dockChange: Bool = false
+    ) {
       guard let screen = resolvedScreen() else { return }
       currentScreen = screen
       let presentation = DictationCapsulePresentation(
@@ -1396,14 +1606,33 @@
       }
       if reduceMotion {
         panel.setFrame(finalFrame, display: true)
+        panel.alphaValue = 1
+        return
+      }
+      let duration = DictationCapsuleMotion.transitionDuration(
+        from: previousStatus,
+        to: currentContext.status,
+        reduceMotion: false,
+        dockChange: dockChange
+      )
+      guard duration > 0 else {
+        panel.setFrame(finalFrame, display: true)
+        panel.alphaValue = 1
+        return
       }
       NSAnimationContext.runAnimationGroup { context in
-        context.duration = reduceMotion ? 0.1 : 0.12
-        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        context.duration = duration
+        context.timingFunction = CAMediaTimingFunction(
+          name: !reduceMotion && !dockChange
+            && DictationCapsuleMotion.usesTileMorph(
+              from: previousStatus,
+              to: currentContext.status
+            )
+            ? .easeInEaseOut
+            : .easeOut
+        )
         panel.animator().alphaValue = 1
-        if !reduceMotion {
-          panel.animator().setFrame(finalFrame, display: true)
-        }
+        panel.animator().setFrame(finalFrame, display: true)
       }
     }
 
@@ -1414,7 +1643,11 @@
       currentDock = dock
       if let screen { currentScreen = screen }
       presentationModel.updateDock(dock)
-      applyCurrentFrame(animated: true)
+      applyCurrentFrame(
+        animated: true,
+        from: currentContext.status,
+        dockChange: true
+      )
       onDockChanged?(dock)
     }
 
@@ -1432,7 +1665,10 @@
     private func redockAfterScreenChange() {
       let center = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
       currentScreen = screen(containing: center) ?? activeScreen()
-      applyCurrentFrame(animated: false)
+      applyCurrentFrame(
+        animated: false,
+        from: currentContext.status
+      )
     }
 
     deinit {
@@ -1534,7 +1770,7 @@
           )
         )
         .accessibilityElement(children: model.action == nil ? .ignore : .contain)
-        .accessibilityLabel(presentation.voiceOverText)
+        .accessibilityLabel(model.voiceOverLabel)
         .accessibilityAddTraits(.isStaticText)
     }
 
@@ -1582,6 +1818,14 @@
         layout: usesProgressRail ? .rail(reversed: model.dock == .right) : .mark,
         treatments: usesProgressRail ? presentation.stageTreatments : [],
         colors: model.colors
+      )
+      .animation(
+        reduceMotion ? nil : .easeInOut(duration: DictationCapsuleMotion.tileMorph),
+        value: usesProgressRail
+      )
+      .animation(
+        reduceMotion ? nil : .easeInOut(duration: DictationCapsuleMotion.tileMorph),
+        value: presentation.stageTreatments
       )
     }
 
@@ -1653,19 +1897,19 @@
     }
 
     private func waveform(at date: Date) -> some View {
-      HStack(alignment: .center, spacing: 3) {
+      HStack(alignment: .center, spacing: DictationWaveformModel.barGap) {
         ForEach(
           Array(
-            waveformModel.barLevels(
+            waveformModel.barHeights(
               at: date,
               reduceMotion: reduceMotion
             ).enumerated()
           ),
           id: \.offset
-        ) { _, level in
+        ) { _, height in
           Capsule()
             .fill(model.colors.liveColor)
-            .frame(width: 3, height: 4 + (level * 15))
+            .frame(width: DictationWaveformModel.barWidth, height: height)
         }
       }
       .accessibilityHidden(true)
@@ -1690,6 +1934,13 @@
           .lineLimit(1)
           .truncationMode(.tail)
           .foregroundStyle(model.colors.primaryTextColor)
+          .opacity(model.showsProcessingLabel ? 1 : 0)
+          .animation(
+            reduceMotion
+              ? .easeOut(duration: DictationCapsuleMotion.reduceMotionCrossfade)
+              : .easeOut(duration: DictationCapsuleMotion.colorAndOpacity),
+            value: model.showsProcessingLabel
+          )
       }
     }
 
