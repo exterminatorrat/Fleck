@@ -283,6 +283,8 @@ import FleckCore
   #expect(tabStrip.contains(".help(\"Show earlier tabs\")"))
   #expect(tabStrip.contains(".help(\"Show later tabs\")"))
   #expect(tabStrip.contains(".frame(width: 56, height: 37"))
+  #expect(tabStrip.components(separatedBy: ".frame(width: 28, height: 37)").count - 1 == 2)
+  #expect(tabStrip.components(separatedBy: ".contentShape(Rectangle())").count - 1 == 2)
   #expect(!tabStrip.contains("accessibilityHidden(!hasHidden"))
   #expect(!tabStrip.contains(".opacity(hasHidden"))
 }
@@ -352,8 +354,10 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
   let leadingOffset = clipView.bounds.origin.x
   let maximumOffset = documentView.frame.maxX - clipView.bounds.width
   let tabFrame = tabScrollView.convert(tabScrollView.bounds, to: host)
+  // The top two points of each rail half are outside the current 28-point button frame.
+  let offGlyphY = tabFrame.minY + 2
   clickHostedTabControl(
-    at: NSPoint(x: tabFrame.maxX + 42, y: tabFrame.midY),
+    at: NSPoint(x: tabFrame.maxX + 42, y: offGlyphY),
     in: window,
     root: host
   )
@@ -362,7 +366,7 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
   #expect(abs(trailingOffset - maximumOffset) <= 1)
 
   clickHostedTabControl(
-    at: NSPoint(x: tabFrame.maxX + 14, y: tabFrame.midY),
+    at: NSPoint(x: tabFrame.maxX + 14, y: offGlyphY),
     in: window,
     root: host
   )

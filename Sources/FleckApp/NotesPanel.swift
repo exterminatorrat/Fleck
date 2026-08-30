@@ -1179,6 +1179,8 @@
               Image(systemName: "chevron.left")
                 .font(.caption)
                 .frame(width: 28, height: 28)
+                .frame(width: 28, height: 37)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Reveal earlier tabs")
@@ -1191,6 +1193,8 @@
               Image(systemName: "chevron.right")
                 .font(.caption)
                 .frame(width: 28, height: 28)
+                .frame(width: 28, height: 37)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Reveal later tabs")
