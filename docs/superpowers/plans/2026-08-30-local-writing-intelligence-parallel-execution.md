@@ -75,7 +75,8 @@ The program never collapses these states:
 | 2 | 2C capture-pinned dictionary | 6B exact catalog snapshot | 1A3 evaluation evidence contracts | Capture identity, truthful build catalogs, and the complete 1A evidence vocabulary exist. |
 | 3 | 2B3 dictionary transfer | 3A capture-first arming | 6B2 historical archive | Transfer, first-word architecture, and evidence history progress independently. |
 | 4 | 2D dictionary Settings | 7D1 private corpus workspace | available repair lane | Dictionary UX and the secure empty-corpus authority exist without inventing premature release schemas. |
-| 5 | 3C1 Apple terminology | 7D5 private-material lifecycle | 6C hardware recommender | Apple context, secure corpus mutation/export, and deterministic recommendation advance. |
+| 5a | 3C1 Apple terminology | 7D5 private-material lifecycle | 6B4 recommendation-ready snapshot closure | Apple context, secure corpus mutation/export, and truthful configuration-level recommendation authority advance. |
+| 5b | available repair lane | available repair lane | 6C hardware recommender | The pure recommender consumes the accepted closed snapshot rather than inventing a shadow catalog. |
 | 6 | 3B Parakeet audio-first | 3C2 Apple release tail | 4B1 Gemma cleanup contract | Both ASR paths and faithful local cleanup improve independently. |
 | 7 | 4B2 Gemma harness parity | 4C history baselines | 7D4 corpus templates/oracles | Product/helper parity, correction provenance, and corpus preparation advance. |
 | 8 | 3D Parakeet context truth | 4D receipt-safe correction | 7D3 controlled routing workspaces | ASR context, safe correction, and routing fixtures progress. |
@@ -219,6 +220,27 @@ The full exact owned paths, implementation requirements, red cases, and gates fo
     authority whose old exports and dependent receipts cannot regain eligibility.
     Its retirement/tombstone schema and crash boundaries must be frozen before
     delegation. Packet 7D4 follows accepted 7D5, not merely 7D1.
+- Expand Packet 3C1 after accepted Packet 3A. Its truthful production seam needs
+  `AppleSpeechCapture.swift`, `AppleSpeechStreamingAdapter.swift`,
+  `DictationInterfaces.swift`, `StreamingDictationProcessor.swift`, and the two
+  matching adapter/processor tests. The source applies the exact capture-pinned
+  recognition strings before audio start and returns `.applied` only after the
+  Apple framework accepts them; unsupported capability retains deterministic
+  dictionary resolution, while a claimed-capability setup failure rejects before
+  audio. Legacy Speech sets exact contextual strings and on-device-only mode;
+  macOS 26 Speech uses exact `.general` `AnalysisContext`. No re-sorting,
+  re-normalization, truncation, userData copy, or cloud fallback is permitted.
+- Insert **6B4 recommendation-ready snapshot closure** before 6C, owning only
+  `LocalModelCatalog.swift`, `LocalModelCatalogSnapshot.swift`, and their existing
+  catalog tests. The accepted snapshot presently lacks configuration-level joint
+  admission/evidence, deterministic Fleck rank, joint peak/sequential/co-residency
+  resources, legal/release authorization, staging requirement, exact hardware and
+  OS-build cohorts, evidence validity, and a revisioned recommendation/cooldown
+  policy. 6B4 adds one immutable snapshot-bound record for those values and
+  requires exact Built-in Safe presence in every signed snapshot while keeping
+  development candidates nonrecommendable. Until 6B4 ships, 6C may recommend only
+  Built-in Safe; it must never infer safety from per-profile resource sums, vendor
+  benchmarks, historical archives, family names, or sentinel values.
 - Packet 7J remains absent unless qualified Parakeet v2 fails the frozen dictionary-accuracy gate and an exact auxiliary artifact/license/runtime/files/tests amendment is accepted.
 - Packet 7K remains absent unless live partials become a measured hard requirement and an exact Unified/EOU profile amendment is accepted.
 - Packet 7L2 remains absent unless Gemma 1B misses a frozen resource or latency objective and an exact 270M artifact/runtime/files/tests amendment is accepted.
