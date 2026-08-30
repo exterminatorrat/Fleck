@@ -150,30 +150,41 @@ final class StreamingDictationProcessor: DictationProcessing {
     configuration: DictationProcessingConfiguration,
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession {
+    try await begin(
+      configuration: configuration,
+      level: level,
+      startAuthorized: { true }
+    )
+  }
+
+  func begin(
+    configuration: DictationProcessingConfiguration,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    startAuthorized: @escaping @MainActor @Sendable () -> Bool
+  ) async throws -> any DictationProcessingSession {
     let measurements = ProcessorMeasurementRecorder()
     measurements.record(.processorStarted, at: clock.now())
+    try authorizeStart(startAuthorized)
     try validate(configuration)
     let source = try await makeSource(configuration)
-    let acknowledgement: DictationRecognitionContextAcknowledgement?
-    if let context = configuration.captureContext {
-      do {
+    do {
+      try authorizeStart(startAuthorized)
+      let acknowledgement: DictationRecognitionContextAcknowledgement?
+      if let context = configuration.captureContext {
         acknowledgement = try await recognitionContextAcknowledgement?(configuration)
           ?? .unsupported(context)
+        try authorizeStart(startAuthorized)
         guard acknowledgement?.context == context else {
           throw StreamingDictationProcessorError.recognitionContextMismatch
         }
         if case .rejected? = acknowledgement {
           throw StreamingDictationProcessorError.recognitionContextRejected
         }
-      } catch {
-        await source.releaseResources()
-        throw error
+      } else {
+        acknowledgement = nil
       }
-    } else {
-      acknowledgement = nil
-    }
-    let callbackBuffer = StreamingDictationCallbackBuffer()
-    do {
+      let callbackBuffer = StreamingDictationCallbackBuffer()
+      try authorizeStart(startAuthorized)
       measurements.record(.sourceStartRequested, at: clock.now())
       try await source.start(
         provisional: { callbackBuffer.provisional($0, receivedAt: self.clock.now()) },
@@ -199,6 +210,12 @@ final class StreamingDictationProcessor: DictationProcessing {
       await source.releaseResources()
       throw error
     }
+  }
+
+  private func authorizeStart(
+    _ startAuthorized: @MainActor @Sendable () -> Bool
+  ) throws {
+    guard !Task.isCancelled, startAuthorized() else { throw CancellationError() }
   }
 
   private func validate(_ configuration: DictationProcessingConfiguration) throws {

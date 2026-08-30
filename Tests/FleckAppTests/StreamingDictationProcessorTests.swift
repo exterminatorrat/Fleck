@@ -25,6 +25,11 @@ private func processorDictionaryContext(
   )
 }
 
+@MainActor
+private final class ProcessingBeginErrorBox {
+  var error: Error?
+}
+
 private func processorDictionaryConfiguration(
   _ context: LocalWritingCaptureContext
 ) -> DictationProcessingConfiguration {
@@ -1362,6 +1367,87 @@ func processorThrowingDictionaryAcknowledgementReleasesSourceWithoutAudio() asyn
       level: { _ in }
     )
   }
+  #expect(source.startCount == 0)
+  #expect(source.releaseHookCount == 1)
+}
+
+@Test @MainActor
+func processorDictionaryCancellationWhileSourceCreationIsSuspendedConsumesNoAudio() async throws {
+  let context = try processorDictionaryContext()
+  let sourceGate = Gate()
+  let source = StreamingSpeechSourceProbe()
+  var startAuthorized = true
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in
+      await sourceGate.wait()
+      return source
+    },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "unused"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+  let errorBox = ProcessingBeginErrorBox()
+  let begin = Task {
+    do {
+      _ = try await processor.begin(
+        configuration: processorDictionaryConfiguration(context),
+        level: { _ in },
+        startAuthorized: { startAuthorized }
+      )
+    } catch {
+      errorBox.error = error
+    }
+  }
+  await sourceGate.waitUntilWaiting()
+
+  startAuthorized = false
+  await sourceGate.openGate()
+  await begin.value
+
+  #expect(errorBox.error is CancellationError)
+  #expect(source.startCount == 0)
+  #expect(source.releaseHookCount == 1)
+}
+
+@Test @MainActor
+func processorDictionaryCancellationWhileAcknowledgementIsSuspendedConsumesNoAudio() async throws {
+  let context = try processorDictionaryContext()
+  let acknowledgementGate = Gate()
+  let source = StreamingSpeechSourceProbe()
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    recognitionContextAcknowledgement: { _ in
+      await acknowledgementGate.wait()
+      return .unsupported(context)
+    },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "unused"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+  let errorBox = ProcessingBeginErrorBox()
+  let begin = Task {
+    do {
+      _ = try await processor.begin(
+        configuration: processorDictionaryConfiguration(context),
+        level: { _ in }
+      )
+    } catch {
+      errorBox.error = error
+    }
+  }
+  await acknowledgementGate.waitUntilWaiting()
+
+  begin.cancel()
+  await acknowledgementGate.openGate()
+  await begin.value
+
+  #expect(errorBox.error is CancellationError)
   #expect(source.startCount == 0)
   #expect(source.releaseHookCount == 1)
 }

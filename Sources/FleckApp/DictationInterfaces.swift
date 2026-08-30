@@ -42,7 +42,23 @@ protocol DictationProcessing: AnyObject {
     configuration: DictationProcessingConfiguration,
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession
+  func begin(
+    configuration: DictationProcessingConfiguration,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    startAuthorized: @escaping @MainActor @Sendable () -> Bool
+  ) async throws -> any DictationProcessingSession
   func handle(_ signal: DictationRuntimeSignal) async
+}
+
+extension DictationProcessing {
+  func begin(
+    configuration: DictationProcessingConfiguration,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    startAuthorized: @escaping @MainActor @Sendable () -> Bool
+  ) async throws -> any DictationProcessingSession {
+    guard startAuthorized() else { throw CancellationError() }
+    return try await begin(configuration: configuration, level: level)
+  }
 }
 
 @MainActor

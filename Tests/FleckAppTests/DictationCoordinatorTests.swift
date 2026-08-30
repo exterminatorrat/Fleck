@@ -131,6 +131,98 @@ func coordinatorMismatchedDictionaryCompletionInsertsNothing() async throws {
 }
 
 @Test @MainActor
+func coordinatorShortcutPinsDictionaryBeforeThresholdMutation() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("FleckShortcutDictionary-\(UUID().uuidString)", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let entry = PersonalDictionaryEntry(preferredForm: "FleckApp", aliases: ["fleck app"])
+  try await store.upsert(entry)
+  let threshold = Gate()
+  let pinGate = Gate()
+  let pinStarted = CompletionProbe()
+  let processing = ProcessingProbe(result: processingResult("unused"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      let published = try await store.publishedSnapshot()
+      await pinStarted.complete()
+      await pinGate.wait()
+      return try LocalWritingCaptureContext(
+        captureID: captureID,
+        generation: generation,
+        localeIdentifier: published.compiled.localeIdentifier,
+        speechEngine: engine,
+        publishedSnapshot: published
+      )
+    },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+
+  #expect(await waitForCompletion(pinStarted, timeout: .seconds(1)))
+  try await store.upsert(PersonalDictionaryEntry(
+    id: entry.id,
+    preferredForm: "Fleck",
+    aliases: ["fleck app"]
+  ))
+  await pinGate.openGate()
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+
+  let current = try #require(processing.configurations.first?.captureContext)
+  #expect(current.snapshot.entries.map(\.preferredForm) == ["FleckApp"])
+  await fixture.coordinator.cancelShortcut(session)
+  await fixture.coordinator.waitForShortcutTerminal(session)
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let next = try #require(processing.configurations.last?.captureContext)
+  #expect(next.snapshot.entries.map(\.preferredForm) == ["Fleck"])
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor
+func coordinatorShortShortcutReleaseDrainsDictionaryPinWithoutStarting() async throws {
+  let threshold = Gate()
+  let pinGate = Gate()
+  let pinStarted = CompletionProbe()
+  let releaseCompleted = CompletionProbe()
+  let processing = ProcessingProbe(result: processingResult("must not insert"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      await pinStarted.complete()
+      await pinGate.wait()
+      return try coordinatorDictionaryContext(
+        captureID: captureID,
+        generation: generation,
+        engine: engine
+      )
+    },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  #expect(await waitForCompletion(pinStarted, timeout: .seconds(1)))
+
+  let release = Task {
+    await fixture.coordinator.endShortcut(session)
+    await releaseCompleted.complete()
+  }
+  try? await Task.sleep(for: .milliseconds(20))
+  #expect(!(await releaseCompleted.isComplete))
+  #expect(processing.beginCount == 0)
+
+  await pinGate.openGate()
+  await release.value
+  await threshold.openGate()
+  await Task.yield()
+
+  #expect(processing.beginCount == 0)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+}
+
+@Test @MainActor
 func enhancedPreferenceUsesProcessingAndReportsItsSelectedEngine() async throws {
   let processing = ProcessingProbe(
     result: .init(
