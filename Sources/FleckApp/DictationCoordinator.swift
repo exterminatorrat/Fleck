@@ -343,8 +343,14 @@ final class DictationCoordinator {
       isShort: pressedAt.duration(to: releasedAt) < holdThreshold
     )
     active.physicalReleaseReceipt = receipt
+    if !receipt.isShort, active.stopOrigin == nil {
+      active.stopOrigin = .physicalRelease(releasedAt)
+    }
     capture = active
-    guard receipt.isShort else { return }
+    guard receipt.isShort else {
+      recordMeasurement(.physicalRelease, at: releasedAt, captureID: session.id)
+      return
+    }
 
     requestCancellation(session.id, at: clock.now())
     holdTask?.cancel()

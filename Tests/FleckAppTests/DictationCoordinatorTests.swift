@@ -493,6 +493,71 @@ func captureFirstLongReleaseReceiptKeepsLivePartialAndExactStopOrigin() async th
 }
 
 @Test @MainActor
+func captureFirstLongReleaseReceiptReservesOriginBeforeToolbarFinish() async throws {
+  let clock = ManualDictationClock()
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("Held result"))
+  let fixture = try Fixture(
+    processing: processing,
+    clock: clock.clock,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let flushGate = Gate()
+  fixture.saver.flushGate = flushGate
+  let press = clock.now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(250))
+    )
+  )
+  await processing.emit(.init(
+    generation: 1,
+    stableText: "Held ",
+    provisionalTail: "partial"
+  ))
+  #expect(fixture.editor.provisionalTexts == ["Held partial"])
+
+  clock.advance(by: .seconds(1))
+  let toolbarFinish = Task { await fixture.coordinator.finish() }
+  await flushGate.waitUntilWaiting()
+  await fixture.coordinator.finishHandsFreeShortcut(
+    session,
+    stopOrigin: .handsFreeKeyPress(clock.now)
+  )
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(250))
+    )
+  )
+  await flushGate.openGate()
+  await toolbarFinish.value
+
+  #expect(processing.stopOrigins == [.physicalRelease(release)])
+  #expect(processing.deadlineOrigins == [release])
+  #expect(fixture.coordinator.latestRuntimeMeasurements.physicalReleaseAt == release)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.integrity == .valid)
+  #expect(fixture.editor.committedTexts == ["Held result"])
+  #expect(fixture.saver.flushCount == 1)
+}
+
+@Test @MainActor
 func captureFirstEscapeDuringArmingPreservesPriorRecovery() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
