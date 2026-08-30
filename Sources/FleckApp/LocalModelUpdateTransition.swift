@@ -159,7 +159,11 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
 
     let dependencies = try validateDependencies(raw.predecessorCorpusDependencies)
     let roles = try validateReferenceRoles(raw.referenceRoles)
-    let rollback = try validateRollback(raw.rollback)
+    let rollback = try validateRollback(
+      raw.rollback,
+      predecessorInstalledBytes: installedBytes(predecessor.artifactManifests),
+      successorInstalledBytes: installedBytes(successor.artifactManifests)
+    )
     let identityDigest = try canonicalDigest(
       predecessor: predecessor,
       successor: successor,
@@ -289,7 +293,9 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
   }
 
   private static func validateRollback(
-    _ raw: RawLocalModelRollbackPolicy
+    _ raw: RawLocalModelRollbackPolicy,
+    predecessorInstalledBytes: Int64,
+    successorInstalledBytes: Int64
   ) throws -> LocalModelRollbackPolicy {
     guard raw.sideBySideBytes > 0,
           raw.stagingBytes > 0,
@@ -305,6 +311,8 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
       throw LocalModelUpdateTransitionError.byteCountOverflow
     }
     guard raw.sideBySideBytes == required,
+          raw.rollbackBytes >= predecessorInstalledBytes,
+          raw.stagingBytes >= successorInstalledBytes,
           raw.availableBytes >= required else {
       throw LocalModelUpdateTransitionError.insufficientRollbackReserve
     }
@@ -316,9 +324,22 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
     )
   }
 
+  private static func installedBytes(
+    _ manifests: [LocalModelTransitionArtifactManifest]
+  ) throws -> Int64 {
+    try manifests.reduce(0) { total, manifest in
+      let (sum, overflow) = total.addingReportingOverflow(manifest.installedBytes)
+      guard !overflow else {
+        throw LocalModelUpdateTransitionError.byteCountOverflow
+      }
+      return sum
+    }
+  }
+
   private static func validateDigest(_ digest: String) throws {
     guard digest.count == 64,
-          digest.allSatisfy({ "0123456789abcdef".contains($0) }) else {
+          digest.allSatisfy({ "0123456789abcdef".contains($0) }),
+          digest.contains(where: { $0 != "0" }) else {
       throw LocalModelUpdateTransitionError.invalidDigest(digest)
     }
   }

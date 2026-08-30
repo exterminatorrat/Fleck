@@ -8,6 +8,7 @@ private enum TransitionFixtures {
   static let digestB = String(repeating: "b", count: 64)
   static let digestC = String(repeating: "c", count: 64)
   static let digestD = String(repeating: "d", count: 64)
+  static let zeroDigest = String(repeating: "0", count: 64)
   static let revisionA = String(repeating: "1", count: 40)
   static let revisionB = String(repeating: "2", count: 40)
 
@@ -137,6 +138,93 @@ private enum TransitionFixtures {
       expectedSuccessor: expectedSuccessor,
       currentTrustPolicySequence: currentTrustSequence,
       currentTrustPolicyCheckpointDigest: currentTrustCheckpoint
+    )
+  }
+
+  static let signedEnvironment = LocalModelBuildEnvironment(
+    architecture: .arm64,
+    osMajor: 26,
+    languages: ["en"],
+    buildCapability: .signedDistributionCandidate,
+    claimScope: .general,
+    speakerCohort: .generalAdult,
+    acousticCohort: .general
+  )
+
+  static func signedProfile(
+    id: String,
+    role: LocalModelCatalogRole
+  ) -> RawLocalModelProfile {
+    .init(
+      family: LocalModelFamily.rules.rawValue,
+      profileID: id,
+      role: role.rawValue,
+      distribution: LocalModelDistribution.deterministic.rawValue,
+      artifact: nil,
+      compatibility: .init(
+        configurationABI: "fleck.local-writing.v1",
+        architectures: [LocalModelHardwareArchitecture.arm64.rawValue],
+        minimumOSMajor: 14,
+        maximumOSMajor: 26,
+        languages: ["en"]
+      ),
+      resources: .init(minimumRAMBytes: 1, workingRAMBytes: 1, storageBytes: 0),
+      license: LocalModelLicenseState.fleckOwned.rawValue,
+      evidence: LocalModelEvidenceTier.deterministic.rawValue,
+      admission: LocalModelAdmissionState.notAdmitted.rawValue,
+      claimScope: LocalModelClaimScope.general.rawValue,
+      speakerCohort: LocalModelSpeakerCohort.generalAdult.rawValue,
+      acousticCohort: LocalModelAcousticCohort.general.rawValue,
+      buildCapability: LocalModelBuildCapability.signedDistributionCandidate.rawValue
+    )
+  }
+
+  static let signedConfiguration = RawLocalModelConfiguration(
+    key: "promoted.en.v1",
+    requiredRoles: ["dictation", "cleanup", "routing"],
+    profiles: [
+      signedProfile(id: "signed-dictation", role: .dictation),
+      signedProfile(id: "signed-cleanup", role: .cleanup),
+      signedProfile(id: "signed-routing", role: .routing),
+    ]
+  )
+
+  static func signedPromotion(
+    transitionSuccessor: LocalModelTransitionReleaseIdentity? = nil
+  ) -> LocalModelPromotionTuple {
+    .init(
+      configurations: [signedConfiguration],
+      managedProfileIDs: [],
+      transitionSuccessor: transitionSuccessor
+    )
+  }
+
+  static func signedTransitionInputs() throws -> (
+    promotion: LocalModelPromotionTuple,
+    transition: LocalModelUpdateTransition
+  ) {
+    let snapshot = try LocalModelCatalogSnapshot.make(
+      for: signedEnvironment,
+      promotion: signedPromotion()
+    )
+    guard let configuration = snapshot.configurations.first else {
+      throw LocalModelCatalogSnapshotError.transitionSuccessorMismatch
+    }
+    let exactSuccessor = release(
+      packageDigest: digestC,
+      admission: .twoDeviceAccepted,
+      configurationKey: configuration.key,
+      configurationDigest: configuration.digest,
+      profileIdentityDigests: [digestB],
+      artifactManifests: [manifest(
+        digest: digestC,
+        revision: revisionB,
+        closedFileSetDigest: digestD
+      )]
+    )
+    return (
+      signedPromotion(transitionSuccessor: exactSuccessor),
+      try validate(raw(successor: exactSuccessor), expectedSuccessor: exactSuccessor)
     )
   }
 }
@@ -311,6 +399,82 @@ private enum TransitionFixtures {
     }
   }
 
+  @Test func transitionRejectsManifestUnderProvisionedRollbackAndStaging() {
+    let oversizedPredecessor = TransitionFixtures.release(
+      packageDigest: TransitionFixtures.digestA,
+      admission: .releaseAdmitted,
+      configurationKey: "previous.en.v1",
+      configurationDigest: TransitionFixtures.digestB,
+      profileIdentityDigests: [TransitionFixtures.digestA],
+      artifactManifests: [TransitionFixtures.manifest(installedBytes: 41)]
+    )
+    #expect(throws: LocalModelUpdateTransitionError.insufficientRollbackReserve) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        predecessor: oversizedPredecessor
+      ))
+    }
+
+    let oversizedSuccessor = TransitionFixtures.release(
+      packageDigest: TransitionFixtures.digestC,
+      admission: .twoDeviceAccepted,
+      configurationKey: "promoted.en.v1",
+      configurationDigest: TransitionFixtures.digestC,
+      profileIdentityDigests: [TransitionFixtures.digestB],
+      artifactManifests: [TransitionFixtures.manifest(
+        digest: TransitionFixtures.digestC,
+        revision: TransitionFixtures.revisionB,
+        closedFileSetDigest: TransitionFixtures.digestD,
+        installedBytes: 61
+      )]
+    )
+    #expect(throws: LocalModelUpdateTransitionError.insufficientRollbackReserve) {
+      _ = try TransitionFixtures.validate(
+        TransitionFixtures.raw(successor: oversizedSuccessor),
+        expectedSuccessor: oversizedSuccessor
+      )
+    }
+  }
+
+  @Test func transitionRejectsManifestByteOverflowAndZeroDigest() {
+    let overflowingPredecessor = TransitionFixtures.release(
+      packageDigest: TransitionFixtures.digestA,
+      admission: .releaseAdmitted,
+      configurationKey: "previous.en.v1",
+      configurationDigest: TransitionFixtures.digestB,
+      profileIdentityDigests: [TransitionFixtures.digestA],
+      artifactManifests: [
+        TransitionFixtures.manifest(installedBytes: Int64.max),
+        TransitionFixtures.manifest(
+          digest: TransitionFixtures.digestB,
+          revision: TransitionFixtures.revisionB,
+          closedFileSetDigest: TransitionFixtures.digestC,
+          installedBytes: 1
+        ),
+      ]
+    )
+    #expect(throws: LocalModelUpdateTransitionError.byteCountOverflow) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        predecessor: overflowingPredecessor
+      ))
+    }
+
+    let zeroIdentityPredecessor = TransitionFixtures.release(
+      packageDigest: TransitionFixtures.zeroDigest,
+      admission: .releaseAdmitted,
+      configurationKey: "previous.en.v1",
+      configurationDigest: TransitionFixtures.digestB,
+      profileIdentityDigests: [TransitionFixtures.digestA],
+      artifactManifests: [TransitionFixtures.manifest()]
+    )
+    #expect(throws: LocalModelUpdateTransitionError.invalidDigest(
+      TransitionFixtures.zeroDigest
+    )) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        predecessor: zeroIdentityPredecessor
+      ))
+    }
+  }
+
   @Test func transitionDigestCanonicalizesSetsButPreservesDependencyOrder() throws {
     let manifestB = TransitionFixtures.manifest(
       digest: TransitionFixtures.digestB,
@@ -347,12 +511,18 @@ private enum TransitionFixtures {
     let first = try TransitionFixtures.validate(TransitionFixtures.raw(
       predecessor: predecessor,
       dependencies: dependencies,
-      referenceRoles: ["install", "retainForRollback", "shared"]
+      referenceRoles: ["install", "retainForRollback", "shared"],
+      sideBySideBytes: 140,
+      rollbackBytes: 80,
+      availableBytes: 140
     ))
     let setsReordered = try TransitionFixtures.validate(TransitionFixtures.raw(
       predecessor: reorderedSets,
       dependencies: dependencies,
-      referenceRoles: ["shared", "retainForRollback", "install"]
+      referenceRoles: ["shared", "retainForRollback", "install"],
+      sideBySideBytes: 140,
+      rollbackBytes: 80,
+      availableBytes: 140
     ))
     #expect(first.identityDigest == setsReordered.identityDigest)
 
@@ -371,58 +541,58 @@ private enum TransitionFixtures {
     let orderChanged = try TransitionFixtures.validate(TransitionFixtures.raw(
       predecessor: predecessor,
       dependencies: reversedDependencies,
-      referenceRoles: ["install", "retainForRollback", "shared"]
+      referenceRoles: ["install", "retainForRollback", "shared"],
+      sideBySideBytes: 140,
+      rollbackBytes: 80,
+      availableBytes: 140
     ))
     #expect(first.identityDigest != orderChanged.identityDigest)
   }
 
   @Test func transitionMetadataIsNonselectableAndUpdateIsNeverInferred() throws {
-    let transition = try TransitionFixtures.validate()
-    let successorConfiguration = LocalModelConfiguration(
-      key: transition.successor.configurationKey,
-      digest: transition.successor.configurationDigest,
-      profiles: []
-    )
-    let withoutTransition = try LocalModelCatalogSnapshot.validated(
-      buildCapability: .signedDistributionCandidate,
-      configurations: [successorConfiguration],
-      promotionManagedProfileIDs: [],
-      transitions: []
+    let withoutTransition = try LocalModelCatalogSnapshot.make(
+      for: TransitionFixtures.signedEnvironment,
+      promotion: TransitionFixtures.signedPromotion()
     )
     #expect(!withoutTransition.isUpdateAvailable)
 
-    let withTransition = try LocalModelCatalogSnapshot.validated(
-      buildCapability: .signedDistributionCandidate,
-      configurations: [successorConfiguration],
-      promotionManagedProfileIDs: [],
-      transitions: [transition]
+    let inputs = try TransitionFixtures.signedTransitionInputs()
+    let withTransition = try LocalModelCatalogSnapshot.make(
+      for: TransitionFixtures.signedEnvironment,
+      promotion: inputs.promotion,
+      transitions: [inputs.transition]
     )
     #expect(withTransition.isUpdateAvailable)
-    #expect(withTransition.configuration(key: transition.predecessor.configurationKey) == nil)
-    #expect(withTransition.profile(id: transition.predecessor.profileIdentityDigests[0]) == nil)
+    #expect(withTransition.configuration(
+      key: inputs.transition.predecessor.configurationKey
+    ) == nil)
+    #expect(withTransition.profile(
+      id: inputs.transition.predecessor.profileIdentityDigests[0]
+    ) == nil)
   }
 
   @Test func snapshotsRejectMultipleOrWrongCapabilityTransitions() throws {
-    let transition = try TransitionFixtures.validate()
-    for capability in [
-      LocalModelBuildCapability.ordinarySafe,
-      .developmentQuality,
-    ] {
-      #expect(throws: LocalModelCatalogSnapshotError.transitionNotAllowed) {
-        _ = try LocalModelCatalogSnapshot.validated(
-          buildCapability: capability,
-          configurations: [],
-          promotionManagedProfileIDs: [],
-          transitions: [transition]
-        )
-      }
+    let inputs = try TransitionFixtures.signedTransitionInputs()
+    let ordinary = LocalModelBuildEnvironment(
+      architecture: .arm64,
+      osMajor: 26,
+      languages: ["en"],
+      buildCapability: .ordinarySafe,
+      claimScope: .general,
+      speakerCohort: .generalAdult,
+      acousticCohort: .general
+    )
+    #expect(throws: LocalModelCatalogSnapshotError.transitionNotAllowed) {
+      _ = try LocalModelCatalogSnapshot.make(
+        for: ordinary,
+        transitions: [inputs.transition]
+      )
     }
     #expect(throws: LocalModelCatalogSnapshotError.multipleTransitions) {
-      _ = try LocalModelCatalogSnapshot.validated(
-        buildCapability: .signedDistributionCandidate,
-        configurations: [],
-        promotionManagedProfileIDs: [],
-        transitions: [transition, transition]
+      _ = try LocalModelCatalogSnapshot.make(
+        for: TransitionFixtures.signedEnvironment,
+        promotion: inputs.promotion,
+        transitions: [inputs.transition, inputs.transition]
       )
     }
   }

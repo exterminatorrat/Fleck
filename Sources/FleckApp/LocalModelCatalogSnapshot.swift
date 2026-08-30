@@ -24,6 +24,16 @@ struct LocalModelCatalogSnapshot: Equatable, Sendable {
   let configurations: [LocalModelConfiguration]
   let transitions: [LocalModelUpdateTransition]
 
+  private init(
+    buildCapability: LocalModelBuildCapability,
+    configurations: [LocalModelConfiguration],
+    transitions: [LocalModelUpdateTransition]
+  ) {
+    self.buildCapability = buildCapability
+    self.configurations = configurations
+    self.transitions = transitions
+  }
+
   var isUpdateAvailable: Bool { transitions.count == 1 }
 
   func configuration(key: String) -> LocalModelConfiguration? {
@@ -96,7 +106,7 @@ struct LocalModelCatalogSnapshot: Equatable, Sendable {
     return snapshot
   }
 
-  static func validated(
+  private static func validated(
     buildCapability: LocalModelBuildCapability,
     configurations: [LocalModelConfiguration],
     promotionManagedProfileIDs: Set<String>,
