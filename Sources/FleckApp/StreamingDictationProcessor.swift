@@ -153,7 +153,8 @@ final class StreamingDictationProcessor: DictationProcessing {
     try await begin(
       configuration: configuration,
       level: level,
-      startAuthorized: { true }
+      startAuthorized: { true },
+      requiresCaptureContext: false
     )
   }
 
@@ -162,6 +163,23 @@ final class StreamingDictationProcessor: DictationProcessing {
     level: @escaping @MainActor @Sendable (Float) -> Void,
     startAuthorized: @escaping @MainActor @Sendable () -> Bool
   ) async throws -> any DictationProcessingSession {
+    try await begin(
+      configuration: configuration,
+      level: level,
+      startAuthorized: startAuthorized,
+      requiresCaptureContext: true
+    )
+  }
+
+  private func begin(
+    configuration: DictationProcessingConfiguration,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    startAuthorized: @escaping @MainActor @Sendable () -> Bool,
+    requiresCaptureContext: Bool
+  ) async throws -> any DictationProcessingSession {
+    if requiresCaptureContext, configuration.captureContext == nil {
+      throw StreamingDictationProcessorError.captureContextMismatch
+    }
     let measurements = ProcessorMeasurementRecorder()
     measurements.record(.processorStarted, at: clock.now())
     try authorizeStart(startAuthorized)

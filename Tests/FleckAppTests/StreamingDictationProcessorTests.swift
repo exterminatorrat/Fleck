@@ -1319,6 +1319,51 @@ func processorUnsupportedDictionaryRecognitionStillUsesPinnedResolution() async 
 }
 
 @Test @MainActor
+func processorNilDictionaryContextFailsBeforeSourceCreation() async throws {
+  let source = StreamingSpeechSourceProbe()
+  var makeSourceCount = 0
+  var acknowledgementCount = 0
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in
+      makeSourceCount += 1
+      return source
+    },
+    recognitionContextAcknowledgement: { _ in
+      acknowledgementCount += 1
+      throw StreamingSpeechSourceProbeError.failed
+    },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "unused"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+
+  do {
+    let configuration = DictationProcessingConfiguration(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    )
+    let session = try await processor.begin(
+      configuration: configuration,
+      level: { _ in },
+      startAuthorized: { true }
+    )
+    Issue.record("Expected missing capture context")
+    await session.cancel()
+  } catch {
+    #expect(error as? StreamingDictationProcessorError == .captureContextMismatch)
+  }
+
+  #expect(makeSourceCount == 0)
+  #expect(acknowledgementCount == 0)
+  #expect(source.startCount == 0)
+  #expect(source.releaseHookCount == 0)
+}
+
+@Test @MainActor
 func processorRejectedDictionaryRecognitionConsumesNoAudio() async throws {
   let context = try processorDictionaryContext()
   let source = StreamingSpeechSourceProbe()

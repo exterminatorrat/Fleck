@@ -17,6 +17,25 @@ private func processingResult(_ text: String) -> DictationProcessingResult {
   )
 }
 
+private func processingResult(
+  _ result: DictationProcessingResult,
+  pinnedTo context: LocalWritingCaptureContext?
+) -> DictationProcessingResult {
+  guard result.captureContext == nil, let context else { return result }
+  return .init(
+    rawTranscript: result.rawTranscript,
+    dictionaryBaseline: result.dictionaryBaseline,
+    cleanedTranscript: result.cleanedTranscript,
+    insertedText: result.insertedText,
+    cleanupOutcome: result.cleanupOutcome,
+    measurements: result.measurements,
+    captureContext: context,
+    recognitionContextAcknowledgement: .unsupported(context),
+    protectedDictionaryForms: result.protectedDictionaryForms,
+    appliedDictionaryEntryIDs: result.appliedDictionaryEntryIDs
+  )
+}
+
 private func coordinatorDictionaryContext(
   captureID: UUID,
   generation: UInt64,
@@ -56,6 +75,24 @@ func coordinatorMissingDictionaryContextConsumesNoAudioOrInsertion() async throw
   #expect(fixture.editor.committedTexts.isEmpty)
   #expect(fixture.saver.savedTexts.isEmpty)
   #expect(fixture.coordinator.phase != .listening(mode: .focused, engine: .standard))
+}
+
+@Test @MainActor
+func coordinatorNilDictionaryProviderFailsBeforePrepareOrProcessing() async throws {
+  let processing = ProcessingProbe(result: processingResult("must not insert"))
+  let fixture = try Fixture(
+    processing: processing,
+    providesCaptureContext: false
+  )
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+
+  #expect(processing.prepareCount == 0)
+  #expect(processing.beginCount == 0)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.coordinator.latestProcessingResult == nil)
+  #expect(try await fixture.history.list().isEmpty)
 }
 
 @Test @MainActor
@@ -128,6 +165,45 @@ func coordinatorMismatchedDictionaryCompletionInsertsNothing() async throws {
   #expect(fixture.editor.committedTexts.isEmpty)
   #expect(fixture.saver.savedTexts.isEmpty)
   #expect(fixture.coordinator.latestProcessingResult == nil)
+}
+
+@Test @MainActor
+func coordinatorRejectedDictionaryCompletionInsertsNothing() async throws {
+  let box = DictionaryContextBox()
+  let processing = ProcessingProbe(result: processingResult("pending"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      let context = try coordinatorDictionaryContext(
+        captureID: captureID,
+        generation: generation,
+        engine: engine
+      )
+      box.value = context
+      return context
+    }
+  )
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let pinned = try #require(box.value)
+  processing.complete(with: .init(
+    rawTranscript: "open fleck app",
+    dictionaryBaseline: "open FleckApp",
+    cleanedTranscript: "open FleckApp",
+    insertedText: "open FleckApp",
+    cleanupOutcome: .cleaned,
+    measurements: .empty,
+    captureContext: pinned,
+    recognitionContextAcknowledgement: .rejected(pinned),
+    protectedDictionaryForms: ["FleckApp"],
+    appliedDictionaryEntryIDs: pinned.snapshot.entries.map(\.id)
+  ))
+
+  await fixture.coordinator.finish()
+
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.coordinator.latestProcessingResult == nil)
+  #expect(try await fixture.history.list().isEmpty)
 }
 
 @Test @MainActor
@@ -3204,6 +3280,7 @@ private final class Fixture {
     captureContextProvider: (@MainActor (
       UUID, UInt64, DictationSpeechEngine
     ) async throws -> LocalWritingCaptureContext)? = nil,
+    providesCaptureContext: Bool = true,
     onFocusedEditorRollback: (() -> Void)? = nil,
     onFocusedProvisionalUpdate: (() -> Void)? = nil,
     preferred: DictationSpeechEngine = .standard,
@@ -3243,6 +3320,22 @@ private final class Fixture {
     editor.onCancelFocusedDictation = onFocusedEditorRollback
     editor.onFocusedProvisionalUpdate = onFocusedProvisionalUpdate
     provider.engines = [.standard: standard, .enhancedLocal: enhanced]
+    let effectiveCaptureContextProvider: (@MainActor (
+      UUID, UInt64, DictationSpeechEngine
+    ) async throws -> LocalWritingCaptureContext)?
+    if let captureContextProvider {
+      effectiveCaptureContextProvider = captureContextProvider
+    } else if processing != nil, providesCaptureContext {
+      effectiveCaptureContextProvider = { captureID, generation, engine in
+        try coordinatorDictionaryContext(
+          captureID: captureID,
+          generation: generation,
+          engine: engine
+        )
+      }
+    } else {
+      effectiveCaptureContextProvider = nil
+    }
     coordinator = DictationCoordinator(
       engineProvider: provider,
       preferredEngine: { [preference] in preference.value },
@@ -3252,7 +3345,7 @@ private final class Fixture {
       historyController: historyController,
       historyEnabled: { historyEnabled },
       processing: processing,
-      captureContextProvider: captureContextProvider,
+      captureContextProvider: effectiveCaptureContextProvider,
       clock: clock,
       holdSleeper: holdSleeper
     )
@@ -3459,11 +3552,13 @@ final class ProcessingProbe: DictationProcessing {
   private let onFinishUnblocked: (() -> Void)?
   private let onSessionDrain: (() -> Void)?
   private var session: ProcessingSessionProbe?
+  private var captureContext: LocalWritingCaptureContext?
   private var levelCallback: (@MainActor @Sendable (Float) -> Void)?
   private var finishStarted = false
   private var finishWaiters: [CheckedContinuation<Void, Never>] = []
 
   private(set) var publishedUpdates: [DictationTextUpdate] = []
+  private(set) var prepareCount = 0
   private(set) var beginCount = 0
   private(set) var configurations: [DictationProcessingConfiguration] = []
   private(set) var deadlineOrigins: [ContinuousClock.Instant] = []
@@ -3503,6 +3598,7 @@ final class ProcessingProbe: DictationProcessing {
 
   func prepare(for intent: DictationPreparationIntent) async {
     _ = intent
+    prepareCount += 1
   }
 
   func begin(
@@ -3510,6 +3606,8 @@ final class ProcessingProbe: DictationProcessing {
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession {
     configurations.append(configuration)
+    captureContext = configuration.captureContext
+    result = processingResult(result, pinnedTo: captureContext)
     levelCallback = level
     if let synchronousLevel { level(synchronousLevel) }
     beginCount += 1
@@ -3554,8 +3652,9 @@ final class ProcessingProbe: DictationProcessing {
   }
 
   func complete(with result: DictationProcessingResult) {
-    self.result = result
-    session?.setResult(result)
+    let pinnedResult = processingResult(result, pinnedTo: captureContext)
+    self.result = pinnedResult
+    session?.setResult(pinnedResult)
   }
 
   func waitUntilFinishStarted() async {

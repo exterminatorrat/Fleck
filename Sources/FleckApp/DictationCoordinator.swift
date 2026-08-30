@@ -483,7 +483,17 @@ final class DictationCoordinator {
     engine: DictationSpeechEngine,
     processing: any DictationProcessing
   ) async {
-    if capture?.captureContext == nil, let captureContextProvider {
+    if capture?.captureContext == nil {
+      guard let captureContextProvider else {
+        guard finishStarting(id) != nil else { return }
+        guard await continueCapture(id) else { return }
+        await terminate(
+          id,
+          phase: .failed(message(for: StreamingDictationProcessorError.captureContextMismatch)),
+          cancelEditor: mode == .focused
+        )
+        return
+      }
       let context: LocalWritingCaptureContext
       do {
         guard let reserved = capture, reserved.id == id else { return }
@@ -519,17 +529,13 @@ final class DictationCoordinator {
 
     let session: any DictationProcessingSession
     do {
-      let configuration: DictationProcessingConfiguration
-      if let context = capture?.captureContext {
-        configuration = .init(mode: mode, captureContext: context)
-      } else {
-        configuration = .init(
-          captureID: id,
-          mode: mode,
-          recognitionContext: .englishDefault,
-          engine: engine
-        )
+      guard let context = capture?.captureContext else {
+        throw StreamingDictationProcessorError.captureContextMismatch
       }
+      let configuration = DictationProcessingConfiguration(
+        mode: mode,
+        captureContext: context
+      )
       session = try await processing.begin(
         configuration: configuration,
         level: { [weak self] level in
@@ -745,8 +751,15 @@ final class DictationCoordinator {
     guard await continueCapture(id) else { return }
     guard let capture, capture.id == id else { return }
     if let expectedContext = capture.captureContext {
+      let acknowledgementIsAccepted: Bool
+      switch result.recognitionContextAcknowledgement {
+      case .applied(let context), .unsupported(let context):
+        acknowledgementIsAccepted = context == expectedContext
+      case .rejected, nil:
+        acknowledgementIsAccepted = false
+      }
       guard result.captureContext == expectedContext,
-        result.recognitionContextAcknowledgement?.context == expectedContext
+        acknowledgementIsAccepted
       else {
         await terminate(
           id,
