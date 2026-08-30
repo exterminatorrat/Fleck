@@ -51,12 +51,12 @@ private enum LocalCatalogFixtures {
     workingRAMBytes: Int64 = 8,
     storageBytes: Int64 = 8,
     license: String = "ccBy40Reviewed",
-    evidence: String = "reviewed",
-    admission: String = "admitted",
+    evidence: String = "identityVerified",
+    admission: String = "notAdmitted",
     claimScope: String = "general",
     speakerCohort: String = "generalAdult",
     acousticCohort: String = "general",
-    buildCapability: String = "enhancedCandidate"
+    buildCapability: String = "developmentQuality"
   ) -> RawLocalModelProfile {
     .init(
       family: family,
@@ -121,7 +121,7 @@ private enum LocalCatalogFixtures {
     architecture: LocalModelHardwareArchitecture = .arm64,
     osMajor: Int = 15,
     languages: Set<String> = ["en"],
-    buildCapability: LocalModelBuildCapability = .enhancedCandidate
+    buildCapability: LocalModelBuildCapability = .developmentQuality
   ) -> LocalModelBuildEnvironment {
     .init(
       architecture: architecture,
@@ -340,7 +340,7 @@ private enum LocalCatalogFixtures {
 
     let mismatched = LocalCatalogFixtures.replacing(
       LocalCatalogFixtures.profile(),
-      admission: "candidate"
+      admission: "signedDistributionAccepted"
     )
     #expect(throws: LocalModelCatalogError.evidenceAdmissionMismatch) {
       _ = try LocalModelCatalog.validate(
@@ -357,13 +357,13 @@ private enum LocalCatalogFixtures {
       distribution: "system",
       license: "system",
       evidence: "platform",
-      admission: "system",
-      buildCapability: "ordinary"
+      admission: "notAdmitted",
+      buildCapability: "ordinarySafe"
     )
     #expect(throws: LocalModelCatalogError.unmanagedArtifact) {
       _ = try LocalModelCatalog.validate(
         LocalCatalogFixtures.configuration(profiles: [system, LocalCatalogFixtures.cleanup()]),
-        for: LocalCatalogFixtures.environment()
+        for: LocalCatalogFixtures.environment(buildCapability: .ordinarySafe)
       )
     }
 
@@ -373,13 +373,13 @@ private enum LocalCatalogFixtures {
       distribution: "deterministic",
       license: "fleckOwned",
       evidence: "deterministic",
-      admission: "deterministic",
-      buildCapability: "enhancedCandidate"
+      admission: "notAdmitted",
+      buildCapability: "ordinarySafe"
     )
     #expect(throws: LocalModelCatalogError.unmanagedArtifact) {
       _ = try LocalModelCatalog.validate(
         LocalCatalogFixtures.configuration(profiles: [deterministic, LocalCatalogFixtures.cleanup()]),
-        for: LocalCatalogFixtures.environment()
+        for: LocalCatalogFixtures.environment(buildCapability: .ordinarySafe)
       )
     }
   }
@@ -418,11 +418,15 @@ private enum LocalCatalogFixtures {
     let ordinaryProfiles = [
       LocalCatalogFixtures.replacing(
         LocalCatalogFixtures.profile(),
-        buildCapability: "ordinary"
+        evidence: "releaseAdmitted",
+        admission: "releaseAdmitted",
+        buildCapability: "ordinarySafe"
       ),
       LocalCatalogFixtures.replacing(
         LocalCatalogFixtures.cleanup(),
-        buildCapability: "ordinary"
+        evidence: "releaseAdmitted",
+        admission: "releaseAdmitted",
+        buildCapability: "ordinarySafe"
       )
     ]
     #expect(throws: LocalModelCatalogError.incompatibleBuildCapability) {
@@ -434,8 +438,24 @@ private enum LocalCatalogFixtures {
   }
 
   @Test func catalogRejectsHardwareOSAndLanguageMismatch() {
+    let x86Profiles = [
+      LocalCatalogFixtures.replacing(
+        LocalCatalogFixtures.profile(),
+        architectures: ["x86_64"]
+      ),
+      LocalCatalogFixtures.replacing(
+        LocalCatalogFixtures.cleanup(),
+        architectures: ["x86_64"]
+      )
+    ]
+    #expect(throws: LocalModelCatalogError.incompatibleHardware) {
+      _ = try LocalModelCatalog.validate(
+        LocalCatalogFixtures.configuration(profiles: x86Profiles),
+        for: LocalCatalogFixtures.environment(architecture: .x86_64)
+      )
+    }
+
     let mismatches: [(LocalModelBuildEnvironment, LocalModelCatalogError)] = [
-      (LocalCatalogFixtures.environment(architecture: .x86_64), .incompatibleHardware),
       (LocalCatalogFixtures.environment(osMajor: 17), .incompatibleOS),
       (LocalCatalogFixtures.environment(languages: ["zh-Hans"]), .incompatibleLanguage)
     ]
@@ -477,15 +497,15 @@ private enum LocalCatalogFixtures {
   @Test func catalogRejectsOwnerPrivateEvidenceInOrdinaryBuilds() {
     let privateProfile = LocalCatalogFixtures.replacing(
       LocalCatalogFixtures.profile(),
-      evidence: "ownerPrivate",
-      admission: "candidate",
+      evidence: "identityVerified",
+      admission: "notAdmitted",
       claimScope: "ownerPrivate",
-      buildCapability: "ordinary"
+      buildCapability: "ordinarySafe"
     )
     #expect(throws: LocalModelCatalogError.ownerPrivateEvidenceForbidden) {
       _ = try LocalModelCatalog.validate(
         LocalCatalogFixtures.configuration(profiles: [privateProfile, LocalCatalogFixtures.cleanup()]),
-        for: LocalCatalogFixtures.environment(buildCapability: .ordinary)
+        for: LocalCatalogFixtures.environment(buildCapability: .ordinarySafe)
       )
     }
   }
@@ -514,10 +534,30 @@ private enum LocalCatalogFixtures {
       LocalCatalogFixtures.configuration(profiles: [cleanup, reorderedDictation]),
       for: LocalCatalogFixtures.environment()
     )
+    let laterEvidenceProfiles = [dictation, cleanup].map {
+      LocalCatalogFixtures.replacing(
+        $0,
+        evidence: "twoDeviceAccepted",
+        admission: "twoDeviceAccepted"
+      )
+    }
+    let laterEvidence = try LocalModelCatalog.validate(
+      LocalCatalogFixtures.configuration(profiles: laterEvidenceProfiles),
+      for: LocalCatalogFixtures.environment()
+    )
+    let changedRuntime = LocalCatalogFixtures.profile(
+      artifact: LocalCatalogFixtures.artifact(runtimeABI: "runtime-changed")
+    )
+    let changedIdentity = try LocalModelCatalog.validate(
+      LocalCatalogFixtures.configuration(profiles: [changedRuntime, cleanup]),
+      for: LocalCatalogFixtures.environment()
+    )
 
     #expect(first.key == "parakeet-gemma.en.v1")
     #expect(first.digest.count == 64)
     #expect(first.digest == second.digest)
+    #expect(first.digest == laterEvidence.digest)
+    #expect(first.digest != changedIdentity.digest)
     #expect(first.profiles == second.profiles)
   }
 
@@ -552,12 +592,12 @@ private enum LocalCatalogFixtures {
       maximumOSMajor: 16,
       resources: .init(minimumRAMBytes: 4, workingRAMBytes: 8, storageBytes: 4),
       license: .ccBy40Reviewed,
-      evidence: .reviewed,
-      admission: .admitted,
+      evidence: .identityVerified,
+      admission: .notAdmitted,
       claimScope: .general,
       speakerCohort: .generalAdult,
       acousticCohort: .general,
-      buildCapability: .enhancedCandidate
+      buildCapability: .developmentQuality
     )
     let gemmaRaw = RawLocalModelProfile(
       adapting: gemma,
@@ -568,12 +608,12 @@ private enum LocalCatalogFixtures {
       maximumOSMajor: 16,
       resources: .init(minimumRAMBytes: 4, workingRAMBytes: 8, storageBytes: 6),
       license: .gemmaTermsReviewed,
-      evidence: .reviewed,
-      admission: .admitted,
+      evidence: .identityVerified,
+      admission: .notAdmitted,
       claimScope: .general,
       speakerCohort: .generalAdult,
       acousticCohort: .general,
-      buildCapability: .enhancedCandidate
+      buildCapability: .developmentQuality
     )
     let configuration = try LocalModelCatalog.validate(
       .init(
@@ -589,6 +629,9 @@ private enum LocalCatalogFixtures {
     #expect(parakeet.files.map(\.path) == ["parakeet.mlmodelc/model.mil"])
     #expect(gemma.files.map(\.path) == ["model.safetensors"])
     #expect(configuration.profiles.map(\.role) == [.cleanup, .dictation])
+    #expect(configuration.profiles.allSatisfy { $0.evidence == .identityVerified })
+    #expect(configuration.profiles.allSatisfy { $0.admission == .notAdmitted })
+    #expect(configuration.profiles.allSatisfy { $0.buildCapability == .developmentQuality })
     #expect(configuration.profiles.first(where: { $0.role == .dictation })?.artifact?.modelID == parakeet.modelID)
     #expect(configuration.profiles.first(where: { $0.role == .cleanup })?.artifact?.modelID == gemma.modelID)
   }

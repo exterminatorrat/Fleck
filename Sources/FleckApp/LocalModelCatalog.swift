@@ -39,15 +39,20 @@ enum LocalModelLicenseState: String, Equatable, Sendable {
 enum LocalModelEvidenceTier: String, Equatable, Sendable {
   case platform
   case deterministic
-  case reviewed
-  case ownerPrivate
+  case documented
+  case identityVerified
+  case labCompatible
+  case fleckQualified
+  case twoDeviceAccepted
+  case signedDistributionAccepted
+  case releaseAdmitted
 }
 
 enum LocalModelAdmissionState: String, Equatable, Sendable {
-  case system
-  case deterministic
-  case admitted
-  case candidate
+  case notAdmitted
+  case twoDeviceAccepted
+  case signedDistributionAccepted
+  case releaseAdmitted
 }
 
 enum LocalModelClaimScope: String, Equatable, Sendable {
@@ -66,8 +71,9 @@ enum LocalModelAcousticCohort: String, Equatable, Sendable {
 }
 
 enum LocalModelBuildCapability: String, Equatable, Sendable {
-  case ordinary
-  case enhancedCandidate
+  case ordinarySafe
+  case developmentQuality
+  case signedDistributionCandidate
 }
 
 struct RawLocalModelArtifactFile: Equatable, Sendable {
@@ -353,17 +359,17 @@ enum LocalModelCatalog {
       artifact = nil
     }
 
-    guard evidenceMatchesAdmission(evidence, admission, distribution: distribution) else {
-      throw LocalModelCatalogError.evidenceAdmissionMismatch
+    if claimScope == .ownerPrivate && buildCapability != .developmentQuality {
+      throw LocalModelCatalogError.ownerPrivateEvidenceForbidden
     }
-    if evidence == .ownerPrivate {
-      guard claimScope == .ownerPrivate else {
-        throw LocalModelCatalogError.evidenceAdmissionMismatch
-      }
-      guard environment.buildCapability == .enhancedCandidate,
-            buildCapability == .enhancedCandidate else {
-        throw LocalModelCatalogError.ownerPrivateEvidenceForbidden
-      }
+    guard evidenceMatchesState(
+      evidence: evidence,
+      admission: admission,
+      distribution: distribution,
+      buildCapability: buildCapability,
+      claimScope: claimScope
+    ) else {
+      throw LocalModelCatalogError.evidenceAdmissionMismatch
     }
 
     let architectures = try Set(raw.compatibility.architectures.map {
@@ -379,7 +385,7 @@ enum LocalModelCatalog {
           }) else {
       throw LocalModelCatalogError.invalidValue(field: "compatibility", value: raw.profileID)
     }
-    guard architectures.contains(environment.architecture) else {
+    guard architectures == [.arm64], environment.architecture == .arm64 else {
       throw LocalModelCatalogError.incompatibleHardware
     }
     guard (raw.compatibility.minimumOSMajor...raw.compatibility.maximumOSMajor)
@@ -531,16 +537,30 @@ enum LocalModelCatalog {
       && !path.split(separator: "/").contains("..")
   }
 
-  private static func evidenceMatchesAdmission(
-    _ evidence: LocalModelEvidenceTier,
-    _ admission: LocalModelAdmissionState,
-    distribution: LocalModelDistribution
+  private static func evidenceMatchesState(
+    evidence: LocalModelEvidenceTier,
+    admission: LocalModelAdmissionState,
+    distribution: LocalModelDistribution,
+    buildCapability: LocalModelBuildCapability,
+    claimScope: LocalModelClaimScope
   ) -> Bool {
-    switch (evidence, admission, distribution) {
-    case (.platform, .system, .system),
-         (.deterministic, .deterministic, .deterministic),
-         (.reviewed, .admitted, .fleckManaged),
-         (.ownerPrivate, .candidate, .fleckManaged):
+    switch (evidence, admission, distribution, buildCapability, claimScope) {
+    case (.platform, .notAdmitted, .system, .ordinarySafe, .general),
+         (.deterministic, .notAdmitted, .deterministic, .ordinarySafe, .general),
+         (.documented, .notAdmitted, .fleckManaged, .developmentQuality, .general),
+         (.documented, .notAdmitted, .fleckManaged, .developmentQuality, .ownerPrivate),
+         (.identityVerified, .notAdmitted, .fleckManaged, .developmentQuality, .general),
+         (.identityVerified, .notAdmitted, .fleckManaged, .developmentQuality, .ownerPrivate),
+         (.labCompatible, .notAdmitted, .fleckManaged, .developmentQuality, .general),
+         (.labCompatible, .notAdmitted, .fleckManaged, .developmentQuality, .ownerPrivate),
+         (.fleckQualified, .notAdmitted, .fleckManaged, .developmentQuality, .general),
+         (.fleckQualified, .notAdmitted, .fleckManaged, .developmentQuality, .ownerPrivate),
+         (.twoDeviceAccepted, .twoDeviceAccepted, .fleckManaged, .developmentQuality, .general),
+         (.twoDeviceAccepted, .twoDeviceAccepted,
+          .fleckManaged, .developmentQuality, .ownerPrivate),
+         (.signedDistributionAccepted, .signedDistributionAccepted,
+          .fleckManaged, .signedDistributionCandidate, .general),
+         (.releaseAdmitted, .releaseAdmitted, .fleckManaged, .ordinarySafe, .general):
       return true
     default:
       return false
@@ -593,8 +613,6 @@ enum LocalModelCatalog {
       try encoder.append(String(profile.resources.workingRAMBytes))
       try encoder.append(String(profile.resources.storageBytes))
       try encoder.append(profile.license.rawValue)
-      try encoder.append(profile.evidence.rawValue)
-      try encoder.append(profile.admission.rawValue)
       try encoder.append(profile.claimScope.rawValue)
       try encoder.append(profile.speakerCohort.rawValue)
       try encoder.append(profile.acousticCohort.rawValue)
