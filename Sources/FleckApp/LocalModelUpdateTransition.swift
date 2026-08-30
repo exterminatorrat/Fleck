@@ -41,6 +41,33 @@ struct RawLocalModelRollbackPolicy: Equatable, Sendable {
   let retentionDurationMilliseconds: Int64
 }
 
+struct RawLocalModelTransitionArtifactDescriptor: Equatable, Sendable {
+  let manifestDigest: String
+  let side: String
+  let role: String
+  let closedFileSetDigest: String
+  let installedBytes: Int64
+}
+
+enum LocalModelTransitionArtifactSide: String, Equatable, Hashable, Sendable {
+  case predecessor
+  case successor
+}
+
+enum LocalModelTransitionArtifactRole: String, Equatable, Sendable {
+  case install
+  case retainForRollback
+  case shared
+}
+
+struct LocalModelTransitionArtifactDescriptor: Equatable, Sendable {
+  let manifestDigest: String
+  let side: LocalModelTransitionArtifactSide
+  let role: LocalModelTransitionArtifactRole
+  let closedFileSetDigest: String
+  let installedBytes: Int64
+}
+
 struct RawLocalModelUpdateTransition: Equatable, Sendable {
   let schemaVersion: Int
   let predecessor: LocalModelTransitionReleaseIdentity
@@ -49,14 +76,8 @@ struct RawLocalModelUpdateTransition: Equatable, Sendable {
   let successorPromotionRecordDigest: String
   let predecessorCorpusDependencies: [LocalModelPredecessorCorpusDependency]
   let lineageValid: Bool
-  let referenceRoles: [String]
+  let artifactDescriptors: [RawLocalModelTransitionArtifactDescriptor]
   let rollback: RawLocalModelRollbackPolicy
-}
-
-enum LocalModelTransitionReferenceRole: String, Equatable, Sendable {
-  case install
-  case retainForRollback
-  case shared
 }
 
 struct LocalModelRollbackPolicy: Equatable, Sendable {
@@ -85,12 +106,23 @@ enum LocalModelUpdateTransitionError: Error, Equatable, Sendable {
   case staleTrustCheckpoint
   case incompatibleReceiptSchema
   case incompatibleRuntime
-  case invalidReferenceRole(String)
-  case duplicateReferenceRole(String)
-  case missingReferenceRole
+  case invalidArtifactDescriptor
+  case invalidArtifactDescriptorSide(String)
+  case invalidArtifactDescriptorRole(String)
+  case missingArtifactDescriptor(LocalModelTransitionArtifactSide, String)
+  case extraArtifactDescriptor(LocalModelTransitionArtifactSide, String)
+  case duplicateArtifactDescriptor(LocalModelTransitionArtifactSide, String)
+  case artifactDescriptorManifestMismatch(LocalModelTransitionArtifactSide, String)
+  case artifactDescriptorRoleMismatch(LocalModelTransitionArtifactSide, String)
+  case inconsistentSharedArtifactManifest(String)
   case invalidRollbackPolicy
   case insufficientRollbackReserve
   case byteCountOverflow
+}
+
+private struct LocalModelTransitionArtifactDescriptorKey: Hashable {
+  let side: LocalModelTransitionArtifactSide
+  let manifestDigest: String
 }
 
 struct LocalModelUpdateTransition: Equatable, Sendable {
@@ -104,7 +136,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
   let successor: LocalModelTransitionReleaseIdentity
   let successorPromotionRecordDigest: String
   let predecessorCorpusDependencies: [LocalModelPredecessorCorpusDependency]
-  let referenceRoles: [LocalModelTransitionReferenceRole]
+  let artifactDescriptors: [LocalModelTransitionArtifactDescriptor]
   let rollback: LocalModelRollbackPolicy
 
   private init(
@@ -114,7 +146,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
     successor: LocalModelTransitionReleaseIdentity,
     successorPromotionRecordDigest: String,
     predecessorCorpusDependencies: [LocalModelPredecessorCorpusDependency],
-    referenceRoles: [LocalModelTransitionReferenceRole],
+    artifactDescriptors: [LocalModelTransitionArtifactDescriptor],
     rollback: LocalModelRollbackPolicy
   ) {
     self.identityDigest = identityDigest
@@ -123,7 +155,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
     self.successor = successor
     self.successorPromotionRecordDigest = successorPromotionRecordDigest
     self.predecessorCorpusDependencies = predecessorCorpusDependencies
-    self.referenceRoles = referenceRoles
+    self.artifactDescriptors = artifactDescriptors
     self.rollback = rollback
   }
 
@@ -185,7 +217,11 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
       raw.predecessorCorpusDependencies,
       predecessorAdmissionDigest: predecessor.admissionRecordDigest
     )
-    let roles = try validateReferenceRoles(raw.referenceRoles)
+    let artifactDescriptors = try validateArtifactDescriptors(
+      raw.artifactDescriptors,
+      predecessorManifests: predecessor.artifactManifests,
+      successorManifests: successor.artifactManifests
+    )
     let rollback = try validateRollback(
       raw.rollback,
       predecessorInstalledBytes: installedBytes(predecessor.artifactManifests),
@@ -197,7 +233,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
       successor: successor,
       successorPromotionRecordDigest: raw.successorPromotionRecordDigest,
       dependencies: dependencies,
-      roles: roles,
+      artifactDescriptors: artifactDescriptors,
       rollback: rollback
     )
     return .init(
@@ -207,7 +243,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
       successor: successor,
       successorPromotionRecordDigest: raw.successorPromotionRecordDigest,
       predecessorCorpusDependencies: dependencies,
-      referenceRoles: roles,
+      artifactDescriptors: artifactDescriptors,
       rollback: rollback
     )
   }
@@ -307,22 +343,124 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
     return dependencies
   }
 
-  private static func validateReferenceRoles(
-    _ rawRoles: [String]
-  ) throws -> [LocalModelTransitionReferenceRole] {
-    var roles = Set<LocalModelTransitionReferenceRole>()
-    for rawRole in rawRoles {
-      guard let role = LocalModelTransitionReferenceRole(rawValue: rawRole) else {
-        throw LocalModelUpdateTransitionError.invalidReferenceRole(rawRole)
-      }
-      guard roles.insert(role).inserted else {
-        throw LocalModelUpdateTransitionError.duplicateReferenceRole(rawRole)
+  private static func validateArtifactDescriptors(
+    _ rawDescriptors: [RawLocalModelTransitionArtifactDescriptor],
+    predecessorManifests: [LocalModelTransitionArtifactManifest],
+    successorManifests: [LocalModelTransitionArtifactManifest]
+  ) throws -> [LocalModelTransitionArtifactDescriptor] {
+    let predecessorByDigest = Dictionary(
+      uniqueKeysWithValues: predecessorManifests.map { ($0.manifestDigest, $0) }
+    )
+    let successorByDigest = Dictionary(
+      uniqueKeysWithValues: successorManifests.map { ($0.manifestDigest, $0) }
+    )
+
+    let sharedDigests = Set(predecessorByDigest.keys)
+      .intersection(successorByDigest.keys)
+      .sorted()
+    for digest in sharedDigests {
+      guard let predecessor = predecessorByDigest[digest],
+            let successor = successorByDigest[digest],
+            predecessor.revision == successor.revision,
+            predecessor.closedFileSetDigest == successor.closedFileSetDigest,
+            predecessor.installedBytes == successor.installedBytes else {
+        throw LocalModelUpdateTransitionError.inconsistentSharedArtifactManifest(digest)
       }
     }
-    guard roles.contains(.install), roles.contains(.retainForRollback) else {
-      throw LocalModelUpdateTransitionError.missingReferenceRole
+
+    var seen = Set<LocalModelTransitionArtifactDescriptorKey>()
+    var descriptors: [LocalModelTransitionArtifactDescriptor] = []
+    for rawDescriptor in rawDescriptors {
+      try validateDigest(rawDescriptor.manifestDigest)
+      try validateDigest(rawDescriptor.closedFileSetDigest)
+      guard rawDescriptor.installedBytes > 0 else {
+        throw LocalModelUpdateTransitionError.invalidArtifactDescriptor
+      }
+      guard let side = LocalModelTransitionArtifactSide(
+        rawValue: rawDescriptor.side
+      ) else {
+        throw LocalModelUpdateTransitionError.invalidArtifactDescriptorSide(
+          rawDescriptor.side
+        )
+      }
+      guard let role = LocalModelTransitionArtifactRole(
+        rawValue: rawDescriptor.role
+      ) else {
+        throw LocalModelUpdateTransitionError.invalidArtifactDescriptorRole(
+          rawDescriptor.role
+        )
+      }
+      let key = LocalModelTransitionArtifactDescriptorKey(
+        side: side,
+        manifestDigest: rawDescriptor.manifestDigest
+      )
+      guard seen.insert(key).inserted else {
+        throw LocalModelUpdateTransitionError.duplicateArtifactDescriptor(
+          side,
+          rawDescriptor.manifestDigest
+        )
+      }
+
+      let sideManifests = side == .predecessor
+        ? predecessorByDigest : successorByDigest
+      guard let manifest = sideManifests[rawDescriptor.manifestDigest] else {
+        throw LocalModelUpdateTransitionError.extraArtifactDescriptor(
+          side,
+          rawDescriptor.manifestDigest
+        )
+      }
+      guard rawDescriptor.closedFileSetDigest == manifest.closedFileSetDigest,
+            rawDescriptor.installedBytes == manifest.installedBytes else {
+        throw LocalModelUpdateTransitionError.artifactDescriptorManifestMismatch(
+          side,
+          rawDescriptor.manifestDigest
+        )
+      }
+
+      let appearsOnOtherSide = side == .predecessor
+        ? successorByDigest[rawDescriptor.manifestDigest] != nil
+        : predecessorByDigest[rawDescriptor.manifestDigest] != nil
+      let expectedRole: LocalModelTransitionArtifactRole
+      if appearsOnOtherSide {
+        expectedRole = .shared
+      } else if side == .predecessor {
+        expectedRole = .retainForRollback
+      } else {
+        expectedRole = .install
+      }
+      guard role == expectedRole else {
+        throw LocalModelUpdateTransitionError.artifactDescriptorRoleMismatch(
+          side,
+          rawDescriptor.manifestDigest
+        )
+      }
+      descriptors.append(.init(
+        manifestDigest: rawDescriptor.manifestDigest,
+        side: side,
+        role: role,
+        closedFileSetDigest: rawDescriptor.closedFileSetDigest,
+        installedBytes: rawDescriptor.installedBytes
+      ))
     }
-    return roles.sorted { $0.rawValue < $1.rawValue }
+
+    for (side, manifests) in [
+      (LocalModelTransitionArtifactSide.predecessor, predecessorManifests),
+      (.successor, successorManifests),
+    ] {
+      for manifest in manifests where !seen.contains(.init(
+        side: side,
+        manifestDigest: manifest.manifestDigest
+      )) {
+        throw LocalModelUpdateTransitionError.missingArtifactDescriptor(
+          side,
+          manifest.manifestDigest
+        )
+      }
+    }
+
+    return descriptors.sorted {
+      ($0.side.rawValue, $0.manifestDigest) < ($1.side.rawValue, $1.manifestDigest)
+    }
   }
 
   private static func validateRollback(
@@ -388,7 +526,7 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
     successor: LocalModelTransitionReleaseIdentity,
     successorPromotionRecordDigest: String,
     dependencies: [LocalModelPredecessorCorpusDependency],
-    roles: [LocalModelTransitionReferenceRole],
+    artifactDescriptors: [LocalModelTransitionArtifactDescriptor],
     rollback: LocalModelRollbackPolicy
   ) throws -> String {
     var encoder = LocalModelTransitionCanonicalEncoder()
@@ -406,7 +544,14 @@ struct LocalModelUpdateTransition: Equatable, Sendable {
       try encoder.append(dependency.corpusAdmissionSealDigest)
       try encoder.append(dependency.evaluationSignerFingerprintDigest)
     }
-    try encoder.append(roles.map(\.rawValue))
+    try encoder.appendCount(artifactDescriptors.count)
+    for descriptor in artifactDescriptors {
+      try encoder.append(descriptor.manifestDigest)
+      try encoder.append(descriptor.side.rawValue)
+      try encoder.append(descriptor.role.rawValue)
+      try encoder.append(descriptor.closedFileSetDigest)
+      try encoder.append(String(descriptor.installedBytes))
+    }
     try encoder.append(String(rollback.sideBySideBytes))
     try encoder.append(String(rollback.stagingBytes))
     try encoder.append(String(rollback.rollbackBytes))

@@ -98,6 +98,42 @@ private enum TransitionFixtures {
     )
   }
 
+  static func descriptor(
+    manifest: LocalModelTransitionArtifactManifest,
+    side: String,
+    role: String
+  ) -> RawLocalModelTransitionArtifactDescriptor {
+    .init(
+      manifestDigest: manifest.manifestDigest,
+      side: side,
+      role: role,
+      closedFileSetDigest: manifest.closedFileSetDigest,
+      installedBytes: manifest.installedBytes
+    )
+  }
+
+  static func descriptors(
+    predecessor: LocalModelTransitionReleaseIdentity = predecessor,
+    successor: LocalModelTransitionReleaseIdentity = successor
+  ) -> [RawLocalModelTransitionArtifactDescriptor] {
+    let predecessorDigests = Set(predecessor.artifactManifests.map(\.manifestDigest))
+    let successorDigests = Set(successor.artifactManifests.map(\.manifestDigest))
+    return predecessor.artifactManifests.map {
+      descriptor(
+        manifest: $0,
+        side: "predecessor",
+        role: successorDigests.contains($0.manifestDigest)
+          ? "shared" : "retainForRollback"
+      )
+    } + successor.artifactManifests.map {
+      descriptor(
+        manifest: $0,
+        side: "successor",
+        role: predecessorDigests.contains($0.manifestDigest) ? "shared" : "install"
+      )
+    }
+  }
+
   static func raw(
     schemaVersion: Int = 1,
     predecessor: LocalModelTransitionReleaseIdentity = predecessor,
@@ -106,7 +142,7 @@ private enum TransitionFixtures {
     successorPromotionRecordDigest: String = digestC,
     dependencies: [LocalModelPredecessorCorpusDependency] = [dependency()],
     lineageValid: Bool = true,
-    referenceRoles: [String] = ["install", "retainForRollback"],
+    artifactDescriptors: [RawLocalModelTransitionArtifactDescriptor]? = nil,
     sideBySideBytes: Int64 = 100,
     stagingBytes: Int64 = 60,
     rollbackBytes: Int64 = 40,
@@ -121,7 +157,10 @@ private enum TransitionFixtures {
       successorPromotionRecordDigest: successorPromotionRecordDigest,
       predecessorCorpusDependencies: dependencies,
       lineageValid: lineageValid,
-      referenceRoles: referenceRoles,
+      artifactDescriptors: artifactDescriptors ?? descriptors(
+        predecessor: predecessor,
+        successor: successor
+      ),
       rollback: .init(
         sideBySideBytes: sideBySideBytes,
         stagingBytes: stagingBytes,
@@ -297,6 +336,259 @@ private enum TransitionFixtures {
     #expect(transition.predecessor == TransitionFixtures.predecessor)
     #expect(transition.successor == TransitionFixtures.successor)
     #expect(transition.identityDigest.count == 64)
+  }
+
+  @Test func transitionRejectsFabricatedOrUnknownDescriptorRolesAndSides() {
+    let descriptors = TransitionFixtures.descriptors()
+    let fabricatedShared = RawLocalModelTransitionArtifactDescriptor(
+      manifestDigest: descriptors[0].manifestDigest,
+      side: descriptors[0].side,
+      role: "shared",
+      closedFileSetDigest: descriptors[0].closedFileSetDigest,
+      installedBytes: descriptors[0].installedBytes
+    )
+    #expect(throws: LocalModelUpdateTransitionError.artifactDescriptorRoleMismatch(
+      .predecessor,
+      TransitionFixtures.digestA
+    )) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        artifactDescriptors: [fabricatedShared, descriptors[1]]
+      ))
+    }
+
+    let unknownSide = RawLocalModelTransitionArtifactDescriptor(
+      manifestDigest: descriptors[0].manifestDigest,
+      side: "elsewhere",
+      role: descriptors[0].role,
+      closedFileSetDigest: descriptors[0].closedFileSetDigest,
+      installedBytes: descriptors[0].installedBytes
+    )
+    #expect(throws: LocalModelUpdateTransitionError.invalidArtifactDescriptorSide(
+      "elsewhere"
+    )) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        artifactDescriptors: [unknownSide, descriptors[1]]
+      ))
+    }
+
+    let unknownRole = RawLocalModelTransitionArtifactDescriptor(
+      manifestDigest: descriptors[0].manifestDigest,
+      side: descriptors[0].side,
+      role: "download",
+      closedFileSetDigest: descriptors[0].closedFileSetDigest,
+      installedBytes: descriptors[0].installedBytes
+    )
+    #expect(throws: LocalModelUpdateTransitionError.invalidArtifactDescriptorRole(
+      "download"
+    )) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        artifactDescriptors: [unknownRole, descriptors[1]]
+      ))
+    }
+
+    let wrongSide = RawLocalModelTransitionArtifactDescriptor(
+      manifestDigest: descriptors[0].manifestDigest,
+      side: "successor",
+      role: "install",
+      closedFileSetDigest: descriptors[0].closedFileSetDigest,
+      installedBytes: descriptors[0].installedBytes
+    )
+    #expect(throws: LocalModelUpdateTransitionError.extraArtifactDescriptor(
+      .successor,
+      TransitionFixtures.digestA
+    )) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        artifactDescriptors: [wrongSide, descriptors[1]]
+      ))
+    }
+  }
+
+  @Test func transitionRejectsMissingExtraOrDuplicateArtifactDescriptors() {
+    let descriptors = TransitionFixtures.descriptors()
+    #expect(throws: LocalModelUpdateTransitionError.missingArtifactDescriptor(
+      .successor,
+      TransitionFixtures.digestC
+    )) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        artifactDescriptors: [descriptors[0]]
+      ))
+    }
+
+    let extra = RawLocalModelTransitionArtifactDescriptor(
+      manifestDigest: TransitionFixtures.digestF,
+      side: "successor",
+      role: "install",
+      closedFileSetDigest: TransitionFixtures.digestA,
+      installedBytes: 1
+    )
+    #expect(throws: LocalModelUpdateTransitionError.extraArtifactDescriptor(
+      .successor,
+      TransitionFixtures.digestF
+    )) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        artifactDescriptors: descriptors + [extra]
+      ))
+    }
+
+    #expect(throws: LocalModelUpdateTransitionError.duplicateArtifactDescriptor(
+      .predecessor,
+      TransitionFixtures.digestA
+    )) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        artifactDescriptors: [descriptors[0], descriptors[0], descriptors[1]]
+      ))
+    }
+  }
+
+  @Test func transitionRejectsDescriptorManifestFieldMismatches() {
+    let descriptors = TransitionFixtures.descriptors()
+    for mismatch in [
+      RawLocalModelTransitionArtifactDescriptor(
+        manifestDigest: descriptors[0].manifestDigest,
+        side: descriptors[0].side,
+        role: descriptors[0].role,
+        closedFileSetDigest: TransitionFixtures.digestF,
+        installedBytes: descriptors[0].installedBytes
+      ),
+      RawLocalModelTransitionArtifactDescriptor(
+        manifestDigest: descriptors[0].manifestDigest,
+        side: descriptors[0].side,
+        role: descriptors[0].role,
+        closedFileSetDigest: descriptors[0].closedFileSetDigest,
+        installedBytes: descriptors[0].installedBytes + 1
+      ),
+    ] {
+      #expect(throws: LocalModelUpdateTransitionError.artifactDescriptorManifestMismatch(
+        .predecessor,
+        TransitionFixtures.digestA
+      )) {
+        _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+          artifactDescriptors: [mismatch, descriptors[1]]
+        ))
+      }
+    }
+
+    let invalidDigest = RawLocalModelTransitionArtifactDescriptor(
+      manifestDigest: "not-a-digest",
+      side: descriptors[0].side,
+      role: descriptors[0].role,
+      closedFileSetDigest: descriptors[0].closedFileSetDigest,
+      installedBytes: descriptors[0].installedBytes
+    )
+    #expect(throws: LocalModelUpdateTransitionError.invalidDigest("not-a-digest")) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        artifactDescriptors: [invalidDigest, descriptors[1]]
+      ))
+    }
+
+    let nonpositiveBytes = RawLocalModelTransitionArtifactDescriptor(
+      manifestDigest: descriptors[0].manifestDigest,
+      side: descriptors[0].side,
+      role: descriptors[0].role,
+      closedFileSetDigest: descriptors[0].closedFileSetDigest,
+      installedBytes: 0
+    )
+    #expect(throws: LocalModelUpdateTransitionError.invalidArtifactDescriptor) {
+      _ = try TransitionFixtures.validate(TransitionFixtures.raw(
+        artifactDescriptors: [nonpositiveBytes, descriptors[1]]
+      ))
+    }
+  }
+
+  @Test func transitionAcceptsIdenticalSharedManifestOnBothSides() throws {
+    let sharedManifest = TransitionFixtures.manifest()
+    let predecessor = TransitionFixtures.release(
+      packageDigest: TransitionFixtures.digestA,
+      admission: .releaseAdmitted,
+      configurationKey: "previous.en.v1",
+      configurationDigest: TransitionFixtures.digestB,
+      profileIdentityDigests: [TransitionFixtures.digestA],
+      artifactManifests: [sharedManifest]
+    )
+    let successor = TransitionFixtures.release(
+      packageDigest: TransitionFixtures.digestC,
+      admission: .twoDeviceAccepted,
+      configurationKey: "promoted.en.v1",
+      configurationDigest: TransitionFixtures.digestC,
+      profileIdentityDigests: [TransitionFixtures.digestB],
+      artifactManifests: [sharedManifest]
+    )
+    let transition = try TransitionFixtures.validate(
+      TransitionFixtures.raw(predecessor: predecessor, successor: successor),
+      expectedSuccessor: successor
+    )
+
+    #expect(transition.artifactDescriptors.map(\.role) == [.shared, .shared])
+    #expect(transition.artifactDescriptors.map(\.side) == [.predecessor, .successor])
+  }
+
+  @Test func transitionRejectsInconsistentSharedManifestIdentity() {
+    let sharedPredecessorManifest = TransitionFixtures.manifest()
+    let sharedSuccessorManifest = TransitionFixtures.manifest(
+      revision: TransitionFixtures.revisionB
+    )
+    let predecessor = TransitionFixtures.release(
+      packageDigest: TransitionFixtures.digestA,
+      admission: .releaseAdmitted,
+      configurationKey: "previous.en.v1",
+      configurationDigest: TransitionFixtures.digestB,
+      profileIdentityDigests: [TransitionFixtures.digestA],
+      artifactManifests: [sharedPredecessorManifest]
+    )
+    let successor = TransitionFixtures.release(
+      packageDigest: TransitionFixtures.digestC,
+      admission: .twoDeviceAccepted,
+      configurationKey: "promoted.en.v1",
+      configurationDigest: TransitionFixtures.digestC,
+      profileIdentityDigests: [TransitionFixtures.digestB],
+      artifactManifests: [sharedSuccessorManifest]
+    )
+
+    #expect(throws: LocalModelUpdateTransitionError.inconsistentSharedArtifactManifest(
+      TransitionFixtures.digestA
+    )) {
+      _ = try TransitionFixtures.validate(
+        TransitionFixtures.raw(predecessor: predecessor, successor: successor),
+        expectedSuccessor: successor
+      )
+    }
+  }
+
+  @Test func transitionCanonicalizesAndBindsArtifactDescriptors() throws {
+    let descriptors = TransitionFixtures.descriptors()
+    let canonical = try TransitionFixtures.validate(TransitionFixtures.raw(
+      artifactDescriptors: descriptors
+    ))
+    let reordered = try TransitionFixtures.validate(TransitionFixtures.raw(
+      artifactDescriptors: Array(descriptors.reversed())
+    ))
+    #expect(canonical.identityDigest == reordered.identityDigest)
+    #expect(canonical.artifactDescriptors.map(\.side) == [.predecessor, .successor])
+
+    let changedManifest = TransitionFixtures.manifest(
+      digest: TransitionFixtures.digestC,
+      revision: TransitionFixtures.revisionB,
+      closedFileSetDigest: TransitionFixtures.digestD,
+      installedBytes: 41
+    )
+    let changedSuccessor = TransitionFixtures.release(
+      packageDigest: TransitionFixtures.digestC,
+      admission: .twoDeviceAccepted,
+      configurationKey: "promoted.en.v1",
+      configurationDigest: TransitionFixtures.digestC,
+      profileIdentityDigests: [TransitionFixtures.digestB],
+      artifactManifests: [changedManifest]
+    )
+    let mutated = try TransitionFixtures.validate(
+      TransitionFixtures.raw(
+        successor: changedSuccessor,
+        artifactDescriptors: TransitionFixtures.descriptors(
+          successor: changedSuccessor
+        )
+      ),
+      expectedSuccessor: changedSuccessor
+    )
+    #expect(canonical.identityDigest != mutated.identityDigest)
   }
 
   @Test func transitionRejectsWrongReleaseAndTrustAuthority() {
@@ -600,7 +892,7 @@ private enum TransitionFixtures {
     let first = try TransitionFixtures.validate(TransitionFixtures.raw(
       predecessor: predecessor,
       dependencies: dependencies,
-      referenceRoles: ["install", "retainForRollback", "shared"],
+      artifactDescriptors: TransitionFixtures.descriptors(predecessor: predecessor),
       sideBySideBytes: 140,
       rollbackBytes: 80,
       availableBytes: 140
@@ -608,7 +900,9 @@ private enum TransitionFixtures {
     let setsReordered = try TransitionFixtures.validate(TransitionFixtures.raw(
       predecessor: reorderedSets,
       dependencies: dependencies,
-      referenceRoles: ["shared", "retainForRollback", "install"],
+      artifactDescriptors: Array(TransitionFixtures.descriptors(
+        predecessor: reorderedSets
+      ).reversed()),
       sideBySideBytes: 140,
       rollbackBytes: 80,
       availableBytes: 140
@@ -631,7 +925,7 @@ private enum TransitionFixtures {
     let orderChanged = try TransitionFixtures.validate(TransitionFixtures.raw(
       predecessor: predecessor,
       dependencies: transitiveOrderChanged,
-      referenceRoles: ["install", "retainForRollback", "shared"],
+      artifactDescriptors: TransitionFixtures.descriptors(predecessor: predecessor),
       sideBySideBytes: 140,
       rollbackBytes: 80,
       availableBytes: 140
