@@ -4,6 +4,49 @@ import FleckCore
 
 @testable import FleckApp
 
+private func processorDictionaryContext(
+  captureID: UUID = UUID(),
+  generation: UInt64 = 1,
+  revision: UInt64 = 1,
+  preferredForm: String = "FleckApp"
+) throws -> LocalWritingCaptureContext {
+  let entry = PersonalDictionaryEntry(
+    preferredForm: preferredForm,
+    aliases: ["fleck app"]
+  )
+  let snapshot = PersonalDictionarySnapshotV2(revision: revision, entries: [entry])
+  return try LocalWritingCaptureContext(
+    captureID: captureID,
+    generation: generation,
+    localeIdentifier: "en-US",
+    speechEngine: .standard,
+    snapshot: snapshot,
+    compiledDictionary: CompiledPersonalDictionary.compile(snapshot)
+  )
+}
+
+private func processorDictionaryConfiguration(
+  _ context: LocalWritingCaptureContext
+) -> DictationProcessingConfiguration {
+  DictationProcessingConfiguration(mode: .focused, captureContext: context)
+}
+
+private func processorDictionaryContext(
+  from context: LocalWritingCaptureContext,
+  captureID: UUID? = nil,
+  generation: UInt64? = nil,
+  speechEngine: DictationSpeechEngine? = nil
+) throws -> LocalWritingCaptureContext {
+  try LocalWritingCaptureContext(
+    captureID: captureID ?? context.captureID,
+    generation: generation ?? context.generation,
+    localeIdentifier: context.localeIdentifier,
+    speechEngine: speechEngine ?? context.speechEngine,
+    snapshot: context.snapshot,
+    compiledDictionary: context.compiledDictionary
+  )
+}
+
 @MainActor
 private func makeProcessor(
   source: any StreamingSpeechSource,
@@ -1235,6 +1278,206 @@ func processorUsesRawRecoveryWhenDictionaryResolutionFails() async throws {
   #expect(result.cleanedTranscript == nil)
   #expect(result.insertedText == raw)
   #expect(result.cleanupOutcome == .usedRaw)
+}
+
+@Test @MainActor
+func processorUnsupportedDictionaryRecognitionStillUsesPinnedResolution() async throws {
+  let context = try processorDictionaryContext(revision: 11)
+  let source = StreamingSpeechSourceProbe(finalText: "open fleck app")
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    recognitionContextAcknowledgement: { configuration in
+      .unsupported(try #require(configuration.captureContext))
+    },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "open FleckApp"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: TestDictationClock.immediate,
+    budget: .production
+  )
+
+  let result = try await processor.begin(
+    configuration: processorDictionaryConfiguration(context),
+    level: { _ in }
+  ).finish()
+
+  #expect(source.startCount == 1)
+  #expect(result.dictionaryBaseline == "open FleckApp")
+  #expect(result.captureContext == context)
+  #expect(result.recognitionContextAcknowledgement == .unsupported(context))
+  #expect(result.dictionaryRevision == 11)
+  #expect(result.dictionaryContentDigest == context.dictionaryContentDigest)
+  #expect(result.appliedDictionaryEntryIDs == context.snapshot.entries.map(\.id))
+}
+
+@Test @MainActor
+func processorRejectedDictionaryRecognitionConsumesNoAudio() async throws {
+  let context = try processorDictionaryContext()
+  let source = StreamingSpeechSourceProbe()
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    recognitionContextAcknowledgement: { _ in .rejected(context) },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "unused"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+
+  do {
+    _ = try await processor.begin(
+      configuration: processorDictionaryConfiguration(context),
+      level: { _ in }
+    )
+    Issue.record("Expected rejected recognition context")
+  } catch {
+    #expect(error as? StreamingDictationProcessorError == .recognitionContextRejected)
+  }
+  #expect(source.startCount == 0)
+  #expect(source.releaseHookCount == 1)
+}
+
+@Test @MainActor
+func processorMismatchedDictionaryAcknowledgementConsumesNoAudio() async throws {
+  let context = try processorDictionaryContext(captureID: UUID())
+  let mismatches = try [
+    processorDictionaryContext(from: context, captureID: UUID()),
+    processorDictionaryContext(from: context, generation: context.generation + 1),
+    processorDictionaryContext(revision: context.dictionaryRevision + 1),
+    processorDictionaryContext(from: context, speechEngine: .enhancedLocal),
+  ]
+
+  for mismatch in mismatches {
+    let source = StreamingSpeechSourceProbe()
+    let processor = StreamingDictationProcessor(
+      makeSource: { _ in source },
+      recognitionContextAcknowledgement: { _ in .applied(mismatch) },
+      dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+      cleaner: IncrementalTranscriptCleaner(
+        generator: CleanupGeneratorProbe(result: "unused"),
+        clock: TestCleanupClock.immediate
+      ),
+      runtime: nil
+    )
+
+    do {
+      _ = try await processor.begin(
+        configuration: processorDictionaryConfiguration(context),
+        level: { _ in }
+      )
+      Issue.record("Expected mismatched recognition context")
+    } catch {
+      #expect(error as? StreamingDictationProcessorError == .recognitionContextMismatch)
+    }
+    #expect(source.startCount == 0)
+    #expect(source.releaseHookCount == 1)
+  }
+}
+
+@Test @MainActor
+func processorDictionaryResolutionMismatchUsesExactRawBaseline() async throws {
+  let context = try processorDictionaryContext(revision: 3)
+  let raw = "open fleck app"
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in StreamingSpeechSourceProbe(finalText: raw) },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(
+        baseline: "open Wrong",
+        protectedForms: ["Wrong"],
+        replacements: 1,
+        dictionaryRevision: 99,
+        dictionaryContentDigest: "wrong"
+      )
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "must not run"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+
+  let result = try await processor.begin(
+    configuration: processorDictionaryConfiguration(context),
+    level: { _ in }
+  ).finish()
+
+  #expect(result.dictionaryBaseline == nil)
+  #expect(result.insertedText == raw)
+  #expect(result.appliedDictionaryEntryIDs.isEmpty)
+  #expect(result.captureContext == context)
+}
+
+@Test @MainActor
+func processorCleanupRejectedDictionaryCandidateUsesPinnedBaselineAndEvidence() async throws {
+  let context = try processorDictionaryContext(revision: 14)
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in StreamingSpeechSourceProbe(finalText: "open fleck app") },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "close the app"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+
+  let result = try await processor.begin(
+    configuration: processorDictionaryConfiguration(context),
+    level: { _ in }
+  ).finish()
+
+  #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.insertedText == "open FleckApp")
+  #expect(result.protectedDictionaryForms == ["FleckApp"])
+  #expect(result.appliedDictionaryEntryIDs == context.snapshot.entries.map(\.id))
+  #expect(result.dictionaryRevision == context.dictionaryRevision)
+  #expect(result.dictionaryContentDigest == context.dictionaryContentDigest)
+}
+
+@Test @MainActor
+func processorDictionarySettingsMutationDoesNotAlterInflightContext() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("FleckProcessorDictionary-\(UUID().uuidString)", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let first = PersonalDictionaryEntry(preferredForm: "FleckApp", aliases: ["fleck app"])
+  try await store.upsert(first)
+  let published = try await store.publishedSnapshot()
+  let context = try LocalWritingCaptureContext(
+    captureID: UUID(),
+    generation: 1,
+    localeIdentifier: published.compiled.localeIdentifier,
+    speechEngine: .standard,
+    snapshot: published.snapshot,
+    compiledDictionary: published.compiled
+  )
+  var receivedRecognitionContext: DictationRecognitionContext?
+  let processor = StreamingDictationProcessor(
+    makeSource: { configuration in
+      receivedRecognitionContext = configuration.recognitionContext
+      return StreamingSpeechSourceProbe(finalText: "open fleck app")
+    },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "open FleckApp"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+  let session = try await processor.begin(
+    configuration: processorDictionaryConfiguration(context),
+    level: { _ in }
+  )
+
+  try await store.setEnabled(false, id: first.id)
+  let result = try await session.finish()
+
+  #expect(receivedRecognitionContext?.contextualStrings == context.compiledDictionary.recognitionStrings)
+  #expect(result.dictionaryBaseline == "open FleckApp")
+  #expect(result.dictionaryRevision == context.dictionaryRevision)
 }
 
 @Test @MainActor

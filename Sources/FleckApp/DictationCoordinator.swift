@@ -52,6 +52,10 @@ enum DictationDestinationChoiceResult: Equatable {
 
 @MainActor
 final class DictationCoordinator {
+  typealias CaptureContextProvider = @MainActor (
+    UUID, UInt64, DictationSpeechEngine
+  ) async throws -> LocalWritingCaptureContext
+
   private struct PendingRoutingAmbiguity {
     var ambiguity: DictationRoutingAmbiguity
     var receipt: DictationInsertionReceipt
@@ -64,11 +68,13 @@ final class DictationCoordinator {
     let id: UUID
     let mode: DictationMode
     let selectedEngine: DictationSpeechEngine
+    let contextGeneration: UInt64
     let editor: (any FocusedDictationEditing)?
     let destination: DictationDestination?
     let startedAt: Date
     var engine: (any SpeechEngine)?
     var processingSession: (any DictationProcessingSession)?
+    var captureContext: LocalWritingCaptureContext?
     var processingUpdatesTask: Task<Void, Never>?
     var generation: UInt64 = 0
     var stablePrefix = ""
@@ -96,6 +102,7 @@ final class DictationCoordinator {
   private let historyController: DictationHistoryController
   private let historyEnabled: @MainActor () -> Bool
   private let processing: (any DictationProcessing)?
+  private let captureContextProvider: CaptureContextProvider?
   private let clock: DictationClock
   private let holdThreshold: Duration
   private let holdSleeper: @Sendable (Duration) async -> Void
@@ -112,6 +119,7 @@ final class DictationCoordinator {
   private var eventObserver: (@MainActor (DictationCoordinatorEvent) -> Void)?
   private var levelObserver: (@MainActor (Float) -> Void)?
   private var pendingRoutingAmbiguity: PendingRoutingAmbiguity?
+  private var nextCaptureContextGeneration: UInt64 = 1
 
   private(set) var phase: DictationPhase = .idle
   private(set) var copyableTranscript: String?
@@ -120,6 +128,7 @@ final class DictationCoordinator {
   private(set) var recoveryOperationInFlight = false
   private(set) var routingAmbiguity: DictationRoutingAmbiguity?
   private(set) var latestRuntimeMeasurements = DictationRuntimeMeasurements.empty
+  private(set) var latestProcessingResult: DictationProcessingResult?
   private var latestMeasurementCaptureID: UUID?
 
   var canConfigureShortcut: Bool {
@@ -136,6 +145,7 @@ final class DictationCoordinator {
     historyStore: DictationHistoryStore,
     historyEnabled: @escaping @MainActor () -> Bool,
     processing: (any DictationProcessing)? = nil,
+    captureContextProvider: CaptureContextProvider? = nil,
     clock: DictationClock = .live,
     holdThreshold: Duration = .milliseconds(180),
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { duration in
@@ -150,6 +160,7 @@ final class DictationCoordinator {
     historyController = DictationHistoryController(store: historyStore)
     self.historyEnabled = historyEnabled
     self.processing = processing
+    self.captureContextProvider = captureContextProvider
     self.clock = clock
     self.holdThreshold = holdThreshold
     self.holdSleeper = holdSleeper
@@ -164,6 +175,7 @@ final class DictationCoordinator {
     historyController: DictationHistoryController,
     historyEnabled: @escaping @MainActor () -> Bool,
     processing: (any DictationProcessing)? = nil,
+    captureContextProvider: CaptureContextProvider? = nil,
     clock: DictationClock = .live,
     holdThreshold: Duration = .milliseconds(180),
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { duration in
@@ -178,6 +190,7 @@ final class DictationCoordinator {
     self.historyController = historyController
     self.historyEnabled = historyEnabled
     self.processing = processing
+    self.captureContextProvider = captureContextProvider
     self.clock = clock
     self.holdThreshold = holdThreshold
     self.holdSleeper = holdSleeper
@@ -356,6 +369,7 @@ final class DictationCoordinator {
     routingAmbiguity = nil
     latestMeasurementCaptureID = id
     latestRuntimeMeasurements = .empty
+    latestProcessingResult = nil
     if let pressedAt = physicalGesture.pressedAt {
       recordMeasurement(.physicalPress, at: pressedAt, captureID: id)
     }
@@ -365,10 +379,13 @@ final class DictationCoordinator {
     setPhase(.arming)
 
     let focusedEditor = mode == .focused ? editor : nil
+    let contextGeneration = nextCaptureContextGeneration
+    nextCaptureContextGeneration &+= 1
     capture = Capture(
       id: id,
       mode: mode,
       selectedEngine: selectedEngine,
+      contextGeneration: contextGeneration,
       editor: focusedEditor,
       destination: mode == .focused ? destination : nil,
       startedAt: Date()
@@ -452,18 +469,55 @@ final class DictationCoordinator {
     engine: DictationSpeechEngine,
     processing: any DictationProcessing
   ) async {
+    if let captureContextProvider {
+      let context: LocalWritingCaptureContext
+      do {
+        guard let reserved = capture, reserved.id == id else { return }
+        context = try await captureContextProvider(
+          id,
+          reserved.contextGeneration,
+          engine
+        )
+        guard context.captureID == id,
+          context.generation == reserved.contextGeneration,
+          context.speechEngine == engine
+        else {
+          throw StreamingDictationProcessorError.captureContextMismatch
+        }
+      } catch {
+        guard finishStarting(id) != nil else { return }
+        guard await continueCapture(id) else { return }
+        await terminate(
+          id,
+          phase: .failed(message(for: error)),
+          cancelEditor: mode == .focused
+        )
+        return
+      }
+      guard await continueCapture(id) else { return }
+      guard var active = capture, active.id == id else { return }
+      active.captureContext = context
+      capture = active
+    }
+
     await processing.prepare(for: .immediateCapture)
     guard await continueCapture(id) else { return }
 
     let session: any DictationProcessingSession
     do {
-      session = try await processing.begin(
-        configuration: .init(
+      let configuration: DictationProcessingConfiguration
+      if let context = capture?.captureContext {
+        configuration = .init(mode: mode, captureContext: context)
+      } else {
+        configuration = .init(
           captureID: id,
           mode: mode,
           recognitionContext: .englishDefault,
           engine: engine
-        ),
+        )
+      }
+      session = try await processing.begin(
+        configuration: configuration,
         level: { [weak self] level in
           guard let self, self.isActive(id) else { return }
           self.levelObserver?(level)
@@ -673,6 +727,19 @@ final class DictationCoordinator {
     await drainProcessingUpdates(id)
     guard await continueCapture(id) else { return }
     guard let capture, capture.id == id else { return }
+    if let expectedContext = capture.captureContext {
+      guard result.captureContext == expectedContext,
+        result.recognitionContextAcknowledgement?.context == expectedContext
+      else {
+        await terminate(
+          id,
+          phase: .failed(message(for: StreamingDictationProcessorError.captureContextMismatch)),
+          cancelEditor: capture.mode == .focused
+        )
+        return
+      }
+    }
+    latestProcessingResult = result
     overlay(result.measurements, captureID: id)
 
     let savesHistory = historyEnabled()

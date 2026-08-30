@@ -37,11 +37,68 @@ struct DictationRecognitionContext: Equatable, Sendable {
   static let englishDefault = Self(locale: Locale(identifier: "en-US"))
 }
 
+enum LocalWritingCaptureContextError: Error, Equatable, Sendable {
+  case dictionaryRevisionMismatch
+  case localeMismatch
+}
+
+struct LocalWritingCaptureContext: Equatable, Sendable {
+  let captureID: UUID
+  let generation: UInt64
+  let localeIdentifier: String
+  let speechEngine: DictationSpeechEngine
+  let snapshot: PersonalDictionarySnapshotV2
+  let compiledDictionary: CompiledPersonalDictionary
+
+  var dictionaryRevision: UInt64 { compiledDictionary.revision }
+  var dictionaryContentDigest: String { compiledDictionary.contentDigest }
+  var dictionaryCompilerPolicyRevision: Int {
+    compiledDictionary.compilerPolicyRevision
+  }
+
+  init(
+    captureID: UUID,
+    generation: UInt64,
+    localeIdentifier: String,
+    speechEngine: DictationSpeechEngine,
+    snapshot: PersonalDictionarySnapshotV2,
+    compiledDictionary: CompiledPersonalDictionary
+  ) throws {
+    guard snapshot.revision == compiledDictionary.revision else {
+      throw LocalWritingCaptureContextError.dictionaryRevisionMismatch
+    }
+    guard localeIdentifier == compiledDictionary.localeIdentifier else {
+      throw LocalWritingCaptureContextError.localeMismatch
+    }
+    self.captureID = captureID
+    self.generation = generation
+    self.localeIdentifier = localeIdentifier
+    self.speechEngine = speechEngine
+    self.snapshot = snapshot
+    self.compiledDictionary = compiledDictionary
+  }
+}
+
+enum DictationRecognitionContextAcknowledgement: Equatable, Sendable {
+  case applied(LocalWritingCaptureContext)
+  case unsupported(LocalWritingCaptureContext)
+  case rejected(LocalWritingCaptureContext)
+
+  var context: LocalWritingCaptureContext {
+    switch self {
+    case .applied(let context), .unsupported(let context), .rejected(let context):
+      context
+    }
+  }
+}
+
 struct DictationProcessingConfiguration: Equatable, Sendable {
   let captureID: UUID
+  let captureGeneration: UInt64
   let mode: DictationMode
   let recognitionContext: DictationRecognitionContext
   let engine: DictationSpeechEngine
+  let captureContext: LocalWritingCaptureContext?
 
   init(
     captureID: UUID,
@@ -50,9 +107,23 @@ struct DictationProcessingConfiguration: Equatable, Sendable {
     engine: DictationSpeechEngine = .standard
   ) {
     self.captureID = captureID
+    captureGeneration = 0
     self.mode = mode
     self.recognitionContext = recognitionContext
     self.engine = engine
+    captureContext = nil
+  }
+
+  init(mode: DictationMode, captureContext: LocalWritingCaptureContext) {
+    captureID = captureContext.captureID
+    captureGeneration = captureContext.generation
+    self.mode = mode
+    recognitionContext = DictationRecognitionContext(
+      locale: Locale(identifier: captureContext.localeIdentifier),
+      contextualStrings: captureContext.compiledDictionary.recognitionStrings
+    )
+    engine = captureContext.speechEngine
+    self.captureContext = captureContext
   }
 }
 
@@ -316,6 +387,37 @@ struct DictationProcessingResult: Equatable, Sendable {
   let insertedText: String
   let cleanupOutcome: DictationCleanupOutcome
   let measurements: DictationRuntimeMeasurements
+  let captureContext: LocalWritingCaptureContext?
+  let recognitionContextAcknowledgement: DictationRecognitionContextAcknowledgement?
+  let protectedDictionaryForms: [String]
+  let appliedDictionaryEntryIDs: [UUID]
+
+  var dictionaryRevision: UInt64? { captureContext?.dictionaryRevision }
+  var dictionaryContentDigest: String? { captureContext?.dictionaryContentDigest }
+
+  init(
+    rawTranscript: String,
+    dictionaryBaseline: String?,
+    cleanedTranscript: String?,
+    insertedText: String,
+    cleanupOutcome: DictationCleanupOutcome,
+    measurements: DictationRuntimeMeasurements,
+    captureContext: LocalWritingCaptureContext? = nil,
+    recognitionContextAcknowledgement: DictationRecognitionContextAcknowledgement? = nil,
+    protectedDictionaryForms: [String] = [],
+    appliedDictionaryEntryIDs: [UUID] = []
+  ) {
+    self.rawTranscript = rawTranscript
+    self.dictionaryBaseline = dictionaryBaseline
+    self.cleanedTranscript = cleanedTranscript
+    self.insertedText = insertedText
+    self.cleanupOutcome = cleanupOutcome
+    self.measurements = measurements
+    self.captureContext = captureContext
+    self.recognitionContextAcknowledgement = recognitionContextAcknowledgement
+    self.protectedDictionaryForms = protectedDictionaryForms
+    self.appliedDictionaryEntryIDs = appliedDictionaryEntryIDs
+  }
 }
 
 struct DictationProcessingBudget: Equatable, Sendable {

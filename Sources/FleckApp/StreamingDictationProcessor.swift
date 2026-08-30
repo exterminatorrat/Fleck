@@ -3,6 +3,9 @@ import FleckCore
 
 enum StreamingDictationProcessorError: Error, Equatable {
   case noSpeech
+  case captureContextMismatch
+  case recognitionContextMismatch
+  case recognitionContextRejected
 }
 
 @MainActor
@@ -96,8 +99,12 @@ private final class ProcessorMeasurementRecorder {
 final class StreamingDictationProcessor: DictationProcessing {
   typealias SourceFactory =
     @MainActor (DictationProcessingConfiguration) async throws -> any StreamingSpeechSource
+  typealias RecognitionContextAcknowledger = @MainActor (
+    DictationProcessingConfiguration
+  ) async throws -> DictationRecognitionContextAcknowledgement
 
   private let makeSource: SourceFactory
+  private let recognitionContextAcknowledgement: RecognitionContextAcknowledger?
   private let dictionaryResolver: any TranscriptDictionaryResolving
   private let cleaner: IncrementalTranscriptCleaner
   private let runtime: LocalDictationRuntime?
@@ -109,6 +116,7 @@ final class StreamingDictationProcessor: DictationProcessing {
 
   init(
     makeSource: @escaping SourceFactory,
+    recognitionContextAcknowledgement: RecognitionContextAcknowledger? = nil,
     dictionaryResolver: any TranscriptDictionaryResolving,
     cleaner: IncrementalTranscriptCleaner,
     runtime: LocalDictationRuntime?,
@@ -119,6 +127,7 @@ final class StreamingDictationProcessor: DictationProcessing {
     onCancellationDrained: (@MainActor @Sendable () -> Void)? = nil
   ) {
     self.makeSource = makeSource
+    self.recognitionContextAcknowledgement = recognitionContextAcknowledgement
     self.dictionaryResolver = dictionaryResolver
     self.cleaner = cleaner
     self.runtime = runtime
@@ -143,7 +152,23 @@ final class StreamingDictationProcessor: DictationProcessing {
   ) async throws -> any DictationProcessingSession {
     let measurements = ProcessorMeasurementRecorder()
     measurements.record(.processorStarted, at: clock.now())
+    try validate(configuration)
     let source = try await makeSource(configuration)
+    let acknowledgement: DictationRecognitionContextAcknowledgement?
+    if let context = configuration.captureContext {
+      acknowledgement = try await recognitionContextAcknowledgement?(configuration)
+        ?? .unsupported(context)
+      guard acknowledgement?.context == context else {
+        await source.releaseResources()
+        throw StreamingDictationProcessorError.recognitionContextMismatch
+      }
+      if case .rejected? = acknowledgement {
+        await source.releaseResources()
+        throw StreamingDictationProcessorError.recognitionContextRejected
+      }
+    } else {
+      acknowledgement = nil
+    }
     let callbackBuffer = StreamingDictationCallbackBuffer()
     do {
       measurements.record(.sourceStartRequested, at: clock.now())
@@ -156,6 +181,8 @@ final class StreamingDictationProcessor: DictationProcessing {
         source: source,
         callbackBuffer: callbackBuffer,
         measurements: measurements,
+        captureContext: configuration.captureContext,
+        recognitionContextAcknowledgement: acknowledgement,
         dictionaryResolver: dictionaryResolver,
         cleaner: cleaner,
         runtime: runtime,
@@ -168,6 +195,19 @@ final class StreamingDictationProcessor: DictationProcessing {
     } catch {
       await source.releaseResources()
       throw error
+    }
+  }
+
+  private func validate(_ configuration: DictationProcessingConfiguration) throws {
+    guard let context = configuration.captureContext else { return }
+    guard configuration.captureID == context.captureID,
+      configuration.captureGeneration == context.generation,
+      configuration.engine == context.speechEngine,
+      configuration.recognitionContext.locale.identifier == context.localeIdentifier,
+      configuration.recognitionContext.contextualStrings
+        == context.compiledDictionary.recognitionStrings
+    else {
+      throw StreamingDictationProcessorError.captureContextMismatch
     }
   }
 }
@@ -197,6 +237,8 @@ fileprivate final class StreamingDictationCallbackBuffer {
 final class StreamingDictationSession: DictationProcessingSession {
   private let source: any StreamingSpeechSource
   private let measurements: ProcessorMeasurementRecorder
+  private let captureContext: LocalWritingCaptureContext?
+  private let recognitionContextAcknowledgement: DictationRecognitionContextAcknowledgement?
   private let dictionaryResolver: any TranscriptDictionaryResolving
   private let cleaner: IncrementalTranscriptCleaner
   private let runtime: LocalDictationRuntime?
@@ -225,6 +267,8 @@ final class StreamingDictationSession: DictationProcessingSession {
     source: any StreamingSpeechSource,
     callbackBuffer: StreamingDictationCallbackBuffer,
     measurements: ProcessorMeasurementRecorder,
+    captureContext: LocalWritingCaptureContext?,
+    recognitionContextAcknowledgement: DictationRecognitionContextAcknowledgement?,
     dictionaryResolver: any TranscriptDictionaryResolving,
     cleaner: IncrementalTranscriptCleaner,
     runtime: LocalDictationRuntime?,
@@ -237,6 +281,8 @@ final class StreamingDictationSession: DictationProcessingSession {
     _ = configuration
     self.source = source
     self.measurements = measurements
+    self.captureContext = captureContext
+    self.recognitionContextAcknowledgement = recognitionContextAcknowledgement
     self.dictionaryResolver = dictionaryResolver
     self.cleaner = cleaner
     self.runtime = runtime
@@ -402,7 +448,19 @@ final class StreamingDictationSession: DictationProcessingSession {
 
     let resolution: PersonalDictionaryResolution
     do {
-      resolution = try await dictionaryResolver.resolve(rawText)
+      if let captureContext {
+        resolution = try await dictionaryResolver.resolve(
+          rawText,
+          context: captureContext
+        )
+        guard resolution.dictionaryRevision == captureContext.dictionaryRevision,
+          resolution.dictionaryContentDigest == captureContext.dictionaryContentDigest
+        else {
+          throw StreamingDictationProcessorError.captureContextMismatch
+        }
+      } else {
+        resolution = try await dictionaryResolver.resolve(rawText)
+      }
     } catch {
       try Task.checkCancellation()
       measurements.record(.dictionaryCompleted, at: clock.now())
@@ -429,7 +487,11 @@ final class StreamingDictationSession: DictationProcessingSession {
         cleanedTranscript: text,
         insertedText: text,
         cleanupOutcome: .cleaned,
-        measurements: runtimeMeasurements
+        measurements: runtimeMeasurements,
+        captureContext: captureContext,
+        recognitionContextAcknowledgement: recognitionContextAcknowledgement,
+        protectedDictionaryForms: resolution.protectedForms,
+        appliedDictionaryEntryIDs: resolution.appliedEntryIDs
       )
     case .baseline:
       return DictationProcessingResult(
@@ -438,7 +500,11 @@ final class StreamingDictationSession: DictationProcessingSession {
         cleanedTranscript: nil,
         insertedText: resolution.baseline,
         cleanupOutcome: .usedRaw,
-        measurements: runtimeMeasurements
+        measurements: runtimeMeasurements,
+        captureContext: captureContext,
+        recognitionContextAcknowledgement: recognitionContextAcknowledgement,
+        protectedDictionaryForms: resolution.protectedForms,
+        appliedDictionaryEntryIDs: resolution.appliedEntryIDs
       )
     }
   }
@@ -450,7 +516,9 @@ final class StreamingDictationSession: DictationProcessingSession {
       cleanedTranscript: nil,
       insertedText: rawText,
       cleanupOutcome: .usedRaw,
-      measurements: runtimeMeasurements
+      measurements: runtimeMeasurements,
+      captureContext: captureContext,
+      recognitionContextAcknowledgement: recognitionContextAcknowledgement
     )
   }
 

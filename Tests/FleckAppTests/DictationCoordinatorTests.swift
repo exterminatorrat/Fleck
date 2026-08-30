@@ -17,6 +17,119 @@ private func processingResult(_ text: String) -> DictationProcessingResult {
   )
 }
 
+private func coordinatorDictionaryContext(
+  captureID: UUID,
+  generation: UInt64,
+  engine: DictationSpeechEngine = .standard
+) throws -> LocalWritingCaptureContext {
+  let entry = PersonalDictionaryEntry(
+    preferredForm: "FleckApp",
+    aliases: ["fleck app"]
+  )
+  let snapshot = PersonalDictionarySnapshotV2(revision: 21, entries: [entry])
+  return try LocalWritingCaptureContext(
+    captureID: captureID,
+    generation: generation,
+    localeIdentifier: "en-US",
+    speechEngine: engine,
+    snapshot: snapshot,
+    compiledDictionary: CompiledPersonalDictionary.compile(snapshot)
+  )
+}
+
+@MainActor
+private final class DictionaryContextBox {
+  var value: LocalWritingCaptureContext?
+}
+
+@Test @MainActor
+func coordinatorMissingDictionaryContextConsumesNoAudioOrInsertion() async throws {
+  let processing = ProcessingProbe(result: processingResult("must not insert"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { _, _, _ in throw TestError.failed }
+  )
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+
+  #expect(processing.beginCount == 0)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.coordinator.phase != .listening(mode: .focused, engine: .standard))
+}
+
+@Test @MainActor
+func coordinatorCancellationDuringDictionaryPinConsumesNoAudioOrInsertion() async throws {
+  let gate = Gate()
+  let processing = ProcessingProbe(result: processingResult("must not insert"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      await gate.wait()
+      return try coordinatorDictionaryContext(
+        captureID: captureID,
+        generation: generation,
+        engine: engine
+      )
+    }
+  )
+  let start = Task {
+    await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  }
+  await gate.waitUntilWaiting()
+
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await start.value
+
+  #expect(processing.beginCount == 0)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+}
+
+@Test @MainActor
+func coordinatorMismatchedDictionaryCompletionInsertsNothing() async throws {
+  let box = DictionaryContextBox()
+  let processing = ProcessingProbe(result: processingResult("pending"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      let context = try coordinatorDictionaryContext(
+        captureID: captureID,
+        generation: generation,
+        engine: engine
+      )
+      box.value = context
+      return context
+    }
+  )
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let pinned = try #require(box.value)
+  let mismatch = try coordinatorDictionaryContext(
+    captureID: pinned.captureID,
+    generation: pinned.generation + 1,
+    engine: pinned.speechEngine
+  )
+  processing.complete(with: .init(
+    rawTranscript: "open fleck app",
+    dictionaryBaseline: "open FleckApp",
+    cleanedTranscript: "open FleckApp",
+    insertedText: "open FleckApp",
+    cleanupOutcome: .cleaned,
+    measurements: .empty,
+    captureContext: mismatch,
+    recognitionContextAcknowledgement: .unsupported(mismatch),
+    protectedDictionaryForms: ["FleckApp"],
+    appliedDictionaryEntryIDs: mismatch.snapshot.entries.map(\.id)
+  ))
+
+  await fixture.coordinator.finish()
+
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.coordinator.latestProcessingResult == nil)
+}
+
 @Test @MainActor
 func enhancedPreferenceUsesProcessingAndReportsItsSelectedEngine() async throws {
   let processing = ProcessingProbe(
@@ -2996,6 +3109,9 @@ private final class Fixture {
 
   init(
     processing: (any DictationProcessing)? = nil,
+    captureContextProvider: (@MainActor (
+      UUID, UInt64, DictationSpeechEngine
+    ) async throws -> LocalWritingCaptureContext)? = nil,
     onFocusedEditorRollback: (() -> Void)? = nil,
     onFocusedProvisionalUpdate: (() -> Void)? = nil,
     preferred: DictationSpeechEngine = .standard,
@@ -3044,6 +3160,7 @@ private final class Fixture {
       historyController: historyController,
       historyEnabled: { historyEnabled },
       processing: processing,
+      captureContextProvider: captureContextProvider,
       clock: clock,
       holdSleeper: holdSleeper
     )

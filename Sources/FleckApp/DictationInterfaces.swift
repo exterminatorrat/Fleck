@@ -67,6 +67,20 @@ extension DictationProcessingSession {
 
 protocol TranscriptDictionaryResolving: Sendable {
   func resolve(_ rawTranscript: String) async throws -> PersonalDictionaryResolution
+  func resolve(
+    _ rawTranscript: String,
+    context: LocalWritingCaptureContext
+  ) async throws -> PersonalDictionaryResolution
+}
+
+extension TranscriptDictionaryResolving {
+  func resolve(
+    _ rawTranscript: String,
+    context: LocalWritingCaptureContext
+  ) async throws -> PersonalDictionaryResolution {
+    _ = context
+    return try await resolve(rawTranscript)
+  }
 }
 
 struct DictationRoutingCandidate: Equatable, Sendable {

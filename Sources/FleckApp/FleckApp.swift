@@ -597,9 +597,7 @@
           )
           return AppleSpeechStreamingAdapter(engine: engine)
         },
-        dictionaryResolver: PersonalDictionaryTranscriptResolver(entries: {
-          try await personalDictionaryStore.snapshot().entries
-        }),
+        dictionaryResolver: PersonalDictionaryTranscriptResolver(),
         cleaner: incrementalCleaner,
         runtime: nil
       )
@@ -624,7 +622,20 @@
         historyEnabled: { [weak appState] in
           appState?.preferences.dictationHistoryEnabled ?? true
         },
-        processing: processing
+        processing: processing,
+        captureContextProvider: { captureID, generation, engine in
+          // Replaces the live `try await personalDictionaryStore.snapshot().entries`
+          // seam: one published snapshot now stays pinned for the whole capture.
+          let published = try await personalDictionaryStore.publishedSnapshot()
+          return try LocalWritingCaptureContext(
+            captureID: captureID,
+            generation: generation,
+            localeIdentifier: published.compiled.localeIdentifier,
+            speechEngine: engine,
+            snapshot: published.snapshot,
+            compiledDictionary: published.compiled
+          )
+        }
       )
       let capsuleController = DictationCapsuleController()
       let shortcutController = GlobalHoldShortcut(
