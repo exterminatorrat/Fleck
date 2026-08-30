@@ -702,6 +702,105 @@ func captureFirstCancellationWinsQueuedDeferredStartupFailure() async throws {
 }
 
 @Test @MainActor
+func captureFirstToolbarFinishDuringArmingYieldsToExactShortRelease() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Keep this recovery"
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  let priorFinishCount = fixture.standard.finishCount
+  let priorSavedCount = fixture.saver.savedTexts.count
+  let priorHistoryCount = try await fixture.history.list().count
+  fixture.standard.finalText = "Must not publish"
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let priorStartCount = fixture.standard.startCount
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(179))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where fixture.standard.startCount == priorStartCount { await Task.yield() }
+
+  await fixture.coordinator.finish()
+
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(fixture.standard.finishCount == priorFinishCount)
+  #expect(terminalEvents.isEmpty)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await threshold.openGate()
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  await Task.yield()
+
+  #expect(terminalEvents.map(\.terminal) == [.cancelled])
+  #expect(fixture.standard.finishCount == priorFinishCount)
+  #expect(fixture.saver.savedTexts.count == priorSavedCount)
+  #expect(try await fixture.history.list().count == priorHistoryCount)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+}
+
+@Test @MainActor
+func captureFirstAcceptedLongHoldHonorsPendingToolbarOriginOnce() async throws {
+  let clock = ManualDictationClock()
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("Accepted result"))
+  let fixture = try Fixture(
+    processing: processing,
+    clock: clock.clock,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let press = clock.now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  clock.advance(by: .milliseconds(50))
+  let toolbarAction = clock.now
+
+  await fixture.coordinator.finish()
+
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(processing.stopOrigins.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(terminalEvents.isEmpty)
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await threshold.openGate()
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  await Task.yield()
+
+  #expect(processing.stopOrigins == [.toolbarAction(toolbarAction)])
+  #expect(processing.deadlineOrigins == [toolbarAction])
+  #expect(fixture.editor.committedTexts == ["Accepted result"])
+  #expect(terminalEvents.count == 1)
+}
+
+@Test @MainActor
 func captureFirstPhysicalReleaseSurvivesSuspendedStartup() async throws {
   let threshold = Gate()
   let pinGate = Gate()

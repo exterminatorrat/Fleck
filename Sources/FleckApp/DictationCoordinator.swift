@@ -112,6 +112,7 @@ final class DictationCoordinator {
     var physicalReleaseReceipt: PhysicalReleaseReceipt?
     var deferredStartupFailureMessage: String?
     var deferredStartupFailureTask: Task<Void, Never>?
+    var deferredFinishTask: Task<Void, Never>?
   }
 
   private let engineProvider: any SpeechEngineProviding
@@ -750,6 +751,11 @@ final class DictationCoordinator {
       }
     }
     guard let stopOrigin = capture.stopOrigin else { return }
+    if !capture.holdAccepted, activeShortcutSessions.contains(capture.id) {
+      capture.releaseRequested = true
+      self.capture = capture
+      return
+    }
     if capture.isStarting {
       capture.releaseRequested = true
       self.capture = capture
@@ -941,11 +947,13 @@ final class DictationCoordinator {
     let captureContextTask = capture.captureContextTask
     let startupTask = capture.startupTask
     let deferredStartupFailureTask = capture.deferredStartupFailureTask
+    let deferredFinishTask = capture.deferredFinishTask
     requestCancellation(id, at: clock.now())
 
     captureContextTask?.cancel()
     startupTask?.cancel()
     deferredStartupFailureTask?.cancel()
+    deferredFinishTask?.cancel()
     _ = await captureContextTask?.result
     await startupTask?.value
     await deferredStartupFailureTask?.value
@@ -960,11 +968,14 @@ final class DictationCoordinator {
         latest.routingTask = nil
         self.capture = latest
       }
+      await deferredFinishTask?.value
       await completeCancellation(id)
     } else if current.processingSession != nil {
       await cancelProcessingSession(id)
+      await deferredFinishTask?.value
       await completeCancellation(id)
     } else {
+      await deferredFinishTask?.value
       _ = await compensateFocusedPersistence(id)
       guard let current = self.capture, current.id == id, !current.isTerminating else {
         return
@@ -1004,6 +1015,13 @@ final class DictationCoordinator {
       return
     }
     clearPreviousPresentation()
+    if active.releaseRequested, let stopOrigin = active.stopOrigin {
+      active.deferredFinishTask = Task { @MainActor [weak self] in
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+        await self?.finish(stopOrigin: stopOrigin)
+      }
+    }
     capture = active
     if let session = active.processingSession {
       startProcessingUpdates(id, session: session)
