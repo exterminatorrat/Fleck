@@ -1626,16 +1626,19 @@
     }
   #endif
 
-  private struct DictationSettingsEnvironmentBridge<Content: View>: View {
+  struct DictationSettingsEnvironmentBridge<Content: View>: View {
     @Environment(\.openSettings) private var openSettings
     @ObservedObject var runtime: DictationRuntime
     let content: Content
+    private let openSettingsAction: (@MainActor () -> Void)?
 
     init(
       runtime: DictationRuntime,
+      openSettingsAction: (@MainActor () -> Void)? = nil,
       @ViewBuilder content: () -> Content
     ) {
       self.runtime = runtime
+      self.openSettingsAction = openSettingsAction
       self.content = content()
     }
 
@@ -1643,7 +1646,11 @@
       content
         .onAppear {
           runtime.installOpenSettingsBridge {
-            openSettings()
+            if let openSettingsAction {
+              openSettingsAction()
+            } else {
+              openSettings()
+            }
           }
         }
     }

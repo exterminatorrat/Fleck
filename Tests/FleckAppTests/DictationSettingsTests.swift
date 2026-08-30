@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import FleckCore
+import SwiftUI
 import Testing
 
 @testable import FleckApp
@@ -127,27 +128,65 @@ import Testing
   #expect(fixture.runtime.consumePendingSettingsSection() == nil)
 }
 
-@Test func DictationSettingsBridgeIsMountedOnResidentMenuBarLabel() throws {
-  let sourceRoot = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-  let source = try String(
-    contentsOf: sourceRoot.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
-    encoding: .utf8
-  )
-  guard
-    let menuBarStart = source.range(of: "MenuBarExtra {"),
-    let labelStart = source.range(of: "label: {", range: menuBarStart.upperBound..<source.endIndex),
-    let menuBarStyle = source.range(of: ".menuBarExtraStyle", range: labelStart.upperBound..<source.endIndex)
-  else {
-    Issue.record("Expected the Fleck MenuBarExtra label")
-    return
+@Test @MainActor func DictationSettingsBridgeLifecycleOpensOnceAndSettingsViewConsumesRoute()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  var openSettingsCalls = 0
+
+  fixture.runtime.requestSettings(.dictation)
+  #expect(fixture.runtime.pendingSettingsSection == .dictation)
+  #expect(openSettingsCalls == 0)
+
+  let bridge = DictationSettingsEnvironmentBridge(
+    runtime: fixture.runtime,
+    openSettingsAction: { openSettingsCalls += 1 }
+  ) {
+    Text("Resident bridge")
   }
-  let menuBarContent = source[menuBarStart.upperBound..<labelStart.lowerBound]
-  let labelContent = source[labelStart.lowerBound..<menuBarStyle.lowerBound]
-  #expect(!menuBarContent.contains("DictationSettingsEnvironmentBridge"))
-  #expect(labelContent.contains("DictationSettingsEnvironmentBridge"))
+  let bridgeHost = NSHostingView(rootView: bridge)
+  let bridgeWindow = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 120, height: 40),
+    styleMask: [.borderless],
+    backing: .buffered,
+    defer: false
+  )
+  bridgeWindow.contentView = bridgeHost
+  bridgeWindow.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(bridgeHost)
+
+  #expect(openSettingsCalls == 1)
+  #expect(fixture.runtime.pendingSettingsSection == .dictation)
+
+  let settingsHost = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+  )
+  let settingsWindow = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  settingsWindow.contentView = settingsHost
+  settingsWindow.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(settingsHost)
+
+  #expect(fixture.runtime.pendingSettingsSection == nil)
+  #expect(openSettingsCalls == 1)
+
+  settingsWindow.contentView = nil
+  settingsWindow.orderOut(nil)
+  bridgeWindow.contentView = nil
+  bridgeWindow.orderOut(nil)
+}
+
+@MainActor
+private func settleSettingsHost(_ view: NSView) async {
+  for _ in 0..<40 {
+    view.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
 }
 
 @Test @MainActor func DictationRuntimeUpdatesRailAccentWithoutRewritingPreference() async throws {
