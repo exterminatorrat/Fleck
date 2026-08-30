@@ -10,7 +10,8 @@ private func capsuleContext(
   mode: DictationMode? = .smartCapture,
   stage: DictationPipelineStage? = .capture,
   cleanup: DictationCleanupOutcome? = nil,
-  failureStage: DictationPipelineStage? = nil
+  failureStage: DictationPipelineStage? = nil,
+  failureKind: DictationCapsuleFailureKind? = nil
 ) -> DictationCapsuleContext {
   DictationCapsuleContext(
     status: status,
@@ -20,7 +21,8 @@ private func capsuleContext(
     isHandsFree: true,
     pipelineStage: stage,
     cleanupOutcome: cleanup,
-    failureStage: failureStage
+    failureStage: failureStage,
+    failureKind: failureKind
   )
 }
 
@@ -82,19 +84,43 @@ private func capsuleContext(
   ]
 
   for (status, action, expectedSize) in results {
-    let size = DictationCapsuleController.size(for: status)
+    let presentation = DictationCapsulePresentation(status: status, action: action)
+    let size = DictationCapsuleController.size(
+      for: status,
+      measuredWidth: presentation.measuredWidth
+    )
     let frame = DictationCapsuleController.frame(
       for: .bottom,
       size: size,
       in: visibleFrame
     )
-    let presentation = DictationCapsulePresentation(status: status, action: action)
 
-    #expect(size == expectedSize)
-    #expect(frame.size == expectedSize)
-    #expect(presentation.widthCeiling == frame.width)
-    #expect(presentation.measuredWidth <= frame.width)
+    #expect(size.height == expectedSize.height)
+    #expect(size.width <= expectedSize.width)
+    #expect(frame.size == size)
+    #expect(presentation.measuredWidth <= expectedSize.width)
   }
+
+  let short = DictationCapsulePresentation(
+    status: .saved(destination: "Inbox"),
+    action: .undo
+  )
+  let long = DictationCapsulePresentation(
+    status: .saved(destination: String(repeating: "Long destination ", count: 20)),
+    action: .undo
+  )
+  #expect(
+    DictationCapsuleController.size(
+      for: .saved(destination: "Inbox"),
+      measuredWidth: short.measuredWidth
+    ).width < DictationCapsuleController.savedSize.width
+  )
+  #expect(
+    DictationCapsuleController.size(
+      for: .saved(destination: "Long destination"),
+      measuredWidth: long.measuredWidth
+    ).width == DictationCapsuleController.savedSize.width
+  )
 }
 
 @Test func DictationAccessibilityUsesAuthoritativePipelineTreatment() {
@@ -189,9 +215,22 @@ private func capsuleContext(
   #expect(FleckRailStageTreatment.forContext(polishFailureWithFallback) == [
     .complete, .failed, .pending, .pending,
   ])
+
+  let failureWithoutProvenance = capsuleContext(
+    .failed("unattributed failure"),
+    mode: .focused,
+    stage: .capture,
+    cleanup: .usedRaw,
+    failureStage: nil
+  )
+  #expect(FleckRailStageTreatment.forContext(failureWithoutProvenance) == [
+    .pending, .pending, .pending, .pending,
+  ])
 }
 
 @Test func DictationAccessibilityUsesFailureStageAndPreservesTechnicalDetail() {
+  #expect(DictationCapsuleContext(status: .idle).failureKind == nil)
+
   let captureFailure = DictationCapsulePresentation(
     status: .failed("unrelated capture detail"),
     context: capsuleContext(
@@ -200,19 +239,44 @@ private func capsuleContext(
       failureStage: .capture
     )
   )
-  #expect(captureFailure.visibleText == "Microphone access needed")
+  #expect(captureFailure.visibleText == "Dictation failed")
   #expect(captureFailure.voiceOverText.contains("unrelated capture detail"))
+
+  let microphoneFailure = DictationCapsulePresentation(
+    status: .failed("unrelated microphone detail"),
+    context: capsuleContext(
+      .failed("unrelated microphone detail"),
+      stage: .capture,
+      failureStage: .capture,
+      failureKind: .microphoneAccess
+    )
+  )
+  #expect(microphoneFailure.visibleText == "Microphone access needed")
+  #expect(microphoneFailure.voiceOverText.contains("unrelated microphone detail"))
 
   let saveFailure = DictationCapsulePresentation(
     status: .failed("unrelated capture detail"),
     context: capsuleContext(
       .failed("unrelated capture detail"),
       stage: .save,
-      failureStage: .save
+      failureStage: .save,
+      failureKind: .save
     )
   )
   #expect(saveFailure.visibleText == "Couldn't save")
   #expect(saveFailure.voiceOverText.contains("unrelated capture detail"))
+
+  let modelRepairFailure = DictationCapsulePresentation(
+    status: .failed("model repair detail"),
+    context: capsuleContext(
+      .failed("model repair detail"),
+      stage: .capture,
+      failureStage: .capture,
+      failureKind: .modelRepair
+    )
+  )
+  #expect(modelRepairFailure.visibleText == "Model repair failed")
+  #expect(modelRepairFailure.voiceOverText.contains("model repair detail"))
 
   let unknownFailure = DictationCapsulePresentation(
     status: .failed("permission denied"),
@@ -244,8 +308,35 @@ private func capsuleContext(
     FleckRailMark.layoutFrameSize(for: .rail(reversed: false))
       == CGSize(width: 30, height: 14)
   )
-  #expect(FleckRailContentOrder.processing(for: .left) == [.mark, .statusText])
-  #expect(FleckRailContentOrder.processing(for: .right) == [.statusText, .mark])
+  #expect(FleckRailContentOrder.markAndContent(for: .left) == [.mark, .statusText])
+  #expect(FleckRailContentOrder.markAndContent(for: .right) == [.statusText, .mark])
+  #expect(FleckRailContentOrder.listening(for: .left) == [.mark, .waveform, .timer])
+  #expect(FleckRailContentOrder.listening(for: .right) == [.timer, .waveform, .mark])
+  #expect(FleckRailContentOrder.terminal(for: .left, includesAction: true) == [
+    .mark, .terminalGlyph, .statusText, .action,
+  ])
+  #expect(FleckRailContentOrder.terminal(for: .right, includesAction: true) == [
+    .action, .statusText, .terminalGlyph, .mark,
+  ])
+  #expect(FleckRailContentOrder.terminal(for: .left, includesAction: false) == [
+    .mark, .terminalGlyph, .statusText,
+  ])
+  #expect(FleckRailContentOrder.terminal(for: .right, includesAction: false) == [
+    .statusText, .terminalGlyph, .mark,
+  ])
+}
+
+@Test func DictationAccessibilityInstallsOnePersistentFleckMarkSubtree() throws {
+  let sourceRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: sourceRoot.appendingPathComponent("Sources/FleckApp/DictationCapsule.swift"),
+    encoding: .utf8
+  )
+  #expect(source.components(separatedBy: "FleckRailMark(").count - 1 == 1)
+  #expect(source.contains("private var railMark"))
 }
 
 @Test func DictationAccessibilityFailedTileUsesColorAndShape() {
@@ -255,20 +346,36 @@ private func capsuleContext(
   #expect(!FleckRailStageTreatment.pending.usesDiagonal)
 }
 
-@Test func DictationAccessibilityPersistentHostLeavesGestureRoutingToDescendants() throws {
-  let sourceRoot = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-  let source = try String(
-    contentsOf: sourceRoot.appendingPathComponent("Sources/FleckApp/DictationCapsule.swift"),
-    encoding: .utf8
+@Test @MainActor func DictationAccessibilityPersistentHostLeavesGestureRoutingToDescendants() {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  var actions = 0
+  controller.presentIdle(
+    dock: .bottom,
+    onOpenFleck: {},
+    onDockChanged: { _ in }
   )
-  let host = source.components(separatedBy: "private final class DictationCapsuleHostingView").last ?? ""
+  controller.render(.saved(destination: "Inbox"), action: .undo) {
+    actions += 1
+  }
 
-  #expect(!host.contains("override func mouseDown"))
-  #expect(!host.contains("performDrag(with:"))
-  #expect(host.contains("return path.contains(point) ? super.hitTest(point) : nil"))
+  panel.setFrame(CGRect(x: 0, y: 0, width: 264, height: 36), display: false)
+  panel.contentView?.frame = CGRect(x: 0, y: 0, width: 264, height: 36)
+  panel.contentView?.layoutSubtreeIfNeeded()
+  let host = panel.contentView!
+  let descendant = host.subviews.first
+  let hit = host.hitTest(NSPoint(x: host.bounds.midX, y: host.bounds.midY))
+
+  #expect(descendant != nil)
+  #expect(hit != nil)
+  #expect(hit !== host)
+  if let descendant {
+    #expect(hit === descendant || hit?.isDescendant(of: descendant) == true)
+  }
+  #expect(controller.presentationModel.action != nil)
+  controller.presentationModel.actionHandler()
+  #expect(actions == 1)
+  controller.dismiss()
 }
 
 @Test func DictationAccessibilityResolvesContrastSafeFleckColors() {
