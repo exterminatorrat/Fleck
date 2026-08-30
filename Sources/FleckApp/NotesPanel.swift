@@ -202,8 +202,17 @@
   }
 
   enum TabOverflowPresentation {
+    static let tabOverflowRailWidth: CGFloat = 56
+
     static func tabViewportWidth(totalStripWidth: CGFloat) -> CGFloat {
-      max(0, totalStripWidth - 28)
+      max(0, totalStripWidth - tabOverflowRailWidth)
+    }
+
+    static func hasHiddenLeadingContent(
+      contentLeadingEdge: CGFloat,
+      visibleLeadingEdge: CGFloat
+    ) -> Bool {
+      contentLeadingEdge < visibleLeadingEdge - 0.5
     }
 
     static func hasHiddenTrailingContent(
@@ -224,6 +233,14 @@
       let requestedSize = CGFloat(size)
       guard isMixed || requestedSize != currentSize else { return nil }
       return requestedSize
+    }
+  }
+
+  private struct TabContentLeadingEdgePreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+      value = nextValue()
     }
   }
 
@@ -343,6 +360,7 @@
     @State private var noteDropSource: NoteDropSource?
     @State private var tabDragDestinationID: UUID?
     @State private var tabColorPickerNoteID: UUID?
+    @State private var tabContentLeadingEdge: CGFloat = 0
     @State private var tabContentTrailingEdge: CGFloat = 0
     @State private var activeFolderID: UUID?
     @State private var bannerDismissalState = NotesPanelBannerDismissalState()
@@ -1024,10 +1042,24 @@
             contentTrailingEdge: tabContentTrailingEdge,
             visibleTrailingEdge: tabViewportWidth
           )
+          let hasHiddenLeadingTabs = TabOverflowPresentation.hasHiddenLeadingContent(
+            contentLeadingEdge: tabContentLeadingEdge,
+            visibleLeadingEdge: 0
+          )
         HStack(spacing: 0) {
           ZStack(alignment: .trailing) {
             ScrollView(.horizontal, showsIndicators: false) {
               HStack(spacing: 6) {
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .background {
+                    GeometryReader { proxy in
+                      Color.clear.preference(
+                        key: TabContentLeadingEdgePreferenceKey.self,
+                        value: proxy.frame(in: .named("tab-scroll-viewport")).maxX + 6
+                      )
+                    }
+                  }
                 ForEach(visibleNotes) { note in
             Button {
               _ = activateNoteAndScope(note.id)
@@ -1180,39 +1212,49 @@
               }
               }
               .padding(.horizontal, 12)
-              .padding(.bottom, 9)
+              .frame(height: 37, alignment: .center)
               .animation(motion.spatial, value: appState.workspace.selectedNoteID)
               .animation(motion.spatial, value: visibleNotes.map(\.id))
             }
             .coordinateSpace(name: "tab-scroll-viewport")
             .coordinateSpace(name: "tab-strip")
-
-            if hasHiddenTrailingTabs {
-              LinearGradient(
-                colors: [.clear, Color(nsColor: .windowBackgroundColor)],
-                startPoint: .leading,
-                endPoint: .trailing
-              )
-              .frame(width: 18)
-              .allowsHitTesting(false)
-            }
           }
           .frame(width: tabViewportWidth, alignment: .leading)
 
-          Button {
-            if let lastNoteID = visibleNotes.last?.id {
-              scrollProxy.scrollTo(lastNoteID, anchor: .trailing)
+          HStack(spacing: 0) {
+            Button {
+              if let firstNoteID = visibleNotes.first?.id {
+                scrollProxy.scrollTo(firstNoteID, anchor: .leading)
+              }
+            } label: {
+              Image(systemName: "chevron.left")
+                .font(.caption)
+                .frame(width: 28, height: 28)
             }
-          } label: {
-            Image(systemName: "chevron.right")
-              .font(.caption)
-              .frame(width: 28, height: 28)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reveal earlier tabs")
+            .help("Show earlier tabs")
+            .disabled(!hasHiddenLeadingTabs)
+
+            Button {
+              if let lastNoteID = visibleNotes.last?.id {
+                scrollProxy.scrollTo(lastNoteID, anchor: .trailing)
+              }
+            } label: {
+              Image(systemName: "chevron.right")
+                .font(.caption)
+                .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reveal later tabs")
+            .help("Show later tabs")
+            .disabled(!hasHiddenTrailingTabs)
           }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Reveal hidden tabs")
-          .accessibilityHidden(!hasHiddenTrailingTabs)
-          .disabled(!hasHiddenTrailingTabs)
-          .opacity(hasHiddenTrailingTabs ? 1 : 0)
+          .frame(width: 56, height: 37, alignment: .center)
+        }
+        .onPreferenceChange(TabContentLeadingEdgePreferenceKey.self) { leadingEdge in
+          guard tabContentLeadingEdge != leadingEdge else { return }
+          tabContentLeadingEdge = leadingEdge
         }
         .onPreferenceChange(TabContentTrailingEdgePreferenceKey.self) { trailingEdge in
           guard tabContentTrailingEdge != trailingEdge else { return }

@@ -238,8 +238,8 @@ import FleckCore
 }
 
 @Test func tabStripAllocatesItsActualOverflowViewportAtSupportedWidths() throws {
-  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380) == 352)
-  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 520) == 492)
+  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380) == 324)
+  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 520) == 464)
 
   let source = try tabNotesPanelSource()
   let tabStrip = try #require(
@@ -263,11 +263,59 @@ import FleckCore
   #expect(scrollViewport.contains(".coordinateSpace(name: \"tab-scroll-viewport\")"))
   #expect(tabContent.contains("Color.clear"))
   #expect(tabContent.contains(".frame(width: 0, height: 0)"))
+  #expect(tabContent.contains("value: proxy.frame(in: .named(\"tab-scroll-viewport\")).maxX + 6"))
   #expect(tabContent.contains("value: proxy.frame(in: .named(\"tab-scroll-viewport\")).minX - 6"))
-  #expect(!tabContent.contains("value: proxy.frame(in: .named(\"tab-scroll-viewport\")).maxX"))
   #expect(!tabStrip.contains("TabViewportTrailingEdgePreferenceKey"))
   #expect(tabStrip.contains(".coordinateSpace(name: \"tab-strip\")"))
   #expect(!tabStrip.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
+}
+
+@Test func tabStripUsesAStableBidirectionalControlRail() throws {
+  let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
+
+  #expect(tabStrip.contains("chevron.left"))
+  #expect(tabStrip.contains("chevron.right"))
+  #expect(tabStrip.contains("scrollProxy.scrollTo(firstNoteID, anchor: .leading)"))
+  #expect(tabStrip.contains("scrollProxy.scrollTo(lastNoteID, anchor: .trailing)"))
+  #expect(tabStrip.contains("accessibilityLabel(\"Reveal earlier tabs\")"))
+  #expect(tabStrip.contains("accessibilityLabel(\"Reveal later tabs\")"))
+  #expect(tabStrip.contains(".help(\"Show earlier tabs\")"))
+  #expect(tabStrip.contains(".help(\"Show later tabs\")"))
+  #expect(tabStrip.contains(".frame(width: 56, height: 37"))
+  #expect(!tabStrip.contains("accessibilityHidden(!hasHidden"))
+  #expect(!tabStrip.contains(".opacity(hasHidden"))
+}
+
+@Test func tabStripMeasuresLeadingAndTrailingEdgesAndCentersItsContent() throws {
+  let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
+
+  #expect(source.contains("@State private var tabContentLeadingEdge"))
+  #expect(tabStrip.contains("TabContentLeadingEdgePreferenceKey"))
+  #expect(tabStrip.contains("hasHiddenLeadingTabs"))
+  #expect(tabStrip.contains("contentLeadingEdge: tabContentLeadingEdge"))
+  #expect(tabStrip.contains(".onPreferenceChange(TabContentLeadingEdgePreferenceKey.self)"))
+  #expect(tabStrip.contains(".onPreferenceChange(TabContentTrailingEdgePreferenceKey.self)"))
+  #expect(tabStrip.contains(".frame(height: 37, alignment: .center)"))
+  #expect(!tabStrip.contains(".padding(.bottom, 9)"))
+}
+
+@Test func tabStripRemovesTheWindowBackgroundFade() throws {
+  let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
+
+  #expect(!tabStrip.contains("LinearGradient"))
+  #expect(!tabStrip.contains("windowBackgroundColor"))
 }
 
 @Test func tabDragProductionPathUsesOneNativeSourceForReorderAndFolderTransfer() throws {
@@ -837,6 +885,33 @@ private func tabNotesPanelSource() throws -> String {
     TabOverflowPresentation.hasHiddenTrailingContent(
       contentTrailingEdge: 101,
       visibleTrailingEdge: 100
+    )
+  )
+}
+
+@Test func tabOverflowShowsOnlyWhenLeadingContentExceedsVisibleEdge() {
+  #expect(
+    !TabOverflowPresentation.hasHiddenLeadingContent(
+      contentLeadingEdge: 0,
+      visibleLeadingEdge: 0
+    )
+  )
+  #expect(
+    !TabOverflowPresentation.hasHiddenLeadingContent(
+      contentLeadingEdge: -0.5,
+      visibleLeadingEdge: 0
+    )
+  )
+  #expect(
+    TabOverflowPresentation.hasHiddenLeadingContent(
+      contentLeadingEdge: -0.51,
+      visibleLeadingEdge: 0
+    )
+  )
+  #expect(
+    !TabOverflowPresentation.hasHiddenLeadingContent(
+      contentLeadingEdge: 1,
+      visibleLeadingEdge: 0
     )
   )
 }
