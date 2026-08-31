@@ -21,10 +21,24 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     var filter = Filter.all
     var canonicalExportData: Data?
     var csvExportData: Data?
+    var suggestionEdit: SuggestionEdit?
     var importPreviewData: Data?
     var importPreview: PersonalDictionaryImportPreview?
+    var isImportPreviewPresented = false
     var statusMessage: String?
     var errorMessage: String?
+  }
+
+  struct SuggestionEdit: Identifiable, Equatable {
+    let id: UUID
+    var preferredForm: String
+    var aliases: String
+
+    init(suggestion: PersonalDictionarySuggestion) {
+      id = suggestion.id
+      preferredForm = suggestion.preferredForm
+      aliases = suggestion.observedForms.joined(separator: ", ")
+    }
   }
 
   struct ImportPreviewRow: Identifiable, Equatable {
@@ -70,10 +84,22 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   var suggestions: [PersonalDictionarySuggestion] { state.suggestions }
   var canonicalExportData: Data? { state.canonicalExportData }
   var csvExportData: Data? { state.csvExportData }
+  var suggestionEdit: SuggestionEdit? { state.suggestionEdit }
   var importPreviewData: Data? { state.importPreviewData }
   var importPreview: PersonalDictionaryImportPreview? { state.importPreview }
+  var isImportPreviewPresented: Bool { state.isImportPreviewPresented }
   var statusMessage: String? { state.statusMessage }
   var errorMessage: String? { state.errorMessage }
+
+  var suggestionEditPreferredForm: String {
+    get { state.suggestionEdit?.preferredForm ?? "" }
+    set { state.suggestionEdit?.preferredForm = newValue }
+  }
+
+  var suggestionEditAliases: String {
+    get { state.suggestionEdit?.aliases ?? "" }
+    set { state.suggestionEdit?.aliases = newValue }
+  }
 
   var query: String {
     get { state.query }
@@ -208,6 +234,28 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     }
   }
 
+  func beginEditingSuggestion(_ suggestion: PersonalDictionarySuggestion) {
+    state.suggestionEdit = SuggestionEdit(suggestion: suggestion)
+  }
+
+  func cancelSuggestionEdit() {
+    state.suggestionEdit = nil
+  }
+
+  func submitSuggestionEdit() async {
+    guard let edit = suggestionEdit else { return }
+    let expectedRevision = revision
+    await editAndApproveSuggestion(
+      id: edit.id,
+      preferredForm: edit.preferredForm,
+      aliases: edit.aliases,
+      expectedRevision: expectedRevision
+    )
+    if errorMessage == nil {
+      state.suggestionEdit = nil
+    }
+  }
+
   func editAndApproveSuggestion(
     id: UUID,
     preferredForm: String,
@@ -277,9 +325,11 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     await enqueue {
       self.state.importPreviewData = data
       self.state.importPreview = nil
+      self.state.isImportPreviewPresented = false
       self.clearMessages()
       do {
         self.state.importPreview = try await self.store.previewCanonicalImport(data)
+        self.state.isImportPreviewPresented = true
       } catch {
         self.state.errorMessage = Self.message(for: error, action: .previewImport)
       }
@@ -293,6 +343,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
         self.publish(try await self.store.confirmCanonicalImport(preview))
         self.state.importPreviewData = nil
         self.state.importPreview = nil
+        self.state.isImportPreviewPresented = false
         self.state.errorMessage = nil
         self.state.statusMessage = "Dictionary imported."
       } catch PersonalDictionaryStoreError.revisionConflict {
@@ -310,6 +361,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   func cancelImportPreview() {
     state.importPreviewData = nil
     state.importPreview = nil
+    state.isImportPreviewPresented = false
     clearMessages()
   }
 
@@ -354,6 +406,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   private func repreviewAfterRevisionConflict() async {
     guard let data = importPreviewData else {
       state.importPreview = nil
+      state.isImportPreviewPresented = false
       state.statusMessage = nil
       state.errorMessage = "Dictionary changed; import it again."
       return

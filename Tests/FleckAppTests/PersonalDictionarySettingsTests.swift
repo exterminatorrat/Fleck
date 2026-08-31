@@ -176,6 +176,46 @@ func personalDictionarySettingsEditAndApproveIsAtomicAndPreservesSuggestionOnFai
 }
 
 @Test @MainActor
+func personalDictionarySettingsEditAndApproveRetainsDraftForExplicitConflictRetry() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let suggestion = settingsSuggestion(2, "Suggested", observed: ["sugested"], count: 3)
+  try await store.recordSuggestion(suggestion)
+  let viewModel = PersonalDictionarySettingsViewModel(store: store)
+  await viewModel.load()
+  viewModel.beginEditingSuggestion(suggestion)
+  viewModel.suggestionEditPreferredForm = "Edited suggestion"
+  viewModel.suggestionEditAliases = "edited, EDITED\nsecond"
+  let displayedRevision = viewModel.revision
+
+  _ = try await store.mutate(
+    expectedRevision: displayedRevision,
+    .upsert(settingsEntry(1, "Concurrent entry"))
+  )
+  await viewModel.submitSuggestionEdit()
+
+  #expect(viewModel.revision == displayedRevision + 1)
+  #expect(viewModel.suggestionEdit?.preferredForm == "Edited suggestion")
+  #expect(viewModel.suggestionEdit?.aliases == "edited, EDITED\nsecond")
+  #expect(viewModel.suggestions.map(\.id) == [suggestion.id])
+  #expect(viewModel.entries.map(\.preferredForm) == ["Concurrent entry"])
+  #expect(viewModel.errorMessage == "Dictionary changed; try again.")
+
+  await viewModel.submitSuggestionEdit()
+
+  #expect(viewModel.revision == displayedRevision + 2)
+  #expect(viewModel.suggestionEdit == nil)
+  #expect(viewModel.suggestions.isEmpty)
+  #expect(viewModel.entries.map(\.preferredForm) == ["Concurrent entry", "Edited suggestion"])
+  let approved = try #require(viewModel.entries.first { $0.id == suggestion.id })
+  #expect(approved.aliases == ["edited", "second"])
+  #expect(approved.origin == .suggested)
+  #expect(approved.usage.useCount == 3)
+  #expect(viewModel.errorMessage == nil)
+}
+
+@Test @MainActor
 func personalDictionarySettingsEditAndApproveRejectsIdentifierCollisionAtomically() async throws {
   let root = temporarySettingsDictionaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -300,10 +340,12 @@ func personalDictionarySettingsStaleConfirmationRepreviewsAndRequiresAnotherConf
   try await source.upsert(settingsEntry(1, "Imported"))
   let viewModel = PersonalDictionarySettingsViewModel(store: target)
   await viewModel.load()
-  await viewModel.previewCanonicalImport(
-    try await source.exportCanonicalTransfer(exportedAt: Date(timeIntervalSince1970: 3))
+  let bytes = try await source.exportCanonicalTransfer(
+    exportedAt: Date(timeIntervalSince1970: 3)
   )
+  await viewModel.previewCanonicalImport(bytes)
   let staleRevision = viewModel.importPreview?.expectedLocalRevision
+  #expect(viewModel.isImportPreviewPresented)
 
   _ = try await target.mutate(
     expectedRevision: viewModel.revision,
@@ -312,12 +354,16 @@ func personalDictionarySettingsStaleConfirmationRepreviewsAndRequiresAnotherConf
   await viewModel.confirmCanonicalImport()
 
   #expect(viewModel.importPreview != nil)
+  #expect(viewModel.isImportPreviewPresented)
+  #expect(viewModel.importPreviewData == bytes)
   #expect(viewModel.importPreview?.expectedLocalRevision != staleRevision)
+  #expect(viewModel.importRequiresOmissionConfirmation)
   #expect(viewModel.statusMessage == "Dictionary changed; review the updated preview.")
   #expect(viewModel.entries.map(\.preferredForm) == ["Concurrent local"])
 
   await viewModel.confirmCanonicalImport()
   #expect(viewModel.entries.map(\.preferredForm) == ["Imported"])
+  #expect(!viewModel.isImportPreviewPresented)
   #expect(viewModel.importPreview == nil)
   #expect(viewModel.importPreviewData == nil)
   #expect(viewModel.statusMessage == "Dictionary imported.")
@@ -422,6 +468,7 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("filenameExtension: \"fleckdict\""))
   #expect(settingsSource.contains(".confirmationDialog("))
   #expect(settingsSource.contains(".sheet("))
+  #expect(settingsSource.contains("get: { viewModel.isImportPreviewPresented }"))
 }
 
 private func settingsEntry(

@@ -539,7 +539,6 @@
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
     @State private var preferredForm = ""
     @State private var aliases = ""
-    @State private var suggestionDraft: PersonalDictionarySuggestionDraft?
     @State private var showsImporter = false
     @State private var showsDictionaryExporter = false
     @State private var showsCSVExporter = false
@@ -576,27 +575,26 @@
         transfer
       }
       .searchable(text: $viewModel.query, prompt: "Search personal dictionary")
-      .sheet(item: $suggestionDraft) { draft in
+      .sheet(
+        isPresented: Binding(
+          get: { viewModel.suggestionEdit != nil },
+          set: { if !$0 { viewModel.cancelSuggestionEdit() } }
+        )
+      ) {
         PersonalDictionarySuggestionEditSheet(
-          draft: draft,
-          onCancel: { suggestionDraft = nil },
-          onSubmit: { preferredForm, aliases in
+          preferredForm: $viewModel.suggestionEditPreferredForm,
+          aliases: $viewModel.suggestionEditAliases,
+          onCancel: { viewModel.cancelSuggestionEdit() },
+          onSubmit: {
             Task { @MainActor in
-              await viewModel.editAndApproveSuggestion(
-                id: draft.id,
-                preferredForm: preferredForm,
-                aliases: aliases,
-                expectedRevision: draft.expectedRevision
-              )
-              guard viewModel.errorMessage == nil else { return }
-              suggestionDraft = nil
+              await viewModel.submitSuggestionEdit()
             }
           }
         )
       }
       .sheet(
         isPresented: Binding(
-          get: { viewModel.importPreview != nil },
+          get: { viewModel.isImportPreviewPresented },
           set: { if !$0 { viewModel.cancelImportPreview() } }
         )
       ) {
@@ -727,10 +725,7 @@
           .accessibilityHint("Adds this suggestion to the dictionary")
 
           Button("Edit and Approve") {
-            suggestionDraft = PersonalDictionarySuggestionDraft(
-              suggestion: suggestion,
-              expectedRevision: expectedRevision
-            )
+            viewModel.beginEditingSuggestion(suggestion)
           }
           .accessibilityLabel("Edit and approve \(suggestion.preferredForm)")
           .accessibilityHint("Reviews the preferred form and aliases before adding")
@@ -833,38 +828,11 @@
     }
   }
 
-  private struct PersonalDictionarySuggestionDraft: Identifiable {
-    let id: UUID
-    let expectedRevision: UInt64
-    let preferredForm: String
-    let aliases: String
-
-    init(suggestion: PersonalDictionarySuggestion, expectedRevision: UInt64) {
-      id = suggestion.id
-      self.expectedRevision = expectedRevision
-      preferredForm = suggestion.preferredForm
-      aliases = suggestion.observedForms.joined(separator: ", ")
-    }
-  }
-
   private struct PersonalDictionarySuggestionEditSheet: View {
-    let draft: PersonalDictionarySuggestionDraft
+    @Binding var preferredForm: String
+    @Binding var aliases: String
     let onCancel: () -> Void
-    let onSubmit: (String, String) -> Void
-    @State private var preferredForm: String
-    @State private var aliases: String
-
-    init(
-      draft: PersonalDictionarySuggestionDraft,
-      onCancel: @escaping () -> Void,
-      onSubmit: @escaping (String, String) -> Void
-    ) {
-      self.draft = draft
-      self.onCancel = onCancel
-      self.onSubmit = onSubmit
-      _preferredForm = State(initialValue: draft.preferredForm)
-      _aliases = State(initialValue: draft.aliases)
-    }
+    let onSubmit: () -> Void
 
     var body: some View {
       Form {
@@ -877,7 +845,7 @@
           Spacer()
           Button("Cancel", action: onCancel)
             .accessibilityLabel("Cancel suggestion edit")
-          Button("Approve") { onSubmit(preferredForm, aliases) }
+          Button("Approve", action: onSubmit)
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
             .disabled(preferredForm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
