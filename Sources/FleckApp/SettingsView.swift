@@ -188,6 +188,7 @@
         }
       }
       .navigationSplitViewStyle(.balanced)
+      .toolbar(.visible, for: .windowToolbar)
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }

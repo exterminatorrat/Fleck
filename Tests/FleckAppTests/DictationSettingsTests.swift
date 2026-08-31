@@ -236,6 +236,7 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(source.contains(".listStyle(.sidebar)"))
   #expect(source.contains(".tag(section)"))
   #expect(source.contains(".accessibilityLabel(\"Settings sections\")"))
+  #expect(source.contains(".toolbar(.visible, for: .windowToolbar)"))
   #expect(!source.contains("SettingsSectionSelector"))
   #expect(!source.contains("matchedGeometryEffect"))
   #expect(!source.contains("Picker(\"Settings section\""))
