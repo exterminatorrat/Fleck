@@ -785,10 +785,12 @@
     private func addEntry() {
       let submittedPreferredForm = preferredForm
       let submittedAliases = aliases
+      let expectedRevision = viewModel.revision
       Task { @MainActor in
         await viewModel.add(
           preferredForm: submittedPreferredForm,
-          aliases: submittedAliases
+          aliases: submittedAliases,
+          expectedRevision: expectedRevision
         )
         guard viewModel.errorMessage == nil else { return }
         preferredForm = ""

@@ -47,7 +47,8 @@ func personalDictionarySettingsBindsAddEnableAndDeleteToDisplayedRevision() asyn
 
   await viewModel.add(
     preferredForm: "  FleckApp \n",
-    aliases: " fleck app, Fleck application\n fleck app "
+    aliases: " fleck app, Fleck application\n fleck app ",
+    expectedRevision: viewModel.revision
   )
   #expect(viewModel.revision == 1)
   #expect(viewModel.entries[0].preferredForm == "FleckApp")
@@ -74,10 +75,17 @@ func personalDictionarySettingsDoesNotRebaseConcurrentAddsOntoAnUndisplayedRevis
   )
   await viewModel.load()
 
-  async let first: Void = viewModel.add(preferredForm: "First", aliases: "")
-  async let second: Void = viewModel.add(preferredForm: "Second", aliases: "")
-  await first
-  await second
+  let displayedRevision = viewModel.revision
+  await viewModel.add(
+    preferredForm: "First",
+    aliases: "",
+    expectedRevision: displayedRevision
+  )
+  await viewModel.add(
+    preferredForm: "Second",
+    aliases: "",
+    expectedRevision: displayedRevision
+  )
 
   #expect(viewModel.entries.count == 1)
   #expect(viewModel.revision == 1)
@@ -479,6 +487,8 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
     "let personalDictionarySettingsViewModel = PersonalDictionarySettingsViewModel("
   ))
   #expect(runtimeSource.contains("store: personalDictionaryStore"))
+  #expect(settingsSource.contains("let expectedRevision = viewModel.revision"))
+  #expect(settingsSource.contains("expectedRevision: expectedRevision"))
   #expect(settingsSource.contains("Section(\"Personal Dictionary\")"))
   #expect(settingsSource.contains(".searchable("))
   #expect(settingsSource.contains("Picker(\"Show\""))

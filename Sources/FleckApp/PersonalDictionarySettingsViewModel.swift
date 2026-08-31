@@ -165,8 +165,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     }
   }
 
-  func add(preferredForm: String, aliases: String) async {
-    let expectedRevision = revision
+  func add(preferredForm: String, aliases: String, expectedRevision: UInt64) async {
     await enqueue {
       let preferredForm = preferredForm.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !preferredForm.isEmpty else {
