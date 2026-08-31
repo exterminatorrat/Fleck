@@ -284,7 +284,7 @@
       ceiling: CGFloat
     ) -> CGFloat {
       guard let visible = copy.visible else { return ceiling }
-      let markWidth: CGFloat = 14
+      let markWidth = FleckRailIdentityMark.frameSize.width
       let glyphWidth: CGFloat = status == .finalizing || status == .cleaning
         || status == .routing || status == .saving ? 0 : 14
       let actionWidth = action.map(Self.actionWidth(for:)) ?? 0
@@ -685,6 +685,34 @@
         )
         cursor += size.width + spacing
       }
+    }
+  }
+
+  struct FleckRailIdentityMark: View {
+    nonisolated static let frameSize = CGSize(width: 18, height: 18)
+
+    let image: NSImage?
+    let color: Color
+
+    init(image: NSImage?, color: Color) {
+      self.image = image
+      self.color = color
+    }
+
+    var body: some View {
+      Group {
+        if let image {
+          Image(nsImage: image)
+            .resizable()
+            .renderingMode(.template)
+            .interpolation(.high)
+            .scaledToFit()
+            .foregroundStyle(color)
+        }
+      }
+      .frame(width: Self.frameSize.width, height: Self.frameSize.height)
+      .background(FleckRailFrameProbe(identifier: "fleck-rail-mark"))
+      .accessibilityHidden(true)
     }
   }
 
@@ -1407,6 +1435,12 @@
       panel: DictationCapsulePanel = DictationCapsulePanel(),
       waveformModel: DictationWaveformModel = DictationWaveformModel(),
       accentHex: String = FleckRailColors.defaultAccentHex,
+      markLoader: @escaping @MainActor () -> NSImage? = {
+        guard case .image(let image) = FleckMark.load(template: true) else {
+          return nil
+        }
+        return image
+      },
       announcementPoster: @escaping @MainActor (NSWindow, String) -> Void =
         DictationCapsuleController.postAnnouncement
     ) {
@@ -1436,6 +1470,7 @@
       let hostingView = DictationCapsuleHostingView(
         model: presentationModel,
         waveformModel: waveformModel,
+        markImage: markLoader(),
         inputRouter: inputRouter,
         onDockSelected: { [weak self] dock in self?.selectDock(dock) }
       )
@@ -1931,6 +1966,7 @@
 
     @ObservedObject var model: DictationCapsulePresentationModel
     @ObservedObject var waveformModel: DictationWaveformModel
+    let markImage: NSImage?
 
     private var presentation: DictationCapsulePresentation {
       DictationCapsulePresentation(
@@ -2049,17 +2085,45 @@
       }
     }
 
+    @ViewBuilder
     private var railContent: some View {
-      FleckRailLayout(
-        order: FleckRailContentOrder.markAndContent(for: model.dock),
-        spacing: 7
-      ) {
-        railMark
-        stateContent
+      switch model.context.status {
+      case .idle, .arming:
+        idleContent
+      case .listening:
+        listeningContent
+      case .finalizing, .cleaning, .routing, .saving:
+        processingContent
+      default:
+        FleckRailLayout(
+          order: FleckRailContentOrder.markAndContent(for: model.dock),
+          spacing: 7
+        ) {
+          railMark
+          stateContent
+        }
       }
     }
 
+    private var idleContent: some View {
+      identityMark
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var identityMark: some View {
+      FleckRailIdentityMark(image: markImage, color: model.colors.coreColor)
+    }
+
+    @ViewBuilder
     private var railMark: some View {
+      if usesProgressRail {
+        progressMark
+      } else {
+        identityMark
+      }
+    }
+
+    private var progressMark: some View {
       FleckRailMark(
         color: model.colors.coreColor,
         activeTile: model.context.status == .arming ? 0 : nil,
@@ -2075,6 +2139,26 @@
         reduceMotion ? nil : .easeInOut(duration: DictationCapsuleMotion.tileMorph),
         value: presentation.stageTreatments
       )
+    }
+
+    @ViewBuilder
+    private var processingContent: some View {
+      if model.showsProcessingLabel {
+        HStack(spacing: 7) {
+          if model.dock == .right {
+            processingText
+            progressMark
+          } else {
+            progressMark
+            processingText
+          }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        progressMark
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
     }
 
     private var usesProgressRail: Bool {
@@ -2108,41 +2192,53 @@
           by: DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)
         )
       ) { context in
-        let order = FleckRailContentOrder.listening(for: model.dock)
-        if order.first == .timer {
-          HStack(spacing: 7) {
-            listeningActionZone(at: context.date)
-            waveform(at: context.date)
+        ZStack {
+          waveform(at: context.date)
+          HStack {
+            if model.dock == .right {
+              listeningActionZone(at: context.date)
+              Spacer(minLength: 0)
+              identityMark
+            } else {
+              identityMark
+              Spacer(minLength: 0)
+              listeningActionZone(at: context.date)
+            }
           }
-          .accessibilityLabel("Dictation listening")
-        } else {
-          HStack(spacing: 7) {
-            waveform(at: context.date)
-            listeningActionZone(at: context.date)
-          }
-          .accessibilityLabel("Dictation listening")
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel("Dictation listening")
       }
     }
 
     private func listeningActionZone(at date: Date) -> some View {
       ZStack {
         elapsedText(at: date)
+          .frame(maxWidth: .infinity, alignment: .trailing)
           .opacity(model.isListeningHover && model.context.isHandsFree ? 0 : 1)
         HStack(spacing: 2) {
-          Button("Stop", action: model.stopHandler)
+          Button(action: model.stopHandler) {
+            Image(systemName: "stop.fill")
+              .font(.system(size: 11, weight: .semibold))
+              .frame(width: 28, height: 28)
+          }
             .buttonStyle(.borderless)
-            .frame(width: 28, height: 28)
+            .accessibilityLabel("Stop")
             .background(FleckRailInteractionProbe(region: .stop))
-          Button("Cancel", action: model.cancelHandler)
+          Button(action: model.cancelHandler) {
+            Image(systemName: "xmark")
+              .font(.system(size: 11, weight: .semibold))
+              .frame(width: 28, height: 28)
+          }
             .buttonStyle(.borderless)
-            .frame(width: 28, height: 28)
+            .accessibilityLabel("Cancel")
             .background(FleckRailInteractionProbe(region: .cancel))
         }
         .opacity(model.isListeningHover && model.context.isHandsFree ? 1 : 0)
         .allowsHitTesting(model.isListeningHover && model.context.isHandsFree)
       }
       .frame(width: 58, height: 28)
+      .background(FleckRailFrameProbe(identifier: "fleck-rail-timer"))
     }
 
     private func waveform(at date: Date) -> some View {
@@ -2162,6 +2258,7 @@
         }
       }
       .accessibilityHidden(true)
+      .background(FleckRailFrameProbe(identifier: "fleck-rail-waveform"))
     }
 
     private func elapsedText(at date: Date) -> some View {
@@ -2172,6 +2269,7 @@
         )
         .monospacedDigit()
         .frame(width: 34, alignment: .trailing)
+        .background(FleckRailFrameProbe(identifier: "fleck-rail-elapsed"))
         .accessibilityHidden(true)
     }
 
@@ -2183,6 +2281,7 @@
           .lineLimit(1)
           .truncationMode(.tail)
           .foregroundStyle(model.colors.primaryTextColor)
+          .background(FleckRailFrameProbe(identifier: "fleck-rail-processing-text"))
           .opacity(model.showsProcessingLabel ? 1 : 0)
           .animation(
             reduceMotion
@@ -2392,6 +2491,7 @@
     init(
       model: DictationCapsulePresentationModel,
       waveformModel: DictationWaveformModel,
+      markImage: NSImage?,
       inputRouter: DictationCapsuleInputRouter,
       onDockSelected: @escaping @MainActor (DictationCapsuleDock) -> Void
     ) {
@@ -2399,7 +2499,11 @@
       self.inputRouter = inputRouter
       self.onDockSelected = onDockSelected
       self.hostingView = DictationCapsuleEventHostingView(
-        rootView: DictationCapsuleView(model: model, waveformModel: waveformModel),
+        rootView: DictationCapsuleView(
+          model: model,
+          waveformModel: waveformModel,
+          markImage: markImage
+        ),
         model: model,
         inputRouter: inputRouter
       )

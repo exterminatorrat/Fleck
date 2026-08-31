@@ -366,7 +366,7 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   #expect(unknownFailure.voiceOverText.contains("permission denied"))
 }
 
-@Test @MainActor func DictationAccessibilityDrawsStableFourTileFleckMark() {
+@Test @MainActor func DictationAccessibilityDrawsStableFourTileProgressRail() {
   #expect(FleckRailMark.frameSize == CGSize(width: 14, height: 14))
   #expect(FleckRailMark.tileIDs == [0, 1, 2, 3])
   #expect(FleckRailMark.tileFrames.count == 4)
@@ -374,6 +374,25 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   #expect(FleckRailMark.tileFrames[1].minX - FleckRailMark.tileFrames[0].maxX == 2)
   #expect(FleckRailMark.tileFrames[2].minY - FleckRailMark.tileFrames[0].maxY == 2)
   #expect(FleckRailMark.innerHighlightThickness == 1)
+}
+
+@Test @MainActor func DictationAccessibilityLoadsCanonicalTemplateMarkAtTinyRailSize() {
+  let sourceRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let markDirectory = sourceRoot.appendingPathComponent("website/public", isDirectory: true)
+  guard case .image(let image) = FleckMark.load(
+    template: true,
+    resourceURL: markDirectory,
+    isPackagedApp: true
+  ) else {
+    Issue.record("Expected the canonical packaged Fleck mark")
+    return
+  }
+  #expect(image.isTemplate)
+  #expect(image.size == NSSize(width: 18, height: 18))
+  #expect(FleckRailIdentityMark.frameSize == CGSize(width: 18, height: 18))
 }
 
 @Test @MainActor func DictationAccessibilityPreservesFleckTileIdentityAcrossLayouts() {
@@ -443,6 +462,134 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   }
   #expect(abs(left.mark.minX - 8) < 0.1)
   #expect(abs(right.mark.maxX - 92) < 0.1)
+}
+
+@Test @MainActor func DictationAccessibilityAnchorsIdentityAndListeningToRailEdges() {
+  let sourceRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let markDirectory = sourceRoot.appendingPathComponent("website/public", isDirectory: true)
+  let markLoader: @MainActor () -> NSImage? = {
+    guard case .image(let image) = FleckMark.load(
+      template: true,
+      resourceURL: markDirectory,
+      isPackagedApp: true
+    ) else {
+      return nil
+    }
+    return image
+  }
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel, markLoader: markLoader)
+  defer { controller.dismiss() }
+
+  func probeFrame(_ identifier: String, size: CGSize) -> CGRect? {
+    panel.setFrame(CGRect(origin: .zero, size: size), display: false)
+    panel.contentView?.frame = CGRect(origin: .zero, size: size)
+    panel.contentView?.layoutSubtreeIfNeeded()
+    guard let host = panel.contentView,
+      let probe = renderedView(with: identifier, in: host)
+    else {
+      return nil
+    }
+    return probe.convert(probe.bounds, to: host)
+  }
+
+  controller.render(.idle)
+  guard let idleMark = probeFrame(
+    "fleck-rail-mark",
+    size: DictationCapsuleController.idleSize
+  ) else {
+    Issue.record("Expected the canonical idle mark probe")
+    return
+  }
+  #expect(abs(idleMark.midX - 23) < 0.1)
+  #expect(abs(idleMark.midY - 12) < 0.1)
+
+  let listening = DictationCapsuleContext(
+    status: .listening,
+    sessionID: UUID(uuidString: "B1D2B13B-6D48-4D13-8D90-81DE8E54C6AC")!,
+    trigger: .hold,
+    mode: .smartCapture,
+    isHandsFree: false,
+    pipelineStage: .capture
+  )
+  controller.render(listening)
+  guard let bottomMark = probeFrame(
+    "fleck-rail-mark",
+    size: DictationCapsuleController.listeningSize
+  ), let bottomWaveform = probeFrame(
+    "fleck-rail-waveform",
+    size: DictationCapsuleController.listeningSize
+  ), let bottomTimer = probeFrame(
+    "fleck-rail-timer",
+    size: DictationCapsuleController.listeningSize
+  ), let bottomElapsed = probeFrame(
+    "fleck-rail-elapsed",
+    size: DictationCapsuleController.listeningSize
+  ) else {
+    Issue.record("Expected the bottom listening probes")
+    return
+  }
+  #expect(abs(bottomMark.minX - 8) < 0.1)
+  #expect(abs(bottomMark.midY - 18) < 0.1)
+  #expect(abs(bottomWaveform.midX - 88) < 0.1)
+  #expect(abs(bottomTimer.maxX - 168) < 0.1)
+  #expect(abs(bottomElapsed.maxX - 168) < 0.1)
+  #expect(bottomMark.maxX < bottomWaveform.minX)
+  #expect(bottomWaveform.maxX < bottomTimer.minX)
+
+  controller.setDock(.left)
+  controller.render(listening)
+  guard let leftMark = probeFrame(
+    "fleck-rail-mark",
+    size: DictationCapsuleController.listeningSize
+  ), let leftWaveform = probeFrame(
+    "fleck-rail-waveform",
+    size: DictationCapsuleController.listeningSize
+  ), let leftTimer = probeFrame(
+    "fleck-rail-timer",
+    size: DictationCapsuleController.listeningSize
+  ), let leftElapsed = probeFrame(
+    "fleck-rail-elapsed",
+    size: DictationCapsuleController.listeningSize
+  ) else {
+    Issue.record("Expected the left listening probes")
+    return
+  }
+  #expect(abs(leftMark.minX - 8) < 0.1)
+  #expect(abs(leftMark.midY - 18) < 0.1)
+  #expect(abs(leftWaveform.midX - 88) < 0.1)
+  #expect(abs(leftTimer.maxX - 168) < 0.1)
+  #expect(abs(leftElapsed.maxX - 168) < 0.1)
+  #expect(leftMark.maxX < leftWaveform.minX)
+  #expect(leftWaveform.maxX < leftTimer.minX)
+
+  controller.setDock(.right)
+  controller.render(listening)
+  guard let rightMark = probeFrame(
+    "fleck-rail-mark",
+    size: DictationCapsuleController.listeningSize
+  ), let rightWaveform = probeFrame(
+    "fleck-rail-waveform",
+    size: DictationCapsuleController.listeningSize
+  ), let rightTimer = probeFrame(
+    "fleck-rail-timer",
+    size: DictationCapsuleController.listeningSize
+  ), let rightElapsed = probeFrame(
+    "fleck-rail-elapsed",
+    size: DictationCapsuleController.listeningSize
+  ) else {
+    Issue.record("Expected the right listening probes")
+    return
+  }
+  #expect(abs(rightMark.maxX - 168) < 0.1)
+  #expect(abs(rightWaveform.midX - 88) < 0.1)
+  #expect(abs(rightTimer.minX - 8) < 0.1)
+  #expect(abs(rightElapsed.maxX - 66) < 0.1)
+  #expect(rightTimer.maxX < rightWaveform.minX)
+  #expect(rightWaveform.maxX < rightMark.minX)
 }
 
 @Test @MainActor func DictationAccessibilityMirrorsRenderedTerminalFramesAtDockEdges() {
@@ -530,7 +677,124 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   #expect(right.glyph.minX < right.mark.minX)
 }
 
-@Test func DictationAccessibilityInstallsOnePersistentFleckMarkSubtree() throws {
+@Test @MainActor func DictationAccessibilityCentersProcessingRailBeforeAndAfterLabelDelay() async {
+  let sourceRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let markDirectory = sourceRoot.appendingPathComponent("website/public", isDirectory: true)
+  let markLoader: @MainActor () -> NSImage? = {
+    guard case .image(let image) = FleckMark.load(
+      template: true,
+      resourceURL: markDirectory,
+      isPackagedApp: true
+    ) else {
+      return nil
+    }
+    return image
+  }
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel, markLoader: markLoader)
+  defer { controller.dismiss() }
+  let context = DictationCapsuleContext(
+    status: .cleaning,
+    sessionID: UUID(uuidString: "905A0F05-0D5A-46D0-88AF-7CD49E1E0A9D")!,
+    mode: .smartCapture,
+    pipelineStage: .polish
+  )
+  controller.render(context)
+
+  func frame(for identifier: String) -> CGRect? {
+    panel.setFrame(
+      CGRect(origin: .zero, size: DictationCapsuleController.activeSize),
+      display: false
+    )
+    panel.contentView?.frame = CGRect(
+      origin: .zero,
+      size: DictationCapsuleController.activeSize
+    )
+    panel.contentView?.layoutSubtreeIfNeeded()
+    guard let host = panel.contentView,
+      let rendered = renderedView(with: identifier, in: host)
+    else {
+      return nil
+    }
+    return rendered.convert(rendered.bounds, to: host)
+  }
+
+  guard let hiddenMark = frame(for: "fleck-rail-mark") else {
+    Issue.record("Expected the centered hidden processing rail")
+    return
+  }
+  #expect(abs(hiddenMark.midX - DictationCapsuleController.activeSize.width / 2) < 0.1)
+  #expect(frame(for: "fleck-rail-processing-text") == nil)
+
+  try? await Task.sleep(for: .milliseconds(500))
+  for _ in 0..<5 { await Task.yield() }
+  guard let visibleMark = frame(for: "fleck-rail-mark"),
+    let visibleText = frame(for: "fleck-rail-processing-text")
+  else {
+    Issue.record("Expected the visible processing label and rail")
+    return
+  }
+  let cluster = visibleMark.union(visibleText)
+  #expect(abs(cluster.midX - DictationCapsuleController.activeSize.width / 2) < 0.1)
+  #expect(visibleMark.maxX < visibleText.minX)
+}
+
+@Test @MainActor func DictationAccessibilityFitsHandsFreeHoverActionsInTrailingZone() {
+  let sourceRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let markDirectory = sourceRoot.appendingPathComponent("website/public", isDirectory: true)
+  let markLoader: @MainActor () -> NSImage? = {
+    guard case .image(let image) = FleckMark.load(
+      template: true,
+      resourceURL: markDirectory,
+      isPackagedApp: true
+    ) else {
+      return nil
+    }
+    return image
+  }
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel, markLoader: markLoader)
+  defer { controller.dismiss() }
+  controller.render(
+    DictationCapsuleContext(
+      status: .listening,
+      sessionID: UUID(uuidString: "7D044D5B-5A32-46AA-A51F-BFAE2CFBF66C")!,
+      trigger: .doubleTap,
+      mode: .smartCapture,
+      isHandsFree: true,
+      pipelineStage: .capture
+    )
+  )
+  controller.presentationModel.setListeningHover(true)
+  let size = DictationCapsuleController.listeningSize
+  panel.setFrame(CGRect(origin: .zero, size: size), display: false)
+  panel.contentView?.frame = CGRect(origin: .zero, size: size)
+  panel.contentView?.layoutSubtreeIfNeeded()
+  guard let host = panel.contentView,
+    let stop = renderedView(with: "fleck-rail-stop", in: host),
+    let cancel = renderedView(with: "fleck-rail-cancel", in: host),
+    let timer = renderedView(with: "fleck-rail-timer", in: host)
+  else {
+    Issue.record("Expected the hands-free hover action probes")
+    return
+  }
+  let stopFrame = stop.convert(stop.bounds, to: host)
+  let cancelFrame = cancel.convert(cancel.bounds, to: host)
+  let timerFrame = timer.convert(timer.bounds, to: host)
+  #expect(stopFrame.size == CGSize(width: 28, height: 28))
+  #expect(cancelFrame.size == CGSize(width: 28, height: 28))
+  #expect(abs(stopFrame.minX - 110) < 0.1)
+  #expect(abs(cancelFrame.maxX - 168) < 0.1)
+  #expect(abs(timerFrame.maxX - 168) < 0.1)
+}
+
+@Test func DictationAccessibilityKeepsPersistentProgressAndCanonicalMarkSubtrees() throws {
   let sourceRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -540,6 +804,9 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
     encoding: .utf8
   )
   #expect(source.components(separatedBy: "FleckRailMark(").count - 1 == 1)
+  #expect(source.components(separatedBy: "FleckRailIdentityMark(").count - 1 == 1)
+  #expect(source.contains("FleckMark.load(template: true)"))
+  #expect(source.contains("private var identityMark"))
   #expect(source.contains("private var railMark"))
 }
 
