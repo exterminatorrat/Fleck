@@ -555,6 +555,56 @@ struct LocalWritingCorpusStoreTests {
   }
 
   @Test
+  func createRejectsAByteForByteLeafReplacementBeforeReturning() async throws {
+    let fixture = try CorpusStoreFixture()
+    defer { fixture.cleanup() }
+    let corpusID = testUUID(0xbf)
+    let workspace = fixture.workspaceURL(corpusID: corpusID)
+    let paths = CorpusStorePaths(workspace: workspace)
+    let store = fixture.store(faultHook: { point in
+      guard point == .afterLedgerCreate else { return }
+      let consent = try Data(contentsOf: paths.consent)
+      try FileManager.default.removeItem(at: paths.consent)
+      #expect(FileManager.default.createFile(atPath: paths.consent.path, contents: consent))
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600],
+        ofItemAtPath: paths.consent.path
+      )
+    })
+
+    await #expect(throws: LocalWritingCorpusStoreError.identityMismatch) {
+      try await store.create(in: fixture.selectedContainer, corpusID: corpusID)
+    }
+
+    #expect(FileManager.default.fileExists(atPath: paths.consent.path))
+  }
+
+  @Test
+  func openRejectsAByteForByteLedgerReplacementBeforeReturning() async throws {
+    let fixture = try CorpusStoreFixture()
+    defer { fixture.cleanup() }
+    let workspace = try await fixture.store().create(
+      in: fixture.selectedContainer,
+      corpusID: testUUID(0xc0)
+    )
+    let paths = CorpusStorePaths(workspace: workspace.workspaceURL)
+    let ledger = try Data(contentsOf: paths.ledger)
+    let opener = fixture.store(faultHook: { point in
+      guard point == .beforeFinalAuthorityRecheck else { return }
+      try FileManager.default.removeItem(at: paths.ledger)
+      #expect(FileManager.default.createFile(atPath: paths.ledger.path, contents: ledger))
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600],
+        ofItemAtPath: paths.ledger.path
+      )
+    })
+
+    await #expect(throws: LocalWritingCorpusStoreError.identityMismatch) {
+      try await opener.open(at: workspace.workspaceURL)
+    }
+  }
+
+  @Test
   func checkpointReadbackAndRenameFailuresPreserveOnlyForeignAuthorities() async throws {
     let readbackFixture = try CorpusStoreFixture()
     defer { readbackFixture.cleanup() }

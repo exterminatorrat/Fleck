@@ -34,6 +34,7 @@ enum LocalWritingCorpusStoreFaultPoint: Equatable, Sendable {
   case beforeCheckpointRename
   case afterCheckpointRenameBeforeDirectorySync
   case afterAuthorityRead
+  case beforeFinalAuthorityRecheck
 }
 
 actor LocalWritingCorpusStore {
@@ -177,6 +178,23 @@ actor LocalWritingCorpusStore {
     try Self.requireDirectoryIdentity(createdExposure)
     try Self.syncDirectory(managed.descriptor)
     try Self.syncDirectory(selected.descriptor, exactMode: nil)
+    try faultHook?(.beforeFinalAuthorityRecheck)
+    try Self.requireDirectoryIdentity(corpus)
+    try Self.requireDirectoryIdentity(createdExposure)
+    guard createdFiles[Self.consentName]
+      == (try Self.fileIdentity(named: Self.consentName, in: corpus.descriptor)),
+      createdFiles[Self.manifestName]
+        == (try Self.fileIdentity(named: Self.manifestName, in: corpus.descriptor)),
+      createdFiles["\(Self.exposureName)/\(Self.ledgerName)"]
+        == (try Self.fileIdentity(named: Self.ledgerName, in: createdExposure.descriptor)),
+      createdFiles["\(Self.exposureName)/\(Self.ledgerName).lock"]
+        == (try Self.fileIdentity(
+          named: "\(Self.ledgerName).lock",
+          in: createdExposure.descriptor
+        )),
+      createdFiles[Self.checkpointName]
+        == (try Self.fileIdentity(named: Self.checkpointName, in: corpus.descriptor))
+    else { throw LocalWritingCorpusStoreError.identityMismatch }
     keepCorpus = true
     return LocalWritingCorpusWorkspace(
       corpusID: corpusID,
@@ -282,7 +300,7 @@ actor LocalWritingCorpusStore {
       throw Self.mapLedgerError(error)
     }
 
-    let checkpointIdentity: AuthorityIdentity?
+    let checkpointIdentity: AuthorityIdentity
     if let cachedBytes {
       let cached: LocalWritingExposureLedgerCheckpoint
       do {
@@ -321,9 +339,20 @@ actor LocalWritingCorpusStore {
     } else {
       checkpointIdentity = try publishCheckpoint(live, replacing: nil, in: corpus)
     }
-    guard checkpointIdentity != nil else { throw LocalWritingCorpusStoreError.ioFailure }
+    try faultHook?(.beforeFinalAuthorityRecheck)
     try Self.requireDirectoryIdentity(corpus)
     try Self.requireDirectoryIdentity(exposure)
+    guard try Self.fileIdentity(named: Self.consentName, in: corpus.descriptor)
+      == consentBytes.identity,
+      try Self.fileIdentity(named: Self.manifestName, in: corpus.descriptor)
+        == manifestBytes.identity,
+      try Self.fileIdentity(named: Self.ledgerName, in: exposure.descriptor)
+        == ledgerIdentity,
+      try Self.fileIdentity(named: "\(Self.ledgerName).lock", in: exposure.descriptor)
+        == lockIdentity,
+      try Self.fileIdentity(named: Self.checkpointName, in: corpus.descriptor)
+        == checkpointIdentity
+    else { throw LocalWritingCorpusStoreError.identityMismatch }
     return LocalWritingCorpusWorkspace(
       corpusID: location.corpusID,
       workspaceURL: workspaceURL,
