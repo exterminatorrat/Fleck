@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import FleckCore
+import SwiftUI
 import Testing
 
 @testable import FleckApp
@@ -156,6 +157,155 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
 @Test func DictationSettingsUsesTheExistingMatchedGeometrySectionSelector() {
   #expect(SettingsSection.allCases == [.appearance, .editing, .shortcuts, .dictation])
   #expect(SettingsSection.selectionEffectID == "settings-section")
+}
+
+@Test @MainActor func DictationSettingsPendingRouteIsDurableAndConsumedOnce() async throws {
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  fixture.runtime.requestSettings(.dictation)
+  #expect(fixture.runtime.pendingSettingsSection == .dictation)
+  #expect(fixture.runtime.consumePendingSettingsSection() == .dictation)
+  #expect(fixture.runtime.consumePendingSettingsSection() == nil)
+}
+
+@Test @MainActor func DictationSettingsBridgeLifecycleOpensOnceAndSettingsViewConsumesRoute()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  var openSettingsCalls = 0
+
+  fixture.runtime.requestSettings(.dictation)
+  #expect(fixture.runtime.pendingSettingsSection == .dictation)
+  #expect(openSettingsCalls == 0)
+
+  let bridge = DictationSettingsEnvironmentBridge(
+    runtime: fixture.runtime,
+    openSettingsAction: { openSettingsCalls += 1 }
+  ) {
+    Text("Resident bridge")
+  }
+  let bridgeHost = NSHostingView(rootView: bridge)
+  let bridgeWindow = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 120, height: 40),
+    styleMask: [.borderless],
+    backing: .buffered,
+    defer: false
+  )
+  bridgeWindow.contentView = bridgeHost
+  bridgeWindow.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(bridgeHost)
+
+  #expect(openSettingsCalls == 1)
+  #expect(fixture.runtime.pendingSettingsSection == .dictation)
+
+  let settingsHost = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+  )
+  let settingsWindow = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  settingsWindow.contentView = settingsHost
+  settingsWindow.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(settingsHost)
+
+  #expect(fixture.runtime.pendingSettingsSection == nil)
+  #expect(openSettingsCalls == 1)
+
+  settingsWindow.contentView = nil
+  settingsWindow.orderOut(nil)
+  bridgeWindow.contentView = nil
+  bridgeWindow.orderOut(nil)
+}
+
+@MainActor
+private func settleSettingsHost(_ view: NSView) async {
+  for _ in 0..<40 {
+    view.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+}
+
+@Test @MainActor func DictationRuntimeUpdatesRailAccentWithoutRewritingPreference() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  let accentHex = "#E64A19"
+  fixture.appState.updatePreferences { $0.accentHex = accentHex }
+  fixture.runtime.preferencesDidChange()
+
+  #expect(fixture.runtime.capsuleController.presentationModel.colors.accentHex == accentHex)
+  #expect(fixture.appState.preferences.accentHex == accentHex)
+}
+
+@Test @MainActor func DictationRuntimeMapsTheRealSaveBoundaryToSaving() {
+  let id = UUID(uuidString: "7EF3CE15-48DD-42E2-9A58-4F0C0A5A0783")!
+  let event = DictationCoordinatorEvent(
+    phase: .routing,
+    terminal: nil,
+    context: DictationCoordinatorContext(
+      sessionID: id,
+      mode: .smartCapture,
+      pipelineStage: .save,
+      cleanupOutcome: .cleaned,
+      failureStage: nil
+    )
+  )
+
+  let context = DictationRuntime.capsuleContext(for: event)
+  #expect(context.status == .saving)
+  #expect(context.status.presentation.visibleText == "Saving")
+  #expect(context.pipelineStage == .save)
+}
+
+@Test @MainActor func DictationRuntimePointerStartPublishesOwnerContextImmediately() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.runtime.shortcutController.startPointerHandsFree())
+  for _ in 0..<100 {
+    if fixture.runtime.capsuleController.currentContext.sessionID != nil { break }
+    await Task.yield()
+  }
+
+  let context = fixture.runtime.capsuleController.currentContext
+  #expect(context.status == .arming || context.status == .listening)
+  #expect(context.sessionID != nil)
+  #expect(context.trigger == .pointer)
+  #expect(context.mode == .smartCapture)
+  #expect(context.isHandsFree)
+
+  await fixture.runtime.shortcutController.cancelOwnedSession()
+  await fixture.runtime.shortcutController.waitForTerminalObservation()
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+}
+
+@Test @MainActor func DictationRuntimeActionBearingFailureDoesNotScheduleReturnTimer() async throws {
+  let sleeper = RuntimeCapsuleSleeper()
+  let saver = RuntimeSaving(error: DictationFailure.saveFailed)
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    capsuleEnabled: true,
+    saving: saver,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  for _ in 0..<100 {
+    if fixture.runtime.phase == .failed("Unable to save dictation.") { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.phase == .failed("Unable to save dictation."))
+  #expect(fixture.runtime.recoveryAction == .openHistory)
+  #expect(await sleeper.requestedDurations.isEmpty)
+  await fixture.runtime.shortcutController.waitForTerminalObservation()
+  #expect(fixture.runtime.currentCapsuleStatus == .failed("Unable to save dictation."))
+  await fixture.runtime.cancel()
 }
 
 @Test @MainActor func DictationSettingsHistoryClearRequiresConfirmation() {
@@ -1530,6 +1680,37 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
 }
 
+@Test @MainActor func DictationRuntimeIgnoresAStaleEngineCallbackAfterANewCapture() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  for _ in 0..<100 {
+    if fixture.engine.captureCallbackCount == 1 { break }
+    await Task.yield()
+  }
+  #expect(fixture.engine.captureCallbackCount == 1)
+  fixture.engine.emitLevel(0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  for _ in 0..<100 {
+    if fixture.engine.captureCallbackCount == 2 { break }
+    await Task.yield()
+  }
+  #expect(fixture.engine.captureCallbackCount == 2)
+  #expect(fixture.runtime.capsuleController.currentContext.status == .listening)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+
+  fixture.engine.emitLevel(fromCaptureAt: 0, value: 0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+  fixture.engine.emitLevel(fromCaptureAt: 1, value: 0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+
+  await fixture.runtime.cancel()
+}
+
 @Test @MainActor func DictationRuntimeUsesCoordinatorEventsAndAppliesModifierAfterTerminal() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
   let replacement = DictationModifierKey.leftCommand
@@ -2356,6 +2537,7 @@ private final class RuntimeFixture {
     cleanupFails: Bool = false,
     historySaveFailureAttempt: Int? = nil,
     historySaveBlockingAttempt: Int? = nil,
+    saving: (any DictationSaving)? = nil,
     capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
     }
@@ -2431,7 +2613,7 @@ private final class RuntimeFixture {
       },
       cleaner: RuntimeCleaner(fails: cleanupFails),
       router: RuntimeRouter(returnsAmbiguity: ambiguousRouting),
-      saver: appState,
+      saver: saving ?? appState,
       historyController: history,
       historyEnabled: { true },
       holdThreshold: .zero,
@@ -2577,6 +2759,9 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   var releaseGate: DictationTestGate?
   private(set) var releaseCount = 0
   private var level: (@MainActor (Float) -> Void)?
+  private var levelCallbacks: [@MainActor (Float) -> Void] = []
+
+  var captureCallbackCount: Int { levelCallbacks.count }
 
   init(
     finalText: String?,
@@ -2595,6 +2780,7 @@ private final class RuntimeSpeechEngine: SpeechEngine {
     level: @escaping @MainActor (Float) -> Void
   ) async throws {
     self.level = level
+    levelCallbacks.append(level)
   }
 
   func finish() async throws -> String? {
@@ -2604,6 +2790,9 @@ private final class RuntimeSpeechEngine: SpeechEngine {
 
   func cancel() async {}
   func emitLevel(_ value: Float) { level?(value) }
+  func emitLevel(fromCaptureAt index: Int, value: Float) {
+    levelCallbacks[index](value)
+  }
   func releaseResources() async {
     releaseCount += 1
     if let releaseGate { await releaseGate.wait() }
@@ -2621,6 +2810,49 @@ private struct RuntimeCleaner: TranscriptCleaning {
   func clean(_ transcript: String) async throws -> String {
     if fails { throw DictationSettingsTestError.failed }
     return transcript
+  }
+}
+
+@MainActor
+private final class RuntimeSaving: DictationSaving {
+  let error: Error?
+  let destination = DictationDestination(noteID: UUID(), title: "Inbox")
+
+  init(error: Error? = nil) {
+    self.error = error
+  }
+
+  func activeDestinations() -> [DictationRoutingCandidate] {
+    [DictationRoutingCandidate(destination: destination, semanticContext: "")]
+  }
+
+  func saveSmartCapture(
+    text: String,
+    captureID: UUID,
+    destinationID: UUID?
+  ) async throws -> DictationInsertionReceipt {
+    if let error { throw error }
+    return DictationInsertionReceipt(
+      captureID: captureID,
+      noteID: destination.noteID,
+      insertedSuffix: text
+    )
+  }
+
+  func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
+    true
+  }
+
+  func flushFocusedDictationSave(
+    captureID: UUID
+  ) async throws -> FocusedDictationPersistenceReceipt {
+    FocusedDictationPersistenceReceipt(captureID: captureID)
+  }
+
+  func compensateFocusedDictationSave(
+    _ receipt: FocusedDictationPersistenceReceipt
+  ) async -> Bool {
+    true
   }
 }
 

@@ -180,16 +180,18 @@
           .preferredColorScheme(colorScheme)
       }
       label: {
-        Group {
-          switch FleckMark.load(template: true) {
-          case .image(let mark):
-            Image(nsImage: mark)
-          case .missingPackagedResource:
-            Text("!")
-              .accessibilityLabel("Fleck mark missing")
+        DictationSettingsEnvironmentBridge(runtime: dictationRuntime) {
+          Group {
+            switch FleckMark.load(template: true) {
+            case .image(let mark):
+              Image(nsImage: mark)
+            case .missingPackagedResource:
+              Text("!")
+                .accessibilityLabel("Fleck mark missing")
+            }
           }
+          .accessibilityLabel("Fleck")
         }
-        .accessibilityLabel("Fleck")
       }
       .menuBarExtraStyle(.window)
 
@@ -422,7 +424,7 @@
 
     private enum CapsuleUpdate {
       case coordinator(DictationCoordinatorEvent)
-      case preflightFailure(String)
+      case preflightFailure(String, DictationCapsuleFailureKind?)
     }
 
     private struct RoutingChooserSnapshot {
@@ -463,6 +465,7 @@
     @Published private(set) var recoveryAction: DictationCapsuleAction?
     @Published private(set) var recoveryActionInFlight = false
     @Published private(set) var captureFailure: DictationCaptureFailurePresentation?
+    @Published private(set) var pendingSettingsSection: SettingsSection? = nil
     private(set) var currentCapsuleStatus: DictationCapsuleStatus?
 
     private weak var appState: AppState?
@@ -490,6 +493,9 @@
       message: String
     )?
     private var preloadCapsuleUpdate: CapsuleUpdate?
+    private var lastCoordinatorEvent: DictationCoordinatorEvent?
+    private var activeOwnership: DictationShortcutOwnership?
+    private var openSettingsBridge: (@MainActor () -> Void)?
     private var startupAssessmentTask: Task<Void, Never>?
     private var initialLoadSynchronizationTask: Task<Void, Never>?
     private var terminalSynchronizationTask: Task<Void, Never>?
@@ -819,6 +825,44 @@
       shortcutController.monitorStateHandler = { [weak self] state in
         self?.modifierMonitorState = state
       }
+      shortcutController.ownershipHandler = { [weak self] ownership in
+        self?.receiveOwnership(ownership)
+      }
+      capsuleController.configureInteraction(
+        onPrimaryClick: { [weak self] in
+          self?.capsulePrimaryClick()
+        },
+        onStop: { [weak self] in
+          guard let self else { return }
+          Task { @MainActor in
+            await self.shortcutController.finishOwnedHandsFree()
+          }
+        },
+        onCancel: { [weak self] in
+          guard let self else { return }
+          Task { @MainActor in
+            await self.shortcutController.cancelOwnedSession()
+          }
+        },
+        onOpenFleck: { [weak self] in
+          self?.openFleckPanel()
+        },
+        onOpenHistory: { [weak self] in
+          self?.openDictationHistory()
+        },
+        onOpenSettings: { [weak self] in
+          self?.requestSettings(.dictation)
+        },
+        onDismiss: { [weak self] in
+          self?.dismissVisibleCapsule()
+        },
+        onRecovery: { [weak self] in
+          guard let self else { return }
+          Task { @MainActor in
+            await self.performRecoveryAction()
+          }
+        }
+      )
       terminationObserver = ObserverToken(
         NotificationCenter.default.addObserver(
           forName: NSApplication.willTerminateNotification,
@@ -954,6 +998,27 @@
       await coordinator.cancel()
     }
 
+    private func capsulePrimaryClick() {
+      switch capsuleController.currentContext.status {
+      case .idle:
+        _ = shortcutController.startPointerHandsFree()
+      case .arming, .listening:
+        guard capsuleController.currentContext.isHandsFree else { return }
+        Task { @MainActor [weak self] in
+          await self?.shortcutController.finishOwnedHandsFree()
+        }
+      case .failed, .saved, .savedWithoutCleanup, .noSpeech, .routingFailure, .repairingModel:
+        dismissVisibleCapsule()
+      case .finalizing, .cleaning, .routing, .saving:
+        break
+      }
+    }
+
+    private func dismissVisibleCapsule() {
+      guard capsuleOwner != nil else { return }
+      showIdleCapsule(ifOwnedBy: capsuleOwner)
+    }
+
     func preferencesDidChange() {
       let current = appState?.preferences.dictationModifierKey
       if current != desiredModifier {
@@ -1021,6 +1086,23 @@
 
     func applicationDidBecomeActive() {
       synchronizePreferences()
+    }
+
+    func installOpenSettingsBridge(_ action: @escaping @MainActor () -> Void) {
+      openSettingsBridge = action
+      if pendingSettingsSection != nil {
+        action()
+      }
+    }
+
+    func requestSettings(_ section: SettingsSection) {
+      pendingSettingsSection = section
+      openSettingsBridge?()
+    }
+
+    func consumePendingSettingsSection() -> SettingsSection? {
+      defer { pendingSettingsSection = nil }
+      return pendingSettingsSection
     }
 
     func awaitStartupAssessment() async {
@@ -1132,6 +1214,8 @@
     }
 
     private func receive(_ event: DictationCoordinatorEvent) {
+      lastCoordinatorEvent = event
+      activeOwnership = shortcutController.activeOwnership
       phase = event.phase
       updateRoutingChooserSnapshot(for: event)
       if let captureID = routingChoiceInFlightCaptureID,
@@ -1165,6 +1249,14 @@
       synchronizeAfter(event)
     }
 
+    private func receiveOwnership(_ ownership: DictationShortcutOwnership?) {
+      activeOwnership = ownership
+      guard let event = lastCoordinatorEvent else { return }
+      guard event.terminal == nil else { return }
+      guard ownership != nil else { return }
+      presentCapsuleUpdate(.coordinator(event))
+    }
+
     private func presentCapsuleUpdate(_ update: CapsuleUpdate) {
       guard appState?.hasFinishedInitialLoad == true else {
         preloadCapsuleUpdate = update
@@ -1179,8 +1271,12 @@
         return
       }
       switch update {
-      case .preflightFailure(let message):
-        showFailureCapsule(message, action: nil)
+      case .preflightFailure(let message, let failureKind):
+        showFailureCapsule(
+          message,
+          action: nil,
+          failureKind: failureKind
+        )
       case .coordinator(let event):
         renderCoordinatorCapsule(event)
       }
@@ -1188,23 +1284,44 @@
 
     private func renderCoordinatorCapsule(_ event: DictationCoordinatorEvent) {
       let action = capsuleAction(for: coordinator.recoveryAction)
+      let eventContext = Self.capsuleContext(
+        for: event,
+        ownership: activeOwnership
+      )
       let chooserPresentation = activeRoutingChooserPresentation()
-      let status = chooserPresentation?.status ?? Self.capsuleStatus(for: event)
+      let context = DictationCapsuleContext(
+        status: chooserPresentation?.status ?? eventContext.status,
+        sessionID: eventContext.sessionID,
+        trigger: eventContext.trigger,
+        mode: eventContext.mode,
+        isHandsFree: eventContext.isHandsFree,
+        pipelineStage: eventContext.pipelineStage,
+        cleanupOutcome: eventContext.cleanupOutcome,
+        failureStage: eventContext.failureStage,
+        failureKind: eventContext.failureKind
+      )
       let chooser = chooserPresentation?.chooser
       if let terminal = event.terminal {
         switch terminal {
         case .saved:
-          showCapsule(status, owner: .dictation, action: action, chooser: chooser)
+          showCapsule(context, owner: .dictation, action: action, chooser: chooser)
           if chooser == nil {
             scheduleIdle(after: Self.savedCapsuleDuration, owner: .dictation)
           }
         case .failed(let message):
-          showFailureCapsule(message, action: action)
+          showFailureCapsule(
+            message,
+            action: action,
+            context: context
+          )
+        case .noSpeech:
+          showCapsule(context, owner: .dictation, action: nil, chooser: chooser)
+          scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
         case .cancelled:
           showIdleCapsule()
         }
       } else {
-        showCapsule(status, owner: .dictation, action: action, chooser: chooser)
+        showCapsule(context, owner: .dictation, action: action, chooser: chooser)
       }
     }
 
@@ -1284,15 +1401,27 @@
     ) {
       phase = .failed(message)
       captureFailure = .init(message: message, actions: actions)
-      presentCapsuleUpdate(.preflightFailure(message))
+      let failureKind = actions.contains(where: { $0.pane == .microphone })
+        ? DictationCapsuleFailureKind.microphoneAccess
+        : DictationCapsuleFailureKind.resolve(message: message, failureStage: nil)
+      presentCapsuleUpdate(.preflightFailure(message, failureKind))
     }
 
     private func showFailureCapsule(
       _ message: String,
-      action: DictationCapsuleAction?
+      action: DictationCapsuleAction?,
+      context: DictationCapsuleContext? = nil,
+      failureKind: DictationCapsuleFailureKind? = nil
     ) {
-      showCapsule(.failed(message), owner: .dictation, action: action)
-      scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
+      let context = context ?? DictationCapsuleContext(
+        status: .failed(message),
+        failureStage: nil,
+        failureKind: failureKind
+      )
+      showCapsule(context, owner: .dictation, action: action)
+      if action == nil {
+        scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
+      }
     }
 
     private func synchronizeAfter(_ event: DictationCoordinatorEvent) {
@@ -1357,7 +1486,16 @@
       }
     }
 
-    static func capsuleStatus(for event: DictationCoordinatorEvent) -> DictationCapsuleStatus {
+    static func capsuleContext(
+      for event: DictationCoordinatorEvent,
+      ownership: DictationShortcutOwnership? = nil
+    ) -> DictationCapsuleContext {
+      let coordinatorContext = event.context
+      let terminalCleanup: DictationCleanupOutcome? = {
+        guard case .saved(_, let cleanup, _) = event.terminal else { return nil }
+        return cleanup
+      }()
+      let status: DictationCapsuleStatus
       if let terminal = event.terminal {
         switch terminal {
         case .saved(let mode, let cleanup, let destination):
@@ -1365,31 +1503,94 @@
             mode == .focused
             ? "current note"
             : destination?.title ?? "your notes"
-          return cleanup == .cleaned
+          status = cleanup == .cleaned
             ? .saved(destination: title)
             : .savedWithoutCleanup(destination: title)
         case .failed(let message):
-          return .failed(message)
+          status = .failed(message)
+        case .noSpeech:
+          status = .noSpeech
         case .cancelled:
-          return .idle
+          status = .idle
+        }
+      } else {
+        if coordinatorContext?.pipelineStage == .save {
+          status = .saving
+        } else {
+          switch event.phase {
+          case .arming:
+            status = .arming
+          case .listening:
+            status = .listening
+          case .finalizing:
+            status = .finalizing
+          case .cleaning:
+            status = .cleaning
+          case .routing:
+            status = .routing
+          case .saved(let destination):
+            status = .saved(destination: destination.title)
+          case .failed(let message):
+            status = .failed(message)
+          case .idle:
+            status = .idle
+          }
         }
       }
-      switch event.phase {
-      case .arming, .listening:
-        return .listening
-      case .finalizing:
-        return .finalizing
+
+      let failureMessage: String? = {
+        if case .failed(let message) = status { return message }
+        return nil
+      }()
+      return DictationCapsuleContext(
+        status: status,
+        sessionID: coordinatorContext?.sessionID ?? ownership?.session.id,
+        trigger: ownership?.trigger,
+        mode: coordinatorContext?.mode ?? ownership?.mode,
+        isHandsFree: ownership?.isHandsFree ?? false,
+        pipelineStage: coordinatorContext?.pipelineStage ?? Self.pipelineStage(for: event.phase),
+        cleanupOutcome: coordinatorContext?.cleanupOutcome ?? terminalCleanup,
+        failureStage: coordinatorContext?.failureStage,
+        failureKind: failureMessage.flatMap {
+          DictationCapsuleFailureKind.resolve(
+            message: $0,
+            failureStage: coordinatorContext?.failureStage
+          )
+        }
+      )
+    }
+
+    static func capsuleStatus(for event: DictationCoordinatorEvent) -> DictationCapsuleStatus {
+      capsuleContext(for: event).status
+    }
+
+    private static func pipelineStage(for phase: DictationPhase) -> DictationPipelineStage? {
+      switch phase {
+      case .arming, .listening, .finalizing:
+        .capture
       case .cleaning:
-        return .cleaning
+        .polish
       case .routing:
-        return .routing
-      case .saved(let destination):
-        return .saved(destination: destination.title)
-      case .failed(let message):
-        return .failed(message)
-      case .idle:
-        return .idle
+        .organize
+      case .saved:
+        .save
+      case .idle, .failed:
+        nil
       }
+    }
+
+    private func capsuleContext(for status: DictationCapsuleStatus) -> DictationCapsuleContext {
+      DictationCapsuleContext(
+        status: status,
+        sessionID: capsuleController.currentContext.sessionID,
+        trigger: capsuleController.currentContext.trigger,
+        mode: capsuleController.currentContext.mode,
+        isHandsFree: capsuleController.currentContext.isHandsFree,
+        pipelineStage: capsuleController.currentContext.pipelineStage,
+        cleanupOutcome: capsuleController.currentContext.cleanupOutcome,
+        failureStage: capsuleController.currentContext.failureStage,
+        failureKind: capsuleController.currentContext.failureKind
+      )
     }
 
     private static func shortcutMessage(
@@ -1436,12 +1637,26 @@
       action: DictationCapsuleAction? = nil,
       chooser: DictationCapsuleChooser? = nil
     ) {
+      showCapsule(
+        capsuleContext(for: status),
+        owner: owner,
+        action: action,
+        chooser: chooser
+      )
+    }
+
+    private func showCapsule(
+      _ context: DictationCapsuleContext,
+      owner: CapsuleOwner,
+      action: DictationCapsuleAction? = nil,
+      chooser: DictationCapsuleChooser? = nil
+    ) {
       guard appState?.hasFinishedInitialLoad == true else { return }
       invalidateCapsuleReturn()
-      currentCapsuleStatus = status
+      currentCapsuleStatus = context.status
       capsuleOwner = owner
       capsuleController.render(
-        status,
+        context,
         action: action,
         chooser: chooser,
         onAction: { [weak self] in
@@ -1513,6 +1728,7 @@
       let dockChanged = dock != capsuleDock
       capsuleDock = dock
       appliedCapsuleEnabled = enabled
+      capsuleController.updateAccentHex(appState.preferences.accentHex)
 
       if dockChanged {
         capsuleController.setDock(dock)
@@ -1540,7 +1756,13 @@
       }
       switch phase {
       case .arming, .listening, .finalizing, .cleaning, .routing:
-        renderCoordinatorCapsule(.init(phase: phase, terminal: nil))
+        if let lastCoordinatorEvent, lastCoordinatorEvent.terminal == nil,
+          lastCoordinatorEvent.phase == phase
+        {
+          renderCoordinatorCapsule(lastCoordinatorEvent)
+        } else {
+          renderCoordinatorCapsule(.init(phase: phase, terminal: nil))
+        }
         return
       case .idle, .saved, .failed:
         break
@@ -1833,6 +2055,36 @@
       }
     }
   #endif
+
+  struct DictationSettingsEnvironmentBridge<Content: View>: View {
+    @Environment(\.openSettings) private var openSettings
+    @ObservedObject var runtime: DictationRuntime
+    let content: Content
+    private let openSettingsAction: (@MainActor () -> Void)?
+
+    init(
+      runtime: DictationRuntime,
+      openSettingsAction: (@MainActor () -> Void)? = nil,
+      @ViewBuilder content: () -> Content
+    ) {
+      self.runtime = runtime
+      self.openSettingsAction = openSettingsAction
+      self.content = content()
+    }
+
+    var body: some View {
+      content
+        .onAppear {
+          runtime.installOpenSettingsBridge {
+            if let openSettingsAction {
+              openSettingsAction()
+            } else {
+              openSettings()
+            }
+          }
+        }
+    }
+  }
 
   private struct FloatingWindowConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {

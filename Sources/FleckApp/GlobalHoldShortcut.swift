@@ -2,17 +2,32 @@
   import Carbon
   import FleckCore
 
+  enum DictationShortcutTrigger: Equatable, Sendable {
+    case hold
+    case doubleTap
+    case pointer
+  }
+
+  struct DictationShortcutOwnership: Equatable, Sendable {
+    let session: DictationShortcutSession
+    let trigger: DictationShortcutTrigger
+    let mode: DictationMode
+    let isHandsFree: Bool
+  }
+
   @MainActor
   protocol ShortcutHoldHandling: AnyObject {
     var canConfigureShortcut: Bool { get }
     func beginShortcut(
+      session: DictationShortcutSession,
       editor: (any FocusedDictationEditing)?,
       destination: DictationDestination?
-    ) -> DictationShortcutSession?
+    ) -> Bool
     func beginHandsFreeShortcut(
+      session: DictationShortcutSession,
       editor: (any FocusedDictationEditing)?,
       destination: DictationDestination?
-    ) -> DictationShortcutSession?
+    ) -> Bool
     func endShortcut(_ session: DictationShortcutSession) async
     func finishHandsFreeShortcut(_ session: DictationShortcutSession) async
     func cancelShortcut(_ session: DictationShortcutSession) async
@@ -57,6 +72,12 @@
       case monitorLost
     }
 
+    private struct NormalizedShortcutContext {
+      let editor: (any FocusedDictationEditing)?
+      let destination: DictationDestination?
+      let mode: DictationMode
+    }
+
     static let holdThreshold = Duration.milliseconds(180)
     static let doubleTapWindow = Duration.milliseconds(320)
 
@@ -68,14 +89,15 @@
     private let escapeRegistrar: any EscapeHotKeyRegistering
     private let onRegistrationError: @MainActor (RegistrationError) -> Void
     var monitorStateHandler: @MainActor (ModifierMonitorState) -> Void
+    private(set) var activeOwnership: DictationShortcutOwnership?
+    var ownershipHandler: @MainActor (DictationShortcutOwnership?) -> Void
     private var monitorStopExpected = false
     private var escapeRegistered = false
-    private var escapeCancellationRequested = false
+    private var finishRequested = false
+    private var cancelRequested = false
     private var physicalPrimaryDown = false
     private var pressStartedAt: ContinuousClock.Instant?
     private var lastShortRelease: ContinuousClock.Instant?
-    private var acceptedSession: DictationShortcutSession?
-    private var handsFreeSession: DictationShortcutSession?
     private var ignoresReleaseAfterHandsFreeStart = false
     private var deliveryTask: Task<Void, Never>?
     private var pendingDeliveryCount = 0
@@ -88,7 +110,7 @@
       handler?.canConfigureShortcut == true
         && !physicalPrimaryDown
         && pendingDeliveryCount == 0
-        && acceptedSession == nil
+        && activeOwnership == nil
     }
 
     init(
@@ -109,6 +131,7 @@
       self.escapeRegistrar = escapeRegistrar
       self.onRegistrationError = onRegistrationError
       monitorStateHandler = onMonitorStateChange
+      ownershipHandler = { _ in }
       monitor.transitionHandler = { [weak self] transition in
         guard let self else { return }
         self.enqueue(.transition(transition, self.clock.now))
@@ -127,7 +150,7 @@
         throw RegistrationError.activeSession
       }
       guard pendingDeliveryCount == 0 else { throw RegistrationError.eventDeliveryPending }
-      guard acceptedSession == nil else { throw RegistrationError.activeSession }
+      guard activeOwnership == nil else { throw RegistrationError.activeSession }
       guard !physicalPrimaryDown else { throw RegistrationError.primaryKeyHeld }
       guard monitor.accessGranted else {
         if monitorState != .running {
@@ -177,10 +200,26 @@
 
     func drainEvents() async {
       await deliveryTask?.value
+      await Task.yield()
     }
 
     func waitForTerminalObservation() async {
       await terminalTask?.value
+    }
+
+    @discardableResult
+    func startPointerHandsFree() -> Bool {
+      beginOwnedSession(trigger: .pointer, isHandsFree: true)
+    }
+
+    func finishOwnedHandsFree() async {
+      guard let ownership = activeOwnership, ownership.isHandsFree else { return }
+      await requestFinish(ownership)
+    }
+
+    func cancelOwnedSession() async {
+      guard let ownership = activeOwnership else { return }
+      await requestCancel(ownership)
     }
 
     func uninstall() async {
@@ -196,12 +235,16 @@
       await drainEvents()
       physicalPrimaryDown = false
       clearTapState()
-      if let acceptedSession, let handler {
-        await handler.cancelShortcut(acceptedSession)
+      if let ownership = activeOwnership, handler != nil {
+        await requestCancel(ownership)
         await terminalTask?.value
       }
-      acceptedSession = nil
-      handsFreeSession = nil
+      if activeOwnership != nil {
+        activeOwnership = nil
+        finishRequested = false
+        cancelRequested = false
+        ownershipHandler(nil)
+      }
       unregisterEscape()
       publishMonitorState(.stopped)
     }
@@ -246,44 +289,34 @@
     }
 
     private func receiveSelectedPress(at now: ContinuousClock.Instant) async {
-      if let handsFreeSession {
+      if let ownership = activeOwnership {
+        guard ownership.isHandsFree else {
+          guard finishRequested, lastShortRelease != nil else { return }
+          await terminalTask?.value
+          await receiveSelectedPress(at: now)
+          return
+        }
+        guard !cancelRequested else { return }
         lastShortRelease = nil
         ignoresReleaseAfterHandsFreeStart = true
-        await handler?.finishHandsFreeShortcut(handsFreeSession)
+        await requestFinish(ownership)
         return
       }
 
       if let lastShortRelease {
         let interval = lastShortRelease.duration(to: now)
-        self.lastShortRelease = nil
         if interval >= .zero, interval <= Self.doubleTapWindow {
-          guard
-            let session = handler?.beginHandsFreeShortcut(
-              editor: editorProvider(),
-              destination: destinationProvider()
-            )
-          else { return }
-          acceptedSession = session
-          handsFreeSession = session
-          ignoresReleaseAfterHandsFreeStart = true
-          escapeCancellationRequested = false
-          registerEscape()
-          observeTerminal(session)
+          self.lastShortRelease = nil
+          if beginOwnedSession(trigger: .doubleTap, isHandsFree: true) {
+            ignoresReleaseAfterHandsFreeStart = true
+          }
           return
         }
+        self.lastShortRelease = nil
       }
 
       pressStartedAt = now
-      guard
-        let session = handler?.beginShortcut(
-          editor: editorProvider(),
-          destination: destinationProvider()
-        )
-      else { return }
-      acceptedSession = session
-      escapeCancellationRequested = false
-      registerEscape()
-      observeTerminal(session)
+      _ = beginOwnedSession(trigger: .hold, isHandsFree: false)
     }
 
     private func receiveSelectedRelease(at now: ContinuousClock.Instant) async {
@@ -291,37 +324,31 @@
         ignoresReleaseAfterHandsFreeStart = false
         return
       }
-      guard handsFreeSession == nil, let session = acceptedSession else {
+      guard let ownership = activeOwnership else {
+        pressStartedAt = nil
+        return
+      }
+      guard !ownership.isHandsFree else {
         pressStartedAt = nil
         return
       }
       let isShort =
         pressStartedAt.map { $0.duration(to: now) < Self.holdThreshold } ?? false
-      acceptedSession = nil
       pressStartedAt = nil
-      escapeCancellationRequested = false
-      unregisterEscape()
-      await handler?.endShortcut(session)
       lastShortRelease = isShort ? now : nil
+      await requestFinish(ownership)
     }
 
     private func receiveEscape() async {
-      guard
-        escapeRegistered,
-        !escapeCancellationRequested,
-        let acceptedSession
-      else { return }
-      escapeCancellationRequested = true
-      clearTapState()
-      await handler?.cancelShortcut(acceptedSession)
+      guard escapeRegistered, let ownership = activeOwnership else { return }
+      await requestCancel(ownership, allowAfterFinish: true)
     }
 
     private func receiveMonitorLoss() async {
       physicalPrimaryDown = false
       clearTapState()
-      guard let acceptedSession else { return }
-      escapeCancellationRequested = true
-      await handler?.cancelShortcut(acceptedSession)
+      guard let ownership = activeOwnership else { return }
+      await requestCancel(ownership)
     }
 
     private func monitorDidChange(_ state: ModifierMonitorState) {
@@ -345,6 +372,86 @@
       ignoresReleaseAfterHandsFreeStart = false
     }
 
+    private func normalizedShortcutContext() -> NormalizedShortcutContext {
+      let editor = editorProvider()
+      let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
+      return NormalizedShortcutContext(
+        editor: focusedEditor,
+        destination: focusedEditor == nil ? nil : destinationProvider(),
+        mode: focusedEditor == nil ? .smartCapture : .focused
+      )
+    }
+
+    @discardableResult
+    private func beginOwnedSession(
+      trigger: DictationShortcutTrigger,
+      isHandsFree: Bool
+    ) -> Bool {
+      guard !isUninstalled, activeOwnership == nil else { return false }
+      let context = normalizedShortcutContext()
+      let session = DictationShortcutSession(id: UUID())
+      let ownership = DictationShortcutOwnership(
+        session: session,
+        trigger: trigger,
+        mode: context.mode,
+        isHandsFree: isHandsFree
+      )
+      activeOwnership = ownership
+      finishRequested = false
+      cancelRequested = false
+
+      let accepted = if isHandsFree {
+        handler?.beginHandsFreeShortcut(
+          session: session,
+          editor: context.editor,
+          destination: context.destination
+        ) == true
+      } else {
+        handler?.beginShortcut(
+          session: session,
+          editor: context.editor,
+          destination: context.destination
+        ) == true
+      }
+      guard accepted else {
+        activeOwnership = nil
+        return false
+      }
+
+      registerEscape()
+      observeTerminal(session)
+      ownershipHandler(ownership)
+      return true
+    }
+
+    private func requestFinish(_ ownership: DictationShortcutOwnership) async {
+      guard
+        activeOwnership?.session == ownership.session,
+        !finishRequested,
+        !cancelRequested
+      else { return }
+      finishRequested = true
+      if ownership.isHandsFree {
+        await handler?.finishHandsFreeShortcut(ownership.session)
+      } else {
+        await handler?.endShortcut(ownership.session)
+      }
+    }
+
+    private func requestCancel(
+      _ ownership: DictationShortcutOwnership,
+      allowAfterFinish: Bool = false
+    ) async {
+      guard
+        activeOwnership?.session == ownership.session,
+        !cancelRequested,
+        !finishRequested || ownership.isHandsFree || allowAfterFinish
+      else { return }
+      cancelRequested = true
+      clearTapState()
+      await handler?.cancelShortcut(ownership.session)
+    }
+
     private func observeTerminal(_ session: DictationShortcutSession) {
       guard let handler else { return }
       terminalTask = Task { @MainActor [weak self] in
@@ -355,14 +462,22 @@
     }
 
     private func terminalReached(_ session: DictationShortcutSession) {
-      guard acceptedSession == session else { return }
-      acceptedSession = nil
-      if handsFreeSession == session {
-        handsFreeSession = nil
+      guard let ownership = activeOwnership, ownership.session == session else { return }
+      let preserveDoubleTap = ownership.trigger == .hold
+        && !ownership.isHandsFree
+        && finishRequested
+        && lastShortRelease != nil
+      activeOwnership = nil
+      finishRequested = false
+      cancelRequested = false
+      if preserveDoubleTap {
+        pressStartedAt = nil
+        ignoresReleaseAfterHandsFreeStart = false
+      } else {
+        clearTapState()
       }
-      escapeCancellationRequested = false
-      clearTapState()
       unregisterEscape()
+      ownershipHandler(nil)
     }
 
     private func registerEscape() {
@@ -389,9 +504,9 @@
       escapeRegistrar.eventHandler = nil
       monitor.stop()
       unregisterEscape()
-      if let acceptedSession, let handler {
+      if let ownership = activeOwnership, let handler {
         Task { @MainActor in
-          await handler.cancelShortcut(acceptedSession)
+          await handler.cancelShortcut(ownership.session)
         }
       }
     }

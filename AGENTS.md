@@ -1,16 +1,28 @@
 # Engineering and GitHub workflow
 
-## Sol Advisor is mandatory for change-producing work
+## Implementation lane selection for change-producing work
 
-Use `$sol-advisor:orchestration` for every task that can modify product
-behavior, source or native code, configuration, tests, build systems,
-operational behavior, or reliability. Read-only orientation and explanation
-may remain in the primary Sol session.
+The default implementation lane is `$sol-advisor:orchestration` with a
+user-visible GPT-5.6 Luna task at Max reasoning. This default applies to every
+task that can modify product behavior, source or native code, configuration,
+tests, build systems, operational behavior, or reliability. Read-only
+orientation and explanation may remain in the primary Sol session.
 
-For covered work, the primary session must be GPT-5.6 Sol at High reasoning
-and must first run the orchestration exactness check and confirm the exact
-user-visible Codex task tools and GPT-5.6 Luna/Max route are available; there
-is no native implementer preflight. It writes a bounded five-part specification:
+The current user can explicitly select Codex-native subagents for a task. An
+instruction such as "use Codex-native subagents" activates the native-subagent
+lane for the entire task: do not create or use a Sol Advisor Luna-Max
+implementation task, and route all implementation and correction work through
+Codex-native worker subagents instead. This selection is sticky across every
+later turn, packet, and fix loop in that task until the current user explicitly
+says to revert to the Sol Advisor Luna-Max task lane. Do not silently switch
+lanes. If a later instruction makes the active lane ambiguous, surface the
+conflict before delegation.
+
+For the default Sol Advisor lane, the primary session must be GPT-5.6 Sol at
+High reasoning and must first run the Sol Advisor Luna task-lane capability
+gate. For the native-subagent lane, the primary session remains the
+orchestrator and writes the same bounded five-part specification before
+delegation:
 
 1. Objective and success criteria.
 2. Owned files, interfaces, and constraints.
@@ -18,31 +30,36 @@ is no native implementer preflight. It writes a bounded five-part specification:
 4. Verification commands and expected evidence.
 5. Authority boundaries and the required handoff.
 
-Implementation is only through one or more separate user-visible Codex tasks
-running GPT-5.6 Luna at Max reasoning, created and orchestrated by the primary
-Sol session; Luna/Max is the only implementation route, never Terra or native
-subagents. The primary chooses the smallest useful independent partition;
-requested agent count does not override safe decomposition. Parallel independent
-tasks may run concurrently only when their file/module ownership sets are
-disjoint with no overlap and they have no sequential dependency, with each task
-using a separate worktree.
-Tasks sharing files/modules or having dependencies integrate serially under the
-primary. Every implementation packet must identify ownership, preserve
-unrelated work, and require adaptation to concurrent edits. The primary Sol
-inspects all parent diffs and reruns the required verification. A fresh
-`sol_advisor_sol_reviewer` (Sol, High) then reviews the actual integrated diff
-and evidence. Do not call the work complete unless its verdict is `ship`.
+The primary Sol session remains the orchestrator and integrator. In the default
+lane, implementation is only through user-visible Codex tasks running GPT-5.6
+Luna at Max reasoning, created and supervised through
+`$sol-advisor:orchestration`; do not silently fall back when that lane is
+unavailable. In the native-subagent lane, implementation is only through
+Codex-native worker subagents created and supervised by the primary session;
+do not create a user-visible Luna implementation task. Multiple implementation
+workers may run in parallel only when their bounded packets are independent,
+use isolated worktrees, and have exact, disjoint file ownership. Work that
+shares interfaces, depends on another unaccepted diff, or can touch the same
+files remains sequential.
+This `AGENTS.md` routing policy supersedes any conflicting worker-model or
+routing text in historical plans or specifications.
+Each implementation packet must identify ownership, preserve unrelated work,
+require adaptation to concurrent edits, and forbid edits outside its owned
+paths. The primary Sol inspects each parent diff and reruns the required
+verification. A fresh
+`sol_advisor_sol_reviewer` (Sol, High) then reviews the actual diff and
+evidence. Do not call the work complete unless its verdict is `ship`.
 
-For `fix-first`, return corrected bounded findings and specification to the same
-responsible user-visible Luna/Max task, then repeat parent verification and
-obtain a new fresh Sol review.
-
-For `rethink`, return to the primary Sol session for architecture/scope
-reconsideration and a newly settled specification before any further
-implementation routing.
-
-Do not silently repair a child patch, substitute another agent, model, or
-reasoning level, or treat a worker report as verification.
+For `fix-first` or `rethink`, return a corrected bounded specification through
+the active implementation lane: the same Luna implementation task in the
+default lane, or the same Codex-native worker in the native-subagent lane.
+Repeat parent verification and obtain a new fresh Sol review. Do not silently
+repair a child patch, substitute another agent, model, reasoning level, or
+implementation lane, or treat a worker report as verification. A `rethink`
+verdict returns architecture to the primary Sol session before the corrected
+packet is sent through the active lane.
+Do not start a dependent packet until every prerequisite diff has the required
+fresh `ship` verdict.
 
 ## GitHub branch, PR, merge, and sync workflow
 

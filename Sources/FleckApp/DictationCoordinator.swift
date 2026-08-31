@@ -12,12 +12,28 @@ enum DictationPhase: Equatable {
   case failed(String)
 }
 
+enum DictationPipelineStage: Equatable, Sendable {
+  case capture
+  case polish
+  case organize
+  case save
+}
+
+struct DictationCoordinatorContext: Equatable, Sendable {
+  let sessionID: UUID
+  let mode: DictationMode
+  let pipelineStage: DictationPipelineStage
+  let cleanupOutcome: DictationCleanupOutcome?
+  let failureStage: DictationPipelineStage?
+}
+
 enum DictationTerminalOutcome: Equatable {
   case saved(
     mode: DictationMode,
     cleanup: DictationCleanupOutcome,
     destination: DictationDestination?
   )
+  case noSpeech
   case failed(String)
   case cancelled
 }
@@ -25,6 +41,17 @@ enum DictationTerminalOutcome: Equatable {
 struct DictationCoordinatorEvent: Equatable {
   let phase: DictationPhase
   let terminal: DictationTerminalOutcome?
+  let context: DictationCoordinatorContext?
+
+  init(
+    phase: DictationPhase,
+    terminal: DictationTerminalOutcome?,
+    context: DictationCoordinatorContext? = nil
+  ) {
+    self.phase = phase
+    self.terminal = terminal
+    self.context = context
+  }
 }
 
 struct DictationShortcutSession: Equatable, Hashable, Sendable {
@@ -72,6 +99,8 @@ final class DictationCoordinator {
     var processingUpdatesTask: Task<Void, Never>?
     var generation: UInt64 = 0
     var stablePrefix = ""
+    var pipelineStage: DictationPipelineStage = .capture
+    var cleanupOutcome: DictationCleanupOutcome?
     var isStarting = true
     var isFinishing = false
     var isSourceFinishing = false
@@ -99,6 +128,7 @@ final class DictationCoordinator {
   private let holdSleeper: @Sendable (Duration) async -> Void
 
   private var capture: Capture?
+  private var pendingContext: DictationCoordinatorContext?
   private var shortcutID: UUID?
   private var shortcutEditor: (any FocusedDictationEditing)?
   private var shortcutDestination: DictationDestination?
@@ -191,45 +221,86 @@ final class DictationCoordinator {
     editor: (any FocusedDictationEditing)?,
     destination: DictationDestination? = nil
   ) -> DictationShortcutSession? {
-    guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
-      return nil
+    let session = DictationShortcutSession(id: UUID())
+    return beginShortcut(
+      session: session,
+      editor: editor,
+      destination: destination
+    ) ? session : nil
+  }
+
+  @discardableResult
+  func beginShortcut(
+    session: DictationShortcutSession,
+    editor: (any FocusedDictationEditing)?,
+    destination: DictationDestination?
+  ) -> Bool {
+    guard capture == nil, shortcutID == nil, !recoveryOperationInFlight,
+      !activeShortcutSessions.contains(session.id)
+    else {
+      return false
     }
-    let id = UUID()
-    shortcutID = id
-    shortcutEditor = editor
+    let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
+    let mode: DictationMode = focusedEditor == nil ? .smartCapture : .focused
+    shortcutID = session.id
+    shortcutEditor = focusedEditor
     shortcutDestination = destination
-    activeShortcutSessions.insert(id)
+    activeShortcutSessions.insert(session.id)
+    pendingContext = DictationCoordinatorContext(
+      sessionID: session.id,
+      mode: mode,
+      pipelineStage: .capture,
+      cleanupOutcome: nil,
+      failureStage: nil
+    )
     setPhase(.arming)
     holdTask = Task { [weak self, holdSleeper, holdThreshold] in
       await holdSleeper(holdThreshold)
       guard !Task.isCancelled else { return }
-      await self?.holdThresholdElapsed(id)
+      await self?.holdThresholdElapsed(session.id)
     }
-    return DictationShortcutSession(id: id)
+    return true
   }
 
+  @discardableResult
   func beginHandsFreeShortcut(
     editor: (any FocusedDictationEditing)?,
     destination: DictationDestination? = nil
   ) -> DictationShortcutSession? {
-    guard capture == nil, shortcutID == nil, !recoveryOperationInFlight else {
-      return nil
-    }
     let session = DictationShortcutSession(id: UUID())
-    activeShortcutSessions.insert(session.id)
+    return beginHandsFreeShortcut(
+      session: session,
+      editor: editor,
+      destination: destination
+    ) ? session : nil
+  }
+
+  @discardableResult
+  func beginHandsFreeShortcut(
+    session: DictationShortcutSession,
+    editor: (any FocusedDictationEditing)?,
+    destination: DictationDestination?
+  ) -> Bool {
+    guard capture == nil, shortcutID == nil, !recoveryOperationInFlight,
+      !activeShortcutSessions.contains(session.id)
+    else {
+      return false
+    }
     let focusedEditor = editor?.canBeginFocusedDictation == true ? editor : nil
+    activeShortcutSessions.insert(session.id)
     guard reserveCapture(
       id: session.id,
       mode: focusedEditor == nil ? .smartCapture : .focused,
       editor: focusedEditor,
       destination: focusedEditor == nil ? nil : destination
     ) else {
-      return nil
+      activeShortcutSessions.remove(session.id)
+      return false
     }
     Task { [weak self] in
       await self?.startReservedCapture(session.id)
     }
-    return session
+    return true
   }
 
   func finishHandsFreeShortcut(_ session: DictationShortcutSession) async {
@@ -250,13 +321,15 @@ final class DictationCoordinator {
   func endShortcut(_ session: DictationShortcutSession) async {
     guard activeShortcutSessions.contains(session.id) else { return }
     if shortcutID == session.id {
+      let context = pendingContext
       shortcutID = nil
       shortcutEditor = nil
       shortcutDestination = nil
+      pendingContext = nil
       holdTask?.cancel()
       holdTask = nil
       completeShortcutSession(session.id)
-      publishTerminal(phase: .idle, outcome: .cancelled)
+      publishTerminal(phase: .idle, outcome: .cancelled, context: context)
       return
     }
     guard capture?.id == session.id else { return }
@@ -331,9 +404,21 @@ final class DictationCoordinator {
     recoveryAction = nil
     pendingRoutingAmbiguity = nil
     routingAmbiguity = nil
+    let context = pendingContext?.sessionID == id && pendingContext?.mode == mode
+      ? pendingContext!
+      : DictationCoordinatorContext(
+        sessionID: id,
+        mode: mode,
+        pipelineStage: .capture,
+        cleanupOutcome: nil,
+        failureStage: nil
+      )
+    pendingContext = context
     setPhase(.arming)
 
-    let focusedEditor = mode == .focused ? editor : nil
+    let focusedEditor = mode == .focused
+      ? (editor?.canBeginFocusedDictation == true ? editor : nil)
+      : nil
     capture = Capture(
       id: id,
       mode: mode,
@@ -342,14 +427,20 @@ final class DictationCoordinator {
       destination: mode == .focused ? destination : nil,
       startedAt: Date()
     )
+    pendingContext = nil
     guard mode != .focused || (
       focusedEditor?.canBeginFocusedDictation == true && focusedEditor?.beginFocusedDictation() == true
     ) else {
+      let terminalContext = contextForCapture(
+        capture!,
+        failureStage: .capture
+      )
       capture = nil
       completeShortcutSession(id)
       publishTerminal(
         phase: .failed("Unable to begin focused dictation."),
-        outcome: .failed("Unable to begin focused dictation.")
+        outcome: .failed("Unable to begin focused dictation."),
+        context: terminalContext
       )
       return false
     }
@@ -375,7 +466,12 @@ final class DictationCoordinator {
     } catch {
       guard finishStarting(id) != nil else { return }
       guard await continueCapture(id) else { return }
-      await terminate(id, phase: .failed(message(for: error)), cancelEditor: mode == .focused)
+      await terminate(
+        id,
+        phase: .failed(message(for: error)),
+        cancelEditor: mode == .focused,
+        failureStage: .capture
+      )
       return
     }
     guard var activeCapture = capture, activeCapture.id == id else {
@@ -386,10 +482,6 @@ final class DictationCoordinator {
     activeCapture.isStarting = false
     capture = activeCapture
     guard await continueCapture(id) else { return }
-    if activeCapture.releaseRequested {
-      await terminate(id, phase: .failed("No speech detected."), cancelEditor: mode == .focused)
-      return
-    }
 
     setStarting(id, true)
     do {
@@ -406,13 +498,17 @@ final class DictationCoordinator {
     } catch {
       guard finishStarting(id) != nil else { return }
       guard await continueCapture(id) else { return }
-      await terminate(id, phase: .failed(message(for: error)), cancelEditor: mode == .focused)
+      await terminate(
+        id,
+        phase: .failed(message(for: error)),
+        cancelEditor: mode == .focused,
+        failureStage: .capture
+      )
       return
     }
-    guard let current = finishStarting(id) else { return }
+    guard finishStarting(id) != nil else { return }
     guard await continueCapture(id) else { return }
     setPhase(.listening(mode: mode, engine: engine.kind))
-    if current.releaseRequested { await finish() }
   }
 
   private func startProcessingCapture(
@@ -522,8 +618,7 @@ final class DictationCoordinator {
   func finish() async {
     guard var capture, !capture.isTerminating, !capture.cancelRequested else { return }
     if capture.isStarting {
-      capture.releaseRequested = true
-      self.capture = capture
+      await cancel()
       return
     }
     guard !capture.isFinishing else { return }
@@ -547,12 +642,23 @@ final class DictationCoordinator {
     } catch {
       setSourceFinishing(capture.id, false)
       guard await continueCapture(capture.id) else { return }
-      await terminate(capture.id, phase: .failed(message(for: error)), cancelEditor: capture.mode == .focused)
+      await terminate(
+        capture.id,
+        phase: .failed(message(for: error)),
+        cancelEditor: capture.mode == .focused,
+        failureStage: .capture
+      )
       return
     }
     guard await continueCapture(capture.id) else { return }
     guard let rawText = nonempty(rawText) else {
-      await terminate(capture.id, phase: .failed("No speech detected."), cancelEditor: capture.mode == .focused)
+      await terminate(
+        capture.id,
+        phase: .failed("No speech detected."),
+        cancelEditor: capture.mode == .focused,
+        outcome: .noSpeech,
+        failureStage: .capture
+      )
       return
     }
 
@@ -568,6 +674,7 @@ final class DictationCoordinator {
       destination: capture.mode == .focused ? capture.destination : nil,
       insertionOutcome: .pending
     )
+    setCleanupOutcome(.pending, captureID: capture.id)
     guard let historyIsDurable = await updateHistory(
       record,
       captureID: capture.id,
@@ -581,10 +688,12 @@ final class DictationCoordinator {
       guard await continueCapture(capture.id) else { return }
       record.cleanedTranscript = cleanedText
       record.cleanupOutcome = .cleaned
+      setCleanupOutcome(.cleaned, captureID: capture.id)
     } catch {
       guard await continueCapture(capture.id) else { return }
       cleanedText = rawText
       record.cleanupOutcome = .usedRaw
+      setCleanupOutcome(.usedRaw, captureID: capture.id)
     }
 
     if capture.mode == .focused {
@@ -676,7 +785,9 @@ final class DictationCoordinator {
       holdTask?.cancel()
       holdTask = nil
       completeShortcutSession(id)
-      publishTerminal(phase: .idle, outcome: .cancelled)
+      let context = pendingContext
+      pendingContext = nil
+      publishTerminal(phase: .idle, outcome: .cancelled, context: context)
     }
     guard let capture, !capture.isTerminating, !capture.cancelRequested else {
       return
@@ -751,14 +862,21 @@ final class DictationCoordinator {
   ) async {
     guard let capture, capture.id == id else { return }
     var record = record
+    setPipelineStage(.save, captureID: id)
     guard let commitReceipt = capture.editor?.commitFocusedDictation(text: text) else {
       record.insertionOutcome = .unsaved
       guard let durable = await updateHistory(record, captureID: id, enabled: savesHistory)
       else { return }
-      await unsaved(id, text: text, historyIsDurable: durable || historyIsDurable)
+      await unsaved(
+        id,
+        text: text,
+        historyIsDurable: durable || historyIsDurable,
+        failureStage: .save
+      )
       return
     }
     setFocusedCommitReceipt(commitReceipt, captureID: id)
+    publishSaveContext(captureID: id)
     do {
       let persistenceReceipt = try await saver.flushFocusedDictationSave(captureID: id)
       setFocusedPersistenceReceipt(persistenceReceipt, captureID: id)
@@ -786,7 +904,12 @@ final class DictationCoordinator {
       record.insertionOutcome = .unsaved
       guard let durable = await updateHistory(record, captureID: id, enabled: savesHistory)
       else { return }
-      await unsaved(id, text: text, historyIsDurable: durable || historyIsDurable)
+      await unsaved(
+        id,
+        text: text,
+        historyIsDurable: durable || historyIsDurable,
+        failureStage: .save
+      )
     }
   }
 
@@ -838,6 +961,7 @@ final class DictationCoordinator {
 
     do {
       // A receipt is the save commit boundary: a later cancellation must compensate it.
+      publishSaveContext(captureID: id)
       let receipt = try await saver.saveSmartCapture(
         text: text,
         captureID: id,
@@ -924,11 +1048,21 @@ final class DictationCoordinator {
       record.destination = candidates.first { $0.destination.noteID == destinationID }?.destination
       guard let durable = await updateHistory(record, captureID: id, enabled: savesHistory)
       else { return }
-      await unsaved(id, text: text, historyIsDurable: durable || historyIsDurable)
+      await unsaved(
+        id,
+        text: text,
+        historyIsDurable: durable || historyIsDurable,
+        failureStage: .save
+      )
     }
   }
 
-  private func unsaved(_ id: UUID, text: String, historyIsDurable: Bool) async {
+  private func unsaved(
+    _ id: UUID,
+    text: String,
+    historyIsDurable: Bool,
+    failureStage: DictationPipelineStage
+  ) async {
     guard let capture, capture.id == id else { return }
     if historyIsDurable {
       recoveryAction = .openHistory
@@ -936,7 +1070,12 @@ final class DictationCoordinator {
       copyableTranscript = text
       recoveryAction = .copy
     }
-    await terminate(id, phase: .failed("Unable to save dictation."), cancelEditor: capture.mode == .focused)
+    await terminate(
+      id,
+      phase: .failed("Unable to save dictation."),
+      cancelEditor: capture.mode == .focused,
+      failureStage: failureStage
+    )
   }
 
   private func preserveFailedUndoRecovery(
@@ -1058,7 +1197,8 @@ final class DictationCoordinator {
     phase: DictationPhase,
     cancelEditor: Bool,
     deleteHistory: Bool = false,
-    outcome: DictationTerminalOutcome? = nil
+    outcome: DictationTerminalOutcome? = nil,
+    failureStage: DictationPipelineStage? = nil
   ) async {
     guard var capture, capture.id == id, !capture.isTerminating else { return }
     capture.isTerminating = true
@@ -1066,20 +1206,31 @@ final class DictationCoordinator {
     if cancelEditor { rollbackEditor(id) }
     var terminalPhase = phase
     var terminalOutcome = outcome
+    var terminalFailureStage = failureStage
     if deleteHistory, !(await historyController.delete(id)) {
       let message = "Dictation cancellation could not remove its History transcript."
       recoveryAction = .openHistory
       terminalPhase = .failed(message)
       terminalOutcome = .failed(message)
+      terminalFailureStage = nil
     }
     guard let current = self.capture, current.id == id else { return }
+    let terminalContext = contextForCapture(
+      current,
+      failureStage: terminalFailureStage
+    )
     if let engine = current.engine { await release(engine) }
     guard self.capture?.id == id else { return }
     self.capture = nil
+    pendingContext = nil
     levelObserver?(0)
     completeShortcutSession(id)
     let resolvedOutcome = terminalOutcome ?? inferredTerminalOutcome(for: terminalPhase)
-    publishTerminal(phase: terminalPhase, outcome: resolvedOutcome)
+    publishTerminal(
+      phase: terminalPhase,
+      outcome: resolvedOutcome,
+      context: terminalContext
+    )
   }
 
   private func release(_ engine: any SpeechEngine) async {
@@ -1148,6 +1299,35 @@ final class DictationCoordinator {
     guard var capture, capture.id == captureID else { return }
     capture.focusedPersistenceReceipt = receipt
     self.capture = capture
+  }
+
+  private func setPipelineStage(
+    _ stage: DictationPipelineStage,
+    captureID: UUID
+  ) {
+    guard var capture, capture.id == captureID else { return }
+    capture.pipelineStage = stage
+    self.capture = capture
+  }
+
+  private func setCleanupOutcome(
+    _ cleanupOutcome: DictationCleanupOutcome,
+    captureID: UUID
+  ) {
+    guard var capture, capture.id == captureID else { return }
+    capture.cleanupOutcome = cleanupOutcome
+    self.capture = capture
+  }
+
+  private func publishSaveContext(captureID: UUID) {
+    guard var capture, capture.id == captureID, !capture.isTerminating else { return }
+    capture.pipelineStage = .save
+    self.capture = capture
+    eventObserver?(DictationCoordinatorEvent(
+      phase: phase,
+      terminal: nil,
+      context: contextForCapture(capture)
+    ))
   }
 
   private func finalizeFocusedCommit(_ id: UUID) {
@@ -1329,17 +1509,30 @@ final class DictationCoordinator {
   }
 
   private func setPhase(_ phase: DictationPhase) {
+    if let pipelineStage = pipelineStage(for: phase), var capture {
+      capture.pipelineStage = pipelineStage
+      self.capture = capture
+    }
     guard self.phase != phase else { return }
     self.phase = phase
-    eventObserver?(DictationCoordinatorEvent(phase: phase, terminal: nil))
+    eventObserver?(DictationCoordinatorEvent(
+      phase: phase,
+      terminal: nil,
+      context: currentContext()
+    ))
   }
 
   private func publishTerminal(
     phase: DictationPhase,
-    outcome: DictationTerminalOutcome
+    outcome: DictationTerminalOutcome,
+    context: DictationCoordinatorContext? = nil
   ) {
     self.phase = phase
-    eventObserver?(DictationCoordinatorEvent(phase: phase, terminal: outcome))
+    eventObserver?(DictationCoordinatorEvent(
+      phase: phase,
+      terminal: outcome,
+      context: context
+    ))
     let waiters = terminalWaiters
     terminalWaiters.removeAll()
     waiters.forEach { $0.resume() }
@@ -1350,5 +1543,40 @@ final class DictationCoordinator {
       return .failed(message)
     }
     return .cancelled
+  }
+
+  private func pipelineStage(for phase: DictationPhase) -> DictationPipelineStage? {
+    switch phase {
+    case .arming, .listening, .finalizing:
+      return .capture
+    case .cleaning:
+      return .polish
+    case .routing:
+      return .organize
+    case .saved:
+      return .save
+    case .idle, .failed:
+      return nil
+    }
+  }
+
+  private func currentContext() -> DictationCoordinatorContext? {
+    if let capture {
+      return contextForCapture(capture)
+    }
+    return pendingContext
+  }
+
+  private func contextForCapture(
+    _ capture: Capture,
+    failureStage: DictationPipelineStage? = nil
+  ) -> DictationCoordinatorContext {
+    DictationCoordinatorContext(
+      sessionID: capture.id,
+      mode: capture.mode,
+      pipelineStage: capture.pipelineStage,
+      cleanupOutcome: capture.cleanupOutcome,
+      failureStage: failureStage
+    )
   }
 }
