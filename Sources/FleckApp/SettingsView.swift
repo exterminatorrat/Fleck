@@ -879,7 +879,7 @@
 
   private struct PersonalDictionaryImportPreviewSheet: View {
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
-    @State private var showsOmissionConfirmation = false
+    @State private var omissionPreview: PersonalDictionaryImportPreview?
 
     var body: some View {
       VStack(alignment: .leading, spacing: 12) {
@@ -943,10 +943,11 @@
             .accessibilityLabel("Cancel dictionary import")
             .accessibilityHint("Closes the preview without changing the dictionary")
           Button("Confirm Import") {
+            guard let preview = viewModel.importPreview else { return }
             if viewModel.importRequiresOmissionConfirmation {
-              showsOmissionConfirmation = true
+              omissionPreview = preview
             } else {
-              Task { @MainActor in await viewModel.confirmCanonicalImport() }
+              Task { @MainActor in await viewModel.confirmCanonicalImport(preview) }
             }
           }
           .focusable()
@@ -962,13 +963,17 @@
       .padding()
       .confirmationDialog(
         "Import omits local dictionary content",
-        isPresented: $showsOmissionConfirmation
-      ) {
+        isPresented: Binding(
+          get: { omissionPreview != nil },
+          set: { if !$0 { omissionPreview = nil } }
+        ),
+        presenting: omissionPreview
+      ) { preview in
         Button("Import and Omit", role: .destructive) {
-          Task { @MainActor in await viewModel.confirmCanonicalImport() }
+          Task { @MainActor in await viewModel.confirmCanonicalImport(preview) }
         }
         Button("Cancel", role: .cancel) {}
-      } message: {
+      } message: { _ in
         Text("The reviewed omitted entries and suggestions will be removed.")
       }
     }

@@ -352,14 +352,15 @@ func personalDictionarySettingsStaleConfirmationRepreviewsAndRequiresAnotherConf
     exportedAt: Date(timeIntervalSince1970: 3)
   )
   await viewModel.previewCanonicalImport(bytes)
-  let staleRevision = viewModel.importPreview?.expectedLocalRevision
+  let displayedPreview = try #require(viewModel.importPreview)
+  let staleRevision = displayedPreview.expectedLocalRevision
   #expect(viewModel.isImportPreviewPresented)
 
   _ = try await target.mutate(
     expectedRevision: viewModel.revision,
     .upsert(settingsEntry(2, "Concurrent local"))
   )
-  await viewModel.confirmCanonicalImport()
+  await viewModel.confirmCanonicalImport(displayedPreview)
 
   #expect(viewModel.importPreview != nil)
   #expect(viewModel.isImportPreviewPresented)
@@ -369,12 +370,55 @@ func personalDictionarySettingsStaleConfirmationRepreviewsAndRequiresAnotherConf
   #expect(viewModel.statusMessage == "Dictionary changed; review the updated preview.")
   #expect(viewModel.entries.map(\.preferredForm) == ["Concurrent local"])
 
-  await viewModel.confirmCanonicalImport()
+  let updatedPreview = try #require(viewModel.importPreview)
+  await viewModel.confirmCanonicalImport(updatedPreview)
   #expect(viewModel.entries.map(\.preferredForm) == ["Imported"])
   #expect(!viewModel.isImportPreviewPresented)
   #expect(viewModel.importPreview == nil)
   #expect(viewModel.importPreviewData == nil)
   #expect(viewModel.statusMessage == "Dictionary imported.")
+}
+
+@Test @MainActor
+func personalDictionarySettingsQueuedConfirmationsUseExactDisplayedPreview() async throws {
+  let sourceRoot = temporarySettingsDictionaryRoot()
+  let targetRoot = temporarySettingsDictionaryRoot()
+  defer {
+    try? FileManager.default.removeItem(at: sourceRoot)
+    try? FileManager.default.removeItem(at: targetRoot)
+  }
+  let source = PersonalDictionaryStore(rootURL: sourceRoot)
+  let target = PersonalDictionaryStore(rootURL: targetRoot)
+  try await source.upsert(settingsEntry(1, "Imported"))
+  let viewModel = PersonalDictionarySettingsViewModel(store: target)
+  await viewModel.load()
+  let bytes = try await source.exportCanonicalTransfer(
+    exportedAt: Date(timeIntervalSince1970: 3)
+  )
+  await viewModel.previewCanonicalImport(bytes)
+  let displayedPreview = try #require(viewModel.importPreview)
+  #expect(!viewModel.importRequiresOmissionConfirmation)
+
+  _ = try await target.mutate(
+    expectedRevision: viewModel.revision,
+    .upsert(settingsEntry(2, "Concurrent local"))
+  )
+  await viewModel.confirmCanonicalImport(displayedPreview)
+  await viewModel.confirmCanonicalImport(displayedPreview)
+
+  #expect(viewModel.entries.map(\.preferredForm) == ["Concurrent local"])
+  #expect(viewModel.importPreviewData == bytes)
+  #expect(viewModel.isImportPreviewPresented)
+  #expect(viewModel.importPreview != displayedPreview)
+  #expect(viewModel.importRequiresOmissionConfirmation)
+  #expect(viewModel.statusMessage == "Dictionary changed; review the updated preview.")
+
+  let updatedPreview = try #require(viewModel.importPreview)
+  await viewModel.confirmCanonicalImport(updatedPreview)
+  #expect(viewModel.entries.map(\.preferredForm) == ["Imported"])
+  #expect(!viewModel.isImportPreviewPresented)
+  #expect(viewModel.importPreview == nil)
+  #expect(viewModel.importPreviewData == nil)
 }
 
 @Test @MainActor
@@ -404,7 +448,8 @@ func personalDictionarySettingsRejectsIntroducedImportConflictAndRetainsPreview(
 
   #expect(viewModel.importConflictRows.map(\.code) == ["duplicatePreferredOwner"])
   #expect(viewModel.importConflictRows.map(\.count) == [1])
-  await viewModel.confirmCanonicalImport()
+  let preview = try #require(viewModel.importPreview)
+  await viewModel.confirmCanonicalImport(preview)
 
   #expect(viewModel.errorMessage == "This import would introduce a dictionary conflict.")
   #expect(viewModel.importPreview != nil)
@@ -504,6 +549,8 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains(".confirmationDialog("))
   #expect(settingsSource.contains(".sheet("))
   #expect(settingsSource.contains("get: { viewModel.isImportPreviewPresented }"))
+  #expect(settingsSource.contains("presenting: omissionPreview"))
+  #expect(settingsSource.contains("viewModel.confirmCanonicalImport(preview)"))
 }
 
 private func settingsEntry(

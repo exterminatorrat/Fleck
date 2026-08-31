@@ -335,9 +335,9 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     }
   }
 
-  func confirmCanonicalImport() async {
+  func confirmCanonicalImport(_ preview: PersonalDictionaryImportPreview) async {
     await enqueue {
-      guard let preview = self.importPreview, self.canConfirmImport else { return }
+      guard !preview.changes.isEmpty else { return }
       do {
         self.publish(try await self.store.confirmCanonicalImport(preview))
         self.state.importPreviewData = nil
