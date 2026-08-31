@@ -14,12 +14,56 @@
     case vocabulary = "Vocabulary"
     case agents = "Agents"
 
-    static let allCases: [SettingsSection] = [
-      .appearance, .editing, .shortcuts, .dictation, .vocabulary,
-    ]
-    static let selectorCases = allCases + [.agents]
-    static let selectionEffectID = "settings-section"
+    static let fleckCases: [SettingsSection] = [.editing, .appearance, .shortcuts]
+    static let voiceAndWritingCases: [SettingsSection] = [.dictation, .vocabulary]
+    static let connectionCases: [SettingsSection] = [.agents]
+    static let allCases: [SettingsSection] =
+      fleckCases + voiceAndWritingCases + connectionCases
+
     var id: Self { self }
+
+    var title: String {
+      switch self {
+      case .editing:
+        "General"
+      default:
+        rawValue
+      }
+    }
+
+    var systemImage: String {
+      switch self {
+      case .editing:
+        "note.text"
+      case .appearance:
+        "paintbrush"
+      case .shortcuts:
+        "keyboard"
+      case .dictation:
+        "waveform"
+      case .vocabulary:
+        "character.book.closed"
+      case .agents:
+        "person.2"
+      }
+    }
+
+    var description: String {
+      switch self {
+      case .editing:
+        "Choose how Fleck edits and organizes your notes."
+      case .appearance:
+        "Adjust Fleck’s editor theme, type, and accent."
+      case .shortcuts:
+        "Set the keyboard shortcuts you use across Fleck."
+      case .dictation:
+        "Configure voice capture, models, microphones, and history."
+      case .vocabulary:
+        "Teach Fleck the words and spellings that matter to you."
+      case .agents:
+        "Control which local agents can work with your Fleck workspace."
+      }
+    }
   }
 
   struct SettingsShortcutRecordingState: Equatable {
@@ -40,82 +84,55 @@
     }
   }
 
-  struct SettingsSectionSelector: View {
+  struct SettingsSectionSidebar: View {
     @Binding var selection: SettingsSection
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var selectedSectionHighlight
 
     var body: some View {
-      ViewThatFits(in: .horizontal) {
-        fullSelector
-        compactSelector
+      List(selection: $selection) {
+        sectionGroup("Fleck", sections: SettingsSection.fleckCases)
+        sectionGroup("Voice & Writing", sections: SettingsSection.voiceAndWritingCases)
+        sectionGroup("Connections", sections: SettingsSection.connectionCases)
       }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 10)
-      .accessibilityElement(children: .contain)
-      .accessibilityLabel("Settings section")
-      .accessibilityIdentifier("settings-section-selector")
+      .listStyle(.sidebar)
+      .accessibilityLabel("Settings sections")
+      .accessibilityIdentifier("settings-section-sidebar")
+      .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 230)
     }
 
-    private var fullSelector: some View {
-      HStack(spacing: 4) {
-        ForEach(SettingsSection.selectorCases) { section in
-          let isSelected = section == selection
-          Button {
-            withAnimation(motion.spatial) {
-              selection = section
-            }
-          } label: {
-            Text(section.rawValue)
-              .font(.callout.weight(.medium))
-              .fixedSize(horizontal: true, vertical: false)
-              .foregroundStyle(isSelected ? Color.white : Color.primary)
-              .frame(maxWidth: .infinity)
-              .padding(.vertical, 7)
-              .padding(.horizontal, 5)
-              .background {
-                if isSelected {
-                  RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.accentColor)
-                    .matchedGeometryEffect(
-                      id: SettingsSection.selectionEffectID,
-                      in: selectedSectionHighlight
-                    )
-                }
-              }
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel(section.rawValue)
-          .accessibilityValue(isSelected ? "Selected" : "Not selected")
-          .accessibilityAddTraits(isSelected ? .isSelected : [])
+    @ViewBuilder
+    private func sectionGroup(
+      _ title: LocalizedStringKey,
+      sections: [SettingsSection]
+    ) -> some View {
+      Section(title) {
+        ForEach(sections) { section in
+          Label(section.title, systemImage: section.systemImage)
+            .tag(section)
         }
       }
-      .padding(3)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
     }
+  }
 
-    private var compactSelector: some View {
-      Picker("Settings section", selection: $selection) {
-        ForEach(SettingsSection.selectorCases) { section in
-          Text(section.rawValue).tag(section)
-        }
+  struct SettingsPageHeader: View {
+    let section: SettingsSection
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(section.title)
+          .font(.title2.weight(.semibold))
+        Text(section.description)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
-      .pickerStyle(.menu)
-      .frame(maxWidth: .infinity, alignment: .trailing)
-      .accessibilityLabel("Settings section")
-      .accessibilityValue(selection.rawValue)
-      .accessibilityHint("Chooses which Fleck settings to show")
-    }
-
-    private var motion: AppMotion {
-      AppMotion(reduceMotion: reduceMotion)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 24)
+      .padding(.vertical, 18)
     }
   }
 
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
     @ObservedObject private var cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel
@@ -143,30 +160,34 @@
     }
 
     var body: some View {
-      ZStack {
-        Form {
-          sectionSelector
+      NavigationSplitView {
+        SettingsSectionSidebar(selection: $selectedSection)
+      } detail: {
+        VStack(alignment: .leading, spacing: 0) {
+          SettingsPageHeader(section: selectedSection)
+          Divider()
 
-          switch selectedSection {
-          case .appearance:
-            appearance
-          case .editing:
-            editing
-          case .shortcuts:
-            shortcuts
-          case .dictation:
-            dictation
-          case .vocabulary:
-            vocabulary
-          case .agents:
-            AgentSettingsView()
+          Form {
+            switch selectedSection {
+            case .appearance:
+              appearance
+            case .editing:
+              editing
+            case .shortcuts:
+              shortcuts
+            case .dictation:
+              dictation
+            case .vocabulary:
+              vocabulary
+            case .agents:
+              AgentSettingsView()
+            }
           }
+          .formStyle(.grouped)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .formStyle(.grouped)
-        .id(selectedSection)
-        .transition(.opacity)
       }
-      .animation(motion.standard, value: selectedSection)
+      .navigationSplitViewStyle(.balanced)
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }
@@ -220,19 +241,9 @@
       }
     }
 
-    private var sectionSelector: some View {
-      SettingsSectionSelector(selection: $selectedSection)
-    }
-
-    private var motion: AppMotion {
-      AppMotion(reduceMotion: reduceMotion)
-    }
-
     private func consumePendingSettingsRoute() {
       guard let section = runtime.consumePendingSettingsSection() else { return }
-      withAnimation(motion.spatial) {
-        selectedSection = section
-      }
+      selectedSection = section
     }
 
     private var appearance: some View {

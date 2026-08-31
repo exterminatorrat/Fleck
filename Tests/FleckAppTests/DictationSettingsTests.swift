@@ -154,31 +154,31 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
 }
 #endif
 
-@Test func DictationSettingsUsesTheExistingMatchedGeometrySectionSelector() {
-  #expect(SettingsSection.allCases == [
-    .appearance, .editing, .shortcuts, .dictation, .vocabulary,
-  ])
-  #expect(SettingsSection.selectionEffectID == "settings-section")
+@Test func DictationSettingsExposesNativeSidebarGroupsAndMetadata() {
+  #expect(SettingsSection.fleckCases == [.editing, .appearance, .shortcuts])
+  #expect(SettingsSection.voiceAndWritingCases == [.dictation, .vocabulary])
+  #expect(SettingsSection.connectionCases == [.agents])
+  #expect(SettingsSection.editing.title == "General")
+  #expect(SettingsSection.editing.description ==
+    "Choose how Fleck edits and organizes your notes.")
+  #expect(!SettingsSection.editing.systemImage.isEmpty)
 }
 
 @Test @MainActor
-func DictationSettingsSelectorFitsNormalAndAccessibilityLayoutsWithoutClipping() {
+func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() {
   var selection = SettingsSection.appearance
   let selected = Binding(
     get: { selection },
     set: { selection = $0 }
   )
 
-  for (width, dynamicTypeSize) in [
-    (520.0, DynamicTypeSize.large),
-    (320.0, DynamicTypeSize.accessibility3),
-  ] {
+  for dynamicTypeSize in [DynamicTypeSize.large, DynamicTypeSize.accessibility3] {
     let host = NSHostingView(
-      rootView: SettingsSectionSelector(selection: selected)
+      rootView: SettingsSectionSidebar(selection: selected)
         .environment(\.dynamicTypeSize, dynamicTypeSize)
-        .frame(width: width, height: 64)
+        .frame(width: 200, height: 520)
     )
-    host.frame = NSRect(x: 0, y: 0, width: width, height: 64)
+    host.frame = NSRect(x: 0, y: 0, width: 200, height: 520)
     let window = NSWindow(
       contentRect: host.frame,
       styleMask: [.borderless],
@@ -189,18 +189,22 @@ func DictationSettingsSelectorFitsNormalAndAccessibilityLayoutsWithoutClipping()
     window.orderFront(nil)
     host.layoutSubtreeIfNeeded()
 
-    let visibleFrames = settingsSelectorDescendants(of: host)
+    let visibleFrames = settingsSidebarDescendants(of: host)
       .filter { !$0.isHidden && $0.alphaValue > 0 && !$0.bounds.isEmpty }
       .map { $0.convert($0.bounds, to: host) }
     #expect(!visibleFrames.isEmpty)
     #expect(visibleFrames.allSatisfy { host.bounds.insetBy(dx: -1, dy: -1).contains($0) })
+
+    selection = .vocabulary
+    host.layoutSubtreeIfNeeded()
+    #expect(selection == .vocabulary)
 
     window.contentView = nil
     window.orderOut(nil)
   }
 }
 
-@Test func DictationSettingsSelectorProvidesFullAndCompactAccessibilityContracts() throws {
+@Test func DictationSettingsUsesNativeSidebarAccessibilityAndSelectionContracts() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -210,16 +214,19 @@ func DictationSettingsSelectorFitsNormalAndAccessibilityLayoutsWithoutClipping()
     encoding: .utf8
   )
 
-  #expect(source.contains("accessibilityLabel(section.rawValue)"))
-  #expect(source.contains("Picker(\"Settings section\", selection: $selection)"))
-  #expect(source.contains("accessibilityLabel(\"Settings section\")"))
-  #expect(source.contains("accessibilityValue(selection.rawValue)"))
-  #expect(source.contains("accessibilityHint(\"Chooses which Fleck settings to show\")"))
+  #expect(source.contains("struct SettingsSectionSidebar: View"))
+  #expect(source.contains("List(selection: $selection)"))
+  #expect(source.contains(".listStyle(.sidebar)"))
+  #expect(source.contains(".tag(section)"))
+  #expect(source.contains(".accessibilityLabel(\"Settings sections\")"))
+  #expect(!source.contains("SettingsSectionSelector"))
+  #expect(!source.contains("matchedGeometryEffect"))
+  #expect(!source.contains("Picker(\"Settings section\""))
 }
 
 @MainActor
-private func settingsSelectorDescendants(of view: NSView) -> [NSView] {
-  view.subviews + view.subviews.flatMap(settingsSelectorDescendants)
+private func settingsSidebarDescendants(of view: NSView) -> [NSView] {
+  view.subviews + view.subviews.flatMap(settingsSidebarDescendants)
 }
 
 @Test func DictationSettingsSeparatesVocabularyAndOnlySurfacesAvailabilityProblems() throws {
