@@ -450,6 +450,35 @@ import Testing
   await fixture.shortcut.waitForTerminalObservation()
 }
 
+@Test @MainActor func escapeAfterHoldReleaseFinishPendingDispatchesOneCancelUntilTerminal()
+  async throws
+{
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  try fixture.shortcut.configure(.rightOption)
+
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.clock.advance(by: .milliseconds(200))
+  fixture.monitor.emit(.released(.rightOption))
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.endCount == 1)
+  #expect(fixture.handler.cancelCount == 0)
+  #expect(fixture.shortcut.activeOwnership != nil)
+
+  fixture.escape.emit()
+  fixture.escape.emit()
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.endCount == 1)
+  #expect(fixture.handler.cancelCount == 1)
+  #expect(fixture.shortcut.activeOwnership != nil)
+
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+  #expect(fixture.shortcut.activeOwnership == nil)
+}
+
 @Test @MainActor func uninstallAfterFinishPendingDispatchesCancelAndWaitsForTerminal()
   async throws
 {

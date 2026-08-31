@@ -289,7 +289,7 @@
     }
 
     static func actionWidth(for action: DictationCapsuleAction) -> CGFloat {
-      max(CGFloat(action.title.count) * 7 + 4, 28)
+      max(CGFloat(action.buttonTitle.count) * 7 + 4, 28)
     }
   }
 
@@ -998,6 +998,15 @@
       case .copy: "Copy"
       case .openHistory: "Open Dictation History"
       case .openDestination: "Open Destination"
+      }
+    }
+
+    var buttonTitle: String {
+      switch self {
+      case .undo: "Undo"
+      case .copy: "Copy"
+      case .openHistory: "History"
+      case .openDestination: "Destination"
       }
     }
 
@@ -2108,6 +2117,7 @@
             width: DictationCapsulePresentation.actionDividerSize.width,
             height: DictationCapsulePresentation.actionDividerSize.height
           )
+          .background(FleckRailFrameProbe(identifier: "fleck-terminal-divider"))
           .accessibilityHidden(true)
       }
     }
@@ -2115,7 +2125,7 @@
     @ViewBuilder
     private var terminalButton: some View {
       if let action = model.action {
-        Button(action.title, action: model.actionHandler)
+        Button(action.buttonTitle, action: model.actionHandler)
           .buttonStyle(.borderless)
           .font(.system(size: 11, weight: .semibold, design: .default))
           .foregroundStyle(model.colors.coreColor)

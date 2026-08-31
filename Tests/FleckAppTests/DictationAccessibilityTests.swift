@@ -652,6 +652,93 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   controller.dismiss()
 }
 
+@Test @MainActor func DictationAccessibilityRecoveryActionsFitFailureFramesOnEveryDock() {
+  let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+
+  controller.presentIdle(
+    dock: .bottom,
+    onOpenFleck: {},
+    onDockChanged: { _ in }
+  )
+
+  let failureContext = DictationCapsuleContext(
+    status: .failed("save detail"),
+    sessionID: UUID(),
+    trigger: .pointer,
+    mode: .smartCapture,
+    isHandsFree: true,
+    pipelineStage: .save,
+    failureStage: .save,
+    failureKind: .save
+  )
+  let requiredFailureCopies = [
+    DictationCapsulePresentation(
+      status: .failed("microphone detail"),
+      context: DictationCapsuleContext(
+        status: .failed("microphone detail"),
+        failureStage: .capture,
+        failureKind: .microphoneAccess
+      )
+    ).visibleText,
+    DictationCapsulePresentation(
+      status: failureContext.status,
+      context: failureContext
+    ).visibleText,
+  ]
+  #expect(requiredFailureCopies == ["Microphone access needed", "Couldn't save"])
+
+  for dock in [DictationCapsuleDock.bottom, .left, .right] {
+    for action in [DictationCapsuleAction.openHistory, .openDestination] {
+      controller.setDock(dock)
+      controller.render(failureContext, action: action)
+      let presentation = DictationCapsulePresentation(
+        status: failureContext.status,
+        action: action,
+        context: failureContext
+      )
+      let frame = DictationCapsuleController.frame(
+        for: dock,
+        status: failureContext.status,
+        measuredWidth: presentation.measuredWidth,
+        in: visibleFrame
+      )
+      panel.setFrame(CGRect(origin: .zero, size: frame.size), display: false)
+      panel.contentView?.frame = CGRect(origin: .zero, size: frame.size)
+      panel.contentView?.layoutSubtreeIfNeeded()
+      guard let host = panel.contentView else {
+        Issue.record("Expected the persistent hosted failure frame")
+        continue
+      }
+      for identifier in [
+        "fleck-rail-mark",
+        "fleck-terminal-glyph",
+        "fleck-terminal-text",
+        "fleck-terminal-divider",
+        "fleck-rail-recovery",
+      ] {
+        guard let rendered = renderedView(with: identifier, in: host) else {
+          Issue.record("Expected rendered \(identifier) for \(action) at \(dock)")
+          continue
+        }
+        let renderedFrame = rendered.convert(rendered.bounds, to: host)
+        #expect(renderedFrame.width > 0)
+        #expect(renderedFrame.height > 0)
+        #expect(renderedFrame.minX >= host.bounds.minX)
+        #expect(renderedFrame.maxX <= host.bounds.maxX)
+        #expect(renderedFrame.minY >= host.bounds.minY)
+        #expect(renderedFrame.maxY <= host.bounds.maxY)
+      }
+      #expect(presentation.measuredWidth < DictationCapsuleController.failureSize.width)
+      #expect(action.title == action.accessibilityLabel)
+      #expect(DictationCapsulePresentation.actionWidth(for: action) < 100)
+      #expect(action.accessibilityLabel.contains("Open"))
+    }
+  }
+  controller.dismiss()
+}
+
 @Test @MainActor func DictationAccessibilityNoSpeechWithoutActionFitsHostedFrame() {
   let panel = DictationCapsulePanel()
   let controller = DictationCapsuleController(panel: panel)

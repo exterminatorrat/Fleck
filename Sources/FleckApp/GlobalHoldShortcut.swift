@@ -341,7 +341,7 @@
 
     private func receiveEscape() async {
       guard escapeRegistered, let ownership = activeOwnership else { return }
-      await requestCancel(ownership)
+      await requestCancel(ownership, allowAfterFinish: true)
     }
 
     private func receiveMonitorLoss() async {
@@ -438,11 +438,14 @@
       }
     }
 
-    private func requestCancel(_ ownership: DictationShortcutOwnership) async {
+    private func requestCancel(
+      _ ownership: DictationShortcutOwnership,
+      allowAfterFinish: Bool = false
+    ) async {
       guard
         activeOwnership?.session == ownership.session,
         !cancelRequested,
-        (!finishRequested || ownership.isHandsFree)
+        !finishRequested || ownership.isHandsFree || allowAfterFinish
       else { return }
       cancelRequested = true
       clearTapState()
