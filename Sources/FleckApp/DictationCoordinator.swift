@@ -341,6 +341,7 @@ final class DictationCoordinator {
     if !receipt.isShort, active.stopOrigin == nil {
       active.stopOrigin = .physicalRelease(releasedAt)
     }
+    scheduleDeferredFinishIfReady(&active)
     capture = active
     guard receipt.isShort else {
       recordMeasurement(.physicalRelease, at: releasedAt, captureID: session.id)
@@ -751,7 +752,10 @@ final class DictationCoordinator {
       }
     }
     guard let stopOrigin = capture.stopOrigin else { return }
-    if !capture.holdAccepted, activeShortcutSessions.contains(capture.id) {
+    if activeShortcutSessions.contains(capture.id),
+      capture.previousPresentation != nil,
+      (!capture.holdAccepted || capture.physicalReleaseReceipt == nil)
+    {
       capture.releaseRequested = true
       self.capture = capture
       return
@@ -1015,19 +1019,27 @@ final class DictationCoordinator {
       return
     }
     clearPreviousPresentation()
-    if active.releaseRequested, let stopOrigin = active.stopOrigin {
-      active.deferredFinishTask = Task { @MainActor [weak self] in
-        await Task.yield()
-        guard !Task.isCancelled else { return }
-        await self?.finish(stopOrigin: stopOrigin)
-      }
-    }
+    scheduleDeferredFinishIfReady(&active)
     capture = active
     if let session = active.processingSession {
       startProcessingUpdates(id, session: session)
     }
     if !active.isStarting {
       setPhase(.listening(mode: active.mode, engine: active.selectedEngine))
+    }
+  }
+
+  private func scheduleDeferredFinishIfReady(_ active: inout Capture) {
+    guard active.holdAccepted,
+      active.physicalReleaseReceipt?.isShort == false,
+      active.releaseRequested,
+      active.deferredFinishTask == nil,
+      let stopOrigin = active.stopOrigin
+    else { return }
+    active.deferredFinishTask = Task { @MainActor [weak self] in
+      await Task.yield()
+      guard !Task.isCancelled else { return }
+      await self?.finish(stopOrigin: stopOrigin)
     }
   }
 

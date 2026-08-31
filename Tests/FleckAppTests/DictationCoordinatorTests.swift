@@ -702,7 +702,7 @@ func captureFirstCancellationWinsQueuedDeferredStartupFailure() async throws {
 }
 
 @Test @MainActor
-func captureFirstToolbarFinishDuringArmingYieldsToExactShortRelease() async throws {
+func captureFirstTimerAcceptanceKeepsToolbarFinishPendingUntilExactShortRelease() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
   fixture.standard.finalText = "Keep this recovery"
@@ -713,6 +713,8 @@ func captureFirstToolbarFinishDuringArmingYieldsToExactShortRelease() async thro
   let priorSavedCount = fixture.saver.savedTexts.count
   let priorHistoryCount = try await fixture.history.list().count
   fixture.standard.finalText = "Must not publish"
+  let prematureFinishGate = Gate()
+  fixture.standard.finishGate = prematureFinishGate
   var terminalEvents: [DictationCoordinatorEvent] = []
   fixture.coordinator.setEventObserver { event in
     if event.terminal != nil { terminalEvents.append(event) }
@@ -732,15 +734,29 @@ func captureFirstToolbarFinishDuringArmingYieldsToExactShortRelease() async thro
   #expect(fixture.standard.finishCount == priorFinishCount)
   #expect(terminalEvents.isEmpty)
   #expect(fixture.coordinator.recoveryAction == .undo)
+  await threshold.openGate()
+  for _ in 0..<100 where fixture.coordinator.phase == .arming { await Task.yield() }
+  for _ in 0..<100 where fixture.standard.finishCount == priorFinishCount { await Task.yield() }
+
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(fixture.standard.finishCount == priorFinishCount)
+  #expect(terminalEvents.isEmpty)
+  let competingFinish = Task { await fixture.coordinator.finish() }
+  for _ in 0..<100 where fixture.standard.finishCount == priorFinishCount { await Task.yield() }
+
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(fixture.standard.finishCount == priorFinishCount)
+  #expect(terminalEvents.isEmpty)
   fixture.coordinator.recordPhysicalRelease(
     session,
     physicalGesture: .init(pressedAt: press, releasedAt: release)
   )
+  await prematureFinishGate.openGate()
+  await competingFinish.value
   await fixture.coordinator.endShortcut(
     session,
     physicalGesture: .init(pressedAt: press, releasedAt: release)
   )
-  await threshold.openGate()
   await fixture.coordinator.waitForShortcutTerminal(session)
   await Task.yield()
 
