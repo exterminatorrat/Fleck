@@ -241,6 +241,54 @@ struct LocalWritingCorpusStoreTests {
   }
 
   @Test
+  func selectedPathWalkRejectsSnapshotToOpenReplacementRaces() async throws {
+    let createFixture = try CorpusStoreFixture()
+    defer { createFixture.cleanup() }
+    let createDisplaced = createFixture.root
+      .appendingPathComponent("DisplacedCreateSelected", isDirectory: true)
+    let creator = createFixture.store(faultHook: { point in
+      guard point == .afterInitialSelectedLeafSnapshot else { return }
+      try FileManager.default.moveItem(
+        at: createFixture.selectedContainer,
+        to: createDisplaced
+      )
+      try FileManager.default.createSymbolicLink(
+        at: createFixture.selectedContainer,
+        withDestinationURL: createDisplaced
+      )
+    })
+    await #expect(throws: LocalWritingCorpusStoreError.self) {
+      try await creator.create(
+        in: createFixture.selectedContainer,
+        corpusID: testUUID(0xc8)
+      )
+    }
+
+    let openFixture = try CorpusStoreFixture()
+    defer { openFixture.cleanup() }
+    let workspace = try await openFixture.store().create(
+      in: openFixture.selectedContainer,
+      corpusID: testUUID(0xc9)
+    )
+    let openDisplaced = openFixture.root
+      .appendingPathComponent("DisplacedOpenSelected", isDirectory: true)
+    let opener = openFixture.store(faultHook: { point in
+      guard point == .afterFinalSelectedLeafSnapshot else { return }
+      try FileManager.default.moveItem(
+        at: openFixture.selectedContainer,
+        to: openDisplaced
+      )
+      try FileManager.default.createSymbolicLink(
+        at: openFixture.selectedContainer,
+        withDestinationURL: openDisplaced
+      )
+    })
+    await #expect(throws: LocalWritingCorpusStoreError.identityMismatch) {
+      try await opener.open(at: workspace.workspaceURL)
+    }
+  }
+
+  @Test
   func rejectsNoncanonicalOrMismatchedConsentReceipts() async throws {
     let fixture = try CorpusStoreFixture()
     defer { fixture.cleanup() }
@@ -506,6 +554,150 @@ struct LocalWritingCorpusStoreTests {
   }
 
   @Test
+  func precommitFailureLeavesOnlyAHiddenNonUUIDStage() async throws {
+    let fixture = try CorpusStoreFixture()
+    defer { fixture.cleanup() }
+    let corpusID = testUUID(0xca)
+    let workspace = fixture.workspaceURL(corpusID: corpusID)
+    let store = fixture.store(faultHook: { point in
+      if point == .afterConsentPublish { throw CorpusStoreTestFailure.injected }
+    })
+
+    await #expect(throws: CorpusStoreTestFailure.injected) {
+      try await store.create(in: fixture.selectedContainer, corpusID: corpusID)
+    }
+
+    #expect(!FileManager.default.fileExists(atPath: workspace.path))
+    let managed = workspace.deletingLastPathComponent()
+    let names = try FileManager.default.contentsOfDirectory(atPath: managed.path)
+    let stageName = try #require(names.first { $0.hasPrefix(".corpus-stage-") })
+    #expect(UUID(uuidString: stageName) == nil)
+    let stage = managed.appendingPathComponent(stageName, isDirectory: true)
+    #expect(FileManager.default.fileExists(
+      atPath: stage.appendingPathComponent("consent.json").path
+    ))
+    await #expect(throws: LocalWritingCorpusStoreError.invalidLocation) {
+      try await fixture.store().open(at: stage)
+    }
+  }
+
+  @Test
+  func exclusivePublishFailurePreservesCreatedAuthorityResidue() async throws {
+    let fixture = try CorpusStoreFixture()
+    defer { fixture.cleanup() }
+    let corpusID = testUUID(0xce)
+    let workspace = fixture.workspaceURL(corpusID: corpusID)
+    let store = fixture.store(faultHook: { point in
+      if point == .afterConsentSyncBeforeReadback {
+        throw CorpusStoreTestFailure.injected
+      }
+    })
+
+    await #expect(throws: CorpusStoreTestFailure.injected) {
+      try await store.create(in: fixture.selectedContainer, corpusID: corpusID)
+    }
+
+    let consent = try hiddenCorpusStage(for: workspace)
+      .appendingPathComponent("consent.json")
+    #expect(FileManager.default.fileExists(atPath: consent.path))
+    let attributes = try FileManager.default.attributesOfItem(atPath: consent.path)
+    #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+  }
+
+  @Test
+  func renamedUndurableCreateFailsIndeterminatelyAndExplicitOpenRecovers() async throws {
+    let fixture = try CorpusStoreFixture()
+    defer { fixture.cleanup() }
+    let corpusID = testUUID(0xcb)
+    let workspace = fixture.workspaceURL(corpusID: corpusID)
+    let store = fixture.store(faultHook: { point in
+      if point == .afterCorpusRenameBeforeManagedSync {
+        throw CorpusStoreTestFailure.injected
+      }
+    })
+
+    await #expect(throws: LocalWritingCorpusStoreError.ioFailure) {
+      try await store.create(in: fixture.selectedContainer, corpusID: corpusID)
+    }
+
+    #expect(FileManager.default.fileExists(atPath: workspace.path))
+    await #expect(throws: CorpusStoreTestFailure.injected) {
+      try await fixture.store(faultHook: { point in
+        if point == .afterOpenManagedParentSync {
+          throw CorpusStoreTestFailure.injected
+        }
+      }).open(at: workspace)
+    }
+    let recovered = try await fixture.store().open(at: workspace)
+    #expect(recovered.corpusID == corpusID)
+    #expect(recovered.checkpoint.eventCount == 0)
+    #expect(try Data(contentsOf: CorpusStorePaths(workspace: workspace).checkpoint)
+      == recovered.checkpoint.canonicalData)
+  }
+
+  @Test
+  func corpusRenameRequiresExactStageAndFinalNameBindings() async throws {
+    let stageFixture = try CorpusStoreFixture()
+    defer { stageFixture.cleanup() }
+    let stageID = testUUID(0xcc)
+    let stageWorkspace = stageFixture.workspaceURL(corpusID: stageID)
+    let displacedStage = stageFixture.root
+      .appendingPathComponent("DisplacedCorpusStage", isDirectory: true)
+    let stageStore = stageFixture.store(faultHook: { point in
+      guard point == .beforeCorpusRename else { return }
+      let stage = try hiddenCorpusStage(for: stageWorkspace)
+      try FileManager.default.moveItem(at: stage, to: displacedStage)
+      try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: stage.path
+      )
+      #expect(FileManager.default.createFile(
+        atPath: stage.appendingPathComponent("foreign.txt").path,
+        contents: Data("foreign-stage-binding".utf8)
+      ))
+    })
+    await #expect(throws: LocalWritingCorpusStoreError.identityMismatch) {
+      try await stageStore.create(in: stageFixture.selectedContainer, corpusID: stageID)
+    }
+    #expect(FileManager.default.fileExists(
+      atPath: try hiddenCorpusStage(for: stageWorkspace)
+        .appendingPathComponent("foreign.txt").path
+    ))
+    #expect(FileManager.default.fileExists(atPath: displacedStage.path))
+
+    let finalFixture = try CorpusStoreFixture()
+    defer { finalFixture.cleanup() }
+    let finalID = testUUID(0xcd)
+    let finalWorkspace = finalFixture.workspaceURL(corpusID: finalID)
+    let displacedFinal = finalFixture.root
+      .appendingPathComponent("DisplacedFinalCorpus", isDirectory: true)
+    let finalStore = finalFixture.store(faultHook: { point in
+      guard point == .afterCorpusRenameBeforeManagedSync else { return }
+      try FileManager.default.moveItem(at: finalWorkspace, to: displacedFinal)
+      try FileManager.default.createDirectory(
+        at: finalWorkspace,
+        withIntermediateDirectories: false
+      )
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: finalWorkspace.path
+      )
+      #expect(FileManager.default.createFile(
+        atPath: finalWorkspace.appendingPathComponent("foreign.txt").path,
+        contents: Data("foreign-final-binding".utf8)
+      ))
+    })
+    await #expect(throws: LocalWritingCorpusStoreError.identityMismatch) {
+      try await finalStore.create(in: finalFixture.selectedContainer, corpusID: finalID)
+    }
+    #expect(FileManager.default.fileExists(
+      atPath: finalWorkspace.appendingPathComponent("foreign.txt").path
+    ))
+    #expect(FileManager.default.fileExists(atPath: displacedFinal.path))
+  }
+
+  @Test
   func cleanupPreservesAnIdentitySwappedReplacement() async throws {
     let fixture = try CorpusStoreFixture()
     defer { fixture.cleanup() }
@@ -514,9 +706,10 @@ struct LocalWritingCorpusStoreTests {
     let displaced = fixture.root.appendingPathComponent("Displaced", isDirectory: true)
     let store = fixture.store(faultHook: { point in
       guard point == .afterConsentPublish else { return }
-      try FileManager.default.moveItem(at: workspace, to: displaced)
-      try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: false)
-      try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: workspace.path)
+      let stage = try hiddenCorpusStage(for: workspace)
+      try FileManager.default.moveItem(at: stage, to: displaced)
+      try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
+      try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stage.path)
       throw CorpusStoreTestFailure.injected
     })
 
@@ -524,9 +717,11 @@ struct LocalWritingCorpusStoreTests {
       try await store.create(in: fixture.selectedContainer, corpusID: corpusID)
     }
 
-    #expect(FileManager.default.fileExists(atPath: workspace.path))
+    let stage = try hiddenCorpusStage(for: workspace)
+    #expect(FileManager.default.fileExists(atPath: stage.path))
     #expect(FileManager.default.fileExists(atPath: displaced.path))
-    #expect((try FileManager.default.contentsOfDirectory(atPath: workspace.path)).isEmpty)
+    #expect((try FileManager.default.contentsOfDirectory(atPath: stage.path)).isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: workspace.path))
   }
 
   @Test
@@ -537,15 +732,16 @@ struct LocalWritingCorpusStoreTests {
     let workspace = fixture.workspaceURL(corpusID: corpusID)
     let displaced = fixture.root
       .appendingPathComponent("DisplacedCreatedCorpus", isDirectory: true)
-    let marker = workspace.appendingPathComponent("foreign.txt")
     let foreign = Data("foreign-directory".utf8)
     let store = fixture.store(faultHook: { point in
       guard point == .beforeCorpusDirectorySync else { return }
-      try FileManager.default.moveItem(at: workspace, to: displaced)
-      try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: false)
+      let stage = try hiddenCorpusStage(for: workspace)
+      let marker = stage.appendingPathComponent("foreign.txt")
+      try FileManager.default.moveItem(at: stage, to: displaced)
+      try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
       try FileManager.default.setAttributes(
         [.posixPermissions: 0o700],
-        ofItemAtPath: workspace.path
+        ofItemAtPath: stage.path
       )
       #expect(FileManager.default.createFile(atPath: marker.path, contents: foreign))
       throw CorpusStoreTestFailure.injected
@@ -555,7 +751,8 @@ struct LocalWritingCorpusStoreTests {
       try await store.create(in: fixture.selectedContainer, corpusID: corpusID)
     }
 
-    #expect(try Data(contentsOf: marker) == foreign)
+    let stage = try hiddenCorpusStage(for: workspace)
+    #expect(try Data(contentsOf: stage.appendingPathComponent("foreign.txt")) == foreign)
     #expect(FileManager.default.fileExists(atPath: displaced.path))
   }
 
@@ -590,15 +787,16 @@ struct LocalWritingCorpusStoreTests {
     defer { fixture.cleanup() }
     let corpusID = testUUID(0xbf)
     let workspace = fixture.workspaceURL(corpusID: corpusID)
-    let paths = CorpusStorePaths(workspace: workspace)
     let store = fixture.store(faultHook: { point in
       guard point == .afterLedgerCreate else { return }
-      let consent = try Data(contentsOf: paths.consent)
-      try FileManager.default.removeItem(at: paths.consent)
-      #expect(FileManager.default.createFile(atPath: paths.consent.path, contents: consent))
+      let consentURL = try hiddenCorpusStage(for: workspace)
+        .appendingPathComponent("consent.json")
+      let consent = try Data(contentsOf: consentURL)
+      try FileManager.default.removeItem(at: consentURL)
+      #expect(FileManager.default.createFile(atPath: consentURL.path, contents: consent))
       try FileManager.default.setAttributes(
         [.posixPermissions: 0o600],
-        ofItemAtPath: paths.consent.path
+        ofItemAtPath: consentURL.path
       )
     })
 
@@ -606,7 +804,8 @@ struct LocalWritingCorpusStoreTests {
       try await store.create(in: fixture.selectedContainer, corpusID: corpusID)
     }
 
-    #expect(FileManager.default.fileExists(atPath: paths.consent.path))
+    let consent = try hiddenCorpusStage(for: workspace).appendingPathComponent("consent.json")
+    #expect(FileManager.default.fileExists(atPath: consent.path))
   }
 
   @Test
@@ -632,6 +831,41 @@ struct LocalWritingCorpusStoreTests {
     await #expect(throws: LocalWritingCorpusStoreError.identityMismatch) {
       try await opener.open(at: workspace.workspaceURL)
     }
+  }
+
+  @Test
+  func openUsesThePinnedLedgerAcrossASwapUseRestoreRace() async throws {
+    let pair = try await makeCheckpointPair(firstID: 0xc7, secondID: 0xc7)
+    defer { pair.cleanup() }
+    let alternate = try appendExposure(
+      to: pair.secondPaths.ledger,
+      corpusID: pair.secondWorkspace.corpusID,
+      parent: pair.secondWorkspace.checkpoint,
+      discriminator: 7
+    )
+    let firstExposure = pair.firstPaths.ledger.deletingLastPathComponent()
+    let secondExposure = pair.secondPaths.ledger.deletingLastPathComponent()
+    let displaced = pair.firstFixture.root
+      .appendingPathComponent("DisplacedExposure", isDirectory: true)
+    let opener = pair.firstFixture.store(faultHook: { point in
+      switch point {
+      case .afterAuthorityRead:
+        try FileManager.default.moveItem(at: firstExposure, to: displaced)
+        try FileManager.default.moveItem(at: secondExposure, to: firstExposure)
+      case .beforeFinalAuthorityRecheck:
+        try FileManager.default.moveItem(at: firstExposure, to: secondExposure)
+        try FileManager.default.moveItem(at: displaced, to: firstExposure)
+      default:
+        break
+      }
+    })
+
+    let reopened = try await opener.open(at: pair.firstWorkspace.workspaceURL)
+
+    #expect(reopened.checkpoint == pair.firstWorkspace.checkpoint)
+    #expect(reopened.checkpoint != alternate)
+    #expect(try Data(contentsOf: pair.firstPaths.checkpoint)
+      == pair.firstWorkspace.checkpoint.canonicalData)
   }
 
   @Test
@@ -725,10 +959,11 @@ struct LocalWritingCorpusStoreTests {
     let readbackWorkspace = readbackFixture.workspaceURL(corpusID: readbackID)
     let readbackStore = readbackFixture.store(faultHook: { point in
       guard point == .afterCheckpointStageCloseBeforeReadback else { return }
-      let names = try FileManager.default.contentsOfDirectory(atPath: readbackWorkspace.path)
+      let corpusStage = try hiddenCorpusStage(for: readbackWorkspace)
+      let names = try FileManager.default.contentsOfDirectory(atPath: corpusStage.path)
       let stage = try #require(names.first { $0.hasPrefix(".checkpoint-") })
       try replaceFile(
-        at: readbackWorkspace.appendingPathComponent(stage),
+        at: corpusStage.appendingPathComponent(stage),
         with: Data("{}".utf8)
       )
     })
@@ -739,15 +974,17 @@ struct LocalWritingCorpusStoreTests {
       )
     }
     #expect(!FileManager.default.fileExists(atPath: readbackWorkspace.path))
+    _ = try hiddenCorpusStage(for: readbackWorkspace)
 
     let renameFixture = try CorpusStoreFixture()
     defer { renameFixture.cleanup() }
     let renameID = testUUID(0xbc)
     let renameWorkspace = renameFixture.workspaceURL(corpusID: renameID)
-    let checkpoint = renameWorkspace.appendingPathComponent("checkpoint.json")
     let foreign = Data("foreign-authority".utf8)
     let renameStore = renameFixture.store(faultHook: { point in
       guard point == .beforeCheckpointRename else { return }
+      let checkpoint = try hiddenCorpusStage(for: renameWorkspace)
+        .appendingPathComponent("checkpoint.json")
       #expect(FileManager.default.createFile(atPath: checkpoint.path, contents: foreign))
       try FileManager.default.setAttributes(
         [.posixPermissions: 0o600],
@@ -757,6 +994,8 @@ struct LocalWritingCorpusStoreTests {
     await #expect(throws: LocalWritingCorpusStoreError.identityMismatch) {
       try await renameStore.create(in: renameFixture.selectedContainer, corpusID: renameID)
     }
+    let checkpoint = try hiddenCorpusStage(for: renameWorkspace)
+      .appendingPathComponent("checkpoint.json")
     #expect(try Data(contentsOf: checkpoint) == foreign)
     await #expect(throws: LocalWritingCorpusStoreError.missingAuthority) {
       try await renameFixture.store().open(at: renameWorkspace)
@@ -772,9 +1011,10 @@ struct LocalWritingCorpusStoreTests {
     let foreign = Data("foreign-stage".utf8)
     let store = fixture.store(faultHook: { point in
       guard point == .afterCheckpointStageCloseBeforeReadback else { return }
-      let names = try FileManager.default.contentsOfDirectory(atPath: workspace.path)
+      let corpusStage = try hiddenCorpusStage(for: workspace)
+      let names = try FileManager.default.contentsOfDirectory(atPath: corpusStage.path)
       let stageName = try #require(names.first { $0.hasPrefix(".checkpoint-") })
-      let stage = workspace.appendingPathComponent(stageName)
+      let stage = corpusStage.appendingPathComponent(stageName)
       try FileManager.default.removeItem(at: stage)
       #expect(FileManager.default.createFile(atPath: stage.path, contents: foreign))
       try FileManager.default.setAttributes(
@@ -787,9 +1027,10 @@ struct LocalWritingCorpusStoreTests {
       try await store.create(in: fixture.selectedContainer, corpusID: corpusID)
     }
 
-    let names = try FileManager.default.contentsOfDirectory(atPath: workspace.path)
+    let corpusStage = try hiddenCorpusStage(for: workspace)
+    let names = try FileManager.default.contentsOfDirectory(atPath: corpusStage.path)
     let stageName = try #require(names.first { $0.hasPrefix(".checkpoint-") })
-    let stage = workspace.appendingPathComponent(stageName)
+    let stage = corpusStage.appendingPathComponent(stageName)
     #expect(try Data(contentsOf: stage) == foreign)
   }
 
@@ -850,6 +1091,13 @@ private func replaceFile(at url: URL, with data: Data) throws {
   try handle.truncate(atOffset: 0)
   try handle.write(contentsOf: data)
   try handle.synchronize()
+}
+
+private func hiddenCorpusStage(for workspace: URL) throws -> URL {
+  let managed = workspace.deletingLastPathComponent()
+  let names = try FileManager.default.contentsOfDirectory(atPath: managed.path)
+  let name = try #require(names.first { $0.hasPrefix(".corpus-stage-") })
+  return managed.appendingPathComponent(name, isDirectory: true)
 }
 
 private func appendExposure(

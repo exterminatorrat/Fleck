@@ -7,6 +7,106 @@ import Testing
 @Suite
 struct LocalWritingExposureLedgerTests {
   @Test
+  func pinnedDirectoryDescriptorIsDuplicatedBeforeOwnershipTransfer() throws {
+    let root = try makePrivateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ledgerURL = root.appendingPathComponent("pinned-ledger.jsonl")
+    let createDescriptor = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    #expect(createDescriptor >= 0)
+    let ledger = try LocalWritingExposureLedger.create(
+      at: ledgerURL,
+      pinnedDirectoryDescriptor: createDescriptor,
+      corpusID: corpusID
+    )
+    #expect(Darwin.close(createDescriptor) == 0)
+    #expect(try ledger.checkpoint().eventCount == 0)
+
+    let openDescriptor = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    #expect(openDescriptor >= 0)
+    let reopened = try LocalWritingExposureLedger.open(
+      at: ledgerURL,
+      pinnedDirectoryDescriptor: openDescriptor
+    )
+    #expect(Darwin.close(openDescriptor) == 0)
+    #expect(try reopened.checkpoint() == ledger.checkpoint())
+  }
+
+  @Test
+  func pinnedCreateAndOpenIgnoreTransientReportingDirectorySwaps() throws {
+    let root = try makePrivateRoot()
+    let displaced = temporaryRoot()
+    defer {
+      try? FileManager.default.removeItem(at: root)
+      try? FileManager.default.removeItem(at: displaced)
+    }
+    let ledgerURL = root.appendingPathComponent("pinned-ledger.jsonl")
+    let descriptor = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    #expect(descriptor >= 0)
+    try FileManager.default.moveItem(at: root, to: displaced)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o700],
+      ofItemAtPath: root.path
+    )
+
+    let pinned = try LocalWritingExposureLedger.create(
+      at: ledgerURL,
+      pinnedDirectoryDescriptor: descriptor,
+      corpusID: corpusID
+    )
+    #expect(FileManager.default.fileExists(
+      atPath: displaced.appendingPathComponent("pinned-ledger.jsonl").path
+    ))
+    #expect(!FileManager.default.fileExists(atPath: ledgerURL.path))
+
+    let alternate = try LocalWritingExposureLedger.create(at: ledgerURL, corpusID: corpusID)
+    _ = try alternate.appendExposure(
+      exposure(),
+      expectedHead: try alternate.checkpoint().currentHeadSHA256
+    )
+    let reopened = try LocalWritingExposureLedger.open(
+      at: ledgerURL,
+      pinnedDirectoryDescriptor: descriptor
+    )
+    #expect(try reopened.checkpoint() == pinned.checkpoint())
+    #expect(try reopened.checkpoint().eventCount == 0)
+    #expect(try alternate.checkpoint().eventCount == 1)
+    #expect(Darwin.close(descriptor) == 0)
+  }
+
+  @Test
+  func pinnedCreateFailurePreservesANameReboundToForeignContent() throws {
+    let root = try makePrivateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ledgerURL = root.appendingPathComponent("pinned-ledger.jsonl")
+    let lockURL = ledgerURL.appendingPathExtension("lock")
+    let descriptor = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    defer { Darwin.close(descriptor) }
+    #expect(descriptor >= 0)
+    let foreign = Data("foreign-lock".utf8)
+
+    #expect(throws: TestFailure.injected) {
+      try LocalWritingExposureLedger.create(
+        at: ledgerURL,
+        pinnedDirectoryDescriptor: descriptor,
+        corpusID: corpusID,
+        faultHook: { point in
+          guard point == .afterCreateLockPublish else { return }
+          try FileManager.default.removeItem(at: lockURL)
+          #expect(FileManager.default.createFile(atPath: lockURL.path, contents: foreign))
+          try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: lockURL.path
+          )
+          throw TestFailure.injected
+        }
+      )
+    }
+
+    #expect(try Data(contentsOf: lockURL) == foreign)
+  }
+
+  @Test
   func emptyLedgerPublishesCanonicalCorpusBoundCheckpoint() throws {
     let first = try makeLedger(corpusID: corpusID)
     defer { first.cleanup() }

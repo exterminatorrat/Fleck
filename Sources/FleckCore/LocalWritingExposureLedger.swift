@@ -245,6 +245,7 @@ public struct LocalWritingExposureLedgerVerification: Equatable, Sendable {
 }
 
 enum LocalWritingExposureLedgerFaultPoint: Equatable, Sendable {
+  case afterCreateLockPublish
   case afterLockAcquired
   case afterStageSync
   case afterStageWriteCloseBeforeReadOpen
@@ -261,7 +262,7 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
   public let corpusID: UUID
   var faultHook: ((LocalWritingExposureLedgerFaultPoint) throws -> Void)?
   var directorySyncObserver: (() -> Void)?
-  private let directoryURL: URL
+  private let directoryURL: URL?
   private let directoryDescriptor: Int32
   private let directoryIdentity: AuthorityIdentity
   private let ledgerName: String
@@ -273,12 +274,13 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
     corpusID: UUID,
     directoryDescriptor: Int32,
     directoryIdentity: AuthorityIdentity,
-    lockIdentity: AuthorityIdentity
+    lockIdentity: AuthorityIdentity,
+    directoryURL: URL?
   ) {
     self.ledgerURL = ledgerURL
     lockURL = ledgerURL.appendingPathExtension("lock")
     self.corpusID = corpusID
-    directoryURL = ledgerURL.deletingLastPathComponent()
+    self.directoryURL = directoryURL
     self.directoryDescriptor = directoryDescriptor
     self.directoryIdentity = directoryIdentity
     ledgerName = ledgerURL.lastPathComponent
@@ -292,19 +294,67 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
 
   public static func create(at ledgerURL: URL, corpusID: UUID) throws -> Self {
     let directory = try openDirectoryAuthority(for: ledgerURL)
+    return try create(
+      at: ledgerURL,
+      corpusID: corpusID,
+      directory: directory,
+      directoryURL: ledgerURL.deletingLastPathComponent(),
+      removesCreatedNamesOnFailure: true,
+      creationFaultHook: nil
+    )
+  }
+
+  public static func create(
+    at ledgerURL: URL,
+    pinnedDirectoryDescriptor: Int32,
+    corpusID: UUID
+  ) throws -> Self {
+    try create(
+      at: ledgerURL,
+      pinnedDirectoryDescriptor: pinnedDirectoryDescriptor,
+      corpusID: corpusID,
+      faultHook: nil
+    )
+  }
+
+  static func create(
+    at ledgerURL: URL,
+    pinnedDirectoryDescriptor: Int32,
+    corpusID: UUID,
+    faultHook: ((LocalWritingExposureLedgerFaultPoint) throws -> Void)?
+  ) throws -> Self {
+    _ = try authorityNames(for: ledgerURL)
+    return try create(
+      at: ledgerURL,
+      corpusID: corpusID,
+      directory: try duplicateDirectoryAuthority(pinnedDirectoryDescriptor),
+      directoryURL: nil,
+      removesCreatedNamesOnFailure: false,
+      creationFaultHook: faultHook
+    )
+  }
+
+  private static func create(
+    at ledgerURL: URL,
+    corpusID: UUID,
+    directory: (descriptor: Int32, identity: AuthorityIdentity),
+    directoryURL: URL?,
+    removesCreatedNamesOnFailure: Bool,
+    creationFaultHook: ((LocalWritingExposureLedgerFaultPoint) throws -> Void)?
+  ) throws -> Self {
     var directoryTransferred = false
     defer {
       if !directoryTransferred { Darwin.close(directory.descriptor) }
     }
-    let ledgerName = ledgerURL.lastPathComponent
-    let lockURL = ledgerURL.appendingPathExtension("lock")
-    let lockName = lockURL.lastPathComponent
+    let names = try authorityNames(for: ledgerURL)
+    let ledgerName = names.ledger
+    let lockName = names.lock
     try requireAbsent(name: ledgerName, in: directory.descriptor)
     try requireAbsent(name: lockName, in: directory.descriptor)
     try requireDirectoryIdentity(
       directory.identity,
       descriptor: directory.descriptor,
-      url: ledgerURL.deletingLastPathComponent()
+      url: directoryURL
     )
 
     let lockDescriptor = Darwin.openat(
@@ -318,7 +368,7 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
     var createdLockIdentity: AuthorityIdentity?
     defer {
       Darwin.close(lockDescriptor)
-      if !keepLock,
+      if removesCreatedNamesOnFailure, !keepLock,
         let createdLockIdentity,
         (try? authorityIdentity(name: lockName, in: directory.descriptor))
           == createdLockIdentity
@@ -342,8 +392,9 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
     try requireDirectoryIdentity(
       directory.identity,
       descriptor: directory.descriptor,
-      url: ledgerURL.deletingLastPathComponent()
+      url: directoryURL
     )
+    try creationFaultHook?(.afterCreateLockPublish)
 
     let header = try canonicalHeader(corpusID: corpusID)
     let ledgerDescriptor = Darwin.openat(
@@ -357,7 +408,7 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
     var createdLedgerIdentity: AuthorityIdentity?
     defer {
       Darwin.close(ledgerDescriptor)
-      if !keepLedger,
+      if removesCreatedNamesOnFailure, !keepLedger,
         let createdLedgerIdentity,
         (try? authorityIdentity(name: ledgerName, in: directory.descriptor))
           == createdLedgerIdentity
@@ -382,7 +433,7 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
     try requireDirectoryIdentity(
       directory.identity,
       descriptor: directory.descriptor,
-      url: ledgerURL.deletingLastPathComponent()
+      url: directoryURL
     )
     try requireNamedIdentity(
       lockIdentity,
@@ -398,7 +449,8 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
       corpusID: corpusID,
       directoryDescriptor: directory.descriptor,
       directoryIdentity: directory.identity,
-      lockIdentity: lockIdentity
+      lockIdentity: lockIdentity,
+      directoryURL: directoryURL
     )
     directoryTransferred = true
     _ = try store.verify(expectedCorpusID: corpusID)
@@ -407,13 +459,37 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
 
   public static func open(at ledgerURL: URL) throws -> Self {
     let directory = try openDirectoryAuthority(for: ledgerURL)
+    return try open(
+      at: ledgerURL,
+      directory: directory,
+      directoryURL: ledgerURL.deletingLastPathComponent()
+    )
+  }
+
+  public static func open(
+    at ledgerURL: URL,
+    pinnedDirectoryDescriptor: Int32
+  ) throws -> Self {
+    _ = try authorityNames(for: ledgerURL)
+    return try open(
+      at: ledgerURL,
+      directory: try duplicateDirectoryAuthority(pinnedDirectoryDescriptor),
+      directoryURL: nil
+    )
+  }
+
+  private static func open(
+    at ledgerURL: URL,
+    directory: (descriptor: Int32, identity: AuthorityIdentity),
+    directoryURL: URL?
+  ) throws -> Self {
     var directoryTransferred = false
     defer {
       if !directoryTransferred { Darwin.close(directory.descriptor) }
     }
-    let lockURL = ledgerURL.appendingPathExtension("lock")
-    let ledgerName = ledgerURL.lastPathComponent
-    let lockName = lockURL.lastPathComponent
+    let names = try authorityNames(for: ledgerURL)
+    let ledgerName = names.ledger
+    let lockName = names.lock
     let ledgerIdentity = try authorityIdentity(
       name: ledgerName,
       in: directory.descriptor
@@ -430,7 +506,7 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
     try requireDirectoryIdentity(
       directory.identity,
       descriptor: directory.descriptor,
-      url: ledgerURL.deletingLastPathComponent()
+      url: directoryURL
     )
     try requireNamedIdentity(
       lockIdentity,
@@ -443,7 +519,8 @@ public final class LocalWritingExposureLedger: @unchecked Sendable {
       corpusID: verification.checkpoint.corpusID,
       directoryDescriptor: directory.descriptor,
       directoryIdentity: directory.identity,
-      lockIdentity: lockIdentity
+      lockIdentity: lockIdentity,
+      directoryURL: directoryURL
     )
     directoryTransferred = true
     _ = try store.verify(expectedCorpusID: verification.checkpoint.corpusID)
@@ -1164,18 +1241,42 @@ extension LocalWritingExposureLedger {
 }
 
 extension LocalWritingExposureLedger {
-  private static func openDirectoryAuthority(
+  private static func authorityNames(
     for ledgerURL: URL
-  ) throws -> (descriptor: Int32, identity: AuthorityIdentity) {
+  ) throws -> (ledger: String, lock: String) {
+    let ledgerName = ledgerURL.lastPathComponent
+    let lockName = ledgerURL.appendingPathExtension("lock").lastPathComponent
     guard ledgerURL.isFileURL,
       ledgerURL.path.hasPrefix("/"),
       ledgerURL.path == ledgerURL.standardizedFileURL.path,
-      !ledgerURL.lastPathComponent.isEmpty,
-      ledgerURL.lastPathComponent != ".",
-      ledgerURL.lastPathComponent != "..",
-      !ledgerURL.lastPathComponent.contains("/"),
-      !ledgerURL.appendingPathExtension("lock").lastPathComponent.contains("/")
+      !ledgerName.isEmpty,
+      ledgerName != ".",
+      ledgerName != "..",
+      !ledgerName.contains("/"),
+      !lockName.isEmpty,
+      lockName != ".",
+      lockName != "..",
+      !lockName.contains("/")
     else { throw LocalWritingExposureLedgerError.permissions }
+    return (ledgerName, lockName)
+  }
+
+  private static func duplicateDirectoryAuthority(
+    _ descriptor: Int32
+  ) throws -> (descriptor: Int32, identity: AuthorityIdentity) {
+    let duplicate = fcntl(descriptor, F_DUPFD_CLOEXEC, 0)
+    guard duplicate >= 0 else { throw mappedSystemError() }
+    var keepDuplicate = false
+    defer { if !keepDuplicate { Darwin.close(duplicate) } }
+    let identity = try validateDirectoryDescriptor(duplicate)
+    keepDuplicate = true
+    return (duplicate, identity)
+  }
+
+  private static func openDirectoryAuthority(
+    for ledgerURL: URL
+  ) throws -> (descriptor: Int32, identity: AuthorityIdentity) {
+    _ = try authorityNames(for: ledgerURL)
     let directoryURL = ledgerURL.deletingLastPathComponent()
     let descriptor = Darwin.open(
       directoryURL.path,
@@ -1264,11 +1365,12 @@ extension LocalWritingExposureLedger {
   private static func requireDirectoryIdentity(
     _ expectedIdentity: AuthorityIdentity,
     descriptor: Int32,
-    url: URL
+    url: URL?
   ) throws {
     guard try validateDirectoryDescriptor(descriptor) == expectedIdentity else {
       throw LocalWritingExposureLedgerError.permissions
     }
+    guard let url else { return }
     var status = stat()
     guard lstat(url.path, &status) == 0,
       status.st_mode & S_IFMT == S_IFDIR,
