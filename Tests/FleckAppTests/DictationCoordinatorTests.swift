@@ -6,6 +6,1143 @@ import Testing
 
 @testable import FleckApp
 
+private func processingResult(_ text: String) -> DictationProcessingResult {
+  .init(
+    rawTranscript: text,
+    dictionaryBaseline: text,
+    cleanedTranscript: text,
+    insertedText: text,
+    cleanupOutcome: .cleaned,
+    measurements: .empty
+  )
+}
+
+private func processingResult(
+  _ result: DictationProcessingResult,
+  pinnedTo context: LocalWritingCaptureContext?
+) -> DictationProcessingResult {
+  guard result.captureContext == nil, let context else { return result }
+  return .init(
+    rawTranscript: result.rawTranscript,
+    dictionaryBaseline: result.dictionaryBaseline,
+    cleanedTranscript: result.cleanedTranscript,
+    insertedText: result.insertedText,
+    cleanupOutcome: result.cleanupOutcome,
+    measurements: result.measurements,
+    captureContext: context,
+    recognitionContextAcknowledgement: .unsupported(context),
+    protectedDictionaryForms: result.protectedDictionaryForms,
+    appliedDictionaryEntryIDs: result.appliedDictionaryEntryIDs
+  )
+}
+
+private func coordinatorDictionaryContext(
+  captureID: UUID,
+  generation: UInt64,
+  engine: DictationSpeechEngine = .standard
+) throws -> LocalWritingCaptureContext {
+  let entry = PersonalDictionaryEntry(
+    preferredForm: "FleckApp",
+    aliases: ["fleck app"]
+  )
+  let snapshot = PersonalDictionarySnapshotV2(revision: 21, entries: [entry])
+  return try LocalWritingCaptureContext(
+    captureID: captureID,
+    generation: generation,
+    localeIdentifier: "en-US",
+    speechEngine: engine,
+    snapshot: snapshot,
+    compiledDictionary: CompiledPersonalDictionary.compile(snapshot)
+  )
+}
+
+@MainActor
+private final class DictionaryContextBox {
+  var value: LocalWritingCaptureContext?
+}
+
+@Test @MainActor
+func captureFirstAcceptedHoldRetainsSpeechReceivedBeforeThreshold() async throws {
+  let threshold = Gate()
+  let provisional = CompletionProbe()
+  let processing = ProcessingProbe(
+    result: processingResult("Captured from key-down")
+  )
+  let fixture = try Fixture(
+    processing: processing,
+    onFocusedProvisionalUpdate: { Task { await provisional.complete() } },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+
+  #expect(processing.beginCount == 1)
+  #expect(fixture.coordinator.phase == .arming)
+  await processing.emit(.init(
+    generation: 1,
+    stableText: "Captured ",
+    provisionalTail: "from key-down"
+  ))
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+
+  await threshold.openGate()
+  #expect(await waitForCompletion(provisional, timeout: .seconds(1)))
+  let release = press.advanced(by: .milliseconds(200))
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+
+  #expect(fixture.editor.provisionalTexts == ["Captured from key-down"])
+  #expect(fixture.editor.committedTexts == ["Captured from key-down"])
+}
+
+@Test @MainActor
+func captureFirstShortTapDrainsSourceWithoutPublishing() async throws {
+  let threshold = Gate()
+  let drained = CompletionProbe()
+  let processing = ProcessingProbe(
+    result: processingResult("must not publish"),
+    onSessionDrain: { Task { await drained.complete() } }
+  )
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  await processing.emit(.init(generation: 1, stableText: "", provisionalTail: "early"))
+
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
+
+  #expect(await waitForCompletion(drained, timeout: .seconds(1)))
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(try await fixture.history.list().isEmpty)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor
+func captureFirstReleaseRacingThresholdHasOneOutcome() async throws {
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("Boundary"))
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+
+  async let thresholdRelease: Void = threshold.openGate()
+  async let physicalRelease: Void = fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  _ = await (thresholdRelease, physicalRelease)
+
+  #expect(processing.stopOrigins == [.physicalRelease(release)])
+  #expect(fixture.editor.committedTexts == ["Boundary"])
+  #expect(fixture.saver.savedTexts.isEmpty)
+}
+
+@Test @MainActor
+func captureFirstShortReleaseWinsAfterThresholdTaskQueues() async throws {
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("must discard"))
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
+
+  #expect(processing.sessionCancelCount == 1)
+  #expect(processing.stopOrigins.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor
+func captureFirstEscapeDuringArmingDrainsSource() async throws {
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("late"))
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let session = try #require(fixture.coordinator.beginShortcut(editor: fixture.editor))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+
+  await fixture.coordinator.cancelShortcut(session)
+  await processing.emit(.init(generation: 99, stableText: "", provisionalTail: "late"))
+
+  #expect(processing.sessionCancelCount == 1)
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor
+func captureFirstCancelledGenerationPublishesNothingLate() async throws {
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("late result"))
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let session = try #require(fixture.coordinator.beginShortcut(editor: fixture.editor))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+
+  await fixture.coordinator.cancelShortcut(session)
+  await processing.emit(.init(
+    generation: 42,
+    stableText: "",
+    provisionalTail: "late generation"
+  ))
+
+  #expect(processing.publishedUpdates.isEmpty)
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+}
+
+@Test @MainActor
+func captureFirstShortReleasePreservesPriorRecoveryAndChooser() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "Keep this recovery"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  let priorAmbiguity = try #require(fixture.coordinator.routingAmbiguity)
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+  #expect(fixture.coordinator.routingAmbiguity == priorAmbiguity)
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+  #expect(fixture.coordinator.routingAmbiguity == priorAmbiguity)
+}
+
+@Test @MainActor
+func captureFirstShortReleaseRestoresPriorPresentationAfterThresholdWins() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "Keep prior presentation"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  let priorAmbiguity = try #require(fixture.coordinator.routingAmbiguity)
+  var recoverySeenAtTerminal: DictationRecoveryAction?
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil {
+      recoverySeenAtTerminal = fixture.coordinator.recoveryAction
+    }
+  }
+  let press = ContinuousClock().now
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+  #expect(fixture.coordinator.routingAmbiguity == priorAmbiguity)
+  #expect(recoverySeenAtTerminal == .undo)
+}
+
+@Test @MainActor
+func captureFirstSynchronousShortReceiptSuppressesProvisionalAndRestoresPresentation()
+  async throws
+{
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("Replacement"))
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorCaptureID = try #require(fixture.coordinator.recoveryReceipt?.captureID)
+  let priorAmbiguity = try #require(fixture.coordinator.routingAmbiguity)
+  let savedCount = fixture.saver.savedTexts.count
+  let historyCount = try await fixture.history.list().count
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(179))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount < 2 { await Task.yield() }
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await processing.emit(.init(
+    generation: 1,
+    stableText: "Attempted ",
+    provisionalTail: "publication"
+  ))
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+
+  #expect(processing.publishedUpdates.count == 1)
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.count == savedCount)
+  #expect(try await fixture.history.list().count == historyCount)
+  #expect(terminalEvents.allSatisfy { event in
+    if case .failed = event.phase { return false }
+    return true
+  })
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt?.captureID == priorCaptureID)
+  #expect(fixture.coordinator.routingAmbiguity == priorAmbiguity)
+}
+
+@Test @MainActor
+func captureFirstSynchronousShortReceiptSuppressesDelayedStartupFailure() async throws {
+  let threshold = Gate()
+  let startGate = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.standard.finalText = "Prior"
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorCaptureID = try #require(fixture.coordinator.recoveryReceipt?.captureID)
+  let priorAmbiguity = try #require(fixture.coordinator.routingAmbiguity)
+  let savedCount = fixture.saver.savedTexts.count
+  let historyCount = try await fixture.history.list().count
+  let releaseCount = fixture.standard.releaseCount
+  fixture.standard.startGate = startGate
+  fixture.standard.startError = TestError.failed
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(179))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  await startGate.waitUntilWaiting()
+  await threshold.openGate()
+  for _ in 0..<100 where fixture.coordinator.recoveryAction != nil { await Task.yield() }
+  #expect(fixture.coordinator.recoveryAction == nil)
+
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await startGate.openGate()
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+
+  #expect(fixture.standard.releaseCount == releaseCount + 1)
+  #expect(fixture.saver.savedTexts.count == savedCount)
+  #expect(try await fixture.history.list().count == historyCount)
+  #expect(terminalEvents.allSatisfy { event in
+    if case .failed = event.phase { return false }
+    return true
+  })
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt?.captureID == priorCaptureID)
+  #expect(fixture.coordinator.routingAmbiguity == priorAmbiguity)
+}
+
+@Test @MainActor
+func captureFirstLongReleaseReceiptKeepsLivePartialAndExactStopOrigin() async throws {
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("Held result"))
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
+  await processing.emit(.init(
+    generation: 1,
+    stableText: "Held ",
+    provisionalTail: "partial"
+  ))
+  #expect(fixture.editor.provisionalTexts == ["Held partial"])
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+
+  #expect(processing.stopOrigins == [.physicalRelease(release)])
+  #expect(fixture.editor.committedTexts == ["Held result"])
+}
+
+@Test @MainActor
+func captureFirstLongReleaseReceiptReservesOriginBeforeToolbarFinish() async throws {
+  let clock = ManualDictationClock()
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("Held result"))
+  let fixture = try Fixture(
+    processing: processing,
+    clock: clock.clock,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let flushGate = Gate()
+  fixture.saver.flushGate = flushGate
+  let press = clock.now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(250))
+    )
+  )
+  await processing.emit(.init(
+    generation: 1,
+    stableText: "Held ",
+    provisionalTail: "partial"
+  ))
+  #expect(fixture.editor.provisionalTexts == ["Held partial"])
+
+  clock.advance(by: .seconds(1))
+  let toolbarFinish = Task { await fixture.coordinator.finish() }
+  await flushGate.waitUntilWaiting()
+  await fixture.coordinator.finishHandsFreeShortcut(
+    session,
+    stopOrigin: .handsFreeKeyPress(clock.now)
+  )
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(250))
+    )
+  )
+  await flushGate.openGate()
+  await toolbarFinish.value
+
+  #expect(processing.stopOrigins == [.physicalRelease(release)])
+  #expect(processing.deadlineOrigins == [release])
+  #expect(fixture.coordinator.latestRuntimeMeasurements.physicalReleaseAt == release)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.integrity == .valid)
+  #expect(fixture.editor.committedTexts == ["Held result"])
+  #expect(fixture.saver.flushCount == 1)
+}
+
+@Test @MainActor
+func captureFirstEscapeDuringArmingPreservesPriorRecovery() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Keep this recovery"
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  await fixture.coordinator.cancelShortcut(session)
+
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+}
+
+@Test @MainActor
+func captureFirstDeferredStartupFailurePublishesWhenThresholdAccepts() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Keep this recovery"
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  fixture.standard.startError = TestError.failed
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let priorStartCount = fixture.standard.startCount
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  for _ in 0..<100 where fixture.standard.startCount == priorStartCount { await Task.yield() }
+
+  #expect(terminalEvents.isEmpty)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  await threshold.openGate()
+
+  await fixture.coordinator.waitForShortcutTerminal(session)
+
+  let publishedFailure = terminalEvents.contains { event in
+    if case .failed = event.terminal { return true }
+    return false
+  }
+  #expect(terminalEvents.count == 1)
+  #expect(publishedFailure)
+  #expect(fixture.coordinator.recoveryAction == nil)
+}
+
+@Test @MainActor
+func captureFirstLongReceiptAcceptsDeferredStartupFailureExactlyOnce() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.startError = TestError.failed
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where fixture.standard.startCount == 0 { await Task.yield() }
+
+  #expect(terminalEvents.isEmpty)
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await threshold.openGate()
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  await Task.yield()
+
+  let publishedFailure = terminalEvents.contains { event in
+    if case .failed = event.terminal { return true }
+    return false
+  }
+  #expect(terminalEvents.count == 1)
+  #expect(publishedFailure)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.physicalReleaseAt == release)
+  #expect(fixture.editor.provisionalTexts.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+}
+
+@Test @MainActor
+func captureFirstCancellationWinsQueuedDeferredStartupFailure() async throws {
+  let threshold = Gate()
+  let releaseGate = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Keep this recovery"
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  fixture.standard.startError = TestError.failed
+  fixture.standard.releaseGate = releaseGate
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let priorStartCount = fixture.standard.startCount
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where fixture.standard.startCount == priorStartCount { await Task.yield() }
+
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await releaseGate.waitUntilWaiting()
+  let cancelling = Task { await fixture.coordinator.cancelShortcut(session) }
+  for _ in 0..<100
+  where fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil
+  {
+    await Task.yield()
+  }
+  #expect(fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt != nil)
+  await releaseGate.openGate()
+  await cancelling.value
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  await threshold.openGate()
+  await Task.yield()
+
+  let cancelled = terminalEvents.contains { $0.terminal == .cancelled }
+  let failed = terminalEvents.contains { event in
+    if case .failed = event.terminal { return true }
+    return false
+  }
+  #expect(terminalEvents.count == 1)
+  #expect(cancelled)
+  #expect(!failed)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+}
+
+@Test @MainActor
+func captureFirstTimerAcceptanceKeepsToolbarFinishPendingUntilExactShortRelease() async throws {
+  let threshold = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.finalText = "Keep this recovery"
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let priorReceipt = try #require(fixture.coordinator.recoveryReceipt)
+  let priorFinishCount = fixture.standard.finishCount
+  let priorSavedCount = fixture.saver.savedTexts.count
+  let priorHistoryCount = try await fixture.history.list().count
+  fixture.standard.finalText = "Must not publish"
+  let prematureFinishGate = Gate()
+  fixture.standard.finishGate = prematureFinishGate
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let priorStartCount = fixture.standard.startCount
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(179))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where fixture.standard.startCount == priorStartCount { await Task.yield() }
+
+  await fixture.coordinator.finish()
+
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(fixture.standard.finishCount == priorFinishCount)
+  #expect(terminalEvents.isEmpty)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  await threshold.openGate()
+  for _ in 0..<100 where fixture.coordinator.phase == .arming { await Task.yield() }
+  for _ in 0..<100 where fixture.standard.finishCount == priorFinishCount { await Task.yield() }
+
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(fixture.standard.finishCount == priorFinishCount)
+  #expect(terminalEvents.isEmpty)
+  let competingFinish = Task { await fixture.coordinator.finish() }
+  for _ in 0..<100 where fixture.standard.finishCount == priorFinishCount { await Task.yield() }
+
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(fixture.standard.finishCount == priorFinishCount)
+  #expect(terminalEvents.isEmpty)
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await prematureFinishGate.openGate()
+  await competingFinish.value
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  await Task.yield()
+
+  #expect(terminalEvents.map(\.terminal) == [.cancelled])
+  #expect(fixture.standard.finishCount == priorFinishCount)
+  #expect(fixture.saver.savedTexts.count == priorSavedCount)
+  #expect(try await fixture.history.list().count == priorHistoryCount)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(fixture.coordinator.recoveryReceipt == priorReceipt)
+}
+
+@Test @MainActor
+func captureFirstAcceptedLongHoldHonorsPendingToolbarOriginOnce() async throws {
+  let clock = ManualDictationClock()
+  let threshold = Gate()
+  let processing = ProcessingProbe(result: processingResult("Accepted result"))
+  let fixture = try Fixture(
+    processing: processing,
+    clock: clock.clock,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  var terminalEvents: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { terminalEvents.append(event) }
+  }
+  let press = clock.now
+  let release = press.advanced(by: .milliseconds(180))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  clock.advance(by: .milliseconds(50))
+  let toolbarAction = clock.now
+
+  await fixture.coordinator.finish()
+
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(processing.stopOrigins.isEmpty)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(terminalEvents.isEmpty)
+  fixture.coordinator.recordPhysicalRelease(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+  await threshold.openGate()
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  await Task.yield()
+
+  #expect(processing.stopOrigins == [.toolbarAction(toolbarAction)])
+  #expect(processing.deadlineOrigins == [toolbarAction])
+  #expect(fixture.editor.committedTexts == ["Accepted result"])
+  #expect(terminalEvents.count == 1)
+}
+
+@Test @MainActor
+func captureFirstPhysicalReleaseSurvivesSuspendedStartup() async throws {
+  let threshold = Gate()
+  let pinGate = Gate()
+  let pinStarted = CompletionProbe()
+  let processing = ProcessingProbe(result: processingResult("After startup"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      await pinStarted.complete()
+      await pinGate.wait()
+      return try coordinatorDictionaryContext(
+        captureID: captureID,
+        generation: generation,
+        engine: engine
+      )
+    },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(250))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  #expect(await waitForCompletion(pinStarted, timeout: .seconds(1)))
+
+  let finishing = Task {
+    await fixture.coordinator.endShortcut(
+      session,
+      physicalGesture: .init(pressedAt: press, releasedAt: release)
+    )
+  }
+  await Task.yield()
+  await pinGate.openGate()
+  await finishing.value
+  await fixture.coordinator.waitForShortcutTerminal(session)
+
+  #expect(processing.stopOrigins == [.physicalRelease(release)])
+  #expect(fixture.editor.committedTexts == ["After startup"])
+}
+
+@Test @MainActor
+func captureFirstToolbarSamplesOriginAtActionReceipt() async throws {
+  let clock = ManualDictationClock()
+  let processing = ProcessingProbe(result: processingResult("Toolbar"))
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let actionInstant = clock.now
+
+  await fixture.coordinator.finish()
+
+  #expect(processing.stopOrigins == [.toolbarAction(actionInstant)])
+}
+
+@Test @MainActor
+func captureFirstHandsFreeCoordinatorForwardsExactOrigin() async throws {
+  let processing = ProcessingProbe(result: processingResult("Hands free"))
+  let fixture = try Fixture(processing: processing)
+  let session = try #require(fixture.coordinator.beginHandsFreeShortcut(editor: nil))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+  let instant = ContinuousClock().now
+  let origin = DictationStopOrigin.handsFreeKeyPress(instant)
+
+  await fixture.coordinator.finishHandsFreeShortcut(session, stopOrigin: origin)
+
+  #expect(processing.stopOrigins == [origin])
+  #expect(fixture.saver.savedTexts == ["Hands free"])
+}
+
+@Test @MainActor
+func captureFirstFirstStopOriginWins() async throws {
+  let clock = ManualDictationClock()
+  let flushGate = Gate()
+  let processing = ProcessingProbe(result: processingResult("First origin"))
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+  fixture.saver.flushGate = flushGate
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let first = clock.now
+
+  let finishing = Task { await fixture.coordinator.finish() }
+  await flushGate.waitUntilWaiting()
+  clock.advance(by: .milliseconds(50))
+  await fixture.coordinator.finish()
+  await flushGate.openGate()
+  await finishing.value
+
+  #expect(processing.stopOrigins == [.toolbarAction(first)])
+}
+
+@Test @MainActor
+func coordinatorMissingDictionaryContextConsumesNoAudioOrInsertion() async throws {
+  let processing = ProcessingProbe(result: processingResult("must not insert"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { _, _, _ in throw TestError.failed }
+  )
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+
+  #expect(processing.beginCount == 0)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.coordinator.phase != .listening(mode: .focused, engine: .standard))
+}
+
+@Test @MainActor
+func coordinatorNilDictionaryProviderFailsBeforePrepareOrProcessing() async throws {
+  let processing = ProcessingProbe(result: processingResult("must not insert"))
+  let fixture = try Fixture(
+    processing: processing,
+    providesCaptureContext: false
+  )
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+
+  #expect(processing.prepareCount == 0)
+  #expect(processing.beginCount == 0)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.coordinator.latestProcessingResult == nil)
+  #expect(try await fixture.history.list().isEmpty)
+}
+
+@Test @MainActor
+func coordinatorCancellationDuringDictionaryPinConsumesNoAudioOrInsertion() async throws {
+  let gate = Gate()
+  let processing = ProcessingProbe(result: processingResult("must not insert"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      await gate.wait()
+      return try coordinatorDictionaryContext(
+        captureID: captureID,
+        generation: generation,
+        engine: engine
+      )
+    }
+  )
+  let start = Task {
+    await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  }
+  await gate.waitUntilWaiting()
+
+  await fixture.coordinator.cancel()
+  await gate.openGate()
+  await start.value
+
+  #expect(processing.beginCount == 0)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+}
+
+@Test @MainActor
+func coordinatorMismatchedDictionaryCompletionInsertsNothing() async throws {
+  let box = DictionaryContextBox()
+  let processing = ProcessingProbe(result: processingResult("pending"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      let context = try coordinatorDictionaryContext(
+        captureID: captureID,
+        generation: generation,
+        engine: engine
+      )
+      box.value = context
+      return context
+    }
+  )
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let pinned = try #require(box.value)
+  let mismatch = try coordinatorDictionaryContext(
+    captureID: pinned.captureID,
+    generation: pinned.generation + 1,
+    engine: pinned.speechEngine
+  )
+  processing.complete(with: .init(
+    rawTranscript: "open fleck app",
+    dictionaryBaseline: "open FleckApp",
+    cleanedTranscript: "open FleckApp",
+    insertedText: "open FleckApp",
+    cleanupOutcome: .cleaned,
+    measurements: .empty,
+    captureContext: mismatch,
+    recognitionContextAcknowledgement: .unsupported(mismatch),
+    protectedDictionaryForms: ["FleckApp"],
+    appliedDictionaryEntryIDs: mismatch.snapshot.entries.map(\.id)
+  ))
+
+  await fixture.coordinator.finish()
+
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.coordinator.latestProcessingResult == nil)
+}
+
+@Test @MainActor
+func coordinatorRejectedDictionaryCompletionInsertsNothing() async throws {
+  let box = DictionaryContextBox()
+  let processing = ProcessingProbe(result: processingResult("pending"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      let context = try coordinatorDictionaryContext(
+        captureID: captureID,
+        generation: generation,
+        engine: engine
+      )
+      box.value = context
+      return context
+    }
+  )
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  let pinned = try #require(box.value)
+  processing.complete(with: .init(
+    rawTranscript: "open fleck app",
+    dictionaryBaseline: "open FleckApp",
+    cleanedTranscript: "open FleckApp",
+    insertedText: "open FleckApp",
+    cleanupOutcome: .cleaned,
+    measurements: .empty,
+    captureContext: pinned,
+    recognitionContextAcknowledgement: .rejected(pinned),
+    protectedDictionaryForms: ["FleckApp"],
+    appliedDictionaryEntryIDs: pinned.snapshot.entries.map(\.id)
+  ))
+
+  await fixture.coordinator.finish()
+
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(fixture.coordinator.latestProcessingResult == nil)
+  #expect(try await fixture.history.list().isEmpty)
+}
+
+@Test @MainActor
+func coordinatorShortcutPinsDictionaryBeforeThresholdMutation() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("FleckShortcutDictionary-\(UUID().uuidString)", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let entry = PersonalDictionaryEntry(preferredForm: "FleckApp", aliases: ["fleck app"])
+  try await store.upsert(entry)
+  let threshold = Gate()
+  let pinGate = Gate()
+  let pinStarted = CompletionProbe()
+  let processing = ProcessingProbe(result: processingResult("unused"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      let published = try await store.publishedSnapshot()
+      await pinStarted.complete()
+      await pinGate.wait()
+      return try LocalWritingCaptureContext(
+        captureID: captureID,
+        generation: generation,
+        localeIdentifier: published.compiled.localeIdentifier,
+        speechEngine: engine,
+        publishedSnapshot: published
+      )
+    },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+
+  #expect(await waitForCompletion(pinStarted, timeout: .seconds(1)))
+  try await store.upsert(PersonalDictionaryEntry(
+    id: entry.id,
+    preferredForm: "Fleck",
+    aliases: ["fleck app"]
+  ))
+  await pinGate.openGate()
+  await threshold.openGate()
+  #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
+
+  let current = try #require(processing.configurations.first?.captureContext)
+  #expect(current.snapshot.entries.map(\.preferredForm) == ["FleckApp"])
+  await fixture.coordinator.cancelShortcut(session)
+  await fixture.coordinator.waitForShortcutTerminal(session)
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let next = try #require(processing.configurations.last?.captureContext)
+  #expect(next.snapshot.entries.map(\.preferredForm) == ["Fleck"])
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor
+func coordinatorShortShortcutReleaseDrainsDictionaryPinWithoutStarting() async throws {
+  let threshold = Gate()
+  let pinGate = Gate()
+  let pinStarted = CompletionProbe()
+  let releaseCompleted = CompletionProbe()
+  let processing = ProcessingProbe(result: processingResult("must not insert"))
+  let fixture = try Fixture(
+    processing: processing,
+    captureContextProvider: { captureID, generation, engine in
+      await pinStarted.complete()
+      await pinGate.wait()
+      return try coordinatorDictionaryContext(
+        captureID: captureID,
+        generation: generation,
+        engine: engine
+      )
+    },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  #expect(await waitForCompletion(pinStarted, timeout: .seconds(1)))
+
+  let release = Task {
+    await fixture.coordinator.endShortcut(session)
+    await releaseCompleted.complete()
+  }
+  try? await Task.sleep(for: .milliseconds(20))
+  #expect(!(await releaseCompleted.isComplete))
+  #expect(processing.beginCount == 0)
+
+  await pinGate.openGate()
+  await release.value
+  await threshold.openGate()
+  await Task.yield()
+
+  #expect(processing.beginCount == 0)
+  #expect(fixture.editor.committedTexts.isEmpty)
+  #expect(fixture.saver.savedTexts.isEmpty)
+}
+
 @Test @MainActor
 func enhancedPreferenceUsesProcessingAndReportsItsSelectedEngine() async throws {
   let processing = ProcessingProbe(
@@ -107,6 +1244,183 @@ func processingUsesExactDictionaryBaselineForRawFallback() async throws {
   #expect(record.cleanedTranscript == nil)
   #expect(record.cleanupOutcome == .usedRaw)
   #expect(fixture.cleaner.calls == 0)
+}
+
+@Test @MainActor
+func physicalGestureReceiptUsesPhysicalReleaseAsProcessingDeadlineOrigin() async throws {
+  let processing = ProcessingProbe(
+    result: .init(
+      rawTranscript: "deadline",
+      dictionaryBaseline: "Deadline",
+      cleanedTranscript: "Deadline.",
+      insertedText: "Deadline.",
+      cleanupOutcome: .cleaned,
+      measurements: .empty
+    )
+  )
+  let fixture = try Fixture(processing: processing)
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(250))
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  for _ in 0..<100 where processing.beginCount == 0 { await Task.yield() }
+
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(pressedAt: press, releasedAt: release)
+  )
+
+  #expect(processing.deadlineOrigins == [release])
+  #expect(fixture.editor.committedTexts == ["Deadline."])
+}
+
+@Test @MainActor
+func physicalGestureReceiptRecordsFocusedInsertionAndPersistence() async throws {
+  let clock = ManualDictationClock()
+  let processing = ProcessingProbe(result: processingResult("Focused receipt"))
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  await fixture.coordinator.finish()
+
+  let receipt = fixture.coordinator.latestRuntimeMeasurements
+  #expect(receipt.insertionCommittedAt == clock.now)
+  #expect(receipt.persistenceCompletedAt == clock.now)
+  #expect(receipt.physicalPressAt == nil)
+  #expect(receipt.physicalReleaseAt == nil)
+  #expect(fixture.editor.committedTexts == ["Focused receipt"])
+  #expect(fixture.saver.flushCount == 1)
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  #expect(fixture.coordinator.latestRuntimeMeasurements == .empty)
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor
+func physicalGestureReceiptRecordsSmartRoutingInsertionAndPersistence() async throws {
+  let clock = ManualDictationClock()
+  let processing = ProcessingProbe(result: processingResult("Smart receipt"))
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  let receipt = fixture.coordinator.latestRuntimeMeasurements
+  #expect(receipt.routingRequestedAt == clock.now)
+  #expect(receipt.routingDecisionAt == clock.now)
+  #expect(receipt.insertionCommittedAt == clock.now)
+  #expect(receipt.persistenceCompletedAt == clock.now)
+  #expect(fixture.saver.savedTexts == ["Smart receipt"])
+}
+
+@Test @MainActor
+func physicalGestureReceiptRecordsAmbiguousInboxDurabilityAndChooserPresentation()
+  async throws
+{
+  let clock = ManualDictationClock()
+  let processing = ProcessingProbe(result: processingResult("Ambiguous receipt"))
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  let personal = DictationDestination(noteID: UUID(), title: "Personal")
+  fixture.saver.destinations += [project, personal]
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+    .init(destination: personal, contextHint: "personal"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  let receipt = fixture.coordinator.latestRuntimeMeasurements
+  #expect(receipt.insertionCommittedAt == clock.now)
+  #expect(receipt.persistenceCompletedAt == clock.now)
+  #expect(receipt.ambiguityPresentedAt == clock.now)
+  #expect(fixture.coordinator.routingAmbiguity?.choices.count == 2)
+  #expect(fixture.saver.destinationIDs == [fixture.inbox.noteID])
+}
+
+@Test @MainActor
+func physicalGestureReceiptRecordsExactAmbiguityMove() async throws {
+  let clock = ManualDictationClock()
+  let processing = ProcessingProbe(result: processingResult("Move receipt"))
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  fixture.saver.destinations.append(project)
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let captureID = try #require(fixture.coordinator.routingAmbiguity?.captureID)
+  clock.advance(by: .milliseconds(1))
+  let result = await fixture.coordinator.chooseDestination(
+    captureID: captureID,
+    noteID: project.noteID
+  )
+
+  #expect(result == .completed)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.ambiguityMovedAt == clock.now)
+  #expect(fixture.saver.moveCount == 1)
+  #expect(fixture.coordinator.recoveryReceipt?.noteID == project.noteID)
+}
+
+@Test @MainActor
+func physicalGestureReceiptFreezesCancelledRouteAfterDrain() async throws {
+  let clock = ManualDictationClock()
+  let processing = ProcessingProbe(result: processingResult("Cancelled route"))
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+  let routeStarted = CompletionProbe()
+  let cancellationObserved = CompletionProbe()
+  let releaseWithoutCancellation = CompletionProbe()
+  let drainGate = Gate()
+  let routeDrained = CompletionProbe()
+  fixture.router.cancellationProbe = .init(
+    routeStarted: routeStarted,
+    cancellationObserved: cancellationObserved,
+    releaseWithoutCancellation: releaseWithoutCancellation,
+    drainGate: drainGate,
+    routeDrained: routeDrained
+  )
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  while !(await routeStarted.isComplete) { await Task.yield() }
+  clock.advance(by: .milliseconds(1))
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  for _ in 0..<100 where !(await cancellationObserved.isComplete) { await Task.yield() }
+  #expect(fixture.coordinator.latestRuntimeMeasurements.cancellationDrainedAt == nil)
+  clock.advance(by: .milliseconds(1))
+  await drainGate.openGate()
+  await cancelling.value
+  await finishing.value
+
+  let terminal = fixture.coordinator.latestRuntimeMeasurements
+  #expect(await routeDrained.isComplete)
+  #expect(terminal.routingRequestedAt != nil)
+  #expect(terminal.routingDecisionAt == nil)
+  #expect(terminal.cancellationRequestedAt != nil)
+  #expect(terminal.cancellationDrainedAt == clock.now)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor
+func physicalGestureReceiptLeavesFailedPersistenceAbsentForRecovery() async throws {
+  let clock = ManualDictationClock()
+  let processing = ProcessingProbe(result: processingResult("Persistence failure"))
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+  fixture.saver.flushError = TestError.failed
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  await fixture.coordinator.finish()
+
+  let receipt = fixture.coordinator.latestRuntimeMeasurements
+  #expect(receipt.insertionCommittedAt == clock.now)
+  #expect(receipt.persistenceCompletedAt == nil)
+  #expect(fixture.coordinator.recoveryAction == .openHistory)
+  #expect(fixture.coordinator.phase == .failed("Unable to save dictation."))
 }
 
 @Test @MainActor
@@ -430,18 +1744,31 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
   await fixture.coordinator.cancel()
 }
 
-@Test @MainActor func shortShortcutHoldDoesNotStartCapture() async throws {
+@Test @MainActor func shortShortcutHoldDrainsCaptureStartedAtPress() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  let press = ContinuousClock().now
 
-  fixture.coordinator.beginShortcut(editor: nil)
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
   await threshold.waitUntilWaiting()
-  await fixture.coordinator.endShortcut()
+  for _ in 0..<100 where fixture.standard.startCount == 0 { await Task.yield() }
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(179))
+    )
+  )
   await threshold.openGate()
   await Task.yield()
 
-  #expect(fixture.provider.requestedKinds.isEmpty)
-  #expect(fixture.standard.startCount == 0)
+  #expect(fixture.provider.requestedKinds == [.standard])
+  #expect(fixture.standard.startCount == 1)
+  #expect(fixture.standard.cancelCount == 1)
+  #expect(fixture.standard.releaseCount == 1)
   #expect(fixture.editor.beginCount == 0)
 }
 
@@ -449,8 +1776,12 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
   fixture.standard.finalText = "Held dictation"
+  let press = ContinuousClock().now
 
-  fixture.coordinator.beginShortcut(editor: nil)
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
   #expect(fixture.coordinator.phase == .arming)
   await threshold.waitUntilWaiting()
   await threshold.openGate()
@@ -459,7 +1790,13 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
   #expect(fixture.standard.startCount == 1)
   #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
 
-  await fixture.coordinator.endShortcut()
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(200))
+    )
+  )
 
   #expect(fixture.standard.finishCount == 1)
   #expect(fixture.saver.savedTexts == ["Held dictation"])
@@ -480,7 +1817,10 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
     mode: .smartCapture,
     engine: .standard
   ))
-  await fixture.coordinator.finishHandsFreeShortcut(session)
+  await fixture.coordinator.finishHandsFreeShortcut(
+    session,
+    stopOrigin: .handsFreeKeyPress(ContinuousClock().now)
+  )
   await fixture.coordinator.waitForShortcutTerminal(session)
   #expect(fixture.saver.savedTexts == ["Hands free"])
 }
@@ -494,7 +1834,10 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
   let foreignSession = DictationShortcutSession(id: UUID())
 
   #expect(await waitForListening(fixture.coordinator, timeout: .seconds(1)))
-  await fixture.coordinator.finishHandsFreeShortcut(foreignSession)
+  await fixture.coordinator.finishHandsFreeShortcut(
+    foreignSession,
+    stopOrigin: .handsFreeKeyPress(ContinuousClock().now)
+  )
   await fixture.coordinator.cancelShortcut(foreignSession)
 
   #expect(fixture.coordinator.phase == .listening(
@@ -863,15 +2206,25 @@ private func waitForCompletion(
   fixture.standard.finalText = "Held dictation"
   var events: [DictationCoordinatorEvent] = []
   fixture.coordinator.setEventObserver { events.append($0) }
+  let press = ContinuousClock().now
 
-  fixture.coordinator.beginShortcut(editor: nil)
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: nil,
+    physicalGesture: .init(pressedAt: press)
+  ))
   await threshold.waitUntilWaiting()
   await threshold.openGate()
   for _ in 0..<20 {
     if case .listening = fixture.coordinator.phase { break }
     await Task.yield()
   }
-  await fixture.coordinator.endShortcut()
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(200))
+    )
+  )
 
   #expect(events.map(\.phase) == [
     .arming,
@@ -1577,18 +2930,26 @@ private func waitForCompletion(
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
   fixture.standard.finalText = "Focused"
+  let press = ContinuousClock().now
 
-  fixture.coordinator.beginShortcut(
+  let session = try #require(fixture.coordinator.beginShortcut(
     editor: fixture.editor,
-    destination: fixture.inbox
-  )
+    destination: fixture.inbox,
+    physicalGesture: .init(pressedAt: press)
+  ))
   await threshold.waitUntilWaiting()
   await threshold.openGate()
   for _ in 0..<20 {
     if case .listening = fixture.coordinator.phase { break }
     await Task.yield()
   }
-  await fixture.coordinator.endShortcut()
+  await fixture.coordinator.endShortcut(
+    session,
+    physicalGesture: .init(
+      pressedAt: press,
+      releasedAt: press.advanced(by: .milliseconds(200))
+    )
+  )
 
   let record = try #require(await fixture.history.list().first)
   #expect(record.destination == fixture.inbox)
@@ -3054,6 +4415,10 @@ private final class Fixture {
 
   init(
     processing: (any DictationProcessing)? = nil,
+    captureContextProvider: (@MainActor (
+      UUID, UInt64, DictationSpeechEngine
+    ) async throws -> LocalWritingCaptureContext)? = nil,
+    providesCaptureContext: Bool = true,
     onFocusedEditorRollback: (() -> Void)? = nil,
     onFocusedProvisionalUpdate: (() -> Void)? = nil,
     preferred: DictationSpeechEngine = .standard,
@@ -3062,6 +4427,7 @@ private final class Fixture {
     historyMovedSaveError: Error? = nil,
     historyFinalSaveGate: Gate? = nil,
     historyDeleteError: Error? = nil,
+    clock: DictationClock = .live,
     holdSleeper: @escaping @Sendable (Duration) async -> Void = { _ in }
   ) throws {
     preference = PreferenceBox(value: preferred)
@@ -3092,6 +4458,22 @@ private final class Fixture {
     editor.onCancelFocusedDictation = onFocusedEditorRollback
     editor.onFocusedProvisionalUpdate = onFocusedProvisionalUpdate
     provider.engines = [.standard: standard, .enhancedLocal: enhanced]
+    let effectiveCaptureContextProvider: (@MainActor (
+      UUID, UInt64, DictationSpeechEngine
+    ) async throws -> LocalWritingCaptureContext)?
+    if let captureContextProvider {
+      effectiveCaptureContextProvider = captureContextProvider
+    } else if processing != nil, providesCaptureContext {
+      effectiveCaptureContextProvider = { captureID, generation, engine in
+        try coordinatorDictionaryContext(
+          captureID: captureID,
+          generation: generation,
+          engine: engine
+        )
+      }
+    } else {
+      effectiveCaptureContextProvider = nil
+    }
     coordinator = DictationCoordinator(
       engineProvider: provider,
       preferredEngine: { [preference] in preference.value },
@@ -3101,6 +4483,8 @@ private final class Fixture {
       historyController: historyController,
       historyEnabled: { historyEnabled },
       processing: processing,
+      captureContextProvider: effectiveCaptureContextProvider,
+      clock: clock,
       holdSleeper: holdSleeper
     )
   }
@@ -3306,13 +4690,18 @@ final class ProcessingProbe: DictationProcessing {
   private let onFinishUnblocked: (() -> Void)?
   private let onSessionDrain: (() -> Void)?
   private var session: ProcessingSessionProbe?
+  private var captureContext: LocalWritingCaptureContext?
   private var levelCallback: (@MainActor @Sendable (Float) -> Void)?
   private var finishStarted = false
   private var finishWaiters: [CheckedContinuation<Void, Never>] = []
 
   private(set) var publishedUpdates: [DictationTextUpdate] = []
+  private(set) var prepareCount = 0
   private(set) var beginCount = 0
   private(set) var configurations: [DictationProcessingConfiguration] = []
+  private(set) var deadlineOrigins: [ContinuousClock.Instant] = []
+  private(set) var stopOrigins: [DictationStopOrigin] = []
+  private(set) var sessionCancelCount = 0
 
   init(
     updates: [DictationTextUpdate] = [],
@@ -3349,6 +4738,7 @@ final class ProcessingProbe: DictationProcessing {
 
   func prepare(for intent: DictationPreparationIntent) async {
     _ = intent
+    prepareCount += 1
   }
 
   func begin(
@@ -3356,6 +4746,8 @@ final class ProcessingProbe: DictationProcessing {
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession {
     configurations.append(configuration)
+    captureContext = configuration.captureContext
+    result = processingResult(result, pinnedTo: captureContext)
     levelCallback = level
     if let synchronousLevel { level(synchronousLevel) }
     beginCount += 1
@@ -3364,11 +4756,18 @@ final class ProcessingProbe: DictationProcessing {
       finishBlocksUntilCancel: finishBlocksUntilCancel,
       drainGate: drainGate,
       onFinishStarted: { [weak self] in self?.markFinishStarted() },
-      onSessionCancel: onSessionCancel,
+      onSessionCancel: { [weak self] in
+        self?.sessionCancelCount += 1
+        self?.onSessionCancel?()
+      },
       onSourceCancel: onSourceCancel,
       onSourcePhysicalRelease: onSourcePhysicalRelease,
       onFinishUnblocked: onFinishUnblocked,
       onSessionDrain: onSessionDrain,
+      onStopOrigin: { [weak self] origin in
+        self?.stopOrigins.append(origin)
+        self?.deadlineOrigins.append(origin.instant)
+      },
       onPublishedUpdate: { [weak self] update in
         self?.publishedUpdates.append(update)
       }
@@ -3397,8 +4796,9 @@ final class ProcessingProbe: DictationProcessing {
   }
 
   func complete(with result: DictationProcessingResult) {
-    self.result = result
-    session?.setResult(result)
+    let pinnedResult = processingResult(result, pinnedTo: captureContext)
+    self.result = pinnedResult
+    session?.setResult(pinnedResult)
   }
 
   func waitUntilFinishStarted() async {
@@ -3430,6 +4830,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
   private let onSourcePhysicalRelease: (() -> Void)?
   private let onFinishUnblocked: (() -> Void)?
   private let onSessionDrain: (() -> Void)?
+  private let onStopOrigin: (DictationStopOrigin) -> Void
   private let onPublishedUpdate: (DictationTextUpdate) -> Void
   private var result: DictationProcessingResult
   private var finishContinuation: CheckedContinuation<DictationProcessingResult, Never>?
@@ -3445,6 +4846,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
     onSourcePhysicalRelease: (() -> Void)?,
     onFinishUnblocked: (() -> Void)?,
     onSessionDrain: (() -> Void)?,
+    onStopOrigin: @escaping (DictationStopOrigin) -> Void,
     onPublishedUpdate: @escaping (DictationTextUpdate) -> Void
   ) {
     self.finishBlocksUntilCancel = finishBlocksUntilCancel
@@ -3455,6 +4857,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
     self.onSourcePhysicalRelease = onSourcePhysicalRelease
     self.onFinishUnblocked = onFinishUnblocked
     self.onSessionDrain = onSessionDrain
+    self.onStopOrigin = onStopOrigin
     self.onPublishedUpdate = onPublishedUpdate
     self.result = result
     var capturedContinuation: AsyncThrowingStream<DictationTextUpdate, Error>.Continuation!
@@ -3462,7 +4865,8 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
     continuation = capturedContinuation
   }
 
-  func finish() async throws -> DictationProcessingResult {
+  func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult {
+    onStopOrigin(stopOrigin)
     onFinishStarted()
     if finishBlocksUntilCancel, !isCancelled {
       return await withCheckedContinuation { continuation in
@@ -3500,6 +4904,27 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
 
   func setResult(_ result: DictationProcessingResult) {
     self.result = result
+  }
+}
+
+private final class ManualDictationClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var instant = ContinuousClock().now
+
+  var now: ContinuousClock.Instant {
+    lock.withLock { instant }
+  }
+
+  var clock: DictationClock {
+    DictationClock(now: { [weak self] in
+      self?.now ?? ContinuousClock().now
+    })
+  }
+
+  func advance(by duration: Duration) {
+    lock.withLock {
+      instant = instant.advanced(by: duration)
+    }
   }
 }
 

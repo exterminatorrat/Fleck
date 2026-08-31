@@ -4,6 +4,60 @@ import FleckCore
 
 @testable import FleckApp
 
+private func testStopOrigin(
+  _ instant: ContinuousClock.Instant = TestDictationClock.fixedInstant
+) -> DictationStopOrigin {
+  .toolbarAction(instant)
+}
+
+private func processorDictionaryContext(
+  captureID: UUID = UUID(),
+  generation: UInt64 = 1,
+  revision: UInt64 = 1,
+  preferredForm: String = "FleckApp"
+) throws -> LocalWritingCaptureContext {
+  let entry = PersonalDictionaryEntry(
+    preferredForm: preferredForm,
+    aliases: ["fleck app"]
+  )
+  let snapshot = PersonalDictionarySnapshotV2(revision: revision, entries: [entry])
+  return try LocalWritingCaptureContext(
+    captureID: captureID,
+    generation: generation,
+    localeIdentifier: "en-US",
+    speechEngine: .standard,
+    snapshot: snapshot,
+    compiledDictionary: CompiledPersonalDictionary.compile(snapshot)
+  )
+}
+
+@MainActor
+private final class ProcessingBeginErrorBox {
+  var error: Error?
+}
+
+private func processorDictionaryConfiguration(
+  _ context: LocalWritingCaptureContext
+) -> DictationProcessingConfiguration {
+  DictationProcessingConfiguration(mode: .focused, captureContext: context)
+}
+
+private func processorDictionaryContext(
+  from context: LocalWritingCaptureContext,
+  captureID: UUID? = nil,
+  generation: UInt64? = nil,
+  speechEngine: DictationSpeechEngine? = nil
+) throws -> LocalWritingCaptureContext {
+  try LocalWritingCaptureContext(
+    captureID: captureID ?? context.captureID,
+    generation: generation ?? context.generation,
+    localeIdentifier: context.localeIdentifier,
+    speechEngine: speechEngine ?? context.speechEngine,
+    snapshot: context.snapshot,
+    compiledDictionary: context.compiledDictionary
+  )
+}
+
 @MainActor
 private func makeProcessor(
   source: any StreamingSpeechSource,
@@ -113,6 +167,7 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
   private(set) var sourceTerminalizationCount = 0
   private(set) var callbacksWereInstalled = false
   private(set) var provisionalCallbackCount = 0
+  private(set) var stopOrigins: [DictationStopOrigin] = []
 
   func emitProvisional(_ text: String) {
     provisional?(text)
@@ -175,6 +230,11 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     return finalText
   }
 
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
+    stopOrigins.append(stopOrigin)
+    return try await finish()
+  }
+
   func cancel() async {
     cancelCount += 1
     cancellationRequested = true
@@ -230,6 +290,448 @@ private final class FinalizationStartGate {
   func release() {
     released = true
   }
+}
+
+@Test @MainActor
+func processorMeasurementsRecordSuccessfulStageOrdering() async throws {
+  let start = TestDictationClock.fixedInstant
+  let samples = (0...6).map { start.advanced(by: .milliseconds($0)) }
+  let clock = TestDictationClock(values: samples)
+  let source = StreamingSpeechSourceProbe(synchronousProvisional: "First")
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "First"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: clock,
+    budget: .production
+  )
+
+  let session = try #require(try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { _ in }
+  ) as? StreamingDictationSession)
+  let result = try await session.finish(stopOrigin: testStopOrigin())
+  let measurements = session.runtimeMeasurements
+
+  #expect(measurements.processorStartedAt == samples[0])
+  #expect(measurements.sourceStartRequestedAt == samples[1])
+  #expect(measurements.firstMeaningfulPartialAt == samples[2])
+  #expect(measurements.stopRequestedAt == samples[3])
+  #expect(measurements.asrFinalAt == samples[4])
+  #expect(measurements.dictionaryCompletedAt == samples[5])
+  #expect(measurements.cleanupDecisionCompletedAt == samples[6])
+  #expect(measurements.integrity == .valid)
+  #expect(result.measurements == measurements)
+  #expect(result.insertedText == "First.")
+}
+
+@Test @MainActor
+func captureFirstSourceReceivesExactOriginAndDeadlinesUseItsInstant() async throws {
+  let clock = TestDictationClock(values: Array(repeating: TestDictationClock.fixedInstant, count: 8))
+  let source = StreamingSpeechSourceProbe(finalText: "First")
+  let generator = CleanupGeneratorProbe(result: "First")
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: generator,
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: clock,
+    budget: .production
+  )
+  let session = try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { _ in }
+  )
+  let instant = TestDictationClock.fixedInstant.advanced(by: .seconds(3))
+  let origin = DictationStopOrigin.physicalRelease(instant)
+
+  _ = try await session.finish(stopOrigin: origin)
+
+  #expect(source.stopOrigins == [origin])
+  #expect(generator.requests.first?.deadline == instant.advanced(by: .milliseconds(3_500)))
+}
+
+@Test @MainActor
+func processorMeasurementsDefaultFinishSamplesOnceAndUsesStopRequestAsDeadlineOrigin() async throws {
+  let start = TestDictationClock.fixedInstant
+  let samples = (0...5).map { start.advanced(by: .milliseconds($0)) }
+  let sequence = InstantSequence(samples)
+  let clock = DictationClock(now: { sequence.next() })
+  let source = StreamingSpeechSourceProbe()
+  let generator = CleanupGeneratorProbe(result: "First")
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: generator,
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: clock,
+    budget: .production
+  )
+  let session = try #require(try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { _ in }
+  ) as? StreamingDictationSession)
+
+  let first = try await session.finish(stopOrigin: testStopOrigin(samples[2]))
+  let second = try await session.finish(stopOrigin: testStopOrigin())
+
+  #expect(first == second)
+  #expect(session.runtimeMeasurements.stopRequestedAt == samples[2])
+  #expect(generator.requests.first?.deadline == samples[2].advanced(by: .milliseconds(3_500)))
+  #expect(sequence.callCount == 6)
+}
+
+@Test @MainActor
+func processorMeasurementsExplicitDeadlineOriginControlsDeadlineSeparatelyFromStopRequest() async throws {
+  let start = TestDictationClock.fixedInstant
+  let samples = (0...5).map { start.advanced(by: .milliseconds($0)) }
+  let sequence = InstantSequence(samples)
+  let clock = DictationClock(now: { sequence.next() })
+  let deadlineOrigin = start.advanced(by: .seconds(10))
+  let generator = CleanupGeneratorProbe(result: "First")
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in StreamingSpeechSourceProbe() },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: generator,
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: clock,
+    budget: .production
+  )
+  let session = try #require(try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { _ in }
+  ) as? StreamingDictationSession)
+
+  let explicit = try await session.finish(stopOrigin: .physicalRelease(deadlineOrigin))
+  let repeated = try await session.finish(stopOrigin: testStopOrigin())
+
+  #expect(explicit == repeated)
+  #expect(session.runtimeMeasurements.stopRequestedAt == samples[2])
+  #expect(generator.requests.first?.deadline == deadlineOrigin.advanced(by: .milliseconds(3_500)))
+  #expect(sequence.callCount == 6)
+}
+
+@Test @MainActor
+func processorMeasurementsRecordCleanupDecisionForRejectedCandidate() async throws {
+  let start = TestDictationClock.fixedInstant
+  let samples = (0...5).map { start.advanced(by: .milliseconds($0)) }
+  let source = StreamingSpeechSourceProbe(finalText: "Do not cancel 2 meetings")
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(
+        baseline: "Do not cancel 2 meetings",
+        protectedForms: [],
+        replacements: 0
+      )
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "Cancel the meetings"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: TestDictationClock(values: samples),
+    budget: .production
+  )
+  let session = try #require(try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { _ in }
+  ) as? StreamingDictationSession)
+
+  let result = try await session.finish(stopOrigin: testStopOrigin())
+
+  #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.insertedText == "Do not cancel 2 meetings")
+  #expect(session.runtimeMeasurements.cleanupDecisionCompletedAt == samples[5])
+  #expect(result.measurements.cleanupDecisionCompletedAt == samples[5])
+}
+
+@Test @MainActor
+func processorMeasurementsRecordSingleCancellationRequestAndDrainForConcurrentCallers() async throws {
+  let start = TestDictationClock.fixedInstant
+  let samples = (0...4).map { start.advanced(by: .milliseconds($0)) }
+  let sequence = InstantSequence(samples)
+  let order = CancellationDrainRecorder()
+  let source = StreamingSpeechSourceProbe(
+    finishBlocksUntilCancel: true,
+    onCancel: {
+      order.append(.sourceCancelStarted)
+      await order.waitUntil(.secondCallerEntered)
+    }
+  )
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "First"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: DictationClock(now: { sequence.next() }),
+    budget: .production
+  )
+  let session = try #require(try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { _ in }
+  ) as? StreamingDictationSession)
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
+  await source.waitUntilFinishStarted()
+
+  let firstCancellation = Task { await session.cancel() }
+  await order.waitUntil(.sourceCancelStarted)
+  let secondCancellation = Task {
+    order.append(.secondCallerEntered)
+    await session.cancel()
+  }
+  await firstCancellation.value
+  await secondCancellation.value
+  await #expect(throws: CancellationError.self) { try await finalization.value }
+
+  #expect(session.runtimeMeasurements.cancellationRequestedAt == samples[3])
+  #expect(session.runtimeMeasurements.cancellationDrainedAt == samples[4])
+  #expect(session.runtimeMeasurements.cancellationMilliseconds == 1)
+  #expect(source.cancelCount == 1)
+  #expect(sequence.callCount == 5)
+
+  await session.cancel()
+  #expect(sequence.callCount == 5)
+}
+
+@Test @MainActor
+func processorMeasurementsLeaveFirstMeaningfulPartialAbsentWithoutGenuinePartial() async throws {
+  let start = TestDictationClock.fixedInstant
+  let samples = (0...6).map { start.advanced(by: .milliseconds($0)) }
+  let source = StreamingSpeechSourceProbe(synchronousProvisional: "   \n")
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "First"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: TestDictationClock(values: samples),
+    budget: .production
+  )
+  let session = try #require(try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { _ in }
+  ) as? StreamingDictationSession)
+
+  let result = try await session.finish(stopOrigin: testStopOrigin())
+
+  #expect(session.runtimeMeasurements.firstMeaningfulPartialAt == nil)
+  #expect(session.runtimeMeasurements.firstMeaningfulPartialMilliseconds == nil)
+  #expect(result.insertedText == "First.")
+}
+
+@Test @MainActor
+func processorMeasurementsPreserveCompletedFailureBoundariesAndLeaveUnreachedStagesAbsent() async throws {
+  for finalText in [nil, ""] as [String?] {
+    let start = TestDictationClock.fixedInstant
+    let samples = (0...3).map { start.advanced(by: .milliseconds($0)) }
+    let processor = StreamingDictationProcessor(
+      makeSource: { _ in StreamingSpeechSourceProbe(finalText: finalText) },
+      dictionaryResolver: DictionaryResolverProbe(
+        resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+      ),
+      cleaner: IncrementalTranscriptCleaner(
+        generator: CleanupGeneratorProbe(result: "First"),
+        clock: TestCleanupClock.immediate
+      ),
+      runtime: nil,
+      clock: TestDictationClock(values: samples),
+      budget: .production
+    )
+    let session = try #require(try await processor.begin(
+      configuration: .init(
+        captureID: UUID(),
+        mode: .focused,
+        recognitionContext: .englishDefault
+      ),
+      level: { _ in }
+    ) as? StreamingDictationSession)
+
+    await #expect(throws: StreamingDictationProcessorError.noSpeech) {
+      try await session.finish(stopOrigin: testStopOrigin())
+    }
+    #expect(session.runtimeMeasurements.asrFinalAt == samples[3])
+    #expect(session.runtimeMeasurements.dictionaryCompletedAt == nil)
+    #expect(session.runtimeMeasurements.cleanupDecisionCompletedAt == nil)
+  }
+
+  do {
+    let start = TestDictationClock.fixedInstant
+    let samples = (0...4).map { start.advanced(by: .milliseconds($0)) }
+    let processor = StreamingDictationProcessor(
+      makeSource: { _ in StreamingSpeechSourceProbe() },
+      dictionaryResolver: DictionaryResolverProbe(error: .failed),
+      cleaner: IncrementalTranscriptCleaner(
+        generator: CleanupGeneratorProbe(result: "First"),
+        clock: TestCleanupClock.immediate
+      ),
+      runtime: nil,
+      clock: TestDictationClock(values: samples),
+      budget: .production
+    )
+    let session = try #require(try await processor.begin(
+      configuration: .init(
+        captureID: UUID(),
+        mode: .focused,
+        recognitionContext: .englishDefault
+      ),
+      level: { _ in }
+    ) as? StreamingDictationSession)
+
+    let result = try await session.finish(stopOrigin: testStopOrigin())
+
+    #expect(result.cleanupOutcome == .usedRaw)
+    #expect(result.insertedText == "First")
+    #expect(session.runtimeMeasurements.dictionaryCompletedAt == samples[4])
+    #expect(session.runtimeMeasurements.cleanupDecisionCompletedAt == nil)
+  }
+
+  do {
+    let start = TestDictationClock.fixedInstant
+    let samples = (0...6).map { start.advanced(by: .milliseconds($0)) }
+    let generator = CleanupGeneratorProbe(
+      result: "First",
+      waitsForCancellation: true
+    )
+    let processor = StreamingDictationProcessor(
+      makeSource: { _ in StreamingSpeechSourceProbe() },
+      dictionaryResolver: DictionaryResolverProbe(
+        resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+      ),
+      cleaner: IncrementalTranscriptCleaner(
+        generator: generator,
+        clock: TestCleanupClock.immediate
+      ),
+      runtime: nil,
+      clock: TestDictationClock(values: samples),
+      budget: .production
+    )
+    let session = try #require(try await processor.begin(
+      configuration: .init(
+        captureID: UUID(),
+        mode: .focused,
+        recognitionContext: .englishDefault
+      ),
+      level: { _ in }
+    ) as? StreamingDictationSession)
+    let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
+    await generator.waitUntilStarted()
+
+    await session.cancel()
+    await #expect(throws: CancellationError.self) { try await finalization.value }
+
+    #expect(session.runtimeMeasurements.asrFinalAt == samples[3])
+    #expect(session.runtimeMeasurements.dictionaryCompletedAt == samples[4])
+    #expect(session.runtimeMeasurements.cleanupDecisionCompletedAt == nil)
+    #expect(session.runtimeMeasurements.cancellationRequestedAt == samples[5])
+    #expect(session.runtimeMeasurements.cancellationDrainedAt == samples[6])
+  }
+}
+
+@Test @MainActor
+func processorMeasurementsRejectBackwardClockSamplesWithoutChangingText() async throws {
+  let start = TestDictationClock.fixedInstant
+  let samples = [
+    start,
+    start.advanced(by: .milliseconds(-1)),
+    start.advanced(by: .milliseconds(1)),
+    start.advanced(by: .milliseconds(2)),
+    start.advanced(by: .milliseconds(3)),
+    start.advanced(by: .milliseconds(4)),
+  ]
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in StreamingSpeechSourceProbe() },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "First"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: TestDictationClock(values: samples),
+    budget: .production
+  )
+  let session = try #require(try await processor.begin(
+    configuration: .init(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { _ in }
+  ) as? StreamingDictationSession)
+
+  let result = try await session.finish(stopOrigin: testStopOrigin())
+  let measurements = session.runtimeMeasurements
+
+  #expect(result.insertedText == "First.")
+  #expect(measurements.integrity == .nonMonotonicClock)
+  #expect(measurements.processorStartedAt == samples[0])
+  #expect(measurements.sourceStartRequestedAt == nil)
+  #expect(measurements.stopRequestedAt == nil)
+  #expect(measurements.asrFinalAt == nil)
+  #expect(measurements.dictionaryCompletedAt == nil)
+  #expect(measurements.cleanupDecisionCompletedAt == nil)
+  #expect(measurements.finalASRMilliseconds == nil)
+  #expect(result.measurements == measurements)
 }
 
 @Test @MainActor
@@ -337,7 +839,7 @@ func successfulFinishUsesSourceOwnedTerminalizationWithoutSecondRelease() async 
     recognitionContext: .englishDefault
   ), level: { _ in })
 
-  _ = try await session.finish()
+  _ = try await session.finish(stopOrigin: testStopOrigin())
   source.emitProvisional("late")
 
   #expect(source.cancelCount == 0)
@@ -363,7 +865,7 @@ func emptyFinalTextThrowsStreamingProcessorNoSpeech() async throws {
   ), level: { _ in })
 
   await #expect(throws: StreamingDictationProcessorError.noSpeech) {
-    _ = try await session.finish()
+    _ = try await session.finish(stopOrigin: testStopOrigin())
   }
   #expect(source.finishCount == 1)
   #expect(source.physicalReleaseCount == 1)
@@ -383,7 +885,7 @@ func failedFinishUsesSourceOwnedTerminalizationAndPublishesNoLateUpdate() async 
   }
 
   await #expect(throws: StreamingSpeechSourceProbeError.failed) {
-    _ = try await session.finish()
+    _ = try await session.finish(stopOrigin: testStopOrigin())
   }
   source.emitProvisional("late")
 
@@ -440,7 +942,7 @@ func cancellingAfterSourceFinishAwaitsCleanupWithoutSecondSourceTerminalization(
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await helper.waitUntilStarted()
 
   #expect(source.finishCount == 1)
@@ -517,7 +1019,7 @@ func concurrentCancelCallersShareOneTaskDuringBlockedFinish() async throws {
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await source.waitUntilFinishStarted()
 
   let first = Task {
@@ -582,7 +1084,7 @@ func cancellingBeforeFinalizationBodyStartsSkipsSourceFinish() async throws {
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await gate.waitUntilEntered()
   #expect(source.finishCount == 0)
 
@@ -644,7 +1146,7 @@ func cancellingBlockedFinishReturningNilWinsWithoutNoSpeechResult() async throws
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await source.waitUntilFinishStarted()
 
   let first = Task {
@@ -690,11 +1192,11 @@ func cancellingSessionUnblocksInFlightSourceFinishWithSourceOwnedRelease() async
   let updates = Task { @MainActor in
     try await collectUpdates(from: session.updates)
   }
-  let firstFinish = Task { try await session.finish() }
+  let firstFinish = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await source.waitUntilFinishStarted()
   #expect(source.finishCompleted == false)
   #expect(source.physicalReleaseCount == 0)
-  let secondFinish = Task { try await session.finish() }
+  let secondFinish = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await Task.yield()
 
   await session.cancel()
@@ -723,7 +1225,7 @@ func cancellingBeforeFinishCannotStartFinalizationWork() async throws {
 
   await session.cancel()
 
-  await #expect(throws: CancellationError.self) { try await session.finish() }
+  await #expect(throws: CancellationError.self) { try await session.finish(stopOrigin: testStopOrigin()) }
   #expect(source.finishCount == 0)
   #expect(source.cancelCount == 1)
   #expect(source.sourceTerminalizationCount == 1)
@@ -760,7 +1262,7 @@ func cancellationWinnerClosesTheFinishRaceBeforeAnyFinalizationOrSourceFinish() 
 
   let cancellation = Task { await session.cancel() }
   await recorder.waitUntilInvalidated()
-  let finish = Task { try await session.finish() }
+  let finish = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await cancellation.value
   await #expect(throws: CancellationError.self) { try await finish.value }
   #expect(source.finishCount == 0)
@@ -795,7 +1297,7 @@ func processorUsesExactBaselineWhenCleanupIsRejected() async throws {
     mode: .focused,
     recognitionContext: .englishDefault
   ), level: { _ in })
-  let result = try await session.finish()
+  let result = try await session.finish(stopOrigin: testStopOrigin())
   #expect(result.insertedText == "Do not cancel 2 meetings")
   #expect(result.cleanedTranscript == nil)
 }
@@ -822,7 +1324,7 @@ func processorUsesRawRecoveryWhenDictionaryResolutionFails() async throws {
     recognitionContext: .englishDefault
   ), level: { _ in })
 
-  let result = try await session.finish()
+  let result = try await session.finish(stopOrigin: testStopOrigin())
   #expect(result.rawTranscript == raw)
   #expect(result.dictionaryBaseline == nil)
   #expect(result.cleanedTranscript == nil)
@@ -831,10 +1333,361 @@ func processorUsesRawRecoveryWhenDictionaryResolutionFails() async throws {
 }
 
 @Test @MainActor
+func processorUnsupportedDictionaryRecognitionStillUsesPinnedResolution() async throws {
+  let context = try processorDictionaryContext(revision: 11)
+  let source = StreamingSpeechSourceProbe(finalText: "open fleck app")
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    recognitionContextAcknowledgement: { configuration in
+      .unsupported(try #require(configuration.captureContext))
+    },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "open FleckApp"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: TestDictationClock.immediate,
+    budget: .production
+  )
+
+  let result = try await processor.begin(
+    configuration: processorDictionaryConfiguration(context),
+    level: { _ in }
+  ).finish(stopOrigin: testStopOrigin())
+
+  #expect(source.startCount == 1)
+  #expect(result.dictionaryBaseline == "open FleckApp")
+  #expect(result.captureContext == context)
+  #expect(result.recognitionContextAcknowledgement == .unsupported(context))
+  #expect(result.dictionaryRevision == 11)
+  #expect(result.dictionaryContentDigest == context.dictionaryContentDigest)
+  #expect(result.appliedDictionaryEntryIDs == context.snapshot.entries.map(\.id))
+}
+
+@Test @MainActor
+func processorNilDictionaryContextFailsBeforeSourceCreation() async throws {
+  let source = StreamingSpeechSourceProbe()
+  var makeSourceCount = 0
+  var acknowledgementCount = 0
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in
+      makeSourceCount += 1
+      return source
+    },
+    recognitionContextAcknowledgement: { _ in
+      acknowledgementCount += 1
+      throw StreamingSpeechSourceProbeError.failed
+    },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "unused"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+
+  do {
+    let configuration = DictationProcessingConfiguration(
+      captureID: UUID(),
+      mode: .focused,
+      recognitionContext: .englishDefault
+    )
+    let session = try await processor.begin(
+      configuration: configuration,
+      level: { _ in },
+      startAuthorized: { true }
+    )
+    Issue.record("Expected missing capture context")
+    await session.cancel()
+  } catch {
+    #expect(error as? StreamingDictationProcessorError == .captureContextMismatch)
+  }
+
+  #expect(makeSourceCount == 0)
+  #expect(acknowledgementCount == 0)
+  #expect(source.startCount == 0)
+  #expect(source.releaseHookCount == 0)
+}
+
+@Test @MainActor
+func processorRejectedDictionaryRecognitionConsumesNoAudio() async throws {
+  let context = try processorDictionaryContext()
+  let source = StreamingSpeechSourceProbe()
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    recognitionContextAcknowledgement: { _ in .rejected(context) },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "unused"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+
+  do {
+    _ = try await processor.begin(
+      configuration: processorDictionaryConfiguration(context),
+      level: { _ in }
+    )
+    Issue.record("Expected rejected recognition context")
+  } catch {
+    #expect(error as? StreamingDictationProcessorError == .recognitionContextRejected)
+  }
+  #expect(source.startCount == 0)
+  #expect(source.releaseHookCount == 1)
+}
+
+@Test @MainActor
+func processorThrowingDictionaryAcknowledgementReleasesSourceWithoutAudio() async throws {
+  let context = try processorDictionaryContext()
+  let source = StreamingSpeechSourceProbe()
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    recognitionContextAcknowledgement: { _ in throw StreamingSpeechSourceProbeError.failed },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "unused"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+
+  await #expect(throws: StreamingSpeechSourceProbeError.failed) {
+    _ = try await processor.begin(
+      configuration: processorDictionaryConfiguration(context),
+      level: { _ in }
+    )
+  }
+  #expect(source.startCount == 0)
+  #expect(source.releaseHookCount == 1)
+}
+
+@Test @MainActor
+func processorDictionaryCancellationWhileSourceCreationIsSuspendedConsumesNoAudio() async throws {
+  let context = try processorDictionaryContext()
+  let sourceGate = Gate()
+  let source = StreamingSpeechSourceProbe()
+  var startAuthorized = true
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in
+      await sourceGate.wait()
+      return source
+    },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "unused"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+  let errorBox = ProcessingBeginErrorBox()
+  let begin = Task {
+    do {
+      _ = try await processor.begin(
+        configuration: processorDictionaryConfiguration(context),
+        level: { _ in },
+        startAuthorized: { startAuthorized }
+      )
+    } catch {
+      errorBox.error = error
+    }
+  }
+  await sourceGate.waitUntilWaiting()
+
+  startAuthorized = false
+  await sourceGate.openGate()
+  await begin.value
+
+  #expect(errorBox.error is CancellationError)
+  #expect(source.startCount == 0)
+  #expect(source.releaseHookCount == 1)
+}
+
+@Test @MainActor
+func processorDictionaryCancellationWhileAcknowledgementIsSuspendedConsumesNoAudio() async throws {
+  let context = try processorDictionaryContext()
+  let acknowledgementGate = Gate()
+  let source = StreamingSpeechSourceProbe()
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    recognitionContextAcknowledgement: { _ in
+      await acknowledgementGate.wait()
+      return .unsupported(context)
+    },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "unused"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+  let errorBox = ProcessingBeginErrorBox()
+  let begin = Task {
+    do {
+      _ = try await processor.begin(
+        configuration: processorDictionaryConfiguration(context),
+        level: { _ in }
+      )
+    } catch {
+      errorBox.error = error
+    }
+  }
+  await acknowledgementGate.waitUntilWaiting()
+
+  begin.cancel()
+  await acknowledgementGate.openGate()
+  await begin.value
+
+  #expect(errorBox.error is CancellationError)
+  #expect(source.startCount == 0)
+  #expect(source.releaseHookCount == 1)
+}
+
+@Test @MainActor
+func processorMismatchedDictionaryAcknowledgementConsumesNoAudio() async throws {
+  let context = try processorDictionaryContext(captureID: UUID())
+  let mismatches = try [
+    processorDictionaryContext(from: context, captureID: UUID()),
+    processorDictionaryContext(from: context, generation: context.generation + 1),
+    processorDictionaryContext(revision: context.dictionaryRevision + 1),
+    processorDictionaryContext(from: context, speechEngine: .enhancedLocal),
+  ]
+
+  for mismatch in mismatches {
+    let source = StreamingSpeechSourceProbe()
+    let processor = StreamingDictationProcessor(
+      makeSource: { _ in source },
+      recognitionContextAcknowledgement: { _ in .applied(mismatch) },
+      dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+      cleaner: IncrementalTranscriptCleaner(
+        generator: CleanupGeneratorProbe(result: "unused"),
+        clock: TestCleanupClock.immediate
+      ),
+      runtime: nil
+    )
+
+    do {
+      _ = try await processor.begin(
+        configuration: processorDictionaryConfiguration(context),
+        level: { _ in }
+      )
+      Issue.record("Expected mismatched recognition context")
+    } catch {
+      #expect(error as? StreamingDictationProcessorError == .recognitionContextMismatch)
+    }
+    #expect(source.startCount == 0)
+    #expect(source.releaseHookCount == 1)
+  }
+}
+
+@Test @MainActor
+func processorDictionaryResolutionMismatchUsesExactRawBaseline() async throws {
+  let context = try processorDictionaryContext(revision: 3)
+  let raw = "open fleck app"
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in StreamingSpeechSourceProbe(finalText: raw) },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(
+        baseline: "open Wrong",
+        protectedForms: ["Wrong"],
+        replacements: 1,
+        dictionaryRevision: 99,
+        dictionaryContentDigest: "wrong"
+      )
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "must not run"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+
+  let result = try await processor.begin(
+    configuration: processorDictionaryConfiguration(context),
+    level: { _ in }
+  ).finish(stopOrigin: testStopOrigin())
+
+  #expect(result.dictionaryBaseline == nil)
+  #expect(result.insertedText == raw)
+  #expect(result.appliedDictionaryEntryIDs.isEmpty)
+  #expect(result.captureContext == context)
+}
+
+@Test @MainActor
+func processorCleanupRejectedDictionaryCandidateUsesPinnedBaselineAndEvidence() async throws {
+  let context = try processorDictionaryContext(revision: 14)
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in StreamingSpeechSourceProbe(finalText: "open fleck app") },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "close the app"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+
+  let result = try await processor.begin(
+    configuration: processorDictionaryConfiguration(context),
+    level: { _ in }
+  ).finish(stopOrigin: testStopOrigin())
+
+  #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.insertedText == "open FleckApp")
+  #expect(result.protectedDictionaryForms == ["FleckApp"])
+  #expect(result.appliedDictionaryEntryIDs == context.snapshot.entries.map(\.id))
+  #expect(result.dictionaryRevision == context.dictionaryRevision)
+  #expect(result.dictionaryContentDigest == context.dictionaryContentDigest)
+}
+
+@Test @MainActor
+func processorDictionarySettingsMutationDoesNotAlterInflightContext() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("FleckProcessorDictionary-\(UUID().uuidString)", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let first = PersonalDictionaryEntry(preferredForm: "FleckApp", aliases: ["fleck app"])
+  try await store.upsert(first)
+  let published = try await store.publishedSnapshot()
+  let context = try LocalWritingCaptureContext(
+    captureID: UUID(),
+    generation: 1,
+    localeIdentifier: published.compiled.localeIdentifier,
+    speechEngine: .standard,
+    snapshot: published.snapshot,
+    compiledDictionary: published.compiled
+  )
+  var receivedRecognitionContext: DictationRecognitionContext?
+  let processor = StreamingDictationProcessor(
+    makeSource: { configuration in
+      receivedRecognitionContext = configuration.recognitionContext
+      return StreamingSpeechSourceProbe(finalText: "open fleck app")
+    },
+    dictionaryResolver: PersonalDictionaryTranscriptResolver(),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "open FleckApp"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+  let session = try await processor.begin(
+    configuration: processorDictionaryConfiguration(context),
+    level: { _ in }
+  )
+
+  try await store.setEnabled(false, id: first.id)
+  let result = try await session.finish(stopOrigin: testStopOrigin())
+
+  #expect(receivedRecognitionContext?.contextualStrings == context.compiledDictionary.recognitionStrings)
+  #expect(result.dictionaryBaseline == "open FleckApp")
+  #expect(result.dictionaryRevision == context.dictionaryRevision)
+}
+
+@Test @MainActor
 func processorCapturesStopBeforeDelayedSourceFinalization() async throws {
   let stop = TestDictationClock.fixedInstant
-  let sourceFinishedAt = stop.advanced(by: .seconds(2))
-  let clock = TestDictationClock(values: [stop, sourceFinishedAt])
+  let manualClock = ManuallyAdvancedInstant(stop)
+  let clock = DictationClock(now: { manualClock.now })
   let source = StreamingSpeechSourceProbe(finishBlocksUntilRelease: true)
   let generator = CleanupGeneratorProbe(result: "send the report")
   let cleaner = IncrementalTranscriptCleaner(
@@ -853,7 +1706,7 @@ func processorCapturesStopBeforeDelayedSourceFinalization() async throws {
     cleaner: cleaner,
     runtime: nil,
     clock: clock,
-    budget: .production
+    budget: .init(insertion: .seconds(4), cleanup: .milliseconds(1_500))
   )
 
   let session = try await processor.begin(configuration: .init(
@@ -861,14 +1714,12 @@ func processorCapturesStopBeforeDelayedSourceFinalization() async throws {
     mode: .focused,
     recognitionContext: .englishDefault
   ), level: { _ in })
-  let finalization = Task { try await session.finish() }
+  let finalization = Task { try await session.finish(stopOrigin: testStopOrigin()) }
   await source.waitUntilFinishStarted()
   #expect(source.finishCompleted == false)
 
-  // The second deterministic instant represents two seconds spent inside
-  // source.finish(). It is observed before releasing the source gate; no
-  // production wall clock or sleep is involved.
-  #expect(clock.now() == sourceFinishedAt)
+  manualClock.advance(by: .seconds(2))
+  let sourceFinishedAt = manualClock.now
   source.releaseFinish()
   _ = try await finalization.value
 
@@ -948,6 +1799,33 @@ private final class InstantSequence: @unchecked Sendable {
     let value = values[min(index, values.count - 1)]
     index += 1
     return value
+  }
+
+  var callCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return index
+  }
+}
+
+private final class ManuallyAdvancedInstant: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: ContinuousClock.Instant
+
+  init(_ value: ContinuousClock.Instant) {
+    self.value = value
+  }
+
+  var now: ContinuousClock.Instant {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
+
+  func advance(by duration: Duration) {
+    lock.lock()
+    value = value.advanced(by: duration)
+    lock.unlock()
   }
 }
 

@@ -117,6 +117,8 @@ private enum DescriptorValidationFixtures {
   ))
 
   #expect(asr.immutableIdentity != cleanup.immutableIdentity)
+  #expect(asr.role.catalogRole == .dictation)
+  #expect(cleanup.role.catalogRole == .cleanup)
 }
 
 @Test func defaultASRCatalogRejectsCleanupDescriptor() throws {

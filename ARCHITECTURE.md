@@ -169,17 +169,18 @@ this phase does not change the license.
 
 ```text
 microphone -> selected local speech engine -> raw transcript
-  -> optional local cleanup -> focused editor OR title-only router -> LocalStore
+  -> optional local cleanup -> focused editor OR local semantic router -> LocalStore
 ```
 
 - **Standard** uses Apple's speech APIs only when on-device recognition is
   available and sets `requiresOnDeviceRecognition = true`. Unavailability is an
   error; there is no cloud fallback.
-- **Enhanced Local** is a non-shippable candidate backed by external, data-only
-  Core ML model content. The exact model revision and every file byte count and
-  checksum are embedded in the application manifest. The 464,413,247-byte
-  (442.9 MiB) model must not be bundled; the release gate rejects it in the
-  current executable root or a future application artifact.
+- **Enhanced Local** is a non-shippable Parakeet TDT 0.6B v2 candidate/test
+  integration backed by external, data-only Core ML model content. The exact
+  model revision and every file byte count and checksum are embedded in the
+  application manifest. The 464,413,247-byte (442.9 MiB) model must not be
+  bundled; the release gate rejects it in the current executable root or a
+  future application artifact.
 - FluidAudio inference is forced offline before load and inference. Release
   checks require `ModelHub.offlineMode = true` and reject code that disables
   offline mode or invokes FluidAudio model download helpers from production
@@ -187,13 +188,21 @@ microphone -> selected local speech engine -> raw transcript
 - Microphone buffers and Enhanced float samples exist in memory only for the
   active capture and are released afterward. No audio is written to notes,
   dictation history, model storage, or logs.
-- Cleanup uses the local Foundation Models framework when available. Failure,
-  unavailability, or an unfaithful result falls back to the raw transcript
-  without blocking persistence.
+- Cleanup uses the local Foundation Models framework when available. The
+  debug-gated enhanced graph also contains a Gemma 3 1B candidate/test
+  integration. Failure, unavailability, or an unfaithful result falls back to
+  the faithful deterministic baseline without blocking persistence.
 - Focused capture writes the transcript into the active editor transaction.
-  Smart Capture gives routing the transcript plus candidate UUIDs and display
-  titles only; note bodies and other note content never enter the routing
-  prompt. Low-confidence or unavailable routing falls back to Inbox.
+  Smart Capture supplies candidate UUIDs, display titles, complete local note
+  bodies, and content revisions to the routing boundary. Exact-title matching
+  runs first. In the debug-gated enhanced graph, the local Gemma route uses a
+  bounded, memory-only cache of title and body passages, passes at most six
+  relevant bounded excerpts under opaque candidate keys, and validates any
+  model choice deterministically. The Foundation Models route selected when
+  that framework is available remains title-based at this base. Missing,
+  incomplete, stale, malformed, cancelled, or low-confidence evidence saves to
+  Inbox; supported close matches are saved there before a bounded chooser is
+  shown.
 - `LocalStore` persists notes locally. Optional dictation history stores
   transcript text and destination metadata as atomic local JSON, contains no
   audio, and purges records after 30 days.
@@ -206,6 +215,12 @@ This architecture is not release approval. Enhanced Local remains disabled
 from release until the pinned model materially beats Standard and the manual
 device, resource, accessibility, legal, attribution, SBOM, signing, and store
 gates in `TESTING.md` have recorded evidence.
+
+At base `63a0832728f57d6a18a4fb46d25199d90c154e71`, reviewed source plus
+deterministic/synthetic tests establish contract behavior only. They do not
+establish real-model human-audio replay, packaged injected-audio behavior,
+packaged live-microphone behavior, two-device acceptance, signed-distribution
+acceptance, or release admission for Parakeet or Gemma.
 
 ## UI direction
 

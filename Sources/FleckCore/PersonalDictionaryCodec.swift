@@ -2,6 +2,7 @@ import Foundation
 
 public enum PersonalDictionaryCodecError: Error, Equatable, Sendable, CustomStringConvertible {
   case invalidJSON
+  case jsonByteLimitExceeded
   case unsupportedSchemaVersion
   case invalidSnapshot
   case malformedCSV
@@ -12,6 +13,7 @@ public enum PersonalDictionaryCodecError: Error, Equatable, Sendable, CustomStri
   public var description: String {
     switch self {
     case .invalidJSON: "invalidJSON"
+    case .jsonByteLimitExceeded: "jsonByteLimitExceeded"
     case .unsupportedSchemaVersion: "unsupportedSchemaVersion"
     case .invalidSnapshot: "invalidSnapshot"
     case .malformedCSV: "malformedCSV"
@@ -22,7 +24,19 @@ public enum PersonalDictionaryCodecError: Error, Equatable, Sendable, CustomStri
   }
 }
 
+struct PersonalDictionaryTransferEnvelope: Equatable, Sendable {
+  let byteCount: Int
+  let compilerPolicyRevision: Int
+  let contentDigest: String
+  let exportedAt: Date
+  let localeIdentifier: String
+  let snapshot: PersonalDictionarySnapshotV2
+}
+
 public enum PersonalDictionaryCodec {
+  private static let jsonByteLimit = 64 * 1024
+  private static let transferByteLimit = jsonByteLimit + 256
+
   public static let csvHeader = [
     "id",
     "preferredForm",
@@ -41,6 +55,208 @@ public enum PersonalDictionaryCodec {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     encoder.dateEncodingStrategy = .iso8601
     return try encoder.encode(sorted(snapshot))
+  }
+
+  public static func encodeCanonicalJSON(
+    _ snapshot: PersonalDictionarySnapshotV2
+  ) throws -> Data {
+    guard snapshot.schemaVersion == PersonalDictionarySnapshotV2.currentSchemaVersion else {
+      throw PersonalDictionaryCodecError.unsupportedSchemaVersion
+    }
+    guard snapshot.validationIssues.isEmpty else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+
+    let entries = snapshot.entries.sorted { canonicalUUID($0.id) < canonicalUUID($1.id) }
+    let suggestions = snapshot.suggestions.sorted { canonicalUUID($0.id) < canonicalUUID($1.id) }
+    var json = "{\"entries\":["
+    for (index, entry) in entries.enumerated() {
+      if index > 0 { json += "," }
+      json += try canonicalEntryJSON(entry)
+    }
+    json += "],\"revision\":\(snapshot.revision),\"schemaVersion\":2,\"suggestions\":["
+    for (index, suggestion) in suggestions.enumerated() {
+      if index > 0 { json += "," }
+      json += try canonicalSuggestionJSON(suggestion)
+    }
+    json += "]}"
+
+    let data = Data(json.utf8)
+    guard data.count <= jsonByteLimit else {
+      throw PersonalDictionaryCodecError.jsonByteLimitExceeded
+    }
+    return data
+  }
+
+  static func encodeCanonicalTransfer(
+    snapshot: PersonalDictionarySnapshotV2,
+    compiled: CompiledPersonalDictionary,
+    exportedAt: Date
+  ) throws -> Data {
+    let recompiled: CompiledPersonalDictionary
+    do {
+      recompiled = try CompiledPersonalDictionary.compile(snapshot)
+    } catch {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    guard recompiled == compiled else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    let snapshotBytes = try encodeCanonicalJSON(snapshot)
+    return try encodeCanonicalTransfer(
+      PersonalDictionaryTransferEnvelope(
+        byteCount: snapshotBytes.count,
+        compilerPolicyRevision: compiled.compilerPolicyRevision,
+        contentDigest: compiled.contentDigest,
+        exportedAt: exportedAt,
+        localeIdentifier: compiled.localeIdentifier,
+        snapshot: snapshot
+      )
+    )
+  }
+
+  static func encodeCanonicalTransfer(
+    _ envelope: PersonalDictionaryTransferEnvelope
+  ) throws -> Data {
+    let snapshotBytes = try encodeCanonicalJSON(envelope.snapshot)
+    let compiled: CompiledPersonalDictionary
+    do {
+      compiled = try CompiledPersonalDictionary.compile(envelope.snapshot)
+    } catch {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    guard envelope.byteCount == snapshotBytes.count,
+      envelope.compilerPolicyRevision == compiled.compilerPolicyRevision,
+      envelope.contentDigest == compiled.contentDigest,
+      envelope.localeIdentifier == compiled.localeIdentifier
+    else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    var json = "{\"byteCount\":\(envelope.byteCount)"
+    json += ",\"compilerPolicyRevision\":\(envelope.compilerPolicyRevision)"
+    json += ",\"contentDigest\":\(canonicalStringJSON(envelope.contentDigest))"
+    json += ",\"exportedAt\":\(canonicalStringJSON(try canonicalDateString(envelope.exportedAt)))"
+    json += ",\"localeIdentifier\":\(canonicalStringJSON(envelope.localeIdentifier))"
+    json += ",\"snapshot\":\(String(decoding: snapshotBytes, as: UTF8.self))}"
+    let data = Data(json.utf8)
+    guard data.count <= transferByteLimit else {
+      throw PersonalDictionaryCodecError.jsonByteLimitExceeded
+    }
+    return data
+  }
+
+  static func decodeCanonicalTransfer(
+    _ data: Data
+  ) throws -> PersonalDictionaryTransferEnvelope {
+    guard data.count <= transferByteLimit else {
+      throw PersonalDictionaryCodecError.jsonByteLimitExceeded
+    }
+    let root: StrictJSONValue
+    do {
+      var parser = try StrictJSONParser(data: data)
+      root = try parser.parse()
+    } catch {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+    guard case .object(let fields) = root,
+      Set(fields.keys) == [
+        "byteCount", "compilerPolicyRevision", "contentDigest", "exportedAt",
+        "localeIdentifier", "snapshot",
+      ],
+      let byteCountValue = fields["byteCount"],
+      let byteCount = strictInt(byteCountValue),
+      let policyValue = fields["compilerPolicyRevision"],
+      let compilerPolicyRevision = strictInt(policyValue),
+      case .string(let contentDigest)? = fields["contentDigest"],
+      contentDigest.count == 64,
+      contentDigest.allSatisfy({ "0123456789abcdef".contains($0) }),
+      let exportedAtValue = fields["exportedAt"],
+      let exportedAt = strictDate(exportedAtValue),
+      case .string(let localeIdentifier)? = fields["localeIdentifier"],
+      let snapshotValue = fields["snapshot"]
+    else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+    let snapshot = try decodeSnapshotV2(snapshotValue)
+    let snapshotBytes = try encodeCanonicalJSON(snapshot)
+    let compiled: CompiledPersonalDictionary
+    do {
+      compiled = try CompiledPersonalDictionary.compile(snapshot)
+    } catch {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    guard byteCount == snapshotBytes.count,
+      compilerPolicyRevision == compiled.compilerPolicyRevision,
+      contentDigest == compiled.contentDigest,
+      localeIdentifier == compiled.localeIdentifier
+    else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    let envelope = PersonalDictionaryTransferEnvelope(
+      byteCount: byteCount,
+      compilerPolicyRevision: compilerPolicyRevision,
+      contentDigest: contentDigest,
+      exportedAt: exportedAt,
+      localeIdentifier: localeIdentifier,
+      snapshot: snapshot
+    )
+    guard try encodeCanonicalTransfer(envelope) == data else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+    return envelope
+  }
+
+  public static func decodeCandidateJSON(
+    _ data: Data
+  ) throws -> PersonalDictionarySnapshotV2 {
+    guard data.count <= jsonByteLimit else {
+      throw PersonalDictionaryCodecError.jsonByteLimitExceeded
+    }
+
+    let root: StrictJSONValue
+    do {
+      var parser = try StrictJSONParser(data: data)
+      root = try parser.parse()
+    } catch {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+    guard case .object(let fields) = root,
+      case .number(let schemaToken)? = fields["schemaVersion"],
+      let schemaVersion = strictInteger(schemaToken)
+    else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+
+    switch schemaVersion {
+    case PersonalDictionarySnapshot.currentSchemaVersion:
+      let snapshot = try decodeJSON(data)
+      guard try encodeJSON(snapshot) == data else {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
+      do {
+        return try PersonalDictionarySnapshotV2.migrationCandidate(fromV1: snapshot)
+      } catch {
+        throw PersonalDictionaryCodecError.invalidSnapshot
+      }
+    case PersonalDictionarySnapshotV2.currentSchemaVersion:
+      let snapshot = try decodeSnapshotV2(root)
+      guard try encodeCanonicalJSON(snapshot) == data else {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
+      return snapshot
+    default:
+      throw PersonalDictionaryCodecError.unsupportedSchemaVersion
+    }
+  }
+
+  static func decodePublishedJSON(
+    _ data: Data
+  ) throws -> PersonalDictionarySnapshotV2 {
+    let snapshot = try decodeCandidateJSON(data)
+    guard try encodeCanonicalJSON(snapshot) == data else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+    return snapshot
   }
 
   public static func decodeJSON(_ data: Data) throws -> PersonalDictionarySnapshot {
@@ -210,6 +426,318 @@ public enum PersonalDictionaryCodec {
     }
   }
 
+  private static func decodeSnapshotV2(
+    _ value: StrictJSONValue
+  ) throws -> PersonalDictionarySnapshotV2 {
+    guard case .object(let fields) = value,
+      Set(fields.keys) == ["entries", "revision", "schemaVersion", "suggestions"],
+      let revisionValue = fields["revision"],
+      let revision = strictUInt64(revisionValue),
+      case .array(let entryValues)? = fields["entries"],
+      case .array(let suggestionValues)? = fields["suggestions"]
+    else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+
+    let snapshot = PersonalDictionarySnapshotV2(
+      revision: revision,
+      entries: try entryValues.map(decodeEntryV2),
+      suggestions: try suggestionValues.map(decodeSuggestionV2)
+    )
+    guard snapshot.validationIssues.isEmpty else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    return snapshot
+  }
+
+  private static func decodeEntryV2(_ value: StrictJSONValue) throws -> PersonalDictionaryEntry {
+    guard case .object(let fields) = value,
+      Set(fields.keys) == [
+        "aliases", "id", "isEnabled", "isPriority", "localeIdentifier", "origin",
+        "preferredForm", "usage",
+      ],
+      let aliasesValue = fields["aliases"],
+      let aliases = strictStringArray(aliasesValue),
+      let idValue = fields["id"],
+      let id = strictUUID(idValue),
+      case .bool(let isEnabled)? = fields["isEnabled"],
+      case .bool(let isPriority)? = fields["isPriority"],
+      case .string(let localeIdentifier)? = fields["localeIdentifier"],
+      case .string(let originValue)? = fields["origin"],
+      let origin = PersonalDictionaryOrigin(rawValue: originValue),
+      case .string(let preferredForm)? = fields["preferredForm"],
+      let usageValue = fields["usage"]
+    else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+
+    return PersonalDictionaryEntry(
+      id: id,
+      preferredForm: preferredForm,
+      aliases: aliases,
+      localeIdentifier: localeIdentifier,
+      isPriority: isPriority,
+      isEnabled: isEnabled,
+      origin: origin,
+      usage: try decodeUsageV2(usageValue)
+    )
+  }
+
+  private static func decodeUsageV2(_ value: StrictJSONValue) throws -> PersonalDictionaryUsage {
+    guard case .object(let fields) = value,
+      Set(fields.keys) == ["useCount"] || Set(fields.keys) == ["lastUsedAt", "useCount"],
+      let useCountValue = fields["useCount"],
+      let useCount = strictInt(useCountValue)
+    else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+
+    let lastUsedAt: Date?
+    if let dateValue = fields["lastUsedAt"] {
+      guard let date = strictDate(dateValue) else {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
+      lastUsedAt = date
+    } else {
+      lastUsedAt = nil
+    }
+    return PersonalDictionaryUsage(useCount: useCount, lastUsedAt: lastUsedAt)
+  }
+
+  private static func decodeSuggestionV2(
+    _ value: StrictJSONValue
+  ) throws -> PersonalDictionarySuggestion {
+    guard case .object(let fields) = value,
+      Set(fields.keys) == [
+        "id", "lastObservedAt", "localeIdentifier", "observationCount", "observedForms",
+        "preferredForm",
+      ],
+      let idValue = fields["id"],
+      let id = strictUUID(idValue),
+      let dateValue = fields["lastObservedAt"],
+      let lastObservedAt = strictDate(dateValue),
+      case .string(let localeIdentifier)? = fields["localeIdentifier"],
+      let countValue = fields["observationCount"],
+      let observationCount = strictInt(countValue),
+      let observedFormsValue = fields["observedForms"],
+      let observedForms = strictStringArray(observedFormsValue),
+      case .string(let preferredForm)? = fields["preferredForm"]
+    else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+
+    return PersonalDictionarySuggestion(
+      id: id,
+      preferredForm: preferredForm,
+      observedForms: observedForms,
+      localeIdentifier: localeIdentifier,
+      observationCount: observationCount,
+      lastObservedAt: lastObservedAt
+    )
+  }
+
+  private static func strictStringArray(_ value: StrictJSONValue) -> [String]? {
+    guard case .array(let values) = value else { return nil }
+    var strings: [String] = []
+    strings.reserveCapacity(values.count)
+    for value in values {
+      guard case .string(let string) = value else { return nil }
+      strings.append(string)
+    }
+    return strings
+  }
+
+  private static func strictUUID(_ value: StrictJSONValue) -> UUID? {
+    guard case .string(let string) = value,
+      let id = UUID(uuidString: string),
+      canonicalUUID(id) == string
+    else { return nil }
+    return id
+  }
+
+  private static func strictDate(_ value: StrictJSONValue) -> Date? {
+    guard case .string(let string) = value else { return nil }
+    let bytes = Array(string.utf8)
+    guard bytes.count == 30,
+      bytes[4] == 0x2D, bytes[7] == 0x2D, bytes[10] == 0x54,
+      bytes[13] == 0x3A, bytes[16] == 0x3A, bytes[19] == 0x2E, bytes[29] == 0x5A,
+      let year = parseDecimal(bytes, in: 0..<4),
+      let month = parseDecimal(bytes, in: 5..<7),
+      let day = parseDecimal(bytes, in: 8..<10),
+      let hour = parseDecimal(bytes, in: 11..<13),
+      let minute = parseDecimal(bytes, in: 14..<16),
+      let second = parseDecimal(bytes, in: 17..<19),
+      let nanosecond = parseDecimal(bytes, in: 20..<29),
+      (1...9999).contains(year),
+      (1...12).contains(month),
+      (1...31).contains(day),
+      (0...23).contains(hour),
+      (0...59).contains(minute),
+      (0...59).contains(second)
+    else { return nil }
+
+    let calendar = utcGregorianCalendar()
+    var components = DateComponents()
+    components.calendar = calendar
+    components.timeZone = calendar.timeZone
+    components.year = year
+    components.month = month
+    components.day = day
+    components.hour = hour
+    components.minute = minute
+    components.second = second
+    guard let wholeSecondDate = calendar.date(from: components) else { return nil }
+    let verified = calendar.dateComponents(
+      [.year, .month, .day, .hour, .minute, .second],
+      from: wholeSecondDate
+    )
+    guard verified.year == year, verified.month == month, verified.day == day,
+      verified.hour == hour, verified.minute == minute, verified.second == second
+    else { return nil }
+
+    let interval = wholeSecondDate.timeIntervalSinceReferenceDate
+      + Double(nanosecond) / 1_000_000_000
+    let date = Date(timeIntervalSinceReferenceDate: interval)
+    guard let canonical = try? canonicalDateString(date), canonical == string else { return nil }
+    return date
+  }
+
+  private static func parseDecimal(_ bytes: [UInt8], in range: Range<Int>) -> Int? {
+    var value = 0
+    for index in range {
+      let byte = bytes[index]
+      guard (0x30...0x39).contains(byte) else { return nil }
+      value = value * 10 + Int(byte - 0x30)
+    }
+    return value
+  }
+
+  private static func strictInt(_ value: StrictJSONValue) -> Int? {
+    guard case .number(let token) = value,
+      let result = Int(token),
+      token == String(result)
+    else { return nil }
+    return result
+  }
+
+  private static func strictUInt64(_ value: StrictJSONValue) -> UInt64? {
+    guard case .number(let token) = value,
+      let result = UInt64(token),
+      token == String(result)
+    else { return nil }
+    return result
+  }
+
+  private static func canonicalEntryJSON(_ entry: PersonalDictionaryEntry) throws -> String {
+    var json = "{\"aliases\":\(canonicalStringArrayJSON(entry.aliases))"
+    json += ",\"id\":\(canonicalStringJSON(canonicalUUID(entry.id)))"
+    json += ",\"isEnabled\":\(entry.isEnabled ? "true" : "false")"
+    json += ",\"isPriority\":\(entry.isPriority ? "true" : "false")"
+    json += ",\"localeIdentifier\":\(canonicalStringJSON(entry.localeIdentifier))"
+    json += ",\"origin\":\(canonicalStringJSON(entry.origin.rawValue))"
+    json += ",\"preferredForm\":\(canonicalStringJSON(entry.preferredForm))"
+    json += ",\"usage\":{"
+    if let lastUsedAt = entry.usage.lastUsedAt {
+      json += "\"lastUsedAt\":\(canonicalStringJSON(try canonicalDateString(lastUsedAt))),"
+    }
+    json += "\"useCount\":\(entry.usage.useCount)}}"
+    return json
+  }
+
+  private static func canonicalSuggestionJSON(
+    _ suggestion: PersonalDictionarySuggestion
+  ) throws -> String {
+    var json = "{\"id\":\(canonicalStringJSON(canonicalUUID(suggestion.id)))"
+    json += ",\"lastObservedAt\":\(canonicalStringJSON(try canonicalDateString(suggestion.lastObservedAt)))"
+    json += ",\"localeIdentifier\":\(canonicalStringJSON(suggestion.localeIdentifier))"
+    json += ",\"observationCount\":\(suggestion.observationCount)"
+    json += ",\"observedForms\":\(canonicalStringArrayJSON(suggestion.observedForms))"
+    json += ",\"preferredForm\":\(canonicalStringJSON(suggestion.preferredForm))}"
+    return json
+  }
+
+  private static func canonicalStringArrayJSON(_ values: [String]) -> String {
+    "[" + values.map(canonicalStringJSON).joined(separator: ",") + "]"
+  }
+
+  private static func canonicalStringJSON(_ value: String) -> String {
+    var result = "\""
+    for scalar in value.unicodeScalars {
+      switch scalar.value {
+      case 0x08: result += "\\b"
+      case 0x09: result += "\\t"
+      case 0x0A: result += "\\n"
+      case 0x0C: result += "\\f"
+      case 0x0D: result += "\\r"
+      case 0x22: result += "\\\""
+      case 0x5C: result += "\\\\"
+      case 0..<0x20: result += String(format: "\\u%04x", scalar.value)
+      default: result.unicodeScalars.append(scalar)
+      }
+    }
+    result += "\""
+    return result
+  }
+
+  private static func canonicalUUID(_ id: UUID) -> String {
+    id.uuidString.lowercased()
+  }
+
+  private static func canonicalDateString(_ date: Date) throws -> String {
+    let interval = date.timeIntervalSinceReferenceDate
+    guard interval.isFinite else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+
+    let flooredSeconds = interval.rounded(.down)
+    guard var wholeSeconds = Int64(exactly: flooredSeconds),
+      var nanoseconds = Int64(exactly: ((interval - flooredSeconds) * 1_000_000_000).rounded()),
+      (0...1_000_000_000).contains(nanoseconds)
+    else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    if nanoseconds == 1_000_000_000 {
+      let result = wholeSeconds.addingReportingOverflow(1)
+      guard !result.overflow else { throw PersonalDictionaryCodecError.invalidSnapshot }
+      wholeSeconds = result.partialValue
+      nanoseconds = 0
+    }
+
+    let calendar = utcGregorianCalendar()
+    let wholeSecondDate = Date(timeIntervalSinceReferenceDate: Double(wholeSeconds))
+    let components = calendar.dateComponents(
+      [.year, .month, .day, .hour, .minute, .second],
+      from: wholeSecondDate
+    )
+    guard let year = components.year, (1...9999).contains(year),
+      let month = components.month, let day = components.day,
+      let hour = components.hour, let minute = components.minute, let second = components.second
+    else {
+      throw PersonalDictionaryCodecError.invalidSnapshot
+    }
+    return "\(paddedDecimal(year, width: 4))-\(paddedDecimal(month, width: 2))"
+      + "-\(paddedDecimal(day, width: 2))T\(paddedDecimal(hour, width: 2))"
+      + ":\(paddedDecimal(minute, width: 2)):\(paddedDecimal(second, width: 2))"
+      + ".\(paddedDecimal(Int(nanoseconds), width: 9))Z"
+  }
+
+  private static func utcGregorianCalendar() -> Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.locale = Locale(identifier: "en_US_POSIX")
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    return calendar
+  }
+
+  private static func paddedDecimal(_ value: Int, width: Int) -> String {
+    let decimal = String(value)
+    return String(repeating: "0", count: width - decimal.count) + decimal
+  }
+
+  private static func strictInteger(_ token: String) -> Int? {
+    guard let value = Int(token), token == String(value) else { return nil }
+    return value
+  }
+
   private static func parseBool(_ value: String) -> Bool? {
     switch value {
     case "true": true
@@ -322,5 +850,210 @@ public enum PersonalDictionaryCodec {
       finishRow()
     }
     return rows
+  }
+}
+
+private enum StrictJSONValue {
+  case object([String: StrictJSONValue])
+  case array([StrictJSONValue])
+  case string(String)
+  case number(String)
+  case bool(Bool)
+  case null
+}
+
+private struct StrictJSONParser {
+  private let scalars: [Unicode.Scalar]
+  private var index = 0
+
+  init(data: Data) throws {
+    guard let text = String(data: data, encoding: .utf8) else {
+      throw PersonalDictionaryCodecError.invalidJSON
+    }
+    scalars = Array(text.unicodeScalars)
+  }
+
+  mutating func parse() throws -> StrictJSONValue {
+    skipWhitespace()
+    let value = try parseValue(depth: 0)
+    skipWhitespace()
+    guard index == scalars.count else { throw PersonalDictionaryCodecError.invalidJSON }
+    return value
+  }
+
+  private mutating func parseValue(depth: Int) throws -> StrictJSONValue {
+    guard let scalar = current else { throw PersonalDictionaryCodecError.invalidJSON }
+    switch scalar {
+    case "{": return try parseObject(depth: depth)
+    case "[": return try parseArray(depth: depth)
+    case "\"": return .string(try parseString())
+    case "t": try consume("true"); return .bool(true)
+    case "f": try consume("false"); return .bool(false)
+    case "n": try consume("null"); return .null
+    case "-", "0"..."9": return .number(try parseNumber())
+    default: throw PersonalDictionaryCodecError.invalidJSON
+    }
+  }
+
+  private mutating func parseObject(depth: Int) throws -> StrictJSONValue {
+    guard depth < 32 else { throw PersonalDictionaryCodecError.invalidJSON }
+    try consume("{")
+    skipWhitespace()
+    if consumeIf("}") { return .object([:]) }
+
+    var fields: [String: StrictJSONValue] = [:]
+    while true {
+      guard current == "\"" else { throw PersonalDictionaryCodecError.invalidJSON }
+      let key = try parseString()
+      guard fields[key] == nil else { throw PersonalDictionaryCodecError.invalidJSON }
+      skipWhitespace()
+      try consume(":")
+      skipWhitespace()
+      fields[key] = try parseValue(depth: depth + 1)
+      skipWhitespace()
+      if consumeIf("}") { return .object(fields) }
+      try consume(",")
+      skipWhitespace()
+    }
+  }
+
+  private mutating func parseArray(depth: Int) throws -> StrictJSONValue {
+    guard depth < 32 else { throw PersonalDictionaryCodecError.invalidJSON }
+    try consume("[")
+    skipWhitespace()
+    if consumeIf("]") { return .array([]) }
+
+    var values: [StrictJSONValue] = []
+    while true {
+      values.append(try parseValue(depth: depth + 1))
+      skipWhitespace()
+      if consumeIf("]") { return .array(values) }
+      try consume(",")
+      skipWhitespace()
+    }
+  }
+
+  private mutating func parseString() throws -> String {
+    try consume("\"")
+    var result = ""
+    while let scalar = current {
+      index += 1
+      if scalar == "\"" { return result }
+      if scalar == "\\" {
+        guard let escape = current else { throw PersonalDictionaryCodecError.invalidJSON }
+        index += 1
+        switch escape {
+        case "\"": result += "\""
+        case "\\": result += "\\"
+        case "/": result += "/"
+        case "b": result += "\u{08}"
+        case "f": result += "\u{0C}"
+        case "n": result += "\n"
+        case "r": result += "\r"
+        case "t": result += "\t"
+        case "u":
+          let first = try parseHexQuad()
+          let value: UInt32
+          if (0xD800...0xDBFF).contains(first) {
+            try consume("\\u")
+            let second = try parseHexQuad()
+            guard (0xDC00...0xDFFF).contains(second) else {
+              throw PersonalDictionaryCodecError.invalidJSON
+            }
+            value = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
+          } else {
+            guard !(0xDC00...0xDFFF).contains(first) else {
+              throw PersonalDictionaryCodecError.invalidJSON
+            }
+            value = first
+          }
+          guard let decoded = Unicode.Scalar(value) else {
+            throw PersonalDictionaryCodecError.invalidJSON
+          }
+          result.unicodeScalars.append(decoded)
+        default: throw PersonalDictionaryCodecError.invalidJSON
+        }
+      } else {
+        guard scalar.value >= 0x20 else { throw PersonalDictionaryCodecError.invalidJSON }
+        result.unicodeScalars.append(scalar)
+      }
+    }
+    throw PersonalDictionaryCodecError.invalidJSON
+  }
+
+  private mutating func parseHexQuad() throws -> UInt32 {
+    var value: UInt32 = 0
+    for _ in 0..<4 {
+      guard let scalar = current, let digit = hexDigit(scalar) else {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
+      value = value * 16 + digit
+      index += 1
+    }
+    return value
+  }
+
+  private func hexDigit(_ scalar: Unicode.Scalar) -> UInt32? {
+    switch scalar.value {
+    case 0x30...0x39: scalar.value - 0x30
+    case 0x41...0x46: scalar.value - 0x41 + 10
+    case 0x61...0x66: scalar.value - 0x61 + 10
+    default: nil
+    }
+  }
+
+  private mutating func parseNumber() throws -> String {
+    let start = index
+    _ = consumeIf("-")
+    guard let scalar = current else { throw PersonalDictionaryCodecError.invalidJSON }
+    if scalar == "0" {
+      index += 1
+      if let next = current, ("0"..."9").contains(next) {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
+    } else {
+      guard ("1"..."9").contains(scalar) else {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
+      repeat { index += 1 } while current.map { ("0"..."9").contains($0) } == true
+    }
+    if consumeIf(".") {
+      guard current.map({ ("0"..."9").contains($0) }) == true else {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
+      repeat { index += 1 } while current.map { ("0"..."9").contains($0) } == true
+    }
+    if current == "e" || current == "E" {
+      index += 1
+      if current == "+" || current == "-" { index += 1 }
+      guard current.map({ ("0"..."9").contains($0) }) == true else {
+        throw PersonalDictionaryCodecError.invalidJSON
+      }
+      repeat { index += 1 } while current.map { ("0"..."9").contains($0) } == true
+    }
+    return String(String.UnicodeScalarView(scalars[start..<index]))
+  }
+
+  private mutating func skipWhitespace() {
+    while let scalar = current, scalar == " " || scalar == "\t" || scalar == "\n" || scalar == "\r" {
+      index += 1
+    }
+  }
+
+  private mutating func consume(_ literal: String) throws {
+    for scalar in literal.unicodeScalars {
+      guard current == scalar else { throw PersonalDictionaryCodecError.invalidJSON }
+      index += 1
+    }
+  }
+
+  private mutating func consumeIf(_ scalar: Unicode.Scalar) -> Bool {
+    guard current == scalar else { return false }
+    index += 1
+    return true
+  }
+
+  private var current: Unicode.Scalar? {
+    index < scalars.count ? scalars[index] : nil
   }
 }

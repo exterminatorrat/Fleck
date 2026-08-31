@@ -4,6 +4,50 @@ import FleckCore
 
 @testable import FleckApp
 
+@Test func captureFirstStopOriginKeepsTypedInstantAndPhysicalProjection() {
+  let instant = ContinuousClock().now
+
+  #expect(DictationStopOrigin.physicalRelease(instant).instant == instant)
+  #expect(DictationStopOrigin.physicalRelease(instant).physicalReleaseAt == instant)
+  #expect(DictationStopOrigin.handsFreeKeyPress(instant).instant == instant)
+  #expect(DictationStopOrigin.handsFreeKeyPress(instant).physicalReleaseAt == nil)
+  #expect(DictationStopOrigin.toolbarAction(instant).instant == instant)
+  #expect(DictationStopOrigin.toolbarAction(instant).physicalReleaseAt == nil)
+}
+
+@Test func captureFirstMeasurementAllowsReleaseBeforeDelayedSourceStart() {
+  let press = ContinuousClock().now
+  let release = press.advanced(by: .milliseconds(200))
+  let processor = release.advanced(by: .milliseconds(20))
+  let source = processor.advanced(by: .milliseconds(1))
+  let partial = source.advanced(by: .milliseconds(1))
+
+  let measurements = DictationRuntimeMeasurements()
+    .recording(.physicalPress, at: press)
+    .recording(.physicalRelease, at: release)
+    .recording(.processorStarted, at: processor)
+    .recording(.sourceStartRequested, at: source)
+    .recording(.firstMeaningfulPartial, at: partial)
+
+  #expect(measurements.integrity == .valid)
+  #expect(measurements.physicalReleaseAt == release)
+  #expect(measurements.sourceStartRequestedAt == source)
+}
+
+@Test func captureFirstMeasurementRejectsRealCausalReversal() {
+  let press = ContinuousClock().now
+  let source = press.advanced(by: .milliseconds(2))
+  let processor = source.advanced(by: .milliseconds(1))
+
+  let measurements = DictationRuntimeMeasurements()
+    .recording(.physicalPress, at: press)
+    .recording(.sourceStartRequested, at: source)
+    .recording(.processorStarted, at: processor)
+
+  #expect(measurements.integrity == .nonMonotonicClock)
+  #expect(measurements.processorStartedAt == nil)
+}
+
 @Test func updateDisplayIsStablePrefixPlusTail() {
   #expect(DictationTextUpdate(
     generation: 4,
@@ -57,6 +101,99 @@ import FleckCore
   #expect(measurements.cleanupMilliseconds == nil)
   #expect(measurements.stopToInsertionMilliseconds == nil)
   #expect(measurements.cancellationMilliseconds == nil)
+}
+
+@Test func processorMeasurementsUseContinuousClockInstantsAndDeriveLegacyDurations() {
+  let start = ContinuousClock().now
+  let measurements = DictationRuntimeMeasurements(
+    processorStartedAt: start,
+    sourceStartRequestedAt: start.advanced(by: .milliseconds(1)),
+    firstMeaningfulPartialAt: start.advanced(by: .milliseconds(10)),
+    stopRequestedAt: start.advanced(by: .milliseconds(20)),
+    asrFinalAt: start.advanced(by: .milliseconds(50)),
+    dictionaryCompletedAt: start.advanced(by: .milliseconds(60)),
+    cleanupDecisionCompletedAt: start.advanced(by: .milliseconds(100)),
+    cancellationRequestedAt: start.advanced(by: .milliseconds(110)),
+    cancellationDrainedAt: start.advanced(by: .milliseconds(125))
+  )
+
+  #expect(measurements.integrity == .valid)
+  #expect(measurements.firstMeaningfulPartialMilliseconds == 10)
+  #expect(measurements.finalASRMilliseconds == 30)
+  #expect(measurements.cleanupMilliseconds == 40)
+  #expect(measurements.stopToInsertionMilliseconds == nil)
+  #expect(measurements.cancellationMilliseconds == 15)
+
+  let reversed = DictationRuntimeMeasurements(
+    stopRequestedAt: start.advanced(by: .seconds(1)),
+    asrFinalAt: start
+  )
+  #expect(reversed.finalASRMilliseconds == nil)
+  let invalid = DictationRuntimeMeasurements(
+    integrity: .nonMonotonicClock,
+    processorStartedAt: start,
+    firstMeaningfulPartialAt: start.advanced(by: .milliseconds(1))
+  )
+  #expect(invalid.firstMeaningfulPartialMilliseconds == nil)
+}
+
+@Test func physicalGestureReceiptRejectsLateTimestampAfterTerminalCancellation() {
+  let start = ContinuousClock().now
+  let accepted = DictationRuntimeMeasurements.empty
+    .recording(.routingRequested, at: start)
+  let backward = accepted.recording(
+    .routingDecision,
+    at: start.advanced(by: .milliseconds(-1))
+  )
+  let equal = accepted.recording(.routingDecision, at: start)
+  let repeated = equal.recording(
+    .routingDecision,
+    at: start.advanced(by: .milliseconds(2))
+  )
+  let terminal = accepted.terminal()
+  let late = terminal.recording(
+    .routingDecision,
+    at: start.advanced(by: .milliseconds(1))
+  )
+  let physical = DictationRuntimeMeasurements.empty
+    .recording(.physicalPress, at: start)
+    .recording(.physicalRelease, at: start.advanced(by: .milliseconds(10)))
+  let processor = DictationRuntimeMeasurements(
+    processorStartedAt: start.advanced(by: .milliseconds(1)),
+    sourceStartRequestedAt: start.advanced(by: .milliseconds(2)),
+    firstMeaningfulPartialAt: start.advanced(by: .milliseconds(3)),
+    stopRequestedAt: start.advanced(by: .milliseconds(10))
+  )
+  let overlaid = physical.overlaying(processor)
+  let backwards = physical.overlaying(DictationRuntimeMeasurements(
+    processorStartedAt: start.advanced(by: .milliseconds(4)),
+    sourceStartRequestedAt: start.advanced(by: .milliseconds(3))
+  ))
+  let firstWrite = overlaid.overlaying(DictationRuntimeMeasurements(
+    processorStartedAt: start.advanced(by: .milliseconds(2))
+  ))
+  let terminalOverlay = physical.terminal().overlaying(processor)
+  let propagated = physical.overlaying(DictationRuntimeMeasurements(
+    integrity: .nonMonotonicClock,
+    processorStartedAt: start.advanced(by: .milliseconds(1))
+  ))
+
+  #expect(backward.integrity == .nonMonotonicClock)
+  #expect(backward.routingDecisionAt == nil)
+  #expect(equal.routingDecisionAt == start)
+  #expect(repeated == equal)
+  #expect(late == terminal)
+  #expect(overlaid.integrity == .valid)
+  #expect(overlaid.processorStartedAt == start.advanced(by: .milliseconds(1)))
+  #expect(overlaid.physicalReleaseAt == start.advanced(by: .milliseconds(10)))
+  #expect(overlaid.stopRequestedAt == start.advanced(by: .milliseconds(10)))
+  #expect(backwards.integrity == .nonMonotonicClock)
+  #expect(backwards.processorStartedAt == start.advanced(by: .milliseconds(4)))
+  #expect(backwards.sourceStartRequestedAt == nil)
+  #expect(firstWrite == overlaid)
+  #expect(terminalOverlay == physical.terminal())
+  #expect(propagated.integrity == .nonMonotonicClock)
+  #expect(propagated.processorStartedAt == start.advanced(by: .milliseconds(1)))
 }
 
 @Test func recognitionContextFiltersDeduplicatesAndBoundsTerms() {
@@ -142,8 +279,9 @@ import FleckCore
       continuation.finish()
     }
 
-    func finish() async throws -> DictationProcessingResult {
-      DictationProcessingResult(
+    func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult {
+      _ = stopOrigin
+      return DictationProcessingResult(
         rawTranscript: "",
         dictionaryBaseline: "",
         cleanedTranscript: nil,

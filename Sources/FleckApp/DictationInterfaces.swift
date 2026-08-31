@@ -22,8 +22,16 @@ protocol SpeechEngine: AnyObject {
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws
   func finish() async throws -> String?
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String?
   func cancel() async
   func releaseResources() async
+}
+
+extension SpeechEngine {
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
+    _ = stopOrigin
+    return try await finish()
+  }
 }
 
 @MainActor
@@ -42,13 +50,29 @@ protocol DictationProcessing: AnyObject {
     configuration: DictationProcessingConfiguration,
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws -> any DictationProcessingSession
+  func begin(
+    configuration: DictationProcessingConfiguration,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    startAuthorized: @escaping @MainActor @Sendable () -> Bool
+  ) async throws -> any DictationProcessingSession
   func handle(_ signal: DictationRuntimeSignal) async
+}
+
+extension DictationProcessing {
+  func begin(
+    configuration: DictationProcessingConfiguration,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    startAuthorized: @escaping @MainActor @Sendable () -> Bool
+  ) async throws -> any DictationProcessingSession {
+    guard startAuthorized() else { throw CancellationError() }
+    return try await begin(configuration: configuration, level: level)
+  }
 }
 
 @MainActor
 protocol DictationProcessingSession: AnyObject {
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
-  func finish() async throws -> DictationProcessingResult
+  func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult
   // All callers await one source-unblocking/finalization/cleanup cancellation
   // task before terminal cancellation returns.
   func cancel() async
@@ -56,6 +80,20 @@ protocol DictationProcessingSession: AnyObject {
 
 protocol TranscriptDictionaryResolving: Sendable {
   func resolve(_ rawTranscript: String) async throws -> PersonalDictionaryResolution
+  func resolve(
+    _ rawTranscript: String,
+    context: LocalWritingCaptureContext
+  ) async throws -> PersonalDictionaryResolution
+}
+
+extension TranscriptDictionaryResolving {
+  func resolve(
+    _ rawTranscript: String,
+    context: LocalWritingCaptureContext
+  ) async throws -> PersonalDictionaryResolution {
+    _ = context
+    return try await resolve(rawTranscript)
+  }
 }
 
 struct DictationRoutingCandidate: Equatable, Sendable {
@@ -102,8 +140,16 @@ protocol StreamingSpeechSource: AnyObject {
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws
   func finish() async throws -> String?
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String?
   func cancel() async
   func releaseResources() async
+}
+
+extension StreamingSpeechSource {
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
+    _ = stopOrigin
+    return try await finish()
+  }
 }
 
 protocol DestinationRouting: Sendable {

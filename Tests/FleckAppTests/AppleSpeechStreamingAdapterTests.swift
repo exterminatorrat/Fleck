@@ -20,6 +20,17 @@ func adapterForwardsSpeechCallbacksWithoutCreatingAudio() async throws {
   #expect(engine.createdAudioSources == 0)
 }
 
+@Test @MainActor
+func appleSpeechStreamingSourceForwardsExactStopOrigin() async throws {
+  let engine = SpeechEngineProbe()
+  let adapter = AppleSpeechStreamingAdapter(engine: engine)
+  let instant = ContinuousClock().now
+  let origin = DictationStopOrigin.physicalRelease(instant)
+
+  #expect(try await adapter.finish(stopOrigin: origin) == "First")
+  #expect(engine.stopOrigins == [origin])
+}
+
 @MainActor
 final class SpeechEngineProbe: SpeechEngine {
   let kind: DictationSpeechEngine = .standard
@@ -30,6 +41,7 @@ final class SpeechEngineProbe: SpeechEngine {
   private(set) var finishCount = 0
   private(set) var cancelCount = 0
   private(set) var releaseResourcesCount = 0
+  private(set) var stopOrigins: [DictationStopOrigin] = []
   let createdAudioSources = 0
 
   init(finalText: String? = "First") {
@@ -48,6 +60,11 @@ final class SpeechEngineProbe: SpeechEngine {
   func finish() async throws -> String? {
     finishCount += 1
     return finalText
+  }
+
+  func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
+    stopOrigins.append(stopOrigin)
+    return try await finish()
   }
 
   func cancel() async {

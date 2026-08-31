@@ -231,6 +231,75 @@ public struct PersonalDictionarySnapshot: Codable, Equatable, Sendable {
   }
 }
 
+public struct PersonalDictionarySnapshotV2: Codable, Equatable, Sendable {
+  public static let currentSchemaVersion = 2
+
+  public let schemaVersion: Int
+  public let revision: UInt64
+  public let entries: [PersonalDictionaryEntry]
+  public let suggestions: [PersonalDictionarySuggestion]
+
+  public init(
+    schemaVersion: Int = Self.currentSchemaVersion,
+    revision: UInt64 = 0,
+    entries: [PersonalDictionaryEntry] = [],
+    suggestions: [PersonalDictionarySuggestion] = []
+  ) {
+    self.schemaVersion = schemaVersion
+    self.revision = revision
+    self.entries = entries
+    self.suggestions = suggestions
+  }
+
+  public var validationIssues: [PersonalDictionaryValidationIssue] {
+    var issues: [PersonalDictionaryValidationIssue] = []
+    if schemaVersion != Self.currentSchemaVersion {
+      issues.append(.init(code: .unsupportedSchemaVersion, field: "schemaVersion"))
+    }
+    issues += entries.flatMap { entry in
+      entry.validationIssues.map { .init(code: $0.code, field: "entries") }
+    }
+    var entryIDs = Set<UUID>()
+    for entry in entries where !entryIDs.insert(entry.id).inserted {
+      issues.append(.init(code: .duplicateEntryID, field: "entries.id"))
+    }
+    issues += suggestions.flatMap { suggestion in
+      suggestion.validationIssues.map { .init(code: $0.code, field: "suggestions") }
+    }
+    var suggestionIDs = Set<UUID>()
+    for suggestion in suggestions where !suggestionIDs.insert(suggestion.id).inserted {
+      issues.append(.init(code: .duplicateSuggestionID, field: "suggestions.id"))
+    }
+    return issues
+  }
+
+  public func validate() throws {
+    let codes = validationIssues.map(\.code)
+    guard codes.isEmpty else { throw PersonalDictionaryValidationError.invalidSnapshot(codes) }
+  }
+
+  static func migrationCandidate(
+    fromV1 snapshot: PersonalDictionarySnapshot
+  ) throws -> PersonalDictionarySnapshotV2 {
+    try snapshot.validate()
+    return PersonalDictionarySnapshotV2(
+      revision: 1,
+      entries: snapshot.entries,
+      suggestions: snapshot.suggestions
+    )
+  }
+
+  func nextRevision() throws -> UInt64 {
+    let (nextRevision, overflow) = revision.addingReportingOverflow(1)
+    guard !overflow else { throw PersonalDictionaryRevisionError.overflow }
+    return nextRevision
+  }
+}
+
+enum PersonalDictionaryRevisionError: Error, Equatable, Sendable {
+  case overflow
+}
+
 enum PersonalDictionaryText {
   static let normalizationLocale = Locale(identifier: "en_US_POSIX")
 

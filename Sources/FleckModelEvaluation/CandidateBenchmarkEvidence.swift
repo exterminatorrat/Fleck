@@ -1236,3 +1236,11 @@ public struct CandidateBenchmarkEvidence: Codable, Equatable, Sendable {
     .invalid(reason)
   }
 }
+
+extension CandidateBenchmarkEvidence {
+  public var localWritingEvidenceLevel: LocalWritingEvidenceLevel? { nil }
+
+  public var localWritingAdmissionOutcome: LocalWritingEvidenceOutcome {
+    .notApplicable
+  }
+}

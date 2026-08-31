@@ -21,15 +21,27 @@
     func beginShortcut(
       session: DictationShortcutSession,
       editor: (any FocusedDictationEditing)?,
-      destination: DictationDestination?
+      destination: DictationDestination?,
+      physicalGesture: DictationPhysicalGesture
     ) -> Bool
     func beginHandsFreeShortcut(
       session: DictationShortcutSession,
       editor: (any FocusedDictationEditing)?,
-      destination: DictationDestination?
+      destination: DictationDestination?,
+      physicalGesture: DictationPhysicalGesture
     ) -> Bool
-    func endShortcut(_ session: DictationShortcutSession) async
-    func finishHandsFreeShortcut(_ session: DictationShortcutSession) async
+    func recordPhysicalRelease(
+      _ session: DictationShortcutSession,
+      physicalGesture: DictationPhysicalGesture
+    )
+    func endShortcut(
+      _ session: DictationShortcutSession,
+      physicalGesture: DictationPhysicalGesture
+    ) async
+    func finishHandsFreeShortcut(
+      _ session: DictationShortcutSession,
+      stopOrigin: DictationStopOrigin
+    ) async
     func cancelShortcut(_ session: DictationShortcutSession) async
     func waitForShortcutTerminal(_ session: DictationShortcutSession) async
   }
@@ -97,6 +109,7 @@
     private var cancelRequested = false
     private var physicalPrimaryDown = false
     private var pressStartedAt: ContinuousClock.Instant?
+    private var acceptedPressAt: ContinuousClock.Instant?
     private var lastShortRelease: ContinuousClock.Instant?
     private var ignoresReleaseAfterHandsFreeStart = false
     private var deliveryTask: Task<Void, Never>?
@@ -134,7 +147,9 @@
       ownershipHandler = { _ in }
       monitor.transitionHandler = { [weak self] transition in
         guard let self else { return }
-        self.enqueue(.transition(transition, self.clock.now))
+        let instant = self.clock.now
+        self.recordPhysicalReleaseIfNeeded(transition, at: instant)
+        self.enqueue(.transition(transition, instant))
       }
       monitor.stateHandler = { [weak self] state in
         self?.monitorDidChange(state)
@@ -209,12 +224,19 @@
 
     @discardableResult
     func startPointerHandsFree() -> Bool {
-      beginOwnedSession(trigger: .pointer, isHandsFree: true)
+      beginOwnedSession(
+        trigger: .pointer,
+        isHandsFree: true,
+        physicalGesture: .absent
+      )
     }
 
     func finishOwnedHandsFree() async {
       guard let ownership = activeOwnership, ownership.isHandsFree else { return }
-      await requestFinish(ownership)
+      await requestFinish(
+        ownership,
+        stopOrigin: .toolbarAction(clock.now)
+      )
     }
 
     func cancelOwnedSession() async {
@@ -259,6 +281,24 @@
       }
     }
 
+    private func recordPhysicalReleaseIfNeeded(
+      _ transition: ModifierKeyTransition,
+      at instant: ContinuousClock.Instant
+    ) {
+      guard case .released(let modifier) = transition,
+        modifier == registeredModifier,
+        physicalPrimaryDown,
+        activeOwnership?.isHandsFree == false,
+        !ignoresReleaseAfterHandsFreeStart,
+        let session = activeOwnership?.session,
+        let pressedAt = acceptedPressAt
+      else { return }
+      handler?.recordPhysicalRelease(
+        session,
+        physicalGesture: .init(pressedAt: pressedAt, releasedAt: instant)
+      )
+    }
+
     private func deliver(_ delivery: Delivery) async {
       defer { pendingDeliveryCount -= 1 }
       switch delivery {
@@ -299,7 +339,10 @@
         guard !cancelRequested else { return }
         lastShortRelease = nil
         ignoresReleaseAfterHandsFreeStart = true
-        await requestFinish(ownership)
+        await requestFinish(
+          ownership,
+          stopOrigin: .handsFreeKeyPress(now)
+        )
         return
       }
 
@@ -307,7 +350,11 @@
         let interval = lastShortRelease.duration(to: now)
         if interval >= .zero, interval <= Self.doubleTapWindow {
           self.lastShortRelease = nil
-          if beginOwnedSession(trigger: .doubleTap, isHandsFree: true) {
+          if beginOwnedSession(
+            trigger: .doubleTap,
+            isHandsFree: true,
+            physicalGesture: .init(pressedAt: now)
+          ) {
             ignoresReleaseAfterHandsFreeStart = true
           }
           return
@@ -316,7 +363,13 @@
       }
 
       pressStartedAt = now
-      _ = beginOwnedSession(trigger: .hold, isHandsFree: false)
+      if beginOwnedSession(
+        trigger: .hold,
+        isHandsFree: false,
+        physicalGesture: .init(pressedAt: now)
+      ) {
+        acceptedPressAt = now
+      }
     }
 
     private func receiveSelectedRelease(at now: ContinuousClock.Instant) async {
@@ -334,9 +387,14 @@
       }
       let isShort =
         pressStartedAt.map { $0.duration(to: now) < Self.holdThreshold } ?? false
+      let physicalGesture = DictationPhysicalGesture(
+        pressedAt: acceptedPressAt,
+        releasedAt: now
+      )
       pressStartedAt = nil
+      acceptedPressAt = nil
       lastShortRelease = isShort ? now : nil
-      await requestFinish(ownership)
+      await requestFinish(ownership, physicalGesture: physicalGesture)
     }
 
     private func receiveEscape() async {
@@ -369,6 +427,7 @@
     private func clearTapState() {
       lastShortRelease = nil
       pressStartedAt = nil
+      acceptedPressAt = nil
       ignoresReleaseAfterHandsFreeStart = false
     }
 
@@ -385,7 +444,8 @@
     @discardableResult
     private func beginOwnedSession(
       trigger: DictationShortcutTrigger,
-      isHandsFree: Bool
+      isHandsFree: Bool,
+      physicalGesture: DictationPhysicalGesture
     ) -> Bool {
       guard !isUninstalled, activeOwnership == nil else { return false }
       let context = normalizedShortcutContext()
@@ -404,13 +464,15 @@
         handler?.beginHandsFreeShortcut(
           session: session,
           editor: context.editor,
-          destination: context.destination
+          destination: context.destination,
+          physicalGesture: physicalGesture
         ) == true
       } else {
         handler?.beginShortcut(
           session: session,
           editor: context.editor,
-          destination: context.destination
+          destination: context.destination,
+          physicalGesture: physicalGesture
         ) == true
       }
       guard accepted else {
@@ -424,7 +486,11 @@
       return true
     }
 
-    private func requestFinish(_ ownership: DictationShortcutOwnership) async {
+    private func requestFinish(
+      _ ownership: DictationShortcutOwnership,
+      physicalGesture: DictationPhysicalGesture = .absent,
+      stopOrigin: DictationStopOrigin? = nil
+    ) async {
       guard
         activeOwnership?.session == ownership.session,
         !finishRequested,
@@ -432,9 +498,16 @@
       else { return }
       finishRequested = true
       if ownership.isHandsFree {
-        await handler?.finishHandsFreeShortcut(ownership.session)
+        guard let stopOrigin else { return }
+        await handler?.finishHandsFreeShortcut(
+          ownership.session,
+          stopOrigin: stopOrigin
+        )
       } else {
-        await handler?.endShortcut(ownership.session)
+        await handler?.endShortcut(
+          ownership.session,
+          physicalGesture: physicalGesture
+        )
       }
     }
 

@@ -33,7 +33,7 @@ feature. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) and
 | --- | --- |
 | Native notes | Menu-bar and pinned-window surfaces; tabs, pinning, live reordering, import/export, 30-day Trash, and recovery. |
 | Native editor | A real AppKit `NSTextView` editor with Markdown-compatible bodies, optional RTF sidecars, undo/redo, inline bold/italic/underline/strikethrough, installed fonts and sizes, colors and highlights, bullets, numbering, and checklists. |
-| Dictation | Standard on-device speech with no cloud fallback, optional local cleanup, title-only Smart Capture routing, local 30-day history, and a persistent dictation capsule. |
+| Dictation | Standard on-device speech with no cloud fallback, optional faithful local cleanup, exact-title routing plus a bounded cached full-note semantic route in the enhanced test graph, Inbox-first ambiguity handling, local 30-day history, and a persistent dictation capsule. Parakeet and Gemma remain candidate/test integrations. |
 | Agent workspace | Profile-scoped `notes.list`, `notes.read`, `notes.write`, and `changes.undo` capabilities; explicit note/folder grants; a local MCP/CLI helper; optimistic revisions; caller-owned operation IDs; visible activity; and safe Undo. |
 | Persistence and privacy | Readable local files, debounced atomic saves, a previous-generation recovery snapshot, Keychain credentials, and same-user Unix-socket IPC. |
 | Native product shell | First-launch onboarding, customization, panel-local shortcuts, launch-at-login integration in the packaged app, and an independently sized pinned window. |
@@ -72,9 +72,13 @@ local MCP client or CLI
   cloud fallback. Microphone buffers and transcripts are not written as audio.
   Optional cleanup, routing, notes, and history remain local; the Enhanced
   candidate's explicit model download path is separate from ordinary notes.
-- Smart Capture receives candidate note identifiers and titles only. Note bodies
-  and other note content are excluded from routing prompts; low-confidence or
-  unavailable routing falls back to Inbox.
+- Smart Capture keeps candidate UUIDs, titles, note bodies, and revisions local.
+  Its debug-gated local candidate route indexes bounded title/body passages in
+  memory and sends only a bounded relevant shortlist under opaque keys to the
+  local Gemma helper. Missing, ambiguous, incomplete, stale, malformed,
+  cancelled, or low-confidence evidence saves to Inbox; a supported ambiguous
+  result is saved there before the chooser appears. The available Foundation
+  Models route remains title-based at this base.
 - Agent access is off until an authorized profile has an explicit note grant or
   an explicit `folderIncludingFutureNotes` grant. New profiles start with no
   tools or scopes, and future-note inheritance is off unless the user confirms
@@ -211,6 +215,11 @@ Enhanced Local is release-disabled and non-shippable until every gate in
 [TESTING.md](TESTING.md) has evidence. The candidate is isolated behind its own
 dependency and model paths; a green build or CI run does not approve its quality,
 privacy, resource, legal, accessibility, signing, or store readiness.
+Parakeet TDT 0.6B v2 dictation and Gemma 3 1B cleanup/local routing are
+debug-gated candidate/test integrations. Current checked-in evidence is
+deterministic/synthetic contract testing, not real-model replay, packaged
+injected audio, live-human microphone use, two-device acceptance, or release
+admission.
 
 ## Known limitations
 

@@ -8,11 +8,24 @@ public struct PersonalDictionaryResolution: Equatable, Sendable {
   public let baseline: String
   public let protectedForms: [String]
   public let replacements: Int
+  public let dictionaryRevision: UInt64?
+  public let dictionaryContentDigest: String?
+  public let appliedEntryIDs: [UUID]
 
-  public init(baseline: String, protectedForms: [String], replacements: Int) {
+  public init(
+    baseline: String,
+    protectedForms: [String],
+    replacements: Int,
+    dictionaryRevision: UInt64? = nil,
+    dictionaryContentDigest: String? = nil,
+    appliedEntryIDs: [UUID] = []
+  ) {
     self.baseline = baseline
     self.protectedForms = protectedForms
     self.replacements = replacements
+    self.dictionaryRevision = dictionaryRevision
+    self.dictionaryContentDigest = dictionaryContentDigest
+    self.appliedEntryIDs = appliedEntryIDs
   }
 }
 
@@ -69,9 +82,58 @@ public enum PersonalDictionaryResolver {
         return lhs.entryID.uuidString < rhs.entryID.uuidString
       }
 
+    return resolve(
+      rawTranscript,
+      candidates: candidates,
+      preferredForms: preferredForms,
+      dictionaryRevision: nil,
+      dictionaryContentDigest: nil
+    )
+  }
+
+  public static func resolve(
+    _ rawTranscript: String,
+    compiled: CompiledPersonalDictionary
+  ) -> PersonalDictionaryResolution {
+    let candidates = compiled.resolverRules.map { rule in
+      AliasCandidate(
+        alias: rule.exactForm,
+        normalized: rule.canonicalClaim,
+        preferredForm: rule.preferredForm,
+        entryID: rule.entryID,
+        isAmbiguous: rule.isBlocker
+      )
+    }
+    return resolve(
+      rawTranscript,
+      candidates: candidates,
+      preferredForms: Set(compiled.protectedLexicon),
+      dictionaryRevision: compiled.revision,
+      dictionaryContentDigest: compiled.contentDigest
+    )
+  }
+
+  private static func resolve(
+    _ rawTranscript: String,
+    candidates: [AliasCandidate],
+    preferredForms: Set<String>,
+    dictionaryRevision: UInt64?,
+    dictionaryContentDigest: String?
+  ) -> PersonalDictionaryResolution {
+    guard !rawTranscript.isEmpty else {
+      return PersonalDictionaryResolution(
+        baseline: rawTranscript,
+        protectedForms: [],
+        replacements: 0,
+        dictionaryRevision: dictionaryRevision,
+        dictionaryContentDigest: dictionaryContentDigest
+      )
+    }
+
     var baseline = String()
     baseline.reserveCapacity(rawTranscript.utf8.count)
     var replacements = 0
+    var appliedEntryIDs: [UUID] = []
     var index = rawTranscript.startIndex
     var copiedThrough = rawTranscript.startIndex
 
@@ -95,6 +157,9 @@ public enum PersonalDictionaryResolver {
       copiedThrough = match.range.upperBound
       index = match.range.upperBound
       replacements += 1
+      if dictionaryRevision != nil {
+        appliedEntryIDs.append(match.candidate.entryID)
+      }
     }
 
     baseline += rawTranscript[copiedThrough..<rawTranscript.endIndex]
@@ -108,7 +173,10 @@ public enum PersonalDictionaryResolver {
     return PersonalDictionaryResolution(
       baseline: baseline,
       protectedForms: protectedForms,
-      replacements: replacements
+      replacements: replacements,
+      dictionaryRevision: dictionaryRevision,
+      dictionaryContentDigest: dictionaryContentDigest,
+      appliedEntryIDs: appliedEntryIDs
     )
   }
 

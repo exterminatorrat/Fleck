@@ -180,6 +180,81 @@ import Testing
   #expect(PersonalDictionaryResolver.contextualStrings(entries: entries, locale: .current, limit: 0).isEmpty)
 }
 
+@Test func resolverCompiledIndexPreservesLegacyBoundaryAndLongestFirstBehavior() throws {
+  let newYorkID = UUID(uuidString: "00000000-0000-0000-0000-000000000101")!
+  let yorkID = UUID(uuidString: "00000000-0000-0000-0000-000000000102")!
+  let appID = UUID(uuidString: "00000000-0000-0000-0000-000000000103")!
+  let compiled = try CompiledPersonalDictionary.compile(
+    PersonalDictionarySnapshotV2(
+      entries: [
+        dictionaryEntry(id: newYorkID, preferredForm: "New York", aliases: ["new york"]),
+        dictionaryEntry(id: yorkID, preferredForm: "York", aliases: ["york"]),
+        dictionaryEntry(id: appID, preferredForm: "App", aliases: ["app"]),
+      ]
+    )
+  )
+
+  let result = PersonalDictionaryResolver.resolve(
+    "new york york app.app application _app app_ app2 (app)",
+    compiled: compiled
+  )
+
+  #expect(result.baseline == "New York York App.App application _app app_ app2 (App)")
+  #expect(result.replacements == 5)
+  #expect(result.protectedForms == ["New York", "York", "York", "App", "App", "App"])
+  #expect(result.appliedEntryIDs == [newYorkID, yorkID, appID, appID, appID])
+}
+
+@Test func resolverCompiledIndexShieldsNestedAliasInsideUnsafeLongerOccurrence() throws {
+  let compiled = try CompiledPersonalDictionary.compile(
+    PersonalDictionarySnapshotV2(
+      entries: [
+        dictionaryEntry(preferredForm: "NewYork", aliases: ["new york"]),
+        dictionaryEntry(preferredForm: "NewYorkAlt", aliases: ["NEW YORK"]),
+        dictionaryEntry(preferredForm: "York", aliases: ["york"]),
+      ]
+    )
+  )
+
+  let result = PersonalDictionaryResolver.resolve("new york", compiled: compiled)
+
+  #expect(result.baseline == "new york")
+  #expect(result.replacements == 0)
+  #expect(result.protectedForms.isEmpty)
+  #expect(result.appliedEntryIDs.isEmpty)
+}
+
+@Test func resolverCompiledResolutionReturnsPinnedIdentityAndAppliedEntryIDs() throws {
+  let fleckID = UUID(uuidString: "00000000-0000-0000-0000-000000000201")!
+  let openAIID = UUID(uuidString: "00000000-0000-0000-0000-000000000202")!
+  let entries = [
+    dictionaryEntry(id: fleckID, preferredForm: "FleckApp", aliases: ["fleck app"]),
+    dictionaryEntry(id: openAIID, preferredForm: "OpenAI", aliases: ["open ai"]),
+  ]
+  let compiled = try CompiledPersonalDictionary.compile(
+    PersonalDictionarySnapshotV2(revision: 42, entries: entries)
+  )
+
+  let result = PersonalDictionaryResolver.resolve(
+    "open ai then fleck app then open ai",
+    compiled: compiled
+  )
+  let noReplacement = PersonalDictionaryResolver.resolve("nothing to replace", compiled: compiled)
+  let legacy = try PersonalDictionaryResolver.resolve("fleck app", entries: entries)
+
+  #expect(result.dictionaryRevision == 42)
+  #expect(result.dictionaryContentDigest == compiled.contentDigest)
+  #expect(result.appliedEntryIDs == [openAIID, fleckID, openAIID])
+  #expect(noReplacement.dictionaryRevision == 42)
+  #expect(noReplacement.dictionaryContentDigest == compiled.contentDigest)
+  #expect(noReplacement.appliedEntryIDs.isEmpty)
+  #expect(legacy.baseline == "FleckApp")
+  #expect(legacy.replacements == 1)
+  #expect(legacy.dictionaryRevision == nil)
+  #expect(legacy.dictionaryContentDigest == nil)
+  #expect(legacy.appliedEntryIDs.isEmpty)
+}
+
 private func dictionaryEntry(
   id: UUID = UUID(),
   preferredForm: String,
