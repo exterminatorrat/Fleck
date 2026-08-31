@@ -2,6 +2,7 @@
   import AppKit
   import Combine
   import FleckCore
+  import QuartzCore
   import SwiftUI
 
   enum DictationCapsuleStatus: Equatable {
@@ -881,13 +882,27 @@
     static let colorAndOpacity: TimeInterval = 0.09
     static let tileMorph: TimeInterval = 0.14
     static let contentExit: TimeInterval = 0.07
+    static let shellSettle: TimeInterval = 0.12
     static let result: TimeInterval = 0.11
     static let dockSnap: TimeInterval = 0.18
-    static let dockSnapBounce: CGFloat = 0
     static let reduceMotionCrossfade: TimeInterval = 0.10
     static let processingLabelDelay: Duration = .milliseconds(450)
 
     static func transitionDuration(
+      from: DictationCapsuleStatus,
+      to: DictationCapsuleStatus,
+      reduceMotion: Bool,
+      dockChange: Bool = false
+    ) -> TimeInterval {
+      contentDuration(
+        from: from,
+        to: to,
+        reduceMotion: reduceMotion,
+        dockChange: dockChange
+      )
+    }
+
+    static func contentDuration(
       from: DictationCapsuleStatus,
       to: DictationCapsuleStatus,
       reduceMotion: Bool,
@@ -912,6 +927,29 @@
         return tileMorph
       }
       return colorAndOpacity
+    }
+
+    static func shellDuration(
+      from: DictationCapsuleStatus,
+      to: DictationCapsuleStatus,
+      reduceMotion: Bool,
+      dockChange: Bool = false
+    ) -> TimeInterval {
+      if reduceMotion {
+        return reduceMotionCrossfade
+      }
+      if dockChange {
+        return dockSnap
+      }
+      if isTerminal(from), to == .idle {
+        return shellSettle
+      }
+      return contentDuration(
+        from: from,
+        to: to,
+        reduceMotion: false,
+        dockChange: false
+      )
     }
 
     static func usesTileMorph(
@@ -981,6 +1019,7 @@
     private(set) var stopHandler: @MainActor () -> Void
     private(set) var cancelHandler: @MainActor () -> Void
     private(set) var dismissHandler: @MainActor () -> Void
+    private let announcementHandler: @MainActor (String) -> Void
     private let processingLabelSleeper: @MainActor (Duration) async -> Void
     private var processingLabelTask: Task<Void, Never>?
 
@@ -995,7 +1034,8 @@
       onDismiss: @escaping @MainActor () -> Void = {},
       processingLabelSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
         try? await Task.sleep(for: duration)
-      }
+      },
+      announcementHandler: @escaping @MainActor (String) -> Void = { _ in }
     ) {
       self.context = context
       self.dock = dock
@@ -1005,6 +1045,7 @@
       self.stopHandler = onStop
       self.cancelHandler = onCancel
       self.dismissHandler = onDismiss
+      self.announcementHandler = announcementHandler
       self.processingLabelSleeper = processingLabelSleeper
       switch context.status {
       case .idle, .listening, .saved, .savedWithoutCleanup, .noSpeech, .failed:
@@ -1119,10 +1160,12 @@
         previousContext.status != .listening
           || previousContext.sessionID != context.sessionID
       {
-        voiceOverLabel = DictationCapsulePresentation(
+        let label = DictationCapsulePresentation(
           status: .listening,
           context: context
         ).voiceOverText
+        voiceOverLabel = label
+        announcementHandler(label)
         return
       }
       guard isTerminal(context.status),
@@ -1130,10 +1173,17 @@
       else {
         return
       }
-      voiceOverLabel = DictationCapsulePresentation(
+      let label = DictationCapsulePresentation(
         status: context.status,
         context: context
       ).voiceOverText
+      let shouldAnnounce = previousContext.status != context.status
+        || previousContext.sessionID != context.sessionID
+        || voiceOverLabel != label
+      voiceOverLabel = label
+      if shouldAnnounce {
+        announcementHandler(label)
+      }
     }
 
     private func isProcessing(_ status: DictationCapsuleStatus) -> Bool {
@@ -1232,12 +1282,19 @@
     init(
       panel: DictationCapsulePanel = DictationCapsulePanel(),
       waveformModel: DictationWaveformModel = DictationWaveformModel(),
-      accentHex: String = FleckRailColors.defaultAccentHex
+      accentHex: String = FleckRailColors.defaultAccentHex,
+      announcementPoster: @escaping @MainActor (NSWindow, String) -> Void =
+        DictationCapsuleController.postAnnouncement
     ) {
       self.panel = panel
       self.waveformModel = waveformModel
+      let persistentPanel = panel
       self.presentationModel = DictationCapsulePresentationModel(
-        colors: FleckRailColors(accentHex: accentHex)
+        colors: FleckRailColors(accentHex: accentHex),
+        announcementHandler: { [weak persistentPanel] message in
+          guard let persistentPanel else { return }
+          announcementPoster(persistentPanel, message)
+        }
       )
       let inputRouter = DictationCapsuleInputRouter()
       self.inputRouter = inputRouter
@@ -1266,6 +1323,17 @@
       inputRouter.onDragEnded = { [weak self] point, cancelled in
         self?.dragEnded(at: point, cancelled: cancelled)
       }
+    }
+
+    private static func postAnnouncement(_ panel: NSWindow, _ message: String) {
+      NSAccessibility.post(
+        element: panel,
+        notification: .announcementRequested,
+        userInfo: [
+          .announcement: message,
+          .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ]
+      )
     }
 
     func presentIdle(
@@ -1607,9 +1675,18 @@
       if reduceMotion {
         panel.setFrame(finalFrame, display: true)
         panel.alphaValue = 1
+        let transition = CATransition()
+        transition.type = .fade
+        transition.duration = DictationCapsuleMotion.reduceMotionCrossfade
+        transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        hostingView.wantsLayer = true
+        hostingView.layer?.add(
+          transition,
+          forKey: "fleck-dictation-content-crossfade"
+        )
         return
       }
-      let duration = DictationCapsuleMotion.transitionDuration(
+      let duration = DictationCapsuleMotion.shellDuration(
         from: previousStatus,
         to: currentContext.status,
         reduceMotion: false,
@@ -1959,6 +2036,24 @@
         terminalDivider
         terminalButton
       }
+      .transition(
+        .asymmetric(
+          insertion: .opacity.animation(
+            .easeOut(
+              duration: reduceMotion
+                ? DictationCapsuleMotion.reduceMotionCrossfade
+                : DictationCapsuleMotion.result
+            )
+          ),
+          removal: .opacity.animation(
+            .easeOut(
+              duration: reduceMotion
+                ? DictationCapsuleMotion.reduceMotionCrossfade
+                : DictationCapsuleMotion.contentExit
+            )
+          )
+        )
+      )
     }
 
     @ViewBuilder

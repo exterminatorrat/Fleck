@@ -3,23 +3,9 @@ import Testing
 
 @testable import FleckApp
 
-@Test func reduceMotionWaveformRefreshCadenceKeepsStaleDecayObservable() {
-  #expect(DictationWaveformRefreshSchedule.interval(reduceMotion: true) <= 0.12)
-  #expect(DictationWaveformRefreshSchedule.interval(reduceMotion: false) <= 1 / 30)
-}
-
-@Test func waveformTimelineConsumesTheSharedTruthfulRefreshSchedule() throws {
-  let root = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-  let source = try String(
-    contentsOf: root.appendingPathComponent("Sources/FleckApp/DictationCapsule.swift"),
-    encoding: .utf8
-  )
-
-  #expect(source.contains("TimelineView("))
-  #expect(source.contains("DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)"))
+@Test func waveformRefreshCadenceUsesNormalAndReducedMotionBudgets() {
+  #expect(DictationWaveformRefreshSchedule.interval(reduceMotion: false) == 1.0 / 30.0)
+  #expect(DictationWaveformRefreshSchedule.interval(reduceMotion: true) == 1.0 / 15.0)
 }
 
 @Test @MainActor func waveformUsesSevenStableAsymmetricBarsAndExactGeometry() {

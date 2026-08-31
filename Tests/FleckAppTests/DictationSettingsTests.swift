@@ -1000,6 +1000,37 @@ private func settleSettingsHost(_ view: NSView) async {
   #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
 }
 
+@Test @MainActor func DictationRuntimeIgnoresAStaleEngineCallbackAfterANewCapture() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  for _ in 0..<100 {
+    if fixture.engine.captureCallbackCount == 1 { break }
+    await Task.yield()
+  }
+  #expect(fixture.engine.captureCallbackCount == 1)
+  fixture.engine.emitLevel(0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  for _ in 0..<100 {
+    if fixture.engine.captureCallbackCount == 2 { break }
+    await Task.yield()
+  }
+  #expect(fixture.engine.captureCallbackCount == 2)
+  #expect(fixture.runtime.capsuleController.currentContext.status == .listening)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+
+  fixture.engine.emitLevel(fromCaptureAt: 0, value: 0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+  fixture.engine.emitLevel(fromCaptureAt: 1, value: 0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+
+  await fixture.runtime.cancel()
+}
+
 @Test @MainActor func DictationRuntimeUsesCoordinatorEventsAndAppliesModifierAfterTerminal() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
   let replacement = DictationModifierKey.leftCommand
@@ -2227,6 +2258,9 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   var releaseGate: DictationTestGate?
   private(set) var releaseCount = 0
   private var level: (@MainActor (Float) -> Void)?
+  private var levelCallbacks: [@MainActor (Float) -> Void] = []
+
+  var captureCallbackCount: Int { levelCallbacks.count }
 
   init(finalText: String?, kind: DictationSpeechEngine = .standard) {
     self.finalText = finalText
@@ -2238,6 +2272,7 @@ private final class RuntimeSpeechEngine: SpeechEngine {
     level: @escaping @MainActor (Float) -> Void
   ) async throws {
     self.level = level
+    levelCallbacks.append(level)
   }
 
   func finish() async throws -> String? {
@@ -2247,6 +2282,9 @@ private final class RuntimeSpeechEngine: SpeechEngine {
 
   func cancel() async {}
   func emitLevel(_ value: Float) { level?(value) }
+  func emitLevel(fromCaptureAt index: Int, value: Float) {
+    levelCallbacks[index](value)
+  }
   func releaseResources() async {
     releaseCount += 1
     if let releaseGate { await releaseGate.wait() }

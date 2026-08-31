@@ -461,11 +461,7 @@
         }
         switch self.phase {
         case .arming, .listening:
-          self.capsuleController.updateAudioLevel(
-            level,
-            presentationGeneration: self.capsuleController
-              .presentationModel.presentationGeneration
-          )
+          self.capsuleController.updateAudioLevel(level)
         case .idle, .finalizing, .cleaning, .routing, .saved, .failed:
           self.capsuleController.updateAudioLevel(0)
         }
