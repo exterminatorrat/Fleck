@@ -149,6 +149,74 @@ func personalDictionaryEntryEditorAddsOneWordThroughTheSharedFlow() async throws
 }
 
 @Test @MainActor
+func personalDictionaryEntryEditorAllowsOnlyOneSaveAndKeepsTheActiveEditStable() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let gate = PersonalDictionaryEntryMutationGate(store: store)
+  let original = settingsEntry(8, "Original")
+  try await store.upsert(original)
+  let viewModel = PersonalDictionarySettingsViewModel(
+    store: store,
+    entryMutation: { revision, mutation in
+      try await gate.perform(expectedRevision: revision, mutation: mutation)
+    }
+  )
+  await viewModel.load()
+  viewModel.beginEditingEntry(original)
+  let sessionID = try #require(viewModel.entryEdit?.sessionID)
+  viewModel.entryEditPreferredForm = "Saved once"
+
+  let firstSave = Task { await viewModel.submitEntryEdit() }
+  await gate.waitUntilStarted()
+  #expect(viewModel.isEntryEditMutationInFlight)
+
+  viewModel.cancelEntryEdit()
+  viewModel.beginAddingEntry()
+  await viewModel.submitEntryEdit()
+
+  #expect(viewModel.entryEdit?.sessionID == sessionID)
+  #expect(await gate.requestCount == 1)
+  await gate.release()
+  await firstSave.value
+
+  #expect(viewModel.entries.map(\.preferredForm) == ["Saved once"])
+  #expect(viewModel.entryEdit == nil)
+  #expect(!viewModel.isEntryEditMutationInFlight)
+}
+
+@Test @MainActor
+func personalDictionaryEntryEditorAllowsOnlyOneDeleteWhileMutationIsInFlight() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let gate = PersonalDictionaryEntryMutationGate(store: store)
+  let original = settingsEntry(6, "Delete once")
+  try await store.upsert(original)
+  let viewModel = PersonalDictionarySettingsViewModel(
+    store: store,
+    entryMutation: { revision, mutation in
+      try await gate.perform(expectedRevision: revision, mutation: mutation)
+    }
+  )
+  await viewModel.load()
+  viewModel.beginEditingEntry(original)
+
+  let firstDelete = Task { await viewModel.deleteEntryEdit() }
+  await gate.waitUntilStarted()
+  await viewModel.deleteEntryEdit()
+
+  #expect(viewModel.isEntryEditMutationInFlight)
+  #expect(await gate.requestCount == 1)
+  await gate.release()
+  await firstDelete.value
+
+  #expect(viewModel.entries.isEmpty)
+  #expect(viewModel.entryEdit == nil)
+  #expect(!viewModel.isEntryEditMutationInFlight)
+}
+
+@Test @MainActor
 func personalDictionarySettingsDoesNotRebaseConcurrentAddsOntoAnUndisplayedRevision() async {
   let root = temporarySettingsDictionaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -673,6 +741,38 @@ private func settingsSuggestion(
     observationCount: count,
     lastObservedAt: observedAt
   )
+}
+
+private actor PersonalDictionaryEntryMutationGate {
+  let store: PersonalDictionaryStore
+  private(set) var requestCount = 0
+  private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+  private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+  init(store: PersonalDictionaryStore) {
+    self.store = store
+  }
+
+  func perform(
+    expectedRevision: UInt64,
+    mutation: PersonalDictionaryMutation
+  ) async throws -> PersonalDictionaryPublishedSnapshot {
+    requestCount += 1
+    startedWaiters.forEach { $0.resume() }
+    startedWaiters.removeAll()
+    await withCheckedContinuation { releaseContinuation = $0 }
+    return try await store.mutate(expectedRevision: expectedRevision, mutation)
+  }
+
+  func waitUntilStarted() async {
+    guard requestCount == 0 else { return }
+    await withCheckedContinuation { startedWaiters.append($0) }
+  }
+
+  func release() {
+    releaseContinuation?.resume()
+    releaseContinuation = nil
+  }
 }
 
 private func settingsUUID(_ number: UInt8) -> UUID {

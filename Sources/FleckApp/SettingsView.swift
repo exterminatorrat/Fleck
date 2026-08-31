@@ -40,6 +40,79 @@
     }
   }
 
+  struct SettingsSectionSelector: View {
+    @Binding var selection: SettingsSection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var selectedSectionHighlight
+
+    var body: some View {
+      ViewThatFits(in: .horizontal) {
+        fullSelector
+        compactSelector
+      }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 10)
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Settings section")
+      .accessibilityIdentifier("settings-section-selector")
+    }
+
+    private var fullSelector: some View {
+      HStack(spacing: 4) {
+        ForEach(SettingsSection.selectorCases) { section in
+          let isSelected = section == selection
+          Button {
+            withAnimation(motion.spatial) {
+              selection = section
+            }
+          } label: {
+            Text(section.rawValue)
+              .font(.callout.weight(.medium))
+              .fixedSize(horizontal: true, vertical: false)
+              .foregroundStyle(isSelected ? Color.white : Color.primary)
+              .frame(maxWidth: .infinity)
+              .padding(.vertical, 7)
+              .padding(.horizontal, 5)
+              .background {
+                if isSelected {
+                  RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.accentColor)
+                    .matchedGeometryEffect(
+                      id: SettingsSection.selectionEffectID,
+                      in: selectedSectionHighlight
+                    )
+                }
+              }
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(section.rawValue)
+          .accessibilityValue(isSelected ? "Selected" : "Not selected")
+          .accessibilityAddTraits(isSelected ? .isSelected : [])
+        }
+      }
+      .padding(3)
+      .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private var compactSelector: some View {
+      Picker("Settings section", selection: $selection) {
+        ForEach(SettingsSection.selectorCases) { section in
+          Text(section.rawValue).tag(section)
+        }
+      }
+      .pickerStyle(.menu)
+      .frame(maxWidth: .infinity, alignment: .trailing)
+      .accessibilityLabel("Settings section")
+      .accessibilityValue(selection.rawValue)
+      .accessibilityHint("Chooses which Fleck settings to show")
+    }
+
+    private var motion: AppMotion {
+      AppMotion(reduceMotion: reduceMotion)
+    }
+  }
+
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -54,7 +127,6 @@
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
     @State private var recordingSelection = SettingsShortcutRecordingState()
-    @Namespace private var selectedSectionHighlight
 
     init(runtime: DictationRuntime) {
       self.runtime = runtime
@@ -149,40 +221,7 @@
     }
 
     private var sectionSelector: some View {
-      HStack(spacing: 4) {
-        ForEach(SettingsSection.selectorCases) { section in
-          let isSelected = section == selectedSection
-          Button {
-            withAnimation(motion.spatial) {
-              selectedSection = section
-            }
-          } label: {
-            Text(section.rawValue)
-              .font(.callout.weight(.medium))
-              .foregroundStyle(isSelected ? Color.white : Color.primary)
-              .frame(maxWidth: .infinity)
-              .padding(.vertical, 7)
-              .background {
-                if isSelected {
-                  RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.accentColor)
-                    .matchedGeometryEffect(
-                      id: SettingsSection.selectionEffectID,
-                      in: selectedSectionHighlight
-                    )
-                }
-              }
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel(section.rawValue)
-          .accessibilityValue(isSelected ? "Selected" : "Not selected")
-          .accessibilityAddTraits(isSelected ? .isSelected : [])
-        }
-      }
-      .padding(3)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
-      .padding()
+      SettingsSectionSelector(selection: $selectedSection)
     }
 
     private var motion: AppMotion {
@@ -619,6 +658,7 @@
               get: { viewModel.entryEditIsEnabled },
               set: { viewModel.entryEditIsEnabled = $0 }
             ),
+            isMutationInFlight: viewModel.isEntryEditMutationInFlight,
             errorMessage: viewModel.errorMessage,
             onCancel: { viewModel.cancelEntryEdit() },
             onSave: {
@@ -936,6 +976,7 @@
     @Binding var aliases: String
     @Binding var usesCorrection: Bool
     @Binding var isEnabled: Bool
+    let isMutationInFlight: Bool
     let errorMessage: String?
     let onCancel: () -> Void
     let onSave: () -> Void
@@ -961,6 +1002,7 @@
 
           Toggle("Use this word in dictation", isOn: $isEnabled)
         }
+        .disabled(isMutationInFlight)
 
         if let errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.triangle")
@@ -976,20 +1018,31 @@
               Button("Delete Word", role: .destructive) {
                 showsDeleteConfirmation = true
               }
+              .disabled(isMutationInFlight)
               .accessibilityLabel("Delete vocabulary word")
               .accessibilityHint("Asks for confirmation before deleting this word")
             }
             Spacer()
+            if isMutationInFlight {
+              ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel("Saving vocabulary word")
+            }
             Button("Cancel", action: onCancel)
+              .disabled(isMutationInFlight)
             Button("Save", action: onSave)
               .buttonStyle(.borderedProminent)
               .keyboardShortcut(.defaultAction)
-              .disabled(preferredForm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+              .disabled(
+                isMutationInFlight
+                  || preferredForm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              )
           }
         }
       }
       .formStyle(.grouped)
       .frame(width: 420, height: usesCorrection ? 330 : 280)
+      .interactiveDismissDisabled(isMutationInFlight)
       .confirmationDialog(
         "Delete this word?",
         isPresented: $showsDeleteConfirmation

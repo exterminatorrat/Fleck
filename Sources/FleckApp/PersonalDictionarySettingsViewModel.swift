@@ -4,6 +4,11 @@ import SwiftUI
 
 @MainActor
 final class PersonalDictionarySettingsViewModel: ObservableObject {
+  typealias EntryMutation = @MainActor (
+    UInt64,
+    PersonalDictionaryMutation
+  ) async throws -> PersonalDictionaryPublishedSnapshot
+
   enum Filter: String, CaseIterable, Identifiable {
     case all = "All"
     case enabled = "Enabled"
@@ -22,6 +27,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     var canonicalExportData: Data?
     var csvExportData: Data?
     var entryEdit: EntryEdit?
+    var entryEditMutationSessionID: UUID?
     var suggestionEdit: SuggestionEdit?
     var importPreviewData: Data?
     var importPreview: PersonalDictionaryImportPreview?
@@ -32,6 +38,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
 
   struct EntryEdit: Identifiable, Equatable {
     let id: UUID
+    let sessionID: UUID
     let isNew: Bool
     var preferredForm: String
     var aliases: String
@@ -44,6 +51,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
 
     init() {
       id = UUID()
+      sessionID = UUID()
       isNew = true
       preferredForm = ""
       aliases = ""
@@ -57,6 +65,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
 
     init(entry: PersonalDictionaryEntry) {
       id = entry.id
+      sessionID = UUID()
       isNew = false
       preferredForm = entry.preferredForm
       aliases = entry.aliases.joined(separator: ", ")
@@ -113,10 +122,14 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   @Published private(set) var state = State()
 
   private let store: PersonalDictionaryStore
+  private let entryMutation: EntryMutation
   private var mutationTail: Task<Void, Never>?
 
-  init(store: PersonalDictionaryStore) {
+  init(store: PersonalDictionaryStore, entryMutation: EntryMutation? = nil) {
     self.store = store
+    self.entryMutation = entryMutation ?? { expectedRevision, mutation in
+      try await store.mutate(expectedRevision: expectedRevision, mutation)
+    }
   }
 
   var revision: UInt64 { state.revision }
@@ -131,6 +144,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   var isImportPreviewPresented: Bool { state.isImportPreviewPresented }
   var statusMessage: String? { state.statusMessage }
   var errorMessage: String? { state.errorMessage }
+  var isEntryEditMutationInFlight: Bool { state.entryEditMutationSessionID != nil }
 
   var entryEditPreferredForm: String {
     get { state.entryEdit?.preferredForm ?? "" }
@@ -275,22 +289,26 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   }
 
   func beginAddingEntry() {
+    guard !isEntryEditMutationInFlight else { return }
     state.entryEdit = EntryEdit()
     clearMessages()
   }
 
   func beginEditingEntry(_ entry: PersonalDictionaryEntry) {
+    guard !isEntryEditMutationInFlight else { return }
     state.entryEdit = EntryEdit(entry: entry)
     clearMessages()
   }
 
   func cancelEntryEdit() {
+    guard !isEntryEditMutationInFlight else { return }
     state.entryEdit = nil
     clearMessages()
   }
 
   func submitEntryEdit() async {
     guard let edit = entryEdit else { return }
+    guard !isEntryEditMutationInFlight else { return }
     let preferredForm = edit.preferredForm.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !preferredForm.isEmpty else {
       state.errorMessage = "Enter a word or phrase before saving."
@@ -307,33 +325,38 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
       usage: edit.usage
     )
     let expectedRevision = revision
+    state.entryEditMutationSessionID = edit.sessionID
     await enqueue {
-      await self.mutate(
+      await self.mutateEntryEditor(
         expectedRevision: expectedRevision,
         mutation: .upsert(entry),
         action: .entry
       )
     }
-    if errorMessage == nil {
+    state.entryEditMutationSessionID = nil
+    if errorMessage == nil, state.entryEdit?.sessionID == edit.sessionID {
       state.entryEdit = nil
     }
   }
 
   func deleteEntryEdit() async {
     guard let edit = entryEdit else { return }
+    guard !isEntryEditMutationInFlight else { return }
     guard !edit.isNew else {
       state.entryEdit = nil
       return
     }
     let expectedRevision = revision
+    state.entryEditMutationSessionID = edit.sessionID
     await enqueue {
-      await self.mutate(
+      await self.mutateEntryEditor(
         expectedRevision: expectedRevision,
         mutation: .delete(id: edit.id),
         action: .entry
       )
     }
-    if errorMessage == nil {
+    state.entryEditMutationSessionID = nil
+    if errorMessage == nil, state.entryEdit?.sessionID == edit.sessionID {
       state.entryEdit = nil
     }
   }
@@ -509,8 +532,37 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     mutation: PersonalDictionaryMutation,
     action: Action
   ) async {
+    await applyMutation(
+      expectedRevision: expectedRevision,
+      mutation: mutation,
+      action: action,
+      operation: { expectedRevision, mutation in
+        try await self.store.mutate(expectedRevision: expectedRevision, mutation)
+      }
+    )
+  }
+
+  private func mutateEntryEditor(
+    expectedRevision: UInt64,
+    mutation: PersonalDictionaryMutation,
+    action: Action
+  ) async {
+    await applyMutation(
+      expectedRevision: expectedRevision,
+      mutation: mutation,
+      action: action,
+      operation: entryMutation
+    )
+  }
+
+  private func applyMutation(
+    expectedRevision: UInt64,
+    mutation: PersonalDictionaryMutation,
+    action: Action,
+    operation: EntryMutation
+  ) async {
     do {
-      publish(try await store.mutate(expectedRevision: expectedRevision, mutation))
+      publish(try await operation(expectedRevision, mutation))
       clearMessages()
     } catch PersonalDictionaryStoreError.revisionConflict {
       do {

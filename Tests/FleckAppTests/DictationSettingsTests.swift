@@ -161,6 +161,67 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
   #expect(SettingsSection.selectionEffectID == "settings-section")
 }
 
+@Test @MainActor
+func DictationSettingsSelectorFitsNormalAndAccessibilityLayoutsWithoutClipping() {
+  var selection = SettingsSection.appearance
+  let selected = Binding(
+    get: { selection },
+    set: { selection = $0 }
+  )
+
+  for (width, dynamicTypeSize) in [
+    (520.0, DynamicTypeSize.large),
+    (320.0, DynamicTypeSize.accessibility3),
+  ] {
+    let host = NSHostingView(
+      rootView: SettingsSectionSelector(selection: selected)
+        .environment(\.dynamicTypeSize, dynamicTypeSize)
+        .frame(width: width, height: 64)
+    )
+    host.frame = NSRect(x: 0, y: 0, width: width, height: 64)
+    let window = NSWindow(
+      contentRect: host.frame,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = host
+    window.orderFront(nil)
+    host.layoutSubtreeIfNeeded()
+
+    let visibleFrames = settingsSelectorDescendants(of: host)
+      .filter { !$0.isHidden && $0.alphaValue > 0 && !$0.bounds.isEmpty }
+      .map { $0.convert($0.bounds, to: host) }
+    #expect(!visibleFrames.isEmpty)
+    #expect(visibleFrames.allSatisfy { host.bounds.insetBy(dx: -1, dy: -1).contains($0) })
+
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+}
+
+@Test func DictationSettingsSelectorProvidesFullAndCompactAccessibilityContracts() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("accessibilityLabel(section.rawValue)"))
+  #expect(source.contains("Picker(\"Settings section\", selection: $selection)"))
+  #expect(source.contains("accessibilityLabel(\"Settings section\")"))
+  #expect(source.contains("accessibilityValue(selection.rawValue)"))
+  #expect(source.contains("accessibilityHint(\"Chooses which Fleck settings to show\")"))
+}
+
+@MainActor
+private func settingsSelectorDescendants(of view: NSView) -> [NSView] {
+  view.subviews + view.subviews.flatMap(settingsSelectorDescendants)
+}
+
 @Test func DictationSettingsSeparatesVocabularyAndOnlySurfacesAvailabilityProblems() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
