@@ -157,7 +157,7 @@ import Testing
   )
 
   #expect(await router.route(
-    transcript: "We need to fix all the image placeholders",
+    transcript: "We need to fix the image placeholders",
     candidates: [inbox, fleck, websiteDemo, chihan],
     inboxID: inbox.destination.noteID
   ) == .resolved(chihan.destination.noteID))

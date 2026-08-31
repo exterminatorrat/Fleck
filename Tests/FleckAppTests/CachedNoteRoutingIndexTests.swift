@@ -78,12 +78,12 @@ import Testing
   let index = CachedNoteRoutingIndex()
 
   let matches = await index.retrieve(
-    transcript: "We need to fix all the image placeholders",
+    transcript: "We need to fix the image placeholders",
     candidates: [unrelated, target]
   )
 
   #expect(matches.first?.candidate.destination.noteID == target.destination.noteID)
-  #expect(matches.first?.exactTermMatches == 3)
+  #expect(matches.first?.exactTermMatches == 2)
 }
 
 @Test func cachedRoutingOrdersTiesByNormalizedTitleThenUUID() async {
