@@ -1,0 +1,984 @@
+import CryptoKit
+import Darwin
+import FleckCore
+import Foundation
+
+enum LocalWritingCorpusStoreError: String, Error, Equatable, Sendable,
+  CustomStringConvertible
+{
+  case invalidLocation
+  case alreadyExists
+  case missingAuthority
+  case permissions
+  case nonCanonicalData
+  case identityMismatch
+  case rollbackOrFork
+  case ioFailure
+
+  var description: String { rawValue }
+}
+
+struct LocalWritingCorpusWorkspace: Equatable, Sendable {
+  let corpusID: UUID
+  let workspaceURL: URL
+  let manifest: LocalWritingCorpusManifestEnvelope
+  let checkpoint: LocalWritingExposureLedgerCheckpoint
+}
+
+enum LocalWritingCorpusStoreFaultPoint: Equatable, Sendable {
+  case afterConsentPublish
+  case afterManifestPublish
+  case afterLedgerCreate
+  case afterCheckpointStageSync
+  case afterCheckpointStageCloseBeforeReadback
+  case beforeCheckpointRename
+  case afterCheckpointRenameBeforeDirectorySync
+  case afterAuthorityRead
+}
+
+actor LocalWritingCorpusStore {
+  typealias Clock = @Sendable () -> Int64
+  typealias ForbiddenRootsProvider = @Sendable () -> [URL]
+  typealias FaultHook = @Sendable (LocalWritingCorpusStoreFaultPoint) throws -> Void
+
+  private static let managedContainerName = "Fleck Local Writing Corpus"
+  private static let consentName = "consent.json"
+  private static let manifestName = "manifest.json"
+  private static let checkpointName = "checkpoint.json"
+  private static let exposureName = "exposure"
+  private static let ledgerName = "ledger.jsonl"
+  private static let maximumConsentBytes = 4 * 1_024
+  private static let maximumManifestBytes = 64 * 1_024
+  private static let maximumCheckpointBytes = 2 * 1_024
+
+  private let fileManager: FileManager
+  private let clock: Clock
+  private let additionalForbiddenRoots: ForbiddenRootsProvider
+  private let faultHook: FaultHook?
+
+  init(
+    fileManager: FileManager = .default,
+    clock: @escaping Clock = {
+      Int64(Date().timeIntervalSince1970 * 1_000)
+    },
+    additionalForbiddenRoots: @escaping ForbiddenRootsProvider = { [] },
+    faultHook: FaultHook? = nil
+  ) {
+    self.fileManager = fileManager
+    self.clock = clock
+    self.additionalForbiddenRoots = additionalForbiddenRoots
+    self.faultHook = faultHook
+  }
+
+  func create(
+    in selectedContainerURL: URL,
+    corpusID: UUID = UUID()
+  ) throws -> LocalWritingCorpusWorkspace {
+    try validateSelectedContainer(selectedContainerURL)
+    let timestamp = clock()
+    guard timestamp >= 0 else { throw LocalWritingCorpusStoreError.nonCanonicalData }
+
+    let selected = try Self.openSelectedDirectory(selectedContainerURL)
+    defer { Darwin.close(selected.descriptor) }
+    let managed = try Self.createOrOpenDirectory(
+      named: Self.managedContainerName,
+      in: selected.descriptor
+    )
+    defer { Darwin.close(managed.descriptor) }
+
+    let corpusName = corpusID.uuidString.lowercased()
+    let corpus = try Self.createDirectory(named: corpusName, in: managed.descriptor)
+    var keepCorpus = false
+    var exposure: DirectoryAuthority?
+    var createdFiles: [String: AuthorityIdentity] = [:]
+    defer {
+      if !keepCorpus {
+        Self.cleanupFailedCreation(
+          corpusName: corpusName,
+          corpus: corpus,
+          exposure: exposure,
+          createdFiles: createdFiles,
+          managed: managed,
+          selected: selected
+        )
+      }
+      if let exposure { Darwin.close(exposure.descriptor) }
+      Darwin.close(corpus.descriptor)
+    }
+
+    let consent = ConsentReceipt(corpusID: corpusID, createdAt: timestamp)
+    let consentData = consent.canonicalData
+    let consentDigest = Self.sha256(consentData)
+    let payload = try LocalWritingCorpusPayload(
+      language: "en-US",
+      claimScope: .ownerPrivateBeta,
+      consentReceiptSHA256: consentDigest,
+      createdAtUnixMilliseconds: timestamp,
+      controlledWorkspaces: [],
+      cases: []
+    )
+    let manifest = try LocalWritingCorpusCodec.makeManifest(
+      corpusID: corpusID,
+      payload: payload
+    )
+    let manifestData = try LocalWritingCorpusCodec.canonicalData(for: manifest)
+
+    createdFiles[Self.consentName] = try Self.publishExclusive(
+      consentData,
+      named: Self.consentName,
+      in: corpus.descriptor
+    )
+    try faultHook?(.afterConsentPublish)
+    createdFiles[Self.manifestName] = try Self.publishExclusive(
+      manifestData,
+      named: Self.manifestName,
+      in: corpus.descriptor
+    )
+    try faultHook?(.afterManifestPublish)
+
+    let createdExposure = try Self.createDirectory(
+      named: Self.exposureName,
+      in: corpus.descriptor
+    )
+    exposure = createdExposure
+    let workspaceURL = selectedContainerURL
+      .appendingPathComponent(Self.managedContainerName, isDirectory: true)
+      .appendingPathComponent(corpusName, isDirectory: true)
+    let ledgerURL = workspaceURL
+      .appendingPathComponent(Self.exposureName, isDirectory: true)
+      .appendingPathComponent(Self.ledgerName)
+    let ledger: LocalWritingExposureLedger
+    do {
+      ledger = try LocalWritingExposureLedger.create(at: ledgerURL, corpusID: corpusID)
+    } catch {
+      throw Self.mapLedgerError(error)
+    }
+    createdFiles["\(Self.exposureName)/\(Self.ledgerName)"] = try Self.fileIdentity(
+      named: Self.ledgerName,
+      in: createdExposure.descriptor
+    )
+    createdFiles["\(Self.exposureName)/\(Self.ledgerName).lock"] = try Self.fileIdentity(
+      named: "\(Self.ledgerName).lock",
+      in: createdExposure.descriptor
+    )
+    try faultHook?(.afterLedgerCreate)
+    let checkpoint: LocalWritingExposureLedgerCheckpoint
+    do {
+      checkpoint = try ledger.checkpoint()
+    } catch {
+      throw Self.mapLedgerError(error)
+    }
+    createdFiles[Self.checkpointName] = try publishCheckpoint(
+      checkpoint,
+      replacing: nil,
+      in: corpus
+    )
+    try Self.requireDirectoryIdentity(corpus)
+    try Self.requireDirectoryIdentity(createdExposure)
+    try Self.syncDirectory(managed.descriptor)
+    try Self.syncDirectory(selected.descriptor, exactMode: nil)
+    keepCorpus = true
+    return LocalWritingCorpusWorkspace(
+      corpusID: corpusID,
+      workspaceURL: workspaceURL,
+      manifest: manifest,
+      checkpoint: checkpoint
+    )
+  }
+
+  func open(at workspaceURL: URL) throws -> LocalWritingCorpusWorkspace {
+    let location = try validateWorkspaceLocation(workspaceURL)
+    try validateSelectedContainer(location.selectedContainer)
+    let selected = try Self.openSelectedDirectory(location.selectedContainer)
+    defer { Darwin.close(selected.descriptor) }
+    let managed = try Self.openDirectory(
+      named: Self.managedContainerName,
+      in: selected.descriptor
+    )
+    defer { Darwin.close(managed.descriptor) }
+    let corpus = try Self.openDirectory(named: location.corpusName, in: managed.descriptor)
+    defer { Darwin.close(corpus.descriptor) }
+    let exposure = try Self.openDirectory(named: Self.exposureName, in: corpus.descriptor)
+    defer { Darwin.close(exposure.descriptor) }
+
+    let consentBytes = try Self.readAuthorityFile(
+      named: Self.consentName,
+      maximumBytes: Self.maximumConsentBytes,
+      in: corpus.descriptor
+    )
+    let consent = try ConsentReceipt.decodeCanonical(consentBytes.data)
+    let manifestBytes = try Self.readAuthorityFile(
+      named: Self.manifestName,
+      maximumBytes: Self.maximumManifestBytes,
+      in: corpus.descriptor
+    )
+    let ledgerIdentity = try Self.fileIdentity(
+      named: Self.ledgerName,
+      in: exposure.descriptor
+    )
+    let lockIdentity = try Self.fileIdentity(
+      named: "\(Self.ledgerName).lock",
+      in: exposure.descriptor
+    )
+    let cachedBytes = try Self.readAuthorityFileIfPresent(
+      named: Self.checkpointName,
+      maximumBytes: Self.maximumCheckpointBytes,
+      in: corpus.descriptor
+    )
+    try faultHook?(.afterAuthorityRead)
+    let checkpointUnchanged: Bool
+    if let cachedBytes {
+      checkpointUnchanged = (try? Self.fileIdentity(
+        named: Self.checkpointName,
+        in: corpus.descriptor
+      )) == cachedBytes.identity
+    } else {
+      checkpointUnchanged = Self.isAbsent(
+        named: Self.checkpointName,
+        in: corpus.descriptor
+      )
+    }
+    guard try Self.fileIdentity(named: Self.consentName, in: corpus.descriptor)
+      == consentBytes.identity,
+      try Self.fileIdentity(named: Self.manifestName, in: corpus.descriptor)
+        == manifestBytes.identity,
+      try Self.fileIdentity(named: Self.ledgerName, in: exposure.descriptor)
+        == ledgerIdentity,
+      try Self.fileIdentity(named: "\(Self.ledgerName).lock", in: exposure.descriptor)
+        == lockIdentity,
+      checkpointUnchanged
+    else { throw LocalWritingCorpusStoreError.identityMismatch }
+    let manifest: LocalWritingCorpusManifestEnvelope
+    do {
+      manifest = try LocalWritingCorpusCodec.decodeCanonical(manifestBytes.data)
+      guard try LocalWritingCorpusCodec.canonicalData(for: manifest) == manifestBytes.data else {
+        throw LocalWritingCorpusStoreError.nonCanonicalData
+      }
+    } catch let error as LocalWritingCorpusStoreError {
+      throw error
+    } catch {
+      throw LocalWritingCorpusStoreError.nonCanonicalData
+    }
+    guard consent.corpusID == location.corpusID,
+      consent.consentID == location.corpusID,
+      manifest.corpusID == location.corpusID,
+      manifest.payload.createdAtUnixMilliseconds == consent.createdAt,
+      manifest.payload.consentReceiptSHA256 == Self.sha256(consentBytes.data),
+      manifest.payload.language == "en-US",
+      manifest.payload.claimScope == .ownerPrivateBeta,
+      manifest.payload.controlledWorkspaces.isEmpty,
+      manifest.payload.cases.isEmpty
+    else { throw LocalWritingCorpusStoreError.identityMismatch }
+
+    let ledgerURL = workspaceURL
+      .appendingPathComponent(Self.exposureName, isDirectory: true)
+      .appendingPathComponent(Self.ledgerName)
+    let ledger: LocalWritingExposureLedger
+    let live: LocalWritingExposureLedgerCheckpoint
+    do {
+      ledger = try LocalWritingExposureLedger.open(at: ledgerURL)
+      live = try ledger.verify(expectedCorpusID: location.corpusID).checkpoint
+    } catch {
+      throw Self.mapLedgerError(error)
+    }
+
+    let checkpointIdentity: AuthorityIdentity?
+    if let cachedBytes {
+      let cached: LocalWritingExposureLedgerCheckpoint
+      do {
+        cached = try LocalWritingExposureLedger.verifyCheckpoint(
+          canonicalData: cachedBytes.data
+        )
+      } catch {
+        throw LocalWritingCorpusStoreError.nonCanonicalData
+      }
+      guard cached.corpusID == location.corpusID else {
+        throw LocalWritingCorpusStoreError.identityMismatch
+      }
+      if cached.eventCount > live.eventCount {
+        throw LocalWritingCorpusStoreError.rollbackOrFork
+      }
+      if cached.eventCount == live.eventCount {
+        guard cached == live else { throw LocalWritingCorpusStoreError.rollbackOrFork }
+        checkpointIdentity = cachedBytes.identity
+      } else {
+        do {
+          let ledgerExtension = try ledger.exportExtension(after: cached)
+          guard ledgerExtension.childCheckpoint == live else {
+            throw LocalWritingCorpusStoreError.rollbackOrFork
+          }
+        } catch let error as LocalWritingCorpusStoreError {
+          throw error
+        } catch {
+          throw LocalWritingCorpusStoreError.rollbackOrFork
+        }
+        checkpointIdentity = try publishCheckpoint(
+          live,
+          replacing: cachedBytes.identity,
+          in: corpus
+        )
+      }
+    } else {
+      checkpointIdentity = try publishCheckpoint(live, replacing: nil, in: corpus)
+    }
+    guard checkpointIdentity != nil else { throw LocalWritingCorpusStoreError.ioFailure }
+    try Self.requireDirectoryIdentity(corpus)
+    try Self.requireDirectoryIdentity(exposure)
+    return LocalWritingCorpusWorkspace(
+      corpusID: location.corpusID,
+      workspaceURL: workspaceURL,
+      manifest: manifest,
+      checkpoint: live
+    )
+  }
+
+  private func validateSelectedContainer(_ url: URL) throws {
+    guard Self.isCanonicalAbsoluteFileURL(url) else {
+      throw LocalWritingCorpusStoreError.invalidLocation
+    }
+    let path = url.path
+    guard path != "/",
+      path != fileManager.homeDirectoryForCurrentUser.standardizedFileURL.path
+    else { throw LocalWritingCorpusStoreError.invalidLocation }
+    let forbidden = additionalForbiddenRoots().map { $0.standardizedFileURL.path }
+    guard !forbidden.contains(where: { Self.isEqualOrDescendant(path, of: $0) }) else {
+      throw LocalWritingCorpusStoreError.invalidLocation
+    }
+    guard !url.pathComponents.contains(where: {
+      $0.lowercased().hasSuffix(".app")
+    }) else { throw LocalWritingCorpusStoreError.invalidLocation }
+    try Self.rejectSymlinkAncestors(of: url)
+    try Self.rejectGitAncestor(of: url)
+  }
+
+  private func validateWorkspaceLocation(
+    _ workspaceURL: URL
+  ) throws -> (selectedContainer: URL, corpusName: String, corpusID: UUID) {
+    guard Self.isCanonicalAbsoluteFileURL(workspaceURL) else {
+      throw LocalWritingCorpusStoreError.invalidLocation
+    }
+    let corpusName = workspaceURL.lastPathComponent
+    guard corpusName == corpusName.lowercased(),
+      let corpusID = UUID(uuidString: corpusName),
+      corpusID.uuidString.lowercased() == corpusName,
+      workspaceURL.deletingLastPathComponent().lastPathComponent
+        == Self.managedContainerName
+    else { throw LocalWritingCorpusStoreError.invalidLocation }
+    return (
+      workspaceURL.deletingLastPathComponent().deletingLastPathComponent(),
+      corpusName,
+      corpusID
+    )
+  }
+
+  private func publishCheckpoint(
+    _ checkpoint: LocalWritingExposureLedgerCheckpoint,
+    replacing oldIdentity: AuthorityIdentity?,
+    in directory: DirectoryAuthority
+  ) throws -> AuthorityIdentity {
+    let stageName = ".checkpoint-\(UUID().uuidString.lowercased()).stage"
+    var stageDescriptor = Darwin.openat(
+      directory.descriptor,
+      stageName,
+      O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW,
+      mode_t(0o600)
+    )
+    guard stageDescriptor >= 0 else { throw Self.mapSystemError() }
+    var stageExists = true
+    var publishedNewFile = false
+    var swappedOldFile = false
+    var publicationComplete = false
+    var stageIdentity: AuthorityIdentity?
+    defer {
+      if stageDescriptor >= 0 { Darwin.close(stageDescriptor) }
+      if !publicationComplete, swappedOldFile,
+        (try? Self.fileIdentity(named: Self.checkpointName, in: directory.descriptor))
+          == stageIdentity,
+        (try? Self.fileIdentity(named: stageName, in: directory.descriptor))
+          == oldIdentity
+      {
+        _ = renameatx_np(
+          directory.descriptor,
+          stageName,
+          directory.descriptor,
+          Self.checkpointName,
+          UInt32(RENAME_SWAP)
+        )
+      } else if !publicationComplete, publishedNewFile,
+        (try? Self.fileIdentity(named: Self.checkpointName, in: directory.descriptor))
+          == stageIdentity
+      {
+        Darwin.unlinkat(directory.descriptor, Self.checkpointName, 0)
+      }
+      if stageExists { Darwin.unlinkat(directory.descriptor, stageName, 0) }
+      if !publicationComplete { _ = fsync(directory.descriptor) }
+    }
+    guard fchmod(stageDescriptor, 0o600) == 0 else {
+      throw LocalWritingCorpusStoreError.ioFailure
+    }
+    let validatedStageIdentity = try Self.validateFileDescriptor(stageDescriptor)
+    stageIdentity = validatedStageIdentity
+    try Self.writeAll(checkpoint.canonicalData, to: stageDescriptor)
+    try Self.fullSync(stageDescriptor)
+    try faultHook?(.afterCheckpointStageSync)
+    guard Darwin.close(stageDescriptor) == 0 else {
+      throw LocalWritingCorpusStoreError.ioFailure
+    }
+    stageDescriptor = -1
+    try faultHook?(.afterCheckpointStageCloseBeforeReadback)
+    let readback = try Self.readAuthorityFile(
+      named: stageName,
+      maximumBytes: Self.maximumCheckpointBytes,
+      in: directory.descriptor
+    )
+    guard readback.identity == validatedStageIdentity,
+      readback.data == checkpoint.canonicalData,
+      (try? LocalWritingExposureLedger.verifyCheckpoint(
+        canonicalData: readback.data
+      )) == checkpoint
+    else { throw LocalWritingCorpusStoreError.identityMismatch }
+    try faultHook?(.beforeCheckpointRename)
+    if let oldIdentity {
+      guard try Self.fileIdentity(
+        named: Self.checkpointName,
+        in: directory.descriptor
+      ) == oldIdentity else { throw LocalWritingCorpusStoreError.identityMismatch }
+      guard renameatx_np(
+        directory.descriptor,
+        stageName,
+        directory.descriptor,
+        Self.checkpointName,
+        UInt32(RENAME_SWAP)
+      ) == 0 else { throw Self.mapSystemError() }
+      guard try Self.fileIdentity(
+        named: Self.checkpointName,
+        in: directory.descriptor
+      ) == validatedStageIdentity,
+        try Self.fileIdentity(named: stageName, in: directory.descriptor) == oldIdentity
+      else {
+        _ = renameatx_np(
+          directory.descriptor,
+          stageName,
+          directory.descriptor,
+          Self.checkpointName,
+          UInt32(RENAME_SWAP)
+        )
+        throw LocalWritingCorpusStoreError.identityMismatch
+      }
+      swappedOldFile = true
+    } else {
+      guard Self.isAbsent(named: Self.checkpointName, in: directory.descriptor) else {
+        throw LocalWritingCorpusStoreError.identityMismatch
+      }
+      guard renameatx_np(
+        directory.descriptor,
+        stageName,
+        directory.descriptor,
+        Self.checkpointName,
+        UInt32(RENAME_EXCL)
+      ) == 0 else { throw Self.mapSystemError() }
+      stageExists = false
+      publishedNewFile = true
+      guard try Self.fileIdentity(
+        named: Self.checkpointName,
+        in: directory.descriptor
+      ) == validatedStageIdentity else { throw LocalWritingCorpusStoreError.identityMismatch }
+    }
+    try faultHook?(.afterCheckpointRenameBeforeDirectorySync)
+    try Self.syncDirectory(directory.descriptor)
+    if swappedOldFile {
+      guard Darwin.unlinkat(directory.descriptor, stageName, 0) == 0 else {
+        throw LocalWritingCorpusStoreError.ioFailure
+      }
+      stageExists = false
+      try Self.syncDirectory(directory.descriptor)
+    }
+    try Self.requireDirectoryIdentity(directory)
+    publicationComplete = true
+    return validatedStageIdentity
+  }
+}
+
+private extension LocalWritingCorpusStore {
+  struct AuthorityIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+
+    init(_ status: stat) {
+      device = UInt64(status.st_dev)
+      inode = UInt64(status.st_ino)
+    }
+  }
+
+  struct DirectoryAuthority: Sendable {
+    let descriptor: Int32
+    let identity: AuthorityIdentity
+    let name: String?
+    let parentDescriptor: Int32?
+  }
+
+  struct AuthorityBytes: Sendable {
+    let identity: AuthorityIdentity
+    let data: Data
+  }
+
+  struct ConsentReceipt: Equatable, Sendable {
+    let consentID: UUID
+    let corpusID: UUID
+    let createdAt: Int64
+
+    init(corpusID: UUID, createdAt: Int64) {
+      consentID = corpusID
+      self.corpusID = corpusID
+      self.createdAt = createdAt
+    }
+
+    var canonicalData: Data {
+      Data(
+        "{\"allowsAudioCapture\":false,\"allowsTranscriptReference\":false,\"consentID\":\"\(consentID.uuidString.lowercased())\",\"corpusID\":\"\(corpusID.uuidString.lowercased())\",\"createdAtUnixMilliseconds\":\(createdAt),\"purpose\":\"localWritingQuality\",\"schemaVersion\":1}".utf8
+      )
+    }
+
+    static func decodeCanonical(_ data: Data) throws -> ConsentReceipt {
+      guard !data.isEmpty,
+        data.count <= maximumConsentBytes,
+        let text = String(data: data, encoding: .utf8),
+        text == text.precomposedStringWithCanonicalMapping
+      else { throw LocalWritingCorpusStoreError.nonCanonicalData }
+      var remainder = text[...]
+      func consume(_ literal: String) throws {
+        guard remainder.hasPrefix(literal) else {
+          throw LocalWritingCorpusStoreError.nonCanonicalData
+        }
+        remainder.removeFirst(literal.count)
+      }
+      func consumeUUID(ending suffix: String) throws -> UUID {
+        guard let end = remainder.range(of: suffix) else {
+          throw LocalWritingCorpusStoreError.nonCanonicalData
+        }
+        let value = String(remainder[..<end.lowerBound])
+        remainder = remainder[end.upperBound...]
+        guard value == value.lowercased(),
+          let uuid = UUID(uuidString: value),
+          uuid.uuidString.lowercased() == value
+        else { throw LocalWritingCorpusStoreError.nonCanonicalData }
+        return uuid
+      }
+      try consume(
+        "{\"allowsAudioCapture\":false,\"allowsTranscriptReference\":false,\"consentID\":\""
+      )
+      let consentID = try consumeUUID(ending: "\",\"corpusID\":\"")
+      let corpusID = try consumeUUID(ending: "\",\"createdAtUnixMilliseconds\":")
+      guard let end = remainder.firstIndex(of: ",") else {
+        throw LocalWritingCorpusStoreError.nonCanonicalData
+      }
+      let number = String(remainder[..<end])
+      remainder = remainder[remainder.index(after: end)...]
+      guard !number.isEmpty,
+        number == "0" || (number.first != "0" && number.allSatisfy(\.isNumber)),
+        let createdAt = Int64(number),
+        createdAt >= 0
+      else { throw LocalWritingCorpusStoreError.nonCanonicalData }
+      try consume("\"purpose\":\"localWritingQuality\",\"schemaVersion\":1}")
+      let receipt = ConsentReceipt(
+        consentID: consentID,
+        corpusID: corpusID,
+        createdAt: createdAt
+      )
+      guard remainder.isEmpty, receipt.canonicalData == data else {
+        throw LocalWritingCorpusStoreError.nonCanonicalData
+      }
+      return receipt
+    }
+
+    private init(consentID: UUID, corpusID: UUID, createdAt: Int64) {
+      self.consentID = consentID
+      self.corpusID = corpusID
+      self.createdAt = createdAt
+    }
+  }
+
+  static func isCanonicalAbsoluteFileURL(_ url: URL) -> Bool {
+    url.isFileURL
+      && url.path.hasPrefix("/")
+      && url.path == url.standardizedFileURL.path
+      && !url.pathComponents.contains("..")
+      && !url.pathComponents.contains(".")
+  }
+
+  static func isEqualOrDescendant(_ path: String, of root: String) -> Bool {
+    path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+  }
+
+  static func rejectSymlinkAncestors(of url: URL) throws {
+    var current = URL(fileURLWithPath: "/", isDirectory: true)
+    for component in url.pathComponents.dropFirst() {
+      current.appendPathComponent(component)
+      var status = stat()
+      guard lstat(current.path, &status) == 0 else {
+        throw mapSystemError(missingIsLocation: true)
+      }
+      guard status.st_mode & S_IFMT != S_IFLNK else {
+        throw LocalWritingCorpusStoreError.invalidLocation
+      }
+    }
+  }
+
+  static func rejectGitAncestor(of url: URL) throws {
+    var current = url
+    while current.path != "/" {
+      var status = stat()
+      let git = current.appendingPathComponent(".git")
+      if lstat(git.path, &status) == 0,
+        status.st_mode & S_IFMT == S_IFDIR || status.st_mode & S_IFMT == S_IFREG
+      {
+        throw LocalWritingCorpusStoreError.invalidLocation
+      }
+      current.deleteLastPathComponent()
+    }
+  }
+
+  static func openSelectedDirectory(_ url: URL) throws -> DirectoryAuthority {
+    let descriptor = Darwin.open(url.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    guard descriptor >= 0 else { throw mapSystemError(missingIsLocation: true) }
+    var keep = false
+    defer { if !keep { Darwin.close(descriptor) } }
+    let identity = try validateDirectoryDescriptor(descriptor, exactMode: nil)
+    var status = stat()
+    guard lstat(url.path, &status) == 0,
+      status.st_mode & S_IFMT == S_IFDIR,
+      AuthorityIdentity(status) == identity
+    else { throw LocalWritingCorpusStoreError.permissions }
+    keep = true
+    return DirectoryAuthority(
+      descriptor: descriptor,
+      identity: identity,
+      name: nil,
+      parentDescriptor: nil
+    )
+  }
+
+  static func createOrOpenDirectory(
+    named name: String,
+    in parentDescriptor: Int32
+  ) throws -> DirectoryAuthority {
+    if mkdirat(parentDescriptor, name, mode_t(0o700)) == 0 {
+      return try openDirectory(named: name, in: parentDescriptor)
+    }
+    guard errno == EEXIST else { throw mapSystemError() }
+    return try openDirectory(named: name, in: parentDescriptor)
+  }
+
+  static func createDirectory(
+    named name: String,
+    in parentDescriptor: Int32
+  ) throws -> DirectoryAuthority {
+    guard mkdirat(parentDescriptor, name, mode_t(0o700)) == 0 else {
+      if errno == EEXIST { throw LocalWritingCorpusStoreError.alreadyExists }
+      throw mapSystemError()
+    }
+    do {
+      let authority = try openDirectory(named: name, in: parentDescriptor)
+      try syncDirectory(parentDescriptor, exactMode: nil)
+      return authority
+    } catch {
+      Darwin.unlinkat(parentDescriptor, name, AT_REMOVEDIR)
+      throw error
+    }
+  }
+
+  static func openDirectory(
+    named name: String,
+    in parentDescriptor: Int32
+  ) throws -> DirectoryAuthority {
+    let descriptor = Darwin.openat(
+      parentDescriptor,
+      name,
+      O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+    )
+    guard descriptor >= 0 else { throw mapSystemError(missingIsLocation: false) }
+    var keep = false
+    defer { if !keep { Darwin.close(descriptor) } }
+    let identity = try validateDirectoryDescriptor(descriptor, exactMode: 0o700)
+    guard try directoryIdentity(named: name, in: parentDescriptor) == identity else {
+      throw LocalWritingCorpusStoreError.identityMismatch
+    }
+    keep = true
+    return DirectoryAuthority(
+      descriptor: descriptor,
+      identity: identity,
+      name: name,
+      parentDescriptor: parentDescriptor
+    )
+  }
+
+  static func publishExclusive(
+    _ data: Data,
+    named name: String,
+    in directoryDescriptor: Int32
+  ) throws -> AuthorityIdentity {
+    let descriptor = Darwin.openat(
+      directoryDescriptor,
+      name,
+      O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW,
+      mode_t(0o600)
+    )
+    guard descriptor >= 0 else {
+      if errno == EEXIST { throw LocalWritingCorpusStoreError.alreadyExists }
+      throw mapSystemError()
+    }
+    var keep = false
+    var identity: AuthorityIdentity?
+    defer {
+      Darwin.close(descriptor)
+      if !keep,
+        let identity,
+        (try? fileIdentity(named: name, in: directoryDescriptor)) == identity
+      {
+        Darwin.unlinkat(directoryDescriptor, name, 0)
+      }
+    }
+    guard fchmod(descriptor, 0o600) == 0 else {
+      throw LocalWritingCorpusStoreError.ioFailure
+    }
+    let createdIdentity = try validateFileDescriptor(descriptor)
+    identity = createdIdentity
+    try writeAll(data, to: descriptor)
+    try fullSync(descriptor)
+    let readback = try readAuthorityFile(
+      named: name,
+      maximumBytes: max(data.count, 1),
+      in: directoryDescriptor
+    )
+    guard readback.identity == createdIdentity, readback.data == data else {
+      throw LocalWritingCorpusStoreError.identityMismatch
+    }
+    try syncDirectory(directoryDescriptor)
+    keep = true
+    return createdIdentity
+  }
+
+  static func readAuthorityFileIfPresent(
+    named name: String,
+    maximumBytes: Int,
+    in directoryDescriptor: Int32
+  ) throws -> AuthorityBytes? {
+    var status = stat()
+    guard fstatat(directoryDescriptor, name, &status, AT_SYMLINK_NOFOLLOW) == 0 else {
+      if errno == ENOENT { return nil }
+      throw mapSystemError()
+    }
+    return try readAuthorityFile(
+      named: name,
+      maximumBytes: maximumBytes,
+      in: directoryDescriptor
+    )
+  }
+
+  static func readAuthorityFile(
+    named name: String,
+    maximumBytes: Int,
+    in directoryDescriptor: Int32
+  ) throws -> AuthorityBytes {
+    let expected = try fileIdentity(named: name, in: directoryDescriptor)
+    let descriptor = Darwin.openat(directoryDescriptor, name, O_RDONLY | O_NOFOLLOW)
+    guard descriptor >= 0 else { throw mapSystemError(missingIsLocation: false) }
+    defer { Darwin.close(descriptor) }
+    guard try validateFileDescriptor(descriptor) == expected else {
+      throw LocalWritingCorpusStoreError.identityMismatch
+    }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: min(8_192, maximumBytes + 1))
+    while true {
+      let count = Darwin.read(descriptor, &buffer, buffer.count)
+      if count == 0 { break }
+      if count < 0 {
+        if errno == EINTR { continue }
+        throw mapSystemError()
+      }
+      guard data.count <= maximumBytes - count else {
+        throw LocalWritingCorpusStoreError.nonCanonicalData
+      }
+      data.append(buffer, count: count)
+    }
+    guard try fileIdentity(named: name, in: directoryDescriptor) == expected else {
+      throw LocalWritingCorpusStoreError.identityMismatch
+    }
+    return AuthorityBytes(identity: expected, data: data)
+  }
+
+  static func fileIdentity(
+    named name: String,
+    in directoryDescriptor: Int32
+  ) throws -> AuthorityIdentity {
+    var status = stat()
+    guard fstatat(directoryDescriptor, name, &status, AT_SYMLINK_NOFOLLOW) == 0 else {
+      throw mapSystemError(missingIsLocation: false)
+    }
+    guard status.st_mode & S_IFMT == S_IFREG,
+      status.st_uid == geteuid(),
+      status.st_mode & 0o7777 == 0o600
+    else { throw LocalWritingCorpusStoreError.permissions }
+    return AuthorityIdentity(status)
+  }
+
+  static func directoryIdentity(
+    named name: String,
+    in parentDescriptor: Int32
+  ) throws -> AuthorityIdentity {
+    var status = stat()
+    guard fstatat(parentDescriptor, name, &status, AT_SYMLINK_NOFOLLOW) == 0 else {
+      throw mapSystemError(missingIsLocation: false)
+    }
+    guard status.st_mode & S_IFMT == S_IFDIR,
+      status.st_uid == geteuid(),
+      status.st_mode & 0o7777 == 0o700
+    else { throw LocalWritingCorpusStoreError.permissions }
+    return AuthorityIdentity(status)
+  }
+
+  static func validateDirectoryDescriptor(
+    _ descriptor: Int32,
+    exactMode: mode_t?
+  ) throws -> AuthorityIdentity {
+    var status = stat()
+    guard fstat(descriptor, &status) == 0,
+      status.st_mode & S_IFMT == S_IFDIR,
+      exactMode == nil || status.st_mode & 0o7777 == exactMode
+    else { throw LocalWritingCorpusStoreError.permissions }
+    if exactMode != nil, status.st_uid != geteuid() {
+      throw LocalWritingCorpusStoreError.permissions
+    }
+    return AuthorityIdentity(status)
+  }
+
+  static func validateFileDescriptor(_ descriptor: Int32) throws -> AuthorityIdentity {
+    var status = stat()
+    guard fstat(descriptor, &status) == 0,
+      status.st_mode & S_IFMT == S_IFREG,
+      status.st_uid == geteuid(),
+      status.st_mode & 0o7777 == 0o600
+    else { throw LocalWritingCorpusStoreError.permissions }
+    return AuthorityIdentity(status)
+  }
+
+  static func requireDirectoryIdentity(_ authority: DirectoryAuthority) throws {
+    guard try validateDirectoryDescriptor(authority.descriptor, exactMode: 0o700)
+      == authority.identity
+    else { throw LocalWritingCorpusStoreError.identityMismatch }
+    if let name = authority.name, let parent = authority.parentDescriptor {
+      guard try directoryIdentity(named: name, in: parent) == authority.identity else {
+        throw LocalWritingCorpusStoreError.identityMismatch
+      }
+    }
+  }
+
+  static func writeAll(_ data: Data, to descriptor: Int32) throws {
+    try data.withUnsafeBytes { bytes in
+      guard let base = bytes.baseAddress else { return }
+      var offset = 0
+      while offset < bytes.count {
+        let count = Darwin.write(
+          descriptor,
+          base.advanced(by: offset),
+          bytes.count - offset
+        )
+        if count < 0 {
+          if errno == EINTR { continue }
+          throw mapSystemError()
+        }
+        guard count > 0 else { throw LocalWritingCorpusStoreError.ioFailure }
+        offset += count
+      }
+    }
+  }
+
+  static func fullSync(_ descriptor: Int32) throws {
+    guard fcntl(descriptor, F_FULLFSYNC) == 0 else {
+      throw LocalWritingCorpusStoreError.ioFailure
+    }
+  }
+
+  static func syncDirectory(_ descriptor: Int32, exactMode: mode_t? = 0o700) throws {
+    _ = try validateDirectoryDescriptor(descriptor, exactMode: exactMode)
+    guard fsync(descriptor) == 0 else { throw LocalWritingCorpusStoreError.ioFailure }
+  }
+
+  static func isAbsent(named name: String, in directoryDescriptor: Int32) -> Bool {
+    var status = stat()
+    return fstatat(directoryDescriptor, name, &status, AT_SYMLINK_NOFOLLOW) != 0
+      && errno == ENOENT
+  }
+
+  static func sha256(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+  }
+
+  static func cleanupFailedCreation(
+    corpusName: String,
+    corpus: DirectoryAuthority,
+    exposure: DirectoryAuthority?,
+    createdFiles: [String: AuthorityIdentity],
+    managed: DirectoryAuthority,
+    selected: DirectoryAuthority
+  ) {
+    if let exposure {
+      for name in [ledgerName, "\(ledgerName).lock"] {
+        let key = "\(exposureName)/\(name)"
+        if let identity = createdFiles[key],
+          (try? fileIdentity(named: name, in: exposure.descriptor)) == identity
+        {
+          Darwin.unlinkat(exposure.descriptor, name, 0)
+        }
+      }
+      if (try? requireDirectoryIdentity(exposure)) != nil {
+        Darwin.unlinkat(corpus.descriptor, exposureName, AT_REMOVEDIR)
+      }
+    }
+    for name in [checkpointName, manifestName, consentName] {
+      if let identity = createdFiles[name],
+        (try? fileIdentity(named: name, in: corpus.descriptor)) == identity
+      {
+        Darwin.unlinkat(corpus.descriptor, name, 0)
+      }
+    }
+    if (try? requireDirectoryIdentity(corpus)) != nil {
+      Darwin.unlinkat(managed.descriptor, corpusName, AT_REMOVEDIR)
+    }
+    _ = fsync(managed.descriptor)
+    _ = fsync(selected.descriptor)
+  }
+
+  static func mapLedgerError(_ error: Error) -> LocalWritingCorpusStoreError {
+    guard let ledgerError = error as? LocalWritingExposureLedgerError else {
+      return .ioFailure
+    }
+    switch ledgerError {
+    case .conflict, .invalidOrder:
+      return .rollbackOrFork
+    case .corruption, .nonCanonicalData:
+      return .nonCanonicalData
+    case .identityMismatch:
+      return .identityMismatch
+    case .permissions:
+      return .permissions
+    case .invalidation, .ioFailure:
+      return .ioFailure
+    }
+  }
+
+  static func mapSystemError(
+    missingIsLocation: Bool = false
+  ) -> LocalWritingCorpusStoreError {
+    switch errno {
+    case ENOENT:
+      return missingIsLocation ? .invalidLocation : .missingAuthority
+    case EEXIST:
+      return .alreadyExists
+    case EACCES, EPERM, ELOOP, EISDIR, ENOTDIR:
+      return .permissions
+    default:
+      return .ioFailure
+    }
+  }
+}
