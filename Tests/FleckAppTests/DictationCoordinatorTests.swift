@@ -2311,6 +2311,64 @@ private func waitForCompletion(
   #expect(fixture.standard.releaseCount == 1)
 }
 
+@Test @MainActor
+func processingBackedNoSpeechPublishesNoSpeechWithCaptureProvenance() async throws {
+  let processing = ProcessingProbe(
+    finishError: StreamingDictationProcessorError.noSpeech
+  )
+  let fixture = try Fixture(processing: processing)
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  let terminal = try #require(events.last { $0.terminal != nil })
+  #expect(terminal.phase == .failed("No speech detected."))
+  #expect(terminal.terminal == .noSpeech)
+  #expect(terminal.context?.pipelineStage == .capture)
+  #expect(terminal.context?.failureStage == .capture)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(try await fixture.history.list().isEmpty)
+}
+
+@Test @MainActor
+func processingFinalizationFailurePublishesCaptureProvenance() async throws {
+  let processing = ProcessingProbe(finishError: TestError.failed)
+  let fixture = try Fixture(processing: processing)
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  let terminal = try #require(events.last { $0.terminal != nil })
+  #expect(terminal.context?.pipelineStage == .capture)
+  #expect(terminal.context?.failureStage == .capture)
+}
+
+@Test @MainActor
+func processingResultContextMismatchPublishesCaptureProvenance() async throws {
+  let mismatchedContext = try coordinatorDictionaryContext(
+    captureID: UUID(),
+    generation: 99
+  )
+  let processing = ProcessingProbe(result: processingResult(
+    processingResult("Mismatched context"),
+    pinnedTo: mismatchedContext
+  ))
+  let fixture = try Fixture(processing: processing)
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  let terminal = try #require(events.last { $0.terminal != nil })
+  #expect(terminal.context?.pipelineStage == .capture)
+  #expect(terminal.context?.failureStage == .capture)
+}
+
 @Test @MainActor func nonemptyFinalCreatesPendingHistoryBeforeCleanup() async throws {
   let fixture = try Fixture()
   fixture.standard.finalText = "Buy tea"
@@ -4680,6 +4738,7 @@ private actor CoordinatorBlockingAppleSpeechSession: AppleSpeechSession {
 final class ProcessingProbe: DictationProcessing {
   private let updates: [DictationTextUpdate]
   private(set) var result: DictationProcessingResult
+  private let finishError: Error?
   private let finishBlocksUntilCancel: Bool
   private let synchronousLevel: Float?
   private let drainGate: Gate?
@@ -4713,6 +4772,7 @@ final class ProcessingProbe: DictationProcessing {
       cleanupOutcome: .usedRaw,
       measurements: .empty
     ),
+    finishError: Error? = nil,
     finishBlocksUntilCancel: Bool = false,
     synchronousLevel: Float? = nil,
     drainGate: Gate? = nil,
@@ -4725,6 +4785,7 @@ final class ProcessingProbe: DictationProcessing {
   ) {
     self.updates = updates
     self.result = result
+    self.finishError = finishError
     self.finishBlocksUntilCancel = finishBlocksUntilCancel
     self.synchronousLevel = synchronousLevel
     self.drainGate = drainGate
@@ -4753,6 +4814,7 @@ final class ProcessingProbe: DictationProcessing {
     beginCount += 1
     let session = ProcessingSessionProbe(
       result: result,
+      finishError: finishError,
       finishBlocksUntilCancel: finishBlocksUntilCancel,
       drainGate: drainGate,
       onFinishStarted: { [weak self] in self?.markFinishStarted() },
@@ -4822,6 +4884,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
   let updates: AsyncThrowingStream<DictationTextUpdate, Error>
 
   private let continuation: AsyncThrowingStream<DictationTextUpdate, Error>.Continuation
+  private let finishError: Error?
   private let finishBlocksUntilCancel: Bool
   private let drainGate: Gate?
   private let onFinishStarted: () -> Void
@@ -4838,6 +4901,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
 
   init(
     result: DictationProcessingResult,
+    finishError: Error?,
     finishBlocksUntilCancel: Bool,
     drainGate: Gate?,
     onFinishStarted: @escaping () -> Void,
@@ -4849,6 +4913,7 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
     onStopOrigin: @escaping (DictationStopOrigin) -> Void,
     onPublishedUpdate: @escaping (DictationTextUpdate) -> Void
   ) {
+    self.finishError = finishError
     self.finishBlocksUntilCancel = finishBlocksUntilCancel
     self.drainGate = drainGate
     self.onFinishStarted = onFinishStarted
@@ -4868,6 +4933,10 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
   func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult {
     onStopOrigin(stopOrigin)
     onFinishStarted()
+    if let finishError {
+      continuation.finish()
+      throw finishError
+    }
     if finishBlocksUntilCancel, !isCancelled {
       return await withCheckedContinuation { continuation in
         finishContinuation = continuation

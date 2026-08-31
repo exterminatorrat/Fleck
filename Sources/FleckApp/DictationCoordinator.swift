@@ -977,7 +977,9 @@ final class DictationCoordinator {
       await terminate(
         id,
         phase: .failed(message(for: error)),
-        cancelEditor: capture.mode == .focused
+        cancelEditor: capture.mode == .focused,
+        outcome: (error as? StreamingDictationProcessorError) == .noSpeech ? .noSpeech : nil,
+        failureStage: .capture
       )
       return
     }
@@ -999,7 +1001,8 @@ final class DictationCoordinator {
         await terminate(
           id,
           phase: .failed(message(for: StreamingDictationProcessorError.captureContextMismatch)),
-          cancelEditor: capture.mode == .focused
+          cancelEditor: capture.mode == .focused,
+          failureStage: .capture
         )
         return
       }
