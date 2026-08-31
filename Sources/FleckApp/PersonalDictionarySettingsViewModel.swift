@@ -21,12 +21,52 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     var filter = Filter.all
     var canonicalExportData: Data?
     var csvExportData: Data?
+    var entryEdit: EntryEdit?
     var suggestionEdit: SuggestionEdit?
     var importPreviewData: Data?
     var importPreview: PersonalDictionaryImportPreview?
     var isImportPreviewPresented = false
     var statusMessage: String?
     var errorMessage: String?
+  }
+
+  struct EntryEdit: Identifiable, Equatable {
+    let id: UUID
+    let isNew: Bool
+    var preferredForm: String
+    var aliases: String
+    var usesCorrection: Bool
+    var isEnabled: Bool
+    let localeIdentifier: String
+    let isPriority: Bool
+    let origin: PersonalDictionaryOrigin
+    let usage: PersonalDictionaryUsage
+
+    init() {
+      id = UUID()
+      isNew = true
+      preferredForm = ""
+      aliases = ""
+      usesCorrection = false
+      isEnabled = true
+      localeIdentifier = "en-US"
+      isPriority = false
+      origin = .manual
+      usage = .init()
+    }
+
+    init(entry: PersonalDictionaryEntry) {
+      id = entry.id
+      isNew = false
+      preferredForm = entry.preferredForm
+      aliases = entry.aliases.joined(separator: ", ")
+      usesCorrection = !entry.aliases.isEmpty
+      isEnabled = entry.isEnabled
+      localeIdentifier = entry.localeIdentifier
+      isPriority = entry.isPriority
+      origin = entry.origin
+      usage = entry.usage
+    }
   }
 
   struct SuggestionEdit: Identifiable, Equatable {
@@ -84,12 +124,33 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   var suggestions: [PersonalDictionarySuggestion] { state.suggestions }
   var canonicalExportData: Data? { state.canonicalExportData }
   var csvExportData: Data? { state.csvExportData }
+  var entryEdit: EntryEdit? { state.entryEdit }
   var suggestionEdit: SuggestionEdit? { state.suggestionEdit }
   var importPreviewData: Data? { state.importPreviewData }
   var importPreview: PersonalDictionaryImportPreview? { state.importPreview }
   var isImportPreviewPresented: Bool { state.isImportPreviewPresented }
   var statusMessage: String? { state.statusMessage }
   var errorMessage: String? { state.errorMessage }
+
+  var entryEditPreferredForm: String {
+    get { state.entryEdit?.preferredForm ?? "" }
+    set { state.entryEdit?.preferredForm = newValue }
+  }
+
+  var entryEditAliases: String {
+    get { state.entryEdit?.aliases ?? "" }
+    set { state.entryEdit?.aliases = newValue }
+  }
+
+  var entryEditUsesCorrection: Bool {
+    get { state.entryEdit?.usesCorrection ?? false }
+    set { state.entryEdit?.usesCorrection = newValue }
+  }
+
+  var entryEditIsEnabled: Bool {
+    get { state.entryEdit?.isEnabled ?? true }
+    set { state.entryEdit?.isEnabled = newValue }
+  }
 
   var suggestionEditPreferredForm: String {
     get { state.suggestionEdit?.preferredForm ?? "" }
@@ -210,6 +271,70 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
         mutation: .delete(id: id),
         action: .entry
       )
+    }
+  }
+
+  func beginAddingEntry() {
+    state.entryEdit = EntryEdit()
+    clearMessages()
+  }
+
+  func beginEditingEntry(_ entry: PersonalDictionaryEntry) {
+    state.entryEdit = EntryEdit(entry: entry)
+    clearMessages()
+  }
+
+  func cancelEntryEdit() {
+    state.entryEdit = nil
+    clearMessages()
+  }
+
+  func submitEntryEdit() async {
+    guard let edit = entryEdit else { return }
+    let preferredForm = edit.preferredForm.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !preferredForm.isEmpty else {
+      state.errorMessage = "Enter a word or phrase before saving."
+      return
+    }
+    let entry = PersonalDictionaryEntry(
+      id: edit.id,
+      preferredForm: preferredForm,
+      aliases: edit.usesCorrection ? Self.parseAliases(edit.aliases) : [],
+      localeIdentifier: edit.localeIdentifier,
+      isPriority: edit.isPriority,
+      isEnabled: edit.isEnabled,
+      origin: edit.origin,
+      usage: edit.usage
+    )
+    let expectedRevision = revision
+    await enqueue {
+      await self.mutate(
+        expectedRevision: expectedRevision,
+        mutation: .upsert(entry),
+        action: .entry
+      )
+    }
+    if errorMessage == nil {
+      state.entryEdit = nil
+    }
+  }
+
+  func deleteEntryEdit() async {
+    guard let edit = entryEdit else { return }
+    guard !edit.isNew else {
+      state.entryEdit = nil
+      return
+    }
+    let expectedRevision = revision
+    await enqueue {
+      await self.mutate(
+        expectedRevision: expectedRevision,
+        mutation: .delete(id: edit.id),
+        action: .entry
+      )
+    }
+    if errorMessage == nil {
+      state.entryEdit = nil
     }
   }
 

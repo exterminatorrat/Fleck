@@ -67,6 +67,88 @@ func personalDictionarySettingsBindsAddEnableAndDeleteToDisplayedRevision() asyn
 }
 
 @Test @MainActor
+func personalDictionaryEntryEditorPreservesIdentityAndMetadataWhenSavingCorrections() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let original = PersonalDictionaryEntry(
+    id: settingsUUID(9),
+    preferredForm: "Fleck",
+    aliases: ["flick"],
+    localeIdentifier: "en-GB",
+    isPriority: true,
+    isEnabled: false,
+    origin: .suggested,
+    usage: .init(useCount: 12, lastUsedAt: Date(timeIntervalSince1970: 4_200))
+  )
+  try await store.upsert(original)
+  let viewModel = PersonalDictionarySettingsViewModel(store: store)
+  await viewModel.load()
+
+  viewModel.beginEditingEntry(original)
+  #expect(viewModel.entryEdit?.id == original.id)
+  #expect(viewModel.entryEdit?.isNew == false)
+  #expect(viewModel.entryEditUsesCorrection == true)
+  viewModel.entryEditPreferredForm = "Fleck App"
+  viewModel.entryEditAliases = "flick app, fleck application\nflick app"
+  await viewModel.submitEntryEdit()
+
+  let saved = try #require(viewModel.entries.first)
+  #expect(saved.id == original.id)
+  #expect(saved.preferredForm == "Fleck App")
+  #expect(saved.aliases == ["flick app", "fleck application"])
+  #expect(saved.localeIdentifier == original.localeIdentifier)
+  #expect(saved.isPriority == original.isPriority)
+  #expect(saved.isEnabled == original.isEnabled)
+  #expect(saved.origin == original.origin)
+  #expect(saved.usage == original.usage)
+  #expect(viewModel.entryEdit == nil)
+}
+
+@Test @MainActor
+func personalDictionaryEntryEditorMapsCorrectionToggleAndDeletesFromTheEditor() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let original = settingsEntry(7, "Parakeet", aliases: ["parrot key"])
+  try await store.upsert(original)
+  let viewModel = PersonalDictionarySettingsViewModel(store: store)
+  await viewModel.load()
+
+  viewModel.beginEditingEntry(original)
+  viewModel.entryEditUsesCorrection = false
+  await viewModel.submitEntryEdit()
+  #expect(viewModel.entries.first?.aliases == [])
+
+  viewModel.beginEditingEntry(try #require(viewModel.entries.first))
+  await viewModel.deleteEntryEdit()
+  #expect(viewModel.entries.isEmpty)
+  #expect(viewModel.entryEdit == nil)
+}
+
+@Test @MainActor
+func personalDictionaryEntryEditorAddsOneWordThroughTheSharedFlow() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let viewModel = PersonalDictionarySettingsViewModel(
+    store: PersonalDictionaryStore(rootURL: root)
+  )
+  await viewModel.load()
+
+  viewModel.beginAddingEntry()
+  #expect(viewModel.entryEdit?.isNew == true)
+  viewModel.entryEditPreferredForm = "Gemma"
+  viewModel.entryEditUsesCorrection = true
+  viewModel.entryEditAliases = "Jemma"
+  await viewModel.submitEntryEdit()
+
+  #expect(viewModel.entries.map(\.preferredForm) == ["Gemma"])
+  #expect(viewModel.entries.first?.aliases == ["Jemma"])
+  #expect(viewModel.entries.first?.origin == .manual)
+  #expect(viewModel.entries.first?.isEnabled == true)
+}
+
+@Test @MainActor
 func personalDictionarySettingsDoesNotRebaseConcurrentAddsOntoAnUndisplayedRevision() async {
   let root = temporarySettingsDictionaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -534,8 +616,18 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(runtimeSource.contains("store: personalDictionaryStore"))
   #expect(settingsSource.contains("let expectedRevision = viewModel.revision"))
   #expect(settingsSource.contains("expectedRevision: expectedRevision"))
-  #expect(settingsSource.contains("Section(\"Personal Dictionary\")"))
-  #expect(settingsSource.contains(".searchable("))
+  #expect(settingsSource.contains("case vocabulary = \"Vocabulary\""))
+  #expect(settingsSource.contains("Section(\"Vocabulary\")"))
+  #expect(settingsSource.contains("Button(\"Add Word\")"))
+  #expect(settingsSource.contains("Text(\"Corrects: \\(entry.aliases.joined(separator: \", \"))\")"))
+  #expect(settingsSource.contains("viewModel.beginEditingEntry(entry)"))
+  #expect(settingsSource.contains("PersonalDictionaryEntryEditSheet("))
+  #expect(settingsSource.contains("Toggle(\"Correct a misspelling or shorthand\""))
+  #expect(settingsSource.contains("TextField(\"Correct from\""))
+  #expect(settingsSource.contains("Button(\"Delete Word\", role: .destructive)"))
+  #expect(settingsSource.contains("Image(systemName: \"xmark.circle.fill\")"))
+  #expect(settingsSource.contains(".frame(width: 200)"))
+  #expect(!settingsSource.contains(".searchable("))
   #expect(settingsSource.contains("Picker(\"Show\""))
   #expect(settingsSource.contains("Button(\"Approve\""))
   #expect(settingsSource.contains("Button(\"Edit and Approve\""))

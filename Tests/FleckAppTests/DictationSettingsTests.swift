@@ -155,8 +155,36 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
 #endif
 
 @Test func DictationSettingsUsesTheExistingMatchedGeometrySectionSelector() {
-  #expect(SettingsSection.allCases == [.appearance, .editing, .shortcuts, .dictation])
+  #expect(SettingsSection.allCases == [
+    .appearance, .editing, .shortcuts, .dictation, .vocabulary,
+  ])
   #expect(SettingsSection.selectionEffectID == "settings-section")
+}
+
+@Test func DictationSettingsSeparatesVocabularyAndOnlySurfacesAvailabilityProblems() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("case vocabulary = \"Vocabulary\""))
+  #expect(source.contains("case .vocabulary:"))
+  #expect(source.contains("PersonalDictionarySettingsSection("))
+  #expect(source.contains("private var availabilityIssues"))
+  #expect(source.contains(".filter { !$0.available }"))
+  #expect(source.contains("Section(\"Needs attention\")"))
+  #expect(!source.contains("Section(\"Availability\")"))
+
+  let dictationStart = try #require(source.range(of: "private var dictation:"))
+  let vocabularyStart = try #require(
+    source.range(of: "private var vocabulary:", range: dictationStart.upperBound..<source.endIndex)
+  )
+  let dictationSource = source[dictationStart.lowerBound..<vocabularyStart.lowerBound]
+  #expect(!dictationSource.contains("PersonalDictionarySettingsSection"))
 }
 
 @Test @MainActor func DictationSettingsPendingRouteIsDurableAndConsumedOnce() async throws {

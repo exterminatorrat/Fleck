@@ -2377,8 +2377,11 @@ private actor AccessibilitySleepGate {
 
   for label in [
     "Personal dictionary filter",
+    "Add a word to Fleck vocabulary",
+    "Search vocabulary",
+    "Clear vocabulary search",
+    "Edit \\(entry.preferredForm)",
     "Enable \\(entry.preferredForm)",
-    "Delete \\(entry.preferredForm)",
     "Approve \\(suggestion.preferredForm)",
     "Edit and approve \\(suggestion.preferredForm)",
     "Dismiss \\(suggestion.preferredForm)",
@@ -2390,9 +2393,11 @@ private actor AccessibilitySleepGate {
   ] {
     #expect(settingsSource.contains("accessibilityLabel(\"\(label)\")"))
   }
-  #expect(settingsSource.contains(
-    ".searchable(text: $viewModel.query, prompt: \"Search personal dictionary\")"
-  ))
+  #expect(settingsSource.contains("accessibilityLabel(\"Word or phrase\")"))
+  #expect(settingsSource.contains("accessibilityLabel(\"Correct from\")"))
+  #expect(settingsSource.contains("accessibilityLabel(\"Delete vocabulary word\")"))
+  #expect(settingsSource.contains("accessibilityHint(\"Searches saved words and corrections\")"))
+  #expect(!settingsSource.contains(".searchable("))
   #expect(settingsSource.contains(".accessibilityValue("))
   #expect(settingsSource.contains(".accessibilityHint("))
   #expect(settingsSource.contains(".focusable()"))

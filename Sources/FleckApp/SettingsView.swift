@@ -11,9 +11,12 @@
     case editing = "Editing"
     case shortcuts = "Shortcuts"
     case dictation = "Dictation"
+    case vocabulary = "Vocabulary"
     case agents = "Agents"
 
-    static let allCases: [SettingsSection] = [.appearance, .editing, .shortcuts, .dictation]
+    static let allCases: [SettingsSection] = [
+      .appearance, .editing, .shortcuts, .dictation, .vocabulary,
+    ]
     static let selectorCases = allCases + [.agents]
     static let selectionEffectID = "settings-section"
     var id: Self { self }
@@ -81,6 +84,8 @@
             shortcuts
           case .dictation:
             dictation
+          case .vocabulary:
+            vocabulary
           case .agents:
             AgentSettingsView()
           }
@@ -305,26 +310,15 @@
 
     @ViewBuilder
     private var dictation: some View {
-      Section("Availability") {
-        let compatibility = DictationCompatibilityPresentation(
-          availability: runtime.availability
-        )
-        ForEach(
-          [
-            compatibility.notes,
-            compatibility.appleSpeech,
-            compatibility.cleanup,
-            compatibility.smartCapture,
-          ],
-          id: \.title
-        ) { row in
-          Label(
-            "\(row.title) — \(row.detail)",
-            systemImage: row.available ? "checkmark.shield" : "info.circle"
-          )
-          .foregroundStyle(row.available ? .primary : .secondary)
-        }
-        if !recoveryActions.isEmpty {
+      if !availabilityIssues.isEmpty || !recoveryActions.isEmpty {
+        Section("Needs attention") {
+          ForEach(availabilityIssues, id: \.title) { row in
+            Label(
+              "\(row.title) — \(row.detail)",
+              systemImage: "info.circle"
+            )
+            .foregroundStyle(.secondary)
+          }
           ForEach(recoveryActions, id: \.pane) { action in
             Button(action.title) {
               NSWorkspace.shared.open(action.url)
@@ -391,8 +385,6 @@
         }
       }
 
-      personalDictionary
-
       Section("Privacy") {
         Text(
           "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
@@ -402,10 +394,18 @@
       .foregroundStyle(.secondary)
     }
 
-    private var personalDictionary: some View {
+    private var vocabulary: some View {
       PersonalDictionarySettingsSection(
         viewModel: personalDictionarySettingsViewModel
       )
+    }
+
+    private var availabilityIssues: [DictationCompatibilityRow] {
+      let compatibility = DictationCompatibilityPresentation(
+        availability: runtime.availability
+      )
+      return [compatibility.appleSpeech, compatibility.cleanup, compatibility.smartCapture]
+        .filter { !$0.available }
     }
 
     private var models: some View {
@@ -551,44 +551,85 @@
 
   private struct PersonalDictionarySettingsSection: View {
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
-    @State private var preferredForm = ""
-    @State private var aliases = ""
     @State private var showsImporter = false
     @State private var showsDictionaryExporter = false
     @State private var showsCSVExporter = false
+    @FocusState private var isSearchFocused: Bool
 
     private let maximumTransferBytes = 64 * 1024 + 256
 
     var body: some View {
-      Section("Personal Dictionary") {
-        Picker("Show", selection: $viewModel.filter) {
-          ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
-            Text(filter.rawValue).tag(filter)
-          }
+      Section("Vocabulary") {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Help Fleck recognize the words and phrases you use.")
+          Text("Add a correction only when Fleck consistently hears something else.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
-        .pickerStyle(.segmented)
-        .accessibilityLabel("Personal dictionary filter")
-        .accessibilityValue(viewModel.filter.rawValue)
-        .accessibilityHint("Filters entries or shows pending suggestions")
 
-        TextField("Preferred form", text: $preferredForm)
-          .accessibilityLabel("Preferred form")
-          .onSubmit(addEntry)
-        TextField("Aliases", text: $aliases)
-          .accessibilityLabel("Aliases")
-          .accessibilityHint("Separate aliases with commas or new lines")
-          .onSubmit(addEntry)
+        HStack {
+          Text(entrySummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Spacer()
+          Picker("Show", selection: $viewModel.filter) {
+            ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
+              Text(filter.rawValue).tag(filter)
+            }
+          }
+          .pickerStyle(.menu)
+          .frame(width: 110)
+          .accessibilityLabel("Personal dictionary filter")
+          .accessibilityValue(viewModel.filter.rawValue)
+          .accessibilityHint("Filters entries or shows pending suggestions")
 
-        Button("Add Entry", action: addEntry)
-          .buttonStyle(.borderedProminent)
-          .disabled(preferredForm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          .accessibilityHint("Adds the preferred form and its aliases to the dictionary")
+          Button("Add Word") { viewModel.beginAddingEntry() }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel("Add a word to Fleck vocabulary")
+            .accessibilityHint("Opens the vocabulary word editor")
+        }
 
         messages
         rows
         transfer
+        searchUtility
       }
-      .searchable(text: $viewModel.query, prompt: "Search personal dictionary")
+      .sheet(
+        isPresented: Binding(
+          get: { viewModel.entryEdit != nil },
+          set: { if !$0 { viewModel.cancelEntryEdit() } }
+        )
+      ) {
+        if let edit = viewModel.entryEdit {
+          PersonalDictionaryEntryEditSheet(
+            isNew: edit.isNew,
+            preferredForm: Binding(
+              get: { viewModel.entryEditPreferredForm },
+              set: { viewModel.entryEditPreferredForm = $0 }
+            ),
+            aliases: Binding(
+              get: { viewModel.entryEditAliases },
+              set: { viewModel.entryEditAliases = $0 }
+            ),
+            usesCorrection: Binding(
+              get: { viewModel.entryEditUsesCorrection },
+              set: { viewModel.entryEditUsesCorrection = $0 }
+            ),
+            isEnabled: Binding(
+              get: { viewModel.entryEditIsEnabled },
+              set: { viewModel.entryEditIsEnabled = $0 }
+            ),
+            errorMessage: viewModel.errorMessage,
+            onCancel: { viewModel.cancelEntryEdit() },
+            onSave: {
+              Task { @MainActor in await viewModel.submitEntryEdit() }
+            },
+            onDelete: {
+              Task { @MainActor in await viewModel.deleteEntryEdit() }
+            }
+          )
+        }
+      }
       .sheet(
         isPresented: Binding(
           get: { viewModel.suggestionEdit != nil },
@@ -638,6 +679,11 @@
       )
     }
 
+    private var entrySummary: String {
+      let count = viewModel.entries.count
+      return count == 1 ? "1 saved word" : "\(count) saved words"
+    }
+
     @ViewBuilder
     private var messages: some View {
       if let errorMessage = viewModel.errorMessage {
@@ -671,19 +717,51 @@
           .foregroundStyle(.secondary)
       } else {
         ForEach(viewModel.visibleEntries) { entry in
-          entryRow(entry, expectedRevision: viewModel.revision)
+          entryRow(entry)
         }
       }
     }
 
-    private func entryRow(
-      _ entry: PersonalDictionaryEntry,
-      expectedRevision: UInt64
-    ) -> some View {
-      HStack(alignment: .firstTextBaseline) {
-        Toggle(isOn: Binding(
+    private func entryRow(_ entry: PersonalDictionaryEntry) -> some View {
+      HStack(spacing: 12) {
+        Button {
+          viewModel.beginEditingEntry(entry)
+        } label: {
+          HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+              HStack(spacing: 5) {
+                Text(entry.preferredForm)
+                  .fontWeight(.medium)
+                if entry.isPriority {
+                  Image(systemName: "star.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Prioritized")
+                }
+              }
+              if !entry.aliases.isEmpty {
+                Text("Corrects: \(entry.aliases.joined(separator: ", "))")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+            }
+            Spacer()
+          }
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Edit \(entry.preferredForm)")
+        .accessibilityValue(
+          entry.aliases.isEmpty
+            ? "Saved word"
+            : "Corrects \(entry.aliases.joined(separator: ", "))"
+        )
+        .accessibilityHint("Opens this vocabulary word for editing")
+
+        Toggle("Use \(entry.preferredForm)", isOn: Binding(
           get: { entry.isEnabled },
           set: { enabled in
+            let expectedRevision = viewModel.revision
             Task { @MainActor in
               await viewModel.setEnabled(
                 enabled,
@@ -692,27 +770,11 @@
               )
             }
           }
-        )) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text(entry.preferredForm)
-            if !entry.aliases.isEmpty {
-              Text(entry.aliases.joined(separator: ", "))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-          }
-        }
+        ))
+        .labelsHidden()
         .accessibilityLabel("Enable \(entry.preferredForm)")
         .accessibilityValue(entry.isEnabled ? "Enabled" : "Disabled")
         .accessibilityHint("Toggles whether this entry is used for dictation")
-
-        Button("Delete", role: .destructive) {
-          Task { @MainActor in
-            await viewModel.delete(id: entry.id, expectedRevision: expectedRevision)
-          }
-        }
-        .accessibilityLabel("Delete \(entry.preferredForm)")
-        .accessibilityHint("Permanently removes this dictionary entry")
       }
       .accessibilityElement(children: .contain)
     }
@@ -796,19 +858,41 @@
       }
     }
 
-    private func addEntry() {
-      let submittedPreferredForm = preferredForm
-      let submittedAliases = aliases
-      let expectedRevision = viewModel.revision
-      Task { @MainActor in
-        await viewModel.add(
-          preferredForm: submittedPreferredForm,
-          aliases: submittedAliases,
-          expectedRevision: expectedRevision
-        )
-        guard viewModel.errorMessage == nil else { return }
-        preferredForm = ""
-        aliases = ""
+    private var searchUtility: some View {
+      HStack {
+        Spacer()
+        HStack(spacing: 6) {
+          Button {
+            isSearchFocused = true
+          } label: {
+            Image(systemName: "magnifyingglass")
+          }
+          .buttonStyle(.plain)
+          .keyboardShortcut("f", modifiers: .command)
+          .help("Search vocabulary (⌘F)")
+          .accessibilityLabel("Search vocabulary")
+          .accessibilityHint("Focuses the vocabulary search field")
+
+          TextField("Search", text: $viewModel.query)
+            .textFieldStyle(.roundedBorder)
+            .focused($isSearchFocused)
+            .accessibilityLabel("Search vocabulary")
+            .accessibilityValue(viewModel.query.isEmpty ? "No search" : viewModel.query)
+            .accessibilityHint("Searches saved words and corrections")
+
+          if !viewModel.query.isEmpty {
+            Button {
+              viewModel.query = ""
+              isSearchFocused = true
+            } label: {
+              Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Clear vocabulary search")
+            .accessibilityHint("Clears the current vocabulary search")
+          }
+        }
+        .frame(width: 200)
       }
     }
 
@@ -842,6 +926,78 @@
     private func handleFileCompletion(_ result: Result<URL, Error>) {
       if case .failure(let error) = result {
         viewModel.handleFileOperationFailure(error)
+      }
+    }
+  }
+
+  private struct PersonalDictionaryEntryEditSheet: View {
+    let isNew: Bool
+    @Binding var preferredForm: String
+    @Binding var aliases: String
+    @Binding var usesCorrection: Bool
+    @Binding var isEnabled: Bool
+    let errorMessage: String?
+    let onCancel: () -> Void
+    let onSave: () -> Void
+    let onDelete: () -> Void
+    @State private var showsDeleteConfirmation = false
+
+    var body: some View {
+      Form {
+        Section(isNew ? "Add Word" : "Edit Word") {
+          TextField("Word or phrase", text: $preferredForm)
+            .accessibilityLabel("Word or phrase")
+            .accessibilityHint("The spelling Fleck should use")
+
+          Toggle("Correct a misspelling or shorthand", isOn: $usesCorrection)
+          if usesCorrection {
+            TextField("Correct from", text: $aliases)
+              .accessibilityLabel("Correct from")
+              .accessibilityHint("The spelling or phrase Fleck should replace")
+            Text("For multiple corrections, separate each one with a comma or new line.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+
+          Toggle("Use this word in dictation", isOn: $isEnabled)
+        }
+
+        if let errorMessage {
+          Label(errorMessage, systemImage: "exclamationmark.triangle")
+            .font(.caption)
+            .foregroundStyle(.red)
+            .accessibilityLabel("Vocabulary editor error")
+            .accessibilityValue(errorMessage)
+        }
+
+        Section {
+          HStack {
+            if !isNew {
+              Button("Delete Word", role: .destructive) {
+                showsDeleteConfirmation = true
+              }
+              .accessibilityLabel("Delete vocabulary word")
+              .accessibilityHint("Asks for confirmation before deleting this word")
+            }
+            Spacer()
+            Button("Cancel", action: onCancel)
+            Button("Save", action: onSave)
+              .buttonStyle(.borderedProminent)
+              .keyboardShortcut(.defaultAction)
+              .disabled(preferredForm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          }
+        }
+      }
+      .formStyle(.grouped)
+      .frame(width: 420, height: usesCorrection ? 330 : 280)
+      .confirmationDialog(
+        "Delete this word?",
+        isPresented: $showsDeleteConfirmation
+      ) {
+        Button("Delete Word", role: .destructive, action: onDelete)
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("Fleck will stop applying this vocabulary entry.")
       }
     }
   }
