@@ -320,6 +320,20 @@ import Testing
   #expect(previewSource.contains("accessibilityLabel(\"Dictionary import status\")"))
 }
 
+@Test func DictationAccessibilitySuggestionEditExposesStatusAndErrorInsideTheSheet() throws {
+  let settingsSource = try settingsViewSource()
+  let editSource = try personalDictionarySuggestionEditSource(settingsSource)
+
+  #expect(settingsSource.contains("errorMessage: viewModel.errorMessage"))
+  #expect(settingsSource.contains("statusMessage: viewModel.statusMessage"))
+  #expect(editSource.contains("if let errorMessage"))
+  #expect(editSource.contains("else if let statusMessage"))
+  #expect(editSource.contains("accessibilityLabel(\"Suggestion edit error\")"))
+  #expect(editSource.contains("accessibilityLabel(\"Suggestion edit status\")"))
+  #expect(editSource.contains("accessibilityValue(errorMessage)"))
+  #expect(editSource.contains("accessibilityValue(statusMessage)"))
+}
+
 @Test func DictationAccessibilityImportPreviewRendersConflictsOutsideTheChangeBranch() throws {
   let previewLines = try personalDictionaryImportPreviewSource().split(
     separator: "\n",
@@ -339,14 +353,7 @@ import Testing
 }
 
 private func personalDictionaryImportPreviewSource() throws -> String {
-  let repository = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-  let settingsSource = try String(
-    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
-    encoding: .utf8
-  )
+  let settingsSource = try settingsViewSource()
   let start = try #require(settingsSource.range(
     of: "private struct PersonalDictionaryImportPreviewSheet"
   ))
@@ -355,4 +362,26 @@ private func personalDictionaryImportPreviewSource() throws -> String {
     range: start.upperBound..<settingsSource.endIndex
   ))
   return String(settingsSource[start.lowerBound..<end.lowerBound])
+}
+
+private func personalDictionarySuggestionEditSource(_ settingsSource: String) throws -> String {
+  let start = try #require(settingsSource.range(
+    of: "private struct PersonalDictionarySuggestionEditSheet"
+  ))
+  let end = try #require(settingsSource.range(
+    of: "private struct PersonalDictionaryImportPreviewSheet",
+    range: start.upperBound..<settingsSource.endIndex
+  ))
+  return String(settingsSource[start.lowerBound..<end.lowerBound])
+}
+
+private func settingsViewSource() throws -> String {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  return try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
 }

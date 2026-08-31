@@ -543,7 +543,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     )
   }
 
-  private enum Action {
+  enum Action {
     case load
     case entry
     case suggestion
@@ -552,10 +552,10 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     case confirmImport
   }
 
-  private static func message(for error: Error, action: Action) -> String {
+  static func message(for error: Error, action: Action) -> String {
     switch error as? PersonalDictionaryStoreError {
     case .invalidTransfer:
-      "Could not read that dictionary file."
+      "That file is not a valid Fleck dictionary."
     case .revisionConflict:
       "Dictionary changed; try again."
     case .revisionOverflow:
@@ -572,10 +572,10 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
       "That entry is no longer available."
     case .missingSuggestion:
       "That suggestion is no longer available."
-    case .corruptData, .fileTooLarge:
-      action == .load
-        ? "Could not load personal dictionary. The saved dictionary is invalid or unsupported."
-        : "Could not read that dictionary file."
+    case .corruptData:
+      "Dictionary data is corrupted."
+    case .fileTooLarge:
+      "That dictionary file is too large."
     case .publicationFailed:
       action == .exportDictionary
         ? "Could not export the personal dictionary."

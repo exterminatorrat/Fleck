@@ -584,6 +584,8 @@
         PersonalDictionarySuggestionEditSheet(
           preferredForm: $viewModel.suggestionEditPreferredForm,
           aliases: $viewModel.suggestionEditAliases,
+          errorMessage: viewModel.errorMessage,
+          statusMessage: viewModel.statusMessage,
           onCancel: { viewModel.cancelSuggestionEdit() },
           onSubmit: {
             Task { @MainActor in
@@ -831,6 +833,8 @@
   private struct PersonalDictionarySuggestionEditSheet: View {
     @Binding var preferredForm: String
     @Binding var aliases: String
+    let errorMessage: String?
+    let statusMessage: String?
     let onCancel: () -> Void
     let onSubmit: () -> Void
 
@@ -841,6 +845,19 @@
         Text("Separate aliases with commas or new lines.")
           .font(.caption)
           .foregroundStyle(.secondary)
+        if let errorMessage {
+          Label(errorMessage, systemImage: "exclamationmark.triangle")
+            .foregroundStyle(.red)
+            .font(.caption)
+            .accessibilityLabel("Suggestion edit error")
+            .accessibilityValue(errorMessage)
+        } else if let statusMessage {
+          Label(statusMessage, systemImage: "info.circle")
+            .foregroundStyle(.secondary)
+            .font(.caption)
+            .accessibilityLabel("Suggestion edit status")
+            .accessibilityValue(statusMessage)
+        }
         HStack {
           Spacer()
           Button("Cancel", action: onCancel)

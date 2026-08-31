@@ -414,19 +414,44 @@ func personalDictionarySettingsCancellationIsSilentAndErrorsNeverExposeContent()
   await viewModel.load()
   await viewModel.previewCanonicalImport(Data("/private/path/SecretTerm".utf8))
 
-  #expect(viewModel.errorMessage == "Could not read that dictionary file.")
+  #expect(viewModel.errorMessage == "That file is not a valid Fleck dictionary.")
   #expect(!viewModel.errorMessage!.contains("/private/path"))
   #expect(!viewModel.errorMessage!.contains("SecretTerm"))
   let before = viewModel.state
 
   viewModel.handleFileOperationFailure(CocoaError(.userCancelled))
   #expect(viewModel.state == before)
-  #expect(viewModel.errorMessage == "Could not read that dictionary file.")
+  #expect(viewModel.errorMessage == "That file is not a valid Fleck dictionary.")
 
   viewModel.cancelImportPreview()
   #expect(viewModel.importPreview == nil)
   #expect(viewModel.importPreviewData == nil)
   #expect(viewModel.errorMessage == nil)
+}
+
+@Test @MainActor
+func personalDictionarySettingsMapsRequiredErrorCategoriesToDistinctContentFreeMessages() {
+  let cases: [(PersonalDictionaryStoreError, PersonalDictionarySettingsViewModel.Action, String)] = [
+    (.invalidTransfer, .previewImport, "That file is not a valid Fleck dictionary."),
+    (.revisionConflict, .entry, "Dictionary changed; try again."),
+    (.revisionOverflow, .entry, "Personal dictionary cannot accept another change."),
+    (.conflictIntroduced, .entry, "This change would introduce a dictionary conflict."),
+    (.corruptData, .previewImport, "Dictionary data is corrupted."),
+    (.fileTooLarge, .previewImport, "That dictionary file is too large."),
+    (.publicationFailed, .entry, "Could not save personal dictionary. Try again."),
+    (.invalidEntry, .entry, "Check the preferred form and aliases."),
+    (.invalidSuggestion, .suggestion, "Could not update that suggestion."),
+  ]
+
+  let messages = cases.map { error, action, expected in
+    let message = PersonalDictionarySettingsViewModel.message(for: error, action: action)
+    #expect(message == expected)
+    #expect(!message.contains("SecretTerm"))
+    #expect(!message.contains("/private/path"))
+    return message
+  }
+
+  #expect(Set(messages).count == messages.count)
 }
 
 @Test
