@@ -310,3 +310,49 @@ import Testing
   #expect(settingsSource.contains(".keyboardShortcut(.defaultAction)"))
   #expect(settingsSource.contains("accessibilityImportLabel"))
 }
+
+@Test func DictationAccessibilityImportPreviewExposesStatusAndErrorInsideTheSheet() throws {
+  let previewSource = try personalDictionaryImportPreviewSource()
+
+  #expect(previewSource.contains("if let errorMessage = viewModel.errorMessage"))
+  #expect(previewSource.contains("else if let statusMessage = viewModel.statusMessage"))
+  #expect(previewSource.contains("accessibilityLabel(\"Dictionary import error\")"))
+  #expect(previewSource.contains("accessibilityLabel(\"Dictionary import status\")"))
+}
+
+@Test func DictationAccessibilityImportPreviewRendersConflictsOutsideTheChangeBranch() throws {
+  let previewLines = try personalDictionaryImportPreviewSource().split(
+    separator: "\n",
+    omittingEmptySubsequences: false
+  )
+  let changesCondition = try #require(previewLines.first {
+    $0.contains("if viewModel.importPreviewRows.isEmpty")
+  })
+  let conflictsLoop = try #require(previewLines.first {
+    $0.contains("ForEach(viewModel.importConflictRows)")
+  })
+
+  #expect(
+    changesCondition.prefix { $0 == " " }.count
+      == conflictsLoop.prefix { $0 == " " }.count
+  )
+}
+
+private func personalDictionaryImportPreviewSource() throws -> String {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let start = try #require(settingsSource.range(
+    of: "private struct PersonalDictionaryImportPreviewSheet"
+  ))
+  let end = try #require(settingsSource.range(
+    of: "private struct PersonalDictionaryTransferDocument",
+    range: start.upperBound..<settingsSource.endIndex
+  ))
+  return String(settingsSource[start.lowerBound..<end.lowerBound])
+}

@@ -898,6 +898,19 @@
       VStack(alignment: .leading, spacing: 12) {
         Text("Review Dictionary Import")
           .font(.title2.weight(.semibold))
+        if let errorMessage = viewModel.errorMessage {
+          Label(errorMessage, systemImage: "exclamationmark.triangle")
+            .foregroundStyle(.red)
+            .font(.caption)
+            .accessibilityLabel("Dictionary import error")
+            .accessibilityValue(errorMessage)
+        } else if let statusMessage = viewModel.statusMessage {
+          Label(statusMessage, systemImage: "info.circle")
+            .foregroundStyle(.secondary)
+            .font(.caption)
+            .accessibilityLabel("Dictionary import status")
+            .accessibilityValue(statusMessage)
+        }
         if let preview = viewModel.importPreview {
           HStack {
             LabeledContent("Source", value: String(preview.sourceRevision))
@@ -926,12 +939,12 @@
                 .accessibilityValue(row.detail ?? "No alternate forms")
                 .accessibilityHint("Dictionary import preview row")
               }
-              ForEach(viewModel.importConflictRows) { conflict in
-                LabeledContent(conflict.code, value: String(conflict.count))
-                  .accessibilityLabel("Compiler conflict \(conflict.code)")
-                  .accessibilityValue("\(conflict.count)")
-                  .accessibilityHint("Existing conflict code and count")
-              }
+            }
+            ForEach(viewModel.importConflictRows) { conflict in
+              LabeledContent(conflict.code, value: String(conflict.count))
+                .accessibilityLabel("Compiler conflict \(conflict.code)")
+                .accessibilityValue("\(conflict.count)")
+                .accessibilityHint("Existing conflict code and count")
             }
           }
         }
