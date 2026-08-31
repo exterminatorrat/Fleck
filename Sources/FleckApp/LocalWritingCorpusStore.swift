@@ -34,6 +34,7 @@ enum LocalWritingCorpusStoreFaultPoint: Equatable, Sendable {
   case beforeCheckpointRename
   case afterCheckpointRenameBeforeDirectorySync
   case afterAuthorityRead
+  case beforeCorpusDirectorySync
   case beforeFinalAuthorityRecheck
 }
 
@@ -51,6 +52,7 @@ actor LocalWritingCorpusStore {
   private static let maximumConsentBytes = 4 * 1_024
   private static let maximumManifestBytes = 64 * 1_024
   private static let maximumCheckpointBytes = 2 * 1_024
+  private static let maximumLedgerBytes = 4 * 1_024 * 1_024
 
   private let fileManager: FileManager
   private let clock: Clock
@@ -88,7 +90,11 @@ actor LocalWritingCorpusStore {
     defer { Darwin.close(managed.descriptor) }
 
     let corpusName = corpusID.uuidString.lowercased()
-    let corpus = try Self.createDirectory(named: corpusName, in: managed.descriptor)
+    let corpus = try Self.createDirectory(
+      named: corpusName,
+      in: managed.descriptor,
+      beforeParentSync: { try self.faultHook?(.beforeCorpusDirectorySync) }
+    )
     var keepCorpus = false
     var exposure: DirectoryAuthority?
     var createdFiles: [String: AuthorityIdentity] = [:]
@@ -169,6 +175,16 @@ actor LocalWritingCorpusStore {
     } catch {
       throw Self.mapLedgerError(error)
     }
+    let ledgerBytes = try Self.readAuthorityFile(
+      named: Self.ledgerName,
+      maximumBytes: Self.maximumLedgerBytes,
+      in: createdExposure.descriptor
+    )
+    let lockBytes = try Self.readAuthorityFile(
+      named: "\(Self.ledgerName).lock",
+      maximumBytes: 0,
+      in: createdExposure.descriptor
+    )
     createdFiles[Self.checkpointName] = try publishCheckpoint(
       checkpoint,
       replacing: nil,
@@ -179,22 +195,45 @@ actor LocalWritingCorpusStore {
     try Self.syncDirectory(managed.descriptor)
     try Self.syncDirectory(selected.descriptor, exactMode: nil)
     try faultHook?(.beforeFinalAuthorityRecheck)
+    try Self.requireSelectedDirectoryIdentity(selected, at: selectedContainerURL)
+    try Self.requireDirectoryIdentity(managed)
     try Self.requireDirectoryIdentity(corpus)
     try Self.requireDirectoryIdentity(createdExposure)
-    guard createdFiles[Self.consentName]
-      == (try Self.fileIdentity(named: Self.consentName, in: corpus.descriptor)),
-      createdFiles[Self.manifestName]
-        == (try Self.fileIdentity(named: Self.manifestName, in: corpus.descriptor)),
-      createdFiles["\(Self.exposureName)/\(Self.ledgerName)"]
-        == (try Self.fileIdentity(named: Self.ledgerName, in: createdExposure.descriptor)),
-      createdFiles["\(Self.exposureName)/\(Self.ledgerName).lock"]
-        == (try Self.fileIdentity(
-          named: "\(Self.ledgerName).lock",
-          in: createdExposure.descriptor
-        )),
-      createdFiles[Self.checkpointName]
-        == (try Self.fileIdentity(named: Self.checkpointName, in: corpus.descriptor))
-    else { throw LocalWritingCorpusStoreError.identityMismatch }
+    try Self.requireAuthorityFile(
+      named: Self.consentName,
+      maximumBytes: Self.maximumConsentBytes,
+      expectedIdentity: createdFiles[Self.consentName],
+      expectedData: consentData,
+      in: corpus.descriptor
+    )
+    try Self.requireAuthorityFile(
+      named: Self.manifestName,
+      maximumBytes: Self.maximumManifestBytes,
+      expectedIdentity: createdFiles[Self.manifestName],
+      expectedData: manifestData,
+      in: corpus.descriptor
+    )
+    try Self.requireAuthorityFile(
+      named: Self.ledgerName,
+      maximumBytes: Self.maximumLedgerBytes,
+      expectedIdentity: createdFiles["\(Self.exposureName)/\(Self.ledgerName)"],
+      expectedData: ledgerBytes.data,
+      in: createdExposure.descriptor
+    )
+    try Self.requireAuthorityFile(
+      named: "\(Self.ledgerName).lock",
+      maximumBytes: 0,
+      expectedIdentity: createdFiles["\(Self.exposureName)/\(Self.ledgerName).lock"],
+      expectedData: lockBytes.data,
+      in: createdExposure.descriptor
+    )
+    try Self.requireAuthorityFile(
+      named: Self.checkpointName,
+      maximumBytes: Self.maximumCheckpointBytes,
+      expectedIdentity: createdFiles[Self.checkpointName],
+      expectedData: checkpoint.canonicalData,
+      in: corpus.descriptor
+    )
     keepCorpus = true
     return LocalWritingCorpusWorkspace(
       corpusID: corpusID,
@@ -230,12 +269,14 @@ actor LocalWritingCorpusStore {
       maximumBytes: Self.maximumManifestBytes,
       in: corpus.descriptor
     )
-    let ledgerIdentity = try Self.fileIdentity(
+    let ledgerBytes = try Self.readAuthorityFile(
       named: Self.ledgerName,
+      maximumBytes: Self.maximumLedgerBytes,
       in: exposure.descriptor
     )
-    let lockIdentity = try Self.fileIdentity(
+    let lockBytes = try Self.readAuthorityFile(
       named: "\(Self.ledgerName).lock",
+      maximumBytes: 0,
       in: exposure.descriptor
     )
     let cachedBytes = try Self.readAuthorityFileIfPresent(
@@ -260,12 +301,22 @@ actor LocalWritingCorpusStore {
       == consentBytes.identity,
       try Self.fileIdentity(named: Self.manifestName, in: corpus.descriptor)
         == manifestBytes.identity,
-      try Self.fileIdentity(named: Self.ledgerName, in: exposure.descriptor)
-        == ledgerIdentity,
-      try Self.fileIdentity(named: "\(Self.ledgerName).lock", in: exposure.descriptor)
-        == lockIdentity,
       checkpointUnchanged
     else { throw LocalWritingCorpusStoreError.identityMismatch }
+    try Self.requireAuthorityFile(
+      named: Self.ledgerName,
+      maximumBytes: Self.maximumLedgerBytes,
+      expectedIdentity: ledgerBytes.identity,
+      expectedData: ledgerBytes.data,
+      in: exposure.descriptor
+    )
+    try Self.requireAuthorityFile(
+      named: "\(Self.ledgerName).lock",
+      maximumBytes: 0,
+      expectedIdentity: lockBytes.identity,
+      expectedData: lockBytes.data,
+      in: exposure.descriptor
+    )
     let manifest: LocalWritingCorpusManifestEnvelope
     do {
       manifest = try LocalWritingCorpusCodec.decodeCanonical(manifestBytes.data)
@@ -340,19 +391,45 @@ actor LocalWritingCorpusStore {
       checkpointIdentity = try publishCheckpoint(live, replacing: nil, in: corpus)
     }
     try faultHook?(.beforeFinalAuthorityRecheck)
+    try Self.requireSelectedDirectoryIdentity(selected, at: location.selectedContainer)
+    try Self.requireDirectoryIdentity(managed)
     try Self.requireDirectoryIdentity(corpus)
     try Self.requireDirectoryIdentity(exposure)
-    guard try Self.fileIdentity(named: Self.consentName, in: corpus.descriptor)
-      == consentBytes.identity,
-      try Self.fileIdentity(named: Self.manifestName, in: corpus.descriptor)
-        == manifestBytes.identity,
-      try Self.fileIdentity(named: Self.ledgerName, in: exposure.descriptor)
-        == ledgerIdentity,
-      try Self.fileIdentity(named: "\(Self.ledgerName).lock", in: exposure.descriptor)
-        == lockIdentity,
-      try Self.fileIdentity(named: Self.checkpointName, in: corpus.descriptor)
-        == checkpointIdentity
-    else { throw LocalWritingCorpusStoreError.identityMismatch }
+    try Self.requireAuthorityFile(
+      named: Self.consentName,
+      maximumBytes: Self.maximumConsentBytes,
+      expectedIdentity: consentBytes.identity,
+      expectedData: consentBytes.data,
+      in: corpus.descriptor
+    )
+    try Self.requireAuthorityFile(
+      named: Self.manifestName,
+      maximumBytes: Self.maximumManifestBytes,
+      expectedIdentity: manifestBytes.identity,
+      expectedData: manifestBytes.data,
+      in: corpus.descriptor
+    )
+    try Self.requireAuthorityFile(
+      named: Self.ledgerName,
+      maximumBytes: Self.maximumLedgerBytes,
+      expectedIdentity: ledgerBytes.identity,
+      expectedData: ledgerBytes.data,
+      in: exposure.descriptor
+    )
+    try Self.requireAuthorityFile(
+      named: "\(Self.ledgerName).lock",
+      maximumBytes: 0,
+      expectedIdentity: lockBytes.identity,
+      expectedData: lockBytes.data,
+      in: exposure.descriptor
+    )
+    try Self.requireAuthorityFile(
+      named: Self.checkpointName,
+      maximumBytes: Self.maximumCheckpointBytes,
+      expectedIdentity: checkpointIdentity,
+      expectedData: live.canonicalData,
+      in: corpus.descriptor
+    )
     return LocalWritingCorpusWorkspace(
       corpusID: location.corpusID,
       workspaceURL: workspaceURL,
@@ -439,7 +516,12 @@ actor LocalWritingCorpusStore {
       {
         Darwin.unlinkat(directory.descriptor, Self.checkpointName, 0)
       }
-      if stageExists { Darwin.unlinkat(directory.descriptor, stageName, 0) }
+      if stageExists, let stageIdentity,
+        (try? Self.fileIdentity(named: stageName, in: directory.descriptor))
+          == stageIdentity
+      {
+        Darwin.unlinkat(directory.descriptor, stageName, 0)
+      }
       if !publicationComplete { _ = fsync(directory.descriptor) }
     }
     guard fchmod(stageDescriptor, 0o600) == 0 else {
@@ -700,18 +782,29 @@ private extension LocalWritingCorpusStore {
 
   static func createDirectory(
     named name: String,
-    in parentDescriptor: Int32
+    in parentDescriptor: Int32,
+    beforeParentSync: (() throws -> Void)? = nil
   ) throws -> DirectoryAuthority {
     guard mkdirat(parentDescriptor, name, mode_t(0o700)) == 0 else {
       if errno == EEXIST { throw LocalWritingCorpusStoreError.alreadyExists }
       throw mapSystemError()
     }
+    let createdIdentity = try directoryIdentity(named: name, in: parentDescriptor)
+    var openedAuthority: DirectoryAuthority?
     do {
       let authority = try openDirectory(named: name, in: parentDescriptor)
+      openedAuthority = authority
+      guard authority.identity == createdIdentity else {
+        throw LocalWritingCorpusStoreError.identityMismatch
+      }
+      try beforeParentSync?()
       try syncDirectory(parentDescriptor, exactMode: nil)
       return authority
     } catch {
-      Darwin.unlinkat(parentDescriptor, name, AT_REMOVEDIR)
+      if let openedAuthority { Darwin.close(openedAuthority.descriptor) }
+      if (try? directoryIdentity(named: name, in: parentDescriptor)) == createdIdentity {
+        Darwin.unlinkat(parentDescriptor, name, AT_REMOVEDIR)
+      }
       throw error
     }
   }
@@ -899,6 +992,45 @@ private extension LocalWritingCorpusStore {
       guard try directoryIdentity(named: name, in: parent) == authority.identity else {
         throw LocalWritingCorpusStoreError.identityMismatch
       }
+    }
+  }
+
+  static func requireSelectedDirectoryIdentity(
+    _ authority: DirectoryAuthority,
+    at url: URL
+  ) throws {
+    guard try validateDirectoryDescriptor(authority.descriptor, exactMode: nil)
+      == authority.identity
+    else { throw LocalWritingCorpusStoreError.identityMismatch }
+    do {
+      try rejectSymlinkAncestors(of: url)
+    } catch {
+      throw LocalWritingCorpusStoreError.identityMismatch
+    }
+    var status = stat()
+    guard lstat(url.path, &status) == 0,
+      status.st_mode & S_IFMT == S_IFDIR,
+      AuthorityIdentity(status) == authority.identity
+    else { throw LocalWritingCorpusStoreError.identityMismatch }
+  }
+
+  static func requireAuthorityFile(
+    named name: String,
+    maximumBytes: Int,
+    expectedIdentity: AuthorityIdentity?,
+    expectedData: Data,
+    in directoryDescriptor: Int32
+  ) throws {
+    guard let expectedIdentity else {
+      throw LocalWritingCorpusStoreError.ioFailure
+    }
+    let current = try readAuthorityFile(
+      named: name,
+      maximumBytes: maximumBytes,
+      in: directoryDescriptor
+    )
+    guard current.identity == expectedIdentity, current.data == expectedData else {
+      throw LocalWritingCorpusStoreError.identityMismatch
     }
   }
 
