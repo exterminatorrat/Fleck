@@ -273,3 +273,40 @@ import Testing
     primary: "primary"
   ) == "pointer")
 }
+
+@Test func DictationAccessibilityPersonalDictionaryExposesSearchRowsTransfersAndPreviewActions()
+  throws
+{
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  for label in [
+    "Personal dictionary filter",
+    "Enable \\(entry.preferredForm)",
+    "Delete \\(entry.preferredForm)",
+    "Approve \\(suggestion.preferredForm)",
+    "Edit and approve \\(suggestion.preferredForm)",
+    "Dismiss \\(suggestion.preferredForm)",
+    "Export complete personal dictionary",
+    "Export visible entries as CSV",
+    "Import personal dictionary",
+    "Confirm dictionary import",
+    "Cancel dictionary import",
+  ] {
+    #expect(settingsSource.contains("accessibilityLabel(\"\(label)\")"))
+  }
+  #expect(settingsSource.contains(
+    ".searchable(text: $viewModel.query, prompt: \"Search personal dictionary\")"
+  ))
+  #expect(settingsSource.contains(".accessibilityValue("))
+  #expect(settingsSource.contains(".accessibilityHint("))
+  #expect(settingsSource.contains(".focusable()"))
+  #expect(settingsSource.contains(".keyboardShortcut(.defaultAction)"))
+  #expect(settingsSource.contains("accessibilityImportLabel"))
+}

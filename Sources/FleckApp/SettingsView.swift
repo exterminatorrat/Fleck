@@ -4,6 +4,7 @@
   import Carbon
   import SwiftUI
   import FleckCore
+  import UniformTypeIdentifiers
 
   enum SettingsSection: String, CaseIterable, Identifiable {
     case appearance = "Appearance"
@@ -50,8 +51,6 @@
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
     @State private var recordingSelection = SettingsShortcutRecordingState()
-    @State private var personalDictionaryPreferredForm = ""
-    @State private var personalDictionaryAliases = ""
     @Namespace private var selectedSectionHighlight
 
     init(runtime: DictationRuntime) {
@@ -390,81 +389,9 @@
     }
 
     private var personalDictionary: some View {
-      Section("Personal Dictionary") {
-        TextField("Preferred form", text: $personalDictionaryPreferredForm)
-          .accessibilityLabel("Preferred form")
-        TextField("Aliases", text: $personalDictionaryAliases)
-          .accessibilityLabel("Aliases")
-        Text("Separate aliases with commas or new lines.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-
-        Button("Add Entry") {
-          let preferredForm = personalDictionaryPreferredForm
-          let aliases = personalDictionaryAliases
-          Task { @MainActor in
-            await personalDictionarySettingsViewModel.add(
-              preferredForm: preferredForm,
-              aliases: aliases
-            )
-            guard personalDictionarySettingsViewModel.errorMessage == nil else { return }
-            personalDictionaryPreferredForm = ""
-            personalDictionaryAliases = ""
-          }
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(
-          personalDictionaryPreferredForm
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty
-        )
-        .accessibilityHint("Adds the preferred form and its aliases to the dictionary")
-
-        if let errorMessage = personalDictionarySettingsViewModel.errorMessage {
-          Label(errorMessage, systemImage: "exclamationmark.triangle")
-            .foregroundStyle(.red)
-            .font(.caption)
-        }
-
-        if personalDictionarySettingsViewModel.entries.isEmpty {
-          Text("No entries yet.")
-            .foregroundStyle(.secondary)
-        } else {
-          ForEach(personalDictionarySettingsViewModel.entries) { entry in
-            HStack(alignment: .firstTextBaseline) {
-              Toggle(isOn: Binding(
-                get: { entry.isEnabled },
-                set: { enabled in
-                  Task { @MainActor in
-                    await personalDictionarySettingsViewModel.setEnabled(
-                      enabled,
-                      id: entry.id
-                    )
-                  }
-                }
-              )) {
-                VStack(alignment: .leading, spacing: 2) {
-                  Text(entry.preferredForm)
-                  if !entry.aliases.isEmpty {
-                    Text(entry.aliases.joined(separator: ", "))
-                      .font(.caption)
-                      .foregroundStyle(.secondary)
-                  }
-                }
-              }
-              .accessibilityLabel("Enable \(entry.preferredForm)")
-              .accessibilityValue(entry.isEnabled ? "Enabled" : "Disabled")
-
-              Button("Delete", role: .destructive) {
-                Task { @MainActor in
-                  await personalDictionarySettingsViewModel.delete(id: entry.id)
-                }
-              }
-              .accessibilityLabel("Delete \(entry.preferredForm)")
-            }
-          }
-        }
-      }
+      PersonalDictionarySettingsSection(
+        viewModel: personalDictionarySettingsViewModel
+      )
     }
 
     private var models: some View {
@@ -606,6 +533,471 @@
       }
       recordingSelection.cancel()
     }
+  }
+
+  private struct PersonalDictionarySettingsSection: View {
+    @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
+    @State private var preferredForm = ""
+    @State private var aliases = ""
+    @State private var suggestionDraft: PersonalDictionarySuggestionDraft?
+    @State private var showsImporter = false
+    @State private var showsDictionaryExporter = false
+    @State private var showsCSVExporter = false
+
+    private let maximumTransferBytes = 64 * 1024 + 256
+
+    var body: some View {
+      Section("Personal Dictionary") {
+        Picker("Show", selection: $viewModel.filter) {
+          ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
+            Text(filter.rawValue).tag(filter)
+          }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityLabel("Personal dictionary filter")
+        .accessibilityValue(viewModel.filter.rawValue)
+        .accessibilityHint("Filters entries or shows pending suggestions")
+
+        TextField("Preferred form", text: $preferredForm)
+          .accessibilityLabel("Preferred form")
+          .onSubmit(addEntry)
+        TextField("Aliases", text: $aliases)
+          .accessibilityLabel("Aliases")
+          .accessibilityHint("Separate aliases with commas or new lines")
+          .onSubmit(addEntry)
+
+        Button("Add Entry", action: addEntry)
+          .buttonStyle(.borderedProminent)
+          .disabled(preferredForm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          .accessibilityHint("Adds the preferred form and its aliases to the dictionary")
+
+        messages
+        rows
+        transfer
+      }
+      .searchable(text: $viewModel.query, prompt: "Search personal dictionary")
+      .sheet(item: $suggestionDraft) { draft in
+        PersonalDictionarySuggestionEditSheet(
+          draft: draft,
+          onCancel: { suggestionDraft = nil },
+          onSubmit: { preferredForm, aliases in
+            Task { @MainActor in
+              await viewModel.editAndApproveSuggestion(
+                id: draft.id,
+                preferredForm: preferredForm,
+                aliases: aliases,
+                expectedRevision: draft.expectedRevision
+              )
+              guard viewModel.errorMessage == nil else { return }
+              suggestionDraft = nil
+            }
+          }
+        )
+      }
+      .sheet(
+        isPresented: Binding(
+          get: { viewModel.importPreview != nil },
+          set: { if !$0 { viewModel.cancelImportPreview() } }
+        )
+      ) {
+        PersonalDictionaryImportPreviewSheet(viewModel: viewModel)
+      }
+      .fileImporter(
+        isPresented: $showsImporter,
+        allowedContentTypes: [.fleckDictionary, .json],
+        allowsMultipleSelection: false,
+        onCompletion: handleImport
+      )
+      .fileExporter(
+        isPresented: $showsDictionaryExporter,
+        document: PersonalDictionaryTransferDocument(data: viewModel.canonicalExportData ?? Data()),
+        contentType: .fleckDictionary,
+        defaultFilename: "Fleck Personal Dictionary.fleckdict",
+        onCompletion: handleFileCompletion
+      )
+      .fileExporter(
+        isPresented: $showsCSVExporter,
+        document: PersonalDictionaryTransferDocument(data: viewModel.csvExportData ?? Data()),
+        contentType: .commaSeparatedText,
+        defaultFilename: "Fleck Personal Dictionary Entries.csv",
+        onCompletion: handleFileCompletion
+      )
+    }
+
+    @ViewBuilder
+    private var messages: some View {
+      if let errorMessage = viewModel.errorMessage {
+        Label(errorMessage, systemImage: "exclamationmark.triangle")
+          .foregroundStyle(.red)
+          .font(.caption)
+          .accessibilityLabel("Personal dictionary error")
+          .accessibilityValue(errorMessage)
+      } else if let statusMessage = viewModel.statusMessage {
+        Label(statusMessage, systemImage: "checkmark.circle")
+          .foregroundStyle(.secondary)
+          .font(.caption)
+          .accessibilityLabel("Personal dictionary status")
+          .accessibilityValue(statusMessage)
+      }
+    }
+
+    @ViewBuilder
+    private var rows: some View {
+      if viewModel.filter == .suggestions {
+        if viewModel.visibleSuggestions.isEmpty {
+          Text("No pending suggestions.")
+            .foregroundStyle(.secondary)
+        } else {
+          ForEach(viewModel.visibleSuggestions) { suggestion in
+            suggestionRow(suggestion, expectedRevision: viewModel.revision)
+          }
+        }
+      } else if viewModel.visibleEntries.isEmpty {
+        Text(viewModel.query.isEmpty ? "No entries yet." : "No matching entries.")
+          .foregroundStyle(.secondary)
+      } else {
+        ForEach(viewModel.visibleEntries) { entry in
+          entryRow(entry, expectedRevision: viewModel.revision)
+        }
+      }
+    }
+
+    private func entryRow(
+      _ entry: PersonalDictionaryEntry,
+      expectedRevision: UInt64
+    ) -> some View {
+      HStack(alignment: .firstTextBaseline) {
+        Toggle(isOn: Binding(
+          get: { entry.isEnabled },
+          set: { enabled in
+            Task { @MainActor in
+              await viewModel.setEnabled(
+                enabled,
+                id: entry.id,
+                expectedRevision: expectedRevision
+              )
+            }
+          }
+        )) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(entry.preferredForm)
+            if !entry.aliases.isEmpty {
+              Text(entry.aliases.joined(separator: ", "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+          }
+        }
+        .accessibilityLabel("Enable \(entry.preferredForm)")
+        .accessibilityValue(entry.isEnabled ? "Enabled" : "Disabled")
+        .accessibilityHint("Toggles whether this entry is used for dictation")
+
+        Button("Delete", role: .destructive) {
+          Task { @MainActor in
+            await viewModel.delete(id: entry.id, expectedRevision: expectedRevision)
+          }
+        }
+        .accessibilityLabel("Delete \(entry.preferredForm)")
+        .accessibilityHint("Permanently removes this dictionary entry")
+      }
+      .accessibilityElement(children: .contain)
+    }
+
+    private func suggestionRow(
+      _ suggestion: PersonalDictionarySuggestion,
+      expectedRevision: UInt64
+    ) -> some View {
+      VStack(alignment: .leading, spacing: 6) {
+        Text(suggestion.preferredForm)
+        if !suggestion.observedForms.isEmpty {
+          Text(suggestion.observedForms.joined(separator: ", "))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        HStack {
+          Button("Approve") {
+            Task { @MainActor in
+              await viewModel.approveSuggestion(
+                id: suggestion.id,
+                expectedRevision: expectedRevision
+              )
+            }
+          }
+          .accessibilityLabel("Approve \(suggestion.preferredForm)")
+          .accessibilityHint("Adds this suggestion to the dictionary")
+
+          Button("Edit and Approve") {
+            suggestionDraft = PersonalDictionarySuggestionDraft(
+              suggestion: suggestion,
+              expectedRevision: expectedRevision
+            )
+          }
+          .accessibilityLabel("Edit and approve \(suggestion.preferredForm)")
+          .accessibilityHint("Reviews the preferred form and aliases before adding")
+
+          Button("Dismiss", role: .destructive) {
+            Task { @MainActor in
+              await viewModel.dismissSuggestion(
+                id: suggestion.id,
+                expectedRevision: expectedRevision
+              )
+            }
+          }
+          .accessibilityLabel("Dismiss \(suggestion.preferredForm)")
+          .accessibilityHint("Removes this pending suggestion")
+        }
+      }
+      .accessibilityElement(children: .contain)
+    }
+
+    private var transfer: some View {
+      DisclosureGroup("Transfer") {
+        VStack(alignment: .leading, spacing: 8) {
+          Button("Export Dictionary") {
+            Task { @MainActor in
+              await viewModel.prepareCanonicalExport()
+              showsDictionaryExporter = viewModel.canonicalExportData != nil
+            }
+          }
+          .accessibilityLabel("Export complete personal dictionary")
+          .accessibilityHint("Exports entries and pending suggestions in a restorable format")
+
+          Button("Export Entries (CSV)") {
+            Task { @MainActor in
+              await viewModel.prepareCSVExport()
+              showsCSVExporter = viewModel.csvExportData != nil
+            }
+          }
+          .accessibilityLabel("Export visible entries as CSV")
+          .accessibilityHint("Exports only the currently visible entries")
+
+          Text(
+            "CSV excludes pending suggestions and cannot restore a complete personal dictionary."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+          Button("Import Dictionary") { showsImporter = true }
+            .accessibilityLabel("Import personal dictionary")
+            .accessibilityHint("Selects a Fleck dictionary or compatible JSON file to preview")
+        }
+        .padding(.vertical, 4)
+      }
+    }
+
+    private func addEntry() {
+      let submittedPreferredForm = preferredForm
+      let submittedAliases = aliases
+      Task { @MainActor in
+        await viewModel.add(
+          preferredForm: submittedPreferredForm,
+          aliases: submittedAliases
+        )
+        guard viewModel.errorMessage == nil else { return }
+        preferredForm = ""
+        aliases = ""
+      }
+    }
+
+    private func handleImport(_ result: Result<[URL], Error>) {
+      switch result {
+      case .success(let urls):
+        guard let url = urls.first else { return }
+        guard url.startAccessingSecurityScopedResource() else {
+          viewModel.handleFileOperationFailure(CocoaError(.fileReadNoPermission))
+          return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+        do {
+          let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+          guard let fileSize, fileSize <= maximumTransferBytes else {
+            throw PersonalDictionaryStoreError.fileTooLarge
+          }
+          let data = try Data(contentsOf: url, options: .mappedIfSafe)
+          guard data.count <= maximumTransferBytes else {
+            throw PersonalDictionaryStoreError.fileTooLarge
+          }
+          Task { @MainActor in await viewModel.previewCanonicalImport(data) }
+        } catch {
+          viewModel.handleFileOperationFailure(error)
+        }
+      case .failure(let error):
+        viewModel.handleFileOperationFailure(error)
+      }
+    }
+
+    private func handleFileCompletion(_ result: Result<URL, Error>) {
+      if case .failure(let error) = result {
+        viewModel.handleFileOperationFailure(error)
+      }
+    }
+  }
+
+  private struct PersonalDictionarySuggestionDraft: Identifiable {
+    let id: UUID
+    let expectedRevision: UInt64
+    let preferredForm: String
+    let aliases: String
+
+    init(suggestion: PersonalDictionarySuggestion, expectedRevision: UInt64) {
+      id = suggestion.id
+      self.expectedRevision = expectedRevision
+      preferredForm = suggestion.preferredForm
+      aliases = suggestion.observedForms.joined(separator: ", ")
+    }
+  }
+
+  private struct PersonalDictionarySuggestionEditSheet: View {
+    let draft: PersonalDictionarySuggestionDraft
+    let onCancel: () -> Void
+    let onSubmit: (String, String) -> Void
+    @State private var preferredForm: String
+    @State private var aliases: String
+
+    init(
+      draft: PersonalDictionarySuggestionDraft,
+      onCancel: @escaping () -> Void,
+      onSubmit: @escaping (String, String) -> Void
+    ) {
+      self.draft = draft
+      self.onCancel = onCancel
+      self.onSubmit = onSubmit
+      _preferredForm = State(initialValue: draft.preferredForm)
+      _aliases = State(initialValue: draft.aliases)
+    }
+
+    var body: some View {
+      Form {
+        TextField("Preferred form", text: $preferredForm)
+        TextField("Aliases", text: $aliases)
+        Text("Separate aliases with commas or new lines.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        HStack {
+          Spacer()
+          Button("Cancel", action: onCancel)
+            .accessibilityLabel("Cancel suggestion edit")
+          Button("Approve") { onSubmit(preferredForm, aliases) }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+            .disabled(preferredForm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("Approve edited suggestion")
+        }
+      }
+      .formStyle(.grouped)
+      .frame(width: 440)
+      .padding()
+    }
+  }
+
+  private struct PersonalDictionaryImportPreviewSheet: View {
+    @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
+    @State private var showsOmissionConfirmation = false
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Review Dictionary Import")
+          .font(.title2.weight(.semibold))
+        if let preview = viewModel.importPreview {
+          HStack {
+            LabeledContent("Source", value: String(preview.sourceRevision))
+            LabeledContent("Local", value: String(preview.expectedLocalRevision))
+            LabeledContent("Target", value: String(preview.checkedTargetRevision))
+          }
+          .accessibilityElement(children: .contain)
+
+          List {
+            if viewModel.importPreviewRows.isEmpty {
+              Text("No dictionary changes.")
+                .foregroundStyle(.secondary)
+            } else {
+              ForEach(viewModel.importPreviewRows) { row in
+                LabeledContent {
+                  VStack(alignment: .trailing, spacing: 2) {
+                    Text(row.title)
+                    if let detail = row.detail {
+                      Text(detail).font(.caption).foregroundStyle(.secondary)
+                    }
+                  }
+                } label: {
+                  Text("\(row.action.rawValue) \(row.kind.rawValue)")
+                }
+                .accessibilityLabel(row.accessibilityImportLabel)
+                .accessibilityValue(row.detail ?? "No alternate forms")
+                .accessibilityHint("Dictionary import preview row")
+              }
+              ForEach(viewModel.importConflictRows) { conflict in
+                LabeledContent(conflict.code, value: String(conflict.count))
+                  .accessibilityLabel("Compiler conflict \(conflict.code)")
+                  .accessibilityValue("\(conflict.count)")
+                  .accessibilityHint("Existing conflict code and count")
+              }
+            }
+          }
+        }
+
+        HStack {
+          Spacer()
+          Button("Cancel") { viewModel.cancelImportPreview() }
+            .focusable()
+            .accessibilityLabel("Cancel dictionary import")
+            .accessibilityHint("Closes the preview without changing the dictionary")
+          Button("Confirm Import") {
+            if viewModel.importRequiresOmissionConfirmation {
+              showsOmissionConfirmation = true
+            } else {
+              Task { @MainActor in await viewModel.confirmCanonicalImport() }
+            }
+          }
+          .focusable()
+          .buttonStyle(.borderedProminent)
+          .keyboardShortcut(.defaultAction)
+          .disabled(!viewModel.canConfirmImport)
+          .accessibilityLabel("Confirm dictionary import")
+          .accessibilityValue(viewModel.canConfirmImport ? "Available" : "No changes")
+          .accessibilityHint("Applies the reviewed dictionary changes")
+        }
+      }
+      .frame(minWidth: 620, minHeight: 420)
+      .padding()
+      .confirmationDialog(
+        "Import omits local dictionary content",
+        isPresented: $showsOmissionConfirmation
+      ) {
+        Button("Import and Omit", role: .destructive) {
+          Task { @MainActor in await viewModel.confirmCanonicalImport() }
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("The reviewed omitted entries and suggestions will be removed.")
+      }
+    }
+  }
+
+  private struct PersonalDictionaryTransferDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.fleckDictionary, .commaSeparatedText] }
+    let data: Data
+
+    init(data: Data) {
+      self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+      data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+      FileWrapper(regularFileWithContents: data)
+    }
+  }
+
+  private extension UTType {
+    static let fleckDictionary =
+      UTType(filenameExtension: "fleckdict", conformingTo: .json)
+      ?? UTType(
+        exportedAs: "com.harryjin.fleck.personal-dictionary",
+        conformingTo: .json
+      )
   }
 
   private struct SettingsColorButton: View {
