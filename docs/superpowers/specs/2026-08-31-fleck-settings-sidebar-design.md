@@ -1,7 +1,7 @@
 # Fleck Settings Sidebar Design
 
-**Status:** Approved for implementation  
-**Baseline:** `d6facac` (`codex/dictation-vocabulary-runtime-polish`)  
+**Status:** Approved for implementation
+**Baseline:** `d6facac` (`codex/dictation-vocabulary-runtime-polish`)
 **Platform:** macOS 14+, with native Liquid Glass treatment on supported macOS releases
 
 ## Objective
