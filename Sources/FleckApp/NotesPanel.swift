@@ -230,23 +230,31 @@
   enum NotesPanelBannerCategory: Hashable {
     case modifierRecovery
     case captureFailure
-    case dictationRecovery
     case agentChange
   }
 
   enum NotesPanelBannerOccurrence: Hashable {
     case modifierRecovery(statusCopy: String, recoveryButtonTitle: String)
     case captureFailure(message: String, actionPanes: [DictationPrivacyPane])
-    case dictationRecovery(actionTitle: String, accessibilityLabel: String)
     case agentChange(changeID: UUID, count: Int)
 
     var category: NotesPanelBannerCategory {
       switch self {
       case .modifierRecovery: .modifierRecovery
       case .captureFailure: .captureFailure
-      case .dictationRecovery: .dictationRecovery
       case .agentChange: .agentChange
       }
+    }
+  }
+
+  enum NotesPanelBannerPolicy {
+    static func activeOccurrences(
+      modifierRecovery: NotesPanelBannerOccurrence?,
+      captureFailure: NotesPanelBannerOccurrence?,
+      routineRecoveryAction _: DictationCapsuleAction?,
+      agentChange: NotesPanelBannerOccurrence?
+    ) -> Set<NotesPanelBannerOccurrence> {
+      Set([modifierRecovery, captureFailure, agentChange].compactMap { $0 })
     }
   }
 
@@ -431,32 +439,6 @@
                 .accessibilityLabel("Dictation unavailable")
               }
             }
-            if let recoveryAction = dictationRuntime.recoveryAction {
-              let occurrence = NotesPanelBannerOccurrence.dictationRecovery(
-                actionTitle: recoveryAction.title,
-                accessibilityLabel: recoveryAction.accessibilityLabel
-              )
-              if bannerDismissalState.isPresented(occurrence) {
-                HStack(spacing: 8) {
-                  Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
-                    .font(.caption)
-                  Spacer()
-                  Button(recoveryAction.title) {
-                    Task { await dictationRuntime.performRecoveryAction() }
-                  }
-                  .keyboardShortcut("r", modifiers: [.command, .shift])
-                  .disabled(!dictationRuntime.recoveryCommand.isEnabled)
-                  .accessibilityLabel(recoveryAction.accessibilityLabel)
-                  NotesPanelBannerCloseButton(
-                    label: "dictation recovery",
-                    action: { dismissBanner(occurrence) }
-                  )
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(.quaternary.opacity(0.35))
-              }
-            }
             if let banner = appState.agentBannerPresentation {
               let occurrence = NotesPanelBannerOccurrence.agentChange(
                 changeID: banner.feedback.changeID,
@@ -526,10 +508,6 @@
       .onReceive(dictationRuntime.$captureFailure) { failure in
         guard failure == nil else { return }
         bannerDismissalState.forgetDismissedOccurrences(in: .captureFailure)
-      }
-      .onReceive(dictationRuntime.$recoveryAction) { recoveryAction in
-        guard recoveryAction == nil else { return }
-        bannerDismissalState.forgetDismissedOccurrences(in: .dictationRecovery)
       }
       .onReceive(dictationRuntime.$modifierMonitorState) { monitorState in
         guard monitorState == .stopped || monitorState == .running else {
@@ -714,40 +692,30 @@
     }
 
     private var activeBannerOccurrences: Set<NotesPanelBannerOccurrence> {
-      var occurrences = Set<NotesPanelBannerOccurrence>()
-      if let title = modifierRecoveryPresentation.recoveryButtonTitle {
-        occurrences.insert(
-          .modifierRecovery(
-            statusCopy: modifierRecoveryPresentation.statusCopy,
-            recoveryButtonTitle: title
-          )
+      let modifierRecovery = modifierRecoveryPresentation.recoveryButtonTitle.map {
+        NotesPanelBannerOccurrence.modifierRecovery(
+          statusCopy: modifierRecoveryPresentation.statusCopy,
+          recoveryButtonTitle: $0
         )
       }
-      if let failure = dictationRuntime.captureFailure {
-        occurrences.insert(
-          .captureFailure(
-            message: failure.message,
-            actionPanes: failure.actions.map(\.pane)
-          )
+      let captureFailure = dictationRuntime.captureFailure.map {
+        NotesPanelBannerOccurrence.captureFailure(
+          message: $0.message,
+          actionPanes: $0.actions.map(\.pane)
         )
       }
-      if let recoveryAction = dictationRuntime.recoveryAction {
-        occurrences.insert(
-          .dictationRecovery(
-            actionTitle: recoveryAction.title,
-            accessibilityLabel: recoveryAction.accessibilityLabel
-          )
+      let agentChange = appState.agentBannerPresentation.map {
+        NotesPanelBannerOccurrence.agentChange(
+          changeID: $0.feedback.changeID,
+          count: $0.count
         )
       }
-      if let banner = appState.agentBannerPresentation {
-        occurrences.insert(
-          .agentChange(
-            changeID: banner.feedback.changeID,
-            count: banner.count
-          )
-        )
-      }
-      return occurrences
+      return NotesPanelBannerPolicy.activeOccurrences(
+        modifierRecovery: modifierRecovery,
+        captureFailure: captureFailure,
+        routineRecoveryAction: dictationRuntime.recoveryAction,
+        agentChange: agentChange
+      )
     }
 
     private func dismissBanner(_ occurrence: NotesPanelBannerOccurrence) {

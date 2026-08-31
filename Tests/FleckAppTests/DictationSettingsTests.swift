@@ -613,6 +613,26 @@ private func settleSettingsHost(_ view: NSView) async {
   #expect(source.contains("await dictationRuntime.recoverModifierMonitoring()"))
 }
 
+@Test func notesPanelBannerPolicyOmitsRoutineUndoWhileKeepingFailures() {
+  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
+    statusCopy: "Input Monitoring is required",
+    recoveryButtonTitle: "Enable Right Option"
+  )
+  let captureFailure = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+
+  let active = NotesPanelBannerPolicy.activeOccurrences(
+    modifierRecovery: modifier,
+    captureFailure: captureFailure,
+    routineRecoveryAction: .undo,
+    agentChange: nil
+  )
+
+  #expect(active == [modifier, captureFailure])
+}
+
 @Test func notesPanelBannerDismissalInitiallyPresentsAllActiveOccurrences() {
   let modifier = NotesPanelBannerOccurrence.modifierRecovery(
     statusCopy: "Input Monitoring is required",
@@ -622,16 +642,11 @@ private func settleSettingsHost(_ view: NSView) async {
     message: "Microphone permission is required",
     actionPanes: [.microphone]
   )
-  let recovery = NotesPanelBannerOccurrence.dictationRecovery(
-    actionTitle: "Recover Last Dictation",
-    accessibilityLabel: "Recover Last Dictation"
-  )
   var state = NotesPanelBannerDismissalState()
-  state.reconcile(activeOccurrences: [modifier, captureFailure, recovery])
+  state.reconcile(activeOccurrences: [modifier, captureFailure])
 
   #expect(state.isPresented(modifier))
   #expect(state.isPresented(captureFailure))
-  #expect(state.isPresented(recovery))
 }
 
 @Test func notesPanelBannerDismissalHidesOnlyTheExactActiveIdentity() {

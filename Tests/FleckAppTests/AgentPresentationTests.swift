@@ -175,21 +175,21 @@ struct AgentPresentationTests {
       changeID: UUID(),
       count: 1
     )
-    let independentRecovery = NotesPanelBannerOccurrence.dictationRecovery(
-      actionTitle: "Recover Last Dictation",
-      accessibilityLabel: "Recover Last Dictation"
+    let independentFailure = NotesPanelBannerOccurrence.captureFailure(
+      message: "Microphone permission is required",
+      actionPanes: [.microphone]
     )
     var state = NotesPanelBannerDismissalState()
-    state.reconcile(activeOccurrences: [first, independentRecovery])
+    state.reconcile(activeOccurrences: [first, independentFailure])
     state.dismiss(first)
 
     state.reconcile(
-      activeOccurrences: [coalesced, differentChange, independentRecovery]
+      activeOccurrences: [coalesced, differentChange, independentFailure]
     )
 
     #expect(state.isPresented(coalesced))
     #expect(state.isPresented(differentChange))
-    #expect(state.isPresented(independentRecovery))
+    #expect(state.isPresented(independentFailure))
   }
 
   @Test func reduceMotionUsesCrossfadeInsteadOfSpatialTransition() {
