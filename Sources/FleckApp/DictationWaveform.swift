@@ -4,13 +4,16 @@
 
   @MainActor
   final class DictationWaveformModel: ObservableObject {
-    static let barCount = 7
-    static let barWidth: CGFloat = 2.5
-    static let barGap: CGFloat = 2
-    static let minimumHeight: CGFloat = 4
-    static let maximumHeight: CGFloat = 17
+    static let barCount = 13
+    static let barWidth: CGFloat = 1.5
+    static let barGap: CGFloat = 1.5
+    static let minimumHeight: CGFloat = 3
+    static let maximumHeight: CGFloat = 20
     static let reducedMaximumHeight: CGFloat = 12
-    static let barWeights: [CGFloat] = [0.78, 0.93, 1.0, 0.84, 0.96, 0.72, 0.88]
+    static let barWeights: [CGFloat] = [
+      0.72, 0.84, 0.93, 0.78, 0.98, 0.89, 1.0,
+      0.91, 0.99, 0.82, 0.94, 0.76, 0.87
+    ]
     static let noiseFloorDecibels: CGFloat = -50
     static let fullScaleDecibels: CGFloat = -12
     static let attackSmoothing: CGFloat = 0.65

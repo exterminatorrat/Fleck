@@ -8,7 +8,7 @@ import Testing
   #expect(DictationWaveformRefreshSchedule.interval(reduceMotion: true) == 1.0 / 15.0)
 }
 
-@Test @MainActor func waveformUsesSevenStableAsymmetricBarsAndExactGeometry() {
+@Test @MainActor func waveformUsesThirteenStableAsymmetricBarsAndExactGeometry() {
   let model = DictationWaveformModel()
   model.beginListening(at: Date(timeIntervalSince1970: 100))
   model.receive(level: 2, now: Date(timeIntervalSince1970: 100.04))
@@ -17,18 +17,41 @@ import Testing
     reduceMotion: false
   )
 
-  #expect(DictationWaveformModel.barCount == 7)
-  #expect(DictationWaveformModel.barWidth == 2.5)
-  #expect(DictationWaveformModel.barGap == 2)
-  #expect(DictationWaveformModel.minimumHeight == 4)
-  #expect(DictationWaveformModel.maximumHeight == 17)
-  #expect(DictationWaveformModel.barWeights.count == 7)
+  #expect(DictationWaveformModel.barCount == 13)
+  #expect(DictationWaveformModel.barWidth == 1.5)
+  #expect(DictationWaveformModel.barGap == 1.5)
+  #expect(
+    CGFloat(DictationWaveformModel.barCount) * DictationWaveformModel.barWidth
+      + CGFloat(DictationWaveformModel.barCount - 1) * DictationWaveformModel.barGap == 37.5
+  )
+  #expect(DictationWaveformModel.minimumHeight == 3)
+  #expect(DictationWaveformModel.maximumHeight == 20)
+  #expect(DictationWaveformModel.barWeights.count == 13)
   #expect(Set(DictationWaveformModel.barWeights).count > 1)
-  #expect(loud.count == 7)
+  #expect(loud.count == 13)
   #expect(loud.allSatisfy {
     (DictationWaveformModel.minimumHeight...DictationWaveformModel.maximumHeight).contains($0)
   })
   #expect(loud[0] != loud[1])
+}
+
+@Test @MainActor func waveformReachesNormalMaximumAfterSustainedLoudInput() {
+  let model = DictationWaveformModel()
+  let start = Date(timeIntervalSince1970: 15)
+  model.beginListening(at: start)
+
+  for index in 0...12 {
+    model.receive(
+      level: 1,
+      now: start.addingTimeInterval(0.04 + (Double(index) * 0.04))
+    )
+  }
+
+  let heights = model.barHeights(
+    at: start.addingTimeInterval(0.57),
+    reduceMotion: false
+  )
+  #expect(heights.max()! > 19.9)
 }
 
 @Test @MainActor func waveformIsStaticAtMinimumDuringSilence() {
