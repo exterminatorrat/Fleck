@@ -44,7 +44,7 @@ import Testing
   #expect(first.allSatisfy { $0 == DictationWaveformModel.minimumHeight })
 }
 
-@Test @MainActor func waveformAmplitudeIncreasesWithRealInputLevel() {
+@Test @MainActor func waveformRespondsImmediatelyAcrossRepresentativeMicrophoneRMS() {
   let start = Date(timeIntervalSince1970: 30)
   func peak(for level: Float) -> CGFloat {
     let model = DictationWaveformModel()
@@ -53,12 +53,14 @@ import Testing
     return model.barHeights(at: start.addingTimeInterval(0.05), reduceMotion: false).max()!
   }
 
-  let quiet = peak(for: 0.01)
-  let soft = peak(for: 0.05)
+  let silence = peak(for: 0.002)
+  let soft = peak(for: 0.006)
+  let conversational = peak(for: 0.02)
   let loud = peak(for: 0.20)
-  #expect(quiet == DictationWaveformModel.minimumHeight)
-  #expect(soft > quiet)
-  #expect(loud > soft)
+  #expect(silence == DictationWaveformModel.minimumHeight)
+  #expect(soft >= silence + 0.75)
+  #expect(conversational > soft)
+  #expect(loud > conversational)
 }
 
 @Test @MainActor func waveformUsesFastAttackAndSlowerReleaseWithoutSyntheticMotion() {

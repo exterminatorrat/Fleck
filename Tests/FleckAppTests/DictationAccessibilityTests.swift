@@ -67,6 +67,65 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   descendants(of: host).first { $0.identifier?.rawValue == identifier }
 }
 
+@MainActor
+private func brightPixelBounds<Content: View>(
+  of content: Content,
+  size: CGSize,
+  threshold: CGFloat = 0.05
+) throws -> CGRect? {
+  let host = NSHostingView(rootView: content)
+  host.frame = CGRect(origin: .zero, size: size)
+  host.layoutSubtreeIfNeeded()
+  let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+  host.cacheDisplay(in: host.bounds, to: imageRep)
+  let scaleX = CGFloat(imageRep.pixelsWide) / size.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / size.height
+  var bounds: CGRect?
+  for y in 0..<imageRep.pixelsHigh {
+    for x in 0..<imageRep.pixelsWide {
+      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+        max(color.redComponent, color.greenComponent, color.blueComponent) > threshold
+      else { continue }
+      let pixel = CGRect(
+        x: CGFloat(x) / scaleX,
+        y: CGFloat(y) / scaleY,
+        width: 1 / scaleX,
+        height: 1 / scaleY
+      )
+      bounds = bounds?.union(pixel) ?? pixel
+    }
+  }
+  return bounds
+}
+
+@Test @MainActor func DictationAccessibilityKeepsActiveProgressTileAtCrispBaseSize() throws {
+  let padding: CGFloat = 10
+  let activeTile = 1
+  let painted = try #require(
+    try brightPixelBounds(
+      of: FleckRailMark(
+        layout: .rail(reversed: false),
+        treatments: [.pending, .active, .pending, .pending]
+      )
+      .padding(padding)
+      .background(Color.black),
+      size: CGSize(
+        width: FleckRailMark.railFrameSize.width + padding * 2,
+        height: FleckRailMark.railFrameSize.height + padding * 2
+      ),
+      threshold: 0.8
+    )
+  )
+  let expected = FleckRailMark.railTileFrames[activeTile].offsetBy(
+    dx: padding,
+    dy: padding
+  )
+  #expect(painted.width <= expected.width + 0.5)
+  #expect(painted.height <= expected.height + 0.5)
+  #expect(abs(painted.midX - expected.midX) <= 0.5)
+  #expect(abs(painted.midY - expected.midY) <= 0.5)
+}
+
 @Test @MainActor func DictationAccessibilityUsesApprovedStatusTiersAndCopy() {
   let expected: [(DictationCapsuleStatus, CGSize, String?)] = [
     (.idle, CGSize(width: 46, height: 24), nil),
@@ -374,6 +433,40 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
   #expect(FleckRailMark.tileFrames[1].minX - FleckRailMark.tileFrames[0].maxX == 2)
   #expect(FleckRailMark.tileFrames[2].minY - FleckRailMark.tileFrames[0].maxY == 2)
   #expect(FleckRailMark.innerHighlightThickness == 1)
+}
+
+@Test @MainActor func DictationAccessibilityKeepsPaintedProgressTilesInsideDeclaredFrame() throws {
+  let padding: CGFloat = 10
+  let frame = CGRect(
+    x: padding,
+    y: padding,
+    width: FleckRailMark.railFrameSize.width,
+    height: FleckRailMark.railFrameSize.height
+  )
+  let canvasSize = CGSize(
+    width: frame.width + padding * 2,
+    height: frame.height + padding * 2
+  )
+
+  for activeTile in FleckRailMark.tileIDs {
+    let renderedBounds = try brightPixelBounds(
+      of: FleckRailMark(
+        color: .white,
+        activeTile: activeTile,
+        layout: .rail(reversed: false)
+      )
+      .padding(padding)
+      .background(Color.black),
+      size: canvasSize
+    )
+    let painted = try #require(renderedBounds)
+    #expect(painted.minX >= frame.minX - 0.5)
+    #expect(painted.maxX <= frame.maxX + 0.5)
+    #expect(painted.minY >= frame.minY - 0.5)
+    #expect(painted.maxY <= frame.maxY + 0.5)
+    #expect(abs(painted.midX - frame.midX) <= 0.5)
+    #expect(abs(painted.midY - frame.midY) <= 0.5)
+  }
 }
 
 @Test @MainActor func DictationAccessibilityLoadsCanonicalTemplateMarkAtTinyRailSize() {

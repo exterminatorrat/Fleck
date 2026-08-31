@@ -11,8 +11,8 @@
     static let maximumHeight: CGFloat = 17
     static let reducedMaximumHeight: CGFloat = 12
     static let barWeights: [CGFloat] = [0.78, 0.93, 1.0, 0.84, 0.96, 0.72, 0.88]
-    static let noiseFloor: CGFloat = 0.015
-    static let fullScale: CGFloat = 0.24
+    static let noiseFloorDecibels: CGFloat = -50
+    static let fullScaleDecibels: CGFloat = -12
     static let attackSmoothing: CGFloat = 0.65
     static let releaseSmoothing: CGFloat = 0.18
     static let staleGracePeriod: TimeInterval = 0.12
@@ -48,9 +48,14 @@
       }
       lastAcceptedLevelAt = now
       let rawLevel = CGFloat(level)
-      let finiteLevel = rawLevel.isNaN ? 0 : rawLevel
+      let finiteLevel = rawLevel.isFinite ? max(rawLevel, 0) : 0
+      let decibels = finiteLevel > 0 ? 20 * log10(finiteLevel) : Self.noiseFloorDecibels
       let normalized = min(
-        max((finiteLevel - Self.noiseFloor) / (Self.fullScale - Self.noiseFloor), 0),
+        max(
+          (decibels - Self.noiseFloorDecibels)
+            / (Self.fullScaleDecibels - Self.noiseFloorDecibels),
+          0
+        ),
         1
       )
       let smoothing = normalized > energy ? Self.attackSmoothing : Self.releaseSmoothing

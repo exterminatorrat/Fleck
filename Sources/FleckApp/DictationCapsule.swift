@@ -824,17 +824,16 @@
 
     var body: some View {
       let frames = Self.tileFrames(for: layout)
+      let frameSize = Self.layoutFrameSize(for: layout)
       ZStack(alignment: .topLeading) {
+        Color.clear
+          .frame(width: frameSize.width, height: frameSize.height)
         ForEach(Self.tileOrder(reversed: railReversed), id: \.self) { tileID in
           let frame = frames[railReversed ? Self.tileIDs.count - 1 - tileID : tileID]
           let treatment = treatment(for: tileID)
-          let active = treatment == .active
           RoundedRectangle(cornerRadius: 2, style: .continuous)
             .fill(fillColor(for: tileID))
-            .frame(
-              width: active && layout != .mark ? frame.width + 1 : frame.width,
-              height: active && layout != .mark ? frame.height + 1 : frame.height
-            )
+            .frame(width: frame.width, height: frame.height)
             .overlay(alignment: .top) {
               Rectangle()
                 .fill(Color.white.opacity(0.10))
@@ -858,10 +857,7 @@
             .offset(x: frame.minX, y: frame.minY)
         }
       }
-      .frame(
-        width: Self.layoutFrameSize(for: layout).width,
-        height: Self.layoutFrameSize(for: layout).height
-      )
+      .frame(width: frameSize.width, height: frameSize.height)
       .accessibilityHidden(true)
       .background(FleckRailFrameProbe(identifier: "fleck-rail-mark"))
     }
