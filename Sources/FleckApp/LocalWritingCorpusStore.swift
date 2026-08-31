@@ -41,6 +41,7 @@ enum LocalWritingCorpusStoreFaultPoint: Equatable, Sendable {
   case afterCorpusRenameBeforeManagedSync
   case afterOpenManagedParentSync
   case beforeCorpusDirectorySync
+  case beforeLiveLedgerVerification
   case beforeFinalAuthorityRecheck
 }
 
@@ -461,6 +462,7 @@ actor LocalWritingCorpusStore {
     let ledger: LocalWritingExposureLedger
     let live: LocalWritingExposureLedgerCheckpoint
     do {
+      try faultHook?(.beforeLiveLedgerVerification)
       ledger = try LocalWritingExposureLedger.open(
         at: ledgerURL,
         pinnedDirectoryDescriptor: exposure.descriptor
@@ -553,6 +555,18 @@ actor LocalWritingCorpusStore {
       expectedData: live.canonicalData,
       in: corpus.descriptor
     )
+    let finalLedgerCheckpoint: LocalWritingExposureLedgerCheckpoint
+    do {
+      finalLedgerCheckpoint = try LocalWritingExposureLedger.open(
+        at: ledgerURL,
+        pinnedDirectoryDescriptor: exposure.descriptor
+      ).verify(expectedCorpusID: location.corpusID).checkpoint
+    } catch {
+      throw Self.mapLedgerError(error)
+    }
+    guard finalLedgerCheckpoint == live else {
+      throw LocalWritingCorpusStoreError.rollbackOrFork
+    }
     return LocalWritingCorpusWorkspace(
       corpusID: location.corpusID,
       workspaceURL: workspaceURL,

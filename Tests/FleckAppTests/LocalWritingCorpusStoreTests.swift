@@ -869,6 +869,36 @@ struct LocalWritingCorpusStoreTests {
   }
 
   @Test
+  func openRejectsATransientSameInodeLedgerUseRace() async throws {
+    let pair = try await makeCheckpointPair(firstID: 0xcf, secondID: 0xcf)
+    defer { pair.cleanup() }
+    let originalLedger = try Data(contentsOf: pair.firstPaths.ledger)
+    let advanced = try appendExposure(
+      to: pair.secondPaths.ledger,
+      corpusID: pair.secondWorkspace.corpusID,
+      parent: pair.secondWorkspace.checkpoint,
+      discriminator: 8
+    )
+    let advancedLedger = try Data(contentsOf: pair.secondPaths.ledger)
+    let opener = pair.firstFixture.store(faultHook: { point in
+      switch point {
+      case .beforeLiveLedgerVerification:
+        try replaceFile(at: pair.firstPaths.ledger, with: advancedLedger)
+      case .beforeFinalAuthorityRecheck:
+        try replaceFile(at: pair.firstPaths.ledger, with: originalLedger)
+      default:
+        break
+      }
+    })
+
+    await #expect(throws: LocalWritingCorpusStoreError.rollbackOrFork) {
+      try await opener.open(at: pair.firstWorkspace.workspaceURL)
+    }
+    #expect(try Data(contentsOf: pair.firstPaths.ledger) == originalLedger)
+    #expect(try Data(contentsOf: pair.firstPaths.checkpoint) == advanced.canonicalData)
+  }
+
+  @Test
   func finalBarriersRejectLateSameInodeContentMutation() async throws {
     let createFixture = try CorpusStoreFixture()
     defer { createFixture.cleanup() }
