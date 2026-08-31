@@ -40,9 +40,6 @@ import Testing
 
   for invalid in [
     DictationRoutingDecision.ambiguous([
-      .init(destination: alpha.destination, contextHint: "only one"),
-    ]),
-    .ambiguous([
       .init(destination: inbox.destination, contextHint: "inbox"),
       .init(destination: beta.destination, contextHint: "beta"),
     ]),
@@ -62,6 +59,83 @@ import Testing
       inboxID: inbox.destination.noteID
     ) == .inbox)
   }
+}
+
+@Test func dynamicDestinationRouterAcceptsSingleBoundedAmbiguity() async {
+  let inbox = dynamicCandidate(title: "Inbox")
+  let alpha = dynamicCandidate(title: "Alpha", context: "alpha context")
+  let decision: DictationRoutingDecision = .ambiguous([
+    .init(destination: alpha.destination, contextHint: "alpha context"),
+  ])
+  let router = DynamicDestinationRouter(
+    foundationIsAvailable: { false },
+    foundationRouter: DynamicDestinationRouterProbe(result: .inbox),
+    localRouter: DynamicDestinationRouterProbe(result: decision)
+  )
+
+  #expect(await router.route(
+    transcript: "Choose a destination",
+    candidates: [inbox, alpha],
+    inboxID: inbox.destination.noteID
+  ) == decision)
+}
+
+@Test func dynamicDestinationRouterDoesNotSuggestFromNonleadingPhoneticPlural() async {
+  let inbox = dynamicCandidate(title: "Inbox")
+  let fleck = dynamicCandidate(title: "Fleck")
+  let local = DynamicDestinationRouterProbe(result: .inbox)
+  let router = DynamicDestinationRouter(
+    foundationIsAvailable: { false },
+    foundationRouter: DynamicDestinationRouterProbe(result: .inbox),
+    localRouter: local
+  )
+
+  #expect(await router.route(
+    transcript: "I noticed flags in the settings UI",
+    candidates: [inbox, fleck],
+    inboxID: inbox.destination.noteID
+  ) == .inbox)
+  #expect(await local.callCount == 1)
+}
+
+@Test func dynamicDestinationRouterDoesNotSuggestPhoneticTitleWithDifferentPrefix() async {
+  let inbox = dynamicCandidate(title: "Inbox")
+  let fleck = dynamicCandidate(title: "Fleck")
+  let local = DynamicDestinationRouterProbe(result: .inbox)
+  let router = DynamicDestinationRouter(
+    foundationIsAvailable: { false },
+    foundationRouter: DynamicDestinationRouterProbe(result: .inbox),
+    localRouter: local
+  )
+
+  #expect(await router.route(
+    transcript: "For black I feel like we need to work on the settings UI",
+    candidates: [inbox, fleck],
+    inboxID: inbox.destination.noteID
+  ) == .inbox)
+  #expect(await local.callCount == 1)
+}
+
+@Test func dynamicDestinationRouterReturnsAmbiguityForPhoneticCollisions() async {
+  let inbox = dynamicCandidate(title: "Inbox")
+  let fleck = dynamicCandidate(title: "Fleck", context: "Fleck workspace")
+  let flick = dynamicCandidate(title: "Flick", context: "Film notes")
+  let local = DynamicDestinationRouterProbe(result: .inbox)
+  let router = DynamicDestinationRouter(
+    foundationIsAvailable: { false },
+    foundationRouter: DynamicDestinationRouterProbe(result: .inbox),
+    localRouter: local
+  )
+
+  #expect(await router.route(
+    transcript: "For Flag I feel like we need to work on the settings UI",
+    candidates: [inbox, fleck, flick],
+    inboxID: inbox.destination.noteID
+  ) == .ambiguous([
+    .init(destination: fleck.destination, contextHint: "Fleck workspace"),
+    .init(destination: flick.destination, contextHint: "Film notes"),
+  ]))
+  #expect(await local.callCount == 0)
 }
 
 @Test func dynamicDestinationRouterExactTitleMatchInvokesNeitherSemanticRouter() async {

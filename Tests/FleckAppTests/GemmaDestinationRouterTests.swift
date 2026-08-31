@@ -4,6 +4,36 @@ import Testing
 
 @testable import FleckApp
 
+@Test func dynamicDestinationRouterRoutesEnhancedParakeetFlagTranscriptToUniqueFleckNote() async {
+  let inbox = GemmaRouteFixture.candidate(title: "Inbox")
+  let fleck = GemmaRouteFixture.candidate(title: "Fleck")
+  let unrelated = GemmaRouteFixture.candidate(
+    title: "Recipes",
+    context: "Grocery lists and weekend meals"
+  )
+  let transport = GemmaRouteTransport(startError: true)
+  let gemma = GemmaDestinationRouter(
+    generator: GemmaCleanupGenerator(transportFactory: { transport }),
+    clock: GemmaRouteFixture.clock
+  )
+  let router = DynamicDestinationRouter(
+    foundationIsAvailable: { false },
+    foundationRouter: FoundationModelDictation(osMajorVersion: { 25 }),
+    localRouter: gemma
+  )
+
+  let decision = await router.route(
+    transcript: "For Flag I feel like we need to work a lot on the settings UI",
+    candidates: [inbox, fleck, unrelated],
+    inboxID: inbox.destination.noteID
+  )
+
+  #expect(decision == .ambiguous([
+    .init(destination: fleck.destination, contextHint: ""),
+  ]))
+  #expect(transport.startCount == 0)
+}
+
 @Test func gemmaRouteReturnsStableAmbiguityOnlyForValidOutputWithMultipleExactMatches() async throws {
   let fixture = GemmaRouteFixture()
   let inbox = fixture.candidate(title: "Inbox")

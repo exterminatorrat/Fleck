@@ -324,7 +324,7 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
       || (lexeme.first == "(" && lexeme.last == ")")
   }
 
-  private static func eligibleDestinations(
+  static func eligibleDestinations(
     from candidates: [DictationDestination]
   ) -> [DictationDestination] {
     let titles = candidates.map { normalizedTitle($0.title) }
@@ -380,7 +380,7 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     eligibleDestinations: [DictationDestination]
   ) -> UUID? {
     let matches = exactTitleMatches(in: transcript, candidates: eligibleDestinations)
-    guard matches.count == 1, matches[0].occurrenceCount == 1 else { return nil }
+    guard matches.count == 1 else { return nil }
     return matches[0].destination.noteID
   }
 

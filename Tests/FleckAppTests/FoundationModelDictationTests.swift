@@ -509,7 +509,7 @@ private actor FoundationModelResponderProbe {
   #expect(recorder.count == 0)
 }
 
-@Test func FoundationModelDictationDoesNotLocallyMatchRepeatedExactTitleOccurrence() async {
+@Test func FoundationModelDictationRoutesRepeatedUniqueExactTitleWithoutFoundationModel() async {
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
   let recorder = CallRecorder()
@@ -528,7 +528,7 @@ private actor FoundationModelResponderProbe {
     inboxID: inbox.noteID
   )
 
-  #expect(destination == .inbox)
+  #expect(destination == .resolved(chemistry.noteID))
   #expect(recorder.count == 0)
 }
 
@@ -607,7 +607,7 @@ private actor FoundationModelResponderProbe {
   #expect(request.candidates == [chemistry, biology])
 }
 
-@Test func FoundationModelDictationUsesFoundationModelForRepeatedExactTitleOnMacOS26() async {
+@Test func FoundationModelDictationRoutesRepeatedExactTitleWithoutFoundationModelOnMacOS26() async {
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
   let requests = RoutingRecorder()
@@ -627,7 +627,7 @@ private actor FoundationModelResponderProbe {
   )
 
   #expect(destination == .resolved(chemistry.noteID))
-  #expect(requests.requests.count == 1)
+  #expect(requests.requests.isEmpty)
 }
 
 @Test func FoundationModelDictationKeepsChemistryInInboxWhenNoExactTitleExists() async {
