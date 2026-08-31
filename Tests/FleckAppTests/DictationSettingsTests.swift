@@ -165,7 +165,7 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
 }
 
 @Test @MainActor
-func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() {
+func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throws {
   var selection = SettingsSection.appearance
   let selected = Binding(
     get: { selection },
@@ -188,6 +188,7 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() {
     window.contentView = host
     window.orderFront(nil)
     host.layoutSubtreeIfNeeded()
+    await settleSettingsHost(host)
 
     let visibleFrames = settingsSidebarDescendants(of: host)
       .filter { !$0.isHidden && $0.alphaValue > 0 && !$0.bounds.isEmpty }
@@ -195,9 +196,25 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() {
     #expect(!visibleFrames.isEmpty)
     #expect(visibleFrames.allSatisfy { host.bounds.insetBy(dx: -1, dy: -1).contains($0) })
 
-    selection = .vocabulary
-    host.layoutSubtreeIfNeeded()
+    let table = try #require(settingsSidebarTableView(of: host))
+    let outline = try #require(table as? NSOutlineView)
+    let selectableRows = (0..<outline.numberOfRows).filter { row in
+      guard let item = outline.item(atRow: row) else { return false }
+      return !(outline.delegate?.outlineView?(outline, isGroupItem: item) ?? false)
+    }
+    let vocabularyIndex = try #require(SettingsSection.allCases.firstIndex(of: .vocabulary))
+    try #require(selectableRows.indices.contains(vocabularyIndex))
+    let vocabularyRow = selectableRows[vocabularyIndex]
+    window.makeKeyAndOrderFront(nil)
+    table.selectRowIndexes(IndexSet(integer: vocabularyRow), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: table
+    )
+    await settleSettingsHost(host)
+
     #expect(selection == .vocabulary)
+    #expect(table.selectedRow == vocabularyRow)
 
     window.contentView = nil
     window.orderOut(nil)
@@ -227,6 +244,11 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() {
 @MainActor
 private func settingsSidebarDescendants(of view: NSView) -> [NSView] {
   view.subviews + view.subviews.flatMap(settingsSidebarDescendants)
+}
+
+@MainActor
+private func settingsSidebarTableView(of view: NSView) -> NSTableView? {
+  settingsSidebarDescendants(of: view).compactMap { $0 as? NSTableView }.first
 }
 
 @Test func DictationSettingsSeparatesVocabularyAndOnlySurfacesAvailabilityProblems() throws {
