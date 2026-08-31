@@ -41,7 +41,7 @@ import Testing
   #expect(matches.first?.exactTermMatches == 2)
 }
 
-@Test func cachedRoutingUsesGenericTrigramsForOrdinaryInflections() async {
+@Test func cachedRoutingUsesEnglishLemmasForOrdinaryInflections() async {
   let target = cachedRoutingCandidate(
     id: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!,
     title: "Displays",
@@ -60,8 +60,30 @@ import Testing
   )
 
   #expect(matches.first?.candidate.destination.noteID == target.destination.noteID)
-  #expect(matches.first?.exactTermMatches == 0)
+  #expect(matches.first?.exactTermMatches == 1)
   #expect(matches.first?.score ?? 0 > 0)
+}
+
+@Test func cachedRoutingLemmatizesIndependentEnglishPluralConcepts() async {
+  let target = cachedRoutingCandidate(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000013")!,
+    title: "Chi Han Technologies Website",
+    body: "Filling in all the placeholder images"
+  )
+  let unrelated = cachedRoutingCandidate(
+    id: UUID(uuidString: "00000000-0000-0000-0000-000000000014")!,
+    title: "Website Demo",
+    body: "Prepare the launch recording and product walkthrough"
+  )
+  let index = CachedNoteRoutingIndex()
+
+  let matches = await index.retrieve(
+    transcript: "We need to fix all the image placeholders",
+    candidates: [unrelated, target]
+  )
+
+  #expect(matches.first?.candidate.destination.noteID == target.destination.noteID)
+  #expect(matches.first?.exactTermMatches == 3)
 }
 
 @Test func cachedRoutingOrdersTiesByNormalizedTitleThenUUID() async {
@@ -105,7 +127,7 @@ import Testing
   let fuzzy = cachedRoutingCandidate(
     id: UUID(uuidString: "00000000-0000-0000-0000-000000000023")!,
     title: "Alpha",
-    body: "hologram"
+    body: "holographic"
   )
   let index = CachedNoteRoutingIndex()
 

@@ -127,6 +127,43 @@ import Testing
   }
 }
 
+@Test func gemmaRouteUsesTitleFreePluralPhraseToResolveUniqueFullNoteContext() async {
+  let inbox = GemmaRouteFixture.candidate(title: "Inbox")
+  let chihan = GemmaRouteFixture.candidate(
+    title: "Chi Han Technologies Website",
+    context: """
+      Website launch checklist and final publication work. Filling in all the placeholder images,
+      checking responsive layouts, and reviewing the Chi Han Technologies pages before launch.
+      """
+  )
+  let fleck = GemmaRouteFixture.candidate(
+    title: "Fleck",
+    context: """
+      Local dictation cleanup, destination routing, model settings, capture reliability, and notes
+      workflow improvements for Fleck.
+      """
+  )
+  let websiteDemo = GemmaRouteFixture.candidate(
+    title: "Website Demo",
+    context: """
+      Browser choreography, launch recording, product walkthrough, and narration for the website
+      demo.
+      """
+  )
+  let transport = GemmaRouteTransport(startError: true)
+  let router = GemmaDestinationRouter(
+    generator: GemmaCleanupGenerator(transportFactory: { transport }),
+    clock: GemmaRouteFixture.clock
+  )
+
+  #expect(await router.route(
+    transcript: "We need to fix all the image placeholders",
+    candidates: [inbox, fleck, websiteDemo, chihan],
+    inboxID: inbox.destination.noteID
+  ) == .resolved(chihan.destination.noteID))
+  #expect(transport.startCount == 0)
+}
+
 @Test func gemmaRouteNeverResolvesABlankTitle() async {
   let inbox = GemmaRouteFixture.candidate(title: "Inbox")
   let blank = GemmaRouteFixture.candidate(title: " \n ", context: "launch roadmap")
@@ -221,7 +258,7 @@ import Testing
 
   let task = Task {
     await router.route(
-      transcript: "Review the holograms",
+      transcript: "Review the holographs",
       candidates: [inbox, target],
       inboxID: inbox.destination.noteID
     )

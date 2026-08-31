@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 struct CachedNoteRoutingMatch: Equatable, Sendable {
   let candidate: DictationRoutingCandidate
@@ -200,6 +201,7 @@ actor CachedNoteRoutingIndex {
   private func synchronize(_ candidates: [DictationRoutingCandidate]) -> Bool {
     let currentIDs = Set(candidates.map(\.destination.noteID))
     var replacements: [(note: Note, passages: [Passage])] = []
+    let tagger = NLTagger(tagSchemes: [.lemma])
     for candidate in candidates {
       guard !Task.isCancelled else { return false }
       let cached = notes[candidate.destination.noteID]
@@ -213,7 +215,7 @@ actor CachedNoteRoutingIndex {
               || cached?.destinationTitleWasTruncated != titleWasTruncated else {
         continue
       }
-      guard let prepared = Self.prepare(candidate) else { return false }
+      guard let prepared = Self.prepare(candidate, using: tagger) else { return false }
       replacements.append(prepared)
     }
     guard !Task.isCancelled else { return false }
@@ -226,7 +228,8 @@ actor CachedNoteRoutingIndex {
   }
 
   private static func prepare(
-    _ candidate: DictationRoutingCandidate
+    _ candidate: DictationRoutingCandidate,
+    using tagger: NLTagger
   ) -> (note: Note, passages: [Passage])? {
     guard !Task.isCancelled else { return nil }
     let noteID = candidate.destination.noteID
@@ -238,7 +241,8 @@ actor CachedNoteRoutingIndex {
     let normalizedTitle = Self.normalizedWhitespace(boundedTitle)
     let boundedTitleTerms = Self.boundedMeaningfulTerms(
       in: normalizedTitle,
-      limit: Self.maximumTitleTermCount
+      limit: Self.maximumTitleTermCount,
+      using: tagger
     )
     let titleTerms = boundedTitleTerms.values
     let boundedTitleTrigrams = Self.boundedTrigrams(
@@ -246,7 +250,9 @@ actor CachedNoteRoutingIndex {
       limit: Self.maximumTitleTrigramCount
     )
     let titleTrigrams = boundedTitleTrigrams.values
-    guard let preparedBody = Self.bodyPassages(candidate.semanticContext) else { return nil }
+    guard let preparedBody = Self.bodyPassages(candidate.semanticContext, using: tagger) else {
+      return nil
+    }
     let bodyPassages = preparedBody.passages
     let passageIDs = bodyPassages.indices.map { PassageID(noteID: noteID, ordinal: $0) }
     let note = Note(
@@ -374,7 +380,8 @@ actor CachedNoteRoutingIndex {
   }
 
   private static func bodyPassages(
-    _ body: String
+    _ body: String,
+    using tagger: NLTagger
   ) -> (passages: [Passage], requiresCompletenessGuard: Bool)? {
     guard !Task.isCancelled else { return nil }
     let words = body.split(whereSeparator: \Character.isWhitespace)
@@ -401,7 +408,11 @@ actor CachedNoteRoutingIndex {
       let end = min(start + 96, words.count)
       let excerptResult = boundedExcerpt(words[start..<end])
       let excerpt = excerptResult.text
-      let boundedTerms = boundedMeaningfulTerms(in: excerpt, limit: maximumPassageTermCount)
+      let boundedTerms = boundedMeaningfulTerms(
+        in: excerpt,
+        limit: maximumPassageTermCount,
+        using: tagger
+      )
       let terms = boundedTerms.values
       let boundedPassageTrigrams = boundedTrigrams(
         for: terms,
@@ -429,10 +440,22 @@ actor CachedNoteRoutingIndex {
     in input: String,
     limit: Int
   ) -> BoundedFeatureSet {
+    boundedMeaningfulTerms(
+      in: input,
+      limit: limit,
+      using: NLTagger(tagSchemes: [.lemma])
+    )
+  }
+
+  private static func boundedMeaningfulTerms(
+    in input: String,
+    limit: Int,
+    using tagger: NLTagger
+  ) -> BoundedFeatureSet {
     var result = Set<String>()
     for lexeme in CleanupLexeme.scan(input) {
       guard lexeme.kind == .word else { continue }
-      let term = lexeme.canonical
+      let term = englishLemma(for: lexeme.canonical, using: tagger)
       guard term.count > 1, !ignoredTerms.contains(term), !result.contains(term) else { continue }
       guard result.count < limit else { return BoundedFeatureSet(values: result, wasTruncated: true) }
       result.insert(term)
@@ -470,10 +493,11 @@ actor CachedNoteRoutingIndex {
     queryTrigrams: Set<String>
   ) -> Bool {
     guard !Task.isCancelled else { return false }
+    let tagger = NLTagger(tagSchemes: [.lemma])
     for lexeme in CleanupLexeme.scan(input) {
       guard !Task.isCancelled else { return false }
       guard lexeme.kind == .word else { continue }
-      let term = lexeme.canonical
+      let term = englishLemma(for: lexeme.canonical, using: tagger)
       guard term.count > 1, !ignoredTerms.contains(term) else { continue }
       if queryTerms.contains(term) { return true }
 
@@ -487,6 +511,30 @@ actor CachedNoteRoutingIndex {
       }
     }
     return false
+  }
+
+  private static func englishLemma(
+    for canonicalTerm: String,
+    using tagger: NLTagger
+  ) -> String {
+    guard !canonicalTerm.isEmpty,
+          canonicalTerm.utf8.allSatisfy({ (97...122).contains($0) }) else {
+      return canonicalTerm
+    }
+
+    tagger.string = canonicalTerm
+    let range = canonicalTerm.startIndex..<canonicalTerm.endIndex
+    tagger.setLanguage(.english, range: range)
+    let (tag, tokenRange) = tagger.tag(
+      at: canonicalTerm.startIndex,
+      unit: .word,
+      scheme: .lemma
+    )
+    guard tokenRange == range, let lemma = tag?.rawValue.lowercased(),
+          !lemma.isEmpty, lemma.utf8.allSatisfy({ (97...122).contains($0) }) else {
+      return canonicalTerm
+    }
+    return lemma
   }
 
   private static func boundedScanText(
