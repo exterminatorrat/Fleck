@@ -685,7 +685,7 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("let expectedRevision = viewModel.revision"))
   #expect(settingsSource.contains("expectedRevision: expectedRevision"))
   #expect(settingsSource.contains("case vocabulary = \"Vocabulary\""))
-  #expect(settingsSource.contains("Section(\"Vocabulary\")"))
+  #expect(settingsSource.contains("SettingsSectionCard(\"Vocabulary\")"))
   #expect(settingsSource.contains("Button(\"Add Word\")"))
   #expect(settingsSource.contains("Text(\"Corrects: \\(entry.aliases.joined(separator: \", \"))\")"))
   #expect(settingsSource.contains("viewModel.beginEditingEntry(entry)"))

@@ -128,6 +128,27 @@
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, 24)
       .padding(.vertical, 18)
+      .accessibilityIdentifier("settings-page-header")
+    }
+  }
+
+  struct SettingsSectionCard<Content: View>: View {
+    private let title: String
+    private let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+      self.title = title
+      self.content = content()
+    }
+
+    var body: some View {
+      GroupBox {
+        content
+      } label: {
+        Text(title)
+          .font(.headline)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
@@ -163,11 +184,9 @@
       NavigationSplitView {
         SettingsSectionSidebar(selection: $selectedSection)
       } detail: {
-        VStack(alignment: .leading, spacing: 0) {
-          SettingsPageHeader(section: selectedSection)
-          Divider()
-
-          Form {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 20) {
+            SettingsPageHeader(section: selectedSection)
             switch selectedSection {
             case .appearance:
               appearance
@@ -183,13 +202,12 @@
               AgentSettingsView()
             }
           }
-          .formStyle(.grouped)
-          .frame(
-            maxWidth: .infinity,
-            minHeight: 0,
-            maxHeight: .infinity
-          )
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 24)
+          .padding(.vertical, 20)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityIdentifier("settings-detail-scroll")
       }
       .navigationSplitViewStyle(.balanced)
       .onChange(of: selectedSection) { _, newSection in
@@ -251,53 +269,61 @@
     }
 
     private var appearance: some View {
-      Section("Editor") {
-        Picker("Theme", selection: preferenceBinding(\.theme)) {
-          ForEach(AppTheme.allCases, id: \.self) { theme in
-            Text(theme.rawValue.capitalized).tag(theme)
+      VStack(alignment: .leading, spacing: 16) {
+        SettingsSectionCard("Interface") {
+          Picker("Theme", selection: preferenceBinding(\.theme)) {
+            ForEach(AppTheme.allCases, id: \.self) { theme in
+              Text(theme.rawValue.capitalized).tag(theme)
+            }
+          }
+          SettingsColorButton(
+            title: "Accent color",
+            currentHex: appState.preferences.accentHex,
+            fallbackColor: .controlAccentColor
+          ) { hex in
+            guard let hex else { return }
+            appState.updatePreferences { $0.accentHex = hex }
+            runtime.preferencesDidChange()
           }
         }
-        SettingsColorButton(
-          title: "Accent color",
-          currentHex: appState.preferences.accentHex,
-          fallbackColor: .controlAccentColor
-        ) { hex in
-          guard let hex else { return }
-          appState.updatePreferences { $0.accentHex = hex }
-          runtime.preferencesDidChange()
+
+        SettingsSectionCard("Editor canvas") {
+          SettingsColorButton(
+            title: "Editor text color",
+            currentHex: appState.preferences.editorTextHex,
+            resetTitle: "Use System",
+            fallbackColor: .labelColor
+          ) { hex in
+            appState.updatePreferences { $0.editorTextHex = hex }
+          }
+          SettingsColorButton(
+            title: "Editor background",
+            currentHex: appState.preferences.editorBackgroundHex,
+            resetTitle: "Use System",
+            fallbackColor: .textBackgroundColor
+          ) { hex in
+            appState.updatePreferences { $0.editorBackgroundHex = hex }
+          }
+          Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
+            Text("Glass opacity")
+          }
         }
-        SettingsColorButton(
-          title: "Editor text color",
-          currentHex: appState.preferences.editorTextHex,
-          resetTitle: "Use System",
-          fallbackColor: .labelColor
-        ) { hex in
-          appState.updatePreferences { $0.editorTextHex = hex }
-        }
-        SettingsColorButton(
-          title: "Editor background",
-          currentHex: appState.preferences.editorBackgroundHex,
-          resetTitle: "Use System",
-          fallbackColor: .textBackgroundColor
-        ) { hex in
-          appState.updatePreferences { $0.editorBackgroundHex = hex }
-        }
-        Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
-          Text("Glass opacity")
-        }
-        HStack {
+
+        SettingsSectionCard("Menu size") {
           Stepper(
             "Menu width: \(Int(appState.preferences.panelWidth))",
-            value: preferenceBinding(\.panelWidth), in: 380...800, step: 20)
+            value: preferenceBinding(\.panelWidth), in: 380...800, step: 20
+          )
           Stepper(
             "Menu height: \(Int(appState.preferences.panelHeight))",
-            value: preferenceBinding(\.panelHeight), in: 300...800, step: 20)
+            value: preferenceBinding(\.panelHeight), in: 300...800, step: 20
+          )
         }
       }
     }
 
     private var editing: some View {
-      Section("Behavior") {
+      SettingsSectionCard("Behavior") {
         Toggle("Create lists automatically", isOn: preferenceBinding(\.automaticLists))
         Toggle(
           "Confirm before moving notes to Trash",
@@ -318,7 +344,7 @@
     }
 
     private var shortcuts: some View {
-      Section("Keyboard shortcuts") {
+      SettingsSectionCard("Keyboard shortcuts") {
         let conflicts = Shortcut.conflicts(in: appState.preferences.shortcuts)
         ForEach(Shortcut.Action.allCases, id: \.self) { action in
           let shortcut = appState.preferences.shortcuts.first(where: { $0.action == action })
@@ -365,7 +391,7 @@
     @ViewBuilder
     private var dictation: some View {
       if !availabilityIssues.isEmpty || !recoveryActions.isEmpty {
-        Section("Needs attention") {
+        SettingsSectionCard("Needs attention") {
           ForEach(availabilityIssues, id: \.title) { row in
             Label(
               "\(row.title) — \(row.detail)",
@@ -383,7 +409,7 @@
 
       models
 
-      Section("Controls") {
+      SettingsSectionCard("Controls") {
         Picker("Modifier key", selection: dictationModifierBinding) {
           ForEach(DictationModifierKey.allCases, id: \.self) { key in
             Text(
@@ -439,7 +465,7 @@
         }
       }
 
-      Section("Privacy") {
+      SettingsSectionCard("Privacy") {
         Text(
           "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
         )
@@ -463,7 +489,7 @@
     }
 
     private var models: some View {
-      Section("Models") {
+      SettingsSectionCard("Models") {
         LabeledContent("Dictation") {
           modelRow(
             presentation: admittedModelSettingsViewModel.presentation,
@@ -613,7 +639,7 @@
     private let maximumTransferBytes = 64 * 1024 + 256
 
     var body: some View {
-      Section("Vocabulary") {
+      SettingsSectionCard("Vocabulary") {
         VStack(alignment: .leading, spacing: 4) {
           Text("Help Fleck recognize the words and phrases you use.")
           Text("Add a correction only when Fleck consistently hears something else.")

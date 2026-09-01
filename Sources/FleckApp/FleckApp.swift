@@ -242,6 +242,8 @@
           )
           .background(FloatingWindowConfigurator())
       }
+      .defaultSize(width: 840, height: 600)
+      .windowResizability(.contentMinSize)
     }
 
     private var colorScheme: ColorScheme? {

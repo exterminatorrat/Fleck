@@ -31,7 +31,7 @@ import Testing
   #expect(source.contains("_cleanupAdmittedModelSettingsViewModel = ObservedObject("))
   #expect(source.contains("wrappedValue: runtime.cleanupAdmittedModelSettingsViewModel"))
   #expect(source.contains("AdmittedModelSettingsPresentation"))
-  #expect(source.contains(#"Section("Models")"#))
+  #expect(source.contains(#"SettingsSectionCard("Models")"#))
   #expect(source.contains(#"LabeledContent("Dictation")"#))
   #expect(source.contains(#"LabeledContent("Cleanup")"#))
   #expect(source.contains(
@@ -48,6 +48,13 @@ import Testing
   #expect(source.contains("presentation.modelLabel"))
   #expect(source.contains("if presentation.showsStatus"))
   #expect(source.contains("if presentation.showsDetail"))
+  #expect(source.contains("SettingsSectionCard(\"Interface\")"))
+  #expect(source.contains("SettingsSectionCard(\"Editor canvas\")"))
+  #expect(source.contains("SettingsSectionCard(\"Menu size\")"))
+  #expect(source.contains("ScrollView"))
+  #expect(source.contains("settings-page-header"))
+  #expect(runtimeSource.contains(".defaultSize(width: 840, height: 600)"))
+  #expect(runtimeSource.contains(".windowResizability(.contentMinSize)"))
   #expect(source.contains(".focusable(presentation.isKeyboardFocusable)"))
   #expect(source.contains(".accessibilityElement(children: .contain)"))
   #expect(source.contains(".accessibilityLabel(presentation.accessibilityLabel)"))
@@ -241,19 +248,87 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(!source.contains("Picker(\"Settings section\""))
 }
 
-@Test func DictationSettingsAllowsDetailFormToCompressVertically() throws {
-  let repository = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-  let source = try String(
-    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
-    encoding: .utf8
-  )
+@Test @MainActor
+func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let sizes = [
+    NSSize(width: 840, height: 600),
+    NSSize(width: 760, height: 520),
+  ]
+  let destinations: [SettingsSection] = [.appearance, .dictation, .agents, .editing]
 
-  #expect(source.contains(
-    ".frame(\n            maxWidth: .infinity,\n            minHeight: 0,\n            maxHeight: .infinity\n          )"
-  ))
+  for size in sizes {
+    let host = NSHostingView(
+      rootView: SettingsView(runtime: fixture.runtime)
+        .environmentObject(fixture.appState)
+        .environment(\.dynamicTypeSize, .large)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(origin: .zero, size: size),
+      styleMask: [.titled, .resizable, .closable],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "Settings"
+    window.contentView = host
+    window.setContentSize(size)
+    window.makeKeyAndOrderFront(nil)
+    await settleSettingsHost(host)
+
+    let contentView = try #require(window.contentView)
+    let sidebar = try #require(settingsSidebarTableView(of: host))
+    let outline = try #require(sidebar as? NSOutlineView)
+    let baselineContentFrame = contentView.convert(contentView.bounds, to: nil)
+    let baselineLayoutRect = window.contentLayoutRect
+    let baselineSidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+
+    #expect(window.isResizable)
+    #expect(!baselineContentFrame.isEmpty)
+    #expect(!baselineLayoutRect.isEmpty)
+    #expect(!baselineSidebarFrame.isEmpty)
+
+    for destination in destinations {
+      let row = try #require(settingsSidebarRow(destination, in: outline))
+      outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+      NotificationCenter.default.post(
+        name: NSTableView.selectionDidChangeNotification,
+        object: outline
+      )
+      await settleSettingsHost(host)
+
+      #expect(outline.selectedRow == row)
+
+      let contentFrame = contentView.convert(contentView.bounds, to: nil)
+      #expect(approximatelyEqual(contentFrame, baselineContentFrame))
+      #expect(approximatelyEqual(window.contentLayoutRect, baselineLayoutRect))
+
+      let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+      #expect(!sidebar.isHidden)
+      #expect(sidebar.alphaValue > 0)
+      #expect(baselineLayoutRect.contains(sidebarFrame.center))
+      #expect(approximatelyEqual(sidebarFrame, baselineSidebarFrame))
+
+      let detailScroll = settingsHostedScrollViews(of: host)
+        .first { $0 !== sidebar }
+      #expect(detailScroll != nil)
+      guard let detailScroll else { continue }
+      #expect(detailScroll !== sidebar)
+      #expect(detailScroll.documentView != nil)
+      #expect(!detailScroll.contentView.bounds.isEmpty)
+
+      let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+      #expect(!detailFrame.isEmpty)
+      #expect(baselineLayoutRect.contains(detailFrame.center))
+    }
+
+    let detailScrollViews = settingsHostedScrollViews(of: host)
+      .filter { $0 !== sidebar }
+    #expect(!detailScrollViews.isEmpty)
+    window.contentView = nil
+    window.orderOut(nil)
+  }
 }
 
 @MainActor
@@ -264,6 +339,45 @@ private func settingsSidebarDescendants(of view: NSView) -> [NSView] {
 @MainActor
 private func settingsSidebarTableView(of view: NSView) -> NSTableView? {
   settingsSidebarDescendants(of: view).compactMap { $0 as? NSTableView }.first
+}
+
+@MainActor
+private func settingsSidebarRow(_ section: SettingsSection, in outline: NSOutlineView) -> Int? {
+  let selectableRows = (0..<outline.numberOfRows).filter { row in
+    guard let item = outline.item(atRow: row) else { return false }
+    return !(outline.delegate?.outlineView?(outline, isGroupItem: item) ?? false)
+  }
+  guard let sectionIndex = SettingsSection.allCases.firstIndex(of: section),
+    selectableRows.indices.contains(sectionIndex)
+  else {
+    return nil
+  }
+  return selectableRows[sectionIndex]
+}
+
+@MainActor
+private func settingsHostedScrollViews(of view: NSView) -> [NSScrollView] {
+  var scrollViews: [NSScrollView] = []
+  if let scrollView = view as? NSScrollView {
+    scrollViews.append(scrollView)
+  }
+  for subview in view.subviews {
+    scrollViews.append(contentsOf: settingsHostedScrollViews(of: subview))
+  }
+  return scrollViews
+}
+
+private extension NSRect {
+  var center: NSPoint {
+    NSPoint(x: midX, y: midY)
+  }
+}
+
+private func approximatelyEqual(_ lhs: NSRect, _ rhs: NSRect, tolerance: CGFloat = 1) -> Bool {
+  abs(lhs.minX - rhs.minX) <= tolerance
+    && abs(lhs.minY - rhs.minY) <= tolerance
+    && abs(lhs.width - rhs.width) <= tolerance
+    && abs(lhs.height - rhs.height) <= tolerance
 }
 
 @Test func DictationSettingsSeparatesVocabularyAndOnlySurfacesAvailabilityProblems() throws {
@@ -281,7 +395,7 @@ private func settingsSidebarTableView(of view: NSView) -> NSTableView? {
   #expect(source.contains("PersonalDictionarySettingsSection("))
   #expect(source.contains("private var availabilityIssues"))
   #expect(source.contains(".filter { !$0.available }"))
-  #expect(source.contains("Section(\"Needs attention\")"))
+  #expect(source.contains("SettingsSectionCard(\"Needs attention\")"))
   #expect(!source.contains("Section(\"Availability\")"))
 
   let dictationStart = try #require(source.range(of: "private var dictation:"))
