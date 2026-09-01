@@ -244,6 +244,7 @@
       }
       .defaultSize(width: 840, height: 600)
       .windowResizability(.contentMinSize)
+      .windowToolbarStyle(.unifiedCompact)
     }
 
     private var colorScheme: ColorScheme? {

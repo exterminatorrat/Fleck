@@ -165,6 +165,7 @@
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     @State private var selectedSection = SettingsSection.appearance
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
@@ -185,9 +186,10 @@
     }
 
     var body: some View {
-      HSplitView {
+      NavigationSplitView(columnVisibility: $columnVisibility) {
         SettingsSectionSidebar(selection: $selectedSection)
-          .frame(minWidth: 180, idealWidth: 200, maxWidth: 230)
+          .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 230)
+      } detail: {
         ScrollView {
           VStack(alignment: .leading, spacing: 20) {
             SettingsPageHeader(section: selectedSection)
@@ -210,9 +212,10 @@
           .padding(.horizontal, 24)
           .padding(.bottom, 20)
         }
-        .contentMargins(.top, 16, for: .scrollContent)
+        .contentMargins(.top, 12, for: .scrollContent)
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
+      .navigationSplitViewStyle(.balanced)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
