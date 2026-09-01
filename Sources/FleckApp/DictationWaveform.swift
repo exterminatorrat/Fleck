@@ -11,8 +11,8 @@
     static let maximumHeight: CGFloat = 20
     static let reducedMaximumHeight: CGFloat = 12
     static let barWeights: [CGFloat] = [
-      0.72, 0.84, 0.93, 0.78, 0.98, 0.89, 1.0,
-      0.91, 0.99, 0.82, 0.94, 0.76, 0.87
+      0.35, 0.46, 0.58, 0.70, 0.82, 0.92, 1.0,
+      0.92, 0.82, 0.70, 0.58, 0.46, 0.35
     ]
     static let noiseFloorDecibels: CGFloat = -50
     static let fullScaleDecibels: CGFloat = -12
@@ -25,7 +25,6 @@
     @Published private(set) var energy: CGFloat = 0
     private(set) var listeningStartedAt: Date?
     private(set) var lastAcceptedLevelAt: Date?
-    private var recentEnergies: [CGFloat] = []
 
     static func refreshInterval(reduceMotion: Bool) -> TimeInterval {
       reduceMotion ? 1 / 15 : 1 / 30
@@ -35,7 +34,6 @@
       listeningStartedAt = date
       lastAcceptedLevelAt = nil
       energy = 0
-      recentEnergies.removeAll(keepingCapacity: true)
     }
 
     func receive(
@@ -49,13 +47,7 @@
         return
       }
       if lastAcceptedLevelAt != nil {
-        let decayScale = staleScale(at: now)
-        energy *= decayScale
-        if decayScale > 0 {
-          recentEnergies = recentEnergies.map { $0 * decayScale }
-        } else {
-          recentEnergies.removeAll(keepingCapacity: true)
-        }
+        energy = displayedEnergy(at: now)
       }
       lastAcceptedLevelAt = now
       let rawLevel = CGFloat(level)
@@ -71,17 +63,12 @@
       )
       let smoothing = normalized > energy ? Self.attackSmoothing : Self.releaseSmoothing
       energy = min(max(energy + (normalized - energy) * smoothing, 0), 1)
-      recentEnergies.append(energy)
-      if recentEnergies.count > Self.barCount {
-        recentEnergies.removeFirst(recentEnergies.count - Self.barCount)
-      }
     }
 
     func reset() {
       listeningStartedAt = nil
       lastAcceptedLevelAt = nil
       energy = 0
-      recentEnergies.removeAll(keepingCapacity: true)
     }
 
     private func staleScale(at date: Date) -> CGFloat {
@@ -94,16 +81,17 @@
       )
     }
 
+    private func displayedEnergy(at date: Date) -> CGFloat {
+      min(max(energy * staleScale(at: date), 0), 1)
+    }
+
     func barLevels(at date: Date, reduceMotion: Bool) -> [CGFloat] {
-      let amplitudeScale = staleScale(at: date)
-        * (reduceMotion ? Self.reducedAmplitudeScale : 1)
-      return Self.barWeights.enumerated().map { index, weight in
-        guard !recentEnergies.isEmpty else { return 0 }
-        let historyIndex = min(
-          index * recentEnergies.count / Self.barCount,
-          recentEnergies.count - 1
-        )
-        return min(max(recentEnergies[historyIndex] * amplitudeScale * weight, 0), 1)
+      let displayedEnergy = displayedEnergy(at: date)
+      let amplitude = reduceMotion
+        ? displayedEnergy * Self.reducedAmplitudeScale
+        : displayedEnergy
+      return Self.barWeights.map { weight in
+        min(max(amplitude * weight, 0), 1)
       }
     }
 

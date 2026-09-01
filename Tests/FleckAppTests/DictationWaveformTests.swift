@@ -8,7 +8,7 @@ import Testing
   #expect(DictationWaveformRefreshSchedule.interval(reduceMotion: true) == 1.0 / 15.0)
 }
 
-@Test @MainActor func waveformUsesThirteenStableAsymmetricBarsAndExactGeometry() {
+@Test @MainActor func waveformUsesThirteenCenterTaperedBarsAndExactGeometry() {
   let model = DictationWaveformModel()
   model.beginListening(at: Date(timeIntervalSince1970: 100))
   model.receive(level: 2, now: Date(timeIntervalSince1970: 100.04))
@@ -86,25 +86,47 @@ import Testing
   #expect(loud > conversational)
 }
 
-@Test @MainActor func waveformChangesBarPatternAcrossVaryingMicrophoneLevels() {
+@Test @MainActor func waveformBloomsSymmetricallyFromCurrentMicrophoneEnergy() {
   let model = DictationWaveformModel()
   let start = Date(timeIntervalSince1970: 32)
   model.beginListening(at: start)
-  model.receive(level: 0.02, now: start.addingTimeInterval(0.04))
-  let first = model.barHeights(at: start.addingTimeInterval(0.05), reduceMotion: false)
+  model.receive(level: 0.006, now: start.addingTimeInterval(0.04))
+  model.receive(level: 0.006, now: start.addingTimeInterval(0.08))
+  let quiet = model.barHeights(
+    at: start.addingTimeInterval(0.09),
+    reduceMotion: false
+  )
 
-  model.receive(level: 0.20, now: start.addingTimeInterval(0.08))
-  let second = model.barHeights(at: start.addingTimeInterval(0.09), reduceMotion: false)
+  model.receive(level: 0.20, now: start.addingTimeInterval(0.12))
+  let loudNewest = model.barHeights(
+    at: start.addingTimeInterval(0.13),
+    reduceMotion: false
+  )
 
-  func normalizedPattern(_ heights: [CGFloat]) -> [CGFloat] {
-    let excursions = heights.map { $0 - DictationWaveformModel.minimumHeight }
-    let total = excursions.reduce(0, +)
-    return excursions.map { $0 / total }
+  let center = DictationWaveformModel.barCount / 2
+  #expect(loudNewest[center] == loudNewest.max())
+  #expect(loudNewest[0] < loudNewest[center])
+  #expect(loudNewest[DictationWaveformModel.barCount - 1] < loudNewest[center])
+  #expect(zip(quiet, loudNewest).allSatisfy { quiet, loud in loud > quiet })
+  for distance in 1...center {
+    #expect(loudNewest[center - distance] == loudNewest[center + distance])
   }
 
-  let patternChange = zip(normalizedPattern(first), normalizedPattern(second))
-    .reduce(CGFloat.zero) { $0 + abs($1.0 - $1.1) }
-  #expect(patternChange > 0.35)
+  let quietExcursions = quiet.map { $0 - DictationWaveformModel.minimumHeight }
+  let loudExcursions = loudNewest.map { $0 - DictationWaveformModel.minimumHeight }
+  let centerChange = loudExcursions[center] - quietExcursions[center]
+  #expect(centerChange > loudExcursions[0] - quietExcursions[0])
+  #expect(
+    centerChange
+      > loudExcursions[DictationWaveformModel.barCount - 1]
+        - quietExcursions[DictationWaveformModel.barCount - 1]
+  )
+
+  let loudnessScale = loudExcursions[center] / quietExcursions[center]
+  for index in 0..<DictationWaveformModel.barCount {
+    let barScale = loudExcursions[index] / quietExcursions[index]
+    #expect(abs(barScale - loudnessScale) < 0.000_001)
+  }
 }
 
 @Test @MainActor func waveformUsesFastAttackAndSlowerReleaseWithoutSyntheticMotion() {
