@@ -66,6 +66,16 @@
     }
   }
 
+  enum DictationSettingsGroup: String, CaseIterable, Identifiable {
+    case readiness = "Status"
+    case models = "Models"
+    case capture = "Capture"
+    case experience = "Experience & history"
+    case privacy = "Privacy"
+
+    var id: Self { self }
+  }
+
   struct SettingsShortcutRecordingState: Equatable {
     private(set) var action: Shortcut.Action?
 
@@ -577,15 +587,43 @@
       }
     }
 
-    @ViewBuilder
     private var dictation: some View {
-      if !availabilityIssues.isEmpty || !recoveryActions.isEmpty {
-        SettingsSectionCard("Needs attention") {
+      VStack(alignment: .leading, spacing: 16) {
+        readiness
+        models
+        capture
+        experienceAndHistory
+        DisclosureGroup(DictationSettingsGroup.privacy.rawValue) {
+          Text(
+            "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .padding(.top, 4)
+        }
+      }
+    }
+
+    private var readiness: some View {
+      let isReady = availabilityIssues.isEmpty && recoveryActions.isEmpty
+      return SettingsSectionCard(DictationSettingsGroup.readiness.rawValue) {
+        Label(
+          isReady ? "Ready" : "Needs attention",
+          systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        )
+        .font(.body.weight(.medium))
+
+        if isReady {
+          Text("Dictation is ready to capture and process your voice locally.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        } else {
           ForEach(availabilityIssues, id: \.title) { row in
             Label(
               "\(row.title) — \(row.detail)",
               systemImage: "info.circle"
             )
+            .font(.caption)
             .foregroundStyle(.secondary)
           }
           ForEach(recoveryActions, id: \.pane) { action in
@@ -595,72 +633,81 @@
           }
         }
       }
+    }
 
-      models
-
-      SettingsSectionCard("Controls") {
-        Picker("Modifier key", selection: dictationModifierBinding) {
-          ForEach(DictationModifierKey.allCases, id: \.self) { key in
-            Text(
-              key == .rightOption
-                ? "\(key.displayName) — Recommended"
-                : key.displayName
-            ).tag(key)
+    private var capture: some View {
+      SettingsSectionCard(DictationSettingsGroup.capture.rawValue) {
+        LabeledContent("Modifier key") {
+          Picker("Modifier key", selection: dictationModifierBinding) {
+            ForEach(DictationModifierKey.allCases, id: \.self) { key in
+              Text(
+                key == .rightOption
+                  ? "\(key.displayName) — Recommended"
+                  : key.displayName
+              ).tag(key)
+            }
           }
+          .labelsHidden()
+          .disabled(!dictationModifierPresentation.isPickerEnabled)
         }
-        .disabled(!dictationModifierPresentation.isPickerEnabled)
 
-        Text(dictationModifierPresentation.statusCopy)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        if let guidance = dictationModifierPresentation.guidanceCopy {
-          Text(guidance)
+        VStack(alignment: .leading, spacing: 4) {
+          Text(dictationModifierPresentation.statusCopy)
             .font(.caption)
             .foregroundStyle(.secondary)
-        }
-        if let action = dictationModifierPresentation.recoveryAction {
-          switch action {
-          case .enableInputMonitoring:
-            Button("Enable Input Monitoring") {
-              Task { @MainActor in
-                guard let settings = await runtime.recoverModifierMonitoring() else { return }
-                runtime.openSystemSettings(settings)
+          if let guidance = dictationModifierPresentation.guidanceCopy {
+            Text(guidance)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          if let action = dictationModifierPresentation.recoveryAction {
+            switch action {
+            case .enableInputMonitoring:
+              Button("Enable Input Monitoring") {
+                Task { @MainActor in
+                  guard let settings = await runtime.recoverModifierMonitoring() else { return }
+                  runtime.openSystemSettings(settings)
+                }
               }
-            }
-          case .retry:
-            Button("Retry") {
-              Task {
-                _ = await runtime.retryModifierMonitoring()
+            case .retry:
+              Button("Retry") {
+                Task {
+                  _ = await runtime.retryModifierMonitoring()
+                }
               }
             }
           }
         }
 
-        Picker("Microphone", selection: dictationMicrophoneBinding) {
-          Text("Automatic").tag(String?.none)
-          ForEach(microphones) { microphone in
-            Text(microphone.name).tag(Optional(microphone.id))
+        LabeledContent("Microphone") {
+          Picker("Microphone", selection: dictationMicrophoneBinding) {
+            Text("Automatic").tag(String?.none)
+            ForEach(microphones) { microphone in
+              Text(microphone.name).tag(Optional(microphone.id))
+            }
           }
+          .labelsHidden()
         }
-
         LabeledContent("Recognition language", value: "English")
-        Toggle("Show status capsule", isOn: dictationPreferenceBinding(\.dictationCapsuleEnabled))
-        Toggle(
-          "Keep local history for 30 days",
+      }
+    }
+
+    private var experienceAndHistory: some View {
+      SettingsSectionCard(DictationSettingsGroup.experience.rawValue) {
+        SettingsToggleRow(
+          title: "Show status capsule",
+          detail: "Show a compact status surface while Fleck is listening.",
+          isOn: dictationPreferenceBinding(\.dictationCapsuleEnabled)
+        )
+        SettingsToggleRow(
+          title: "Keep local history for 30 days",
+          detail: "Keep successful transcripts on this Mac for up to 30 days.",
           isOn: dictationPreferenceBinding(\.dictationHistoryEnabled)
         )
         Button("Clear History", role: .destructive) {
           showsHistoryClearConfirmation = true
         }
       }
-
-      SettingsSectionCard("Privacy") {
-        Text(
-          "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
-        )
-      }
-      .font(.caption)
-      .foregroundStyle(.secondary)
     }
 
     private var vocabulary: some View {
@@ -678,7 +725,7 @@
     }
 
     private var models: some View {
-      SettingsSectionCard("Models") {
+      SettingsSectionCard(DictationSettingsGroup.models.rawValue) {
         LabeledContent("Dictation") {
           modelRow(
             presentation: admittedModelSettingsViewModel.presentation,

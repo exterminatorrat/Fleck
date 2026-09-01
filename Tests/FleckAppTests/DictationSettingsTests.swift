@@ -31,7 +31,9 @@ import Testing
   #expect(source.contains("_cleanupAdmittedModelSettingsViewModel = ObservedObject("))
   #expect(source.contains("wrappedValue: runtime.cleanupAdmittedModelSettingsViewModel"))
   #expect(source.contains("AdmittedModelSettingsPresentation"))
-  #expect(source.contains(#"SettingsSectionCard("Models")"#))
+  #expect(source.contains(
+    "SettingsSectionCard(DictationSettingsGroup.models.rawValue)"
+  ))
   #expect(source.contains(#"LabeledContent("Dictation")"#))
   #expect(source.contains(#"LabeledContent("Cleanup")"#))
   #expect(source.contains(
@@ -262,6 +264,34 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(!source.contains("SettingsSectionSelector"))
   #expect(!source.contains("matchedGeometryEffect"))
   #expect(!source.contains("Picker(\"Settings section\""))
+}
+
+@Test func DictationSettingsUsesReadinessCaptureAndHistoryGroups() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(DictationSettingsGroup.allCases.map(\.rawValue) == [
+    "Status",
+    "Models",
+    "Capture",
+    "Experience & history",
+    "Privacy",
+  ])
+  #expect(source.contains("private var readiness"))
+  #expect(source.contains("SettingsSectionCard(DictationSettingsGroup.capture.rawValue)"))
+  #expect(source.contains(
+    "SettingsSectionCard(DictationSettingsGroup.experience.rawValue)"
+  ))
+  #expect(source.contains("isReady ? \"Ready\" : \"Needs attention\""))
+  #expect(source.contains("SettingsSectionCard(DictationSettingsGroup.models.rawValue)"))
+  #expect(source.contains("DisclosureGroup(DictationSettingsGroup.privacy.rawValue)"))
+  #expect(!source.contains("SettingsSectionCard(\"Controls\")"))
 }
 
 @Test @MainActor
@@ -548,7 +578,7 @@ private func approximatelyEqual(_ lhs: NSRect, _ rhs: NSRect, tolerance: CGFloat
   #expect(source.contains("PersonalDictionarySettingsSection("))
   #expect(source.contains("private var availabilityIssues"))
   #expect(source.contains(".filter { !$0.available }"))
-  #expect(source.contains("SettingsSectionCard(\"Needs attention\")"))
+  #expect(source.contains("isReady ? \"Ready\" : \"Needs attention\""))
   #expect(!source.contains("Section(\"Availability\")"))
 
   let dictationStart = try #require(source.range(of: "private var dictation:"))
