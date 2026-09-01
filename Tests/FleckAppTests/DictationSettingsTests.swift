@@ -294,6 +294,34 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(!source.contains("SettingsSectionCard(\"Controls\")"))
 }
 
+@Test func DictationSettingsRendersItsDestinationGroupsInReadingOrder() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let dictationStart = try #require(source.range(of: "private var dictation: some View"))
+  let vocabularyStart = try #require(
+    source.range(of: "private var vocabulary:", range: dictationStart.upperBound..<source.endIndex)
+  )
+  let dictationSource = source[dictationStart.lowerBound..<vocabularyStart.lowerBound]
+  let markers = [
+    "        readiness",
+    "        models",
+    "        capture",
+    "        experienceAndHistory",
+    "        DisclosureGroup(DictationSettingsGroup.privacy.rawValue)",
+  ]
+  var cursor = dictationSource.startIndex
+  for marker in markers {
+    let next = try #require(dictationSource.range(of: marker, range: cursor..<dictationSource.endIndex))
+    cursor = next.upperBound
+  }
+}
+
 @Test @MainActor
 func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
   async throws

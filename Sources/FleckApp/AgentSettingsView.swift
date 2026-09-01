@@ -9,6 +9,11 @@
   }
 
   enum AgentConnectorPresentation {
+    enum Action: Equatable {
+      case install
+      case refresh
+    }
+
     static let sectionTitle = "Agent Connector"
     static let installTitle = "Install Agent Connector"
     static let refreshTitle = "Refresh Status"
@@ -17,6 +22,10 @@
 
     static func primaryActionTitle(installed: Bool) -> String {
       installed ? refreshTitle : installTitle
+    }
+
+    static func action(installed: Bool) -> Action {
+      installed ? .refresh : .install
     }
 
     static func canAddIntegration(
@@ -127,10 +136,11 @@
           )
         ) {
           Task {
-            if appState.isAgentConnectorInstalled {
-              await appState.refreshAgentConnectorStatus()
-            } else {
+            switch AgentConnectorPresentation.action(installed: appState.isAgentConnectorInstalled) {
+            case .install:
               await appState.installAgentBridge()
+            case .refresh:
+              await appState.refreshAgentConnectorStatus()
             }
           }
         }
@@ -274,8 +284,8 @@
           )
           setupStep(
             number: 2,
-            title: "Add or select an integration",
-            detail: "Choose one of the available integrations above when setup is ready."
+            title: "Add an integration",
+            detail: "Choose one of the available integrations above."
           )
           setupStep(
             number: 3,
