@@ -96,7 +96,6 @@
       .listStyle(.sidebar)
       .accessibilityLabel("Settings sections")
       .accessibilityIdentifier("settings-section-sidebar")
-      .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 230)
     }
 
     @ViewBuilder
@@ -186,34 +185,37 @@
     }
 
     var body: some View {
-      NavigationSplitView {
-        SettingsSectionSidebar(selection: $selectedSection)
-      } detail: {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 20) {
-            SettingsPageHeader(section: selectedSection)
-            switch selectedSection {
-            case .appearance:
-              appearance
-            case .editing:
-              editing
-            case .shortcuts:
-              shortcuts
-            case .dictation:
-              dictation
-            case .vocabulary:
-              vocabulary
-            case .agents:
-              AgentSettingsView()
+      GeometryReader { proxy in
+        HSplitView {
+          SettingsSectionSidebar(selection: $selectedSection)
+            .frame(minWidth: 180, idealWidth: 200, maxWidth: 230)
+          ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+              SettingsPageHeader(section: selectedSection)
+              switch selectedSection {
+              case .appearance:
+                appearance
+              case .editing:
+                editing
+              case .shortcuts:
+                shortcuts
+              case .dictation:
+                dictation
+              case .vocabulary:
+                vocabulary
+              case .agents:
+                AgentSettingsView()
+              }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, 24)
-          .padding(.vertical, 20)
+          .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.top, proxy.safeAreaInsets.top / 2)
       }
-      .navigationSplitViewStyle(.balanced)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }
