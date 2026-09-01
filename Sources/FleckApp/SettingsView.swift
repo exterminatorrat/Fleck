@@ -126,7 +126,6 @@
           .fixedSize(horizontal: false, vertical: true)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.vertical, 18)
     }
   }
 
@@ -215,6 +214,7 @@
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
       .navigationSplitViewStyle(.balanced)
+      .toolbar(removing: .sidebarToggle)
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }
