@@ -236,10 +236,24 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(source.contains(".listStyle(.sidebar)"))
   #expect(source.contains(".tag(section)"))
   #expect(source.contains(".accessibilityLabel(\"Settings sections\")"))
-  #expect(source.contains(".toolbar(.visible, for: .windowToolbar)"))
   #expect(!source.contains("SettingsSectionSelector"))
   #expect(!source.contains("matchedGeometryEffect"))
   #expect(!source.contains("Picker(\"Settings section\""))
+}
+
+@Test func DictationSettingsAllowsDetailFormToCompressVertically() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains(
+    ".frame(\n            maxWidth: .infinity,\n            minHeight: 0,\n            maxHeight: .infinity\n          )"
+  ))
 }
 
 @MainActor

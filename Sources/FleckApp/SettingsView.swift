@@ -184,11 +184,14 @@
             }
           }
           .formStyle(.grouped)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .frame(
+            maxWidth: .infinity,
+            minHeight: 0,
+            maxHeight: .infinity
+          )
         }
       }
       .navigationSplitViewStyle(.balanced)
-      .toolbar(.visible, for: .windowToolbar)
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }
