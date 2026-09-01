@@ -256,7 +256,7 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     NSSize(width: 840, height: 600),
     NSSize(width: 760, height: 520),
   ]
-  let destinations: [SettingsSection] = [.appearance, .dictation, .agents, .editing]
+  let destinations = SettingsSection.allCases
 
   for size in sizes {
     let host = NSHostingView(
@@ -266,11 +266,14 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     )
     let window = NSWindow(
       contentRect: NSRect(origin: .zero, size: size),
-      styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+      styleMask: [.titled, .resizable, .closable],
       backing: .buffered,
       defer: false
     )
     window.title = "Settings"
+    let toolbar = NSToolbar(identifier: "settings-hosted-test-toolbar")
+    window.toolbar = toolbar
+    #expect(window.toolbar === toolbar)
     window.contentView = host
     window.setContentSize(size)
     window.makeKeyAndOrderFront(nil)
@@ -279,7 +282,9 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     #expect(window.standardWindowButton(.closeButton)?.isHidden == false)
     #expect(window.standardWindowButton(.miniaturizeButton)?.isHidden == false)
     #expect(window.standardWindowButton(.zoomButton)?.isHidden == false)
-    #expect(settingsWindowSidebarToolbarItems(in: window).isEmpty)
+    let toolbarItemIdentifiers = toolbar.items.map(\.itemIdentifier)
+    #expect(!toolbarItemIdentifiers.contains(.toggleSidebar))
+    #expect(!toolbarItemIdentifiers.contains(.sidebarTrackingSeparator))
 
     let contentView = try #require(window.contentView)
     let sidebar = try #require(settingsSidebarTableView(of: host))
@@ -288,6 +293,7 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     let baselineContentFrame = contentView.convert(contentView.bounds, to: nil)
     let baselineLayoutRect = window.contentLayoutRect
     let baselineSidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+    let baselineSidebarSurfaceFrame = sidebarScroll.convert(sidebarScroll.bounds, to: nil)
 
     #expect(window.isResizable)
     #expect(!baselineContentFrame.isEmpty)
@@ -310,10 +316,13 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
       #expect(approximatelyEqual(window.contentLayoutRect, baselineLayoutRect))
 
       let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+      let sidebarSurfaceFrame = sidebarScroll.convert(sidebarScroll.bounds, to: nil)
       #expect(!sidebar.isHidden)
       #expect(sidebar.alphaValue > 0)
       #expect(baselineLayoutRect.contains(sidebarFrame.center))
       #expect(approximatelyEqual(sidebarFrame, baselineSidebarFrame))
+      #expect(baselineLayoutRect.insetBy(dx: -1, dy: -1).contains(sidebarSurfaceFrame))
+      #expect(approximatelyEqual(sidebarSurfaceFrame, baselineSidebarSurfaceFrame))
 
       let detailScroll = settingsHostedScrollViews(of: host)
         .first { $0 !== sidebarScroll }
@@ -332,8 +341,14 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
       #expect(detailTopGap >= -1)
       #expect(detailTopGap <= 20)
 
+      let detailContentTopInset = detailScroll.contentInsets.top
+      #expect(detailContentTopInset >= 12)
+      #expect(detailContentTopInset <= 20)
+
       // Restoring a root NavigationSplitView would violate these native chrome bounds.
-      #expect(settingsWindowSidebarToolbarItems(in: window).isEmpty)
+      let toolbarItemIdentifiers = window.toolbar?.items.map(\.itemIdentifier) ?? []
+      #expect(!toolbarItemIdentifiers.contains(.toggleSidebar))
+      #expect(!toolbarItemIdentifiers.contains(.sidebarTrackingSeparator))
     }
 
     let detailScrollViews = settingsHostedScrollViews(of: host)
@@ -378,14 +393,6 @@ private func settingsHostedScrollViews(of view: NSView) -> [NSScrollView] {
     scrollViews.append(contentsOf: settingsHostedScrollViews(of: subview))
   }
   return scrollViews
-}
-
-@MainActor
-private func settingsWindowSidebarToolbarItems(in window: NSWindow) -> [NSToolbarItem] {
-  guard let toolbar = window.toolbar else { return [] }
-  return toolbar.items.filter { item in
-    item.itemIdentifier == .toggleSidebar || item.itemIdentifier == .sidebarTrackingSeparator
-  }
 }
 
 @MainActor
