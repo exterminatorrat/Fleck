@@ -685,16 +685,14 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("let expectedRevision = viewModel.revision"))
   #expect(settingsSource.contains("expectedRevision: expectedRevision"))
   #expect(settingsSource.contains("case vocabulary = \"Vocabulary\""))
-  #expect(settingsSource.contains("SettingsSectionCard(\"Vocabulary\")"))
-  #expect(settingsSource.contains("Button(\"Add Word\")"))
+  #expect(settingsSource.contains("Button(\"Add New\")"))
   #expect(settingsSource.contains("Text(\"Corrects: \\(entry.aliases.joined(separator: \", \"))\")"))
   #expect(settingsSource.contains("viewModel.beginEditingEntry(entry)"))
   #expect(settingsSource.contains("PersonalDictionaryEntryEditSheet("))
-  #expect(settingsSource.contains("Toggle(\"Correct a misspelling or shorthand\""))
+  #expect(settingsSource.contains("Toggle(\"Correct a misspelling\""))
   #expect(settingsSource.contains("TextField(\"Correct from\""))
   #expect(settingsSource.contains("Button(\"Delete Word\", role: .destructive)"))
   #expect(settingsSource.contains("Image(systemName: \"xmark.circle.fill\")"))
-  #expect(settingsSource.contains(".frame(width: 200)"))
   #expect(!settingsSource.contains(".searchable("))
   #expect(settingsSource.contains("Picker(\"Show\""))
   #expect(settingsSource.contains("Button(\"Approve\""))
@@ -711,6 +709,53 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("get: { viewModel.isImportPreviewPresented }"))
   #expect(settingsSource.contains("presenting: omissionPreview"))
   #expect(settingsSource.contains("viewModel.confirmCanonicalImport(preview)"))
+}
+
+@Test
+func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(settingsSource.contains("Teach Fleck the words and phrases that matter to you"))
+  #expect(settingsSource.contains("Button(\"Add New\")"))
+  #expect(settingsSource.contains("Picker(\"Sort\""))
+  #expect(settingsSource.contains("SettingsVocabularySortOrder"))
+  #expect(settingsSource.contains("case aToZ"))
+  #expect(settingsSource.contains("case zToA"))
+  #expect(settingsSource.contains("viewModel.load()"))
+  #expect(settingsSource.contains("isReloading"))
+  #expect(settingsSource.contains("isSearchExpanded"))
+  #expect(settingsSource.contains("keyboardShortcut(\"f\", modifiers: .command)"))
+  #expect(settingsSource.contains("Section(isNew ? \"Add New\" : \"Edit Word\")"))
+  #expect(settingsSource.contains("Use this word in dictation"))
+  #expect(!settingsSource.contains("Sync"))
+  #expect(!settingsSource.contains("Synced"))
+}
+
+@Test
+func personalDictionaryVocabularySortOrdersEntriesInBothDirections() {
+  let entries = [
+    settingsEntry(1, "zulu"),
+    settingsEntry(2, "Alpha"),
+    settingsEntry(3, "bravo"),
+  ]
+
+  #expect(
+    SettingsVocabularySortOrder.aToZ
+      .sorted(entries, by: \.preferredForm, id: \.id)
+      .map(\.preferredForm) == ["Alpha", "bravo", "zulu"]
+  )
+  #expect(
+    SettingsVocabularySortOrder.zToA
+      .sorted(entries, by: \.preferredForm, id: \.id)
+      .map(\.preferredForm) == ["zulu", "bravo", "Alpha"]
+  )
 }
 
 private func settingsEntry(

@@ -818,51 +818,76 @@
     }
   }
 
+  enum SettingsVocabularySortOrder: String, CaseIterable, Identifiable {
+    case aToZ = "A–Z"
+    case zToA = "Z–A"
+
+    var id: Self { self }
+
+    func sorted<Element>(
+      _ values: [Element],
+      by key: (Element) -> String,
+      id: (Element) -> UUID
+    ) -> [Element] {
+      values.sorted { lhs, rhs in
+        let lhsKey = key(lhs).folding(
+          options: [.caseInsensitive, .diacriticInsensitive],
+          locale: Locale(identifier: "en_US_POSIX")
+        )
+        let rhsKey = key(rhs).folding(
+          options: [.caseInsensitive, .diacriticInsensitive],
+          locale: Locale(identifier: "en_US_POSIX")
+        )
+        if lhsKey != rhsKey {
+          return self == .aToZ ? lhsKey < rhsKey : lhsKey > rhsKey
+        }
+        if key(lhs) != key(rhs) {
+          return self == .aToZ ? key(lhs) < key(rhs) : key(lhs) > key(rhs)
+        }
+        let lhsID = id(lhs).uuidString
+        let rhsID = id(rhs).uuidString
+        return self == .aToZ ? lhsID < rhsID : lhsID > rhsID
+      }
+    }
+  }
+
   private struct PersonalDictionarySettingsSection: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
     @State private var showsImporter = false
     @State private var showsDictionaryExporter = false
     @State private var showsCSVExporter = false
     @FocusState private var isSearchFocused: Bool
+    @State private var isSearchExpanded = false
+    @State private var sortOrder = SettingsVocabularySortOrder.aToZ
+    @State private var isReloading = false
 
     private let maximumTransferBytes = 64 * 1024 + 256
 
     var body: some View {
-      SettingsSectionCard("Vocabulary") {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Help Fleck recognize the words and phrases you use.")
-          Text("Add a correction only when Fleck consistently hears something else.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-
-        HStack {
-          Text(entrySummary)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Spacer()
-          Picker("Show", selection: $viewModel.filter) {
-            ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
-              Text(filter.rawValue).tag(filter)
-            }
+      VStack(alignment: .leading, spacing: 16) {
+        HStack(alignment: .top, spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Teach Fleck the words and phrases that matter to you")
+              .font(.body.weight(.medium))
+            Text("Add a correction when Fleck consistently hears something else.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
           }
-          .pickerStyle(.menu)
-          .frame(width: 110)
-          .accessibilityLabel("Personal dictionary filter")
-          .accessibilityValue(viewModel.filter.rawValue)
-          .accessibilityHint("Filters entries or shows pending suggestions")
-
-          Button("Add Word") { viewModel.beginAddingEntry() }
+          Spacer(minLength: 8)
+          Button("Add New") { viewModel.beginAddingEntry() }
             .buttonStyle(.borderedProminent)
-            .accessibilityLabel("Add a word to Fleck vocabulary")
+            .accessibilityLabel("Add a new vocabulary word or phrase")
             .accessibilityHint("Opens the vocabulary word editor")
         }
 
+        toolbar
         messages
-        rows
+        listSurface
         transfer
-        searchUtility
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
       .sheet(
         isPresented: Binding(
           get: { viewModel.entryEdit != nil },
@@ -949,9 +974,97 @@
       )
     }
 
+    private var toolbar: some View {
+      ViewThatFits(in: .horizontal) {
+        toolbarRow
+        toolbarRows
+      }
+    }
+
+    private var toolbarRow: some View {
+      HStack(spacing: 8) {
+        summaryLabel
+        Spacer(minLength: 8)
+        filterControl
+        searchControl
+        sortControl
+        reloadControl
+      }
+    }
+
+    private var toolbarRows: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack {
+          summaryLabel
+          Spacer(minLength: 8)
+          filterControl
+        }
+        HStack(spacing: 8) {
+          searchControl
+          Spacer(minLength: 8)
+          sortControl
+          reloadControl
+        }
+      }
+    }
+
+    private var summaryLabel: some View {
+      Text(entrySummary)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    private var filterControl: some View {
+      Picker("Show", selection: $viewModel.filter) {
+        ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
+          Text(filter.rawValue).tag(filter)
+        }
+      }
+      .pickerStyle(.menu)
+      .accessibilityLabel("Personal dictionary filter")
+      .accessibilityValue(viewModel.filter.rawValue)
+      .accessibilityHint("Filters entries or shows pending suggestions")
+    }
+
+    private var sortControl: some View {
+      Picker("Sort", selection: $sortOrder) {
+        ForEach(SettingsVocabularySortOrder.allCases) { order in
+          Text(order.rawValue).tag(order)
+        }
+      }
+      .pickerStyle(.menu)
+      .accessibilityLabel("Sort vocabulary")
+      .accessibilityValue(sortOrder.rawValue)
+      .accessibilityHint("Sorts vocabulary alphabetically")
+    }
+
+    private var reloadControl: some View {
+      Button(action: reloadVocabulary) {
+        if isReloading {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Label("Reload", systemImage: "arrow.clockwise")
+        }
+      }
+      .buttonStyle(.borderless)
+      .disabled(isReloading)
+      .accessibilityLabel("Reload vocabulary")
+      .accessibilityValue(isReloading ? "Reloading" : "Ready")
+      .accessibilityHint("Loads the latest local vocabulary entries")
+    }
+
     private var entrySummary: String {
-      let count = viewModel.entries.count
-      return count == 1 ? "1 saved word" : "\(count) saved words"
+      if viewModel.filter == .suggestions {
+        let count = viewModel.visibleSuggestions.count
+        return count == 1 ? "1 pending suggestion" : "\(count) pending suggestions"
+      }
+      let count = viewModel.visibleEntries.count
+      let total = viewModel.entries.count
+      if viewModel.query.isEmpty, viewModel.filter == .all {
+        return total == 1 ? "1 saved word" : "\(total) saved words"
+      }
+      return "\(count) of \(total) saved words"
     }
 
     @ViewBuilder
@@ -972,24 +1085,78 @@
     }
 
     @ViewBuilder
-    private var rows: some View {
-      if viewModel.filter == .suggestions {
-        if viewModel.visibleSuggestions.isEmpty {
-          Text("No pending suggestions.")
-            .foregroundStyle(.secondary)
+    private var listSurface: some View {
+      VStack(alignment: .leading, spacing: 0) {
+        if viewModel.filter == .suggestions {
+          if sortedSuggestions.isEmpty {
+            emptyState
+          } else {
+            ForEach(Array(sortedSuggestions.enumerated()), id: \.element.id) { index, suggestion in
+              suggestionRow(suggestion, expectedRevision: viewModel.revision)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+              if index < sortedSuggestions.count - 1 {
+                Divider().padding(.leading, 12)
+              }
+            }
+          }
+        } else if sortedEntries.isEmpty {
+          emptyState
         } else {
-          ForEach(viewModel.visibleSuggestions) { suggestion in
-            suggestionRow(suggestion, expectedRevision: viewModel.revision)
+          ForEach(Array(sortedEntries.enumerated()), id: \.element.id) { index, entry in
+            entryRow(entry)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 10)
+            if index < sortedEntries.count - 1 {
+              Divider().padding(.leading, 12)
+            }
           }
         }
-      } else if viewModel.visibleEntries.isEmpty {
-        Text(viewModel.query.isEmpty ? "No entries yet." : "No matching entries.")
-          .foregroundStyle(.secondary)
-      } else {
-        ForEach(viewModel.visibleEntries) { entry in
-          entryRow(entry)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        if reduceTransparency {
+          shape.fill(Color(nsColor: .controlBackgroundColor))
+        } else {
+          shape.fill(.quaternary.opacity(0.28))
         }
       }
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(.separator.opacity(0.5), lineWidth: 1)
+      }
+    }
+
+    private var sortedEntries: [PersonalDictionaryEntry] {
+      sortOrder.sorted(viewModel.visibleEntries, by: \.preferredForm, id: \.id)
+    }
+
+    private var sortedSuggestions: [PersonalDictionarySuggestion] {
+      sortOrder.sorted(viewModel.visibleSuggestions, by: \.preferredForm, id: \.id)
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+      Group {
+        if viewModel.filter == .suggestions {
+          Text("No pending suggestions. Fleck will show new forms here when it finds them.")
+            .foregroundStyle(.secondary)
+        } else if !viewModel.query.isEmpty {
+          Text("No matching entries. Clear search or choose another filter.")
+            .foregroundStyle(.secondary)
+        } else if viewModel.filter != .all {
+          Text("No entries match this filter. Choose All or use Add New.")
+            .foregroundStyle(.secondary)
+        } else {
+          Text("No entries yet. Use Add New to teach Fleck a word or phrase.")
+            .foregroundStyle(.secondary)
+        }
+      }
+      .font(.callout)
+      .padding(16)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func entryRow(_ entry: PersonalDictionaryEntry) -> some View {
@@ -1128,24 +1295,26 @@
       }
     }
 
-    private var searchUtility: some View {
-      HStack {
-        Spacer()
-        HStack(spacing: 6) {
-          Button {
-            isSearchFocused = true
-          } label: {
-            Image(systemName: "magnifyingglass")
-          }
-          .buttonStyle(.plain)
-          .keyboardShortcut("f", modifiers: .command)
-          .help("Search vocabulary (⌘F)")
-          .accessibilityLabel("Search vocabulary")
-          .accessibilityHint("Focuses the vocabulary search field")
+    @ViewBuilder
+    private var searchControl: some View {
+      HStack(spacing: 6) {
+        Button {
+          isSearchExpanded = true
+          isSearchFocused = true
+        } label: {
+          Image(systemName: "magnifyingglass")
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("f", modifiers: .command)
+        .help("Search vocabulary (⌘F)")
+        .accessibilityLabel("Search vocabulary")
+        .accessibilityHint("Focuses the vocabulary search field")
 
-          TextField("Search", text: $viewModel.query)
+        if isSearchExpanded {
+          TextField("Search vocabulary", text: $viewModel.query)
             .textFieldStyle(.roundedBorder)
             .focused($isSearchFocused)
+            .frame(minWidth: 120, idealWidth: 160, maxWidth: 180)
             .accessibilityLabel("Search vocabulary")
             .accessibilityValue(viewModel.query.isEmpty ? "No search" : viewModel.query)
             .accessibilityHint("Searches saved words and corrections")
@@ -1162,7 +1331,15 @@
             .accessibilityHint("Clears the current vocabulary search")
           }
         }
-        .frame(width: 200)
+      }
+    }
+
+    private func reloadVocabulary() {
+      guard !isReloading else { return }
+      isReloading = true
+      Task { @MainActor in
+        await viewModel.load()
+        isReloading = false
       }
     }
 
@@ -1215,12 +1392,13 @@
 
     var body: some View {
       Form {
-        Section(isNew ? "Add Word" : "Edit Word") {
+        Section(isNew ? "Add New" : "Edit Word") {
           TextField("Word or phrase", text: $preferredForm)
             .accessibilityLabel("Word or phrase")
             .accessibilityHint("The spelling Fleck should use")
 
-          Toggle("Correct a misspelling or shorthand", isOn: $usesCorrection)
+          Toggle("Correct a misspelling", isOn: $usesCorrection)
+            .accessibilityHint("Shows a field for the spelling Fleck should replace")
           if usesCorrection {
             TextField("Correct from", text: $aliases)
               .accessibilityLabel("Correct from")
@@ -1231,6 +1409,7 @@
           }
 
           Toggle("Use this word in dictation", isOn: $isEnabled)
+            .accessibilityHint("Keeps this vocabulary entry active for dictation")
         }
         .disabled(isMutationInFlight)
 
@@ -1260,9 +1439,10 @@
             }
             Button("Cancel", action: onCancel)
               .disabled(isMutationInFlight)
-            Button("Save", action: onSave)
+            Button(isNew ? "Add" : "Save", action: onSave)
               .buttonStyle(.borderedProminent)
               .keyboardShortcut(.defaultAction)
+              .accessibilityLabel(isNew ? "Add vocabulary word" : "Save vocabulary word")
               .disabled(
                 isMutationInFlight
                   || preferredForm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
