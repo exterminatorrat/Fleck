@@ -2330,7 +2330,9 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
 @Test func formattingBarKeepsOneReachableCommandSurfaceAtSupportedWidths() throws {
   let source = try notesPanelSource()
-  let formattingBar = try #require(source.components(separatedBy: "private struct FormattingBar").last)
+  let formattingBar = try #require(
+    source.components(separatedBy: "private struct FormattingBar: View").last
+  )
 
   #expect(formattingBar.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").count == 2)
   #expect(formattingBar.contains("accessibilityLabel(\"Editor toolbar\")"))
@@ -3145,6 +3147,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   state.updatePreferences {
     $0.accentHex = "#00FF00"
     $0.isUnfiledCompact = false
+    $0.showFormattingBar = false
   }
   let commands = EditorCommands()
   let (window, host) = hostedPanel(
@@ -3193,6 +3196,7 @@ private func hostedFolderSelectionGeometry(
   state.updatePreferences {
     $0.accentHex = accentHex
     $0.isUnfiledCompact = true
+    $0.showFormattingBar = false
   }
   let commands = EditorCommands()
   let (window, host) = hostedPanel(
