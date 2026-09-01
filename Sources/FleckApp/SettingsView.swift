@@ -154,6 +154,16 @@
     func updateNSView(_ view: NSView, context: Context) {}
   }
 
+  private struct SettingsPageHeaderProbe: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+      let view = NSView()
+      view.setAccessibilityIdentifier("settings-page-header")
+      return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+  }
+
   struct SettingsPageHeader: View {
     let section: SettingsSection
 
@@ -161,6 +171,7 @@
       VStack(alignment: .leading, spacing: 4) {
         Text(section.title)
           .font(.title2.weight(.semibold))
+          .background(SettingsPageHeaderProbe())
         Text(section.description)
           .font(.callout)
           .foregroundStyle(.secondary)
@@ -218,8 +229,10 @@
             .fixedSize(horizontal: false, vertical: true)
         }
         Spacer(minLength: 8)
-        Toggle("", isOn: $isOn)
+        Toggle(title, isOn: $isOn)
           .labelsHidden()
+          .accessibilityLabel(title)
+          .accessibilityHint(detail)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -284,7 +297,7 @@
         }
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
-      .padding(.leading, 12)
+      .padding(.leading, 8)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .background {
         if reduceTransparency {

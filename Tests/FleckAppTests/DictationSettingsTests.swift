@@ -243,6 +243,12 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(source.contains(".tag(section)"))
   #expect(source.contains(".accessibilityLabel(\"Settings sections\")"))
   #expect(source.contains("SettingsSidebarSurface"))
+  #expect(source.contains("SettingsPageHeaderProbe"))
+  #expect(source.contains("settings-page-header"))
+  #expect(source.contains("Toggle(title, isOn: $isOn)"))
+  #expect(!source.contains("Toggle(\"\", isOn: $isOn)"))
+  #expect(source.contains(".accessibilityLabel(title)"))
+  #expect(source.contains(".accessibilityHint(detail)"))
   #expect(!source.contains("NavigationSplitView"))
   #expect(!source.contains("NavigationSplitViewVisibility"))
   #expect(!source.contains("navigationSplitViewColumnWidth"))
@@ -318,8 +324,14 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
       return button.convert(button.bounds, to: nil)
     }
     #expect(!trafficLightFrames.isEmpty)
-    let trafficLightSafeSurfaceFrame = outerSidebarSurfaceFrame.insetBy(dx: 12, dy: 12)
-    #expect(trafficLightFrames.allSatisfy { trafficLightSafeSurfaceFrame.contains($0.center) })
+    #expect(trafficLightFrames.allSatisfy {
+      settingsRoundedSurfaceContains(
+        $0,
+        in: outerSidebarSurfaceFrame,
+        cornerRadius: 22,
+        margin: 8
+      )
+    })
     #expect(trafficLightFrames.allSatisfy { !$0.intersects(baselineSidebarFrame) })
 
     for destination in destinations {
@@ -370,6 +382,16 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
       let detailTopGap = baselineLayoutRect.maxY - detailDocumentFrame.maxY
       #expect(detailTopGap >= -1)
       #expect(detailTopGap <= 20)
+      let pageTitle = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
+      )
+      let pageTitleFrame = pageTitle.convert(pageTitle.bounds, to: nil)
+      #expect(!pageTitleFrame.isEmpty)
+      #expect(pageTitleFrame.minX >= detailDocumentFrame.minX - 1)
+      #expect(pageTitleFrame.maxX <= detailDocumentFrame.maxX + 1)
+      let pageTitleTopGap = baselineLayoutRect.maxY - pageTitleFrame.maxY
+      #expect(pageTitleTopGap >= -1)
+      #expect(pageTitleTopGap <= 20)
 
     }
 
@@ -416,6 +438,39 @@ private func settingsSidebarSurface(of view: NSView) -> NSView? {
   }
   return settingsSidebarDescendants(of: view)
     .first { $0.accessibilityIdentifier() == "settings-sidebar-surface" }
+}
+
+@MainActor
+private func settingsView(withAccessibilityIdentifier identifier: String, in view: NSView)
+  -> NSView?
+{
+  if view.accessibilityIdentifier() == identifier {
+    return view
+  }
+  return settingsSidebarDescendants(of: view)
+    .first { $0.accessibilityIdentifier() == identifier }
+}
+
+@MainActor
+private func settingsRoundedSurfaceContains(
+  _ candidate: NSRect,
+  in surface: NSRect,
+  cornerRadius: CGFloat,
+  margin: CGFloat
+) -> Bool {
+  guard surface.insetBy(dx: margin, dy: margin).contains(candidate) else { return false }
+  let path = NSBezierPath(
+    roundedRect: surface,
+    xRadius: cornerRadius,
+    yRadius: cornerRadius
+  )
+  let corners = [
+    NSPoint(x: candidate.minX, y: candidate.minY),
+    NSPoint(x: candidate.minX, y: candidate.maxY),
+    NSPoint(x: candidate.maxX, y: candidate.minY),
+    NSPoint(x: candidate.maxX, y: candidate.maxY),
+  ]
+  return corners.allSatisfy(path.contains)
 }
 
 @MainActor
