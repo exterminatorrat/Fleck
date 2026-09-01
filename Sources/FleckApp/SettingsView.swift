@@ -112,6 +112,48 @@
     }
   }
 
+  struct SettingsSidebarSurface<Content: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+      self.content = content()
+    }
+
+    var body: some View {
+      content
+        .padding(.horizontal, 12)
+        .padding(.top, 52)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background {
+          let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+          if reduceTransparency {
+            shape.fill(Color(nsColor: .windowBackgroundColor))
+          } else if #available(macOS 26, *) {
+            shape.fill(.clear)
+              .glassEffect(Glass.regular, in: shape)
+          } else {
+            shape.fill(.regularMaterial)
+          }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(SettingsSidebarSurfaceProbe())
+        .accessibilityIdentifier("settings-sidebar-surface")
+        .ignoresSafeArea(.container, edges: .top)
+    }
+  }
+
+  private struct SettingsSidebarSurfaceProbe: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+      let view = NSView()
+      view.setAccessibilityIdentifier("settings-sidebar-surface")
+      return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+  }
+
   struct SettingsPageHeader: View {
     let section: SettingsSection
 
@@ -129,6 +171,7 @@
   }
 
   struct SettingsSectionCard<Content: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     private let title: String
     private let content: Content
 
@@ -147,10 +190,36 @@
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(.quaternary.opacity(0.35))
-        )
+        .background {
+          let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+          if reduceTransparency {
+            shape.fill(Color(nsColor: .controlBackgroundColor))
+          } else {
+            shape.fill(.quaternary.opacity(0.35))
+          }
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  private struct SettingsToggleRow: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+      HStack(alignment: .firstTextBaseline, spacing: 16) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(title)
+          Text(detail)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Spacer(minLength: 8)
+        Toggle("", isOn: $isOn)
+          .labelsHidden()
       }
       .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -158,6 +227,7 @@
 
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
     @ObservedObject private var cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel
@@ -165,7 +235,6 @@
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     @State private var selectedSection = SettingsSection.appearance
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
@@ -186,10 +255,11 @@
     }
 
     var body: some View {
-      NavigationSplitView(columnVisibility: $columnVisibility) {
-        SettingsSectionSidebar(selection: $selectedSection)
-          .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 230)
-      } detail: {
+      HStack(alignment: .top, spacing: 12) {
+        SettingsSidebarSurface {
+          SettingsSectionSidebar(selection: $selectedSection)
+        }
+        .frame(width: 220)
         ScrollView {
           VStack(alignment: .leading, spacing: 20) {
             SettingsPageHeader(section: selectedSection)
@@ -212,11 +282,17 @@
           .padding(.horizontal, 24)
           .padding(.bottom, 20)
         }
-        .contentMargins(.top, 12, for: .scrollContent)
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
-      .navigationSplitViewStyle(.balanced)
+      .padding(.leading, 12)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background {
+        if reduceTransparency {
+          Color(nsColor: .windowBackgroundColor)
+        } else {
+          Rectangle().fill(.ultraThinMaterial)
+        }
+      }
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }
@@ -278,10 +354,14 @@
     private var appearance: some View {
       VStack(alignment: .leading, spacing: 16) {
         SettingsSectionCard("Interface") {
-          Picker("Theme", selection: preferenceBinding(\.theme)) {
-            ForEach(AppTheme.allCases, id: \.self) { theme in
-              Text(theme.rawValue.capitalized).tag(theme)
+          LabeledContent("Theme") {
+            Picker("Theme", selection: preferenceBinding(\.theme)) {
+              ForEach(AppTheme.allCases, id: \.self) { theme in
+                Text(theme.rawValue.capitalized).tag(theme)
+              }
             }
+            .labelsHidden()
+            .pickerStyle(.menu)
           }
           SettingsColorButton(
             title: "Accent color",
@@ -311,33 +391,48 @@
           ) { hex in
             appState.updatePreferences { $0.editorBackgroundHex = hex }
           }
-          Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
-            Text("Glass opacity")
+          LabeledContent("Glass opacity") {
+            Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
+              Text("Glass opacity")
+            }
+            .labelsHidden()
           }
         }
 
         SettingsSectionCard("Menu size") {
-          Stepper(
-            "Menu width: \(Int(appState.preferences.panelWidth))",
-            value: preferenceBinding(\.panelWidth), in: 380...800, step: 20
-          )
-          Stepper(
-            "Menu height: \(Int(appState.preferences.panelHeight))",
-            value: preferenceBinding(\.panelHeight), in: 300...800, step: 20
-          )
+          LabeledContent("Width") {
+            Stepper(
+              value: preferenceBinding(\.panelWidth), in: 380...800, step: 20
+            ) {
+              Text("\(Int(appState.preferences.panelWidth)) pt")
+            }
+          }
+          LabeledContent("Height") {
+            Stepper(
+              value: preferenceBinding(\.panelHeight), in: 300...800, step: 20
+            ) {
+              Text("\(Int(appState.preferences.panelHeight)) pt")
+            }
+          }
         }
       }
     }
 
     private var editing: some View {
       SettingsSectionCard("Behavior") {
-        Toggle("Create lists automatically", isOn: preferenceBinding(\.automaticLists))
-        Toggle(
-          "Confirm before moving notes to Trash",
+        SettingsToggleRow(
+          title: "Create lists automatically",
+          detail: "Recognize list-shaped lines while you edit.",
+          isOn: preferenceBinding(\.automaticLists)
+        )
+        SettingsToggleRow(
+          title: "Confirm before moving notes to Trash",
+          detail: "Ask before a note is moved to the Trash folder.",
           isOn: preferenceBinding(\.confirmBeforeMovingNotesToTrash)
         )
-        Toggle(
-          "Launch at login",
+        SettingsToggleRow(
+          title: "Launch at login",
+          detail: "Start Fleck automatically when you sign in.",
           isOn: Binding(
             get: { appState.preferences.launchAtLogin },
             set: { appState.setLaunchAtLogin($0) }

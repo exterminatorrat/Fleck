@@ -242,6 +242,10 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(source.contains(".listStyle(.sidebar)"))
   #expect(source.contains(".tag(section)"))
   #expect(source.contains(".accessibilityLabel(\"Settings sections\")"))
+  #expect(source.contains("SettingsSidebarSurface"))
+  #expect(!source.contains("NavigationSplitView"))
+  #expect(!source.contains("NavigationSplitViewVisibility"))
+  #expect(!source.contains("navigationSplitViewColumnWidth"))
   #expect(!source.contains("SettingsSectionSelector"))
   #expect(!source.contains("matchedGeometryEffect"))
   #expect(!source.contains("Picker(\"Settings section\""))
@@ -266,14 +270,13 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     )
     let window = NSWindow(
       contentRect: NSRect(origin: .zero, size: size),
-      styleMask: [.titled, .resizable, .closable],
+      styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
     window.title = "Settings"
     let toolbar = NSToolbar(identifier: "settings-hosted-test-toolbar-\(Int(size.width))")
     window.toolbar = toolbar
-    toolbar.insertItem(withItemIdentifier: .toggleSidebar, at: 0)
     #expect(window.toolbar === toolbar)
     window.contentView = host
     window.setContentSize(size)
@@ -284,52 +287,40 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     #expect(window.standardWindowButton(.miniaturizeButton)?.isHidden == false)
     #expect(window.standardWindowButton(.zoomButton)?.isHidden == false)
     let contentView = try #require(window.contentView)
-    let nativeSplitController = try #require(
-      settingsNativeSplitViewController(of: contentView)
-    )
-    let nativeSidebarItem = try #require(nativeSplitController.splitViewItems.first)
-    #expect(nativeSplitController.splitViewItems.count >= 2)
-    #expect(!nativeSidebarItem.isCollapsed)
-    if toolbar.items.first(where: { $0.itemIdentifier == .toggleSidebar }) == nil {
-      toolbar.insertItem(withItemIdentifier: .toggleSidebar, at: toolbar.items.count)
-    }
-    let toggleItem = try #require(
-      toolbar.items.first { $0.itemIdentifier == .toggleSidebar }
-    )
-    toggleItem.target = nativeSplitController
-    #expect(toggleItem.action != nil)
-    #expect(toggleItem.action == #selector(NSSplitViewController.toggleSidebar(_:)))
+    #expect(settingsNativeSplitViewController(of: contentView) == nil)
+    let toolbarItemIdentifiers = toolbar.items.map(\.itemIdentifier)
+    #expect(!toolbarItemIdentifiers.contains(.toggleSidebar))
+    #expect(!toolbarItemIdentifiers.contains(.sidebarTrackingSeparator))
     let sidebar = try #require(settingsSidebarTableView(of: host))
     let outline = try #require(sidebar as? NSOutlineView)
     let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
-    let initialDetailScroll = try #require(
-      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
-    )
+    let sidebarSurface = try #require(settingsSidebarSurface(of: host))
     let baselineContentFrame = contentView.convert(contentView.bounds, to: nil)
     let baselineLayoutRect = window.contentLayoutRect
     let baselineSidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
     let baselineSidebarSurfaceFrame = sidebarScroll.convert(sidebarScroll.bounds, to: nil)
+    let outerSidebarSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
 
     #expect(window.isResizable)
     #expect(!baselineContentFrame.isEmpty)
     #expect(!baselineLayoutRect.isEmpty)
     #expect(!baselineSidebarFrame.isEmpty)
-
-    let expandedSidebarSurfaceFrame = baselineSidebarSurfaceFrame
-    nativeSplitController.toggleSidebar(toggleItem)
-    await settleSettingsHost(host)
-
-    let collapsedSidebarSurfaceFrame = sidebarScroll.convert(sidebarScroll.bounds, to: nil)
-    #expect(nativeSidebarItem.isCollapsed)
-    #expect(!collapsedSidebarSurfaceFrame.isEmpty)
-    let collapsedDetailFrame = initialDetailScroll.convert(initialDetailScroll.bounds, to: nil)
-    #expect(!collapsedDetailFrame.isEmpty)
-
-    nativeSplitController.toggleSidebar(toggleItem)
-    await settleSettingsHost(host)
-    #expect(!nativeSidebarItem.isCollapsed)
-    let restoredSidebarSurfaceFrame = sidebarScroll.convert(sidebarScroll.bounds, to: nil)
-    #expect(approximatelyEqual(restoredSidebarSurfaceFrame, expandedSidebarSurfaceFrame))
+    #expect(!outerSidebarSurfaceFrame.isEmpty)
+    #expect(outerSidebarSurfaceFrame.minX >= baselineContentFrame.minX + 8)
+    #expect(outerSidebarSurfaceFrame.maxX <= baselineContentFrame.maxX - 8)
+    let trafficLightButtons: [NSButton?] = [
+      window.standardWindowButton(.closeButton),
+      window.standardWindowButton(.miniaturizeButton),
+      window.standardWindowButton(.zoomButton),
+    ]
+    let trafficLightFrames: [NSRect] = trafficLightButtons.compactMap { button in
+      guard let button else { return nil }
+      return button.convert(button.bounds, to: nil)
+    }
+    #expect(!trafficLightFrames.isEmpty)
+    let trafficLightSafeSurfaceFrame = outerSidebarSurfaceFrame.insetBy(dx: 12, dy: 12)
+    #expect(trafficLightFrames.allSatisfy { trafficLightSafeSurfaceFrame.contains($0.center) })
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(baselineSidebarFrame) })
 
     for destination in destinations {
       let row = try #require(settingsSidebarRow(destination, in: outline))
@@ -352,47 +343,34 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
       #expect(sidebar.alphaValue > 0)
       #expect(baselineLayoutRect.contains(sidebarFrame.center))
       #expect(approximatelyEqual(sidebarFrame, baselineSidebarFrame))
-      #expect(baselineLayoutRect.insetBy(dx: -1, dy: -1).contains(sidebarSurfaceFrame))
       #expect(approximatelyEqual(sidebarSurfaceFrame, baselineSidebarSurfaceFrame))
+      #expect(approximatelyEqual(
+        sidebarSurface.convert(sidebarSurface.bounds, to: nil),
+        outerSidebarSurfaceFrame
+      ))
+      #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
 
       let detailScroll = settingsHostedScrollViews(of: host)
         .first { $0 !== sidebarScroll }
       #expect(detailScroll != nil)
       guard let detailScroll else { continue }
       #expect(detailScroll !== sidebarScroll)
-      #expect(detailScroll.documentView != nil)
+      let detailDocument = try #require(detailScroll.documentView)
+      #expect(!detailDocument.bounds.isEmpty)
       #expect(!detailScroll.contentView.bounds.isEmpty)
 
       let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
       #expect(!detailFrame.isEmpty)
       #expect(baselineLayoutRect.contains(detailFrame.center))
-      #expect(baselineLayoutRect.insetBy(dx: -1, dy: -1).contains(sidebarFrame))
-      #expect(baselineLayoutRect.insetBy(dx: -1, dy: -1).contains(detailFrame))
-      let detailTopGap = baselineLayoutRect.maxY - detailFrame.maxY
+      let detailDocumentFrame = detailDocument.convert(detailDocument.bounds, to: nil)
+      #expect(detailDocumentFrame.minX >= baselineLayoutRect.minX - 1)
+      #expect(detailDocumentFrame.maxX <= baselineLayoutRect.maxX + 1)
+      #expect(detailDocumentFrame.maxY <= baselineLayoutRect.maxY + 1)
+      #expect(detailDocumentFrame.intersects(baselineLayoutRect))
+      let detailTopGap = baselineLayoutRect.maxY - detailDocumentFrame.maxY
       #expect(detailTopGap >= -1)
       #expect(detailTopGap <= 20)
 
-      let detailContentTopInset = detailScroll.contentInsets.top
-      #expect(detailContentTopInset >= 12)
-      #expect(detailContentTopInset <= 20)
-
-      nativeSplitController.toggleSidebar(toggleItem)
-      await settleSettingsHost(host)
-      let collapsedDestinationSidebarFrame = sidebarScroll.convert(sidebarScroll.bounds, to: nil)
-      #expect(nativeSidebarItem.isCollapsed)
-      #expect(!collapsedDestinationSidebarFrame.isEmpty)
-      let collapsedDestinationDetailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
-      #expect(!collapsedDestinationDetailFrame.isEmpty)
-      #expect(collapsedDestinationDetailFrame.width > 0)
-      nativeSplitController.toggleSidebar(toggleItem)
-      await settleSettingsHost(host)
-      #expect(!nativeSidebarItem.isCollapsed)
-      #expect(
-        approximatelyEqual(
-          sidebarScroll.convert(sidebarScroll.bounds, to: nil),
-          baselineSidebarSurfaceFrame
-        )
-      )
     }
 
     let detailScrollViews = settingsHostedScrollViews(of: host)
@@ -429,6 +407,15 @@ private func settingsNativeSplitViewController(of view: NSView) -> NSSplitViewCo
     }
   }
   return nil
+}
+
+@MainActor
+private func settingsSidebarSurface(of view: NSView) -> NSView? {
+  if view.accessibilityIdentifier() == "settings-sidebar-surface" {
+    return view
+  }
+  return settingsSidebarDescendants(of: view)
+    .first { $0.accessibilityIdentifier() == "settings-sidebar-surface" }
 }
 
 @MainActor
