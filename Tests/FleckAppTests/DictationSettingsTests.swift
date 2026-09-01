@@ -52,7 +52,6 @@ import Testing
   #expect(source.contains("SettingsSectionCard(\"Editor canvas\")"))
   #expect(source.contains("SettingsSectionCard(\"Menu size\")"))
   #expect(source.contains("ScrollView"))
-  #expect(source.contains("settings-page-header"))
   #expect(runtimeSource.contains(".defaultSize(width: 840, height: 600)"))
   #expect(runtimeSource.contains(".windowResizability(.contentMinSize)"))
   #expect(source.contains(".focusable(presentation.isKeyboardFocusable)"))
@@ -280,6 +279,7 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     let contentView = try #require(window.contentView)
     let sidebar = try #require(settingsSidebarTableView(of: host))
     let outline = try #require(sidebar as? NSOutlineView)
+    let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
     let baselineContentFrame = contentView.convert(contentView.bounds, to: nil)
     let baselineLayoutRect = window.contentLayoutRect
     let baselineSidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
@@ -311,10 +311,10 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
       #expect(approximatelyEqual(sidebarFrame, baselineSidebarFrame))
 
       let detailScroll = settingsHostedScrollViews(of: host)
-        .first { $0 !== sidebar }
+        .first { $0 !== sidebarScroll }
       #expect(detailScroll != nil)
       guard let detailScroll else { continue }
-      #expect(detailScroll !== sidebar)
+      #expect(detailScroll !== sidebarScroll)
       #expect(detailScroll.documentView != nil)
       #expect(!detailScroll.contentView.bounds.isEmpty)
 
@@ -324,7 +324,7 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     }
 
     let detailScrollViews = settingsHostedScrollViews(of: host)
-      .filter { $0 !== sidebar }
+      .filter { $0 !== sidebarScroll }
     #expect(!detailScrollViews.isEmpty)
     window.contentView = nil
     window.orderOut(nil)
@@ -365,6 +365,18 @@ private func settingsHostedScrollViews(of view: NSView) -> [NSScrollView] {
     scrollViews.append(contentsOf: settingsHostedScrollViews(of: subview))
   }
   return scrollViews
+}
+
+@MainActor
+private func settingsScrollViewAncestor(of view: NSView) -> NSScrollView? {
+  var current = view.superview
+  while let candidate = current {
+    if let scrollView = candidate as? NSScrollView {
+      return scrollView
+    }
+    current = candidate.superview
+  }
+  return nil
 }
 
 private extension NSRect {

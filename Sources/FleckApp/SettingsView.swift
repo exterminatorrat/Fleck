@@ -128,7 +128,6 @@
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, 24)
       .padding(.vertical, 18)
-      .accessibilityIdentifier("settings-page-header")
     }
   }
 
@@ -207,7 +206,6 @@
           .padding(.vertical, 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .accessibilityIdentifier("settings-detail-scroll")
       }
       .navigationSplitViewStyle(.balanced)
       .onChange(of: selectedSection) { _, newSection in
