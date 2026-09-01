@@ -164,6 +164,80 @@
     func updateNSView(_ view: NSView, context: Context) {}
   }
 
+  private struct SettingsWindowChromeConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> SettingsWindowChromeView {
+      SettingsWindowChromeView()
+    }
+
+    func updateNSView(_ view: SettingsWindowChromeView, context: Context) {
+      view.scheduleTrafficLightAdjustment()
+    }
+  }
+
+  private final class SettingsWindowChromeView: NSView {
+    private var adjustmentScheduled = false
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      scheduleTrafficLightAdjustment()
+    }
+
+    override func layout() {
+      super.layout()
+      scheduleTrafficLightAdjustment()
+    }
+
+    func scheduleTrafficLightAdjustment() {
+      guard window != nil, !adjustmentScheduled else { return }
+      adjustmentScheduled = true
+      DispatchQueue.main.async { [weak self] in
+        self?.adjustmentScheduled = false
+        self?.adjustTrafficLights()
+      }
+    }
+
+    private func adjustTrafficLights() {
+      guard let window,
+        let contentView = window.contentView,
+        let sidebarSurface = settingsSidebarSurface(in: contentView)
+      else {
+        return
+      }
+
+      let buttons = [
+        window.standardWindowButton(.closeButton),
+        window.standardWindowButton(.miniaturizeButton),
+        window.standardWindowButton(.zoomButton),
+      ].compactMap { $0 }
+      guard !buttons.isEmpty else { return }
+
+      let sidebarFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+      let buttonFrames = buttons.map { $0.convert($0.bounds, to: nil) }
+      let targetMinX = sidebarFrame.minX + 8
+      guard let currentMinX = buttonFrames.map(\.minX).min() else { return }
+      let offset = targetMinX - currentMinX
+      guard offset > 0 else { return }
+
+      for button in buttons {
+        button.setFrameOrigin(
+          NSPoint(x: button.frame.minX + offset, y: button.frame.minY)
+        )
+      }
+    }
+
+    private func settingsSidebarSurface(in view: NSView) -> NSView? {
+      if view.accessibilityIdentifier() == "settings-sidebar-surface" {
+        return view
+      }
+      for subview in view.subviews {
+        if let surface = settingsSidebarSurface(in: subview) {
+          return surface
+        }
+      }
+      return nil
+    }
+  }
+
   struct SettingsPageHeader: View {
     let section: SettingsSection
 
@@ -220,7 +294,7 @@
     @Binding var isOn: Bool
 
     var body: some View {
-      HStack(alignment: .firstTextBaseline, spacing: 16) {
+      Toggle(isOn: $isOn) {
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
           Text(detail)
@@ -228,12 +302,11 @@
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
-        Spacer(minLength: 8)
-        Toggle(title, isOn: $isOn)
-          .labelsHidden()
-          .accessibilityLabel(title)
-          .accessibilityHint(detail)
       }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(title)
+      .accessibilityHint(detail)
+      .accessibilityIdentifier(title)
       .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
@@ -306,6 +379,7 @@
           Rectangle().fill(.ultraThinMaterial)
         }
       }
+      .background(SettingsWindowChromeConfigurator())
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }

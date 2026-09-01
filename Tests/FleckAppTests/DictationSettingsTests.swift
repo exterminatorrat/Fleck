@@ -245,10 +245,17 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(source.contains("SettingsSidebarSurface"))
   #expect(source.contains("SettingsPageHeaderProbe"))
   #expect(source.contains("settings-page-header"))
-  #expect(source.contains("Toggle(title, isOn: $isOn)"))
+  #expect(source.contains("Toggle(isOn: $isOn)"))
   #expect(!source.contains("Toggle(\"\", isOn: $isOn)"))
   #expect(source.contains(".accessibilityLabel(title)"))
   #expect(source.contains(".accessibilityHint(detail)"))
+  #expect(source.contains(".accessibilityIdentifier(title)"))
+  #expect(source.contains("Create lists automatically"))
+  #expect(source.contains("Recognize list-shaped lines while you edit."))
+  #expect(source.contains("Confirm before moving notes to Trash"))
+  #expect(source.contains("Ask before a note is moved to the Trash folder."))
+  #expect(source.contains("Launch at login"))
+  #expect(source.contains("Start Fleck automatically when you sign in."))
   #expect(!source.contains("NavigationSplitView"))
   #expect(!source.contains("NavigationSplitViewVisibility"))
   #expect(!source.contains("navigationSplitViewColumnWidth"))
@@ -283,7 +290,9 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     window.title = "Settings"
     let toolbar = NSToolbar(identifier: "settings-hosted-test-toolbar-\(Int(size.width))")
     window.toolbar = toolbar
+    window.toolbarStyle = .unifiedCompact
     #expect(window.toolbar === toolbar)
+    #expect(window.toolbarStyle == .unifiedCompact)
     window.contentView = host
     window.setContentSize(size)
     window.makeKeyAndOrderFront(nil)
