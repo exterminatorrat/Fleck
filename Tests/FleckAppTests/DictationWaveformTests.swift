@@ -86,6 +86,27 @@ import Testing
   #expect(loud > conversational)
 }
 
+@Test @MainActor func waveformChangesBarPatternAcrossVaryingMicrophoneLevels() {
+  let model = DictationWaveformModel()
+  let start = Date(timeIntervalSince1970: 32)
+  model.beginListening(at: start)
+  model.receive(level: 0.02, now: start.addingTimeInterval(0.04))
+  let first = model.barHeights(at: start.addingTimeInterval(0.05), reduceMotion: false)
+
+  model.receive(level: 0.20, now: start.addingTimeInterval(0.08))
+  let second = model.barHeights(at: start.addingTimeInterval(0.09), reduceMotion: false)
+
+  func normalizedPattern(_ heights: [CGFloat]) -> [CGFloat] {
+    let excursions = heights.map { $0 - DictationWaveformModel.minimumHeight }
+    let total = excursions.reduce(0, +)
+    return excursions.map { $0 / total }
+  }
+
+  let patternChange = zip(normalizedPattern(first), normalizedPattern(second))
+    .reduce(CGFloat.zero) { $0 + abs($1.0 - $1.1) }
+  #expect(patternChange > 0.35)
+}
+
 @Test @MainActor func waveformUsesFastAttackAndSlowerReleaseWithoutSyntheticMotion() {
   let model = DictationWaveformModel()
   let start = Date(timeIntervalSince1970: 35)
@@ -152,6 +173,17 @@ import Testing
   #expect(model.energy == 0)
   #expect(model.listeningStartedAt == nil)
   #expect(model.lastAcceptedLevelAt == nil)
+
+  let restartedAt = start.addingTimeInterval(1)
+  let fresh = DictationWaveformModel()
+  model.beginListening(at: restartedAt)
+  fresh.beginListening(at: restartedAt)
+  model.receive(level: 0.05, now: restartedAt.addingTimeInterval(0.04))
+  fresh.receive(level: 0.05, now: restartedAt.addingTimeInterval(0.04))
+  #expect(
+    model.barHeights(at: restartedAt.addingTimeInterval(0.05), reduceMotion: false)
+      == fresh.barHeights(at: restartedAt.addingTimeInterval(0.05), reduceMotion: false)
+  )
 }
 
 @Test @MainActor func waveformReducedMotionUsesFifteenHertzAndSmoothedLowerAmplitude() {
