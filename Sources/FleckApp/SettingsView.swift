@@ -59,7 +59,7 @@
       case .dictation:
         "Configure voice capture, models, microphones, and history."
       case .vocabulary:
-        "Teach Fleck the words and spellings that matter to you."
+        "Manage personal vocabulary and dictation corrections."
       case .agents:
         "Control which local agents can work with your Fleck workspace."
       }
@@ -104,6 +104,8 @@
         sectionGroup("Connections", sections: SettingsSection.connectionCases)
       }
       .listStyle(.sidebar)
+      .scrollContentBackground(.hidden)
+      .background(Color.clear)
       .accessibilityLabel("Settings sections")
       .accessibilityIdentifier("settings-section-sidebar")
     }

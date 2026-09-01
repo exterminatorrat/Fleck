@@ -266,6 +266,24 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(!source.contains("Picker(\"Settings section\""))
 }
 
+@Test func SettingsSidebarUsesTransparentListAndVocabularyKeepsOneTeachingHeadline() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains(".scrollContentBackground(.hidden)"))
+  #expect(source.contains(".background(Color.clear)"))
+  #expect(SettingsSection.vocabulary.description ==
+    "Manage personal vocabulary and dictation corrections.")
+  #expect(SettingsSection.vocabulary.description !=
+    "Teach Fleck the words and spellings that matter to you.")
+}
+
 @Test func DictationSettingsUsesReadinessCaptureAndHistoryGroups() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
