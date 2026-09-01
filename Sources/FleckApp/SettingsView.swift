@@ -214,7 +214,6 @@
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
       .navigationSplitViewStyle(.balanced)
-      .toolbar(.hidden, for: .windowToolbar)
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }
