@@ -488,6 +488,92 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
   }
 }
 
+@Test @MainActor
+func DictationSettingsHostedWindowResetsDetailScrollWhenSwitchingDestinations()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let size = NSSize(width: 840, height: 600)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(origin: .zero, size: size),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.title = "Settings"
+  window.toolbar = NSToolbar(identifier: "settings-hosted-scroll-reset-toolbar")
+  window.toolbarStyle = .unifiedCompact
+  window.contentView = host
+  window.setContentSize(size)
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  let contentLayoutRect = window.contentLayoutRect
+  let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+  let sidebarTable = try #require(settingsSidebarTableView(of: host))
+  let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebarTable))
+
+  func select(_ destination: SettingsSection) async throws {
+    let row = try #require(settingsSidebarRow(destination, in: outline))
+    outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: outline
+    )
+    await settleSettingsHost(host)
+  }
+
+  try await select(.dictation)
+  let initialDetailScroll = try #require(
+    settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+  )
+  var previousDetailScroll = initialDetailScroll
+  let initialDocument = try #require(initialDetailScroll.documentView)
+  let initialBounds = initialDetailScroll.contentView.bounds
+  let initialDocumentFrame = initialDocument.frame
+  #expect(initialDocumentFrame.height > initialBounds.height + 1)
+
+  let maximumOriginY = max(
+    initialDocumentFrame.minY,
+    initialDocumentFrame.maxY - initialBounds.height
+  )
+  initialDetailScroll.contentView.scroll(
+    to: NSPoint(x: initialBounds.origin.x, y: maximumOriginY)
+  )
+  initialDetailScroll.reflectScrolledClipView(initialDetailScroll.contentView)
+  await settleSettingsHost(host)
+  #expect(
+    initialDetailScroll.contentView.bounds.origin.y > initialBounds.origin.y + 1
+  )
+
+  for destination in SettingsSection.allCases {
+    try await select(destination)
+
+    let detailScroll = try #require(
+      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+    )
+    #expect(detailScroll !== previousDetailScroll)
+    previousDetailScroll = detailScroll
+    let detailDocument = try #require(detailScroll.documentView)
+    let pageTitle = try #require(
+      settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
+    )
+    let pageTitleFrame = pageTitle.convert(pageTitle.bounds, to: nil)
+    #expect(!pageTitleFrame.isEmpty)
+    let pageTitleTopGap = contentLayoutRect.maxY - pageTitleFrame.maxY
+    #expect(pageTitleTopGap >= -1)
+    #expect(pageTitleTopGap <= 20)
+  }
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
 @MainActor
 private func settingsSidebarDescendants(of view: NSView) -> [NSView] {
   view.subviews + view.subviews.flatMap(settingsSidebarDescendants)

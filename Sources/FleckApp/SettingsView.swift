@@ -380,6 +380,7 @@
           .padding(.horizontal, 24)
           .padding(.bottom, 20)
         }
+        .id(selectedSection)
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
       .padding(.leading, 8)
