@@ -241,7 +241,6 @@
             idealHeight: 600
           )
           .background(FloatingWindowConfigurator())
-          .toolbar(removing: .sidebarToggle)
       }
       .defaultSize(width: 840, height: 600)
       .windowResizability(.contentMinSize)
