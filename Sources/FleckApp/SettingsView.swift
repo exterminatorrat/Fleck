@@ -126,7 +126,6 @@
           .fixedSize(horizontal: false, vertical: true)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 24)
       .padding(.vertical, 18)
     }
   }
@@ -141,11 +140,19 @@
     }
 
     var body: some View {
-      GroupBox {
-        content
-      } label: {
+      VStack(alignment: .leading, spacing: 8) {
         Text(title)
           .font(.headline)
+
+        VStack(alignment: .leading, spacing: 12) {
+          content
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(.quaternary.opacity(0.35))
+        )
       }
       .frame(maxWidth: .infinity, alignment: .leading)
     }
