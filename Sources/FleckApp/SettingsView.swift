@@ -205,7 +205,9 @@
     }
 
     func scheduleTrafficLightAdjustment() {
-      guard window != nil, !adjustmentScheduled else { return }
+      guard let window else { return }
+      window.titleVisibility = .hidden
+      guard !adjustmentScheduled else { return }
       adjustmentScheduled = true
       DispatchQueue.main.async { [weak self] in
         self?.adjustmentScheduled = false
@@ -402,10 +404,12 @@
           .padding(.bottom, 20)
         }
         .id(selectedSection)
+        .safeAreaPadding(.top, 40)
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
       .padding(.leading, 8)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .ignoresSafeArea(.container, edges: .top)
       .background {
         if reduceTransparency {
           Color(nsColor: .windowBackgroundColor)

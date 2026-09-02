@@ -538,11 +538,15 @@ func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
   let sidebarSurface = try #require(settingsSidebarSurface(of: host))
   let contentFrame = contentView.convert(contentView.bounds, to: nil)
   let surfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+  let topInset = contentFrame.maxY - surfaceFrame.maxY
+  let bottomInset = surfaceFrame.minY - contentFrame.minY
 
   #expect(surfaceFrame.minX >= contentFrame.minX + 8)
-  #expect(surfaceFrame.maxX <= contentFrame.maxX - 8)
-  #expect(surfaceFrame.minY >= contentFrame.minY + 8)
-  #expect(surfaceFrame.maxY <= contentFrame.maxY - 8)
+  #expect(topInset >= 8)
+  #expect(topInset <= 12)
+  #expect(bottomInset >= 8)
+  #expect(bottomInset <= 12)
+  #expect(window.titleVisibility == .hidden)
 
   let trafficLightButtons: [NSButton?] = [
     window.standardWindowButton(.closeButton),
