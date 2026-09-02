@@ -789,6 +789,25 @@ func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismis
 }
 
 @Test
+func personalDictionaryVocabularySearchDefersQueryClearUntilFieldTeardown() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(settingsSource.contains("private func clearSearchQueryAfterTeardown()"))
+  #expect(settingsSource.contains("Task { @MainActor in"))
+  #expect(settingsSource.contains("await Task.yield()"))
+  #expect(settingsSource.contains("clearSearchQueryAfterTeardown()"))
+  #expect(settingsSource.contains("closeSearch(source: .pointer)"))
+  #expect(settingsSource.contains("closeSearch(source: .keyboard)"))
+}
+
+@Test
 func personalDictionaryUsesOneLargeGlassPanelWithAccessibleFilterTabs() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()

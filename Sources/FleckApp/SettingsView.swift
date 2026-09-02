@@ -1618,6 +1618,14 @@
       withAnimation(motion.presentationAnimation(for: source)) {
         isSearchExpanded = false
         isSearchFocused = false
+      }
+      clearSearchQueryAfterTeardown()
+    }
+
+    private func clearSearchQueryAfterTeardown() {
+      let viewModel = viewModel
+      Task { @MainActor in
+        await Task.yield()
         viewModel.query = ""
       }
     }
