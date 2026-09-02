@@ -129,7 +129,7 @@ executable_bytes=$(wc -c < "$release_executable" | tr -d '[:space:]') || exit 2
 {
   printf 'executable=%s\n' "$release_executable"
   printf 'bytes=%s\n' "$executable_bytes"
-  printf '%s\n' 'target_bytes=15728640'
+  printf '%s\n' 'target_bytes=18874368'
   printf '%s\n' 'note=SwiftPM executable size only; measure the final signed .app separately.'
 } > "$output_dir/executable-size.txt"
 

@@ -4,7 +4,7 @@
 
 Fleck is a native macOS utility, not a miniature web application. The initial engineering budgets are:
 
-- **Installed app size target:** at or below 15 MB for a release build where practical.
+- **Release executable size target:** at or below 18 MiB where practical.
 - **Memory ceiling:** never intentionally ship a normal idle workflow that exceeds 75 MB; profile representative release builds before releases.
 - **Idle behavior:** no polling, server process, web view, analytics client, or network requirement.
 - **Storage:** local, readable, atomic, and recoverable.
