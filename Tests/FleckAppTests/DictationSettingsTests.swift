@@ -249,6 +249,17 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(source.contains(".accessibilityLabel(title)"))
   #expect(source.contains(".accessibilityHint(detail)"))
   #expect(source.contains(".accessibilityIdentifier(title)"))
+  #expect(source.contains("case .editing:\n        \"gearshape\""))
+  #expect(source.contains(".padding(.top, 38)"))
+  let sectionGroupStart = try #require(source.range(of: "private func sectionGroup("))
+  let sidebarSurfaceStart = try #require(
+    source.range(
+      of: "  struct SettingsSidebarSurface",
+      range: sectionGroupStart.upperBound..<source.endIndex
+    )
+  )
+  let sectionGroupSource = source[sectionGroupStart.lowerBound..<sidebarSurfaceStart.lowerBound]
+  #expect(sectionGroupSource.contains(".padding(.bottom, 4)"))
   #expect(source.contains("Create lists automatically"))
   #expect(source.contains("Recognize list-shaped lines while you edit."))
   #expect(source.contains("Confirm before moving notes to Trash"))

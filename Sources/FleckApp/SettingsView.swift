@@ -34,7 +34,7 @@
     var systemImage: String {
       switch self {
       case .editing:
-        "note.text"
+        "gearshape"
       case .appearance:
         "paintbrush"
       case .shortcuts:
@@ -115,11 +115,14 @@
       _ title: LocalizedStringKey,
       sections: [SettingsSection]
     ) -> some View {
-      Section(title) {
+      Section {
         ForEach(sections) { section in
           Label(section.title, systemImage: section.systemImage)
             .tag(section)
         }
+      } header: {
+        Text(title)
+          .padding(.bottom, 4)
       }
     }
   }
@@ -135,7 +138,7 @@
     var body: some View {
       content
         .padding(.horizontal, 12)
-        .padding(.top, 52)
+        .padding(.top, 38)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background {
