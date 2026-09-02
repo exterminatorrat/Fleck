@@ -13,20 +13,25 @@ This is the final source-vs-implementation comparison for the native macOS Setti
 
 The final implementation was inspected from the exact rebuilt local bundle in Dark appearance, using the default 840 x 600 Settings window. The captured states were an empty Vocabulary page, the Add New sheet, an installed connector, and one connected Codex profile.
 
-- [Appearance](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/after-01-appearance.png) — 840 x 600 px.
-- [General](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/after-02-general.png) — 840 x 600 px.
-- [Shortcuts](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/after-03-shortcuts.png) — 840 x 600 px.
-- [Dictation](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/after-04-dictation.png) — 840 x 600 px.
-- [Vocabulary](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/after-05-vocabulary.png) — 840 x 600 px.
-- [Vocabulary Add New sheet](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/after-06-vocabulary-add-new.png) — 420 x 280 px.
-- [Agents](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/after-07-agents.png) — 840 x 600 px.
+- [Appearance](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-page-01-appearance.png) — 840 x 600 px.
+- [General](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-page-02-general.png) — 840 x 600 px.
+- [Shortcuts](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-page-03-shortcuts.png) — 840 x 600 px.
+- [Dictation](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-page-04-dictation.png) — 840 x 600 px.
+- [Vocabulary](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-page-05-vocabulary.png) — 840 x 600 px.
+- [Vocabulary Add New sheet](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-page-06-vocabulary-add-new.png) — 420 x 280 px.
+- [Agents](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-page-07-agents.png) — 840 x 600 px.
+
+Post-fix transition evidence:
+
+- [Dictation scrolled](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-transition-01-dictation-scrolled.png) — Dictation deliberately scrolled to its bottom, 840 x 600 px.
+- [General reset](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-transition-02-general-reset.png) — General immediately after navigation with its header restored to the same compact safe top band, 840 x 600 px.
 
 ## Comparison method and normalization
 
 The combined comparison inputs that were opened and inspected were:
 
-- [Stats / Appearance comparison](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/after-compare-stats-appearance.png) — 1766 x 600 px. The 728 x 480 source was normalized to 600 px high; the 840 x 600 implementation was retained at its capture size.
-- [Wispr / Vocabulary comparison](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/after-compare-wispr-vocabulary.png) — 2312 x 768 px. The 1220 x 768 source was retained at its capture size; the implementation was normalized to 768 px high.
+- [Stats / Appearance comparison](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-compare-stats-appearance.png) — 1766 x 600 px. The 728 x 480 source was normalized to 600 px high; the 840 x 600 implementation was retained at its capture size.
+- [Wispr / Vocabulary comparison](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/final-compare-wispr-vocabulary.png) — 2312 x 768 px. The 1220 x 768 source was retained at its capture size; the implementation was normalized to 768 px high.
 
 These are native AppKit/SwiftUI screenshots, so CSS viewport size and browser `deviceScaleFactor` are not applicable. The page capture pixel sizes are 840 x 600, the sheet is 420 x 280, and the only comparison normalization was the explicit height normalization above; no browser-density or device-frame conversion was applied.
 
@@ -50,7 +55,7 @@ The combined Stats / Appearance comparison makes the sidebar/chrome relationship
 | Icons | System symbols and standard macOS controls are visually consistent with the native Settings shell. The traffic lights and standard navigation affordances remain visible and comfortably inset. |
 | States and interactions | The inspected states include selected navigation, the empty Vocabulary page, Add New sheet, installed connector, and connected Codex profile. Add New, search/sort/reload, connector/profile actions, and recovery/task controls are legible in their intended destinations. |
 | Accessibility | Accessibility labels are present in the exact Computer Use tree for the inspected controls and destinations. Native semantic controls and system symbols remain the basis of the interaction surface; this visual pass does not claim a substitute for exhaustive assistive-technology testing. |
-| Viewport resilience | The default 840 x 600 window remains stable across all six destinations. The minimum 760 x 520 boundary is covered by the hosted AppKit geometry test; a live resize screenshot was not obtained (see residual evidence limitation). |
+| Viewport resilience | The default 840 x 600 window remains stable across all six destinations, including the live scroll-to-navigation reset. The minimum 760 x 520 boundary is covered by the hosted AppKit geometry test; a live resize screenshot was not obtained (see residual evidence limitation). |
 | AI-shortcut artifacts | The final composition avoids generic card soup, decorative blobs, fake imagery, emoji, and handcrafted SVG substitutes. Grouped surfaces are restrained and serve information hierarchy rather than acting as decoration. |
 
 ## Findings
@@ -61,10 +66,11 @@ No actionable P0, P1, or P2 findings remain in the final pass. The remaining vie
 
 1. Earlier P2 — `compare-stats-appearance.png` showed an opaque rectangular List layer flattening the rounded sidebar material. The fix was `.scrollContentBackground(.hidden)` plus `.background(Color.clear)`. Post-fix evidence in `after-compare-stats-appearance.png` shows one continuous rounded surface.
 2. Earlier P2 — `compare-wispr-vocabulary.png` repeated two near-identical teaching sentences. The destination description was changed to `Manage personal vocabulary and dictation corrections.` while retaining `Teach Fleck the words and phrases that matter to you` as the task headline. Post-fix evidence is in `after-compare-wispr-vocabulary.png`.
+3. Earlier P2 / fresh-review concern — one shared `HostingScrollView` could retain a tall page’s offset after navigation. The detail `ScrollView` now has destination identity via `.id(selectedSection)`, and a hosted transition test scrolls Dictation before switching through all six destinations, requiring a fresh scroll view and a header within the accepted top band. Post-fix visual evidence is `final-transition-01-dictation-scrolled.png` and `final-transition-02-general-reset.png`; the test passed 1/1.
 
 ## Open questions and evidence limits
 
-Computer Use corner drag did not change the Settings window from 840 x 600. Therefore the 760 x 520 minimum boundary remains covered by the hosted AppKit geometry test rather than a live resize screenshot. This is an evidence limitation, not an actionable visual finding.
+Computer Use corner drag did not change the Settings window from 840 x 600, so a live 760 x 520 resize screenshot remains unavailable and that minimum boundary is covered by the hosted AppKit geometry test. Live Computer Use does verify the scroll-to-navigation reset at 840 x 600. This is an evidence limitation, not an actionable visual finding.
 
 ## Implementation checklist
 
@@ -72,7 +78,7 @@ Computer Use corner drag did not change the Settings window from 840 x 600. Ther
 - [x] Compare the Wispr dictionary task structure with the final Vocabulary implementation.
 - [x] Inspect all six Settings destinations and the Add New sheet in the final bundle.
 - [x] Evaluate typography, spacing/layout rhythm, colors/tokens, image/asset fidelity, copy/content, icons, states/interactions, accessibility, viewport resilience, and AI-shortcut artifacts.
-- [x] Record earlier P2 findings, fixes, and post-fix evidence.
+- [x] Record earlier P2 findings, the scroll-reset fix, and post-fix evidence.
 
 ## Follow-up polish
 
