@@ -692,7 +692,7 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("Toggle(\"Correct a misspelling\""))
   #expect(settingsSource.contains("TextField(\"Correct from\""))
   #expect(settingsSource.contains("Button(\"Delete Word\", role: .destructive)"))
-  #expect(settingsSource.contains("Image(systemName: \"xmark.circle.fill\")"))
+  #expect(settingsSource.contains("Image(systemName: \"xmark\")"))
   #expect(!settingsSource.contains(".searchable("))
   #expect(settingsSource.contains("private var filterTabs: some View"))
   #expect(settingsSource.contains("Button(filter.rawValue)"))
@@ -757,6 +757,35 @@ func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
   #expect(settingsSource.contains("Use this word in dictation"))
   #expect(!settingsSource.contains("Sync"))
   #expect(!settingsSource.contains("Synced"))
+}
+
+@Test
+func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismissal() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(!settingsSource.contains("ViewThatFits(in: .horizontal)"))
+  #expect(!settingsSource.contains("private var toolbarRows: some View"))
+  #expect(!settingsSource.contains(".textFieldStyle(.roundedBorder)"))
+  #expect(settingsSource.contains("private var searchSurface: some View"))
+  #expect(settingsSource.contains(".textFieldStyle(.plain)"))
+  #expect(settingsSource.contains(".frame(height: 30)"))
+  #expect(settingsSource.contains("RoundedRectangle(cornerRadius: 10, style: .continuous)"))
+  #expect(settingsSource.contains("@Environment(\\.accessibilityReduceMotion) private var reduceMotion"))
+  #expect(settingsSource.contains("AppMotion(reduceMotion: reduceMotion)"))
+  #expect(settingsSource.contains("openSearch(source: .pointer)"))
+  #expect(settingsSource.contains("withAnimation(motion.presentationAnimation(for: source))"))
+  #expect(settingsSource.contains(".onExitCommand"))
+  #expect(settingsSource.contains("closeSearch(source: .keyboard)"))
+  #expect(settingsSource.contains("viewModel.query = \"\""))
+  #expect(settingsSource.contains("Clear vocabulary search"))
+  #expect(settingsSource.contains("xmark"))
 }
 
 @Test

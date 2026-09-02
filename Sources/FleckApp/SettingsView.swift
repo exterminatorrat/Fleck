@@ -1058,6 +1058,7 @@
   }
 
   private struct PersonalDictionarySettingsSection: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
     @State private var showsImporter = false
@@ -1069,6 +1070,10 @@
     @State private var isReloading = false
 
     private let maximumTransferBytes = 64 * 1024 + 256
+
+    private var motion: AppMotion {
+      AppMotion(reduceMotion: reduceMotion)
+    }
 
     var body: some View {
       VStack(alignment: .leading, spacing: 16) {
@@ -1179,9 +1184,21 @@
     }
 
     private var toolbar: some View {
-      ViewThatFits(in: .horizontal) {
+      ZStack(alignment: .trailing) {
         toolbarRow
-        toolbarRows
+          .opacity(isSearchExpanded ? 0 : 1)
+          .accessibilityHidden(isSearchExpanded)
+          .allowsHitTesting(!isSearchExpanded)
+        if isSearchExpanded {
+          searchSurface
+            .transition(.opacity)
+        }
+      }
+      .frame(maxWidth: .infinity)
+      .frame(height: 30)
+      .onExitCommand {
+        guard isSearchExpanded else { return }
+        closeSearch(source: .keyboard)
       }
     }
 
@@ -1190,25 +1207,9 @@
         filterTabs
         Spacer(minLength: 8)
         summaryLabel
-        searchControl
+        searchTrigger
         sortControl
         reloadControl
-      }
-    }
-
-    private var toolbarRows: some View {
-      VStack(alignment: .leading, spacing: 8) {
-        HStack(spacing: 8) {
-          filterTabs
-          Spacer(minLength: 8)
-          summaryLabel
-        }
-        HStack(spacing: 8) {
-          Spacer(minLength: 8)
-          searchControl
-          sortControl
-          reloadControl
-        }
       }
     }
 
@@ -1546,42 +1547,78 @@
       }
     }
 
-    @ViewBuilder
-    private var searchControl: some View {
-      HStack(spacing: 6) {
+    private var searchTrigger: some View {
+      Button {
+        openSearch(source: .pointer)
+      } label: {
+        Image(systemName: "magnifyingglass")
+      }
+      .buttonStyle(.plain)
+      .keyboardShortcut("f", modifiers: .command)
+      .help("Search vocabulary (⌘F)")
+      .accessibilityLabel("Search vocabulary")
+      .accessibilityHint("Focuses the vocabulary search field")
+    }
+
+    private var searchSurface: some View {
+      HStack(spacing: 7) {
+        Image(systemName: "magnifyingglass")
+          .foregroundStyle(.secondary)
+          .accessibilityHidden(true)
+        TextField("Search vocabulary", text: $viewModel.query)
+          .textFieldStyle(.plain)
+          .focused($isSearchFocused)
+          .accessibilityLabel("Search vocabulary")
+          .accessibilityValue(viewModel.query.isEmpty ? "No search" : viewModel.query)
+          .accessibilityHint("Searches saved words and corrections")
         Button {
-          isSearchExpanded = true
-          isSearchFocused = true
+          closeSearch(source: .pointer)
         } label: {
-          Image(systemName: "magnifyingglass")
+          Image(systemName: "xmark")
         }
         .buttonStyle(.plain)
-        .keyboardShortcut("f", modifiers: .command)
-        .help("Search vocabulary (⌘F)")
-        .accessibilityLabel("Search vocabulary")
-        .accessibilityHint("Focuses the vocabulary search field")
-
-        if isSearchExpanded {
-          TextField("Search vocabulary", text: $viewModel.query)
-            .textFieldStyle(.roundedBorder)
-            .focused($isSearchFocused)
-            .frame(minWidth: 120, idealWidth: 160, maxWidth: 180)
-            .accessibilityLabel("Search vocabulary")
-            .accessibilityValue(viewModel.query.isEmpty ? "No search" : viewModel.query)
-            .accessibilityHint("Searches saved words and corrections")
-
-          if !viewModel.query.isEmpty {
-            Button {
-              viewModel.query = ""
-              isSearchFocused = true
-            } label: {
-              Image(systemName: "xmark.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Clear vocabulary search")
-            .accessibilityHint("Clears the current vocabulary search")
-          }
+        .help("Close search (Esc)")
+        .accessibilityLabel("Clear vocabulary search")
+        .accessibilityHint("Clears search and closes vocabulary search")
+      }
+      .padding(.horizontal, 10)
+      .frame(width: 236, height: 30)
+      .background {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        if reduceTransparency {
+          shape.fill(Color(nsColor: .controlBackgroundColor))
+            .overlay { shape.fill(Color.primary.opacity(0.03)) }
+            .overlay { shape.stroke(Color.primary.opacity(0.10), lineWidth: 1) }
+        } else if #available(macOS 26, *) {
+          shape.fill(.clear)
+            .glassEffect(
+              Glass.regular.tint(Color.black.opacity(0.18)),
+              in: shape
+            )
+        } else {
+          shape.fill(.ultraThinMaterial)
+            .overlay { shape.fill(Color.black.opacity(0.10)) }
         }
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .stroke(.separator.opacity(0.5), lineWidth: 1)
+      }
+    }
+
+    private func openSearch(source: AppInteractionSource) {
+      withAnimation(motion.presentationAnimation(for: source)) {
+        isSearchExpanded = true
+        isSearchFocused = true
+      }
+    }
+
+    private func closeSearch(source: AppInteractionSource) {
+      withAnimation(motion.presentationAnimation(for: source)) {
+        isSearchExpanded = false
+        isSearchFocused = false
+        viewModel.query = ""
       }
     }
 
