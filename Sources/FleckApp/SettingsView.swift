@@ -328,26 +328,77 @@
     }
   }
 
+  struct SettingsPreferenceRow<Accessory: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private let title: String
+    private let detail: String
+    private let accessory: Accessory
+
+    init(
+      _ title: String,
+      detail: String,
+      @ViewBuilder accessory: () -> Accessory
+    ) {
+      self.title = title
+      self.detail = detail
+      self.accessory = accessory()
+    }
+
+    var body: some View {
+      HStack(alignment: .top, spacing: 16) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(title)
+            .font(.body.weight(.semibold))
+          Text(detail)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        accessory
+          .controlSize(.small)
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 12)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        if reduceTransparency {
+          shape.fill(Color(nsColor: .controlBackgroundColor))
+            .overlay { shape.fill(Color.primary.opacity(0.03)) }
+            .overlay { shape.stroke(Color.primary.opacity(0.10), lineWidth: 1) }
+        } else if #available(macOS 26, *) {
+          shape.fill(.clear)
+            .glassEffect(
+              Glass.regular.tint(Color.black.opacity(0.18)),
+              in: shape
+            )
+        } else {
+          shape.fill(.ultraThinMaterial)
+            .overlay { shape.fill(Color.black.opacity(0.10)) }
+        }
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+  }
+
   private struct SettingsToggleRow: View {
     let title: String
     let detail: String
     @Binding var isOn: Bool
 
     var body: some View {
-      Toggle(isOn: $isOn) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(title)
-          Text(detail)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
+      SettingsPreferenceRow(title, detail: detail) {
+        Toggle(isOn: $isOn) { EmptyView() }
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .controlSize(.small)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(title)
+          .accessibilityHint(detail)
       }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel(title)
-      .accessibilityHint(detail)
       .accessibilityIdentifier(title)
-      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
@@ -488,17 +539,25 @@
     }
 
     private var appearance: some View {
-      VStack(alignment: .leading, spacing: 16) {
-        SettingsSectionCard("Interface") {
-          LabeledContent("Theme") {
-            Picker("Theme", selection: preferenceBinding(\.theme)) {
-              ForEach(AppTheme.allCases, id: \.self) { theme in
-                Text(theme.rawValue.capitalized).tag(theme)
-              }
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Interface")
+          .font(.headline)
+        SettingsPreferenceRow(
+          "Theme",
+          detail: "Choose the overall look for Fleck."
+        ) {
+          Picker("Theme", selection: preferenceBinding(\.theme)) {
+            ForEach(AppTheme.allCases, id: \.self) { theme in
+              Text(theme.rawValue.capitalized).tag(theme)
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
           }
+          .labelsHidden()
+          .pickerStyle(.menu)
+        }
+        SettingsPreferenceRow(
+          "Accent color",
+          detail: "Choose the color used for selections and actions."
+        ) {
           SettingsColorButton(
             title: "Accent color",
             currentHex: appState.preferences.accentHex,
@@ -510,7 +569,13 @@
           }
         }
 
-        SettingsSectionCard("Editor canvas") {
+        Text("Editor canvas")
+          .font(.headline)
+          .padding(.top, 4)
+        SettingsPreferenceRow(
+          "Editor text color",
+          detail: "Choose the color used for note text."
+        ) {
           SettingsColorButton(
             title: "Editor text color",
             currentHex: appState.preferences.editorTextHex,
@@ -519,6 +584,11 @@
           ) { hex in
             appState.updatePreferences { $0.editorTextHex = hex }
           }
+        }
+        SettingsPreferenceRow(
+          "Editor background",
+          detail: "Choose the canvas color behind your notes."
+        ) {
           SettingsColorButton(
             title: "Editor background",
             currentHex: appState.preferences.editorBackgroundHex,
@@ -527,35 +597,46 @@
           ) { hex in
             appState.updatePreferences { $0.editorBackgroundHex = hex }
           }
-          LabeledContent("Glass opacity") {
-            Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
-              Text("Glass opacity")
-            }
-            .labelsHidden()
+        }
+        SettingsPreferenceRow(
+          "Glass opacity",
+          detail: "Adjust how much of the window shows through Fleck surfaces."
+        ) {
+          Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
+            Text("Glass opacity")
           }
+          .labelsHidden()
+          .frame(width: 150)
         }
 
-        SettingsSectionCard("Menu size") {
-          LabeledContent("Width") {
-            Stepper(
-              value: preferenceBinding(\.panelWidth), in: 380...800, step: 20
-            ) {
-              Text("\(Int(appState.preferences.panelWidth)) pt")
-            }
+        Text("Menu size")
+          .font(.headline)
+          .padding(.top, 4)
+        SettingsPreferenceRow(
+          "Width",
+          detail: "Set the width of the menu bar notes panel."
+        ) {
+          Stepper(
+            value: preferenceBinding(\.panelWidth), in: 380...800, step: 20
+          ) {
+            Text("\(Int(appState.preferences.panelWidth)) pt")
           }
-          LabeledContent("Height") {
-            Stepper(
-              value: preferenceBinding(\.panelHeight), in: 300...800, step: 20
-            ) {
-              Text("\(Int(appState.preferences.panelHeight)) pt")
-            }
+        }
+        SettingsPreferenceRow(
+          "Height",
+          detail: "Set the height of the menu bar notes panel."
+        ) {
+          Stepper(
+            value: preferenceBinding(\.panelHeight), in: 300...800, step: 20
+          ) {
+            Text("\(Int(appState.preferences.panelHeight)) pt")
           }
         }
       }
     }
 
     private var editing: some View {
-      SettingsSectionCard("Behavior") {
+      VStack(alignment: .leading, spacing: 12) {
         SettingsToggleRow(
           title: "Create lists automatically",
           detail: "Recognize list-shaped lines while you edit.",
@@ -573,48 +654,48 @@
             get: { appState.preferences.launchAtLogin },
             set: { appState.setLaunchAtLogin($0) }
           ))
-        Text(
-          "Notes are stored locally as readable Markdown files with a small JSON workspace manifest."
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
       }
     }
 
     private var shortcuts: some View {
-      SettingsSectionCard("Keyboard shortcuts") {
+      VStack(alignment: .leading, spacing: 12) {
         let conflicts = Shortcut.conflicts(in: appState.preferences.shortcuts)
         ForEach(Shortcut.Action.allCases, id: \.self) { action in
           let shortcut = appState.preferences.shortcuts.first(where: { $0.action == action })
-          VStack(alignment: .leading, spacing: 5) {
-            HStack {
-              Text(action.title)
-              Spacer()
-              ShortcutRecorder(
-                action: action,
-                shortcut: shortcut,
-                isRecording: recordingSelection.action == action,
-                onBegin: { recordingSelection.begin(action) },
-                onCapture: { chord in
-                  recordShortcut(action, chord: chord)
-                },
-                onCancel: { recordingSelection.cancel() }
-              )
-              Button(shortcut?.key == nil ? "Restore" : "Remove") {
-                recordingSelection.cancel()
-                setShortcutEnabled(action, enabled: shortcut?.key == nil)
+          SettingsPreferenceRow(
+            action.title,
+            detail: "Set the key combination used to \(action.title.lowercased())."
+          ) {
+            VStack(alignment: .trailing, spacing: 4) {
+              HStack(spacing: 8) {
+                ShortcutRecorder(
+                  action: action,
+                  shortcut: shortcut,
+                  isRecording: recordingSelection.action == action,
+                  onBegin: { recordingSelection.begin(action) },
+                  onCapture: { chord in
+                    recordShortcut(action, chord: chord)
+                  },
+                  onCancel: { recordingSelection.cancel() }
+                )
+                Button(shortcut?.key == nil ? "Restore" : "Remove") {
+                  recordingSelection.cancel()
+                  setShortcutEnabled(action, enabled: shortcut?.key == nil)
+                }
               }
-            }
-            if shortcut?.isEnabled == true, shortcut?.modifiers.isEmpty == true {
-              Text(
-                "This shortcut may replace normal typing or navigation while Fleck is active."
-              )
-              .font(.caption)
-              .foregroundStyle(.secondary)
-            }
-            if conflicts.contains(action) {
-              Label("Conflicts with another shortcut", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption).foregroundStyle(.orange)
+              if shortcut?.isEnabled == true, shortcut?.modifiers.isEmpty == true {
+                Text(
+                  "This shortcut may replace normal typing or navigation while Fleck is active."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+              }
+              if conflicts.contains(action) {
+                Label("Conflicts with another shortcut", systemImage: "exclamationmark.triangle.fill")
+                  .font(.caption)
+                  .foregroundStyle(.orange)
+              }
             }
           }
         }
@@ -627,7 +708,7 @@
     }
 
     private var dictation: some View {
-      VStack(alignment: .leading, spacing: 16) {
+      VStack(alignment: .leading, spacing: 12) {
         readiness
         models
         capture
@@ -645,29 +726,29 @@
 
     private var readiness: some View {
       let isReady = availabilityIssues.isEmpty && recoveryActions.isEmpty
-      return SettingsSectionCard(DictationSettingsGroup.readiness.rawValue) {
-        Label(
-          isReady ? "Ready" : "Needs attention",
-          systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-        )
-        .font(.body.weight(.medium))
-
-        if isReady {
-          Text("Dictation is ready to capture and process your voice locally.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        } else {
-          ForEach(availabilityIssues, id: \.title) { row in
-            Label(
-              "\(row.title) — \(row.detail)",
-              systemImage: "info.circle"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          }
-          ForEach(recoveryActions, id: \.pane) { action in
-            Button(action.title) {
-              NSWorkspace.shared.open(action.url)
+      return SettingsPreferenceRow(
+        DictationSettingsGroup.readiness.rawValue,
+        detail: isReady
+          ? "Dictation is ready to capture and process your voice locally."
+          : "Review the items below before starting a capture."
+      ) {
+        VStack(alignment: .trailing, spacing: 5) {
+          Label(
+            isReady ? "Ready" : "Needs attention",
+            systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+          )
+          .font(.body.weight(.medium))
+          if !isReady {
+            ForEach(availabilityIssues, id: \.title) { row in
+              Text("\(row.title) — \(row.detail)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+            }
+            ForEach(recoveryActions, id: \.pane) { action in
+              Button(action.title) {
+                NSWorkspace.shared.open(action.url)
+              }
             }
           }
         }
@@ -675,50 +756,54 @@
     }
 
     private var capture: some View {
-      SettingsSectionCard(DictationSettingsGroup.capture.rawValue) {
-        LabeledContent("Modifier key") {
-          Picker("Modifier key", selection: dictationModifierBinding) {
-            ForEach(DictationModifierKey.allCases, id: \.self) { key in
-              Text(
-                key == .rightOption
-                  ? "\(key.displayName) — Recommended"
-                  : key.displayName
-              ).tag(key)
-            }
-          }
-          .labelsHidden()
-          .disabled(!dictationModifierPresentation.isPickerEnabled)
-        }
-
-        VStack(alignment: .leading, spacing: 4) {
-          Text(dictationModifierPresentation.statusCopy)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          if let guidance = dictationModifierPresentation.guidanceCopy {
-            Text(guidance)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-          if let action = dictationModifierPresentation.recoveryAction {
-            switch action {
-            case .enableInputMonitoring:
-              Button("Enable Input Monitoring") {
-                Task { @MainActor in
-                  guard let settings = await runtime.recoverModifierMonitoring() else { return }
-                  runtime.openSystemSettings(settings)
-                }
-              }
-            case .retry:
-              Button("Retry") {
-                Task {
-                  _ = await runtime.retryModifierMonitoring()
-                }
+      VStack(alignment: .leading, spacing: 12) {
+        Text(DictationSettingsGroup.capture.rawValue)
+          .font(.headline)
+        SettingsPreferenceRow(
+          "Modifier key",
+          detail: dictationModifierPresentation.statusCopy
+        ) {
+          VStack(alignment: .trailing, spacing: 4) {
+            Picker("Modifier key", selection: dictationModifierBinding) {
+              ForEach(DictationModifierKey.allCases, id: \.self) { key in
+                Text(
+                  key == .rightOption
+                    ? "\(key.displayName) — Recommended"
+                    : key.displayName
+                ).tag(key)
               }
             }
+            .labelsHidden()
+            .disabled(!dictationModifierPresentation.isPickerEnabled)
+            if let guidance = dictationModifierPresentation.guidanceCopy {
+              Text(guidance)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+            }
+            if let action = dictationModifierPresentation.recoveryAction {
+              switch action {
+              case .enableInputMonitoring:
+                Button("Enable Input Monitoring") {
+                  Task { @MainActor in
+                    guard let settings = await runtime.recoverModifierMonitoring() else { return }
+                    runtime.openSystemSettings(settings)
+                  }
+                }
+              case .retry:
+                Button("Retry") {
+                  Task {
+                    _ = await runtime.retryModifierMonitoring()
+                  }
+                }
+              }
+            }
           }
         }
-
-        LabeledContent("Microphone") {
+        SettingsPreferenceRow(
+          "Microphone",
+          detail: "Choose which microphone Fleck uses for dictation."
+        ) {
           Picker("Microphone", selection: dictationMicrophoneBinding) {
             Text("Automatic").tag(String?.none)
             ForEach(microphones) { microphone in
@@ -727,12 +812,20 @@
           }
           .labelsHidden()
         }
-        LabeledContent("Recognition language", value: "English")
+        SettingsPreferenceRow(
+          "Recognition language",
+          detail: "Choose the language used to recognize your dictation."
+        ) {
+          Text("English")
+            .foregroundStyle(.secondary)
+        }
       }
     }
 
     private var experienceAndHistory: some View {
-      SettingsSectionCard(DictationSettingsGroup.experience.rawValue) {
+      VStack(alignment: .leading, spacing: 12) {
+        Text(DictationSettingsGroup.experience.rawValue)
+          .font(.headline)
         SettingsToggleRow(
           title: "Show status capsule",
           detail: "Show a compact status surface while Fleck is listening.",
@@ -743,8 +836,13 @@
           detail: "Keep successful transcripts on this Mac for up to 30 days.",
           isOn: dictationPreferenceBinding(\.dictationHistoryEnabled)
         )
-        Button("Clear History", role: .destructive) {
-          showsHistoryClearConfirmation = true
+        SettingsPreferenceRow(
+          "Clear History",
+          detail: "Remove all local transcript records from this Mac."
+        ) {
+          Button("Clear History", role: .destructive) {
+            showsHistoryClearConfirmation = true
+          }
         }
       }
     }
@@ -764,16 +862,23 @@
     }
 
     private var models: some View {
-      SettingsSectionCard(DictationSettingsGroup.models.rawValue) {
-        LabeledContent("Dictation") {
+      VStack(alignment: .leading, spacing: 12) {
+        Text(DictationSettingsGroup.models.rawValue)
+          .font(.headline)
+        SettingsPreferenceRow(
+          "Dictation model",
+          detail: "Use the local model that turns your voice into text."
+        ) {
           modelRow(
             presentation: admittedModelSettingsViewModel.presentation,
             viewModel: admittedModelSettingsViewModel,
             progressAccessibilityLabel: "Enhanced local dictation installation progress"
           )
         }
-
-        LabeledContent("Cleanup") {
+        SettingsPreferenceRow(
+          "Cleanup model",
+          detail: "Use the local model that polishes captured text."
+        ) {
           modelRow(
             presentation: cleanupAdmittedModelSettingsViewModel.presentation,
             viewModel: cleanupAdmittedModelSettingsViewModel,
@@ -1338,6 +1443,8 @@
           }
         ))
         .labelsHidden()
+        .toggleStyle(.switch)
+        .controlSize(.small)
         .accessibilityLabel("Enable \(entry.preferredForm)")
         .accessibilityValue(entry.isEnabled ? "Enabled" : "Disabled")
         .accessibilityHint("Toggles whether this entry is used for dictation")
@@ -1527,6 +1634,8 @@
             .accessibilityHint("The spelling Fleck should use")
 
           Toggle("Correct a misspelling", isOn: $usesCorrection)
+            .toggleStyle(.switch)
+            .controlSize(.small)
             .accessibilityHint("Shows a field for the spelling Fleck should replace")
           if usesCorrection {
             TextField("Correct from", text: $aliases)
@@ -1538,6 +1647,8 @@
           }
 
           Toggle("Use this word in dictation", isOn: $isEnabled)
+            .toggleStyle(.switch)
+            .controlSize(.small)
             .accessibilityHint("Keeps this vocabulary entry active for dictation")
         }
         .disabled(isMutationInFlight)
@@ -1794,8 +1905,6 @@
         isPresented = true
       } label: {
         HStack(spacing: 10) {
-          Text(title)
-          Spacer()
           RoundedRectangle(cornerRadius: 5)
             .fill(currentColor)
             .frame(width: 24, height: 18)

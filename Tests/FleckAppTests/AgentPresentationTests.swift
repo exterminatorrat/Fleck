@@ -73,6 +73,26 @@ struct AgentPresentationTests {
     #expect(!settings.contains("HStack {\n            addButton(\"Add Codex\""))
   }
 
+  @Test func agentSettingsUsesConsumerPreferenceRowsForVisibleConnectorContent() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let sourceRoot = testFile.deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp")
+    let settings = try String(
+      contentsOf: sourceRoot.appendingPathComponent("AgentSettingsView.swift"),
+      encoding: .utf8
+    )
+
+    #expect(settings.contains("SettingsPreferenceRow("))
+    #expect(settings.contains(
+      "SettingsPreferenceRow(\n          AgentConnectorPresentation.sectionTitle"
+    ))
+    #expect(settings.contains("SettingsPreferenceRow(integration.displayName"))
+    #expect(settings.contains("SettingsPreferenceRow(profile.displayName"))
+    #expect(settings.contains("SettingsPreferenceRow(\n        \"Set up a local integration\""))
+  }
+
   @Test func agentConnectorActionDecisionMatchesInstalledStateAndIsDispatched() throws {
     #expect(AgentConnectorPresentation.action(installed: false) == .install)
     #expect(AgentConnectorPresentation.action(installed: true) == .refresh)
@@ -87,7 +107,9 @@ struct AgentPresentationTests {
       encoding: .utf8
     )
 
-    #expect(settings.contains("switch AgentConnectorPresentation.action(installed:"))
+    #expect(settings.contains(
+      "switch AgentConnectorPresentation.action(\n                  installed:"
+    ))
     #expect(settings.contains("case .install:"))
     #expect(settings.contains("await appState.installAgentBridge()"))
     #expect(settings.contains("case .refresh:"))

@@ -31,11 +31,8 @@ import Testing
   #expect(source.contains("_cleanupAdmittedModelSettingsViewModel = ObservedObject("))
   #expect(source.contains("wrappedValue: runtime.cleanupAdmittedModelSettingsViewModel"))
   #expect(source.contains("AdmittedModelSettingsPresentation"))
-  #expect(source.contains(
-    "SettingsSectionCard(DictationSettingsGroup.models.rawValue)"
-  ))
-  #expect(source.contains(#"LabeledContent("Dictation")"#))
-  #expect(source.contains(#"LabeledContent("Cleanup")"#))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Dictation model\""))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Cleanup model\""))
   #expect(source.contains(
     "presentation: admittedModelSettingsViewModel.presentation,\n" +
       "            viewModel: admittedModelSettingsViewModel,"
@@ -50,9 +47,9 @@ import Testing
   #expect(source.contains("presentation.modelLabel"))
   #expect(source.contains("if presentation.showsStatus"))
   #expect(source.contains("if presentation.showsDetail"))
-  #expect(source.contains("SettingsSectionCard(\"Interface\")"))
-  #expect(source.contains("SettingsSectionCard(\"Editor canvas\")"))
-  #expect(source.contains("SettingsSectionCard(\"Menu size\")"))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Theme\""))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Editor text color\""))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Width\""))
   #expect(source.contains("ScrollView"))
   #expect(runtimeSource.contains(".defaultSize(width: 840, height: 600)"))
   #expect(runtimeSource.contains(".windowResizability(.contentMinSize)"))
@@ -284,6 +281,39 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
     "Teach Fleck the words and spellings that matter to you.")
 }
 
+@Test func SettingsPresentationUsesNativeSwitchesAndConsumerPreferenceRows() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let agentSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/AgentSettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(settingsSource.contains("struct SettingsPreferenceRow"))
+  #expect(settingsSource.contains(".toggleStyle(.switch)"))
+  #expect(settingsSource.contains(".controlSize(.small)"))
+  #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Create lists automatically\""))
+  #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Confirm before moving notes to Trash\""))
+  #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Launch at login\""))
+  #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Theme\""))
+  #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Modifier key\""))
+  #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Show status capsule\""))
+  #expect(!settingsSource.contains("SettingsSectionCard(\"Behavior\")"))
+  #expect(!settingsSource.contains("JSON workspace manifest"))
+  #expect(agentSource.contains("SettingsPreferenceRow("))
+  #expect(agentSource.contains(
+    "SettingsPreferenceRow(\n          AgentConnectorPresentation.sectionTitle"
+  ))
+  #expect(agentSource.contains("SettingsPreferenceRow(integration.displayName"))
+  #expect(agentSource.contains("SettingsPreferenceRow(profile.displayName"))
+}
+
 @Test func DictationSettingsUsesFleckNeutralGlassContractWithAdaptiveFallback() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
@@ -319,12 +349,12 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
     "Privacy",
   ])
   #expect(source.contains("private var readiness"))
-  #expect(source.contains("SettingsSectionCard(DictationSettingsGroup.capture.rawValue)"))
+  #expect(source.contains("Text(DictationSettingsGroup.capture.rawValue)"))
   #expect(source.contains(
-    "SettingsSectionCard(DictationSettingsGroup.experience.rawValue)"
+    "Text(DictationSettingsGroup.experience.rawValue)"
   ))
   #expect(source.contains("isReady ? \"Ready\" : \"Needs attention\""))
-  #expect(source.contains("SettingsSectionCard(DictationSettingsGroup.models.rawValue)"))
+  #expect(source.contains("Text(DictationSettingsGroup.models.rawValue)"))
   #expect(source.contains("DisclosureGroup(DictationSettingsGroup.privacy.rawValue)"))
   #expect(!source.contains("SettingsSectionCard(\"Controls\")"))
 }

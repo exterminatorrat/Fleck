@@ -122,39 +122,43 @@
     }
 
     private var connectorStatus: some View {
-      SettingsSectionCard(AgentConnectorPresentation.sectionTitle) {
-        LabeledContent(
-          "Status",
-          value: appState.isAgentConnectorInstalled ? "Installed" : "Not Installed"
-        )
-        Text(AgentConnectorPresentation.explanation)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        Button(
-          AgentConnectorPresentation.primaryActionTitle(
-            installed: appState.isAgentConnectorInstalled
-          )
+      VStack(alignment: .leading, spacing: 6) {
+        SettingsPreferenceRow(
+          AgentConnectorPresentation.sectionTitle,
+          detail: AgentConnectorPresentation.explanation
         ) {
-          Task {
-            switch AgentConnectorPresentation.action(installed: appState.isAgentConnectorInstalled) {
-            case .install:
-              await appState.installAgentBridge()
-            case .refresh:
-              await appState.refreshAgentConnectorStatus()
+          VStack(alignment: .trailing, spacing: 6) {
+            Text(appState.isAgentConnectorInstalled ? "Installed" : "Not Installed")
+              .font(.caption.weight(.medium))
+            Button(
+              AgentConnectorPresentation.primaryActionTitle(
+                installed: appState.isAgentConnectorInstalled
+              )
+            ) {
+              Task {
+                switch AgentConnectorPresentation.action(
+                  installed: appState.isAgentConnectorInstalled
+                ) {
+                case .install:
+                  await appState.installAgentBridge()
+                case .refresh:
+                  await appState.refreshAgentConnectorStatus()
+                }
+              }
             }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel(
+              AgentConnectorPresentation.primaryActionTitle(
+                installed: appState.isAgentConnectorInstalled
+              )
+            )
+            .accessibilityHint(
+              appState.isAgentConnectorInstalled
+                ? "Checks the local connector installation status"
+                : "Installs the local connector used by authorized integrations"
+            )
           }
         }
-        .buttonStyle(.borderedProminent)
-        .accessibilityLabel(
-          AgentConnectorPresentation.primaryActionTitle(
-            installed: appState.isAgentConnectorInstalled
-          )
-        )
-        .accessibilityHint(
-          appState.isAgentConnectorInstalled
-            ? "Checks the local connector installation status"
-            : "Installs the local connector used by authorized integrations"
-        )
         if let error = appState.agentCleanupError {
           Text(error).font(.caption).foregroundStyle(.orange)
         }
@@ -165,29 +169,17 @@
     }
 
     private var availableIntegrations: some View {
-      SettingsSectionCard("Available Integrations") {
-        VStack(alignment: .leading, spacing: 0) {
-          ForEach(AgentIntegrationKind.allCases) { integration in
-            integrationRow(integration)
-            if integration != AgentIntegrationKind.allCases.last {
-              Divider().padding(.vertical, 8)
-            }
-          }
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Available Integrations")
+          .font(.headline)
+        ForEach(AgentIntegrationKind.allCases) { integration in
+          integrationRow(integration)
         }
       }
     }
 
     private func integrationRow(_ integration: AgentIntegrationKind) -> some View {
-      HStack(alignment: .top, spacing: 12) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(integration.displayName)
-            .font(.body.weight(.medium))
-          Text(integration.description)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        Spacer(minLength: 8)
+      SettingsPreferenceRow(integration.displayName, detail: integration.description) {
         addButton(for: integration)
       }
     }
@@ -205,18 +197,55 @@
     }
 
     private var connectedProfiles: some View {
-      SettingsSectionCard("Connected Profiles") {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Connected Profiles")
+          .font(.headline)
         let profiles = AgentProfilesPresentation.active(appState.agentProfiles)
         if profiles.isEmpty {
           Text("No integrations connected yet. Add one above when the local connector is ready.")
             .font(.caption)
             .foregroundStyle(.secondary)
         } else {
-          VStack(alignment: .leading, spacing: 12) {
-            ForEach(profiles) { profile in
-              connectedProfile(profile)
-              if profile.id != profiles.last?.id {
-                Divider()
+          ForEach(profiles) { profile in
+            connectedProfile(profile)
+          }
+        }
+      }
+    }
+
+    private func connectedProfile(_ profile: AgentIntegrationProfile) -> some View {
+      SettingsPreferenceRow(profile.displayName, detail: lastConnection(profile)) {
+        VStack(alignment: .trailing, spacing: 7) {
+          Button("Revoke", role: .destructive) {
+            Task { await appState.revokeAgentProfile(profile) }
+          }
+          .accessibilityHint("Revokes this local integration profile")
+          if let capabilities = appState.capabilityProfile(profile.id) {
+            let summary = AgentCapabilityPresentation.profileSummary(
+              for: capabilities,
+              isActive: true,
+              workspace: appState.workspace,
+              unassignedLegacyNoteIDs: appState.agentCapabilityState.unassignedLegacyNoteIDs
+            )
+            VStack(alignment: .trailing, spacing: 4) {
+              Text(summary.scopeSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(summary.accessibilityLabel)
+              Button("Edit Capabilities…") {
+                profileForCapabilities = profile
+              }
+            }
+          }
+          if let snippet = appState.agentSetupSnippet(profileID: profile.id) {
+            VStack(alignment: .trailing, spacing: 4) {
+              Text(snippet)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(2)
+                .textSelection(.enabled)
+              Button("Copy") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(snippet, forType: .string)
               }
             }
           }
@@ -224,58 +253,11 @@
       }
     }
 
-    private func connectedProfile(_ profile: AgentIntegrationProfile) -> some View {
-      VStack(alignment: .leading, spacing: 7) {
-        HStack(alignment: .firstTextBaseline) {
-          VStack(alignment: .leading, spacing: 3) {
-            Text(profile.displayName)
-              .font(.body.weight(.medium))
-            Text(lastConnection(profile))
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-          Spacer()
-          Button("Revoke", role: .destructive) {
-            Task { await appState.revokeAgentProfile(profile) }
-          }
-          .accessibilityHint("Revokes this local integration profile")
-        }
-        if let capabilities = appState.capabilityProfile(profile.id) {
-          let summary = AgentCapabilityPresentation.profileSummary(
-            for: capabilities,
-            isActive: true,
-            workspace: appState.workspace,
-            unassignedLegacyNoteIDs: appState.agentCapabilityState.unassignedLegacyNoteIDs
-          )
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(summary.scopeSummary)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .accessibilityLabel(summary.accessibilityLabel)
-            Spacer()
-            Button("Edit Capabilities…") {
-              profileForCapabilities = profile
-            }
-          }
-        }
-        if let snippet = appState.agentSetupSnippet(profileID: profile.id) {
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(snippet)
-              .font(.system(.caption, design: .monospaced))
-              .lineLimit(2)
-              .textSelection(.enabled)
-            Spacer()
-            Button("Copy") {
-              NSPasteboard.general.clearContents()
-              NSPasteboard.general.setString(snippet, forType: .string)
-            }
-          }
-        }
-      }
-    }
-
     private var setupInstructions: some View {
-      SettingsSectionCard("Set up a local integration") {
+      SettingsPreferenceRow(
+        "Set up a local integration",
+        detail: "Connect a local tool and grant only the access it needs."
+      ) {
         VStack(alignment: .leading, spacing: 10) {
           setupStep(
             number: 1,

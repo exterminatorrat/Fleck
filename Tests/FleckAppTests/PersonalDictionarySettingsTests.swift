@@ -713,6 +713,26 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
 }
 
 @Test
+func personalDictionaryBooleanControlsUseCompactNativeSwitches() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(settingsSource.contains("Toggle(\"Use \\(entry.preferredForm)\""))
+  #expect(settingsSource.contains("Toggle(\"Correct a misspelling\""))
+  #expect(settingsSource.contains("Toggle(\"Use this word in dictation\""))
+  #expect(
+    settingsSource.components(separatedBy: ".toggleStyle(.switch)").count - 1 >= 4
+  )
+  #expect(settingsSource.contains(".controlSize(.small)"))
+}
+
+@Test
 func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
