@@ -144,9 +144,15 @@
             shape.fill(Color(nsColor: .windowBackgroundColor))
           } else if #available(macOS 26, *) {
             shape.fill(.clear)
-              .glassEffect(Glass.regular, in: shape)
+              .glassEffect(
+                Glass.regular.tint(Color.black.opacity(0.18)),
+                in: shape
+              )
           } else {
-            shape.fill(.regularMaterial)
+            shape.fill(.ultraThinMaterial)
+              .overlay {
+                shape.fill(Color.black.opacity(0.10))
+              }
           }
         }
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -291,8 +297,17 @@
           let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
           if reduceTransparency {
             shape.fill(Color(nsColor: .controlBackgroundColor))
+          } else if #available(macOS 26, *) {
+            shape.fill(.clear)
+              .glassEffect(
+                Glass.regular.tint(Color.black.opacity(0.18)),
+                in: shape
+              )
           } else {
-            shape.fill(.quaternary.opacity(0.35))
+            shape.fill(.ultraThinMaterial)
+              .overlay {
+                shape.fill(Color.black.opacity(0.10))
+              }
           }
         }
       }
@@ -389,7 +404,11 @@
         if reduceTransparency {
           Color(nsColor: .windowBackgroundColor)
         } else {
-          Rectangle().fill(.ultraThinMaterial)
+          Rectangle()
+            .fill(.ultraThinMaterial)
+            .overlay {
+              Color.black.opacity(0.10)
+            }
         }
       }
       .background(SettingsWindowChromeConfigurator())
@@ -932,9 +951,7 @@
             .accessibilityHint("Opens the vocabulary word editor")
         }
 
-        toolbar
-        messages
-        listSurface
+        dictionaryPanel
         transfer
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -1033,9 +1050,9 @@
 
     private var toolbarRow: some View {
       HStack(spacing: 8) {
-        summaryLabel
+        filterTabs
         Spacer(minLength: 8)
-        filterControl
+        summaryLabel
         searchControl
         sortControl
         reloadControl
@@ -1044,14 +1061,14 @@
 
     private var toolbarRows: some View {
       VStack(alignment: .leading, spacing: 8) {
-        HStack {
-          summaryLabel
+        HStack(spacing: 8) {
+          filterTabs
           Spacer(minLength: 8)
-          filterControl
+          summaryLabel
         }
         HStack(spacing: 8) {
-          searchControl
           Spacer(minLength: 8)
+          searchControl
           sortControl
           reloadControl
         }
@@ -1064,13 +1081,30 @@
         .foregroundStyle(.secondary)
     }
 
-    private var filterControl: some View {
-      Picker("Show", selection: $viewModel.filter) {
+    private var filterTabs: some View {
+      HStack(spacing: 2) {
         ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
-          Text(filter.rawValue).tag(filter)
+          Button(filter.rawValue) {
+            viewModel.filter = filter
+          }
+          .buttonStyle(.plain)
+          .font(.caption.weight(filter == viewModel.filter ? .semibold : .regular))
+          .foregroundStyle(filter == viewModel.filter ? .primary : .secondary)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 5)
+          .overlay(alignment: .bottom) {
+            if filter == viewModel.filter {
+              Capsule()
+                .fill(Color.accentColor)
+                .frame(height: 2)
+            }
+          }
+          .accessibilityLabel(filter.rawValue)
+          .accessibilityValue(filter == viewModel.filter ? "Selected" : "Available")
+          .accessibilityHint("Shows \(filter.rawValue.lowercased()) vocabulary")
         }
       }
-      .pickerStyle(.menu)
+      .accessibilityElement(children: .contain)
       .accessibilityLabel("Personal dictionary filter")
       .accessibilityValue(viewModel.filter.rawValue)
       .accessibilityHint("Filters entries or shows pending suggestions")
@@ -1135,6 +1169,44 @@
     }
 
     @ViewBuilder
+    private var dictionaryPanel: some View {
+      VStack(alignment: .leading, spacing: 0) {
+        toolbar
+          .padding(.horizontal, 12)
+          .padding(.top, 12)
+          .padding(.bottom, 10)
+        messages
+          .padding(.horizontal, 12)
+          .padding(.bottom, 8)
+        Divider()
+        listSurface
+      }
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+      .background {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        if reduceTransparency {
+          shape.fill(Color(nsColor: .controlBackgroundColor))
+        } else if #available(macOS 26, *) {
+          shape.fill(.clear)
+            .glassEffect(
+              Glass.regular.tint(Color.black.opacity(0.18)),
+              in: shape
+            )
+        } else {
+          shape.fill(.ultraThinMaterial)
+            .overlay {
+              shape.fill(Color.black.opacity(0.10))
+            }
+        }
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(.separator.opacity(0.5), lineWidth: 1)
+      }
+    }
+
+    @ViewBuilder
     private var listSurface: some View {
       VStack(alignment: .leading, spacing: 0) {
         if viewModel.filter == .suggestions {
@@ -1163,20 +1235,8 @@
           }
         }
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background {
-        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        if reduceTransparency {
-          shape.fill(Color(nsColor: .controlBackgroundColor))
-        } else {
-          shape.fill(.quaternary.opacity(0.28))
-        }
-      }
-      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .stroke(.separator.opacity(0.5), lineWidth: 1)
-      }
+      .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
+      .padding(.bottom, 12)
     }
 
     private var sortedEntries: [PersonalDictionaryEntry] {

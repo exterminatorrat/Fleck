@@ -694,7 +694,8 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("Button(\"Delete Word\", role: .destructive)"))
   #expect(settingsSource.contains("Image(systemName: \"xmark.circle.fill\")"))
   #expect(!settingsSource.contains(".searchable("))
-  #expect(settingsSource.contains("Picker(\"Show\""))
+  #expect(settingsSource.contains("private var filterTabs: some View"))
+  #expect(settingsSource.contains("Button(filter.rawValue)"))
   #expect(settingsSource.contains("Button(\"Approve\""))
   #expect(settingsSource.contains("Button(\"Edit and Approve\""))
   #expect(settingsSource.contains("Button(\"Dismiss\""))
@@ -736,6 +737,33 @@ func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
   #expect(settingsSource.contains("Use this word in dictation"))
   #expect(!settingsSource.contains("Sync"))
   #expect(!settingsSource.contains("Synced"))
+}
+
+@Test
+func personalDictionaryUsesOneLargeGlassPanelWithAccessibleFilterTabs() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(settingsSource.contains("private var dictionaryPanel: some View"))
+  #expect(settingsSource.contains("private var filterTabs: some View"))
+  #expect(settingsSource.contains(
+    "ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"
+  ))
+  #expect(settingsSource.contains("Button(filter.rawValue)"))
+  #expect(settingsSource.contains("if filter == viewModel.filter"))
+  #expect(settingsSource.contains(".accessibilityLabel(\"Personal dictionary filter\")"))
+  #expect(settingsSource.contains(".frame(maxWidth: .infinity, minHeight: 280"))
+  #expect(!settingsSource.contains("shape.fill(.quaternary.opacity(0.28))"))
+  #expect(!settingsSource.contains(#"Picker("Show""#))
+  #expect(settingsSource.contains("Label(\"Reload\", systemImage: \"arrow.clockwise\")"))
+  #expect(settingsSource.contains(#"Picker("Sort""#))
+  #expect(settingsSource.contains("DisclosureGroup(\"Transfer\")"))
 }
 
 @Test

@@ -284,6 +284,23 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
     "Teach Fleck the words and spellings that matter to you.")
 }
 
+@Test func DictationSettingsUsesFleckNeutralGlassContractWithAdaptiveFallback() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("Color.black.opacity(0.10)"))
+  #expect(source.contains("Glass.regular.tint(Color.black.opacity(0.18))"))
+  #expect(source.contains("shape.fill(.ultraThinMaterial)"))
+  #expect(source.contains("if reduceTransparency"))
+  #expect(source.contains("Color(nsColor: .windowBackgroundColor)"))
+}
+
 @Test func DictationSettingsUsesReadinessCaptureAndHistoryGroups() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
