@@ -10,6 +10,7 @@ import Testing
 struct FleckMCPServerTests {
   @Test func advertisesOnlyToolCapabilitiesAtVersionOne() async {
     let server = await FleckMCPServer.makeServer(
+      listTools: { FleckMCPToolRegistry.tools },
       callTool: { _ in
         try FleckMCPToolRegistry.result(
           for: AgentWorkspaceError(code: .invalidOperation)
@@ -28,12 +29,15 @@ struct FleckMCPServerTests {
   }
 
   @Test func registeredHandlersServeToolsOverInMemoryTransport() async throws {
-    let server = await FleckMCPServer.makeServer { parameters in
-      #expect(parameters.name == "list_shared_notes")
-      return try FleckMCPToolRegistry.result(
-        for: AgentWorkspaceResponse.sharedNotes(notes: [])
-      )
-    }
+    let server = await FleckMCPServer.makeServer(
+      listTools: { FleckMCPToolRegistry.tools },
+      callTool: { parameters in
+        #expect(parameters.name == "list_shared_notes")
+        return try FleckMCPToolRegistry.result(
+          for: AgentWorkspaceResponse.sharedNotes(notes: [])
+        )
+      }
+    )
     let transports = await InMemoryTransport.createConnectedPair()
     let client = Client(name: "test", version: "1")
 
@@ -49,6 +53,48 @@ struct FleckMCPServerTests {
 
     #expect(listed.tools.map(\.name) == FleckMCPToolRegistry.tools.map(\.name))
     #expect(called.isError == false)
+  }
+
+  @Test func listToolsRecomputesCurrentCapabilitiesForEveryRequest() async throws {
+    let summaries = SummarySequence([
+      AgentCapabilitySummary(
+        grantRevision: 1,
+        availableCapabilities: [.listNotes, .readNotes]
+      ),
+      AgentCapabilitySummary(
+        grantRevision: 2,
+        availableCapabilities: Set(AgentCapability.allCases)
+      ),
+    ])
+    let server = await FleckMCPServer.makeServer(
+      listTools: {
+        FleckMCPToolRegistry.tools(for: await summaries.next())
+      },
+      callTool: { _ in
+        try FleckMCPToolRegistry.result(
+          for: AgentWorkspaceError(code: .invalidOperation)
+        )
+      }
+    )
+    let transports = await InMemoryTransport.createConnectedPair()
+    let client = Client(name: "test", version: "1")
+
+    try await server.start(transport: transports.server)
+    _ = try await client.connect(transport: transports.client)
+    let first = try await client.listTools()
+    let second = try await client.listTools()
+    await client.disconnect()
+    await server.stop()
+
+    #expect(
+      first.tools.map(\.name) == [
+        "list_shared_notes",
+        "read_note",
+        "list_tasks",
+        "list_agent_activity",
+      ]
+    )
+    #expect(second.tools.map(\.name) == FleckMCPToolRegistry.tools.map(\.name))
   }
 
   @Test func canceledSingleAndBatchRequestsDoNotBlockEOFDrain() async {
@@ -116,6 +162,18 @@ struct FleckMCPServerTests {
 
 private enum TestTransportError: Error {
   case sendFailed
+}
+
+private actor SummarySequence {
+  private var summaries: [AgentCapabilitySummary]
+
+  init(_ summaries: [AgentCapabilitySummary]) {
+    self.summaries = summaries
+  }
+
+  func next() -> AgentCapabilitySummary {
+    summaries.removeFirst()
+  }
 }
 
 private actor FailingSendTransport: Transport {

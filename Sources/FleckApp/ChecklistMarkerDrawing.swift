@@ -3,6 +3,53 @@
   import QuartzCore
 
   enum ChecklistMarkerDrawing {
+    static let markerDiameter: CGFloat = 16
+    static let hitTargetSize: CGFloat = 28
+    static let minimumContentGap: CGFloat = 4
+    static let emptyListMarkerOpacity: CGFloat = 0.45
+
+    static func markerRect(around slotRect: CGRect) -> CGRect {
+      let idealX = slotRect.midX - markerDiameter / 2
+      let safeRightAlignedX = slotRect.maxX - markerDiameter - minimumContentGap
+      return CGRect(
+        x: min(idealX, safeRightAlignedX),
+        y: slotRect.midY - markerDiameter / 2,
+        width: markerDiameter,
+        height: markerDiameter
+      )
+    }
+
+    static func hitRect(around markerRect: CGRect) -> CGRect {
+      let width = max(hitTargetSize, markerRect.width + 8)
+      let height = max(hitTargetSize, markerRect.height + 8)
+      return CGRect(
+        x: markerRect.maxX - width,
+        y: markerRect.midY - height / 2,
+        width: width,
+        height: height
+      )
+    }
+
+    static func drawOpen(
+      in rect: NSRect,
+      strokeColor: NSColor,
+      hoverColor: NSColor?,
+      opacity: CGFloat = 1
+    ) {
+      guard let context = NSGraphicsContext.current?.cgContext else { return }
+      context.saveGState()
+      context.setAlpha(opacity)
+      if let hoverColor {
+        context.setFillColor(hoverColor.cgColor)
+        context.fillEllipse(in: rect.insetBy(dx: -3, dy: -3))
+      }
+      let lineWidth = max(1, rect.width * 0.09)
+      context.setStrokeColor(strokeColor.cgColor)
+      context.setLineWidth(lineWidth)
+      context.strokeEllipse(in: rect.insetBy(dx: lineWidth / 2, dy: lineWidth / 2))
+      context.restoreGState()
+    }
+
     static func checkmarkPath(in rect: CGRect, flipped: Bool) -> CGPath {
       let elbowY = rect.minY + rect.height * (flipped ? 0.66 : 0.34)
       let rightY = rect.minY + rect.height * (flipped ? 0.32 : 0.68)
@@ -18,9 +65,20 @@
       return path
     }
 
-    static func drawCompleted(in rect: NSRect, accentColor: NSColor, flipped: Bool) {
+    static func drawCompleted(
+      in rect: NSRect,
+      accentColor: NSColor,
+      flipped: Bool,
+      hoverColor: NSColor? = nil,
+      opacity: CGFloat = 1
+    ) {
       guard let context = NSGraphicsContext.current?.cgContext else { return }
       context.saveGState()
+      context.setAlpha(opacity)
+      if let hoverColor {
+        context.setFillColor(hoverColor.cgColor)
+        context.fillEllipse(in: rect.insetBy(dx: -3, dy: -3))
+      }
       context.setFillColor(accentColor.cgColor)
       context.fillEllipse(in: rect)
       context.addPath(checkmarkPath(in: rect, flipped: flipped))

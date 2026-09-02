@@ -91,7 +91,7 @@
             }
             guard
               response.protocolVersion
-                == AgentWireRequest.currentProtocolVersion
+                == request.protocolVersion
             else {
               throw AgentIPCClientError.protocolMismatch
             }
@@ -99,6 +99,9 @@
               throw error
             }
             guard let result = response.result else {
+              throw AgentIPCClientError.invalidFrame
+            }
+            guard result.isSupported(wireVersion: request.protocolVersion) else {
               throw AgentIPCClientError.invalidFrame
             }
             return result

@@ -157,6 +157,23 @@ private let changeID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
   }
 }
 
+@Test func capabilitiesCLICommandRemainsDeferred() {
+  do {
+    _ = try BridgeCommand.parse(
+      arguments: ["capabilities", "--profile", profileID.uuidString]
+    ) { "" }
+    Issue.record("Expected unknown command error")
+  } catch let error as BridgeParseError {
+    #expect(error.message == "Unknown command.")
+  } catch {
+    Issue.record("Unexpected error: \(error)")
+  }
+}
+
+@Test func helpDoesNotAdvertiseCapabilitiesCLICommand() {
+  #expect(!BridgeOutput.help.contains("capabilities"))
+}
+
 @Test func parserRequiresProfileAndWriteConcurrencyFields() {
   expectUsageError(["notes", "list"])
   expectUsageError([

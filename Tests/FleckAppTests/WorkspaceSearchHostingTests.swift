@@ -6,6 +6,394 @@ import Testing
 
 @testable import FleckApp
 
+@Suite(.serialized)
+struct WorkspaceSearchHostingTests {
+
+@Test @MainActor
+func WorkspaceSearchPresentationSelectsPointerAndKeyboardMotionKinds() {
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .pointer,
+      reduceMotion: false
+    ) == .inline
+  )
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .pointer,
+      reduceMotion: true
+    ) == .crossfade
+  )
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .keyboard,
+      reduceMotion: false
+    ) == .instant
+  )
+  #expect(
+    WorkspaceSearchPresentationKind.resolve(
+      activation: .keyboard,
+      reduceMotion: true
+    ) == .instant
+  )
+  #expect(WorkspaceSearchPresentationKind.inline.interactionSource == .pointer)
+  #expect(WorkspaceSearchPresentationKind.crossfade.interactionSource == .pointer)
+  #expect(WorkspaceSearchPresentationKind.instant.interactionSource == .keyboard)
+  #expect(WorkspaceSearchPresentationKind.inline.usesAnimatedDismissal)
+  #expect(WorkspaceSearchPresentationKind.crossfade.usesAnimatedDismissal)
+  #expect(!WorkspaceSearchPresentationKind.instant.usesAnimatedDismissal)
+
+  let controller = WorkspaceSearchController()
+  controller.present(presentation: .inline)
+  #expect(controller.presentationKind == .inline)
+  controller.dismiss()
+  controller.present(presentation: .crossfade)
+  #expect(controller.presentationKind == .crossfade)
+}
+
+@Test
+func WorkspaceSearchHostingUsesNoMatchedGeometryWiring() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let notesPanel = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+  let searchView = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/WorkspaceSearchView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(!notesPanel.contains("WorkspaceSearchTransition"))
+  #expect(!searchView.contains("WorkspaceSearchTransition"))
+  #expect(!searchView.contains("matchedGeometryEffect"))
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingUsesACompactTrailingSurfaceAt640Points() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-compact-640-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  searchController.present(presentation: .inline)
+  await settleWorkspaceSearchHost(host)
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  let queryFrame = queryField.convert(queryField.bounds, to: host)
+
+  #expect(queryFrame.width <= 320)
+  #expect(queryFrame.minX >= host.bounds.maxX - 370)
+  #expect(queryFrame.maxX <= host.bounds.maxX - 10)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-compact-380-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 380, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  searchController.present(presentation: .inline)
+  await settleWorkspaceSearchHost(host)
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  let queryFrame = queryField.convert(queryField.bounds, to: host)
+
+  #expect(queryFrame.width <= 320)
+  #expect(queryFrame.minX >= 10)
+  #expect(queryFrame.maxX <= host.bounds.maxX - 10)
+
+  let hStackSpacing: CGFloat = 8
+  let closeGlyphWidth: CGFloat = 15
+  let dismissPoint = NSPoint(
+    x: queryFrame.maxX + hStackSpacing + closeGlyphWidth / 2,
+    y: queryFrame.midY
+  )
+  #expect(dismissPoint.x >= host.bounds.maxX - 40)
+  #expect(dismissPoint.x <= host.bounds.maxX - 10)
+  clickWorkspaceSearchControl(host.convert(dismissPoint, to: nil), in: window)
+  await settleWorkspaceSearchHost(host)
+  #expect(!searchController.isPresented)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test
+func WorkspaceSearchDismissalsUseNotesPanelAnimationContract() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let notesPanel = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+  let searchView = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/WorkspaceSearchView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(notesPanel.contains("onDismiss: dismissWorkspaceSearch"))
+  #expect(notesPanel.contains("searchController.presentationKind.usesAnimatedDismissal"))
+  #expect(notesPanel.contains("motion.presentationAnimation(for: presentation.interactionSource)"))
+  #expect(!notesPanel.contains("value: searchController.isPresented"))
+  #expect(searchView.contains("let onDismiss: () -> Void"))
+  #expect(searchView.contains("onDismiss: onDismiss"))
+  #expect(searchView.contains("onDismiss()"))
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-pointer-focus-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let note = Note(title: "Focus title", body: "Keep this body")
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      editorCommands: commands,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let editor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == note.body }
+  )
+  #expect(window.makeFirstResponder(editor))
+  let bodySelection = NSRange(location: 2, length: 4)
+  editor.setSelectedRange(bodySelection)
+
+  let searchButton = try #require(workspaceSearchTrigger(in: host))
+  clickWorkspaceSearchControl(searchButton, in: window)
+  await settleWorkspaceSearchHost(host)
+
+  #expect(searchController.isPresented)
+  #expect(searchController.presentationKind == .inline)
+  sendWorkspaceSearchEscape(to: window)
+  await settleWorkspaceSearchHost(host)
+
+  #expect(!searchController.isPresented)
+  #expect(commands.textView === editor)
+  #expect(editor.selectedRange() == bodySelection)
+  #expect(window.firstResponder === editor)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingImmediateReopenSurvivesOldDisappearance() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-reopen-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  searchController.present(presentation: .inline)
+  let firstPresentationID = searchController.presentationID
+  await settleWorkspaceSearchHost(host)
+  searchController.dismiss()
+  searchController.present(presentation: .instant)
+  let reopenedPresentationID = searchController.presentationID
+  #expect(reopenedPresentationID != firstPresentationID)
+  searchController.dismiss(ifPresentationID: firstPresentationID)
+  #expect(searchController.isPresented)
+  searchController.setQuery("still open", in: state.workspace.notes)
+  await settleWorkspaceSearchHost(host)
+  try await Task.sleep(for: .milliseconds(400))
+  await settleWorkspaceSearchHost(host)
+
+  #expect(searchController.isPresented)
+  #expect(searchController.presentationKind == .instant)
+  #expect(searchController.query == "still open")
+
+  searchController.dismiss()
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingImmediateReopenKeepsQueryFocusAfterOldRestoreRetry()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-focus-reopen-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let note = Note(title: "Focus title", body: "Keep this body")
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let editor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == note.body }
+  )
+  #expect(window.makeFirstResponder(editor))
+
+  searchController.present(for: note.id)
+  await settleWorkspaceSearchHost(host)
+  let firstQueryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  #expect(window.makeFirstResponder(firstQueryField))
+
+  searchController.dismiss()
+  searchController.present(for: note.id)
+  var reopenedField: NSTextField?
+  for _ in 0..<8 {
+    host.layoutSubtreeIfNeeded()
+    reopenedField = hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+    if reopenedField != nil { break }
+    await Task.yield()
+  }
+  let reopenedQueryField = try #require(reopenedField)
+  #expect(window.makeFirstResponder(reopenedQueryField))
+  let reopenedQueryEditor = try #require(
+    reopenedQueryField.currentEditor() as? NSTextView
+  )
+  #expect(window.firstResponder === reopenedQueryEditor)
+
+  try await Task.sleep(for: .milliseconds(400))
+  await settleWorkspaceSearchHost(host)
+
+  #expect(searchController.isPresented)
+  #expect(window.firstResponder === reopenedQueryEditor)
+  #expect(reopenedQueryField.currentEditor() === reopenedQueryEditor)
+
+  searchController.dismiss()
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
 @Test @MainActor
 func WorkspaceSearchHostingPreservesSearchResultsAndNoteStateAcrossAccentUpdates()
   async throws
@@ -43,7 +431,19 @@ func WorkspaceSearchHostingPreservesSearchResultsAndNoteStateAcrossAccentUpdates
   searchController.present()
   await settleWorkspaceSearchHost(host)
   searchController.setQuery("cafe", in: state.workspace.notes)
-  await settleWorkspaceSearchHost(host)
+  let searchDeadline = ContinuousClock.now + .seconds(1)
+  while
+    (!searchController.resultsAreCurrent
+      || searchController.results.map(\.noteID) != [titleNoteID]),
+    ContinuousClock.now < searchDeadline
+  {
+    await Task.yield()
+  }
+  #expect(
+    searchController.resultsAreCurrent
+      && searchController.results.map(\.noteID) == [titleNoteID],
+    "Timed out waiting for the current workspace search result"
+  )
 
   #expect(searchController.results.map(\.noteID) == [titleNoteID])
   let initialResult = try #require(searchController.results.first)
@@ -957,6 +1357,8 @@ func WorkspaceSearchHostingDismissPreservesFocusScopeWorkspaceAndSaveGeneration(
   await runtime.shutdown()
 }
 
+}
+
 @MainActor
 private func hostedWorkspaceSearchDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T? {
   if let match = view as? T { return match }
@@ -986,6 +1388,65 @@ private func hostedWorkspaceSearchScrollViews(in view: NSView) -> [NSScrollView]
     scrollViews.append(contentsOf: hostedWorkspaceSearchScrollViews(in: subview))
   }
   return scrollViews
+}
+
+@MainActor
+private func workspaceSearchTrigger(in view: NSView) -> NSView? {
+  let headerControls = hostedWorkspaceSearchDescendants(in: view, as: NSView.self)
+    .filter { control in
+      guard String(describing: type(of: control)) == "KeyViewProxy" else { return false }
+      let frame = control.convert(control.bounds, to: view)
+      return frame.minY < 40 && frame.minX > view.bounds.midX
+    }
+    .sorted {
+      $0.convert($0.bounds, to: view).minX < $1.convert($1.bounds, to: view).minX
+    }
+  return headerControls.dropFirst().first
+}
+
+@MainActor
+private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow) {
+  let point = control.convert(
+    NSPoint(x: control.bounds.midX, y: control.bounds.midY),
+    to: nil
+  )
+  clickWorkspaceSearchControl(point, in: window)
+}
+
+@MainActor
+private func clickWorkspaceSearchControl(_ point: NSPoint, in window: NSWindow) {
+  let screenPoint = window.convertPoint(toScreen: point)
+  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    guard let event = NSEvent.mouseEvent(
+      with: eventType,
+      location: screenPoint,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 0,
+      clickCount: 1,
+      pressure: eventType == .leftMouseDown ? 1 : 0
+    ) else { continue }
+    NSApp.sendEvent(event)
+  }
+}
+
+@MainActor
+private func sendWorkspaceSearchEscape(to window: NSWindow) {
+  guard let event = NSEvent.keyEvent(
+    with: .keyDown,
+    location: .zero,
+    modifierFlags: [],
+    timestamp: ProcessInfo.processInfo.systemUptime,
+    windowNumber: window.windowNumber,
+    context: nil,
+    characters: "\u{1b}",
+    charactersIgnoringModifiers: "\u{1b}",
+    isARepeat: false,
+    keyCode: 53
+  ) else { return }
+  window.sendEvent(event)
 }
 
 @MainActor

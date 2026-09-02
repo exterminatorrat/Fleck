@@ -255,18 +255,19 @@ import Testing
   #expect(note.agentAccess == false)
   #expect(note.revision == 0)
   #expect(note.folderID == nil)
+  #expect(note.titleFontFamily == nil)
 
   let remaining = Note(
     id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
     title: "Remaining",
     body: "Keep this note"
   )
-  let restored = try await store.restore(
+  let restored = (try await store.restore(
     trashed,
     into: Workspace(notes: [remaining], selectedNoteID: remaining.id),
     preferences: .init(),
     generation: 1
-  )
+  )).workspace
 
   #expect(restored.notes.map(\.id) == [remaining.id, id])
   #expect(restored.notes.first == remaining)
@@ -274,6 +275,57 @@ import Testing
   #expect(restored.notes.last?.title == "Legacy trash")
   #expect(restored.notes.last?.body == "Legacy trash body")
   #expect(try await store.loadTrash().isEmpty)
+}
+
+@Test func titleFontFamilyRoundTripsThroughRootAndRecovery() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = LocalStore(rootURL: root)
+  let first = Note(title: "First", titleFontFamily: "Menlo")
+
+  try await store.save(
+    workspace: Workspace(notes: [first], selectedNoteID: first.id),
+    preferences: .init(),
+    generation: 1
+  )
+  #expect(try await store.loadSnapshot().workspace.notes.first?.titleFontFamily == "Menlo")
+
+  let second = Note(title: "Second", titleFontFamily: "Avenir")
+  try await store.save(
+    workspace: Workspace(notes: [second], selectedNoteID: second.id),
+    preferences: .init(),
+    generation: 2
+  )
+  try Data("corrupt".utf8).write(to: root.appendingPathComponent("preferences.json"))
+
+  let recovered = try await store.loadSnapshot()
+  #expect(recovered.source == .recovery)
+  #expect(recovered.workspace.notes.first?.titleFontFamily == "Menlo")
+}
+
+@Test func titleFontFamilyRoundTripsThroughTrashAndRestore() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let deleted = Note(title: "Restore me", titleFontFamily: "Courier")
+  let remaining = Note(title: "Remaining")
+  let activeWorkspace = Workspace(notes: [remaining], selectedNoteID: remaining.id)
+  let store = LocalStore(rootURL: root)
+
+  try await store.save(
+    workspace: activeWorkspace,
+    preferences: .init(),
+    trashedNotes: [deleted]
+  )
+  let trashedNote = try #require(await store.loadTrash().first)
+  #expect(trashedNote.note.titleFontFamily == "Courier")
+
+  let restored = try await store.restore(
+    trashedNote,
+    into: activeWorkspace,
+    preferences: .init()
+  )
+  #expect(restored.workspace.notes.last?.titleFontFamily == "Courier")
+  #expect(try await store.loadWorkspace().notes.last?.titleFontFamily == "Courier")
 }
 
 @Test func trashRetainsEntriesUntilThirtyDaysThenPurgesThem() async throws {
@@ -373,11 +425,11 @@ import Testing
   )
   let trashedNote = try #require(await store.loadTrash().first)
 
-  let restoredWorkspace = try await store.restore(
+  let restoredWorkspace = (try await store.restore(
     trashedNote,
     into: activeWorkspace,
     preferences: preferences
-  )
+  )).workspace
 
   #expect(restoredWorkspace.selectedNoteID == deleted.id)
   #expect(restoredWorkspace.notes.first == deleted)
@@ -386,6 +438,85 @@ import Testing
   #expect(try await store.loadPreferences() == preferences)
   #expect(
     !FileManager.default.fileExists(atPath: trashEntryURL(root: root, noteID: deleted.id).path))
+}
+
+@Test func restoreFailureBeforeManifestCommitLeavesTrashEntry() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let remaining = Note(title: "Remaining")
+  let deleted = Note(title: "Restore me")
+  let initialStore = LocalStore(rootURL: root)
+  try await initialStore.save(
+    workspace: Workspace(notes: [remaining], selectedNoteID: remaining.id),
+    preferences: .init(),
+    trashedNotes: [deleted],
+    generation: 1
+  )
+  try await initialStore.save(
+    workspace: Workspace(notes: [remaining], selectedNoteID: remaining.id),
+    preferences: .init(),
+    trashedNotes: [deleted],
+    generation: 2
+  )
+  let trashed = try #require(await initialStore.loadTrash().first)
+
+  let manifestURL = root.appendingPathComponent("workspace.json")
+  try FileManager.default.removeItem(at: manifestURL)
+  try FileManager.default.createDirectory(at: manifestURL, withIntermediateDirectories: true)
+
+  let restoringStore = LocalStore(rootURL: root)
+  var didThrow = false
+  do {
+    _ = try await restoringStore.restore(
+      trashed,
+      into: Workspace(notes: [remaining], selectedNoteID: remaining.id),
+      preferences: .init(),
+      generation: 3
+    )
+  } catch {
+    didThrow = true
+  }
+
+  #expect(didThrow)
+  #expect(
+    !(try await restoringStore.loadSnapshot().workspace.notes.contains {
+      $0.id == deleted.id
+    })
+  )
+  #expect(try await restoringStore.loadTrash().map(\.id) == [deleted.id])
+}
+
+@Test func restoreReturnsCommittedOutcomeWhenTrashCleanupFails() async throws {
+  let root = temporaryStoreURL()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let remaining = Note(title: "Remaining")
+  let deleted = Note(title: "Restore me")
+  let fileManager: FileManager = RestoreCleanupFailureFileManager(
+    failingURL: trashEntryURL(root: root, noteID: deleted.id)
+  )
+  let store = LocalStore(rootURL: root, fileManager: fileManager)
+  let activeWorkspace = Workspace(notes: [remaining], selectedNoteID: remaining.id)
+  try await store.save(
+    workspace: activeWorkspace,
+    preferences: .init(),
+    trashedNotes: [deleted],
+    generation: 1
+  )
+  let trashed = try #require(await store.loadTrash().first)
+
+  let outcome = try await store.restore(
+    trashed,
+    into: activeWorkspace,
+    preferences: .init(),
+    generation: 2
+  )
+  switch outcome {
+  case let .committed(workspace, trashCleanup):
+    #expect(workspace.notes.map(\.id) == [remaining.id, deleted.id])
+    #expect(trashCleanup == .failed)
+  }
+  #expect(try await store.loadWorkspace().notes.map(\.id) == [remaining.id, deleted.id])
+  #expect(try await store.loadTrash().map(\.id) == [deleted.id])
 }
 
 @Test func tabColorRoundTripsThroughTrashAndRestore() async throws {
@@ -406,11 +537,11 @@ import Testing
   let trashedNote = try #require(await store.loadTrash().first)
   #expect(trashedNote.note.tabColorHex == "#BF5AF2")
 
-  let restoredWorkspace = try await store.restore(
+  let restoredWorkspace = (try await store.restore(
     trashedNote,
     into: activeWorkspace,
     preferences: .init()
-  )
+  )).workspace
   #expect(restoredWorkspace.notes.last?.tabColorHex == "#BF5AF2")
   #expect(try await store.loadWorkspace().notes.last?.tabColorHex == "#BF5AF2")
 }
@@ -488,12 +619,12 @@ import Testing
     ) == .committed
   )
   let trashed = try #require(await store.loadTrash().first)
-  let restoredWorkspace = try await store.restore(
+  let restoredWorkspace = (try await store.restore(
     trashed,
     into: activeWorkspace,
     preferences: .init(),
     generation: 3
-  )
+  )).workspace
   #expect(try await store.loadTrash().isEmpty)
 
   #expect(
@@ -1090,12 +1221,12 @@ import Testing
 
   let restoredStore = LocalStore(rootURL: root)
   let trashedNote = try #require(await restoredStore.loadTrash().first)
-  let restoredWorkspace = try await restoredStore.restore(
+  let restoredWorkspace = (try await restoredStore.restore(
     trashedNote,
     into: reducedWorkspace,
     preferences: .init(),
     generation: 3
-  )
+  )).workspace
   #expect(restoredWorkspace.notes.map(\.id) == [remaining.id, deleted.id])
   #expect(
     try Dictionary(
@@ -2355,12 +2486,12 @@ import Testing
   #expect(trashMetadata["folderID"] as? String == folder.id.uuidString)
 
   let trashed = try #require(await store.loadTrash().first)
-  let restored = try await store.restore(
+  let restored = (try await store.restore(
     trashed,
     into: active,
     preferences: .init(),
     generation: 2
-  )
+  )).workspace
   #expect(restored.notes.map(\.title) == ["P1", "P2", "U1"])
   #expect(restored.notes[1] == restoredPinned)
 
@@ -2374,12 +2505,12 @@ import Testing
     generation: 3
   )
   let orphaned = try #require(await store.loadTrash().first)
-  let fallback = try await store.restore(
+  let fallback = (try await store.restore(
     orphaned,
     into: deletedFolderWorkspace,
     preferences: .init(),
     generation: 4
-  )
+  )).workspace
   #expect(fallback.notes.last?.id == later.id)
   #expect(fallback.notes.last?.folderID == nil)
 }
@@ -2441,6 +2572,24 @@ private final class SnapshotFailureController: @unchecked Sendable {
       hasFailed = true
       throw SnapshotTestError.failed
     }
+  }
+}
+
+private final class RestoreCleanupFailureFileManager: FileManager {
+  private let failingURL: URL
+  private var hasFailed = false
+
+  init(failingURL: URL) {
+    self.failingURL = failingURL
+    super.init()
+  }
+
+  override func removeItem(at URL: URL) throws {
+    if !hasFailed && URL.standardizedFileURL == failingURL.standardizedFileURL {
+      hasFailed = true
+      throw SnapshotTestError.failed
+    }
+    try super.removeItem(at: URL)
   }
 }
 

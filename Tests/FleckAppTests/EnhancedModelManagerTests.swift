@@ -7,6 +7,42 @@ import Testing
 
 @testable import FleckApp
 
+private let testSourceRepository = URL(
+  string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml"
+)!
+
+@MainActor
+private func testArtifactIdentity(
+  for manifest: EnhancedModelManifest
+) -> EnhancedModelArtifactIdentity {
+  EnhancedModelArtifactIdentity(
+    sourceRepository: testSourceRepository,
+    modelID: manifest.modelID,
+    revision: manifest.revision,
+    license: "test-license",
+    runtimeABI: "test-runtime",
+    conversion: "test-conversion",
+    quantization: "test-quantization",
+    files: manifest.files.map {
+      .init(path: $0.path, byteCount: $0.byteCount, sha256: $0.sha256)
+    },
+    downloadBytes: manifest.totalByteCount,
+    installedBytes: manifest.totalByteCount,
+    requiredCapacityBytes: EnhancedModelManager.requiredAvailableCapacity
+  )
+}
+
+private func testRemoteURL(
+  for file: EnhancedModelFile,
+  manifest: EnhancedModelManifest
+) throws -> URL {
+  try EnhancedModelManager.remoteURL(
+    for: file,
+    sourceRepository: testSourceRepository,
+    revision: manifest.revision
+  )
+}
+
 @Suite(.serialized)
 struct EnhancedModelManagerTests {
   @Test @MainActor func missingInstallIsNotInstalled() async throws {
@@ -51,6 +87,7 @@ struct EnhancedModelManagerTests {
     let manager = EnhancedModelManager(
       modelRootURL: root,
       manifest: testManifest,
+      artifactIdentity: testArtifactIdentity(for: testManifest),
       candidateEnabled: true,
       capacityProvider: {
         capacity.increment()
@@ -145,7 +182,7 @@ struct EnhancedModelManagerTests {
       let fixture = try Fixture()
       defer { fixture.remove() }
       let data = validResumeData()
-      let remoteURL = try EnhancedModelManager.remoteURL(
+      let remoteURL = try testRemoteURL(
         for: testManifest.files[0],
         manifest: testManifest
       )
@@ -187,7 +224,7 @@ struct EnhancedModelManagerTests {
       withIntermediateDirectories: true
     )
     try validResumeData().write(to: resumeFile)
-    let expectedURL = try EnhancedModelManager.remoteURL(
+    let expectedURL = try testRemoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
@@ -207,7 +244,7 @@ struct EnhancedModelManagerTests {
 
   @Test func productionResumeValidatorRejectsEverySyntheticPlist() throws {
     let downloader = URLSessionModelDownloader()
-    let pinnedURL = try EnhancedModelManager.remoteURL(
+    let pinnedURL = try testRemoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
@@ -262,7 +299,7 @@ struct EnhancedModelManagerTests {
   @Test func productionResumeTokenIsConsumedWhenIssued() throws {
     let downloader = URLSessionModelDownloader()
     let data = validResumeData()
-    let pinnedURL = try EnhancedModelManager.remoteURL(
+    let pinnedURL = try testRemoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
@@ -286,7 +323,7 @@ struct EnhancedModelManagerTests {
     let fixture = try Fixture()
     defer { fixture.remove() }
     let data = validResumeData()
-    let remoteURL = try EnhancedModelManager.remoteURL(
+    let remoteURL = try testRemoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
@@ -310,6 +347,7 @@ struct EnhancedModelManagerTests {
     let restartedManager = EnhancedModelManager(
       modelRootURL: fixture.root,
       manifest: testManifest,
+      artifactIdentity: testArtifactIdentity(for: testManifest),
       candidateEnabled: true,
       capacityProvider: { .max },
       architectureProvider: { true },
@@ -326,7 +364,7 @@ struct EnhancedModelManagerTests {
     let fixture = try Fixture()
     defer { fixture.remove() }
     let data = validResumeData()
-    let remoteURL = try EnhancedModelManager.remoteURL(
+    let remoteURL = try testRemoteURL(
       for: testManifest.files[0],
       manifest: testManifest
     )
@@ -360,6 +398,7 @@ struct EnhancedModelManagerTests {
     let restartedManager = EnhancedModelManager(
       modelRootURL: fixture.root,
       manifest: testManifest,
+      artifactIdentity: testArtifactIdentity(for: testManifest),
       candidateEnabled: true,
       capacityProvider: { .max },
       architectureProvider: { true },
@@ -432,6 +471,37 @@ struct EnhancedModelManagerTests {
     #expect(fixture.manager.state == .ready)
   }
 
+  @Test @MainActor
+  func customLocalRepositoryNameIsUsedForVerifiedInstallAndLoad() async throws {
+    let fixture = try Fixture(localRepositoryName: "parakeet-tdt-0.6b-v2")
+    defer { fixture.remove() }
+    let expectedRemoteURL = try testRemoteURL(
+      for: testManifest.files[0],
+      manifest: testManifest
+    )
+    fixture.transport.handler = { receivedURL, _, _ in
+      #expect(receivedURL == expectedRemoteURL)
+      return ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+
+    try await fixture.manager.download()
+
+    #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL)
+    #expect(
+      fixture.manager.verifiedLoadState
+        == .ready(repositoryURL: fixture.repositoryURL)
+    )
+    #expect(FileManager.default.fileExists(atPath: fixture.fileURL.path))
+
+    await fixture.manager.refreshState()
+
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL)
+  }
+
   @Test @MainActor func deleteRemovesOnlyOwnedModelTrees() async throws {
     let fixture = try Fixture()
     defer { fixture.remove() }
@@ -450,6 +520,31 @@ struct EnhancedModelManagerTests {
     #expect([fixture.installedURL, fixture.stagingURL, fixture.resumeURL, fixture.derivedURL]
       .allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
     #expect(FileManager.default.fileExists(atPath: sibling.path))
+  }
+
+  @Test @MainActor
+  func deleteWaitsForAsyncRemovalBarrierBeforeMutatingOwnedTrees() async throws {
+    let removal = AsyncModelMutationGate()
+    let fixture = try Fixture(removalWillBegin: { await removal.wait() })
+    defer { fixture.remove() }
+    try fixture.install()
+    await fixture.manager.refreshState()
+
+    let deletion = Task { @MainActor in
+      try await fixture.manager.deleteModel()
+    }
+    await removal.waitUntilEntered()
+
+    #expect(await removal.invocationCount == 1)
+    #expect(fixture.manager.verifiedRepositoryURL == fixture.repositoryURL)
+    #expect(FileManager.default.fileExists(atPath: fixture.fileURL.path))
+    #expect(try Data(contentsOf: fixture.fileURL) == testContents)
+
+    await removal.release()
+    try await deletion.value
+
+    #expect(fixture.manager.state == .notInstalled)
+    #expect(!FileManager.default.fileExists(atPath: fixture.fileURL.path))
   }
 
   @Test @MainActor func lifecycleOperationsCannotOverlap() async throws {
@@ -670,14 +765,9 @@ struct EnhancedModelManagerTests {
   }
 
   @Test @MainActor func inferenceFailureDuringDeleteCannotResurrectRepairState() async throws {
-    let removal = CleanupControl()
-    let fixture = try Fixture(removalWillBegin: {
-      removal.pause()
-    })
-    defer {
-      removal.resume()
-      fixture.remove()
-    }
+    let removal = AsyncModelMutationGate()
+    let fixture = try Fixture(removalWillBegin: { await removal.wait() })
+    defer { fixture.remove() }
     try fixture.install()
     await fixture.manager.refreshState()
     let deletedRepository = try #require(fixture.manager.verifiedRepositoryURL)
@@ -685,12 +775,12 @@ struct EnhancedModelManagerTests {
     let deletion = Task { @MainActor in
       try await fixture.manager.deleteModel()
     }
-    await removal.waitUntilPaused()
+    await removal.waitUntilEntered()
     fixture.manager.markInferenceLoadFailure(
       message: "stale load failure",
       failedRepositoryURL: deletedRepository
     )
-    removal.resume()
+    await removal.release()
     try await deletion.value
 
     #expect(fixture.manager.state == .notInstalled)
@@ -809,7 +899,8 @@ struct EnhancedModelManagerTests {
     )
   }
 
-  @Test @MainActor func publishesNewRepositoryBeforeOldCleanupBegins() async throws {
+  @Test @MainActor
+  func preservesPreviousRepositoryUntilCleanupBarrierReleases() async throws {
     let current = EnhancedModelManifest(
       schemaVersion: 1,
       modelID: testManifest.modelID,
@@ -817,18 +908,13 @@ struct EnhancedModelManagerTests {
       totalByteCount: testManifest.totalByteCount,
       files: testManifest.files
     )
-    let cleanup = CleanupControl()
+    let cleanup = AsyncModelMutationGate()
     let fixture = try Fixture(
       manifest: current,
       trustedManifests: [testManifest, current],
-      cleanupWillBegin: {
-        cleanup.pause()
-      }
+      cleanupWillBegin: { await cleanup.wait() }
     )
-    defer {
-      cleanup.resume()
-      fixture.remove()
-    }
+    defer { fixture.remove() }
     try fixture.install(manifest: testManifest)
     await fixture.manager.refreshState()
     fixture.transport.handler = { _, _, _ in
@@ -841,26 +927,152 @@ struct EnhancedModelManagerTests {
       try await fixture.manager.update()
     }
 
-    await cleanup.waitUntilPaused()
+    await cleanup.waitUntilEntered()
+    #expect(await cleanup.invocationCount == 1)
 
+    let previousRepository = fixture.repositoryURL(for: testManifest)
     let newRepository = fixture.repositoryURL(for: current)
-    #expect(fixture.manager.verifiedRepositoryURL == newRepository)
+    let stagingFile = fixture.stagingURL
+      .appendingPathComponent(current.revision, isDirectory: true)
+      .appendingPathComponent(fixture.localRepositoryName, isDirectory: true)
+      .appendingPathComponent(current.files[0].path)
+    #expect(fixture.manager.state == .installing)
+    #expect(fixture.manager.verifiedRepositoryURL == previousRepository)
+    #expect(fixture.manager.verifiedLoadState == .unavailable)
     #expect(
-      fixture.manager.verifiedLoadState == .ready(repositoryURL: newRepository)
+      FileManager.default.fileExists(atPath: previousRepository.path)
     )
-    #expect(
-      FileManager.default.fileExists(
-        atPath: fixture.installedURL
-          .appendingPathComponent(testManifest.revision)
-          .path
-      )
-    )
+    #expect(try Data(contentsOf: fixture.fileURL(for: testManifest)) == testContents)
+    #expect(try Data(contentsOf: stagingFile) == testContents)
 
-    cleanup.resume()
+    await cleanup.release()
     try await update.value
 
     #expect(fixture.manager.state == .ready)
-    #expect(fixture.manager.verifiedRepositoryURL == newRepository)
+    #expect(fixture.manager.verifiedRepositoryURL?.path == newRepository.path)
+    guard case .ready(let loadedRepository) = fixture.manager.verifiedLoadState else {
+      Issue.record("Expected enhanced model to be loadable after update")
+      return
+    }
+    #expect(loadedRepository.path == newRepository.path)
+    #expect(try Data(contentsOf: fixture.fileURL(for: current)) == testContents)
+    #expect(!FileManager.default.fileExists(atPath: stagingFile.path))
+  }
+
+  @Test @MainActor
+  func sameRevisionRepairWaitsBeforeReplacingInstalledRepository() async throws {
+    let cleanup = AsyncModelMutationGate()
+    let fixture = try Fixture(cleanupWillBegin: { await cleanup.wait() })
+    defer { fixture.remove() }
+    try fixture.install()
+    await fixture.manager.refreshState()
+
+    let previousRepository = try #require(fixture.manager.verifiedRepositoryURL)
+    let sentinel = previousRepository.appendingPathComponent("installed-sentinel")
+    let sentinelContents = Data("sentinel".utf8)
+    try sentinelContents.write(to: sentinel, options: .atomic)
+    fixture.transport.handler = { _, _, _ in
+      ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+    let stagingFile = fixture.stagingURL
+      .appendingPathComponent(testManifest.revision, isDirectory: true)
+      .appendingPathComponent(fixture.localRepositoryName, isDirectory: true)
+      .appendingPathComponent(testManifest.files[0].path)
+    let repair = Task { @MainActor in
+      try await fixture.manager.repair()
+    }
+
+    await cleanup.waitUntilEntered()
+
+    #expect(await cleanup.invocationCount == 1)
+    #expect(fixture.manager.state == .installing)
+    #expect(fixture.manager.verifiedRepositoryURL == previousRepository)
+    #expect(fixture.manager.verifiedLoadState == .unavailable)
+    #expect(FileManager.default.fileExists(atPath: previousRepository.path))
+    #expect(try Data(contentsOf: fixture.fileURL) == testContents)
+    #expect(try Data(contentsOf: sentinel) == sentinelContents)
+    #expect(try Data(contentsOf: stagingFile) == testContents)
+
+    await cleanup.release()
+    try await repair.value
+
+    #expect(fixture.manager.state == .ready)
+    #expect(fixture.manager.verifiedRepositoryURL == previousRepository)
+    guard case .ready(let loadedRepository) = fixture.manager.verifiedLoadState else {
+      Issue.record("Expected enhanced model to be loadable after repair")
+      return
+    }
+    #expect(loadedRepository.path == previousRepository.path)
+    #expect(try Data(contentsOf: fixture.fileURL) == testContents)
+    #expect(!FileManager.default.fileExists(atPath: sentinel.path))
+    #expect(!FileManager.default.fileExists(atPath: stagingFile.path))
+  }
+
+  @Test @MainActor
+  func cancellationAtMutationBarrierRestoresPreviousUpdateStateWithoutInstallingNewRevision() async throws {
+    let current = EnhancedModelManifest(
+      schemaVersion: 1,
+      modelID: testManifest.modelID,
+      revision: "new-revision",
+      totalByteCount: testManifest.totalByteCount,
+      files: testManifest.files
+    )
+    let cleanup = AsyncModelMutationGate()
+    let fixture = try Fixture(
+      manifest: current,
+      trustedManifests: [testManifest, current],
+      cleanupWillBegin: { await cleanup.wait() }
+    )
+    defer { fixture.remove() }
+    try fixture.install(manifest: testManifest)
+    await fixture.manager.refreshState()
+    let previousRepository = try #require(fixture.manager.verifiedRepositoryURL)
+    let previousFile = fixture.fileURL(for: testManifest)
+    fixture.transport.handler = { _, _, _ in
+      ModelDownloadResult(
+        temporaryURL: try writeTemporary(testContents),
+        resumeData: nil
+      )
+    }
+    let stagingFile = fixture.stagingURL
+      .appendingPathComponent(current.revision, isDirectory: true)
+      .appendingPathComponent(fixture.localRepositoryName, isDirectory: true)
+      .appendingPathComponent(current.files[0].path)
+    let update = Task { @MainActor in
+      try await fixture.manager.update()
+    }
+
+    await cleanup.waitUntilEntered()
+
+    #expect(await cleanup.invocationCount == 1)
+    #expect(fixture.manager.state == .installing)
+    #expect(fixture.manager.verifiedLoadState == .unavailable)
+    #expect(fixture.manager.verifiedRepositoryURL == previousRepository)
+    #expect(try Data(contentsOf: previousFile) == testContents)
+    #expect(try Data(contentsOf: stagingFile) == testContents)
+
+    update.cancel()
+    await cleanup.release()
+    await #expect(throws: CancellationError.self) {
+      try await update.value
+    }
+
+    #expect(fixture.manager.state == .updateAvailable)
+    #expect(fixture.manager.verifiedRepositoryURL == previousRepository)
+    guard case .ready(let loadedRepository) = fixture.manager.verifiedLoadState else {
+      Issue.record("Expected the previous enhanced model to remain loadable")
+      return
+    }
+    #expect(loadedRepository.path == previousRepository.path)
+    #expect(try Data(contentsOf: previousFile) == testContents)
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: fixture.repositoryURL(for: current).path
+      )
+    )
   }
 
   @Test @MainActor func installedManifestCannotAuthorizeAnUnshippedRevision() async throws {
@@ -896,6 +1108,7 @@ struct EnhancedModelManagerTests {
         .appendingPathComponent("nested", isDirectory: true)
         .appendingPathComponent("DictationModels", isDirectory: true),
       manifest: testManifest,
+      artifactIdentity: testArtifactIdentity(for: testManifest),
       candidateEnabled: true,
       capacityProvider: { .max },
       architectureProvider: { true },
@@ -948,7 +1161,7 @@ struct EnhancedModelManagerTests {
       files: [file]
     )
 
-    let url = try EnhancedModelManager.remoteURL(for: file, manifest: manifest)
+    let url = try testRemoteURL(for: file, manifest: manifest)
 
     #expect(url.host == "huggingface.co")
     #expect(url.path.contains("/resolve/immutable-revision/folder/a file#1.bin"))
@@ -961,7 +1174,7 @@ struct EnhancedModelManagerTests {
     let file = EnhancedModelFile(path: path, byteCount: 0, sha256: sha256(Data()))
 
     #expect(throws: EnhancedModelManagerError.self) {
-      try EnhancedModelManager.remoteURL(for: file, manifest: testManifest)
+      try testRemoteURL(for: file, manifest: testManifest)
     }
   }
 
@@ -999,9 +1212,12 @@ struct EnhancedModelManagerTests {
     ("huggingface.co", true),
     ("cdn.huggingface.co", true),
     ("transfer.xethub.hf.co", true),
+    ("us.aws.cdn.hf.co", true),
     ("evil-huggingface.co", false),
     ("huggingface.co.evil.example", false),
     ("xethub.hf.co.evil.example", false),
+    ("aws.cdn.hf.co", false),
+    ("us.aws.cdn.hf.co.evil.example", false),
   ])
   func redirectHostAllowlistUsesDNSLabels(host: String, allowed: Bool) {
     #expect(URLSessionModelDownloader.isAllowedRedirectHost(host) == allowed)
@@ -1011,8 +1227,11 @@ struct EnhancedModelManagerTests {
     ("https://huggingface.co/file", true),
     ("https://cdn.huggingface.co/file", true),
     ("https://transfer.xethub.hf.co/file", true),
+    ("https://us.aws.cdn.hf.co/file", true),
     ("http://huggingface.co/file", false),
     ("https://evil-huggingface.co/file", false),
+    ("https://aws.cdn.hf.co/file", false),
+    ("https://us.aws.cdn.hf.co.evil.example/file", false),
   ])
   func redirectsRequireHTTPSAndAnAllowedHost(value: String, allowed: Bool) {
     #expect(
@@ -1051,24 +1270,30 @@ private let testManifest = EnhancedModelManifest(
 private final class Fixture {
   let root: URL
   let manifest: EnhancedModelManifest
+  let localRepositoryName: String
   let transport: TestTransport
   let manager: EnhancedModelManager
 
   init(
     manifest: EnhancedModelManifest = testManifest,
+    localRepositoryName: String? = nil,
     capacity: Int64 = .max,
     trustedManifests: [EnhancedModelManifest]? = nil,
     assessmentDidComplete: @escaping @Sendable () -> Void = {},
-    cleanupWillBegin: @escaping @Sendable () -> Void = {},
-    removalWillBegin: @escaping @Sendable () -> Void = {},
+    cleanupWillBegin: @escaping @Sendable () async -> Void = {},
+    removalWillBegin: @escaping @Sendable () async -> Void = {},
     resumeAuthenticationKey: SymmetricKey = testResumeAuthenticationKey
   ) throws {
     root = temporaryRoot()
     self.manifest = manifest
+    let selectedLocalRepositoryName = localRepositoryName
+      ?? manifest.modelID.split(separator: "/").last.map(String.init)!
+    self.localRepositoryName = selectedLocalRepositoryName
     transport = TestTransport()
     manager = EnhancedModelManager(
       modelRootURL: root,
       manifest: manifest,
+      artifactIdentity: testArtifactIdentity(for: manifest),
       trustedManifests: trustedManifests,
       candidateEnabled: true,
       capacityProvider: { capacity },
@@ -1078,7 +1303,8 @@ private final class Fixture {
       assessmentDidComplete: assessmentDidComplete,
       cleanupWillBegin: cleanupWillBegin,
       removalWillBegin: removalWillBegin,
-      resumeAuthenticationKeyProvider: { resumeAuthenticationKey }
+      resumeAuthenticationKeyProvider: { resumeAuthenticationKey },
+      localRepositoryName: selectedLocalRepositoryName
     )
   }
 
@@ -1101,7 +1327,7 @@ private final class Fixture {
   var resumeFileURL: URL {
     resumeURL
       .appendingPathComponent(manifest.revision, isDirectory: true)
-      .appendingPathComponent(manifest.modelID.split(separator: "/").last.map(String.init)!)
+      .appendingPathComponent(localRepositoryName)
       .appendingPathComponent(manifest.files[0].path + ".resumeData")
   }
 
@@ -1116,7 +1342,7 @@ private final class Fixture {
   func repositoryURL(for manifest: EnhancedModelManifest) -> URL {
     installedURL
       .appendingPathComponent(manifest.revision, isDirectory: true)
-      .appendingPathComponent(manifest.modelID.split(separator: "/").last.map(String.init)!)
+      .appendingPathComponent(localRepositoryName)
   }
 
   func fileURL(for manifest: EnhancedModelManifest) -> URL {
@@ -1317,46 +1543,36 @@ private final class LockedCounter: @unchecked Sendable {
   }
 }
 
-private final class CleanupControl: @unchecked Sendable {
-  private let resumeCleanup = DispatchSemaphore(value: 0)
-  private let lock = NSLock()
-  private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
-  private var isPaused = false
-  private var didResume = false
+actor AsyncModelMutationGate {
+  private var entered = false
+  private var released = false
+  private var count = 0
+  private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+  private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
 
-  func pause() {
-    let waiters = lock.withLock {
-      isPaused = true
-      defer { pauseWaiters.removeAll() }
-      return pauseWaiters
-    }
+  func wait() async {
+    count += 1
+    entered = true
+    let waiters = enteredWaiters
+    enteredWaiters.removeAll()
     waiters.forEach { $0.resume() }
-    resumeCleanup.wait()
+    guard !released else { return }
+    await withCheckedContinuation { releaseWaiters.append($0) }
   }
 
-  func waitUntilPaused() async {
-    await withCheckedContinuation { continuation in
-      let resumeNow = lock.withLock {
-        guard !isPaused else { return true }
-        pauseWaiters.append(continuation)
-        return false
-      }
-      if resumeNow {
-        continuation.resume()
-      }
-    }
+  func waitUntilEntered() async {
+    guard !entered else { return }
+    await withCheckedContinuation { enteredWaiters.append($0) }
   }
 
-  func resume() {
-    let shouldSignal = lock.withLock {
-      guard !didResume else { return false }
-      didResume = true
-      return true
-    }
-    if shouldSignal {
-      resumeCleanup.signal()
-    }
+  func release() {
+    released = true
+    let waiters = releaseWaiters
+    releaseWaiters.removeAll()
+    waiters.forEach { $0.resume() }
   }
+
+  var invocationCount: Int { count }
 }
 
 private final class StateRecorder: @unchecked Sendable {

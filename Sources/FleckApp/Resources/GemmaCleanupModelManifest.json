@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "modelID": "mlx-community/gemma-3-1b-it-qat-4bit",
+  "revision": "15fed4eafb456c6fcb2a1165f19ac609670ed14b",
+  "totalByteCount": 771863021,
+  "files": [
+    {
+      "path": ".gitattributes",
+      "byteCount": 1570,
+      "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930"
+    },
+    {
+      "path": "README.md",
+      "byteCount": 1202,
+      "sha256": "ef1b7148ef260594ac05c36885f6471182f78416ee0d49c76851e7ebe56f4009"
+    },
+    {
+      "path": "added_tokens.json",
+      "byteCount": 35,
+      "sha256": "50b2f405ba56a26d4913fd772089992252d7f942123cc0a034d96424221ba946"
+    },
+    {
+      "path": "config.json",
+      "byteCount": 1105,
+      "sha256": "eb080baebedaa32151a71988721a64f0be067fc6cd7e20ca16ba11231f822533"
+    },
+    {
+      "path": "model.safetensors",
+      "byteCount": 732577304,
+      "sha256": "b6010f6b03a83f973ca8708eb5784d5b0f80c0e7e9143dbb4c95d0eefe39c837"
+    },
+    {
+      "path": "model.safetensors.index.json",
+      "byteCount": 50542,
+      "sha256": "b479eca1f14de16218fc5f45aa270d008944cd3f261f78e90f9b718c8857faef"
+    },
+    {
+      "path": "special_tokens_map.json",
+      "byteCount": 662,
+      "sha256": "2f7b0adf4fb469770bb1490e3e35df87b1dc578246c5e7e6fc76ecf33213a397"
+    },
+    {
+      "path": "tokenizer.json",
+      "byteCount": 33384568,
+      "sha256": "4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795"
+    },
+    {
+      "path": "tokenizer.model",
+      "byteCount": 4689074,
+      "sha256": "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "byteCount": 1156959,
+      "sha256": "be9d72bdf5021aa82d67c3cc60cb0f8ddcc759d4d3f05eb129b9fcc345fc94b7"
+    }
+  ]
+}

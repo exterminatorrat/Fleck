@@ -5,6 +5,19 @@
   import FleckCore
   import ServiceManagement
 
+  enum AgentCapabilitySaveResult {
+    case succeeded
+    case revisionConflict
+    case failed
+  }
+
+  enum AgentNoteAccessSaveResult: Equatable {
+    case succeeded
+    case revisionConflict
+    case contextChanged
+    case failed
+  }
+
   @MainActor
   final class AppState: ObservableObject, DictationSaving, AgentWorkspaceStateAccess {
     typealias SaveOperation =
@@ -21,6 +34,23 @@
         [Note]
       ) async throws -> Void
     typealias LoadTrashOperation = @Sendable () async throws -> [TrashedNote]
+    typealias BeforeSaveOperation = @Sendable () async -> Void
+    typealias AgentProfileProvisionOperation =
+      @Sendable (UUID, Data) async throws -> Void
+    typealias AgentProfileDisconnectOperation =
+      @Sendable (UUID) async throws -> Void
+    typealias RestoreOperation =
+      @Sendable (
+        TrashedNote,
+        Workspace,
+        AppPreferences,
+        UInt64
+      ) async throws -> LocalStore.RestoreOutcome
+    typealias AgentCapabilityBatchReplaceOperation =
+      @Sendable (
+        [(profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)],
+        [UUID: UInt64]
+      ) async throws -> AgentCapabilityState
 
     enum SaveStatus: Equatable {
       case idle
@@ -52,6 +82,10 @@
     @Published private(set) var agentActivity: [AgentActivityRecord] = []
     @Published private(set) var agentBannerPresentation: AgentBannerPresentation?
     @Published private(set) var isAgentConnectorInstalled = false
+    @Published private(set) var agentCapabilityState = AgentCapabilityState(
+      profiles: [:],
+      unassignedLegacyNoteIDs: []
+    )
     @Published var agentCleanupError: String?
     private(set) var persistenceGeneration: UInt64 = 0
     private(set) var hasFinishedInitialLoad = false
@@ -62,12 +96,37 @@
     private let store: LocalStore
     private let snapshotWriter: LocalStoreSnapshotWriter
     private let saveOperation: SaveOperation
+    private let beforeSaveOperation: BeforeSaveOperation?
     private let loadTrashOperation: LoadTrashOperation
     let agentProfileStore: AgentProfileStore
     let agentActivityStore: AgentActivityStore
+    let agentCapabilityStore: AgentCapabilityStore
+    let agentCapabilityAuthority: any AgentCapabilityAuthorizing
+    private let agentProfileProvisionOperation: AgentProfileProvisionOperation
+    private let agentProfileDisconnectOperation: AgentProfileDisconnectOperation
+    private let restoreOperation: RestoreOperation
+    private let replaceAgentCapabilitiesOperation:
+      AgentCapabilityBatchReplaceOperation
+    private struct NoteAccessTransactionLock {
+      let ownerID: UUID
+      let capturedContext: AgentNoteAccessContext
+      let folderID: UUID?
+    }
+    private struct CommittedSmartCapture: Equatable {
+      let receipt: DictationInsertionReceipt
+      let noteRevision: UInt64
+    }
+    private struct SmartCaptureTransferBusy: Error {}
+    private var noteAccessTransactionLocks: [UUID: NoteAccessTransactionLock] = [:]
+    private var committedSmartCaptures: [UUID: CommittedSmartCapture] = [:]
+    private var smartCaptureTransferNoteIDs: Set<UUID> = []
+    private var smartCaptureTransferOwnerID: UUID?
+    private var smartCaptureTransferWaiters: [CheckedContinuation<Void, Never>] = []
+    private var pendingRestoreNoteIDs: Set<UUID> = []
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
-    private var awaitedSaveWaiters: [CheckedContinuation<Void, Never>] = []
+    private var transactionOwnedSaveCount = 0
+    private var persistenceTransactionWaiters: [CheckedContinuation<Void, Never>] = []
     private var initialLoadWaiters: [CheckedContinuation<Void, Never>] = []
     private var saveStatusResetTask: Task<Void, Never>?
     private var agentConnectorStatusGeneration: UInt64 = 0
@@ -82,9 +141,16 @@
     init(
       store: LocalStore? = nil,
       saveOperation: SaveOperation? = nil,
+      beforeSaveOperation: BeforeSaveOperation? = nil,
       loadTrashOperation: LoadTrashOperation? = nil,
+      restoreOperation: RestoreOperation? = nil,
       agentProfileStore: AgentProfileStore? = nil,
       agentActivityStore: AgentActivityStore? = nil,
+      agentCapabilityStore: AgentCapabilityStore? = nil,
+      agentCapabilityAuthority: (any AgentCapabilityAuthorizing)? = nil,
+      replaceAgentCapabilities: AgentCapabilityBatchReplaceOperation? = nil,
+      provisionAgentProfile: AgentProfileProvisionOperation? = nil,
+      disconnectAgentProfile: AgentProfileDisconnectOperation? = nil,
       startupMigrationError: FleckProductMigrationError? = nil
     ) {
       let appSupport = FileManager.default.urls(
@@ -96,6 +162,7 @@
         isDirectory: true
       )
       let store = store ?? LocalStore(rootURL: canonicalRoot)
+      let agentRoot = store.rootURL
       self.store = store
       snapshotWriter = store.snapshotWriter
       self.saveOperation =
@@ -107,14 +174,63 @@
             generation: generation
           )
         }
+      self.beforeSaveOperation = beforeSaveOperation
       self.loadTrashOperation =
         loadTrashOperation ?? {
           try await store.loadTrash()
         }
-      self.agentProfileStore = agentProfileStore ?? AgentProfileStore()
+      self.restoreOperation =
+        restoreOperation ?? { trashedNote, workspace, preferences, generation in
+          try await store.restore(
+            trashedNote,
+            into: workspace,
+            preferences: preferences,
+            generation: generation
+          )
+        }
+      self.agentProfileStore =
+        agentProfileStore
+        ?? AgentProfileStore(
+          profilesURL: agentRoot
+            .appendingPathComponent("AgentIntegrations", isDirectory: true)
+            .appendingPathComponent("profiles.json")
+        )
       self.agentActivityStore =
         agentActivityStore
-        ?? AgentActivityStore(rootURL: canonicalRoot)
+        ?? AgentActivityStore(rootURL: agentRoot)
+      let capabilityStore =
+        agentCapabilityStore
+        ?? AgentCapabilityStore(
+          capabilitiesURL: agentRoot
+            .appendingPathComponent("AgentIntegrations", isDirectory: true)
+            .appendingPathComponent("capabilities.json"),
+          previousCapabilitiesURL: agentRoot
+            .appendingPathComponent("AgentIntegrations", isDirectory: true)
+            .appendingPathComponent("capabilities.previous.json")
+        )
+      self.agentCapabilityStore = capabilityStore
+      self.agentCapabilityAuthority =
+        agentCapabilityAuthority ?? AgentCapabilityAuthority(store: capabilityStore)
+      self.replaceAgentCapabilitiesOperation =
+        replaceAgentCapabilities ?? { replacements, expectedGrantRevisions in
+          try await capabilityStore.replaceProfiles(
+            replacements,
+            expectedGrantRevisions: expectedGrantRevisions
+          )
+        }
+      self.agentProfileProvisionOperation =
+        provisionAgentProfile ?? { profileID, credential in
+          try await AgentBridgeInstaller.live().provisionAsync(
+            profileID: profileID,
+            token: credential
+          )
+        }
+      self.agentProfileDisconnectOperation =
+        disconnectAgentProfile ?? { profileID in
+          try await AgentBridgeInstaller.live().disconnectAsync(
+            profileID: profileID
+          )
+        }
       self.startupMigrationError = startupMigrationError
       workspace.ensureNoteExists()
       Task {
@@ -124,15 +240,34 @@
           finishInitialLoad()
           return
         }
-        await load()
-        await refreshAgentProfiles()
+        guard await load() else {
+          finishInitialLoad()
+          return
+        }
+        guard await refreshAgentProfiles() else {
+          finishInitialLoad()
+          return
+        }
+        do {
+          agentCapabilityState = try await self.agentCapabilityStore.loadOrMigrate(
+            activeProfileIDs: agentProfiles.map(\.id),
+            workspace: workspace
+          )
+          isAgentWorkspaceAvailable = true
+          agentCleanupError = nil
+        } catch {
+          isAgentWorkspaceAvailable = false
+          agentCleanupError = Self.agentCapabilityFailureMessage
+        }
         refreshAgentActivity()
+        finishInitialLoad()
       }
     }
 
     convenience init(
       store: LocalStore? = nil,
       saveOperation: @escaping LegacySaveOperation,
+      beforeSaveOperation: BeforeSaveOperation? = nil,
       loadTrashOperation: LoadTrashOperation? = nil
     ) {
       self.init(
@@ -141,6 +276,7 @@
           try await saveOperation(workspace, preferences, trashedNotes)
           return .committed
         },
+        beforeSaveOperation: beforeSaveOperation,
         loadTrashOperation: loadTrashOperation
       )
     }
@@ -166,9 +302,404 @@
       return folderID
     }
 
-    func activeDestinations() -> [DictationDestination] {
+    private func isLockedNoteMembershipChange(
+      noteID: UUID,
+      targetFolderID: UUID?
+    ) -> Bool {
+      guard
+        !pendingRestoreNoteIDs.contains(noteID),
+        !smartCaptureTransferNoteIDs.contains(noteID)
+      else { return true }
+      guard noteAccessTransactionLocks[noteID] != nil else { return false }
+      let currentContext = AgentCapabilityPresentation.noteAccessContext(
+        for: noteID,
+        in: workspace
+      )
+      guard currentContext.noteExists else { return true }
+      return currentContext.noteFolderID != targetFolderID
+    }
+
+    private func isLockedNote(_ noteID: UUID) -> Bool {
+      pendingRestoreNoteIDs.contains(noteID)
+        || noteAccessTransactionLocks[noteID] != nil
+        || smartCaptureTransferNoteIDs.contains(noteID)
+    }
+
+    private func isLockedFolder(_ folderID: UUID) -> Bool {
+      noteAccessTransactionLocks.values.contains { $0.folderID == folderID }
+        || smartCaptureTransferNoteIDs.contains { noteID in
+          workspace.notes.first(where: { $0.id == noteID })?.folderID == folderID
+        }
+        || pendingRestoreNoteIDs.contains { noteID in
+          workspace.notes.first(where: { $0.id == noteID })?.folderID == folderID
+        }
+    }
+
+    private func isLockedContextUnchanged(in workspace: Workspace) -> Bool {
+      noteAccessTransactionLocks.values.allSatisfy { lock in
+        AgentCapabilityPresentation.noteAccessContext(
+          for: lock.capturedContext.noteID,
+          in: workspace
+        ) == lock.capturedContext
+      }
+    }
+
+    private func setAgentCapabilityNoteExclusion(
+      _ noteID: UUID,
+      excluded: Bool
+    ) {
+      guard
+        let manager = agentCapabilityAuthority
+          as? any AgentCapabilityExclusionManaging
+      else { return }
+      if excluded {
+        manager.exclude(noteID: noteID)
+      } else {
+        manager.include(noteID: noteID)
+      }
+    }
+
+    private func acquireNoteAccessTransactionLocks(
+      for noteIDs: Set<UUID>,
+      ownerID: UUID,
+      capturedContexts: [UUID: AgentNoteAccessContext] = [:]
+    ) -> Bool {
+      guard
+        smartCaptureTransferNoteIDs.isDisjoint(with: noteIDs),
+        noteIDs.allSatisfy({ noteAccessTransactionLocks[$0] == nil })
+      else {
+        return false
+      }
+      for noteID in noteIDs {
+        let capturedContext = capturedContexts[noteID]
+          ?? AgentCapabilityPresentation.noteAccessContext(
+            for: noteID,
+            in: workspace
+          )
+        noteAccessTransactionLocks[noteID] = NoteAccessTransactionLock(
+          ownerID: ownerID,
+          capturedContext: capturedContext,
+          folderID: capturedContext.folderExists
+            ? capturedContext.noteFolderID
+            : nil
+        )
+      }
+      return true
+    }
+
+    private func acquireSmartCaptureTransferLock(
+      for noteIDs: Set<UUID>,
+      ownerID: UUID
+    ) -> Bool {
+      guard
+        smartCaptureTransferOwnerID == nil,
+        awaitedSaveCount == 0,
+        transactionOwnedSaveCount == 0,
+        pendingRestoreNoteIDs.isEmpty,
+        smartCaptureTransferNoteIDs.isDisjoint(with: noteIDs),
+        noteIDs.allSatisfy({ noteAccessTransactionLocks[$0] == nil })
+      else { return false }
+      smartCaptureTransferOwnerID = ownerID
+      smartCaptureTransferNoteIDs.formUnion(noteIDs)
+      return true
+    }
+
+    private func releaseSmartCaptureTransferLock(
+      for noteIDs: Set<UUID>,
+      ownerID: UUID
+    ) {
+      guard smartCaptureTransferOwnerID == ownerID else { return }
+      smartCaptureTransferOwnerID = nil
+      smartCaptureTransferNoteIDs.subtract(noteIDs)
+      let waiters = smartCaptureTransferWaiters
+      smartCaptureTransferWaiters.removeAll()
+      for waiter in waiters {
+        waiter.resume()
+      }
+    }
+
+    private func waitForSmartCaptureTransfer() async {
+      while smartCaptureTransferOwnerID != nil {
+        await withCheckedContinuation { continuation in
+          smartCaptureTransferWaiters.append(continuation)
+        }
+      }
+    }
+
+    private func releaseNoteAccessTransactionLocks(
+      for noteIDs: Set<UUID>,
+      ownerID: UUID
+    ) {
+      for noteID in noteIDs {
+        guard noteAccessTransactionLocks[noteID]?.ownerID == ownerID else {
+          continue
+        }
+        noteAccessTransactionLocks.removeValue(forKey: noteID)
+      }
+    }
+
+    private func relevantCapabilityGrants(
+      for profile: AgentProfileCapabilities?,
+      noteID: UUID
+    ) -> [AgentResourceGrant] {
+      guard let profile,
+        let note = workspace.notes.first(where: { $0.id == noteID })
+      else { return [] }
+      return profile.grants.filter { grant in
+        switch grant.scope {
+        case let .note(grantedNoteID):
+          return grantedNoteID == noteID
+        case let .folderIncludingFutureNotes(folderID):
+          return note.folderID == folderID
+        }
+      }
+      .sorted { $0.id.uuidString < $1.id.uuidString }
+    }
+
+    private func capabilityMutationAffectsPendingRestoreNote(
+      _ replacements: [
+        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+      ]
+    ) -> Bool {
+      replacements.contains { replacement in
+        let current = agentCapabilityState.profiles[replacement.profile.profileID]
+        return pendingRestoreNoteIDs.contains { noteID in
+          let currentGrants = relevantCapabilityGrants(
+            for: current,
+            noteID: noteID
+          )
+          let replacementGrants = relevantCapabilityGrants(
+            for: replacement.profile,
+            noteID: noteID
+          )
+          if currentGrants != replacementGrants {
+            return true
+          }
+          return current?.allowedCapabilities != replacement.profile.allowedCapabilities
+            && (!currentGrants.isEmpty || !replacementGrants.isEmpty)
+        }
+      }
+    }
+
+    private func rejectPendingRestoreCapabilityMutation() {
+      agentCleanupError = AgentCapabilityPresentation.conflictMessage
+    }
+
+    private func performAgentCapabilitySave(
+      operation: @escaping @Sendable () async throws -> AgentCapabilityState,
+      failureMessage: String
+    ) async -> AgentCapabilitySaveResult {
+      do {
+        agentCapabilityState = try await operation()
+        agentCleanupError = nil
+        return .succeeded
+      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
+        agentCleanupError = AgentCapabilityPresentation.conflictMessage
+        return .revisionConflict
+      } catch {
+        agentCleanupError = failureMessage
+        return .failed
+      }
+    }
+
+    func activeDestinations() -> [DictationRoutingCandidate] {
       workspace.notes.map {
-        DictationDestination(noteID: $0.id, title: $0.displayTitle)
+        DictationRoutingCandidate(
+          destination: DictationDestination(noteID: $0.id, title: $0.displayTitle),
+          semanticContext: $0.body,
+          contentRevision: $0.revision
+        )
+      }
+    }
+
+    func capabilityProfile(_ profileID: UUID) -> AgentProfileCapabilities? {
+      agentCapabilityState.profiles[profileID]
+    }
+
+    static func activeCapabilityProfiles(
+      profiles: [AgentIntegrationProfile],
+      state: AgentCapabilityState
+    ) -> [AgentProfileCapabilities] {
+      profiles.compactMap { profile in
+        guard !profile.isRevoked else { return nil }
+        return state.profiles[profile.id]
+      }
+    }
+
+    var activeAgentCapabilityProfiles: [AgentProfileCapabilities] {
+      Self.activeCapabilityProfiles(profiles: agentProfiles, state: agentCapabilityState)
+    }
+
+    func profilesWithReadAccess(to noteID: UUID) -> [AgentIntegrationProfile] {
+      agentProfiles.filter { profile in
+        guard !profile.isRevoked else { return false }
+        guard let capabilities = agentCapabilityState.profiles[profile.id] else {
+          return false
+        }
+        return AgentCapabilityPolicy.authorizationSnapshot(
+          for: capabilities,
+          workspace: workspace
+        ).readableNoteIDs.contains(noteID)
+      }
+    }
+
+    func isSharedWithAnyActiveProfile(_ noteID: UUID) -> Bool {
+      !profilesWithReadAccess(to: noteID).isEmpty
+    }
+
+    @discardableResult
+    func updateAgentCapabilitiesForNote(
+      noteID: UUID,
+      capturedContext: AgentNoteAccessContext,
+      replacements: [
+        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+      ],
+      expectedGrantRevisions: [UUID: UInt64]
+    ) async -> AgentNoteAccessSaveResult {
+      guard !pendingRestoreNoteIDs.contains(noteID) else {
+        return .contextChanged
+      }
+      guard !capabilityMutationAffectsPendingRestoreNote(replacements) else {
+        return .contextChanged
+      }
+      guard
+        capturedContext.noteID == noteID,
+        capturedContext.noteExists,
+        AgentCapabilityPresentation.noteAccessContextIsUnchanged(
+          noteID: noteID,
+          captured: capturedContext,
+          workspace: workspace
+        )
+      else {
+        return .contextChanged
+      }
+      let transactionID = UUID()
+      guard acquireNoteAccessTransactionLocks(
+        for: [noteID],
+        ownerID: transactionID,
+        capturedContexts: [noteID: capturedContext]
+      ) else {
+        agentCleanupError = "Could not update Agent access. Try again."
+        return .failed
+      }
+      defer {
+        releaseNoteAccessTransactionLocks(
+          for: [noteID],
+          ownerID: transactionID
+        )
+      }
+
+      do {
+        agentCapabilityState = try await replaceAgentCapabilitiesOperation(
+          replacements,
+          expectedGrantRevisions
+        )
+        agentCleanupError = nil
+        return .succeeded
+      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
+        agentCleanupError = AgentCapabilityPresentation.conflictMessage
+        return .revisionConflict
+      } catch {
+        agentCleanupError = "Could not update Agent access. Try again."
+        return .failed
+      }
+    }
+
+    @discardableResult
+    func updateAgentCapabilities(
+      _ replacement: AgentProfileCapabilities,
+      expectedGrantRevision: UInt64
+    ) async -> AgentCapabilitySaveResult {
+      let replacements = [
+        (
+          profile: replacement,
+          expectedGrantRevision: expectedGrantRevision
+        )
+      ]
+      guard !capabilityMutationAffectsPendingRestoreNote(replacements) else {
+        rejectPendingRestoreCapabilityMutation()
+        return .revisionConflict
+      }
+      let expectedGrantRevisions = [
+        replacement.profileID: expectedGrantRevision
+      ]
+      let operation = replaceAgentCapabilitiesOperation
+      return await performAgentCapabilitySave(
+        operation: {
+          try await operation(replacements, expectedGrantRevisions)
+        },
+        failureMessage: "Could not update Agent capabilities. Try again."
+      )
+    }
+
+    @discardableResult
+    func updateAgentCapabilities(
+      _ replacements: [
+        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+      ]
+    ) async -> AgentCapabilitySaveResult {
+      guard !capabilityMutationAffectsPendingRestoreNote(replacements) else {
+        rejectPendingRestoreCapabilityMutation()
+        return .revisionConflict
+      }
+      let expectedGrantRevisions = replacements.reduce(
+        into: [UUID: UInt64]()
+      ) { result, replacement in
+        result[replacement.profile.profileID] = replacement.expectedGrantRevision
+      }
+      let operation = replaceAgentCapabilitiesOperation
+      return await performAgentCapabilitySave(
+        operation: {
+          try await operation(replacements, expectedGrantRevisions)
+        },
+        failureMessage: "Could not update Agent access. Try again."
+      )
+    }
+
+    @discardableResult
+    func updateAgentCapabilities(
+      _ replacements: [
+        (profile: AgentProfileCapabilities, expectedGrantRevision: UInt64)
+      ],
+      expectedGrantRevisions: [UUID: UInt64]
+    ) async -> AgentCapabilitySaveResult {
+      guard !capabilityMutationAffectsPendingRestoreNote(replacements) else {
+        rejectPendingRestoreCapabilityMutation()
+        return .revisionConflict
+      }
+      let operation = replaceAgentCapabilitiesOperation
+      return await performAgentCapabilitySave(
+        operation: {
+          try await operation(replacements, expectedGrantRevisions)
+        },
+        failureMessage: "Could not update Agent access. Try again."
+      )
+    }
+
+    @discardableResult
+    func assignUnassignedLegacyNotes(
+      _ noteIDs: Set<UUID>,
+      to profileID: UUID,
+      expectedGrantRevision: UInt64
+    ) async -> AgentCapabilitySaveResult {
+      guard pendingRestoreNoteIDs.isDisjoint(with: noteIDs) else {
+        rejectPendingRestoreCapabilityMutation()
+        return .revisionConflict
+      }
+      do {
+        agentCapabilityState = try await agentCapabilityStore.assignUnassignedLegacyNotes(
+          noteIDs,
+          to: profileID,
+          expectedGrantRevision: expectedGrantRevision
+        )
+        agentCleanupError = nil
+        return .succeeded
+      } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
+        agentCleanupError = AgentCapabilityPresentation.conflictMessage
+        return .revisionConflict
+      } catch {
+        agentCleanupError = "Could not assign legacy Agent shares. Try again."
+        return .failed
       }
     }
 
@@ -211,6 +742,9 @@
         )
       )
       let noteID = workspace.notes[destinationIndex].id
+      guard !smartCaptureTransferNoteIDs.contains(noteID) else {
+        throw SmartCaptureTransferBusy()
+      }
       workspace.updateContent(
         id: noteID,
         body: appended.body,
@@ -228,22 +762,134 @@
         )
         throw error
       }
-      return DictationInsertionReceipt(
+      let receipt = DictationInsertionReceipt(
         captureID: captureID,
         noteID: noteID,
         insertedSuffix: appended.insertedSuffix
       )
+      if workspace.notes.first(where: { $0.id == noteID }) == insertedNote {
+        committedSmartCaptures[noteID] = CommittedSmartCapture(
+          receipt: receipt,
+          noteRevision: insertedNote.revision
+        )
+      }
+      return receipt
+    }
+
+    func moveSmartCapture(
+      _ receipt: DictationInsertionReceipt,
+      to destinationID: UUID
+    ) async -> DictationInsertionReceipt? {
+      guard
+        !Task.isCancelled,
+        !receipt.insertedSuffix.isEmpty,
+        receipt.noteID != destinationID,
+        let sourceIndex = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }),
+        let destinationIndex = workspace.notes.firstIndex(where: { $0.id == destinationID })
+      else { return nil }
+
+      let source = workspace.notes[sourceIndex]
+      let destination = workspace.notes[destinationIndex]
+      guard
+        let committedCapture = committedSmartCaptures[receipt.noteID],
+        committedCapture.receipt == receipt,
+        committedCapture.noteRevision == source.revision,
+        source.body.hasSuffix(receipt.insertedSuffix),
+        let sourceRTF = removingSuffix(receipt.insertedSuffix, from: source.richTextRTF)
+      else { return nil }
+
+      let priorSourceBody = String(source.body.dropLast(receipt.insertedSuffix.count))
+      let capturedText: String
+      if priorSourceBody.isEmpty {
+        capturedText = receipt.insertedSuffix
+      } else {
+        guard receipt.insertedSuffix.hasPrefix("\n\n") else { return nil }
+        capturedText = String(receipt.insertedSuffix.dropFirst(2))
+      }
+      let appended = NoteTextAppender.appending(
+        capturedText,
+        to: destination,
+        defaults: NoteTextAppendDefaults(
+          fontFamily: preferences.fontFamily,
+          fontSize: preferences.fontSize
+        )
+      )
+      let lockedNoteIDs: Set<UUID> = [source.id, destination.id]
+      let transferOwnerID = UUID()
+      guard acquireSmartCaptureTransferLock(
+        for: lockedNoteIDs,
+        ownerID: transferOwnerID
+      ) else { return nil }
+      defer {
+        releaseSmartCaptureTransferLock(
+          for: lockedNoteIDs,
+          ownerID: transferOwnerID
+        )
+      }
+      let previousDestinationCapture = committedSmartCaptures[destinationID]
+
+      beginAwaitedSave()
+      defer { endAwaitedSave() }
+      workspace.updateContent(id: source.id, body: priorSourceBody, rtf: sourceRTF)
+      workspace.updateContent(
+        id: destination.id,
+        body: appended.body,
+        rtf: appended.richTextRTF
+      )
+      guard
+        let attemptedSource = workspace.notes.first(where: { $0.id == source.id }),
+        let attemptedDestination = workspace.notes.first(where: { $0.id == destination.id })
+      else { return nil }
+
+      let movedReceipt = DictationInsertionReceipt(
+        captureID: receipt.captureID,
+        noteID: destination.id,
+        insertedSuffix: appended.insertedSuffix
+      )
+      let saveTask = saveSmartCaptureTransfer(ownerID: transferOwnerID)
+      do {
+        try await withTaskCancellationHandler {
+          try await saveTask.value
+        } onCancel: {
+          saveTask.cancel()
+        }
+      } catch {
+        rollbackSmartCaptureMove(
+          source: source,
+          attemptedSource: attemptedSource,
+          destination: destination,
+          attemptedDestination: attemptedDestination
+        )
+        return nil
+      }
+
+      if committedSmartCaptures[source.id] == committedCapture {
+        committedSmartCaptures.removeValue(forKey: source.id)
+      }
+      if workspace.notes.first(where: { $0.id == destination.id }) == attemptedDestination,
+        committedSmartCaptures[destination.id] == previousDestinationCapture
+      {
+        committedSmartCaptures[destination.id] = CommittedSmartCapture(
+          receipt: movedReceipt,
+          noteRevision: attemptedDestination.revision
+        )
+      }
+      return movedReceipt
     }
 
     func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
       guard let index = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }) else {
         return false
       }
+      guard !smartCaptureTransferNoteIDs.contains(receipt.noteID) else { return false }
       beginAwaitedSave()
       defer { endAwaitedSave() }
       workspace.selectedNoteID = receipt.noteID
       let note = workspace.notes[index]
       guard
+        let committedCapture = committedSmartCaptures[receipt.noteID],
+        committedCapture.receipt == receipt,
+        committedCapture.noteRevision == note.revision,
         !receipt.insertedSuffix.isEmpty,
         note.body.hasSuffix(receipt.insertedSuffix),
         let richTextRTF = removingSuffix(receipt.insertedSuffix, from: note.richTextRTF)
@@ -259,6 +905,9 @@
       let attemptedUndoNote = workspace.notes[index]
       do {
         try await saveNow(transactionOwned: true).value
+        if committedSmartCaptures[receipt.noteID] == committedCapture {
+          committedSmartCaptures.removeValue(forKey: receipt.noteID)
+        }
         return true
       } catch {
         if let currentIndex = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }) {
@@ -321,6 +970,10 @@
 
     func importNote(_ note: Note, intoFolderID targetFolderID: UUID?) {
       var imported = note
+      guard
+        !isLockedNote(imported.id)
+          || workspace.notes.contains(where: { $0.id == imported.id })
+      else { return }
       if workspace.notes.contains(where: { $0.id == imported.id }) {
         imported = Note(
           id: UUID(),
@@ -333,7 +986,8 @@
           isPinned: imported.isPinned,
           agentAccess: imported.agentAccess,
           revision: imported.revision,
-          folderID: imported.folderID
+          folderID: imported.folderID,
+          titleFontFamily: imported.titleFontFamily
         )
       }
       imported.folderID = validFolderIDOrUnfiled(targetFolderID)
@@ -367,6 +1021,7 @@
     }
 
     func deleteFolder(id: UUID, activeFolderID: UUID? = nil) throws {
+      guard !isLockedFolder(id) else { return }
       let selectedID = workspace.selectedNoteID
       let selectedWasMember = workspace.notes.contains {
         $0.id == selectedID && $0.folderID == id
@@ -425,6 +1080,8 @@
         targetFolderID == nil
           || workspace.folders.contains(where: { $0.id == targetFolderID })
       else { return false }
+      guard !isLockedNoteMembershipChange(noteID: id, targetFolderID: targetFolderID)
+      else { return false }
       guard note.folderID != targetFolderID else { return false }
 
       let sourceFolderID = note.folderID
@@ -467,18 +1124,39 @@
       return true
     }
 
-    func moveToTrash(_ id: UUID) {
-      guard let note = workspace.notes.first(where: { $0.id == id }) else { return }
+    @discardableResult
+    func moveToTrash(_ id: UUID, suppressConfirmation: Bool = false) -> Bool {
+      guard !isLockedNote(id) else { return false }
+      guard let note = workspace.notes.first(where: { $0.id == id }) else {
+        return false
+      }
+      if suppressConfirmation {
+        preferences.confirmBeforeMovingNotesToTrash = false
+      }
+      committedSmartCaptures.removeValue(forKey: id)
       pendingTrashNotes[id] = note
       workspace.deleteNote(id: id)
       saveNow()
+      return true
     }
 
-    func moveToTrash(_ id: UUID, activeFolderID: UUID?) {
-      guard let note = workspace.notes.first(where: { $0.id == id }) else { return }
+    @discardableResult
+    func moveToTrash(
+      _ id: UUID,
+      activeFolderID: UUID?,
+      suppressConfirmation: Bool = false
+    ) -> Bool {
+      guard !isLockedNote(id) else { return false }
+      guard let note = workspace.notes.first(where: { $0.id == id }) else {
+        return false
+      }
       let sourceFolderID = note.folderID
       let sourceVisibleNotes = workspace.notes(inFolderID: sourceFolderID)
       let selectedWasDeleted = workspace.selectedNoteID == id
+      if suppressConfirmation {
+        preferences.confirmBeforeMovingNotesToTrash = false
+      }
+      committedSmartCaptures.removeValue(forKey: id)
       pendingTrashNotes[id] = note
       var updated = workspace
       updated.deleteNote(id: id)
@@ -492,6 +1170,7 @@
       }
       workspace = updated
       saveNow()
+      return true
     }
 
     func selectAdjacentNote(forward: Bool) {
@@ -521,12 +1200,14 @@
     }
 
     func togglePinned(_ id: UUID) {
+      guard !smartCaptureTransferNoteIDs.contains(id) else { return }
       workspace.togglePinned(id: id)
       scheduleSave()
     }
 
     func updateSelected(title: String? = nil, body: String? = nil) {
       guard let id = workspace.selectedNoteID else { return }
+      guard !smartCaptureTransferNoteIDs.contains(id) else { return }
       let originalWorkspace = workspace
       if let title {
         workspace.updateNote(id: id, title: title)
@@ -542,6 +1223,7 @@
 
     func updateSelected(body: String, richTextRTF: Data?) {
       guard let id = workspace.selectedNoteID else { return }
+      guard !smartCaptureTransferNoteIDs.contains(id) else { return }
       let originalWorkspace = workspace
       workspace.updateContent(id: id, body: body, rtf: richTextRTF)
       guard workspace != originalWorkspace else { return }
@@ -555,30 +1237,18 @@
 
     func setSelectedTabColor(_ hex: String?) {
       guard let id = workspace.selectedNoteID else { return }
+      guard !smartCaptureTransferNoteIDs.contains(id) else { return }
       workspace.setTabColor(id: id, hex: hex)
       scheduleSave()
     }
 
-    func setSelectedAgentAccess(_ enabled: Bool) {
+    func setSelectedTitleFontFamily(_ family: String?) {
       guard let id = workspace.selectedNoteID else { return }
-      setAgentAccess(noteID: id, enabled: enabled)
-    }
-
-    func setAgentAccess(noteID: UUID, enabled: Bool) {
+      guard !smartCaptureTransferNoteIDs.contains(id) else { return }
       let originalWorkspace = workspace
-      workspace.setAgentAccess(id: noteID, enabled: enabled)
+      workspace.setTitleFontFamily(id: id, family: family)
       guard workspace != originalWorkspace else { return }
-      saveNow()
-      refreshAgentActivity()
-    }
-
-    var hasConfirmedFirstAgentShare: Bool {
-      UserDefaults.standard.bool(forKey: "hasConfirmedFirstAgentShare")
-    }
-
-    func confirmFirstAgentShare(noteID: UUID) {
-      UserDefaults.standard.set(true, forKey: "hasConfirmedFirstAgentShare")
-      setAgentAccess(noteID: noteID, enabled: true)
+      scheduleSave()
     }
 
     func toggleList(_ style: MarkdownEditing.ListStyle) {
@@ -628,15 +1298,31 @@
       debouncedSaveTask?.cancel()
       markSaveStarted()
       if transactionOwned {
-        let snapshot = saveSnapshot()
+        beginTransactionOwnedSave()
         return Task {
-          try await persist(snapshot)
+          defer { endTransactionOwnedSave() }
+          await waitForSmartCaptureTransfer()
+          try await persist(saveSnapshot())
         }
       }
       return Task {
-        await waitForAwaitedSaves()
+        await waitForPersistenceTransactions()
         try Task.checkCancellation()
         try await persist(saveSnapshot())
+      }
+    }
+
+    private func saveSmartCaptureTransfer(ownerID: UUID) -> Task<Void, Error> {
+      guard startupMigrationError == nil,
+        smartCaptureTransferOwnerID == ownerID
+      else {
+        return Task { throw SmartCaptureTransferBusy() }
+      }
+      debouncedSaveTask?.cancel()
+      markSaveStarted()
+      let snapshot = saveSnapshot()
+      return Task {
+        try await persist(snapshot)
       }
     }
 
@@ -649,44 +1335,90 @@
       }
     }
 
-    func restore(_ trashedNote: TrashedNote) {
-      guard startupMigrationError == nil else { return }
+    @discardableResult
+    func restore(_ trashedNote: TrashedNote) -> Task<Void, Never>? {
+      guard !isLockedNote(trashedNote.id) else { return nil }
+      guard startupMigrationError == nil else { return nil }
+      guard pendingRestoreNoteIDs.insert(trashedNote.id).inserted else {
+        return nil
+      }
+      setAgentCapabilityNoteExclusion(trashedNote.id, excluded: true)
+      committedSmartCaptures.removeValue(forKey: trashedNote.id)
       debouncedSaveTask?.cancel()
       resetSaveStatus()
       pendingTrashNotes.removeValue(forKey: trashedNote.id)
       trashedNotes.removeAll { $0.id == trashedNote.id }
-      let originalWorkspace = workspace
+      let originalNote = workspace.notes.first(where: { $0.id == trashedNote.id })
+      let originalSelectedNoteID = workspace.selectedNoteID
       workspace.addRestoredNote(trashedNote.note)
-      let optimisticWorkspace = workspace
-      let preferences = preferences
-      let generation = persistenceGeneration
-      let store = store
-      Task {
+      let restoreOperation = self.restoreOperation
+      let loadTrashOperation = self.loadTrashOperation
+      return Task { @MainActor in
+        defer {
+          pendingRestoreNoteIDs.remove(trashedNote.id)
+          setAgentCapabilityNoteExclusion(trashedNote.id, excluded: false)
+        }
+        await waitForSmartCaptureTransfer()
+        let optimisticWorkspace = workspace
+        let preferences = preferences
+        let generation = persistenceGeneration
         do {
-          _ = try await store.restore(
+          let restoreOutcome = try await restoreOperation(
             trashedNote,
-            into: optimisticWorkspace,
-            preferences: preferences,
-            generation: generation
+            optimisticWorkspace,
+            preferences,
+            generation
           )
-          trashedNotes = try await store.loadTrash()
-          saveError = nil
+          pendingRestoreNoteIDs.remove(trashedNote.id)
+          setAgentCapabilityNoteExclusion(trashedNote.id, excluded: false)
+
+          do {
+            trashedNotes = try await loadTrashOperation()
+            saveError = restoreOutcome.trashCleanup == .failed
+              ? Self.restoreTrashCleanupFailureMessage
+              : nil
+          } catch {
+            if restoreOutcome.trashCleanup == .failed {
+              if !trashedNotes.contains(where: { $0.id == trashedNote.id }) {
+                trashedNotes.append(trashedNote)
+              }
+              saveError = Self.restoreTrashCleanupFailureMessage
+            } else {
+              saveError = error.localizedDescription
+            }
+          }
+          return
         } catch {
-          if workspace == optimisticWorkspace {
-            workspace = originalWorkspace
+          let restoreError = error
+          var rolledBackWorkspace = workspace
+          if originalNote == nil {
+            rolledBackWorkspace.notes.removeAll { $0.id == trashedNote.id }
+            if rolledBackWorkspace.selectedNoteID == trashedNote.id {
+              rolledBackWorkspace.selectedNoteID = originalSelectedNoteID
+              rolledBackWorkspace.ensureNoteExists()
+            }
+          } else if rolledBackWorkspace.selectedNoteID == trashedNote.id {
+            rolledBackWorkspace.selectedNoteID = originalSelectedNoteID
           }
-          if let refreshedTrash = try? await store.loadTrash() {
+          workspace = rolledBackWorkspace
+          do {
+            let refreshedTrash = try await loadTrashOperation()
             trashedNotes = refreshedTrash
+          } catch {
+            if !trashedNotes.contains(where: { $0.id == trashedNote.id }) {
+              trashedNotes.append(trashedNote)
+            }
           }
-          saveError = error.localizedDescription
+          saveError = restoreError.localizedDescription
+          return
         }
       }
     }
 
-    private func load() async {
-      defer { finishInitialLoad() }
+    private func load() async -> Bool {
       do {
         let snapshot = try await store.loadSnapshot()
+        committedSmartCaptures.removeAll()
         workspace = snapshot.workspace
         preferences = snapshot.preferences
         initialSnapshotSource = snapshot.source
@@ -696,11 +1428,12 @@
         )
         agentCommitProofs = snapshot.commitProofs
         trashedNotes = try await store.loadTrash()
-        isAgentWorkspaceAvailable = true
         saveError = nil
+        return true
       } catch {
         isAgentWorkspaceAvailable = false
         saveError = error.localizedDescription
+        return false
       }
     }
 
@@ -727,7 +1460,7 @@
       markSaveStarted()
       let task = Task {
         try await Task.sleep(for: .milliseconds(350))
-        await waitForAwaitedSaves()
+        await waitForPersistenceTransactions()
         try Task.checkCancellation()
         try await persist(saveSnapshot())
       }
@@ -756,6 +1489,11 @@
       }
     }
 
+    private static let agentCapabilityFailureMessage =
+      "Agent workspace is unavailable. Reopen Fleck after resolving capability storage."
+    private static let restoreTrashCleanupFailureMessage =
+      "The note was restored, but Trash cleanup could not finish. Try again."
+
     private typealias SaveSnapshot = (
       workspace: Workspace,
       preferences: AppPreferences,
@@ -774,6 +1512,10 @@
 
     private func persist(_ snapshot: SaveSnapshot) async throws {
       do {
+        if let beforeSaveOperation {
+          await beforeSaveOperation()
+        }
+        try Task.checkCancellation()
         _ = try await saveOperation(
           snapshot.workspace,
           snapshot.preferences,
@@ -852,6 +1594,14 @@
           recoveryAction: "Wait for Trash to finish saving, then retry."
         )
       }
+      guard smartCaptureTransferNoteIDs.isEmpty else {
+        throw AgentWorkspaceError(code: .revisionConflict)
+      }
+      guard isLockedContextUnchanged(in: self.workspace),
+        isLockedContextUnchanged(in: workspace)
+      else {
+        throw AgentWorkspaceError(code: .revisionConflict)
+      }
       debouncedSaveTask?.cancel()
       let committedGeneration = expectedGeneration + 1
       do {
@@ -870,6 +1620,7 @@
         throw AgentWorkspaceError(code: .internalSaveFailure)
       }
 
+      committedSmartCaptures.removeAll()
       self.workspace = workspace
       persistenceGeneration = committedGeneration
       agentCommitProofs.removeAll {
@@ -921,12 +1672,24 @@
       do {
         let provisioning = try await agentProfileStore.create(name: name)
         do {
-          try await AgentBridgeInstaller.live().provisionAsync(
-            profileID: provisioning.profile.id,
-            token: provisioning.credential
+          try await agentProfileProvisionOperation(
+            provisioning.profile.id,
+            provisioning.credential
+          )
+          agentCapabilityState = try await agentCapabilityStore.registerEmptyProfile(
+            provisioning.profile.id
           )
         } catch {
-          try? await agentProfileStore.revoke(profileID: provisioning.profile.id)
+          do {
+            try await agentProfileStore.revoke(profileID: provisioning.profile.id)
+          } catch {
+            try? await agentProfileStore.revoke(profileID: provisioning.profile.id)
+          }
+          do {
+            try await agentProfileDisconnectOperation(provisioning.profile.id)
+          } catch {
+            try? await agentProfileDisconnectOperation(provisioning.profile.id)
+          }
           throw error
         }
         await refreshAgentProfiles()
@@ -948,7 +1711,7 @@
       await refreshAgentProfiles()
       guard !agentProfiles.contains(where: { $0.id == profile.id }) else { return }
       do {
-        try await AgentBridgeInstaller.live().disconnectAsync(profileID: profile.id)
+        try await agentProfileDisconnectOperation(profile.id)
         if !localCleanupFailed {
           agentCleanupError = nil
         }
@@ -959,11 +1722,14 @@
       }
     }
 
-    func refreshAgentProfiles() async {
+    @discardableResult
+    func refreshAgentProfiles() async -> Bool {
       do {
         agentProfiles = try await agentProfileStore.activeProfiles()
+        return true
       } catch {
         agentCleanupError = "Could not load agent profiles: \(error.localizedDescription)"
+        return false
       }
     }
 
@@ -989,7 +1755,8 @@
       let service = AgentCommandService(
         state: self,
         profileStore: agentProfileStore,
-        activityStore: agentActivityStore
+        activityStore: agentActivityStore,
+        capabilityAuthority: agentCapabilityAuthority
       )
       do {
         _ = try await service.executeLocalUndo(
@@ -1016,7 +1783,7 @@
 
     private func drainPersistenceForAgent() async throws {
       while true {
-        await waitForAwaitedSaves()
+        await waitForPersistenceTransactions()
         debouncedSaveTask?.cancel()
         let generation = persistenceGeneration
         do {
@@ -1063,24 +1830,56 @@
       }
     }
 
+    private func rollbackSmartCaptureMove(
+      source: Note,
+      attemptedSource: Note,
+      destination: Note,
+      attemptedDestination: Note
+    ) {
+      if let index = workspace.notes.firstIndex(where: { $0.id == source.id }),
+        workspace.notes[index] == attemptedSource
+      {
+        workspace.notes[index] = source
+      }
+      if let index = workspace.notes.firstIndex(where: { $0.id == destination.id }),
+        workspace.notes[index] == attemptedDestination
+      {
+        workspace.notes[index] = destination
+      }
+    }
+
     private func beginAwaitedSave() {
       awaitedSaveCount += 1
     }
 
     private func endAwaitedSave() {
       awaitedSaveCount -= 1
-      guard awaitedSaveCount == 0 else { return }
-      let waiters = awaitedSaveWaiters
-      awaitedSaveWaiters.removeAll()
+      resumePersistenceTransactionWaitersIfIdle()
+    }
+
+    private func beginTransactionOwnedSave() {
+      transactionOwnedSaveCount += 1
+    }
+
+    private func endTransactionOwnedSave() {
+      transactionOwnedSaveCount -= 1
+      resumePersistenceTransactionWaitersIfIdle()
+    }
+
+    private func resumePersistenceTransactionWaitersIfIdle() {
+      guard awaitedSaveCount == 0, transactionOwnedSaveCount == 0 else { return }
+      let waiters = persistenceTransactionWaiters
+      persistenceTransactionWaiters.removeAll()
       for waiter in waiters {
         waiter.resume()
       }
     }
 
-    private func waitForAwaitedSaves() async {
-      guard awaitedSaveCount > 0 else { return }
-      await withCheckedContinuation { continuation in
-        awaitedSaveWaiters.append(continuation)
+    private func waitForPersistenceTransactions() async {
+      while awaitedSaveCount > 0 || transactionOwnedSaveCount > 0 {
+        await withCheckedContinuation { continuation in
+          persistenceTransactionWaiters.append(continuation)
+        }
       }
     }
 

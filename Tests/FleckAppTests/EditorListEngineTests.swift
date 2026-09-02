@@ -53,6 +53,31 @@ import Testing
   )
 }
 
+@Test func emptyParagraphTogglesCreateAndRemoveRealMarkers() {
+  #expect(EditorListEngine.toggle(style: .bullet(.disc), in: "") == "• ")
+  #expect(EditorListEngine.toggle(style: .number(.decimal), in: "") == "1. ")
+  #expect(EditorListEngine.toggle(style: .checklist, in: "") == "○ ")
+  #expect(EditorListEngine.toggle(style: .bullet(.disc), in: "• ") == "")
+  #expect(EditorListEngine.toggle(style: .number(.decimal), in: "1. ") == "")
+  #expect(EditorListEngine.toggle(style: .checklist, in: "○ ") == "")
+}
+
+@Test func emptyParagraphAutomaticTogglesPreserveTerminator() {
+  #expect(EditorListEngine.toggleAutomatic(family: .bullets, in: "") == "• ")
+  #expect(EditorListEngine.toggleAutomatic(family: .numbers, in: "") == "1. ")
+  #expect(EditorListEngine.toggle(style: .checklist, in: "\n") == "○ \n")
+  #expect(EditorListEngine.toggleAutomatic(family: .bullets, in: "\n") == "• \n")
+  #expect(EditorListEngine.toggleAutomatic(family: .numbers, in: "\n") == "1. \n")
+  #expect(EditorListEngine.toggle(style: .checklist, in: "○ \n") == "\n")
+}
+
+@Test func emptyInternalParagraphsRemainBlankWhenSelectionIsMultiline() {
+  #expect(
+    EditorListEngine.toggle(style: .bullet(.disc), in: "One\n\nTwo")
+      == "• One\n\n• Two"
+  )
+}
+
 @Test func automaticListsUseEachParagraphDepth() {
   let plain = "Parent\n    Child\n        Grandchild"
   let bullets = "• Parent\n    ◦ Child\n        ▪ Grandchild"

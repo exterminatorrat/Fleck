@@ -34,7 +34,8 @@ enum FoundationModelRouteDecision: Equatable, Sendable {
 }
 
 struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
-  typealias CleanupGenerator = @Sendable (FoundationModelCleanupPrompt) async throws -> String
+  typealias CleanupGenerator =
+    @Sendable (FoundationModelCleanupPrompt, Int) async throws -> String
   typealias RoutingGenerator = @Sendable (String, [DictationDestination]) async throws -> FoundationModelRouteDecision
 
   private struct CorrectionSignal {
@@ -71,21 +72,28 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
   }
 
   func clean(_ rawTranscript: String) async throws -> String {
-    let result = await cleanupResult(rawTranscript)
+    let result = await cleanupResult(
+      rawTranscript,
+      maximumOutputTokens: 128
+    )
     guard result.outcome == .cleaned else { throw FoundationModelDictationError.usedRaw }
     return result.text
   }
 
-  func cleanupResult(_ rawTranscript: String) async -> FoundationModelCleanupResult {
+  func cleanupResult(
+    _ rawTranscript: String,
+    maximumOutputTokens: Int = 128
+  ) async -> FoundationModelCleanupResult {
     let localFallback = Self.localCleanup(rawTranscript)
     guard osMajorVersion() >= 26 else {
       return Self.fallbackResult(raw: rawTranscript, cleaned: localFallback)
     }
 
     do {
-      let cleaned = try await cleanupGenerator(.init(
-        rawTranscript: rawTranscript
-      ))
+      let cleaned = try await cleanupGenerator(
+        .init(rawTranscript: rawTranscript),
+        maximumOutputTokens
+      )
       guard Self.isFaithful(cleaned, to: rawTranscript) else {
         return Self.fallbackResult(raw: rawTranscript, cleaned: localFallback)
       }
@@ -97,23 +105,48 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
 
   func route(
     transcript: String,
-    candidates: [DictationDestination],
+    candidates: [DictationRoutingCandidate],
     inboxID: UUID?
-  ) async -> UUID? {
-    guard osMajorVersion() >= 26 else { return inboxID }
-    let eligible = Self.eligibleDestinations(from: candidates)
-    guard !eligible.isEmpty else { return inboxID }
+  ) async -> DictationRoutingDecision {
+    let eligible = Self.eligibleDestinations(from: candidates.map(\.destination))
+    guard !eligible.isEmpty else { return .inbox }
+
+    let osMajorVersion = osMajorVersion()
+    if osMajorVersion >= 14 {
+      if let destinationID = Self.exactTitleDestinationID(
+        transcript: transcript,
+        eligibleDestinations: eligible
+      ) {
+        return .resolved(destinationID)
+      }
+    }
+
+    guard osMajorVersion >= 26 else { return .inbox }
 
     do {
       switch try await routingGenerator(transcript, eligible) {
       case .match(let noteID, .high) where eligible.contains(where: { $0.noteID == noteID }):
-        return noteID
+        return .resolved(noteID)
       default:
-        return inboxID
+        return .inbox
       }
     } catch {
-      return inboxID
+      return .inbox
     }
+  }
+
+  func route(
+    transcript: String,
+    candidates: [DictationDestination],
+    inboxID: UUID?
+  ) async -> DictationRoutingDecision {
+    await route(
+      transcript: transcript,
+      candidates: candidates.map {
+        DictationRoutingCandidate(destination: $0, semanticContext: "")
+      },
+      inboxID: inboxID
+    )
   }
 
   private static let cleanupInstructions = """
@@ -291,7 +324,7 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
       || (lexeme.first == "(" && lexeme.last == ")")
   }
 
-  private static func eligibleDestinations(
+  static func eligibleDestinations(
     from candidates: [DictationDestination]
   ) -> [DictationDestination] {
     let titles = candidates.map { normalizedTitle($0.title) }
@@ -314,6 +347,63 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
       }
       return destination
     }
+  }
+
+  private static func exactTitleMatches(
+    in transcript: String,
+    candidates: [DictationDestination]
+  ) -> [(destination: DictationDestination, occurrenceCount: Int)] {
+    let normalizedTranscript = normalizedTitle(transcript)
+    return candidates.compactMap { candidate in
+      let title = normalizedTitle(candidate.title)
+      guard title.allSatisfy({ $0.isLetter || $0.isNumber || $0.isWhitespace }) else {
+        return nil
+      }
+      let occurrenceCount = exactTitleOccurrenceCount(title, in: normalizedTranscript)
+      guard occurrenceCount > 0 else { return nil }
+      return (destination: candidate, occurrenceCount: occurrenceCount)
+    }
+  }
+
+  static func exactTitleDestinationID(
+    transcript: String,
+    candidates: [DictationRoutingCandidate]
+  ) -> UUID? {
+    exactTitleDestinationID(
+      transcript: transcript,
+      eligibleDestinations: eligibleDestinations(from: candidates.map(\.destination))
+    )
+  }
+
+  private static func exactTitleDestinationID(
+    transcript: String,
+    eligibleDestinations: [DictationDestination]
+  ) -> UUID? {
+    let matches = exactTitleMatches(in: transcript, candidates: eligibleDestinations)
+    guard matches.count == 1 else { return nil }
+    return matches[0].destination.noteID
+  }
+
+  private static func exactTitleOccurrenceCount(_ title: String, in transcript: String) -> Int {
+    var count = 0
+    var searchStart = transcript.startIndex
+    while searchStart < transcript.endIndex,
+      let range = transcript.range(of: title, range: searchStart..<transcript.endIndex)
+    {
+      let precededByWordCharacter = range.lowerBound > transcript.startIndex
+        && isWordCharacter(transcript[transcript.index(before: range.lowerBound)])
+      let followedByWordCharacter = range.upperBound < transcript.endIndex
+        && isWordCharacter(transcript[range.upperBound])
+      if !precededByWordCharacter && !followedByWordCharacter {
+        count += 1
+      }
+      searchStart = transcript.index(after: range.lowerBound)
+    }
+    return count
+  }
+
+  private static func isWordCharacter(_ character: Character) -> Bool {
+    character.isLetter || character.isNumber || character == "'" || character == "’"
   }
 
   private static let genericTitles: Set<String> = [
@@ -482,9 +572,19 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     }
   }
 
-  private static func generateCleanup(_ prompt: FoundationModelCleanupPrompt) async throws -> String {
+  private static func generateCleanup(
+    _ prompt: FoundationModelCleanupPrompt,
+    _ maximumOutputTokens: Int
+  ) async throws -> String {
     guard #available(macOS 26, *) else { throw FoundationModelDictationError.unavailable }
-    return try await generateCleanupOnCurrentOS(prompt)
+    #if canImport(FoundationModels)
+    return try await liveCleanupResponder.generate(
+      prompt: prompt,
+      maximumOutputTokens: maximumOutputTokens
+    )
+    #else
+    throw FoundationModelDictationError.unavailable
+    #endif
   }
 
   private static func generateRoute(
@@ -500,6 +600,57 @@ private enum FoundationModelDictationError: Error {
   case unavailable
   case usedRaw
 }
+
+#if canImport(FoundationModels)
+@available(macOS 26, *)
+struct FoundationModelCleanupResponder: Sendable {
+  typealias Respond =
+    @Sendable (String, GenerationOptions) async throws -> String
+
+  private let respondClosure: Respond
+
+  init(_ respond: @escaping Respond) {
+    respondClosure = respond
+  }
+
+  func respond(
+    to prompt: String,
+    options: GenerationOptions
+  ) async throws -> String {
+    try await respondClosure(prompt, options)
+  }
+
+  func generate(
+    prompt: FoundationModelCleanupPrompt,
+    maximumOutputTokens: Int
+  ) async throws -> String {
+    let options = GenerationOptions(maximumResponseTokens: maximumOutputTokens)
+    return try await respond(to: prompt.rendered, options: options)
+  }
+}
+
+@available(macOS 26, *)
+extension FoundationModelDictation {
+  init(
+    osMajorVersion: @escaping @Sendable () -> Int = {
+      ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    },
+    foundationModelResponder: FoundationModelCleanupResponder,
+    routingGenerator: @escaping RoutingGenerator = FoundationModelDictation.generateRoute
+  ) {
+    self.init(
+      osMajorVersion: osMajorVersion,
+      cleanupGenerator: { prompt, maximumOutputTokens in
+        try await foundationModelResponder.generate(
+          prompt: prompt,
+          maximumOutputTokens: maximumOutputTokens
+        )
+      },
+      routingGenerator: routingGenerator
+    )
+  }
+}
+#endif
 
 #if canImport(FoundationModels)
 @available(macOS 26, *)
@@ -527,10 +678,16 @@ private enum GeneratedRouteConfidence {
 
 @available(macOS 26, *)
 private extension FoundationModelDictation {
-  static func generateCleanupOnCurrentOS(_ prompt: FoundationModelCleanupPrompt) async throws -> String {
-    guard SystemLanguageModel.default.isAvailable else { throw FoundationModelDictationError.unavailable }
+  static let liveCleanupResponder = FoundationModelCleanupResponder { prompt, options in
+    guard SystemLanguageModel.default.isAvailable else {
+      throw FoundationModelDictationError.unavailable
+    }
     let session = LanguageModelSession(instructions: cleanupInstructions)
-    return try await session.respond(to: prompt.rendered, generating: GeneratedCleanup.self).content.text
+    return try await session.respond(
+      to: prompt,
+      generating: GeneratedCleanup.self,
+      options: options
+    ).content.text
   }
 
   static func generateRouteOnCurrentOS(
@@ -560,10 +717,6 @@ private extension FoundationModelDictation {
 }
 #else
 private extension FoundationModelDictation {
-  static func generateCleanupOnCurrentOS(_: FoundationModelCleanupPrompt) async throws -> String {
-    throw FoundationModelDictationError.unavailable
-  }
-
   static func generateRouteOnCurrentOS(
     transcript _: String,
     candidates _: [DictationDestination]

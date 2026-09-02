@@ -24,8 +24,9 @@ enum DictationPermissionStatus: Equatable, Sendable {
 }
 
 enum DictationRoutingAvailability: Equatable, Sendable {
-  case inbox
+  case exactTitle
   case foundationModel
+  case localModel
 }
 
 enum DictationFoundationModelAvailability: Equatable, Sendable {
@@ -81,6 +82,8 @@ struct DictationAvailability: Equatable, Sendable {
     let appleOnDeviceRecognitionSupported: Bool
     let enhancedModelReady: Bool
     let foundationModelAvailability: DictationFoundationModelAvailability
+    let cleanupModelReady: Bool
+    let localRoutingModelReady: Bool
 
     init(
       osMajorVersion: Int,
@@ -89,7 +92,9 @@ struct DictationAvailability: Equatable, Sendable {
       speechPermission: DictationPermissionStatus,
       appleOnDeviceRecognitionSupported: Bool,
       enhancedModelReady: Bool,
-      foundationModelAvailability: DictationFoundationModelAvailability
+      foundationModelAvailability: DictationFoundationModelAvailability,
+      cleanupModelReady: Bool = false,
+      localRoutingModelReady: Bool = false
     ) {
       self.osMajorVersion = osMajorVersion
       self.architecture = architecture
@@ -98,6 +103,8 @@ struct DictationAvailability: Equatable, Sendable {
       self.appleOnDeviceRecognitionSupported = appleOnDeviceRecognitionSupported
       self.enhancedModelReady = enhancedModelReady
       self.foundationModelAvailability = foundationModelAvailability
+      self.cleanupModelReady = cleanupModelReady
+      self.localRoutingModelReady = localRoutingModelReady
     }
 
     init(
@@ -107,7 +114,9 @@ struct DictationAvailability: Equatable, Sendable {
       speechPermission: DictationPermissionStatus,
       appleOnDeviceRecognitionSupported: Bool,
       enhancedModelReady: Bool,
-      foundationModelAvailable: Bool
+      foundationModelAvailable: Bool,
+      cleanupModelReady: Bool = false,
+      localRoutingModelReady: Bool = false
     ) {
       self.init(
         osMajorVersion: osMajorVersion,
@@ -119,7 +128,9 @@ struct DictationAvailability: Equatable, Sendable {
         foundationModelAvailability:
           osMajorVersion < 26
           ? .unsupportedOS
-          : foundationModelAvailable ? .available : .unknown
+          : foundationModelAvailable ? .available : .unknown,
+        cleanupModelReady: cleanupModelReady,
+        localRoutingModelReady: localRoutingModelReady
       )
     }
   }
@@ -147,6 +158,7 @@ struct DictationAvailability: Equatable, Sendable {
     let microphoneAvailable = input.microphonePermission.permitsRequestOrUse
     let speechAvailable = input.speechPermission.permitsRequestOrUse
     let foundationModelAvailable = input.foundationModelAvailability == .available
+    let cleanupAvailable = foundationModelAvailable || input.cleanupModelReady
     let enhancedAvailable = supportedOS
       && enhancedCandidateEnabled
       && input.architecture == .appleSilicon
@@ -164,14 +176,19 @@ struct DictationAvailability: Equatable, Sendable {
       && microphoneAvailable
       && speechAvailable
       && input.appleOnDeviceRecognitionSupported
-    let routing: DictationRoutingAvailability =
-      foundationModelAvailable ? .foundationModel : .inbox
+    let routing: DictationRoutingAvailability = if foundationModelAvailable {
+      .foundationModel
+    } else if input.localRoutingModelReady {
+      .localModel
+    } else {
+      .exactTitle
+    }
 
     #if CLEAN_DICTATION_ENHANCED_CANDIDATE
       return .init(
         standardAvailable: standardAvailable,
         enhancedAvailable: enhancedAvailable,
-        cleanupAvailable: foundationModelAvailable,
+        cleanupAvailable: cleanupAvailable,
         routing: routing,
         foundationModelAvailability: input.foundationModelAvailability,
         microphonePermission: input.microphonePermission,
@@ -190,7 +207,7 @@ struct DictationAvailability: Equatable, Sendable {
       return .init(
         standardAvailable: standardAvailable,
         enhancedAvailable: enhancedAvailable,
-        cleanupAvailable: foundationModelAvailable,
+        cleanupAvailable: cleanupAvailable,
         routing: routing,
         foundationModelAvailability: input.foundationModelAvailability,
         microphonePermission: input.microphonePermission,
@@ -205,7 +222,9 @@ struct DictationAvailability: Equatable, Sendable {
   @MainActor
   static func current(
     permissions: DictationPermissionController,
-    enhancedModelReady: Bool
+    enhancedModelReady: Bool,
+    cleanupModelReady: Bool = false,
+    localRoutingModelReady: Bool = false
   ) -> Self {
     let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     return evaluate(.init(
@@ -215,7 +234,9 @@ struct DictationAvailability: Equatable, Sendable {
       speechPermission: permissions.currentSpeechStatus,
       appleOnDeviceRecognitionSupported: recognizer?.supportsOnDeviceRecognition == true,
       enhancedModelReady: enhancedModelReady,
-      foundationModelAvailability: foundationModelAvailability
+      foundationModelAvailability: currentFoundationModelAvailability,
+      cleanupModelReady: cleanupModelReady,
+      localRoutingModelReady: localRoutingModelReady
     ))
   }
 
@@ -265,7 +286,7 @@ struct DictationAvailability: Equatable, Sendable {
     return machine == "arm64" ? .appleSilicon : .intel
   }
 
-  private static var foundationModelAvailability: DictationFoundationModelAvailability {
+  static var currentFoundationModelAvailability: DictationFoundationModelAvailability {
     #if canImport(FoundationModels)
       if #available(macOS 26.0, *) {
         switch SystemLanguageModel.default.availability {
@@ -320,29 +341,38 @@ struct DictationCompatibilityPresentation: Equatable, Sendable {
     )
 
     let cleanupDetail: String
-    switch availability.foundationModelAvailability {
-    case .available:
+    if availability.cleanupAvailable {
       cleanupDetail = "Available"
-    case .unsupportedOS:
-      cleanupDetail = "Requires macOS 26 or later"
-    case .deviceNotEligible:
-      cleanupDetail = "Requires a Mac that supports Apple Intelligence"
-    case .appleIntelligenceNotEnabled:
-      cleanupDetail = "Turn on Apple Intelligence in System Settings"
-    case .modelNotReady:
-      cleanupDetail = "Apple Intelligence model is not ready"
-    case .unknown:
-      cleanupDetail = "Unavailable"
+    } else {
+      switch availability.foundationModelAvailability {
+      case .available:
+        cleanupDetail = "Available"
+      case .unsupportedOS:
+        cleanupDetail = "Requires macOS 26 or later"
+      case .deviceNotEligible:
+        cleanupDetail = "Requires a Mac that supports Apple Intelligence"
+      case .appleIntelligenceNotEnabled:
+        cleanupDetail = "Turn on Apple Intelligence in System Settings"
+      case .modelNotReady:
+        cleanupDetail = "Apple Intelligence model is not ready"
+      case .unknown:
+        cleanupDetail = "Unavailable"
+      }
     }
     cleanup = .init(
       title: "AI cleanup",
       detail: cleanupDetail,
       available: availability.cleanupAvailable
     )
+    let smartCaptureAvailable = availability.osMajorVersion >= 14
     smartCapture = .init(
       title: "Smart Capture",
-      detail: availability.routing == .foundationModel ? "Available" : "Saves to Inbox",
-      available: availability.routing == .foundationModel
+      detail: smartCaptureAvailable
+        ? availability.routing == .exactTitle
+          ? "Say an exact note title once; otherwise Inbox."
+          : "Matches note titles and content by topic; ambiguous captures go to Inbox."
+        : "Requires macOS 14 or later",
+      available: smartCaptureAvailable
     )
   }
 }

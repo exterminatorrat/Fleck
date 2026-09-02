@@ -1379,6 +1379,7 @@ Show local activity newest first with:
 - Open Note;
 - Copy Details;
 - Undo when safe.
+- Done dismisses only the presented Agent Activity sheet from both Options and Settings; Escape performs the same dismissal, and the control is labeled `Close Agent Activity` for accessibility.
 
 Clearing requires destructive confirmation and refreshes visible records while preserving tombstones.
 

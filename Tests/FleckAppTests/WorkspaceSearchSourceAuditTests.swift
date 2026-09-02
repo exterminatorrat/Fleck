@@ -62,6 +62,18 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
   #expect(!searchView.contains("NativeRichTextEditor("))
   #expect(!searchView.contains("WorkspaceSearchKeyResponder"))
   #expect(!searchView.contains("WorkspaceSearchEngine.search(query: query, in: notes, limit: 50)"))
+  #expect(!notesPanel.contains("WorkspaceSearchTransition"))
+  #expect(!searchView.contains("WorkspaceSearchTransition"))
+  #expect(!searchView.contains("matchedGeometryEffect"))
+  #expect(notesPanel.contains("workspaceSearchPresentationTransition"))
+  #expect(notesPanel.contains("scale(scale: 0.98, anchor: .topTrailing)"))
+  #expect(searchView.contains(".frame(maxWidth: 360"))
+  #expect(searchView.contains(".padding(.horizontal, 10)"))
+  #expect(searchView.contains(".padding(.top, 8)"))
+
+  let formattingBar = try #require(notesPanel.components(separatedBy: "private struct FormattingBar: View").last)
+  #expect(!formattingBar.contains(".background(.bar)"))
+  #expect(formattingBar.contains(".modifier(FormattingBarSurface())"))
 }
 
 @Test

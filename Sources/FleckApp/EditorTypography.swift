@@ -1,6 +1,5 @@
 #if os(macOS)
   import AppKit
-  import SwiftUI
 
   enum EditorTypography {
     static let defaultLineHeight: CGFloat = 27
@@ -39,10 +38,25 @@
       ]
     }
 
-    static func titleFont(family: String) -> Font {
-      family == ".AppleSystemUIFont"
-        ? .title3.weight(.semibold)
-        : .custom(family, size: 20).weight(.semibold)
+    static func titleNSFont(family: String) -> NSFont {
+      let size: CGFloat = 20
+      guard family != ".AppleSystemUIFont" else {
+        return .systemFont(ofSize: size, weight: .semibold)
+      }
+      let base = bodyFont(family: family, size: size)
+      guard base.familyName == family else {
+        return .systemFont(ofSize: size, weight: .semibold)
+      }
+      let descriptor = NSFontDescriptor(
+        fontAttributes: [
+          .family: family,
+          .traits: [
+            NSFontDescriptor.TraitKey.weight: NSFont.Weight.semibold.rawValue
+          ],
+        ]
+      )
+      return NSFont(descriptor: descriptor, size: size)
+        ?? .systemFont(ofSize: size, weight: .semibold)
     }
   }
 #endif

@@ -295,6 +295,19 @@ public struct Workspace: Codable, Equatable, Sendable {
     notes[index].modifiedAt = now
   }
 
+  public mutating func setTitleFontFamily(
+    id: UUID,
+    family: String?,
+    now: Date = Date()
+  ) {
+    guard let index = notes.firstIndex(where: { $0.id == id }),
+      notes[index].titleFontFamily != family
+    else { return }
+    notes[index].titleFontFamily = family
+    notes[index].revision += 1
+    notes[index].modifiedAt = now
+  }
+
   public mutating func setAgentAccess(
     id: UUID,
     enabled: Bool,

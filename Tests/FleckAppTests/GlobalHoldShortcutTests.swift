@@ -78,6 +78,60 @@ import Testing
   #expect(fixture.handler.handsFreeBeginCount == 0)
 }
 
+@Test @MainActor
+func physicalGestureReceiptPreservesPressAndReleaseAcrossQueuedDelivery() async throws {
+  let fixture = ShortcutFixture()
+  let deliveryGate = TerminalGate()
+  fixture.handler.endGate = deliveryGate
+  try fixture.shortcut.configure(.rightOption)
+
+  let firstPress = fixture.clock.now
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.clock.advance(by: .milliseconds(200))
+  fixture.monitor.emit(.released(.rightOption))
+  while fixture.handler.endCount == 0 { await Task.yield() }
+
+  fixture.clock.advance(by: .milliseconds(50))
+  let queuedPress = fixture.clock.now
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.clock.advance(by: .milliseconds(30))
+  let queuedRelease = fixture.clock.now
+  fixture.monitor.emit(.released(.rightOption))
+  fixture.clock.advance(by: .seconds(2))
+
+  deliveryGate.open()
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.beginGestures == [
+    .init(pressedAt: firstPress),
+    .init(pressedAt: queuedPress),
+  ])
+  #expect(fixture.handler.endGestures.last == .init(
+    pressedAt: queuedPress,
+    releasedAt: queuedRelease
+  ))
+}
+
+@Test @MainActor
+func physicalGestureReceiptReachesHandlerBeforeQueuedEndDelivery() async throws {
+  let fixture = ShortcutFixture()
+  try fixture.shortcut.configure(.rightOption)
+  fixture.monitor.emit(.pressed(.rightOption))
+  await fixture.shortcut.drainEvents()
+  let press = try #require(fixture.handler.beginGestures.last?.pressedAt)
+
+  fixture.clock.advance(by: .milliseconds(179))
+  let release = fixture.clock.now
+  fixture.monitor.emit(.released(.rightOption))
+
+  #expect(fixture.handler.events == [.begin, .releaseReceipt])
+  #expect(fixture.handler.releaseGestures == [
+    .init(pressedAt: press, releasedAt: release)
+  ])
+  await fixture.shortcut.drainEvents()
+  #expect(fixture.handler.events == [.begin, .releaseReceipt, .end])
+}
+
 @Test @MainActor func doubleTapStartsHandsFreeAndLaterPressFinishesIt() async throws {
   let fixture = ShortcutFixture()
   try fixture.shortcut.configure(.rightOption)
@@ -100,6 +154,21 @@ import Testing
   await fixture.shortcut.drainEvents()
 
   #expect(fixture.handler.handsFreeFinishCount == 1)
+}
+
+@Test @MainActor func captureFirstHandsFreeStopPreservesPhysicalKeyDownAcrossQueueing() async throws {
+  let fixture = ShortcutFixture()
+  try fixture.shortcut.configure(.rightOption)
+  await fixture.startHandsFree()
+
+  fixture.clock.advance(by: .milliseconds(75))
+  let stoppingPress = fixture.clock.now
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.clock.advance(by: .seconds(1))
+  fixture.monitor.emit(.released(.rightOption))
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.handsFreeStopOrigins == [.handsFreeKeyPress(stoppingPress)])
 }
 
 @Test @MainActor func tapOutsideDoubleTapWindowStartsANewHold() async throws {
@@ -358,6 +427,278 @@ import Testing
   }
 }
 
+@Test @MainActor func pointerStartClaimsPointerOwnershipAndBeginsHandsFreeOnce() throws {
+  let fixture = ShortcutFixture()
+
+  #expect(fixture.shortcut.startPointerHandsFree())
+  #expect(fixture.handler.handsFreeBeginCount == 1)
+  let session = try #require(fixture.handler.lastSession)
+  #expect(fixture.shortcut.activeOwnership == DictationShortcutOwnership(
+    session: session,
+    trigger: .pointer,
+    mode: .smartCapture,
+    isHandsFree: true
+  ))
+}
+
+@Test @MainActor func rejectedPointerStartClearsProvisionalOwnershipWithoutPublishing() {
+  let fixture = ShortcutFixture()
+  fixture.handler.acceptsHandsFree = false
+  var published: [DictationShortcutOwnership?] = []
+  fixture.shortcut.ownershipHandler = { published.append($0) }
+
+  #expect(!fixture.shortcut.startPointerHandsFree())
+  #expect(fixture.handler.handsFreeBeginCount == 1)
+  #expect(fixture.shortcut.activeOwnership == nil)
+  #expect(published.isEmpty)
+}
+
+@Test @MainActor func pointerOwnershipRejectsCompetingPointerAndKeyboardStarts() async throws {
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  try fixture.shortcut.configure(.rightOption)
+
+  #expect(fixture.shortcut.startPointerHandsFree())
+  #expect(!fixture.shortcut.startPointerHandsFree())
+
+  fixture.monitor.emit(.pressed(.rightOption))
+  await fixture.shortcut.drainEvents()
+  #expect(fixture.handler.beginCount == 0)
+  #expect(fixture.handler.handsFreeBeginCount == 1)
+  #expect(fixture.handler.handsFreeFinishCount == 1)
+
+  fixture.monitor.emit(.released(.rightOption))
+  await fixture.shortcut.drainEvents()
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.monitor.emit(.released(.rightOption))
+  await fixture.shortcut.drainEvents()
+  #expect(fixture.handler.beginCount == 0)
+  #expect(fixture.handler.handsFreeBeginCount == 1)
+  #expect(fixture.handler.handsFreeFinishCount == 1)
+}
+
+@Test @MainActor func finishOwnedHandsFreeDispatchesOnceAndRetainsOwnershipUntilTerminal()
+  async throws
+{
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  var published: [DictationShortcutOwnership?] = []
+  fixture.shortcut.ownershipHandler = { published.append($0) }
+
+  #expect(fixture.shortcut.startPointerHandsFree())
+  let ownership = try #require(fixture.shortcut.activeOwnership)
+  await fixture.shortcut.finishOwnedHandsFree()
+  await fixture.shortcut.finishOwnedHandsFree()
+
+  #expect(fixture.handler.handsFreeFinishCount == 1)
+  #expect(fixture.shortcut.activeOwnership == ownership)
+  #expect(fixture.escape.unregisterCount == 0)
+
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+  #expect(fixture.shortcut.activeOwnership == nil)
+  #expect(fixture.escape.unregisterCount == 1)
+  #expect(published == [ownership, nil])
+}
+
+@Test @MainActor func escapeAfterFinishPendingDispatchesOneCancel() async throws {
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  #expect(fixture.shortcut.startPointerHandsFree())
+
+  await fixture.shortcut.finishOwnedHandsFree()
+  fixture.escape.emit()
+  fixture.escape.emit()
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.handsFreeFinishCount == 1)
+  #expect(fixture.handler.cancelCount == 1)
+  #expect(fixture.shortcut.activeOwnership != nil)
+
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+}
+
+@Test @MainActor func escapeAfterHoldReleaseFinishPendingDispatchesOneCancelUntilTerminal()
+  async throws
+{
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  try fixture.shortcut.configure(.rightOption)
+
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.clock.advance(by: .milliseconds(200))
+  fixture.monitor.emit(.released(.rightOption))
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.endCount == 1)
+  #expect(fixture.handler.cancelCount == 0)
+  #expect(fixture.shortcut.activeOwnership != nil)
+
+  fixture.escape.emit()
+  fixture.escape.emit()
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.endCount == 1)
+  #expect(fixture.handler.cancelCount == 1)
+  #expect(fixture.shortcut.activeOwnership != nil)
+
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+  #expect(fixture.shortcut.activeOwnership == nil)
+}
+
+@Test @MainActor func uninstallAfterFinishPendingDispatchesCancelAndWaitsForTerminal()
+  async throws
+{
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  #expect(fixture.shortcut.startPointerHandsFree())
+
+  await fixture.shortcut.finishOwnedHandsFree()
+  let uninstallTask = Task { @MainActor in
+    await fixture.shortcut.uninstall()
+  }
+  for _ in 0..<100 where fixture.handler.cancelCount == 0 {
+    await Task.yield()
+  }
+
+  #expect(fixture.handler.handsFreeFinishCount == 1)
+  #expect(fixture.handler.cancelCount == 1)
+  #expect(fixture.shortcut.activeOwnership != nil)
+
+  fixture.handler.completeCurrentTerminal()
+  await uninstallTask.value
+  #expect(fixture.shortcut.activeOwnership == nil)
+  #expect(fixture.escape.unregisterCount == 1)
+}
+
+@Test @MainActor func selectedModifierPressFinishesPointerSessionAndIgnoresRelease() async throws {
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  try fixture.shortcut.configure(.rightOption)
+  #expect(fixture.shortcut.startPointerHandsFree())
+
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.monitor.emit(.released(.rightOption))
+  await fixture.shortcut.drainEvents()
+  #expect(fixture.handler.handsFreeFinishCount == 1)
+  #expect(fixture.handler.endCount == 0)
+
+  fixture.monitor.emit(.pressed(.rightOption))
+  fixture.monitor.emit(.released(.rightOption))
+  await fixture.shortcut.drainEvents()
+  #expect(fixture.handler.handsFreeFinishCount == 1)
+  #expect(fixture.handler.endCount == 0)
+
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+}
+
+@Test @MainActor func escapeCancelsPointerSessionExactlyOnce() async throws {
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  #expect(fixture.shortcut.startPointerHandsFree())
+
+  fixture.escape.emit()
+  fixture.escape.emit()
+  await fixture.shortcut.drainEvents()
+
+  #expect(fixture.handler.cancelCount == 1)
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+}
+
+@Test @MainActor func cancelOwnedSessionCancelsPointerSessionExactlyOnce() async throws {
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  #expect(fixture.shortcut.startPointerHandsFree())
+
+  await fixture.shortcut.cancelOwnedSession()
+  await fixture.shortcut.cancelOwnedSession()
+
+  #expect(fixture.handler.cancelCount == 1)
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+}
+
+@Test @MainActor func terminalObservationClearsPointerOwnershipEscapeAndTapState() async throws {
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  try fixture.shortcut.configure(.rightOption)
+  #expect(fixture.shortcut.startPointerHandsFree())
+  await fixture.shortcut.finishOwnedHandsFree()
+
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+
+  #expect(fixture.shortcut.activeOwnership == nil)
+  #expect(fixture.escape.unregisterCount == 1)
+
+  fixture.monitor.emit(.pressed(.rightOption))
+  await fixture.shortcut.drainEvents()
+  #expect(fixture.handler.beginCount == 1)
+  await fixture.shortcut.cancelOwnedSession()
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+}
+
+@Test @MainActor func pointerModeUsesOneNormalizedEditorDestinationSnapshot() {
+  let editor = ShortcutEditorSpy(canBeginFocusedDictation: true)
+  let destination = DictationDestination(noteID: UUID(), title: "Work")
+  let fixture = ShortcutFixture(
+    editorProvider: { editor },
+    destinationProvider: { destination }
+  )
+
+  #expect(fixture.shortcut.startPointerHandsFree())
+  #expect((fixture.handler.lastEditor as AnyObject?) === editor)
+  #expect(fixture.handler.lastDestination == destination)
+  #expect(fixture.shortcut.activeOwnership?.mode == .focused)
+}
+
+@Test @MainActor func firstArmingEventsSynchronouslySeeTransactionalOwnership() async throws {
+  let hold = ShortcutFixture()
+  try hold.shortcut.configure(.rightOption)
+  var holdArming: DictationShortcutOwnership?
+  hold.handler.onArming = { holdArming = hold.shortcut.activeOwnership }
+  hold.monitor.emit(.pressed(.rightOption))
+  await hold.shortcut.drainEvents()
+  #expect(holdArming?.trigger == .hold)
+  #expect(holdArming?.mode == .smartCapture)
+  #expect(holdArming?.isHandsFree == false)
+  await hold.shortcut.cancelOwnedSession()
+  await hold.shortcut.waitForTerminalObservation()
+
+  let doubleTap = ShortcutFixture()
+  try doubleTap.shortcut.configure(.rightOption)
+  doubleTap.monitor.emit(.pressed(.rightOption))
+  doubleTap.clock.advance(by: .milliseconds(40))
+  doubleTap.monitor.emit(.released(.rightOption))
+  await doubleTap.shortcut.drainEvents()
+  await doubleTap.shortcut.waitForTerminalObservation()
+  var doubleTapArming: DictationShortcutOwnership?
+  doubleTap.handler.onArming = { doubleTapArming = doubleTap.shortcut.activeOwnership }
+  doubleTap.clock.advance(by: .milliseconds(100))
+  doubleTap.monitor.emit(.pressed(.rightOption))
+  await doubleTap.shortcut.drainEvents()
+  #expect(doubleTapArming?.trigger == .doubleTap)
+  #expect(doubleTapArming?.mode == .smartCapture)
+  #expect(doubleTapArming?.isHandsFree == true)
+  await doubleTap.shortcut.cancelOwnedSession()
+  await doubleTap.shortcut.waitForTerminalObservation()
+
+  let pointer = ShortcutFixture()
+  var pointerArming: DictationShortcutOwnership?
+  pointer.handler.onArming = { pointerArming = pointer.shortcut.activeOwnership }
+  #expect(pointer.shortcut.startPointerHandsFree())
+  #expect(pointerArming?.trigger == .pointer)
+  #expect(pointerArming?.mode == .smartCapture)
+  #expect(pointerArming?.isHandsFree == true)
+  await pointer.shortcut.cancelOwnedSession()
+  await pointer.shortcut.waitForTerminalObservation()
+}
+
 @MainActor
 private final class ShortcutFixture {
   let handler = ShortcutHoldSpy()
@@ -366,9 +707,14 @@ private final class ShortcutFixture {
   let clock = TestGestureClock()
   let shortcut: GlobalHoldShortcut
 
-  init() {
+  init(
+    editorProvider: @escaping @MainActor () -> (any FocusedDictationEditing)? = { nil },
+    destinationProvider: @escaping @MainActor () -> DictationDestination? = { nil }
+  ) {
     shortcut = GlobalHoldShortcut(
       handler: handler,
+      editorProvider: editorProvider,
+      destinationProvider: destinationProvider,
       monitor: monitor,
       clock: clock,
       escapeRegistrar: escape
@@ -390,6 +736,7 @@ private final class ShortcutFixture {
 private final class ShortcutHoldSpy: ShortcutHoldHandling {
   enum Event: Equatable {
     case begin
+    case releaseReceipt
     case end
     case handsFreeBegin
     case handsFreeFinish
@@ -399,9 +746,21 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
   var canConfigureShortcut = true
   var acceptsShortcut = true
   var acceptsHandsFree = true
+  var autoCompleteTerminal = true
+  var onArming: (() -> Void)?
   private(set) var events: [Event] = []
+  private(set) var beginGestures: [DictationPhysicalGesture] = []
+  private(set) var releaseGestures: [DictationPhysicalGesture] = []
+  private(set) var endGestures: [DictationPhysicalGesture] = []
+  private(set) var handsFreeStopOrigins: [DictationStopOrigin] = []
+  var endGate: TerminalGate?
   private var sessions: [UUID: TerminalGate] = [:]
   private var currentSession: DictationShortcutSession?
+
+  private(set) var lastEditor: (any FocusedDictationEditing)?
+  private(set) var lastDestination: DictationDestination?
+
+  var lastSession: DictationShortcutSession? { currentSession }
 
   var beginCount: Int { events.count { $0 == .begin } }
   var endCount: Int { events.count { $0 == .end } }
@@ -410,36 +769,67 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
   var cancelCount: Int { events.count { $0 == .cancel } }
 
   func beginShortcut(
+    session: DictationShortcutSession,
     editor: (any FocusedDictationEditing)?,
-    destination: DictationDestination?
-  ) -> DictationShortcutSession? {
+    destination: DictationDestination?,
+    physicalGesture: DictationPhysicalGesture
+  ) -> Bool {
     events.append(.begin)
-    guard acceptsShortcut else { return nil }
-    return makeSession()
+    beginGestures.append(physicalGesture)
+    lastEditor = editor
+    lastDestination = destination
+    onArming?()
+    guard acceptsShortcut else { return false }
+    store(session)
+    return true
   }
 
   func beginHandsFreeShortcut(
+    session: DictationShortcutSession,
     editor: (any FocusedDictationEditing)?,
-    destination: DictationDestination?
-  ) -> DictationShortcutSession? {
+    destination: DictationDestination?,
+    physicalGesture: DictationPhysicalGesture
+  ) -> Bool {
     events.append(.handsFreeBegin)
-    guard acceptsHandsFree else { return nil }
-    return makeSession()
+    beginGestures.append(physicalGesture)
+    lastEditor = editor
+    lastDestination = destination
+    onArming?()
+    guard acceptsHandsFree else { return false }
+    store(session)
+    return true
   }
 
-  func endShortcut(_ session: DictationShortcutSession) async {
+  func recordPhysicalRelease(
+    _ session: DictationShortcutSession,
+    physicalGesture: DictationPhysicalGesture
+  ) {
+    events.append(.releaseReceipt)
+    releaseGestures.append(physicalGesture)
+  }
+
+  func endShortcut(
+    _ session: DictationShortcutSession,
+    physicalGesture: DictationPhysicalGesture
+  ) async {
     events.append(.end)
-    sessions[session.id]?.open()
+    endGestures.append(physicalGesture)
+    await endGate?.wait()
+    if autoCompleteTerminal { sessions[session.id]?.open() }
   }
 
-  func finishHandsFreeShortcut(_ session: DictationShortcutSession) async {
+  func finishHandsFreeShortcut(
+    _ session: DictationShortcutSession,
+    stopOrigin: DictationStopOrigin
+  ) async {
     events.append(.handsFreeFinish)
-    sessions[session.id]?.open()
+    handsFreeStopOrigins.append(stopOrigin)
+    if autoCompleteTerminal { sessions[session.id]?.open() }
   }
 
   func cancelShortcut(_ session: DictationShortcutSession) async {
     events.append(.cancel)
-    sessions[session.id]?.open()
+    if autoCompleteTerminal { sessions[session.id]?.open() }
   }
 
   func waitForShortcutTerminal(_ session: DictationShortcutSession) async {
@@ -451,12 +841,30 @@ private final class ShortcutHoldSpy: ShortcutHoldHandling {
     sessions[currentSession.id]?.open()
   }
 
-  private func makeSession() -> DictationShortcutSession {
-    let session = DictationShortcutSession(id: UUID())
+  private func store(_ session: DictationShortcutSession) {
     sessions[session.id] = TerminalGate()
     currentSession = session
-    return session
   }
+}
+
+@MainActor
+private final class ShortcutEditorSpy: FocusedDictationEditing {
+  var canBeginFocusedDictation: Bool
+
+  init(canBeginFocusedDictation: Bool) {
+    self.canBeginFocusedDictation = canBeginFocusedDictation
+  }
+
+  func beginFocusedDictation() -> Bool { true }
+  func updateFocusedDictation(provisionalText: String) {}
+  func commitFocusedDictation(text: String) -> FocusedDictationCommitReceipt? {
+    FocusedDictationCommitReceipt()
+  }
+  func cancelFocusedDictation() {}
+  func rollbackCommittedFocusedDictation(_ receipt: FocusedDictationCommitReceipt) -> Bool {
+    true
+  }
+  func finalizeCommittedFocusedDictation(_ receipt: FocusedDictationCommitReceipt) {}
 }
 
 @MainActor

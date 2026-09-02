@@ -14,6 +14,7 @@ public enum LocalStoreFolderMigrationWarning: Equatable, Sendable {
 struct LocalStoreTrashMetadata: Codable {
   var id: UUID
   var title: String
+  var titleFontFamily: String?
   var tabColorHex: String?
   var createdAt: Date
   var modifiedAt: Date
@@ -225,6 +226,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
 
   private struct Metadata: Codable {
     var title: String
+    var titleFontFamily: String?
     var tabColorHex: String?
     var createdAt: Date
     var modifiedAt: Date
@@ -236,6 +238,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
 
     init(
       title: String,
+      titleFontFamily: String?,
       tabColorHex: String?,
       createdAt: Date,
       modifiedAt: Date,
@@ -245,6 +248,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       folderID: UUID?
     ) {
       self.title = title
+      self.titleFontFamily = titleFontFamily
       self.tabColorHex = tabColorHex
       self.createdAt = createdAt
       self.modifiedAt = modifiedAt
@@ -257,6 +261,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     init(from decoder: Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       title = try container.decode(String.self, forKey: .title)
+      titleFontFamily = try container.decodeIfPresent(String.self, forKey: .titleFontFamily)
       tabColorHex = try container.decodeIfPresent(String.self, forKey: .tabColorHex)
       createdAt = try container.decode(Date.self, forKey: .createdAt)
       modifiedAt = try container.decode(Date.self, forKey: .modifiedAt)
@@ -280,6 +285,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     func encode(to encoder: Encoder) throws {
       var container = encoder.container(keyedBy: CodingKeys.self)
       try container.encode(title, forKey: .title)
+      try container.encodeIfPresent(titleFontFamily, forKey: .titleFontFamily)
       try container.encodeIfPresent(tabColorHex, forKey: .tabColorHex)
       try container.encode(createdAt, forKey: .createdAt)
       try container.encode(modifiedAt, forKey: .modifiedAt)
@@ -291,6 +297,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
 
     private enum CodingKeys: String, CodingKey {
       case title
+      case titleFontFamily
       case tabColorHex
       case createdAt
       case modifiedAt
@@ -468,6 +475,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
               note.id,
               Metadata(
                 title: note.title,
+                titleFontFamily: note.titleFontFamily,
                 tabColorHex: note.tabColorHex,
                 createdAt: note.createdAt,
                 modifiedAt: note.modifiedAt,
@@ -748,7 +756,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         isPinned: metadata.isPinned,
         agentAccess: metadata.agentAccess ?? false,
         revision: metadata.revision ?? 0,
-        folderID: folderID
+        folderID: folderID,
+        titleFontFamily: metadata.titleFontFamily
       )
     }
     if manifest.snapshotIntegrityVersion != nil,
@@ -883,6 +892,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       let metadata = LocalStoreTrashMetadata(
         id: note.id,
         title: note.title,
+        titleFontFamily: note.titleFontFamily,
         tabColorHex: note.tabColorHex,
         createdAt: note.createdAt,
         modifiedAt: note.modifiedAt,

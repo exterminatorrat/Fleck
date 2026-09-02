@@ -40,7 +40,7 @@ import Testing
   #expect(notesPanelSource.contains("FleckMark.load(template: true)"))
 }
 
-@Test func notesPanelHeaderExposesOnlyTheFleckTitleAndMissingMarkWarning() throws {
+@Test func notesPanelHeaderExposesOnlyTheFleckMarkAndMissingMarkWarning() throws {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -51,11 +51,12 @@ import Testing
   )
   let header = try #require(source.components(separatedBy: "private var header: some View").dropFirst().first)
   let titleArea = try #require(header.components(separatedBy: "Spacer()").first)
-  let mark = try #require(titleArea.range(of: "Image(nsImage: mark)"))
-  let title = try #require(titleArea.range(of: "Text(\"Fleck\")"))
+  let mark = try #require(titleArea.range(of: "FleckMark.load(template: true)"))
 
+  #expect(titleArea[mark.upperBound...].contains("Image(nsImage: mark)"))
   #expect(titleArea[mark.upperBound...].contains(".accessibilityHidden(true)"))
-  #expect(titleArea[title.upperBound...].contains(".accessibilityLabel(\"Fleck\")"))
+  #expect(!titleArea.contains("Text(\"Fleck\")"))
+  #expect(!titleArea.contains(".accessibilityLabel(\"Fleck\")"))
   #expect(titleArea.contains(".accessibilityLabel(\"Fleck mark missing\")"))
 }
 
@@ -106,6 +107,60 @@ import Testing
     #expect(image.size.height == 18)
   case .missingPackagedResource:
     Issue.record("The canonical Fleck mark should load for the header")
+  }
+}
+
+@Test @MainActor
+func fleckMarkRetainsPackagedImageAfterBackingFileDisappears() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let canonicalAsset = root.appendingPathComponent("website/public/fleck-mark.png")
+  let temporaryDirectory = FileManager.default.temporaryDirectory
+    .appendingPathComponent("FleckMarkLifetime-\(UUID().uuidString)", isDirectory: true)
+  let markURL = temporaryDirectory.appendingPathComponent("fleck-mark.png")
+  try FileManager.default.createDirectory(
+    at: temporaryDirectory,
+    withIntermediateDirectories: false
+  )
+  defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+  try FileManager.default.copyItem(at: canonicalAsset, to: markURL)
+
+  let loader = FleckMark.Loader(
+    resourceURL: temporaryDirectory,
+    isPackagedApp: true
+  )
+  switch loader.load(template: true) {
+  case .image(let image):
+    #expect(image.isTemplate)
+    #expect(image.size.width == 18)
+    #expect(image.size.height == 18)
+  case .missingPackagedResource:
+    Issue.record("The packaged Fleck mark should load before its file disappears")
+  }
+
+  try FileManager.default.removeItem(at: markURL)
+  #expect(!FileManager.default.fileExists(atPath: markURL.path))
+
+  switch loader.load(template: true) {
+  case .image(let image):
+    #expect(image.isTemplate)
+    #expect(image.size.width == 18)
+    #expect(image.size.height == 18)
+  case .missingPackagedResource:
+    Issue.record("The same loader should retain its decoded packaged mark")
+  }
+
+  let freshLoader = FleckMark.Loader(
+    resourceURL: temporaryDirectory,
+    isPackagedApp: true
+  )
+  switch freshLoader.load(template: true) {
+  case .missingPackagedResource:
+    break
+  case .image:
+    Issue.record("A fresh loader must fail loudly for a missing packaged resource")
   }
 }
 
@@ -167,6 +222,23 @@ import Testing
   #expect(validationScript.contains("signature uses a build-specific code hash"))
   #expect(validationScript.contains("Contents/Resources/fleck-mark.png"))
   #expect(validationScript.contains("LSUIElement"))
+}
+
+@Test func packagedDevelopmentAccessIsEnabledOnlyByTheDevelopmentBuildScript() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let buildScript = try String(
+    contentsOf: root.appendingPathComponent("Scripts/build-fleck-app.sh"),
+    encoding: .utf8
+  )
+
+  #expect(
+    buildScript.contains(
+      #"/usr/bin/plutil -insert FleckDevelopmentAccess -bool true "$staged_app/Contents/Info.plist""#
+    )
+  )
 }
 
 private func sourceText(in root: URL) throws -> String {

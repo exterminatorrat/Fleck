@@ -35,6 +35,11 @@
     let files: [EnhancedModelFile]
   }
 
+  struct EnhancedModelByteProgress: Equatable, Sendable {
+    let receivedBytes: Int64
+    let totalBytes: Int64
+  }
+
   struct ModelResumeToken: Equatable, Sendable {
     let data: Data
 
@@ -105,6 +110,67 @@
     }
   }
 
+  struct AdmittedModelStorageNamespace: Equatable, Sendable {
+    enum Error: Swift.Error, Equatable {
+      case invalidBaseRoot
+      case managerRootMismatch
+    }
+
+    let baseRootURL: URL
+    let rootURL: URL
+    let identityKey: String
+
+    init(baseRootURL: URL, descriptor: AdmittedModelDescriptor) throws {
+      let base = baseRootURL.standardizedFileURL.resolvingSymlinksInPath()
+      guard base.path != "/", !base.path.isEmpty else {
+        throw Error.invalidBaseRoot
+      }
+      let identity = descriptor.immutableIdentity
+      let material = [
+        identity.role.identityComponent,
+        identity.sourceRepository.absoluteString,
+        identity.modelID,
+        identity.revision,
+        identity.license,
+        identity.runtimeABI,
+        identity.conversion,
+        identity.quantization,
+        identity.files.map {
+          "\($0.path):\($0.byteCount):\($0.sha256)"
+        }.joined(separator: "\u{1f}"),
+        String(identity.downloadBytes),
+        String(identity.installedBytes),
+        String(identity.requiredCapacityBytes)
+      ].joined(separator: "\u{1e}")
+      let identityKey = SHA256.hash(data: Data(material.utf8))
+        .map { String(format: "%02x", $0) }
+        .joined()
+      let root = base.appendingPathComponent(identityKey, isDirectory: true)
+      guard root.path.hasPrefix(base.path + "/") else {
+        throw Error.invalidBaseRoot
+      }
+      self.baseRootURL = base
+      self.rootURL = root
+      self.identityKey = identityKey
+    }
+
+    static func validate(
+      managerRootURL: URL,
+      selected: Self?,
+      descriptor: AdmittedModelDescriptor
+    ) throws {
+      guard let selected else { throw Error.managerRootMismatch }
+      let derived = try Self(
+        baseRootURL: selected.baseRootURL,
+        descriptor: descriptor
+      )
+      guard selected == derived,
+            managerRootURL.standardizedFileURL == selected.rootURL else {
+        throw Error.managerRootMismatch
+      }
+    }
+  }
+
   @MainActor
   final class EnhancedModelManager: ObservableObject {
     nonisolated static let resumeAuthenticationService =
@@ -116,6 +182,7 @@
     static let requiredAvailableCapacity: Int64 = 1_197_261_950
 
     @Published private(set) var state: EnhancedModelState = .notInstalled
+    @Published private(set) var byteProgress: EnhancedModelByteProgress? = nil
     private(set) var verifiedRepositoryURL: URL?
     var verifiedLoadState: EnhancedModelVerifiedLoadState {
       guard candidateEnabled else {
@@ -125,9 +192,9 @@
         return .unavailable
       }
       switch state {
-      case .ready, .updateAvailable, .downloading, .verifying, .installing:
+      case .ready, .updateAvailable, .downloading, .verifying:
         return .ready(repositoryURL: verifiedRepositoryURL)
-      case .notInstalled, .repairRequired, .removing:
+      case .notInstalled, .repairRequired, .removing, .installing:
         return .unavailable
       }
     }
@@ -136,14 +203,18 @@
     private let context: FileContext
     private let manifest: EnhancedModelManifest
     private let trustedManifests: [EnhancedModelManifest]
+    private let artifactIdentity: EnhancedModelArtifactIdentity
+    private let requiredCapacityBytes: Int64
     private let capacityProvider: @Sendable () throws -> Int64
     private let candidateEnabled: Bool
     private let clock: @Sendable () -> Date
     private let transport: any ModelDownloading
     private let assessmentDidComplete: @Sendable () -> Void
-    private let cleanupWillBegin: @Sendable () -> Void
-    private let removalWillBegin: @Sendable () -> Void
+    private let cleanupWillBegin: @Sendable () async -> Void
+    private let removalWillBegin: @Sendable () async -> Void
     private let resumeAuthenticationKeyProvider: @Sendable () throws -> SymmetricKey
+    private let admittedStorageNamespace: AdmittedModelStorageNamespace?
+    private let localRepositoryName: String?
     private var stateChangedAt: Date
     private var activeOperationID: UUID?
     private var activeAssessmentCount = 0
@@ -151,34 +222,47 @@
     private var lifecycleEpoch: UInt64 = 0
     private var highestProgress = 0.0
 
+    nonisolated static func liveAvailableCapacity() throws -> Int64 {
+      let values = try URL(fileURLWithPath: NSHomeDirectory()).resourceValues(
+        forKeys: [.volumeAvailableCapacityForImportantUsageKey]
+      )
+      return values.volumeAvailableCapacityForImportantUsage ?? 0
+    }
+
+    nonisolated static func isAppleSilicon() -> Bool {
+      var info = utsname()
+      uname(&info)
+      let machine = withUnsafePointer(to: &info.machine) {
+        $0.withMemoryRebound(to: CChar.self, capacity: 1) {
+          String(cString: $0)
+        }
+      }
+      return machine == "arm64"
+    }
+
     init(
       modelRootURL: URL? = nil,
       fileManager: FileManager = .default,
-      manifest: EnhancedModelManifest? = nil,
+      manifest: EnhancedModelManifest,
+      artifactIdentity: EnhancedModelArtifactIdentity,
       trustedManifests: [EnhancedModelManifest]? = nil,
       candidateEnabled: Bool = CleanDictationFeatures.enhancedLocalCandidateEnabled,
       capacityProvider: @escaping @Sendable () throws -> Int64 = {
-        let values = try URL(fileURLWithPath: NSHomeDirectory()).resourceValues(
-          forKeys: [.volumeAvailableCapacityForImportantUsageKey]
-        )
-        return values.volumeAvailableCapacityForImportantUsage ?? 0
+        try EnhancedModelManager.liveAvailableCapacity()
       },
       architectureProvider: @escaping @Sendable () -> Bool = {
-        var info = utsname()
-        uname(&info)
-        let machine = withUnsafePointer(to: &info.machine) {
-          $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
-        }
-        return machine == "arm64"
+        EnhancedModelManager.isAppleSilicon()
       },
       clock: @escaping @Sendable () -> Date = { Date() },
       transport: any ModelDownloading = URLSessionModelDownloader(),
       assessmentDidComplete: @escaping @Sendable () -> Void = {},
-      cleanupWillBegin: @escaping @Sendable () -> Void = {},
-      removalWillBegin: @escaping @Sendable () -> Void = {},
+      cleanupWillBegin: @escaping @Sendable () async -> Void = {},
+      removalWillBegin: @escaping @Sendable () async -> Void = {},
       resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
         try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
-      }
+      },
+      admittedStorageNamespace: AdmittedModelStorageNamespace? = nil,
+      localRepositoryName: String? = nil
     ) {
       let root = modelRootURL ?? fileManager.urls(
         for: .applicationSupportDirectory,
@@ -189,10 +273,11 @@
         isDirectory: true
       )
       .appendingPathComponent("DictationModels", isDirectory: true)
-      let selectedManifest = manifest ?? Self.embeddedManifest()
       self.context = FileContext(root: root, fileManager: fileManager)
-      self.manifest = selectedManifest
-      self.trustedManifests = trustedManifests ?? [selectedManifest]
+      self.manifest = manifest
+      self.trustedManifests = trustedManifests ?? [manifest]
+      self.artifactIdentity = artifactIdentity
+      self.requiredCapacityBytes = artifactIdentity.requiredCapacityBytes
       self.candidateEnabled = candidateEnabled
       self.capacityProvider = capacityProvider
       self.isArchitectureSupported = architectureProvider()
@@ -202,7 +287,217 @@
       self.cleanupWillBegin = cleanupWillBegin
       self.removalWillBegin = removalWillBegin
       self.resumeAuthenticationKeyProvider = resumeAuthenticationKeyProvider
+      self.admittedStorageNamespace = admittedStorageNamespace
+      self.localRepositoryName = localRepositoryName
       stateChangedAt = clock()
+    }
+
+    convenience init(
+      modelRootURL: URL? = nil,
+      fileManager: FileManager = .default,
+      trustedManifests: [EnhancedModelManifest]? = nil,
+      candidateEnabled: Bool = CleanDictationFeatures.enhancedLocalCandidateEnabled,
+      capacityProvider: @escaping @Sendable () throws -> Int64 = {
+        try EnhancedModelManager.liveAvailableCapacity()
+      },
+      architectureProvider: @escaping @Sendable () -> Bool = {
+        EnhancedModelManager.isAppleSilicon()
+      },
+      clock: @escaping @Sendable () -> Date = { Date() },
+      transport: any ModelDownloading = URLSessionModelDownloader(),
+      assessmentDidComplete: @escaping @Sendable () -> Void = {},
+      cleanupWillBegin: @escaping @Sendable () async -> Void = {},
+      removalWillBegin: @escaping @Sendable () async -> Void = {},
+      resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
+        try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
+      },
+      applicationResourceRoot: URL? = Bundle.main.resourceURL,
+      moduleBundle: Bundle? = FleckAppResourceBundle.defaultModuleBundle(),
+      localRepositoryName: String? = nil
+    ) {
+      let embedded = Self.embeddedManifestAndArtifactIdentity(
+        applicationResourceRoot: applicationResourceRoot,
+        moduleBundle: moduleBundle
+      )
+      self.init(
+        modelRootURL: modelRootURL,
+        fileManager: fileManager,
+        manifest: embedded.manifest,
+        artifactIdentity: embedded.artifactIdentity,
+        trustedManifests: trustedManifests,
+        candidateEnabled: candidateEnabled && embedded.candidateEnabled,
+        capacityProvider: capacityProvider,
+        architectureProvider: architectureProvider,
+        clock: clock,
+        transport: transport,
+        assessmentDidComplete: assessmentDidComplete,
+        cleanupWillBegin: cleanupWillBegin,
+        removalWillBegin: removalWillBegin,
+        resumeAuthenticationKeyProvider: resumeAuthenticationKeyProvider,
+        localRepositoryName: localRepositoryName
+      )
+    }
+
+    private static func embeddedManifestAndArtifactIdentity(
+      applicationResourceRoot: URL?,
+      moduleBundle: Bundle?
+    ) -> (
+      manifest: EnhancedModelManifest,
+      artifactIdentity: EnhancedModelArtifactIdentity,
+      candidateEnabled: Bool
+    ) {
+      let manifest: EnhancedModelManifest
+      let candidateEnabled: Bool
+      do {
+        let url = try FleckAppResourceBundle.url(
+          forResource: "EnhancedModelManifest",
+          withExtension: "json",
+          applicationResourceRoot: applicationResourceRoot,
+          moduleBundle: moduleBundle
+        )
+        manifest = try JSONDecoder().decode(
+          EnhancedModelManifest.self,
+          from: Data(contentsOf: url)
+        )
+        candidateEnabled = true
+      } catch {
+        // Compatibility construction cannot throw. Keep the fallback inert so
+        // invalid packaged resources are never accepted as a candidate.
+        manifest = Self.embeddedCompatibilityManifest
+        candidateEnabled = false
+      }
+      let sourceRepository = URL(
+        string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml"
+      ) ?? URL(fileURLWithPath: "/")
+      let identity = EnhancedModelArtifactIdentity(
+        sourceRepository: sourceRepository,
+        modelID: manifest.modelID,
+        revision: manifest.revision,
+        license: "experimental-manifest-only",
+        runtimeABI: "experimental-manifest-only",
+        conversion: "experimental-manifest-only",
+        quantization: "experimental-manifest-only",
+        files: manifest.files.map {
+          .init(path: $0.path, byteCount: $0.byteCount, sha256: $0.sha256)
+        },
+        downloadBytes: manifest.totalByteCount,
+        installedBytes: manifest.totalByteCount,
+        requiredCapacityBytes: Self.embeddedCompatibilityRequiredCapacity
+      )
+      return (
+        manifest: manifest,
+        artifactIdentity: identity,
+        candidateEnabled: candidateEnabled
+      )
+    }
+
+    private static let embeddedCompatibilityManifest = EnhancedModelManifest(
+      schemaVersion: 1,
+      modelID: "FluidInference/parakeet-tdt-0.6b-v2-coreml",
+      revision: "ee09c569f73759e6d44c9bd16766f477b2b36d39",
+      totalByteCount: 0,
+      files: []
+    )
+
+    // Compatibility only: this is the current experimental embedded Parakeet
+    // manager path, never a signed admitted artifact or recommendation.
+    private static let embeddedCompatibilityRequiredCapacity: Int64 =
+      1_197_261_950
+
+    var admittedArtifactIdentity: EnhancedModelArtifactIdentity {
+      artifactIdentity
+    }
+
+    var admittedManifest: EnhancedModelManifest { manifest }
+
+    var admittedStorageNamespaceRootURL: URL? {
+      admittedStorageNamespace?.rootURL
+    }
+
+    var admittedStorageBaseRootURL: URL? {
+      admittedStorageNamespace?.baseRootURL
+    }
+
+    var selectedAdmittedStorageNamespace: AdmittedModelStorageNamespace? {
+      admittedStorageNamespace
+    }
+
+    var modelRootURL: URL { context.root }
+
+    convenience init(
+      admittedBaseRoot: URL,
+      descriptor: AdmittedModelDescriptor,
+      fileManager: FileManager = .default,
+      manifest: EnhancedModelManifest,
+      artifactIdentity: EnhancedModelArtifactIdentity,
+      trustedManifests: [EnhancedModelManifest]? = nil,
+      candidateEnabled: Bool = CleanDictationFeatures.enhancedLocalCandidateEnabled,
+      capacityProvider: @escaping @Sendable () throws -> Int64 = {
+        try EnhancedModelManager.liveAvailableCapacity()
+      },
+      architectureProvider: @escaping @Sendable () -> Bool = {
+        EnhancedModelManager.isAppleSilicon()
+      },
+      clock: @escaping @Sendable () -> Date = { Date() },
+      transport: any ModelDownloading = URLSessionModelDownloader(),
+      assessmentDidComplete: @escaping @Sendable () -> Void = {},
+      cleanupWillBegin: @escaping @Sendable () async -> Void = {},
+      removalWillBegin: @escaping @Sendable () async -> Void = {},
+      resumeAuthenticationKeyProvider: @escaping @Sendable () throws -> SymmetricKey = {
+        try EnhancedModelManager.loadOrCreateResumeAuthenticationKey()
+      },
+      localRepositoryName: String? = nil
+    ) throws {
+      let namespace = try AdmittedModelStorageNamespace(
+        baseRootURL: admittedBaseRoot,
+        descriptor: descriptor
+      )
+      self.init(
+        modelRootURL: namespace.rootURL,
+        fileManager: fileManager,
+        manifest: manifest,
+        artifactIdentity: artifactIdentity,
+        trustedManifests: trustedManifests,
+        candidateEnabled: candidateEnabled,
+        capacityProvider: capacityProvider,
+        architectureProvider: architectureProvider,
+        clock: clock,
+        transport: transport,
+        assessmentDidComplete: assessmentDidComplete,
+        cleanupWillBegin: cleanupWillBegin,
+        removalWillBegin: removalWillBegin,
+        resumeAuthenticationKeyProvider: resumeAuthenticationKeyProvider,
+        admittedStorageNamespace: namespace,
+        localRepositoryName: localRepositoryName
+      )
+    }
+
+    // This is the same bound used by the immediately-before-transport check.
+    func preflightTransferCapacity() throws {
+      try requireLiveTransferCapacity()
+    }
+
+    private func requireLiveTransferCapacity() throws {
+      let availableBytes = try capacityProvider()
+      guard availableBytes >= requiredCapacityBytes else {
+        throw EnhancedModelManagerError.insufficientSpace(
+          required: requiredCapacityBytes,
+          available: availableBytes
+        )
+      }
+    }
+
+    private func performTransfer(
+      from remoteURL: URL,
+      resumeToken: ModelResumeToken?,
+      progress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws -> ModelDownloadResult {
+      try requireLiveTransferCapacity()
+      return try await transport.download(
+        from: remoteURL,
+        resumeToken: resumeToken,
+        progress: progress
+      )
     }
 
     func refreshState() async {
@@ -227,13 +522,15 @@
       let context = context
       let manifest = manifest
       let trustedManifests = trustedManifests
+      let localRepositoryName = localRepositoryName
       let assessmentDidComplete = assessmentDidComplete
       let assessment = await Task.detached {
         let result = Result {
           try Self.assess(
             context: context,
             manifest: manifest,
-            trustedManifests: trustedManifests
+            trustedManifests: trustedManifests,
+            localRepositoryName: localRepositoryName
           )
         }
         assessmentDidComplete()
@@ -298,8 +595,10 @@
       let context = context
       let removalWillBegin = removalWillBegin
       do {
+        try Task.checkCancellation()
+        await removalWillBegin()
+        try Task.checkCancellation()
         try await Task.detached {
-          removalWillBegin()
           for url in [
             context.installedRoot,
             context.stagingRoot,
@@ -321,16 +620,25 @@
       }
     }
 
+    func remoteURL(for file: EnhancedModelFile) throws -> URL {
+      try Self.remoteURL(
+        for: file,
+        sourceRepository: artifactIdentity.sourceRepository,
+        revision: artifactIdentity.revision
+      )
+    }
+
     nonisolated static func remoteURL(
       for file: EnhancedModelFile,
-      manifest: EnhancedModelManifest
+      sourceRepository: URL,
+      revision: String
     ) throws -> URL {
-      try validateRelativePath(file.path)
-      try validateRevision(manifest.revision)
-      let revisionRoot = URL(
-        string: "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml/resolve/"
-      )!.appendingPathComponent(manifest.revision, isDirectory: true)
-      let artifactURL = file.path.split(separator: "/").reduce(revisionRoot) {
+      let canonicalPath = try validateRelativePath(file.path)
+      try validateRevision(revision)
+      let revisionRoot = sourceRepository
+        .appendingPathComponent("resolve", isDirectory: true)
+        .appendingPathComponent(revision, isDirectory: true)
+      let artifactURL = canonicalPath.split(separator: "/").reduce(revisionRoot) {
         $0.appendingPathComponent(String($1))
       }
       var components = URLComponents(
@@ -350,15 +658,10 @@
       let previousState = state
       let context = context
       let manifest = manifest
+      let localRepositoryName = localRepositoryName
 
       do {
-        let available = try capacityProvider()
-        guard available >= Self.requiredAvailableCapacity else {
-          throw EnhancedModelManagerError.insufficientSpace(
-            required: Self.requiredAvailableCapacity,
-            available: available
-          )
-        }
+        try requireLiveTransferCapacity()
         highestProgress = 0
         setState(.downloading(progress: 0))
         try await Task.detached {
@@ -368,7 +671,8 @@
 
         let stagingRepository = try Self.repositoryURL(
           under: context.stagingRevision(manifest.revision),
-          manifest: manifest
+          manifest: manifest,
+          localRepositoryName: localRepositoryName
         )
         var completedBytes: Int64 = 0
         for file in manifest.files {
@@ -398,9 +702,10 @@
           let resumeURL = try Self.resumeURL(
             for: file,
             context: context,
-            manifest: manifest
+            manifest: manifest,
+            localRepositoryName: localRepositoryName
           )
-          let remoteURL = try Self.remoteURL(for: file, manifest: manifest)
+          let remoteURL = try remoteURL(for: file)
           let transport = transport
           let resumeAuthenticationKeyProvider = resumeAuthenticationKeyProvider
           let resumeToken = await Task.detached { () -> ModelResumeToken? in
@@ -419,7 +724,7 @@
           }.value
           do {
             let completedBeforeFile = completedBytes
-            let result = try await transport.download(
+            let result = try await performTransfer(
               from: remoteURL,
               resumeToken: resumeToken
             ) { [weak self] received, _ in
@@ -495,13 +800,19 @@
         }
 
         setState(.installing)
+        let cleanupWillBegin = cleanupWillBegin
+        try Task.checkCancellation()
+        await cleanupWillBegin()
+        try Task.checkCancellation()
         let installedRepository = try await Task.detached {
-          try Self.commitVerifiedStaging(context, manifest: manifest)
+          try Self.commitVerifiedStaging(
+            context,
+            manifest: manifest,
+            localRepositoryName: localRepositoryName
+          )
         }.value
         verifiedRepositoryURL = installedRepository
-        let cleanupWillBegin = cleanupWillBegin
         try await Task.detached {
-          cleanupWillBegin()
           try Self.cleanupCommittedInstallation(
             context,
             manifest: manifest,
@@ -569,6 +880,15 @@
       operationID: UUID
     ) {
       guard activeOperationID == operationID else { return }
+      let totalBytes = max(manifest.totalByteCount, 0)
+      let observedBytes = min(
+        max(completedBytes + receivedBytes, 0),
+        totalBytes
+      )
+      byteProgress = EnhancedModelByteProgress(
+        receivedBytes: observedBytes,
+        totalBytes: totalBytes
+      )
       let progress = manifest.totalByteCount > 0
         ? min(Double(completedBytes + receivedBytes) / Double(manifest.totalByteCount), 1)
         : 1
@@ -578,18 +898,12 @@
 
     private func setState(_ newState: EnhancedModelState) {
       stateChangedAt = clock()
+      if case .downloading = newState {
+        // Keep byteProgress available to the installer during transfer.
+      } else {
+        byteProgress = nil
+      }
       state = newState
-    }
-
-    private static func embeddedManifest() -> EnhancedModelManifest {
-      let url = Bundle.module.url(
-        forResource: "EnhancedModelManifest",
-        withExtension: "json"
-      )!
-      return try! JSONDecoder().decode(
-        EnhancedModelManifest.self,
-        from: Data(contentsOf: url)
-      )
     }
 
     nonisolated static func resumeAuthenticationKeychainBaseQuery(
@@ -660,7 +974,8 @@
     nonisolated private static func assess(
       context: FileContext,
       manifest: EnhancedModelManifest,
-      trustedManifests: [EnhancedModelManifest]
+      trustedManifests: [EnhancedModelManifest],
+      localRepositoryName: String?
     ) throws -> Assessment {
       try prepareRoot(context)
       try validateManifest(manifest)
@@ -669,7 +984,11 @@
       }
       let currentRevision = context.installedRevision(manifest.revision)
       if context.fileManager.fileExists(atPath: currentRevision.path) {
-        let repository = try repositoryURL(under: currentRevision, manifest: manifest)
+        let repository = try repositoryURL(
+          under: currentRevision,
+          manifest: manifest,
+          localRepositoryName: localRepositoryName
+        )
         do {
           try verifyRepository(
             at: repository,
@@ -703,7 +1022,8 @@
           oldManifest.modelID == manifest.modelID,
           let repository = try? repositoryURL(
             under: revision,
-            manifest: oldManifest
+            manifest: oldManifest,
+            localRepositoryName: localRepositoryName
           ),
           (try? verifyRepository(
             at: repository,
@@ -738,14 +1058,13 @@
         !manifest.modelID.isEmpty,
         manifest.totalByteCount >= 0,
         manifest.files.reduce(Int64(0), { $0 + $1.byteCount })
-          == manifest.totalByteCount,
-        Set(manifest.files.map(\.path)).count == manifest.files.count
+          == manifest.totalByteCount
       else {
         throw EnhancedModelManagerError.invalidManifest
       }
+      try validateManifestPaths(manifest)
       try validateRevision(manifest.revision)
       for file in manifest.files {
-        try validateRelativePath(file.path)
         guard
           file.byteCount >= 0,
           file.sha256.count == 64,
@@ -756,14 +1075,27 @@
       }
     }
 
-    nonisolated private static func validateRelativePath(_ path: String) throws {
-      let pieces = path.split(separator: "/", omittingEmptySubsequences: false)
-      guard
-        !path.isEmpty,
-        !path.hasPrefix("/"),
-        pieces.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
-      else {
+    nonisolated private static func validateManifestPaths(
+      _ manifest: EnhancedModelManifest
+    ) throws {
+      do {
+        _ = try AdmittedModelPathRules.canonicalizeUnique(
+          manifest.files.map(\.path)
+        )
+      } catch AdmittedModelPathError.unsafePath(let path) {
         throw EnhancedModelManagerError.invalidManifestPath(path)
+      } catch AdmittedModelPathError.duplicatePath(_) {
+        throw EnhancedModelManagerError.invalidManifest
+      }
+    }
+
+    nonisolated private static func validateRelativePath(
+      _ rawPath: String
+    ) throws -> String {
+      do {
+        return try AdmittedModelPathRules.canonicalize(rawPath)
+      } catch {
+        throw EnhancedModelManagerError.invalidManifestPath(rawPath)
       }
     }
 
@@ -780,24 +1112,42 @@
 
     nonisolated private static func repositoryURL(
       under revisionURL: URL,
-      manifest: EnhancedModelManifest
+      manifest: EnhancedModelManifest,
+      localRepositoryName: String?
     ) throws -> URL {
-      guard
-        let name = manifest.modelID.split(separator: "/").last,
-        !name.isEmpty
-      else {
-        throw EnhancedModelManagerError.invalidManifest
+      let rawName: String
+      if let localRepositoryName {
+        rawName = localRepositoryName
+      } else {
+        guard
+          let name = manifest.modelID.split(separator: "/").last,
+          !name.isEmpty
+        else {
+          throw EnhancedModelManagerError.invalidManifest
+        }
+        rawName = String(name)
       }
-      return try containedURL(for: String(name), under: revisionURL)
+      let name = try validateRepositoryName(rawName)
+      return try containedURL(for: name, under: revisionURL)
+    }
+
+    nonisolated private static func validateRepositoryName(
+      _ rawName: String
+    ) throws -> String {
+      let name = try validateRelativePath(rawName)
+      guard !name.contains("/") else {
+        throw EnhancedModelManagerError.invalidManifestPath(rawName)
+      }
+      return name
     }
 
     nonisolated private static func containedURL(
       for relativePath: String,
       under root: URL
     ) throws -> URL {
-      try validateRelativePath(relativePath)
+      let canonicalPath = try validateRelativePath(relativePath)
       let root = lexicallyNormalizedURL(root)
-      let candidate = relativePath.split(separator: "/").reduce(root) {
+      let candidate = canonicalPath.split(separator: "/").reduce(root) {
         $0.appendingPathComponent(String($1))
       }
       guard candidate.path.hasPrefix(root.path + "/") else {
@@ -902,11 +1252,13 @@
     nonisolated private static func resumeURL(
       for file: EnhancedModelFile,
       context: FileContext,
-      manifest: EnhancedModelManifest
+      manifest: EnhancedModelManifest,
+      localRepositoryName: String?
     ) throws -> URL {
       let repository = try repositoryURL(
         under: context.resumeRevision(manifest.revision),
-        manifest: manifest
+        manifest: manifest,
+        localRepositoryName: localRepositoryName
       )
       return try containedURL(for: file.path + ".resumeData", under: repository)
     }
@@ -924,7 +1276,8 @@
 
     nonisolated private static func commitVerifiedStaging(
       _ context: FileContext,
-      manifest: EnhancedModelManifest
+      manifest: EnhancedModelManifest,
+      localRepositoryName: String?
     ) throws -> URL {
       let staging = context.stagingRevision(manifest.revision)
       try assertOwnedPath(staging, context: context)
@@ -936,7 +1289,11 @@
       let final = context.installedRevision(manifest.revision)
       try removeOwnedTreeIfPresent(final, context: context)
       try context.fileManager.moveItem(at: staging, to: final)
-      return try repositoryURL(under: final, manifest: manifest)
+      return try repositoryURL(
+        under: final,
+        manifest: manifest,
+        localRepositoryName: localRepositoryName
+      )
     }
 
     nonisolated private static func cleanupCommittedInstallation(
@@ -1221,6 +1578,7 @@
       return host == "huggingface.co"
         || host.hasSuffix(".huggingface.co")
         || host.hasSuffix(".xethub.hf.co")
+        || host.hasSuffix(".aws.cdn.hf.co")
     }
 
     static func isAllowedRedirectURL(_ url: URL) -> Bool {

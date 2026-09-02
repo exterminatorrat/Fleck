@@ -31,6 +31,68 @@ struct FleckMCPToolRegistryTests {
     )
   }
 
+  @Test func filtersToolsByCurrentCapabilitiesInReviewedOrder() {
+    let readOnly = FleckMCPToolRegistry.tools(
+      for: AgentCapabilitySummary(
+        grantRevision: 1,
+        availableCapabilities: [.listNotes, .readNotes]
+      )
+    )
+    #expect(
+      readOnly.map(\.name) == [
+        "list_shared_notes",
+        "read_note",
+        "list_tasks",
+        "list_agent_activity",
+      ]
+    )
+    #expect(
+      FleckMCPToolRegistry.tools(
+        for: AgentCapabilitySummary(
+          grantRevision: 2,
+          availableCapabilities: []
+        )
+      ).isEmpty
+    )
+  }
+
+  @Test func assignsExactlyOneCanonicalCapabilityToEachTool() {
+    #expect(
+      FleckMCPToolRegistry.registrations.map(\.tool.name) == [
+        "list_shared_notes",
+        "read_note",
+        "append_text",
+        "insert_text",
+        "replace_lines",
+        "delete_lines",
+        "list_tasks",
+        "add_task",
+        "rename_task",
+        "set_task_state",
+        "remove_task",
+        "list_agent_activity",
+        "undo_agent_change",
+      ]
+    )
+    #expect(
+      FleckMCPToolRegistry.registrations.map(\.capability) == [
+        .listNotes,
+        .readNotes,
+        .writeNotes,
+        .writeNotes,
+        .writeNotes,
+        .writeNotes,
+        .readNotes,
+        .writeNotes,
+        .writeNotes,
+        .writeNotes,
+        .writeNotes,
+        .readNotes,
+        .undoChanges,
+      ]
+    )
+  }
+
   @Test func FleckMCPToolRegistryKeepsFolderUnawareSurface() {
     #expect(FleckMCPToolRegistry.tools.count == 13)
     #expect(

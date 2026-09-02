@@ -22,10 +22,11 @@ printf '%s\n' \
   'set -eu' \
   'case "${1:-}" in' \
   '  package)' \
-  '    test "$#" -eq 4' \
-  '    test "$2" = "--scratch-path"' \
-  '    test "$3" = "$FAKE_CANDIDATE_SCRATCH"' \
-  '    test "$4" = "resolve"' \
+  '    test "$#" -eq 5' \
+  '    test "$2" = "--skip-update"' \
+  '    test "$3" = "--scratch-path"' \
+  '    test "$4" = "$FAKE_CANDIDATE_SCRATCH"' \
+  '    test "$5" = "resolve"' \
   '    test "${FLECK_ENHANCED_CANDIDATE:-}" = "1"' \
   '    /bin/mkdir "$FAKE_CANDIDATE_SCRATCH"' \
   '    /bin/cp "$FAKE_CANDIDATE_FIXTURE" "$FAKE_REPO_ROOT/Package.resolved"' \

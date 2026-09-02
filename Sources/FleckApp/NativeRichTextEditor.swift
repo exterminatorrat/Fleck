@@ -668,9 +668,104 @@
     }
   }
 
+  final class NativeEditorDocumentView: NSView {
+    let titleField: NSTextField
+    let textView: ListAwareTextView
+
+    override var isFlipped: Bool { true }
+
+    init(titleField: NSTextField, textView: ListAwareTextView) {
+      self.titleField = titleField
+      self.textView = textView
+      super.init(frame: .zero)
+      autoresizingMask = [.width]
+      addSubview(titleField)
+      addSubview(textView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+      fatalError("init(coder:) has not been implemented")
+    }
+
+    func updateLayout(width: CGFloat, minimumHeight: CGFloat) {
+      let width = max(0, width)
+      let titleHeight = max(24, titleField.fittingSize.height)
+      let titleFrame = NSRect(
+        x: 16,
+        y: 12,
+        width: max(0, width - 32),
+        height: titleHeight
+      )
+      titleField.frame = titleFrame
+
+      let bodyY = titleFrame.maxY
+      textView.frame = NSRect(x: 0, y: bodyY, width: width, height: 1)
+      textView.textContainer?.containerSize = NSSize(
+        width: width,
+        height: .greatestFiniteMagnitude
+      )
+      textView.sizeToFit()
+      textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+      if let textContainer = textView.textContainer,
+        let layoutManager = textView.layoutManager
+      {
+        layoutManager.ensureLayout(for: textContainer)
+      }
+      let usedHeight = textView.textContainer.flatMap { textContainer in
+        textView.layoutManager?.usedRect(for: textContainer).height
+      } ?? 0
+      let textInsets = textView.textContainerInset.height * 2
+      let contentHeight = max(1, usedHeight + textInsets)
+      let minimumBodyHeight = max(0, minimumHeight - bodyY - 10)
+      let bodyHeight = max(contentHeight, minimumBodyHeight)
+      textView.setFrameSize(NSSize(width: width, height: bodyHeight))
+
+      var documentFrame = frame
+      documentFrame.size = NSSize(
+        width: width,
+        height: max(minimumHeight, bodyY + bodyHeight + 10)
+      )
+      frame = documentFrame
+    }
+  }
+
+  fileprivate final class NativeEditorScrollView: NSScrollView {
+    private var isLayingOutDocument = false
+
+    override func layout() {
+      super.layout()
+      guard !isLayingOutDocument,
+        let documentView = documentView as? NativeEditorDocumentView
+      else { return }
+      isLayingOutDocument = true
+      defer { isLayingOutDocument = false }
+      let contentOrigin = contentView.bounds.origin
+      documentView.updateLayout(
+        width: contentView.bounds.width,
+        minimumHeight: contentView.bounds.height
+      )
+      contentView.scroll(to: contentOrigin)
+      reflectScrolledClipView(contentView)
+      scrollerStyle = .overlay
+      verticalScroller?.controlSize = .mini
+    }
+
+    func relayoutDocument() {
+      needsLayout = true
+      layoutSubtreeIfNeeded()
+    }
+  }
+
   struct NativeRichTextEditor: NSViewRepresentable {
+    @Environment(\.isEnabled) private var isEnabled
+
     let text: String
     let richTextRTF: Data?
+    let title: String
+    let titleFontFamily: String
+    let onTitleChange: (String) -> Void
+    let onTitleFocusChange: (Bool) -> Void
     let onChange: (String, Data?) -> Void
     let fontFamily: String
     let fontSize: Double
@@ -689,6 +784,10 @@
     init(
       text: String,
       richTextRTF: Data?,
+      title: String = "",
+      titleFontFamily: String? = nil,
+      onTitleChange: @escaping (String) -> Void = { _ in },
+      onTitleFocusChange: @escaping (Bool) -> Void = { _ in },
       onChange: @escaping (String, Data?) -> Void,
       fontFamily: String,
       fontSize: Double,
@@ -706,6 +805,10 @@
     ) {
       self.text = text
       self.richTextRTF = richTextRTF
+      self.title = title
+      self.titleFontFamily = titleFontFamily ?? fontFamily
+      self.onTitleChange = onTitleChange
+      self.onTitleFocusChange = onTitleFocusChange
       self.onChange = onChange
       self.fontFamily = fontFamily
       self.fontSize = fontSize
@@ -725,12 +828,28 @@
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-      let scrollView = NSScrollView()
+      let scrollView = NativeEditorScrollView()
       scrollView.hasVerticalScroller = true
       scrollView.drawsBackground = false
       scrollView.autohidesScrollers = true
 
-      let textView = ListAwareTextView(frame: scrollView.contentView.bounds)
+      let titleField = NSTextField()
+      titleField.placeholderString = "Note title"
+      titleField.stringValue = title
+      titleField.isEditable = true
+      titleField.isSelectable = true
+      titleField.isEnabled = isEnabled
+      titleField.isBordered = false
+      titleField.drawsBackground = false
+      titleField.focusRingType = .none
+      titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
+      titleField.usesSingleLineMode = true
+      titleField.cell?.lineBreakMode = .byTruncatingTail
+      titleField.setAccessibilityLabel("Note title")
+      titleField.setAccessibilityElement(isEnabled)
+      titleField.delegate = context.coordinator
+
+      let textView = ListAwareTextView(frame: .zero)
       textView.delegate = context.coordinator
       textView.isRichText = true
       textView.importsGraphics = false
@@ -738,20 +857,21 @@
       textView.isAutomaticSpellingCorrectionEnabled = true
       textView.isContinuousSpellCheckingEnabled = true
       textView.drawsBackground = false
-      textView.textContainerInset = NSSize(width: 16, height: 10)
+      textView.textContainerInset = NSSize(width: 16, height: 8)
       textView.textContainer?.lineFragmentPadding = 0
       textView.isVerticallyResizable = true
       textView.isHorizontallyResizable = false
-      textView.minSize = NSSize(width: 0, height: scrollView.contentView.bounds.height)
+      textView.minSize = .zero
       textView.maxSize = NSSize(
         width: CGFloat.greatestFiniteMagnitude,
         height: CGFloat.greatestFiniteMagnitude
       )
-      textView.autoresizingMask = [.width]
+      textView.autoresizingMask = []
       textView.textContainer?.widthTracksTextView = true
+      textView.textContainer?.heightTracksTextView = false
       textView.textContainer?.containerSize = NSSize(
-        width: scrollView.contentView.bounds.width,
-        height: .greatestFiniteMagnitude
+        width: 0,
+        height: CGFloat.greatestFiniteMagnitude
       )
       textView.setAccessibilityLabel("Note body")
       loadContent(into: textView)
@@ -761,7 +881,13 @@
       applyColors(to: textView)
       Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
       configureNoteLinks(on: textView)
-      scrollView.documentView = textView
+      let documentView = NativeEditorDocumentView(
+        titleField: titleField,
+        textView: textView
+      )
+      scrollView.documentView = documentView
+      documentView.autoresizingMask = [.width]
+      context.coordinator.scrollView = scrollView
       if let undoManager = textView.undoManager {
         context.coordinator.undoManager = undoManager
       }
@@ -769,12 +895,19 @@
         commands.textView = textView
         commands.refreshFormattingState()
       }
+      scrollView.relayoutDocument()
+      scrollView.contentView.scroll(
+        to: NSPoint(x: scrollView.contentView.bounds.origin.x, y: 0)
+      )
+      scrollView.reflectScrolledClipView(scrollView.contentView)
       return scrollView
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
-      guard let textView = nsView.documentView as? ListAwareTextView else { return }
+      guard let documentView = nsView.documentView as? NativeEditorDocumentView else { return }
+      let textView = documentView.textView
       let commands = coordinator.parent.commands
+      documentView.titleField.delegate = nil
       textView.clearNoteLinkPresentation()
       textView.onRequestNoteLink = nil
       textView.onOpenNoteLink = nil
@@ -786,14 +919,19 @@
         undoManager?.removeAllActions(withTarget: storage)
       }
       coordinator.undoManager = nil
+      coordinator.scrollView = nil
       if commands.textView === textView {
         commands.textView = nil
       }
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-      guard let textView = scrollView.documentView as? ListAwareTextView else { return }
+      guard let scrollView = scrollView as? NativeEditorScrollView,
+        let documentView = scrollView.documentView as? NativeEditorDocumentView
+      else { return }
+      let textView = documentView.textView
       context.coordinator.parent = self
+      context.coordinator.scrollView = scrollView
       if let undoManager = textView.undoManager {
         context.coordinator.undoManager = undoManager
       }
@@ -803,6 +941,12 @@
       textView.automaticLists = automaticLists
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
+      documentView.titleField.isEnabled = isEnabled
+      documentView.titleField.setAccessibilityElement(isEnabled)
+      documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
+      if documentView.titleField.stringValue != title {
+        documentView.titleField.stringValue = title
+      }
       textView.clearNoteLinkPresentation()
       let reloadedContent = applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator)
       applyColors(to: textView)
@@ -816,6 +960,7 @@
       }
       context.coordinator.fontFamily = fontFamily
       context.coordinator.fontSize = fontSize
+      scrollView.relayoutDocument()
     }
 
     private func configureNoteLinks(on textView: ListAwareTextView) {
@@ -854,6 +999,7 @@
       guard !commands.isFocusedDictationActive, modelChanged || textView.string != text else {
         return false
       }
+      (textView as? ListAwareTextView)?.cancelPasteOptions()
       let selection = textView.selectedRange()
       loadContent(into: textView)
       textView.setSelectedRange(
@@ -965,9 +1111,10 @@
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, NSTextFieldDelegate {
       var parent: NativeRichTextEditor
       weak var undoManager: UndoManager?
+      fileprivate weak var scrollView: NativeEditorScrollView?
       var fontFamily: String
       var fontSize: Double
       var text: String
@@ -1022,6 +1169,20 @@
         } else {
           lastReportedNoteLinkTrigger = nil
         }
+        scrollView?.relayoutDocument()
+      }
+
+      func controlTextDidBeginEditing(_ notification: Notification) {
+        parent.onTitleFocusChange(true)
+      }
+
+      func controlTextDidEndEditing(_ notification: Notification) {
+        parent.onTitleFocusChange(false)
+      }
+
+      func controlTextDidChange(_ notification: Notification) {
+        guard let titleField = notification.object as? NSTextField else { return }
+        parent.onTitleChange(titleField.stringValue)
       }
 
       func textViewDidChangeSelection(_ notification: Notification) {
@@ -1044,6 +1205,20 @@
     }
   }
 
+  enum PasteOption: Int, CaseIterable, Equatable {
+    case keepSourceFormatting
+    case pasteTextOnly
+    case mergeFormatting
+
+    var title: String {
+      switch self {
+      case .keepSourceFormatting: return "Keep Source Formatting"
+      case .mergeFormatting: return "Merge Formatting"
+      case .pasteTextOnly: return "Paste Text Only"
+      }
+    }
+  }
+
   final class ListAwareTextView: NSTextView {
     private static let noteLinkSeparatorMenuTag = 0xF1EC
     private static let noteLinkRequestMenuTag = 0xF1ED
@@ -1060,6 +1235,7 @@
     var reduceMotion = false
     private weak var checklistCompletionOverlay: ChecklistCompletionOverlay?
     private struct TemporaryAttributeSlice {
+      let key: NSAttributedString.Key
       let range: NSRange
       let value: Any?
     }
@@ -1069,9 +1245,175 @@
       let underlineStyle: [TemporaryAttributeSlice]
     }
 
+    private struct ChecklistItem {
+      let markerRange: NSRange
+      let contentRange: NSRange
+      let completed: Bool
+    }
+
     private var temporaryNoteLinkPresentations: [TemporaryNoteLinkPresentation] = []
+    private var temporaryChecklistSlices: [TemporaryAttributeSlice] = []
+    private var checklistTrackingArea: NSTrackingArea?
+    private var hoveredChecklistMarkerRange: NSRange?
+    private var checklistPresentationNeedsRefresh = true
+    private struct PendingPaste {
+      let range: NSRange
+      let nativeText: NSAttributedString
+      let plainText: String
+      let destinationAttributes: [NSAttributedString.Key: Any]
+      let hasRichFormatting: Bool
+      let hasAttachments: Bool
+    }
+
+    private struct PasteContext {
+      let replacementRange: NSRange
+      let destinationAttributes: [NSAttributedString.Key: Any]
+      let originalDocumentLength: Int
+      let changeGeneration: Int
+    }
+
+    private var pendingPaste: PendingPaste?
+    private var pasteOptionsButton: NSButton?
+    private var isApplyingPasteOption = false
+    private var textChangeGeneration = 0
+    private var pasteOptionsBoundsObserver: NSObjectProtocol?
+    private var pasteOptionsFocusObservers: [NSObjectProtocol] = []
+    private var pasteOptionsClickMonitor: Any?
+    private var isPasteOptionsMenuVisible = false
+
+    var hasPasteOptions: Bool { pendingPaste != nil }
+
+    var pasteOptionMenuTitles: [String] {
+      PasteOption.allCases.map(\.title)
+    }
+
+    var pasteOptionEnabledStates: [Bool] {
+      PasteOption.allCases.map(isPasteOptionEnabled)
+    }
+
+    static func pasteTextOnly(
+      _ text: String,
+      destinationAttributes: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+      NSAttributedString(string: text, attributes: destinationAttributes)
+    }
+
+    static func mergePaste(
+      _ source: NSAttributedString,
+      destinationAttributes: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+      let result = NSMutableAttributedString()
+      let semanticKeys: [NSAttributedString.Key] = [
+        .underlineStyle,
+        .strikethroughStyle,
+        .link
+      ]
+      source.enumerateAttributes(
+        in: NSRange(location: 0, length: source.length),
+        options: []
+      ) { sourceAttributes, range, _ in
+        var attributes = destinationAttributes
+        for key in semanticKeys {
+          attributes.removeValue(forKey: key)
+          if let value = sourceAttributes[key] { attributes[key] = value }
+        }
+        if let sourceFont = sourceAttributes[.font] as? NSFont,
+          let destinationFont = destinationAttributes[.font] as? NSFont
+        {
+          attributes[.font] = mergedFont(
+            sourceFont: sourceFont,
+            destinationFont: destinationFont
+          )
+        }
+        let fragment = source.attributedSubstring(from: range)
+        result.append(NSAttributedString(string: fragment.string, attributes: attributes))
+      }
+      return result
+    }
+
+    private static func mergedFont(sourceFont: NSFont, destinationFont: NSFont) -> NSFont {
+      var result = destinationFont
+      for trait: NSFontTraitMask in [.boldFontMask, .italicFontMask] {
+        if NSFontManager.shared.traits(of: sourceFont).contains(trait) {
+          result = NSFontManager.shared.convert(result, toHaveTrait: trait)
+        } else {
+          result = NSFontManager.shared.convert(result, toNotHaveTrait: trait)
+        }
+      }
+      return result
+    }
+
+    private func clearChecklistPresentation() {
+      if let layoutManager {
+        restoreTemporaryAttributeSlices(
+          temporaryChecklistSlices,
+          in: layoutManager,
+          textLength: (string as NSString).length
+        )
+      }
+      temporaryChecklistSlices = []
+      checklistPresentationNeedsRefresh = true
+    }
+
+    func refreshChecklistPresentation() {
+      clearChecklistPresentation()
+      checklistPresentationNeedsRefresh = false
+      guard let storage = textStorage, let layoutManager, storage.length > 0 else {
+        needsDisplay = true
+        return
+      }
+
+      let linkRanges = NoteLinkParser.links(in: string).map(\.range)
+      for markerRange in emptyListMarkerRanges() {
+        temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
+          .foregroundColor,
+          in: markerRange,
+          layoutManager: layoutManager
+        ))
+        let effectiveColor = effectiveForegroundColor(
+          at: markerRange.location,
+          storage: storage,
+          layoutManager: layoutManager
+        )
+        layoutManager.addTemporaryAttribute(
+          .foregroundColor,
+          value: effectiveColor.withAlphaComponent(
+            effectiveColor.alphaComponent * ChecklistMarkerDrawing.emptyListMarkerOpacity
+          ),
+          forCharacterRange: markerRange
+        )
+      }
+      for item in checklistItems() {
+        temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
+          .foregroundColor,
+          in: item.markerRange,
+          layoutManager: layoutManager
+        ))
+        layoutManager.addTemporaryAttribute(
+          .foregroundColor,
+          value: NSColor.clear,
+          forCharacterRange: item.markerRange
+        )
+
+        guard item.completed, item.contentRange.length > 0 else { continue }
+        for range in rangesExcluding(item.contentRange, ranges: linkRanges) {
+          temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
+            .foregroundColor,
+            in: range,
+            layoutManager: layoutManager
+          ))
+          temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
+            .strikethroughColor,
+            in: range,
+            layoutManager: layoutManager
+          ))
+          applyChecklistRecession(in: range, storage: storage, layoutManager: layoutManager)
+        }
+      }
+    }
 
     func clearNoteLinkPresentation() {
+      clearChecklistPresentation()
       guard let layoutManager else {
         temporaryNoteLinkPresentations = []
         return
@@ -1092,6 +1434,7 @@
 
       let links = NoteLinkParser.links(in: string)
       guard !links.isEmpty, textLength > 0 else {
+        refreshChecklistPresentation()
         needsDisplay = true
         return
       }
@@ -1125,6 +1468,7 @@
         )
         temporaryNoteLinkPresentations.append(presentation)
       }
+      refreshChecklistPresentation()
       needsDisplay = true
     }
 
@@ -1147,6 +1491,7 @@
         let effectiveEnd = max(location + 1, min(end, NSMaxRange(effectiveRange)))
         slices.append(
           TemporaryAttributeSlice(
+            key: key,
             range: NSRange(location: location, length: effectiveEnd - location),
             value: value
           )
@@ -1163,13 +1508,11 @@
       for presentation in temporaryNoteLinkPresentations {
         restoreTemporaryAttributeSlices(
           presentation.foregroundColor,
-          key: .foregroundColor,
           in: layoutManager,
           textLength: textLength
         )
         restoreTemporaryAttributeSlices(
           presentation.underlineStyle,
-          key: .underlineStyle,
           in: layoutManager,
           textLength: textLength
         )
@@ -1178,7 +1521,6 @@
 
     private func restoreTemporaryAttributeSlices(
       _ slices: [TemporaryAttributeSlice],
-      key: NSAttributedString.Key,
       in layoutManager: NSLayoutManager,
       textLength: Int
     ) {
@@ -1190,9 +1532,9 @@
         )
         guard range.length > 0 else { continue }
         if let value = slice.value {
-          layoutManager.addTemporaryAttribute(key, value: value, forCharacterRange: range)
+          layoutManager.addTemporaryAttribute(slice.key, value: value, forCharacterRange: range)
         } else {
-          layoutManager.removeTemporaryAttribute(key, forCharacterRange: range)
+          layoutManager.removeTemporaryAttribute(slice.key, forCharacterRange: range)
         }
       }
     }
@@ -1205,10 +1547,16 @@
       checklistCompletionOverlay?.removeFromSuperview()
     }
 
-    private func showChecklistCompletionAnimation(for markerRange: NSRange) {
+    private func showChecklistCompletionAnimation(
+      for markerRange: NSRange,
+      contentLength: Int
+    ) {
       removeChecklistCompletionOverlay()
       guard !reduceMotion, let rect = checklistMarkerRect(for: markerRange) else { return }
       let overlay = ChecklistCompletionOverlay(frame: rect, accentColor: checklistAccentColor)
+      overlay.layer?.opacity = Float(
+        contentLength == 0 ? ChecklistMarkerDrawing.emptyListMarkerOpacity : 1
+      )
       checklistCompletionOverlay = overlay
       addSubview(overlay)
       overlay.start { [weak overlay] in
@@ -1219,43 +1567,175 @@
     func checklistMarkerRect(for markerRange: NSRange) -> NSRect? {
       guard let layoutManager, let textContainer,
         markerRange.location != NSNotFound,
-        NSMaxRange(markerRange) <= (string as NSString).length
+        markerRange.location >= 0,
+        NSMaxRange(markerRange) <= (string as NSString).length,
+        markerRange.location + 2 <= (string as NSString).length
       else { return nil }
 
       layoutManager.ensureLayout(for: textContainer)
       let glyphRange = layoutManager.glyphRange(
-        forCharacterRange: markerRange,
+        forCharacterRange: NSRange(location: markerRange.location, length: 2),
         actualCharacterRange: nil
       )
       guard glyphRange.length > 0 else { return nil }
-      let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+      let slotRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
         .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-      let diameter = max(10, min(glyphRect.width, glyphRect.height))
-      return NSRect(
-        x: glyphRect.midX - diameter / 2,
-        y: glyphRect.midY - diameter / 2,
-        width: diameter,
-        height: diameter
-      ).integral
+      var markerSlotRect = slotRect
+      let ns = string as NSString
+      if let item = checklistItem(
+        in: ns.paragraphRange(for: markerRange),
+        string: ns
+      ), item.contentRange.length > 0, let storage = textStorage
+      {
+        let content = ns.substring(with: item.contentRange)
+        var firstVisibleContentRange: NSRange?
+        content.enumerateSubstrings(
+          in: content.startIndex..<content.endIndex,
+          options: [.byComposedCharacterSequences]
+        ) { substring, range, _, stop in
+          guard let substring,
+            !substring.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          else { return }
+          let relativeRange = NSRange(range, in: content)
+          firstVisibleContentRange = NSRange(
+            location: item.contentRange.location + relativeRange.location,
+            length: relativeRange.length
+          )
+          stop = true
+        }
+
+        if let contentRange = firstVisibleContentRange,
+          let contentFont = (
+            storage.attribute(.font, at: contentRange.location, effectiveRange: nil) as? NSFont
+          ) ?? font
+        {
+          let contentGlyphRange = layoutManager.glyphRange(
+            forCharacterRange: contentRange,
+            actualCharacterRange: nil
+          )
+          if contentGlyphRange.length > 0,
+            contentGlyphRange.location < layoutManager.numberOfGlyphs
+          {
+            let contentGlyph = contentGlyphRange.location
+            let lineFragmentRect = layoutManager.lineFragmentRect(
+              forGlyphAt: contentGlyph,
+              effectiveRange: nil
+            )
+            let baselineY = textContainerOrigin.y
+              + lineFragmentRect.minY
+              + layoutManager.location(forGlyphAt: contentGlyph).y
+            let visibleInkMidY = baselineY
+              - contentFont.boundingRect(
+                forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
+              ).midY
+            markerSlotRect.origin.y += visibleInkMidY - markerSlotRect.midY
+          }
+        }
+      }
+      return ChecklistMarkerDrawing.markerRect(around: markerSlotRect)
     }
 
     func checklistHitRect(for markerRange: NSRange) -> NSRect? {
-      checklistMarkerRect(for: markerRange)?.insetBy(dx: -4, dy: -3)
+      guard let markerRect = checklistMarkerRect(for: markerRange) else { return nil }
+      return ChecklistMarkerDrawing.hitRect(around: markerRect)
     }
 
     override func draw(_ dirtyRect: NSRect) {
+      if checklistPresentationNeedsRefresh { refreshChecklistPresentation() }
+      NSGraphicsContext.saveGraphicsState()
       super.draw(dirtyRect)
+      NSGraphicsContext.restoreGraphicsState()
 
-      for markerRange in completedChecklistMarkerRanges(in: dirtyRect) {
-        guard let rect = checklistMarkerRect(for: markerRange), rect.intersects(dirtyRect) else {
+      for item in checklistItems(in: dirtyRect) {
+        guard let rect = checklistMarkerRect(for: item.markerRange), rect.intersects(dirtyRect) else {
           continue
         }
-        ChecklistMarkerDrawing.drawCompleted(
-          in: rect,
-          accentColor: checklistAccentColor,
-          flipped: isFlipped
+        let isHovered = hoveredChecklistMarkerRange == item.markerRange
+        let hoverColor = checklistAccentColor.withAlphaComponent(isHovered ? 0.14 : 0)
+        let opacity = item.contentRange.length == 0
+          ? ChecklistMarkerDrawing.emptyListMarkerOpacity
+          : 1
+        if item.completed {
+          ChecklistMarkerDrawing.drawCompleted(
+            in: rect,
+            accentColor: checklistAccentColor,
+            flipped: isFlipped,
+            hoverColor: isHovered ? hoverColor : nil,
+            opacity: opacity
+          )
+        } else {
+          ChecklistMarkerDrawing.drawOpen(
+            in: rect,
+            strokeColor: .secondaryLabelColor,
+            hoverColor: isHovered ? hoverColor : nil,
+            opacity: opacity
+          )
+        }
+      }
+    }
+
+    override func deleteBackward(_ sender: Any?) {
+      let selection = selectedRange()
+      let ns = string as NSString
+      guard selection.length == 0, selection.location > 0, selection.location <= ns.length else {
+        super.deleteBackward(sender)
+        return
+      }
+
+      let paragraphRange = ns.paragraphRange(
+        for: NSRange(location: selection.location, length: 0)
+      )
+      guard let item = checklistItem(in: paragraphRange, string: ns),
+        item.contentRange.length == 0,
+        selection.location == item.contentRange.location
+      else {
+        super.deleteBackward(sender)
+        return
+      }
+
+      performUndoGroup {
+        _ = replaceText(
+          in: NSRange(
+            location: item.markerRange.location,
+            length: item.markerRange.length + 1
+          ),
+          with: "",
+          selecting: NSRange(location: item.markerRange.location, length: 0)
         )
       }
+    }
+
+    override func resetCursorRects() {
+      super.resetCursorRects()
+      for item in checklistItems(in: visibleRect) {
+        guard let hitRect = checklistHitRect(for: item.markerRange) else { continue }
+        addCursorRect(hitRect, cursor: .arrow)
+      }
+    }
+
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      if let checklistTrackingArea {
+        removeTrackingArea(checklistTrackingArea)
+      }
+      let trackingArea = NSTrackingArea(
+        rect: bounds,
+        options: [.activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
+        owner: self,
+        userInfo: ["fleckChecklistMarker": true]
+      )
+      checklistTrackingArea = trackingArea
+      addTrackingArea(trackingArea)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+      updateHoveredChecklistMarker(at: convert(event.locationInWindow, from: nil))
+      super.mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+      updateHoveredChecklistMarker(at: nil)
+      super.mouseExited(with: event)
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -1368,6 +1848,320 @@
         }
       }
       super.insertText(insertString, replacementRange: replacementRange)
+    }
+
+    override func paste(_ sender: Any?) {
+      cancelPasteOptions()
+      guard let context = pasteContext() else {
+        super.paste(sender)
+        return
+      }
+
+      let pasteboard = NSPasteboard.general
+      let plainText = pasteboard.string(forType: .string)
+      let hasRichFormatting = pasteboard.data(forType: .rtf) != nil
+        || pasteboard.data(forType: .rtfd) != nil
+        || pasteboard.data(forType: .html) != nil
+
+      performPaste(
+        context: context,
+        plainText: plainText,
+        hasRichFormatting: hasRichFormatting
+      ) {
+        super.paste(sender)
+      }
+    }
+
+    func insertPastedTextForTesting(
+      _ attributedText: NSAttributedString,
+      plainText: String? = nil,
+      hasRichFormatting: Bool = true
+    ) {
+      cancelPasteOptions()
+      guard let context = pasteContext() else { return }
+      performPaste(
+        context: context,
+        plainText: plainText ?? attributedText.string,
+        hasRichFormatting: hasRichFormatting
+      ) {
+        _ = replaceAttributedText(
+          in: context.replacementRange,
+          with: attributedText,
+          selecting: NSRange(
+            location: context.replacementRange.location + attributedText.length,
+            length: 0
+          )
+        )
+      }
+    }
+
+    private func performPaste(
+      context: PasteContext,
+      plainText: String?,
+      hasRichFormatting: Bool,
+      insertion: () -> Void
+    ) {
+      insertion()
+      guard textChangeGeneration > context.changeGeneration else { return }
+      guard let updatedStorage = textStorage else { return }
+      let insertedLength = updatedStorage.length
+        - context.originalDocumentLength
+        + context.replacementRange.length
+      finishPaste(
+        insertedRange: NSRange(
+          location: context.replacementRange.location,
+          length: insertedLength
+        ),
+        plainText: plainText,
+        destinationAttributes: context.destinationAttributes,
+        hasRichFormatting: hasRichFormatting
+      )
+    }
+
+    private func pasteContext() -> PasteContext? {
+      guard let storage = textStorage else { return nil }
+      let selected = selectedRange()
+      guard selected.location != NSNotFound,
+        selected.location >= 0,
+        selected.location <= storage.length
+      else { return nil }
+      let replacementLength = min(selected.length, storage.length - selected.location)
+      let replacementRange = NSRange(location: selected.location, length: replacementLength)
+      return PasteContext(
+        replacementRange: replacementRange,
+        destinationAttributes: pasteDestinationAttributes(for: replacementRange),
+        originalDocumentLength: storage.length,
+        changeGeneration: textChangeGeneration
+      )
+    }
+
+    private func finishPaste(
+      insertedRange: NSRange,
+      plainText: String?,
+      destinationAttributes: [NSAttributedString.Key: Any],
+      hasRichFormatting: Bool
+    ) {
+      guard let updatedStorage = textStorage,
+        insertedRange.length > 0,
+        insertedRange.location >= 0,
+        NSMaxRange(insertedRange) <= updatedStorage.length
+      else { return }
+      let nativeText = updatedStorage.attributedSubstring(from: insertedRange)
+      pendingPaste = PendingPaste(
+        range: insertedRange,
+        nativeText: nativeText,
+        plainText: plainText ?? nativeText.string,
+        destinationAttributes: destinationAttributes,
+        hasRichFormatting: hasRichFormatting,
+        hasAttachments: Self.containsAttachment(in: nativeText)
+      )
+      showPasteOptions()
+    }
+
+    private static func containsAttachment(in text: NSAttributedString) -> Bool {
+      var containsAttachment = false
+      text.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: text.length),
+        options: []
+      ) { value, _, stop in
+        guard value != nil else { return }
+        containsAttachment = true
+        stop.pointee = true
+      }
+      return containsAttachment
+    }
+
+    func applyPasteOption(_ option: PasteOption) {
+      guard let pendingPaste else { return }
+      guard isPasteOptionEnabled(option) else { return }
+      guard option != .keepSourceFormatting else {
+        cancelPasteOptions()
+        return
+      }
+      let replacement: NSAttributedString
+      switch option {
+      case .keepSourceFormatting:
+        replacement = pendingPaste.nativeText
+      case .mergeFormatting:
+        replacement = Self.mergePaste(
+          pendingPaste.nativeText,
+          destinationAttributes: pendingPaste.destinationAttributes
+        )
+      case .pasteTextOnly:
+        replacement = Self.pasteTextOnly(
+          pendingPaste.plainText,
+          destinationAttributes: pendingPaste.destinationAttributes
+        )
+      }
+      guard let storage = textStorage,
+        pendingPaste.range.location >= 0,
+        NSMaxRange(pendingPaste.range) <= storage.length
+      else {
+        cancelPasteOptions()
+        return
+      }
+
+      isApplyingPasteOption = true
+      performUndoGroup {
+        _ = replaceAttributedText(
+          in: pendingPaste.range,
+          with: replacement,
+          selecting: NSRange(
+            location: pendingPaste.range.location + replacement.length,
+            length: 0
+          )
+        )
+      }
+      isApplyingPasteOption = false
+      cancelPasteOptions()
+    }
+
+    func cancelPasteOptions() {
+      pendingPaste = nil
+      pasteOptionsButton?.removeFromSuperview()
+      pasteOptionsButton = nil
+      removePasteOptionsClickMonitor()
+    }
+
+    func isPasteOptionEnabled(_ option: PasteOption) -> Bool {
+      guard let pendingPaste else { return false }
+      switch option {
+      case .keepSourceFormatting:
+        return true
+      case .mergeFormatting:
+        guard pendingPaste.hasRichFormatting, !pendingPaste.hasAttachments else { return false }
+        let merged = Self.mergePaste(
+          pendingPaste.nativeText,
+          destinationAttributes: pendingPaste.destinationAttributes
+        )
+        return !merged.isEqual(to: pendingPaste.nativeText)
+      case .pasteTextOnly:
+        guard pendingPaste.hasRichFormatting, !pendingPaste.hasAttachments else { return false }
+        let textOnly = Self.pasteTextOnly(
+          pendingPaste.plainText,
+          destinationAttributes: pendingPaste.destinationAttributes
+        )
+        return !textOnly.isEqual(to: pendingPaste.nativeText)
+      }
+    }
+
+    private func pasteDestinationAttributes(
+      for range: NSRange
+    ) -> [NSAttributedString.Key: Any] {
+      if range.length > 0,
+        let storage = textStorage,
+        range.location < storage.length
+      {
+        return storage.attributes(at: range.location, effectiveRange: nil)
+      }
+      return typingAttributes
+    }
+
+    private func showPasteOptions() {
+      guard let pendingPaste else { return }
+      guard let anchor = pasteOptionsAnchorRect(for: pendingPaste.range) else {
+        cancelPasteOptions()
+        return
+      }
+      let button = NSButton(frame: .zero)
+      button.setButtonType(.momentaryPushIn)
+      button.bezelStyle = .texturedRounded
+      button.isBordered = true
+      button.image = NSImage(
+        systemSymbolName: "doc.on.clipboard",
+        accessibilityDescription: "Paste options"
+      )
+      button.title = "⌄"
+      button.imagePosition = .imageLeading
+      button.imageScaling = .scaleProportionallyDown
+      button.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+      button.contentTintColor = .secondaryLabelColor
+      button.setAccessibilityElement(true)
+      button.setAccessibilityLabel("Paste options")
+      button.setAccessibilityHelp("Choose how the pasted content is formatted")
+      button.target = self
+      button.action = #selector(showPasteOptionsMenu(_:))
+      addSubview(button)
+      pasteOptionsButton = button
+      positionPasteOptionsButton(anchor: anchor)
+      guard self.pendingPaste != nil, pasteOptionsButton != nil else { return }
+      installPasteOptionsClickMonitor()
+    }
+
+    private func pasteOptionsAnchorRect(for range: NSRange) -> NSRect? {
+      guard let layoutManager, let textContainer,
+        range.location >= 0,
+        range.location <= (string as NSString).length
+      else { return nil }
+      layoutManager.ensureLayout(for: textContainer)
+      let stringLength = (string as NSString).length
+      let endpoint = min(NSMaxRange(range), stringLength)
+      let glyphIndex: Int
+      if endpoint < stringLength {
+        glyphIndex = layoutManager.glyphIndexForCharacter(at: endpoint)
+      } else {
+        guard endpoint > 0 else { return nil }
+        glyphIndex = layoutManager.glyphIndexForCharacter(at: endpoint - 1)
+      }
+      guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+      return layoutManager
+        .boundingRect(
+          forGlyphRange: NSRange(location: glyphIndex, length: 1),
+          in: textContainer
+        )
+        .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+    }
+
+    private func positionPasteOptionsButton(anchor: NSRect) {
+      guard let button = pasteOptionsButton else { return }
+      let visible = visibleRect.isEmpty ? bounds : visibleRect
+      let size = NSSize(width: 36, height: 24)
+      guard !visible.isEmpty, anchor.intersects(visible) else {
+        cancelPasteOptions()
+        return
+      }
+      var origin = NSPoint(x: anchor.maxX - size.width, y: anchor.maxY + 4)
+      origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - size.width - 4)
+      if origin.y + size.height > visible.maxY {
+        origin.y = anchor.minY - size.height - 4
+      }
+      origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - size.height - 4)
+      button.frame = NSRect(origin: origin, size: size)
+    }
+
+    @objc private func showPasteOptionsMenu(_ sender: NSButton) {
+      let menu = NSMenu(title: "Paste Options")
+      menu.autoenablesItems = false
+      for option in PasteOption.allCases {
+        let item = NSMenuItem(
+          title: option.title,
+          action: #selector(selectPasteOptionFromMenu(_:)),
+          keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = option.rawValue
+        item.isEnabled = isPasteOptionEnabled(option)
+        item.state = option == .keepSourceFormatting ? .on : .off
+        menu.addItem(item)
+      }
+      isPasteOptionsMenuVisible = true
+      defer {
+        isPasteOptionsMenuVisible = false
+        cancelPasteOptions()
+      }
+      menu.popUp(
+        positioning: nil,
+        at: NSPoint(x: 0, y: sender.bounds.maxY),
+        in: sender
+      )
+    }
+
+    @objc private func selectPasteOptionFromMenu(_ sender: NSMenuItem) {
+      guard let rawValue = sender.representedObject as? Int,
+        let option = PasteOption(rawValue: rawValue)
+      else { return }
+      applyPasteOption(option)
     }
 
     func toggleList(_ style: EditorListStyle) {
@@ -1530,7 +2324,173 @@
         return false
       }
       clearNoteLinkPresentation()
+      if !isApplyingPasteOption { cancelPasteOptions() }
       return true
+    }
+
+    override func didChangeText() {
+      textChangeGeneration += 1
+      super.didChangeText()
+    }
+
+    override func setSelectedRange(_ range: NSRange) {
+      let changed = range != selectedRange()
+      super.setSelectedRange(range)
+      if changed, !isApplyingPasteOption { cancelPasteOptions() }
+    }
+
+    override func setSelectedRanges(
+      _ ranges: [NSValue],
+      affinity: NSSelectionAffinity,
+      stillSelecting flag: Bool
+    ) {
+      let previousRanges = selectedRanges
+      super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: flag)
+      guard !isApplyingPasteOption else { return }
+      let currentRanges = selectedRanges
+      guard previousRanges.count != currentRanges.count
+        || zip(previousRanges, currentRanges).contains(where: { !$0.isEqual(to: $1) })
+      else { return }
+      cancelPasteOptions()
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+      guard hasPasteOptions else {
+        super.cancelOperation(sender)
+        return
+      }
+      cancelPasteOptions()
+    }
+
+    override func resignFirstResponder() -> Bool {
+      cancelPasteOptions()
+      return super.resignFirstResponder()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+      if newWindow == nil {
+        removePasteOptionsBoundsObserver()
+        removePasteOptionsFocusObservers()
+        cancelPasteOptions()
+      }
+      super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      removePasteOptionsBoundsObserver()
+      removePasteOptionsFocusObservers()
+      removePasteOptionsClickMonitor()
+      guard let window else { return }
+      installPasteOptionsFocusObservers(for: window)
+      if let clipView = enclosingScrollView?.contentView {
+        clipView.postsBoundsChangedNotifications = true
+        pasteOptionsBoundsObserver = NotificationCenter.default.addObserver(
+          forName: NSView.boundsDidChangeNotification,
+          object: clipView,
+          queue: .main
+        ) { [weak self] _ in
+          DispatchQueue.main.async { [weak self] in
+            self?.updatePasteOptionsPlacement()
+          }
+        }
+      }
+      if pendingPaste != nil, pasteOptionsButton != nil {
+        installPasteOptionsClickMonitor()
+      }
+    }
+
+    isolated deinit {
+      if let observer = pasteOptionsBoundsObserver {
+        NotificationCenter.default.removeObserver(observer)
+      }
+      pasteOptionsFocusObservers.forEach(NotificationCenter.default.removeObserver)
+      if let monitor = pasteOptionsClickMonitor {
+        NSEvent.removeMonitor(monitor)
+      }
+    }
+
+    override func layout() {
+      super.layout()
+      updatePasteOptionsPlacement()
+    }
+
+    private func updatePasteOptionsPlacement() {
+      guard let pendingPaste else { return }
+      guard let anchor = pasteOptionsAnchorRect(for: pendingPaste.range) else {
+        cancelPasteOptions()
+        return
+      }
+      positionPasteOptionsButton(anchor: anchor)
+    }
+
+    private func removePasteOptionsBoundsObserver() {
+      if let pasteOptionsBoundsObserver {
+        NotificationCenter.default.removeObserver(pasteOptionsBoundsObserver)
+        self.pasteOptionsBoundsObserver = nil
+      }
+    }
+
+    private func installPasteOptionsClickMonitor() {
+      guard pasteOptionsClickMonitor == nil else { return }
+      pasteOptionsClickMonitor = NSEvent.addLocalMonitorForEvents(
+        matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+      ) { [weak self] event in
+        guard let self else { return event }
+        MainActor.assumeIsolated {
+          guard !self.isPasteOptionsMenuVisible,
+            !self.isPasteOptionsEventInsideTextView(event)
+          else { return }
+          self.cancelPasteOptions()
+        }
+        return event
+      }
+    }
+
+    private func isPasteOptionsEventInsideTextView(_ event: NSEvent) -> Bool {
+      guard let textWindow = window, event.windowNumber == textWindow.windowNumber else {
+        return false
+      }
+      let point = event.window == nil
+        ? event.locationInWindow
+        : convert(event.locationInWindow, from: nil)
+      return bounds.contains(point)
+    }
+
+    private func removePasteOptionsClickMonitor() {
+      if let pasteOptionsClickMonitor {
+        NSEvent.removeMonitor(pasteOptionsClickMonitor)
+        self.pasteOptionsClickMonitor = nil
+      }
+    }
+
+    private func installPasteOptionsFocusObservers(for window: NSWindow) {
+      let notificationCenter = NotificationCenter.default
+      pasteOptionsFocusObservers = [
+        notificationCenter.addObserver(
+          forName: NSWindow.didResignKeyNotification,
+          object: window,
+          queue: .main
+        ) { [weak self] _ in
+          MainActor.assumeIsolated {
+            self?.cancelPasteOptions()
+          }
+        },
+        notificationCenter.addObserver(
+          forName: NSApplication.didResignActiveNotification,
+          object: NSApplication.shared,
+          queue: .main
+        ) { [weak self] _ in
+          MainActor.assumeIsolated {
+            self?.cancelPasteOptions()
+          }
+        }
+      ]
+    }
+
+    private func removePasteOptionsFocusObservers() {
+      pasteOptionsFocusObservers.forEach(NotificationCenter.default.removeObserver)
+      pasteOptionsFocusObservers.removeAll()
     }
 
     func noteLinkTarget(atViewPoint point: NSPoint) -> UUID? {
@@ -1562,6 +2522,7 @@
     }
 
     override func mouseDown(with event: NSEvent) {
+      cancelPasteOptions()
       guard let layoutManager, let textContainer else {
         super.mouseDown(with: event)
         return
@@ -1572,12 +2533,16 @@
         x: point.x - textContainerOrigin.x,
         y: point.y - textContainerOrigin.y
       )
-      guard textPoint.x >= 0, textPoint.y >= 0, layoutManager.numberOfGlyphs > 0 else {
+      guard layoutManager.numberOfGlyphs > 0 else {
         super.mouseDown(with: event)
         return
       }
 
-      let glyphIndex = layoutManager.glyphIndex(for: textPoint, in: textContainer)
+      let glyphPoint = NSPoint(
+        x: max(0, textPoint.x),
+        y: max(0, textPoint.y)
+      )
+      let glyphIndex = layoutManager.glyphIndex(for: glyphPoint, in: textContainer)
       guard glyphIndex < layoutManager.numberOfGlyphs else {
         super.mouseDown(with: event)
         return
@@ -1603,27 +2568,20 @@
       let paragraphRange = ns.paragraphRange(
         for: NSRange(location: characterIndex, length: 0)
       )
-      let paragraph = ns.substring(with: paragraphRange).trimmingCharacters(in: .newlines)
-      guard let parsed = EditorListEngine.parse(paragraph),
-        parsed.style == .checklist
-      else {
+      guard let item = checklistItem(in: paragraphRange, string: ns) else {
         super.mouseDown(with: event)
         return
       }
 
-      let markerRange = NSRange(
-        location: paragraphRange.location + (parsed.depth * 4),
-        length: 1
-      )
-      guard checklistHitRect(for: markerRange)?.contains(point) == true else {
+      guard checklistHitRect(for: item.markerRange)?.contains(point) == true else {
         super.mouseDown(with: event)
         return
       }
 
       _ = toggleChecklist(
-        markerRange: markerRange,
-        contentLength: parsed.content.utf16.count,
-        currentlyCompleted: parsed.isChecklistComplete
+        markerRange: item.markerRange,
+        contentLength: item.contentRange.length,
+        currentlyCompleted: item.completed
       )
     }
 
@@ -1639,11 +2597,27 @@
         location: range.location,
         length: replacement.utf16.count
       )
+      let originalParagraph = original.trimmingCharacters(in: .newlines)
+      let isSingleEmptyListRemoval =
+        (replacement.isEmpty || replacement == "\n")
+        && (original == originalParagraph || original == originalParagraph + "\n")
+        && EditorListEngine.parse(originalParagraph)?.content.isEmpty == true
+      let selection: NSRange
+      if original.isEmpty || original == "\n" {
+        let offset = replacement.hasSuffix("\n")
+          ? replacement.utf16.count - 1
+          : replacement.utf16.count
+        selection = NSRange(location: range.location + offset, length: 0)
+      } else if isSingleEmptyListRemoval {
+        selection = NSRange(location: range.location, length: 0)
+      } else {
+        selection = replacementRange
+      }
       let attributed = attributedListReplacement(in: range, with: replacement)
       _ = replaceAttributedText(
         in: range,
         with: attributed,
-        selecting: replacementRange
+        selecting: selection
       ) { storage, insertedRange in
         if clearsCompletedChecklist {
           storage.removeAttribute(.strikethroughStyle, range: insertedRange)
@@ -1800,17 +2774,221 @@
       }
       guard changed else { return false }
       if completed {
-        showChecklistCompletionAnimation(for: markerRange)
+        showChecklistCompletionAnimation(
+          for: markerRange,
+          contentLength: contentLength
+        )
       } else {
         removeChecklistCompletionOverlay()
       }
       return true
     }
 
+    private func checklistItems(in dirtyRect: NSRect? = nil) -> [ChecklistItem] {
+      let ns = string as NSString
+      guard ns.length > 0 else { return [] }
+      let characterRange: NSRange
+      if let dirtyRect {
+        guard let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 else {
+          return []
+        }
+        let containerRect = dirtyRect.offsetBy(
+          dx: -textContainerOrigin.x,
+          dy: -textContainerOrigin.y
+        )
+        let glyphRange = layoutManager.glyphRange(
+          forBoundingRect: containerRect,
+          in: textContainer
+        )
+        guard glyphRange.length > 0 else { return [] }
+        characterRange = layoutManager.characterRange(
+          forGlyphRange: glyphRange,
+          actualGlyphRange: nil
+        )
+      } else {
+        characterRange = NSRange(location: 0, length: ns.length)
+      }
+
+      var location = min(characterRange.location, ns.length)
+      let end = min(ns.length, NSMaxRange(characterRange))
+      var items: [ChecklistItem] = []
+      while location < end {
+        let paragraphRange = ns.paragraphRange(
+          for: NSRange(location: location, length: 0)
+        )
+        if let item = checklistItem(in: paragraphRange, string: ns) { items.append(item) }
+        let nextLocation = NSMaxRange(paragraphRange)
+        guard nextLocation > location else { break }
+        location = nextLocation
+      }
+      return items
+    }
+
+    private func emptyListMarkerRanges() -> [NSRange] {
+      let ns = string as NSString
+      guard ns.length > 0 else { return [] }
+      var location = 0
+      var ranges: [NSRange] = []
+      while location < ns.length {
+        let paragraphRange = ns.paragraphRange(
+          for: NSRange(location: location, length: 0)
+        )
+        if let item = parsedListItem(in: paragraphRange, string: ns),
+          item.parsed.content.isEmpty
+        {
+          switch item.parsed.style {
+          case .bullet, .number:
+            ranges.append(item.markerRange)
+          case .checklist:
+            break
+          }
+        }
+        let nextLocation = NSMaxRange(paragraphRange)
+        guard nextLocation > location else { break }
+        location = nextLocation
+      }
+      return ranges
+    }
+
+    private func checklistItem(in paragraphRange: NSRange, string ns: NSString) -> ChecklistItem? {
+      guard let item = parsedListItem(in: paragraphRange, string: ns),
+        item.parsed.style == .checklist
+      else {
+        return nil
+      }
+      return ChecklistItem(
+        markerRange: item.markerRange,
+        contentRange: item.contentRange,
+        completed: item.parsed.isChecklistComplete
+      )
+    }
+
+    private func parsedListItem(in paragraphRange: NSRange, string ns: NSString) -> (
+      markerRange: NSRange,
+      contentRange: NSRange,
+      parsed: ParsedEditorListLine
+    )? {
+      let paragraph = ns.substring(with: paragraphRange).trimmingCharacters(in: .newlines)
+      guard let parsed = EditorListEngine.parse(paragraph) else { return nil }
+      let markerStart = parsed.depth * 4
+      guard markerStart < paragraph.utf16.count else { return nil }
+      let remainder = paragraph.dropFirst(markerStart)
+      guard let separator = remainder.firstIndex(of: " ") else { return nil }
+      let markerLength = remainder[..<separator].utf16.count
+      let markerRange = NSRange(
+        location: paragraphRange.location + markerStart,
+        length: markerLength
+      )
+      return (
+        markerRange: markerRange,
+        contentRange: NSRange(
+          location: NSMaxRange(markerRange) + 1,
+          length: parsed.content.utf16.count
+        ),
+        parsed: parsed
+      )
+    }
+
+    private func rangesExcluding(
+      _ range: NSRange,
+      ranges excludedRanges: [NSRange]
+    ) -> [NSRange] {
+      let end = NSMaxRange(range)
+      var location = range.location
+      var result: [NSRange] = []
+      for excluded in excludedRanges.sorted(by: { $0.location < $1.location }) {
+        guard excluded.location < end else { break }
+        let overlapStart = max(location, excluded.location)
+        let overlapEnd = min(end, NSMaxRange(excluded))
+        guard overlapEnd > location else { continue }
+        if overlapStart > location {
+          result.append(NSRange(location: location, length: overlapStart - location))
+        }
+        location = overlapEnd
+        if location == end { break }
+      }
+      if location < end {
+        result.append(NSRange(location: location, length: end - location))
+      }
+      return result
+    }
+
+    private func applyChecklistRecession(
+      in range: NSRange,
+      storage: NSTextStorage,
+      layoutManager: NSLayoutManager
+    ) {
+      guard range.length > 0 else { return }
+      storage.enumerateAttribute(.foregroundColor, in: range) { value, subrange, _ in
+        let effectiveColor = (
+          layoutManager.temporaryAttribute(
+            .foregroundColor,
+            atCharacterIndex: subrange.location,
+            effectiveRange: nil
+          ) as? NSColor
+        ) ?? (value as? NSColor) ?? .textColor
+        let recessionColor = effectiveColor.withAlphaComponent(
+          effectiveColor.alphaComponent * 0.72
+        )
+        layoutManager.addTemporaryAttribute(
+          .foregroundColor,
+          value: recessionColor,
+          forCharacterRange: subrange
+        )
+        layoutManager.addTemporaryAttribute(
+          .strikethroughColor,
+          value: recessionColor,
+          forCharacterRange: subrange
+        )
+      }
+    }
+
+    private func effectiveForegroundColor(
+      at location: Int,
+      storage: NSTextStorage,
+      layoutManager: NSLayoutManager
+    ) -> NSColor {
+      (layoutManager.temporaryAttribute(
+        .foregroundColor,
+        atCharacterIndex: location,
+        effectiveRange: nil
+      ) as? NSColor)
+        ?? (storage.attribute(.foregroundColor, at: location, effectiveRange: nil) as? NSColor)
+        ?? .textColor
+    }
+
+    private func updateHoveredChecklistMarker(at point: NSPoint?) {
+      let hovered = point.flatMap { point -> NSRange? in
+        guard let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 else {
+          return nil
+        }
+        let textPoint = NSPoint(
+          x: max(0, point.x - textContainerOrigin.x),
+          y: max(0, point.y - textContainerOrigin.y)
+        )
+        let glyphIndex = layoutManager.glyphIndex(for: textPoint, in: textContainer)
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        let ns = string as NSString
+        guard characterIndex < ns.length,
+          let item = checklistItem(
+            in: ns.paragraphRange(for: NSRange(location: characterIndex, length: 0)),
+            string: ns
+          ),
+          checklistHitRect(for: item.markerRange)?.contains(point) == true
+        else { return nil }
+        return item.markerRange
+      }
+      guard hovered != hoveredChecklistMarkerRange else { return }
+      hoveredChecklistMarkerRange = hovered
+      needsDisplay = true
+    }
+
     private func registerStrikethroughUndo(enabled: Bool, range: NSRange) {
       undoManager?.registerUndo(withTarget: self) { target in
         target.registerStrikethroughUndo(enabled: !enabled, range: range)
         target.removeChecklistCompletionOverlay()
+        target.clearChecklistPresentation()
         guard let storage = target.textStorage, range.length > 0 else { return }
         if enabled {
           storage.addAttribute(
@@ -1823,54 +3001,6 @@
         }
         target.didChangeText()
       }
-    }
-
-    private func completedChecklistMarkerRanges(in dirtyRect: NSRect) -> [NSRange] {
-      guard let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 else {
-        return []
-      }
-      let containerRect = dirtyRect.offsetBy(
-        dx: -textContainerOrigin.x,
-        dy: -textContainerOrigin.y
-      )
-      let glyphRange = layoutManager.glyphRange(
-        forBoundingRect: containerRect,
-        in: textContainer
-      )
-      guard glyphRange.length > 0 else { return [] }
-
-      let characterRange = layoutManager.characterRange(
-        forGlyphRange: glyphRange,
-        actualGlyphRange: nil
-      )
-      let ns = string as NSString
-      let visibleEnd = min(ns.length, NSMaxRange(characterRange))
-      var location = min(characterRange.location, ns.length)
-      var markerRanges: [NSRange] = []
-
-      while location < visibleEnd {
-        let paragraphRange = ns.paragraphRange(
-          for: NSRange(location: location, length: 0)
-        )
-        let paragraph = ns.substring(with: paragraphRange)
-          .trimmingCharacters(in: .newlines)
-        if let parsed = EditorListEngine.parse(paragraph),
-          parsed.style == .checklist,
-          parsed.isChecklistComplete
-        {
-          markerRanges.append(
-            NSRange(
-              location: paragraphRange.location + (parsed.depth * 4),
-              length: 1
-            )
-          )
-        }
-        let nextLocation = NSMaxRange(paragraphRange)
-        guard nextLocation > location else { break }
-        location = nextLocation
-      }
-
-      return markerRanges
     }
 
     private func renumberNumberedList(around affectedRange: NSRange) {

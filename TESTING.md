@@ -36,7 +36,7 @@ panel. Quit Fleck from the menu-bar icon's context menu when testing is done.
 The packaged app is required for the embedded Agent Connector and for stable
 macOS privacy permissions.
 
-`Scripts/validate-macos.sh` verifies the host OS, runs the complete test suite, creates a release build, checks the release executable against the 15 MB budget, and prints the exact executable path. It does not launch or terminate the app because visual testing should remain under the tester's control.
+`Scripts/validate-macos.sh` verifies the host OS, runs the complete test suite, creates a release build, checks the release executable against the 18 MiB budget, and prints the exact executable path. It does not launch or terminate the app because visual testing should remain under the tester's control.
 
 ## Packaged editor and branding checklist
 
@@ -96,6 +96,7 @@ swift build -c release --product Fleck
 swift build -c release --product fleck-agent
 Scripts/audit-agent-boundary.sh
 Scripts/check-release-size.sh .build/release/Fleck
+Scripts/test-release-model-asset-exclusion.sh
 Scripts/validate-macos.sh
 Scripts/test-enhanced-candidate-pin.sh
 Scripts/resolve-enhanced-candidate.sh .build-candidate \
@@ -111,11 +112,55 @@ git diff --exit-code -- Package.resolved
 The test suite probes private, unknown, Trash, and Dictation History UUIDs;
 unshared activity; the closed command model; secret-free profile persistence
 and setup output; same-user IPC; revisions, retries, transaction recovery, and
-Undo; the exact thirteen MCP tools; and tools-only MCP capabilities.
+Undo; pending-restore privacy and commit outcomes; the exact thirteen existing
+MCP tools; and tools-only MCP capabilities.
 `Scripts/audit-agent-boundary.sh` separately rejects helper AppKit outside the
 non-activating launch adapter, HTTP/TCP/listener APIs, direct Fleck storage
 paths, an altered MCP tool/handler surface, MCP-mode stdout prose, and
 credential-bearing snippets.
+
+### MCP Capability Foundation Phase A evidence
+
+Fresh code review of exact implementation head
+`1671792fca311af4b66efff3c96fe0d1a560f22d` returned exactly **ship** before
+Task 8. The parent automated release gate recorded:
+
+- `swift test --disable-automatic-resolution --no-parallel`: exit 0, 994 tests
+  in 14 suites.
+- `swift build -c release --product Fleck`: exit 0.
+- `swift build -c release --product fleck-agent`: exit 0.
+- `Scripts/audit-agent-boundary.sh`: exit 0, including exact 13 tools, local
+  IPC, and no storage fallback.
+- `Scripts/check-release-size.sh`: exit 0. Latest sizes were Fleck
+  10,803,712 bytes and `fleck-agent` 11,171,312 bytes, below the 15 MiB Fleck
+  budget.
+- `Scripts/validate-macos.sh`: exit 0 on rerun. The first run encountered one
+  existing `WorkspaceSearchHosting` timing flake after a separate full 994/994
+  pass; the rerun passed.
+- `Scripts/build-fleck-app.sh`: exit 0.
+- `codesign --verify --deep --strict .build/Fleck.app`: exit 0.
+- `git diff --check`: exit 0.
+
+The environment was arm64 macOS 26.2 build 25C56, Xcode 26.6 build 17F113,
+Swift 6.3.3. Development ad-hoc packaging and codesign verification passed;
+this is not distribution signing evidence.
+
+The profile model under test is `notes.list`, `notes.read`, `notes.write`, and
+`changes.undo`; direct note grants and explicit `folderIncludingFutureNotes`
+grants are tested separately, with future inheritance off by default and
+confirmation required. Folder-contained notes use the same existing note
+operations as unfiled notes when their Agent Access grants authorize them.
+
+`tools/list` is recomputed per request from the current profile authority,
+returns only authorized entries from the static exact 13 existing registrations,
+and does not advertise `listChanged`. Wire v1 remains compatible while internal
+v2 `getCapabilities` remains typed and non-mutating.
+
+GitHub CI remains pending until the branch and pull request are pushed.
+Interactive packaged-app/manual workflows, installed Codex/Claude/Kimi/generic
+clients, live Keychain, accessibility, Full Keyboard Access, Reduce Motion,
+multiple-window, sleep/wake, five-minute idle, distribution signing,
+notarization, and App Store gates remain pending or unrecorded.
 
 `Scripts/validate-macos.sh` builds the native ad-hoc development-signed
 `Fleck.app`, verifies its stable code identity and separately packaged helper,
@@ -186,6 +231,61 @@ retain only sanitized evidence.
 
 ## Clean Dictation release gates
 
+### Baseline evidence at `63a0832` — 2026-08-29
+
+These commands ran in a clean
+`codex/local-writing-phase0-doc-truth` worktree at exact commit
+`63a0832728f57d6a18a4fb46d25199d90c154e71` on arm64 macOS 26.6.2 (25G83)
+with Swift 6.3.3. Automatic resolution was disabled for every test command;
+this host did not require `--disable-sandbox`.
+
+```sh
+swift test --disable-automatic-resolution --no-parallel \
+  --filter 'FleckAppTests\.(cachedRouting|dynamicDestinationRouter|gemmaRoute|routingContext|routingFailure|ambiguousRouting|processingCancelDuringRouting|cancelDuringRouting)'
+
+swift test --disable-automatic-resolution --no-parallel \
+  --filter 'FleckAppTests\.(FoundationModelDictation|cleaner|deterministicFiller|faithfulValidator|extractedFaithful|dynamicCleanup|cleanupFailureUsesRawTranscript|processorUsesExactBaseline|deadlineUsesStop|productionProcessingBudget|nonemptyFinalCreatesPendingHistoryBeforeCleanup|cancelDuringCleanup)'
+
+Scripts/resolve-enhanced-candidate.sh .build-candidate-0c \
+  swift test --disable-automatic-resolution --no-parallel \
+    --scratch-path .build-candidate-0c \
+    --filter 'FleckAppTests\.(Parakeet|EnhancedSpeech|gemmaActivation|gemmaCleanupAppComposition|gemmaCleanupConfiguration|gemmaCleanupModelManifest|gemmaProcessTransport|gemmaRoute|dynamicCleanup|dynamicDestinationRouter)'
+```
+
+The focused routing command exited 0 with 63 tests, the focused cleanup command
+exited 0 with 123 tests, and the enhanced candidate command exited 0 with 96
+tests. These are non-empty deterministic/synthetic integration checks. The
+enhanced command resolved only the pinned candidate dependency graph from local
+package caches; it did not download model weights, build or launch a packaged
+app, inject audio, or use a microphone.
+
+The full ordinary command is currently a reproducible failing baseline:
+
+```sh
+swift test --disable-automatic-resolution --no-parallel
+```
+
+It ran 1,674 tests in 17 suites and failed with three issues in two tests:
+
+- `FleckAppTests.completedChecklistMarkerContainsAccentFillAndWhiteCheck()`:
+  `ChecklistMarkerDrawingTests.swift:70` observed `accentPixels == 0`, failing
+  `accentPixels > 80`.
+- `FleckAppTests.processorCapturesStopBeforeDelayedSourceFinalization()`:
+  `StreamingDictationProcessorTests.swift:875-876` failed both deadline
+  expectations.
+
+An immediate isolated rerun with the same flags and a filter containing those
+two exact identifiers reproduced both failures and all three issues. No source
+or test was changed in this documentation packet. `Package.resolved` remained
+byte-identical with SHA-256
+`ccf30f62d44719e9859266a373bb0219dbbd1e0f73d17667b50d7d87715a09f7`.
+
+The proof boundary is explicit: these results establish deterministic/synthetic
+contract behavior only. There is no recorded private human-audio model replay,
+exact packaged injected-audio run, packaged live-human real-microphone run,
+identical-artifact two-device acceptance, signed/notarized distribution
+acceptance, or owner release admission for Parakeet or Gemma.
+
 ### Automated gate
 
 Run from the repository root:
@@ -195,6 +295,7 @@ swift package resolve
 swift test --disable-automatic-resolution --no-parallel
 swift build -c release
 Scripts/check-release-size.sh
+Scripts/test-release-model-asset-exclusion.sh
 Scripts/validate-macos.sh
 git diff --check
 git status --short
@@ -206,8 +307,9 @@ profleck an executable path inside `.app` to the enclosing bundle, including
 when an executable symlink outside the bundle resolves into it. It resolves
 command-line directory symlinks to a physical root, inspects nested symlink
 targets without following arbitrary cycles, fails closed on traversal errors,
-and scans case-insensitively for `.mlmodel`, `.mlpackage`, `.mlmodelc`, exact
-`coremldata.bin`/`weight.bin`/`weights.bin` names, and `.bin` files under model
+and scans case-insensitively for `.mlmodel`, `.mlpackage`, `.mlmodelc`,
+`.safetensors`, `.gguf`, and `.onnx` files anywhere in the artifact; exact
+`coremldata.bin`/`weight.bin`/`weights.bin` names; and `.bin` files under model
 bundle or model directory paths relative to each artifact or queued scan root.
 When a model-named symlink resolves to a neutral external directory, the
 logical model context follows that queued physical root.
@@ -216,6 +318,15 @@ ancestor happens to be named `models`. The same gate restricts searches to
 Swift sources accepted through regular files, file symlinks, or directory
 symlinks under `Sources`; resolves and deduplicates their physical targets;
 and fails closed on broken links, cycles, or traversal errors.
+
+`Scripts/test-release-model-asset-exclusion.sh` builds a temporary minimal
+`.app` with `Fleck` and `fleck-agent` fixtures. It separately verifies
+case-insensitive neutral-path rejection for each new suffix, rejection through
+a symlinked directory, and acceptance of an unrelated neutral `.bin`; no
+fixture files are kept in the repository. Candidate SDK/runtime symbol checks
+use these additional case-insensitive `nm` substrings: `Qwen`, `SherpaOnnx`,
+`MLX` (including the `mlx_lm` prefix), `Nemotron`, `nemo_speech`, `whisper_`,
+`ggml_`, and `llama_`. Broad tokens such as `model` and `onnx` are not used.
 
 For source assertions, the gate generates and compiles a temporary structural
 inspector using the active Xcode toolchain's host `SwiftSyntax`, `SwiftParser`,
@@ -432,15 +543,20 @@ do not change the status from pending based on CI alone.
   180 ms hold, short tap, double-tap hands-free, finish, and Escape; active,
   hidden, pinned, and behind-another-app windows; all Spaces, full-screen apps,
   multiple displays, display removal, and docking; focused rollback/Undo;
-  title-only routing/Inbox; history copy/open/delete/purge/clear; and ordinary
+  exact-title plus bounded full-note semantic routing/Inbox/chooser behavior;
+  history copy/open/delete/purge/clear; and ordinary
   notes with no model installed.
 - **Exact procedure:** Run every interaction from both idle and active capture
   states. Confirm the persistent bar remains non-activating and shows neither a
-  transcript nor a shortcut hint at idle. Use uniquely identifiable note-body
-  secrets to confirm routing sees titles only. Force failed cleanup and
-  low-confidence routing, verify raw/Inbox fallback, advance a test clock or
-  use dated fixtures for 30-day purge, and inspect the saved note/history after
-  each terminal path.
+  transcript nor a shortcut hint at idle. In disposable notes, verify exact
+  title routing separately from unique body-context routing, ambiguous body
+  evidence, and no-match evidence. Record Foundation Models availability and
+  the active routing implementation; full-note cases require the debug-gated
+  local Gemma route, because the available Foundation route remains title-based
+  at this base. Force failed cleanup and low-confidence routing, verify
+  faithful-baseline/Inbox fallback, advance a test clock or use dated fixtures
+  for 30-day purge, and inspect the saved note/history after each terminal path.
+  Do not use private everyday notes as routing fixtures.
 
 #### VoiceOver and Reduce Motion
 
@@ -673,7 +789,7 @@ Also inspect **Activity Monitor → Memory** and **Activity Monitor → CPU** af
 - Idle CPU after pending saves finish.
 - Time from clicking the menu-bar icon to seeing the editor.
 
-The current targets are at or below 15 MB for the release executable where practical and below 75 MB resident memory during an ordinary idle workflow. A SwiftPM executable-size result is not a substitute for measuring the eventual signed `.app` bundle.
+The current targets are at or below 18 MiB for the release executable where practical and below 75 MB resident memory during an ordinary idle workflow. A SwiftPM executable-size result is not a substitute for measuring the eventual signed `.app` bundle.
 
 ### Performance baseline — Wave 1A
 

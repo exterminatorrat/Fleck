@@ -67,7 +67,6 @@
             .padding(.bottom, 10)
         }
       }
-      .frame(minWidth: 440, minHeight: 320)
       .task {
         await appState.refreshTrash()
       }

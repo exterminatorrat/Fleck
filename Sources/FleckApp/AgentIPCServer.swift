@@ -269,11 +269,24 @@
     }
 
     func response(to request: AgentWireRequest) async -> AgentWireResponse {
-      guard request.protocolVersion == AgentWireRequest.currentProtocolVersion else {
+      guard AgentWireRequest.supportedProtocolVersions.contains(
+        request.protocolVersion
+      ) else {
         return .failure(
+          protocolVersion: AgentWireResponse.currentProtocolVersion,
           requestID: request.requestID,
           error: AgentWorkspaceError(
-            code: .invalidPayload,
+            code: .protocolVersionUnsupported,
+            recoveryAction: "Please update Fleck and the helper, then try again."
+          )
+        )
+      }
+      guard request.command.isSupported(wireVersion: request.protocolVersion) else {
+        return .failure(
+          protocolVersion: request.protocolVersion,
+          requestID: request.requestID,
+          error: AgentWorkspaceError(
+            code: .protocolVersionUnsupported,
             recoveryAction: "Please update Fleck and the helper, then try again."
           )
         )
@@ -287,6 +300,7 @@
         credential.base64EncodedString() == request.credentialBase64
       else {
         return .failure(
+          protocolVersion: request.protocolVersion,
           requestID: request.requestID,
           error: AgentWorkspaceError(code: .invalidPayload)
         )
@@ -294,24 +308,38 @@
 
       let response: AgentWireResponse
       do {
-        response = .success(
-          requestID: request.requestID,
-          result: try await execute(
-            request.profileID,
-            credential,
-            request.command
+        let result = try await execute(
+          request.profileID,
+          credential,
+          request.command
+        )
+        guard result.isSupported(wireVersion: request.protocolVersion) else {
+          throw AgentWorkspaceError(
+            code: .protocolVersionUnsupported,
+            recoveryAction: "Please update Fleck and the helper, then try again."
           )
+        }
+        response = .success(
+          protocolVersion: request.protocolVersion,
+          requestID: request.requestID,
+          result: result
         )
       } catch let error as AgentWorkspaceError {
-        response = .failure(requestID: request.requestID, error: error)
+        response = .failure(
+          protocolVersion: request.protocolVersion,
+          requestID: request.requestID,
+          error: error
+        )
       } catch {
         response = .failure(
+          protocolVersion: request.protocolVersion,
           requestID: request.requestID,
           error: AgentWorkspaceError(code: .internalSaveFailure)
         )
       }
       guard (try? AgentWireFraming.encode(response)) != nil else {
         return .failure(
+          protocolVersion: request.protocolVersion,
           requestID: request.requestID,
           error: AgentWorkspaceError(code: .responseTooLarge)
         )

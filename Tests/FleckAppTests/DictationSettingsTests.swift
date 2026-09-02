@@ -1,122 +1,1240 @@
 import AppKit
 import Foundation
 import FleckCore
+import SwiftUI
 import Testing
 
 @testable import FleckApp
 
+@Test func settingsSourceUsesCompactModelsRowsAndRemovesTechnicalMetadata() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let runtimeSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains(
+    "@ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel"
+  ))
+  #expect(source.contains(
+    "@ObservedObject private var cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel"
+  ))
+  #expect(source.contains("_admittedModelSettingsViewModel = ObservedObject("))
+  #expect(source.contains("wrappedValue: runtime.admittedModelSettingsViewModel"))
+  #expect(source.contains("_cleanupAdmittedModelSettingsViewModel = ObservedObject("))
+  #expect(source.contains("wrappedValue: runtime.cleanupAdmittedModelSettingsViewModel"))
+  #expect(source.contains("AdmittedModelSettingsPresentation"))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Dictation model\""))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Cleanup model\""))
+  #expect(source.contains(
+    "presentation: admittedModelSettingsViewModel.presentation,\n" +
+      "            viewModel: admittedModelSettingsViewModel,"
+  ))
+  #expect(source.contains(
+    "presentation: cleanupAdmittedModelSettingsViewModel.presentation,\n" +
+      "            viewModel: cleanupAdmittedModelSettingsViewModel,"
+  ))
+  #expect(!source.contains(#"Section("Speech Engine")"#))
+  #expect(!source.contains(#"Text("Active engine:"#))
+  #expect(source.contains(#"Text("Model: \(presentation.modelLabel)")"#))
+  #expect(source.contains("presentation.modelLabel"))
+  #expect(source.contains("if presentation.showsStatus"))
+  #expect(source.contains("if presentation.showsDetail"))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Theme\""))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Editor text color\""))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Width\""))
+  #expect(source.contains("ScrollView"))
+  #expect(runtimeSource.contains(".defaultSize(width: 840, height: 600)"))
+  #expect(runtimeSource.contains(".windowResizability(.contentMinSize)"))
+  #expect(source.contains(".focusable(presentation.isKeyboardFocusable)"))
+  #expect(source.contains(".accessibilityElement(children: .contain)"))
+  #expect(source.contains(".accessibilityLabel(presentation.accessibilityLabel)"))
+  #expect(source.contains(".accessibilityValue(presentation.accessibilityValue)"))
+  #expect(source.contains("await admittedModelSettingsViewModel.refresh()"))
+  #expect(source.contains("await cleanupAdmittedModelSettingsViewModel.refresh()"))
+  #expect(source.contains("Button(label) { viewModel.perform(action) }"))
+  #expect(source.contains(
+    #"progressAccessibilityLabel: "Enhanced local dictation installation progress""#
+  ))
+  #expect(source.contains(
+    #"progressAccessibilityLabel: "Enhanced local cleanup installation progress""#
+  ))
+  #expect(source.contains(".accessibilityLabel(progressAccessibilityLabel)"))
+  #expect(!source.contains("cleanupModelLabel"))
+  #expect(!source.contains("runtime.availability.foundationModelAvailability"))
+  #expect(!source.contains(#"LabeledContent("Cleanup", value:"#))
+  #expect(!source.contains("private func perform(_ action: AdmittedModelSettingsAction)"))
+  #expect(!source.contains("Button(label) { perform(action) }"))
+  #expect(!source.contains("License"))
+  #expect(!source.contains("Checksums"))
+  #expect(!source.contains("Supported architectures"))
+  #expect(!source.contains("Supported languages"))
+  #expect(!source.contains("Download size"))
+  #expect(!source.contains("Installed size"))
+  #expect(!source.contains(" bytes"))
+  #expect(!source.contains("Admitted model installation progress"))
+  #expect(!source.contains("Picker(\"Engine\""))
+  #expect(!source.contains("ModelConsentView"))
+  #expect(!source.contains("DictationModelConsentPresentation"))
+  #expect(!source.contains("Download Enhanced Model"))
+  #expect(!source.contains("Loading"))
+  #expect(!source.contains("modelError"))
+  #expect(!source.contains("clearModelError"))
+  #expect(!runtimeSource.contains("modelError"))
+  #expect(!runtimeSource.contains("clearModelError"))
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
-@Test func DictationSettingsSelectsStandardByDefault() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(),
-    modelState: .notInstalled,
-    isArchitectureSupported: true,
-    enhancedIsReady: false
-  )
-
-  #expect(presentation.selectedEngine == .standard)
+  #expect(runtimeSource.contains(
+    "let destinationRouter: any DestinationRouting = cleanupComposition.destinationRouter"
+  ))
+  #expect(runtimeSource.contains(
+    "localRoutingModelReady: localRoutingModelReady(cleanupPresentation)"
+  ))
+#endif
 }
 
-@Test func DictationSettingsDisablesEnhancedOnIntel() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(),
-    modelState: .ready,
-    isArchitectureSupported: false,
-    enhancedIsReady: true
-  )
+@Test func admittedModelSourcesUseNeutralUserFacingCopy() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
 
-  #expect(!presentation.enhancedChoiceEnabled)
-  #expect(presentation.architectureCopy == "Enhanced dictation requires Apple silicon.")
+  let sourcePaths = [
+    "Sources/FleckApp/AdmittedModelSettingsPresentation.swift",
+    "Sources/FleckApp/SettingsView.swift",
+    "Sources/FleckApp/ParakeetTDTTestActivation.swift",
+  ]
+  let sources = try sourcePaths.map { path in
+    (
+      path,
+      try String(contentsOf: repository.appendingPathComponent(path), encoding: .utf8)
+    )
+  }
+  var offendingQuotedCopy: [String] = []
+  for (path, source) in sources {
+    offendingQuotedCopy.append(contentsOf: source.split(whereSeparator: \.isNewline).filter { line in
+      let lowercasedLine = line.lowercased()
+      return lowercasedLine.contains("\"") && (
+        lowercasedLine.contains("admitted model") ||
+        lowercasedLine.contains("admitted local model")
+      )
+    }.map { "\(path): \($0)" })
+  }
+
+  #expect(offendingQuotedCopy.isEmpty)
+  #expect(sources[0].1.contains(
+    "Enhanced local dictation failed:"
+  ))
+  #expect(sources[1].1.contains(
+    #"progressAccessibilityLabel: "Enhanced local dictation installation progress""#
+  ))
+  #expect(sources[2].1.contains(
+    "Repair the experimental enhanced local model candidate in Dictation Settings"
+  ))
 }
 
-@Test func DictationSettingsOffersEnhancedDownloadWhenNotInstalled() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(),
-    modelState: .notInstalled,
-    isArchitectureSupported: true,
-    enhancedIsReady: false
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test
+func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let runtimeSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
+    encoding: .utf8
   )
 
-  #expect(presentation.primaryAction?.title == "Download Enhanced Model")
-}
-
-@Test func DictationSettingsConsentExplainsThePrivateLocalDownload() {
-  let consent = DictationModelConsentPresentation.standard
-
-  #expect(consent.downloadSize == "442.9 MiB")
-  #expect(consent.installedSize == "442.9 MiB")
-  #expect(consent.requirement == "Apple silicon")
-  #expect(consent.language == "English")
-  #expect(consent.attribution.contains("NVIDIA"))
-  #expect(consent.attribution.contains("FluidInference"))
-  #expect(consent.privacyCopy.contains("does not upload"))
-  #expect(consent.privacyCopy.contains("dictation data"))
-}
-
-@Test func DictationSettingsDownloadingShowsProgressAndCancel() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(),
-    modelState: .downloading(progress: 0.42),
-    isArchitectureSupported: true,
-    enhancedIsReady: false
-  )
-
-  #expect(presentation.downloadProgress == 0.42)
-  #expect(presentation.primaryAction == .cancel)
-}
-
-@Test func DictationSettingsFailureOffersRepair() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(dictationSpeechEngine: .enhancedLocal),
-    modelState: .repairRequired(message: "Checksum mismatch"),
-    isArchitectureSupported: true,
-    enhancedIsReady: false
-  )
-
-  #expect(presentation.primaryAction == .repair)
-  #expect(presentation.statusCopy == "Checksum mismatch")
-}
-
-@Test func DictationSettingsReadyAllowsSelectionAndDeletion() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(),
-    modelState: .ready,
-    isArchitectureSupported: true,
-    enhancedIsReady: true
-  )
-
-  #expect(presentation.enhancedChoiceEnabled)
-  #expect(presentation.primaryAction == .delete)
-}
-
-@Test func DictationSettingsDeletionReturnsSelectionToStandard() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(dictationSpeechEngine: .enhancedLocal),
-    modelState: .notInstalled,
-    isArchitectureSupported: true,
-    enhancedIsReady: false
-  )
-
-  #expect(presentation.selectedEngine == .standard)
-}
-
-@Test func DictationSettingsUpdateRequiresAnExplicitAction() {
-  let presentation = DictationSettingsPresentation(
-    preferences: AppPreferences(dictationSpeechEngine: .enhancedLocal),
-    modelState: .updateAvailable,
-    isArchitectureSupported: true,
-    enhancedIsReady: true
-  )
-
-  #expect(presentation.selectedEngine == .enhancedLocal)
-  #expect(presentation.primaryAction == .update)
-  #expect(presentation.secondaryAction == .delete)
+  #expect(runtimeSource.contains("ParakeetTDTTestActivation"))
+  #expect(!runtimeSource.contains(
+    "let signedConfiguration: AdmittedModelSignedConfiguration? = nil"
+  ))
+  #expect(runtimeSource.contains("await admittedModelSettingsViewModel.refresh()"))
 }
 #endif
 
-@Test func DictationSettingsUsesTheExistingMatchedGeometrySectionSelector() {
-  #expect(SettingsSection.allCases == [.appearance, .editing, .shortcuts, .dictation])
-  #expect(SettingsSection.selectionEffectID == "settings-section")
+@Test func DictationSettingsExposesNativeSidebarGroupsAndMetadata() {
+  #expect(SettingsSection.fleckCases == [.editing, .appearance, .shortcuts])
+  #expect(SettingsSection.voiceAndWritingCases == [.dictation, .vocabulary])
+  #expect(SettingsSection.connectionCases == [.agents])
+  #expect(SettingsSection.editing.title == "General")
+  #expect(SettingsSection.editing.description ==
+    "Choose how Fleck edits and organizes your notes.")
+  #expect(!SettingsSection.editing.systemImage.isEmpty)
+}
+
+@Test @MainActor
+func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throws {
+  var selection = SettingsSection.appearance
+  let selected = Binding(
+    get: { selection },
+    set: { selection = $0 }
+  )
+
+  for dynamicTypeSize in [DynamicTypeSize.large, DynamicTypeSize.accessibility3] {
+    let host = NSHostingView(
+      rootView: SettingsSectionSidebar(selection: selected)
+        .environment(\.dynamicTypeSize, dynamicTypeSize)
+        .frame(width: 200, height: 520)
+    )
+    host.frame = NSRect(x: 0, y: 0, width: 200, height: 520)
+    let window = NSWindow(
+      contentRect: host.frame,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = host
+    window.orderFront(nil)
+    host.layoutSubtreeIfNeeded()
+    await settleSettingsHost(host)
+
+    let visibleFrames = settingsSidebarDescendants(of: host)
+      .filter { !$0.isHidden && $0.alphaValue > 0 && !$0.bounds.isEmpty }
+      .map { $0.convert($0.bounds, to: host) }
+    #expect(!visibleFrames.isEmpty)
+    #expect(visibleFrames.allSatisfy { host.bounds.insetBy(dx: -1, dy: -1).contains($0) })
+
+    let table = try #require(settingsSidebarTableView(of: host))
+    let outline = try #require(table as? NSOutlineView)
+    let selectableRows = (0..<outline.numberOfRows).filter { row in
+      guard let item = outline.item(atRow: row) else { return false }
+      return !(outline.delegate?.outlineView?(outline, isGroupItem: item) ?? false)
+    }
+    let vocabularyIndex = try #require(SettingsSection.allCases.firstIndex(of: .vocabulary))
+    try #require(selectableRows.indices.contains(vocabularyIndex))
+    let vocabularyRow = selectableRows[vocabularyIndex]
+    window.makeKeyAndOrderFront(nil)
+    table.selectRowIndexes(IndexSet(integer: vocabularyRow), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: table
+    )
+    await settleSettingsHost(host)
+
+    #expect(selection == .vocabulary)
+    #expect(table.selectedRow == vocabularyRow)
+
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+}
+
+@Test func DictationSettingsUsesNativeSidebarAccessibilityAndSelectionContracts() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("struct SettingsSectionSidebar: View"))
+  #expect(source.contains("List(selection: $selection)"))
+  #expect(source.contains(".listStyle(.sidebar)"))
+  #expect(source.contains(".tag(section)"))
+  #expect(source.contains(".accessibilityLabel(\"Settings sections\")"))
+  #expect(source.contains("SettingsSidebarSurface"))
+  #expect(source.contains("SettingsPageHeaderProbe"))
+  #expect(source.contains("settings-page-header"))
+  #expect(source.contains("Toggle(isOn: $isOn)"))
+  #expect(!source.contains("Toggle(\"\", isOn: $isOn)"))
+  #expect(source.contains(".accessibilityLabel(title)"))
+  #expect(source.contains(".accessibilityHint(detail)"))
+  #expect(source.contains(".accessibilityIdentifier(title)"))
+  #expect(source.contains("case .editing:\n        \"gearshape\""))
+  #expect(source.contains(".padding(.top, 38)"))
+  let sectionGroupStart = try #require(source.range(of: "private func sectionGroup("))
+  let sidebarSurfaceStart = try #require(
+    source.range(
+      of: "  struct SettingsSidebarSurface",
+      range: sectionGroupStart.upperBound..<source.endIndex
+    )
+  )
+  let sectionGroupSource = source[sectionGroupStart.lowerBound..<sidebarSurfaceStart.lowerBound]
+  #expect(sectionGroupSource.contains(".padding(.bottom, 4)"))
+  #expect(source.contains("Create lists automatically"))
+  #expect(source.contains("Recognize list-shaped lines while you edit."))
+  #expect(source.contains("Confirm before moving notes to Trash"))
+  #expect(source.contains("Ask before a note is moved to the Trash folder."))
+  #expect(source.contains("Launch at login"))
+  #expect(source.contains("Start Fleck automatically when you sign in."))
+  #expect(!source.contains("NavigationSplitView"))
+  #expect(!source.contains("NavigationSplitViewVisibility"))
+  #expect(!source.contains("navigationSplitViewColumnWidth"))
+  #expect(!source.contains("SettingsSectionSelector"))
+  #expect(!source.contains("matchedGeometryEffect"))
+  #expect(!source.contains("Picker(\"Settings section\""))
+}
+
+@Test func SettingsSidebarUsesTransparentListAndVocabularyKeepsOneTeachingHeadline() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains(".scrollContentBackground(.hidden)"))
+  #expect(source.contains(".background(Color.clear)"))
+  #expect(SettingsSection.vocabulary.description ==
+    "Manage personal vocabulary and dictation corrections.")
+  #expect(SettingsSection.vocabulary.description !=
+    "Teach Fleck the words and spellings that matter to you.")
+}
+
+@Test func SettingsPresentationUsesNativeSwitchesAndConsumerPreferenceRows() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let agentSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/AgentSettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(settingsSource.contains("struct SettingsPreferenceRow"))
+  #expect(settingsSource.contains(".toggleStyle(.switch)"))
+  #expect(settingsSource.contains(".controlSize(.small)"))
+  #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Create lists automatically\""))
+  #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Confirm before moving notes to Trash\""))
+  #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Launch at login\""))
+  #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Theme\""))
+  #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Modifier key\""))
+  #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Show status capsule\""))
+  #expect(!settingsSource.contains("SettingsSectionCard(\"Behavior\")"))
+  #expect(!settingsSource.contains("JSON workspace manifest"))
+  #expect(agentSource.contains("SettingsPreferenceRow("))
+  #expect(agentSource.contains(
+    "SettingsPreferenceRow(\n          AgentConnectorPresentation.sectionTitle"
+  ))
+  #expect(agentSource.contains("SettingsPreferenceRow(integration.displayName"))
+  #expect(agentSource.contains("SettingsPreferenceRow(profile.displayName"))
+}
+
+@Test func DictationSettingsUsesFleckNeutralGlassContractWithAdaptiveFallback() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("Color.black.opacity(0.10)"))
+  #expect(source.contains("Glass.regular.tint(Color.black.opacity(0.18))"))
+  #expect(source.contains("shape.fill(.ultraThinMaterial)"))
+  #expect(source.contains("if reduceTransparency"))
+  #expect(source.contains("Color(nsColor: .windowBackgroundColor)"))
+}
+
+@Test func DictationSettingsUsesReadinessCaptureAndHistoryGroups() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(DictationSettingsGroup.allCases.map(\.rawValue) == [
+    "Status",
+    "Models",
+    "Capture",
+    "Experience & history",
+    "Privacy",
+  ])
+  #expect(source.contains("private var readiness"))
+  #expect(source.contains("Text(DictationSettingsGroup.capture.rawValue)"))
+  #expect(source.contains(
+    "Text(DictationSettingsGroup.experience.rawValue)"
+  ))
+  #expect(source.contains("isReady ? \"Ready\" : \"Needs attention\""))
+  #expect(source.contains("Text(DictationSettingsGroup.models.rawValue)"))
+  #expect(source.contains("DisclosureGroup(DictationSettingsGroup.privacy.rawValue)"))
+  #expect(!source.contains("SettingsSectionCard(\"Controls\")"))
+}
+
+@Test func DictationSettingsRendersItsDestinationGroupsInReadingOrder() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let dictationStart = try #require(source.range(of: "private var dictation: some View"))
+  let vocabularyStart = try #require(
+    source.range(of: "private var vocabulary:", range: dictationStart.upperBound..<source.endIndex)
+  )
+  let dictationSource = source[dictationStart.lowerBound..<vocabularyStart.lowerBound]
+  let markers = [
+    "        readiness",
+    "        models",
+    "        capture",
+    "        experienceAndHistory",
+    "        DisclosureGroup(DictationSettingsGroup.privacy.rawValue)",
+  ]
+  var cursor = dictationSource.startIndex
+  for marker in markers {
+    let next = try #require(dictationSource.range(of: marker, range: cursor..<dictationSource.endIndex))
+    cursor = next.upperBound
+  }
+}
+
+@Test @MainActor
+func DictationSettingsHostedWindowExplicitlyEnablesFullSizeContentViewChrome()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+    styleMask: [.titled, .resizable, .closable],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  #expect(window.styleMask.contains(.fullSizeContentView))
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@Test @MainActor
+func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let sizes = [
+    NSSize(width: 840, height: 600),
+    NSSize(width: 760, height: 520),
+  ]
+  let destinations = SettingsSection.allCases
+
+  for size in sizes {
+    let host = NSHostingView(
+      rootView: SettingsView(runtime: fixture.runtime)
+        .environmentObject(fixture.appState)
+        .environment(\.dynamicTypeSize, .large)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(origin: .zero, size: size),
+      styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "Settings"
+    let toolbar = NSToolbar(identifier: "settings-hosted-test-toolbar-\(Int(size.width))")
+    window.toolbar = toolbar
+    window.toolbarStyle = .unifiedCompact
+    #expect(window.toolbar === toolbar)
+    #expect(window.toolbarStyle == .unifiedCompact)
+    window.contentView = host
+    window.setContentSize(size)
+    window.makeKeyAndOrderFront(nil)
+    await settleSettingsHost(host)
+
+    #expect(window.standardWindowButton(.closeButton)?.isHidden == false)
+    #expect(window.standardWindowButton(.miniaturizeButton)?.isHidden == false)
+    #expect(window.standardWindowButton(.zoomButton)?.isHidden == false)
+    let contentView = try #require(window.contentView)
+    #expect(settingsNativeSplitViewController(of: contentView) == nil)
+    let toolbarItemIdentifiers = toolbar.items.map(\.itemIdentifier)
+    #expect(!toolbarItemIdentifiers.contains(.toggleSidebar))
+    #expect(!toolbarItemIdentifiers.contains(.sidebarTrackingSeparator))
+    let sidebar = try #require(settingsSidebarTableView(of: host))
+    let outline = try #require(sidebar as? NSOutlineView)
+    let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
+    let sidebarSurface = try #require(settingsSidebarSurface(of: host))
+    let baselineContentFrame = contentView.convert(contentView.bounds, to: nil)
+    let baselineLayoutRect = window.contentLayoutRect
+    let baselineSidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+    let baselineSidebarSurfaceFrame = sidebarScroll.convert(sidebarScroll.bounds, to: nil)
+    let outerSidebarSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+
+    #expect(window.isResizable)
+    #expect(!baselineContentFrame.isEmpty)
+    #expect(!baselineLayoutRect.isEmpty)
+    #expect(!baselineSidebarFrame.isEmpty)
+    #expect(!outerSidebarSurfaceFrame.isEmpty)
+    #expect(outerSidebarSurfaceFrame.minX >= baselineContentFrame.minX + 8)
+    #expect(outerSidebarSurfaceFrame.maxX <= baselineContentFrame.maxX - 8)
+    let trafficLightButtons: [NSButton?] = [
+      window.standardWindowButton(.closeButton),
+      window.standardWindowButton(.miniaturizeButton),
+      window.standardWindowButton(.zoomButton),
+    ]
+    let trafficLightFrames: [NSRect] = trafficLightButtons.compactMap { button in
+      guard let button else { return nil }
+      return button.convert(button.bounds, to: nil)
+    }
+    #expect(!trafficLightFrames.isEmpty)
+    #expect(trafficLightFrames.allSatisfy {
+      settingsRoundedSurfaceContains(
+        $0,
+        in: outerSidebarSurfaceFrame,
+        cornerRadius: 22,
+        margin: 8
+      )
+    })
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(baselineSidebarFrame) })
+
+    for destination in destinations {
+      let row = try #require(settingsSidebarRow(destination, in: outline))
+      outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+      NotificationCenter.default.post(
+        name: NSTableView.selectionDidChangeNotification,
+        object: outline
+      )
+      await settleSettingsHost(host)
+
+      #expect(outline.selectedRow == row)
+
+      let contentFrame = contentView.convert(contentView.bounds, to: nil)
+      #expect(approximatelyEqual(contentFrame, baselineContentFrame))
+      #expect(approximatelyEqual(window.contentLayoutRect, baselineLayoutRect))
+
+      let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+      let sidebarSurfaceFrame = sidebarScroll.convert(sidebarScroll.bounds, to: nil)
+      #expect(!sidebar.isHidden)
+      #expect(sidebar.alphaValue > 0)
+      #expect(baselineLayoutRect.contains(sidebarFrame.center))
+      #expect(approximatelyEqual(sidebarFrame, baselineSidebarFrame))
+      #expect(approximatelyEqual(sidebarSurfaceFrame, baselineSidebarSurfaceFrame))
+      #expect(approximatelyEqual(
+        sidebarSurface.convert(sidebarSurface.bounds, to: nil),
+        outerSidebarSurfaceFrame
+      ))
+      #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+
+      let detailScroll = settingsHostedScrollViews(of: host)
+        .first { $0 !== sidebarScroll }
+      #expect(detailScroll != nil)
+      guard let detailScroll else { continue }
+      #expect(detailScroll !== sidebarScroll)
+      let detailDocument = try #require(detailScroll.documentView)
+      #expect(!detailDocument.bounds.isEmpty)
+      #expect(!detailScroll.contentView.bounds.isEmpty)
+
+      let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+      #expect(!detailFrame.isEmpty)
+      #expect(baselineLayoutRect.contains(detailFrame.center))
+      let detailDocumentFrame = detailDocument.convert(detailDocument.bounds, to: nil)
+      #expect(detailDocumentFrame.minX >= baselineLayoutRect.minX - 1)
+      #expect(detailDocumentFrame.maxX <= baselineLayoutRect.maxX + 1)
+      #expect(detailDocumentFrame.maxY <= baselineLayoutRect.maxY + 1)
+      #expect(detailDocumentFrame.intersects(baselineLayoutRect))
+      let detailTopGap = baselineLayoutRect.maxY - detailDocumentFrame.maxY
+      #expect(detailTopGap >= -1)
+      #expect(detailTopGap <= 20)
+      let pageTitle = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
+      )
+      let pageTitleFrame = pageTitle.convert(pageTitle.bounds, to: nil)
+      #expect(!pageTitleFrame.isEmpty)
+      #expect(pageTitleFrame.minX >= detailDocumentFrame.minX - 1)
+      #expect(pageTitleFrame.maxX <= detailDocumentFrame.maxX + 1)
+      let pageTitleTopGap = baselineLayoutRect.maxY - pageTitleFrame.maxY
+      #expect(pageTitleTopGap >= -1)
+      #expect(pageTitleTopGap <= 20)
+
+    }
+
+    let detailScrollViews = settingsHostedScrollViews(of: host)
+      .filter { $0 !== sidebarScroll }
+    #expect(!detailScrollViews.isEmpty)
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+}
+
+@Test @MainActor
+func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let size = NSSize(width: 840, height: 600)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(origin: .zero, size: size),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.title = "Settings"
+  let toolbar = NSToolbar(identifier: "settings-hosted-inset-sidebar-toolbar")
+  window.toolbar = toolbar
+  window.toolbarStyle = .unifiedCompact
+  window.contentView = host
+  window.setContentSize(size)
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  let contentView = try #require(window.contentView)
+  let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+  let sidebar = try #require(settingsSidebarTableView(of: host))
+  let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
+  let sidebarSurface = try #require(settingsSidebarSurface(of: host))
+  let contentFrame = contentView.convert(contentView.bounds, to: nil)
+  let surfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+  let topInset = contentFrame.maxY - surfaceFrame.maxY
+  let bottomInset = surfaceFrame.minY - contentFrame.minY
+
+  #expect(surfaceFrame.minX >= contentFrame.minX + 8)
+  #expect(topInset >= 8)
+  #expect(topInset <= 12)
+  #expect(bottomInset >= 8)
+  #expect(bottomInset <= 12)
+  #expect(window.titleVisibility == .hidden)
+  #expect(window.titlebarSeparatorStyle == .none)
+  #expect(window.titlebarAppearsTransparent)
+
+  let trafficLightButtons: [NSButton?] = [
+    window.standardWindowButton(.closeButton),
+    window.standardWindowButton(.miniaturizeButton),
+    window.standardWindowButton(.zoomButton),
+  ]
+  let trafficLightFrames: [NSRect] = trafficLightButtons.compactMap { button in
+    guard let button else { return nil }
+    return button.convert(button.bounds, to: nil)
+  }
+  #expect(trafficLightFrames.count == 3)
+  #expect(trafficLightFrames.allSatisfy {
+    settingsRoundedSurfaceContains(
+      $0,
+      in: surfaceFrame,
+      cornerRadius: 22,
+      margin: 12
+    )
+  })
+
+  for destination in SettingsSection.allCases {
+    let row = try #require(settingsSidebarRow(destination, in: outline))
+    outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: outline
+    )
+    await settleSettingsHost(host)
+
+    #expect(outline.selectedRow == row)
+    let currentSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+    #expect(approximatelyEqual(currentSurfaceFrame, surfaceFrame))
+    let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+    #expect(!sidebar.isHidden)
+    #expect(!sidebarFrame.isEmpty)
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+
+    let detailScroll = try #require(
+      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+    )
+    let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+    #expect(!detailFrame.isEmpty)
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(detailFrame) })
+  }
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@Test @MainActor
+func DictationSettingsHostedWindowResetsDetailScrollWhenSwitchingDestinations()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let size = NSSize(width: 840, height: 600)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(origin: .zero, size: size),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.title = "Settings"
+  window.toolbar = NSToolbar(identifier: "settings-hosted-scroll-reset-toolbar")
+  window.toolbarStyle = .unifiedCompact
+  window.contentView = host
+  window.setContentSize(size)
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  let contentLayoutRect = window.contentLayoutRect
+  let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+  let sidebarTable = try #require(settingsSidebarTableView(of: host))
+  let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebarTable))
+
+  func select(_ destination: SettingsSection) async throws {
+    let row = try #require(settingsSidebarRow(destination, in: outline))
+    outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: outline
+    )
+    await settleSettingsHost(host)
+  }
+
+  try await select(.dictation)
+  let initialDetailScroll = try #require(
+    settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+  )
+  var previousDetailScroll = initialDetailScroll
+  let initialDocument = try #require(initialDetailScroll.documentView)
+  let initialBounds = initialDetailScroll.contentView.bounds
+  let initialDocumentFrame = initialDocument.frame
+  #expect(initialDocumentFrame.height > initialBounds.height + 1)
+
+  let maximumOriginY = max(
+    initialDocumentFrame.minY,
+    initialDocumentFrame.maxY - initialBounds.height
+  )
+  initialDetailScroll.contentView.scroll(
+    to: NSPoint(x: initialBounds.origin.x, y: maximumOriginY)
+  )
+  initialDetailScroll.reflectScrolledClipView(initialDetailScroll.contentView)
+  await settleSettingsHost(host)
+  #expect(
+    initialDetailScroll.contentView.bounds.origin.y > initialBounds.origin.y + 1
+  )
+
+  for destination in SettingsSection.allCases {
+    try await select(destination)
+
+    let detailScroll = try #require(
+      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+    )
+    #expect(detailScroll !== previousDetailScroll)
+    previousDetailScroll = detailScroll
+    let detailDocument = try #require(detailScroll.documentView)
+    let pageTitle = try #require(
+      settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
+    )
+    let pageTitleFrame = pageTitle.convert(pageTitle.bounds, to: nil)
+    #expect(!pageTitleFrame.isEmpty)
+    let pageTitleTopGap = contentLayoutRect.maxY - pageTitleFrame.maxY
+    #expect(pageTitleTopGap >= -1)
+    #expect(pageTitleTopGap <= 20)
+  }
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@Test @MainActor
+func DictationSettingsReduceTransparencyKeepsHostedSurfacesDistinctInLightAndDark()
+  async throws
+{
+  for (appearanceName, appearanceLabel) in [
+    (NSAppearance.Name.aqua, "light"),
+    (.darkAqua, "dark"),
+  ] {
+    let host = NSHostingView(
+      rootView: ZStack {
+        Color(nsColor: .windowBackgroundColor)
+        HStack(spacing: 24) {
+          SettingsSidebarSurface {
+            Color.clear
+              .frame(width: 180, height: 200)
+          }
+          .frame(width: 220, height: 260)
+
+          SettingsSectionCard("Card") {
+            Color.clear
+              .frame(maxWidth: .infinity, minHeight: 200)
+          }
+          .frame(width: 220)
+        }
+        .padding(20)
+      }
+      .environment(\._accessibilityReduceTransparency, true)
+      .frame(width: 520, height: 320)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 520, height: 320),
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.appearance = NSAppearance(named: appearanceName)
+    window.contentView = host
+    window.orderFront(nil)
+    await settleSettingsHost(host)
+
+    let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+    host.cacheDisplay(in: host.bounds, to: image)
+    let scaleX = CGFloat(image.pixelsWide) / host.bounds.width
+    let scaleY = CGFloat(image.pixelsHigh) / host.bounds.height
+    func color(at point: NSPoint) throws -> NSColor {
+      let x = min(image.pixelsWide - 1, max(0, Int(point.x * scaleX)))
+      let y = min(image.pixelsHigh - 1, max(0, Int(point.y * scaleY)))
+      return try #require(image.colorAt(x: x, y: y))
+    }
+
+    let rootColor = try color(at: NSPoint(x: 500, y: 160))
+    let sidebarColor = try color(at: NSPoint(x: 130, y: 160))
+    let cardColor = try color(at: NSPoint(x: 374, y: 160))
+    #expect(settingsColorDistance(rootColor, sidebarColor) > 0.01)
+    #expect(settingsColorDistance(sidebarColor, cardColor) > 0.01)
+
+    if let captureDirectory = ProcessInfo.processInfo.environment[
+      "FLECK_SETTINGS_REDUCE_TRANSPARENCY_CAPTURE_DIR"
+    ] {
+      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+      try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+      )
+      let captureURL = directory.appendingPathComponent(
+        "settings-reduce-transparency-" + appearanceLabel + ".png"
+      )
+      let pngData = try #require(
+        image.representation(using: .png, properties: [:])
+      )
+      try pngData.write(to: captureURL)
+    }
+
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+}
+
+@Test @MainActor
+func DictationSettingsHostedWindowKeepsChromeAfterSameWindowResize() async throws {
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.title = "Settings"
+  let toolbar = NSToolbar(identifier: "settings-hosted-resize-toolbar")
+  window.toolbar = toolbar
+  window.toolbarStyle = .unifiedCompact
+  window.contentView = host
+  window.setContentSize(NSSize(width: 840, height: 600))
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  for size in [
+    NSSize(width: 840, height: 600),
+    NSSize(width: 760, height: 520),
+    NSSize(width: 840, height: 600),
+  ] {
+    window.setContentSize(size)
+    await settleSettingsHost(host)
+
+    let contentView = try #require(window.contentView)
+    let contentFrame = contentView.convert(contentView.bounds, to: nil)
+    let layoutRect = window.contentLayoutRect
+    let sidebar = try #require(settingsSidebarTableView(of: host))
+    let outline = try #require(sidebar as? NSOutlineView)
+    let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
+    let sidebarSurface = try #require(settingsSidebarSurface(of: host))
+    let sidebarSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+    let topInset = contentFrame.maxY - sidebarSurfaceFrame.maxY
+    let bottomInset = sidebarSurfaceFrame.minY - contentFrame.minY
+
+    #expect(!contentFrame.isEmpty)
+    #expect(!layoutRect.isEmpty)
+    #expect(sidebarSurfaceFrame.minX >= contentFrame.minX + 8)
+    #expect(sidebarSurfaceFrame.maxX <= contentFrame.maxX - 8)
+    #expect(topInset >= 8)
+    #expect(topInset <= 12)
+    #expect(bottomInset >= 8)
+    #expect(bottomInset <= 12)
+    #expect(window.toolbar === toolbar)
+    let toolbarItemIdentifiers = toolbar.items.map(\.itemIdentifier)
+    #expect(!toolbarItemIdentifiers.contains(.toggleSidebar))
+    #expect(!toolbarItemIdentifiers.contains(.sidebarTrackingSeparator))
+
+    let trafficLightButtons: [NSButton?] = [
+      window.standardWindowButton(.closeButton),
+      window.standardWindowButton(.miniaturizeButton),
+      window.standardWindowButton(.zoomButton),
+    ]
+    let trafficLightFrames = trafficLightButtons.compactMap { button in
+      button.map { $0.convert($0.bounds, to: nil) }
+    }
+    #expect(trafficLightFrames.count == 3)
+    #expect(trafficLightFrames.allSatisfy {
+      settingsRoundedSurfaceContains(
+        $0,
+        in: sidebarSurfaceFrame,
+        cornerRadius: 22,
+        margin: 12
+      )
+    })
+
+    let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+    #expect(!sidebar.isHidden)
+    #expect(!sidebarFrame.isEmpty)
+    #expect(layoutRect.contains(sidebarFrame.center))
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+
+    let detailScroll = try #require(
+      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+    )
+    let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+    #expect(!detailFrame.isEmpty)
+    #expect(layoutRect.contains(detailFrame.center))
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(detailFrame) })
+
+    let detailDocument = try #require(detailScroll.documentView)
+    let pageTitle = try #require(
+      settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
+    )
+    let pageTitleFrame = pageTitle.convert(pageTitle.bounds, to: nil)
+    let pageTitleTopGap = layoutRect.maxY - pageTitleFrame.maxY
+    #expect(!pageTitleFrame.isEmpty)
+    #expect(pageTitleTopGap >= -1)
+    #expect(pageTitleTopGap <= 20)
+    #expect(outline.numberOfRows > 0)
+  }
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@MainActor
+private func settingsSidebarDescendants(of view: NSView) -> [NSView] {
+  view.subviews + view.subviews.flatMap(settingsSidebarDescendants)
+}
+
+@MainActor
+private func settingsSidebarTableView(of view: NSView) -> NSTableView? {
+  settingsSidebarDescendants(of: view).compactMap { $0 as? NSTableView }.first
+}
+
+@MainActor
+private func settingsNativeSplitViewController(of view: NSView) -> NSSplitViewController? {
+  var responder: NSResponder? = view
+  while let current = responder {
+    if let controller = current as? NSSplitViewController {
+      return controller
+    }
+    responder = current.nextResponder
+  }
+
+  for subview in view.subviews {
+    if let controller = settingsNativeSplitViewController(of: subview) {
+      return controller
+    }
+  }
+  return nil
+}
+
+@MainActor
+private func settingsSidebarSurface(of view: NSView) -> NSView? {
+  if view.accessibilityIdentifier() == "settings-sidebar-surface" {
+    return view
+  }
+  return settingsSidebarDescendants(of: view)
+    .first { $0.accessibilityIdentifier() == "settings-sidebar-surface" }
+}
+
+@MainActor
+private func settingsView(withAccessibilityIdentifier identifier: String, in view: NSView)
+  -> NSView?
+{
+  if view.accessibilityIdentifier() == identifier {
+    return view
+  }
+  return settingsSidebarDescendants(of: view)
+    .first { $0.accessibilityIdentifier() == identifier }
+}
+
+@MainActor
+private func settingsRoundedSurfaceContains(
+  _ candidate: NSRect,
+  in surface: NSRect,
+  cornerRadius: CGFloat,
+  margin: CGFloat
+) -> Bool {
+  guard surface.insetBy(dx: margin, dy: margin).contains(candidate) else { return false }
+  let path = NSBezierPath(
+    roundedRect: surface,
+    xRadius: cornerRadius,
+    yRadius: cornerRadius
+  )
+  let corners = [
+    NSPoint(x: candidate.minX, y: candidate.minY),
+    NSPoint(x: candidate.minX, y: candidate.maxY),
+    NSPoint(x: candidate.maxX, y: candidate.minY),
+    NSPoint(x: candidate.maxX, y: candidate.maxY),
+  ]
+  return corners.allSatisfy(path.contains)
+}
+
+@MainActor
+private func settingsSidebarRow(_ section: SettingsSection, in outline: NSOutlineView) -> Int? {
+  let selectableRows = (0..<outline.numberOfRows).filter { row in
+    guard let item = outline.item(atRow: row) else { return false }
+    return !(outline.delegate?.outlineView?(outline, isGroupItem: item) ?? false)
+  }
+  guard let sectionIndex = SettingsSection.allCases.firstIndex(of: section),
+    selectableRows.indices.contains(sectionIndex)
+  else {
+    return nil
+  }
+  return selectableRows[sectionIndex]
+}
+
+@MainActor
+private func settingsHostedScrollViews(of view: NSView) -> [NSScrollView] {
+  var scrollViews: [NSScrollView] = []
+  if let scrollView = view as? NSScrollView {
+    scrollViews.append(scrollView)
+  }
+  for subview in view.subviews {
+    scrollViews.append(contentsOf: settingsHostedScrollViews(of: subview))
+  }
+  return scrollViews
+}
+
+@MainActor
+private func settingsScrollViewAncestor(of view: NSView) -> NSScrollView? {
+  var current = view.superview
+  while let candidate = current {
+    if let scrollView = candidate as? NSScrollView {
+      return scrollView
+    }
+    current = candidate.superview
+  }
+  return nil
+}
+
+private extension NSRect {
+  var center: NSPoint {
+    NSPoint(x: midX, y: midY)
+  }
+}
+
+private func approximatelyEqual(_ lhs: NSRect, _ rhs: NSRect, tolerance: CGFloat = 1) -> Bool {
+  abs(lhs.minX - rhs.minX) <= tolerance
+    && abs(lhs.minY - rhs.minY) <= tolerance
+    && abs(lhs.width - rhs.width) <= tolerance
+    && abs(lhs.height - rhs.height) <= tolerance
+}
+
+private func settingsColorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
+  guard let lhs = lhs.usingColorSpace(.sRGB), let rhs = rhs.usingColorSpace(.sRGB) else {
+    return 0
+  }
+  let red = lhs.redComponent - rhs.redComponent
+  let green = lhs.greenComponent - rhs.greenComponent
+  let blue = lhs.blueComponent - rhs.blueComponent
+  return (red * red + green * green + blue * blue).squareRoot()
+}
+
+@Test func DictationSettingsSeparatesVocabularyAndOnlySurfacesAvailabilityProblems() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("case vocabulary = \"Vocabulary\""))
+  #expect(source.contains("case .vocabulary:"))
+  #expect(source.contains("PersonalDictionarySettingsSection("))
+  #expect(source.contains("private var availabilityIssues"))
+  #expect(source.contains(".filter { !$0.available }"))
+  #expect(source.contains("isReady ? \"Ready\" : \"Needs attention\""))
+  #expect(!source.contains("Section(\"Availability\")"))
+
+  let dictationStart = try #require(source.range(of: "private var dictation:"))
+  let vocabularyStart = try #require(
+    source.range(of: "private var vocabulary:", range: dictationStart.upperBound..<source.endIndex)
+  )
+  let dictationSource = source[dictationStart.lowerBound..<vocabularyStart.lowerBound]
+  #expect(!dictationSource.contains("PersonalDictionarySettingsSection"))
+}
+
+@Test @MainActor func DictationSettingsPendingRouteIsDurableAndConsumedOnce() async throws {
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  fixture.runtime.requestSettings(.dictation)
+  #expect(fixture.runtime.pendingSettingsSection == .dictation)
+  #expect(fixture.runtime.consumePendingSettingsSection() == .dictation)
+  #expect(fixture.runtime.consumePendingSettingsSection() == nil)
+}
+
+@Test @MainActor func DictationSettingsBridgeLifecycleOpensOnceAndSettingsViewConsumesRoute()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  var openSettingsCalls = 0
+
+  fixture.runtime.requestSettings(.dictation)
+  #expect(fixture.runtime.pendingSettingsSection == .dictation)
+  #expect(openSettingsCalls == 0)
+
+  let bridge = DictationSettingsEnvironmentBridge(
+    runtime: fixture.runtime,
+    openSettingsAction: { openSettingsCalls += 1 }
+  ) {
+    Text("Resident bridge")
+  }
+  let bridgeHost = NSHostingView(rootView: bridge)
+  let bridgeWindow = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 120, height: 40),
+    styleMask: [.borderless],
+    backing: .buffered,
+    defer: false
+  )
+  bridgeWindow.contentView = bridgeHost
+  bridgeWindow.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(bridgeHost)
+
+  #expect(openSettingsCalls == 1)
+  #expect(fixture.runtime.pendingSettingsSection == .dictation)
+
+  let settingsHost = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+  )
+  let settingsWindow = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  settingsWindow.contentView = settingsHost
+  settingsWindow.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(settingsHost)
+
+  #expect(fixture.runtime.pendingSettingsSection == nil)
+  #expect(openSettingsCalls == 1)
+
+  settingsWindow.contentView = nil
+  settingsWindow.orderOut(nil)
+  bridgeWindow.contentView = nil
+  bridgeWindow.orderOut(nil)
+}
+
+@MainActor
+private func settleSettingsHost(_ view: NSView) async {
+  for _ in 0..<40 {
+    view.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+}
+
+@Test @MainActor func DictationRuntimeUpdatesRailAccentWithoutRewritingPreference() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  let accentHex = "#E64A19"
+  fixture.appState.updatePreferences { $0.accentHex = accentHex }
+  fixture.runtime.preferencesDidChange()
+
+  #expect(fixture.runtime.capsuleController.presentationModel.colors.accentHex == accentHex)
+  #expect(fixture.appState.preferences.accentHex == accentHex)
+}
+
+@Test @MainActor func DictationRuntimeMapsTheRealSaveBoundaryToSaving() {
+  let id = UUID(uuidString: "7EF3CE15-48DD-42E2-9A58-4F0C0A5A0783")!
+  let event = DictationCoordinatorEvent(
+    phase: .routing,
+    terminal: nil,
+    context: DictationCoordinatorContext(
+      sessionID: id,
+      mode: .smartCapture,
+      pipelineStage: .save,
+      cleanupOutcome: .cleaned,
+      failureStage: nil
+    )
+  )
+
+  let context = DictationRuntime.capsuleContext(for: event)
+  #expect(context.status == .saving)
+  #expect(context.status.presentation.visibleText == "Saving")
+  #expect(context.pipelineStage == .save)
+}
+
+@Test @MainActor func DictationRuntimePointerStartPublishesOwnerContextImmediately() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.runtime.shortcutController.startPointerHandsFree())
+  for _ in 0..<100 {
+    if fixture.runtime.capsuleController.currentContext.sessionID != nil { break }
+    await Task.yield()
+  }
+
+  let context = fixture.runtime.capsuleController.currentContext
+  #expect(context.status == .arming || context.status == .listening)
+  #expect(context.sessionID != nil)
+  #expect(context.trigger == .pointer)
+  #expect(context.mode == .smartCapture)
+  #expect(context.isHandsFree)
+
+  await fixture.runtime.shortcutController.cancelOwnedSession()
+  await fixture.runtime.shortcutController.waitForTerminalObservation()
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+}
+
+@Test @MainActor func DictationRuntimeActionBearingFailureDoesNotScheduleReturnTimer() async throws {
+  let sleeper = RuntimeCapsuleSleeper()
+  let saver = RuntimeSaving(error: DictationFailure.saveFailed)
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    capsuleEnabled: true,
+    saving: saver,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  for _ in 0..<100 {
+    if fixture.runtime.phase == .failed("Unable to save dictation.") { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.phase == .failed("Unable to save dictation."))
+  #expect(fixture.runtime.recoveryAction == .openHistory)
+  #expect(await sleeper.requestedDurations.isEmpty)
+  await fixture.runtime.shortcutController.waitForTerminalObservation()
+  #expect(fixture.runtime.currentCapsuleStatus == .failed("Unable to save dictation."))
+  await fixture.runtime.cancel()
 }
 
 @Test @MainActor func DictationSettingsHistoryClearRequiresConfirmation() {
@@ -335,6 +1453,119 @@ import Testing
   #expect(source.contains("await dictationRuntime.recoverModifierMonitoring()"))
 }
 
+@Test func notesPanelBannerPolicyOmitsRoutineUndoWhileKeepingFailures() {
+  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
+    statusCopy: "Input Monitoring is required",
+    recoveryButtonTitle: "Enable Right Option"
+  )
+  let captureFailure = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+
+  let active = NotesPanelBannerPolicy.activeOccurrences(
+    modifierRecovery: modifier,
+    captureFailure: captureFailure,
+    routineRecoveryAction: .undo,
+    agentChange: nil
+  )
+
+  #expect(active == [modifier, captureFailure])
+}
+
+@Test func notesPanelBannerDismissalInitiallyPresentsAllActiveOccurrences() {
+  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
+    statusCopy: "Input Monitoring is required",
+    recoveryButtonTitle: "Enable Right Option"
+  )
+  let captureFailure = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+  var state = NotesPanelBannerDismissalState()
+  state.reconcile(activeOccurrences: [modifier, captureFailure])
+
+  #expect(state.isPresented(modifier))
+  #expect(state.isPresented(captureFailure))
+}
+
+@Test func notesPanelBannerDismissalHidesOnlyTheExactActiveIdentity() {
+  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
+    statusCopy: "Input Monitoring is required",
+    recoveryButtonTitle: "Enable Right Option"
+  )
+  let changedModifier = NotesPanelBannerOccurrence.modifierRecovery(
+    statusCopy: "Input Monitoring could not start",
+    recoveryButtonTitle: "Retry Right Option"
+  )
+  let captureFailure = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+  var state = NotesPanelBannerDismissalState()
+  state.reconcile(activeOccurrences: [modifier, changedModifier, captureFailure])
+  state.dismiss(modifier)
+
+  #expect(!state.isPresented(modifier))
+  #expect(state.isPresented(changedModifier))
+  #expect(state.isPresented(captureFailure))
+}
+
+@Test func notesPanelBannerDismissalForgetsIdentityAfterDisappearanceBeforeRecurrence() {
+  let occurrence = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+  var state = NotesPanelBannerDismissalState()
+  state.reconcile(activeOccurrences: [occurrence])
+  state.dismiss(occurrence)
+  #expect(!state.isPresented(occurrence))
+
+  state.reconcile(activeOccurrences: [])
+  state.reconcile(activeOccurrences: [occurrence])
+
+  #expect(state.isPresented(occurrence))
+}
+
+@Test func notesPanelBannerDismissalPresentsIdenticalCaptureFailureAfterSynchronousClearAndReemit() {
+  let occurrence = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+  var state = NotesPanelBannerDismissalState()
+  state.reconcile(activeOccurrences: [occurrence])
+  state.dismiss(occurrence)
+  #expect(!state.isPresented(occurrence))
+
+  // The source emitted nil and re-emitted this same failure before a render.
+  state.forgetDismissedOccurrences(in: .captureFailure)
+  state.reconcile(activeOccurrences: [occurrence])
+
+  #expect(state.isPresented(occurrence))
+}
+
+@Test func notesPanelBannerDismissalResetsModifierOnCaptureArmingWithoutClearingCaptureFailure() {
+  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
+    statusCopy: "Input Monitoring is required",
+    recoveryButtonTitle: "Enable Right Option"
+  )
+  let captureFailure = NotesPanelBannerOccurrence.captureFailure(
+    message: "Microphone permission is required",
+    actionPanes: [.microphone]
+  )
+  var state = NotesPanelBannerDismissalState()
+  state.reconcile(activeOccurrences: [modifier, captureFailure])
+  state.dismiss(modifier)
+  state.dismiss(captureFailure)
+  #expect(!state.isPresented(modifier))
+  #expect(!state.isPresented(captureFailure))
+
+  state.dictationPhaseDidEmit(.arming)
+
+  #expect(state.isPresented(modifier))
+  #expect(!state.isPresented(captureFailure))
+}
+
 @Test func dictationModifierSettingsExplainsFnAndConflictProneKeys() {
   let function = DictationModifierSettingsPresentation(
     selected: .function,
@@ -380,7 +1611,7 @@ import Testing
   let bodyView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
   let titleView = NSTextField(frame: NSRect(x: 0, y: 90, width: 200, height: 24))
   let otherView = NSTextField(frame: NSRect(x: 0, y: 115, width: 80, height: 24))
-  let window = NSWindow(
+  let window = DictationKeyWindowProbe(
     contentRect: NSRect(x: 0, y: 0, width: 220, height: 140),
     styleMask: [.titled],
     backing: .buffered,
@@ -391,6 +1622,7 @@ import Testing
   content.addSubview(titleView)
   content.addSubview(otherView)
   window.contentView = content
+  window.reportsKey = true
   body.textView = bodyView
   registry.register(body)
 
@@ -400,6 +1632,33 @@ import Testing
   #expect(registry.focusedEditor() === body)
   window.makeFirstResponder(otherView)
   #expect(registry.focusedEditor() == nil)
+}
+
+@Test @MainActor func DictationEditorRegistryRejectsRetainedResponderInNonKeyWindow() {
+  let registry = DictationEditorRegistry()
+  let body = EditorCommands()
+  let bodyView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
+  let window = DictationKeyWindowProbe(
+    contentRect: NSRect(x: 0, y: 0, width: 220, height: 100),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = bodyView
+  window.reportsKey = false
+  body.textView = bodyView
+  registry.register(body)
+
+  #expect(window.makeFirstResponder(bodyView))
+  #expect(!window.isKeyWindow)
+  #expect(window.firstResponder === bodyView)
+  #expect(registry.focusedEditor() == nil)
+}
+
+private final class DictationKeyWindowProbe: NSWindow {
+  var reportsKey = false
+
+  override var isKeyWindow: Bool { reportsKey }
 }
 
 @Test @MainActor func DictationHistoryControllerSharesWritesAcrossPresentationsAndSettingsClear()
@@ -541,7 +1800,6 @@ import Testing
 @Test @MainActor func DictationRuntimeAssessesOnceBeforeAuthoritativeEnhancedDowngrade() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved", startupBlocked: true)
   fixture.appState.preferences.dictationSpeechEngine = .enhancedLocal
-  fixture.enhancedReady.value = false
 
   #expect(fixture.appState.preferences.dictationSpeechEngine == .enhancedLocal)
   await fixture.startupGate.waitUntilWaiting()
@@ -554,6 +1812,64 @@ import Testing
 
   #expect(fixture.appState.preferences.dictationSpeechEngine == .standard)
   #expect(await fixture.startupLog.value == 1)
+}
+
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test @MainActor
+func DictationRuntimeAutomaticallySelectsInstalledRecommendationOverStalePreference() {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let installed = AdmittedModelSettingsPresentation(snapshot: .init(
+    recommendation: .recommended(descriptor),
+    phase: .installed,
+    lastError: nil
+  ))
+  let notInstalled = AdmittedModelSettingsPresentation(snapshot: .init(
+    recommendation: .recommended(descriptor),
+    phase: .ready,
+    lastError: nil
+  ))
+
+  #expect(
+    DictationRuntime.effectiveEngine(
+      preference: .standard,
+      presentation: installed
+    ) == .enhancedLocal
+  )
+  #expect(
+    DictationRuntime.effectiveEngine(
+      preference: .enhancedLocal,
+      presentation: notInstalled
+    ) == .standard
+  )
+}
+#endif
+
+@Test @MainActor
+func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInstallerIsBuiltIn()
+  async throws
+{
+  let speechRequests = RuntimeCounter()
+  let permissionController = DictationPermissionController(
+    microphoneStatus: { .authorized },
+    speechStatus: { .notDetermined },
+    requestMicrophone: { true },
+    requestSpeech: {
+      await speechRequests.increment()
+      return true
+    }
+  )
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    permissionController: permissionController
+  )
+
+  fixture.appState.updatePreferences { $0.dictationSpeechEngine = .enhancedLocal }
+  await fixture.runtime.requestPermissionsAfterShortcutSetup()
+  #expect(await speechRequests.value == 1)
+
+  await fixture.runtime.toggle()
+  #expect(fixture.provider.requestedKinds == [.standard])
+  await fixture.runtime.cancel()
 }
 
 @Test @MainActor func DictationRuntimeWaitsForLoadedModifierWithoutRequestingAccess()
@@ -728,6 +2044,464 @@ import Testing
   }
 }
 
+@Test @MainActor func DictationRuntimeKeepsAmbiguousCaptureVisibleUntilExactChoiceCompletes()
+  async throws
+{
+  let sleeper = RuntimeCapsuleSleeper()
+  let project = Note(title: "Projects", body: "Roadmap and milestones")
+  let personal = Note(title: "Personal", body: "Weekend plans")
+  let fixture = try await RuntimeFixture(
+    finalText: "Plan the launch",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+
+  let ambiguity = try #require(fixture.runtime.coordinator.routingAmbiguity)
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Inbox"))
+  #expect(fixture.runtime.capsuleController.currentChooser?.captureID == ambiguity.captureID)
+  #expect(fixture.runtime.recoveryAction == .undo)
+  #expect(fixture.runtime.capsuleController.panel.allowsActions)
+  #expect(await sleeper.requestedDurations.isEmpty)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: ambiguity.captureID,
+    noteID: project.id
+  )
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Projects"))
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+  #expect(fixture.appState.workspace.notes.first(where: { $0.id == project.id })?.body.contains("Plan the launch") == true)
+  #expect(fixture.appState.workspace.notes.first(where: {
+    $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
+  })?.body.contains("Plan the launch") == false)
+  await sleeper.waitForRequest()
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+  await sleeper.resumeAll()
+}
+
+@Test @MainActor func DictationRuntimeReplaysValidChooserAndInvalidatesItForNewCapture()
+  async throws
+{
+  let project = Note(title: "Projects", body: "Roadmap")
+  let personal = Note(title: "Personal", body: "Weekend")
+  let fixture = try await RuntimeFixture(
+    finalText: "First capture",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let firstCaptureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+  #expect(fixture.runtime.coordinator.routingAmbiguity?.captureID == firstCaptureID)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Inbox"))
+  #expect(fixture.runtime.capsuleController.currentChooser?.captureID == firstCaptureID)
+
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.currentCapsuleStatus == .listening)
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: firstCaptureID,
+    noteID: project.id
+  )
+  #expect(fixture.runtime.phase == .listening(mode: .smartCapture, engine: .standard))
+  await fixture.runtime.cancel()
+}
+
+@Test @MainActor func DictationRuntimeReplaysRawFallbackChooserAfterDisableAndReenable()
+  async throws
+{
+  let project = Note(title: "Projects", body: "Roadmap")
+  let personal = Note(title: "Personal", body: "Weekend")
+  let fixture = try await RuntimeFixture(
+    finalText: "Raw fallback capture",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true,
+    cleanupFails: true
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Inbox"))
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Inbox"))
+  #expect(fixture.runtime.capsuleController.currentChooser?.captureID == captureID)
+}
+
+@Test @MainActor func DictationRuntimeKeepInboxCompletesChooserWithoutMovingCapture()
+  async throws
+{
+  let sleeper = RuntimeCapsuleSleeper()
+  let project = Note(title: "Projects", body: "Roadmap")
+  let personal = Note(title: "Personal", body: "Weekend")
+  let fixture = try await RuntimeFixture(
+    finalText: "Leave this here",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: nil
+  )
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Inbox"))
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+  #expect(fixture.appState.workspace.notes.first(where: {
+    $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
+  })?.body.contains("Leave this here") == true)
+  #expect(fixture.appState.workspace.notes.first(where: { $0.id == project.id })?.body == "Roadmap")
+  await sleeper.waitForRequest()
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+  await sleeper.resumeAll()
+}
+
+@Test @MainActor func DictationRuntimeDeletedChoiceShowsActionableFailureWithOnlyValidChoices()
+  async throws
+{
+  let sleeper = RuntimeCapsuleSleeper()
+  let project = Note(title: "Projects", body: "Roadmap")
+  let personal = Note(title: "Personal", body: "Weekend")
+  let fixture = try await RuntimeFixture(
+    finalText: "Still in Inbox",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+  fixture.appState.workspace.notes.removeAll { $0.id == project.id }
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: project.id
+  )
+  for _ in 0..<100 { await Task.yield() }
+
+  #expect(fixture.runtime.coordinator.routingAmbiguity?.captureID == captureID)
+  #expect(fixture.runtime.currentCapsuleStatus == .routingFailure(
+    status: "Inbox saved · retry",
+    message: "Still saved to Inbox. Projects is no longer available. Choose another note or keep this dictation in Inbox."
+  ))
+  #expect(fixture.runtime.currentCapsuleStatus?.presentation.visibleText == "Inbox saved · retry")
+  #expect(
+    fixture.runtime.currentCapsuleStatus?.presentation.voiceOverText
+      == "Dictation routing needs attention: Still saved to Inbox. Projects is no longer available. Choose another note or keep this dictation in Inbox."
+  )
+  let chooser = try #require(fixture.runtime.capsuleController.currentChooser)
+  #expect(chooser.captureID == captureID)
+  #expect(chooser.choices.map(\.id) == [personal.id])
+  #expect(chooser.allowsKeepInInbox)
+  #expect(await sleeper.requestedDurations.isEmpty)
+  #expect(fixture.appState.workspace.notes.first(where: {
+    $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
+  })?.body.contains("Still in Inbox") == true)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+  fixture.runtime.preferencesDidChange()
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.currentCapsuleStatus == .routingFailure(
+    status: "Inbox saved · retry",
+    message: "Still saved to Inbox. Projects is no longer available. Choose another note or keep this dictation in Inbox."
+  ))
+  #expect(fixture.runtime.capsuleController.currentChooser?.choices.map(\.id) == [personal.id])
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: personal.id
+  )
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Personal"))
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+  #expect(fixture.appState.workspace.notes.first(where: { $0.id == personal.id })?.body.contains("Still in Inbox") == true)
+  await sleeper.waitForRequest()
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+  await sleeper.resumeAll()
+}
+
+@Test @MainActor func DictationRuntimeHistoryFailureKeepsMovedDestinationTruthfulAndRetryable()
+  async throws
+{
+  let sleeper = RuntimeCapsuleSleeper()
+  let project = Note(title: "Projects", body: "Roadmap")
+  let personal = Note(title: "Personal", body: "Weekend")
+  let fixture = try await RuntimeFixture(
+    finalText: "Moved before history failed",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true,
+    cleanupFails: true,
+    historySaveFailureAttempt: 3,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: project.id
+  )
+  for _ in 0..<1_000 {
+    if fixture.history.errorMessage != nil { break }
+    await Task.yield()
+  }
+  for _ in 0..<1_000 {
+    if case .routingFailure? = fixture.runtime.currentCapsuleStatus { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.history.errorMessage != nil)
+  #expect(fixture.runtime.coordinator.routingAmbiguity?.captureID == captureID)
+  #expect(fixture.runtime.currentCapsuleStatus == .routingFailure(
+    status: "Projects saved raw · retry",
+    message: "Still saved to Projects without cleanup. Dictation History could not be updated. Retry Projects or choose another note."
+  ))
+  #expect(
+    fixture.runtime.currentCapsuleStatus?.presentation.visibleText
+      == "Projects saved raw · retry"
+  )
+  let chooser = try #require(fixture.runtime.capsuleController.currentChooser)
+  #expect(chooser.captureID == captureID)
+  #expect(!chooser.allowsKeepInInbox)
+  #expect(!chooser.menuAccessibilityHint.contains("Inbox"))
+  #expect(chooser.choices.allSatisfy { !$0.accessibilityHint.contains("from Inbox") })
+  fixture.runtime.capsuleController.selectRoutingChoice(captureID: captureID, noteID: nil)
+  for _ in 0..<100 { await Task.yield() }
+  #expect(fixture.runtime.currentCapsuleStatus == .routingFailure(
+    status: "Projects saved raw · retry",
+    message: "Still saved to Projects without cleanup. Dictation History could not be updated. Retry Projects or choose another note."
+  ))
+  #expect(fixture.runtime.coordinator.routingAmbiguity?.captureID == captureID)
+  #expect(await sleeper.requestedDurations.isEmpty)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(captureID: captureID, noteID: project.id)
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Projects"))
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+  await sleeper.waitForRequest()
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+  await sleeper.resumeAll()
+  #expect(fixture.appState.workspace.notes.first(where: { $0.id == project.id })?.body.contains("Moved before history failed") == true)
+  #expect(fixture.appState.workspace.notes.first(where: {
+    $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
+  })?.body.contains("Moved before history failed") == false)
+}
+
+@Test @MainActor func DictationCapsuleRendersKeepInboxWhenNoNoteChoicesRemain() {
+  let captureID = UUID()
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel)
+  var selectedNoteID: UUID??
+  let chooser = DictationCapsuleChooser(
+    ambiguity: .init(captureID: captureID, choices: []),
+    allowsKeepInInbox: true
+  )
+
+  controller.render(
+    .failed("Still saved to Inbox."),
+    chooser: chooser,
+    onChoice: { _, noteID in selectedNoteID = noteID }
+  )
+
+  #expect(panel.allowsActions)
+  controller.selectRoutingChoice(captureID: captureID, noteID: nil)
+  #expect(selectedNoteID == .some(nil))
+}
+
+@Test @MainActor func DictationRuntimeKeepsInboxActionWhenEveryChoiceWasDeleted()
+  async throws
+{
+  let sleeper = RuntimeCapsuleSleeper()
+  let project = Note(title: "Projects", body: "Roadmap")
+  let personal = Note(title: "Personal", body: "Weekend")
+  let fixture = try await RuntimeFixture(
+    finalText: "Keep after every choice disappears",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+  fixture.appState.workspace.notes.removeAll { $0.id == project.id || $0.id == personal.id }
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: project.id
+  )
+  for _ in 0..<1_000 {
+    if case .routingFailure? = fixture.runtime.currentCapsuleStatus { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.currentCapsuleStatus == .routingFailure(
+    status: "Inbox saved · keep/undo",
+    message: "Still saved to Inbox. Projects is no longer available. Keep this dictation in Inbox or use Undo."
+  ))
+  let chooser = try #require(fixture.runtime.capsuleController.currentChooser)
+  #expect(chooser.choices.isEmpty)
+  #expect(chooser.allowsKeepInInbox)
+  #expect(await sleeper.requestedDurations.isEmpty)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(captureID: captureID, noteID: nil)
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Inbox"))
+  await sleeper.waitForRequest()
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+  await sleeper.resumeAll()
+}
+
+@Test @MainActor func DictationRuntimeClearsOldFailureWhenAlternateMoveIsPending()
+  async throws
+{
+  let project = Note(title: "Projects", body: "Roadmap")
+  let personal = Note(title: "Personal", body: "Weekend")
+  let fixture = try await RuntimeFixture(
+    finalText: "Move after retry failure",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true,
+    cleanupFails: true,
+    historySaveFailureAttempt: 3,
+    historySaveBlockingAttempt: 4
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: project.id
+  )
+  for _ in 0..<1_000 {
+    if case .routingFailure? = fixture.runtime.currentCapsuleStatus { break }
+    await Task.yield()
+  }
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: personal.id
+  )
+  await fixture.historySaveGate.waitUntilWaiting()
+
+  #expect(fixture.runtime.currentCapsuleStatus == .savedWithoutCleanup(destination: "Personal"))
+  #expect(fixture.runtime.capsuleController.currentChooser?.captureID == captureID)
+
+  await fixture.historySaveGate.open()
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+}
+
+@Test @MainActor func DictationRuntimeCompletesChoiceReplayedDuringInFlightDisableAndReenable()
+  async throws
+{
+  let sleeper = RuntimeCapsuleSleeper()
+  let project = Note(title: "Projects", body: "Roadmap")
+  let personal = Note(title: "Personal", body: "Weekend")
+  let fixture = try await RuntimeFixture(
+    finalText: "Move while capsule is hidden",
+    capsuleEnabled: true,
+    routingNotes: [project, personal],
+    ambiguousRouting: true,
+    historySaveBlockingAttempt: 3,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: project.id
+  )
+  await fixture.historySaveGate.waitUntilWaiting()
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Projects"))
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+
+  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
+  fixture.runtime.preferencesDidChange()
+  #expect(fixture.runtime.capsuleController.currentChooser?.captureID == captureID)
+
+  await fixture.historySaveGate.open()
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+  for _ in 0..<100 { await Task.yield() }
+
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Projects"))
+  #expect(fixture.runtime.capsuleController.currentChooser == nil)
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+}
+
 @Test @MainActor func DictationRuntimeDoesNotReplayTerminalUpdatesReceivedWhileDisabled()
   async throws
 {
@@ -850,6 +2624,37 @@ import Testing
   #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
 }
 
+@Test @MainActor func DictationRuntimeIgnoresAStaleEngineCallbackAfterANewCapture() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  for _ in 0..<100 {
+    if fixture.engine.captureCallbackCount == 1 { break }
+    await Task.yield()
+  }
+  #expect(fixture.engine.captureCallbackCount == 1)
+  fixture.engine.emitLevel(0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+  for _ in 0..<100 {
+    if fixture.engine.captureCallbackCount == 2 { break }
+    await Task.yield()
+  }
+  #expect(fixture.engine.captureCallbackCount == 2)
+  #expect(fixture.runtime.capsuleController.currentContext.status == .listening)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+
+  fixture.engine.emitLevel(fromCaptureAt: 0, value: 0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+  fixture.engine.emitLevel(fromCaptureAt: 1, value: 0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+
+  await fixture.runtime.cancel()
+}
+
 @Test @MainActor func DictationRuntimeUsesCoordinatorEventsAndAppliesModifierAfterTerminal() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
   let replacement = DictationModifierKey.leftCommand
@@ -874,13 +2679,14 @@ import Testing
   let fixture = try await RuntimeFixture(finalText: "Focused")
   let commands = EditorCommands()
   let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
-  let window = NSWindow(
+  let window = DictationKeyWindowProbe(
     contentRect: NSRect(x: 0, y: 0, width: 220, height: 100),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
   window.contentView = textView
+  window.reportsKey = true
   commands.textView = textView
   fixture.editorRegistry.register(commands)
   window.makeFirstResponder(textView)
@@ -901,13 +2707,14 @@ import Testing
   let fixture = try await RuntimeFixture(finalText: "Focused")
   let commands = EditorCommands()
   let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
-  let window = NSWindow(
+  let window = DictationKeyWindowProbe(
     contentRect: NSRect(x: 0, y: 0, width: 220, height: 100),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
   window.contentView = textView
+  window.reportsKey = true
   commands.textView = textView
   fixture.editorRegistry.register(commands)
   window.makeFirstResponder(textView)
@@ -960,7 +2767,11 @@ import Testing
     if finalText == nil {
       #expect(fixture.runtime.phase == .failed("No speech detected."))
     } else {
-      #expect(fixture.runtime.phase == .idle)
+      guard case .saved(let destination) = fixture.runtime.phase else {
+        Issue.record("Expected saved Inbox phase, got \(fixture.runtime.phase)")
+        continue
+      }
+      #expect(destination.title == "Inbox")
     }
   }
 }
@@ -1311,289 +3122,6 @@ import Testing
   )
 }
 
-#if CLEAN_DICTATION_ENHANCED_CANDIDATE
-@Test @MainActor func FocusedEnhancedToolbarFailureUsesOnlyMicrophoneRecoveryAndClearsOnRetry()
-  async throws
-{
-  let availability = RuntimeAvailabilityBox(.evaluate(.init(
-    osMajorVersion: 26,
-    architecture: .appleSilicon,
-    microphonePermission: .denied,
-    speechPermission: .denied,
-    appleOnDeviceRecognitionSupported: true,
-    enhancedModelReady: true,
-    foundationModelAvailable: true
-  ), enhancedCandidateEnabled: true))
-  let fixture = try await RuntimeFixture(
-    finalText: "Enhanced",
-    preferredEngine: .enhancedLocal,
-    enhancedReadyAtStartup: true,
-    availabilityProvider: { availability.value }
-  )
-  let focused = focusRuntimeEditor(fixture)
-  fixture.provider.error = DictationFailure.permissionDenied
-
-  await fixture.runtime.toggle()
-
-  #expect(fixture.provider.requestedKinds == [.enhancedLocal])
-  #expect(
-    fixture.runtime.captureFailure?.message
-      == "Enhanced Local needs Microphone access. Open System Settings to allow Fleck."
-  )
-  #expect(
-    fixture.runtime.captureFailure?.actions.map(\.title)
-      == ["Open Microphone Settings"]
-  )
-  #expect(fixture.runtime.captureFailure?.message.contains("Apple Speech") == false)
-  #expect(fixture.runtime.captureFailure?.message.contains("Speech Recognition") == false)
-  #expect(!focused.commands.isFocusedDictationActive)
-
-  availability.value = .evaluate(.init(
-    osMajorVersion: 26,
-    architecture: .appleSilicon,
-    microphonePermission: .authorized,
-    speechPermission: .denied,
-    appleOnDeviceRecognitionSupported: true,
-    enhancedModelReady: true,
-    foundationModelAvailable: true
-  ), enhancedCandidateEnabled: true)
-  fixture.provider.error = nil
-  await fixture.runtime.toggle()
-
-  #expect(fixture.runtime.captureFailure == nil)
-  #expect(fixture.runtime.phase == .listening(mode: .focused, engine: .enhancedLocal))
-  #expect(focused.commands.isFocusedDictationActive)
-
-  await fixture.runtime.cancel()
-  #expect(fixture.runtime.captureFailure == nil)
-}
-
-@Test @MainActor func FocusedEnhancedGlobalFailuresExplainModelArchitectureAndStartup()
-  async throws
-{
-  let scenarios: [(DictationAvailability, Error, String)] = [
-    (
-      .evaluate(.init(
-        osMajorVersion: 26,
-        architecture: .appleSilicon,
-        microphonePermission: .authorized,
-        speechPermission: .denied,
-        appleOnDeviceRecognitionSupported: true,
-        enhancedModelReady: false,
-        foundationModelAvailable: true
-      ), enhancedCandidateEnabled: true),
-      DictationFailure.unavailable,
-      "Enhanced Local is unavailable because its model is not ready. Open Dictation Settings to download or repair it."
-    ),
-    (
-      .evaluate(.init(
-        osMajorVersion: 26,
-        architecture: .intel,
-        microphonePermission: .authorized,
-        speechPermission: .denied,
-        appleOnDeviceRecognitionSupported: true,
-        enhancedModelReady: true,
-        foundationModelAvailable: true
-      ), enhancedCandidateEnabled: true),
-      DictationFailure.unavailable,
-      "Enhanced Local requires Apple silicon."
-    ),
-    (
-      .evaluate(.init(
-        osMajorVersion: 26,
-        architecture: .appleSilicon,
-        microphonePermission: .authorized,
-        speechPermission: .denied,
-        appleOnDeviceRecognitionSupported: true,
-        enhancedModelReady: true,
-        foundationModelAvailable: true
-      ), enhancedCandidateEnabled: true),
-      DictationSettingsTestError.failed,
-      "Enhanced Local could not start. Try again, repair the model in Dictation Settings, or switch to Standard."
-    ),
-  ]
-
-  for (availability, error, expectedMessage) in scenarios {
-    let fixture = try await RuntimeFixture(
-      finalText: nil,
-      preferredEngine: .enhancedLocal,
-      enhancedReadyAtStartup: true,
-      availability: availability
-    )
-    let focused = focusRuntimeEditor(fixture)
-    fixture.provider.error = error
-    await fixture.runtime.awaitStartupAssessment()
-
-    fixture.monitor.emit(.pressed(.rightOption))
-    await fixture.runtime.shortcutController.drainEvents()
-    for _ in 0..<20 {
-      if fixture.runtime.captureFailure != nil { break }
-      await Task.yield()
-    }
-
-    #expect(fixture.provider.requestedKinds == [.enhancedLocal])
-    #expect(fixture.runtime.captureFailure?.message == expectedMessage)
-    #expect(fixture.runtime.captureFailure?.actions.isEmpty == true)
-    #expect(fixture.runtime.captureFailure?.message.contains("Apple Speech") == false)
-    #expect(fixture.runtime.captureFailure?.message.contains("Speech Recognition") == false)
-    #expect(!focused.commands.isFocusedDictationActive)
-
-    fixture.monitor.emit(.released(.rightOption))
-    await fixture.runtime.shortcutController.drainEvents()
-  }
-}
-
-@Test @MainActor func ShortcutPermissionRequestUsesThePreferredEnhancedEngine()
-  async throws
-{
-  let speechRequests = RuntimeCounter()
-  let permissionController = DictationPermissionController(
-    microphoneStatus: { .authorized },
-    speechStatus: { .notDetermined },
-    requestMicrophone: { true },
-    requestSpeech: {
-      await speechRequests.increment()
-      return true
-    }
-  )
-  let fixture = try await RuntimeFixture(
-    finalText: nil,
-    preferredEngine: .enhancedLocal,
-    permissionController: permissionController
-  )
-
-  await fixture.runtime.requestPermissionsAfterShortcutSetup()
-
-  #expect(await speechRequests.value == 0)
-}
-#endif
-
-#if CLEAN_DICTATION_ENHANCED_CANDIDATE
-@Test @MainActor func DictationRuntimeReplaysOnlyAnActiveModelRepairWhenReenabled()
-  async throws
-{
-  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: false)
-  let gate = DictationTestGate()
-  await fixture.runtime.awaitStartupAssessment()
-  let repair = fixture.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in await gate.wait() }
-  )
-  await gate.waitUntilWaiting()
-  #expect(fixture.runtime.currentCapsuleStatus == nil)
-
-  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
-  fixture.runtime.preferencesDidChange()
-  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
-
-  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
-  fixture.runtime.preferencesDidChange()
-  fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
-  fixture.runtime.preferencesDidChange()
-  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
-
-  await gate.open()
-  await repair.value
-  #expect(fixture.runtime.currentCapsuleStatus == .idle)
-}
-
-@Test @MainActor func DictationRepairCapsuleReturnsToIdleOnSuccessAndCancellation() async throws {
-  let success = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
-  let successfulTask = success.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in }
-  )
-  #expect(success.runtime.currentCapsuleStatus == .repairingModel)
-  await successfulTask.value
-  #expect(success.runtime.currentCapsuleStatus == .idle)
-
-  let cancelled = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
-  let gate = DictationTestGate()
-  let cancelledTask = cancelled.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in
-      await gate.wait()
-      try Task.checkCancellation()
-    }
-  )
-  await gate.waitUntilWaiting()
-  #expect(cancelled.runtime.currentCapsuleStatus == .repairingModel)
-  cancelled.runtime.cancelModelOperation()
-  await gate.open()
-  await cancelledTask.value
-  #expect(cancelled.runtime.currentCapsuleStatus == .idle)
-}
-
-@Test @MainActor func DictationRepairCapsuleShowsNonTranscriptFailure() async throws {
-  let fixture = try await RuntimeFixture(finalText: "private transcript", capsuleEnabled: true)
-
-  let task = fixture.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in
-      throw DictationSettingsTestError.failed
-    }
-  )
-  await task.value
-
-  #expect(fixture.runtime.currentCapsuleStatus == .failed("Enhanced model repair failed."))
-  #expect(
-    fixture.runtime.currentCapsuleStatus?.presentation.voiceOverText
-      .contains("private transcript") == false
-  )
-}
-
-@Test @MainActor func StaleRepairCompletionCannotDismissANewerRepairStatus() async throws {
-  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
-  let firstGate = DictationTestGate()
-  let secondGate = DictationTestGate()
-  let first = fixture.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in
-      await firstGate.wait()
-    }
-  )
-  await firstGate.waitUntilWaiting()
-  let second = fixture.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in
-      await secondGate.wait()
-    }
-  )
-  await secondGate.waitUntilWaiting()
-
-  await firstGate.open()
-  await first.value
-  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
-
-  await secondGate.open()
-  await second.value
-  #expect(fixture.runtime.currentCapsuleStatus == .idle)
-}
-
-@Test @MainActor func RepairFailureCannotReplaceANewerDictationCapsuleStatus() async throws {
-  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
-  let failureGate = DictationTestGate()
-  let repair = fixture.runtime.runModelOperation(
-    showsRepairStatus: true,
-    operation: { _ in
-      await failureGate.wait()
-      throw DictationSettingsTestError.failed
-    }
-  )
-  await failureGate.waitUntilWaiting()
-  #expect(fixture.runtime.currentCapsuleStatus == .repairingModel)
-
-  await fixture.runtime.toggle()
-  #expect(fixture.runtime.currentCapsuleStatus == .listening)
-
-  await failureGate.open()
-  await repair.value
-  #expect(fixture.runtime.currentCapsuleStatus == .listening)
-
-  await fixture.runtime.cancel()
-}
-#endif
-
 @Test @MainActor func DictationRuntimeShutdownAwaitsCancelledStartupAssessment() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved", startupBlocked: true)
   await fixture.startupGate.waitUntilWaiting()
@@ -1610,97 +3138,6 @@ import Testing
   await shutdown.value
   #expect(await completed.isComplete)
 }
-
-#if CLEAN_DICTATION_ENHANCED_CANDIDATE
-@Test @MainActor func DictationRuntimeShutdownAwaitsModelOperationFilesystemCleanup() async throws {
-  let fixture = try await RuntimeFixture(finalText: "saved")
-  let operationGate = DictationTestGate()
-  let cleanupGate = DictationTestGate()
-  let file = FileManager.default.temporaryDirectory
-    .appendingPathComponent("model-cleanup-\(UUID().uuidString)")
-  try Data("partial".utf8).write(to: file)
-  let operation = fixture.runtime.runModelOperation(
-    operation: { _ in
-      await operationGate.wait()
-      if Task.isCancelled {
-        await cleanupGate.wait()
-        try? FileManager.default.removeItem(at: file)
-        throw CancellationError()
-      }
-    }
-  )
-  await operationGate.waitUntilWaiting()
-  let completed = RuntimeCompletionProbe()
-
-  let shutdown = Task {
-    await fixture.runtime.shutdown()
-    await completed.complete()
-  }
-  await Task.yield()
-  #expect(!(await completed.isComplete))
-
-  await operationGate.open()
-  await cleanupGate.waitUntilWaiting()
-  #expect(!(await completed.isComplete))
-  await cleanupGate.open()
-  await operation.value
-  await shutdown.value
-  #expect(!FileManager.default.fileExists(atPath: file.path))
-}
-
-@Test @MainActor func DictationRuntimeShutdownAwaitsEverySupersededModelCleanup() async throws {
-  let fixture = try await RuntimeFixture(finalText: "saved")
-  let firstOperationGate = DictationTestGate()
-  let firstCleanupGate = DictationTestGate()
-  let secondOperationGate = DictationTestGate()
-  let secondCleanupGate = DictationTestGate()
-  let first = fixture.runtime.runModelOperation(
-    operation: { _ in
-      await firstOperationGate.wait()
-      if Task.isCancelled {
-        await firstCleanupGate.wait()
-        throw CancellationError()
-      }
-    }
-  )
-  await firstOperationGate.waitUntilWaiting()
-
-  let second = fixture.runtime.runModelOperation(
-    operation: { _ in
-      await secondOperationGate.wait()
-      if Task.isCancelled {
-        await secondCleanupGate.wait()
-        throw CancellationError()
-      }
-    }
-  )
-  await secondOperationGate.waitUntilWaiting()
-  await firstOperationGate.open()
-  await firstCleanupGate.waitUntilWaiting()
-  let completed = RuntimeCompletionProbe()
-
-  let shutdown = Task {
-    await fixture.runtime.shutdown()
-    await completed.complete()
-  }
-  await secondOperationGate.open()
-  await secondCleanupGate.waitUntilWaiting()
-  #expect(!(await completed.isComplete))
-
-  await secondCleanupGate.open()
-  await second.value
-  for _ in 0..<20 {
-    if await completed.isComplete { break }
-    await Task.yield()
-  }
-  #expect(!(await completed.isComplete))
-
-  await firstCleanupGate.open()
-  await first.value
-  await shutdown.value
-  #expect(await completed.isComplete)
-}
-#endif
 
 @Test @MainActor func DictationRuntimeShutdownAwaitsSuspendedProviderAndLateRelease() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved")
@@ -1766,6 +3203,126 @@ import Testing
   fixture.releaseRuntime()
   await Task.yield()
   #expect(weakRuntime == nil)
+}
+
+@Test @MainActor
+func DictationRuntimeStopsResourceMonitoringBeforeDrainAndCoolsAfterDrain() async throws {
+  let lifecycle = RuntimeResourceLifecycleProbe()
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    resourceLifecycle: lifecycle
+  )
+  await fixture.runtime.toggle()
+
+  let releaseGate = DictationTestGate()
+  fixture.engine.releaseGate = releaseGate
+  let shutdown = Task { await fixture.runtime.shutdown() }
+  await releaseGate.waitUntilWaiting()
+
+  #expect(lifecycle.events == [.monitorStarted, .monitorStopped])
+
+  await releaseGate.open()
+  await shutdown.value
+
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .engineReleased,
+    .forceCold,
+  ])
+
+  await fixture.runtime.shutdown()
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .engineReleased,
+    .forceCold,
+  ])
+}
+
+@Test @MainActor
+func DictationRuntimeDeinitDrainsStartupBeforeCoolingWithoutRetainingRuntime()
+  async throws
+{
+  let lifecycle = RuntimeResourceLifecycleProbe()
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    startupBlocked: true,
+    resourceLifecycle: lifecycle
+  )
+  await fixture.startupGate.waitUntilWaiting()
+
+  var runtime: DictationRuntime? = fixture.runtime
+  weak let weakRuntime = runtime
+  fixture.releaseRuntime()
+  runtime = nil
+
+  await lifecycle.monitorStoppedGate.wait()
+  #expect(weakRuntime == nil)
+  #expect(lifecycle.events == [.monitorStarted, .monitorStopped])
+
+  await Task.yield()
+  #expect(lifecycle.events == [.monitorStarted, .monitorStopped])
+
+  await fixture.startupGate.open()
+  await lifecycle.forceColdGate.wait()
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .forceCold,
+  ])
+
+  await Task.yield()
+  await Task.yield()
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .forceCold,
+  ])
+}
+
+@Test @MainActor
+func DictationRuntimeDeinitStopsAndCoolsWhenFinalReleaseHappensOffMainActor()
+  async throws
+{
+  let lifecycle = RuntimeResourceLifecycleProbe()
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    startupBlocked: true,
+    resourceLifecycle: lifecycle
+  )
+  await fixture.startupGate.waitUntilWaiting()
+
+  weak let weakRuntime = fixture.runtime
+  let releaseBox = RuntimeOffActorReleaseBox(runtime: fixture.runtime)
+  fixture.releaseRuntime()
+  let release = Task.detached {
+    releaseBox.release()
+  }
+
+  await lifecycle.monitorStoppedGate.wait()
+  await release.value
+  #expect(weakRuntime == nil)
+  #expect(lifecycle.events == [.monitorStarted, .monitorStopped])
+
+  await Task.yield()
+  #expect(lifecycle.events == [.monitorStarted, .monitorStopped])
+
+  await fixture.startupGate.open()
+  await lifecycle.forceColdGate.wait()
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .forceCold,
+  ])
+
+  await Task.yield()
+  await Task.yield()
+  #expect(lifecycle.events == [
+    .monitorStarted,
+    .monitorStopped,
+    .forceCold,
+  ])
 }
 
 private func historyRecord(
@@ -1843,6 +3400,44 @@ private actor DictationOperationLog {
   }
 }
 
+private enum RuntimeResourceLifecycleEvent: Equatable {
+  case monitorStarted
+  case monitorStopped
+  case engineReleased
+  case forceCold
+}
+
+@MainActor
+private final class RuntimeResourceLifecycleProbe {
+  private(set) var events: [RuntimeResourceLifecycleEvent] = []
+  let monitorStoppedGate = DictationTestGate()
+  let forceColdGate = DictationTestGate()
+
+  func append(_ event: RuntimeResourceLifecycleEvent) {
+    events.append(event)
+    switch event {
+    case .monitorStopped:
+      Task { await monitorStoppedGate.open() }
+    case .forceCold:
+      Task { await forceColdGate.open() }
+    case .monitorStarted, .engineReleased:
+      break
+    }
+  }
+}
+
+private final class RuntimeOffActorReleaseBox: @unchecked Sendable {
+  private var runtime: DictationRuntime?
+
+  init(runtime: DictationRuntime) {
+    self.runtime = runtime
+  }
+
+  func release() {
+    runtime = nil
+  }
+}
+
 @MainActor
 private final class RuntimeFixture {
   let appState: AppState
@@ -1850,10 +3445,10 @@ private final class RuntimeFixture {
   let escapeRegistrar = RuntimeEscapeRegistrar()
   let startupGate = DictationTestGate()
   let startupLog = RuntimeCounter()
-  let enhancedReady = RuntimeBool()
   let engine: RuntimeSpeechEngine
   let provider: RuntimeEngineProvider
   let history: DictationHistoryController
+  let historySaveGate = DictationTestGate()
   let editorRegistry = DictationEditorRegistry()
   let initialLoadBlocker: RuntimeBlockingFileManager?
   var runtime: DictationRuntime!
@@ -1869,8 +3464,8 @@ private final class RuntimeFixture {
     blockInitialLoad: Bool = false,
     monitorAccessGranted: Bool = true,
     monitorRequestAccessResult: Bool = true,
-    enhancedReadyAtStartup: Bool = false,
     permissionController: DictationPermissionController = .init(),
+    resourceLifecycle: RuntimeResourceLifecycleProbe? = nil,
     availability: DictationAvailability = .evaluate(.init(
       osMajorVersion: 26,
       architecture: .appleSilicon,
@@ -1881,6 +3476,12 @@ private final class RuntimeFixture {
       foundationModelAvailable: true
     )),
     availabilityProvider: (@MainActor () -> DictationAvailability)? = nil,
+    routingNotes: [Note] = [],
+    ambiguousRouting: Bool = false,
+    cleanupFails: Bool = false,
+    historySaveFailureAttempt: Int? = nil,
+    historySaveBlockingAttempt: Int? = nil,
+    saving: (any DictationSaving)? = nil,
     capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
     }
@@ -1901,7 +3502,10 @@ private final class RuntimeFixture {
       dictationCapsuleDock: preferredDock,
       dictationCapsuleEnabled: capsuleEnabled
     )
-    var workspace = Workspace()
+    var workspace = Workspace(
+      notes: routingNotes,
+      selectedNoteID: routingNotes.first?.id
+    )
     workspace.ensureNoteExists()
     let persistedSelectedNoteID = workspace.selectedNoteID
     try await store.save(
@@ -1923,23 +3527,37 @@ private final class RuntimeFixture {
     }
     monitor.accessGranted = monitorAccessGranted
     monitor.requestAccessResult = monitorRequestAccessResult
-    enhancedReady.value = enhancedReadyAtStartup
-    engine = RuntimeSpeechEngine(finalText: finalText, kind: preferredEngine)
+    engine = RuntimeSpeechEngine(
+      finalText: finalText,
+      kind: preferredEngine,
+      onRelease: { resourceLifecycle?.append(.engineReleased) }
+    )
     provider = RuntimeEngineProvider(engine: engine)
+    let historySaveProbe = RuntimeHistorySaveProbe(
+      failureAttempt: historySaveFailureAttempt,
+      blockingAttempt: historySaveBlockingAttempt,
+      gate: historySaveGate
+    )
     history = DictationHistoryController(
       load: { [] },
-      save: { _ in },
+      save: { _ in try await historySaveProbe.save() },
       delete: { _ in },
       clear: {}
     )
+    let admittedModelSettingsViewModel = AdmittedModelSettingsViewModel(
+      installer: makeAdmittedModelInstaller()
+    )
     let coordinator = DictationCoordinator(
       engineProvider: provider,
-      preferredEngine: { [weak appState] in
-        appState?.preferences.dictationSpeechEngine ?? .standard
+      preferredEngine: { [weak appState, admittedModelSettingsViewModel] in
+        DictationRuntime.effectiveEngine(
+          preference: appState?.preferences.dictationSpeechEngine,
+          presentation: admittedModelSettingsViewModel.presentation
+        )
       },
-      cleaner: RuntimeCleaner(),
-      router: RuntimeRouter(),
-      saver: appState,
+      cleaner: RuntimeCleaner(fails: cleanupFails),
+      router: RuntimeRouter(returnsAmbiguity: ambiguousRouting),
+      saver: saving ?? appState,
       historyController: history,
       historyEnabled: { true },
       holdThreshold: .zero,
@@ -1982,9 +3600,18 @@ private final class RuntimeFixture {
         await log.increment()
         if startupBlocked { await gate.wait() }
       },
-      enhancedIsReady: { [enhancedReady] in enhancedReady.value },
+      admittedModelSettingsViewModel: admittedModelSettingsViewModel,
       availabilityProvider: availabilityProvider ?? { availability },
-      capsuleSleeper: capsuleSleeper
+      capsuleSleeper: capsuleSleeper,
+      startResourceMonitoring: {
+        resourceLifecycle?.append(.monitorStarted)
+      },
+      stopResourceMonitoring: {
+        resourceLifecycle?.append(.monitorStopped)
+      },
+      forceEnhancedInferenceCold: {
+        resourceLifecycle?.append(.forceCold)
+      }
     )
   }
 
@@ -2076,17 +3703,28 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   var releaseGate: DictationTestGate?
   private(set) var releaseCount = 0
   private var level: (@MainActor (Float) -> Void)?
+  private var levelCallbacks: [@MainActor (Float) -> Void] = []
 
-  init(finalText: String?, kind: DictationSpeechEngine = .standard) {
+  var captureCallbackCount: Int { levelCallbacks.count }
+
+  init(
+    finalText: String?,
+    kind: DictationSpeechEngine = .standard,
+    onRelease: (() -> Void)? = nil
+  ) {
     self.finalText = finalText
     self.kind = kind
+    self.onRelease = onRelease
   }
+
+  private let onRelease: (() -> Void)?
 
   func start(
     provisional: @escaping @MainActor (String) -> Void,
     level: @escaping @MainActor (Float) -> Void
   ) async throws {
     self.level = level
+    levelCallbacks.append(level)
   }
 
   func finish() async throws -> String? {
@@ -2096,25 +3734,93 @@ private final class RuntimeSpeechEngine: SpeechEngine {
 
   func cancel() async {}
   func emitLevel(_ value: Float) { level?(value) }
+  func emitLevel(fromCaptureAt index: Int, value: Float) {
+    levelCallbacks[index](value)
+  }
   func releaseResources() async {
     releaseCount += 1
     if let releaseGate { await releaseGate.wait() }
+    onRelease?()
   }
 }
 
 private struct RuntimeCleaner: TranscriptCleaning {
+  let fails: Bool
+
+  init(fails: Bool = false) {
+    self.fails = fails
+  }
+
   func clean(_ transcript: String) async throws -> String {
-    transcript
+    if fails { throw DictationSettingsTestError.failed }
+    return transcript
+  }
+}
+
+@MainActor
+private final class RuntimeSaving: DictationSaving {
+  let error: Error?
+  let destination = DictationDestination(noteID: UUID(), title: "Inbox")
+
+  init(error: Error? = nil) {
+    self.error = error
+  }
+
+  func activeDestinations() -> [DictationRoutingCandidate] {
+    [DictationRoutingCandidate(destination: destination, semanticContext: "")]
+  }
+
+  func saveSmartCapture(
+    text: String,
+    captureID: UUID,
+    destinationID: UUID?
+  ) async throws -> DictationInsertionReceipt {
+    if let error { throw error }
+    return DictationInsertionReceipt(
+      captureID: captureID,
+      noteID: destination.noteID,
+      insertedSuffix: text
+    )
+  }
+
+  func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
+    true
+  }
+
+  func flushFocusedDictationSave(
+    captureID: UUID
+  ) async throws -> FocusedDictationPersistenceReceipt {
+    FocusedDictationPersistenceReceipt(captureID: captureID)
+  }
+
+  func compensateFocusedDictationSave(
+    _ receipt: FocusedDictationPersistenceReceipt
+  ) async -> Bool {
+    true
   }
 }
 
 private struct RuntimeRouter: DestinationRouting {
+  let returnsAmbiguity: Bool
+
+  init(returnsAmbiguity: Bool = false) {
+    self.returnsAmbiguity = returnsAmbiguity
+  }
+
   func route(
     transcript: String,
-    candidates: [DictationDestination],
+    candidates: [DictationRoutingCandidate],
     inboxID: UUID?
-  ) async -> UUID? {
-    inboxID
+  ) async -> DictationRoutingDecision {
+    if returnsAmbiguity {
+      return .ambiguous(candidates.prefix(4).map {
+        DictationRoutingChoice(
+          destination: $0.destination,
+          contextHint: DictationRoutingChoice.boundedContextHint(from: $0.semanticContext)
+        )
+      })
+    }
+    return .inbox
   }
 }
 
@@ -2123,6 +3829,33 @@ private actor RuntimeCounter {
 
   func increment() {
     value += 1
+  }
+}
+
+private actor RuntimeHistorySaveProbe {
+  let failureAttempt: Int?
+  let blockingAttempt: Int?
+  let gate: DictationTestGate
+  private var attempts = 0
+
+  init(
+    failureAttempt: Int?,
+    blockingAttempt: Int?,
+    gate: DictationTestGate
+  ) {
+    self.failureAttempt = failureAttempt
+    self.blockingAttempt = blockingAttempt
+    self.gate = gate
+  }
+
+  func save() async throws {
+    attempts += 1
+    if attempts == blockingAttempt {
+      await gate.wait()
+    }
+    if attempts == failureAttempt {
+      throw DictationSettingsTestError.failed
+    }
   }
 }
 

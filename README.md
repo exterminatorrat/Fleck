@@ -17,8 +17,10 @@
 
 Fleck is under active development. The repository contains implemented local
 development paths for native notes, dictation, persistence, and the local Agent
-Connector. Build and test the packaged development app for macOS-specific
-behavior; the ordinary SwiftPM executable is not a substitute for that evidence.
+Connector. The MCP Capability Foundation Phase A is implemented for profile-
+scoped access to explicitly granted notes. Build and test the packaged
+development app for macOS-specific behavior; the ordinary SwiftPM executable
+is not a substitute for that evidence.
 
 Distribution signing and notarization, StoreKit access, and Mac App Store release
 remain pending. Enhanced Local is a release-disabled candidate, not a shipping
@@ -31,8 +33,8 @@ feature. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) and
 | --- | --- |
 | Native notes | Menu-bar and pinned-window surfaces; tabs, pinning, live reordering, import/export, 30-day Trash, and recovery. |
 | Native editor | A real AppKit `NSTextView` editor with Markdown-compatible bodies, optional RTF sidecars, undo/redo, inline bold/italic/underline/strikethrough, installed fonts and sizes, colors and highlights, bullets, numbering, and checklists. |
-| Dictation | Standard on-device speech with no cloud fallback, optional local cleanup, title-only Smart Capture routing, local 30-day history, and a persistent dictation capsule. |
-| Agent workspace | Explicit per-note opt-in, a local MCP/CLI helper, optimistic revisions, caller-owned operation IDs, visible activity, and safe Undo. |
+| Dictation | Standard on-device speech with no cloud fallback, optional faithful local cleanup, exact-title routing plus a bounded cached full-note semantic route in the enhanced test graph, Inbox-first ambiguity handling, local 30-day history, and a persistent dictation capsule. Parakeet and Gemma remain candidate/test integrations. |
+| Agent workspace | Profile-scoped `notes.list`, `notes.read`, `notes.write`, and `changes.undo` capabilities; explicit note/folder grants; a local MCP/CLI helper; optimistic revisions; caller-owned operation IDs; visible activity; and safe Undo. |
 | Persistence and privacy | Readable local files, debounced atomic saves, a previous-generation recovery snapshot, Keychain credentials, and same-user Unix-socket IPC. |
 | Native product shell | First-launch onboarding, customization, panel-local shortcuts, launch-at-login integration in the packaged app, and an independently sized pinned window. |
 
@@ -70,12 +72,22 @@ local MCP client or CLI
   cloud fallback. Microphone buffers and transcripts are not written as audio.
   Optional cleanup, routing, notes, and history remain local; the Enhanced
   candidate's explicit model download path is separate from ordinary notes.
-- Smart Capture receives candidate note identifiers and titles only. Note bodies
-  and other note content are excluded from routing prompts; low-confidence or
-  unavailable routing falls back to Inbox.
-- Agent access is off until explicitly enabled per note. Credentials use the
-  Keychain, and the helper communicates with Fleck over a private same-user Unix
-  socket. There is no HTTP/TCP listener, cloud bridge, or internet-facing port.
+- Smart Capture keeps candidate UUIDs, titles, note bodies, and revisions local.
+  Its debug-gated local candidate route indexes bounded title/body passages in
+  memory and sends only a bounded relevant shortlist under opaque keys to the
+  local Gemma helper. Missing, ambiguous, incomplete, stale, malformed,
+  cancelled, or low-confidence evidence saves to Inbox; a supported ambiguous
+  result is saved there before the chooser appears. The available Foundation
+  Models route remains title-based at this base.
+- Agent access is off until an authorized profile has an explicit note grant or
+  an explicit `folderIncludingFutureNotes` grant. New profiles start with no
+  tools or scopes, and future-note inheritance is off unless the user confirms
+  it. Credentials use the Keychain, and the helper communicates with Fleck over
+  a private same-user Unix socket. There is no HTTP/TCP listener, cloud bridge,
+  or internet-facing port.
+- Folder-contained notes use the same existing list/read/write/task/activity/
+  Undo operations as unfiled notes when the profile's grant authorizes them;
+  there is no separate folder-access path.
 - The ordinary notes path has no accounts, analytics, advertising, or mandatory
   network dependency. This is a cooperative local-client boundary and does not
   claim to protect against malicious software already running as the same user.
@@ -145,8 +157,11 @@ the embedded Agent Connector.
 ## Agent connector development
 
 The separately packaged `fleck-agent` helper provides the direct JSON CLI and MCP
-surface for explicitly shared notes. Create a profile in **Settings → Agents**,
-then use its profile UUID in a client configuration. For example:
+surface for explicitly granted notes. Create a profile in **Settings → Agents**,
+then grant access to notes or folders and use the profile UUID in a client
+configuration. Each profile is independently filtered: `tools/list` is recomputed
+on every request, exposes only authorized tools from the static set of exactly
+13 existing registrations, and does not advertise `listChanged`.
 
 ```sh
 codex mcp add fleck -- "/absolute/path/to/fleck" mcp --profile PROFILE_UUID
@@ -155,6 +170,33 @@ codex mcp add fleck -- "/absolute/path/to/fleck" mcp --profile PROFILE_UUID
 The trust boundary, supported operations, revision/idempotency rules, and client
 setup forms are documented in [ARCHITECTURE.md](ARCHITECTURE.md#agent-workspace-trust-and-data-flow)
 and [TESTING.md](TESTING.md#agent-workspace-release-gates).
+
+## MCP Capability Foundation Phase A
+
+- Capability authority is native and enforced for every command, with a revision
+  recheck before protected reads return and before writes commit.
+- A profile may have `notes.list`, `notes.read`, `notes.write`, and
+  `changes.undo`. Direct note grants are explicit. A
+  `folderIncludingFutureNotes` grant is also explicit, requires confirmation,
+  and is off by default; current-note visibility materializes direct grants.
+- Legacy per-note sharing is migrated into direct grants for active profiles.
+  Legacy shares with no active profile remain unassigned until explicitly
+  assigned; a new profile does not inherit them automatically.
+- Unknown, private, and unauthorized targets remain indistinguishable. Capability
+  storage is recoverable, and capability-load failure is isolated from note
+  availability without exposing capability-file contents or paths.
+- The wire remains v1-compatible; internal v2 `getCapabilities` discovery is not
+  a user-facing CLI command. The MCP surface is tools-only and profile-filtered.
+- Pending restored notes stay excluded from agent authority until durable
+  workspace commit. If Trash cleanup fails after commit, the workspace remains
+  committed and the cleanup error is recoverable rather than rolling back the
+  note.
+
+Expanded Discovery/context tools, Organization, Change Sets/Proposals,
+Collaboration/Work Items, the Add-on SDK and registry, the sandboxed execution
+broker, Context Packs, recipes, schedules, richer automation, a community
+directory or marketplace, iCloud, onboarding changes, and AI/dictation changes
+are not implemented in Phase A.
 
 ## Website development
 
@@ -173,6 +215,11 @@ Enhanced Local is release-disabled and non-shippable until every gate in
 [TESTING.md](TESTING.md) has evidence. The candidate is isolated behind its own
 dependency and model paths; a green build or CI run does not approve its quality,
 privacy, resource, legal, accessibility, signing, or store readiness.
+Parakeet TDT 0.6B v2 dictation and Gemma 3 1B cleanup/local routing are
+debug-gated candidate/test integrations. Current checked-in evidence is
+deterministic/synthetic contract testing, not real-model replay, packaged
+injected audio, live-human microphone use, two-device acceptance, or release
+admission.
 
 ## Known limitations
 
@@ -186,6 +233,9 @@ privacy, resource, legal, accessibility, signing, or store readiness.
   remaining interaction checks are not automated successes.
 - Configurable show/hide shortcuts are currently panel-local; system-wide
   activation remains release work.
+- The expanded MCP capability roadmap remains deferred: Discovery/context,
+  Organization, Change Sets/Proposals, Collaboration/Work Items, add-ons,
+  registry/marketplace, and the sandbox broker are not available.
 
 ## Reporting issues
 
@@ -201,6 +251,8 @@ Fleck is source-available under the [PolyForm Shield License 1.0.0](LICENSE), wi
 Harry Jin as licensor and copyright holder. Its noncompete condition protects Fleck
 and official products from competing source or binary distributions; the operative
 terms are only in `LICENSE`.
+
+Phase A makes no license change.
 
 See [NOTICE](NOTICE) for the required copyright and brand notice, and
 [Sources/FleckApp/Resources/ThirdPartyNotices.md](Sources/FleckApp/Resources/ThirdPartyNotices.md)

@@ -36,7 +36,7 @@ trap cleanup EXIT
 /bin/rm -f -- "$resolved"
 cd "$repo_root"
 FLECK_ENHANCED_CANDIDATE=1 \
-  swift package --scratch-path "$scratch" resolve
+  swift package --skip-update --scratch-path "$scratch" resolve
 "$script_dir/verify-enhanced-candidate-pin.swift" "$resolved"
 
 if (( $# > 0 )); then

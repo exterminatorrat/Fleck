@@ -4,25 +4,35 @@
   import FleckCore
 
   enum AgentPresentation {
-    static func visibleNoteIDs(in workspace: Workspace) -> Set<UUID> {
-      Set(workspace.notes.filter(\.agentAccess).map(\.id))
+    static func visibleNoteIDs(
+      in workspace: Workspace,
+      activeProfiles: [AgentProfileCapabilities] = []
+    ) -> Set<UUID> {
+      Set(
+        activeProfiles.flatMap {
+          AgentCapabilityPolicy.authorizationSnapshot(
+            for: $0,
+            workspace: workspace
+          ).readableNoteIDs
+        }
+      )
     }
 
-    static func bridgeVisibleActivity(
-      _ records: [AgentActivityRecord],
-      workspace: Workspace
-    ) -> [AgentActivityRecord] {
-      let visible = visibleNoteIDs(in: workspace)
-      return records.filter { visible.contains($0.noteID) }
-    }
   }
 
   struct AgentSharingPresentation {
     static let sharedBadgeAccessibilityLabel = "Shared with agents"
-    let requiresEnableConfirmation: Bool
 
-    init(note: Note, hasConfirmedFirstShare: Bool) {
-      requiresEnableConfirmation = !note.agentAccess && !hasConfirmedFirstShare
+    static func isShared(
+      noteID: UUID,
+      activeProfiles: [AgentProfileCapabilities],
+      workspace: Workspace
+    ) -> Bool {
+      AgentCapabilityPresentation.isShared(
+        noteID: noteID,
+        activeProfiles: activeProfiles,
+        workspace: workspace
+      )
     }
   }
 
@@ -91,6 +101,7 @@
 
   struct AgentActivityView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
     let onOpenNote: (UUID) -> Void
     @State private var showsClearConfirmation = false
 
@@ -103,6 +114,11 @@
             showsClearConfirmation = true
           }
           .disabled(appState.agentActivity.isEmpty)
+          Button("Done") {
+            dismiss()
+          }
+          .keyboardShortcut(.cancelAction)
+          .accessibilityLabel("Close Agent Activity")
         }
 
         if appState.agentActivity.isEmpty {

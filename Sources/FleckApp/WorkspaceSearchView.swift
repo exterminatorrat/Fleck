@@ -76,6 +76,42 @@
     return coalesced
   }
 
+  enum WorkspaceSearchActivation: Equatable {
+    case pointer
+    case keyboard
+  }
+
+  enum WorkspaceSearchPresentationKind: Equatable {
+    case inline
+    case crossfade
+    case instant
+
+    static func resolve(
+      activation: WorkspaceSearchActivation,
+      reduceMotion: Bool
+    ) -> Self {
+      switch activation {
+      case .pointer:
+        return reduceMotion ? .crossfade : .inline
+      case .keyboard:
+        return .instant
+      }
+    }
+
+    var interactionSource: AppInteractionSource {
+      switch self {
+      case .inline, .crossfade:
+        return .pointer
+      case .instant:
+        return .keyboard
+      }
+    }
+
+    var usesAnimatedDismissal: Bool {
+      self != .instant
+    }
+  }
+
   @MainActor
   final class WorkspaceSearchController: ObservableObject {
     typealias SearchOperation = @MainActor (
@@ -90,6 +126,8 @@
     }
 
     @Published private(set) var isPresented = false
+    @Published private(set) var presentationKind: WorkspaceSearchPresentationKind = .instant
+    @Published private(set) var presentationID: UInt64 = 0
     @Published var query = ""
     @Published private(set) var results: [WorkspaceSearchResult] = []
     @Published private(set) var highlightedNoteID: UUID?
@@ -100,6 +138,7 @@
     private var resultGeneration: UInt64?
     private weak var hostingWindow: NSWindow?
     private var focusOrigin: WorkspaceSearchFocusOrigin?
+    private var focusRestoreTask: Task<Void, Never>?
     private var hasActivatedCurrentPresentation = false
 
     init(
@@ -125,10 +164,15 @@
       resultGeneration == searchGeneration
     }
 
-    func present(for noteID: UUID? = nil) {
+    func present(
+      for noteID: UUID? = nil,
+      presentation: WorkspaceSearchPresentationKind = .instant
+    ) {
       guard !isPresented else { return }
+      cancelFocusRestore()
       cancelSearch()
       searchGeneration &+= 1
+      presentationID &+= 1
       focusOrigin = WorkspaceSearchFocusOrigin.capture(
         preferredWindow: hostingWindow,
         noteID: noteID
@@ -138,13 +182,21 @@
       highlightedNoteID = nil
       resultGeneration = nil
       hasActivatedCurrentPresentation = false
+      presentationKind = presentation
       isPresented = true
+    }
+
+    func dismiss(ifPresentationID presentationID: UInt64) {
+      guard self.presentationID == presentationID else { return }
+      dismiss()
     }
 
     func dismiss() {
       guard isPresented || focusOrigin != nil else { return }
+      cancelFocusRestore()
       cancelSearch()
       searchGeneration &+= 1
+      let restoreGeneration = searchGeneration
       isPresented = false
       query = ""
       results = []
@@ -155,11 +207,20 @@
       focusOrigin = nil
       origin?.restore()
       if let origin {
-        Task { @MainActor in
+        focusRestoreTask = Task { @MainActor [weak self] in
           for _ in 0..<12 {
+            guard !Task.isCancelled else { return }
             await Task.yield()
+            guard !Task.isCancelled,
+              let self,
+              self.searchGeneration == restoreGeneration
+            else {
+              return
+            }
             if origin.restore() { break }
           }
+          guard let self, self.searchGeneration == restoreGeneration else { return }
+          self.focusRestoreTask = nil
         }
       }
     }
@@ -235,7 +296,8 @@
     func activateResult(
       _ noteID: UUID,
       currentNoteIDs: Set<UUID>,
-      activate: (UUID) -> Void
+      activate: (UUID) -> Void,
+      onDismiss: (() -> Void)? = nil
     ) -> Bool {
       guard resultGeneration == searchGeneration,
         currentNoteIDs.contains(noteID),
@@ -244,13 +306,18 @@
         return false
       }
       highlight(noteID)
-      return activateHighlighted(currentNoteIDs: currentNoteIDs, activate: activate)
+      return activateHighlighted(
+        currentNoteIDs: currentNoteIDs,
+        activate: activate,
+        onDismiss: onDismiss
+      )
     }
 
     @discardableResult
     func activateHighlighted(
       currentNoteIDs: Set<UUID>,
-      activate: (UUID) -> Void
+      activate: (UUID) -> Void,
+      onDismiss: (() -> Void)? = nil
     ) -> Bool {
       guard isPresented,
         !hasActivatedCurrentPresentation,
@@ -265,7 +332,11 @@
       hasActivatedCurrentPresentation = true
       focusOrigin?.markActivated(noteID)
       activate(noteID)
-      dismiss()
+      if let onDismiss {
+        onDismiss()
+      } else {
+        dismiss()
+      }
       return true
     }
 
@@ -273,7 +344,8 @@
     func handleKey(
       _ key: KeyEquivalent,
       currentNoteIDs: Set<UUID> = [],
-      activate: (UUID) -> Void = { _ in }
+      activate: (UUID) -> Void = { _ in },
+      onDismiss: (() -> Void)? = nil
     ) -> Bool {
       switch key {
       case .upArrow:
@@ -283,10 +355,18 @@
         moveHighlight(.down)
         return true
       case .return:
-        _ = activateHighlighted(currentNoteIDs: currentNoteIDs, activate: activate)
+        _ = activateHighlighted(
+          currentNoteIDs: currentNoteIDs,
+          activate: activate,
+          onDismiss: onDismiss
+        )
         return true
       case .escape:
-        dismiss()
+        if let onDismiss {
+          onDismiss()
+        } else {
+          dismiss()
+        }
         return true
       default:
         return false
@@ -312,8 +392,14 @@
       searchTask = nil
     }
 
+    private func cancelFocusRestore() {
+      focusRestoreTask?.cancel()
+      focusRestoreTask = nil
+    }
+
     deinit {
       searchTask?.cancel()
+      focusRestoreTask?.cancel()
     }
   }
 
@@ -549,16 +635,19 @@
     @ObservedObject var controller: WorkspaceSearchController
     let notes: [Note]
     let accent: Color
+    let presentationID: UInt64
+    let reduceMotion: Bool
     let currentNoteIDs: () -> Set<UUID>
     let onActivate: (UUID) -> Void
+    let onDismiss: () -> Void
     @FocusState private var isQueryFocused: Bool
 
     var body: some View {
-      ZStack(alignment: .top) {
+      ZStack(alignment: .topTrailing) {
         Color.clear
           .contentShape(Rectangle())
           .onTapGesture {
-            controller.dismiss()
+            onDismiss()
           }
 
         VStack(alignment: .leading, spacing: 8) {
@@ -575,7 +664,8 @@
                 _ = controller.handleKey(
                   .upArrow,
                   currentNoteIDs: currentNoteIDs(),
-                  activate: onActivate
+                  activate: onActivate,
+                  onDismiss: onDismiss
                 )
                 return .handled
               }
@@ -583,7 +673,8 @@
                 _ = controller.handleKey(
                   .downArrow,
                   currentNoteIDs: currentNoteIDs(),
-                  activate: onActivate
+                  activate: onActivate,
+                  onDismiss: onDismiss
                 )
                 return .handled
               }
@@ -591,7 +682,8 @@
                 _ = controller.handleKey(
                   .return,
                   currentNoteIDs: currentNoteIDs(),
-                  activate: onActivate
+                  activate: onActivate,
+                  onDismiss: onDismiss
                 )
                 return .handled
               }
@@ -599,13 +691,14 @@
                 _ = controller.handleKey(
                   .escape,
                   currentNoteIDs: currentNoteIDs(),
-                  activate: onActivate
+                  activate: onActivate,
+                  onDismiss: onDismiss
                 )
                 return .handled
               }
 
             Button {
-              controller.dismiss()
+              onDismiss()
             } label: {
               Image(systemName: "xmark")
             }
@@ -621,7 +714,7 @@
               return .handled
             }
             .onKeyPress(.escape) {
-              controller.dismiss()
+              onDismiss()
               return .handled
             }
           }
@@ -651,7 +744,8 @@
                       _ = controller.activateResult(
                         result.noteID,
                         currentNoteIDs: currentNoteIDs(),
-                        activate: onActivate
+                        activate: onActivate,
+                        onDismiss: onDismiss
                       )
                     } label: {
                       VStack(alignment: .leading, spacing: 2) {
@@ -701,7 +795,7 @@
                       return .handled
                     }
                     .onKeyPress(.escape) {
-                      controller.dismiss()
+                      onDismiss()
                       return .handled
                     }
                   }
@@ -716,17 +810,24 @@
           }
         }
         .padding(12)
-        .frame(maxWidth: 560, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-          RoundedRectangle(cornerRadius: 12)
-            .strokeBorder(.quaternary)
+        .frame(maxWidth: 360, alignment: .leading)
+        .background {
+          RoundedRectangle(cornerRadius: 10)
+            .fill(.regularMaterial)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
+        .overlay {
+          RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(.quaternary)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 8, y: 4)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-      .padding(.horizontal, 20)
-      .padding(.top, 48)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
       .onMoveCommand { direction in
         switch direction {
         case .up:
@@ -738,7 +839,7 @@
         }
       }
       .onExitCommand {
-        controller.dismiss()
+        onDismiss()
       }
       .onAppear {
         isQueryFocused = true
@@ -751,7 +852,7 @@
         controller.refresh(in: newNotes)
       }
       .onDisappear {
-        controller.dismiss()
+        controller.dismiss(ifPresentationID: presentationID)
       }
     }
   }

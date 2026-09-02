@@ -83,8 +83,17 @@ let package = Package(
             name: "FleckAgentProtocol",
             targets: ["FleckAgentProtocol"]
         ),
+        .library(
+            name: "FleckModelEvaluation",
+            targets: ["FleckModelEvaluation"]
+        ),
         .executable(name: "Fleck", targets: ["FleckApp"]),
         .executable(name: "fleck-agent", targets: ["FleckAgentBridge"]),
+        .executable(
+            name: "fleck-model-eval",
+            targets: ["FleckModelEvaluator"]
+        ),
+        .executable(name: "fleck-capture-lab", targets: ["FleckCaptureLab"]),
     ],
     dependencies: packageDependencies,
     targets: [
@@ -95,6 +104,14 @@ let package = Package(
         .target(
             name: "FleckAgentProtocol",
             dependencies: ["FleckCore"]
+        ),
+        .target(
+            name: "FleckModelEvaluation",
+            dependencies: ["FleckCore"]
+        ),
+        .executableTarget(
+            name: "FleckModelEvaluator",
+            dependencies: ["FleckModelEvaluation"]
         ),
         .executableTarget(
             name: "FleckApp",
@@ -119,6 +136,10 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
+        .executableTarget(
+            name: "FleckCaptureLab",
+            dependencies: ["FleckCore"]
+        ),
         .testTarget(
             name: "FleckCoreTests",
             dependencies: ["FleckCore"]
@@ -128,6 +149,10 @@ let package = Package(
             dependencies: ["FleckAgentProtocol", "FleckCore"]
         ),
         .testTarget(
+            name: "FleckModelEvaluationTests",
+            dependencies: ["FleckModelEvaluation"]
+        ),
+        .testTarget(
             name: "FleckAppTests",
             dependencies: ["FleckApp"],
             swiftSettings: appTestSwiftSettings
@@ -135,6 +160,10 @@ let package = Package(
         .testTarget(
             name: "FleckAgentBridgeTests",
             dependencies: ["FleckAgentBridge"]
+        ),
+        .testTarget(
+            name: "FleckCaptureLabTests",
+            dependencies: ["FleckCaptureLab", "FleckCore"]
         ),
     ]
 )

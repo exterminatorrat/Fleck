@@ -5,6 +5,434 @@ import Testing
 
 @testable import FleckApp
 
+@MainActor private final class EditorChangeDelegate: NSObject, NSTextViewDelegate {
+  var changeCount = 0
+
+  func textDidChange(_ notification: Notification) {
+    changeCount += 1
+  }
+}
+
+@Test @MainActor func pasteOptionTitlesMatchWordOrder() {
+  #expect(
+    PasteOption.allCases.map(\.title) == [
+      "Keep Source Formatting",
+      "Paste Text Only",
+      "Merge Formatting"
+    ]
+  )
+}
+
+@Test @MainActor func pasteTextOnlyUsesDestinationAttributes() throws {
+  let font = NSFont.systemFont(ofSize: 18)
+  let color = NSColor(calibratedRed: 0.1, green: 0.2, blue: 0.3, alpha: 1)
+  let destinationLink = URL(string: "https://example.com/destination")!
+  let pasted = ListAwareTextView.pasteTextOnly(
+    "Plain",
+    destinationAttributes: [
+      .font: font,
+      .foregroundColor: color,
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+      .link: destinationLink
+    ]
+  )
+
+  #expect(pasted.string == "Plain")
+  #expect((pasted.attribute(.font, at: 0, effectiveRange: nil) as? NSFont) == font)
+  #expect(
+    (pasted.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+      == color
+  )
+  #expect(
+    pasted.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
+      == NSUnderlineStyle.single.rawValue
+  )
+  #expect(pasted.attribute(.link, at: 0, effectiveRange: nil) as? URL == destinationLink)
+}
+
+@Test @MainActor func mergePasteKeepsSemanticAttributesAndDestinationTypography() throws {
+  let sourceFont = NSFontManager.shared.convert(
+    NSFontManager.shared.convert(
+      NSFont.systemFont(ofSize: 13),
+      toHaveTrait: .boldFontMask
+    ),
+    toHaveTrait: .italicFontMask
+  )
+  let sourceUnderlineColor = NSColor.systemRed
+  let sourceStrikethroughColor = NSColor.systemBlue
+  let destinationUnderlineColor = NSColor.systemGreen
+  let destinationStrikethroughColor = NSColor.systemPurple
+  let source = NSMutableAttributedString(
+    string: "Link",
+    attributes: [
+      .font: sourceFont,
+      .foregroundColor: NSColor.systemRed,
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+      .underlineColor: sourceUnderlineColor,
+      .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+      .strikethroughColor: sourceStrikethroughColor,
+      .link: URL(string: "https://example.com")!
+    ]
+  )
+  let destinationFont = NSFont.systemFont(ofSize: 19)
+  let destinationColor = NSColor.systemBlue
+  let destinationBackground = NSColor.systemYellow
+  let paragraphStyle = NSMutableParagraphStyle()
+  paragraphStyle.alignment = .right
+  let merged = ListAwareTextView.mergePaste(
+    source,
+    destinationAttributes: [
+      .font: destinationFont,
+      .foregroundColor: destinationColor,
+      .backgroundColor: destinationBackground,
+      .underlineColor: destinationUnderlineColor,
+      .strikethroughColor: destinationStrikethroughColor,
+      .paragraphStyle: paragraphStyle
+    ]
+  )
+
+  let mergedFont = try #require(merged.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+  #expect(mergedFont.pointSize == destinationFont.pointSize)
+  #expect(NSFontManager.shared.traits(of: mergedFont).contains(.boldFontMask))
+  #expect(NSFontManager.shared.traits(of: mergedFont).contains(.italicFontMask))
+  #expect((merged.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == destinationColor)
+  #expect((merged.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor) == destinationBackground)
+  #expect(
+    (merged.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.alignment
+      == .right
+  )
+  #expect(
+    merged.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
+      == NSUnderlineStyle.single.rawValue
+  )
+  #expect(
+    (merged.attribute(.underlineColor, at: 0, effectiveRange: nil) as? NSColor)
+      == destinationUnderlineColor
+  )
+  #expect(
+    merged.attribute(.strikethroughStyle, at: 0, effectiveRange: nil) as? Int
+      == NSUnderlineStyle.single.rawValue
+  )
+  #expect(
+    (merged.attribute(.strikethroughColor, at: 0, effectiveRange: nil) as? NSColor)
+      == destinationStrikethroughColor
+  )
+  #expect(merged.attribute(.link, at: 0, effectiveRange: nil) as? URL == URL(string: "https://example.com")!)
+}
+
+@Test @MainActor func plainPasteShowsOptionsAndEscapeDismissesThem() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  contentView.addSubview(textView)
+  let otherResponder = NSButton(frame: NSRect(x: 0, y: 0, width: 80, height: 24))
+  contentView.addSubview(otherResponder)
+  window.contentView = contentView
+  textView.allowsUndo = true
+  #expect(window.makeFirstResponder(textView))
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  textView.insertPastedTextForTesting(
+    NSAttributedString(string: "Pasted"),
+    plainText: "Pasted",
+    hasRichFormatting: false
+  )
+
+  #expect(textView.string == "Pasted")
+  #expect(textView.hasPasteOptions)
+  #expect(textView.pasteOptionMenuTitles == PasteOption.allCases.map(\.title))
+  #expect(textView.pasteOptionEnabledStates == [true, false, false])
+  textView.cancelOperation(nil)
+  #expect(!textView.hasPasteOptions)
+
+  textView.insertPastedTextForTesting(
+    NSAttributedString(string: "Again"),
+    plainText: "Again",
+    hasRichFormatting: false
+  )
+  #expect(textView.hasPasteOptions)
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  #expect(!textView.hasPasteOptions)
+
+  textView.insertPastedTextForTesting(
+    NSAttributedString(string: "Once more"),
+    plainText: "Once more",
+    hasRichFormatting: false
+  )
+  #expect(textView.hasPasteOptions)
+  #expect(window.makeFirstResponder(otherResponder))
+  #expect(!textView.hasPasteOptions)
+
+  textView.insertPastedTextForTesting(
+    NSAttributedString(string: "Teardown"),
+    plainText: "Teardown",
+    hasRichFormatting: false
+  )
+  #expect(textView.hasPasteOptions)
+  textView.viewWillMove(toWindow: nil)
+  #expect(!textView.hasPasteOptions)
+}
+
+@Test @MainActor func identicalPasteStillShowsPasteOptions() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.string = "Same"
+  textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
+  let source = textView.textStorage?.attributedSubstring(
+    from: NSRange(location: 0, length: textView.string.utf16.count)
+  ) ?? NSAttributedString(string: "Same")
+
+  textView.insertPastedTextForTesting(
+    source,
+    plainText: source.string,
+    hasRichFormatting: true
+  )
+
+  #expect(textView.string == "Same")
+  #expect(textView.hasPasteOptions)
+}
+
+@Test @MainActor func pasteOptionsDismissWhenNativeSelectionMoves() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  #expect(window.makeFirstResponder(textView))
+
+  textView.insertPastedTextForTesting(NSAttributedString(string: "Pasted"))
+  #expect(textView.hasPasteOptions)
+  let pastedEnd = textView.selectedRange()
+
+  textView.moveLeft(nil)
+
+  #expect(textView.selectedRange() != pastedEnd)
+  #expect(!textView.hasPasteOptions)
+}
+
+@MainActor private func pasteOptionsDismissOnWindowAndApplicationFocusNotificationsImpl() async {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  textView.viewDidMoveToWindow()
+  #expect(window.makeFirstResponder(textView))
+
+  textView.insertPastedTextForTesting(NSAttributedString(string: "Window"))
+  #expect(textView.hasPasteOptions)
+  NotificationCenter.default.post(
+    name: NSWindow.didResignKeyNotification,
+    object: window
+  )
+  await Task.yield()
+  #expect(!textView.hasPasteOptions)
+
+  textView.insertPastedTextForTesting(NSAttributedString(string: "Application"))
+  #expect(textView.hasPasteOptions)
+  NotificationCenter.default.post(
+    name: NSApplication.didResignActiveNotification,
+    object: NSApplication.shared
+  )
+  await Task.yield()
+  #expect(!textView.hasPasteOptions)
+}
+
+@Test @MainActor func pasteOptionsDismissOnSameWindowOutsideClick() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 220, height: 160))
+  let background = NSView(frame: NSRect(x: 220, y: 0, width: 100, height: 160))
+  let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  contentView.addSubview(textView)
+  contentView.addSubview(background)
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = contentView
+  window.makeKeyAndOrderFront(nil)
+  defer { window.orderOut(nil) }
+  textView.viewDidMoveToWindow()
+  #expect(window.makeFirstResponder(textView))
+
+  textView.insertPastedTextForTesting(NSAttributedString(string: "Pasted"))
+  #expect(textView.hasPasteOptions)
+
+  let location = background.convert(NSPoint(x: 20, y: 20), to: nil)
+  let mouseDown = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: location,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    )
+  )
+  let mouseUp = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseUp,
+      location: location,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 0
+    )
+  )
+  NSApplication.shared.sendEvent(mouseDown)
+  NSApplication.shared.sendEvent(mouseUp)
+
+  #expect(window.firstResponder === textView)
+  #expect(!textView.hasPasteOptions)
+}
+
+@Test @MainActor func pasteOptionsDismissOnNonactivatingWindowClick() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 220, height: 160))
+  let editorWindow = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 220, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  editorWindow.contentView = textView
+  editorWindow.makeKeyAndOrderFront(nil)
+  defer { editorWindow.orderOut(nil) }
+  textView.viewDidMoveToWindow()
+  #expect(editorWindow.makeFirstResponder(textView))
+  textView.insertPastedTextForTesting(NSAttributedString(string: "Pasted"))
+  #expect(textView.hasPasteOptions)
+
+  let panel = NSPanel(
+    contentRect: NSRect(x: 260, y: 0, width: 120, height: 80),
+    styleMask: [.borderless, .nonactivatingPanel],
+    backing: .buffered,
+    defer: false
+  )
+  panel.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
+  panel.orderFrontRegardless()
+  defer { panel.orderOut(nil) }
+
+  let location = NSPoint(x: textView.bounds.maxX + 20, y: textView.bounds.midY)
+  let panelWindowNumber = panel.windowNumber == editorWindow.windowNumber
+    ? editorWindow.windowNumber + 1
+    : panel.windowNumber
+  let mouseDown = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: location,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: panelWindowNumber,
+      context: nil,
+      eventNumber: 2,
+      clickCount: 1,
+      pressure: 1
+    )
+  )
+  NSApplication.shared.sendEvent(mouseDown)
+
+  #expect(!textView.hasPasteOptions)
+}
+
+@Test @MainActor func attachmentPasteKeepsNativeOptionEnabledOnly() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let attachment = NSTextAttachment()
+  textView.insertPastedTextForTesting(
+    NSAttributedString(attachment: attachment),
+    plainText: "\u{FFFC}",
+    hasRichFormatting: true
+  )
+
+  #expect(textView.hasPasteOptions)
+  #expect(textView.pasteOptionEnabledStates == [true, false, false])
+}
+
+@MainActor private func selectingPasteTextOnlyReplacesOnlyLatestPasteAndUndoRestoresItImpl() async throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  textView.allowsUndo = true
+  #expect(window.makeFirstResponder(textView))
+  textView.string = "Before"
+  textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+  let sourceFont = NSFontManager.shared.convert(
+    NSFont.systemFont(ofSize: 13),
+    toHaveTrait: .italicFontMask
+  )
+  let source = NSAttributedString(
+    string: " Pasted",
+    attributes: [.font: sourceFont, .foregroundColor: NSColor.systemRed]
+  )
+  let changeDelegate = EditorChangeDelegate()
+  textView.delegate = changeDelegate
+  textView.insertPastedTextForTesting(
+    source,
+    plainText: source.string,
+    hasRichFormatting: true
+  )
+  #expect(textView.string == "Before Pasted")
+  #expect(textView.hasPasteOptions)
+  #expect(textView.pasteOptionEnabledStates == [true, true, true])
+  #expect(
+    NSFontManager.shared.traits(
+      of: try #require(textView.textStorage?.attribute(.font, at: 7, effectiveRange: nil) as? NSFont)
+    ).contains(.italicFontMask)
+  )
+  let changesBeforeOption = changeDelegate.changeCount
+
+  await Task.yield()
+  textView.applyPasteOption(.pasteTextOnly)
+  #expect(textView.string == "Before Pasted")
+  #expect(
+    NSFontManager.shared.traits(
+      of: try #require(textView.textStorage?.attribute(.font, at: 7, effectiveRange: nil) as? NSFont)
+    ).contains(.italicFontMask) == false
+  )
+  #expect(changeDelegate.changeCount > changesBeforeOption)
+  #expect(!textView.hasPasteOptions)
+
+  await Task.yield()
+  try #require(textView.undoManager).undo()
+  #expect(textView.string == "Before Pasted")
+  #expect(
+    NSFontManager.shared.traits(
+      of: try #require(textView.textStorage?.attribute(.font, at: 7, effectiveRange: nil) as? NSFont)
+    ).contains(.italicFontMask)
+  )
+}
+
+@Suite(.serialized)
+struct PasteOptionsGlobalFocusTests {
+  @Test @MainActor func pasteOptionsDismissOnWindowAndApplicationFocusNotifications() async {
+    await pasteOptionsDismissOnWindowAndApplicationFocusNotificationsImpl()
+  }
+
+  @Test @MainActor func selectingPasteTextOnlyReplacesOnlyLatestPasteAndUndoRestoresIt() async throws {
+    try await selectingPasteTextOnlyReplacesOnlyLatestPasteAndUndoRestoresItImpl()
+  }
+}
+
 @Test @MainActor func listFormattingPreservesInlineAttributes() {
   let textView = ListAwareTextView(frame: .zero)
   textView.string = "One two"
@@ -25,6 +453,43 @@ import Testing
       effectiveRange: nil
     ) as? Int == NSUnderlineStyle.single.rawValue
   )
+}
+
+@Test @MainActor func deletingEmptyChecklistPrefixRemovesMarkerAndSeparatorAtomically() async throws {
+  let textView = ListAwareTextView(frame: .zero)
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  textView.allowsUndo = true
+  textView.string = "○ x"
+  textView.setSelectedRange(NSRange(location: 3, length: 0))
+
+  textView.deleteBackward(nil)
+
+  #expect(textView.string == "○ ")
+  #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
+  await Task.yield()
+
+  textView.deleteBackward(nil)
+
+  #expect(textView.string == "")
+  #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+
+  try #require(textView.undoManager).undo()
+
+  #expect(textView.string == "○ ")
+
+  textView.string = "    ● \n"
+  textView.setSelectedRange(NSRange(location: 6, length: 0))
+
+  textView.deleteBackward(nil)
+
+  #expect(textView.string == "    \n")
+  #expect(textView.selectedRange() == NSRange(location: 4, length: 0))
 }
 
 @Test @MainActor func appKitLinkPresentationDoesNotWriteLinkAttributes() throws {
@@ -59,7 +524,10 @@ import Testing
     defer: false
   )
   window.contentView = scrollView
-  scrollView.documentView = textView
+  scrollView.documentView = NativeEditorDocumentView(
+    titleField: NSTextField(),
+    textView: textView
+  )
   textView.allowsUndo = true
 
   let undoManager = try #require(textView.undoManager)
@@ -137,6 +605,10 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   #expect(textView.toggleSelectedChecklist())
   #expect(textView.string == "● Task")
   #expect(textView.checklistCompletionOverlayCount == 1)
+  let overlay = try #require(
+    textView.subviews.compactMap { $0 as? ChecklistCompletionOverlay }.first
+  )
+  #expect(abs(CGFloat(overlay.layer?.opacity ?? 0) - 1) < 0.001)
   #expect(
     textView.textStorage?.attribute(
       .strikethroughStyle,
@@ -169,6 +641,24 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   #expect(textView.toggleSelectedChecklist())
   #expect(textView.string == "● Task")
   #expect(textView.checklistCompletionOverlayCount == 0)
+}
+
+@Test @MainActor func emptyChecklistCompletionOverlayUsesEmptyItemOpacity() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.string = "○ "
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  textView.reduceMotion = false
+
+  #expect(textView.toggleSelectedChecklist())
+  let overlay = try #require(
+    textView.subviews.compactMap { $0 as? ChecklistCompletionOverlay }.first
+  )
+  #expect(
+    abs(
+      CGFloat(overlay.layer?.opacity ?? 0)
+        - ChecklistMarkerDrawing.emptyListMarkerOpacity
+    ) < 0.001
+  )
 }
 
 @Test @MainActor func rapidChecklistToggleDoesNotLeaveStaleOverlay() {
@@ -326,17 +816,658 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
 
 @Test @MainActor func checklistHitRectContainsItsRenderedMarker() throws {
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
-  textView.font = .systemFont(ofSize: 16)
+  textView.font = .systemFont(ofSize: 11)
   textView.string = "○ Task"
   textView.layoutManager?.ensureLayout(for: try #require(textView.textContainer))
 
   let markerRange = NSRange(location: 0, length: 1)
   let markerRect = try #require(textView.checklistMarkerRect(for: markerRange))
   let hitRect = try #require(textView.checklistHitRect(for: markerRange))
+  let layoutManager = try #require(textView.layoutManager)
+  let textContainer = try #require(textView.textContainer)
+  let slotGlyphRange = layoutManager.glyphRange(
+    forCharacterRange: NSRange(location: 0, length: 2),
+    actualCharacterRange: nil
+  )
+  let slotRect = layoutManager.boundingRect(
+    forGlyphRange: slotGlyphRange,
+    in: textContainer
+  ).offsetBy(
+    dx: textView.textContainerOrigin.x,
+    dy: textView.textContainerOrigin.y
+  )
+  let contentGlyphRange = layoutManager.glyphRange(
+    forCharacterRange: NSRange(location: 2, length: 1),
+    actualCharacterRange: nil
+  )
+  let contentRect = layoutManager.boundingRect(
+    forGlyphRange: contentGlyphRange,
+    in: textContainer
+  ).offsetBy(
+    dx: textView.textContainerOrigin.x,
+    dy: textView.textContainerOrigin.y
+  )
+  let expectedX = min(
+    slotRect.midX - 8,
+    slotRect.maxX - ChecklistMarkerDrawing.markerDiameter
+      - ChecklistMarkerDrawing.minimumContentGap
+  )
 
-  #expect(hitRect.contains(NSPoint(x: markerRect.midX, y: markerRect.midY)))
+  #expect(markerRect.size == CGSize(width: 16, height: 16))
+  #expect(abs(markerRect.minX - expectedX) < 0.01)
+  if slotRect.width >= ChecklistMarkerDrawing.markerDiameter
+    + 2 * ChecklistMarkerDrawing.minimumContentGap
+  {
+    #expect(abs(markerRect.midX - slotRect.midX) < 0.01)
+  } else {
+    #expect(
+      abs(
+        markerRect.maxX
+          - (slotRect.maxX - ChecklistMarkerDrawing.minimumContentGap)
+      ) < 0.01
+    )
+  }
+  #expect(hitRect.contains(markerRect))
   #expect(hitRect.width > markerRect.width)
   #expect(hitRect.height > markerRect.height)
+  #expect(hitRect.width >= 28)
+  #expect(hitRect.height >= 28)
+  #expect(abs(hitRect.maxX - markerRect.maxX) < 0.01)
+  #expect(markerRect.maxX <= contentRect.minX)
+  #expect(hitRect.maxX <= contentRect.minX)
+}
+
+@Test @MainActor func checklistMarkerLeavesMinimumGapBeforeFirstContentGlyph() throws {
+  for fontSize in [CGFloat(11), CGFloat(14)] {
+    for text in ["○ d", "○ 1"] {
+      let textView = ListAwareTextView(
+        frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+      )
+      textView.textContainerInset = NSSize(width: 16, height: 10)
+      textView.textContainer?.lineFragmentPadding = 0
+      textView.font = .systemFont(ofSize: fontSize)
+      textView.string = text
+
+      let textContainer = try #require(textView.textContainer)
+      let layoutManager = try #require(textView.layoutManager)
+      layoutManager.ensureLayout(for: textContainer)
+
+      let markerRect = try #require(
+        textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+      )
+      let contentGlyphRange = layoutManager.glyphRange(
+        forCharacterRange: NSRange(location: 2, length: 1),
+        actualCharacterRange: nil
+      )
+      let contentRect = layoutManager.boundingRect(
+        forGlyphRange: contentGlyphRange,
+        in: textContainer
+      ).offsetBy(
+        dx: textView.textContainerOrigin.x,
+        dy: textView.textContainerOrigin.y
+      )
+      let gap = contentRect.minX - markerRect.maxX
+
+      #expect(
+        gap >= 4 - 0.001,
+        "font \(fontSize), text \(text), gap \(gap)"
+      )
+    }
+  }
+}
+
+@Test @MainActor func checklistMarkerCentersOnFirstVisibleTextGlyphAcrossFontSizes() throws {
+  for fontSize in [CGFloat(11), CGFloat(14), CGFloat(24)] {
+    let textView = ListAwareTextView(
+      frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+    )
+    textView.textContainerInset = NSSize(width: 16, height: 10)
+    textView.textContainer?.lineFragmentPadding = 0
+    textView.font = .systemFont(ofSize: fontSize)
+    textView.string = "○ Formative 1"
+
+    let textContainer = try #require(textView.textContainer)
+    let layoutManager = try #require(textView.layoutManager)
+    layoutManager.ensureLayout(for: textContainer)
+
+    let markerRect = try #require(
+      textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+    )
+    let contentGlyphRange = layoutManager.glyphRange(
+      forCharacterRange: NSRange(location: 2, length: 1),
+      actualCharacterRange: nil
+    )
+    let contentGlyph = contentGlyphRange.location
+    let contentFont = try #require(
+      textView.textStorage?.attribute(
+        .font,
+        at: 2,
+        effectiveRange: nil
+      ) as? NSFont
+    )
+    let lineFragmentRect = layoutManager.lineFragmentRect(
+      forGlyphAt: contentGlyph,
+      effectiveRange: nil
+    )
+    let baselineY = textView.textContainerOrigin.y
+      + lineFragmentRect.minY
+      + layoutManager.location(forGlyphAt: contentGlyph).y
+    let visibleInkMidY = baselineY
+      - contentFont.boundingRect(
+        forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
+      ).midY
+
+    #expect(
+      abs(markerRect.midY - visibleInkMidY) < 0.01,
+      "font \(fontSize), marker midY \(markerRect.midY), visible ink midY \(visibleInkMidY)"
+    )
+  }
+}
+
+@Test @MainActor func checklistMarkerSkipsLeadingWhitespaceBeforeVisibleTextGlyph() throws {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  textView.textContainerInset = NSSize(width: 16, height: 10)
+  textView.textContainer?.lineFragmentPadding = 0
+  textView.font = .systemFont(ofSize: 14)
+  textView.string = "○   Formative 1"
+
+  let textContainer = try #require(textView.textContainer)
+  let layoutManager = try #require(textView.layoutManager)
+  layoutManager.ensureLayout(for: textContainer)
+
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let contentGlyphRange = layoutManager.glyphRange(
+    forCharacterRange: NSRange(location: 4, length: 1),
+    actualCharacterRange: nil
+  )
+  let contentGlyph = contentGlyphRange.location
+  let contentFont = try #require(
+    textView.textStorage?.attribute(
+      .font,
+      at: 4,
+      effectiveRange: nil
+    ) as? NSFont
+  )
+  let lineFragmentRect = layoutManager.lineFragmentRect(
+    forGlyphAt: contentGlyph,
+    effectiveRange: nil
+  )
+  let baselineY = textView.textContainerOrigin.y
+    + lineFragmentRect.minY
+    + layoutManager.location(forGlyphAt: contentGlyph).y
+  let visibleInkMidY = baselineY
+    - contentFont.boundingRect(
+      forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
+    ).midY
+
+  #expect(
+    abs(markerRect.midY - visibleInkMidY) < 0.01,
+    "marker midY \(markerRect.midY), F ink midY \(visibleInkMidY)"
+  )
+}
+
+@Test @MainActor func allWhitespaceChecklistContentKeepsMarkerSlotFallback() throws {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  textView.textContainerInset = NSSize(width: 16, height: 10)
+  textView.textContainer?.lineFragmentPadding = 0
+  textView.font = .systemFont(ofSize: 14)
+  textView.string = "○   "
+
+  let textContainer = try #require(textView.textContainer)
+  let layoutManager = try #require(textView.layoutManager)
+  layoutManager.ensureLayout(for: textContainer)
+
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let slotGlyphRange = layoutManager.glyphRange(
+    forCharacterRange: NSRange(location: 0, length: 2),
+    actualCharacterRange: nil
+  )
+  let slotRect = layoutManager.boundingRect(
+    forGlyphRange: slotGlyphRange,
+    in: textContainer
+  ).offsetBy(
+    dx: textView.textContainerOrigin.x,
+    dy: textView.textContainerOrigin.y
+  )
+
+  #expect(markerRect == ChecklistMarkerDrawing.markerRect(around: slotRect))
+}
+
+@Test @MainActor func depthZeroChecklistMarkerCacheDisplayKeepsWholeCircleInsideLeftClip() throws {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 160, height: 80))
+  textView.appearance = NSAppearance(named: .aqua)
+  textView.drawsBackground = true
+  textView.backgroundColor = .white
+  textView.textContainerInset = NSSize(width: 16, height: 10)
+  textView.textContainer?.lineFragmentPadding = 0
+  textView.font = .systemFont(ofSize: 11)
+  textView.checklistAccentColor = NSColor(
+    calibratedRed: 0.12,
+    green: 0.42,
+    blue: 0.92,
+    alpha: 1
+  )
+  textView.string = "○ Task"
+  textView.textStorage?.addAttribute(
+    .foregroundColor,
+    value: NSColor.systemRed,
+    range: NSRange(location: 2, length: 4)
+  )
+  textView.refreshChecklistPresentation()
+
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 160, height: 80),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  window.makeKeyAndOrderFront(nil)
+  defer { window.orderOut(nil) }
+  textView.updateTrackingAreas()
+  let hoverLocation = textView.convert(
+    NSPoint(x: markerRect.midX, y: markerRect.midY),
+    to: nil
+  )
+  let hoverEvent = try #require(
+    NSEvent.mouseEvent(
+      with: .mouseMoved,
+      location: hoverLocation,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 0,
+      pressure: 0
+    )
+  )
+  textView.mouseMoved(with: hoverEvent)
+
+  let imageRep = try #require(textView.bitmapImageRepForCachingDisplay(in: textView.bounds))
+  textView.cacheDisplay(in: textView.bounds, to: imageRep)
+
+  let scaleX = CGFloat(imageRep.pixelsWide) / textView.bounds.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / textView.bounds.height
+  let xEnd = min(imageRep.pixelsWide, max(0, Int(ceil(markerRect.maxX * scaleX))))
+  let yStart = max(0, Int(floor(markerRect.minY * scaleY)))
+  let yEnd = min(imageRep.pixelsHigh, max(0, Int(ceil(markerRect.maxY * scaleY))))
+  let inkColumns = (0..<xEnd).filter { x in
+    (yStart..<yEnd).contains { y in
+      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+        return false
+      }
+      let channelRange = max(color.redComponent, color.greenComponent, color.blueComponent)
+        - min(color.redComponent, color.greenComponent, color.blueComponent)
+      return channelRange < 0.08
+        && color.redComponent < 0.95
+    }
+  }
+  let renderedWidth = (inkColumns.last ?? -1) - (inkColumns.first ?? 0) + 1
+  #expect(markerRect.width == ChecklistMarkerDrawing.markerDiameter)
+  #expect(
+    renderedWidth
+      >= Int(ChecklistMarkerDrawing.markerDiameter * scaleX) - 1
+  )
+}
+
+@Test @MainActor func nestedChecklistUsesStableMarkerSizeAndKeepsHitTargetBeforeContent() throws {
+  for fontSize in [CGFloat(11), CGFloat(14)] {
+    let textView = ListAwareTextView(
+      frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+    )
+    textView.font = .systemFont(ofSize: fontSize)
+    textView.string = "    ○ Nested"
+    let container = try #require(textView.textContainer)
+    let layoutManager = try #require(textView.layoutManager)
+    layoutManager.ensureLayout(for: container)
+
+    let markerRange = NSRange(location: 4, length: 1)
+    let markerRect = try #require(textView.checklistMarkerRect(for: markerRange))
+    let hitRect = try #require(textView.checklistHitRect(for: markerRange))
+    let slotGlyphRange = layoutManager.glyphRange(
+      forCharacterRange: NSRange(location: 4, length: 2),
+      actualCharacterRange: nil
+    )
+    let slotRect = layoutManager.boundingRect(
+      forGlyphRange: slotGlyphRange,
+      in: container
+    ).offsetBy(
+      dx: textView.textContainerOrigin.x,
+      dy: textView.textContainerOrigin.y
+    )
+    let contentGlyphRange = layoutManager.glyphRange(
+      forCharacterRange: NSRange(location: 6, length: 1),
+      actualCharacterRange: nil
+    )
+    let contentRect = layoutManager.boundingRect(
+      forGlyphRange: contentGlyphRange,
+      in: container
+    ).offsetBy(
+      dx: textView.textContainerOrigin.x,
+      dy: textView.textContainerOrigin.y
+    )
+    let expectedX = min(
+      slotRect.midX - 8,
+      slotRect.maxX - ChecklistMarkerDrawing.markerDiameter
+        - ChecklistMarkerDrawing.minimumContentGap
+    )
+
+    #expect(markerRect.size == CGSize(width: 16, height: 16))
+    #expect(abs(markerRect.minX - expectedX) < 0.01)
+    if slotRect.width >= ChecklistMarkerDrawing.markerDiameter
+      + 2 * ChecklistMarkerDrawing.minimumContentGap
+    {
+      #expect(abs(markerRect.midX - slotRect.midX) < 0.01)
+    } else {
+      #expect(
+        abs(
+          markerRect.maxX
+            - (slotRect.maxX - ChecklistMarkerDrawing.minimumContentGap)
+        ) < 0.01
+      )
+    }
+    #expect(hitRect.contains(markerRect))
+    #expect(hitRect.width >= 28)
+    #expect(hitRect.height >= 28)
+    #expect(abs(hitRect.maxX - markerRect.maxX) < 0.01)
+    #expect(markerRect.maxX <= contentRect.minX)
+    #expect(hitRect.maxX <= contentRect.minX)
+  }
+}
+
+@Test @MainActor func emptyBulletMarkerUsesRelativeTemporaryOpacity() throws {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  let authoredColor = NSColor(
+    calibratedRed: 0.12,
+    green: 0.42,
+    blue: 0.92,
+    alpha: 0.6
+  )
+  textView.string = "• "
+  let storage = try #require(textView.textStorage)
+  let layoutManager = try #require(textView.layoutManager)
+  storage.addAttribute(
+    .foregroundColor,
+    value: authoredColor,
+    range: NSRange(location: 0, length: 1)
+  )
+
+  textView.refreshChecklistPresentation()
+
+  let temporaryColor = try #require(
+    layoutManager.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: 0,
+      effectiveRange: nil
+    ) as? NSColor
+  )
+  #expect(abs(temporaryColor.alphaComponent - authoredColor.alphaComponent * 0.45) < 0.001)
+  #expect(temporaryColor.alphaComponent < authoredColor.alphaComponent)
+  #expect(
+    (storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+      == authoredColor
+  )
+
+  textView.refreshChecklistPresentation()
+  let repeatedColor = try #require(
+    layoutManager.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: 0,
+      effectiveRange: nil
+    ) as? NSColor
+  )
+  #expect(abs(repeatedColor.alphaComponent - authoredColor.alphaComponent * 0.45) < 0.001)
+
+  textView.clearNoteLinkPresentation()
+  #expect(
+    (storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+      == authoredColor
+  )
+  textView.refreshChecklistPresentation()
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  textView.insertText("x", replacementRange: textView.selectedRange())
+  textView.refreshChecklistPresentation()
+  #expect(textView.string == "• x")
+  #expect(
+    layoutManager.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: 0,
+      effectiveRange: nil
+    ) == nil
+  )
+}
+
+@Test @MainActor func emptyListCommandsPlaceCaretAfterMarkerAndReturnExits() throws {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  textView.allowsUndo = true
+
+  textView.toggleList(.bullet(.disc))
+  #expect(textView.string == "• ")
+  #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
+  try #require(textView.undoManager).undo()
+  #expect(textView.string.isEmpty)
+  try #require(textView.undoManager).redo()
+  #expect(textView.string == "• ")
+  #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
+
+  textView.string = "\n"
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  textView.toggleAutomaticList(.numbers)
+  #expect(textView.string == "1. \n")
+  #expect(textView.selectedRange() == NSRange(location: 3, length: 0))
+
+  textView.string = "○ "
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  #expect(textView.accessibilityCustomActions()?.isEmpty == false)
+  #expect(textView.toggleSelectedChecklist())
+  #expect(textView.string == "● ")
+
+  textView.string = "○ "
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  let markerRect = try #require(
+    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
+  )
+  let clickPoint = NSPoint(x: markerRect.midX, y: markerRect.midY)
+  let windowPoint = textView.convert(clickPoint, to: nil)
+  let event = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: windowPoint,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    )
+  )
+  textView.mouseDown(with: event)
+  #expect(textView.string == "● ")
+
+  for marker in ["• ", "1. ", "○ "] {
+    textView.string = marker
+    textView.setSelectedRange(NSRange(location: marker.utf16.count, length: 0))
+    textView.insertNewline(nil)
+    #expect(textView.string.isEmpty)
+  }
+}
+
+@Test @MainActor func newlineTerminatedEmptyListRemovalLeavesCaretAtParagraphStart() {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+
+  func toggleTwice(
+    marker: String,
+    toggle: (ListAwareTextView) -> Void
+  ) {
+    textView.string = "\n"
+    textView.setSelectedRange(NSRange(location: 0, length: 0))
+    toggle(textView)
+    #expect(textView.string == marker + "\n")
+    #expect(textView.selectedRange() == NSRange(location: marker.utf16.count, length: 0))
+
+    toggle(textView)
+    #expect(textView.string == "\n")
+    #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+  }
+
+  toggleTwice(marker: "• ") { $0.toggleList(.bullet(.disc)) }
+  toggleTwice(marker: "○ ") { $0.toggleList(.checklist) }
+  toggleTwice(marker: "1. ") { $0.toggleAutomaticList(.numbers) }
+}
+
+@Test @MainActor func multilineEmptyListRemovalKeepsReplacementSelection() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.string = "• \n• "
+  textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
+
+  textView.toggleList(.bullet(.disc))
+
+  #expect(textView.string == "\n")
+  #expect(textView.selectedRange() == NSRange(location: 0, length: 1))
+}
+
+@Test @MainActor func completedChecklistTextUsesReversibleDisplayOnlyRecession() {
+  let textView = ListAwareTextView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
+  )
+  let authoredColor = NSColor(calibratedRed: 0.12, green: 0.42, blue: 0.92, alpha: 1)
+  textView.string = "● Task"
+  textView.textStorage?.addAttribute(
+    .foregroundColor,
+    value: authoredColor,
+    range: NSRange(location: 2, length: 4)
+  )
+  textView.textStorage?.addAttribute(
+    .strikethroughStyle,
+    value: NSUnderlineStyle.single.rawValue,
+    range: NSRange(location: 2, length: 4)
+  )
+  textView.refreshChecklistPresentation()
+
+  NSImage(size: textView.bounds.size).lockFocus()
+  textView.draw(textView.bounds)
+  NSImage(size: textView.bounds.size).unlockFocus()
+
+  let foreground = textView.layoutManager?.temporaryAttribute(
+    .foregroundColor,
+    atCharacterIndex: 2,
+    effectiveRange: nil
+  ) as? NSColor
+  let strikethrough = textView.layoutManager?.temporaryAttribute(
+    .strikethroughColor,
+    atCharacterIndex: 2,
+    effectiveRange: nil
+  ) as? NSColor
+
+  #expect(foreground != nil)
+  #expect((foreground?.alphaComponent ?? 1) < authoredColor.alphaComponent)
+  #expect(strikethrough?.isEqual(foreground) == true)
+  let storedColor = textView.textStorage?.attribute(
+    .foregroundColor,
+    at: 2,
+    effectiveRange: nil
+  ) as? NSColor
+  #expect(storedColor?.isEqual(authoredColor) == true)
+}
+
+@Test @MainActor func completedChecklistRecessionComposesWithNoteLinkPresentation() throws {
+  let target = UUID()
+  let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
+  let text = "● Outside \(token) tail"
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 160))
+  textView.string = text
+  let storage = try #require(textView.textStorage)
+  let layoutManager = try #require(textView.layoutManager)
+  let link = try #require(NoteLinkParser.links(in: text).first)
+  let contentRange = NSRange(location: 2, length: text.utf16.count - 2)
+  let authoredColor = NSColor(calibratedRed: 0.12, green: 0.42, blue: 0.92, alpha: 1)
+  storage.addAttribute(
+    .foregroundColor,
+    value: authoredColor,
+    range: NSRange(location: 2, length: 7)
+  )
+  storage.addAttribute(
+    .strikethroughStyle,
+    value: NSUnderlineStyle.single.rawValue,
+    range: contentRange
+  )
+
+  let accent = try #require(NSColor(hex: "#FFD600"))
+  textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
+  textView.refreshChecklistPresentation()
+  textView.refreshChecklistPresentation()
+
+  func assertLayers() {
+    #expect(
+      sRGB(
+        layoutManager.temporaryAttribute(
+          .foregroundColor,
+          atCharacterIndex: link.range.location,
+          effectiveRange: nil
+        ) as? NSColor
+      ) == sRGB(accent)
+    )
+    #expect(
+      layoutManager.temporaryAttribute(
+        .underlineStyle,
+        atCharacterIndex: link.range.location,
+        effectiveRange: nil
+      ) as? Int == NSUnderlineStyle.single.rawValue
+    )
+
+    let expectedRecession = authoredColor.withAlphaComponent(0.72)
+    let foreground = layoutManager.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: 2,
+      effectiveRange: nil
+    ) as? NSColor
+    let strikethrough = layoutManager.temporaryAttribute(
+      .strikethroughColor,
+      atCharacterIndex: 2,
+      effectiveRange: nil
+    ) as? NSColor
+    #expect(sRGB(foreground) == sRGB(expectedRecession))
+    #expect(sRGB(strikethrough) == sRGB(expectedRecession))
+    #expect(
+      storage.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor
+        == authoredColor
+    )
+    #expect(
+      storage.attribute(.strikethroughStyle, at: 2, effectiveRange: nil) as? Int
+        == NSUnderlineStyle.single.rawValue
+    )
+  }
+
+  assertLayers()
+  textView.clearNoteLinkPresentation()
+  textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
+  assertLayers()
 }
 
 @Test @MainActor func clickingChecklistControlUsesSharedHitRect() throws {
@@ -390,6 +1521,21 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
       effectiveRange: nil
     ) as? Int == NSUnderlineStyle.single.rawValue
   )
+}
+
+@Test @MainActor func checklistTrackingAreaReplacesWithoutDuplicates() {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.updateTrackingAreas()
+  textView.updateTrackingAreas()
+
+  let checklistAreas = textView.trackingAreas.filter {
+    ($0.userInfo?["fleckChecklistMarker"] as? Bool) == true
+      && $0.owner === textView
+      && $0.options.contains(.inVisibleRect)
+      && $0.options.contains(.mouseMoved)
+      && $0.options.contains(.mouseEnteredAndExited)
+  }
+  #expect(checklistAreas.count == 1)
 }
 
 @Test @MainActor func completedChecklistRoundTripsWithoutRenderingArtifacts() {
@@ -969,6 +2115,88 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
   #expect(!source.contains("Font Size Presets"))
 }
 
+@Test func highlighterMarkerShapeUsesUprightBodyAndDistinctLowerChiselInk() throws {
+  let rect = CGRect(x: 0, y: 0, width: 20, height: 18)
+  let bodyPath = HighlighterMarkerShape().path(in: rect)
+  let inkPath = HighlighterMarkerNibShape().path(in: rect)
+  var inkPoints: [CGPoint] = []
+  inkPath.forEach { element in
+    switch element {
+    case .move(to: let point), .line(to: let point):
+      inkPoints.append(point)
+    case .quadCurve, .curve, .closeSubpath:
+      break
+    @unknown default:
+      break
+    }
+  }
+  let flatChiselEdge = zip(inkPoints, inkPoints.dropFirst()).first { first, second in
+    abs(first.y - second.y) < 0.01 && abs(first.x - second.x) >= rect.width * 0.25
+  }
+
+  #expect(bodyPath.boundingRect.width >= rect.width * 0.55)
+  #expect(bodyPath.boundingRect.minY < inkPath.boundingRect.minY)
+  #expect(inkPath.boundingRect.maxY > bodyPath.boundingRect.maxY)
+  #expect(inkPath.boundingRect.width <= bodyPath.boundingRect.width * 0.7)
+  #expect(inkPath.contains(CGPoint(x: rect.width * 0.5, y: rect.height * 0.75)))
+  #expect(flatChiselEdge != nil)
+  #expect(!(try notesPanelSource()).contains(".rotationEffect(.degrees(-32))"))
+}
+
+@Test @MainActor func highlighterMarkerIconUsesUniformHighlightAndYellowFallback() throws {
+  let selectedColor = try #require(NSColor(hex: "#4D8DFF"))
+  let selectedIcon = HighlighterMarkerIcon(
+    backgroundColor: selectedColor,
+    isMixed: false
+  )
+  let noColorIcon = HighlighterMarkerIcon(
+    backgroundColor: nil,
+    isMixed: false
+  )
+  let mixedColorIcon = HighlighterMarkerIcon(
+    backgroundColor: selectedColor,
+    isMixed: true
+  )
+
+  #expect(FleckColorHex.hex(from: selectedIcon.inkColor) == "#4D8DFF")
+  #expect(FleckColorHex.hex(from: noColorIcon.inkColor) == "#FFD600")
+  #expect(FleckColorHex.hex(from: mixedColorIcon.inkColor) == "#FFD600")
+
+  let source = try notesPanelSource()
+
+  #expect(source.contains("backgroundColor: commands.currentBackgroundColor"))
+  #expect(source.contains("isMixed: commands.isBackgroundColorMixed"))
+  #expect(!source.contains("HighlighterMarkerIcon()"))
+}
+
+@Test func titleFontActionRoutesOnlyToFocusedMutation() {
+  var titleFamily: String?
+  var bodyFamily: String?
+
+  routeFontFamilyAction(
+    family: "Menlo",
+    isTitleFocused: true,
+    titleMutation: { titleFamily = $0 },
+    bodyMutation: { bodyFamily = $0 }
+  )
+
+  #expect(titleFamily == "Menlo")
+  #expect(bodyFamily == nil)
+
+  titleFamily = nil
+  bodyFamily = nil
+
+  routeFontFamilyAction(
+    family: "Avenir",
+    isTitleFocused: false,
+    titleMutation: { titleFamily = $0 },
+    bodyMutation: { bodyFamily = $0 }
+  )
+
+  #expect(titleFamily == nil)
+  #expect(bodyFamily == "Avenir")
+}
+
 @Test func formattingBarUsesFleckPaletteForForegroundAndHighlight() throws {
   let source = try notesPanelSource()
 
@@ -1102,7 +2330,9 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
 @Test func formattingBarKeepsOneReachableCommandSurfaceAtSupportedWidths() throws {
   let source = try notesPanelSource()
-  let formattingBar = try #require(source.components(separatedBy: "private struct FormattingBar").last)
+  let formattingBar = try #require(
+    source.components(separatedBy: "private struct FormattingBar: View").last
+  )
 
   #expect(formattingBar.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").count == 2)
   #expect(formattingBar.contains("accessibilityLabel(\"Editor toolbar\")"))
@@ -1118,7 +2348,15 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(source.contains("showFormattingBar.toggle()"))
   #expect(source.contains("if appState.preferences.showFormattingBar"))
   #expect(source.contains("\"chevron.up\""))
-  #expect(source.contains("\"chevron.down\""))
+  #expect(source.contains(".rotationEffect("))
+  #expect(
+    source.contains(
+      ".degrees(appState.preferences.showFormattingBar ? 0 : 180)"
+    )
+  )
+  #expect(source.contains("if reduceMotion"))
+  #expect(source.contains("withAnimation(motion.quick)"))
+  #expect(source.contains(".move(edge: .top).combined(with: .opacity)"))
 
   let editorCommands = try #require(source.range(of: "@StateObject private var editorCommands = EditorCommands()"))
   let formattingBar = try #require(source.range(of: "if appState.preferences.showFormattingBar"))
@@ -1171,6 +2409,248 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(source.contains("if activateNoteAndScope(noteID)"))
   #expect(source.contains("appState.setSelectedTabColor(hex)"))
   #expect(source.contains("guard let note = visibleSelectedNote else { return }"))
+}
+
+@Test func folderCreationPolishUsesSmoothMotionAndFleckPills() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let bodyStart = try #require(navigator.range(of: "var body: some View"))
+  let rootDefinition = try #require(navigator.range(of: "private var rootRow"))
+  let body = String(navigator[bodyStart.upperBound..<rootDefinition.lowerBound])
+  let editor = navigator
+    .components(separatedBy: "@ViewBuilder\n    private func folderEditor")
+    .dropFirst()
+    .first ?? ""
+  let styleTail = navigator
+    .components(separatedBy: "private struct FolderActionButtonStyle: ButtonStyle")
+    .dropFirst()
+    .first ?? ""
+  let style = styleTail
+    .components(separatedBy: "@ViewBuilder\n    private func folderEditor")
+    .first ?? styleTail
+  let normalizedNavigator = navigator
+    .split(whereSeparator: \.isWhitespace)
+    .joined(separator: " ")
+  let normalizedEditor = editor
+    .split(whereSeparator: \.isWhitespace)
+    .joined(separator: " ")
+
+  #expect(navigator.contains("@Environment(\\.accessibilityReduceMotion) private var reduceMotion"))
+  #expect(
+    normalizedNavigator.contains(
+      "private var folderMorphAnimation: Animation? { reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0) }"
+    )
+  )
+  #expect(body.contains(".animation(folderMorphAnimation, value: isCreatingFolder)"))
+  #expect(!body.contains(".animation(motion.spatial, value: isCreatingFolder)"))
+
+  #expect(editor.contains("let accent = Color(hex: appState.preferences.accentHex) ?? .accentColor"))
+  #expect(
+    normalizedEditor.contains(
+      ".buttonStyle(FolderActionButtonStyle(role: .save, accent: accent, motion: motion))"
+    )
+  )
+  #expect(
+    normalizedEditor.contains(
+      ".buttonStyle(FolderActionButtonStyle(role: .cancel, accent: accent, motion: motion))"
+    )
+  )
+  #expect(editor.contains("Button(\"Save\")"))
+  #expect(editor.contains("Button(\"Cancel\", role: .cancel)"))
+  #expect(editor.contains("Save folder name"))
+  #expect(editor.contains("Cancel folder name"))
+
+  #expect(style.contains("enum Role: Equatable"))
+  #expect(style.contains("let role: Role"))
+  #expect(style.contains("let accent: Color"))
+  #expect(style.contains("let motion: AppMotion"))
+  #expect(style.contains("@Environment(\\.isEnabled) private var isEnabled"))
+  #expect(style.contains(".font(.caption.weight(isSave ? .semibold : .medium))"))
+  #expect(style.contains(".padding(.horizontal, 8)"))
+  #expect(style.contains(".frame(height: 22)"))
+  #expect(
+    style.contains("RoundedRectangle(cornerRadius: 6, style: .continuous)")
+  )
+  #expect(style.contains("accent.opacity(configuration.isPressed ? 0.24 : 0.16)"))
+  #expect(
+    style.contains(
+      "Color.primary.opacity(configuration.isPressed ? 0.10 : 0.06)"
+    )
+  )
+  #expect(
+    style.contains(
+      ".scaleEffect(isEnabled && configuration.isPressed ? motion.pressScale : 1)"
+    )
+  )
+  #expect(style.contains(".opacity(isEnabled ? 1 : 0.48)"))
+  #expect(style.contains(".animation(motion.quick, value: configuration.isPressed)"))
+  #expect(editor.contains("folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"))
+  #expect(!style.contains("Image(systemName:"))
+  #expect(!style.lowercased().contains("material"))
+  #expect(!style.lowercased().contains("gradient"))
+  #expect(!style.lowercased().contains("shadow"))
+  #expect(!style.lowercased().contains("outline"))
+  #expect(!style.lowercased().contains("stroke"))
+}
+
+@Test func folderNoteDropTargetsDoNotNavigateOrSpringOpen() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+
+  #expect(navigator.contains("NoteDropTarget"))
+  #expect(navigator.contains("private struct NoteDropDelegate: DropDelegate"))
+  #expect(navigator.contains("delegate: noteDropDelegate("))
+  #expect(navigator.contains("providerSource == expectedSource"))
+  #expect(navigator.contains("draggedSource == expectedSource"))
+  #expect(navigator.contains("Color.accentColor.opacity"))
+  #expect(navigator.contains(".contentShape"))
+  #expect(navigator.contains("accessibilityAction"))
+  #expect(navigator.contains("noteDropTarget = nil"))
+  #expect(!navigator.contains("spring"))
+  #expect(!navigator.contains("onSelect(targetFolderID)"))
+}
+
+@Test func compactUnfiledKeepsSelectionDropAndAccessibilityContracts() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+
+  #expect(navigator.contains("isUnfiledCompact"))
+  #expect(navigator.contains("updatePreferences"))
+  #expect(navigator.contains("isUnfiledHovered"))
+  #expect(navigator.contains("focusedRow == .unfiled"))
+  #expect(navigator.contains(".accessibilityLabel(\"Unfiled\")"))
+  #expect(navigator.contains(".accessibilityAction"))
+  #expect(navigator.contains("FolderDragPayload.noteType"))
+  #expect(navigator.contains("count:"))
+}
+
+@Test func compactUnfiledDisclosureShowsExpandedAtRestAndOnInteraction() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let normalizedNavigator = navigator
+    .split(whereSeparator: \.isWhitespace)
+    .joined(separator: " ")
+
+  #expect(
+    normalizedNavigator.contains(
+      "private var showsUnfiledDisclosure: Bool { !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled }"
+    )
+  )
+}
+
+@Test func compactUnfiledRemovesOnlyItsAccidentalEditorLayoutModifiers() throws {
+  let source = try notesPanelSource()
+  let editor = try #require(
+    source.components(separatedBy: "private var editor: some View").last
+  )
+
+  #expect(!editor.contains(".frame(minHeight: 48)"))
+  #expect(source.contains(".frame(minHeight: 80)"))
+  #expect(source.components(separatedBy: ".layoutPriority(1)").count - 1 == 1)
+}
+
+@Test func compactUnfiledDoesNotChangeNamedFolderOrTrashRowLabels() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+
+  #expect(navigator.contains("name: \"Trash\""))
+  #expect(navigator.contains("name: \"Unfiled\""))
+  #expect(navigator.contains("ForEach(appState.workspace.folders"))
+  #expect(!navigator.contains("All Notes"))
+  #expect(!navigator.contains("Inbox"))
+}
+
+@Test func compactUnfiledUsesIntrinsicRootRowWidth() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let rootRow = try #require(
+    navigator.components(separatedBy: "private var rootRow").last?
+      .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
+  )
+  let rowLabel = try #require(
+    navigator.components(separatedBy: "private func rowLabel").last?
+      .components(separatedBy: "private func noteDropDelegate").first
+  )
+
+  #expect(rootRow.contains(".fixedSize(horizontal: true, vertical: false)"))
+  #expect(!rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
+  #expect(!rowLabel.contains(".fixedSize(horizontal:"))
+}
+
+@Test func compactTrashAloneUsesIntrinsicWidthAndLeavesFolderStripFlexible() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let bodyStart = try #require(navigator.range(of: "var body: some View"))
+  let rootDefinition = try #require(navigator.range(of: "private var rootRow"))
+  let body = String(navigator[bodyStart.upperBound..<rootDefinition.lowerBound])
+  let folderScroll = try #require(
+    body.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").last?
+      .components(separatedBy: "beginNewFolder()").first
+  )
+  let trashBlock = try #require(
+    body.components(separatedBy: "Divider()").last?
+      .components(separatedBy: ".accessibilityValue(").first
+  )
+  let rootRow = try #require(
+    navigator.components(separatedBy: "private var rootRow").last?
+      .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
+  )
+  let folderRow = try #require(
+    navigator.components(separatedBy: "private func folderRow").last?
+      .components(separatedBy: "private struct FolderActionButtonStyle").first
+  )
+  let rowLabel = try #require(
+    navigator.components(separatedBy: "private func rowLabel").last?
+      .components(separatedBy: "private func noteDropDelegate").first
+  )
+
+  #expect(folderScroll.contains(".frame(maxWidth: .infinity)"))
+  #expect(trashBlock.contains("onOpenTrash()"))
+  #expect(trashBlock.contains("name: \"Trash\""))
+  #expect(trashBlock.contains(".fixedSize(horizontal: true, vertical: false)"))
+  #expect(
+    body.components(separatedBy: ".fixedSize(horizontal: true, vertical: false)").count
+      - 1 == 1
+  )
+  #expect(rootRow.contains(".fixedSize(horizontal: true, vertical: false)"))
+  #expect(!rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
+  #expect(!folderRow.contains(".fixedSize(horizontal: true, vertical: false)"))
+  #expect(!rowLabel.contains(".fixedSize(horizontal: true, vertical: false)"))
+}
+
+@Test func compactUnfiledDisclosureUsesForgivingRectangularHitTarget() throws {
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  let rootRow = try #require(
+    navigator.components(separatedBy: "private var rootRow").last?
+      .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
+  )
+  let disclosure = try #require(
+    rootRow.components(separatedBy: "if showsUnfiledDisclosure").last?
+      .components(separatedBy: ".onHover").first
+  )
+
+  #expect(disclosure.contains(".frame(width: 28, height: 28)"))
+  #expect(disclosure.contains(".contentShape(Rectangle())"))
+  #expect(disclosure.contains(".buttonStyle(.plain)"))
+  #expect(disclosure.contains("Expand Unfiled"))
+  #expect(disclosure.contains("Collapse Unfiled"))
 }
 
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
@@ -1242,6 +2722,518 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(actualRTF == expectedRTF)
   #expect(commands.isBold)
   #expect(textView.undoManager?.canUndo == true)
+}
+
+@Test @MainActor func hostedNotesPanelTitleScrollsWithBody() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(
+    title: "Scrollable title",
+    body: (0..<80).map { "Body line \($0) keeps the document taller than the viewport." }
+      .joined(separator: "\n"),
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+  let bodyTextView = try #require(hostedPanelEditor(in: host))
+  let bodyScrollView = try #require(hostedPanelBodyScrollView(in: host))
+  let documentView = try #require(bodyScrollView.documentView)
+  let titleScrollView = hostedVerticalScrollView(containing: titleField)
+
+  #expect(titleField.isDescendant(of: documentView))
+
+  let initialBounds = bodyScrollView.contentView.bounds
+  let initialVisibleDocumentRect = documentView.convert(
+    initialBounds,
+    from: bodyScrollView.contentView
+  )
+  let initialTitleFrame = documentView.convert(titleField.bounds, from: titleField)
+  #expect(titleScrollView === bodyScrollView)
+  #expect(documentView.frame.height > initialBounds.height)
+  #expect(initialVisibleDocumentRect.contains(initialTitleFrame))
+
+  let maximumOriginY = max(
+    documentView.frame.minY,
+    documentView.frame.maxY - initialBounds.height
+  )
+  bodyScrollView.contentView.scroll(
+    to: NSPoint(x: initialBounds.origin.x, y: maximumOriginY)
+  )
+  bodyScrollView.reflectScrolledClipView(bodyScrollView.contentView)
+  forceHostedViewUpdate(host)
+
+  let scrolledBounds = bodyScrollView.contentView.bounds
+  let scrolledVisibleDocumentRect = documentView.convert(
+    scrolledBounds,
+    from: bodyScrollView.contentView
+  )
+  #expect(scrolledBounds.origin.y > initialBounds.origin.y)
+  #expect(!scrolledVisibleDocumentRect.intersects(initialTitleFrame))
+
+  window.setContentSize(NSSize(width: 640, height: 360))
+  host.setFrameSize(window.contentView?.bounds.size ?? NSSize(width: 640, height: 360))
+  await settleHostedView(host)
+
+  let relaidBounds = bodyScrollView.contentView.bounds
+  let relaidVisibleDocumentRect = documentView.convert(
+    relaidBounds,
+    from: bodyScrollView.contentView
+  )
+  let relaidTitleFrame = documentView.convert(titleField.bounds, from: titleField)
+  #expect(abs(relaidBounds.origin.y - scrolledBounds.origin.y) < 0.01)
+  #expect(relaidBounds.origin.y > 0)
+  #expect(!relaidVisibleDocumentRect.intersects(relaidTitleFrame))
+  #expect(bodyTextView.enclosingScrollView === bodyScrollView)
+}
+
+@Test @MainActor func hostedNotesPanelUsesSlimOverlayScrollIndicator() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(
+    title: "Slim indicator",
+    body: (0..<80).map { "Body line \($0) keeps the document scrollable." }
+      .joined(separator: "\n"),
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (_, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let scrollView = try #require(hostedPanelBodyScrollView(in: host))
+  let verticalScroller = try #require(scrollView.verticalScroller)
+
+  #expect(scrollView.hasVerticalScroller)
+  #expect(scrollView.autohidesScrollers)
+  #expect(scrollView.scrollerStyle == .overlay)
+  #expect(verticalScroller.controlSize == .mini)
+  #expect(scrollView.contentView.frame.width >= scrollView.bounds.width - 1)
+}
+
+@Test @MainActor func hostedNotesPanelTitleUsesSemiboldCustomFont() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(
+    title: "Semibold title",
+    body: "Body",
+    richTextRTF: try hostedPanelRTF(text: "Body"),
+    folderID: nil,
+    titleFontFamily: "Avenir Next"
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences { $0.fontFamily = "Menlo" }
+  let commands = EditorCommands()
+  let (_, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+  let font = try #require(titleField.font)
+
+  #expect(font.familyName == "Avenir Next")
+  #expect(font.fontName == "AvenirNext-DemiBold")
+  #expect(font.pointSize == 20)
+  #expect(
+    EditorTypography.titleNSFont(family: ".AppleSystemUIFont").isEqual(
+      NSFont.systemFont(ofSize: 20, weight: .semibold)
+    )
+  )
+}
+
+@Test @MainActor func hostedNotesPanelTitleBodyGeometryRemainsStableAcrossFocus() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(
+    title: "Geometry title",
+    body: "First body line\nSecond body line",
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer { window.orderOut(nil) }
+  await settleHostedView(host)
+
+  let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+  let bodyTextView = try #require(hostedPanelEditor(in: host))
+  let documentView = try #require(bodyTextView.enclosingScrollView?.documentView)
+  let layoutManager = try #require(bodyTextView.layoutManager)
+  let textContainer = try #require(bodyTextView.textContainer)
+
+  func measure() throws -> HostedTitleBodyGeometry {
+    layoutManager.ensureLayout(for: textContainer)
+    var firstLineGlyphRange = NSRange(location: 0, length: 0)
+    _ = layoutManager.lineFragmentRect(
+      forGlyphAt: layoutManager.glyphIndexForCharacter(at: 0),
+      effectiveRange: &firstLineGlyphRange
+    )
+    let firstBodyLineRectInTextView = layoutManager.boundingRect(
+      forGlyphRange: firstLineGlyphRange,
+      in: textContainer
+    ).offsetBy(
+      dx: bodyTextView.textContainerOrigin.x,
+      dy: bodyTextView.textContainerOrigin.y
+    )
+    let firstBodyLineRect = documentView.convert(
+      firstBodyLineRectInTextView,
+      from: bodyTextView
+    )
+    let titleFrame = documentView.convert(titleField.bounds, from: titleField)
+    let titleCell = try #require(titleField.cell)
+    let cellTitleRect = titleCell.titleRect(forBounds: titleField.bounds)
+    let titleRenderRect: CGRect
+    if let fieldEditor = titleField.currentEditor() as? NSTextView,
+      let fieldEditorLayoutManager = fieldEditor.layoutManager,
+      let fieldEditorTextContainer = fieldEditor.textContainer,
+      fieldEditor.textStorage?.length ?? 0 > 0
+    {
+      fieldEditorLayoutManager.ensureLayout(for: fieldEditorTextContainer)
+      var titleLineGlyphRange = NSRange(location: 0, length: 0)
+      _ = fieldEditorLayoutManager.lineFragmentRect(
+        forGlyphAt: fieldEditorLayoutManager.glyphIndexForCharacter(at: 0),
+        effectiveRange: &titleLineGlyphRange
+      )
+      let titleGlyphRectInFieldEditor = fieldEditorLayoutManager.boundingRect(
+        forGlyphRange: titleLineGlyphRange,
+        in: fieldEditorTextContainer
+      ).offsetBy(
+        dx: fieldEditor.textContainerOrigin.x,
+        dy: fieldEditor.textContainerOrigin.y
+      )
+      titleRenderRect = documentView.convert(
+        titleGlyphRectInFieldEditor,
+        from: fieldEditor
+      )
+    } else {
+      titleRenderRect = documentView.convert(cellTitleRect, from: titleField)
+    }
+    let geometry = HostedTitleBodyGeometry(
+      titleFrame: titleFrame,
+      titleRenderRect: titleRenderRect,
+      firstBodyLineRect: firstBodyLineRect
+    )
+    return geometry
+  }
+
+  let initial = try measure()
+  #expect(window.makeFirstResponder(titleField))
+  await settleHostedView(host)
+  let titleFocused = try measure()
+  #expect(window.makeFirstResponder(bodyTextView))
+  await settleHostedView(host)
+  let bodyFocused = try measure()
+  #expect(window.makeFirstResponder(titleField))
+  await settleHostedView(host)
+  let titleFocusedAgain = try measure()
+
+  for geometry in [initial, titleFocused, bodyFocused, titleFocusedAgain] {
+    #expect(
+      geometry.renderedGap <= 8,
+      "rendered title/body gap \(geometry.renderedGap) pt exceeds 8 pt"
+    )
+  }
+  for geometry in [titleFocused, bodyFocused, titleFocusedAgain] {
+    #expect(
+      abs(geometry.renderedTitleMinY - initial.renderedTitleMinY) < 0.01,
+      "rendered title minY shifted from \(initial.renderedTitleMinY) to \(geometry.renderedTitleMinY)"
+    )
+    #expect(
+      abs(geometry.titleFrame.minY - initial.titleFrame.minY) < 0.01,
+      "title frame minY shifted from \(initial.titleFrame.minY) to \(geometry.titleFrame.minY)"
+    )
+    #expect(
+      abs(geometry.titleFrame.height - initial.titleFrame.height) < 0.01,
+      "title frame height shifted from \(initial.titleFrame.height) to \(geometry.titleFrame.height)"
+    )
+    #expect(
+      abs(geometry.renderedGap - initial.renderedGap) < 0.01,
+      "rendered gap shifted from \(initial.renderedGap) to \(geometry.renderedGap)"
+    )
+  }
+}
+
+@Test @MainActor func hostedNotesPanelTitleEditingUsesRealFieldEditor() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let title = "Original title"
+  let text = "Body stays exactly the same"
+  let note = Note(
+    title: title,
+    body: text,
+    richTextRTF: try hostedPanelRTF(text: text),
+    folderID: nil
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  await settleHostedView(host)
+
+  let bodyEditor = try #require(hostedPanelEditor(in: host))
+  let titleField = try #require(hostedPanelTitleField(with: title, in: host))
+  let selectedNoteID = try #require(state.workspace.selectedNoteID)
+  let originalNote = try #require(
+    state.workspace.notes.first(where: { $0.id == selectedNoteID })
+  )
+  let originalBody = originalNote.body
+  let originalRichTextRTF = originalNote.richTextRTF
+  let newTitle = "Edited through AppKit"
+
+  #expect(commands.textView === bodyEditor)
+  #expect(window.makeFirstResponder(titleField))
+  let fieldEditor = try #require(window.fieldEditor(false, for: titleField) as? NSTextView)
+  #expect(window.firstResponder === fieldEditor)
+  #expect(fieldEditor !== titleField)
+
+  fieldEditor.selectAll(nil)
+  fieldEditor.insertText(newTitle, replacementRange: fieldEditor.selectedRange())
+  await settleHostedView(host)
+
+  let editedNote = try #require(
+    state.workspace.notes.first(where: { $0.id == selectedNoteID })
+  )
+  #expect(editedNote.title == newTitle)
+  #expect(editedNote.body == originalBody)
+  #expect(editedNote.richTextRTF == originalRichTextRTF)
+  #expect(state.workspace.selectedNoteID == selectedNoteID)
+  #expect(commands.textView === bodyEditor)
+}
+
+@Test @MainActor func hostedCompactUnfiledKeepsNamedFolderPillInsideNavigator() async throws {
+  let unfiledRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  let namedRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer {
+    try? FileManager.default.removeItem(at: unfiledRoot)
+    try? FileManager.default.removeItem(at: namedRoot)
+  }
+  let folder = try Folder(id: UUID(), name: "SoftwareDev")
+  let unfiledNote = Note(title: "Selected Unfiled", body: "Body")
+  let namedNote = Note(
+    title: "Selected folder render",
+    body: "Body",
+    folderID: folder.id
+  )
+  let unfiledWorkspace = Workspace(
+    notes: [unfiledNote, namedNote],
+    selectedNoteID: unfiledNote.id,
+    folders: [folder]
+  )
+  var namedWorkspace = unfiledWorkspace
+  namedWorkspace.selectedNoteID = namedNote.id
+  let accentHex = "#00FF00"
+  let unfiledPill = try await hostedFolderSelectionGeometry(
+    root: unfiledRoot,
+    workspace: unfiledWorkspace,
+    accentHex: accentHex
+  )
+  let namedPill = try await hostedFolderSelectionGeometry(
+    root: namedRoot,
+    workspace: namedWorkspace,
+    accentHex: accentHex
+  )
+
+  let navigatorBand = CGRect(x: 0, y: 42, width: 640, height: 40)
+  let windowBounds = CGRect(x: 0, y: 0, width: 640, height: 430)
+  for pill in [unfiledPill, namedPill] {
+    #expect(navigatorBand.contains(pill.bounds))
+    #expect(windowBounds.contains(pill.bounds))
+    #expect(pill.bounds.width >= 24)
+    #expect(pill.bounds.height >= 24)
+    #expect(pill.bounds.height <= 33)
+    #expect(pill.pixelCount >= 32)
+    #expect(pill.bounds.minX >= 4)
+    #expect(pill.bounds.maxX <= 636)
+  }
+
+  #expect(abs(namedPill.bounds.minY - unfiledPill.bounds.minY) <= 2)
+  #expect(abs(namedPill.bounds.height - unfiledPill.bounds.height) <= 5)
+  #expect(namedPill.bounds.width > unfiledPill.bounds.width)
+
+  let focusDestination = FolderNavigatorFocus.nextIndex(
+    currentIndex: 0,
+    direction: .down,
+    count: 2
+  )
+  #expect(focusDestination == 1)
+  #expect(unfiledWorkspace.selectedNoteID == unfiledNote.id)
+
+  let source = try notesPanelSource()
+  let navigator = try #require(
+    source.components(separatedBy: "private struct FolderNavigator").last
+  )
+  #expect(navigator.contains(".focused($focusedRow, equals: .unfiled)"))
+  #expect(navigator.contains(".focused($focusedRow, equals: .folder(folder.id))"))
+  #expect(navigator.contains(".onMoveCommand { direction in"))
+  #expect(navigator.contains("moveFocus(direction)"))
+  #expect(navigator.contains("isSelected: activeFolderID == nil"))
+  #expect(navigator.contains("isSelected: activeFolderID == folder.id"))
+  let rowLabel = try #require(navigator.range(of: "private func rowLabel("))
+  let rowLabelBody = navigator[rowLabel.lowerBound...]
+  let rootRow = try #require(
+    navigator.components(separatedBy: "private var rootRow").last?
+      .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
+  )
+  let folderRow = try #require(
+    navigator.components(separatedBy: "private func folderRow").last?
+      .components(separatedBy: "private struct FolderActionButtonStyle").first
+  )
+  #expect(rowLabelBody.contains("RoundedRectangle(cornerRadius: 6)"))
+  #expect(rowLabelBody.contains("isSelected ? Color.accentColor.opacity(0.18)"))
+  #expect(rootRow.contains("isFocused: focusedRow == .unfiled"))
+  #expect(folderRow.contains("isFocused: focusedRow == .folder(folder.id)"))
+  #expect(rootRow.contains(".focusEffectDisabled()"))
+  #expect(folderRow.contains(".focusEffectDisabled()"))
+  let rootFocused = try #require(
+    rootRow.range(of: ".focused($focusedRow, equals: .unfiled)")
+  )
+  let rootFocusable = try #require(rootRow.range(of: ".focusable()"))
+  let folderFocused = try #require(
+    folderRow.range(of: ".focused($focusedRow, equals: .folder(folder.id))")
+  )
+  let folderFocusable = try #require(folderRow.range(of: ".focusable()"))
+  #expect(rootFocusable.lowerBound < rootFocused.lowerBound)
+  #expect(folderFocusable.lowerBound < folderFocused.lowerBound)
+  #expect(rowLabelBody.contains("isFocused: Bool"))
+  #expect(rowLabelBody.contains("isFocused && !isSelected"))
+  #expect(rowLabelBody.contains(".overlay"))
+  #expect(
+    rowLabelBody.contains(
+      ".strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)"
+    )
+  )
+}
+
+@Test @MainActor func hostedFolderKeyboardFocusAddsOutlineToUnselectedRow() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = try Folder(id: UUID(), name: "School")
+  let note = Note(title: "Selected Unfiled", body: "Body")
+  let folderNote = Note(
+    title: "Selected School",
+    body: "Body",
+    folderID: folder.id
+  )
+  let workspace = Workspace(
+    notes: [note, folderNote],
+    selectedNoteID: note.id,
+    folders: [folder]
+  )
+  let state = await hostedPanelState(root: root, workspace: workspace)
+  state.updatePreferences {
+    $0.accentHex = "#00FF00"
+    $0.isUnfiledCompact = false
+    $0.showFormattingBar = false
+  }
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(
+    root: root,
+    state: state,
+    commands: commands,
+    accentHex: "#00FF00"
+  )
+  window.appearance = NSAppearance(named: .darkAqua)
+  defer { window.orderOut(nil) }
+  await settleHostedView(host)
+
+  try sendHostedClick(at: NSPoint(x: 40, y: 60), in: host, to: window)
+  await settleHostedView(host)
+
+  let before = try hostedNavigatorAccentGeometry(
+    in: host,
+    accentHex: "#00FF00"
+  )
+  try sendHostedKeyDown("\t", keyCode: 48, to: window)
+  await settleHostedView(host)
+  let after = try hostedNavigatorAccentGeometry(
+    in: host,
+    accentHex: "#00FF00"
+  )
+
+  #expect(after.pixelCount > before.pixelCount)
+
+  try sendHostedKeyDown("\r", keyCode: 36, to: window)
+  await settleHostedView(host)
+  #expect(state.workspace.selectedNoteID == folderNote.id)
+}
+
+private struct HostedAccentPillGeometry {
+  let bounds: CGRect
+  let pixelCount: Int
+}
+
+@MainActor
+private func hostedFolderSelectionGeometry(
+  root: URL,
+  workspace: Workspace,
+  accentHex: String
+) async throws -> HostedAccentPillGeometry {
+  let state = await hostedPanelState(root: root, workspace: workspace)
+  state.updatePreferences {
+    $0.accentHex = accentHex
+    $0.isUnfiledCompact = true
+    $0.showFormattingBar = false
+  }
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(
+    root: root,
+    state: state,
+    commands: commands,
+    accentHex: accentHex
+  )
+  window.appearance = NSAppearance(named: .darkAqua)
+  defer { window.orderOut(nil) }
+  await settleHostedView(host)
+
+  let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+  host.cacheDisplay(in: host.bounds, to: imageRep)
+  return try #require(
+    hostedAccentFillBounds(
+      in: imageRep,
+      hostSize: host.bounds.size,
+      accentHex: accentHex
+    )
+  )
+}
+
+@MainActor
+private func hostedNavigatorAccentGeometry(
+  in host: NSHostingView<AnyView>,
+  accentHex: String
+) throws -> HostedAccentPillGeometry {
+  let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+  host.cacheDisplay(in: host.bounds, to: imageRep)
+  return try #require(
+    hostedAccentFillBounds(
+      in: imageRep,
+      hostSize: host.bounds.size,
+      accentHex: accentHex
+    )
+  )
 }
 
 @Test @MainActor func hostedNotesPanelEvacuatesTitleFocusWithoutRestoringBody() async throws {
@@ -1575,6 +3567,20 @@ private func forceHostedViewUpdate(_ view: NSView) {
   view.displayIfNeeded()
 }
 
+private struct HostedTitleBodyGeometry {
+  let titleFrame: CGRect
+  let titleRenderRect: CGRect
+  let firstBodyLineRect: CGRect
+
+  var renderedGap: CGFloat {
+    firstBodyLineRect.minY - titleFrame.maxY
+  }
+
+  var renderedTitleMinY: CGFloat {
+    titleRenderRect.minY
+  }
+}
+
 private func notesPanelSource() throws -> String {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
@@ -1601,15 +3607,18 @@ private func hostedPanelState(root: URL, workspace: Workspace) async -> AppState
 private func hostedPanel(
   root: URL,
   state: AppState,
-  commands: EditorCommands
+  commands: EditorCommands,
+  accentHex: String? = nil
 ) -> (NSWindow, NSHostingView<AnyView>) {
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
-  let host = NSHostingView(
-    rootView: AnyView(
-      NotesPanel(dictationRuntime: runtime, editorCommands: commands)
-        .environmentObject(state)
-    )
-  )
+  let panel = NotesPanel(dictationRuntime: runtime, editorCommands: commands)
+  let rootView: AnyView
+  if let accentHex, let accent = Color(hex: accentHex) {
+    rootView = AnyView(panel.environmentObject(state).accentColor(accent))
+  } else {
+    rootView = AnyView(panel.environmentObject(state))
+  }
+  let host = NSHostingView(rootView: rootView)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
     styleMask: [.titled], backing: .buffered, defer: false
@@ -1624,6 +3633,31 @@ private func hostedPanelEditor(in view: NSView) -> ListAwareTextView? {
   if let editor = view as? ListAwareTextView { return editor }
   for subview in view.subviews {
     if let editor = hostedPanelEditor(in: subview) { return editor }
+  }
+  return nil
+}
+
+@MainActor
+private func hostedPanelBodyScrollView(in view: NSView) -> NSScrollView? {
+  if let scrollView = view as? NSScrollView,
+    let documentView = scrollView.documentView,
+    hostedDescendant(in: documentView, as: ListAwareTextView.self) != nil {
+    return scrollView
+  }
+  for subview in view.subviews {
+    if let scrollView = hostedPanelBodyScrollView(in: subview) { return scrollView }
+  }
+  return nil
+}
+
+@MainActor
+private func hostedVerticalScrollView(containing view: NSView) -> NSScrollView? {
+  var current: NSView? = view
+  while let candidate = current {
+    if let scrollView = candidate as? NSScrollView, scrollView.hasVerticalScroller {
+      return scrollView
+    }
+    current = candidate.superview
   }
   return nil
 }
@@ -1653,6 +3687,73 @@ private func hostedPanelRTF(text: String) throws -> Data {
   return try attributed.data(
     from: range,
     documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+}
+
+@MainActor
+private func hostedAccentFillBounds(
+  in imageRep: NSBitmapImageRep,
+  hostSize: CGSize,
+  accentHex: String
+) -> HostedAccentPillGeometry? {
+  guard hostSize.width > 0, hostSize.height > 0,
+    let accent = NSColor(hex: accentHex)?.usingColorSpace(.sRGB)
+  else { return nil }
+
+  var accentRed: CGFloat = 0
+  var accentGreen: CGFloat = 0
+  var accentBlue: CGFloat = 0
+  var accentAlpha: CGFloat = 0
+  accent.getRed(
+    &accentRed,
+    green: &accentGreen,
+    blue: &accentBlue,
+    alpha: &accentAlpha
+  )
+  guard accentRed < 0.01, accentGreen > 0.99, accentBlue < 0.01 else { return nil }
+
+  let scaleX = CGFloat(imageRep.pixelsWide) / hostSize.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / hostSize.height
+  let bandTop: CGFloat = 42
+  let bandBottom: CGFloat = 82
+  let bandStart = max(0, Int(floor(bandTop * scaleY)))
+  let bandEnd = min(imageRep.pixelsHigh, Int(ceil(bandBottom * scaleY)))
+  guard bandStart < bandEnd else { return nil }
+  var matchCount = 0
+  var minX = Int.max
+  var minY = Int.max
+  var maxX = Int.min
+  var maxY = Int.min
+
+  for y in bandStart..<bandEnd {
+    for x in 0..<imageRep.pixelsWide {
+      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+      else { continue }
+      var red: CGFloat = 0
+      var green: CGFloat = 0
+      var blue: CGFloat = 0
+      var alpha: CGFloat = 0
+      color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+      guard alpha > 0.5 else { continue }
+      guard green > 0.05, green > red + 0.05, green > blue + 0.05 else { continue }
+      matchCount += 1
+      minX = min(minX, x)
+      minY = min(minY, y)
+      maxX = max(maxX, x)
+      maxY = max(maxY, y)
+    }
+  }
+
+  let minimumPixels = max(32, Int(20 * scaleX * scaleY))
+  guard matchCount >= minimumPixels else { return nil }
+  return HostedAccentPillGeometry(
+    bounds: CGRect(
+      x: CGFloat(minX) / scaleX,
+      y: CGFloat(minY) / scaleY,
+      width: CGFloat(maxX - minX + 1) / scaleX,
+      height: CGFloat(maxY - minY + 1) / scaleY
+    ),
+    pixelCount: matchCount
   )
 }
 
@@ -1693,6 +3794,54 @@ private func sendHostedKeyEquivalent(
     )
   )
   _ = window.performKeyEquivalent(with: event)
+}
+
+@MainActor
+private func sendHostedClick(
+  at point: NSPoint,
+  in host: NSView,
+  to window: NSWindow
+) throws {
+  let location = host.convert(point, to: nil)
+  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    let event = try #require(
+      NSEvent.mouseEvent(
+        with: eventType,
+        location: location,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 0,
+        clickCount: 1,
+        pressure: eventType == .leftMouseDown ? 1 : 0
+      )
+    )
+    window.sendEvent(event)
+  }
+}
+
+@MainActor
+private func sendHostedKeyDown(
+  _ characters: String,
+  keyCode: UInt16,
+  to window: NSWindow
+) throws {
+  let event = try #require(
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      characters: characters,
+      charactersIgnoringModifiers: characters,
+      isARepeat: false,
+      keyCode: keyCode
+    )
+  )
+  window.sendEvent(event)
 }
 
 @Test @MainActor func tabColorSwatchesAreNonTemplateImages() {

@@ -194,6 +194,8 @@ Every accepted agent mutation writes an atomic local activity record containing:
 
 Records appear under **Options → Agent Activity**, newest first. The user can inspect the patch, open the affected note, copy details, or request Undo.
 
+The presented Agent Activity sheet includes a visible **Done** action in its header. Done and Escape dismiss only the presented sheet from both Options and Settings, leave activity data and the parent UI unchanged, and expose the Done action to assistive technologies as **Close Agent Activity**.
+
 An integration can list and undo only its own activity for notes that are currently shared. Unsharing a note immediately hides its historical patches from every integration. The Motes user can still inspect all local activity in the application and may request a safe local Undo for any active note even after the originating integration is revoked or the note is unshared.
 
 Undo is conditional:

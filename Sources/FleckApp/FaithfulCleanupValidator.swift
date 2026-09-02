@@ -1,0 +1,2056 @@
+import Foundation
+import FleckCore
+
+enum CleanupEditOperation: Equatable, Sendable {
+  case caseChange
+  case punctuation
+  case whitespace
+  case deleteFiller(String)
+  case deleteImmediateDuplicate([String])
+  case selectExplicitCorrection(removed: [String], kept: [String])
+  case formatList
+}
+
+enum CleanupValidationFailure: Error, Equatable, Sendable {
+  case emptyCandidate
+  case protectedContentChanged
+  case lexicalInsertion
+  case lexicalDeletion
+  case lexicalSubstitution
+  case reorderedContent
+  case ambiguousCorrection
+  case numberMeaningChanged
+}
+
+enum CleanupValidationDecision: Equatable, Sendable {
+  case accepted(text: String, operations: [CleanupEditOperation])
+  case rejected(CleanupValidationFailure)
+}
+
+struct FaithfulCleanupValidator: Sendable {
+  init() {}
+
+  func deterministicFillerFallback(
+    against resolution: PersonalDictionaryResolution
+  ) -> String? {
+    guard let fallback = Self.deterministicFallbackCandidate(against: resolution),
+          case .accepted(let text, _) = validate(
+      candidate: fallback.text,
+      against: resolution
+    ) else { return nil }
+    return text
+  }
+
+  private static func deterministicFallbackCandidate(
+    against resolution: PersonalDictionaryResolution
+  ) -> (text: String, omittedRawIndices: Set<Int>)? {
+    let baselineLexemes = CleanupLexeme.scan(resolution.baseline)
+    let protectedSpans = Self.deterministicFallbackProtectedSpans(
+      from: resolution.baseline,
+      protectedForms: resolution.protectedForms
+    )
+    let removableRawIndices = baselineLexemes.indices.filter { index in
+      guard !protectedSpans.contains(where: { $0.lexemeRange.contains(index) }) else {
+        return false
+      }
+      if Self.deterministicEnglishFillerWords.contains(baselineLexemes[index].canonical) {
+        return Self.isWhitespaceDelimitedFiller(at: index, in: baselineLexemes)
+          || Self.isSentenceInitialCommaFiller(at: index, in: baselineLexemes)
+          || Self.isCommaSeparatedFiller(at: index, in: baselineLexemes)
+      }
+      return Self.isButLikeFiller(at: index, in: baselineLexemes)
+    }
+    guard !removableRawIndices.isEmpty else { return nil }
+
+    var omittedRawIndices = Set(removableRawIndices)
+    for index in removableRawIndices {
+      if Self.isSentenceInitialCommaFiller(at: index, in: baselineLexemes)
+        || Self.isCommaSeparatedFiller(at: index, in: baselineLexemes)
+        || Self.isButLikeFiller(at: index, in: baselineLexemes) {
+        omittedRawIndices.insert(index + 1)
+        omittedRawIndices.insert(index + 2)
+        if Self.isTitleCaseButLikeFiller(at: index, in: baselineLexemes) {
+          omittedRawIndices.insert(index - 2)
+        }
+      } else if baselineLexemes.indices.contains(index + 1),
+         baselineLexemes[index + 1].kind == .whitespace {
+        omittedRawIndices.insert(index + 1)
+      } else if index > baselineLexemes.startIndex,
+                baselineLexemes[index - 1].kind == .whitespace {
+        omittedRawIndices.insert(index - 1)
+      }
+    }
+    let candidate = baselineLexemes.enumerated()
+      .filter { !omittedRawIndices.contains($0.offset) }
+      .map { $0.element.original }
+      .joined()
+    guard candidate != resolution.baseline else { return nil }
+    return (candidate, omittedRawIndices)
+  }
+
+  func validate(
+    candidate: String,
+    against resolution: PersonalDictionaryResolution
+  ) -> CleanupValidationDecision {
+    guard !candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return .rejected(.emptyCandidate)
+    }
+
+    let deterministicFallback = Self.deterministicFallbackCandidate(against: resolution)
+    let baselineLexemes = CleanupLexeme.scan(resolution.baseline)
+    let candidateLexemes = CleanupLexeme.scan(candidate)
+    let baselineValues = baselineLexemes.filter(\.isLexical).map(\.canonical)
+    let candidateValues = candidateLexemes.filter(\.isLexical).map(\.canonical)
+    let extractedBaselineSpans = CleanupProtectedSpan.extract(
+      from: resolution.baseline,
+      protectedForms: resolution.protectedForms
+    )
+    let extractedCandidateSpans = CleanupProtectedSpan.extract(
+      from: candidate,
+      protectedForms: resolution.protectedForms
+    )
+    let exactProtectedNumericRanges = Self.exactProtectedAmbiguousNumericRanges(
+      baseline: extractedBaselineSpans,
+      candidate: extractedCandidateSpans
+    )
+    let ordinalMarkerPairs = Self.pairedOrdinalMarkersAreOnlyDifference(
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes
+    )
+    guard Self.numberMeaningIsPreserved(
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes,
+      exemptBaselineAmbiguousRanges: exactProtectedNumericRanges.baseline,
+      exemptCandidateAmbiguousRanges: exactProtectedNumericRanges.candidate
+    )
+      || ordinalMarkerPairs != nil else {
+      return .rejected(.numberMeaningChanged)
+    }
+
+    let correction = Self.explicitCorrection(
+      baselineLexemes,
+      candidateValues,
+      baselineValues
+    )
+
+    guard PersonalDictionaryResolver.cleanupPreserves(
+      resolution.protectedForms,
+      in: candidate
+    ) else { return .rejected(.protectedContentChanged) }
+
+    let validatedSpans = Self.deterministicFallbackValidationSpans(
+      baseline: extractedBaselineSpans,
+      candidate: extractedCandidateSpans,
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes,
+      fallback: deterministicFallback
+    )
+    let baselineSpans = validatedSpans.baseline
+    let candidateSpans = validatedSpans.candidate
+    let filler = Self.isolatedFillerRemoval(
+      baselineLexemes, candidateLexemes, baselineValues, candidateValues, baselineSpans
+    )
+    let duplicate = Self.immediateDuplicateRemoval(
+      baselineLexemes, candidateValues, baselineValues, baselineSpans
+    )
+    let composedDeletion = filler == nil && duplicate == nil
+      ? Self.composedSafeDeletion(
+        baselineLexemes,
+        candidateValues,
+        baselineValues,
+        baselineSpans
+      )
+      : nil
+    let candidateToBaselineLexicalOrdinals = Self.candidateToBaselineLexicalOrdinals(
+      baselineValues: baselineValues,
+      candidateValues: candidateValues,
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes,
+      ordinalMarkerPairs: ordinalMarkerPairs,
+      correction: correction,
+      removedBaselineLexicalOrdinals: filler?.removedOrdinals
+        ?? duplicate?.removedOrdinals
+        ?? composedDeletion?.removedOrdinals
+    )
+    guard let comparableCandidateSpans = Self.reconcileCaseOnlyNameSpans(
+      baseline: baselineSpans,
+      candidate: candidateSpans,
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes,
+      ordinalMarkerPairs: ordinalMarkerPairs,
+      candidateToBaselineLexicalOrdinals: candidateToBaselineLexicalOrdinals
+    ) else { return .rejected(.protectedContentChanged) }
+    guard Self.protectedSpansMatch(
+      baselineSpans,
+      comparableCandidateSpans,
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes,
+      candidateToBaselineLexicalOrdinals: candidateToBaselineLexicalOrdinals,
+      ordinalMarkerPairs: ordinalMarkerPairs,
+      correction: correction
+    ) else { return .rejected(.protectedContentChanged) }
+
+    if baselineValues == candidateValues {
+      return .accepted(
+        text: candidate,
+        operations: Self.equalLexicalOperations(baselineLexemes, candidateLexemes)
+      )
+    }
+    if let filler {
+      return .accepted(
+        text: candidate,
+        operations: filler.values.map { .deleteFiller($0) }
+      )
+    }
+    if let duplicate {
+      return .accepted(
+        text: candidate,
+        operations: [.deleteImmediateDuplicate(duplicate.values)]
+      )
+    }
+    if let composedDeletion {
+      return .accepted(text: candidate, operations: composedDeletion.operations)
+    }
+    if let correction {
+      return .accepted(
+        text: candidate,
+        operations: [.selectExplicitCorrection(
+          removed: correction.removed,
+          kept: correction.kept
+        )]
+      )
+    }
+    if Self.hasCorrectionMarker(baselineValues) {
+      return .rejected(.ambiguousCorrection)
+    }
+    if let ordinalMarkerPairs,
+       Self.isShortListFormatting(
+         baselineLexemes,
+         candidateLexemes,
+         ordinalMarkerPairs: ordinalMarkerPairs
+       ) {
+      return .accepted(text: candidate, operations: [.formatList])
+    }
+    if candidateValues.count > baselineValues.count {
+      return .rejected(.lexicalInsertion)
+    }
+    if candidateValues.count < baselineValues.count {
+      return .rejected(.lexicalDeletion)
+    }
+    if candidateValues.sorted() == baselineValues.sorted() {
+      return .rejected(.reorderedContent)
+    }
+    return .rejected(.lexicalSubstitution)
+  }
+
+  private static let fillerWords: Set<String> = ["um", "uh", "erm", "呃", "嗯"]
+  private static let deterministicEnglishFillerWords: Set<String> = ["um", "uh", "erm"]
+  private static let numberWords: Set<String> = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty",
+    "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million", "billion",
+    "trillion", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+    "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth",
+    "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth", "twentieth",
+    "thirtieth", "fortieth", "fiftieth", "sixtieth", "seventieth", "eightieth",
+    "ninetieth", "hundredth", "thousandth", "millionth", "billionth", "trillionth"
+  ]
+  private static let quantityWords: Set<String> = [
+    "half", "halves", "quarter", "quarters", "thirds", "fourths", "fifths",
+    "eighths", "tenths", "fraction", "fractions", "decimal", "decimals",
+    "percent", "percentage", "percentages", "currency", "currencies", "cent",
+    "cents", "dollar", "dollars", "euro", "euros",
+    "yen", "pound", "pounds", "yuan", "dozen", "dozens", "pair", "pairs",
+    "gram", "grams", "kilogram", "kilograms", "meter", "meters", "metre",
+    "metres", "kilometer", "kilometers", "kilometre", "kilometres", "mile",
+    "miles", "inch", "inches", "foot", "feet", "yard", "yards", "liter",
+    "liters", "litre", "litres", "hour", "hours", "minute", "minutes",
+    "second", "seconds", "day", "days", "week", "weeks", "month", "months",
+    "year", "years"
+  ]
+  private static let numericLookingRoots: Set<String> = [
+    "hundred", "thousand", "million", "billion", "trillion", "percent",
+    "fraction", "decimal", "half", "quarter", "cent", "dollar", "euro",
+    "currency", "yen", "pound", "yuan", "dozen", "gram", "kilo", "meter", "metre",
+    "liter", "litre", "mile", "inch", "foot", "yard"
+  ]
+  private static let numericLookingSuffixes: [String] = ["ish", "like"]
+  private static let correctionMarkers: Set<String> = ["actually", "sorry", "no"]
+  private static let sentenceTerminalPunctuation: Set<String> = [
+    ".", "!", "?", "。", "！", "？"
+  ]
+
+  private enum NumberClassification: Equatable {
+    case none
+    case digit(String)
+    case digitOrdinal(String)
+    case word(String)
+    case quantity(String)
+    case ambiguous
+  }
+
+  private struct PairedOrdinalMarkerIndices: Equatable {
+    let baselineRawRanges: [Range<Int>]
+    let candidateRawRanges: [Range<Int>]
+    let candidateNumberRawRanges: [Range<Int>]
+  }
+
+  private struct ExplicitCorrection: Equatable {
+    let removed: [String]
+    let kept: [String]
+    let markerCanonical: String
+    let markerRawRange: Range<Int>
+  }
+
+  private struct IsolatedFillerRemoval: Equatable {
+    let removedOrdinals: [Int]
+    let values: [String]
+  }
+
+  private struct ImmediateDuplicateRemoval: Equatable {
+    let removedOrdinals: [Int]
+    let values: [String]
+  }
+
+  private struct ComposedSafeDeletion: Equatable {
+    let removedOrdinals: [Int]
+    let operations: [CleanupEditOperation]
+  }
+
+  private struct FormattingLexeme: Equatable {
+    let kind: CleanupLexemeKind
+    let lexicalAnchor: Int
+    let ordinalAtAnchor: Int
+    let value: String
+  }
+
+  private struct FormattingCoordinate: Equatable {
+    let lexicalAnchor: Int
+    let ordinalAtAnchor: Int
+    let value: String
+  }
+
+  private struct NumericRawContext: Equatable {
+    let detachedLeadingContext: [String]
+    let detachedTrailingContext: [String]
+
+    static let none = Self(
+      detachedLeadingContext: [],
+      detachedTrailingContext: []
+    )
+  }
+
+  private struct NumberSemanticSignature: Equatable {
+    let classification: NumberClassification
+    let rawContext: NumericRawContext
+  }
+
+  private struct NumberSignature: Equatable {
+    let rawRange: Range<Int>
+    let classification: NumberClassification
+    let rawContext: NumericRawContext
+
+    init(
+      rawRange: Range<Int>,
+      classification: NumberClassification,
+      rawContext: NumericRawContext = .none
+    ) {
+      self.rawRange = rawRange
+      self.classification = classification
+      self.rawContext = rawContext
+    }
+
+    var semantic: NumberSemanticSignature {
+      .init(classification: classification, rawContext: rawContext)
+    }
+  }
+
+  private static let ordinalMarkerNumbers: [String: Int] = [
+    "first": 1,
+    "second": 2,
+    "third": 3,
+    "fourth": 4,
+    "fifth": 5
+  ]
+
+  private static func numberMeaningIsPreserved(
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme],
+    exemptBaselineAmbiguousRanges: [Range<Int>] = [],
+    exemptCandidateAmbiguousRanges: [Range<Int>] = []
+  ) -> Bool {
+    let baseline = numberSignatures(from: baselineLexemes).filter {
+      !isExemptAmbiguousSignature($0, containedIn: exemptBaselineAmbiguousRanges)
+    }
+    let candidate = numberSignatures(from: candidateLexemes).filter {
+      !isExemptAmbiguousSignature($0, containedIn: exemptCandidateAmbiguousRanges)
+    }
+    guard !baseline.contains(where: { $0.classification == .ambiguous }),
+          !candidate.contains(where: { $0.classification == .ambiguous }) else {
+      return false
+    }
+    return baseline
+      .filter { $0.classification != .none }
+      .map(\.semantic)
+      == candidate
+      .filter { $0.classification != .none }
+      .map(\.semantic)
+  }
+
+  private static func exactProtectedAmbiguousNumericRanges(
+    baseline: [CleanupProtectedSpan],
+    candidate: [CleanupProtectedSpan]
+  ) -> (baseline: [Range<Int>], candidate: [Range<Int>]) {
+    let baselineEligible = baseline.filter(isExactNumericIdentityCategory)
+    let candidateEligible = candidate.filter(isExactNumericIdentityCategory)
+    var baselineRanges: [Range<Int>] = []
+    var candidateRanges: [Range<Int>] = []
+    for (baselineSpan, candidateSpan) in zip(baselineEligible, candidateEligible)
+      where baselineSpan.category == candidateSpan.category
+        && baselineSpan.canonicalLexemes == candidateSpan.canonicalLexemes {
+      baselineRanges.append(baselineSpan.lexemeRange)
+      candidateRanges.append(candidateSpan.lexemeRange)
+    }
+    return (baselineRanges, candidateRanges)
+  }
+
+  private static func isExactNumericIdentityCategory(
+    _ span: CleanupProtectedSpan
+  ) -> Bool {
+    if span.category == .dictionary { return true }
+    guard span.category == .dateOrTime,
+          span.canonicalLexemes.count == 1,
+          let value = span.canonicalLexemes.first else { return false }
+    return value.range(
+      of: #"^\d{4}-\d{2}-\d{2}$"#,
+      options: .regularExpression
+    ) != nil
+  }
+
+  private static func isExemptAmbiguousSignature(
+    _ signature: NumberSignature,
+    containedIn ranges: [Range<Int>]
+  ) -> Bool {
+    guard signature.classification == .ambiguous else { return false }
+    return ranges.contains {
+      $0.lowerBound <= signature.rawRange.lowerBound
+        && $0.upperBound >= signature.rawRange.upperBound
+    }
+  }
+
+  private static func numberSignatures(from lexemes: [CleanupLexeme]) -> [NumberSignature] {
+    var signatures: [NumberSignature] = []
+    var consumedIndices = Set<Int>()
+    var index = 0
+    while index < lexemes.count {
+      guard lexemes[index].kind == .number else {
+        index += 1
+        continue
+      }
+
+      let value = lexemes[index].canonical.lowercased()
+      guard let rawContext = numericRawContext(at: index, in: lexemes) else {
+        signatures.append(.init(
+          rawRange: index..<(index + 1),
+          classification: .ambiguous
+        ))
+        consumedIndices.insert(index)
+        index += 1
+        continue
+      }
+      if index + 1 < lexemes.count, lexemes[index + 1].kind == .word {
+        let suffix = lexemes[index + 1].canonical.lowercased()
+        if ["st", "nd", "rd", "th"].contains(suffix) {
+          let range = index..<(index + 2)
+          let classification: NumberClassification = validOrdinalSuffix(for: value, suffix: suffix)
+            && hasCompleteDigitOrdinalToken(after: range, in: lexemes)
+            ? .digitOrdinal(value + suffix)
+            : .ambiguous
+          signatures.append(.init(
+            rawRange: range,
+            classification: classification,
+            rawContext: rawContext
+          ))
+          consumedIndices.formUnion(range)
+          index += 2
+          continue
+        }
+        if unitWords.contains(suffix) {
+          let range = index..<(index + 2)
+          signatures.append(.init(
+            rawRange: range,
+            classification: hasNumericPunctuationBridge(
+              after: range.upperBound,
+              in: lexemes
+            ) ? .ambiguous : .quantity(value + suffix),
+            rawContext: rawContext
+          ))
+          consumedIndices.formUnion(range)
+          index += 2
+          continue
+        }
+        if suffix.hasPrefix("st") || suffix.hasPrefix("nd")
+            || suffix.hasPrefix("rd") || suffix.hasPrefix("th") {
+          signatures.append(.init(
+            rawRange: index..<(index + 2),
+            classification: .ambiguous,
+            rawContext: rawContext
+          ))
+          consumedIndices.formUnion(index..<(index + 2))
+          index += 2
+          continue
+        }
+        signatures.append(.init(
+          rawRange: index..<(index + 2),
+          classification: .ambiguous,
+          rawContext: rawContext
+        ))
+        consumedIndices.formUnion(index..<(index + 2))
+        index += 2
+        continue
+      }
+
+      if let range = degreeUnitRange(at: index, in: lexemes) {
+        let suffix = "°" + lexemes[range.upperBound - 1].canonical.lowercased()
+        signatures.append(.init(
+          rawRange: range,
+          classification: hasNumericPunctuationBridge(
+            after: range.upperBound,
+            in: lexemes
+          ) ? .ambiguous : .quantity(value + suffix),
+          rawContext: rawContext
+        ))
+        consumedIndices.formUnion(range)
+        index = range.upperBound
+        continue
+      }
+
+      if index + 2 < lexemes.count,
+         lexemes[index + 1].kind == .whitespace,
+         lexemes[index + 2].kind == .word {
+        let suffix = lexemes[index + 2].canonical.lowercased()
+        if unitWords.contains(suffix) {
+          let range = index..<(index + 3)
+          signatures.append(.init(
+            rawRange: range,
+            classification: hasNumericPunctuationBridge(
+              after: range.upperBound,
+              in: lexemes
+            ) ? .ambiguous : .quantity(value + suffix),
+            rawContext: rawContext
+          ))
+          consumedIndices.formUnion(range)
+          index += 3
+          continue
+        }
+      }
+
+      if index + 2 < lexemes.count,
+         lexemes[index + 1].kind == .whitespace,
+         lexemes[index + 2].kind == .word,
+         ["am", "pm"].contains(lexemes[index + 2].canonical.lowercased()),
+         value.contains(":") {
+        let time = value + lexemes[index + 2].canonical.lowercased()
+        signatures.append(.init(
+          rawRange: index..<(index + 3),
+          classification: classifyNumber(time),
+          rawContext: rawContext
+        ))
+        consumedIndices.formUnion(index..<(index + 3))
+        index += 3
+        continue
+      }
+
+      signatures.append(.init(
+        rawRange: index..<(index + 1),
+        classification: classifyNumber(value),
+        rawContext: rawContext
+      ))
+      consumedIndices.insert(index)
+      index += 1
+    }
+
+    for index in lexemes.indices where isAmbiguousNumericSpecialRun(lexemes[index]) {
+      signatures.append(.init(
+        rawRange: index..<(index + 1),
+        classification: .ambiguous
+      ))
+    }
+
+    for index in lexemes.indices where lexemes[index].kind == .word && !consumedIndices.contains(index) {
+      let classification = classifyNumber(lexemes[index].canonical)
+      if classification != .none {
+        signatures.append(.init(
+          rawRange: index..<(index + 1),
+          classification: classification
+        ))
+      }
+    }
+    return signatures.sorted { $0.rawRange.lowerBound < $1.rawRange.lowerBound }
+  }
+
+  private static func isAmbiguousNumericSpecialRun(_ lexeme: CleanupLexeme) -> Bool {
+    guard lexeme.kind == .code,
+          lexeme.original.unicodeScalars.contains(where: CharacterSet.decimalDigits.contains)
+    else { return false }
+    return lexeme.original.contains {
+      ["(", ")", "=", "_", "`"].contains(String($0))
+    }
+  }
+
+  private static let unitWords: Set<String> = [
+    "ms", "s", "sec", "secs", "min", "mins", "hour", "hours", "mm", "cm",
+    "m", "km", "g", "kg", "mg", "oz", "lb", "lbs", "ml", "l", "gb", "mb",
+    "tb", "c", "°c"
+  ]
+
+  private static func validOrdinalSuffix(for digits: String, suffix: String) -> Bool {
+    guard let integer = Int(digits), ["st", "nd", "rd", "th"].contains(suffix) else {
+      return false
+    }
+    let expected: String
+    let lastTwo = integer % 100
+    if (11...13).contains(lastTwo) {
+      expected = "th"
+    } else {
+      switch integer % 10 {
+      case 1: expected = "st"
+      case 2: expected = "nd"
+      case 3: expected = "rd"
+      default: expected = "th"
+      }
+    }
+    return suffix == expected
+  }
+
+  private static func hasCompleteDigitOrdinalToken(
+    after range: Range<Int>,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(range.upperBound) else { return true }
+    let next = lexemes[range.upperBound]
+    guard next.kind != .whitespace else { return true }
+    guard next.kind == .punctuation else { return false }
+    guard sentenceTerminalPunctuation.contains(next.original)
+      || [",", ";"].contains(next.original) else {
+      return false
+    }
+    guard lexemes.indices.contains(range.upperBound + 1) else { return true }
+    return lexemes[range.upperBound + 1].kind == .whitespace
+  }
+
+  private static func numericRawContext(
+    at index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> NumericRawContext? {
+    let original = lexemes[index].original
+    let openCount = original.filter { $0 == "(" }.count
+    let closeCount = original.filter { $0 == ")" }.count
+    guard openCount == closeCount else { return nil }
+    if openCount > 0 {
+      guard original.first == "(", original.last == ")" else { return nil }
+    }
+
+    func adjacentNonWhitespace(_ step: Int) -> CleanupLexeme? {
+      var cursor = index + step
+      while lexemes.indices.contains(cursor) {
+        if lexemes[cursor].kind != .whitespace { return lexemes[cursor] }
+        cursor += step
+      }
+      return nil
+    }
+
+    func rawContextRun(_ step: Int) -> [String] {
+      var cursor = index + step
+      var context: [String] = []
+      while lexemes.indices.contains(cursor) {
+        if lexemes[cursor].kind == .whitespace {
+          cursor += step
+          continue
+        }
+        guard isNumericContextPunctuation(lexemes[cursor]) else { break }
+        context.append(lexemes[cursor].original)
+        cursor += step
+      }
+      return step < 0 ? Array(context.reversed()) : context
+    }
+
+    if index > 0, lexemes[index - 1].isLexical {
+      return nil
+    }
+    if index > 0,
+       lexemes[index - 1].kind != .whitespace,
+       isNumericCodeBoundaryPunctuation(lexemes[index - 1]) {
+      return nil
+    }
+    if index + 1 < lexemes.count,
+       lexemes[index + 1].kind != .whitespace,
+       isNumericCodeBoundaryPunctuation(lexemes[index + 1]) {
+      return nil
+    }
+    if degreeUnitRange(at: index, in: lexemes) == nil,
+       degreeLikeRange(at: index, in: lexemes) != nil {
+      return nil
+    }
+    if degreeUnitRange(at: index, in: lexemes) == nil,
+       degreeSymbolIndex(after: index, in: lexemes) != nil {
+      return nil
+    }
+    if degreeUnitRange(at: index, in: lexemes) == nil,
+       hasNumericPunctuationBridge(at: index, in: lexemes) {
+      return nil
+    }
+    if hasUnsupportedNumericAffixRun(at: index, in: lexemes) {
+      return nil
+    }
+
+    let previous = adjacentNonWhitespace(-1)
+    let next = adjacentNonWhitespace(1)
+    if let previous,
+       ["(", ")"].contains(previous.original),
+       !(openCount > 0 && closeCount > 0) {
+      return nil
+    }
+    if let next {
+      if ["(", ")"].contains(next.original),
+         !(openCount > 0 && closeCount > 0) {
+        return nil
+      }
+      if ["/", ":", "%"].contains(next.original) { return nil }
+      if original.hasSuffix("%") && next.original == "%" { return nil }
+    }
+    let detachedLeadingContext = rawContextRun(-1)
+    let detachedTrailingContext = rawContextRun(1)
+    guard detachedTrailingContext.isEmpty else {
+      return nil
+    }
+    let hasAffix = detachedLeadingContext.contains { value in
+      guard value.count == 1, let character = value.first else { return false }
+      return isNumericSign(character) || isCurrencySymbol(character)
+    }
+    let hasSeparator = detachedLeadingContext.contains {
+      [":", "/", "%"].contains($0)
+    }
+    guard !(hasAffix && hasSeparator) else { return nil }
+    return .init(
+      detachedLeadingContext: detachedLeadingContext,
+      detachedTrailingContext: detachedTrailingContext
+    )
+  }
+
+  private static func isNumericContextPunctuation(_ lexeme: CleanupLexeme) -> Bool {
+    isNumericAffixPunctuation(lexeme)
+      || (lexeme.kind == .punctuation
+        && [":", "/", "%"].contains(lexeme.original))
+  }
+
+  private static func isNumericAffixPunctuation(_ lexeme: CleanupLexeme) -> Bool {
+    guard lexeme.kind == .punctuation,
+          lexeme.original.count == 1,
+          let character = lexeme.original.first else {
+      return false
+    }
+    return isNumericSign(character) || isCurrencySymbol(character)
+  }
+
+  private static func isNumericCodeBoundaryPunctuation(_ lexeme: CleanupLexeme) -> Bool {
+    guard lexeme.kind == .punctuation, lexeme.original.count == 1 else { return false }
+    return ["(", ")", "/", ":", "%", "=", "_", "`", "@", "#", "\\"].contains(lexeme.original)
+  }
+
+  private static func degreeUnitRange(
+    at index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Range<Int>? {
+    guard let range = degreeLikeRange(at: index, in: lexemes),
+          unitWords.contains("°" + lexemes[range.upperBound - 1].canonical.lowercased()) else {
+      return nil
+    }
+    return range
+  }
+
+  private static func degreeLikeRange(
+    at index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Range<Int>? {
+    guard let degreeIndex = degreeSymbolIndex(after: index, in: lexemes),
+          lexemes.indices.contains(degreeIndex + 1),
+          lexemes[degreeIndex + 1].kind == .word else {
+      return nil
+    }
+    return index..<(degreeIndex + 2)
+  }
+
+  private static func degreeSymbolIndex(
+    after index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Int? {
+    if index + 1 < lexemes.count,
+       lexemes[index + 1].kind == .punctuation,
+       lexemes[index + 1].original == "°" {
+      return index + 1
+    }
+    if index + 2 < lexemes.count,
+       lexemes[index + 1].kind == .whitespace,
+       lexemes[index + 2].kind == .punctuation,
+       lexemes[index + 2].original == "°" {
+      return index + 2
+    }
+    return nil
+  }
+
+  private static func hasNumericPunctuationBridge(
+    at index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    for step in [-1, 1] {
+      var cursor = index + step
+      var punctuationCount = 0
+      while lexemes.indices.contains(cursor), lexemes[cursor].kind == .punctuation {
+        punctuationCount += 1
+        cursor += step
+      }
+      guard punctuationCount > 0,
+            lexemes.indices.contains(cursor),
+            lexemes[cursor].isLexical else { continue }
+      return true
+    }
+    return false
+  }
+
+  private static func hasUnsupportedNumericAffixRun(
+    at index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    for step in [-1, 1] {
+      var cursor = index + step
+      while lexemes.indices.contains(cursor), lexemes[cursor].kind == .whitespace {
+        cursor += step
+      }
+      guard lexemes.indices.contains(cursor),
+            lexemes[cursor].kind == .punctuation else { continue }
+      if isNumericAffixPunctuation(lexemes[cursor]) { continue }
+
+      var run: [CleanupLexeme] = []
+      while lexemes.indices.contains(cursor),
+            [.punctuation, .whitespace].contains(lexemes[cursor].kind) {
+        if lexemes[cursor].kind == .punctuation {
+          run.append(lexemes[cursor])
+        }
+        cursor += step
+      }
+      guard run.contains(where: isNumericAffixPunctuation) else { continue }
+      if run.contains(where: { !isNumericContextPunctuation($0) }) {
+        return true
+      }
+    }
+    return false
+  }
+
+  private static func hasNumericPunctuationBridge(
+    after index: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    var cursor = index
+    while lexemes.indices.contains(cursor), lexemes[cursor].kind == .whitespace {
+      cursor += 1
+    }
+    var hasNumericContext = false
+    while lexemes.indices.contains(cursor),
+          (lexemes[cursor].kind == .punctuation
+            || lexemes[cursor].kind == .whitespace
+            || lexemes[cursor].original == "/") {
+      if lexemes[cursor].kind == .punctuation {
+        hasNumericContext = hasNumericContext
+          || isNumericContextPunctuation(lexemes[cursor])
+          || lexemes[cursor].original == "°"
+      }
+      hasNumericContext = hasNumericContext || lexemes[cursor].original == "/"
+      cursor += 1
+    }
+    if hasNumericContext { return true }
+
+    cursor = index
+    var punctuationCount = 0
+    while lexemes.indices.contains(cursor), lexemes[cursor].kind == .punctuation {
+      punctuationCount += 1
+      cursor += 1
+    }
+    return punctuationCount > 0
+      && lexemes.indices.contains(cursor)
+      && lexemes[cursor].isLexical
+  }
+
+  private static func isNumericSign(_ character: Character) -> Bool {
+    character == "+" || character == "-" || character == "−"
+  }
+
+  private static func isCurrencySymbol(_ character: Character) -> Bool {
+    character.unicodeScalars.contains {
+      $0.properties.generalCategory == .currencySymbol
+    }
+  }
+
+  private static func parseScannerNumericForm(
+    _ canonical: String
+  ) -> NumberClassification? {
+    let characters = Array(canonical)
+    guard !characters.isEmpty else { return nil }
+    var index = 0
+    let parenthesized = characters[index] == "("
+    if parenthesized { index += 1 }
+    if characters.indices.contains(index), isNumericSign(characters[index]) {
+      index += 1
+    }
+    if characters.indices.contains(index), isCurrencySymbol(characters[index]) {
+      index += 1
+    }
+    if characters.indices.contains(index), isNumericSign(characters[index]) {
+      index += 1
+    }
+
+    let coreStart = index
+    guard characters.indices.contains(index), characters[index].isNumber else {
+      return nil
+    }
+    while index < characters.count {
+      if characters[index].isNumber {
+        index += 1
+        continue
+      }
+      let separator = characters[index]
+      guard [".", "-", "/", ":"].contains(separator),
+            index + 1 < characters.count,
+            characters[index + 1].isNumber else {
+        break
+      }
+      index += 1
+    }
+    let core = String(characters[coreStart..<index])
+    if index < characters.count,
+       characters[index] == "%" || isCurrencySymbol(characters[index]) {
+      index += 1
+    }
+
+    var meridiem: String?
+    if parenthesized {
+      guard index < characters.count, characters[index] == ")" else {
+        return nil
+      }
+      index += 1
+    } else if index + 1 < characters.count,
+              (characters[index] == "a" || characters[index] == "p"),
+              characters[index + 1] == "m" {
+      meridiem = String(characters[index...(index + 1)]).lowercased()
+      index += 2
+    }
+
+    guard index == characters.count,
+          isSupportedNumericCore(core, meridiem: meridiem) else {
+      return nil
+    }
+    return .digit(canonical)
+  }
+
+  private static func isSupportedNumericCore(
+    _ core: String,
+    meridiem: String?
+  ) -> Bool {
+    if core.range(of: #"^\d+/\d+$"#, options: .regularExpression) != nil {
+      let parts = core.split(separator: "/")
+      guard meridiem == nil,
+            parts.count == 2,
+            let denominator = Int(parts[1]),
+            denominator > 0 else {
+        return false
+      }
+      return true
+    }
+
+    if core.range(of: #"^\d+(?:\.\d+)?$"#, options: .regularExpression) != nil {
+      guard meridiem != nil else { return true }
+      guard let hour = Int(core) else { return false }
+      return (1...12).contains(hour)
+        && core.range(of: #"^\d{1,2}$"#, options: .regularExpression) != nil
+    }
+
+    guard core.range(of: #"^\d{1,2}:\d{2}$"#, options: .regularExpression) != nil else {
+      return false
+    }
+    let parts = core.split(separator: ":")
+    guard parts.count == 2,
+          let hour = Int(parts[0]),
+          let minute = Int(parts[1]),
+          (meridiem == nil ? (0...23).contains(hour) : (1...12).contains(hour)),
+          (0...59).contains(minute) else {
+      return false
+    }
+    return true
+  }
+
+  private static func classifyNumber(_ value: String) -> NumberClassification {
+    let canonical = value.lowercased()
+    if numberWords.contains(canonical) {
+      return .word(canonical)
+    }
+    if quantityWords.contains(canonical) {
+      return .quantity(canonical)
+    }
+    if canonical.contains("-") {
+      let parts = canonical.split(separator: "-").map(String.init)
+      if parts.allSatisfy({ numberWords.contains($0) || quantityWords.contains($0) }) {
+        return .word(canonical)
+      }
+      if parts.contains(where: { numberWords.contains($0) || quantityWords.contains($0) }) {
+        return .ambiguous
+      }
+    }
+    if canonical.range(of: #"^[0-9]+(?:st|nd|rd|th)$"#, options: .regularExpression) != nil {
+      let suffix = String(canonical.suffix(2))
+      let digits = String(canonical.dropLast(2))
+      return validOrdinalSuffix(for: digits, suffix: suffix)
+        ? .digitOrdinal(canonical)
+        : .ambiguous
+    }
+    if let numeric = parseScannerNumericForm(canonical) {
+      return numeric
+    }
+    if canonical.unicodeScalars.contains(where: CharacterSet.decimalDigits.contains) {
+      return .ambiguous
+    }
+    if isBoundedNumericLookingForm(canonical) {
+      return .ambiguous
+    }
+    return .none
+  }
+
+  private static func isBoundedNumericLookingForm(_ canonical: String) -> Bool {
+    guard canonical.allSatisfy({ $0.isLetter }) else { return false }
+    return numericLookingSuffixes.contains { suffix in
+      guard canonical.hasSuffix(suffix) else { return false }
+      let root = String(canonical.dropLast(suffix.count))
+      return numericLookingRoots.contains(root)
+    }
+  }
+
+  private static func pairedOrdinalMarkersAreOnlyDifference(
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme]
+  ) -> PairedOrdinalMarkerIndices? {
+    guard let markerRanges = validatedShortListMarkerRanges(
+      baselineLexemes: baselineLexemes,
+      candidateLexemes: candidateLexemes
+    ) else {
+      return nil
+    }
+    let baselineMarkers = markerRanges.baselineRawRanges
+    let candidateMarkers = markerRanges.candidateRawRanges
+    guard baselineMarkers.count >= 2,
+          baselineMarkers.count == candidateMarkers.count else {
+      return nil
+    }
+    guard zip(baselineMarkers, candidateMarkers).enumerated().allSatisfy({ offset, pair in
+      guard let baselineNumber = ordinalMarkerNumbers[
+              baselineLexemes[pair.0.lowerBound].canonical
+            ],
+            let candidateNumber = isNumericListMarker(
+              candidateLexemes[pair.1.lowerBound].canonical
+            ) else {
+        return false
+      }
+      return baselineNumber == offset + 1 && candidateNumber == offset + 1
+    }) else {
+      return nil
+    }
+    let baselineItems = listItemPayloads(baselineMarkers, in: baselineLexemes)
+    let candidateItems = listItemPayloads(candidateMarkers, in: candidateLexemes)
+    guard baselineItems.count == candidateItems.count,
+          baselineItems.allSatisfy({ !$0.isEmpty }),
+          candidateItems.allSatisfy({ !$0.isEmpty }),
+          baselineItems == candidateItems else {
+      return nil
+    }
+    let baselineRemainder = removingRawRanges(baselineMarkers, from: baselineLexemes)
+    let candidateRemainder = removingRawRanges(candidateMarkers, from: candidateLexemes)
+    guard numberMeaningIsPreserved(
+      baselineLexemes: baselineRemainder,
+      candidateLexemes: candidateRemainder
+    ) else {
+      return nil
+    }
+    return .init(
+      baselineRawRanges: baselineMarkers,
+      candidateRawRanges: candidateMarkers,
+      candidateNumberRawRanges: markerRanges.candidateNumberRawRanges
+    )
+  }
+
+  private static func listItemPayloads(
+    _ markerRanges: [Range<Int>],
+    in lexemes: [CleanupLexeme]
+  ) -> [[String]] {
+    markerRanges.enumerated().map { offset, range in
+      let end = offset + 1 < markerRanges.count
+        ? markerRanges[offset + 1].lowerBound
+        : lexemes.count
+      return lexemes[range.upperBound..<end]
+        .filter(\.isLexical)
+        .map(\.canonical)
+    }
+  }
+
+  private static func removingRawRanges(
+    _ ranges: [Range<Int>],
+    from lexemes: [CleanupLexeme]
+  ) -> [CleanupLexeme] {
+    lexemes.enumerated()
+      .filter { index, _ in !ranges.contains { $0.contains(index) } }
+      .map(\.element)
+  }
+
+  private static func isNumericListMarker(_ value: String) -> Int? {
+    guard let number = Int(value) else { return nil }
+    return (1...5).contains(number) ? number : nil
+  }
+
+  private struct NameOccurrence: Hashable {
+    let lexicalOrdinal: Int
+    let canonical: String
+  }
+
+  private static func singleNameOccurrence(
+    _ span: CleanupProtectedSpan,
+    in lexemes: [CleanupLexeme],
+    ignoring ignoredRawRanges: [Range<Int>] = []
+  ) -> NameOccurrence? {
+    guard span.category == .name,
+          span.lexemeRange.count == 1,
+          let index = span.lexemeRange.first,
+          lexemes.indices.contains(index),
+          lexemes[index].isLexical else { return nil }
+    let lexicalOrdinal = lexemes[..<index].enumerated().reduce(into: 0) { count, pair in
+      let (rawIndex, lexeme) = pair
+      if lexeme.isLexical && !ignoredRawRanges.contains(where: { $0.contains(rawIndex) }) {
+        count += 1
+      }
+    }
+    return .init(
+      lexicalOrdinal: lexicalOrdinal,
+      canonical: lexemes[index].canonical
+    )
+  }
+
+  private static func lexicalIndex(
+    atOrdinal ordinal: Int,
+    in lexemes: [CleanupLexeme],
+    ignoring ignoredRawRanges: [Range<Int>] = []
+  ) -> Int? {
+    guard ordinal >= 0 else { return nil }
+    var currentOrdinal = 0
+    for index in lexemes.indices
+      where lexemes[index].isLexical
+        && !ignoredRawRanges.contains(where: { $0.contains(index) }) {
+      if currentOrdinal == ordinal { return index }
+      currentOrdinal += 1
+    }
+    return nil
+  }
+
+  private static func candidateToBaselineLexicalOrdinals(
+    baselineValues: [String],
+    candidateValues: [String],
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme],
+    ordinalMarkerPairs: PairedOrdinalMarkerIndices?,
+    correction: ExplicitCorrection?,
+    removedBaselineLexicalOrdinals: [Int]?
+  ) -> [Int]? {
+    if let ordinalMarkerPairs {
+      let normalizedBaselineValues = removingRawRanges(
+        ordinalMarkerPairs.baselineRawRanges,
+        from: baselineLexemes
+      ).filter(\.isLexical).map(\.canonical)
+      let normalizedCandidateValues = removingRawRanges(
+        ordinalMarkerPairs.candidateRawRanges,
+        from: candidateLexemes
+      ).filter(\.isLexical).map(\.canonical)
+      guard normalizedBaselineValues == normalizedCandidateValues else { return nil }
+      return Array(normalizedCandidateValues.indices)
+    }
+    if baselineValues == candidateValues {
+      return Array(candidateValues.indices)
+    }
+    if let correction {
+      let prefixCount = baselineValues.count
+        - correction.removed.count
+        - correction.kept.count
+        - 1
+      guard prefixCount >= 0,
+            prefixCount <= baselineValues.count,
+            candidateValues == Array(baselineValues[..<prefixCount]) + correction.kept else {
+        return nil
+      }
+      let tailStart = prefixCount + correction.removed.count + 1
+      guard tailStart <= baselineValues.count,
+            Array(baselineValues[tailStart..<baselineValues.count]) == correction.kept else {
+        return nil
+      }
+      return candidateValues.indices.map { ordinal in
+        ordinal < prefixCount ? ordinal : ordinal + correction.removed.count + 1
+      }
+    }
+    guard let removedBaselineLexicalOrdinals,
+          !removedBaselineLexicalOrdinals.isEmpty,
+          candidateValues.count + removedBaselineLexicalOrdinals.count == baselineValues.count else {
+      return nil
+    }
+
+    let removed = Set(removedBaselineLexicalOrdinals)
+    guard removed.count == removedBaselineLexicalOrdinals.count,
+          removed.allSatisfy({ baselineValues.indices.contains($0) }) else {
+      return nil
+    }
+
+    var mapping: [Int] = []
+    var baselineOrdinal = 0
+    for candidateOrdinal in candidateValues.indices {
+      while removed.contains(baselineOrdinal) {
+        baselineOrdinal += 1
+      }
+      guard baselineValues.indices.contains(baselineOrdinal),
+            baselineValues[baselineOrdinal] == candidateValues[candidateOrdinal] else {
+        return nil
+      }
+      mapping.append(baselineOrdinal)
+      baselineOrdinal += 1
+    }
+    while baselineOrdinal < baselineValues.count {
+      guard removed.contains(baselineOrdinal) else { return nil }
+      baselineOrdinal += 1
+    }
+    return mapping
+  }
+
+  private static func reconcileCaseOnlyNameSpans(
+    baseline: [CleanupProtectedSpan],
+    candidate: [CleanupProtectedSpan],
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme],
+    ordinalMarkerPairs: PairedOrdinalMarkerIndices?,
+    candidateToBaselineLexicalOrdinals: [Int]?
+  ) -> [CleanupProtectedSpan]? {
+    guard let candidateToBaselineLexicalOrdinals else { return candidate }
+    let ignoredBaselineRawRanges = ordinalMarkerPairs?.baselineRawRanges ?? []
+    let ignoredCandidateRawRanges = ordinalMarkerPairs?.candidateRawRanges ?? []
+    let normalizedBaselineValues = removingRawRanges(
+      ignoredBaselineRawRanges,
+      from: baselineLexemes
+    ).filter(\.isLexical).map(\.canonical)
+    let normalizedCandidateValues = removingRawRanges(
+      ignoredCandidateRawRanges,
+      from: candidateLexemes
+    ).filter(\.isLexical).map(\.canonical)
+
+    let baselineNames = Set(
+      baseline.compactMap {
+        singleNameOccurrence(
+          $0,
+          in: baselineLexemes,
+          ignoring: ignoredBaselineRawRanges
+        )
+      }
+    )
+    let candidateNames = Set(
+      candidate.compactMap { span -> NameOccurrence? in
+        guard let occurrence = singleNameOccurrence(
+          span,
+          in: candidateLexemes,
+          ignoring: ignoredCandidateRawRanges
+        ),
+        candidateToBaselineLexicalOrdinals.indices.contains(occurrence.lexicalOrdinal) else {
+          return nil
+        }
+        return .init(
+          lexicalOrdinal: candidateToBaselineLexicalOrdinals[occurrence.lexicalOrdinal],
+          canonical: occurrence.canonical
+        )
+      }
+    )
+    guard baselineNames.isSubset(of: candidateNames) else { return nil }
+
+    return candidate.filter { span in
+      guard let occurrence = singleNameOccurrence(
+        span,
+        in: candidateLexemes,
+        ignoring: ignoredCandidateRawRanges
+      ) else {
+        return true
+      }
+      guard candidateToBaselineLexicalOrdinals.indices.contains(occurrence.lexicalOrdinal) else {
+        return true
+      }
+      let baselineOrdinal = candidateToBaselineLexicalOrdinals[occurrence.lexicalOrdinal]
+      guard !baselineNames.contains(.init(
+        lexicalOrdinal: baselineOrdinal,
+        canonical: occurrence.canonical
+      )) else { return true }
+      guard normalizedBaselineValues.indices.contains(baselineOrdinal),
+            normalizedCandidateValues.indices.contains(occurrence.lexicalOrdinal),
+            normalizedBaselineValues[baselineOrdinal]
+              == normalizedCandidateValues[occurrence.lexicalOrdinal],
+            normalizedCandidateValues[occurrence.lexicalOrdinal] == occurrence.canonical else {
+        return true
+      }
+      guard let baselineIndex = lexicalIndex(
+              atOrdinal: baselineOrdinal,
+              in: baselineLexemes,
+              ignoring: ignoredBaselineRawRanges
+            ),
+            let candidateIndex = span.lexemeRange.first,
+            candidateLexemes.indices.contains(candidateIndex),
+            baselineLexemes[baselineIndex].canonical == occurrence.canonical,
+            baselineLexemes[baselineIndex].original
+              != candidateLexemes[candidateIndex].original,
+            baselineLexemes[baselineIndex].original.lowercased()
+              == candidateLexemes[candidateIndex].original.lowercased() else {
+        return true
+      }
+      return false
+    }
+  }
+
+  private static func protectedSpansMatch(
+    _ baseline: [CleanupProtectedSpan],
+    _ candidate: [CleanupProtectedSpan],
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme],
+    candidateToBaselineLexicalOrdinals: [Int]?,
+    ordinalMarkerPairs: PairedOrdinalMarkerIndices?,
+    correction: ExplicitCorrection?
+  ) -> Bool {
+    let comparableBaseline = baseline.filter { span in
+      guard let correction,
+            correction.markerCanonical == "no" else { return true }
+      return !(span.category == .negation && span.lexemeRange == correction.markerRawRange)
+    }
+    let exemptCandidateNumbers = ordinalMarkerPairs?.candidateNumberRawRanges ?? []
+    let comparableCandidate = candidate.filter { span in
+      guard span.category == .number else { return true }
+      return !exemptCandidateNumbers.contains(span.lexemeRange)
+    }
+    let stableOrder: (CleanupProtectedSpan, CleanupProtectedSpan) -> Bool = { left, right in
+      if left.category.rawValue != right.category.rawValue {
+        return left.category.rawValue < right.category.rawValue
+      }
+      if left.lexemeRange.lowerBound != right.lexemeRange.lowerBound {
+        return left.lexemeRange.lowerBound < right.lexemeRange.lowerBound
+      }
+      return left.lexemeRange.upperBound < right.lexemeRange.upperBound
+    }
+    let orderedBaseline = comparableBaseline.sorted(by: stableOrder)
+    let orderedCandidate = comparableCandidate.sorted(by: stableOrder)
+    guard orderedBaseline.count == orderedCandidate.count else { return false }
+    guard !orderedBaseline.isEmpty else { return true }
+    guard let candidateToBaselineLexicalOrdinals else { return false }
+    return zip(orderedBaseline, orderedCandidate).allSatisfy { baselineSpan, candidateSpan in
+      guard baselineSpan.category == candidateSpan.category,
+            protectedSpanLexemesMatch(baselineSpan, candidateSpan),
+            let baselineOrdinal = protectedSpanLexicalOrdinal(
+              baselineSpan,
+              in: baselineLexemes,
+              ignoring: ordinalMarkerPairs?.baselineRawRanges ?? []
+            ),
+            let candidateOrdinal = protectedSpanLexicalOrdinal(
+              candidateSpan,
+              in: candidateLexemes,
+              ignoring: ordinalMarkerPairs?.candidateRawRanges ?? []
+            ),
+            candidateToBaselineLexicalOrdinals.indices.contains(candidateOrdinal) else {
+        return false
+      }
+      let mappedBaselineOrdinal = candidateToBaselineLexicalOrdinals[candidateOrdinal]
+      return mappedBaselineOrdinal == baselineOrdinal
+        || isCorrectionBoundaryStructuralSpan(
+          baselineSpan,
+          candidateSpan,
+          baselineOrdinal: baselineOrdinal,
+          candidateOrdinal: candidateOrdinal,
+          mappedBaselineOrdinal: mappedBaselineOrdinal,
+          baselineLexemes: baselineLexemes,
+          candidateLexemes: candidateLexemes,
+          correction: correction
+        )
+    }
+  }
+
+  private static func isCorrectionBoundaryStructuralSpan(
+    _ baselineSpan: CleanupProtectedSpan,
+    _ candidateSpan: CleanupProtectedSpan,
+    baselineOrdinal: Int,
+    candidateOrdinal: Int,
+    mappedBaselineOrdinal: Int,
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme],
+    correction: ExplicitCorrection?
+  ) -> Bool {
+    guard let correction,
+          baselineSpan.category == candidateSpan.category,
+          [.recipient, .destination].contains(baselineSpan.category),
+          baselineSpan.canonicalLexemes == candidateSpan.canonicalLexemes else {
+      return false
+    }
+    let baselineCount = baselineLexemes.filter(\.isLexical).count
+    let candidateCount = candidateLexemes.filter(\.isLexical).count
+    let boundary = baselineCount
+      - correction.removed.count
+      - correction.kept.count
+      - 1
+    guard boundary >= 0,
+          candidateCount == boundary + correction.kept.count else {
+      return false
+    }
+    return baselineOrdinal == boundary
+      && candidateOrdinal == boundary
+      && mappedBaselineOrdinal == boundary + correction.removed.count + 1
+  }
+
+  private static func protectedSpanLexicalOrdinal(
+    _ span: CleanupProtectedSpan,
+    in lexemes: [CleanupLexeme],
+    ignoring ignoredRawRanges: [Range<Int>]
+  ) -> Int? {
+    guard let firstLexicalIndex = span.lexemeRange.first(where: { index in
+      lexemes.indices.contains(index)
+        && lexemes[index].isLexical
+        && !ignoredRawRanges.contains(where: { $0.contains(index) })
+    }) else { return nil }
+    return lexemes[..<firstLexicalIndex].enumerated().reduce(into: 0) { count, pair in
+      let (rawIndex, lexeme) = pair
+      if lexeme.isLexical && !ignoredRawRanges.contains(where: { $0.contains(rawIndex) }) {
+        count += 1
+      }
+    }
+  }
+
+  private static func protectedSpanLexemesMatch(
+    _ baseline: CleanupProtectedSpan,
+    _ candidate: CleanupProtectedSpan
+  ) -> Bool {
+    guard baseline.category == .command else {
+      return baseline.canonicalLexemes == candidate.canonicalLexemes
+    }
+    if baseline.canonicalLexemes == candidate.canonicalLexemes { return true }
+    guard let baselineLast = baseline.canonicalLexemes.last,
+          !sentenceTerminalPunctuation.contains(baselineLast),
+          candidate.canonicalLexemes.count == baseline.canonicalLexemes.count + 1,
+          Array(candidate.canonicalLexemes.dropLast()) == baseline.canonicalLexemes,
+          let candidateLast = candidate.canonicalLexemes.last,
+          sentenceTerminalPunctuation.contains(candidateLast) else {
+      return false
+    }
+    return true
+  }
+
+  private static func equalLexicalOperations(
+    _ baseline: [CleanupLexeme],
+    _ candidate: [CleanupLexeme]
+  ) -> [CleanupEditOperation] {
+    var operations: [CleanupEditOperation] = []
+    let baselineLexical = baseline.filter(\.isLexical)
+    let candidateLexical = candidate.filter(\.isLexical)
+    if zip(baselineLexical, candidateLexical).contains(where: { left, right in
+      left.kind == .word
+        && left.canonical == right.canonical
+        && left.original != right.original
+        && left.original.lowercased() == right.original.lowercased()
+    }) {
+      operations.append(.caseChange)
+    }
+    let baselineFormatting = formattingLexemes(baseline)
+    let candidateFormatting = formattingLexemes(candidate)
+    func formattingCounts(_ lexemes: [FormattingLexeme]) -> [Int: Int] {
+      lexemes.reduce(into: [:]) { counts, lexeme in
+        counts[lexeme.lexicalAnchor, default: 0] += 1
+      }
+    }
+    let baselineCounts = formattingCounts(baselineFormatting)
+    let candidateCounts = formattingCounts(candidateFormatting)
+    let ordinalAnchors = Set(
+      (Array(baselineCounts.keys) + Array(candidateCounts.keys)).filter { anchor in
+        baselineCounts[anchor, default: 0] == candidateCounts[anchor, default: 0]
+      }
+    )
+    let baselinePunctuation = formattingCoordinates(
+      baselineFormatting,
+      kind: .punctuation,
+      ordinalAnchors: ordinalAnchors
+    )
+    let candidatePunctuation = formattingCoordinates(
+      candidateFormatting,
+      kind: .punctuation,
+      ordinalAnchors: ordinalAnchors
+    )
+    let baselineWhitespace = formattingCoordinates(
+      baselineFormatting,
+      kind: .whitespace,
+      ordinalAnchors: ordinalAnchors
+    )
+    let candidateWhitespace = formattingCoordinates(
+      candidateFormatting,
+      kind: .whitespace,
+      ordinalAnchors: ordinalAnchors
+    )
+    if baselinePunctuation != candidatePunctuation {
+      operations.append(.punctuation)
+    }
+    if baselineWhitespace != candidateWhitespace {
+      operations.append(.whitespace)
+    }
+    return operations
+  }
+
+  private static func formattingLexemes(
+    _ lexemes: [CleanupLexeme]
+  ) -> [FormattingLexeme] {
+    var lexicalAnchor = 0
+    var ordinalByAnchor: [Int: Int] = [:]
+    var result: [FormattingLexeme] = []
+    for lexeme in lexemes {
+      if lexeme.kind == .punctuation || lexeme.kind == .whitespace {
+        let ordinalAtAnchor = ordinalByAnchor[lexicalAnchor, default: 0]
+        result.append(.init(
+          kind: lexeme.kind,
+          lexicalAnchor: lexicalAnchor,
+          ordinalAtAnchor: ordinalAtAnchor,
+          value: lexeme.original
+        ))
+        ordinalByAnchor[lexicalAnchor] = ordinalAtAnchor + 1
+      }
+      if lexeme.isLexical { lexicalAnchor += 1 }
+    }
+    return result
+  }
+
+  private static func formattingCoordinates(
+    _ lexemes: [FormattingLexeme],
+    kind: CleanupLexemeKind,
+    ordinalAnchors: Set<Int>
+  ) -> [FormattingCoordinate] {
+    lexemes.filter { $0.kind == kind }.map {
+      .init(
+        lexicalAnchor: $0.lexicalAnchor,
+        ordinalAtAnchor: ordinalAnchors.contains($0.lexicalAnchor)
+          ? $0.ordinalAtAnchor
+          : 0,
+        value: $0.value
+      )
+    }
+  }
+
+  private static func isolatedFillerRemoval(
+    _ baseline: [CleanupLexeme],
+    _ candidate: [CleanupLexeme],
+    _ baselineValues: [String],
+    _ candidateValues: [String],
+    _ spans: [CleanupProtectedSpan]
+  ) -> IsolatedFillerRemoval? {
+    guard candidateValues.count < baselineValues.count else { return nil }
+    let removableOrdinals = removableFillerOrdinals(
+      in: baseline,
+      baselineValues: baselineValues,
+      protectedSpans: spans
+    )
+    guard !removableOrdinals.isEmpty else { return nil }
+
+    var candidateOrdinal = 0
+    var removedOrdinals: [Int] = []
+    for baselineOrdinal in baselineValues.indices {
+      if candidateOrdinal < candidateValues.count,
+         baselineValues[baselineOrdinal] == candidateValues[candidateOrdinal] {
+        candidateOrdinal += 1
+        continue
+      }
+      guard removableOrdinals.contains(baselineOrdinal) else { return nil }
+      removedOrdinals.append(baselineOrdinal)
+    }
+
+    guard candidateOrdinal == candidateValues.count, !removedOrdinals.isEmpty else { return nil }
+    return .init(
+      removedOrdinals: removedOrdinals,
+      values: removedOrdinals.map { baselineValues[$0] }
+    )
+  }
+
+  private static func removableFillerOrdinals(
+    in baseline: [CleanupLexeme],
+    baselineValues: [String],
+    protectedSpans: [CleanupProtectedSpan]
+  ) -> Set<Int> {
+    let lexicalIndices = baseline.indices.filter { baseline[$0].isLexical }
+    return Set(baselineValues.indices.filter { ordinal in
+      guard lexicalIndices.indices.contains(ordinal) else { return false }
+      let rawIndex = lexicalIndices[ordinal]
+      let isContextualLike = isButLikeFiller(at: rawIndex, in: baseline)
+      guard fillerWords.contains(baselineValues[ordinal]) || isContextualLike,
+            !protectedSpans.contains(where: { $0.lexemeRange.contains(rawIndex) }) else {
+        return false
+      }
+      return isContextualLike || isStandaloneFiller(at: rawIndex, in: baseline)
+    })
+  }
+
+  private static func composedSafeDeletion(
+    _ baseline: [CleanupLexeme],
+    _ candidateValues: [String],
+    _ baselineValues: [String],
+    _ spans: [CleanupProtectedSpan]
+  ) -> ComposedSafeDeletion? {
+    guard candidateValues.count < baselineValues.count else { return nil }
+    let lexicalIndices = baseline.indices.filter { baseline[$0].isLexical }
+    let removableFillers = removableFillerOrdinals(
+      in: baseline,
+      baselineValues: baselineValues,
+      protectedSpans: spans
+    )
+    var candidateOrdinal = 0
+    var removedOrdinals: [Int] = []
+    var operations: [CleanupEditOperation] = []
+    var removedFiller = false
+    var removedDuplicate = false
+
+    for baselineOrdinal in baselineValues.indices {
+      if candidateValues.indices.contains(candidateOrdinal),
+         baselineValues[baselineOrdinal] == candidateValues[candidateOrdinal] {
+        candidateOrdinal += 1
+        continue
+      }
+      if removableFillers.contains(baselineOrdinal) {
+        removedOrdinals.append(baselineOrdinal)
+        operations.append(.deleteFiller(baselineValues[baselineOrdinal]))
+        removedFiller = true
+        continue
+      }
+      guard isKeepFirstImmediateDuplicate(
+        at: baselineOrdinal,
+        in: baseline,
+        baselineValues: baselineValues,
+        lexicalIndices: lexicalIndices,
+        protectedSpans: spans,
+        removedOrdinals: removedOrdinals
+      ) else { return nil }
+      removedOrdinals.append(baselineOrdinal)
+      operations.append(.deleteImmediateDuplicate([baselineValues[baselineOrdinal]]))
+      removedDuplicate = true
+    }
+
+    guard candidateOrdinal == candidateValues.count,
+          removedFiller,
+          removedDuplicate else { return nil }
+    return .init(removedOrdinals: removedOrdinals, operations: operations)
+  }
+
+  private static func isKeepFirstImmediateDuplicate(
+    at ordinal: Int,
+    in baseline: [CleanupLexeme],
+    baselineValues: [String],
+    lexicalIndices: [Int],
+    protectedSpans: [CleanupProtectedSpan],
+    removedOrdinals: [Int]
+  ) -> Bool {
+    guard ordinal > 0,
+          !removedOrdinals.contains(ordinal - 1),
+          baselineValues.indices.contains(ordinal),
+          baselineValues[ordinal - 1] == baselineValues[ordinal],
+          lexicalIndices.indices.contains(ordinal) else { return false }
+    let firstIndex = lexicalIndices[ordinal - 1]
+    let secondIndex = lexicalIndices[ordinal]
+    guard baseline[firstIndex].kind != .number,
+          baseline[secondIndex].kind != .number,
+          !protectedSpans.contains(where: { $0.lexemeRange.contains(firstIndex) }),
+          !protectedSpans.contains(where: { $0.lexemeRange.contains(secondIndex) }) else {
+      return false
+    }
+    return baseline[(firstIndex + 1)..<secondIndex].allSatisfy { $0.kind == .whitespace }
+  }
+
+  private static func isStandaloneFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(rawIndex), lexemes[rawIndex].kind == .word else {
+      return false
+    }
+    func isBoundaryWhitespaceOrPunctuation(_ index: Int) -> Bool {
+      guard lexemes.indices.contains(index) else { return true }
+      return lexemes[index].kind == .whitespace || lexemes[index].kind == .punctuation
+    }
+    return isBoundaryWhitespaceOrPunctuation(rawIndex - 1)
+      && isBoundaryWhitespaceOrPunctuation(rawIndex + 1)
+  }
+
+  private static func isWhitespaceDelimitedFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(rawIndex), lexemes[rawIndex].kind == .word else {
+      return false
+    }
+    let isStartDelimited = rawIndex == lexemes.startIndex
+      || lexemes[rawIndex - 1].kind == .whitespace
+    let isEndDelimited = !lexemes.indices.contains(rawIndex + 1)
+      || lexemes[rawIndex + 1].kind == .whitespace
+    guard isStartDelimited && isEndDelimited else { return false }
+    var next = rawIndex + 1
+    while lexemes.indices.contains(next), lexemes[next].kind == .whitespace {
+      next += 1
+    }
+    return !(lexemes.indices.contains(next)
+      && lexemes[next].kind == .punctuation
+      && lexemes[next].original == ",")
+  }
+
+  private static func isCommaSeparatedFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(rawIndex),
+          lexemes[rawIndex].kind == .word,
+          deterministicEnglishFillerWords.contains(lexemes[rawIndex].canonical),
+          rawIndex >= 3,
+          lexemes[rawIndex - 1].kind == .whitespace,
+          lexemes[rawIndex - 2].kind == .punctuation,
+          lexemes[rawIndex - 2].original == ",",
+          lexemes[rawIndex - 3].isLexical,
+          lexemes.indices.contains(rawIndex + 3),
+          lexemes[rawIndex + 1].kind == .punctuation,
+          lexemes[rawIndex + 1].original == ",",
+          lexemes[rawIndex + 2].kind == .whitespace,
+          lexemes[rawIndex + 3].isLexical else {
+      return false
+    }
+    return !deterministicEnglishFillerWords.contains(lexemes[rawIndex - 3].canonical)
+      && !deterministicEnglishFillerWords.contains(lexemes[rawIndex + 3].canonical)
+  }
+
+  private static func deterministicFallbackProtectedSpans(
+    from text: String,
+    protectedForms: [String]
+  ) -> [CleanupProtectedSpan] {
+    let lexemes = CleanupLexeme.scan(text)
+    return CleanupProtectedSpan.extract(from: text, protectedForms: protectedForms).filter { span in
+      guard span.category == .name,
+            span.lexemeRange.count == 1,
+            let rawIndex = span.lexemeRange.first,
+            lexemes.indices.contains(rawIndex) else {
+        return true
+      }
+      return !isSentenceInitialCommaFiller(at: rawIndex, in: lexemes)
+        && !isButLikeFiller(at: rawIndex, in: lexemes)
+    }
+  }
+
+  private static func deterministicFallbackValidationSpans(
+    baseline: [CleanupProtectedSpan],
+    candidate: [CleanupProtectedSpan],
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme],
+    fallback: (text: String, omittedRawIndices: Set<Int>)?
+  ) -> (baseline: [CleanupProtectedSpan], candidate: [CleanupProtectedSpan]) {
+    guard let fallback else {
+      return (baseline, candidate)
+    }
+    let expectedValues = baselineLexemes.enumerated()
+      .filter { !fallback.omittedRawIndices.contains($0.offset) && $0.element.isLexical }
+      .map { $0.element.canonical }
+    guard expectedValues == candidateLexemes.filter(\.isLexical).map(\.canonical) else {
+      return (baseline, candidate)
+    }
+    let firstRetainedRawIndex = isSentenceInitialCommaFiller(
+      at: baselineLexemes.startIndex,
+      in: baselineLexemes
+    )
+      ? baselineLexemes.indices.first {
+        !fallback.omittedRawIndices.contains($0) && baselineLexemes[$0].isLexical
+      }
+      : nil
+    let filteredBaseline = baseline.filter { span in
+      guard span.category == .name,
+            span.lexemeRange.count == 1,
+            let rawIndex = span.lexemeRange.first else {
+        return true
+      }
+      if fallback.omittedRawIndices.contains(rawIndex) {
+        return !isSentenceInitialCommaFiller(at: rawIndex, in: baselineLexemes)
+          && !isButLikeFiller(at: rawIndex, in: baselineLexemes)
+      }
+      return rawIndex != firstRetainedRawIndex
+    }
+    return (filteredBaseline, candidate)
+  }
+
+  private static func isSentenceInitialCommaFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(rawIndex),
+          deterministicEnglishFillerWords.contains(lexemes[rawIndex].canonical),
+          lexemes[rawIndex].kind == .word,
+          lexemes.indices.contains(rawIndex + 2),
+          lexemes[rawIndex + 1].kind == .punctuation,
+          lexemes[rawIndex + 1].original == ",",
+          lexemes[rawIndex + 2].kind == .whitespace else {
+      return false
+    }
+    return rawIndex == lexemes.startIndex
+  }
+
+  private static func isButLikeFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard lexemes.indices.contains(rawIndex),
+          lexemes[rawIndex].kind == .word,
+          lexemes[rawIndex].canonical == "like",
+          lexemes[rawIndex].original == "like",
+          lexemes.indices.contains(rawIndex + 2),
+          lexemes[rawIndex + 1].kind == .punctuation,
+          lexemes[rawIndex + 1].original == ",",
+          lexemes[rawIndex + 2].kind == .whitespace else {
+      return false
+    }
+    if rawIndex >= 2,
+       lexemes[rawIndex - 1].kind == .whitespace,
+       lexemes[rawIndex - 2].kind == .word,
+       lexemes[rawIndex - 2].canonical == "but",
+       lexemes[rawIndex - 2].original == "but" {
+      return true
+    }
+    return rawIndex >= 3
+      && lexemes[rawIndex - 1].kind == .whitespace
+      && lexemes[rawIndex - 2].kind == .punctuation
+      && lexemes[rawIndex - 2].original == ","
+      && lexemes[rawIndex - 3].kind == .word
+      && lexemes[rawIndex - 3].canonical == "but"
+      && lexemes[rawIndex - 3].original == "But"
+      && lexemes.indices.contains(rawIndex + 3)
+      && lexemes[rawIndex + 3].isLexical
+      && isSentenceBoundary(before: rawIndex - 3, in: lexemes)
+  }
+
+  private static func isTitleCaseButLikeFiller(
+    at rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    guard isButLikeFiller(at: rawIndex, in: lexemes),
+          rawIndex >= 3,
+          lexemes[rawIndex - 1].kind == .whitespace,
+          lexemes[rawIndex - 2].kind == .punctuation,
+          lexemes[rawIndex - 2].original == ",",
+          lexemes[rawIndex - 3].kind == .word,
+          lexemes[rawIndex - 3].canonical == "but",
+          lexemes[rawIndex - 3].original == "But",
+          lexemes.indices.contains(rawIndex + 3),
+          lexemes[rawIndex + 3].isLexical else {
+      return false
+    }
+    return true
+  }
+
+  private static func isSentenceBoundary(
+    before rawIndex: Int,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    var index = rawIndex - 1
+    while index >= 0 {
+      if lexemes[index].isLexical { return false }
+      if sentenceTerminalPunctuation.contains(lexemes[index].original) { return true }
+      index -= 1
+    }
+    return true
+  }
+
+  private static func immediateDuplicateRemoval(
+    _ baseline: [CleanupLexeme],
+    _ candidateValues: [String],
+    _ baselineValues: [String],
+    _ spans: [CleanupProtectedSpan]
+  ) -> ImmediateDuplicateRemoval? {
+    guard candidateValues.count + 1 == baselineValues.count else { return nil }
+    let lexicalIndices = baseline.indices.filter { baseline[$0].isLexical }
+    for ordinal in baselineValues.indices {
+      guard ordinal + 1 < baselineValues.count,
+            baselineValues[ordinal] == baselineValues[ordinal + 1],
+            lexicalIndices.indices.contains(ordinal),
+            lexicalIndices.indices.contains(ordinal + 1) else { continue }
+      let firstIndex = lexicalIndices[ordinal]
+      let secondIndex = lexicalIndices[ordinal + 1]
+      guard baseline[firstIndex].kind != .number,
+            baseline[secondIndex].kind != .number,
+            !spans.contains(where: { $0.lexemeRange.contains(firstIndex) }),
+            !spans.contains(where: { $0.lexemeRange.contains(secondIndex) }) else { continue }
+      guard baseline[(firstIndex + 1)..<secondIndex].allSatisfy({ $0.kind == .whitespace }) else {
+        continue
+      }
+      var expected = baselineValues
+      expected.remove(at: ordinal)
+      if expected == candidateValues {
+        return .init(
+          removedOrdinals: [ordinal],
+          values: [baselineValues[ordinal]]
+        )
+      }
+    }
+    return nil
+  }
+
+  private static func explicitCorrection(
+    _ baseline: [CleanupLexeme],
+    _ candidateValues: [String],
+    _ baselineValues: [String]
+  ) -> ExplicitCorrection? {
+    let lexicalIndices = baseline.indices.filter { baseline[$0].isLexical }
+    let correctionDelimiters: Set<String> = [",", ";", ":", "-", "–", "—"]
+
+    func nearestNonWhitespace(_ index: Int, step: Int) -> Int? {
+      var cursor = index + step
+      while baseline.indices.contains(cursor) {
+        if baseline[cursor].kind != .whitespace { return cursor }
+        cursor += step
+      }
+      return nil
+    }
+
+    var matches: [ExplicitCorrection] = []
+    for markerIndex in baselineValues.indices where correctionMarkers.contains(baselineValues[markerIndex]) {
+      guard lexicalIndices.indices.contains(markerIndex),
+            markerIndex + 1 < baselineValues.count else { continue }
+      let markerRawIndex = lexicalIndices[markerIndex]
+      guard let previous = nearestNonWhitespace(markerRawIndex, step: -1),
+            let next = nearestNonWhitespace(markerRawIndex, step: 1),
+            baseline[previous].kind == .punctuation,
+            baseline[next].kind == .punctuation,
+            correctionDelimiters.contains(baseline[previous].original),
+            correctionDelimiters.contains(baseline[next].original) else {
+        continue
+      }
+      let kept = Array(baselineValues[(markerIndex + 1)...])
+      guard !kept.isEmpty,
+            kept.allSatisfy({ !correctionMarkers.contains($0) }) else { continue }
+      for splitIndex in 0..<markerIndex {
+        let prefix = Array(baselineValues[..<splitIndex])
+        let removed = Array(baselineValues[splitIndex..<markerIndex])
+        guard !removed.isEmpty,
+              removed.allSatisfy({ !correctionMarkers.contains($0) }),
+              candidateValues == prefix + kept else { continue }
+        matches.append(.init(
+          removed: removed,
+          kept: kept,
+          markerCanonical: baselineValues[markerIndex],
+          markerRawRange: markerRawIndex..<(markerRawIndex + 1)
+        ))
+      }
+    }
+    guard matches.count == 1 else { return nil }
+    return matches[0]
+  }
+
+  private static func hasCorrectionMarker(_ values: [String]) -> Bool {
+    values.contains { correctionMarkers.contains($0) }
+  }
+
+  private static func isShortListFormatting(
+    _ baseline: [CleanupLexeme],
+    _ candidate: [CleanupLexeme],
+    ordinalMarkerPairs: PairedOrdinalMarkerIndices
+  ) -> Bool {
+    let baselineRemainder = removingRawRanges(
+      ordinalMarkerPairs.baselineRawRanges,
+      from: baseline
+    )
+    let candidateRemainder = removingRawRanges(
+      ordinalMarkerPairs.candidateRawRanges,
+      from: candidate
+    )
+    return baselineRemainder.filter(\.isLexical).map(\.canonical)
+      == candidateRemainder.filter(\.isLexical).map(\.canonical)
+  }
+
+  private static func validatedShortListMarkerRanges(
+    baselineLexemes: [CleanupLexeme],
+    candidateLexemes: [CleanupLexeme]
+  ) -> (
+    baselineRawRanges: [Range<Int>],
+    candidateRawRanges: [Range<Int>],
+    candidateNumberRawRanges: [Range<Int>]
+  )? {
+    let baseline = baselineLexemes.indices.compactMap { index -> Range<Int>? in
+      guard baselineLexemes[index].kind == .word,
+            ordinalMarkerNumbers[baselineLexemes[index].canonical] != nil else {
+        return nil
+      }
+      return index..<(index + 1)
+    }
+    let candidate = candidateLexemes.indices.compactMap { index -> (Range<Int>, Range<Int>)? in
+      guard candidateLexemes[index].kind == .number,
+            isNumericListMarker(candidateLexemes[index].canonical) != nil,
+            index + 1 < candidateLexemes.count,
+            candidateLexemes[index + 1].original == "." else {
+        return nil
+      }
+      return (index..<(index + 2), index..<(index + 1))
+    }
+    guard baseline.count == candidate.count,
+          (2...5).contains(baseline.count),
+          let firstBaseline = baseline.first,
+          let firstCandidate = candidate.first,
+          startsShortList(at: firstBaseline, in: baselineLexemes),
+          startsShortList(at: firstCandidate.0, in: candidateLexemes),
+          markersHaveItems(baseline, in: baselineLexemes),
+          markersHaveItems(candidate.map(\.0), in: candidateLexemes),
+          candidate.dropFirst().allSatisfy({ marker in
+            isPrecededByLineBreak(marker.0, in: candidateLexemes)
+          }) else {
+      return nil
+    }
+    return (
+      baselineRawRanges: baseline,
+      candidateRawRanges: candidate.map(\.0),
+      candidateNumberRawRanges: candidate.map(\.1)
+    )
+  }
+
+  private static func startsShortList(
+    at range: Range<Int>,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    lexemes[..<range.lowerBound].allSatisfy { $0.kind == .whitespace }
+  }
+
+  private static func isPrecededByLineBreak(
+    _ range: Range<Int>,
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    var index = range.lowerBound - 1
+    while index >= 0, lexemes[index].kind == .whitespace {
+      if lexemes[index].original.contains("\n")
+        || lexemes[index].original.contains("\r") {
+        return true
+      }
+      index -= 1
+    }
+    return false
+  }
+
+  private static func markersHaveItems(
+    _ ranges: [Range<Int>],
+    in lexemes: [CleanupLexeme]
+  ) -> Bool {
+    ranges.enumerated().allSatisfy { offset, range in
+      let end = offset + 1 < ranges.count
+        ? ranges[offset + 1].lowerBound
+        : lexemes.count
+      return lexemes[range.upperBound..<end].contains(where: \.isLexical)
+    }
+  }
+}

@@ -8,31 +8,50 @@
     static let noteType = UTType(exportedAs: "com.harryjin.fleck.local-note")
     static let folderType = UTType(exportedAs: "com.harryjin.fleck.local-folder")
 
-    private struct NoteValue: Codable {
-      let noteID: UUID
-      let sourceFolderID: UUID?
+    private final class LocalNoteItemProvider: NSItemProvider {
+      let source: NoteDropSource
+
+      init(source: NoteDropSource) {
+        self.source = source
+        super.init()
+      }
+
+      required init?(coder: NSCoder) {
+        return nil
+      }
     }
 
     private struct FolderValue: Codable {
       let folderID: UUID
     }
 
-    static func noteProvider(noteID: UUID, sourceFolderID: UUID?) -> NSItemProvider {
-      provider(
-        type: noteType,
-        value: NoteValue(noteID: noteID, sourceFolderID: sourceFolderID)
-      )
+    static func noteProvider(source: NoteDropSource) -> NSItemProvider {
+      let data = try! JSONEncoder().encode(source)
+      let provider = LocalNoteItemProvider(source: source)
+      provider.registerDataRepresentation(
+        forTypeIdentifier: noteType.identifier,
+        visibility: .ownProcess
+      ) { completion in
+        completion(data, nil)
+        return nil
+      }
+      return provider
+    }
+
+    static func noteSource(from providers: [NSItemProvider]) -> NoteDropSource? {
+      providers.first(where: {
+        $0.registeredTypeIdentifiers.contains(noteType.identifier)
+      }).flatMap {
+        ($0 as? LocalNoteItemProvider)?.source
+      }
+    }
+
+    static func noteValue(from data: Data) -> NoteDropSource? {
+      try? JSONDecoder().decode(NoteDropSource.self, from: data)
     }
 
     static func folderProvider(folderID: UUID) -> NSItemProvider {
       provider(type: folderType, value: FolderValue(folderID: folderID))
-    }
-
-    static func noteValue(from data: Data) -> (noteID: UUID, sourceFolderID: UUID?)? {
-      guard let value = try? JSONDecoder().decode(NoteValue.self, from: data) else {
-        return nil
-      }
-      return (value.noteID, value.sourceFolderID)
     }
 
     static func folderID(from data: Data) -> UUID? {
@@ -56,6 +75,36 @@
     }
   }
 
+  struct NoteDropSource: Codable, Equatable {
+    let noteID: UUID
+    let sourceFolderID: UUID?
+    let dragSessionID: UUID
+
+    init(noteID: UUID, sourceFolderID: UUID?, dragSessionID: UUID = UUID()) {
+      self.noteID = noteID
+      self.sourceFolderID = sourceFolderID
+      self.dragSessionID = dragSessionID
+    }
+  }
+
+  enum NoteDropPresentation {
+    static func isValidTarget(
+      draggedSource: NoteDropSource?,
+      targetFolderID: UUID?,
+      notes: [Note],
+      validTargetFolderIDs: Set<UUID>
+    ) -> Bool {
+      guard let draggedSource,
+        let note = notes.first(where: { $0.id == draggedSource.noteID }),
+        note.folderID == draggedSource.sourceFolderID
+      else { return false }
+      if let targetFolderID, !validTargetFolderIDs.contains(targetFolderID) {
+        return false
+      }
+      return draggedSource.sourceFolderID != targetFolderID
+    }
+  }
+
   enum FolderNavigatorFocus {
     static func nextIndex(
       currentIndex: Int,
@@ -74,9 +123,40 @@
   }
 
   enum TabDragReorder {
-    struct Destination: Equatable {
-      let id: UUID
-      let index: Int
+    static func isValidLocalDrag(
+      draggedSource: NoteDropSource?,
+      providerSource: NoteDropSource?,
+      destinationID: UUID,
+      activeFolderID: UUID?,
+      currentNotes: [Note]
+    ) -> Bool {
+      guard let draggedSource,
+        draggedSource == providerSource,
+        draggedSource.sourceFolderID == activeFolderID,
+        draggedSource.noteID != destinationID,
+        let draggedNote = currentNotes.first(where: { $0.id == draggedSource.noteID }),
+        draggedNote.folderID == draggedSource.sourceFolderID,
+        let destinationNote = currentNotes.first(where: { $0.id == destinationID }),
+        destinationNote.folderID == activeFolderID
+      else { return false }
+      return true
+    }
+
+    static func partitionLocalDestination(
+      draggedID: UUID,
+      absoluteDestination: Int,
+      visibleNotes: [Note]
+    ) -> Int? {
+      guard let draggedNote = visibleNotes.first(where: { $0.id == draggedID }) else {
+        return nil
+      }
+      let notesAfterRemoval = visibleNotes.filter { $0.id != draggedID }
+      let insertion = min(max(absoluteDestination, 0), notesAfterRemoval.count)
+      return notesAfterRemoval.prefix(insertion).reduce(into: 0) { count, note in
+        if note.isPinned == draggedNote.isPinned {
+          count += 1
+        }
+      }
     }
 
     struct LiveMoveResult: Equatable {
@@ -84,74 +164,48 @@
       let destinationID: UUID?
     }
 
-    static func destination(
-      draggedID: UUID?,
-      locationX: CGFloat,
-      currentNoteIDs: [UUID],
-      currentFrames: [UUID: CGRect]
-    ) -> Destination? {
-      guard let draggedID,
-        let sourceIndex = currentNoteIDs.firstIndex(of: draggedID),
-        let draggedFrame = currentFrames[draggedID]
-      else { return nil }
-
-      let destinationID: UUID?
-      if locationX > draggedFrame.midX {
-        destinationID = currentNoteIDs.dropFirst(sourceIndex + 1).last { id in
-          guard let midpoint = currentFrames[id]?.midX else { return false }
-          return midpoint <= locationX
-        }
-      } else if locationX < draggedFrame.midX {
-        destinationID = currentNoteIDs.prefix(sourceIndex).first { id in
-          guard let midpoint = currentFrames[id]?.midX else { return false }
-          return midpoint >= locationX
-        }
-      } else {
-        destinationID = nil
-      }
-
-      guard let destinationID,
-        let destinationIndex = currentNoteIDs.firstIndex(of: destinationID)
-      else { return nil }
-      return Destination(id: destinationID, index: destinationIndex)
-    }
-
     static func performLiveMove(
-      draggedID: UUID?,
-      locationX: CGFloat,
-      currentNoteIDs: () -> [UUID],
-      currentFrames: () -> [UUID: CGRect],
+      draggedSource: NoteDropSource?,
+      providerSource: NoteDropSource?,
+      over destinationID: UUID,
+      activeFolderID: UUID?,
+      currentNotes: () -> [Note],
       lastDestinationID: UUID?,
       move: (UUID, Int) -> Void
     ) -> LiveMoveResult {
-      guard let draggedID,
-        let destination = destination(
-          draggedID: draggedID,
-          locationX: locationX,
-          currentNoteIDs: currentNoteIDs(),
-          currentFrames: currentFrames()
+      let visibleNotes = currentNotes()
+      guard isValidLocalDrag(
+        draggedSource: draggedSource,
+        providerSource: providerSource,
+        destinationID: destinationID,
+        activeFolderID: activeFolderID,
+        currentNotes: visibleNotes
+      ), let draggedSource
+      else {
+        return LiveMoveResult(didMove: false, destinationID: nil)
+      }
+      guard destinationID != lastDestinationID else {
+        return LiveMoveResult(didMove: false, destinationID: destinationID)
+      }
+      guard let absoluteDestination = visibleNotes.firstIndex(where: { $0.id == destinationID }),
+        let localDestination = partitionLocalDestination(
+          draggedID: draggedSource.noteID,
+          absoluteDestination: absoluteDestination,
+          visibleNotes: visibleNotes
         )
       else {
         return LiveMoveResult(didMove: false, destinationID: nil)
       }
-      guard destination.id != lastDestinationID else {
-        return LiveMoveResult(didMove: false, destinationID: destination.id)
-      }
-      move(draggedID, destination.index)
-      return LiveMoveResult(didMove: true, destinationID: destination.id)
+      move(draggedSource.noteID, localDestination)
+      return LiveMoveResult(didMove: true, destinationID: destinationID)
     }
   }
 
   enum TabOverflowPresentation {
-    static func tabViewportWidth(totalStripWidth: CGFloat) -> CGFloat {
-      max(0, totalStripWidth - 28)
-    }
+    static let tabOverflowRailWidth: CGFloat = 56
 
-    static func hasHiddenTrailingContent(
-      contentTrailingEdge: CGFloat,
-      visibleTrailingEdge: CGFloat
-    ) -> Bool {
-      contentTrailingEdge > visibleTrailingEdge + 0.5
+    static func tabViewportWidth(totalStripWidth: CGFloat) -> CGFloat {
+      max(0, totalStripWidth - tabOverflowRailWidth)
     }
   }
 
@@ -168,28 +222,100 @@
     }
   }
 
-  private struct TabContentTrailingEdgePreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-      value = nextValue()
-    }
-  }
-
-  private struct TabFramePreferenceKey: PreferenceKey {
-    static let defaultValue: [UUID: CGRect] = [:]
-
-    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
-      value.merge(nextValue(), uniquingKeysWith: { _, new in new })
-    }
-  }
-
   enum NotesPanelSizing: Equatable {
     case storedPreferences
     case container
   }
 
+  enum NotesPanelBannerCategory: Hashable {
+    case modifierRecovery
+    case captureFailure
+    case agentChange
+  }
+
+  enum NotesPanelBannerOccurrence: Hashable {
+    case modifierRecovery(statusCopy: String, recoveryButtonTitle: String)
+    case captureFailure(message: String, actionPanes: [DictationPrivacyPane])
+    case agentChange(changeID: UUID, count: Int)
+
+    var category: NotesPanelBannerCategory {
+      switch self {
+      case .modifierRecovery: .modifierRecovery
+      case .captureFailure: .captureFailure
+      case .agentChange: .agentChange
+      }
+    }
+  }
+
+  enum NotesPanelBannerPolicy {
+    static func activeOccurrences(
+      modifierRecovery: NotesPanelBannerOccurrence?,
+      captureFailure: NotesPanelBannerOccurrence?,
+      routineRecoveryAction _: DictationCapsuleAction?,
+      agentChange: NotesPanelBannerOccurrence?
+    ) -> Set<NotesPanelBannerOccurrence> {
+      Set([modifierRecovery, captureFailure, agentChange].compactMap { $0 })
+    }
+  }
+
+  struct NotesPanelBannerDismissalState: Equatable {
+    private var dismissedOccurrences = Set<NotesPanelBannerOccurrence>()
+
+    mutating func reconcile(
+      activeOccurrences: Set<NotesPanelBannerOccurrence>
+    ) {
+      dismissedOccurrences.formIntersection(activeOccurrences)
+    }
+
+    mutating func forgetDismissedOccurrences(
+      in category: NotesPanelBannerCategory
+    ) {
+      dismissedOccurrences = dismissedOccurrences.filter {
+        $0.category != category
+      }
+    }
+
+    mutating func dictationPhaseDidEmit(_ phase: DictationPhase) {
+      guard phase == .arming else { return }
+      forgetDismissedOccurrences(in: .modifierRecovery)
+    }
+
+    mutating func dismiss(_ occurrence: NotesPanelBannerOccurrence) {
+      dismissedOccurrences.insert(occurrence)
+    }
+
+    func isPresented(_ occurrence: NotesPanelBannerOccurrence) -> Bool {
+      !dismissedOccurrences.contains(occurrence)
+    }
+  }
+
+  struct NotesPanelBannerCloseButton: View {
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+      Button(action: action) {
+        Image(systemName: "xmark")
+          .font(.system(size: 10, weight: .semibold))
+          .frame(width: 22, height: 22)
+      }
+      .buttonStyle(.borderless)
+      .help("Dismiss \(label)")
+      .accessibilityLabel("Dismiss \(label)")
+    }
+  }
+
   struct NotesPanel: View {
+    private enum EditorFocus: Hashable {
+      case title
+      case body
+    }
+
+    private enum TabScrollTarget: Hashable {
+      case leading
+      case trailing
+    }
+
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
@@ -208,17 +334,20 @@
     @State private var isShowingDictationHistory = false
     @State private var isShowingAgentActivity = false
     @State private var notePendingDeletion: Note?
+    @State private var folderPendingDeletion: Folder?
+    @State private var dontAskAgainForDeletion = false
     @State private var notePendingAgentShare: Note?
     @State private var exportDocument: NoteFileDocument?
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
-    @State private var draggedNoteID: UUID?
+    @State private var noteDropSource: NoteDropSource?
     @State private var tabDragDestinationID: UUID?
     @State private var tabColorPickerNoteID: UUID?
-    @State private var tabFrames: [UUID: CGRect] = [:]
-    @State private var tabContentTrailingEdge: CGFloat = 0
     @State private var activeFolderID: UUID?
+    @State private var bannerDismissalState = NotesPanelBannerDismissalState()
     @State private var restoreEditorFocusAfterHide = false
+    @State private var searchPointerActivationPending = false
+    @FocusState private var editorFocus: EditorFocus?
 
     init(
       dictationRuntime: DictationRuntime,
@@ -252,67 +381,78 @@
             tabStrip
             Divider().opacity(0.35)
             if let title = modifierRecoveryPresentation.recoveryButtonTitle {
-              HStack(spacing: 8) {
-                Label(modifierRecoveryPresentation.statusCopy, systemImage: "keyboard.badge.ellipsis")
-                  .font(.caption)
-                Spacer()
-                Button(title) {
-                  Task { @MainActor in
-                    guard let settings = await dictationRuntime.recoverModifierMonitoring() else {
-                      return
+              let occurrence = NotesPanelBannerOccurrence.modifierRecovery(
+                statusCopy: modifierRecoveryPresentation.statusCopy,
+                recoveryButtonTitle: title
+              )
+              if bannerDismissalState.isPresented(occurrence) {
+                HStack(spacing: 8) {
+                  Label(modifierRecoveryPresentation.statusCopy, systemImage: "keyboard.badge.ellipsis")
+                    .font(.caption)
+                  Spacer()
+                  Button(title) {
+                    Task { @MainActor in
+                      guard let settings = await dictationRuntime.recoverModifierMonitoring() else {
+                        return
+                      }
+                      dictationRuntime.openSystemSettings(settings)
                     }
-                    dictationRuntime.openSystemSettings(settings)
                   }
+                  .accessibilityLabel(title)
+                  NotesPanelBannerCloseButton(
+                    label: "modifier monitoring recovery",
+                    action: { dismissBanner(occurrence) }
+                  )
                 }
-                .accessibilityLabel(title)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.quaternary.opacity(0.35))
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Dictation shortcut unavailable")
               }
-              .padding(.horizontal, 10)
-              .padding(.vertical, 7)
-              .background(.quaternary.opacity(0.35))
-              .accessibilityElement(children: .contain)
-              .accessibilityLabel("Dictation shortcut unavailable")
             }
             if let failure = dictationRuntime.captureFailure {
-              HStack(spacing: 8) {
-                Label(failure.message, systemImage: "exclamationmark.triangle")
-                  .font(.caption)
-                Spacer()
-                ForEach(failure.actions, id: \.pane) { action in
-                  Button(action.title) {
-                    dictationRuntime.openSystemSettings(action)
+              let occurrence = NotesPanelBannerOccurrence.captureFailure(
+                message: failure.message,
+                actionPanes: failure.actions.map(\.pane)
+              )
+              if bannerDismissalState.isPresented(occurrence) {
+                HStack(spacing: 8) {
+                  Label(failure.message, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                  Spacer()
+                  ForEach(failure.actions, id: \.pane) { action in
+                    Button(action.title) {
+                      dictationRuntime.openSystemSettings(action)
+                    }
+                    .accessibilityLabel(action.title)
                   }
-                  .accessibilityLabel(action.title)
+                  NotesPanelBannerCloseButton(
+                    label: "dictation capture failure",
+                    action: { dismissBanner(occurrence) }
+                  )
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.quaternary.opacity(0.35))
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Dictation unavailable")
               }
-              .padding(.horizontal, 10)
-              .padding(.vertical, 7)
-              .background(.quaternary.opacity(0.35))
-              .accessibilityElement(children: .contain)
-              .accessibilityLabel("Dictation unavailable")
-            }
-            if let recoveryAction = dictationRuntime.recoveryAction {
-              HStack(spacing: 8) {
-                Label("Dictation recovery", systemImage: "waveform.badge.exclamationmark")
-                  .font(.caption)
-                Spacer()
-                Button(recoveryAction.title) {
-                  Task { await dictationRuntime.performRecoveryAction() }
-                }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-                .disabled(!dictationRuntime.recoveryCommand.isEnabled)
-                .accessibilityLabel(recoveryAction.accessibilityLabel)
-              }
-              .padding(.horizontal, 10)
-              .padding(.vertical, 7)
-              .background(.quaternary.opacity(0.35))
             }
             if let banner = appState.agentBannerPresentation {
-              AgentChangeBanner(
-                presentation: banner,
-                motion: motion,
-                onUndo: { Task { await appState.undoLatestAgentChange() } }
+              let occurrence = NotesPanelBannerOccurrence.agentChange(
+                changeID: banner.feedback.changeID,
+                count: banner.count
               )
-              .animation(motion.quick, value: banner)
+              if bannerDismissalState.isPresented(occurrence) {
+                AgentChangeBanner(
+                  presentation: banner,
+                  motion: motion,
+                  onUndo: { Task { await appState.undoLatestAgentChange() } },
+                  onDismiss: { dismissBanner(occurrence) }
+                )
+                .animation(motion.quick, value: banner)
+              }
             }
             scopedEditor
               .frame(minHeight: 80)
@@ -359,6 +499,22 @@
         NoteLinkPickerWindowReader(controller: noteLinkPickerController)
           .frame(width: 0, height: 0)
       )
+      .onChange(of: activeBannerOccurrences, initial: true) { _, occurrences in
+        bannerDismissalState.reconcile(activeOccurrences: occurrences)
+      }
+      .onReceive(dictationRuntime.$phase) { phase in
+        bannerDismissalState.dictationPhaseDidEmit(phase)
+      }
+      .onReceive(dictationRuntime.$captureFailure) { failure in
+        guard failure == nil else { return }
+        bannerDismissalState.forgetDismissedOccurrences(in: .captureFailure)
+      }
+      .onReceive(dictationRuntime.$modifierMonitorState) { monitorState in
+        guard monitorState == .stopped || monitorState == .running else {
+          return
+        }
+        bannerDismissalState.forgetDismissedOccurrences(in: .modifierRecovery)
+      }
       .fileImporter(
         isPresented: $isImporting,
         allowedContentTypes: [.plainText, NoteFileDocument.markdownContentType],
@@ -375,10 +531,6 @@
           appState.saveError = "Export failed: \(error.localizedDescription)"
         }
       }
-      .sheet(isPresented: $isShowingTrash) {
-        TrashView(onDone: { isShowingTrash = false })
-          .environmentObject(appState)
-      }
       .sheet(isPresented: $isShowingDictationHistory) {
         DictationHistoryView(
           history: dictationRuntime.historyController,
@@ -393,24 +545,12 @@
         }
         .environmentObject(appState)
       }
-      .confirmationDialog(
-        "Allow authorized agents to read and edit this note?",
-        isPresented: Binding(
-          get: { notePendingAgentShare != nil },
-          set: { if !$0 { notePendingAgentShare = nil } }
+      .sheet(item: $notePendingAgentShare) { note in
+        AgentNoteAccessEditorView(
+          note: note,
+          onDismiss: { notePendingAgentShare = nil }
         )
-      ) {
-        Button("Allow Agent Access") {
-          guard let note = notePendingAgentShare else { return }
-          notePendingAgentShare = nil
-          guard isNoteVisible(note.id) else { return }
-          appState.confirmFirstAgentShare(noteID: note.id)
-        }
-        Button("Cancel", role: .cancel) {
-          notePendingAgentShare = nil
-        }
-      } message: {
-        Text("Every authorized local integration will be able to read and edit this note.")
+          .environmentObject(appState)
       }
       .onAppear {
         dictationRuntime.registerEditor(editorCommands)
@@ -420,10 +560,38 @@
       }
       .overlay {
         ZStack {
+          if isShowingTrash {
+            TrashPanelOverlay(
+              onDone: { isShowingTrash = false }
+            )
+            .transition(
+              .opacity.combined(
+                with: .scale(scale: reduceMotion ? 1 : 0.985)
+              )
+            )
+          }
+
+          if let folderPendingDeletion {
+            FolderDeleteConfirmationOverlay(
+              folder: folderPendingDeletion,
+              onCancel: { self.folderPendingDeletion = nil },
+              onConfirm: { confirmFolderDeletion(folderPendingDeletion) }
+            )
+            .transition(
+              .opacity.combined(
+                with: .scale(scale: reduceMotion ? 1 : 0.985)
+              )
+            )
+          }
+
           if let notePendingDeletion {
             DeleteConfirmationOverlay(
               note: notePendingDeletion,
-              onCancel: { self.notePendingDeletion = nil },
+              dontAskAgain: $dontAskAgainForDeletion,
+              onCancel: {
+                self.notePendingDeletion = nil
+                self.dontAskAgainForDeletion = false
+              },
               onConfirm: { confirmDeletion(notePendingDeletion) }
             )
             .transition(
@@ -433,22 +601,31 @@
             )
           }
         }
+        .animation(motion.standard, value: isShowingTrash)
+        .animation(motion.standard, value: folderPendingDeletion?.id)
         .animation(motion.standard, value: notePendingDeletion?.id)
       }
       .overlay {
-        if searchController.isPresented && !noteLinkPickerController.isPresented {
-          WorkspaceSearchView(
-            controller: searchController,
-            notes: appState.workspace.notes,
-            accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
-            currentNoteIDs: {
-              Set(appState.workspace.notes.map(\.id))
-            },
-            onActivate: { noteID in
-              guard activateNoteAndScope(noteID) else { return }
-            }
-          )
-          .zIndex(2)
+        ZStack {
+          if searchController.isPresented && !noteLinkPickerController.isPresented {
+            WorkspaceSearchView(
+              controller: searchController,
+              notes: appState.workspace.notes,
+              accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
+              presentationID: searchController.presentationID,
+              reduceMotion: reduceMotion,
+              currentNoteIDs: {
+                Set(appState.workspace.notes.map(\.id))
+              },
+              onActivate: { noteID in
+                guard activateNoteAndScope(noteID) else { return }
+              },
+              onDismiss: dismissWorkspaceSearch
+            )
+            .id(searchController.presentationID)
+            .zIndex(2)
+            .transition(workspaceSearchPresentationTransition)
+          }
         }
       }
       .overlay {
@@ -478,13 +655,16 @@
         backlinkController.refresh(liveNotes: notes)
       }
       .onChange(of: searchController.isPresented) { _, isPresented in
+        if !isPresented {
+          searchPointerActivationPending = false
+        }
         if isPresented, noteLinkPickerController.isPresented {
-          searchController.dismiss()
+          dismissWorkspaceSearch()
         }
       }
       .onChange(of: noteLinkPickerController.isPresented) { _, isPresented in
         if isPresented, searchController.isPresented {
-          searchController.dismiss()
+          dismissWorkspaceSearch()
         }
       }
       .onChange(of: appState.workspace.folders) { _, folders in
@@ -509,6 +689,39 @@
         monitorStatus: dictationRuntime.modifierMonitorState,
         canChange: dictationRuntime.canChangeModifier
       )
+    }
+
+    private var activeBannerOccurrences: Set<NotesPanelBannerOccurrence> {
+      let modifierRecovery = modifierRecoveryPresentation.recoveryButtonTitle.map {
+        NotesPanelBannerOccurrence.modifierRecovery(
+          statusCopy: modifierRecoveryPresentation.statusCopy,
+          recoveryButtonTitle: $0
+        )
+      }
+      let captureFailure = dictationRuntime.captureFailure.map {
+        NotesPanelBannerOccurrence.captureFailure(
+          message: $0.message,
+          actionPanes: $0.actions.map(\.pane)
+        )
+      }
+      let agentChange = appState.agentBannerPresentation.map {
+        NotesPanelBannerOccurrence.agentChange(
+          changeID: $0.feedback.changeID,
+          count: $0.count
+        )
+      }
+      return NotesPanelBannerPolicy.activeOccurrences(
+        modifierRecovery: modifierRecovery,
+        captureFailure: captureFailure,
+        routineRecoveryAction: dictationRuntime.recoveryAction,
+        agentChange: agentChange
+      )
+    }
+
+    private func dismissBanner(_ occurrence: NotesPanelBannerOccurrence) {
+      withTransaction(Transaction(animation: nil)) {
+        bannerDismissalState.dismiss(occurrence)
+      }
     }
 
     private func migrationFailure(
@@ -540,7 +753,8 @@
     }
 
     private var header: some View {
-      HStack(spacing: 10) {
+      let backlinkEntries = backlinkController.incoming(to: appState.workspace.selectedNoteID)
+      return HStack(spacing: 10) {
         HStack(spacing: 6) {
           switch FleckMark.load(template: true) {
           case .image(let mark):
@@ -553,22 +767,63 @@
               .foregroundStyle(.red)
               .accessibilityLabel("Fleck mark missing")
           }
-          Text("Fleck")
-            .accessibilityLabel("Fleck")
         }
           .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
         Button {
-          guard !noteLinkPickerController.isPresented else { return }
-          searchController.present(for: appState.workspace.selectedNoteID)
+          backlinkController.toggleDisclosure()
+        } label: {
+          Image(systemName: "link")
+            .frame(width: 22, height: 22)
+        }
+        .accessibilityIdentifier("backlinks-toolbar-button")
+        .accessibilityLabel("Backlinks")
+        .accessibilityValue(
+          backlinkEntries.count == 1
+            ? "1 backlink"
+            : "\(backlinkEntries.count) backlinks"
+        )
+        .accessibilityHint("Show notes linking here")
+        .help("Backlinks")
+        .popover(isPresented: backlinksPopoverPresentation, arrowEdge: .top) {
+          BacklinksView(
+            entries: backlinkEntries,
+            foldersByID: folderNamesByID,
+            onOpen: { noteID in
+              if backlinkController.isExpanded {
+                backlinkController.toggleDisclosure()
+              }
+              openNoteLink(noteID)
+            }
+          )
+          .frame(width: 320)
+        }
+        Button {
+          let pointerActivation = searchPointerActivationPending
+          searchPointerActivationPending = false
+          guard !pointerActivation else { return }
+          Task { @MainActor in
+            await Task.yield()
+            guard !searchController.isPresented else { return }
+            presentWorkspaceSearch(activation: .keyboard)
+          }
         } label: {
           Image(systemName: "magnifyingglass")
+            .opacity(searchController.isPresented ? 0 : 1)
+            .accessibilityHidden(true)
         }
         .keyboardShortcut("f", modifiers: .command)
         .accessibilityLabel("Search notes")
         .accessibilityHint("Search note titles and bodies")
         .help("Search notes (⌘F)")
+        .simultaneousGesture(
+          TapGesture().onEnded {
+            guard !noteLinkPickerController.isPresented else { return }
+            searchPointerActivationPending = true
+            presentWorkspaceSearch(activation: .pointer)
+          }
+        )
         Button {
           appState.addNote(inFolderID: activeFolderID)
         } label: {
@@ -595,13 +850,22 @@
         }
 
         Button {
-          appState.updatePreferences { $0.showFormattingBar.toggle() }
+          if reduceMotion {
+            appState.updatePreferences { $0.showFormattingBar.toggle() }
+          } else {
+            withAnimation(motion.quick) {
+              appState.updatePreferences { $0.showFormattingBar.toggle() }
+            }
+          }
         } label: {
-          Image(
-            systemName: appState.preferences.showFormattingBar
-              ? "chevron.up"
-              : "chevron.down"
-          )
+          Image(systemName: "chevron.up")
+            .rotationEffect(
+              .degrees(appState.preferences.showFormattingBar ? 0 : 180)
+            )
+            .animation(
+              reduceMotion ? nil : motion.quick,
+              value: appState.preferences.showFormattingBar
+            )
         }
         .accessibilityLabel(
           appState.preferences.showFormattingBar
@@ -633,13 +897,9 @@
             isShowingAgentActivity = true
           }
           if let note = visibleSelectedNote {
-            Toggle(
-              "Allow Agent Access",
-              isOn: Binding(
-                get: { note.agentAccess },
-                set: { requestAgentAccess(note, enabled: $0) }
-              )
-            )
+            Button(AgentCapabilityPresentation.manageAgentAccessTitle) {
+              notePendingAgentShare = note
+            }
           }
         } label: {
           Image(systemName: "ellipsis.circle")
@@ -664,9 +924,10 @@
 
     private var folderNavigator: some View {
       FolderNavigator(
+        draggedSource: $noteDropSource,
         activeFolderID: activeFolderID,
         onSelect: selectFolder,
-        onDelete: deleteFolder,
+        onDelete: { folderPendingDeletion = $0 },
         onOpenTrash: { isShowingTrash = true }
       )
       .environmentObject(appState)
@@ -709,21 +970,25 @@
       }
     }
 
+    private func confirmFolderDeletion(_ folder: Folder) {
+      folderPendingDeletion = nil
+      deleteFolder(folder.id)
+    }
+
     private var tabStrip: some View {
       ScrollViewReader { scrollProxy in
         GeometryReader { proxy in
           let tabViewportWidth = TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)
-          let hasHiddenTrailingTabs = TabOverflowPresentation.hasHiddenTrailingContent(
-            contentTrailingEdge: tabContentTrailingEdge,
-            visibleTrailingEdge: tabViewportWidth
-          )
         HStack(spacing: 0) {
           ZStack(alignment: .trailing) {
             ScrollView(.horizontal, showsIndicators: false) {
-              HStack(spacing: 6) {
+              HStack(spacing: 0) {
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .id(TabScrollTarget.leading)
+                HStack(spacing: 6) {
                 ForEach(visibleNotes) { note in
             Button {
-              guard draggedNoteID == nil else { return }
               _ = activateNoteAndScope(note.id)
             } label: {
               HStack(spacing: 4) {
@@ -732,7 +997,7 @@
                     .font(.caption2)
                 }
                 Text(note.displayTitle).lineLimit(1)
-                if note.agentAccess {
+                if appState.isSharedWithAnyActiveProfile(note.id) {
                   Image(systemName: "point.3.connected.trianglepath.dotted")
                     .font(.caption2)
                     .accessibilityLabel(AgentSharingPresentation.sharedBadgeAccessibilityLabel)
@@ -750,57 +1015,41 @@
                     .fill(tabColor(for: note, opacity: 0.10))
                 }
               }
-              .background {
-                GeometryReader { proxy in
-                  Color.clear.preference(
-                    key: TabFramePreferenceKey.self,
-                    value: [note.id: proxy.frame(in: .named("tab-strip"))]
-                  )
-                }
-              }
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("note-tab-\(note.id.uuidString)")
             .onDrag {
-              FolderDragPayload.noteProvider(
+              let source = NoteDropSource(
                 noteID: note.id,
-                sourceFolderID: note.folderID
+                sourceFolderID: note.folderID,
+                dragSessionID: UUID()
               )
+              noteDropSource = source
+              tabDragDestinationID = nil
+              _ = activateNoteAndScope(note.id)
+              return FolderDragPayload.noteProvider(source: source)
             }
+            .onDrop(
+              of: [FolderDragPayload.noteType],
+              delegate: TabDropDelegate(
+                destinationID: note.id,
+                activeFolderID: activeFolderID,
+                currentNotes: { visibleNotes },
+                draggedSource: $noteDropSource,
+                lastDestinationID: $tabDragDestinationID,
+                move: { id, localDestination in
+                  _ = appState.moveNote(
+                    id,
+                    inFolderID: activeFolderID,
+                    toVisibleIndex: localDestination
+                  )
+                }
+              )
+            )
             .transition(
               .opacity.combined(
                 with: .offset(x: motion.offset)
               )
-            )
-            .simultaneousGesture(
-              DragGesture(minimumDistance: 2, coordinateSpace: .named("tab-strip"))
-                .onChanged { value in
-                  guard abs(value.translation.width) >= 2 else { return }
-                  if draggedNoteID == nil {
-                    draggedNoteID = note.id
-                    tabDragDestinationID = nil
-                    _ = activateNoteAndScope(note.id)
-                  }
-                  guard draggedNoteID == note.id else { return }
-                  let result = TabDragReorder.performLiveMove(
-                    draggedID: draggedNoteID,
-                    locationX: value.location.x,
-                    currentNoteIDs: { visibleNotes.map(\.id) },
-                    currentFrames: { tabFrames },
-                    lastDestinationID: tabDragDestinationID,
-                    move: { id, destination in
-                      _ = appState.moveNote(
-                        id,
-                        inFolderID: activeFolderID,
-                        toVisibleIndex: destination
-                      )
-                    }
-                  )
-                  tabDragDestinationID = result.destinationID
-                }
-                .onEnded { _ in
-                  draggedNoteID = nil
-                  tabDragDestinationID = nil
-                }
             )
             .contextMenu {
               Button(
@@ -815,18 +1064,54 @@
               Button("Move Right", systemImage: "arrow.right") {
                 move(note, offset: 1)
               }
+              let moveToFolder: (UUID?) -> Void = { destinationFolderID in
+                guard isNoteVisible(note.id),
+                  let currentNote = appState.workspace.notes.first(where: { $0.id == note.id })
+                else { return }
+                _ = appState.moveNote(
+                  note.id,
+                  fromFolderID: currentNote.folderID,
+                  toFolderID: destinationFolderID,
+                  activeFolderID: activeFolderID
+                )
+              }
+              Menu("Move to Folder", systemImage: "folder") {
+                Button {
+                  moveToFolder(nil)
+                } label: {
+                  HStack {
+                    Text("Unfiled")
+                    if note.folderID == nil {
+                      Spacer()
+                      Image(systemName: "checkmark")
+                    }
+                  }
+                }
+                .disabled(note.folderID == nil)
+                ForEach(appState.workspace.folders, id: \.id) { folder in
+                  Button {
+                    moveToFolder(folder.id)
+                  } label: {
+                    HStack {
+                      Text(folder.name)
+                      if note.folderID == folder.id {
+                        Spacer()
+                        Image(systemName: "checkmark")
+                      }
+                    }
+                  }
+                  .disabled(note.folderID == folder.id)
+                }
+              }
               Button("Tab Color...", systemImage: "paintpalette") {
                 guard isNoteVisible(note.id) else { return }
                 tabColorPickerNoteID = note.id
               }
               .accessibilityValue(tabColorAccessibilityValue(for: note.tabColorHex))
-              Toggle(
-                "Allow Agent Access",
-                isOn: Binding(
-                  get: { note.agentAccess },
-                  set: { requestAgentAccess(note, enabled: $0) }
-                )
-              )
+              Button(AgentCapabilityPresentation.manageAgentAccessTitle) {
+                guard isNoteVisible(note.id) else { return }
+                notePendingAgentShare = note
+              }
               Divider()
               Button("Move to Trash", systemImage: "trash", role: .destructive) {
                 requestDeletion(note)
@@ -842,58 +1127,49 @@
               tabColorPicker(noteID: note.id)
             }
                 }
-                Color.clear
-                  .frame(width: 0, height: 0)
-                  .background {
-                GeometryReader { proxy in
-                  Color.clear.preference(
-                    key: TabContentTrailingEdgePreferenceKey.self,
-                    value: proxy.frame(in: .named("tab-scroll-viewport")).minX - 6
-                  )
-                }
-              }
               }
               .padding(.horizontal, 12)
-              .padding(.bottom, 9)
+              .frame(height: 37, alignment: .center)
               .animation(motion.spatial, value: appState.workspace.selectedNoteID)
               .animation(motion.spatial, value: visibleNotes.map(\.id))
-            }
-            .coordinateSpace(name: "tab-scroll-viewport")
-            .coordinateSpace(name: "tab-strip")
-
-            if hasHiddenTrailingTabs {
-              LinearGradient(
-                colors: [.clear, Color(nsColor: .windowBackgroundColor)],
-                startPoint: .leading,
-                endPoint: .trailing
-              )
-              .frame(width: 18)
-              .allowsHitTesting(false)
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .id(TabScrollTarget.trailing)
+              }
             }
           }
           .frame(width: tabViewportWidth, alignment: .leading)
 
-          Button {
-            if let lastNoteID = visibleNotes.last?.id {
-              scrollProxy.scrollTo(lastNoteID, anchor: .trailing)
+          HStack(spacing: 0) {
+            Button {
+              scrollProxy.scrollTo(TabScrollTarget.leading, anchor: .leading)
+            } label: {
+              Image(systemName: "chevron.left")
+                .font(.caption)
+                .frame(width: 28, height: 28)
+                .frame(width: 28, height: 37)
+                .contentShape(Rectangle())
             }
-          } label: {
-            Image(systemName: "chevron.right")
-              .font(.caption)
-              .frame(width: 28, height: 28)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reveal earlier tabs")
+            .help("Show earlier tabs")
+            .disabled(visibleNotes.isEmpty)
+
+            Button {
+              scrollProxy.scrollTo(TabScrollTarget.trailing, anchor: .trailing)
+            } label: {
+              Image(systemName: "chevron.right")
+                .font(.caption)
+                .frame(width: 28, height: 28)
+                .frame(width: 28, height: 37)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reveal later tabs")
+            .help("Show later tabs")
+            .disabled(visibleNotes.isEmpty)
           }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Reveal hidden tabs")
-          .accessibilityHidden(!hasHiddenTrailingTabs)
-          .disabled(!hasHiddenTrailingTabs)
-          .opacity(hasHiddenTrailingTabs ? 1 : 0)
-        }
-        .onPreferenceChange(TabContentTrailingEdgePreferenceKey.self) { trailingEdge in
-          guard tabContentTrailingEdge != trailingEdge else { return }
-          tabContentTrailingEdge = trailingEdge
-        }
-        .onPreferenceChange(TabFramePreferenceKey.self) { frames in
-          tabFrames = frames
+          .frame(width: 56, height: 37, alignment: .center)
         }
         }
         .frame(height: 37)
@@ -902,6 +1178,58 @@
 
     private var motion: AppMotion {
       AppMotion(reduceMotion: reduceMotion)
+    }
+
+    private var workspaceSearchPresentationTransition: AnyTransition {
+      switch searchController.presentationKind {
+      case .inline:
+        return .opacity.combined(
+          with: .scale(scale: 0.98, anchor: .topTrailing)
+        )
+      case .crossfade:
+        return .opacity
+      case .instant:
+        return .identity
+      }
+    }
+
+    private func presentWorkspaceSearch(activation: WorkspaceSearchActivation) {
+      guard !noteLinkPickerController.isPresented else { return }
+      let presentation = WorkspaceSearchPresentationKind.resolve(
+        activation: activation,
+        reduceMotion: reduceMotion
+      )
+      withAnimation(
+        motion.presentationAnimation(for: presentation.interactionSource)
+      ) {
+        if presentation == .instant {
+          searchController.present(for: appState.workspace.selectedNoteID)
+        } else {
+          searchController.present(
+            for: appState.workspace.selectedNoteID,
+            presentation: presentation
+          )
+        }
+      }
+    }
+
+    private func dismissWorkspaceSearch() {
+      guard searchController.isPresented else { return }
+      withAnimation(
+        searchController.presentationKind.usesAnimatedDismissal ? motion.quick : nil
+      ) {
+        searchController.dismiss()
+      }
+    }
+
+    private var backlinksPopoverPresentation: Binding<Bool> {
+      Binding(
+        get: { backlinkController.isExpanded },
+        set: { isPresented in
+          guard backlinkController.isExpanded != isPresented else { return }
+          backlinkController.toggleDisclosure()
+        }
+      )
     }
 
     private func tabColor(for note: Note, opacity: Double) -> Color {
@@ -964,32 +1292,28 @@
 
     private func requestDeletion(_ note: Note) {
       guard isNoteVisible(note.id) else { return }
-      notePendingDeletion = note
-    }
-
-    private func requestAgentAccess(_ note: Note, enabled: Bool) {
-      guard isNoteVisible(note.id) else { return }
-      guard enabled else {
-        appState.setAgentAccess(noteID: note.id, enabled: false)
-        return
-      }
-      if AgentSharingPresentation(
-        note: note,
-        hasConfirmedFirstShare: appState.hasConfirmedFirstAgentShare
-      ).requiresEnableConfirmation {
-        notePendingAgentShare = note
+      if appState.preferences.confirmBeforeMovingNotesToTrash {
+        dontAskAgainForDeletion = false
+        notePendingDeletion = note
       } else {
-        appState.setAgentAccess(noteID: note.id, enabled: true)
+        appState.moveToTrash(note.id, activeFolderID: activeFolderID)
       }
     }
 
     private func confirmDeletion(_ note: Note) {
       guard isNoteVisible(note.id) else {
         notePendingDeletion = nil
+        dontAskAgainForDeletion = false
         return
       }
+      let shouldSuppressConfirmation = dontAskAgainForDeletion
+      _ = appState.moveToTrash(
+        note.id,
+        activeFolderID: activeFolderID,
+        suppressConfirmation: shouldSuppressConfirmation
+      )
       notePendingDeletion = nil
-      appState.moveToTrash(note.id, activeFolderID: activeFolderID)
+      dontAskAgainForDeletion = false
     }
 
     private func openHistoryDestination(_ noteID: UUID) {
@@ -1011,10 +1335,15 @@
       guard let index = visibleNotes.firstIndex(where: { $0.id == note.id }) else {
         return
       }
+      guard let localDestination = TabDragReorder.partitionLocalDestination(
+        draggedID: note.id,
+        absoluteDestination: index + offset,
+        visibleNotes: visibleNotes
+      ) else { return }
       _ = appState.moveNote(
         note.id,
         inFolderID: activeFolderID,
-        toVisibleIndex: index + offset
+        toVisibleIndex: localDestination
       )
     }
 
@@ -1050,6 +1379,7 @@
 
     private var isBlockingOverlayPresented: Bool {
       searchController.isPresented || noteLinkPickerController.isPresented
+        || notePendingDeletion != nil || folderPendingDeletion != nil || isShowingTrash
     }
 
     private var folderNamesByID: [UUID: String] {
@@ -1183,36 +1513,41 @@
         VStack(spacing: 0) {
           if appState.preferences.showFormattingBar {
             FormattingBar(
+              appState: appState,
               commands: editorCommands,
               dictationRuntime: dictationRuntime,
               isEditorVisible: isEditorVisible,
+              isTitleFocused: editorFocus == .title,
               onDelete: {
                 if let note = visibleSelectedNote {
                   requestDeletion(note)
                 }
               }
             )
-            .transition(.opacity)
+            .transition(
+              .asymmetric(
+                insertion: .move(edge: .top).combined(with: .opacity),
+                removal: .move(edge: .top).combined(with: .opacity)
+              )
+            )
             .animation(reduceMotion ? nil : motion.quick, value: appState.preferences.showFormattingBar)
           }
-          TextField(
-            "Note title",
-            text: Binding(
-              get: { note.title },
-              set: {
-                guard visibleSelectedNote?.id == note.id else { return }
-                appState.updateSelected(title: $0)
-              }
-            )
-          )
-          .textFieldStyle(.plain)
-          .font(EditorTypography.titleFont(family: appState.preferences.fontFamily))
-          .padding(.horizontal, 16)
-          .padding(.top, 12)
-
           NativeRichTextEditor(
             text: note.body,
             richTextRTF: note.richTextRTF,
+            title: note.title,
+            titleFontFamily: note.titleFontFamily ?? appState.preferences.fontFamily,
+            onTitleChange: { title in
+              guard visibleSelectedNote?.id == note.id else { return }
+              appState.updateSelected(title: title)
+            },
+            onTitleFocusChange: { isFocused in
+              if isFocused {
+                editorFocus = .title
+              } else if editorFocus == .title {
+                editorFocus = nil
+              }
+            },
             onChange: { body, richTextRTF in
               guard visibleSelectedNote?.id == note.id else { return }
               appState.updateSelected(body: body, richTextRTF: richTextRTF)
@@ -1241,6 +1576,7 @@
             onOpenNoteLink: openNoteLink,
             onUnavailableNoteLink: { appState.saveError = "Note unavailable" }
           )
+          .focused($editorFocus, equals: .body)
           .background(
             EditorCommandVisibilityBoundary(
               appState: appState,
@@ -1252,14 +1588,6 @@
           )
           .id(note.id)
           .padding(.vertical, 10)
-
-          BacklinksView(
-            entries: backlinkController.incoming(to: note.id),
-            foldersByID: folderNamesByID,
-            isExpanded: backlinkController.isExpanded,
-            onToggle: backlinkController.toggleDisclosure,
-            onOpen: openNoteLink
-          )
         }
       }
     }
@@ -1321,18 +1649,47 @@
       case newFolder
     }
 
+    private enum NoteDropTarget: Equatable {
+      case unfiled
+      case folder(UUID)
+
+      var folderID: UUID? {
+        switch self {
+        case .unfiled: return nil
+        case .folder(let id): return id
+        }
+      }
+    }
+
     @EnvironmentObject private var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedRow: FocusedRow?
+    @Binding private var draggedSource: NoteDropSource?
     @State private var editingFolderID: UUID?
     @State private var isCreatingFolder = false
     @State private var folderNameDraft = ""
-    @State private var folderPendingDeletion: Folder?
+    @State private var noteDropTarget: NoteDropTarget?
+    @State private var isUnfiledHovered = false
     private let folderNavigatorMaxHeight: CGFloat = 32
 
     let activeFolderID: UUID?
     let onSelect: (UUID?) -> Void
-    let onDelete: (UUID) -> Void
+    let onDelete: (Folder) -> Void
     let onOpenTrash: () -> Void
+
+    init(
+      draggedSource: Binding<NoteDropSource?>,
+      activeFolderID: UUID?,
+      onSelect: @escaping (UUID?) -> Void,
+      onDelete: @escaping (Folder) -> Void,
+      onOpenTrash: @escaping () -> Void
+    ) {
+      self._draggedSource = draggedSource
+      self.activeFolderID = activeFolderID
+      self.onSelect = onSelect
+      self.onDelete = onDelete
+      self.onOpenTrash = onOpenTrash
+    }
 
     var body: some View {
       VStack(spacing: 3) {
@@ -1381,6 +1738,7 @@
               isEmpty: appState.trashedNotes.isEmpty
             )
           }
+          .fixedSize(horizontal: true, vertical: false)
           .buttonStyle(.plain)
           .focused($focusedRow, equals: .trash)
           .focusable()
@@ -1393,6 +1751,12 @@
           )
         }
       }
+      .animation(folderMorphAnimation, value: isCreatingFolder)
+      .onChange(of: draggedSource) { oldValue, newValue in
+        if oldValue != newValue {
+          noteDropTarget = nil
+        }
+      }
       .padding(.horizontal, 12)
       .padding(.vertical, 5)
       .onMoveCommand { direction in
@@ -1402,7 +1766,7 @@
         guard case .folder(let id) = focusedRow,
           let folder = appState.workspace.folders.first(where: { $0.id == id })
         else { return }
-        folderPendingDeletion = folder
+        onDelete(folder)
       }
       .onExitCommand {
         cancelFolderEditing()
@@ -1415,53 +1779,65 @@
         activateFocusedRow()
         return .handled
       }
-      .confirmationDialog(
-        "Delete folder?",
-        isPresented: Binding(
-          get: { folderPendingDeletion != nil },
-          set: { if !$0 { folderPendingDeletion = nil } }
-        ),
-        titleVisibility: .visible
-      ) {
-        Button("Delete Folder", role: .destructive) {
-          guard let folderPendingDeletion else { return }
-          self.folderPendingDeletion = nil
-          onDelete(folderPendingDeletion.id)
-        }
-        Button("Cancel", role: .cancel) {
-          folderPendingDeletion = nil
-        }
-      } message: {
-        Text("Notes in this folder move to Unfiled. No notes are deleted.")
-      }
     }
 
     private var rootRow: some View {
-      Button {
-        onSelect(nil)
-      } label: {
-        rowLabel(
-          name: "Unfiled",
-          systemImage: "tray",
-          count: appState.visibleNotes(in: nil).count,
-          isSelected: activeFolderID == nil,
-          isEmpty: appState.visibleNotes(in: nil).isEmpty
+      let unfiledNotes = appState.visibleNotes(in: nil)
+      return HStack(spacing: 0) {
+        Button {
+          onSelect(nil)
+        } label: {
+          rowLabel(
+            name: "Unfiled",
+            systemImage: "tray",
+            count: unfiledNotes.count,
+            isSelected: activeFolderID == nil,
+            isEmpty: unfiledNotes.isEmpty,
+            isDropTarget: isNoteDropTarget(.unfiled),
+            isFocused: focusedRow == .unfiled,
+            showsName: !isUnfiledCompact
+          )
+        }
+        .buttonStyle(.plain)
+        .modifier(
+          FolderRowFocusPublisher(onFocusChange: { isFocused in
+            updateFocusedRow(.unfiled, isFocused: isFocused)
+          })
         )
+        .focusable()
+        .focused($focusedRow, equals: .unfiled)
+        .focusEffectDisabled()
+        .accessibilityLabel("Unfiled")
+        .accessibilityIdentifier("folder-unfiled")
+        .accessibilityValue(unfiledAccessibilityValue)
+        .accessibilityAddTraits(activeFolderID == nil ? .isSelected : [])
+        .accessibilityAction(named: Text("Toggle Unfiled compact mode")) {
+          setUnfiledCompact(!isUnfiledCompact)
+        }
+
+        if showsUnfiledDisclosure {
+          Button {
+            setUnfiledCompact(!isUnfiledCompact)
+          } label: {
+            Image(systemName: isUnfiledCompact ? "chevron.right" : "chevron.left")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+              .frame(width: 28, height: 28)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(
+            isUnfiledCompact ? "Expand Unfiled" : "Collapse Unfiled"
+          )
+        }
       }
-      .buttonStyle(.plain)
-      .focused($focusedRow, equals: .unfiled)
-      .focusable()
-      .onDrop(of: [FolderDragPayload.noteType], isTargeted: nil) { providers, _ in
-        handleNoteDrop(providers, targetFolderID: nil)
-      }
-      .accessibilityLabel("Unfiled")
-      .accessibilityIdentifier("folder-unfiled")
-      .accessibilityValue(
-        "\(appState.visibleNotes(in: nil).count) notes"
-          + (activeFolderID == nil ? ", Selected" : "")
-          + (appState.visibleNotes(in: nil).isEmpty ? ", Empty" : "")
+      .fixedSize(horizontal: true, vertical: false)
+      .onHover { isUnfiledHovered = $0 }
+      .contentShape(Rectangle())
+      .onDrop(
+        of: [FolderDragPayload.noteType],
+        delegate: noteDropDelegate(.unfiled)
       )
-      .accessibilityAddTraits(activeFolderID == nil ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -1477,43 +1853,81 @@
             systemImage: "folder",
             count: appState.visibleNotes(in: folder.id).count,
             isSelected: activeFolderID == folder.id,
-            isEmpty: appState.visibleNotes(in: folder.id).isEmpty
+            isEmpty: appState.visibleNotes(in: folder.id).isEmpty,
+            isDropTarget: isNoteDropTarget(.folder(folder.id)),
+            isFocused: focusedRow == .folder(folder.id)
           )
         }
         .buttonStyle(.plain)
-        .focused($focusedRow, equals: .folder(folder.id))
+        .modifier(
+          FolderRowFocusPublisher(onFocusChange: { isFocused in
+            updateFocusedRow(.folder(folder.id), isFocused: isFocused)
+          })
+        )
         .focusable()
+        .focused($focusedRow, equals: .folder(folder.id))
+        .focusEffectDisabled()
         .onDrag { FolderDragPayload.folderProvider(folderID: folder.id) }
         .onDrop(
-          of: [FolderDragPayload.noteType, FolderDragPayload.folderType],
-          isTargeted: nil
-        ) { providers, _ in
-          handleDrop(
-            providers,
-            noteTargetFolderID: folder.id,
-            folderBeforeID: folder.id
-          )
+          of: [FolderDragPayload.noteType],
+          delegate: noteDropDelegate(.folder(folder.id))
+        )
+        .onDrop(of: [FolderDragPayload.folderType], isTargeted: nil) { providers, _ in
+          handleFolderDrop(providers, beforeFolderID: folder.id)
         }
         .contextMenu {
           Button("Rename", systemImage: "pencil") {
             _ = beginRename(folderID: folder.id)
           }
           Button("Delete", systemImage: "trash", role: .destructive) {
-            folderPendingDeletion = folder
+            onDelete(folder)
           }
         }
         .accessibilityLabel(folder.name)
+        .accessibilityIdentifier("folder-\(folder.id.uuidString)")
         .accessibilityValue(
           "\(appState.visibleNotes(in: folder.id).count) notes"
             + (activeFolderID == folder.id ? ", Selected" : "")
             + (appState.visibleNotes(in: folder.id).isEmpty ? ", Empty" : "")
+            + (isNoteDropTarget(.folder(folder.id)) ? ", Drop target" : "")
         )
         .accessibilityAddTraits(activeFolderID == folder.id ? .isSelected : [])
       }
     }
 
+    private struct FolderActionButtonStyle: ButtonStyle {
+      enum Role: Equatable {
+        case save
+        case cancel
+      }
+
+      let role: Role
+      let accent: Color
+      let motion: AppMotion
+      @Environment(\.isEnabled) private var isEnabled
+
+      func makeBody(configuration: Configuration) -> some View {
+        let isSave = role == .save
+        return configuration.label
+          .font(.caption.weight(isSave ? .semibold : .medium))
+          .foregroundStyle(isSave ? accent : Color.secondary)
+          .frame(height: 22)
+          .padding(.horizontal, 8)
+          .background(
+            isSave
+              ? accent.opacity(configuration.isPressed ? 0.24 : 0.16)
+              : Color.primary.opacity(configuration.isPressed ? 0.10 : 0.06),
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+          )
+          .scaleEffect(isEnabled && configuration.isPressed ? motion.pressScale : 1)
+          .opacity(isEnabled ? 1 : 0.48)
+          .animation(motion.quick, value: configuration.isPressed)
+      }
+    }
+
     @ViewBuilder
     private func folderEditor(label: String, focus: FocusedRow) -> some View {
+      let accent = Color(hex: appState.preferences.accentHex) ?? .accentColor
       HStack(spacing: 5) {
         TextField(label, text: $folderNameDraft)
           .textFieldStyle(.roundedBorder)
@@ -1521,13 +1935,31 @@
           .onSubmit { commitFolderEditing() }
           .onExitCommand { cancelFolderEditing() }
         Button("Save") { commitFolderEditing() }
-          .buttonStyle(.plain)
+          .buttonStyle(FolderActionButtonStyle(role: .save, accent: accent, motion: motion))
+          .disabled(
+            folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          )
           .accessibilityLabel("Save folder name")
         Button("Cancel", role: .cancel) { cancelFolderEditing() }
-          .buttonStyle(.plain)
+          .buttonStyle(FolderActionButtonStyle(role: .cancel, accent: accent, motion: motion))
           .accessibilityLabel("Cancel folder name")
       }
       .accessibilityElement(children: .contain)
+    }
+
+    private struct FolderRowFocusPublisher: ViewModifier {
+      @Environment(\.isFocused) private var isNativeFocused
+      let onFocusChange: (Bool) -> Void
+
+      init(onFocusChange: @escaping (Bool) -> Void) {
+        self.onFocusChange = onFocusChange
+      }
+
+      func body(content: Content) -> some View {
+        content.onChange(of: isNativeFocused) { _, isFocused in
+          onFocusChange(isFocused)
+        }
+      }
     }
 
     @ViewBuilder
@@ -1536,26 +1968,121 @@
       systemImage: String,
       count: Int,
       isSelected: Bool,
-      isEmpty: Bool
+      isEmpty: Bool,
+      isDropTarget: Bool = false,
+      isFocused: Bool = false,
+      showsName: Bool = true
     ) -> some View {
       HStack(spacing: 7) {
         Image(systemName: systemImage)
           .frame(width: 18)
-        Text(name)
-          .lineLimit(1)
-        Spacer(minLength: 4)
+        if showsName {
+          Text(name)
+            .lineLimit(1)
+          Spacer(minLength: 4)
+        } else {
+          Spacer(minLength: 2)
+        }
         Text(count, format: .number)
           .font(.caption.monospacedDigit())
           .foregroundStyle(.secondary)
       }
       .padding(.horizontal, 8)
       .padding(.vertical, 5)
+      .frame(minHeight: 24)
       .background(
-        isSelected ? Color.accentColor.opacity(0.18) : .clear,
+        isDropTarget
+          ? Color.accentColor.opacity(0.28)
+          : (isSelected ? Color.accentColor.opacity(0.18) : .clear),
         in: RoundedRectangle(cornerRadius: 6)
       )
       .contentShape(RoundedRectangle(cornerRadius: 6))
+      .overlay {
+        if isFocused && !isSelected {
+          RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)
+        }
+      }
       .accessibilityHint(isEmpty ? "Empty folder" : "")
+    }
+
+    private func noteDropDelegate(_ target: NoteDropTarget) -> NoteDropDelegate {
+      NoteDropDelegate(
+        target: target,
+        draggedSource: $draggedSource,
+        dropTarget: $noteDropTarget,
+        canAccept: { expectedSource, targetFolderID in
+          canHighlightNoteDrop(
+            expectedSource: expectedSource,
+            targetFolderID: targetFolderID
+          )
+        },
+        perform: { providers, targetFolderID, expectedSource in
+          handleNoteDrop(
+            providers,
+            targetFolderID: targetFolderID,
+            expectedSource: expectedSource
+          )
+        }
+      )
+    }
+
+    private func isNoteDropTarget(_ target: NoteDropTarget) -> Bool {
+      guard let draggedSource else { return false }
+      return noteDropTarget == target
+        && canHighlightNoteDrop(
+          expectedSource: draggedSource,
+          targetFolderID: target.folderID
+        )
+    }
+
+    private func canHighlightNoteDrop(
+      expectedSource: NoteDropSource,
+      targetFolderID: UUID?
+    ) -> Bool {
+      guard draggedSource == expectedSource else { return false }
+      return NoteDropPresentation.isValidTarget(
+        draggedSource: expectedSource,
+        targetFolderID: targetFolderID,
+        notes: appState.workspace.notes,
+        validTargetFolderIDs: Set(appState.workspace.folders.map(\.id))
+      )
+    }
+
+    private var isUnfiledCompact: Bool {
+      appState.preferences.isUnfiledCompact
+    }
+
+    private var unfiledAccessibilityValue: String {
+      let notes = appState.visibleNotes(in: nil)
+      var parts = ["\(notes.count) notes"]
+      if activeFolderID == nil { parts.append("Selected") }
+      if notes.isEmpty { parts.append("Empty") }
+      if isUnfiledCompact { parts.append("Compact") }
+      if isNoteDropTarget(.unfiled) { parts.append("Drop target") }
+      return parts.joined(separator: ", ")
+    }
+
+    private var showsUnfiledDisclosure: Bool {
+      !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled
+    }
+
+    private func setUnfiledCompact(_ compact: Bool) {
+      if reduceMotion {
+        appState.updatePreferences { $0.isUnfiledCompact = compact }
+      } else {
+        withAnimation(motion.quick) {
+          appState.updatePreferences { $0.isUnfiledCompact = compact }
+        }
+      }
+    }
+
+    private var motion: AppMotion {
+      AppMotion(reduceMotion: reduceMotion)
+    }
+
+    private var folderMorphAnimation: Animation? {
+      reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0)
     }
 
     private func beginNewFolder() {
@@ -1604,6 +2131,14 @@
       focusedRow = nil
     }
 
+    private func updateFocusedRow(_ row: FocusedRow, isFocused: Bool) {
+      if isFocused {
+        focusedRow = row
+      } else if focusedRow == row {
+        focusedRow = nil
+      }
+    }
+
     private func activateFocusedRow() {
       switch focusedRow {
       case .unfiled:
@@ -1636,37 +2171,37 @@
       press.characters.unicodeScalars.contains { $0.value == UInt32(NSF2FunctionKey) }
     }
 
-    private func handleDrop(
-      _ providers: [NSItemProvider],
-      noteTargetFolderID: UUID?,
-      folderBeforeID: UUID?
-    ) -> Bool {
-      if let provider = providers.first(where: {
-        $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
-      }) {
-        return handleNoteDrop([provider], targetFolderID: noteTargetFolderID)
-      }
-      if let provider = providers.first(where: {
-        $0.registeredTypeIdentifiers.contains(FolderDragPayload.folderType.identifier)
-      }) {
-        return handleFolderDrop([provider], beforeFolderID: folderBeforeID)
-      }
-      return false
-    }
-
     private func handleNoteDrop(
       _ providers: [NSItemProvider],
-      targetFolderID: UUID?
+      targetFolderID: UUID?,
+      expectedSource: NoteDropSource
     ) -> Bool {
-      guard let provider = providers.first(where: {
-        $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
-      }) else { return false }
+      noteDropTarget = nil
+      guard draggedSource == expectedSource,
+        FolderDragPayload.noteSource(from: providers) == expectedSource,
+        let provider = providers.first(where: {
+          $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
+        })
+      else {
+        if draggedSource == expectedSource { draggedSource = nil }
+        return false
+      }
       provider.loadDataRepresentation(forTypeIdentifier: FolderDragPayload.noteType.identifier) {
         data, _ in
-        guard let data, let payload = FolderDragPayload.noteValue(from: data) else { return }
         Task { @MainActor in
+          defer {
+            if self.draggedSource == expectedSource { self.draggedSource = nil }
+            self.noteDropTarget = nil
+          }
+          guard self.draggedSource == expectedSource else { return }
+          guard let data, let payload = FolderDragPayload.noteValue(from: data) else { return }
+          guard payload == expectedSource else { return }
+          guard targetFolderID == nil || appState.workspace.folders.contains(where: {
+            $0.id == targetFolderID
+          }) else { return }
           guard let note = appState.workspace.notes.first(where: { $0.id == payload.noteID }),
-            note.folderID == payload.sourceFolderID
+            note.folderID == payload.sourceFolderID,
+            note.folderID != targetFolderID
           else { return }
           _ = appState.moveNote(
             payload.noteID,
@@ -1677,6 +2212,71 @@
         }
       }
       return true
+    }
+
+    private struct NoteDropDelegate: DropDelegate {
+      let target: NoteDropTarget
+      @Binding var draggedSource: NoteDropSource?
+      @Binding var dropTarget: NoteDropTarget?
+      let canAccept: (NoteDropSource, UUID?) -> Bool
+      let perform: ([NSItemProvider], UUID?, NoteDropSource) -> Bool
+
+      private func matchingSource(_ info: DropInfo) -> NoteDropSource? {
+        guard let expectedSource = draggedSource,
+          let providerSource = FolderDragPayload.noteSource(
+            from: info.itemProviders(for: [FolderDragPayload.noteType])
+          ),
+          providerSource == expectedSource,
+          canAccept(expectedSource, target.folderID)
+        else { return nil }
+        return expectedSource
+      }
+
+      func validateDrop(info: DropInfo) -> Bool {
+        matchingSource(info) != nil
+      }
+
+      func dropEntered(info: DropInfo) {
+        if matchingSource(info) != nil {
+          dropTarget = target
+        } else if dropTarget == target {
+          dropTarget = nil
+        }
+      }
+
+      func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard matchingSource(info) != nil else { return nil }
+        return DropProposal(operation: .move)
+      }
+
+      func dropExited(info: DropInfo) {
+        if dropTarget == target { dropTarget = nil }
+      }
+
+      func performDrop(info: DropInfo) -> Bool {
+        let providerSource = FolderDragPayload.noteSource(
+          from: info.itemProviders(for: [FolderDragPayload.noteType])
+        )
+        guard let expectedSource = draggedSource,
+          providerSource == expectedSource
+        else {
+          if dropTarget == target { dropTarget = nil }
+          return false
+        }
+        guard canAccept(expectedSource, target.folderID) else {
+          if draggedSource == expectedSource { draggedSource = nil }
+          if dropTarget == target { dropTarget = nil }
+          return false
+        }
+        dropTarget = nil
+        let accepted = perform(
+          info.itemProviders(for: [FolderDragPayload.noteType]),
+          target.folderID,
+          expectedSource
+        )
+        if !accepted && draggedSource == expectedSource { draggedSource = nil }
+        return accepted
+      }
     }
 
     private func handleFolderDrop(
@@ -1711,8 +2311,74 @@
     }
   }
 
+  struct TrashPanelOverlay: View {
+    let onDone: () -> Void
+
+    var body: some View {
+      ZStack {
+        Color.black.opacity(0.28)
+          .ignoresSafeArea()
+          .accessibilityHidden(true)
+
+        TrashView(onDone: onDone)
+          .frame(maxWidth: 520, maxHeight: 400)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+          .clipShape(RoundedRectangle(cornerRadius: 14))
+          .shadow(radius: 20, y: 8)
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("Trash")
+          .padding(8)
+
+        Button("Close Trash", action: onDone)
+          .keyboardShortcut(.cancelAction)
+          .frame(width: 0, height: 0)
+          .opacity(0)
+          .accessibilityHidden(true)
+      }
+    }
+  }
+
+  struct FolderDeleteConfirmationOverlay: View {
+    let folder: Folder
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
+      ZStack {
+        Color.black.opacity(0.28)
+          .ignoresSafeArea()
+          .accessibilityHidden(true)
+
+        VStack(alignment: .leading, spacing: 16) {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Delete \(folder.name)?")
+              .font(.headline)
+            Text("Notes in this folder move to Unfiled. No notes are deleted.")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          }
+
+          HStack {
+            Spacer()
+            Button("Cancel", role: .cancel, action: onCancel)
+              .keyboardShortcut(.cancelAction)
+            Button("Delete Folder", role: .destructive, action: onConfirm)
+              .keyboardShortcut(.defaultAction)
+          }
+        }
+        .padding(20)
+        .frame(maxWidth: 360)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .shadow(radius: 20, y: 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Delete folder confirmation")
+      }
+    }
+  }
+
   private struct DeleteConfirmationOverlay: View {
     let note: Note
+    @Binding var dontAskAgain: Bool
     let onCancel: () -> Void
     let onConfirm: () -> Void
 
@@ -1730,9 +2396,13 @@
               .foregroundStyle(.secondary)
           }
 
+          Toggle("Don't ask me again", isOn: $dontAskAgain)
+            .toggleStyle(.checkbox)
+
           HStack {
             Spacer()
             Button("Cancel", role: .cancel, action: onCancel)
+              .keyboardShortcut(.cancelAction)
             Button("Confirm", role: .destructive, action: onConfirm)
               .keyboardShortcut(.defaultAction)
           }
@@ -1745,11 +2415,26 @@
     }
   }
 
+  func routeFontFamilyAction(
+    family: String,
+    isTitleFocused: Bool,
+    titleMutation: (String) -> Void,
+    bodyMutation: (String) -> Void
+  ) {
+    if isTitleFocused {
+      titleMutation(family)
+    } else {
+      bodyMutation(family)
+    }
+  }
+
   private struct FormattingBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject var appState: AppState
     @ObservedObject var commands: EditorCommands
     @ObservedObject var dictationRuntime: DictationRuntime
     let isEditorVisible: Bool
+    let isTitleFocused: Bool
     let onDelete: () -> Void
     @State private var fontSizeText = ""
     @FocusState private var isFontSizeFocused: Bool
@@ -1838,11 +2523,11 @@
           ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
             Button {
               guard isEditorVisible else { return }
-              commands.applyFontFamily(family)
+              applyFontFamily(family)
             } label: {
               HStack {
                 Text(family)
-                if !commands.isFontFamilyMixed, commands.currentFontFamily == family {
+                if !isFontFamilyMixed, currentFontFamily == family {
                   Image(systemName: "checkmark")
                 }
               }
@@ -1854,7 +2539,7 @@
         .help("Font")
         .accessibilityLabel("Font")
         .accessibilityValue(
-          commands.isFontFamilyMixed ? "Mixed" : commands.currentFontFamily ?? "Automatic"
+          isFontFamilyMixed ? "Mixed" : currentFontFamily ?? "Automatic"
         )
         TextField("Font size", text: $fontSizeText)
           .textFieldStyle(.roundedBorder)
@@ -1910,7 +2595,10 @@
           guard isEditorVisible else { return }
           isBackgroundColorPickerPresented = true
         } label: {
-          ToolbarIconLabel(systemImage: "highlighter")
+          HighlighterMarkerIcon(
+            backgroundColor: commands.currentBackgroundColor,
+            isMixed: commands.isBackgroundColorMixed
+          )
         }
         .accessibilityLabel("Highlight")
         .accessibilityValue(
@@ -2012,7 +2700,9 @@
         .padding(.vertical, 9)
       }
       .frame(maxWidth: .infinity)
-      .background(.thinMaterial)
+      .modifier(FormattingBarSurface())
+      .padding(.horizontal, 10)
+      .padding(.top, 8)
       .disabled(!isEditorVisible)
       .accessibilityLabel("Editor toolbar")
       .accessibilityHidden(!isEditorVisible)
@@ -2025,6 +2715,26 @@
     private var fontSizeDisplay: String {
       guard !commands.isFontSizeMixed, let size = commands.currentFontSize else { return "" }
       return String(format: "%.2f", size).replacingOccurrences(of: #"\.00$"#, with: "", options: .regularExpression)
+    }
+
+    private var currentFontFamily: String? {
+      if isTitleFocused {
+        return appState.selectedNote?.titleFontFamily ?? appState.preferences.fontFamily
+      }
+      return commands.currentFontFamily
+    }
+
+    private var isFontFamilyMixed: Bool {
+      isTitleFocused ? false : commands.isFontFamilyMixed
+    }
+
+    private func applyFontFamily(_ family: String) {
+      routeFontFamilyAction(
+        family: family,
+        isTitleFocused: isTitleFocused,
+        titleMutation: { appState.setSelectedTitleFontFamily($0) },
+        bodyMutation: { commands.applyFontFamily($0) }
+      )
     }
 
     private func syncFontSizeText() {
@@ -2052,6 +2762,27 @@
       guard !isMixed else { return "Mixed" }
       guard let color else { return emptyName }
       return FleckPaletteOption.paletteName(for: color) ?? "Custom"
+    }
+  }
+
+  private struct FormattingBarSurface: ViewModifier {
+    func body(content: Content) -> some View {
+      if #available(macOS 26, *) {
+        content.glassEffect(
+          Glass.regular.tint(Color.black.opacity(0.18)),
+          in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+      } else {
+        content
+          .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+              .fill(.ultraThinMaterial)
+              .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                  .fill(Color.black.opacity(0.10))
+              }
+          }
+      }
     }
   }
 
@@ -2093,6 +2824,142 @@
       .frame(width: 62, height: 22, alignment: .trailing)
       .animation(motion.quick, value: status)
       .accessibilityElement(children: .combine)
+    }
+  }
+
+  private struct TabDropDelegate: DropDelegate {
+    let destinationID: UUID
+    let activeFolderID: UUID?
+    let currentNotes: () -> [Note]
+    @Binding var draggedSource: NoteDropSource?
+    @Binding var lastDestinationID: UUID?
+    let move: (UUID, Int) -> Void
+
+    func dropEntered(info: DropInfo) {
+      let providerSource = FolderDragPayload.noteSource(
+        from: info.itemProviders(for: [FolderDragPayload.noteType])
+      )
+      guard draggedSource == providerSource else { return }
+      let result = TabDragReorder.performLiveMove(
+        draggedSource: draggedSource,
+        providerSource: providerSource,
+        over: destinationID,
+        activeFolderID: activeFolderID,
+        currentNotes: currentNotes,
+        lastDestinationID: lastDestinationID,
+        move: move
+      )
+      lastDestinationID = result.destinationID
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+      let providerSource = FolderDragPayload.noteSource(
+        from: info.itemProviders(for: [FolderDragPayload.noteType])
+      )
+      guard draggedSource == providerSource,
+        TabDragReorder.isValidLocalDrag(
+          draggedSource: draggedSource,
+          providerSource: providerSource,
+          destinationID: destinationID,
+          activeFolderID: activeFolderID,
+          currentNotes: currentNotes()
+        )
+      else { return nil }
+      return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+      let providerSource = FolderDragPayload.noteSource(
+        from: info.itemProviders(for: [FolderDragPayload.noteType])
+      )
+      let accepted = draggedSource == providerSource
+        && TabDragReorder.isValidLocalDrag(
+          draggedSource: draggedSource,
+          providerSource: providerSource,
+          destinationID: destinationID,
+          activeFolderID: activeFolderID,
+          currentNotes: currentNotes()
+        )
+      if draggedSource == providerSource {
+        draggedSource = nil
+        lastDestinationID = nil
+      }
+      return accepted
+    }
+  }
+
+  struct HighlighterMarkerShape: Shape {
+    func path(in rect: CGRect) -> Path {
+      let stemMinX = rect.minX + rect.width * 0.20
+      let stemMaxX = rect.minX + rect.width * 0.80
+      let stemTop = rect.minY + rect.height * 0.08
+      let shoulderY = rect.minY + rect.height * 0.43
+      let bodyBottom = rect.minY + rect.height * 0.57
+      let bodyInset = rect.width * 0.08
+
+      var path = Path()
+      path.move(to: CGPoint(x: stemMinX, y: stemTop))
+      path.addLine(to: CGPoint(x: stemMinX, y: shoulderY))
+      path.addLine(
+        to: CGPoint(x: stemMinX + bodyInset, y: bodyBottom)
+      )
+      path.addLine(
+        to: CGPoint(x: stemMaxX - bodyInset, y: bodyBottom)
+      )
+      path.addLine(to: CGPoint(x: stemMaxX, y: shoulderY))
+      path.addLine(to: CGPoint(x: stemMaxX, y: stemTop))
+      path.move(to: CGPoint(x: stemMinX, y: shoulderY))
+      path.addLine(to: CGPoint(x: stemMaxX, y: shoulderY))
+      return path
+    }
+  }
+
+  struct HighlighterMarkerNibShape: Shape {
+    func path(in rect: CGRect) -> Path {
+      let inkMinX = rect.minX + rect.width * 0.34
+      let inkMaxX = rect.minX + rect.width * 0.70
+      let inkTop = rect.minY + rect.height * 0.63
+      let inkBottom = rect.minY + rect.height * 0.96
+      let taperY = inkTop + (inkBottom - inkTop) * 0.38
+      let lowerMinX = inkMinX + rect.width * 0.05
+
+      var path = Path()
+      path.move(to: CGPoint(x: inkMinX, y: inkTop))
+      path.addLine(to: CGPoint(x: inkMaxX, y: inkTop))
+      path.addLine(to: CGPoint(x: inkMaxX, y: taperY))
+      path.addLine(to: CGPoint(x: lowerMinX, y: inkBottom))
+      path.addLine(to: CGPoint(x: inkMinX, y: inkBottom))
+      path.closeSubpath()
+      return path
+    }
+  }
+
+  struct HighlighterMarkerIcon: View {
+    let inkColor: NSColor
+
+    init(backgroundColor: NSColor?, isMixed: Bool) {
+      self.inkColor = (!isMixed ? backgroundColor : nil)
+        ?? FleckColorHex.nsColor(from: "#FFD600")!
+    }
+
+    var body: some View {
+      ZStack {
+        HighlighterMarkerNibShape()
+          .fill(Color(nsColor: inkColor))
+          .overlay {
+            HighlighterMarkerNibShape()
+              .stroke(.primary, lineWidth: 1.1)
+          }
+        HighlighterMarkerShape()
+          .stroke(
+            .primary,
+            style: StrokeStyle(lineWidth: 1.15, lineCap: .butt, lineJoin: .miter)
+          )
+      }
+        .frame(width: 20, height: 18)
+        .frame(width: 28, height: 26)
+        .background(.clear, in: RoundedRectangle(cornerRadius: 5))
+        .contentShape(RoundedRectangle(cornerRadius: 5))
     }
   }
 

@@ -1,6 +1,27 @@
 import Foundation
 
 public actor LocalStore {
+  public enum RestoreOutcome: Equatable, Sendable {
+    public enum TrashCleanup: Equatable, Sendable {
+      case succeeded
+      case failed
+    }
+
+    case committed(workspace: Workspace, trashCleanup: TrashCleanup)
+
+    public var workspace: Workspace {
+      switch self {
+      case let .committed(workspace, _): workspace
+      }
+    }
+
+    public var trashCleanup: TrashCleanup {
+      switch self {
+      case let .committed(_, trashCleanup): trashCleanup
+      }
+    }
+  }
+
   public enum StoreError: Error, Equatable {
     case invalidFilename
     case invalidTrashEntry(UUID)
@@ -9,7 +30,7 @@ public actor LocalStore {
     case restoreConflict
   }
 
-  private let rootURL: URL
+  public nonisolated let rootURL: URL
   private let fileManager: FileManager
   private let decoder: JSONDecoder
   public nonisolated let snapshotWriter: LocalStoreSnapshotWriter
@@ -82,7 +103,7 @@ public actor LocalStore {
     into workspace: Workspace,
     preferences: AppPreferences,
     generation: UInt64 = 0
-  ) throws -> Workspace {
+  ) throws -> RestoreOutcome {
     try createDirectoryIfNeeded()
     let entryURL = trashEntryURL(for: trashedNote.id)
     guard loadTrashedNote(at: entryURL) != nil else {
@@ -99,8 +120,17 @@ public actor LocalStore {
     guard result == .committed else {
       throw StoreError.restoreConflict
     }
-    try fileManager.removeItem(at: entryURL)
-    return restoredWorkspace
+    let trashCleanup: RestoreOutcome.TrashCleanup
+    do {
+      try fileManager.removeItem(at: entryURL)
+      trashCleanup = .succeeded
+    } catch {
+      trashCleanup = .failed
+    }
+    return .committed(
+      workspace: restoredWorkspace,
+      trashCleanup: trashCleanup
+    )
   }
 
   public func loadPreferences() throws -> AppPreferences {
@@ -152,7 +182,8 @@ public actor LocalStore {
         isPinned: metadata.isPinned,
         agentAccess: metadata.agentAccess ?? false,
         revision: metadata.revision ?? 0,
-        folderID: metadata.folderID
+        folderID: metadata.folderID,
+        titleFontFamily: metadata.titleFontFamily
       ),
       deletedAt: metadata.deletedAt
     )

@@ -1,0 +1,1293 @@
+{
+  "schemaVersion": 1,
+  "corpusID": "english-qualification-v1",
+  "language": "english",
+  "sourceCorpus": {
+    "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+    "corpusID": "fleck-qwen-cleanup-qualification-corpus-v1",
+    "sha256": "6d8a639d6b67fde23a198398e13176ccc50af03acdfaf504a68dfaa20c9a17fb"
+  },
+  "expectedCounts": {
+    "total": 38,
+    "publicHuman": 24,
+    "publicHumanByEngine": {
+      "qwen": 12,
+      "whisper": 12
+    },
+    "protectedStress": 9,
+    "syntheticUtility": 5
+  },
+  "cases": [
+    {
+      "id": "qwen-asr-en_us-01",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-01"
+      },
+      "sourceCaseSHA256": "47b3b3c2a58e0e3490ea9d164de5c8051299a3e0761d2011ba3f591664b1e033",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "65c65c2f3f01266d5551076135494c8744b93f802d7ea8ef5c21912c904bb9d5",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-01",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "One hundred and eight plates of chapati, bong, and Hinduism—fifty-six different edible items like sweet fruits, nuts, dishes, etc.—which are offered to deity—were served to Baba Shyam.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-02",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-02"
+      },
+      "sourceCaseSHA256": "253b6db16c2a0d8bad0369d5bfa4a3ae1cb28b8b7a8a831cb45d0b5278cbffa1",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "d89869e19fba50ce3e998e6240fb5d470aecae7a1f01ec9058dabc64f86b934d",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-02",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "Many common formats, EPS family of formats, for example, are equal to or closely approximate this aspect ratio.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-03",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-03"
+      },
+      "sourceCaseSHA256": "8b04f4bb00839be897b6f43190d3310b8d8fff2fde7dc1762d76048d8810780a",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "0fa327ea3a2ee2f24ecc8f168edbe6d058283f19dae2148bcf70804f6f6bc4fe",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-03",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "The largest tournament of the year takes place in December at the Polo Fields in Las Canitas.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-04",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-04"
+      },
+      "sourceCaseSHA256": "56bbcf2399e87e13595226df67df80bdc260b39673c83fbec3050e65e4ec6bfe",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "3d8ddfba77c98faafb92bd3cefe2760949521627395da35259a2b0664ec418e7",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-04",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "The report opens with plea for open debate and the formation of a consensus in the United States about the policy towards the Middle East.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-05",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-05"
+      },
+      "sourceCaseSHA256": "b0e079cdb788b8642576047d3d860ccf5e8d6169b197077c992ef75778754c6d",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "417fee0dad20562352aa591b6ed5b1f10752eba60ef2d9f95389e8ba34272191",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-05",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "The Arabs also brought Islam to the lands, and it took in a big way in Comoros and Myat.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-06",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-06"
+      },
+      "sourceCaseSHA256": "3e520a4b18674ab089bbb951a40c6db6efa23aa0a8cc565a58810f5880913d1f",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "e1a0d114c4a7be8f01b945397134aa6061abfefee27d06b53f8178baf1248dc5",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-06",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "She came to this conclusion due to the multitude of positive comments and encouragement sent to her by both female and male individuals urging that contraception medication be considered a medical necessity.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-07",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-07"
+      },
+      "sourceCaseSHA256": "96d7ce80357c1ed117a54872d8bbbf71bcc473c51cc29efd9406438ca45d3bdf",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "802d85c39741ed508ea6edc51eec0a41826fdf15f9d713d44614731ad6595c5b",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-07",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "Air accidents are common in Iran, which has an aging fleet that is poorly maintained, both for civil and military operations.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-08",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-08"
+      },
+      "sourceCaseSHA256": "9e714501057dcce41084bd7e62395e937b2851ce31d81e9af586b4aa5ed4d4bb",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "347228b0381efa21d8cb445be239ec3c7073b71af53ea4fb35d9112be2ddb430",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-08",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "Robin Uppa made the innings highest score: seventy runs in just forty-one balls by hitting eleven fours and two sixes.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-09",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-09"
+      },
+      "sourceCaseSHA256": "b452e966bc6c2e1e66df27515c72c3c045a8db890990799ba74adb4fd0759fdc",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "927c771e8c06fe6217c6abc2b094c4195568ac41e05145e411d3d0a061c6fdcc",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-09",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "Ancient Roman meals couldn't have included foods that came from Europe, that came to Europe from America or from Asia in later centuries.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-10",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-10"
+      },
+      "sourceCaseSHA256": "bb3d71dae5007693c035f89af0c01cc0b66a8661083a60084a09f7dd8c6d7a81",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "e85aef051308d5afd533ce01d5c94baea3d9b785b0d0c57e64e3c183e1556b30",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-10",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "Arley Velasquez of Mexico finished 15th in the men's sitting super G. New Zealand's Adam Hall finished 9th in the men's standing super G.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-11",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-11"
+      },
+      "sourceCaseSHA256": "8fde150ec4fb3499c73a55e751a9fc935d215b5bc3ab659fc7ca70c777c6be4d",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "24c7a270684158bce7990aa97de9f9c2b3a996752a24b4ee973b7ea85dda7090",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-11",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "The Spaniards started the colonization period, which lasted for three centuries.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "qwen-asr-en_us-12",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "qwen-asr-en_us-12"
+      },
+      "sourceCaseSHA256": "9b5acc81f3e8fe35a17b82a3964e3f59dcca4c5fb3d6006dcaaf6d5dc50de404",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "a5957dc0ca5f920cefc62c043e1db3bf3eebb7bf63c4ddd727b2a7cec49c40d3",
+        "engine": "qwen",
+        "field": "hypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "recordID": "en_us-12",
+        "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
+      },
+      "tags": [
+        "asr",
+        "qwen",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": "The park covers 19,500 kilometers and is divided in 14 different ecozones, each supporting different wildlife.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-01",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-01"
+      },
+      "sourceCaseSHA256": "1d80b1f54a1b82f09c1e7b619f470094d4142a6c1496f2ea9d312cf08fc2e45a",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "65c65c2f3f01266d5551076135494c8744b93f802d7ea8ef5c21912c904bb9d5",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-01",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " 108 plates of Chap-n-Bong in Hinduism, 56 different edible items like sweet fruits, nuts, dishes, etc. which are offered to deity were served to Baba Shyam.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-02",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-02"
+      },
+      "sourceCaseSHA256": "8acd6e020270f67c3c80ad8f34e79fdf036bf13068954c842fb97627a64b849c",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "d89869e19fba50ce3e998e6240fb5d470aecae7a1f01ec9058dabc64f86b934d",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-02",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " Many common formats, EPS family of formats for example, are equal to or closely approximate this aspect ratio.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-03",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-03"
+      },
+      "sourceCaseSHA256": "186a04551892b5e147b9fcb04739a16f96e44eae2e7ba3ff77ab7bc67c1b8c17",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "0fa327ea3a2ee2f24ecc8f168edbe6d058283f19dae2148bcf70804f6f6bc4fe",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-03",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " The largest tournament of the year takes place in December at the Polo Fields in Las Canitas.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-04",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-04"
+      },
+      "sourceCaseSHA256": "89eafdd677fb5d8298582510b63b66e9e2ad91c4ba4a96d4117f1ccc617dbcd6",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "3d8ddfba77c98faafb92bd3cefe2760949521627395da35259a2b0664ec418e7",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-04",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " The report opens with plea for open debate and the formation of a consensus in the United States about the policy towards the Middle East.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-05",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-05"
+      },
+      "sourceCaseSHA256": "d7064ad0ef0c814708b76adbb6ba420bd4ce60a792a15a81dcce63620c99b208",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "417fee0dad20562352aa591b6ed5b1f10752eba60ef2d9f95389e8ba34272191",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-05",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " The Arabs also brought it along to the lands and it took in a big way in comoros and mayat.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-06",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-06"
+      },
+      "sourceCaseSHA256": "5bc7ec66ee12b2fa08c287db7ac5767f02f4f82e248046a781ee55c4912c758f",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "e1a0d114c4a7be8f01b945397134aa6061abfefee27d06b53f8178baf1248dc5",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-06",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " She came to this conclusion due to the multitude of positive comments and encouragement sent to her by both female and male individuals urging that contraception medication be considered a medical necessity.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-07",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-07"
+      },
+      "sourceCaseSHA256": "b61126e38988ead824536f758724399db04bf56870d5839aa6738ccde475d180",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "802d85c39741ed508ea6edc51eec0a41826fdf15f9d713d44614731ad6595c5b",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-07",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " Air accidents are common in Iran which has an aging fleet that is poorly maintained both for civil and military operations.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-08",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-08"
+      },
+      "sourceCaseSHA256": "c11cc2556f5608ceb27a4cca11b713cacaf961f7dfaa13b1c0509526d94a1a06",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "347228b0381efa21d8cb445be239ec3c7073b71af53ea4fb35d9112be2ddb430",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-08",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " Robin Ujapa made the innings high score. 70 runs in just 41 balls by hitting 11 forwards and two sixes.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-09",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-09"
+      },
+      "sourceCaseSHA256": "ee372043fea58f3c53df75f71963e4fb1fe12fc709944b7579f1f2ff0b991ca5",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "927c771e8c06fe6217c6abc2b094c4195568ac41e05145e411d3d0a061c6fdcc",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-09",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " Ancient Roman meals couldn't have included foods that came to Europe from America or from Asia in later centuries.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-10",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-10"
+      },
+      "sourceCaseSHA256": "849726a2065b7f886844be15849baf5d3190854a08ed7e6d127a326b465bb9b3",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "e85aef051308d5afd533ce01d5c94baea3d9b785b0d0c57e64e3c183e1556b30",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-10",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " Arlie Velazquez of Mexico finished 15th in the Men's Sitting Super G. New Zealand's Adam Hall finished 9th in the Men's Standing Super G.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-11",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-11"
+      },
+      "sourceCaseSHA256": "4fb2385f0b0226c8b5dcdcab37274fed914dde9d41136fb2c49bbb8d633ff0ff",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "24c7a270684158bce7990aa97de9f9c2b3a996752a24b4ee973b7ea85dda7090",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-11",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " The Spaniards started the colonization period which lasted for three centuries.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "whisper-asr-en_us-12",
+      "language": "english",
+      "evidenceClass": "publicHuman",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "whisper-asr-en_us-12"
+      },
+      "sourceCaseSHA256": "a83ce8fd4ea6471a2644b7fd7cae45add343db29ff61679bafa8bd0f2b6bba19",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "publicHuman",
+      "sourceEvidence": {
+        "audioSHA256": "a5957dc0ca5f920cefc62c043e1db3bf3eebb7bf63c4ddd727b2a7cec49c40d3",
+        "engine": "whisper",
+        "field": "rawHypothesis",
+        "kind": "externalBenchmark",
+        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "recordID": "en_us-12",
+        "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
+      },
+      "tags": [
+        "asr",
+        "whisper",
+        "english",
+        "public-human"
+      ],
+      "rawBaseline": " The park covers 19,500 kilometers and is divided in 14 different eco zones, each supporting different wildlife.",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": null
+    },
+    {
+      "id": "stress-name-destination",
+      "language": "english",
+      "evidenceClass": "protectedStress",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "stress-name-destination"
+      },
+      "sourceCaseSHA256": "349dc88649081376d8b80f3dcab7d6eb0626db2b648b3ab06b9f5e22ce6b823b",
+      "deterministicCleanupExpectedToChange": true,
+      "sourceClass": "protectedStress",
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "tags": [
+        "stress",
+        "english",
+        "filler",
+        "name",
+        "destination"
+      ],
+      "rawBaseline": "um, send the report to Alice at Office",
+      "protectedForms": [
+        "Alice",
+        "Office"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "name",
+          "text": "Alice"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "destination",
+          "text": "Office"
+        }
+      ],
+      "expectedOutput": null
+    },
+    {
+      "id": "stress-number-words-digits",
+      "language": "english",
+      "evidenceClass": "protectedStress",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "stress-number-words-digits"
+      },
+      "sourceCaseSHA256": "55f47e97fb02a767c6f6e46b9cce9eaf469bd42a1f71198a1656d1084b22dcab",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "protectedStress",
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "tags": [
+        "stress",
+        "english",
+        "number-word",
+        "number-digit"
+      ],
+      "rawBaseline": "use twenty screws and 20 washers",
+      "protectedForms": [
+        "twenty",
+        "20"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "number-word",
+          "text": "twenty"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "number-digit",
+          "text": "20"
+        }
+      ],
+      "expectedOutput": null
+    },
+    {
+      "id": "stress-price-unit",
+      "language": "english",
+      "evidenceClass": "protectedStress",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "stress-price-unit"
+      },
+      "sourceCaseSHA256": "8233a4cf2e19f466939a4057c82f2d1c1881b0d98c31ac960fa9af4eac2a20ef",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "protectedStress",
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "tags": [
+        "stress",
+        "english",
+        "price",
+        "unit"
+      ],
+      "rawBaseline": "pay $20.00 for 3 kg",
+      "protectedForms": [
+        "$20.00",
+        "3 kg"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "price",
+          "text": "$20.00"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "unit",
+          "text": "3 kg"
+        }
+      ],
+      "expectedOutput": null
+    },
+    {
+      "id": "stress-date-time",
+      "language": "english",
+      "evidenceClass": "protectedStress",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "stress-date-time"
+      },
+      "sourceCaseSHA256": "d20842aa340846a9ca7d42078b50f03347e9330d86aef97e35de667649c37e90",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "protectedStress",
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "tags": [
+        "stress",
+        "english",
+        "date",
+        "time"
+      ],
+      "rawBaseline": "meet on 2026-08-21 at 3pm",
+      "protectedForms": [
+        "2026-08-21",
+        "3pm"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "date",
+          "text": "2026-08-21"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "time",
+          "text": "3pm"
+        }
+      ],
+      "expectedOutput": null
+    },
+    {
+      "id": "stress-url-path",
+      "language": "english",
+      "evidenceClass": "protectedStress",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "stress-url-path"
+      },
+      "sourceCaseSHA256": "c0a48a92f5f89f90ff4d9a5ee812e60a8fc3994e6777616dada79ba3a7b4f59e",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "protectedStress",
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "tags": [
+        "stress",
+        "english",
+        "url",
+        "path"
+      ],
+      "rawBaseline": "open https://fleck.app and read /tmp/Fleck.md",
+      "protectedForms": [
+        "https://fleck.app",
+        "/tmp/Fleck.md"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "url",
+          "text": "https://fleck.app"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "path",
+          "text": "/tmp/Fleck.md"
+        }
+      ],
+      "expectedOutput": null
+    },
+    {
+      "id": "stress-command-code",
+      "language": "english",
+      "evidenceClass": "protectedStress",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "stress-command-code"
+      },
+      "sourceCaseSHA256": "b5c5733e2df838915ea8fb5d43129206062cd5094dac3c821e9289c5f3f001d4",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "protectedStress",
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "tags": [
+        "stress",
+        "english",
+        "command",
+        "code"
+      ],
+      "rawBaseline": "run git status --short and inspect foo.bar()",
+      "protectedForms": [
+        "git status --short",
+        "foo.bar()"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "command",
+          "text": "git status --short"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "code",
+          "text": "foo.bar()"
+        }
+      ],
+      "expectedOutput": null
+    },
+    {
+      "id": "stress-destination-recipient",
+      "language": "english",
+      "evidenceClass": "protectedStress",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "stress-destination-recipient"
+      },
+      "sourceCaseSHA256": "55d9c846ca02ce01156f81a0ae5ac5a1d371390c0196617c509fc82ad3beda19",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "protectedStress",
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "tags": [
+        "stress",
+        "english",
+        "recipient",
+        "destination"
+      ],
+      "rawBaseline": "send it to Jordan at Office",
+      "protectedForms": [
+        "Jordan",
+        "Office"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "recipient",
+          "text": "Jordan"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "destination",
+          "text": "Office"
+        }
+      ],
+      "expectedOutput": null
+    },
+    {
+      "id": "stress-commitment-modality",
+      "language": "english",
+      "evidenceClass": "protectedStress",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "stress-commitment-modality"
+      },
+      "sourceCaseSHA256": "ad77ddd2d6f887bcb22ab007fb610eca882d636d67748288a153f2980fc46969",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "protectedStress",
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "tags": [
+        "stress",
+        "english",
+        "commitment",
+        "modality"
+      ],
+      "rawBaseline": "I will ship the patch but I might wait",
+      "protectedForms": [
+        "will",
+        "might"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "commitment",
+          "text": "will"
+        },
+        {
+          "comparison": "exactSubstring",
+          "kind": "modality",
+          "text": "might"
+        }
+      ],
+      "expectedOutput": null
+    },
+    {
+      "id": "stress-negation",
+      "language": "english",
+      "evidenceClass": "protectedStress",
+      "source": {
+        "kind": "Qwen qualification corpus",
+        "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
+        "caseID": "stress-negation"
+      },
+      "sourceCaseSHA256": "a620353a92c8a10bf778cbd06325c0c4848303f2771c734d69820833af0179d2",
+      "deterministicCleanupExpectedToChange": false,
+      "sourceClass": "protectedStress",
+      "sourceEvidence": {
+        "audioSHA256": null,
+        "engine": "none",
+        "field": "localCleanup",
+        "kind": "checkedInSource",
+        "path": "repo:Sources/FleckApp/FoundationModelDictation.swift",
+        "recordID": "FoundationModelDictation.localCleanup",
+        "sha256": "707841d0b95df829cd7301c9032ecd7617172fc168fa438d2761abc0b3574c22"
+      },
+      "tags": [
+        "stress",
+        "english",
+        "negation"
+      ],
+      "rawBaseline": "do not send the email",
+      "protectedForms": [
+        "do not"
+      ],
+      "protectedExpectations": [
+        {
+          "comparison": "exactSubstring",
+          "kind": "negation",
+          "text": "do not"
+        }
+      ],
+      "expectedOutput": null
+    },
+    {
+      "id": "synthetic-filler-removal",
+      "language": "english",
+      "evidenceClass": "syntheticUtility",
+      "source": {
+        "kind": "synthetic utility supplement",
+        "caseID": "synthetic-filler-removal"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "synthetic",
+        "utility",
+        "filler-removal"
+      ],
+      "rawBaseline": "um I need the report",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": "I need the report"
+    },
+    {
+      "id": "synthetic-immediate-duplicate",
+      "language": "english",
+      "evidenceClass": "syntheticUtility",
+      "source": {
+        "kind": "synthetic utility supplement",
+        "caseID": "synthetic-immediate-duplicate"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "synthetic",
+        "utility",
+        "immediate-duplicate-removal"
+      ],
+      "rawBaseline": "send the report report now",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": "send the report now"
+    },
+    {
+      "id": "synthetic-explicit-correction",
+      "language": "english",
+      "evidenceClass": "syntheticUtility",
+      "source": {
+        "kind": "synthetic utility supplement",
+        "caseID": "synthetic-explicit-correction"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "synthetic",
+        "utility",
+        "explicit-correction"
+      ],
+      "rawBaseline": "I need the old draft, no, the final draft",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": "I need the final draft"
+    },
+    {
+      "id": "synthetic-punctuation-case",
+      "language": "english",
+      "evidenceClass": "syntheticUtility",
+      "source": {
+        "kind": "synthetic utility supplement",
+        "caseID": "synthetic-punctuation-case"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "synthetic",
+        "utility",
+        "punctuation-case"
+      ],
+      "rawBaseline": "please send the report",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": "Please send the report."
+    },
+    {
+      "id": "synthetic-short-list",
+      "language": "english",
+      "evidenceClass": "syntheticUtility",
+      "source": {
+        "kind": "synthetic utility supplement",
+        "caseID": "synthetic-short-list"
+      },
+      "deterministicCleanupExpectedToChange": true,
+      "tags": [
+        "synthetic",
+        "utility",
+        "short-list-formatting"
+      ],
+      "rawBaseline": "first privacy second speed",
+      "protectedForms": [],
+      "protectedExpectations": [],
+      "expectedOutput": "1. Privacy\n2. Speed"
+    }
+  ]
+}

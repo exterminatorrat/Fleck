@@ -501,6 +501,16 @@
         "This shortcut may replace normal typing or navigation while Fleck is active."
       )
     )
+    for description in [
+      "Set the keyboard shortcut for showing or hiding notes.",
+      "Set the keyboard shortcut for creating a new note.",
+      "Set the keyboard shortcut for closing the current note.",
+      "Set the keyboard shortcut for moving to the next note.",
+      "Set the keyboard shortcut for moving to the previous note.",
+    ] {
+      #expect(settingsSource.contains(description))
+    }
+    #expect(!settingsSource.contains("Set the key combination used to"))
     #expect(
       settingsSource.contains(
         "Click a shortcut and press the complete chord. Conflicting combinations are highlighted and disabled shortcuts can be restored at any time."

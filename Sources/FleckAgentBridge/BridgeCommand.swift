@@ -53,7 +53,7 @@ enum BridgeCommand: Equatable {
       return request.context.operationID
     case .undoChange(let request):
       return request.operationID
-    case .listSharedNotes, .readNote, .listTasks, .listActivity:
+    case .getCapabilities, .listSharedNotes, .readNote, .listTasks, .listActivity:
       return nil
     }
   }
@@ -400,6 +400,12 @@ enum BridgeOutput {
       return entries.map {
         "\($0.changeID.uuidString)\t\($0.operation.rawValue)\t\($0.noteTitle)"
       }.joined(separator: "\n")
+    case .capabilities(let summary):
+      let capabilities = summary.availableCapabilities
+        .sorted { $0.rawValue < $1.rawValue }
+        .map(\.rawValue)
+        .joined(separator: ", ")
+      return "Grant revision \(summary.grantRevision)\nCapabilities: \(capabilities)"
     }
   }
 

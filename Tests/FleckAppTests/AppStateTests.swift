@@ -102,6 +102,30 @@ private func waitForSaveCount(
   #expect(state.saveStatus == .saved)
 }
 
+@Test @MainActor func selectedTitleFontFamilySchedulesOneNoteSaveWithoutChangingPreferences() async throws {
+  let first = Note(title: "Selected")
+  let second = Note(title: "Other", titleFontFamily: "Avenir")
+  let recorder = SaveRecorder()
+  let state = await folderedState(
+    workspace: Workspace(notes: [first, second], selectedNoteID: first.id),
+    recorder: recorder
+  )
+  let originalPreferences = state.preferences
+
+  state.setSelectedTitleFontFamily("Menlo")
+
+  #expect(state.selectedNote?.titleFontFamily == "Menlo")
+  #expect(state.workspace.notes[1].titleFontFamily == "Avenir")
+  #expect(state.preferences == originalPreferences)
+  #expect(state.saveStatus == .saving)
+  try await waitForSaveCount(recorder, 1)
+  #expect(recorder.generations.count == 1)
+
+  state.setSelectedTitleFontFamily("Menlo")
+  try await Task.sleep(for: .milliseconds(450))
+  #expect(recorder.generations.count == 1)
+}
+
 @Test @MainActor func restoringRemovesTrashRowImmediately() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -276,6 +300,238 @@ private func waitForSaveCount(
   #expect(contents.contains("agentActivityStore: agentActivityStore"))
   #expect(contents.contains("profileStore: agentProfileStore"))
   #expect(contents.contains("activityStore: agentActivityStore"))
+  #expect(contents.components(separatedBy: "AgentCapabilityStore(").count - 1 == 1)
+  #expect(
+    contents.components(
+      separatedBy: "AgentCapabilityAuthority(store: agentCapabilityStore)"
+    ).count - 1 == 1
+  )
+  #expect(contents.contains("agentCapabilityStore: agentCapabilityStore"))
+  #expect(contents.contains("agentCapabilityAuthority: agentCapabilityAuthority"))
+  #expect(contents.contains("capabilityAuthority: agentCapabilityAuthority"))
+}
+
+@Test @MainActor
+func capabilityMigrationRunsAfterWorkspaceAndActiveProfilesLoad() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("AppStateCapabilityTests-\(UUID())", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Migrated", body: "Body", agentAccess: true)
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: .init()
+  )
+  let profile = AgentIntegrationProfile(
+    id: UUID(),
+    displayName: "Codex",
+    createdAt: Date(timeIntervalSince1970: 100),
+    lastConnectedAt: nil,
+    revokedAt: nil
+  )
+  let profilesURL = root
+    .appendingPathComponent("AgentIntegrations", isDirectory: true)
+    .appendingPathComponent("profiles.json")
+  try FileManager.default.createDirectory(
+    at: profilesURL.deletingLastPathComponent(),
+    withIntermediateDirectories: true
+  )
+  try JSONEncoder().encode([profile]).write(to: profilesURL)
+  let state = AppState(
+    store: store,
+    agentProfileStore: AgentProfileStore(profilesURL: profilesURL),
+    agentCapabilityStore: appStateCapabilityStore(root: root)
+  )
+
+  await state.waitUntilInitialLoad()
+
+  let capabilities = try #require(state.capabilityProfile(profile.id))
+  #expect(
+    capabilities.grants.contains {
+      $0.scope == .note(noteID: note.id) && $0.authority == .write
+    }
+  )
+  #expect(state.selectedNote?.body == "Body")
+  #expect(state.hasFinishedInitialLoad)
+  #expect(state.isAgentWorkspaceAvailable)
+}
+
+@Test @MainActor
+func malformedCapabilityGenerationsKeepNotesUsableAndAgentWorkspaceUnavailable()
+  async throws
+{
+  for previous in [false, true] {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AppStateMalformedCapabilityTests-\(UUID())", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Still usable", body: "Keep this")
+    let localStore = LocalStore(rootURL: root)
+    try await localStore.save(
+      workspace: Workspace(notes: [note], selectedNoteID: note.id),
+      preferences: .init()
+    )
+    let malformedURL = previous
+      ? root.appendingPathComponent("AgentIntegrations/capabilities.previous.json")
+      : root.appendingPathComponent("AgentIntegrations/capabilities.json")
+    try FileManager.default.createDirectory(
+      at: malformedURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try Data("not-json".utf8).write(to: malformedURL)
+    let state = AppState(
+      store: localStore,
+      agentProfileStore: appStateProfileStore(root: root),
+      agentCapabilityStore: appStateCapabilityStore(root: root)
+    )
+
+    await state.waitUntilInitialLoad()
+
+    #expect(state.hasFinishedInitialLoad)
+    #expect(state.selectedNote?.body == "Keep this")
+    #expect(!state.isAgentWorkspaceAvailable)
+    #expect(state.saveError == nil)
+    #expect(
+      state.agentCleanupError
+        == "Agent workspace is unavailable. Reopen Fleck after resolving capability storage."
+    )
+    #expect(!(state.agentCleanupError ?? "").contains("not-json"))
+    #expect(!(state.agentCleanupError ?? "").contains(root.path))
+  }
+}
+
+@Test @MainActor
+func appStateKeepsUnassignedLegacySharesUnassigned() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("AppStateUnassignedCapabilityTests-\(UUID())", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Legacy share", agentAccess: true)
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: .init()
+  )
+  let state = AppState(
+    store: store,
+    agentProfileStore: appStateProfileStore(root: root),
+    agentCapabilityStore: appStateCapabilityStore(root: root)
+  )
+
+  await state.waitUntilInitialLoad()
+
+  #expect(state.agentCapabilityState.unassignedLegacyNoteIDs == [note.id])
+  #expect(state.agentCapabilityState.profiles.isEmpty)
+  #expect(state.profilesWithReadAccess(to: note.id).isEmpty)
+  #expect(!state.isSharedWithAnyActiveProfile(note.id))
+}
+
+@Test @MainActor
+func appStateDefaultsAgentStoresToInjectedStoreRoot() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("AppStateCoherentAgentStorageTests-\(UUID())", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let agentDirectory = root.appendingPathComponent("AgentIntegrations", isDirectory: true)
+  try FileManager.default.createDirectory(at: agentDirectory, withIntermediateDirectories: true)
+  let profile = AgentIntegrationProfile(
+    id: UUID(),
+    displayName: "Isolated profile",
+    createdAt: Date(timeIntervalSince1970: 100),
+    lastConnectedAt: nil,
+    revokedAt: nil
+  )
+  try JSONEncoder().encode([profile]).write(
+    to: agentDirectory.appendingPathComponent("profiles.json")
+  )
+
+  let canonicalRoot = FileManager.default.urls(
+    for: .applicationSupportDirectory,
+    in: .userDomainMask
+  )[0].appendingPathComponent(FleckProductPaths.canonicalDirectoryName, isDirectory: true)
+  let canonicalProfilesURL = canonicalRoot
+    .appendingPathComponent("AgentIntegrations", isDirectory: true)
+    .appendingPathComponent("profiles.json")
+  let canonicalCapabilitiesURL = canonicalRoot
+    .appendingPathComponent("AgentIntegrations", isDirectory: true)
+    .appendingPathComponent("capabilities.json")
+  let canonicalProfilesBefore = try? Data(contentsOf: canonicalProfilesURL)
+  let canonicalCapabilitiesBefore = try? Data(contentsOf: canonicalCapabilitiesURL)
+
+  let store = LocalStore(rootURL: root)
+  #expect(store.rootURL == root)
+  let state = AppState(store: store)
+  await state.waitUntilInitialLoad()
+
+  #expect(state.hasFinishedInitialLoad)
+  #expect(state.agentProfiles == [profile])
+  #expect(state.agentCapabilityState.profiles[profile.id]?.profileID == profile.id)
+  #expect(
+    FileManager.default.fileExists(
+      atPath: agentDirectory.appendingPathComponent("capabilities.json").path
+    )
+  )
+  #expect(
+    FileManager.default.fileExists(
+      atPath: root.appendingPathComponent("AgentActivity/Records", isDirectory: true).path
+    )
+  )
+  let canonicalProfilesAfter = try? Data(contentsOf: canonicalProfilesURL)
+  let canonicalCapabilitiesAfter = try? Data(contentsOf: canonicalCapabilitiesURL)
+  #expect(canonicalProfilesAfter == canonicalProfilesBefore)
+  #expect(canonicalCapabilitiesAfter == canonicalCapabilitiesBefore)
+}
+
+@Test @MainActor
+func bothMalformedCapabilityGenerationsKeepNotesUsableAndAgentWorkspaceUnavailable()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("AppStateDualMalformedCapabilityTests-\(UUID())", isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Still usable", body: "Keep this")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(notes: [note], selectedNoteID: note.id),
+    preferences: .init()
+  )
+  let agentDirectory = root.appendingPathComponent("AgentIntegrations", isDirectory: true)
+  try FileManager.default.createDirectory(at: agentDirectory, withIntermediateDirectories: true)
+  try Data("current-not-json".utf8).write(
+    to: agentDirectory.appendingPathComponent("capabilities.json")
+  )
+  try Data("previous-not-json".utf8).write(
+    to: agentDirectory.appendingPathComponent("capabilities.previous.json")
+  )
+
+  let state = AppState(store: store)
+  await state.waitUntilInitialLoad()
+
+  #expect(state.selectedNote?.body == "Keep this")
+  #expect(state.hasFinishedInitialLoad)
+  #expect(!state.isAgentWorkspaceAvailable)
+  #expect(state.saveError == nil)
+  #expect(
+    state.agentCleanupError
+      == "Agent workspace is unavailable. Reopen Fleck after resolving capability storage."
+  )
+  #expect(!(state.agentCleanupError ?? "").contains("not-json"))
+  #expect(!(state.agentCleanupError ?? "").contains(root.path))
+}
+
+private func appStateCapabilityStore(root: URL) -> AgentCapabilityStore {
+  let directory = root.appendingPathComponent("AgentIntegrations", isDirectory: true)
+  return AgentCapabilityStore(
+    capabilitiesURL: directory.appendingPathComponent("capabilities.json"),
+    previousCapabilitiesURL: directory.appendingPathComponent(
+      "capabilities.previous.json"
+    )
+  )
+}
+
+private func appStateProfileStore(root: URL) -> AgentProfileStore {
+  AgentProfileStore(
+    profilesURL: root
+      .appendingPathComponent("AgentIntegrations", isDirectory: true)
+      .appendingPathComponent("profiles.json")
+  )
 }
 
 @Test @MainActor func AppStateFolderDeleteMovesActiveSelectionToUnfiled() async throws {
@@ -772,6 +1028,73 @@ private func settleHostedFolderView(_ view: NSView) async {
 
   try await Task.sleep(for: .milliseconds(500))
   #expect(recorder.generations.isEmpty)
+}
+
+@Test @MainActor func folderMovesUseOneSaveAndRejectStaleOrSameFolderRequests() async throws {
+  let recorder = SaveRecorder()
+  let source = try folder(named: "Source")
+  let target = try folder(named: "Target")
+  let unfiled = Note(title: "Unfiled", folderID: nil)
+  let filed = Note(title: "Filed", folderID: source.id)
+  let state = await folderedState(
+    workspace: Workspace(
+      notes: [unfiled, filed],
+      selectedNoteID: filed.id,
+      folders: [source, target]
+    ),
+    recorder: recorder
+  )
+
+  #expect(state.moveNote(unfiled.id, fromFolderID: nil, toFolderID: source.id, activeFolderID: nil))
+  try await waitForSaveCount(recorder, 1)
+  #expect(state.workspace.notes.first(where: { $0.id == unfiled.id })?.folderID == source.id)
+
+  #expect(state.moveNote(filed.id, fromFolderID: source.id, toFolderID: target.id, activeFolderID: source.id))
+  try await waitForSaveCount(recorder, 2)
+  #expect(state.workspace.notes.first(where: { $0.id == filed.id })?.folderID == target.id)
+  #expect(state.workspace.selectedNoteID == unfiled.id)
+
+  #expect(state.moveNote(filed.id, fromFolderID: target.id, toFolderID: nil, activeFolderID: target.id))
+  try await waitForSaveCount(recorder, 3)
+  #expect(state.workspace.notes.first(where: { $0.id == filed.id })?.folderID == nil)
+
+  #expect(!state.moveNote(filed.id, fromFolderID: source.id, toFolderID: target.id, activeFolderID: nil))
+  #expect(!state.moveNote(filed.id, fromFolderID: nil, toFolderID: nil, activeFolderID: nil))
+  try await Task.sleep(for: .milliseconds(500))
+  #expect(recorder.generations.count == 3)
+}
+
+@Test @MainActor func manualFolderReorderSavesOnceAndRejectsInvalidOrSamePositionRequests() async throws {
+  let recorder = SaveRecorder()
+  let manualFolder = try folder(named: "Manual")
+  let otherFolder = try folder(named: "Other")
+  let pinned = Note(title: "Pinned", isPinned: true, folderID: manualFolder.id)
+  let first = Note(title: "First", folderID: manualFolder.id)
+  let second = Note(title: "Second", folderID: manualFolder.id)
+  let third = Note(title: "Third", folderID: manualFolder.id)
+  let hidden = Note(title: "Hidden", folderID: otherFolder.id)
+  let state = await folderedState(
+    workspace: Workspace(
+      notes: [pinned, first, second, third, hidden],
+      selectedNoteID: first.id,
+      folders: [manualFolder, otherFolder]
+    ),
+    recorder: recorder
+  )
+
+  #expect(state.moveNote(first.id, inFolderID: manualFolder.id, toVisibleIndex: 2))
+  try await waitForSaveCount(recorder, 1)
+  #expect(state.workspace.notes(inFolderID: manualFolder.id).map(\.id) == [pinned.id, second.id, third.id, first.id])
+  #expect(state.workspace.notes.map(\.id) == [pinned.id, second.id, third.id, first.id, hidden.id])
+
+  #expect(!state.moveNote(first.id, inFolderID: manualFolder.id, toVisibleIndex: 2))
+  #expect(!state.moveNote(first.id, inFolderID: manualFolder.id, toVisibleIndex: 99))
+  #expect(!state.moveNote(first.id, inFolderID: otherFolder.id, toVisibleIndex: 0))
+
+  state.updateSelected(title: "First edited")
+  #expect(state.workspace.notes(inFolderID: manualFolder.id).map(\.id) == [pinned.id, second.id, third.id, first.id])
+  try await Task.sleep(for: .milliseconds(500))
+  #expect(recorder.generations.count == 2)
 }
 
 @Test @MainActor func AppStateFolderAwareTrashDeletionSelectsNearestVisibleMemberAndSavesOnce() async throws {

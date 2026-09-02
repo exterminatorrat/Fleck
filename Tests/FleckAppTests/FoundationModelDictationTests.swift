@@ -2,7 +2,48 @@ import Foundation
 import FleckCore
 import Testing
 
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
+
 @testable import FleckApp
+
+#if canImport(FoundationModels)
+@available(macOS 26, *)
+@Test
+func foundationModelDictationPassesMaximumOutputTokensToProductionResponderBoundary() async {
+  let probe = FoundationModelResponderProbe()
+  let responder = FoundationModelCleanupResponder { _, options in
+    await probe.record(options)
+    return "send the report"
+  }
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    foundationModelResponder: responder,
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = await dictation.cleanupResult(
+    "send the report",
+    maximumOutputTokens: 23
+  )
+
+  #expect(result.outcome == .cleaned)
+  #expect(await probe.calls == 1)
+  #expect(await probe.maximumResponseTokens == 23)
+}
+
+@available(macOS 26, *)
+private actor FoundationModelResponderProbe {
+  private(set) var calls = 0
+  private(set) var maximumResponseTokens: Int?
+
+  func record(_ options: GenerationOptions) {
+    calls += 1
+    maximumResponseTokens = options.maximumResponseTokens
+  }
+}
+#endif
 
 @Test func FoundationModelDictationCleansGoldenFixturesFaithfully() async throws {
   let cases = try loadCleanupCases()
@@ -10,7 +51,7 @@ import Testing
   let prompts = PromptRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { prompt in
+    cleanupGenerator: { prompt, _ in
       prompts.prompts.append(prompt)
       guard let output = outputs[prompt.rawTranscript] else { throw FixtureError.missingOutput }
       return output
@@ -43,7 +84,7 @@ import Testing
   let raw = "Do not cancel the 2 meetings with Jordan Lee on July 29."
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "Cancel the meetings with Jordan." },
+    cleanupGenerator: { _, _ in "Cancel the meetings with Jordan." },
     routingGenerator: { _, _ in .inbox }
   )
 
@@ -58,7 +99,7 @@ import Testing
     "Finishing on clarifying all the  all the stuff like  trying to make to clean up better"
   let dictation = FoundationModelDictation(
     osMajorVersion: { 25 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in .inbox }
   )
 
@@ -86,7 +127,7 @@ import Testing
   let raw = "This is very very important."
   let dictation = FoundationModelDictation(
     osMajorVersion: { 25 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in .inbox }
   )
 
@@ -100,7 +141,7 @@ import Testing
   let raw = "um, I I need to email Priya Shah about 3 invoices"
   let dictation = FoundationModelDictation(
     osMajorVersion: { 25 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in .inbox }
   )
 
@@ -301,7 +342,7 @@ import Testing
   let recorder = CallRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 25 },
-    cleanupGenerator: { _ in
+    cleanupGenerator: { _, _ in
       recorder.count += 1
       return "This must not run."
     },
@@ -315,7 +356,7 @@ import Testing
   #expect(recorder.count == 0)
 }
 
-@Test func FoundationModelDictationRoutesOnlyAHighConfidenceExactEligibleTitle() async {
+@Test func FoundationModelDictationRoutesAHighConfidenceGeneratedEligibleTitle() async {
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let project = DictationDestination(noteID: UUID(), title: "Project Delta")
   let duplicateA = DictationDestination(noteID: UUID(), title: "Groceries")
@@ -325,7 +366,7 @@ import Testing
   let requests = RoutingRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { transcript, candidates in
       requests.requests.append(.init(transcript: transcript, candidates: candidates))
       return .match(noteID: project.noteID, confidence: .high)
@@ -333,17 +374,17 @@ import Testing
   )
 
   let destination = await dictation.route(
-    transcript: "Prepare the Project Delta launch checklist.",
+    transcript: "Prepare the launch checklist.",
     candidates: [inbox, project, duplicateA, duplicateB, generic, blank],
     inboxID: inbox.noteID
   )
 
-  #expect(destination == project.noteID)
+  #expect(destination == .resolved(project.noteID))
   guard let request = requests.requests.first else {
     Issue.record("Expected a routing request.")
     return
   }
-  #expect(request.transcript == "Prepare the Project Delta launch checklist.")
+  #expect(request.transcript == "Prepare the launch checklist.")
   #expect(request.candidates == [project])
 }
 
@@ -357,22 +398,22 @@ import Testing
   let responseIndex = ResponseIndex()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in
       defer { responseIndex.value += 1 }
       return responses[responseIndex.value]
     }
   )
 
-  #expect(await dictation.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == inbox.noteID)
-  #expect(await dictation.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == inbox.noteID)
+  #expect(await dictation.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == .inbox)
+  #expect(await dictation.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == .inbox)
 
   let failing = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in throw FixtureError.missingOutput }
   )
-  #expect(await failing.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == inbox.noteID)
+  #expect(await failing.route(transcript: "Project", candidates: [inbox, project], inboxID: inbox.noteID) == .inbox)
 }
 
 @Test func FoundationModelDictationRoutesOlderMacOSToInboxWithoutInvokingAModel() async {
@@ -380,7 +421,7 @@ import Testing
   let recorder = CallRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 15 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in
       recorder.count += 1
       return .inbox
@@ -393,7 +434,222 @@ import Testing
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
+  #expect(recorder.count == 0)
+}
+
+@Test func FoundationModelDictationRoutesAnExactEligibleTitleWithoutFoundationModel() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
+  let recorder = CallRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 14 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in
+      recorder.count += 1
+      return .inbox
+    }
+  )
+
+  let destination = await dictation.route(
+    transcript: "Please save this chemistry note.",
+    candidates: [
+      DictationRoutingCandidate(destination: inbox, semanticContext: "General captures"),
+      DictationRoutingCandidate(
+        destination: chemistry,
+        semanticContext: "Lab reports and reaction notes"
+      ),
+    ],
+    inboxID: inbox.noteID
+  )
+
+  #expect(destination == .resolved(chemistry.noteID))
+  #expect(recorder.count == 0)
+}
+
+@Test func FoundationModelDictationExposesItsExactEligibleTitleMatchForDynamicRouting() {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
+  let candidates = [
+    DictationRoutingCandidate(destination: inbox, semanticContext: "General captures"),
+    DictationRoutingCandidate(
+      destination: chemistry,
+      semanticContext: "Lab reports and reaction notes"
+    ),
+  ]
+
+  let destination = FoundationModelDictation.exactTitleDestinationID(
+    transcript: "Please save this chemistry note.",
+    candidates: candidates
+  )
+
+  #expect(destination == chemistry.noteID)
+}
+
+@Test func FoundationModelDictationDoesNotLocallyMatchPunctuatedTitle() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let cPlusPlus = DictationDestination(noteID: UUID(), title: "C++")
+  let recorder = CallRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 14 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in
+      recorder.count += 1
+      return .inbox
+    }
+  )
+
+  let destination = await dictation.route(
+    transcript: "I need help with C.",
+    candidates: [inbox, cPlusPlus],
+    inboxID: inbox.noteID
+  )
+
+  #expect(destination == .inbox)
+  #expect(recorder.count == 0)
+}
+
+@Test func FoundationModelDictationRoutesRepeatedUniqueExactTitleWithoutFoundationModel() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
+  let recorder = CallRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 14 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in
+      recorder.count += 1
+      return .inbox
+    }
+  )
+
+  let destination = await dictation.route(
+    transcript: "Save chemistry now and chemistry later.",
+    candidates: [inbox, chemistry],
+    inboxID: inbox.noteID
+  )
+
+  #expect(destination == .resolved(chemistry.noteID))
+  #expect(recorder.count == 0)
+}
+
+@Test func FoundationModelDictationDoesNotLocallyMatchPunctuationSeparatedTitle() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let project = DictationDestination(noteID: UUID(), title: "Project Delta")
+  let recorder = CallRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 14 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in
+      recorder.count += 1
+      return .inbox
+    }
+  )
+
+  let destination = await dictation.route(
+    transcript: "Please prepare the Project, Delta checklist.",
+    candidates: [inbox, project],
+    inboxID: inbox.noteID
+  )
+
+  #expect(destination == .inbox)
+  #expect(recorder.count == 0)
+}
+
+@Test func FoundationModelDictationRoutesAmbiguousExactEligibleTitlesToInboxWithoutFoundationModel() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
+  let biology = DictationDestination(noteID: UUID(), title: "Biology")
+  let recorder = CallRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 14 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in
+      recorder.count += 1
+      return .match(noteID: chemistry.noteID, confidence: .high)
+    }
+  )
+
+  let destination = await dictation.route(
+    transcript: "Please save this chemistry and biology note.",
+    candidates: [inbox, chemistry, biology],
+    inboxID: inbox.noteID
+  )
+
+  #expect(destination == .inbox)
+  #expect(recorder.count == 0)
+}
+
+@Test func FoundationModelDictationUsesFoundationModelForAmbiguousCandidateMatchesOnMacOS26() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
+  let biology = DictationDestination(noteID: UUID(), title: "Biology")
+  let requests = RoutingRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { transcript, candidates in
+      requests.requests.append(.init(transcript: transcript, candidates: candidates))
+      return .match(noteID: biology.noteID, confidence: .high)
+    }
+  )
+
+  let destination = await dictation.route(
+    transcript: "Save the chemistry and biology results.",
+    candidates: [inbox, chemistry, biology],
+    inboxID: inbox.noteID
+  )
+
+  #expect(destination == .resolved(biology.noteID))
+  guard let request = requests.requests.first else {
+    Issue.record("Expected Foundation routing for ambiguous candidate matches.")
+    return
+  }
+  #expect(request.candidates == [chemistry, biology])
+}
+
+@Test func FoundationModelDictationRoutesRepeatedExactTitleWithoutFoundationModelOnMacOS26() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
+  let requests = RoutingRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { transcript, candidates in
+      requests.requests.append(.init(transcript: transcript, candidates: candidates))
+      return .match(noteID: chemistry.noteID, confidence: .high)
+    }
+  )
+
+  let destination = await dictation.route(
+    transcript: "Save chemistry now and chemistry later.",
+    candidates: [inbox, chemistry],
+    inboxID: inbox.noteID
+  )
+
+  #expect(destination == .resolved(chemistry.noteID))
+  #expect(requests.requests.isEmpty)
+}
+
+@Test func FoundationModelDictationKeepsChemistryInInboxWhenNoExactTitleExists() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let work = DictationDestination(noteID: UUID(), title: "Work Notes")
+  let recorder = CallRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 14 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in
+      recorder.count += 1
+      return .inbox
+    }
+  )
+
+  let destination = await dictation.route(
+    transcript: "Please save this chemistry note.",
+    candidates: [inbox, work],
+    inboxID: inbox.noteID
+  )
+
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 
@@ -402,7 +658,7 @@ import Testing
   let recorder = CallRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in
       recorder.count += 1
       return .inbox
@@ -423,7 +679,7 @@ import Testing
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 
@@ -432,7 +688,7 @@ import Testing
   let recorder = CallRecorder()
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in "unused" },
+    cleanupGenerator: { _, _ in "unused" },
     routingGenerator: { _, _ in
       recorder.count += 1
       return .inbox
@@ -449,7 +705,7 @@ import Testing
     inboxID: inbox.noteID
   )
 
-  #expect(destination == inbox.noteID)
+  #expect(destination == .inbox)
   #expect(recorder.count == 0)
 }
 
@@ -474,7 +730,7 @@ private func cleanupResult(
 ) async -> FoundationModelCleanupResult {
   let dictation = FoundationModelDictation(
     osMajorVersion: { 26 },
-    cleanupGenerator: { _ in modelOutput },
+    cleanupGenerator: { _, _ in modelOutput },
     routingGenerator: { _, _ in .inbox }
   )
   return await dictation.cleanupResult(raw)
