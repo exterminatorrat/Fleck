@@ -684,6 +684,187 @@ func DictationSettingsHostedWindowResetsDetailScrollWhenSwitchingDestinations()
   window.orderOut(nil)
 }
 
+@Test @MainActor
+func DictationSettingsReduceTransparencyKeepsHostedSurfacesDistinctInLightAndDark()
+  async throws
+{
+  for (appearanceName, appearanceLabel) in [
+    (NSAppearance.Name.aqua, "light"),
+    (.darkAqua, "dark"),
+  ] {
+    let host = NSHostingView(
+      rootView: ZStack {
+        Color(nsColor: .windowBackgroundColor)
+        HStack(spacing: 24) {
+          SettingsSidebarSurface {
+            Color.clear
+              .frame(width: 180, height: 200)
+          }
+          .frame(width: 220, height: 260)
+
+          SettingsSectionCard("Card") {
+            Color.clear
+              .frame(maxWidth: .infinity, minHeight: 200)
+          }
+          .frame(width: 220)
+        }
+        .padding(20)
+      }
+      .environment(\._accessibilityReduceTransparency, true)
+      .frame(width: 520, height: 320)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 520, height: 320),
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.appearance = NSAppearance(named: appearanceName)
+    window.contentView = host
+    window.orderFront(nil)
+    await settleSettingsHost(host)
+
+    let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+    host.cacheDisplay(in: host.bounds, to: image)
+    let scaleX = CGFloat(image.pixelsWide) / host.bounds.width
+    let scaleY = CGFloat(image.pixelsHigh) / host.bounds.height
+    func color(at point: NSPoint) throws -> NSColor {
+      let x = min(image.pixelsWide - 1, max(0, Int(point.x * scaleX)))
+      let y = min(image.pixelsHigh - 1, max(0, Int(point.y * scaleY)))
+      return try #require(image.colorAt(x: x, y: y))
+    }
+
+    let rootColor = try color(at: NSPoint(x: 500, y: 160))
+    let sidebarColor = try color(at: NSPoint(x: 130, y: 160))
+    let cardColor = try color(at: NSPoint(x: 374, y: 160))
+    #expect(settingsColorDistance(rootColor, sidebarColor) > 0.01)
+    #expect(settingsColorDistance(sidebarColor, cardColor) > 0.01)
+
+    if let captureDirectory = ProcessInfo.processInfo.environment[
+      "FLECK_SETTINGS_REDUCE_TRANSPARENCY_CAPTURE_DIR"
+    ] {
+      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+      try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+      )
+      let captureURL = directory.appendingPathComponent(
+        "settings-reduce-transparency-" + appearanceLabel + ".png"
+      )
+      let pngData = try #require(
+        image.representation(using: .png, properties: [:])
+      )
+      try pngData.write(to: captureURL)
+    }
+
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+}
+
+@Test @MainActor
+func DictationSettingsHostedWindowKeepsChromeAfterSameWindowResize() async throws {
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.title = "Settings"
+  let toolbar = NSToolbar(identifier: "settings-hosted-resize-toolbar")
+  window.toolbar = toolbar
+  window.toolbarStyle = .unifiedCompact
+  window.contentView = host
+  window.setContentSize(NSSize(width: 840, height: 600))
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  for size in [
+    NSSize(width: 840, height: 600),
+    NSSize(width: 760, height: 520),
+    NSSize(width: 840, height: 600),
+  ] {
+    window.setContentSize(size)
+    await settleSettingsHost(host)
+
+    let contentView = try #require(window.contentView)
+    let contentFrame = contentView.convert(contentView.bounds, to: nil)
+    let layoutRect = window.contentLayoutRect
+    let sidebar = try #require(settingsSidebarTableView(of: host))
+    let outline = try #require(sidebar as? NSOutlineView)
+    let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
+    let sidebarSurface = try #require(settingsSidebarSurface(of: host))
+    let sidebarSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+    let topInset = contentFrame.maxY - sidebarSurfaceFrame.maxY
+    let bottomInset = sidebarSurfaceFrame.minY - contentFrame.minY
+
+    #expect(!contentFrame.isEmpty)
+    #expect(!layoutRect.isEmpty)
+    #expect(sidebarSurfaceFrame.minX >= contentFrame.minX + 8)
+    #expect(sidebarSurfaceFrame.maxX <= contentFrame.maxX - 8)
+    #expect(topInset >= 8)
+    #expect(topInset <= 12)
+    #expect(bottomInset >= 8)
+    #expect(bottomInset <= 12)
+    #expect(window.toolbar === toolbar)
+    let toolbarItemIdentifiers = toolbar.items.map(\.itemIdentifier)
+    #expect(!toolbarItemIdentifiers.contains(.toggleSidebar))
+    #expect(!toolbarItemIdentifiers.contains(.sidebarTrackingSeparator))
+
+    let trafficLightButtons: [NSButton?] = [
+      window.standardWindowButton(.closeButton),
+      window.standardWindowButton(.miniaturizeButton),
+      window.standardWindowButton(.zoomButton),
+    ]
+    let trafficLightFrames = trafficLightButtons.compactMap { button in
+      button.map { $0.convert($0.bounds, to: nil) }
+    }
+    #expect(trafficLightFrames.count == 3)
+    #expect(trafficLightFrames.allSatisfy {
+      settingsRoundedSurfaceContains(
+        $0,
+        in: sidebarSurfaceFrame,
+        cornerRadius: 22,
+        margin: 12
+      )
+    })
+
+    let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+    #expect(!sidebar.isHidden)
+    #expect(!sidebarFrame.isEmpty)
+    #expect(layoutRect.contains(sidebarFrame.center))
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+
+    let detailScroll = try #require(
+      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+    )
+    let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+    #expect(!detailFrame.isEmpty)
+    #expect(layoutRect.contains(detailFrame.center))
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(detailFrame) })
+
+    let detailDocument = try #require(detailScroll.documentView)
+    let pageTitle = try #require(
+      settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
+    )
+    let pageTitleFrame = pageTitle.convert(pageTitle.bounds, to: nil)
+    let pageTitleTopGap = layoutRect.maxY - pageTitleFrame.maxY
+    #expect(!pageTitleFrame.isEmpty)
+    #expect(pageTitleTopGap >= -1)
+    #expect(pageTitleTopGap <= 20)
+    #expect(outline.numberOfRows > 0)
+  }
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
 @MainActor
 private func settingsSidebarDescendants(of view: NSView) -> [NSView] {
   view.subviews + view.subviews.flatMap(settingsSidebarDescendants)
@@ -803,6 +984,16 @@ private func approximatelyEqual(_ lhs: NSRect, _ rhs: NSRect, tolerance: CGFloat
     && abs(lhs.minY - rhs.minY) <= tolerance
     && abs(lhs.width - rhs.width) <= tolerance
     && abs(lhs.height - rhs.height) <= tolerance
+}
+
+private func settingsColorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
+  guard let lhs = lhs.usingColorSpace(.sRGB), let rhs = rhs.usingColorSpace(.sRGB) else {
+    return 0
+  }
+  let red = lhs.redComponent - rhs.redComponent
+  let green = lhs.greenComponent - rhs.greenComponent
+  let blue = lhs.blueComponent - rhs.blueComponent
+  return (red * red + green * green + blue * blue).squareRoot()
 }
 
 @Test func DictationSettingsSeparatesVocabularyAndOnlySurfacesAvailabilityProblems() throws {

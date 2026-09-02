@@ -1,6 +1,15 @@
 # Fleck Settings Sidebar Design
 
-**Status:** Approved for implementation
+> Status: Superseded by final accepted implementation
+>
+> Historical proposal (non-normative). Do not use this document to guide new
+> implementation work. The accepted Settings implementation uses a fixed
+> HStack sidebar, Fleck neutral glass surfaces, an AppKit Settings chrome
+> configurator, and the final Vocabulary and Agents destination structures.
+> The current source of truth is the accepted source/tests plus
+> `design-qa.md`.
+
+**Status:** Historical proposal (non-normative)
 **Baseline:** `d6facac` (`codex/dictation-vocabulary-runtime-polish`)
 **Platform:** macOS 14+, with native Liquid Glass treatment on supported macOS releases
 

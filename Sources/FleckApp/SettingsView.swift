@@ -142,6 +142,8 @@
           let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
           if reduceTransparency {
             shape.fill(Color(nsColor: .windowBackgroundColor))
+              .overlay { shape.fill(Color.primary.opacity(0.06)) }
+              .overlay { shape.stroke(Color.primary.opacity(0.12), lineWidth: 1) }
           } else if #available(macOS 26, *) {
             shape.fill(.clear)
               .glassEffect(
@@ -306,6 +308,8 @@
           let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
           if reduceTransparency {
             shape.fill(Color(nsColor: .controlBackgroundColor))
+              .overlay { shape.fill(Color.primary.opacity(0.03)) }
+              .overlay { shape.stroke(Color.primary.opacity(0.10), lineWidth: 1) }
           } else if #available(macOS 26, *) {
             shape.fill(.clear)
               .glassEffect(
@@ -415,6 +419,7 @@
       .background {
         if reduceTransparency {
           Color(nsColor: .windowBackgroundColor)
+            .overlay(Color.primary.opacity(0.02))
         } else {
           Rectangle()
             .fill(.ultraThinMaterial)
@@ -1198,6 +1203,8 @@
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         if reduceTransparency {
           shape.fill(Color(nsColor: .controlBackgroundColor))
+            .overlay { shape.fill(Color.primary.opacity(0.03)) }
+            .overlay { shape.stroke(Color.primary.opacity(0.10), lineWidth: 1) }
         } else if #available(macOS 26, *) {
           shape.fill(.clear)
             .glassEffect(

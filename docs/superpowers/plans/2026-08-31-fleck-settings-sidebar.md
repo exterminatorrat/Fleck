@@ -1,10 +1,20 @@
 # Fleck Settings Sidebar Implementation Plan
 
-> **For agentic workers:** REQUIRED PROCESS: Use Codex-native subagent-driven development and strict red-first TDD. Implementation is owned by one GPT-5.6 Luna worker at Max reasoning because the three files form one overlapping UI change.
+> Status: Superseded by final accepted implementation
+>
+> Historical plan (non-normative). The worker instructions and architecture
+> below describe the original proposal and must not be executed for new work.
+> The accepted implementation is the fixed HStack sidebar with Fleck neutral
+> glass surfaces, Settings-specific AppKit chrome, and the final Vocabulary and
+> Agents structures. Use the accepted source/tests and `design-qa.md` as the
+> current source of truth.
+
+> **Historical process note:** The original worker process below is retained
+> for provenance only; it is not an active instruction set.
 
 **Goal:** Replace Fleck's top settings selector with a larger native macOS sidebar settings window whose system material gains Liquid Glass automatically on supported macOS releases.
 
-**Architecture:** Keep `SettingsSection` and every existing settings binding, but present them through a selection-backed `NavigationSplitView`. A native sidebar `List` owns navigation; a fixed header and grouped scrolling `Form` own the detail. The Settings scene supplies minimum and ideal window dimensions.
+**Historical architecture (superseded):** Keep `SettingsSection` and every existing settings binding, but present them through a selection-backed `NavigationSplitView`. A native sidebar `List` owns navigation; a fixed header and grouped scrolling `Form` own the detail. The Settings scene supplies minimum and ideal window dimensions.
 
 **Tech Stack:** Swift 6, SwiftUI, AppKit hosting tests, Swift Testing, Swift Package Manager, macOS 14+
 
