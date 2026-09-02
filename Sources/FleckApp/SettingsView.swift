@@ -664,7 +664,7 @@
           let shortcut = appState.preferences.shortcuts.first(where: { $0.action == action })
           SettingsPreferenceRow(
             action.title,
-            detail: "Set the key combination used to \(action.title.lowercased())."
+            detail: shortcutDescription(for: action)
           ) {
             VStack(alignment: .trailing, spacing: 4) {
               HStack(spacing: 8) {
@@ -991,6 +991,21 @@
           preferences.shortcuts[index].key = nil
           preferences.shortcuts[index].modifiers = []
         }
+      }
+    }
+
+    private func shortcutDescription(for action: Shortcut.Action) -> String {
+      switch action {
+      case .togglePanel:
+        "Set the keyboard shortcut for showing or hiding notes."
+      case .newNote:
+        "Set the keyboard shortcut for creating a new note."
+      case .closeNote:
+        "Set the keyboard shortcut for closing the current note."
+      case .nextNote:
+        "Set the keyboard shortcut for moving to the next note."
+      case .previousNote:
+        "Set the keyboard shortcut for moving to the previous note."
       }
     }
 
