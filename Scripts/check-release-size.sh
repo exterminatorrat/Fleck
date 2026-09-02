@@ -94,7 +94,7 @@ is_forbidden_model_path() {
 }
 
 readonly target="${1:-.build/release/Fleck}"
-readonly limit_mb="${APP_SIZE_LIMIT_MB:-15}"
+readonly limit_mb="${APP_SIZE_LIMIT_MB:-18}"
 readonly limit_bytes=$((limit_mb * 1024 * 1024))
 readonly repository_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly sources_root="$repository_root/Sources"

@@ -36,7 +36,7 @@ panel. Quit Fleck from the menu-bar icon's context menu when testing is done.
 The packaged app is required for the embedded Agent Connector and for stable
 macOS privacy permissions.
 
-`Scripts/validate-macos.sh` verifies the host OS, runs the complete test suite, creates a release build, checks the release executable against the 15 MB budget, and prints the exact executable path. It does not launch or terminate the app because visual testing should remain under the tester's control.
+`Scripts/validate-macos.sh` verifies the host OS, runs the complete test suite, creates a release build, checks the release executable against the 18 MiB budget, and prints the exact executable path. It does not launch or terminate the app because visual testing should remain under the tester's control.
 
 ## Packaged editor and branding checklist
 
@@ -789,7 +789,7 @@ Also inspect **Activity Monitor → Memory** and **Activity Monitor → CPU** af
 - Idle CPU after pending saves finish.
 - Time from clicking the menu-bar icon to seeing the editor.
 
-The current targets are at or below 15 MB for the release executable where practical and below 75 MB resident memory during an ordinary idle workflow. A SwiftPM executable-size result is not a substitute for measuring the eventual signed `.app` bundle.
+The current targets are at or below 18 MiB for the release executable where practical and below 75 MB resident memory during an ordinary idle workflow. A SwiftPM executable-size result is not a substitute for measuring the eventual signed `.app` bundle.
 
 ### Performance baseline — Wave 1A
 
