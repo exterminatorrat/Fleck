@@ -2,7 +2,7 @@
 
 ## Scope and result
 
-This is the final source-vs-implementation comparison for the native macOS Settings window at clean local head `d1e067003afbe4ffb74640662d14f1c340f8dffd`. The exact rebuilt bundle was inspected with Computer Use across all six destinations, the Vocabulary empty/search/Add New states, the scrolled Agents guidance, and a cross-destination scroll reset. The final pass has no actionable P0, P1, or P2 findings.
+This is the final source-vs-implementation comparison for the native macOS Settings window at clean local product head `98242c5b698eb3a13fa726aa4348c69a32bec0f3`. The exact rebuilt bundle was inspected with Computer Use across all six destinations, the Vocabulary empty/search/Add New states, the scrolled Agents guidance, and a cross-destination scroll reset. Forced hosted Light and Dark renders also cover Reduce Transparency. The final pass has no actionable P0, P1, or P2 findings.
 
 ## Source visual truth
 
@@ -13,8 +13,9 @@ This is the final source-vs-implementation comparison for the native macOS Setti
 
 ## Final implementation evidence
 
-The final implementation was inspected from `/Users/harryjin/Fleck/.worktrees/settings-sidebar-redesign/.build/Fleck.app` in Dark appearance at the default 840 x 600 Settings size. The executable SHA-256 was `6906ba9210e03771ebdd5df609879bf2866d7a60458d10d5f331efe4ead7874f`; PID `57182` was running that exact bundle during the final capture pass.
+The final implementation was inspected from `/Users/harryjin/Fleck/.worktrees/settings-sidebar-redesign/.build/Fleck.app` in Dark appearance at the default 840 x 600 Settings size. The final executable SHA-256 was `86f3df2a0f64e0b5c91515037157fcfb17c458230a938a78ab8ae1785dae6fc8`; PID `63139` ran that exact bundle for the final normal-appearance smoke. The full destination capture set immediately precedes the accessibility-only product change, whose normal-appearance branches are unchanged.
 
+- [Final exact-bundle Appearance smoke](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-12-final-normal-smoke.png) — post-accessibility-fix normal appearance from PID `63139`.
 - [Appearance](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-02-appearance-transparent.png) — final transparent-titlebar and glass-chrome state.
 - [General](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-03-general.png).
 - [Shortcuts](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-04-shortcuts.png).
@@ -25,6 +26,8 @@ The final implementation was inspected from `/Users/harryjin/Fleck/.worktrees/se
 - [Agents](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-09-agents.png).
 - [Agents setup guidance](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-10-agents-scrolled.png).
 - [General after leaving scrolled Agents](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-11-general-reset.png).
+- [Reduce Transparency — Dark](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/settings-reduce-transparency-dark.png) — forced hosted opaque hierarchy.
+- [Reduce Transparency — Light](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/settings-reduce-transparency-light.png) — forced hosted opaque hierarchy.
 
 ## Comparison method and normalization
 
@@ -54,6 +57,7 @@ The Vocabulary destination follows the Wispr Flow task structure without implyin
 | States and interactions | Selected navigation, Vocabulary empty/search/Add New, installed connector, connected profile, lower Agent instructions, and scroll reset were all inspected in the exact bundle. |
 | Accessibility | Computer Use exposed labels, hints, values, and semantic roles for destinations and the visible controls. Native controls remain the interaction basis. |
 | Viewport resilience | Default 840 x 600 visual states are stable. Hosted AppKit coverage verifies 840 x 600 and 760 x 520 geometry, all six destinations, sidebar/traffic-light containment, hidden/transparent titlebar, absent separator, and scroll reset. |
+| Reduce Transparency | Forced hosted Light and Dark renders verify opaque root, sidebar, card, and dictionary hierarchy. A rendered-pixel test requires non-flat adaptive color distance, and the rounded surfaces retain subtle boundaries without blur. |
 | AI-shortcut artifacts | The final composition avoids generic card soup, decorative blobs, faux gradients, oversized hero copy, emoji, and inconsistent one-off controls. |
 
 ## Findings and comparison history
@@ -66,11 +70,14 @@ No actionable P0, P1, or P2 findings remain.
 4. Resolved P2 — cards and the dictionary surface read as solid purple slabs. They now reuse Fleck's neutral black-tinted regular-glass contract with adaptive fallback.
 5. Rejected checkpoint — `74764b2` contained the traffic lights but pushed the sidebar 41 px below the window top. The final capsule begins 8 px from the real window edge and the redundant native title is hidden.
 6. Rejected checkpoint — `8202bf2` left a horizontal titlebar seam across the detail. The final window uses a hidden, separator-free, transparent titlebar, and the exact recapture shows no stray line.
+7. Fresh-review P2 — Reduce Transparency initially resolved root, sidebar, and cards to the same rendered RGB value. The final adaptive opaque overlays and strokes produce distinct hierarchy in both Light and Dark hosted renders.
+8. Fresh-review evidence limit — traffic-light frames were previously reused across destination checks. A same-window 840 x 600 → 760 x 520 → 840 x 600 test now re-queries every traffic light and layout surface after each relayout.
 
 ## Verification
 
-- Hosted chrome test: 1/1 passed after red-first coverage for inset, traffic-light containment, title visibility, separator, and transparency.
-- `DictationSettings`: 87/87 passed.
+- Hosted Reduce Transparency render: 1/1 passed in Light and Dark after red showed four flattened comparisons at color distance `0.0`.
+- Hosted same-window resize: 1/1 passed with fresh frames at 840 x 600, 760 x 520, and 840 x 600.
+- `DictationSettings`: 89/89 passed.
 - `PersonalDictionarySettings`: 25/25 passed.
 - Earlier unchanged focused suites at this visual lineage: Shortcut Recorder 18/18, Fleck Color Picker 12/12, Note Deletion Confirmation 5/5, Agent Presentation 19/19.
 - `./Scripts/build-fleck-app.sh`: passed.
