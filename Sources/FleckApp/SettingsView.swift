@@ -158,7 +158,6 @@
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .background(SettingsSidebarSurfaceProbe())
         .accessibilityIdentifier("settings-sidebar-surface")
-        .ignoresSafeArea(.container, edges: .top)
     }
   }
 
@@ -231,14 +230,20 @@
 
       let sidebarFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
       let buttonFrames = buttons.map { $0.convert($0.bounds, to: nil) }
-      let targetMinX = sidebarFrame.minX + 8
+      let targetMinX = sidebarFrame.minX + 14
+      let targetMaxY = sidebarFrame.maxY - 14
       guard let currentMinX = buttonFrames.map(\.minX).min() else { return }
-      let offset = targetMinX - currentMinX
-      guard offset > 0 else { return }
+      guard let currentMaxY = buttonFrames.map(\.maxY).max() else { return }
+      let offsetX = targetMinX - currentMinX
+      let offsetY = targetMaxY - currentMaxY
+      guard offsetX != 0 || offsetY != 0 else { return }
 
       for button in buttons {
         button.setFrameOrigin(
-          NSPoint(x: button.frame.minX + offset, y: button.frame.minY)
+          NSPoint(
+            x: button.frame.minX + offsetX,
+            y: button.frame.minY + offsetY
+          )
         )
       }
     }
@@ -373,6 +378,7 @@
           SettingsSectionSidebar(selection: $selectedSection)
         }
         .frame(width: 220)
+        .padding(.vertical, 8)
         ScrollView {
           VStack(alignment: .leading, spacing: 20) {
             SettingsPageHeader(section: selectedSection)

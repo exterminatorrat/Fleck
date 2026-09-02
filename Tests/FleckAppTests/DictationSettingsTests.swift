@@ -506,6 +506,93 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
 }
 
 @Test @MainActor
+func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let size = NSSize(width: 840, height: 600)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(origin: .zero, size: size),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.title = "Settings"
+  let toolbar = NSToolbar(identifier: "settings-hosted-inset-sidebar-toolbar")
+  window.toolbar = toolbar
+  window.toolbarStyle = .unifiedCompact
+  window.contentView = host
+  window.setContentSize(size)
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  let contentView = try #require(window.contentView)
+  let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+  let sidebar = try #require(settingsSidebarTableView(of: host))
+  let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
+  let sidebarSurface = try #require(settingsSidebarSurface(of: host))
+  let contentFrame = contentView.convert(contentView.bounds, to: nil)
+  let surfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+
+  #expect(surfaceFrame.minX >= contentFrame.minX + 8)
+  #expect(surfaceFrame.maxX <= contentFrame.maxX - 8)
+  #expect(surfaceFrame.minY >= contentFrame.minY + 8)
+  #expect(surfaceFrame.maxY <= contentFrame.maxY - 8)
+
+  let trafficLightButtons: [NSButton?] = [
+    window.standardWindowButton(.closeButton),
+    window.standardWindowButton(.miniaturizeButton),
+    window.standardWindowButton(.zoomButton),
+  ]
+  let trafficLightFrames: [NSRect] = trafficLightButtons.compactMap { button in
+    guard let button else { return nil }
+    return button.convert(button.bounds, to: nil)
+  }
+  #expect(trafficLightFrames.count == 3)
+  #expect(trafficLightFrames.allSatisfy {
+    settingsRoundedSurfaceContains(
+      $0,
+      in: surfaceFrame,
+      cornerRadius: 22,
+      margin: 12
+    )
+  })
+
+  for destination in SettingsSection.allCases {
+    let row = try #require(settingsSidebarRow(destination, in: outline))
+    outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: outline
+    )
+    await settleSettingsHost(host)
+
+    #expect(outline.selectedRow == row)
+    let currentSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+    #expect(approximatelyEqual(currentSurfaceFrame, surfaceFrame))
+    let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+    #expect(!sidebar.isHidden)
+    #expect(!sidebarFrame.isEmpty)
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+
+    let detailScroll = try #require(
+      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+    )
+    let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+    #expect(!detailFrame.isEmpty)
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(detailFrame) })
+  }
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@Test @MainActor
 func DictationSettingsHostedWindowResetsDetailScrollWhenSwitchingDestinations()
   async throws
 {
