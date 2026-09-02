@@ -692,7 +692,7 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("Toggle(\"Correct a misspelling\""))
   #expect(settingsSource.contains("TextField(\"Correct from\""))
   #expect(settingsSource.contains("Button(\"Delete Word\", role: .destructive)"))
-  #expect(settingsSource.contains("Image(systemName: \"xmark.circle.fill\")"))
+  #expect(settingsSource.contains("Image(systemName: \"xmark\")"))
   #expect(!settingsSource.contains(".searchable("))
   #expect(settingsSource.contains("private var filterTabs: some View"))
   #expect(settingsSource.contains("Button(filter.rawValue)"))
@@ -710,6 +710,26 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("get: { viewModel.isImportPreviewPresented }"))
   #expect(settingsSource.contains("presenting: omissionPreview"))
   #expect(settingsSource.contains("viewModel.confirmCanonicalImport(preview)"))
+}
+
+@Test
+func personalDictionaryBooleanControlsUseCompactNativeSwitches() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(settingsSource.contains("Toggle(\"Use \\(entry.preferredForm)\""))
+  #expect(settingsSource.contains("Toggle(\"Correct a misspelling\""))
+  #expect(settingsSource.contains("Toggle(\"Use this word in dictation\""))
+  #expect(
+    settingsSource.components(separatedBy: ".toggleStyle(.switch)").count - 1 >= 4
+  )
+  #expect(settingsSource.contains(".controlSize(.small)"))
 }
 
 @Test
@@ -737,6 +757,68 @@ func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
   #expect(settingsSource.contains("Use this word in dictation"))
   #expect(!settingsSource.contains("Sync"))
   #expect(!settingsSource.contains("Synced"))
+}
+
+@Test
+func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismissal() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(!settingsSource.contains("ViewThatFits(in: .horizontal)"))
+  #expect(!settingsSource.contains("private var toolbarRows: some View"))
+  #expect(!settingsSource.contains(".textFieldStyle(.roundedBorder)"))
+  #expect(settingsSource.contains("private var searchSurface: some View"))
+  #expect(settingsSource.contains(".textFieldStyle(.plain)"))
+  #expect(settingsSource.contains(".frame(height: 30)"))
+  #expect(settingsSource.contains("RoundedRectangle(cornerRadius: 10, style: .continuous)"))
+  #expect(settingsSource.contains("@Environment(\\.accessibilityReduceMotion) private var reduceMotion"))
+  #expect(settingsSource.contains("AppMotion(reduceMotion: reduceMotion)"))
+  #expect(settingsSource.contains("openSearch(source: .pointer)"))
+  #expect(settingsSource.contains("withAnimation(motion.presentationAnimation(for: source))"))
+  #expect(settingsSource.contains(".onExitCommand"))
+  #expect(settingsSource.contains("closeSearch(source: .keyboard)"))
+  #expect(settingsSource.contains("viewModel.query = \"\""))
+  #expect(settingsSource.contains("Clear vocabulary search"))
+  #expect(settingsSource.contains("xmark"))
+
+  let toolbarStart = try #require(settingsSource.range(of: "private var toolbar: some View"))
+  let summaryStart = try #require(
+    settingsSource.range(
+      of: "private var summaryLabel: some View",
+      range: toolbarStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let toolbarSource = settingsSource[toolbarStart.lowerBound..<summaryStart.lowerBound]
+  #expect(toolbarSource.contains("HStack(spacing: 8)"))
+  #expect(toolbarSource.contains("filterTabs"))
+  #expect(toolbarSource.contains("toolbarTrailingContent"))
+  #expect(toolbarSource.contains("ZStack(alignment: .trailing)"))
+  #expect(!toolbarSource.contains("toolbarRow"))
+}
+
+@Test
+func personalDictionaryVocabularySearchDefersQueryClearUntilFieldTeardown() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(settingsSource.contains("private func clearSearchQueryAfterTeardown()"))
+  #expect(settingsSource.contains("Task { @MainActor in"))
+  #expect(settingsSource.contains("await Task.yield()"))
+  #expect(settingsSource.contains("clearSearchQueryAfterTeardown()"))
+  #expect(settingsSource.contains("closeSearch(source: .pointer)"))
+  #expect(settingsSource.contains("closeSearch(source: .keyboard)"))
 }
 
 @Test
