@@ -1184,15 +1184,20 @@
     }
 
     private var toolbar: some View {
-      ZStack(alignment: .trailing) {
-        toolbarRow
-          .opacity(isSearchExpanded ? 0 : 1)
-          .accessibilityHidden(isSearchExpanded)
-          .allowsHitTesting(!isSearchExpanded)
-        if isSearchExpanded {
-          searchSurface
-            .transition(.opacity)
+      HStack(spacing: 8) {
+        filterTabs
+        Spacer(minLength: 8)
+        ZStack(alignment: .trailing) {
+          toolbarTrailingContent
+            .opacity(isSearchExpanded ? 0 : 1)
+            .accessibilityHidden(isSearchExpanded)
+            .allowsHitTesting(!isSearchExpanded)
+          if isSearchExpanded {
+            searchSurface
+              .transition(.opacity)
+          }
         }
+        .frame(width: 236, height: 30, alignment: .trailing)
       }
       .frame(maxWidth: .infinity)
       .frame(height: 30)
@@ -1202,10 +1207,8 @@
       }
     }
 
-    private var toolbarRow: some View {
+    private var toolbarTrailingContent: some View {
       HStack(spacing: 8) {
-        filterTabs
-        Spacer(minLength: 8)
         summaryLabel
         searchTrigger
         sortControl

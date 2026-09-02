@@ -786,6 +786,20 @@ func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismis
   #expect(settingsSource.contains("viewModel.query = \"\""))
   #expect(settingsSource.contains("Clear vocabulary search"))
   #expect(settingsSource.contains("xmark"))
+
+  let toolbarStart = try #require(settingsSource.range(of: "private var toolbar: some View"))
+  let summaryStart = try #require(
+    settingsSource.range(
+      of: "private var summaryLabel: some View",
+      range: toolbarStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let toolbarSource = settingsSource[toolbarStart.lowerBound..<summaryStart.lowerBound]
+  #expect(toolbarSource.contains("HStack(spacing: 8)"))
+  #expect(toolbarSource.contains("filterTabs"))
+  #expect(toolbarSource.contains("toolbarTrailingContent"))
+  #expect(toolbarSource.contains("ZStack(alignment: .trailing)"))
+  #expect(!toolbarSource.contains("toolbarRow"))
 }
 
 @Test
