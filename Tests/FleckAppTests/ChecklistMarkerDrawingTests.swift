@@ -32,21 +32,32 @@
   }
 
   @Test @MainActor func completedChecklistMarkerContainsAccentFillAndWhiteCheck() throws {
-    let size = NSSize(width: 24, height: 24)
-    let image = NSImage(size: size)
-    image.lockFocus()
-    NSColor.clear.setFill()
-    NSRect(origin: .zero, size: size).fill()
+    let representation = try #require(
+      NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: 24,
+        pixelsHigh: 24,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bitmapFormat: [.alphaFirst],
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      )
+    )
+    let context = try #require(NSGraphicsContext(bitmapImageRep: representation))
+    context.cgContext.clear(CGRect(x: 0, y: 0, width: 24, height: 24))
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
     ChecklistMarkerDrawing.drawCompleted(
       in: NSRect(x: 3, y: 3, width: 18, height: 18),
       accentColor: NSColor(calibratedRed: 0.12, green: 0.42, blue: 0.92, alpha: 1),
       flipped: false
     )
-    image.unlockFocus()
-
-    let representation = try #require(
-      image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))
-    )
+    context.flushGraphics()
+    NSGraphicsContext.restoreGraphicsState()
     var accentPixels = 0
     var whitePixels = 0
     for y in 0..<representation.pixelsHigh {
