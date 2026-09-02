@@ -14,11 +14,65 @@
     case vocabulary = "Vocabulary"
     case agents = "Agents"
 
-    static let allCases: [SettingsSection] = [
-      .appearance, .editing, .shortcuts, .dictation, .vocabulary,
-    ]
-    static let selectorCases = allCases + [.agents]
-    static let selectionEffectID = "settings-section"
+    static let fleckCases: [SettingsSection] = [.editing, .appearance, .shortcuts]
+    static let voiceAndWritingCases: [SettingsSection] = [.dictation, .vocabulary]
+    static let connectionCases: [SettingsSection] = [.agents]
+    static let allCases: [SettingsSection] =
+      fleckCases + voiceAndWritingCases + connectionCases
+
+    var id: Self { self }
+
+    var title: String {
+      switch self {
+      case .editing:
+        "General"
+      default:
+        rawValue
+      }
+    }
+
+    var systemImage: String {
+      switch self {
+      case .editing:
+        "note.text"
+      case .appearance:
+        "paintbrush"
+      case .shortcuts:
+        "keyboard"
+      case .dictation:
+        "waveform"
+      case .vocabulary:
+        "character.book.closed"
+      case .agents:
+        "person.2"
+      }
+    }
+
+    var description: String {
+      switch self {
+      case .editing:
+        "Choose how Fleck edits and organizes your notes."
+      case .appearance:
+        "Adjust Fleck’s editor theme, type, and accent."
+      case .shortcuts:
+        "Set the keyboard shortcuts you use across Fleck."
+      case .dictation:
+        "Configure voice capture, models, microphones, and history."
+      case .vocabulary:
+        "Manage personal vocabulary and dictation corrections."
+      case .agents:
+        "Control which local agents can work with your Fleck workspace."
+      }
+    }
+  }
+
+  enum DictationSettingsGroup: String, CaseIterable, Identifiable {
+    case readiness = "Status"
+    case models = "Models"
+    case capture = "Capture"
+    case experience = "Experience & history"
+    case privacy = "Privacy"
+
     var id: Self { self }
   }
 
@@ -40,82 +94,266 @@
     }
   }
 
-  struct SettingsSectionSelector: View {
+  struct SettingsSectionSidebar: View {
     @Binding var selection: SettingsSection
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var selectedSectionHighlight
 
     var body: some View {
-      ViewThatFits(in: .horizontal) {
-        fullSelector
-        compactSelector
+      List(selection: $selection) {
+        sectionGroup("Fleck", sections: SettingsSection.fleckCases)
+        sectionGroup("Voice & Writing", sections: SettingsSection.voiceAndWritingCases)
+        sectionGroup("Connections", sections: SettingsSection.connectionCases)
       }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 10)
-      .accessibilityElement(children: .contain)
-      .accessibilityLabel("Settings section")
-      .accessibilityIdentifier("settings-section-selector")
+      .listStyle(.sidebar)
+      .scrollContentBackground(.hidden)
+      .background(Color.clear)
+      .accessibilityLabel("Settings sections")
+      .accessibilityIdentifier("settings-section-sidebar")
     }
 
-    private var fullSelector: some View {
-      HStack(spacing: 4) {
-        ForEach(SettingsSection.selectorCases) { section in
-          let isSelected = section == selection
-          Button {
-            withAnimation(motion.spatial) {
-              selection = section
-            }
-          } label: {
-            Text(section.rawValue)
-              .font(.callout.weight(.medium))
-              .fixedSize(horizontal: true, vertical: false)
-              .foregroundStyle(isSelected ? Color.white : Color.primary)
-              .frame(maxWidth: .infinity)
-              .padding(.vertical, 7)
-              .padding(.horizontal, 5)
-              .background {
-                if isSelected {
-                  RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.accentColor)
-                    .matchedGeometryEffect(
-                      id: SettingsSection.selectionEffectID,
-                      in: selectedSectionHighlight
-                    )
-                }
+    @ViewBuilder
+    private func sectionGroup(
+      _ title: LocalizedStringKey,
+      sections: [SettingsSection]
+    ) -> some View {
+      Section(title) {
+        ForEach(sections) { section in
+          Label(section.title, systemImage: section.systemImage)
+            .tag(section)
+        }
+      }
+    }
+  }
+
+  struct SettingsSidebarSurface<Content: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+      self.content = content()
+    }
+
+    var body: some View {
+      content
+        .padding(.horizontal, 12)
+        .padding(.top, 52)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background {
+          let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+          if reduceTransparency {
+            shape.fill(Color(nsColor: .windowBackgroundColor))
+              .overlay { shape.fill(Color.primary.opacity(0.06)) }
+              .overlay { shape.stroke(Color.primary.opacity(0.12), lineWidth: 1) }
+          } else if #available(macOS 26, *) {
+            shape.fill(.clear)
+              .glassEffect(
+                Glass.regular.tint(Color.black.opacity(0.18)),
+                in: shape
+              )
+          } else {
+            shape.fill(.ultraThinMaterial)
+              .overlay {
+                shape.fill(Color.black.opacity(0.10))
               }
-              .contentShape(Rectangle())
           }
-          .buttonStyle(.plain)
-          .accessibilityLabel(section.rawValue)
-          .accessibilityValue(isSelected ? "Selected" : "Not selected")
-          .accessibilityAddTraits(isSelected ? .isSelected : [])
         }
-      }
-      .padding(3)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(SettingsSidebarSurfaceProbe())
+        .accessibilityIdentifier("settings-sidebar-surface")
+    }
+  }
+
+  private struct SettingsSidebarSurfaceProbe: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+      let view = NSView()
+      view.setAccessibilityIdentifier("settings-sidebar-surface")
+      return view
     }
 
-    private var compactSelector: some View {
-      Picker("Settings section", selection: $selection) {
-        ForEach(SettingsSection.selectorCases) { section in
-          Text(section.rawValue).tag(section)
-        }
-      }
-      .pickerStyle(.menu)
-      .frame(maxWidth: .infinity, alignment: .trailing)
-      .accessibilityLabel("Settings section")
-      .accessibilityValue(selection.rawValue)
-      .accessibilityHint("Chooses which Fleck settings to show")
+    func updateNSView(_ view: NSView, context: Context) {}
+  }
+
+  private struct SettingsPageHeaderProbe: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+      let view = NSView()
+      view.setAccessibilityIdentifier("settings-page-header")
+      return view
     }
 
-    private var motion: AppMotion {
-      AppMotion(reduceMotion: reduceMotion)
+    func updateNSView(_ view: NSView, context: Context) {}
+  }
+
+  private struct SettingsWindowChromeConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> SettingsWindowChromeView {
+      SettingsWindowChromeView()
+    }
+
+    func updateNSView(_ view: SettingsWindowChromeView, context: Context) {
+      view.scheduleTrafficLightAdjustment()
+    }
+  }
+
+  private final class SettingsWindowChromeView: NSView {
+    private var adjustmentScheduled = false
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      scheduleTrafficLightAdjustment()
+    }
+
+    override func layout() {
+      super.layout()
+      scheduleTrafficLightAdjustment()
+    }
+
+    func scheduleTrafficLightAdjustment() {
+      guard let window else { return }
+      window.titleVisibility = .hidden
+      window.titlebarSeparatorStyle = .none
+      window.titlebarAppearsTransparent = true
+      guard !adjustmentScheduled else { return }
+      adjustmentScheduled = true
+      DispatchQueue.main.async { [weak self] in
+        self?.adjustmentScheduled = false
+        self?.adjustTrafficLights()
+      }
+    }
+
+    private func adjustTrafficLights() {
+      guard let window,
+        let contentView = window.contentView,
+        let sidebarSurface = settingsSidebarSurface(in: contentView)
+      else {
+        return
+      }
+
+      let buttons = [
+        window.standardWindowButton(.closeButton),
+        window.standardWindowButton(.miniaturizeButton),
+        window.standardWindowButton(.zoomButton),
+      ].compactMap { $0 }
+      guard !buttons.isEmpty else { return }
+
+      let sidebarFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+      let buttonFrames = buttons.map { $0.convert($0.bounds, to: nil) }
+      let targetMinX = sidebarFrame.minX + 14
+      let targetMaxY = sidebarFrame.maxY - 14
+      guard let currentMinX = buttonFrames.map(\.minX).min() else { return }
+      guard let currentMaxY = buttonFrames.map(\.maxY).max() else { return }
+      let offsetX = targetMinX - currentMinX
+      let offsetY = targetMaxY - currentMaxY
+      guard offsetX != 0 || offsetY != 0 else { return }
+
+      for button in buttons {
+        button.setFrameOrigin(
+          NSPoint(
+            x: button.frame.minX + offsetX,
+            y: button.frame.minY + offsetY
+          )
+        )
+      }
+    }
+
+    private func settingsSidebarSurface(in view: NSView) -> NSView? {
+      if view.accessibilityIdentifier() == "settings-sidebar-surface" {
+        return view
+      }
+      for subview in view.subviews {
+        if let surface = settingsSidebarSurface(in: subview) {
+          return surface
+        }
+      }
+      return nil
+    }
+  }
+
+  struct SettingsPageHeader: View {
+    let section: SettingsSection
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(section.title)
+          .font(.title2.weight(.semibold))
+          .background(SettingsPageHeaderProbe())
+        Text(section.description)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  struct SettingsSectionCard<Content: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private let title: String
+    private let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+      self.title = title
+      self.content = content()
+    }
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        Text(title)
+          .font(.headline)
+
+        VStack(alignment: .leading, spacing: 12) {
+          content
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+          let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+          if reduceTransparency {
+            shape.fill(Color(nsColor: .controlBackgroundColor))
+              .overlay { shape.fill(Color.primary.opacity(0.03)) }
+              .overlay { shape.stroke(Color.primary.opacity(0.10), lineWidth: 1) }
+          } else if #available(macOS 26, *) {
+            shape.fill(.clear)
+              .glassEffect(
+                Glass.regular.tint(Color.black.opacity(0.18)),
+                in: shape
+              )
+          } else {
+            shape.fill(.ultraThinMaterial)
+              .overlay {
+                shape.fill(Color.black.opacity(0.10))
+              }
+          }
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  private struct SettingsToggleRow: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+      Toggle(isOn: $isOn) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(title)
+          Text(detail)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(title)
+      .accessibilityHint(detail)
+      .accessibilityIdentifier(title)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
     @ObservedObject private var cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel
@@ -143,30 +381,54 @@
     }
 
     var body: some View {
-      ZStack {
-        Form {
-          sectionSelector
-
-          switch selectedSection {
-          case .appearance:
-            appearance
-          case .editing:
-            editing
-          case .shortcuts:
-            shortcuts
-          case .dictation:
-            dictation
-          case .vocabulary:
-            vocabulary
-          case .agents:
-            AgentSettingsView()
-          }
+      HStack(alignment: .top, spacing: 12) {
+        SettingsSidebarSurface {
+          SettingsSectionSidebar(selection: $selectedSection)
         }
-        .formStyle(.grouped)
+        .frame(width: 220)
+        .padding(.vertical, 8)
+        ScrollView {
+          VStack(alignment: .leading, spacing: 20) {
+            SettingsPageHeader(section: selectedSection)
+            switch selectedSection {
+            case .appearance:
+              appearance
+            case .editing:
+              editing
+            case .shortcuts:
+              shortcuts
+            case .dictation:
+              dictation
+            case .vocabulary:
+              vocabulary
+            case .agents:
+              AgentSettingsView()
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 24)
+          .padding(.bottom, 20)
+        }
         .id(selectedSection)
-        .transition(.opacity)
+        .safeAreaPadding(.top, 40)
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
-      .animation(motion.standard, value: selectedSection)
+      .padding(.leading, 8)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .ignoresSafeArea(.container, edges: .top)
+      .background {
+        if reduceTransparency {
+          Color(nsColor: .windowBackgroundColor)
+            .overlay(Color.primary.opacity(0.02))
+        } else {
+          Rectangle()
+            .fill(.ultraThinMaterial)
+            .overlay {
+              Color.black.opacity(0.10)
+            }
+        }
+      }
+      .background(SettingsWindowChromeConfigurator())
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }
@@ -220,76 +482,93 @@
       }
     }
 
-    private var sectionSelector: some View {
-      SettingsSectionSelector(selection: $selectedSection)
-    }
-
-    private var motion: AppMotion {
-      AppMotion(reduceMotion: reduceMotion)
-    }
-
     private func consumePendingSettingsRoute() {
       guard let section = runtime.consumePendingSettingsSection() else { return }
-      withAnimation(motion.spatial) {
-        selectedSection = section
-      }
+      selectedSection = section
     }
 
     private var appearance: some View {
-      Section("Editor") {
-        Picker("Theme", selection: preferenceBinding(\.theme)) {
-          ForEach(AppTheme.allCases, id: \.self) { theme in
-            Text(theme.rawValue.capitalized).tag(theme)
+      VStack(alignment: .leading, spacing: 16) {
+        SettingsSectionCard("Interface") {
+          LabeledContent("Theme") {
+            Picker("Theme", selection: preferenceBinding(\.theme)) {
+              ForEach(AppTheme.allCases, id: \.self) { theme in
+                Text(theme.rawValue.capitalized).tag(theme)
+              }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+          }
+          SettingsColorButton(
+            title: "Accent color",
+            currentHex: appState.preferences.accentHex,
+            fallbackColor: .controlAccentColor
+          ) { hex in
+            guard let hex else { return }
+            appState.updatePreferences { $0.accentHex = hex }
+            runtime.preferencesDidChange()
           }
         }
-        SettingsColorButton(
-          title: "Accent color",
-          currentHex: appState.preferences.accentHex,
-          fallbackColor: .controlAccentColor
-        ) { hex in
-          guard let hex else { return }
-          appState.updatePreferences { $0.accentHex = hex }
-          runtime.preferencesDidChange()
+
+        SettingsSectionCard("Editor canvas") {
+          SettingsColorButton(
+            title: "Editor text color",
+            currentHex: appState.preferences.editorTextHex,
+            resetTitle: "Use System",
+            fallbackColor: .labelColor
+          ) { hex in
+            appState.updatePreferences { $0.editorTextHex = hex }
+          }
+          SettingsColorButton(
+            title: "Editor background",
+            currentHex: appState.preferences.editorBackgroundHex,
+            resetTitle: "Use System",
+            fallbackColor: .textBackgroundColor
+          ) { hex in
+            appState.updatePreferences { $0.editorBackgroundHex = hex }
+          }
+          LabeledContent("Glass opacity") {
+            Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
+              Text("Glass opacity")
+            }
+            .labelsHidden()
+          }
         }
-        SettingsColorButton(
-          title: "Editor text color",
-          currentHex: appState.preferences.editorTextHex,
-          resetTitle: "Use System",
-          fallbackColor: .labelColor
-        ) { hex in
-          appState.updatePreferences { $0.editorTextHex = hex }
-        }
-        SettingsColorButton(
-          title: "Editor background",
-          currentHex: appState.preferences.editorBackgroundHex,
-          resetTitle: "Use System",
-          fallbackColor: .textBackgroundColor
-        ) { hex in
-          appState.updatePreferences { $0.editorBackgroundHex = hex }
-        }
-        Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
-          Text("Glass opacity")
-        }
-        HStack {
-          Stepper(
-            "Menu width: \(Int(appState.preferences.panelWidth))",
-            value: preferenceBinding(\.panelWidth), in: 380...800, step: 20)
-          Stepper(
-            "Menu height: \(Int(appState.preferences.panelHeight))",
-            value: preferenceBinding(\.panelHeight), in: 300...800, step: 20)
+
+        SettingsSectionCard("Menu size") {
+          LabeledContent("Width") {
+            Stepper(
+              value: preferenceBinding(\.panelWidth), in: 380...800, step: 20
+            ) {
+              Text("\(Int(appState.preferences.panelWidth)) pt")
+            }
+          }
+          LabeledContent("Height") {
+            Stepper(
+              value: preferenceBinding(\.panelHeight), in: 300...800, step: 20
+            ) {
+              Text("\(Int(appState.preferences.panelHeight)) pt")
+            }
+          }
         }
       }
     }
 
     private var editing: some View {
-      Section("Behavior") {
-        Toggle("Create lists automatically", isOn: preferenceBinding(\.automaticLists))
-        Toggle(
-          "Confirm before moving notes to Trash",
+      SettingsSectionCard("Behavior") {
+        SettingsToggleRow(
+          title: "Create lists automatically",
+          detail: "Recognize list-shaped lines while you edit.",
+          isOn: preferenceBinding(\.automaticLists)
+        )
+        SettingsToggleRow(
+          title: "Confirm before moving notes to Trash",
+          detail: "Ask before a note is moved to the Trash folder.",
           isOn: preferenceBinding(\.confirmBeforeMovingNotesToTrash)
         )
-        Toggle(
-          "Launch at login",
+        SettingsToggleRow(
+          title: "Launch at login",
+          detail: "Start Fleck automatically when you sign in.",
           isOn: Binding(
             get: { appState.preferences.launchAtLogin },
             set: { appState.setLaunchAtLogin($0) }
@@ -303,7 +582,7 @@
     }
 
     private var shortcuts: some View {
-      Section("Keyboard shortcuts") {
+      SettingsSectionCard("Keyboard shortcuts") {
         let conflicts = Shortcut.conflicts(in: appState.preferences.shortcuts)
         ForEach(Shortcut.Action.allCases, id: \.self) { action in
           let shortcut = appState.preferences.shortcuts.first(where: { $0.action == action })
@@ -347,15 +626,43 @@
       }
     }
 
-    @ViewBuilder
     private var dictation: some View {
-      if !availabilityIssues.isEmpty || !recoveryActions.isEmpty {
-        Section("Needs attention") {
+      VStack(alignment: .leading, spacing: 16) {
+        readiness
+        models
+        capture
+        experienceAndHistory
+        DisclosureGroup(DictationSettingsGroup.privacy.rawValue) {
+          Text(
+            "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .padding(.top, 4)
+        }
+      }
+    }
+
+    private var readiness: some View {
+      let isReady = availabilityIssues.isEmpty && recoveryActions.isEmpty
+      return SettingsSectionCard(DictationSettingsGroup.readiness.rawValue) {
+        Label(
+          isReady ? "Ready" : "Needs attention",
+          systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        )
+        .font(.body.weight(.medium))
+
+        if isReady {
+          Text("Dictation is ready to capture and process your voice locally.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        } else {
           ForEach(availabilityIssues, id: \.title) { row in
             Label(
               "\(row.title) — \(row.detail)",
               systemImage: "info.circle"
             )
+            .font(.caption)
             .foregroundStyle(.secondary)
           }
           ForEach(recoveryActions, id: \.pane) { action in
@@ -365,72 +672,81 @@
           }
         }
       }
+    }
 
-      models
-
-      Section("Controls") {
-        Picker("Modifier key", selection: dictationModifierBinding) {
-          ForEach(DictationModifierKey.allCases, id: \.self) { key in
-            Text(
-              key == .rightOption
-                ? "\(key.displayName) — Recommended"
-                : key.displayName
-            ).tag(key)
+    private var capture: some View {
+      SettingsSectionCard(DictationSettingsGroup.capture.rawValue) {
+        LabeledContent("Modifier key") {
+          Picker("Modifier key", selection: dictationModifierBinding) {
+            ForEach(DictationModifierKey.allCases, id: \.self) { key in
+              Text(
+                key == .rightOption
+                  ? "\(key.displayName) — Recommended"
+                  : key.displayName
+              ).tag(key)
+            }
           }
+          .labelsHidden()
+          .disabled(!dictationModifierPresentation.isPickerEnabled)
         }
-        .disabled(!dictationModifierPresentation.isPickerEnabled)
 
-        Text(dictationModifierPresentation.statusCopy)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        if let guidance = dictationModifierPresentation.guidanceCopy {
-          Text(guidance)
+        VStack(alignment: .leading, spacing: 4) {
+          Text(dictationModifierPresentation.statusCopy)
             .font(.caption)
             .foregroundStyle(.secondary)
-        }
-        if let action = dictationModifierPresentation.recoveryAction {
-          switch action {
-          case .enableInputMonitoring:
-            Button("Enable Input Monitoring") {
-              Task { @MainActor in
-                guard let settings = await runtime.recoverModifierMonitoring() else { return }
-                runtime.openSystemSettings(settings)
+          if let guidance = dictationModifierPresentation.guidanceCopy {
+            Text(guidance)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          if let action = dictationModifierPresentation.recoveryAction {
+            switch action {
+            case .enableInputMonitoring:
+              Button("Enable Input Monitoring") {
+                Task { @MainActor in
+                  guard let settings = await runtime.recoverModifierMonitoring() else { return }
+                  runtime.openSystemSettings(settings)
+                }
               }
-            }
-          case .retry:
-            Button("Retry") {
-              Task {
-                _ = await runtime.retryModifierMonitoring()
+            case .retry:
+              Button("Retry") {
+                Task {
+                  _ = await runtime.retryModifierMonitoring()
+                }
               }
             }
           }
         }
 
-        Picker("Microphone", selection: dictationMicrophoneBinding) {
-          Text("Automatic").tag(String?.none)
-          ForEach(microphones) { microphone in
-            Text(microphone.name).tag(Optional(microphone.id))
+        LabeledContent("Microphone") {
+          Picker("Microphone", selection: dictationMicrophoneBinding) {
+            Text("Automatic").tag(String?.none)
+            ForEach(microphones) { microphone in
+              Text(microphone.name).tag(Optional(microphone.id))
+            }
           }
+          .labelsHidden()
         }
-
         LabeledContent("Recognition language", value: "English")
-        Toggle("Show status capsule", isOn: dictationPreferenceBinding(\.dictationCapsuleEnabled))
-        Toggle(
-          "Keep local history for 30 days",
+      }
+    }
+
+    private var experienceAndHistory: some View {
+      SettingsSectionCard(DictationSettingsGroup.experience.rawValue) {
+        SettingsToggleRow(
+          title: "Show status capsule",
+          detail: "Show a compact status surface while Fleck is listening.",
+          isOn: dictationPreferenceBinding(\.dictationCapsuleEnabled)
+        )
+        SettingsToggleRow(
+          title: "Keep local history for 30 days",
+          detail: "Keep successful transcripts on this Mac for up to 30 days.",
           isOn: dictationPreferenceBinding(\.dictationHistoryEnabled)
         )
         Button("Clear History", role: .destructive) {
           showsHistoryClearConfirmation = true
         }
       }
-
-      Section("Privacy") {
-        Text(
-          "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
-        )
-      }
-      .font(.caption)
-      .foregroundStyle(.secondary)
     }
 
     private var vocabulary: some View {
@@ -448,7 +764,7 @@
     }
 
     private var models: some View {
-      Section("Models") {
+      SettingsSectionCard(DictationSettingsGroup.models.rawValue) {
         LabeledContent("Dictation") {
           modelRow(
             presentation: admittedModelSettingsViewModel.presentation,
@@ -588,51 +904,74 @@
     }
   }
 
+  enum SettingsVocabularySortOrder: String, CaseIterable, Identifiable {
+    case aToZ = "A–Z"
+    case zToA = "Z–A"
+
+    var id: Self { self }
+
+    func sorted<Element>(
+      _ values: [Element],
+      by key: (Element) -> String,
+      id: (Element) -> UUID
+    ) -> [Element] {
+      values.sorted { lhs, rhs in
+        let lhsKey = key(lhs).folding(
+          options: [.caseInsensitive, .diacriticInsensitive],
+          locale: Locale(identifier: "en_US_POSIX")
+        )
+        let rhsKey = key(rhs).folding(
+          options: [.caseInsensitive, .diacriticInsensitive],
+          locale: Locale(identifier: "en_US_POSIX")
+        )
+        if lhsKey != rhsKey {
+          return self == .aToZ ? lhsKey < rhsKey : lhsKey > rhsKey
+        }
+        if key(lhs) != key(rhs) {
+          return self == .aToZ ? key(lhs) < key(rhs) : key(lhs) > key(rhs)
+        }
+        let lhsID = id(lhs).uuidString
+        let rhsID = id(rhs).uuidString
+        return self == .aToZ ? lhsID < rhsID : lhsID > rhsID
+      }
+    }
+  }
+
   private struct PersonalDictionarySettingsSection: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
     @State private var showsImporter = false
     @State private var showsDictionaryExporter = false
     @State private var showsCSVExporter = false
     @FocusState private var isSearchFocused: Bool
+    @State private var isSearchExpanded = false
+    @State private var sortOrder = SettingsVocabularySortOrder.aToZ
+    @State private var isReloading = false
 
     private let maximumTransferBytes = 64 * 1024 + 256
 
     var body: some View {
-      Section("Vocabulary") {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Help Fleck recognize the words and phrases you use.")
-          Text("Add a correction only when Fleck consistently hears something else.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-
-        HStack {
-          Text(entrySummary)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Spacer()
-          Picker("Show", selection: $viewModel.filter) {
-            ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
-              Text(filter.rawValue).tag(filter)
-            }
+      VStack(alignment: .leading, spacing: 16) {
+        HStack(alignment: .top, spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Teach Fleck the words and phrases that matter to you")
+              .font(.body.weight(.medium))
+            Text("Add a correction when Fleck consistently hears something else.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
           }
-          .pickerStyle(.menu)
-          .frame(width: 110)
-          .accessibilityLabel("Personal dictionary filter")
-          .accessibilityValue(viewModel.filter.rawValue)
-          .accessibilityHint("Filters entries or shows pending suggestions")
-
-          Button("Add Word") { viewModel.beginAddingEntry() }
+          Spacer(minLength: 8)
+          Button("Add New") { viewModel.beginAddingEntry() }
             .buttonStyle(.borderedProminent)
-            .accessibilityLabel("Add a word to Fleck vocabulary")
+            .accessibilityLabel("Add a new vocabulary word or phrase")
             .accessibilityHint("Opens the vocabulary word editor")
         }
 
-        messages
-        rows
+        dictionaryPanel
         transfer
-        searchUtility
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
       .sheet(
         isPresented: Binding(
           get: { viewModel.entryEdit != nil },
@@ -719,9 +1058,114 @@
       )
     }
 
+    private var toolbar: some View {
+      ViewThatFits(in: .horizontal) {
+        toolbarRow
+        toolbarRows
+      }
+    }
+
+    private var toolbarRow: some View {
+      HStack(spacing: 8) {
+        filterTabs
+        Spacer(minLength: 8)
+        summaryLabel
+        searchControl
+        sortControl
+        reloadControl
+      }
+    }
+
+    private var toolbarRows: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack(spacing: 8) {
+          filterTabs
+          Spacer(minLength: 8)
+          summaryLabel
+        }
+        HStack(spacing: 8) {
+          Spacer(minLength: 8)
+          searchControl
+          sortControl
+          reloadControl
+        }
+      }
+    }
+
+    private var summaryLabel: some View {
+      Text(entrySummary)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    private var filterTabs: some View {
+      HStack(spacing: 2) {
+        ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
+          Button(filter.rawValue) {
+            viewModel.filter = filter
+          }
+          .buttonStyle(.plain)
+          .font(.caption.weight(filter == viewModel.filter ? .semibold : .regular))
+          .foregroundStyle(filter == viewModel.filter ? .primary : .secondary)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 5)
+          .overlay(alignment: .bottom) {
+            if filter == viewModel.filter {
+              Capsule()
+                .fill(Color.accentColor)
+                .frame(height: 2)
+            }
+          }
+          .accessibilityLabel(filter.rawValue)
+          .accessibilityValue(filter == viewModel.filter ? "Selected" : "Available")
+          .accessibilityHint("Shows \(filter.rawValue.lowercased()) vocabulary")
+        }
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Personal dictionary filter")
+      .accessibilityValue(viewModel.filter.rawValue)
+      .accessibilityHint("Filters entries or shows pending suggestions")
+    }
+
+    private var sortControl: some View {
+      Picker("Sort", selection: $sortOrder) {
+        ForEach(SettingsVocabularySortOrder.allCases) { order in
+          Text(order.rawValue).tag(order)
+        }
+      }
+      .pickerStyle(.menu)
+      .accessibilityLabel("Sort vocabulary")
+      .accessibilityValue(sortOrder.rawValue)
+      .accessibilityHint("Sorts vocabulary alphabetically")
+    }
+
+    private var reloadControl: some View {
+      Button(action: reloadVocabulary) {
+        if isReloading {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Label("Reload", systemImage: "arrow.clockwise")
+        }
+      }
+      .buttonStyle(.borderless)
+      .disabled(isReloading)
+      .accessibilityLabel("Reload vocabulary")
+      .accessibilityValue(isReloading ? "Reloading" : "Ready")
+      .accessibilityHint("Loads the latest local vocabulary entries")
+    }
+
     private var entrySummary: String {
-      let count = viewModel.entries.count
-      return count == 1 ? "1 saved word" : "\(count) saved words"
+      if viewModel.filter == .suggestions {
+        let count = viewModel.visibleSuggestions.count
+        return count == 1 ? "1 pending suggestion" : "\(count) pending suggestions"
+      }
+      let count = viewModel.visibleEntries.count
+      let total = viewModel.entries.count
+      if viewModel.query.isEmpty, viewModel.filter == .all {
+        return total == 1 ? "1 saved word" : "\(total) saved words"
+      }
+      return "\(count) of \(total) saved words"
     }
 
     @ViewBuilder
@@ -742,24 +1186,106 @@
     }
 
     @ViewBuilder
-    private var rows: some View {
-      if viewModel.filter == .suggestions {
-        if viewModel.visibleSuggestions.isEmpty {
-          Text("No pending suggestions.")
-            .foregroundStyle(.secondary)
+    private var dictionaryPanel: some View {
+      VStack(alignment: .leading, spacing: 0) {
+        toolbar
+          .padding(.horizontal, 12)
+          .padding(.top, 12)
+          .padding(.bottom, 10)
+        messages
+          .padding(.horizontal, 12)
+          .padding(.bottom, 8)
+        Divider()
+        listSurface
+      }
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+      .background {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        if reduceTransparency {
+          shape.fill(Color(nsColor: .controlBackgroundColor))
+            .overlay { shape.fill(Color.primary.opacity(0.03)) }
+            .overlay { shape.stroke(Color.primary.opacity(0.10), lineWidth: 1) }
+        } else if #available(macOS 26, *) {
+          shape.fill(.clear)
+            .glassEffect(
+              Glass.regular.tint(Color.black.opacity(0.18)),
+              in: shape
+            )
         } else {
-          ForEach(viewModel.visibleSuggestions) { suggestion in
-            suggestionRow(suggestion, expectedRevision: viewModel.revision)
-          }
-        }
-      } else if viewModel.visibleEntries.isEmpty {
-        Text(viewModel.query.isEmpty ? "No entries yet." : "No matching entries.")
-          .foregroundStyle(.secondary)
-      } else {
-        ForEach(viewModel.visibleEntries) { entry in
-          entryRow(entry)
+          shape.fill(.ultraThinMaterial)
+            .overlay {
+              shape.fill(Color.black.opacity(0.10))
+            }
         }
       }
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(.separator.opacity(0.5), lineWidth: 1)
+      }
+    }
+
+    @ViewBuilder
+    private var listSurface: some View {
+      VStack(alignment: .leading, spacing: 0) {
+        if viewModel.filter == .suggestions {
+          if sortedSuggestions.isEmpty {
+            emptyState
+          } else {
+            ForEach(Array(sortedSuggestions.enumerated()), id: \.element.id) { index, suggestion in
+              suggestionRow(suggestion, expectedRevision: viewModel.revision)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+              if index < sortedSuggestions.count - 1 {
+                Divider().padding(.leading, 12)
+              }
+            }
+          }
+        } else if sortedEntries.isEmpty {
+          emptyState
+        } else {
+          ForEach(Array(sortedEntries.enumerated()), id: \.element.id) { index, entry in
+            entryRow(entry)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 10)
+            if index < sortedEntries.count - 1 {
+              Divider().padding(.leading, 12)
+            }
+          }
+        }
+      }
+      .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
+      .padding(.bottom, 12)
+    }
+
+    private var sortedEntries: [PersonalDictionaryEntry] {
+      sortOrder.sorted(viewModel.visibleEntries, by: \.preferredForm, id: \.id)
+    }
+
+    private var sortedSuggestions: [PersonalDictionarySuggestion] {
+      sortOrder.sorted(viewModel.visibleSuggestions, by: \.preferredForm, id: \.id)
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+      Group {
+        if viewModel.filter == .suggestions {
+          Text("No pending suggestions. Fleck will show new forms here when it finds them.")
+            .foregroundStyle(.secondary)
+        } else if !viewModel.query.isEmpty {
+          Text("No matching entries. Clear search or choose another filter.")
+            .foregroundStyle(.secondary)
+        } else if viewModel.filter != .all {
+          Text("No entries match this filter. Choose All or use Add New.")
+            .foregroundStyle(.secondary)
+        } else {
+          Text("No entries yet. Use Add New to teach Fleck a word or phrase.")
+            .foregroundStyle(.secondary)
+        }
+      }
+      .font(.callout)
+      .padding(16)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func entryRow(_ entry: PersonalDictionaryEntry) -> some View {
@@ -898,24 +1424,26 @@
       }
     }
 
-    private var searchUtility: some View {
-      HStack {
-        Spacer()
-        HStack(spacing: 6) {
-          Button {
-            isSearchFocused = true
-          } label: {
-            Image(systemName: "magnifyingglass")
-          }
-          .buttonStyle(.plain)
-          .keyboardShortcut("f", modifiers: .command)
-          .help("Search vocabulary (⌘F)")
-          .accessibilityLabel("Search vocabulary")
-          .accessibilityHint("Focuses the vocabulary search field")
+    @ViewBuilder
+    private var searchControl: some View {
+      HStack(spacing: 6) {
+        Button {
+          isSearchExpanded = true
+          isSearchFocused = true
+        } label: {
+          Image(systemName: "magnifyingglass")
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("f", modifiers: .command)
+        .help("Search vocabulary (⌘F)")
+        .accessibilityLabel("Search vocabulary")
+        .accessibilityHint("Focuses the vocabulary search field")
 
-          TextField("Search", text: $viewModel.query)
+        if isSearchExpanded {
+          TextField("Search vocabulary", text: $viewModel.query)
             .textFieldStyle(.roundedBorder)
             .focused($isSearchFocused)
+            .frame(minWidth: 120, idealWidth: 160, maxWidth: 180)
             .accessibilityLabel("Search vocabulary")
             .accessibilityValue(viewModel.query.isEmpty ? "No search" : viewModel.query)
             .accessibilityHint("Searches saved words and corrections")
@@ -932,7 +1460,15 @@
             .accessibilityHint("Clears the current vocabulary search")
           }
         }
-        .frame(width: 200)
+      }
+    }
+
+    private func reloadVocabulary() {
+      guard !isReloading else { return }
+      isReloading = true
+      Task { @MainActor in
+        await viewModel.load()
+        isReloading = false
       }
     }
 
@@ -985,12 +1521,13 @@
 
     var body: some View {
       Form {
-        Section(isNew ? "Add Word" : "Edit Word") {
+        Section(isNew ? "Add New" : "Edit Word") {
           TextField("Word or phrase", text: $preferredForm)
             .accessibilityLabel("Word or phrase")
             .accessibilityHint("The spelling Fleck should use")
 
-          Toggle("Correct a misspelling or shorthand", isOn: $usesCorrection)
+          Toggle("Correct a misspelling", isOn: $usesCorrection)
+            .accessibilityHint("Shows a field for the spelling Fleck should replace")
           if usesCorrection {
             TextField("Correct from", text: $aliases)
               .accessibilityLabel("Correct from")
@@ -1001,6 +1538,7 @@
           }
 
           Toggle("Use this word in dictation", isOn: $isEnabled)
+            .accessibilityHint("Keeps this vocabulary entry active for dictation")
         }
         .disabled(isMutationInFlight)
 
@@ -1030,9 +1568,10 @@
             }
             Button("Cancel", action: onCancel)
               .disabled(isMutationInFlight)
-            Button("Save", action: onSave)
+            Button(isNew ? "Add" : "Save", action: onSave)
               .buttonStyle(.borderedProminent)
               .keyboardShortcut(.defaultAction)
+              .accessibilityLabel(isNew ? "Add vocabulary word" : "Save vocabulary word")
               .disabled(
                 isMutationInFlight
                   || preferredForm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

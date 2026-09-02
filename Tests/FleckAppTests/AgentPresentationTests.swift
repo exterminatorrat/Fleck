@@ -36,6 +36,64 @@ struct AgentPresentationTests {
     )
   }
 
+  @Test func agentSettingsUsesDirectIntegrationsAndHonestPrimaryStatusAction() throws {
+    let testFile = URL(fileURLWithPath: #filePath)
+    let sourceRoot = testFile.deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp")
+    let settings = try String(
+      contentsOf: sourceRoot.appendingPathComponent("AgentSettingsView.swift"),
+      encoding: .utf8
+    )
+
+    #expect(
+      AgentConnectorPresentation.primaryActionTitle(installed: false)
+        == "Install Agent Connector"
+    )
+    #expect(
+      AgentConnectorPresentation.primaryActionTitle(installed: true)
+        == "Refresh Status"
+    )
+    #expect(AgentIntegrationKind.allCases.map(\.displayName) == [
+      "Codex", "Claude Code", "Kimi", "Generic CLI",
+    ])
+    #expect(AgentIntegrationKind.allCases.map(\.description) == [
+      "Connect Codex to explicitly shared notes.",
+      "Connect Claude Code to explicitly shared notes.",
+      "Connect Kimi to explicitly shared notes.",
+      "Connect another local CLI to explicitly shared notes.",
+    ])
+    #expect(settings.contains("ForEach(AgentIntegrationKind.allCases)"))
+    #expect(settings.contains("appState.addAgentProfile(named: integration.displayName)"))
+    #expect(settings.contains("Connected Profiles"))
+    #expect(settings.contains("Set up a local integration"))
+    #expect(settings.contains("DisclosureGroup(\"Activity\")"))
+    #expect(settings.contains("DisclosureGroup(\"Access\")"))
+    #expect(!settings.contains("HStack {\n            addButton(\"Add Codex\""))
+  }
+
+  @Test func agentConnectorActionDecisionMatchesInstalledStateAndIsDispatched() throws {
+    #expect(AgentConnectorPresentation.action(installed: false) == .install)
+    #expect(AgentConnectorPresentation.action(installed: true) == .refresh)
+
+    let testFile = URL(fileURLWithPath: #filePath)
+    let sourceRoot = testFile.deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp")
+    let settings = try String(
+      contentsOf: sourceRoot.appendingPathComponent("AgentSettingsView.swift"),
+      encoding: .utf8
+    )
+
+    #expect(settings.contains("switch AgentConnectorPresentation.action(installed:"))
+    #expect(settings.contains("case .install:"))
+    #expect(settings.contains("await appState.installAgentBridge()"))
+    #expect(settings.contains("case .refresh:"))
+    #expect(settings.contains("await appState.refreshAgentConnectorStatus()"))
+  }
+
   @Test func agentConnectorInstallStatusIsCachedAndRefreshedAsynchronously() throws {
     let testFile = URL(fileURLWithPath: #filePath)
     let sourceRoot = testFile.deletingLastPathComponent()

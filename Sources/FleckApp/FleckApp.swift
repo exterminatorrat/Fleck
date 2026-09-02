@@ -234,9 +234,17 @@
       Settings {
         SettingsView(runtime: dictationRuntime)
           .environmentObject(appState)
-          .frame(width: 520, height: 440)
+          .frame(
+            minWidth: 760,
+            idealWidth: 840,
+            minHeight: 520,
+            idealHeight: 600
+          )
           .background(FloatingWindowConfigurator())
       }
+      .defaultSize(width: 840, height: 600)
+      .windowResizability(.contentMinSize)
+      .windowToolbarStyle(.unifiedCompact)
     }
 
     private var colorScheme: ColorScheme? {

@@ -2377,7 +2377,7 @@ private actor AccessibilitySleepGate {
 
   for label in [
     "Personal dictionary filter",
-    "Add a word to Fleck vocabulary",
+    "Add a new vocabulary word or phrase",
     "Search vocabulary",
     "Clear vocabulary search",
     "Edit \\(entry.preferredForm)",

@@ -31,7 +31,9 @@ import Testing
   #expect(source.contains("_cleanupAdmittedModelSettingsViewModel = ObservedObject("))
   #expect(source.contains("wrappedValue: runtime.cleanupAdmittedModelSettingsViewModel"))
   #expect(source.contains("AdmittedModelSettingsPresentation"))
-  #expect(source.contains(#"Section("Models")"#))
+  #expect(source.contains(
+    "SettingsSectionCard(DictationSettingsGroup.models.rawValue)"
+  ))
   #expect(source.contains(#"LabeledContent("Dictation")"#))
   #expect(source.contains(#"LabeledContent("Cleanup")"#))
   #expect(source.contains(
@@ -48,6 +50,12 @@ import Testing
   #expect(source.contains("presentation.modelLabel"))
   #expect(source.contains("if presentation.showsStatus"))
   #expect(source.contains("if presentation.showsDetail"))
+  #expect(source.contains("SettingsSectionCard(\"Interface\")"))
+  #expect(source.contains("SettingsSectionCard(\"Editor canvas\")"))
+  #expect(source.contains("SettingsSectionCard(\"Menu size\")"))
+  #expect(source.contains("ScrollView"))
+  #expect(runtimeSource.contains(".defaultSize(width: 840, height: 600)"))
+  #expect(runtimeSource.contains(".windowResizability(.contentMinSize)"))
   #expect(source.contains(".focusable(presentation.isKeyboardFocusable)"))
   #expect(source.contains(".accessibilityElement(children: .contain)"))
   #expect(source.contains(".accessibilityLabel(presentation.accessibilityLabel)"))
@@ -154,31 +162,31 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
 }
 #endif
 
-@Test func DictationSettingsUsesTheExistingMatchedGeometrySectionSelector() {
-  #expect(SettingsSection.allCases == [
-    .appearance, .editing, .shortcuts, .dictation, .vocabulary,
-  ])
-  #expect(SettingsSection.selectionEffectID == "settings-section")
+@Test func DictationSettingsExposesNativeSidebarGroupsAndMetadata() {
+  #expect(SettingsSection.fleckCases == [.editing, .appearance, .shortcuts])
+  #expect(SettingsSection.voiceAndWritingCases == [.dictation, .vocabulary])
+  #expect(SettingsSection.connectionCases == [.agents])
+  #expect(SettingsSection.editing.title == "General")
+  #expect(SettingsSection.editing.description ==
+    "Choose how Fleck edits and organizes your notes.")
+  #expect(!SettingsSection.editing.systemImage.isEmpty)
 }
 
 @Test @MainActor
-func DictationSettingsSelectorFitsNormalAndAccessibilityLayoutsWithoutClipping() {
+func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throws {
   var selection = SettingsSection.appearance
   let selected = Binding(
     get: { selection },
     set: { selection = $0 }
   )
 
-  for (width, dynamicTypeSize) in [
-    (520.0, DynamicTypeSize.large),
-    (320.0, DynamicTypeSize.accessibility3),
-  ] {
+  for dynamicTypeSize in [DynamicTypeSize.large, DynamicTypeSize.accessibility3] {
     let host = NSHostingView(
-      rootView: SettingsSectionSelector(selection: selected)
+      rootView: SettingsSectionSidebar(selection: selected)
         .environment(\.dynamicTypeSize, dynamicTypeSize)
-        .frame(width: width, height: 64)
+        .frame(width: 200, height: 520)
     )
-    host.frame = NSRect(x: 0, y: 0, width: width, height: 64)
+    host.frame = NSRect(x: 0, y: 0, width: 200, height: 520)
     let window = NSWindow(
       contentRect: host.frame,
       styleMask: [.borderless],
@@ -188,19 +196,40 @@ func DictationSettingsSelectorFitsNormalAndAccessibilityLayoutsWithoutClipping()
     window.contentView = host
     window.orderFront(nil)
     host.layoutSubtreeIfNeeded()
+    await settleSettingsHost(host)
 
-    let visibleFrames = settingsSelectorDescendants(of: host)
+    let visibleFrames = settingsSidebarDescendants(of: host)
       .filter { !$0.isHidden && $0.alphaValue > 0 && !$0.bounds.isEmpty }
       .map { $0.convert($0.bounds, to: host) }
     #expect(!visibleFrames.isEmpty)
     #expect(visibleFrames.allSatisfy { host.bounds.insetBy(dx: -1, dy: -1).contains($0) })
+
+    let table = try #require(settingsSidebarTableView(of: host))
+    let outline = try #require(table as? NSOutlineView)
+    let selectableRows = (0..<outline.numberOfRows).filter { row in
+      guard let item = outline.item(atRow: row) else { return false }
+      return !(outline.delegate?.outlineView?(outline, isGroupItem: item) ?? false)
+    }
+    let vocabularyIndex = try #require(SettingsSection.allCases.firstIndex(of: .vocabulary))
+    try #require(selectableRows.indices.contains(vocabularyIndex))
+    let vocabularyRow = selectableRows[vocabularyIndex]
+    window.makeKeyAndOrderFront(nil)
+    table.selectRowIndexes(IndexSet(integer: vocabularyRow), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: table
+    )
+    await settleSettingsHost(host)
+
+    #expect(selection == .vocabulary)
+    #expect(table.selectedRow == vocabularyRow)
 
     window.contentView = nil
     window.orderOut(nil)
   }
 }
 
-@Test func DictationSettingsSelectorProvidesFullAndCompactAccessibilityContracts() throws {
+@Test func DictationSettingsUsesNativeSidebarAccessibilityAndSelectionContracts() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -210,16 +239,761 @@ func DictationSettingsSelectorFitsNormalAndAccessibilityLayoutsWithoutClipping()
     encoding: .utf8
   )
 
-  #expect(source.contains("accessibilityLabel(section.rawValue)"))
-  #expect(source.contains("Picker(\"Settings section\", selection: $selection)"))
-  #expect(source.contains("accessibilityLabel(\"Settings section\")"))
-  #expect(source.contains("accessibilityValue(selection.rawValue)"))
-  #expect(source.contains("accessibilityHint(\"Chooses which Fleck settings to show\")"))
+  #expect(source.contains("struct SettingsSectionSidebar: View"))
+  #expect(source.contains("List(selection: $selection)"))
+  #expect(source.contains(".listStyle(.sidebar)"))
+  #expect(source.contains(".tag(section)"))
+  #expect(source.contains(".accessibilityLabel(\"Settings sections\")"))
+  #expect(source.contains("SettingsSidebarSurface"))
+  #expect(source.contains("SettingsPageHeaderProbe"))
+  #expect(source.contains("settings-page-header"))
+  #expect(source.contains("Toggle(isOn: $isOn)"))
+  #expect(!source.contains("Toggle(\"\", isOn: $isOn)"))
+  #expect(source.contains(".accessibilityLabel(title)"))
+  #expect(source.contains(".accessibilityHint(detail)"))
+  #expect(source.contains(".accessibilityIdentifier(title)"))
+  #expect(source.contains("Create lists automatically"))
+  #expect(source.contains("Recognize list-shaped lines while you edit."))
+  #expect(source.contains("Confirm before moving notes to Trash"))
+  #expect(source.contains("Ask before a note is moved to the Trash folder."))
+  #expect(source.contains("Launch at login"))
+  #expect(source.contains("Start Fleck automatically when you sign in."))
+  #expect(!source.contains("NavigationSplitView"))
+  #expect(!source.contains("NavigationSplitViewVisibility"))
+  #expect(!source.contains("navigationSplitViewColumnWidth"))
+  #expect(!source.contains("SettingsSectionSelector"))
+  #expect(!source.contains("matchedGeometryEffect"))
+  #expect(!source.contains("Picker(\"Settings section\""))
+}
+
+@Test func SettingsSidebarUsesTransparentListAndVocabularyKeepsOneTeachingHeadline() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains(".scrollContentBackground(.hidden)"))
+  #expect(source.contains(".background(Color.clear)"))
+  #expect(SettingsSection.vocabulary.description ==
+    "Manage personal vocabulary and dictation corrections.")
+  #expect(SettingsSection.vocabulary.description !=
+    "Teach Fleck the words and spellings that matter to you.")
+}
+
+@Test func DictationSettingsUsesFleckNeutralGlassContractWithAdaptiveFallback() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(source.contains("Color.black.opacity(0.10)"))
+  #expect(source.contains("Glass.regular.tint(Color.black.opacity(0.18))"))
+  #expect(source.contains("shape.fill(.ultraThinMaterial)"))
+  #expect(source.contains("if reduceTransparency"))
+  #expect(source.contains("Color(nsColor: .windowBackgroundColor)"))
+}
+
+@Test func DictationSettingsUsesReadinessCaptureAndHistoryGroups() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(DictationSettingsGroup.allCases.map(\.rawValue) == [
+    "Status",
+    "Models",
+    "Capture",
+    "Experience & history",
+    "Privacy",
+  ])
+  #expect(source.contains("private var readiness"))
+  #expect(source.contains("SettingsSectionCard(DictationSettingsGroup.capture.rawValue)"))
+  #expect(source.contains(
+    "SettingsSectionCard(DictationSettingsGroup.experience.rawValue)"
+  ))
+  #expect(source.contains("isReady ? \"Ready\" : \"Needs attention\""))
+  #expect(source.contains("SettingsSectionCard(DictationSettingsGroup.models.rawValue)"))
+  #expect(source.contains("DisclosureGroup(DictationSettingsGroup.privacy.rawValue)"))
+  #expect(!source.contains("SettingsSectionCard(\"Controls\")"))
+}
+
+@Test func DictationSettingsRendersItsDestinationGroupsInReadingOrder() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let source = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let dictationStart = try #require(source.range(of: "private var dictation: some View"))
+  let vocabularyStart = try #require(
+    source.range(of: "private var vocabulary:", range: dictationStart.upperBound..<source.endIndex)
+  )
+  let dictationSource = source[dictationStart.lowerBound..<vocabularyStart.lowerBound]
+  let markers = [
+    "        readiness",
+    "        models",
+    "        capture",
+    "        experienceAndHistory",
+    "        DisclosureGroup(DictationSettingsGroup.privacy.rawValue)",
+  ]
+  var cursor = dictationSource.startIndex
+  for marker in markers {
+    let next = try #require(dictationSource.range(of: marker, range: cursor..<dictationSource.endIndex))
+    cursor = next.upperBound
+  }
+}
+
+@Test @MainActor
+func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let sizes = [
+    NSSize(width: 840, height: 600),
+    NSSize(width: 760, height: 520),
+  ]
+  let destinations = SettingsSection.allCases
+
+  for size in sizes {
+    let host = NSHostingView(
+      rootView: SettingsView(runtime: fixture.runtime)
+        .environmentObject(fixture.appState)
+        .environment(\.dynamicTypeSize, .large)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(origin: .zero, size: size),
+      styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "Settings"
+    let toolbar = NSToolbar(identifier: "settings-hosted-test-toolbar-\(Int(size.width))")
+    window.toolbar = toolbar
+    window.toolbarStyle = .unifiedCompact
+    #expect(window.toolbar === toolbar)
+    #expect(window.toolbarStyle == .unifiedCompact)
+    window.contentView = host
+    window.setContentSize(size)
+    window.makeKeyAndOrderFront(nil)
+    await settleSettingsHost(host)
+
+    #expect(window.standardWindowButton(.closeButton)?.isHidden == false)
+    #expect(window.standardWindowButton(.miniaturizeButton)?.isHidden == false)
+    #expect(window.standardWindowButton(.zoomButton)?.isHidden == false)
+    let contentView = try #require(window.contentView)
+    #expect(settingsNativeSplitViewController(of: contentView) == nil)
+    let toolbarItemIdentifiers = toolbar.items.map(\.itemIdentifier)
+    #expect(!toolbarItemIdentifiers.contains(.toggleSidebar))
+    #expect(!toolbarItemIdentifiers.contains(.sidebarTrackingSeparator))
+    let sidebar = try #require(settingsSidebarTableView(of: host))
+    let outline = try #require(sidebar as? NSOutlineView)
+    let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
+    let sidebarSurface = try #require(settingsSidebarSurface(of: host))
+    let baselineContentFrame = contentView.convert(contentView.bounds, to: nil)
+    let baselineLayoutRect = window.contentLayoutRect
+    let baselineSidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+    let baselineSidebarSurfaceFrame = sidebarScroll.convert(sidebarScroll.bounds, to: nil)
+    let outerSidebarSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+
+    #expect(window.isResizable)
+    #expect(!baselineContentFrame.isEmpty)
+    #expect(!baselineLayoutRect.isEmpty)
+    #expect(!baselineSidebarFrame.isEmpty)
+    #expect(!outerSidebarSurfaceFrame.isEmpty)
+    #expect(outerSidebarSurfaceFrame.minX >= baselineContentFrame.minX + 8)
+    #expect(outerSidebarSurfaceFrame.maxX <= baselineContentFrame.maxX - 8)
+    let trafficLightButtons: [NSButton?] = [
+      window.standardWindowButton(.closeButton),
+      window.standardWindowButton(.miniaturizeButton),
+      window.standardWindowButton(.zoomButton),
+    ]
+    let trafficLightFrames: [NSRect] = trafficLightButtons.compactMap { button in
+      guard let button else { return nil }
+      return button.convert(button.bounds, to: nil)
+    }
+    #expect(!trafficLightFrames.isEmpty)
+    #expect(trafficLightFrames.allSatisfy {
+      settingsRoundedSurfaceContains(
+        $0,
+        in: outerSidebarSurfaceFrame,
+        cornerRadius: 22,
+        margin: 8
+      )
+    })
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(baselineSidebarFrame) })
+
+    for destination in destinations {
+      let row = try #require(settingsSidebarRow(destination, in: outline))
+      outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+      NotificationCenter.default.post(
+        name: NSTableView.selectionDidChangeNotification,
+        object: outline
+      )
+      await settleSettingsHost(host)
+
+      #expect(outline.selectedRow == row)
+
+      let contentFrame = contentView.convert(contentView.bounds, to: nil)
+      #expect(approximatelyEqual(contentFrame, baselineContentFrame))
+      #expect(approximatelyEqual(window.contentLayoutRect, baselineLayoutRect))
+
+      let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+      let sidebarSurfaceFrame = sidebarScroll.convert(sidebarScroll.bounds, to: nil)
+      #expect(!sidebar.isHidden)
+      #expect(sidebar.alphaValue > 0)
+      #expect(baselineLayoutRect.contains(sidebarFrame.center))
+      #expect(approximatelyEqual(sidebarFrame, baselineSidebarFrame))
+      #expect(approximatelyEqual(sidebarSurfaceFrame, baselineSidebarSurfaceFrame))
+      #expect(approximatelyEqual(
+        sidebarSurface.convert(sidebarSurface.bounds, to: nil),
+        outerSidebarSurfaceFrame
+      ))
+      #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+
+      let detailScroll = settingsHostedScrollViews(of: host)
+        .first { $0 !== sidebarScroll }
+      #expect(detailScroll != nil)
+      guard let detailScroll else { continue }
+      #expect(detailScroll !== sidebarScroll)
+      let detailDocument = try #require(detailScroll.documentView)
+      #expect(!detailDocument.bounds.isEmpty)
+      #expect(!detailScroll.contentView.bounds.isEmpty)
+
+      let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+      #expect(!detailFrame.isEmpty)
+      #expect(baselineLayoutRect.contains(detailFrame.center))
+      let detailDocumentFrame = detailDocument.convert(detailDocument.bounds, to: nil)
+      #expect(detailDocumentFrame.minX >= baselineLayoutRect.minX - 1)
+      #expect(detailDocumentFrame.maxX <= baselineLayoutRect.maxX + 1)
+      #expect(detailDocumentFrame.maxY <= baselineLayoutRect.maxY + 1)
+      #expect(detailDocumentFrame.intersects(baselineLayoutRect))
+      let detailTopGap = baselineLayoutRect.maxY - detailDocumentFrame.maxY
+      #expect(detailTopGap >= -1)
+      #expect(detailTopGap <= 20)
+      let pageTitle = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
+      )
+      let pageTitleFrame = pageTitle.convert(pageTitle.bounds, to: nil)
+      #expect(!pageTitleFrame.isEmpty)
+      #expect(pageTitleFrame.minX >= detailDocumentFrame.minX - 1)
+      #expect(pageTitleFrame.maxX <= detailDocumentFrame.maxX + 1)
+      let pageTitleTopGap = baselineLayoutRect.maxY - pageTitleFrame.maxY
+      #expect(pageTitleTopGap >= -1)
+      #expect(pageTitleTopGap <= 20)
+
+    }
+
+    let detailScrollViews = settingsHostedScrollViews(of: host)
+      .filter { $0 !== sidebarScroll }
+    #expect(!detailScrollViews.isEmpty)
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+}
+
+@Test @MainActor
+func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let size = NSSize(width: 840, height: 600)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(origin: .zero, size: size),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.title = "Settings"
+  let toolbar = NSToolbar(identifier: "settings-hosted-inset-sidebar-toolbar")
+  window.toolbar = toolbar
+  window.toolbarStyle = .unifiedCompact
+  window.contentView = host
+  window.setContentSize(size)
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  let contentView = try #require(window.contentView)
+  let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+  let sidebar = try #require(settingsSidebarTableView(of: host))
+  let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
+  let sidebarSurface = try #require(settingsSidebarSurface(of: host))
+  let contentFrame = contentView.convert(contentView.bounds, to: nil)
+  let surfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+  let topInset = contentFrame.maxY - surfaceFrame.maxY
+  let bottomInset = surfaceFrame.minY - contentFrame.minY
+
+  #expect(surfaceFrame.minX >= contentFrame.minX + 8)
+  #expect(topInset >= 8)
+  #expect(topInset <= 12)
+  #expect(bottomInset >= 8)
+  #expect(bottomInset <= 12)
+  #expect(window.titleVisibility == .hidden)
+  #expect(window.titlebarSeparatorStyle == .none)
+  #expect(window.titlebarAppearsTransparent)
+
+  let trafficLightButtons: [NSButton?] = [
+    window.standardWindowButton(.closeButton),
+    window.standardWindowButton(.miniaturizeButton),
+    window.standardWindowButton(.zoomButton),
+  ]
+  let trafficLightFrames: [NSRect] = trafficLightButtons.compactMap { button in
+    guard let button else { return nil }
+    return button.convert(button.bounds, to: nil)
+  }
+  #expect(trafficLightFrames.count == 3)
+  #expect(trafficLightFrames.allSatisfy {
+    settingsRoundedSurfaceContains(
+      $0,
+      in: surfaceFrame,
+      cornerRadius: 22,
+      margin: 12
+    )
+  })
+
+  for destination in SettingsSection.allCases {
+    let row = try #require(settingsSidebarRow(destination, in: outline))
+    outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: outline
+    )
+    await settleSettingsHost(host)
+
+    #expect(outline.selectedRow == row)
+    let currentSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+    #expect(approximatelyEqual(currentSurfaceFrame, surfaceFrame))
+    let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+    #expect(!sidebar.isHidden)
+    #expect(!sidebarFrame.isEmpty)
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+
+    let detailScroll = try #require(
+      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+    )
+    let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+    #expect(!detailFrame.isEmpty)
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(detailFrame) })
+  }
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@Test @MainActor
+func DictationSettingsHostedWindowResetsDetailScrollWhenSwitchingDestinations()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let size = NSSize(width: 840, height: 600)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(origin: .zero, size: size),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.title = "Settings"
+  window.toolbar = NSToolbar(identifier: "settings-hosted-scroll-reset-toolbar")
+  window.toolbarStyle = .unifiedCompact
+  window.contentView = host
+  window.setContentSize(size)
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  let contentLayoutRect = window.contentLayoutRect
+  let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+  let sidebarTable = try #require(settingsSidebarTableView(of: host))
+  let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebarTable))
+
+  func select(_ destination: SettingsSection) async throws {
+    let row = try #require(settingsSidebarRow(destination, in: outline))
+    outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: outline
+    )
+    await settleSettingsHost(host)
+  }
+
+  try await select(.dictation)
+  let initialDetailScroll = try #require(
+    settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+  )
+  var previousDetailScroll = initialDetailScroll
+  let initialDocument = try #require(initialDetailScroll.documentView)
+  let initialBounds = initialDetailScroll.contentView.bounds
+  let initialDocumentFrame = initialDocument.frame
+  #expect(initialDocumentFrame.height > initialBounds.height + 1)
+
+  let maximumOriginY = max(
+    initialDocumentFrame.minY,
+    initialDocumentFrame.maxY - initialBounds.height
+  )
+  initialDetailScroll.contentView.scroll(
+    to: NSPoint(x: initialBounds.origin.x, y: maximumOriginY)
+  )
+  initialDetailScroll.reflectScrolledClipView(initialDetailScroll.contentView)
+  await settleSettingsHost(host)
+  #expect(
+    initialDetailScroll.contentView.bounds.origin.y > initialBounds.origin.y + 1
+  )
+
+  for destination in SettingsSection.allCases {
+    try await select(destination)
+
+    let detailScroll = try #require(
+      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+    )
+    #expect(detailScroll !== previousDetailScroll)
+    previousDetailScroll = detailScroll
+    let detailDocument = try #require(detailScroll.documentView)
+    let pageTitle = try #require(
+      settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
+    )
+    let pageTitleFrame = pageTitle.convert(pageTitle.bounds, to: nil)
+    #expect(!pageTitleFrame.isEmpty)
+    let pageTitleTopGap = contentLayoutRect.maxY - pageTitleFrame.maxY
+    #expect(pageTitleTopGap >= -1)
+    #expect(pageTitleTopGap <= 20)
+  }
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@Test @MainActor
+func DictationSettingsReduceTransparencyKeepsHostedSurfacesDistinctInLightAndDark()
+  async throws
+{
+  for (appearanceName, appearanceLabel) in [
+    (NSAppearance.Name.aqua, "light"),
+    (.darkAqua, "dark"),
+  ] {
+    let host = NSHostingView(
+      rootView: ZStack {
+        Color(nsColor: .windowBackgroundColor)
+        HStack(spacing: 24) {
+          SettingsSidebarSurface {
+            Color.clear
+              .frame(width: 180, height: 200)
+          }
+          .frame(width: 220, height: 260)
+
+          SettingsSectionCard("Card") {
+            Color.clear
+              .frame(maxWidth: .infinity, minHeight: 200)
+          }
+          .frame(width: 220)
+        }
+        .padding(20)
+      }
+      .environment(\._accessibilityReduceTransparency, true)
+      .frame(width: 520, height: 320)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 520, height: 320),
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.appearance = NSAppearance(named: appearanceName)
+    window.contentView = host
+    window.orderFront(nil)
+    await settleSettingsHost(host)
+
+    let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+    host.cacheDisplay(in: host.bounds, to: image)
+    let scaleX = CGFloat(image.pixelsWide) / host.bounds.width
+    let scaleY = CGFloat(image.pixelsHigh) / host.bounds.height
+    func color(at point: NSPoint) throws -> NSColor {
+      let x = min(image.pixelsWide - 1, max(0, Int(point.x * scaleX)))
+      let y = min(image.pixelsHigh - 1, max(0, Int(point.y * scaleY)))
+      return try #require(image.colorAt(x: x, y: y))
+    }
+
+    let rootColor = try color(at: NSPoint(x: 500, y: 160))
+    let sidebarColor = try color(at: NSPoint(x: 130, y: 160))
+    let cardColor = try color(at: NSPoint(x: 374, y: 160))
+    #expect(settingsColorDistance(rootColor, sidebarColor) > 0.01)
+    #expect(settingsColorDistance(sidebarColor, cardColor) > 0.01)
+
+    if let captureDirectory = ProcessInfo.processInfo.environment[
+      "FLECK_SETTINGS_REDUCE_TRANSPARENCY_CAPTURE_DIR"
+    ] {
+      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+      try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+      )
+      let captureURL = directory.appendingPathComponent(
+        "settings-reduce-transparency-" + appearanceLabel + ".png"
+      )
+      let pngData = try #require(
+        image.representation(using: .png, properties: [:])
+      )
+      try pngData.write(to: captureURL)
+    }
+
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+}
+
+@Test @MainActor
+func DictationSettingsHostedWindowKeepsChromeAfterSameWindowResize() async throws {
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.title = "Settings"
+  let toolbar = NSToolbar(identifier: "settings-hosted-resize-toolbar")
+  window.toolbar = toolbar
+  window.toolbarStyle = .unifiedCompact
+  window.contentView = host
+  window.setContentSize(NSSize(width: 840, height: 600))
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  for size in [
+    NSSize(width: 840, height: 600),
+    NSSize(width: 760, height: 520),
+    NSSize(width: 840, height: 600),
+  ] {
+    window.setContentSize(size)
+    await settleSettingsHost(host)
+
+    let contentView = try #require(window.contentView)
+    let contentFrame = contentView.convert(contentView.bounds, to: nil)
+    let layoutRect = window.contentLayoutRect
+    let sidebar = try #require(settingsSidebarTableView(of: host))
+    let outline = try #require(sidebar as? NSOutlineView)
+    let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
+    let sidebarSurface = try #require(settingsSidebarSurface(of: host))
+    let sidebarSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+    let topInset = contentFrame.maxY - sidebarSurfaceFrame.maxY
+    let bottomInset = sidebarSurfaceFrame.minY - contentFrame.minY
+
+    #expect(!contentFrame.isEmpty)
+    #expect(!layoutRect.isEmpty)
+    #expect(sidebarSurfaceFrame.minX >= contentFrame.minX + 8)
+    #expect(sidebarSurfaceFrame.maxX <= contentFrame.maxX - 8)
+    #expect(topInset >= 8)
+    #expect(topInset <= 12)
+    #expect(bottomInset >= 8)
+    #expect(bottomInset <= 12)
+    #expect(window.toolbar === toolbar)
+    let toolbarItemIdentifiers = toolbar.items.map(\.itemIdentifier)
+    #expect(!toolbarItemIdentifiers.contains(.toggleSidebar))
+    #expect(!toolbarItemIdentifiers.contains(.sidebarTrackingSeparator))
+
+    let trafficLightButtons: [NSButton?] = [
+      window.standardWindowButton(.closeButton),
+      window.standardWindowButton(.miniaturizeButton),
+      window.standardWindowButton(.zoomButton),
+    ]
+    let trafficLightFrames = trafficLightButtons.compactMap { button in
+      button.map { $0.convert($0.bounds, to: nil) }
+    }
+    #expect(trafficLightFrames.count == 3)
+    #expect(trafficLightFrames.allSatisfy {
+      settingsRoundedSurfaceContains(
+        $0,
+        in: sidebarSurfaceFrame,
+        cornerRadius: 22,
+        margin: 12
+      )
+    })
+
+    let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+    #expect(!sidebar.isHidden)
+    #expect(!sidebarFrame.isEmpty)
+    #expect(layoutRect.contains(sidebarFrame.center))
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+
+    let detailScroll = try #require(
+      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+    )
+    let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+    #expect(!detailFrame.isEmpty)
+    #expect(layoutRect.contains(detailFrame.center))
+    #expect(trafficLightFrames.allSatisfy { !$0.intersects(detailFrame) })
+
+    let detailDocument = try #require(detailScroll.documentView)
+    let pageTitle = try #require(
+      settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
+    )
+    let pageTitleFrame = pageTitle.convert(pageTitle.bounds, to: nil)
+    let pageTitleTopGap = layoutRect.maxY - pageTitleFrame.maxY
+    #expect(!pageTitleFrame.isEmpty)
+    #expect(pageTitleTopGap >= -1)
+    #expect(pageTitleTopGap <= 20)
+    #expect(outline.numberOfRows > 0)
+  }
+
+  window.contentView = nil
+  window.orderOut(nil)
 }
 
 @MainActor
-private func settingsSelectorDescendants(of view: NSView) -> [NSView] {
-  view.subviews + view.subviews.flatMap(settingsSelectorDescendants)
+private func settingsSidebarDescendants(of view: NSView) -> [NSView] {
+  view.subviews + view.subviews.flatMap(settingsSidebarDescendants)
+}
+
+@MainActor
+private func settingsSidebarTableView(of view: NSView) -> NSTableView? {
+  settingsSidebarDescendants(of: view).compactMap { $0 as? NSTableView }.first
+}
+
+@MainActor
+private func settingsNativeSplitViewController(of view: NSView) -> NSSplitViewController? {
+  var responder: NSResponder? = view
+  while let current = responder {
+    if let controller = current as? NSSplitViewController {
+      return controller
+    }
+    responder = current.nextResponder
+  }
+
+  for subview in view.subviews {
+    if let controller = settingsNativeSplitViewController(of: subview) {
+      return controller
+    }
+  }
+  return nil
+}
+
+@MainActor
+private func settingsSidebarSurface(of view: NSView) -> NSView? {
+  if view.accessibilityIdentifier() == "settings-sidebar-surface" {
+    return view
+  }
+  return settingsSidebarDescendants(of: view)
+    .first { $0.accessibilityIdentifier() == "settings-sidebar-surface" }
+}
+
+@MainActor
+private func settingsView(withAccessibilityIdentifier identifier: String, in view: NSView)
+  -> NSView?
+{
+  if view.accessibilityIdentifier() == identifier {
+    return view
+  }
+  return settingsSidebarDescendants(of: view)
+    .first { $0.accessibilityIdentifier() == identifier }
+}
+
+@MainActor
+private func settingsRoundedSurfaceContains(
+  _ candidate: NSRect,
+  in surface: NSRect,
+  cornerRadius: CGFloat,
+  margin: CGFloat
+) -> Bool {
+  guard surface.insetBy(dx: margin, dy: margin).contains(candidate) else { return false }
+  let path = NSBezierPath(
+    roundedRect: surface,
+    xRadius: cornerRadius,
+    yRadius: cornerRadius
+  )
+  let corners = [
+    NSPoint(x: candidate.minX, y: candidate.minY),
+    NSPoint(x: candidate.minX, y: candidate.maxY),
+    NSPoint(x: candidate.maxX, y: candidate.minY),
+    NSPoint(x: candidate.maxX, y: candidate.maxY),
+  ]
+  return corners.allSatisfy(path.contains)
+}
+
+@MainActor
+private func settingsSidebarRow(_ section: SettingsSection, in outline: NSOutlineView) -> Int? {
+  let selectableRows = (0..<outline.numberOfRows).filter { row in
+    guard let item = outline.item(atRow: row) else { return false }
+    return !(outline.delegate?.outlineView?(outline, isGroupItem: item) ?? false)
+  }
+  guard let sectionIndex = SettingsSection.allCases.firstIndex(of: section),
+    selectableRows.indices.contains(sectionIndex)
+  else {
+    return nil
+  }
+  return selectableRows[sectionIndex]
+}
+
+@MainActor
+private func settingsHostedScrollViews(of view: NSView) -> [NSScrollView] {
+  var scrollViews: [NSScrollView] = []
+  if let scrollView = view as? NSScrollView {
+    scrollViews.append(scrollView)
+  }
+  for subview in view.subviews {
+    scrollViews.append(contentsOf: settingsHostedScrollViews(of: subview))
+  }
+  return scrollViews
+}
+
+@MainActor
+private func settingsScrollViewAncestor(of view: NSView) -> NSScrollView? {
+  var current = view.superview
+  while let candidate = current {
+    if let scrollView = candidate as? NSScrollView {
+      return scrollView
+    }
+    current = candidate.superview
+  }
+  return nil
+}
+
+private extension NSRect {
+  var center: NSPoint {
+    NSPoint(x: midX, y: midY)
+  }
+}
+
+private func approximatelyEqual(_ lhs: NSRect, _ rhs: NSRect, tolerance: CGFloat = 1) -> Bool {
+  abs(lhs.minX - rhs.minX) <= tolerance
+    && abs(lhs.minY - rhs.minY) <= tolerance
+    && abs(lhs.width - rhs.width) <= tolerance
+    && abs(lhs.height - rhs.height) <= tolerance
+}
+
+private func settingsColorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
+  guard let lhs = lhs.usingColorSpace(.sRGB), let rhs = rhs.usingColorSpace(.sRGB) else {
+    return 0
+  }
+  let red = lhs.redComponent - rhs.redComponent
+  let green = lhs.greenComponent - rhs.greenComponent
+  let blue = lhs.blueComponent - rhs.blueComponent
+  return (red * red + green * green + blue * blue).squareRoot()
 }
 
 @Test func DictationSettingsSeparatesVocabularyAndOnlySurfacesAvailabilityProblems() throws {
@@ -237,7 +1011,7 @@ private func settingsSelectorDescendants(of view: NSView) -> [NSView] {
   #expect(source.contains("PersonalDictionarySettingsSection("))
   #expect(source.contains("private var availabilityIssues"))
   #expect(source.contains(".filter { !$0.available }"))
-  #expect(source.contains("Section(\"Needs attention\")"))
+  #expect(source.contains("isReady ? \"Ready\" : \"Needs attention\""))
   #expect(!source.contains("Section(\"Availability\")"))
 
   let dictationStart = try #require(source.range(of: "private var dictation:"))
