@@ -547,6 +547,7 @@ func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
   #expect(bottomInset >= 8)
   #expect(bottomInset <= 12)
   #expect(window.titleVisibility == .hidden)
+  #expect(window.titlebarSeparatorStyle == .none)
 
   let trafficLightButtons: [NSButton?] = [
     window.standardWindowButton(.closeButton),

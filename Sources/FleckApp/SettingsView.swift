@@ -207,6 +207,7 @@
     func scheduleTrafficLightAdjustment() {
       guard let window else { return }
       window.titleVisibility = .hidden
+      window.titlebarSeparatorStyle = .none
       guard !adjustmentScheduled else { return }
       adjustmentScheduled = true
       DispatchQueue.main.async { [weak self] in
