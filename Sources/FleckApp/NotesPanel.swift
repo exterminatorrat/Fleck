@@ -1815,21 +1815,22 @@
           setUnfiledCompact(!isUnfiledCompact)
         }
 
-        if showsUnfiledDisclosure {
-          Button {
-            setUnfiledCompact(!isUnfiledCompact)
-          } label: {
-            Image(systemName: isUnfiledCompact ? "chevron.right" : "chevron.left")
-              .font(.caption2)
-              .foregroundStyle(.secondary)
-              .frame(width: 28, height: 28)
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel(
-            isUnfiledCompact ? "Expand Unfiled" : "Collapse Unfiled"
-          )
+        Button {
+          setUnfiledCompact(!isUnfiledCompact)
+        } label: {
+          Image(systemName: isUnfiledCompact ? "chevron.right" : "chevron.left")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .frame(width: 28, height: 24)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .opacity(showsUnfiledDisclosure ? 1 : 0)
+        .allowsHitTesting(showsUnfiledDisclosure)
+        .accessibilityHidden(!showsUnfiledDisclosure)
+        .accessibilityLabel(
+          isUnfiledCompact ? "Expand Unfiled" : "Collapse Unfiled"
+        )
       }
       .fixedSize(horizontal: true, vertical: false)
       .onHover { isUnfiledHovered = $0 }
@@ -2068,13 +2069,7 @@
     }
 
     private func setUnfiledCompact(_ compact: Bool) {
-      if reduceMotion {
-        appState.updatePreferences { $0.isUnfiledCompact = compact }
-      } else {
-        withAnimation(motion.quick) {
-          appState.updatePreferences { $0.isUnfiledCompact = compact }
-        }
-      }
+      appState.updatePreferences { $0.isUnfiledCompact = compact }
     }
 
     private var motion: AppMotion {

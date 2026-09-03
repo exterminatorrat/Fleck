@@ -2632,7 +2632,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!rowLabel.contains(".fixedSize(horizontal: true, vertical: false)"))
 }
 
-@Test func compactUnfiledDisclosureUsesForgivingRectangularHitTarget() throws {
+@Test func compactUnfiledDisclosureMatchesFolderToolbarHeight() throws {
   let source = try notesPanelSource()
   let navigator = try #require(
     source.components(separatedBy: "private struct FolderNavigator").last
@@ -2641,14 +2641,19 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     navigator.components(separatedBy: "private var rootRow").last?
       .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
   )
-  let disclosure = try #require(
-    rootRow.components(separatedBy: "if showsUnfiledDisclosure").last?
-      .components(separatedBy: ".onHover").first
+  let disclosureStart = try #require(
+    rootRow.range(of: "Button {\n          setUnfiledCompact(!isUnfiledCompact)")
   )
+  let disclosureEnd = try #require(rootRow.range(of: ".onHover"))
+  let disclosure = rootRow[disclosureStart.lowerBound..<disclosureEnd.lowerBound]
 
-  #expect(disclosure.contains(".frame(width: 28, height: 28)"))
+  #expect(!rootRow.contains("if showsUnfiledDisclosure"))
+  #expect(disclosure.contains(".frame(width: 28, height: 24)"))
   #expect(disclosure.contains(".contentShape(Rectangle())"))
   #expect(disclosure.contains(".buttonStyle(.plain)"))
+  #expect(disclosure.contains(".opacity(showsUnfiledDisclosure ? 1 : 0)"))
+  #expect(disclosure.contains(".allowsHitTesting(showsUnfiledDisclosure)"))
+  #expect(disclosure.contains(".accessibilityHidden(!showsUnfiledDisclosure)"))
   #expect(disclosure.contains("Expand Unfiled"))
   #expect(disclosure.contains("Collapse Unfiled"))
 }
@@ -3127,6 +3132,68 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   )
 }
 
+@Test @MainActor func hostedUnfiledDisclosureKeepsFolderToolbarFramesStable() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = try Folder(id: UUID(), name: "School")
+  let unfiledNote = Note(title: "Unfiled note", body: "Body")
+  let folderNote = Note(
+    title: "School note",
+    body: "Body",
+    folderID: folder.id
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(
+      notes: [unfiledNote, folderNote],
+      selectedNoteID: unfiledNote.id,
+      folders: [folder]
+    )
+  )
+  state.updatePreferences {
+    $0.accentHex = "#00FF00"
+    $0.isUnfiledCompact = true
+    $0.showFormattingBar = false
+  }
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(
+    root: root,
+    state: state,
+    commands: commands,
+    accentHex: "#00FF00"
+  )
+  window.appearance = NSAppearance(named: .darkAqua)
+  defer { window.orderOut(nil) }
+  await settleHostedView(host)
+  let editor = try #require(hostedPanelEditor(in: host))
+  #expect(window.makeFirstResponder(editor))
+  await settleHostedView(host)
+
+  let before = hostedNavigatorKeyViewFrames(in: host)
+  let beforeHostSize = host.bounds.size
+  let beforeEditorFrame = host.convert(editor.bounds, from: editor)
+  let unfiledControl = try #require(hostedNavigatorKeyViews(in: host).first)
+  #expect(window.makeFirstResponder(unfiledControl))
+  await settleHostedView(host)
+  let focused = hostedNavigatorKeyViewFrames(in: host)
+
+  #expect(state.preferences.isUnfiledCompact)
+  #expect(focused == before)
+
+  try sendHostedClick(at: NSPoint(x: 83, y: 60), in: host, to: window)
+  forceHostedViewUpdate(host)
+  let expandingFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  try await Task.sleep(for: .milliseconds(300))
+  await settleHostedView(host)
+  let expandedFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+
+  #expect(!state.preferences.isUnfiledCompact)
+  #expect(expandingFolderFrame == expandedFolderFrame)
+  #expect(host.bounds.size == beforeHostSize)
+  #expect(host.convert(editor.bounds, from: editor) == beforeEditorFrame)
+}
+
 @Test @MainActor func hostedFolderKeyboardFocusAddsOutlineToUnselectedRow() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3551,6 +3618,37 @@ private func hostedDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T?
     if let match = hostedDescendant(in: subview, as: type) { return match }
   }
   return nil
+}
+
+@MainActor
+private func hostedNavigatorKeyViewFrames(in view: NSView) -> [CGRect] {
+  hostedNavigatorKeyViews(in: view).map { $0.convert($0.bounds, to: view) }
+}
+
+@MainActor
+private func hostedSchoolFolderFrame(in view: NSView) -> CGRect? {
+  hostedNavigatorKeyViewFrames(in: view).first { abs($0.width - 108) < 0.5 }
+}
+
+@MainActor
+private func hostedNavigatorKeyViews(in view: NSView) -> [NSView] {
+  var views: [NSView] = []
+  func collect(_ candidate: NSView) {
+    if String(describing: type(of: candidate)) == "KeyViewProxy" {
+      let frame = candidate.convert(candidate.bounds, to: view)
+      if frame.minY >= 42, frame.maxY <= 82 {
+        views.append(candidate)
+      }
+    }
+    for subview in candidate.subviews { collect(subview) }
+  }
+  collect(view)
+  return views.sorted { lhs, rhs in
+    let lhsFrame = lhs.convert(lhs.bounds, to: view)
+    let rhsFrame = rhs.convert(rhs.bounds, to: view)
+    if lhsFrame.minX == rhsFrame.minX { return lhsFrame.width < rhsFrame.width }
+    return lhsFrame.minX < rhsFrame.minX
+  }
 }
 
 @MainActor
