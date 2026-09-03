@@ -111,6 +111,7 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     candidates: [DictationRoutingCandidate],
     inboxID: UUID?
   ) async -> DictationRoutingDecision {
+    guard !Task.isCancelled else { return .inbox }
     let eligible = Self.eligibleDestinations(from: candidates.map(\.destination))
     guard !eligible.isEmpty else { return .inbox }
 
