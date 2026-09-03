@@ -693,6 +693,16 @@
     }
   }
 
+  enum EnhancedSpeechAudioTapHandler {
+    nonisolated static func makeHandler(
+      for streamConverter: EnhancedAudioStreamConverter
+    ) -> AVAudioNodeTapBlock {
+      { buffer, _ in
+        try? streamConverter.append(buffer)
+      }
+    }
+  }
+
   @MainActor
   private final class EnhancedSystemAudioCapture: EnhancedAudioCapturing {
     private var engine: AVAudioEngine?
@@ -737,10 +747,9 @@
       inputNode.installTap(
         onBus: 0,
         bufferSize: 1_024,
-        format: inputFormat
-      ) { buffer, _ in
-        try? streamConverter.append(buffer)
-      }
+        format: inputFormat,
+        block: EnhancedSpeechAudioTapHandler.makeHandler(for: streamConverter)
+      )
       tapInstalled = true
       engine.prepare()
       do {
