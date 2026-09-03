@@ -56,6 +56,7 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
   }
 
   private let osMajorVersion: @Sendable () -> Int
+  private let routingBudget: Duration
   private let cleanupGenerator: CleanupGenerator
   private let routingGenerator: RoutingGenerator
 
@@ -63,10 +64,12 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     osMajorVersion: @escaping @Sendable () -> Int = {
       ProcessInfo.processInfo.operatingSystemVersion.majorVersion
     },
+    routingBudget: Duration = .seconds(3),
     cleanupGenerator: @escaping CleanupGenerator = FoundationModelDictation.generateCleanup,
     routingGenerator: @escaping RoutingGenerator = FoundationModelDictation.generateRoute
   ) {
     self.osMajorVersion = osMajorVersion
+    self.routingBudget = routingBudget
     self.cleanupGenerator = cleanupGenerator
     self.routingGenerator = routingGenerator
   }
@@ -108,6 +111,7 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
     candidates: [DictationRoutingCandidate],
     inboxID: UUID?
   ) async -> DictationRoutingDecision {
+    guard !Task.isCancelled else { return .inbox }
     let eligible = Self.eligibleDestinations(from: candidates.map(\.destination))
     guard !eligible.isEmpty else { return .inbox }
 
@@ -117,20 +121,25 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
         transcript: transcript,
         eligibleDestinations: eligible
       ) {
+        guard !Task.isCancelled else { return .inbox }
         return .resolved(destinationID)
       }
     }
 
     guard osMajorVersion >= 26 else { return .inbox }
 
-    do {
-      switch try await routingGenerator(transcript, eligible) {
-      case .match(let noteID, .high) where eligible.contains(where: { $0.noteID == noteID }):
-        return .resolved(noteID)
-      default:
-        return .inbox
-      }
-    } catch {
+    let generated = await raceFoundationModelRoute(
+      generator: routingGenerator,
+      transcript: transcript,
+      candidates: eligible,
+      budget: routingBudget
+    )
+    guard !Task.isCancelled else { return .inbox }
+    switch generated {
+    case .decision(.match(let noteID, .high))
+      where eligible.contains(where: { $0.noteID == noteID }):
+      return .resolved(noteID)
+    default:
       return .inbox
     }
   }
@@ -601,6 +610,73 @@ private enum FoundationModelDictationError: Error {
   case usedRaw
 }
 
+private enum FoundationModelRoutingRaceResult: Sendable {
+  case decision(FoundationModelRouteDecision)
+  case fallback
+}
+
+private final class FoundationModelRoutingResolution: @unchecked Sendable {
+  private let lock = NSLock()
+  private var result: FoundationModelRoutingRaceResult?
+  private var continuation: CheckedContinuation<FoundationModelRoutingRaceResult, Never>?
+
+  func value() async -> FoundationModelRoutingRaceResult {
+    await withCheckedContinuation { continuation in
+      let existing = lock.withLock { () -> FoundationModelRoutingRaceResult? in
+        if let result { return result }
+        self.continuation = continuation
+        return nil
+      }
+      if let existing { continuation.resume(returning: existing) }
+    }
+  }
+
+  func resolve(_ result: FoundationModelRoutingRaceResult) {
+    let continuation = lock.withLock {
+      () -> CheckedContinuation<FoundationModelRoutingRaceResult, Never>? in
+      guard self.result == nil else { return nil }
+      self.result = result
+      let completion = self.continuation
+      self.continuation = nil
+      return completion
+    }
+    continuation?.resume(returning: result)
+  }
+}
+
+private func raceFoundationModelRoute(
+  generator: @escaping FoundationModelDictation.RoutingGenerator,
+  transcript: String,
+  candidates: [DictationDestination],
+  budget: Duration
+) async -> FoundationModelRoutingRaceResult {
+  let resolution = FoundationModelRoutingResolution()
+  let generatorTask = Task {
+    guard !Task.isCancelled else { return }
+    do {
+      resolution.resolve(.decision(try await generator(transcript, candidates)))
+    } catch {
+      resolution.resolve(.fallback)
+    }
+  }
+  let deadlineTask = Task {
+    do {
+      try await Task.sleep(for: budget)
+      resolution.resolve(.fallback)
+    } catch {
+      // The other race participant won and canceled this sleeper.
+    }
+  }
+  let result = await withTaskCancellationHandler {
+    await resolution.value()
+  } onCancel: {
+    resolution.resolve(.fallback)
+  }
+  generatorTask.cancel()
+  deadlineTask.cancel()
+  return result
+}
+
 #if canImport(FoundationModels)
 @available(macOS 26, *)
 struct FoundationModelCleanupResponder: Sendable {
@@ -635,11 +711,13 @@ extension FoundationModelDictation {
     osMajorVersion: @escaping @Sendable () -> Int = {
       ProcessInfo.processInfo.operatingSystemVersion.majorVersion
     },
+    routingBudget: Duration = .seconds(3),
     foundationModelResponder: FoundationModelCleanupResponder,
     routingGenerator: @escaping RoutingGenerator = FoundationModelDictation.generateRoute
   ) {
     self.init(
       osMajorVersion: osMajorVersion,
+      routingBudget: routingBudget,
       cleanupGenerator: { prompt, maximumOutputTokens in
         try await foundationModelResponder.generate(
           prompt: prompt,
