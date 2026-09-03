@@ -4334,6 +4334,44 @@ func EnhancedSpeechCancellationDoesNotDowngradeTheInstalledRuntime() async throw
   #expect(!capture.hasActiveResources)
 }
 
+@Test func EnhancedSpeechAudioTapHandlerCanRunOffMainActor() async throws {
+  let inputFormat = try #require(
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: 48_000,
+      channels: 1,
+      interleaved: false
+    )
+  )
+  let outputFormat = try #require(
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: 16_000,
+      channels: 1,
+      interleaved: false
+    )
+  )
+  let converter = try EnhancedAudioStreamConverter(
+    inputFormat: inputFormat,
+    outputFormat: outputFormat,
+    level: { _ in }
+  )
+  let buffer = try enhancedAudioBuffer(
+    format: inputFormat,
+    frameCount: 2_400,
+    value: 0.25
+  )
+  let handler = EnhancedSpeechAudioTapHandler.makeHandler(for: converter)
+
+  await Task.detached {
+    handler(buffer, AVAudioTime(hostTime: 0))
+  }.value
+  let samples = try converter.finishAndTakeSamples()
+
+  #expect(samples.count == 800)
+  #expect(abs((samples.last ?? 0) - 0.25) < 0.05)
+}
+
 @Test func EnhancedSpeechSequentialConversionDrainsTheFinalResamplerFrames() throws {
   let inputFormat = try #require(
     AVAudioFormat(
