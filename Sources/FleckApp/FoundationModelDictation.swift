@@ -121,6 +121,7 @@ struct FoundationModelDictation: TranscriptCleaning, DestinationRouting {
         transcript: transcript,
         eligibleDestinations: eligible
       ) {
+        guard !Task.isCancelled else { return .inbox }
         return .resolved(destinationID)
       }
     }

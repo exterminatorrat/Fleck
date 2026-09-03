@@ -568,6 +568,34 @@ private actor FoundationModelResponderProbe {
   #expect(recorder.count == 0)
 }
 
+@Test func FoundationModelDictationCancellationAfterEntryKeepsExactTitleInInboxWithoutAModel() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
+  let recorder = CallRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: {
+      withUnsafeCurrentTask { $0?.cancel() }
+      return 26
+    },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in
+      recorder.count += 1
+      return .match(noteID: chemistry.noteID, confidence: .high)
+    }
+  )
+
+  let destination = await Task {
+    await dictation.route(
+      transcript: "Please save this chemistry note.",
+      candidates: [inbox, chemistry],
+      inboxID: inbox.noteID
+    )
+  }.value
+
+  #expect(destination == .inbox)
+  #expect(recorder.count == 0)
+}
+
 @Test func FoundationModelDictationExposesItsExactEligibleTitleMatchForDynamicRouting() {
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let chemistry = DictationDestination(noteID: UUID(), title: "Chemistry")
