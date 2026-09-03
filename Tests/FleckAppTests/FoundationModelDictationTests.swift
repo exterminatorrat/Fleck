@@ -388,6 +388,81 @@ private actor FoundationModelResponderProbe {
   #expect(request.candidates == [project])
 }
 
+@Test func FoundationModelDictationBoundsNonCooperativeRoutingAndIgnoresALateMatch() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let project = DictationDestination(noteID: UUID(), title: "Project Delta")
+  let generator = FoundationModelRoutingGate()
+  let completions = FoundationModelRoutingCompletionRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    routingBudget: .milliseconds(20),
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in
+      await generator.generate(.match(noteID: project.noteID, confidence: .high))
+    }
+  )
+  let route = Task {
+    let decision = await dictation.route(
+      transcript: "Prepare the launch checklist.",
+      candidates: [inbox, project],
+      inboxID: inbox.noteID
+    )
+    await completions.record(decision)
+    return decision
+  }
+
+  await generator.waitUntilStarted()
+  let completedBeforeRelease = await waitForFoundationRoutingCompletion(
+    completions,
+    timeout: .seconds(1)
+  )
+  await generator.release()
+  let decision = await route.value
+  await generator.waitUntilReturned()
+  try? await Task.sleep(for: .milliseconds(20))
+
+  #expect(completedBeforeRelease)
+  #expect(decision == .inbox)
+  #expect(await completions.values == [.inbox])
+}
+
+@Test func FoundationModelDictationCallerCancellationBoundsANonCooperativeGenerator() async {
+  let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
+  let project = DictationDestination(noteID: UUID(), title: "Project Delta")
+  let generator = FoundationModelRoutingGate()
+  let completions = FoundationModelRoutingCompletionRecorder()
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    routingBudget: .seconds(1),
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in
+      await generator.generate(.match(noteID: project.noteID, confidence: .high))
+    }
+  )
+  let route = Task {
+    let decision = await dictation.route(
+      transcript: "Prepare the launch checklist.",
+      candidates: [inbox, project],
+      inboxID: inbox.noteID
+    )
+    await completions.record(decision)
+    return decision
+  }
+
+  await generator.waitUntilStarted()
+  route.cancel()
+  let completedBeforeRelease = await waitForFoundationRoutingCompletion(
+    completions,
+    timeout: .milliseconds(100)
+  )
+  await generator.release()
+  let decision = await route.value
+
+  #expect(completedBeforeRelease)
+  #expect(decision == .inbox)
+  #expect(await completions.values == [.inbox])
+}
+
 @Test func FoundationModelDictationRoutesLowConfidenceInvalidOrFailedResponsesToInbox() async {
   let inbox = DictationDestination(noteID: UUID(), title: "Inbox")
   let project = DictationDestination(noteID: UUID(), title: "Project Delta")
@@ -759,4 +834,51 @@ private final class CallRecorder: @unchecked Sendable {
 
 private final class ResponseIndex: @unchecked Sendable {
   var value = 0
+}
+
+private actor FoundationModelRoutingGate {
+  private var started = false
+  private var returned = false
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  func generate(_ decision: FoundationModelRouteDecision) async -> FoundationModelRouteDecision {
+    started = true
+    await withCheckedContinuation { continuation = $0 }
+    returned = true
+    return decision
+  }
+
+  func waitUntilStarted() async {
+    while !started { await Task.yield() }
+  }
+
+  func waitUntilReturned() async {
+    while !returned { await Task.yield() }
+  }
+
+  func release() {
+    continuation?.resume()
+    continuation = nil
+  }
+}
+
+private actor FoundationModelRoutingCompletionRecorder {
+  private(set) var values: [DictationRoutingDecision] = []
+
+  func record(_ value: DictationRoutingDecision) {
+    values.append(value)
+  }
+}
+
+private func waitForFoundationRoutingCompletion(
+  _ recorder: FoundationModelRoutingCompletionRecorder,
+  timeout: Duration
+) async -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: timeout)
+  while clock.now < deadline {
+    if await !recorder.values.isEmpty { return true }
+    try? await Task.sleep(for: .milliseconds(5))
+  }
+  return await !recorder.values.isEmpty
 }
