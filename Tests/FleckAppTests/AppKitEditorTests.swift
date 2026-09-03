@@ -2632,7 +2632,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!rowLabel.contains(".fixedSize(horizontal: true, vertical: false)"))
 }
 
-@Test func compactUnfiledDisclosureMatchesFolderToolbarHeight() throws {
+@Test func compactUnfiledDisclosureOverlaysPillWithoutReservingWidth() throws {
   let source = try notesPanelSource()
   let navigator = try #require(
     source.components(separatedBy: "private struct FolderNavigator").last
@@ -2641,21 +2641,31 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     navigator.components(separatedBy: "private var rootRow").last?
       .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
   )
-  let disclosureStart = try #require(
-    rootRow.range(of: "Button {\n          setUnfiledCompact(!isUnfiledCompact)")
-  )
-  let disclosureEnd = try #require(rootRow.range(of: ".onHover"))
-  let disclosure = rootRow[disclosureStart.lowerBound..<disclosureEnd.lowerBound]
+  #expect(rootRow.contains("ZStack(alignment: .leading)"))
+  #expect(rootRow.contains(".overlay(alignment: .leading)"))
+  #expect(rootRow.contains("if showsUnfiledDisclosure"))
+  #expect(rootRow.contains("Image(systemName: \"chevron.right\")"))
+  #expect(rootRow.contains(".frame(width: 28, height: 28)"))
+  #expect(rootRow.contains("systemImage: \"tray\""))
+  #expect(rootRow.contains("systemImageOpacity: showsUnfiledDisclosure ? 0 : 1"))
+  #expect(rootRow.contains(".rotationEffect(.degrees(disclosureSystemImageRotation))"))
+  #expect(rootRow.contains(".animation("))
+  #expect(rootRow.contains("reduceMotion ? nil : motion.quick"))
+  #expect(rootRow.contains("value: disclosureSystemImageRotation"))
+  #expect(rootRow.contains(".accessibilityLabel("))
+  #expect(rootRow.contains(".focusable()"))
+  #expect(rootRow.contains("Expand Unfiled"))
+  #expect(rootRow.contains("Collapse Unfiled"))
+  #expect(!rootRow.contains(".opacity(showsUnfiledDisclosure ? 1 : 0)"))
+  #expect(!rootRow.contains(".allowsHitTesting(showsUnfiledDisclosure)"))
+  #expect(!rootRow.contains(".accessibilityHidden(!showsUnfiledDisclosure)"))
 
-  #expect(!rootRow.contains("if showsUnfiledDisclosure"))
-  #expect(disclosure.contains(".frame(width: 28, height: 24)"))
-  #expect(disclosure.contains(".contentShape(Rectangle())"))
-  #expect(disclosure.contains(".buttonStyle(.plain)"))
-  #expect(disclosure.contains(".opacity(showsUnfiledDisclosure ? 1 : 0)"))
-  #expect(disclosure.contains(".allowsHitTesting(showsUnfiledDisclosure)"))
-  #expect(disclosure.contains(".accessibilityHidden(!showsUnfiledDisclosure)"))
-  #expect(disclosure.contains("Expand Unfiled"))
-  #expect(disclosure.contains("Collapse Unfiled"))
+  let rowLabel = try #require(
+    navigator.components(separatedBy: "private func rowLabel").last?
+      .components(separatedBy: "private func noteDropDelegate").first
+  )
+  #expect(rowLabel.contains("systemImageOpacity: Double = 1"))
+  #expect(rowLabel.contains(".opacity(systemImageOpacity)"))
 }
 
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
@@ -3171,17 +3181,31 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   await settleHostedView(host)
 
   let before = hostedNavigatorKeyViewFrames(in: host)
+  let beforeFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
   let beforeHostSize = host.bounds.size
   let beforeEditorFrame = host.convert(editor.bounds, from: editor)
   let unfiledControl = try #require(hostedNavigatorKeyViews(in: host).first)
+  let unfiledFrame = unfiledControl.convert(unfiledControl.bounds, to: host)
+  #expect(
+    !before.contains { frame in
+      abs(frame.width - 28) < 0.5 && abs(frame.height - 28) < 0.5
+    }
+  )
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
   let focused = hostedNavigatorKeyViewFrames(in: host)
 
   #expect(state.preferences.isUnfiledCompact)
-  #expect(focused == before)
+  #expect(focused.count == before.count)
+  #expect(hostedSchoolFolderFrame(in: host) == beforeFolderFrame)
+  #expect(host.bounds.size == beforeHostSize)
+  #expect(host.convert(editor.bounds, from: editor) == beforeEditorFrame)
 
-  try sendHostedClick(at: NSPoint(x: 83, y: 60), in: host, to: window)
+  try sendHostedClick(
+    at: NSPoint(x: unfiledFrame.minX + 14, y: unfiledFrame.midY),
+    in: host,
+    to: window
+  )
   forceHostedViewUpdate(host)
   let expandingFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
   try await Task.sleep(for: .milliseconds(300))
