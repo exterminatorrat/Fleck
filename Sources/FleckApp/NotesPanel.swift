@@ -1783,14 +1783,13 @@
 
     private var rootRow: some View {
       let unfiledNotes = appState.visibleNotes(in: nil)
-      return ZStack(alignment: .leading) {
+      return HStack(spacing: 0) {
         Button {
           onSelect(nil)
         } label: {
           rowLabel(
             name: "Unfiled",
             systemImage: "tray",
-            systemImageOpacity: showsUnfiledDisclosure ? 0 : 1,
             count: unfiledNotes.count,
             isSelected: activeFolderID == nil,
             isEmpty: unfiledNotes.isEmpty,
@@ -1815,25 +1814,18 @@
         .accessibilityAction(named: Text("Toggle Unfiled compact mode")) {
           setUnfiledCompact(!isUnfiledCompact)
         }
-      }
-      .overlay(alignment: .leading) {
+
         if showsUnfiledDisclosure {
           Button {
             setUnfiledCompact(!isUnfiledCompact)
           } label: {
-            Image(systemName: "chevron.right")
+            Image(systemName: isUnfiledCompact ? "chevron.right" : "chevron.left")
               .font(.caption2)
               .foregroundStyle(.secondary)
-              .rotationEffect(.degrees(disclosureSystemImageRotation))
-              .animation(
-                reduceMotion ? nil : motion.quick,
-                value: disclosureSystemImageRotation
-              )
-              .frame(width: 28, height: 28)
+              .frame(width: 28, height: 24)
               .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
-          .focusable()
           .accessibilityLabel(
             isUnfiledCompact ? "Expand Unfiled" : "Collapse Unfiled"
           )
@@ -1974,7 +1966,6 @@
     private func rowLabel(
       name: String,
       systemImage: String,
-      systemImageOpacity: Double = 1,
       count: Int,
       isSelected: Bool,
       isEmpty: Bool,
@@ -1985,7 +1976,6 @@
       HStack(spacing: 7) {
         Image(systemName: systemImage)
           .frame(width: 18)
-          .opacity(systemImageOpacity)
         if showsName {
           Text(name)
             .lineLimit(1)
@@ -2075,10 +2065,6 @@
 
     private var showsUnfiledDisclosure: Bool {
       !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled
-    }
-
-    private var disclosureSystemImageRotation: Double {
-      isUnfiledCompact ? 0 : 180
     }
 
     private func setUnfiledCompact(_ compact: Bool) {

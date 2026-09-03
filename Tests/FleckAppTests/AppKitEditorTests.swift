@@ -2632,7 +2632,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!rowLabel.contains(".fixedSize(horizontal: true, vertical: false)"))
 }
 
-@Test func compactUnfiledDisclosureOverlaysPillWithoutReservingWidth() throws {
+@Test func compactUnfiledDisclosurePreservesOriginalIconLayoutAtRowHeight() throws {
   let source = try notesPanelSource()
   let navigator = try #require(
     source.components(separatedBy: "private struct FolderNavigator").last
@@ -2641,19 +2641,20 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     navigator.components(separatedBy: "private var rootRow").last?
       .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
   )
-  #expect(rootRow.contains("ZStack(alignment: .leading)"))
-  #expect(rootRow.contains(".overlay(alignment: .leading)"))
+  #expect(rootRow.contains("HStack(spacing: 0)"))
   #expect(rootRow.contains("if showsUnfiledDisclosure"))
-  #expect(rootRow.contains("Image(systemName: \"chevron.right\")"))
-  #expect(rootRow.contains(".frame(width: 28, height: 28)"))
+  #expect(
+    rootRow.contains(
+      "Image(systemName: isUnfiledCompact ? \"chevron.right\" : \"chevron.left\")"
+    )
+  )
+  #expect(rootRow.contains(".frame(width: 28, height: 24)"))
   #expect(rootRow.contains("systemImage: \"tray\""))
-  #expect(rootRow.contains("systemImageOpacity: showsUnfiledDisclosure ? 0 : 1"))
-  #expect(rootRow.contains(".rotationEffect(.degrees(disclosureSystemImageRotation))"))
-  #expect(rootRow.contains(".animation("))
-  #expect(rootRow.contains("reduceMotion ? nil : motion.quick"))
-  #expect(rootRow.contains("value: disclosureSystemImageRotation"))
+  #expect(!rootRow.contains("systemImageOpacity"))
+  #expect(!rootRow.contains(".overlay(alignment:"))
+  #expect(!rootRow.contains(".rotationEffect"))
+  #expect(!rootRow.contains(".animation("))
   #expect(rootRow.contains(".accessibilityLabel("))
-  #expect(rootRow.contains(".focusable()"))
   #expect(rootRow.contains("Expand Unfiled"))
   #expect(rootRow.contains("Collapse Unfiled"))
   #expect(!rootRow.contains(".opacity(showsUnfiledDisclosure ? 1 : 0)"))
@@ -2664,8 +2665,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     navigator.components(separatedBy: "private func rowLabel").last?
       .components(separatedBy: "private func noteDropDelegate").first
   )
-  #expect(rowLabel.contains("systemImageOpacity: Double = 1"))
-  #expect(rowLabel.contains(".opacity(systemImageOpacity)"))
+  #expect(!rowLabel.contains("systemImageOpacity"))
 }
 
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
@@ -3194,15 +3194,17 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
   let focused = hostedNavigatorKeyViewFrames(in: host)
+  let focusedFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
 
   #expect(state.preferences.isUnfiledCompact)
   #expect(focused.count == before.count)
-  #expect(hostedSchoolFolderFrame(in: host) == beforeFolderFrame)
+  #expect(focusedFolderFrame.minX == beforeFolderFrame.minX + 28)
+  #expect(focusedFolderFrame.minY == beforeFolderFrame.minY)
   #expect(host.bounds.size == beforeHostSize)
   #expect(host.convert(editor.bounds, from: editor) == beforeEditorFrame)
 
   try sendHostedClick(
-    at: NSPoint(x: unfiledFrame.minX + 14, y: unfiledFrame.midY),
+    at: NSPoint(x: unfiledFrame.maxX + 14, y: unfiledFrame.midY),
     in: host,
     to: window
   )
