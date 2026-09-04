@@ -328,7 +328,99 @@ if [[ -L "$app_path" || ! -d "$app_path" ]]; then
   printf 'error: adjacent Fleck app is missing or unsafe: %s\n' "$app_path" >&2
   exit 1
 fi
-exec /usr/bin/open -n "$app_path"
+readonly intended_executable="$app_path/Contents/MacOS/Fleck"
+is_conflicting_fleck_gui() {
+  local executable="$1"
+  local bundle_path
+  [[ "$executable" == */Contents/MacOS/Fleck ]] || return 1
+  bundle_path="${executable%/Contents/MacOS/Fleck}"
+  case "${bundle_path##*/}" in
+    Fleck*.app) ;;
+    *) return 1 ;;
+  esac
+  [[ "$executable" != "$intended_executable" ]]
+}
+inventory_file=''
+remove_inventory() {
+  [[ -n "$inventory_file" ]] || return 0
+  if [[ -L "$inventory_file" || ! -f "$inventory_file" ]]; then
+    printf 'error: refusing to remove unsafe Fleck process inventory: %s\n' \
+      "$inventory_file" >&2
+    inventory_file=''
+    return 1
+  fi
+  if ! /usr/bin/find "$inventory_file" -maxdepth 0 -type f -delete; then
+    printf 'error: could not remove Fleck process inventory: %s\n' "$inventory_file" >&2
+    inventory_file=''
+    return 1
+  fi
+  inventory_file=''
+}
+cleanup_launcher() {
+  exit_code=$?
+  trap - EXIT HUP INT TERM
+  remove_inventory || exit_code=1
+  exit "$exit_code"
+}
+trap cleanup_launcher EXIT HUP INT TERM
+if ! inventory_file="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/fleck-pre-astra-launch.XXXXXX")"; then
+  printf '%s\n' 'error: could not create secure Fleck process inventory' >&2
+  exit 1
+fi
+capture_inventory() {
+  if ! /bin/ps -x -o pid=,comm= > "$inventory_file"; then
+    printf '%s\n' 'error: could not inspect running Fleck app processes; no app was opened' >&2
+    return 1
+  fi
+}
+retire_inventory() {
+  while IFS= read -r process; do
+    [[ "$process" =~ ^[[:space:]]*([0-9]+)[[:space:]](.*)$ ]] || continue
+    pid="${BASH_REMATCH[1]}"
+    executable="${BASH_REMATCH[2]}"
+    if ! is_conflicting_fleck_gui "$executable"; then
+      continue
+    fi
+    [[ "$(/bin/ps -p "$pid" -o comm= 2>/dev/null || true)" == "$executable" ]] || continue
+    if ! /bin/kill -TERM "$pid" 2>/dev/null; then
+      [[ "$(/bin/ps -p "$pid" -o comm= 2>/dev/null || true)" == "$executable" ]] \
+        || continue
+      printf 'error: could not ask conflicting Fleck app to exit: %s (pid %s)\n' \
+        "$executable" "$pid" >&2
+      return 1
+    fi
+    attempts=0
+    while [[ "$(/bin/ps -p "$pid" -o comm= 2>/dev/null || true)" == "$executable" ]]; do
+      if (( attempts == 20 )); then
+        printf 'error: conflicting Fleck app did not exit after TERM: %s (pid %s); quit it manually and rerun this launcher\n' \
+          "$executable" "$pid" >&2
+        return 1
+      fi
+      /bin/sleep 0.1
+      (( attempts += 1 ))
+    done
+  done < "$inventory_file"
+}
+for pass in 1 2; do
+  capture_inventory
+  retire_inventory
+done
+capture_inventory
+while IFS= read -r process; do
+  [[ "$process" =~ ^[[:space:]]*([0-9]+)[[:space:]](.*)$ ]] || continue
+  pid="${BASH_REMATCH[1]}"
+  executable="${BASH_REMATCH[2]}"
+  if ! is_conflicting_fleck_gui "$executable"; then
+    continue
+  fi
+  [[ "$(/bin/ps -p "$pid" -o comm= 2>/dev/null || true)" == "$executable" ]] || continue
+  printf 'error: a conflicting Fleck app appeared during final launch verification: %s (pid %s); quit it manually and rerun this launcher\n' \
+    "$executable" "$pid" >&2
+  exit 1
+done < "$inventory_file"
+remove_inventory
+trap - EXIT HUP INT TERM
+exec /usr/bin/open "$app_path"
 EOF
 /bin/chmod 755 "$staged_launcher"
 
