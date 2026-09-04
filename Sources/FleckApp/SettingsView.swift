@@ -211,7 +211,6 @@
 
     func scheduleTrafficLightAdjustment() {
       guard let window else { return }
-      window.styleMask.insert(.fullSizeContentView)
       window.titleVisibility = .hidden
       window.titlebarSeparatorStyle = .none
       window.titlebarAppearsTransparent = true

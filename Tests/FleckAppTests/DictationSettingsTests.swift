@@ -399,7 +399,7 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
 }
 
 @Test @MainActor
-func DictationSettingsHostedWindowExplicitlyEnablesFullSizeContentViewChrome()
+func DictationSettingsHostedWindowDoesNotEnableFullSizeContentViewChrome()
   async throws
 {
   let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
@@ -417,7 +417,7 @@ func DictationSettingsHostedWindowExplicitlyEnablesFullSizeContentViewChrome()
   window.makeKeyAndOrderFront(nil)
   await settleSettingsHost(host)
 
-  #expect(window.styleMask.contains(.fullSizeContentView))
+  #expect(!window.styleMask.contains(.fullSizeContentView))
 
   window.contentView = nil
   window.orderOut(nil)
