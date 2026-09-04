@@ -77,3 +77,15 @@ ahead/behind state, unmerged entries, and no merge in progress.
 Never push, merge, open or close pull requests, or change GitHub/repository
 settings unless the current user has authorized those external writes. Preserve
 unrelated dirty, staged, untracked, and concurrent work throughout.
+
+## Current-build provenance
+
+Before calling a Fleck app the "newest" build, synchronize the intended branch
+from the current `origin/main` and build it fresh in the active worktree. Never
+reuse an older `.app` based on its name or modification time. Launch the exact
+new bundle path (or the explicitly named pre-Astra handoff launcher), and report
+the source commit, absolute bundle path, bundle identifier, and executable
+SHA-256. `Scripts/build-pre-astra-corrected-build.sh` performs that fresh build
+and publishes the app, launcher, provenance receipt, and ZIP together under
+`.build/pre-astra-corrected/`. A claim without that evidence is not
+current-build proof.
