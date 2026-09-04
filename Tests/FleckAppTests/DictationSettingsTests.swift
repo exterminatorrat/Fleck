@@ -399,7 +399,7 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
 }
 
 @Test @MainActor
-func DictationSettingsHostedWindowDoesNotEnableFullSizeContentViewChrome()
+func DictationSettingsHostedWindowAppliesChromeAfterSceneConfiguration()
   async throws
 {
   let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
@@ -413,11 +413,22 @@ func DictationSettingsHostedWindowDoesNotEnableFullSizeContentViewChrome()
     backing: .buffered,
     defer: false
   )
+  window.toolbar = NSToolbar(identifier: "settings-hosted-window-chrome")
+  window.toolbarStyle = .unifiedCompact
   window.contentView = host
+  host.layoutSubtreeIfNeeded()
+  window.styleMask.remove(.fullSizeContentView)
+  window.titleVisibility = .visible
+  window.titlebarSeparatorStyle = .automatic
+  window.titlebarAppearsTransparent = false
   window.makeKeyAndOrderFront(nil)
   await settleSettingsHost(host)
 
-  #expect(!window.styleMask.contains(.fullSizeContentView))
+  #expect(window.styleMask.contains(.fullSizeContentView))
+  #expect(window.titleVisibility == .hidden)
+  #expect(window.titlebarSeparatorStyle == .none)
+  #expect(window.titlebarAppearsTransparent)
+  #expect(window.contentView?.frame.height == window.frame.height)
 
   window.contentView = nil
   window.orderOut(nil)
