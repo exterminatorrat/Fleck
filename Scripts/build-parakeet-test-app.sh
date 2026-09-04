@@ -45,6 +45,8 @@ readonly codesign_path="$(xcrun --find codesign)"
 readonly lipo_path="$(xcrun --find lipo)"
 readonly otool_path="$(xcrun --find otool)"
 readonly install_name_tool_path="$(xcrun --find install_name_tool)"
+readonly active_sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+readonly deployment_target="14.0"
 for required_tool in \
   "$resolver" "$swift_path" "$xcodebuild_path" "$codesign_path" "$lipo_path" "$otool_path" \
   "$install_name_tool_path"; do
@@ -349,12 +351,15 @@ readonly bin_marker="$scratch_parent/bin-path"
 "$resolver" "$candidate_scratch" /bin/sh -c '
   set -eu
   "$3" build -c debug --product Fleck \
+    -Xlinker -platform_version -Xlinker macos -Xlinker "$4" -Xlinker "$5" \
     --disable-automatic-resolution --skip-update --scratch-path "$1"
   "$3" build -c debug --product fleck-agent \
+    -Xlinker -platform_version -Xlinker macos -Xlinker "$4" -Xlinker "$5" \
     --disable-automatic-resolution --skip-update --scratch-path "$1"
   "$3" build -c debug --show-bin-path \
     --disable-automatic-resolution --skip-update --scratch-path "$1" >"$2"
-' /bin/sh "$candidate_scratch" "$bin_marker" "$swift_path"
+' /bin/sh "$candidate_scratch" "$bin_marker" "$swift_path" \
+  "$deployment_target" "$active_sdk_version"
 
 if ! /usr/bin/cmp -s "$resolved" "$lock_backup"; then
   printf '%s\n' 'error: candidate build changed root Package.resolved' >&2
@@ -382,6 +387,27 @@ fi
 if [[ ! -d "$resource_bundle" ]]; then
   printf 'error: candidate resource bundle is not a directory: %s\n' \
     "$resource_bundle" >&2
+  exit 1
+fi
+
+linked_sdk_version="$($otool_path -l "$app_executable" | /usr/bin/awk '
+  $1 == "cmd" {
+    in_build_version = ($2 == "LC_BUILD_VERSION")
+    next
+  }
+  in_build_version && $1 == "sdk" {
+    linked_sdk = $2
+    in_build_version = 0
+  }
+  END {
+    if (linked_sdk != "") {
+      print linked_sdk
+    }
+  }
+')"
+if [[ "$linked_sdk_version" != "$active_sdk_version" ]]; then
+  printf 'error: candidate Fleck SDK stamp does not match active SDK: %s (expected %s)\n' \
+    "${linked_sdk_version:-missing}" "$active_sdk_version" >&2
   exit 1
 fi
 if [[ -n "$(/usr/bin/find "$resource_bundle" -type l -print -quit)" ]]; then
