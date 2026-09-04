@@ -4,6 +4,7 @@ set -euo pipefail
 readonly source_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 readonly source_packager="$source_root/Scripts/build-pre-astra-corrected-build.sh"
 readonly test_only="${FLECK_PRE_ASTRA_TEST_ONLY:-}"
+readonly launcher_case="${FLECK_PRE_ASTRA_LAUNCHER_CASE:-all}"
 
 if [[ ! -x "$source_packager" ]]; then
   printf 'FAIL: executable packager is missing: %s\n' "$source_packager" >&2
@@ -173,6 +174,212 @@ signature_entitlements() {
   /usr/bin/codesign -d --entitlements - "$1" 2>/dev/null
 }
 
+if [[ "$test_only" == 'launcher' ]]; then
+  "$fixture_root/Scripts/build-pre-astra-corrected-build.sh" >/dev/null
+  readonly launcher_handoff="$fixture_root/.build/pre-astra-corrected/Fleck Pre-Astra Corrected Build"
+  readonly generated_launcher="$launcher_handoff/Launch Fleck Pre-Astra Corrected Build.command"
+  readonly runtime_handoff="$test_root/runtime/Fleck Pre-Astra Corrected Build"
+  readonly runtime_app="$runtime_handoff/Fleck Pre-Astra Corrected Build.app"
+  readonly runtime_launcher="$runtime_handoff/Launch Fleck Pre-Astra Corrected Build.command"
+  /bin/mkdir -p "$runtime_handoff"
+  /usr/bin/ditto --norsrc "$launcher_handoff/Fleck Pre-Astra Corrected Build.app" "$runtime_app"
+  readonly canonical_runtime_app="$(cd -- "$runtime_app" && pwd -P)"
+  readonly process_state="$test_root/process-state.tsv"
+  readonly inventory_count="$test_root/inventory-count"
+  readonly kill_log="$test_root/kill.log"
+  readonly open_log="$test_root/open.log"
+  readonly sleep_log="$test_root/sleep.log"
+  readonly ps_stub="$test_root/ps-stub.sh"
+  readonly kill_stub="$test_root/kill-stub.sh"
+  readonly open_stub="$test_root/open-stub.sh"
+  readonly sleep_stub="$test_root/sleep-stub.sh"
+  /bin/cat > "$ps_stub" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == '-x -o pid=,comm=' ]]; then
+  count=0
+  if [[ -f "$FLECK_PRE_ASTRA_TEST_INVENTORY_COUNT" ]]; then
+    count="$(/bin/cat "$FLECK_PRE_ASTRA_TEST_INVENTORY_COUNT")"
+  fi
+  (( count += 1 ))
+  printf '%s\n' "$count" > "$FLECK_PRE_ASTRA_TEST_INVENTORY_COUNT"
+  if [[ -n "${FLECK_PRE_ASTRA_TEST_FAIL_INVENTORY:-}" ]]; then
+    exit 71
+  fi
+  if [[ "${FLECK_PRE_ASTRA_TEST_LATE_MODE:-}" == 'one' && "$count" == '2' ]]; then
+    printf '%s\n' \
+      $'107\t/Applications/Fleck Late.app/Contents/MacOS/Fleck\t/Applications/Fleck Late.app/Contents/MacOS/Fleck\talive' \
+      >> "$FLECK_PRE_ASTRA_TEST_PROCESS_STATE"
+  elif [[ "${FLECK_PRE_ASTRA_TEST_LATE_MODE:-}" == 'continuous' \
+    && ( "$count" == '2' || "$count" == '3' ) ]]; then
+    printf '%s\t/Applications/Fleck Late %s.app/Contents/MacOS/Fleck\tlate\talive\n' \
+      "$((200 + count))" "$count" >> "$FLECK_PRE_ASTRA_TEST_PROCESS_STATE"
+  fi
+  /usr/bin/awk -F '\t' '$4 == "alive" { printf "%5s %s\n", $1, $2 }' \
+    "$FLECK_PRE_ASTRA_TEST_PROCESS_STATE"
+  exit 0
+fi
+if [[ "$1" == '-p' && "$3" == '-o' && "$4" == 'comm=' ]]; then
+  /usr/bin/awk -F '\t' -v pid="$2" '$1 == pid && $4 == "alive" { print $2 }' \
+    "$FLECK_PRE_ASTRA_TEST_PROCESS_STATE"
+  exit 0
+fi
+exit 2
+EOF
+  /bin/cat > "$kill_stub" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == '-TERM' && "$2" =~ ^[0-9]+$ ]]
+printf '%s\n' "$2" >> "$FLECK_PRE_ASTRA_TEST_KILL_LOG"
+if [[ "$2" == "${FLECK_PRE_ASTRA_TEST_STUBBORN_PID:-}" ]]; then
+  exit 0
+fi
+readonly replacement="$FLECK_PRE_ASTRA_TEST_PROCESS_STATE.new"
+/usr/bin/awk -F '\t' -v OFS='\t' -v pid="$2" '$1 == pid { $4 = "dead" } { print }' \
+  "$FLECK_PRE_ASTRA_TEST_PROCESS_STATE" > "$replacement"
+/bin/mv "$replacement" "$FLECK_PRE_ASTRA_TEST_PROCESS_STATE"
+EOF
+  /bin/cat > "$open_stub" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "$FLECK_PRE_ASTRA_TEST_OPEN_LOG"
+EOF
+  /bin/cat > "$sleep_stub" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FLECK_PRE_ASTRA_TEST_SLEEP_LOG"
+EOF
+  /bin/chmod 755 "$ps_stub" "$kill_stub" "$open_stub" "$sleep_stub"
+  /usr/bin/sed \
+    -e 's#/bin/ps#"$FLECK_PRE_ASTRA_TEST_PS"#g' \
+    -e 's#/bin/kill#"$FLECK_PRE_ASTRA_TEST_KILL"#g' \
+    -e 's#/bin/sleep#"$FLECK_PRE_ASTRA_TEST_SLEEP"#g' \
+    -e 's#/usr/bin/open#"$FLECK_PRE_ASTRA_TEST_OPEN"#g' \
+    "$generated_launcher" > "$runtime_launcher"
+  /bin/chmod 755 "$runtime_launcher"
+
+  run_test_launcher() {
+    /usr/bin/env \
+      TMPDIR="$test_root" \
+      FLECK_PRE_ASTRA_TEST_PS="$ps_stub" \
+      FLECK_PRE_ASTRA_TEST_KILL="$kill_stub" \
+      FLECK_PRE_ASTRA_TEST_SLEEP="$sleep_stub" \
+      FLECK_PRE_ASTRA_TEST_OPEN="$open_stub" \
+      FLECK_PRE_ASTRA_TEST_PROCESS_STATE="$process_state" \
+      FLECK_PRE_ASTRA_TEST_INVENTORY_COUNT="$inventory_count" \
+      FLECK_PRE_ASTRA_TEST_KILL_LOG="$kill_log" \
+      FLECK_PRE_ASTRA_TEST_SLEEP_LOG="$sleep_log" \
+      FLECK_PRE_ASTRA_TEST_OPEN_LOG="$open_log" \
+      "$@" "$runtime_launcher"
+  }
+
+  if [[ "$launcher_case" == 'all' || "$launcher_case" == 'open' ]]; then
+    /bin/cat > "$process_state" <<EOF
+101	/Applications/Fleck.app/Contents/MacOS/Fleck	/Applications/Fleck.app/Contents/MacOS/Fleck	alive
+102	$canonical_runtime_app/Contents/MacOS/Fleck	$canonical_runtime_app/Contents/MacOS/Fleck	alive
+103	/Applications/Fleck.app/Contents/SharedSupport/fleck-agent	/Applications/Fleck.app/Contents/SharedSupport/fleck-agent	alive
+104	/Applications/Fleck.app/Contents/SharedSupport/gemma-cleanup-helper	/Applications/Fleck.app/Contents/SharedSupport/gemma-cleanup-helper	alive
+105	/bin/sh	/bin/sh -c while-running Fleck.app/Contents/MacOS/Fleck	alive
+106	/Applications/Notes.app/Contents/MacOS/Fleck	/Applications/Notes.app/Contents/MacOS/Fleck	alive
+108	/tmp/Fleck Archive/Notes.app/Contents/MacOS/Fleck	/tmp/Fleck Archive/Notes.app/Contents/MacOS/Fleck	alive
+EOF
+    run_test_launcher
+
+    test "$(/usr/bin/awk -F '\t' '$1 == 101 { print $4 }' "$process_state")" = 'dead'
+    if [[ "$(/usr/bin/awk -F '\t' '$1 == 108 { print $4 }' "$process_state")" != 'alive' ]]; then
+      printf '%s\n' 'FAIL: launcher terminated an unrelated app nested below a Fleck-named directory' >&2
+      exit 1
+    fi
+    test "$(/usr/bin/awk -F '\t' '$1 != 101 { print $4 }' "$process_state" | /usr/bin/sort -u)" = 'alive'
+    test "$(/bin/cat "$kill_log")" = '101'
+    if [[ "$(/bin/cat "$open_log")" != "$canonical_runtime_app" ]]; then
+      printf '%s\n' 'FAIL: launcher did not use normal path-based open for the adjacent app' >&2
+      exit 1
+    fi
+    if [[ "$launcher_case" == 'open' ]]; then
+      printf '%s\n' 'PASS: launcher uses normal path-based open for the adjacent app'
+      exit 0
+    fi
+  fi
+
+  if [[ "$launcher_case" == 'all' || "$launcher_case" == 'inventory' ]]; then
+    printf '102\t%s/Contents/MacOS/Fleck\tintended\talive\n' \
+      "$canonical_runtime_app" > "$process_state"
+    /usr/bin/find "$inventory_count" "$kill_log" "$open_log" "$sleep_log" \
+      -maxdepth 0 -type f -delete 2>/dev/null || true
+    if run_test_launcher FLECK_PRE_ASTRA_TEST_FAIL_INVENTORY=1 \
+      >"$test_root/inventory.out" 2>"$test_root/inventory.err"; then
+      printf '%s\n' 'FAIL: launcher opened the app after process inventory failed' >&2
+      exit 1
+    fi
+    /usr/bin/grep -Fq 'could not inspect running Fleck app processes' "$test_root/inventory.err"
+    test ! -e "$open_log"
+    test -z "$(/usr/bin/find "$test_root" -maxdepth 1 -name 'fleck-pre-astra-launch.*' -print -quit)"
+    if [[ "$launcher_case" == 'inventory' ]]; then
+      printf '%s\n' 'PASS: launcher fails closed when process inventory fails'
+      exit 0
+    fi
+  fi
+
+  if [[ "$launcher_case" == 'all' || "$launcher_case" == 'late' ]]; then
+    printf '102\t%s/Contents/MacOS/Fleck\tintended\talive\n' \
+      "$canonical_runtime_app" > "$process_state"
+    /usr/bin/find "$inventory_count" "$kill_log" "$open_log" "$sleep_log" \
+      -maxdepth 0 -type f -delete 2>/dev/null || true
+    run_test_launcher FLECK_PRE_ASTRA_TEST_LATE_MODE=one
+    if [[ "$(/usr/bin/awk -F '\t' '$1 == 107 { print $4 }' "$process_state")" != 'dead' ]]; then
+      printf '%s\n' 'FAIL: launcher did not retire a late-arriving Fleck GUI process' >&2
+      exit 1
+    fi
+    test "$(/bin/cat "$kill_log")" = '107'
+    test "$(/bin/cat "$inventory_count")" = '3'
+    test "$(/bin/cat "$open_log")" = "$canonical_runtime_app"
+    if [[ "$launcher_case" == 'late' ]]; then
+      printf '%s\n' 'PASS: launcher retires a conflict that appears during launch preparation'
+      exit 0
+    fi
+  fi
+
+  if [[ "$launcher_case" == 'all' || "$launcher_case" == 'bounded' ]]; then
+    printf '102\t%s/Contents/MacOS/Fleck\tintended\talive\n' \
+      "$canonical_runtime_app" > "$process_state"
+    /usr/bin/find "$inventory_count" "$kill_log" "$open_log" "$sleep_log" \
+      -maxdepth 0 -type f -delete 2>/dev/null || true
+    if run_test_launcher FLECK_PRE_ASTRA_TEST_LATE_MODE=continuous \
+      >"$test_root/bounded.out" 2>"$test_root/bounded.err"; then
+      printf '%s\n' 'FAIL: launcher opened while conflicts kept appearing' >&2
+      exit 1
+    fi
+    /usr/bin/grep -Fq 'a conflicting Fleck app appeared during final launch verification' \
+      "$test_root/bounded.err"
+    test "$(/bin/cat "$inventory_count")" = '3'
+    test ! -e "$open_log"
+    if [[ "$launcher_case" == 'bounded' ]]; then
+      printf '%s\n' 'PASS: launcher bounds retries and fails closed when conflicts keep appearing'
+      exit 0
+    fi
+  fi
+
+  /bin/cat > "$process_state" <<EOF
+102	$canonical_runtime_app/Contents/MacOS/Fleck	$canonical_runtime_app/Contents/MacOS/Fleck	alive
+201	/Applications/Fleck Old.app/Contents/MacOS/Fleck	/Applications/Fleck Old.app/Contents/MacOS/Fleck	alive
+EOF
+  /usr/bin/find "$inventory_count" "$kill_log" "$open_log" "$sleep_log" \
+    -maxdepth 0 -type f -delete 2>/dev/null || true
+  if run_test_launcher FLECK_PRE_ASTRA_TEST_STUBBORN_PID=201 \
+    >"$test_root/stubborn.out" 2>"$test_root/stubborn.err"; then
+    printf '%s\n' 'FAIL: launcher opened the app while a conflicting Fleck GUI process remained' >&2
+    exit 1
+  fi
+  /usr/bin/grep -Fq \
+    'conflicting Fleck app did not exit after TERM: /Applications/Fleck Old.app/Contents/MacOS/Fleck (pid 201); quit it manually and rerun this launcher' \
+    "$test_root/stubborn.err"
+  test "$(/usr/bin/wc -l < "$sleep_log" | /usr/bin/tr -d ' ')" = '20'
+  test ! -e "$open_log"
+  printf '%s\n' 'PASS: launcher retires only foreign Fleck GUI processes before opening the adjacent app'
+  exit 0
+fi
+
 readonly input_app="$fixture_root/.build/parakeet-test/Fleck.app"
 if [[ -z "$test_only" || "$test_only" == 'lock-owner' ]]; then
   if FLECK_PRE_ASTRA_TEST_FAIL_LOCK_OWNER_WRITE=1 \
@@ -334,7 +541,11 @@ test "$(/usr/bin/shasum -a 256 "$published_input_manifest" | /usr/bin/awk '{prin
 /usr/bin/grep -Fq "Source tree: $source_tree" "$receipt"
 /usr/bin/grep -Fq "Input app manifest SHA-256: $input_manifest_hash" "$receipt"
 
-/usr/bin/grep -Fq '/usr/bin/open -n "$app_path"' "$launcher"
+/usr/bin/grep -Fq 'exec /usr/bin/open "$app_path"' "$launcher"
+if /usr/bin/grep -Fq '/usr/bin/open -n' "$launcher"; then
+  printf '%s\n' 'FAIL: launcher forces a new instance of the adjacent app' >&2
+  exit 1
+fi
 /usr/bin/codesign --verify --deep --strict "$staged_app"
 test "$(/usr/bin/codesign -d -r- "$staged_app" 2>&1 | /usr/bin/sed -n 's/^designated => /designated => /p')" = \
   'designated => identifier "com.harryjin.fleck"'
