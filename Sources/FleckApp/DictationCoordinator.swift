@@ -118,6 +118,7 @@ final class DictationCoordinator {
     var captureContextTask: Task<LocalWritingCaptureContext, Error>?
     var startupTask: Task<Void, Never>?
     var processingUpdatesTask: Task<Void, Never>?
+    var sourceFailureTask: Task<Void, Never>?
     var generation: UInt64 = 0
     var stablePrefix = ""
     var pipelineStage: DictationPipelineStage = .capture
@@ -680,6 +681,9 @@ final class DictationCoordinator {
         level: { [weak self] level in
           guard let self, self.isActive(id), self.capture?.holdAccepted == true else { return }
           self.levelObserver?(level)
+        },
+        failure: { [weak self] error in
+          self?.scheduleSourceFailure(id, error: error)
         }
       )
     } catch {
@@ -792,10 +796,58 @@ final class DictationCoordinator {
           guard self.applyProcessingUpdate(update, to: id) else { return }
         }
       } catch {
-        return
+        self?.scheduleSourceFailure(id, error: error)
       }
     }
     self.capture = capture
+  }
+
+  private func scheduleSourceFailure(_ id: UUID, error: Error) {
+    guard var capture, capture.id == id,
+      !capture.cancelRequested,
+      !capture.isTerminating,
+      capture.sourceFailureTask == nil
+    else { return }
+    let message = message(for: error)
+    phase = .failed(message)
+    eventObserver?(DictationCoordinatorEvent(
+      phase: phase,
+      terminal: nil,
+      context: contextForCapture(capture, failureStage: .capture)
+    ))
+    let task = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await self.completeSourceFailure(id, message: message)
+    }
+    capture.sourceFailureTask = task
+    self.capture = capture
+  }
+
+  private func completeSourceFailure(_ id: UUID, message: String) async {
+    guard let current = capture, current.id == id, !current.isTerminating else { return }
+    if current.processingSession != nil {
+      await cancelProcessingSession(id)
+    } else if let engine = current.engine {
+      await release(engine)
+      guard var active = capture, active.id == id else { return }
+      active.engine = nil
+      capture = active
+    }
+    guard var active = capture, active.id == id else { return }
+    if active.cancelRequested {
+      active.sourceFailureTask = nil
+      capture = active
+      await completeCancellation(id)
+      return
+    }
+    active.sourceFailureTask = nil
+    capture = active
+    await terminate(
+      id,
+      phase: .failed(message),
+      cancelEditor: active.mode == .focused,
+      failureStage: .capture
+    )
   }
 
   private func applyProcessingUpdate(
@@ -842,7 +894,8 @@ final class DictationCoordinator {
 
   private func finish(stopOrigin proposedOrigin: DictationStopOrigin) async {
     guard var capture, !capture.isTerminating, !capture.cancelRequested,
-      capture.deferredStartupFailureMessage == nil
+      capture.deferredStartupFailureMessage == nil,
+      capture.sourceFailureTask == nil
     else { return }
     if capture.stopOrigin == nil {
       capture.stopOrigin = proposedOrigin
@@ -1634,6 +1687,7 @@ final class DictationCoordinator {
 
   private func continueCapture(_ id: UUID) async -> Bool {
     guard let capture, capture.id == id, !capture.isTerminating else { return false }
+    guard capture.sourceFailureTask == nil else { return false }
     guard capture.cancelRequested else { return true }
     await completeCancellation(id)
     return false

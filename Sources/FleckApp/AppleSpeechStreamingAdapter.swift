@@ -13,6 +13,18 @@ final class AppleSpeechStreamingAdapter: StreamingSpeechSource {
     try await engine.start(provisional: provisional, level: level)
   }
 
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    failure: @escaping @MainActor @Sendable (Error) -> Void
+  ) async throws {
+    try await engine.start(
+      provisional: provisional,
+      level: level,
+      failure: failure
+    )
+  }
+
   func finish() async throws -> String? {
     try await engine.finish()
   }

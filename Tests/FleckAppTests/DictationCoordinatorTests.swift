@@ -1713,6 +1713,58 @@ func processingPathForwardsOnlyActiveCaptureLevels() async throws {
   #expect(levels == [0])
 }
 
+@Test @MainActor
+func enhancedSpeechStartupLegacyPathHandlesLiveFailureWithoutAnotherKeyPress() async throws {
+  let fixture = try Fixture(preferred: .enhancedLocal)
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  fixture.enhanced.emitFailure(TestError.failed)
+  for _ in 0..<50 where !fixture.coordinator.canConfigureShortcut {
+    await Task.yield()
+  }
+
+  let terminal = try #require(events.last { $0.terminal != nil })
+  guard case .failed = terminal.terminal else {
+    Issue.record("Expected terminal live-source failure")
+    return
+  }
+  #expect(terminal.context?.failureStage == .capture)
+  #expect(fixture.enhanced.cancelCount == 1)
+  #expect(fixture.enhanced.releaseCount == 1)
+}
+
+@Test @MainActor
+func enhancedSpeechStartupSynchronousLegacyFailureStaysFailedUntilDrain() async throws {
+  let drainGate = Gate()
+  let fixture = try Fixture(preferred: .enhancedLocal)
+  fixture.enhanced.releaseGate = drainGate
+  fixture.enhanced.onStart = {
+    fixture.enhanced.emitFailure(TestError.failed)
+  }
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await drainGate.waitUntilWaiting()
+
+  guard case .failed = fixture.coordinator.phase else {
+    Issue.record("Expected live source failure to remain visible during drain")
+    await drainGate.openGate()
+    return
+  }
+  #expect(events.contains { $0.terminal == nil && $0.context?.failureStage == .capture })
+  #expect(!fixture.coordinator.canConfigureShortcut)
+
+  await drainGate.openGate()
+  for _ in 0..<50 where !fixture.coordinator.canConfigureShortcut {
+    await Task.yield()
+  }
+  #expect(fixture.enhanced.cancelCount == 1)
+  #expect(fixture.enhanced.releaseCount == 1)
+}
+
 @Test @MainActor func enhancedCaptureStaysBoundToItsSelectedEngine() async throws {
   let fixture = try Fixture(preferred: .enhancedLocal)
   fixture.enhanced.finalText = "Plan lunch"
@@ -2345,6 +2397,65 @@ func processingFinalizationFailurePublishesCaptureProvenance() async throws {
   let terminal = try #require(events.last { $0.terminal != nil })
   #expect(terminal.context?.pipelineStage == .capture)
   #expect(terminal.context?.failureStage == .capture)
+}
+
+@Test @MainActor
+func enhancedSpeechStartupPublishesLiveSourceFailureButRetainsCaptureUntilDrain() async throws {
+  let drainGate = Gate()
+  let processing = ProcessingProbe(drainGate: drainGate)
+  let fixture = try Fixture(processing: processing)
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await processing.emitFailure(TestError.failed)
+  for _ in 0..<20 { await Task.yield() }
+
+  guard case .failed = fixture.coordinator.phase else {
+    Issue.record("Expected a prompt nonterminal source failure")
+    await drainGate.openGate()
+    await fixture.coordinator.cancel()
+    return
+  }
+  #expect(events.last?.terminal == nil)
+  #expect(!fixture.coordinator.canConfigureShortcut)
+  #expect(processing.sessionCancelCount == 1)
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  #expect(processing.beginCount == 1)
+
+  await drainGate.openGate()
+  await fixture.coordinator.waitForTerminal()
+
+  let terminal = try #require(events.last { $0.terminal != nil })
+  guard case .failed = terminal.terminal else {
+    Issue.record("Expected terminal failure after drain")
+    return
+  }
+  #expect(terminal.context?.failureStage == .capture)
+  #expect(fixture.coordinator.canConfigureShortcut)
+}
+
+@Test @MainActor
+func enhancedSpeechStartupCancellationWinsCompetingLiveSourceFailure() async throws {
+  let drainGate = Gate()
+  let processing = ProcessingProbe(drainGate: drainGate)
+  let fixture = try Fixture(processing: processing)
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await processing.emitFailure(TestError.failed)
+  for _ in 0..<50 where processing.sessionCancelCount == 0 { await Task.yield() }
+  let cancellation = Task { @MainActor in await fixture.coordinator.cancel() }
+  for _ in 0..<20 { await Task.yield() }
+  await drainGate.openGate()
+  await cancellation.value
+  await fixture.coordinator.waitForTerminal()
+
+  #expect(events.last?.terminal == .cancelled)
+  #expect(events.last?.phase == .idle)
+  #expect(fixture.coordinator.canConfigureShortcut)
+  #expect(processing.sessionCancelCount == 1)
 }
 
 @Test @MainActor
@@ -3845,7 +3956,7 @@ func DictationEnhancedCandidateCompositionSharesAdaptiveInferenceAcrossCaptures(
   }
 
   #expect(inference.loadURLs.isEmpty)
-  #expect(inference.releaseCount == 1)
+  #expect(inference.releaseCount == 0)
   #expect(audio.startCount == 0)
   #expect(standardRecommendations == 1)
   #expect(!capture.hasActiveResources)
@@ -3946,7 +4057,7 @@ func DictationEnhancedCandidateCompositionSharesAdaptiveInferenceAcrossCaptures(
 }
 
 @Test @MainActor
-func EnhancedSpeechAudioStartFailureDowngradesTheInstalledRuntimeBeforeNextCapture() async throws {
+func EnhancedSpeechAudioStartFailureDoesNotDowngradeValidModelFiles() async throws {
   let runtime = try makeInstalledEnhancedRuntime()
   defer { runtime.fixture.cleanup() }
   await runtime.installer.refresh()
@@ -3964,16 +4075,16 @@ func EnhancedSpeechAudioStartFailureDowngradesTheInstalledRuntimeBeforeNextCaptu
   await #expect(throws: EnhancedTestFailure.failed) {
     try await capture.start(provisional: { _ in }, level: { _ in })
   }
-  await waitForRepairPresentation(runtime.viewModel)
+  await Task.yield()
 
-  #expect(isRepairRequired(runtime.installer.manager.state))
-  #expect(runtime.installer.snapshot.phase != .installed)
-  #expect(!runtime.viewModel.presentation.allowsEnhancedPreference)
+  #expect(runtime.installer.manager.state == .ready)
+  #expect(runtime.installer.snapshot.phase == .installed)
+  #expect(runtime.viewModel.presentation.allowsEnhancedPreference)
   #expect(
     DictationRuntime.effectiveEngine(
       preference: .standard,
       presentation: runtime.viewModel.presentation
-    ) == .standard
+    ) == .enhancedLocal
   )
   #expect(audio.releaseCount == 1)
   #expect(inference.releaseCount == 1)
@@ -4080,14 +4191,20 @@ func EnhancedSpeechCancellationDoesNotDowngradeTheInstalledRuntime() async throw
     recommendStandard: { standardRecommendations += 1 }
   )
 
-  await #expect(throws: EnhancedTestFailure.failed) {
-    try await capture.start(provisional: { _ in }, level: { _ in })
-  }
+  var failures: [Error] = []
+  try? await capture.start(
+    provisional: { _ in },
+    level: { _ in },
+    failure: { failures.append($0) }
+  )
+  while capture.hasActiveResources { await Task.yield() }
 
+  #expect(failures.count == 1)
   #expect(repairMessages.count == 1)
   #expect(standardRecommendations == 1)
   #expect(inference.releaseCount == 1)
-  #expect(audio.startCount == 0)
+  #expect(audio.startCount == 1)
+  #expect(audio.cancelCount == 1)
   #expect(!capture.hasActiveResources)
 }
 
@@ -4107,13 +4224,19 @@ func EnhancedSpeechCancellationDoesNotDowngradeTheInstalledRuntime() async throw
     recommendStandard: { standardRecommendations += 1 }
   )
 
-  await #expect(throws: DictationFailure.unavailable) {
-    try await capture.start(provisional: { _ in }, level: { _ in })
-  }
+  var failures: [Error] = []
+  try? await capture.start(
+    provisional: { _ in },
+    level: { _ in },
+    failure: { failures.append($0) }
+  )
+  while capture.hasActiveResources { await Task.yield() }
 
+  #expect(failures.first as? DictationFailure == .unavailable)
   #expect(standardRecommendations == 1)
   #expect(inference.releaseCount == 1)
-  #expect(audio.startCount == 0)
+  #expect(audio.startCount == 1)
+  #expect(audio.cancelCount == 1)
   #expect(!capture.hasActiveResources)
 }
 
@@ -4138,7 +4261,7 @@ func EnhancedSpeechCancellationDoesNotDowngradeTheInstalledRuntime() async throw
     try await capture.start(provisional: { _ in }, level: { _ in })
   }
 
-  #expect(repairedRepository == repository)
+  #expect(repairedRepository == nil)
   #expect(standardRecommendations == 1)
   #expect(inference.releaseCount == 1)
   #expect(!capture.hasActiveResources)
@@ -4227,9 +4350,7 @@ func EnhancedSpeechCancellationDoesNotDowngradeTheInstalledRuntime() async throw
   inference = nil
 
   await capture.cancel()
-  await #expect(throws: CancellationError.self) {
-    try await start.value
-  }
+  try? await start.value
 
   #expect(lifetime.cancelCount == 1)
   #expect(lifetime.releaseCount == 1)
@@ -4265,9 +4386,7 @@ func EnhancedSpeechCancellationDoesNotDowngradeTheInstalledRuntime() async throw
   }
   await loader.release()
   await cancellation.value
-  await #expect(throws: CancellationError.self) {
-    try await start.value
-  }
+  try? await start.value
 
   #expect(lifetime.cancelCount == 0)
   #expect(lifetime.releaseCount == 1)
@@ -4644,6 +4763,7 @@ private final class FakeSpeechEngine: SpeechEngine {
   var releaseGate: Gate?
   private var provisional: (@MainActor (String) -> Void)?
   private var level: (@MainActor (Float) -> Void)?
+  private var failure: (@MainActor (Error) -> Void)?
   var startCount = 0
   var finishCount = 0
   var cancelCount = 0
@@ -4660,6 +4780,15 @@ private final class FakeSpeechEngine: SpeechEngine {
     self.level = level
   }
 
+  func start(
+    provisional: @escaping @MainActor (String) -> Void,
+    level: @escaping @MainActor (Float) -> Void,
+    failure: @escaping @MainActor (Error) -> Void
+  ) async throws {
+    self.failure = failure
+    try await start(provisional: provisional, level: level)
+  }
+
   func finish() async throws -> String? {
     finishCount += 1
     if let finishGate { await finishGate.wait() }
@@ -4674,6 +4803,7 @@ private final class FakeSpeechEngine: SpeechEngine {
   }
   func emitProvisional(_ text: String) { provisional?(text) }
   func emitLevel(_ value: Float) { level?(value) }
+  func emitFailure(_ error: Error) { failure?(error) }
 }
 
 @MainActor
@@ -4885,6 +5015,11 @@ final class ProcessingProbe: DictationProcessing {
     await Task.yield()
   }
 
+  func emitFailure(_ error: Error) async {
+    session?.emitFailure(error)
+    await Task.yield()
+  }
+
   func emitAll() async {
     for update in updates {
       await emit(update)
@@ -5007,6 +5142,10 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
     if case .enqueued = continuation.yield(update) {
       onPublishedUpdate(update)
     }
+  }
+
+  func emitFailure(_ error: Error) {
+    continuation.finish(throwing: error)
   }
 
   func setResult(_ result: DictationProcessingResult) {
@@ -5333,6 +5472,7 @@ final class EnhancedAudioSpy: EnhancedAudioCapturing {
   let startError: Error?
   private let lifetime: EnhancedLifetimeTracker?
   private(set) var startCount = 0
+  private(set) var stopCount = 0
   private(set) var cancelCount = 0
   private(set) var releaseCount = 0
   private(set) var selectedMicrophoneUID: String?
@@ -5361,7 +5501,8 @@ final class EnhancedAudioSpy: EnhancedAudioCapturing {
   }
 
   func stopAndTakeSamples() -> [Float] {
-    samples
+    stopCount += 1
+    return samples
   }
 
   func cancel() {

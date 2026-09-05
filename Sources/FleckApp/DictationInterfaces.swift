@@ -21,6 +21,11 @@ protocol SpeechEngine: AnyObject {
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    failure: @escaping @MainActor @Sendable (Error) -> Void
+  ) async throws
   func finish() async throws -> String?
   func finish(stopOrigin: DictationStopOrigin) async throws -> String?
   func cancel() async
@@ -28,6 +33,14 @@ protocol SpeechEngine: AnyObject {
 }
 
 extension SpeechEngine {
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    failure _: @escaping @MainActor @Sendable (Error) -> Void
+  ) async throws {
+    try await start(provisional: provisional, level: level)
+  }
+
   func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
     _ = stopOrigin
     return try await finish()
@@ -139,6 +152,11 @@ protocol StreamingSpeechSource: AnyObject {
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    failure: @escaping @MainActor @Sendable (Error) -> Void
+  ) async throws
   func finish() async throws -> String?
   func finish(stopOrigin: DictationStopOrigin) async throws -> String?
   func cancel() async
@@ -146,6 +164,14 @@ protocol StreamingSpeechSource: AnyObject {
 }
 
 extension StreamingSpeechSource {
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    failure _: @escaping @MainActor @Sendable (Error) -> Void
+  ) async throws {
+    try await start(provisional: provisional, level: level)
+  }
+
   func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
     _ = stopOrigin
     return try await finish()

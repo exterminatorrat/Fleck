@@ -206,7 +206,8 @@ final class StreamingDictationProcessor: DictationProcessing {
       measurements.record(.sourceStartRequested, at: clock.now())
       try await source.start(
         provisional: { callbackBuffer.provisional($0, receivedAt: self.clock.now()) },
-        level: level
+        level: level,
+        failure: { callbackBuffer.failure($0) }
       )
       return StreamingDictationSession(
         configuration: configuration,
@@ -253,9 +254,11 @@ final class StreamingDictationProcessor: DictationProcessing {
 @MainActor
 fileprivate final class StreamingDictationCallbackBuffer {
   private var provisionalTexts: [(text: String, receivedAt: ContinuousClock.Instant)] = []
+  private var sourceFailure: Error?
   private weak var session: StreamingDictationSession?
 
   func provisional(_ text: String, receivedAt: ContinuousClock.Instant) {
+    guard sourceFailure == nil else { return }
     if let session {
       session.receiveProvisional(text, receivedAt: receivedAt)
     } else {
@@ -263,11 +266,20 @@ fileprivate final class StreamingDictationCallbackBuffer {
     }
   }
 
+  func failure(_ error: Error) {
+    guard sourceFailure == nil else { return }
+    sourceFailure = error
+    session?.receiveFailure(error)
+  }
+
   func attach(to session: StreamingDictationSession) {
     self.session = session
     let buffered = provisionalTexts
     provisionalTexts.removeAll(keepingCapacity: false)
     buffered.forEach { session.receiveProvisional($0.text, receivedAt: $0.receivedAt) }
+    if let sourceFailure {
+      session.receiveFailure(sourceFailure)
+    }
   }
 }
 
@@ -292,6 +304,7 @@ final class StreamingDictationSession: DictationProcessingSession {
   private var cancellationTask: Task<Void, Never>?
   private var isCancelled = false
   private var isTerminal = false
+  private var terminalSourceFailure: Error?
   private enum SourceTerminalization: Equatable {
     case open
     case finished
@@ -345,10 +358,14 @@ final class StreamingDictationSession: DictationProcessingSession {
 
   func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult {
     if let finalizationTask {
-      return try await finalizationTask.value
+      return try await awaitFinalization(finalizationTask)
     }
     guard !isCancelled, !isTerminal, cancellationTask == nil else {
       throw CancellationError()
+    }
+    if let terminalSourceFailure {
+      await cancel()
+      throw terminalSourceFailure
     }
 
     // Capture the stop boundary before any task suspension or source finalization.
@@ -371,7 +388,20 @@ final class StreamingDictationSession: DictationProcessingSession {
       )
     }
     finalizationTask = task
-    return try await task.value
+    return try await awaitFinalization(task)
+  }
+
+  private func awaitFinalization(
+    _ task: Task<DictationProcessingResult, Error>
+  ) async throws -> DictationProcessingResult {
+    do {
+      return try await task.value
+    } catch {
+      guard let terminalSourceFailure else { throw error }
+      finalizationTask = nil
+      await cancel()
+      throw terminalSourceFailure
+    }
   }
 
   func cancel() async {
@@ -414,6 +444,13 @@ final class StreamingDictationSession: DictationProcessingSession {
     continuation.yield(update)
   }
 
+  fileprivate func receiveFailure(_ error: Error) {
+    guard !isCancelled, !isTerminal, terminalSourceFailure == nil else { return }
+    terminalSourceFailure = error
+    generation &+= 1
+    continuation.finish(throwing: error)
+  }
+
   private func completeCancellation() async {
     finalizationTask?.cancel()
     if sourceTerminalization == .open {
@@ -440,6 +477,7 @@ final class StreamingDictationSession: DictationProcessingSession {
         stopOrigin: stopOrigin
       )
       try Task.checkCancellation()
+      try throwIfSourceFailed()
       guard !isCancelled, !isTerminal else {
         throw CancellationError()
       }
@@ -447,6 +485,9 @@ final class StreamingDictationSession: DictationProcessingSession {
       try Task.checkCancellation()
       return result
     } catch {
+      if terminalSourceFailure != nil {
+        throw error
+      }
       markTerminal()
       throw error
     }
@@ -457,11 +498,13 @@ final class StreamingDictationSession: DictationProcessingSession {
     stopOrigin: DictationStopOrigin
   ) async throws -> DictationProcessingResult {
     try Task.checkCancellation()
+    try throwIfSourceFailed()
 
     let rawText: String?
     do {
       let returnedText = try await source.finish(stopOrigin: stopOrigin)
       try Task.checkCancellation()
+      try throwIfSourceFailed()
       measurements.record(.asrFinal, at: clock.now())
       rawText = returnedText
       if sourceTerminalization == .open {
@@ -469,12 +512,15 @@ final class StreamingDictationSession: DictationProcessingSession {
       }
     } catch {
       if sourceTerminalization == .open {
-        sourceTerminalization = .finished
+        if terminalSourceFailure == nil {
+          sourceTerminalization = .finished
+        }
       }
       throw error
     }
 
     try Task.checkCancellation()
+    try throwIfSourceFailed()
     guard let rawText, !rawText.isEmpty else {
       throw StreamingDictationProcessorError.noSpeech
     }
@@ -553,6 +599,10 @@ final class StreamingDictationSession: DictationProcessingSession {
       captureContext: captureContext,
       recognitionContextAcknowledgement: recognitionContextAcknowledgement
     )
+  }
+
+  private func throwIfSourceFailed() throws {
+    if let terminalSourceFailure { throw terminalSourceFailure }
   }
 
   private func markTerminal() {
