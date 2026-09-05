@@ -2654,7 +2654,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
   #expect(
     normalizedNavigator.contains(
-      "private var showsUnfiledDisclosure: Bool { !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled }"
+      "private var showsUnfiledDisclosure: Bool { !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled || isUnfiledDisclosureFocused }"
     )
   )
 }
@@ -2743,42 +2743,6 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
   #expect(!folderRow.contains(".fixedSize(horizontal: true, vertical: false)"))
   #expect(!rowLabel.contains(".fixedSize(horizontal: true, vertical: false)"))
-}
-
-@Test func compactUnfiledDisclosurePreservesOriginalIconLayoutAtRowHeight() throws {
-  let source = try notesPanelSource()
-  let navigator = try #require(
-    source.components(separatedBy: "private struct FolderNavigator").last
-  )
-  let rootRow = try #require(
-    navigator.components(separatedBy: "private var rootRow").last?
-      .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
-  )
-  #expect(rootRow.contains("HStack(spacing: 0)"))
-  #expect(rootRow.contains("if showsUnfiledDisclosure"))
-  #expect(
-    rootRow.contains(
-      "Image(systemName: isUnfiledCompact ? \"chevron.right\" : \"chevron.left\")"
-    )
-  )
-  #expect(rootRow.contains(".frame(width: 28, height: 24)"))
-  #expect(rootRow.contains("systemImage: \"tray\""))
-  #expect(!rootRow.contains("systemImageOpacity"))
-  #expect(!rootRow.contains(".overlay(alignment:"))
-  #expect(!rootRow.contains(".rotationEffect"))
-  #expect(!rootRow.contains(".animation("))
-  #expect(rootRow.contains(".accessibilityLabel("))
-  #expect(rootRow.contains("Expand Unfiled"))
-  #expect(rootRow.contains("Collapse Unfiled"))
-  #expect(!rootRow.contains(".opacity(showsUnfiledDisclosure ? 1 : 0)"))
-  #expect(!rootRow.contains(".allowsHitTesting(showsUnfiledDisclosure)"))
-  #expect(!rootRow.contains(".accessibilityHidden(!showsUnfiledDisclosure)"))
-
-  let rowLabel = try #require(
-    navigator.components(separatedBy: "private func rowLabel").last?
-      .components(separatedBy: "private func noteDropDelegate").first
-  )
-  #expect(!rowLabel.contains("systemImageOpacity"))
 }
 
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {

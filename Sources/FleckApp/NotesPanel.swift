@@ -1664,12 +1664,14 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedRow: FocusedRow?
+    @FocusState private var isUnfiledDisclosureFocused: Bool
     @Binding private var draggedSource: NoteDropSource?
     @State private var editingFolderID: UUID?
     @State private var isCreatingFolder = false
     @State private var folderNameDraft = ""
     @State private var noteDropTarget: NoteDropTarget?
     @State private var isUnfiledHovered = false
+    @State private var unfiledInteractionSource: AppInteractionSource = .keyboard
     private let folderNavigatorMaxHeight: CGFloat = 32
 
     let activeFolderID: UUID?
@@ -1750,6 +1752,10 @@
               : "\(appState.trashedNotes.count) notes"
           )
         }
+        .animation(
+          motion.allowsSpatialMotion(for: unfiledInteractionSource) ? folderMorphAnimation : nil,
+          value: isUnfiledCompact
+        )
       }
       .animation(folderMorphAnimation, value: isCreatingFolder)
       .onChange(of: draggedSource) { oldValue, newValue in
@@ -1795,7 +1801,8 @@
             isEmpty: unfiledNotes.isEmpty,
             isDropTarget: isNoteDropTarget(.unfiled),
             isFocused: focusedRow == .unfiled,
-            showsName: !isUnfiledCompact
+            showsName: !isUnfiledCompact,
+            revealsName: true
           )
         }
         .buttonStyle(.plain)
@@ -1815,21 +1822,34 @@
           setUnfiledCompact(!isUnfiledCompact)
         }
 
-        if showsUnfiledDisclosure {
-          Button {
-            setUnfiledCompact(!isUnfiledCompact)
-          } label: {
-            Image(systemName: isUnfiledCompact ? "chevron.right" : "chevron.left")
-              .font(.caption2)
-              .foregroundStyle(.secondary)
-              .frame(width: 28, height: 24)
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel(
-            isUnfiledCompact ? "Expand Unfiled" : "Collapse Unfiled"
-          )
+        Button {
+          let isPointer = NSApp.currentEvent.map {
+            [.leftMouseDown, .leftMouseUp].contains($0.type)
+          } ?? false
+          setUnfiledCompact(!isUnfiledCompact, source: isPointer ? .pointer : .keyboard)
+        } label: {
+          Image(systemName: "chevron.right")
+            .rotationEffect(.degrees(isUnfiledCompact ? 0 : 180))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .frame(width: 28, height: 24)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+          isUnfiledCompact ? "Expand Unfiled" : "Collapse Unfiled"
+        )
+        .focusable()
+        .focused($isUnfiledDisclosureFocused)
+        .onKeyPress(keys: [.return, .space], phases: .down) { _ in
+          setUnfiledCompact(!isUnfiledCompact)
+          return .handled
+        }
+        .opacity(showsUnfiledDisclosure ? 1 : 0)
+        .frame(width: showsUnfiledDisclosure ? 28 : 0, alignment: .leading)
+        .clipped()
+        .allowsHitTesting(showsUnfiledDisclosure)
+        .accessibilityHidden(!showsUnfiledDisclosure)
       }
       .fixedSize(horizontal: true, vertical: false)
       .onHover { isUnfiledHovered = $0 }
@@ -1971,17 +1991,27 @@
       isEmpty: Bool,
       isDropTarget: Bool = false,
       isFocused: Bool = false,
-      showsName: Bool = true
+      showsName: Bool = true,
+      revealsName: Bool = false
     ) -> some View {
       HStack(spacing: 7) {
         Image(systemName: systemImage)
           .frame(width: 18)
-        if showsName {
+        if revealsName {
+          HStack(spacing: 0) {
+            Text(name)
+              .lineLimit(1)
+              .fixedSize()
+              .opacity(showsName ? 1 : 0)
+              .frame(width: showsName ? nil : 0, alignment: .leading)
+              .clipped()
+              .padding(.trailing, showsName ? 7 : 0)
+            Spacer(minLength: showsName ? 4 : 2)
+          }
+        } else {
           Text(name)
             .lineLimit(1)
           Spacer(minLength: 4)
-        } else {
-          Spacer(minLength: 2)
         }
         Text(count, format: .number)
           .font(.caption.monospacedDigit())
@@ -2065,9 +2095,14 @@
 
     private var showsUnfiledDisclosure: Bool {
       !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled
+        || isUnfiledDisclosureFocused
     }
 
-    private func setUnfiledCompact(_ compact: Bool) {
+    private func setUnfiledCompact(
+      _ compact: Bool,
+      source: AppInteractionSource = .keyboard
+    ) {
+      unfiledInteractionSource = source
       appState.updatePreferences { $0.isUnfiledCompact = compact }
     }
 
