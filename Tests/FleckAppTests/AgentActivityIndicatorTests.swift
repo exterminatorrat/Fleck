@@ -25,28 +25,44 @@ struct AgentActivityIndicatorTests {
   }
 
   @Test
-  func indicatorFootprintStaysFixedAcrossIdleWorkingAndRecentStates() {
+  func indicatorFootprintStaysFixedAcrossAllStates() {
     let scheduler = IndicatorClearScheduler()
-    let presentation = AgentActivityIndicatorPresentation(
+    let idlePresentation = AgentActivityIndicatorPresentation(
       scheduleClear: scheduler.schedule
     )
     let profileID = UUID()
-    let requestID = UUID()
-    let widths = [
-      indicatorWidth(presentation),
-      {
-        presentation.receive(.began(requestID: requestID, profileID: profileID))
-        return indicatorWidth(presentation)
-      }(),
-      {
-        presentation.receive(
-          .finished(requestID: requestID, profileID: profileID, outcome: .succeeded)
-        )
-        return indicatorWidth(presentation)
-      }(),
+    let workingPresentation = AgentActivityIndicatorPresentation(
+      scheduleClear: scheduler.schedule
+    )
+    workingPresentation.receive(.began(requestID: UUID(), profileID: profileID))
+    var widths = [
+      indicatorWidth(idlePresentation),
+      indicatorWidth(workingPresentation),
     ]
+    for outcome in [
+      AgentRequestOutcome.succeeded,
+      .failed,
+      .cancelled,
+    ] {
+      let presentation = AgentActivityIndicatorPresentation(
+        scheduleClear: scheduler.schedule
+      )
+      let requestID = UUID()
+      presentation.receive(.began(requestID: requestID, profileID: profileID))
+      presentation.receive(
+        .finished(requestID: requestID, profileID: profileID, outcome: outcome)
+      )
+      widths.append(indicatorWidth(presentation))
+    }
 
     #expect(widths.allSatisfy { abs($0 - widths[0]) < 0.5 })
+  }
+
+  @Test
+  func indicatorReservesEnoughWidthForLiteralLabelAndStatusGlyph() {
+    let presentation = AgentActivityIndicatorPresentation()
+
+    #expect(indicatorWidth(presentation) >= requiredIndicatorContentWidth())
   }
 
   @Test
@@ -188,6 +204,30 @@ private func indicatorWidth(
 ) -> CGFloat {
   let host = NSHostingView(
     rootView: AgentActivityIndicator(presentation: presentation, action: {})
+  )
+  host.layoutSubtreeIfNeeded()
+  return host.fittingSize.width
+}
+
+@MainActor
+private func requiredIndicatorContentWidth() -> CGFloat {
+  let host = NSHostingView(
+    rootView: HStack(spacing: 4) {
+      switch FleckMark.load(template: true) {
+      case .image(let mark):
+        Image(nsImage: mark)
+          .resizable()
+          .frame(width: 18, height: 18)
+      case .missingPackagedResource:
+        Text("!")
+      }
+      Text("MCP")
+        .font(.caption2.weight(.semibold))
+        .fixedSize(horizontal: true, vertical: false)
+      Image(systemName: "checkmark.circle.fill")
+        .font(.system(size: 7, weight: .semibold))
+        .frame(width: 9, height: 9)
+    }
   )
   host.layoutSubtreeIfNeeded()
   return host.fittingSize.width

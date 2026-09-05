@@ -156,13 +156,14 @@
           Text("MCP")
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
+            .fixedSize(horizontal: true, vertical: false)
           Image(systemName: presentation.state.statusSymbol ?? "circle.fill")
             .font(.system(size: 7, weight: .semibold))
             .foregroundStyle(presentation.state.statusColor)
             .opacity(presentation.state.statusSymbol == nil ? 0 : 1)
             .frame(width: 9, height: 9)
         }
-        .frame(width: 58, height: 22, alignment: .leading)
+        .frame(width: 64, height: 22, alignment: .leading)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
