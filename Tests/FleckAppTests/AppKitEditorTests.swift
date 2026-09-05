@@ -3077,14 +3077,185 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
       editor.doCommand(by: command)
       #expect(editor.string == original)
     }
+
+    editor.undoManager?.removeAllActions()
+    editor.selectAll(nil)
+    editor.insertText(
+      NSAttributedString(
+        string: "Direct\r\ninput\u{2028}stays\u{2029}plain",
+        attributes: [.underlineStyle: NSUnderlineStyle.single.rawValue]
+      ),
+      replacementRange: editor.selectedRange()
+    )
+    #expect(editor.string == "Direct input stays plain")
+    #expect(editor.textStorage?.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
+    #expect(editor.undoManager?.canUndo == true)
+    editor.undoManager?.undo()
+    #expect(editor.string == original)
+
     let pasteboard = NSPasteboard.withUniqueName()
     defer { pasteboard.releaseGlobally() }
-    pasteboard.setString("Pasted\ntext", forType: .string)
+    let pasted = NSAttributedString(
+      string: "Pasted\r\ntext\u{0085}on\u{2028}one\u{2029}line",
+      attributes: [.underlineStyle: NSUnderlineStyle.single.rawValue]
+    )
+    pasteboard.setData(
+      pasted.rtf(from: NSRange(location: 0, length: pasted.length)),
+      forType: .rtf
+    )
+    editor.undoManager?.removeAllActions()
     editor.selectAll(nil)
-    #expect(editor.readSelection(from: pasteboard, type: .string))
-    #expect(editor.string == "Pasted text")
+    #expect(editor.readSelection(from: pasteboard, type: .rtf))
+    #expect(editor.string == "Pasted text on one line")
+    #expect(editor.textStorage?.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
+    #expect(editor.undoManager?.canUndo == true)
+    editor.undoManager?.undo()
+    #expect(editor.string == original)
     editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
-    #expect(editor.string == "Pasted text")
+    #expect(editor.string == original)
+  }
+}
+
+@Test @MainActor func hostedTitlePreservesNativeReturnTabAndEscapeCommands() async throws {
+  try await withHostedTitleEditors { state, window, host, title, body in
+    title.nextKeyView = body
+
+    // Direct command routing matches an ordinary AppKit field editor: Return and
+    // cancelOperation keep it active, while Tab advances through the key loop.
+    #expect(window.makeFirstResponder(title))
+    let returnEditor = try #require(title.currentEditor() as? NSTextView)
+    returnEditor.selectAll(nil)
+    returnEditor.insertText("Committed title", replacementRange: returnEditor.selectedRange())
+    returnEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+    await settleHostedView(host)
+    #expect(window.firstResponder === returnEditor)
+    #expect(title.stringValue == "Committed title")
+    #expect(state.workspace.notes.first?.title == "Committed title")
+
+    #expect(window.makeFirstResponder(title))
+    let tabEditor = try #require(title.currentEditor() as? NSTextView)
+    tabEditor.doCommand(by: #selector(NSResponder.insertTab(_:)))
+    #expect(window.firstResponder === body)
+    #expect(title.stringValue == "Committed title")
+
+    #expect(window.makeFirstResponder(title))
+    let cancelEditor = try #require(title.currentEditor() as? NSTextView)
+    cancelEditor.selectAll(nil)
+    cancelEditor.insertText("Discarded title", replacementRange: cancelEditor.selectedRange())
+    cancelEditor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+    await settleHostedView(host)
+    #expect(window.firstResponder === cancelEditor)
+    #expect(title.stringValue == "Discarded title")
+    #expect(state.workspace.notes.first?.title == "Discarded title")
+  }
+}
+
+@Test @MainActor func hostedTitlePreservesMarkedTextComposition() async throws {
+  try await withHostedTitleEditors { state, window, host, title, _ in
+    #expect(window.makeFirstResponder(title))
+    let editor = try #require(title.currentEditor() as? NSTextView)
+    editor.selectAll(nil)
+    editor.setMarkedText(
+      "かな", selectedRange: NSRange(location: 2, length: 0),
+      replacementRange: editor.selectedRange()
+    )
+    #expect(editor.hasMarkedText())
+    #expect(editor.string == "かな")
+    editor.unmarkText()
+    #expect(!editor.hasMarkedText())
+    editor.insertText("。", replacementRange: editor.selectedRange())
+    await settleHostedView(host)
+    #expect(editor.string == "かな。")
+    #expect(title.stringValue == "かな。")
+    #expect(state.workspace.notes.first?.title == "かな。")
+  }
+}
+
+@Test @MainActor func hostedEmptyTitlePlaceholderStaysAlignedThroughEditing() async throws {
+  for family in ["Avenir Next", ".AppleSystemUIFont"] {
+    try await withHostedTitleEditors(titleText: "", fontFamily: family) { state, window, host, title, body in
+      #expect(window.makeFirstResponder(body))
+      await settleHostedView(host)
+      let originalFrame = host.convert(title.bounds, from: title)
+      let originalBody = state.workspace.notes.first?.body
+      @MainActor func sample(_ phase: String) throws -> ClosedRange<Int> {
+        // Capture the native draw path before asking TextKit to calculate any layout.
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsHigh) / host.bounds.height
+        let top = host.isFlipped ? originalFrame.minY : host.bounds.height - originalFrame.maxY
+        let rows = max(0, Int((top - 10) * scale))..<min(bitmap.pixelsHigh, Int((top + originalFrame.height) * scale))
+        // The first N is common to the placeholder and typed text; exclude the caret at x=2.
+        let columns = Int((originalFrame.minX + 5) * scale)..<Int((originalFrame.minX + 13) * scale)
+        let ink = rows.filter { y in columns.contains { x in
+          (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1
+        } }
+        let first = try #require(ink.first)
+        let last = try #require(ink.last)
+        #expect(ink.count < rows.count)
+        #expect(host.convert(title.bounds, from: title) == originalFrame)
+        let label = "placeholder-\(family)-\(window.appearance!.name.rawValue)-\(phase)"
+        print("\(label): ink=\(first)...\(last), frame=\(originalFrame)")
+        if let directory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"] {
+          try FileManager.default.createDirectory(
+            atPath: directory, withIntermediateDirectories: true
+          )
+          let png = try #require(bitmap.representation(using: .png, properties: [:]))
+          try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(label).png"))
+        }
+        return first...last
+      }
+      let inactive = try sample("inactive-empty")
+      #expect(window.makeFirstResponder(title))
+      let editor = try #require(title.currentEditor() as? NSTextView)
+      #expect(window.firstResponder === editor)
+      let editorFrame = host.convert(editor.bounds, from: editor)
+      print("PLACEHOLDER EDITOR FRAME \(family): title=\(originalFrame), editor=\(editorFrame)")
+      #expect(editorFrame.intersection(originalFrame).height >= originalFrame.height - 1)
+      for turn in 0..<3 {
+        if turn > 0 {
+          await Task.yield()
+          host.layoutSubtreeIfNeeded()
+        }
+        let focused = try sample("focused-empty-\(turn)")
+        #expect(abs(focused.lowerBound - inactive.lowerBound) <= 1)
+        #expect(abs(focused.upperBound - inactive.upperBound) <= 1)
+      }
+      #expect(editor.string.isEmpty)
+      editor.insertText("N", replacementRange: editor.selectedRange())
+      let typed = try sample("first-character")
+      #expect(abs(typed.lowerBound - inactive.lowerBound) <= 1)
+      #expect(abs(typed.upperBound - inactive.upperBound) <= 1)
+      editor.deleteBackward(nil)
+      for turn in 0..<3 {
+        if turn > 0 {
+          await Task.yield()
+          host.layoutSubtreeIfNeeded()
+        }
+        let emptied = try sample("deleted-empty-\(turn)")
+        #expect(abs(emptied.lowerBound - inactive.lowerBound) <= 1)
+        #expect(abs(emptied.upperBound - inactive.upperBound) <= 1)
+      }
+      await settleHostedView(host)
+      #expect(editor.string.isEmpty)
+      #expect(state.workspace.notes.first?.title == "")
+      #expect(state.workspace.notes.first?.body == originalBody)
+      #expect(window.makeFirstResponder(body))
+      let unfocused = try sample("unfocused-empty")
+      #expect(abs(unfocused.lowerBound - inactive.lowerBound) <= 1)
+      #expect(abs(unfocused.upperBound - inactive.upperBound) <= 1)
+      // Inspect input-method caret geometry only after all unforced visual samples.
+      #expect(window.makeFirstResponder(title))
+      let cursorEditor = try #require(title.currentEditor() as? NSTextView)
+      let emptyCaret = cursorEditor.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+      let emptyLine = cursorEditor.layoutManager?.extraLineFragmentRect
+      cursorEditor.insertText("N", replacementRange: cursorEditor.selectedRange())
+      let typedCaret = cursorEditor.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+      print("PLACEHOLDER CARET \(family): empty=\(emptyCaret), typed=\(typedCaret), emptyLine=\(String(describing: emptyLine))")
+      #expect(abs(emptyCaret.minY - typedCaret.minY) <= 1)
+      #expect(abs(emptyCaret.height - typedCaret.height) <= 1)
+      cursorEditor.deleteBackward(nil)
+    }
   }
 }
 
@@ -3135,7 +3306,6 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
           #expect(host.convert(title.bounds, from: title) == titleFrame)
           #expect(host.convert(body.bounds, from: body) == bodyFrame)
           #expect(scrollView.contentView.bounds.origin == clipOrigin)
-          #expect(title.usesSingleLineMode)
           print("TITLE INK \(label) \(phase): title=\(titleInk), body=\(bodyInk), frame=\(titleFrame), clip=\(clipOrigin)")
           if let directory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"] {
             let png = try #require(bitmap.representation(using: .png, properties: [:]))
@@ -3160,6 +3330,14 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
           #expect(abs(after.title.upperBound - before.title.upperBound) <= 1, "Title baseline moves on focus")
           #expect(after.body == before.body)
         }
+        let textContainer = try #require(editor.textContainer)
+        let layoutManager = try #require(editor.layoutManager)
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        var lineCount = 0
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, _, _, _, _ in
+          lineCount += 1
+        }
+        #expect(lineCount == 1)
       }
     }
   }
@@ -3214,24 +3392,25 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     otherField.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
     host.addSubview(otherField)
     #expect(window.makeFirstResponder(otherField))
-    let sharedEditor = try #require(otherField.currentEditor() as? NSTextView)
-    let originalCaret = sharedEditor.insertionPointColor
-    let originalSelection = NSDictionary(dictionary: sharedEditor.selectedTextAttributes)
+    let ordinaryEditor = try #require(otherField.currentEditor() as? NSTextView)
+    let originalCaret = ordinaryEditor.insertionPointColor
+    let originalSelection = NSDictionary(dictionary: ordinaryEditor.selectedTextAttributes)
     #expect(window.makeFirstResponder(titleField))
     let titleEditor = try #require(titleField.currentEditor() as? NSTextView)
-    #expect(titleEditor === sharedEditor)
+    #expect(titleEditor !== ordinaryEditor)
     #expect(sRGB(titleEditor.insertionPointColor) == sRGB(NSColor(hex: "#FFD600")))
     #expect(window.makeFirstResponder(otherField))
-    #expect(otherField.currentEditor() === sharedEditor)
-    #expect(sRGB(sharedEditor.insertionPointColor) == sRGB(originalCaret))
-    #expect(NSDictionary(dictionary: sharedEditor.selectedTextAttributes).isEqual(to: originalSelection))
+    #expect(otherField.currentEditor() === ordinaryEditor)
+    #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
+    #expect(NSDictionary(dictionary: ordinaryEditor.selectedTextAttributes).isEqual(to: originalSelection))
     state.updatePreferences { $0.accentHex = "#30D158" }
     await settleHostedView(host)
-    #expect(sRGB(sharedEditor.insertionPointColor) == sRGB(originalCaret))
+    #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
     #expect(window.makeFirstResponder(titleField))
-    #expect(sRGB(sharedEditor.insertionPointColor) == sRGB(NSColor(hex: "#30D158")))
+    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(NSColor(hex: "#30D158")))
     #expect(window.makeFirstResponder(otherField))
-    #expect(sRGB(sharedEditor.insertionPointColor) == sRGB(originalCaret))
+    #expect(otherField.currentEditor() === ordinaryEditor)
+    #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
   }
 }
 

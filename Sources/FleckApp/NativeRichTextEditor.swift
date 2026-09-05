@@ -675,19 +675,55 @@
     }
   }
 
+  private final class NoteTitleFieldEditor: NSTextView {
+    override func insertNewlineIgnoringFieldEditor(_ sender: Any?) {}
+
+    override func insertLineBreak(_ sender: Any?) {}
+
+    override func insertParagraphSeparator(_ sender: Any?) {}
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+      let text: String
+      if let attributed = insertString as? NSAttributedString {
+        text = attributed.string
+      } else if let string = insertString as? String {
+        text = string
+      } else {
+        super.insertText(insertString, replacementRange: replacementRange)
+        return
+      }
+      super.insertText(Self.singleLine(text), replacementRange: replacementRange)
+    }
+
+    override func readSelection(
+      from pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType
+    ) -> Bool {
+      guard let text = pasteboard.string(forType: .string) else { return false }
+      insertText(text, replacementRange: selectedRange())
+      return true
+    }
+
+    private static func singleLine(_ text: String) -> String {
+      text.replacingOccurrences(of: "\r\n", with: "\n")
+        .components(separatedBy: .newlines)
+        .joined(separator: " ")
+    }
+  }
+
   private final class NoteTitleCell: NSTextFieldCell {
     var accentColor: NSColor = .controlAccentColor {
       didSet { fieldEditor?.insertionPointColor = accentColor }
     }
+    private let titleFieldEditor: NSTextView = {
+      let editor = NoteTitleFieldEditor(frame: .zero)
+      editor.isFieldEditor = true
+      return editor
+    }()
     private weak var fieldEditor: NSTextView?
     private var originalCaretColor: NSColor?
 
-    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
-      // Draw using the title font's baseline, retaining AppKit's single-line input rules.
-      let singleLineMode = usesSingleLineMode
-      usesSingleLineMode = false
-      defer { usesSingleLineMode = singleLineMode }
-      super.drawInterior(withFrame: cellFrame, in: controlView)
+    override func fieldEditor(for controlView: NSView) -> NSTextView? {
+      titleFieldEditor
     }
 
     override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
@@ -895,7 +931,10 @@
       titleField.drawsBackground = false
       titleField.focusRingType = .none
       titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
-      titleField.usesSingleLineMode = true
+      titleField.usesSingleLineMode = false
+      titleField.cell?.wraps = false
+      titleField.cell?.isScrollable = true
+      titleField.maximumNumberOfLines = 1
       titleField.cell?.lineBreakMode = .byTruncatingTail
       titleField.setAccessibilityLabel("Note title")
       titleField.setAccessibilityElement(isEnabled)
