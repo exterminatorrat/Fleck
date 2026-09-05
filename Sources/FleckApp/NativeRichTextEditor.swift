@@ -80,6 +80,13 @@
       toggleAttribute(.strikethroughStyle, enabledValue: NSUnderlineStyle.single.rawValue)
     }
 
+    var isTitleEditing: Bool {
+      guard let document = textView?.superview as? NativeEditorDocumentView,
+        let fieldEditor = document.titleField.currentEditor()
+      else { return false }
+      return document.window?.firstResponder === fieldEditor
+    }
+
     func applyFontFamily(_ family: String) {
       guard let textView else { return }
       mutateSelection(defaultValue: NSFont.systemFont(ofSize: textView.font?.pointSize ?? 14)) {

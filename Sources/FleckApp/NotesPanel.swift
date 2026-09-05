@@ -2430,6 +2430,8 @@
     let isEditorVisible: Bool
     let isTitleFocused: Bool
     let onDelete: () -> Void
+    @State private var fontPickerTarget: FontPickerTarget?
+    @State private var isFontPickerPresented = false
     @State private var fontSizeText = ""
     @FocusState private var isFontSizeFocused: Bool
     @State private var isForegroundColorPickerPresented = false
@@ -2513,28 +2515,42 @@
           ToolbarIconLabel(systemImage: "strikethrough")
         }
         .accessibilityLabel("Strikethrough")
-        Menu {
-          ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
-            Button {
-              guard isEditorVisible else { return }
-              applyFontFamily(family)
-            } label: {
-              HStack {
-                Text(family)
-                if !isFontFamilyMixed, currentFontFamily == family {
-                  Image(systemName: "checkmark")
-                }
-              }
-            }
-          }
+        Button {
+          guard isEditorVisible, let note = appState.selectedNote else { return }
+          fontPickerTarget = FontPickerTarget(note: note, isTitle: isFontTitleTarget, commands: commands)
+          isFontPickerPresented = fontPickerTarget != nil
         } label: {
-          ToolbarIconLabel(systemImage: "textformat")
+          HStack(spacing: 5) {
+            Text("Aa")
+            Text(fontFamilyDisplay).lineLimit(1).truncationMode(.tail)
+            Image(systemName: "chevron.down").font(.system(size: 8))
+          }
+          .frame(maxWidth: 132)
         }
-        .help("Font")
+        .help("Font: \(fontFamilyDisplay)")
         .accessibilityLabel("Font")
-        .accessibilityValue(
-          isFontFamilyMixed ? "Mixed" : currentFontFamily ?? "Automatic"
-        )
+        .accessibilityValue(fontFamilyDisplay)
+        .popover(isPresented: $isFontPickerPresented, arrowEdge: .bottom) {
+          if let target = fontPickerTarget {
+            FontFamilyPicker(
+              currentFamily: target.isTitle ? target.note.titleFontFamily ?? appState.preferences.fontFamily : commands.currentFontFamily,
+              isMixed: target.isTitle ? false : commands.isFontFamilyMixed,
+              targetLabel: target.label,
+              onCommit: { family in
+                _ = target.apply(family, note: appState.selectedNote, isEditorVisible: isEditorVisible, commands: commands,
+                  titleMutation: { appState.setTitleFontFamily($0, noteID: target.note.id, undoManager: target.undoManager) })
+                isFontPickerPresented = false
+              },
+              onCancel: { isFontPickerPresented = false }
+            )
+            .frame(width: 280, height: 320)
+          }
+        }
+        .onChange(of: isFontPickerPresented) { _, presented in
+          if !presented { fontPickerTarget = nil }
+        }
+        .onChange(of: appState.selectedNote) { _, _ in dismissInvalidFontPicker() }
+        .onChange(of: isEditorVisible) { _, _ in dismissInvalidFontPicker() }
         TextField("Font size", text: $fontSizeText)
           .textFieldStyle(.roundedBorder)
           .frame(width: 48)
@@ -2711,24 +2727,30 @@
       return String(format: "%.2f", size).replacingOccurrences(of: #"\.00$"#, with: "", options: .regularExpression)
     }
 
+    private var isFontTitleTarget: Bool {
+      commands.isTitleEditing || isTitleFocused
+    }
+
     private var currentFontFamily: String? {
-      if isTitleFocused {
+      if isFontTitleTarget {
         return appState.selectedNote?.titleFontFamily ?? appState.preferences.fontFamily
       }
       return commands.currentFontFamily
     }
 
     private var isFontFamilyMixed: Bool {
-      isTitleFocused ? false : commands.isFontFamilyMixed
+      isFontTitleTarget ? false : commands.isFontFamilyMixed
     }
 
-    private func applyFontFamily(_ family: String) {
-      routeFontFamilyAction(
-        family: family,
-        isTitleFocused: isTitleFocused,
-        titleMutation: { appState.setSelectedTitleFontFamily($0) },
-        bodyMutation: { commands.applyFontFamily($0) }
-      )
+    private var fontFamilyDisplay: String {
+      isFontFamilyMixed ? "Mixed fonts" : FontFamilyPickerController.displayName(currentFontFamily ?? ".AppleSystemUIFont")
+    }
+
+    private func dismissInvalidFontPicker() {
+      guard let target = fontPickerTarget else { return }
+      if !target.isValid(note: appState.selectedNote, isEditorVisible: isEditorVisible, commands: commands) {
+        isFontPickerPresented = false
+      }
     }
 
     private func syncFontSizeText() {

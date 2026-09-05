@@ -4307,3 +4307,180 @@ private func sendHostedKeyDown(
     #expect(option.hex == expectedHexByName[option.name])
   }
 }
+
+@Test @MainActor func fontPickerHostedSelectionSearchCancelAndUndo() throws {
+  let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 360, height: 340), styleMask: [.titled], backing: .buffered, defer: false)
+  let textView = NSTextView()
+  window.contentView = textView
+  textView.allowsUndo = true
+  textView.textStorage?.setAttributedString(NSAttributedString(string: "ABCD", attributes: [.font: NSFont.systemFont(ofSize: 17)]))
+  textView.setSelectedRange(NSRange(location: 1, length: 2))
+  window.makeFirstResponder(textView)
+  let original = NSAttributedString(attributedString: try #require(textView.textStorage))
+  let commands = EditorCommands()
+  commands.textView = textView
+  let note = Note(body: "ABCD")
+  let target = try #require(FontPickerTarget(note: note, isTitle: false, commands: commands))
+  var cancelled = false
+  let picker = FontFamilyPickerController(currentFamily: nil, isMixed: true, targetLabel: target.label, onCommit: { _ in Issue.record("Cancelled picker committed") }, onCancel: { cancelled = true })
+  picker.loadViewIfNeeded()
+  let host = NSWindow(contentRect: .init(x: 0, y: 0, width: 280, height: 320), styleMask: [.titled], backing: .buffered, defer: false)
+  host.contentViewController = picker
+  host.makeFirstResponder(picker.searchField)
+  picker.searchField.stringValue = "no such font"
+  picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+  picker.cancelOperation(nil)
+  #expect(cancelled)
+  #expect(textView.textStorage == original)
+  #expect(textView.selectedRange() == NSRange(location: 1, length: 2))
+  #expect(target.apply("Courier", note: note, isEditorVisible: true, commands: commands, titleMutation: { _ in Issue.record("Body routed to title") }))
+  #expect((textView.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.familyName == "Courier")
+  #expect(textView.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont == NSFont.systemFont(ofSize: 17))
+  try #require(textView.undoManager).undo()
+  #expect(textView.textStorage == original)
+  try #require(textView.undoManager).redo()
+  #expect((textView.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.familyName == "Courier")
+}
+
+@Test @MainActor func fontPickerRejectsLiveBodyEditOrRangeChange() throws {
+  let textView = NSTextView()
+  textView.string = "ABCD"
+  let commands = EditorCommands()
+  commands.textView = textView
+  let note = Note(body: "ABCD")
+  for change in [{ textView.insertText("X", replacementRange: NSRange(location: 0, length: 1)) }, { textView.setSelectedRange(NSRange(location: 3, length: 0)) }] {
+    textView.setSelectedRange(NSRange(location: 0, length: 2))
+    let target = try #require(FontPickerTarget(note: note, isTitle: false, commands: commands))
+    change()
+    #expect(!target.apply("Courier", note: note, isEditorVisible: true, commands: commands, titleMutation: { _ in }))
+  }
+}
+
+// SwiftUI accessibility nodes expose the informal AppKit API, not NSAccessibilityProtocol.
+@MainActor private func fontPickerAccessibilityElement(_ value: Any, label: String) -> NSObject? {
+  guard let element = value as? NSObject else { return nil }
+  let labelSelector = NSSelectorFromString("accessibilityLabel")
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let name = element.responds(to: labelSelector)
+    ? element.perform(labelSelector)?.takeUnretainedValue() as? String : nil
+  if name == label { return element }
+  let children = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in children ?? [] {
+    if let found = fontPickerAccessibilityElement(child, label: label) { return found }
+  }
+  return nil
+}
+
+@Test @MainActor func fontPickerHostedToolbarRetainsTitleAndBodyTargets() async throws {
+  NSApplication.shared.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+  for isTitle in [true, false] {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Font picker fixture", body: "Body selection", richTextRTF: try hostedPanelRTF(text: "Body selection"), titleFontFamily: "Avenir Next")
+    let state = await hostedPanelState(root: root, workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: []))
+    let commands = EditorCommands()
+    let (window, host) = hostedPanel(root: root, state: state, commands: commands, isPinned: isTitle)
+    defer { window.orderOut(nil) }
+    if !isTitle { window.setContentSize(NSSize(width: 390, height: 430)) }
+    await settleHostedView(host)
+    let body = try #require(hostedPanelEditor(in: host))
+    if isTitle {
+      let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+      #expect(window.makeFirstResponder(titleField))
+    } else {
+      #expect(window.makeFirstResponder(body))
+      body.setSelectedRange(NSRange(location: 0, length: 4))
+    }
+    await settleHostedView(host)
+    let before = try #require(state.selectedNote)
+    let button = try #require(fontPickerAccessibilityElement(host, label: "Font"))
+    if isTitle {
+      let value = button.perform(NSSelectorFromString("accessibilityValue"))?.takeUnretainedValue() as? String
+      #expect(value == "Avenir Next")
+    }
+    _ = button.perform(NSSelectorFromString("accessibilityPerformPress"))
+    await settleHostedView(host)
+    let searchFields: [NSSearchField] = NSApplication.shared.windows.filter(\.isVisible).compactMap { window -> NSSearchField? in
+      guard let content = window.contentView else { return nil }
+      return hostedDescendant(in: content, as: NSSearchField.self)
+    }
+    let search = try #require(searchFields.first(where: { $0.placeholderString == "Search fonts" }))
+    let picker = try #require(search.delegate as? FontFamilyPickerController)
+    search.stringValue = "Menlo"
+    picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+    #expect(state.selectedNote == before)
+    let searchEditor = try #require(search.currentEditor() as? NSTextView)
+    #expect(picker.control(search, textView: searchEditor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+    await settleHostedView(host)
+    let capture = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+    host.cacheDisplay(in: host.bounds, to: capture)
+    let captureData = try #require(capture.representation(using: .png, properties: [:]))
+    let captureName = isTitle ? "phase2-font-pinned-host.png" : "phase2-font-narrow-host.png"
+    try captureData.write(to: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/evidence/\(captureName)"))
+    if isTitle {
+      #expect(state.selectedNote?.titleFontFamily == "Menlo")
+      #expect(state.selectedNote?.richTextRTF == before.richTextRTF)
+    } else {
+      #expect(state.selectedNote?.titleFontFamily == before.titleFontFamily)
+      #expect((body.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.familyName == "Menlo")
+      #expect(body.selectedRange() == NSRange(location: 0, length: 4))
+    }
+    let updated = try #require(state.selectedNote)
+    _ = button.perform(NSSelectorFromString("accessibilityPerformPress"))
+    await settleHostedView(host)
+    let reopenedPickers: [FontFamilyPickerController] = NSApplication.shared.windows.filter(\.isVisible).compactMap { window in
+      guard let content = window.contentView,
+        let search = hostedDescendant(in: content, as: NSSearchField.self)
+      else { return nil }
+      return search.delegate as? FontFamilyPickerController
+    }
+    let reopenedPicker = try #require(reopenedPickers.first)
+    let other = Note(title: "Other note", body: "Unchanged")
+    state.workspace.notes.append(other)
+    state.workspace.selectedNoteID = other.id
+    await settleHostedView(host)
+    reopenedPicker.commitSelection()
+    #expect(reopenedPicker.view.window?.isVisible != true)
+    #expect(state.selectedNote == other)
+    #expect(state.workspace.notes.first(where: { $0.id == updated.id }) == updated)
+  }
+}
+
+@Test @MainActor func fontPickerTitleUndoTargetsOriginalNoteAfterSelectionSwitch() async throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let original = Note(title: "Original")
+  let other = Note(title: "Other", titleFontFamily: "Avenir Next")
+  let state = await hostedPanelState(root: root, workspace: Workspace(notes: [original, other], selectedNoteID: original.id, folders: []))
+  let undo = UndoManager()
+  undo.groupsByEvent = false
+  undo.beginUndoGrouping()
+  state.setTitleFontFamily("Menlo", noteID: original.id, undoManager: undo)
+  undo.endUndoGrouping()
+  #expect(state.selectedNote?.titleFontFamily == "Menlo")
+  state.workspace.selectedNoteID = other.id
+  #expect(undo.canUndo)
+  undo.undo()
+  #expect(state.workspace.notes.first(where: { $0.id == original.id })?.titleFontFamily == nil)
+  #expect(state.selectedNote?.titleFontFamily == "Avenir Next")
+  undo.redo()
+  #expect(state.workspace.notes.first(where: { $0.id == original.id })?.titleFontFamily == "Menlo")
+  #expect(state.selectedNote?.titleFontFamily == "Avenir Next")
+}
+
+@Test @MainActor func fontPickerTableKeyboardReturnAndEscape() throws {
+  var committed: [String] = []
+  var cancelled = false
+  let picker = FontFamilyPickerController(currentFamily: "Menlo", isMixed: false, targetLabel: "New text", onCommit: { committed.append($0) }, onCancel: { cancelled = true })
+  let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 280, height: 320), styleMask: [.titled], backing: .buffered, defer: false)
+  window.contentViewController = picker
+  let table = try #require(hostedDescendant(in: picker.view, as: NSTableView.self))
+  window.makeFirstResponder(table)
+  let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+  table.keyDown(with: enter)
+  #expect(committed == ["Menlo"])
+  let escape = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+  table.keyDown(with: escape)
+  #expect(cancelled)
+}

@@ -1251,6 +1251,21 @@
       scheduleSave()
     }
 
+    func setTitleFontFamily(_ family: String?, noteID: UUID, undoManager: UndoManager?) {
+      guard !smartCaptureTransferNoteIDs.contains(noteID),
+        !pendingRestoreNoteIDs.contains(noteID),
+        let note = workspace.notes.first(where: { $0.id == noteID }),
+        note.titleFontFamily != family
+      else { return }
+      let previousFamily = note.titleFontFamily
+      workspace.setTitleFontFamily(id: noteID, family: family)
+      undoManager?.registerUndo(withTarget: self) { [weak undoManager] state in
+        state.setTitleFontFamily(previousFamily, noteID: noteID, undoManager: undoManager)
+      }
+      undoManager?.setActionName("Change Title Font")
+      scheduleSave()
+    }
+
     func toggleList(_ style: MarkdownEditing.ListStyle) {
       guard let note = selectedNote else { return }
       updateSelected(body: MarkdownEditing.togglingList(in: note.body, style: style))
