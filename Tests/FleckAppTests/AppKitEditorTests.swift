@@ -2986,6 +2986,100 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   }
 }
 
+@Test @MainActor func hostedTitleCaretMatchesBodyAccent() async throws {
+  try await withHostedTitleEditors { _, window, host, titleField, bodyEditor in
+    let accent = try #require(NSColor(hex: "#FFD600"))
+    for _ in 0..<2 {
+      #expect(window.makeFirstResponder(bodyEditor))
+      #expect(sRGB(bodyEditor.insertionPointColor) == sRGB(accent))
+      #expect(window.makeFirstResponder(titleField))
+      let fieldEditor = try #require(titleField.currentEditor() as? NSTextView)
+      #expect(window.firstResponder === fieldEditor)
+      // Check immediately: merely focusing an empty selection must style the caret.
+      fieldEditor.setSelectedRange(NSRange(location: 2, length: 0))
+      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(bodyEditor.insertionPointColor))
+      await settleHostedView(host)
+      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(accent))
+    }
+  }
+}
+
+@Test @MainActor func hostedTitleCaretUpdatesAccentWhileEditing() async throws {
+  try await withHostedTitleEditors { state, window, host, titleField, bodyEditor in
+    #expect(window.makeFirstResponder(titleField))
+    let fieldEditor = try #require(titleField.currentEditor() as? NSTextView)
+    let selection = NSRange(location: 1, length: 3)
+    fieldEditor.setSelectedRange(selection)
+    let typing = NSDictionary(dictionary: fieldEditor.typingAttributes)
+    let selectedAppearance = NSDictionary(dictionary: fieldEditor.selectedTextAttributes)
+    let originalTitle = fieldEditor.string
+    state.updatePreferences { $0.accentHex = "#30D158" }
+    await settleHostedView(host)
+    #expect(window.firstResponder === fieldEditor)
+    #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(NSColor(hex: "#30D158")))
+    #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(bodyEditor.insertionPointColor))
+    #expect(fieldEditor.selectedRange() == selection)
+    #expect(NSDictionary(dictionary: fieldEditor.typingAttributes).isEqual(to: typing))
+    #expect(NSDictionary(dictionary: fieldEditor.selectedTextAttributes).isEqual(to: selectedAppearance))
+    #expect(fieldEditor.string == originalTitle)
+    fieldEditor.insertText("EDIT", replacementRange: selection)
+    await settleHostedView(host)
+    #expect(state.workspace.notes.first?.title == (originalTitle as NSString).replacingCharacters(in: selection, with: "EDIT"))
+    #expect(state.workspace.notes.first?.body == "Caret body")
+  }
+}
+
+@Test @MainActor func hostedTitleAccentDoesNotLeakToOtherFields() async throws {
+  try await withHostedTitleEditors { state, window, host, titleField, _ in
+    let otherField = NSTextField(string: "Unrelated input")
+    otherField.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
+    host.addSubview(otherField)
+    #expect(window.makeFirstResponder(otherField))
+    let sharedEditor = try #require(otherField.currentEditor() as? NSTextView)
+    let originalCaret = sharedEditor.insertionPointColor
+    let originalSelection = NSDictionary(dictionary: sharedEditor.selectedTextAttributes)
+    #expect(window.makeFirstResponder(titleField))
+    let titleEditor = try #require(titleField.currentEditor() as? NSTextView)
+    #expect(titleEditor === sharedEditor)
+    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(NSColor(hex: "#FFD600")))
+    #expect(window.makeFirstResponder(otherField))
+    #expect(otherField.currentEditor() === sharedEditor)
+    #expect(sRGB(sharedEditor.insertionPointColor) == sRGB(originalCaret))
+    #expect(NSDictionary(dictionary: sharedEditor.selectedTextAttributes).isEqual(to: originalSelection))
+    state.updatePreferences { $0.accentHex = "#30D158" }
+    await settleHostedView(host)
+    #expect(sRGB(sharedEditor.insertionPointColor) == sRGB(originalCaret))
+    #expect(window.makeFirstResponder(titleField))
+    #expect(sRGB(sharedEditor.insertionPointColor) == sRGB(NSColor(hex: "#30D158")))
+    #expect(window.makeFirstResponder(otherField))
+    #expect(sRGB(sharedEditor.insertionPointColor) == sRGB(originalCaret))
+  }
+}
+
+@MainActor
+private func withHostedTitleEditors(
+  _ check: @MainActor (AppState, NSWindow, NSHostingView<AnyView>, NSTextField, ListAwareTextView) async throws -> Void
+) async throws {
+  for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Caret title", body: "Caret body", folderID: nil)
+    let state = await hostedPanelState(
+      root: root,
+      workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+    )
+    state.updatePreferences { $0.accentHex = "#FFD600" }
+    let (window, host) = hostedPanel(root: root, state: state, commands: EditorCommands())
+    defer { window.orderOut(nil) }
+    window.appearance = NSAppearance(named: appearance)
+    await settleHostedView(host)
+    let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+    let bodyEditor = try #require(hostedPanelEditor(in: host))
+    try await check(state, window, host, titleField, bodyEditor)
+    window.makeFirstResponder(nil)
+  }
+}
+
 @Test @MainActor func hostedNotesPanelTitleEditingUsesRealFieldEditor() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)

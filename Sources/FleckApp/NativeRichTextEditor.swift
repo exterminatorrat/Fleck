@@ -668,6 +668,40 @@
     }
   }
 
+  private final class NoteTitleCell: NSTextFieldCell {
+    var accentColor: NSColor = .controlAccentColor {
+      didSet { fieldEditor?.insertionPointColor = accentColor }
+    }
+    private weak var fieldEditor: NSTextView?
+    private var originalCaretColor: NSColor?
+
+    override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
+      let editor = super.setUpFieldEditorAttributes(textObj)
+      if let editor = editor as? NSTextView {
+        if fieldEditor !== editor {
+          originalCaretColor = editor.insertionPointColor
+          fieldEditor = editor
+        }
+        editor.insertionPointColor = accentColor
+      }
+      return editor
+    }
+
+    override func endEditing(_ textObj: NSText) {
+      restoreCaretColor()
+      super.endEditing(textObj)
+    }
+
+    func restoreCaretColor() {
+      // AppKit reuses this editor for other controls in the same window.
+      if let originalCaretColor {
+        fieldEditor?.insertionPointColor = originalCaretColor
+      }
+      fieldEditor = nil
+      originalCaretColor = nil
+    }
+  }
+
   final class NativeEditorDocumentView: NSView {
     let titleField: NSTextField
     let textView: ListAwareTextView
@@ -834,6 +868,9 @@
       scrollView.autohidesScrollers = true
 
       let titleField = NSTextField()
+      let titleCell = NoteTitleCell(textCell: "")
+      titleCell.accentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
+      titleField.cell = titleCell
       titleField.placeholderString = "Note title"
       titleField.stringValue = title
       titleField.isEditable = true
@@ -907,6 +944,7 @@
       guard let documentView = nsView.documentView as? NativeEditorDocumentView else { return }
       let textView = documentView.textView
       let commands = coordinator.parent.commands
+      (documentView.titleField.cell as? NoteTitleCell)?.restoreCaretColor()
       documentView.titleField.delegate = nil
       textView.clearNoteLinkPresentation()
       textView.onRequestNoteLink = nil
@@ -941,6 +979,8 @@
       textView.automaticLists = automaticLists
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
+      (documentView.titleField.cell as? NoteTitleCell)?.accentColor =
+        NSColor(hex: accentColorHex) ?? .controlAccentColor
       documentView.titleField.isEnabled = isEnabled
       documentView.titleField.setAccessibilityElement(isEnabled)
       documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
