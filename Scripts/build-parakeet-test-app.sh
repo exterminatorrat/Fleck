@@ -45,11 +45,12 @@ readonly codesign_path="$(xcrun --find codesign)"
 readonly lipo_path="$(xcrun --find lipo)"
 readonly otool_path="$(xcrun --find otool)"
 readonly install_name_tool_path="$(xcrun --find install_name_tool)"
+readonly swift_stdlib_tool_path="$(xcrun --find swift-stdlib-tool)"
 readonly active_sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
 readonly deployment_target="14.0"
 for required_tool in \
   "$resolver" "$swift_path" "$xcodebuild_path" "$codesign_path" "$lipo_path" "$otool_path" \
-  "$install_name_tool_path"; do
+  "$install_name_tool_path" "$swift_stdlib_tool_path"; do
   if [[ ! -x "$required_tool" ]]; then
     printf 'error: required Xcode tool is unavailable: %s\n' "$required_tool" >&2
     exit 2
@@ -527,6 +528,91 @@ readonly staged_gemma_resource_bundle="$staged_app/Contents/SharedSupport/mlx-sw
   "$staged_app/Contents/SharedSupport/fleck-agent" \
   "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 
+readonly portable_swift_runtime_name='libswiftCompatibilitySpan.dylib'
+readonly staged_frameworks="$staged_app/Contents/Frameworks"
+readonly staged_swift_runtime="$staged_frameworks/$portable_swift_runtime_name"
+readonly runtime_executables=(
+  "$staged_app/Contents/MacOS/Fleck"
+  "$staged_app/Contents/SharedSupport/fleck-agent"
+  "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
+)
+runtime_consumers=()
+portable_swift_runtime_source=''
+for executable in "${runtime_executables[@]}"; do
+  runtime_sources="$("$swift_stdlib_tool_path" \
+    --print \
+    --platform macosx \
+    --scan-executable "$executable")"
+  runtime_source_count=0
+  while IFS= read -r runtime_source; do
+    [[ -z "$runtime_source" ]] && continue
+    runtime_source_count=$((runtime_source_count + 1))
+    runtime_name="${runtime_source##*/}"
+    if [[ "$runtime_source" != /* || "$runtime_name" != "$portable_swift_runtime_name" ]]; then
+      printf 'error: unsupported portable Swift runtime dependency for %s: %s\n' \
+        "$executable" "$runtime_source" >&2
+      exit 1
+    fi
+    if [[ -n "$portable_swift_runtime_source" \
+      && "$runtime_source" != "$portable_swift_runtime_source" ]]; then
+      printf 'error: ambiguous Swift compatibility runtime sources: %s and %s\n' \
+        "$portable_swift_runtime_source" "$runtime_source" >&2
+      exit 1
+    fi
+    portable_swift_runtime_source="$runtime_source"
+  done <<<"$runtime_sources"
+  if (( runtime_source_count > 1 )); then
+    printf 'error: multiple portable Swift runtime dependencies are unsupported for %s\n' \
+      "$executable" >&2
+    exit 1
+  fi
+  if (( runtime_source_count == 1 )); then
+    runtime_consumers+=("$executable")
+  fi
+done
+
+if [[ -n "$portable_swift_runtime_source" ]]; then
+  if [[ -L "$portable_swift_runtime_source" || ! -f "$portable_swift_runtime_source" ]]; then
+    printf 'error: required Swift runtime source is missing or unsafe: %s\n' \
+      "$portable_swift_runtime_source" >&2
+    exit 1
+  fi
+  runtime_architectures="$($lipo_path -archs "$portable_swift_runtime_source")"
+  if [[ " $runtime_architectures " != *' arm64 '* ]]; then
+    printf 'error: required Swift runtime does not contain arm64: %s (%s)\n' \
+      "$portable_swift_runtime_source" "$runtime_architectures" >&2
+    exit 1
+  fi
+  /bin/mkdir "$staged_frameworks"
+  "$swift_stdlib_tool_path" \
+    --copy \
+    --platform macosx \
+    --destination "$staged_frameworks" \
+    --scan-executable "${runtime_executables[0]}" \
+    --scan-executable "${runtime_executables[1]}" \
+    --scan-executable "${runtime_executables[2]}"
+  if [[ -L "$staged_swift_runtime" || ! -f "$staged_swift_runtime" ]]; then
+    printf 'error: required Swift runtime was not copied safely: %s\n' \
+      "$staged_swift_runtime" >&2
+    exit 1
+  fi
+  if [[ "$(/usr/bin/find "$staged_frameworks" -mindepth 1 -maxdepth 1 -print)" \
+    != "$staged_swift_runtime" ]]; then
+    printf '%s\n' 'error: Swift runtime copy produced unexpected bundle entries' >&2
+    exit 1
+  fi
+  if ! /usr/bin/cmp -s "$portable_swift_runtime_source" "$staged_swift_runtime"; then
+    printf '%s\n' 'error: bundled Swift runtime differs from its toolchain source' >&2
+    exit 1
+  fi
+  runtime_architectures="$($lipo_path -archs "$staged_swift_runtime")"
+  if [[ " $runtime_architectures " != *' arm64 '* ]]; then
+    printf 'error: bundled Swift runtime does not contain arm64: %s (%s)\n' \
+      "$staged_swift_runtime" "$runtime_architectures" >&2
+    exit 1
+  fi
+fi
+
 first_symlink="$(/usr/bin/find "$staging_root" -type l -print -quit)"
 if [[ -n "$first_symlink" ]]; then
   printf 'error: staged test app contains a symlink: %s\n' "$first_symlink" >&2
@@ -545,6 +631,14 @@ for forbidden_suffix in \
 done
 
 expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupNotice.md\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/SharedSupport\nContents/SharedSupport/fleck-agent\nContents/SharedSupport/gemma-cleanup-helper\nContents/SharedSupport/mlx-swift_Cmlx.bundle\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Info.plist\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib'
+if [[ -n "$portable_swift_runtime_source" ]]; then
+  expected_app_contents="$(
+    printf '%s\n' "$expected_app_contents" \
+      'Contents/Frameworks' \
+      "Contents/Frameworks/$portable_swift_runtime_name" \
+      | LC_ALL=C /usr/bin/sort
+  )"
+fi
 actual_app_contents="$(
   /usr/bin/find "$staged_app" ! -path "$staged_app" -print \
     | /usr/bin/sed "s#^$staged_app/##" \
@@ -623,6 +717,9 @@ is_allowed_rpath() {
     /usr/lib/swift)
       return 0
       ;;
+    @loader_path/../Frameworks)
+      return 0
+      ;;
     @executable_path/*|@loader_path/*)
       if [[ "$1" == *".."* ]]; then
         return 1
@@ -666,6 +763,8 @@ verify_rpaths() {
             "$executable" "$rpath" >&2
           return 1
         fi
+        ;;
+      @loader_path/../Frameworks)
         ;;
       @executable_path/*|@loader_path/*)
         if [[ "$rpath" == *".."* ]]; then
@@ -735,6 +834,9 @@ verify_rpath_dependencies() {
             /usr/lib/swift)
               candidate="$rpath/$dependency_name"
               ;;
+            @loader_path/../Frameworks)
+              candidate="$staged_frameworks/$dependency_name"
+              ;;
             @executable_path/*|@loader_path/*)
               candidate="$executable_directory/${rpath#*/}/$dependency_name"
               case "$candidate" in
@@ -790,6 +892,9 @@ verify_arm64 "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 strip_disallowed_rpaths "$staged_app/Contents/MacOS/Fleck"
 strip_disallowed_rpaths "$staged_app/Contents/SharedSupport/fleck-agent"
 strip_disallowed_rpaths "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
+for executable in "${runtime_consumers[@]}"; do
+  "$install_name_tool_path" -add_rpath '@loader_path/../Frameworks' "$executable"
+done
 verify_rpaths "$staged_app/Contents/MacOS/Fleck"
 verify_rpaths "$staged_app/Contents/SharedSupport/fleck-agent"
 verify_rpaths "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
@@ -799,6 +904,10 @@ verify_dynamic_dependencies "$staged_app/Contents/SharedSupport/gemma-cleanup-he
 verify_rpath_dependencies "$staged_app/Contents/MacOS/Fleck"
 verify_rpath_dependencies "$staged_app/Contents/SharedSupport/fleck-agent"
 verify_rpath_dependencies "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
+if [[ -n "$portable_swift_runtime_source" ]]; then
+  verify_dynamic_dependencies "$staged_swift_runtime"
+  verify_rpath_dependencies "$staged_swift_runtime"
+fi
 print_rpath_evidence "$staged_app/Contents/MacOS/Fleck"
 print_rpath_evidence "$staged_app/Contents/SharedSupport/fleck-agent"
 print_rpath_evidence "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
@@ -833,6 +942,11 @@ if [[ "$(/usr/bin/plutil -extract NSPrincipalClass raw -o - \
 fi
 
 readonly designated_requirement="=designated => identifier \"$bundle_identifier\""
+if [[ -n "$portable_swift_runtime_source" ]]; then
+  "$codesign_path" --force --sign - \
+    --identifier "$bundle_identifier.swiftCompatibilitySpan" \
+    "$staged_swift_runtime"
+fi
 "$codesign_path" --force --sign - \
   --identifier "$bundle_identifier.gemma-cleanup-helper" \
   "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
@@ -847,6 +961,9 @@ readonly designated_requirement="=designated => identifier \"$bundle_identifier\
   "$staged_app/Contents/SharedSupport/fleck-agent"
 "$codesign_path" --verify --strict \
   "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
+if [[ -n "$portable_swift_runtime_source" ]]; then
+  "$codesign_path" --verify --strict "$staged_swift_runtime"
+fi
 "$codesign_path" --verify --deep --strict "$staged_app"
 
 app_signature_details="$(
