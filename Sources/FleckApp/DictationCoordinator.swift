@@ -167,6 +167,7 @@ final class DictationCoordinator {
   private var shortcutTerminalWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
   private var terminalWaiters: [CheckedContinuation<Void, Never>] = []
   private var eventObserver: (@MainActor (DictationCoordinatorEvent) -> Void)?
+  private var diagnosticObserver: (@MainActor (DictationDiagnosticObservation) -> Void)?
   private var levelObserver: (@MainActor (Float) -> Void)?
   private var pendingRoutingAmbiguity: PendingRoutingAmbiguity?
   private var nextCaptureContextGeneration: UInt64 = 1
@@ -180,6 +181,8 @@ final class DictationCoordinator {
   private(set) var latestRuntimeMeasurements = DictationRuntimeMeasurements.empty
   private(set) var latestProcessingResult: DictationProcessingResult?
   private var latestMeasurementCaptureID: UUID?
+  private var latestDiagnosticRevision: UInt64 = 0
+  private var lastPublishedDiagnostics: DictationRuntimeMeasurements.Diagnostics?
 
   var canConfigureShortcut: Bool {
     capture == nil && shortcutID == nil && activeShortcutSessions.isEmpty
@@ -261,6 +264,12 @@ final class DictationCoordinator {
     _ observer: (@MainActor (DictationCoordinatorEvent) -> Void)?
   ) {
     eventObserver = observer
+  }
+
+  func setDiagnosticObserver(
+    _ observer: (@MainActor (DictationDiagnosticObservation) -> Void)?
+  ) {
+    diagnosticObserver = observer
   }
 
   func setLevelObserver(
@@ -587,6 +596,8 @@ final class DictationCoordinator {
     }
     latestMeasurementCaptureID = id
     latestRuntimeMeasurements = .empty
+    latestDiagnosticRevision = 0
+    lastPublishedDiagnostics = nil
     latestProcessingResult = nil
     recordMeasurement(.coordinatorEventReceived, at: clock.now(), captureID: id)
     if let pressedAt = physicalGesture.pressedAt {
@@ -2142,7 +2153,10 @@ final class DictationCoordinator {
     captureID: UUID
   ) {
     guard latestMeasurementCaptureID == captureID else { return }
-    latestRuntimeMeasurements = latestRuntimeMeasurements.recording(stage, at: instant)
+    let updated = latestRuntimeMeasurements.recording(stage, at: instant)
+    guard updated != latestRuntimeMeasurements else { return }
+    latestRuntimeMeasurements = updated
+    publishDiagnostics(captureID: captureID)
   }
 
   private func overlay(
@@ -2150,7 +2164,10 @@ final class DictationCoordinator {
     captureID: UUID
   ) {
     guard latestMeasurementCaptureID == captureID else { return }
-    latestRuntimeMeasurements = latestRuntimeMeasurements.overlaying(measurements)
+    let updated = latestRuntimeMeasurements.overlaying(measurements)
+    guard updated != latestRuntimeMeasurements else { return }
+    latestRuntimeMeasurements = updated
+    publishDiagnostics(captureID: captureID)
   }
 
   private func recordFailureIfMissing(
@@ -2161,6 +2178,7 @@ final class DictationCoordinator {
       latestRuntimeMeasurements.failure == nil
     else { return }
     latestRuntimeMeasurements = latestRuntimeMeasurements.recording(failure: failure)
+    publishDiagnostics(captureID: captureID)
   }
 
   private func startupFailure(for error: Error) -> DictationRuntimeMeasurements.Failure? {
@@ -2212,11 +2230,29 @@ final class DictationCoordinator {
         failure: diagnosticFailure ?? stageFailure ?? existing
       )
     }
+    publishDiagnostics(captureID: captureID)
   }
 
   private func freezeMeasurements(captureID: UUID) {
     guard latestMeasurementCaptureID == captureID else { return }
     latestRuntimeMeasurements = latestRuntimeMeasurements.terminal()
+    publishDiagnostics(captureID: captureID)
+  }
+
+  private func publishDiagnostics(captureID: UUID) {
+    guard latestMeasurementCaptureID == captureID,
+      latestRuntimeMeasurements.outcome != nil,
+      let diagnosticObserver
+    else { return }
+    let diagnostics = latestRuntimeMeasurements.diagnostics
+    guard diagnostics != lastPublishedDiagnostics else { return }
+    latestDiagnosticRevision &+= 1
+    lastPublishedDiagnostics = diagnostics
+    diagnosticObserver(DictationDiagnosticObservation(
+      captureID: captureID,
+      revision: latestDiagnosticRevision,
+      diagnostics: diagnostics
+    ))
   }
 
   private func message(for error: Error) -> String {

@@ -650,6 +650,13 @@
           )
         }
       )
+      if let diagnosticExporter = DictationDiagnosticExporter.configured(
+        environment: ProcessInfo.processInfo.environment
+      ) {
+        coordinator.setDiagnosticObserver { observation in
+          diagnosticExporter.submit(observation)
+        }
+      }
       let capsuleController = DictationCapsuleController()
       let shortcutController = GlobalHoldShortcut(
         handler: coordinator,

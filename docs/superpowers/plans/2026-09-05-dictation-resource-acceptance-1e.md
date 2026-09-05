@@ -19,9 +19,11 @@ The present machine is a 24 GB M4 Mac mini. Access to the 8 GB M1 MacBook is unr
 4. **Verification:** Red-first tests for disabled mode, allowlisted schema/privacy sentinels, bounded records, revision replacement, write failure isolation, success/failure/cancel observations, drain revision, and reentrant/stale capture isolation. Use `bash scripts/run-nonempty-swift-tests.sh` with anchored discovered Swift Testing function names. Then rerun related coordinator/runtime/diagnostics tests and the existing enhanced adapter tests through the enhanced runner. Parent independently checks the exact diff and nonzero test counts; fresh `sol_advisor_sol_reviewer` must return `ship`.
 5. **Handoff:** Exact changed paths, commands/counts, red/green evidence, content-free sample from tests, limitations and diff identity. Worker owns only these files, is not alone, must preserve/adapt to others' edits, and makes no commits or external writes. Parent commits only accepted work.
 
-- [ ] Write failing tests and implement the minimal observer/exporter.
-- [ ] Parent verification and fresh review; correct through the same worker if needed.
-- [ ] Commit accepted E1 locally before E2.
+- [x] Write failing tests and implement the minimal observer/exporter.
+- [x] Parent verification and fresh review; correct through the same worker if needed.
+- [x] Commit accepted E1 locally before E2.
+
+E1 source acceptance: parent final default 22/22 (`/tmp/fleck-e1-parent-final.log`), true Enhanced 63/63 before the unconditional failure-reporter correction (`/tmp/fleck-e1-parent-enhanced.log`), unchanged dependency lock, clean diff. Fresh reviewer `dictation_e1_final_review` returned `ship`. The first review required a production-visible failure signal; the same worker added one-shot fixed stderr reporting and its configured-path test. Abrupt process exit may lose queued writes. No physical measurement or retention acceptance is claimed.
 
 ## Section E2 — Exact-process resource sampling
 
@@ -33,6 +35,14 @@ The present machine is a 24 GB M4 Mac mini. Access to the 8 GB M1 MacBook is unr
 
 - [ ] Inspect the existing CLI and pin the exact command/interface before delegation.
 - [ ] Implement, verify, review, and commit E2 sequentially.
+
+### E2 execution specification (pinned after CLI inspection)
+
+Expose `local-dictation-candidate sample-resources --pid <positive Int32> --duration-seconds <1...600> --output <new JSON path>` with fixed 100 ms cadence. Reject duplicate/unknown/missing flags, invalid PID/duration and occupied output before sampling. Reuse the Darwin provider in `ProcessResourceSampler.swift`; do not repeat its system call elsewhere. Extend its sample with optional process-start identity (default nil for existing injected providers); production obtains it from the same rusage sample. The new command requires identity and rejects a changed identity before including that sample, while existing peak-sampler consumers keep their behavior.
+
+Own exactly the existing `ProcessResourceSampler.swift`, CLI `main.swift`, new runner `ProcessResourceTimeline.swift`, existing `ProcessResourceSamplerTests.swift`, and new `ProcessResourceTimelineTests.swift`, all under `Tools/LocalDictationCandidateAdapters`. Keep parsing tests in the new test file, using the existing CLI's testable target. Reuse its exclusive output publication (a narrow Encodable generalization is allowed). The timeline records requested PID, observed start identity, cadence, elapsed milliseconds, RSS and physical footprint in bytes, sample count, sampled peaks, completion and a fixed failure category. Retain valid samples and mark incomplete/nonzero exit on process exit, identity change or provider failure; no zero-filling, process-name search, app launch or helper aggregation. Stop at the finite deadline, propagate cancellation, and do not introduce a second benchmark framework. Inject only provider/clock seams necessary for deterministic checks.
+
+Red-first tests cover strict parsing, exact PID, ordered samples/peaks, deadline, missing/changed identity, exit/unavailability, invalid samples and preserved incomplete evidence. Run the nonempty runner with `--package-path Tools/LocalDictationCandidateAdapters` and discovered anchored function identifiers, including existing sampler and CLI regression tests. A harmless short-lived local process may be sampled for smoke evidence. Report exact command, count and output schema. No source edits before E1's fresh `ship`; parent reruns checks and obtains a new fresh Sol review before committing E2.
 
 ## Section E3 — Reproducible measurement protocol
 

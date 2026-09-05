@@ -1389,6 +1389,14 @@ func physicalGestureReceiptFreezesCancelledRouteAfterDrain() async throws {
     drainGate: drainGate,
     routeDrained: routeDrained
   )
+  var diagnosticEvents: [String] = []
+  fixture.coordinator.setDiagnosticObserver { observation in
+    let drain = observation.diagnostics.stages["cancellation_drained"] ?? nil
+    diagnosticEvents.append(drain == nil ? "terminal-diagnostic" : "drain-diagnostic")
+  }
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil { diagnosticEvents.append("terminal-ui") }
+  }
 
   await fixture.coordinator.start(mode: .smartCapture)
   let finishing = Task { await fixture.coordinator.finish() }
@@ -1409,6 +1417,7 @@ func physicalGestureReceiptFreezesCancelledRouteAfterDrain() async throws {
   #expect(terminal.cancellationRequestedAt != nil)
   #expect(terminal.cancellationDrainedAt == clock.now)
   #expect(fixture.coordinator.phase == .idle)
+  #expect(diagnosticEvents == ["terminal-diagnostic", "terminal-ui", "drain-diagnostic"])
 }
 
 @Test @MainActor
@@ -1448,6 +1457,8 @@ func dictationDiagnosticsCoordinatorPublishesLifecycleAndKeepsLateAmbiguityMoveO
   fixture.router.result = .ambiguous([
     .init(destination: project, contextHint: "project"),
   ])
+  var observations: [DictationDiagnosticObservation] = []
+  fixture.coordinator.setDiagnosticObserver { observations.append($0) }
 
   await fixture.coordinator.start(mode: .smartCapture)
   await fixture.coordinator.finish()
@@ -1465,6 +1476,8 @@ func dictationDiagnosticsCoordinatorPublishesLifecycleAndKeepsLateAmbiguityMoveO
   let diagnostics = fixture.coordinator.latestRuntimeDiagnostics
   #expect(diagnostics.stages.keys.contains("asr_final"))
   #expect(diagnostics.stages["asr_final"]! == nil)
+  #expect(observations.count == 1)
+  #expect(observations[0].diagnostics.outcome == .succeeded)
 
   clock.advance(by: .milliseconds(1))
   #expect(await fixture.coordinator.chooseDestination(
@@ -1472,6 +1485,10 @@ func dictationDiagnosticsCoordinatorPublishesLifecycleAndKeepsLateAmbiguityMoveO
     noteID: project.noteID
   ) == .completed)
   #expect(fixture.coordinator.latestRuntimeMeasurements.ambiguityMovedAt == clock.now)
+  #expect(observations.count == 2)
+  #expect(observations[1].captureID == observations[0].captureID)
+  #expect(observations[1].revision == observations[0].revision + 1)
+  #expect(observations[1].diagnostics.stages["ambiguity_moved"]! == 1)
 }
 
 @Test @MainActor
@@ -1488,6 +1505,8 @@ func dictationDiagnosticsCoordinatorPropagatesStartupFailureWithoutReturnedSessi
     startupMeasurements: startup
   )
   let fixture = try Fixture(processing: processing, clock: clock.clock)
+  var observations: [DictationDiagnosticObservation] = []
+  fixture.coordinator.setDiagnosticObserver { observations.append($0) }
 
   await fixture.coordinator.start(mode: .smartCapture)
 
@@ -1496,6 +1515,38 @@ func dictationDiagnosticsCoordinatorPropagatesStartupFailureWithoutReturnedSessi
   #expect(fixture.coordinator.latestRuntimeMeasurements.outcome == .failed)
   #expect(fixture.coordinator.latestRuntimeDiagnostics.failure == .permissionDenied)
   #expect(fixture.coordinator.phase == .failed(DictationFailure.permissionDenied.localizedDescription))
+  #expect(observations.count == 1)
+  #expect(observations[0].diagnostics.outcome == .failed)
+  #expect(observations[0].diagnostics.failure == .permissionDenied)
+}
+
+@Test @MainActor
+func dictationDiagnosticObserverDoesNotRelabelOldCaptureAfterReentry() async throws {
+  let processing = ProcessingProbe(result: processingResult("First capture"))
+  let fixture = try Fixture(processing: processing)
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  fixture.saver.destinations.append(project)
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+  ])
+  var observations: [DictationDiagnosticObservation] = []
+  fixture.coordinator.setDiagnosticObserver { observations.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let oldCaptureID = try #require(fixture.coordinator.routingAmbiguity?.captureID)
+  processing.complete(with: processingResult("Second capture"))
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: oldCaptureID,
+    noteID: project.noteID
+  ) != .completed)
+  await fixture.coordinator.finish()
+
+  #expect(observations.count == 2)
+  #expect(observations[0].captureID == oldCaptureID)
+  #expect(observations[1].captureID != oldCaptureID)
+  #expect(observations[1].revision == 1)
 }
 
 @Test @MainActor
