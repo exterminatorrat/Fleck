@@ -1,20 +1,31 @@
 import AppKit
 import Foundation
 import Testing
+import SwiftUI
 @testable import FleckApp
 import FleckCore
 
-@Test func reorderInteractionFoldersRequireExactLocalSourceSessionAndDistinctPayload() {
+@Test @MainActor
+func reorderInteractionFoldersRequireExactLocalSourceSessionAndDistinctPayload() async throws {
   let ids = [UUID(), UUID(), UUID()]
   var interaction = ReorderInteraction(sourceID: ids[0], originalIDs: ids)
-  let local = FolderDragPayload.folderProvider(folderID: ids[0], sessionID: interaction.sessionID)
-  #expect(FolderDragPayload.matchesFolder([local], interaction: interaction))
-  #expect(!FolderDragPayload.matchesFolder([local], interaction: nil))
-  #expect(!FolderDragPayload.matchesFolder([local], interaction:
-    ReorderInteraction(sourceID: ids[0], originalIDs: ids)))
-  #expect(!FolderDragPayload.matchesFolder([FolderDragPayload.noteProvider(source:
-    NoteDropSource(noteID: ids[0], sourceFolderID: nil))], interaction: interaction))
-  #expect(!FolderDragPayload.matchesFolder([NSItemProvider()], interaction: interaction))
+  let expected = FolderDragPayload.FolderValue(folderID: ids[0], sessionID: interaction.sessionID)
+  let values = [expected, .init(folderID: ids[0], sessionID: UUID()),
+    .init(folderID: ids[1], sessionID: interaction.sessionID)]
+  for value in values {
+    let session = ReorderDropSession(folder: expected)
+    var commits = 0
+    let provider = reconstructedReorderProvider(data: try JSONEncoder().encode(value),
+      typeIdentifier: FolderDragPayload.folderType.identifier)
+    let load = try #require(session.acceptDrop(from: [provider]) { commits += 1 })
+    session.end(operation: .move)
+    await load.value
+    #expect(commits == (value == expected ? 1 : 0))
+  }
+  let session = ReorderDropSession(folder: expected)
+  #expect(session.acceptDrop(from: [FolderDragPayload.noteProvider(source:
+    NoteDropSource(noteID: ids[0], sourceFolderID: nil))], commit: {}) == nil)
+  #expect(session.acceptDrop(from: [NSItemProvider()], commit: {}) == nil)
   interaction.propose(over: ids[2], after: true, currentIDs: ids)
   #expect(interaction.consume(currentIDs: [ids[0], ids[1]]) == nil)
 }
@@ -99,4 +110,339 @@ func reorderInteractionFolderTransferCommitsBeforeReleaseCleanupAndRejectsStaleS
   activeSource = source // A captured source from before the transfer is stale.
   #expect(!drop(source))
   #expect(commits == 1)
+}
+
+@Test func reorderInteractionLocalPayloadTypesDeclareNativeDataConformance() throws {
+  let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .deletingLastPathComponent().deletingLastPathComponent()
+  let data = try Data(contentsOf: root.appendingPathComponent("Sources/FleckApp/Info.plist"))
+  let plist = try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+  let declarations = plist["UTExportedTypeDeclarations"] as? [[String: Any]] ?? []
+  // AppKit registers SwiftUI drop destinations for public.data/public.item.
+  // Own-process payloads still need declared conformance to reach validateDrop.
+  for identifier in [FolderDragPayload.noteType.identifier, FolderDragPayload.folderType.identifier] {
+    let declaration = declarations.first { $0["UTTypeIdentifier"] as? String == identifier }
+    #expect((declaration?["UTTypeConformsTo"] as? [String])?.contains("public.data") == true)
+  }
+}
+
+@Test @MainActor func reorderInteractionGenericProviderCarriesAuthenticatedNotePayload() async throws {
+  let source = NoteDropSource(noteID: UUID(), sourceFolderID: UUID())
+  let encoded = try JSONEncoder().encode(source)
+  let reconstructed = NSItemProvider()
+  reconstructed.registerDataRepresentation(forTypeIdentifier: FolderDragPayload.noteType.identifier,
+    visibility: .ownProcess) { completion in
+      completion(encoded, nil)
+      return nil
+    }
+  let data: Data? = await withCheckedContinuation { continuation in
+    reconstructed.loadDataRepresentation(forTypeIdentifier: FolderDragPayload.noteType.identifier) {
+      data, _ in continuation.resume(returning: data)
+    }
+  }
+  #expect(FolderDragPayload.noteValue(from: try #require(data)) == source)
+  for nativeEndFirst in [false, true] {
+    let session = ReorderDropSession(source: source)
+    var commits = 0
+    let load = try #require(session.acceptDrop(from: [reconstructed]) { commits += 1 })
+    if nativeEndFirst { session.end(operation: .move) }
+    await load.value
+    if !nativeEndFirst {
+      #expect(commits == 0)
+      session.end(operation: .move)
+    }
+    #expect(commits == 1)
+    session.end(operation: .move)
+    #expect(session.acceptDrop(from: [reconstructed], commit: { commits += 1 }) == nil)
+    #expect(commits == 1)
+  }
+}
+
+
+private func reconstructedReorderProvider(data: Data, typeIdentifier: String) -> NSItemProvider {
+  let provider = NSItemProvider()
+  provider.registerDataRepresentation(forTypeIdentifier: typeIdentifier, visibility: .ownProcess) {
+    completion in
+    completion(data, nil)
+    return nil
+  }
+  return provider
+}
+
+@Test @MainActor
+func reorderInteractionPendingDropRejectsCancelledAndReplacedSessions() async throws {
+  let source = NoteDropSource(noteID: UUID(), sourceFolderID: nil)
+  let provider = reconstructedReorderProvider(data: try JSONEncoder().encode(source),
+    typeIdentifier: FolderDragPayload.noteType.identifier)
+  for end in [NSDragOperation(), .copy] {
+    for authenticateFirst in [false, true] {
+      let session = ReorderDropSession(source: source)
+      var commits = 0
+      let load = try #require(session.acceptDrop(from: [provider]) { commits += 1 })
+      if authenticateFirst { await load.value }
+      session.end(operation: end)
+      await load.value
+      session.end(operation: .move)
+      #expect(commits == 0)
+    }
+  }
+  // The latest session survives presentation cleanup so a later drag can cancel it.
+  var latest = ReorderDropSession(source: source)
+  var commits = 0
+  let old = latest
+  let load = try #require(old.acceptDrop(from: [provider]) { commits += 1 })
+  old.end(operation: .move)
+  latest.cancel()
+  latest = ReorderDropSession(source: NoteDropSource(noteID: source.noteID, sourceFolderID: nil))
+  await load.value
+  #expect(commits == 0)
+  #expect(latest.canAcceptDrop)
+  let pending = ReorderDropSession(source: source)
+  let decoded = try #require(pending.acceptDrop(from: [provider]) { commits += 1 })
+  await decoded.value
+  pending.cancel()
+  pending.end(operation: .move)
+  #expect(commits == 0)
+}
+
+@Test @MainActor
+func reorderInteractionGenericPayloadRejectsMismatchAndReplay() async throws {
+  let source = NoteDropSource(noteID: UUID(), sourceFolderID: UUID())
+  let mismatches = [
+    NoteDropSource(noteID: source.noteID, sourceFolderID: source.sourceFolderID),
+    NoteDropSource(noteID: UUID(), sourceFolderID: source.sourceFolderID, dragSessionID: source.dragSessionID),
+    NoteDropSource(noteID: source.noteID, sourceFolderID: nil, dragSessionID: source.dragSessionID)
+  ]
+  for data in try mismatches.map({ try JSONEncoder().encode($0) }) + [Data("{}".utf8)] {
+    let session = ReorderDropSession(source: source)
+    var commits = 0
+    let load = try #require(session.acceptDrop(from: [reconstructedReorderProvider(data: data,
+      typeIdentifier: FolderDragPayload.noteType.identifier)]) { commits += 1 })
+    session.end(operation: .move)
+    await load.value
+    #expect(commits == 0)
+  }
+}
+
+@Test @MainActor
+func reorderInteractionDeferredReorderRevalidatesOrderMembershipAndPins() async throws {
+  let ids = [UUID(), UUID(), UUID()]
+  for change in 0..<5 {
+    var currentIDs = ids
+    var currentPins: Set<UUID> = []
+    var interaction = ReorderInteraction(sourceID: ids[0], originalIDs: ids)
+    interaction.propose(over: ids[2], after: true, currentIDs: ids)
+    let source = NoteDropSource(noteID: ids[0], sourceFolderID: nil, dragSessionID: interaction.sessionID)
+    let session = ReorderDropSession(source: source)
+    var commits = 0
+    let provider = reconstructedReorderProvider(data: try JSONEncoder().encode(source),
+      typeIdentifier: FolderDragPayload.noteType.identifier)
+    let load = try #require(session.acceptReorder(from: [provider], interaction: interaction,
+      currentIDs: { currentIDs }, currentPinnedIDs: { currentPins }) { sourceID, destination in
+        #expect(sourceID == ids[0])
+        #expect(destination == 2)
+        commits += 1
+      })
+    await load.value
+    #expect(commits == 0)
+    switch change {
+    case 1: currentIDs.swapAt(1, 2)
+    case 2: currentIDs.removeLast()
+    case 3: currentIDs.removeFirst()
+    case 4: currentPins.insert(ids[0]) // Order can stay identical when the first tab becomes pinned.
+    default: break
+    }
+    session.end(operation: .move)
+    session.end(operation: .move)
+    #expect(commits == (change == 0 ? 1 : 0))
+  }
+}
+
+@Test @MainActor
+func reorderInteractionDeferredFolderTransferRevalidatesAndPreservesSelection() async throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = try Folder(name: "Destination")
+  let dragged = Note(title: "Drag")
+  let selected = Note(title: "Keep selected")
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _, _ in .committed })
+  await state.waitUntilInitialLoad()
+  for change in 0..<4 {
+    state.workspace = Workspace(notes: [dragged, selected], selectedNoteID: selected.id, folders: [folder])
+    let source = NoteDropSource(noteID: dragged.id, sourceFolderID: nil)
+    let session = ReorderDropSession(source: source)
+    let provider = reconstructedReorderProvider(data: try JSONEncoder().encode(source),
+      typeIdentifier: FolderDragPayload.noteType.identifier)
+    var commits = 0
+    let load = try #require(session.acceptNoteTransfer(from: [provider], source: source,
+      targetFolderID: folder.id, currentSourceNotes: { state.visibleNotes(in: nil) },
+      validTargetFolderIDs: { Set(state.workspace.folders.map(\.id)) }) { source, target in
+        commits += 1
+        return state.moveNote(source.noteID, fromFolderID: source.sourceFolderID,
+          toFolderID: target, activeFolderID: nil)
+      })
+    await load.value
+    #expect(commits == 0)
+    switch change {
+    case 1: state.workspace.notes[0].folderID = folder.id
+    case 2: state.workspace.folders = []
+    case 3: state.workspace.notes[0].isPinned = true
+    default: break
+    }
+    session.end(operation: .move)
+    #expect(commits == (change == 0 ? 1 : 0))
+    #expect(state.workspace.selectedNoteID == selected.id)
+    if change == 0 { #expect(state.workspace.notes.first(where: { $0.id == dragged.id })?.folderID == folder.id) }
+  }
+}
+
+@Test @MainActor func reorderInteractionNativeSourceOnlyAllowsLocalMoves() {
+  #expect(ReorderNativeSource.operationMask(for: .withinApplication) == .move)
+  #expect(ReorderNativeSource.operationMask(for: .outsideApplication).isEmpty)
+}
+
+@Test func reorderInteractionFluidUnequalWidthsDisplaceFullSourceGapAndReverse() throws {
+  let ids = [UUID(), UUID(), UUID()]
+  let frames = [ids[0]: CGRect(x: 0, y: 0, width: 60, height: 30),
+    ids[1]: CGRect(x: 66, y: 0, width: 120, height: 30),
+    ids[2]: CGRect(x: 192, y: 0, width: 80, height: 30)]
+  var drag = try #require(FluidTabReorder(interaction: ReorderInteraction(sourceID: ids[0], originalIDs: ids),
+    frames: frames, pointerX: 15))
+  drag.update(pointerX: 230)
+  #expect(drag.destination == 2)
+  #expect(drag.offset(for: ids[1]) == -66)
+  #expect(drag.offset(for: ids[2]) == -66)
+  #expect(drag.slotFrame == CGRect(x: 212, y: 0, width: 60, height: 30))
+  for _ in 0..<20 { drag.update(pointerX: 230); #expect(drag.destination == 2) }
+  drag.update(pointerX: 15)
+  #expect(drag.destination == 0)
+  #expect(ids.allSatisfy { drag.offset(for: $0) == 0 })
+  var reverse = try #require(FluidTabReorder(interaction: ReorderInteraction(sourceID: ids[2], originalIDs: ids),
+    frames: frames, pointerX: 210))
+  reverse.update(pointerX: 18)
+  #expect(reverse.destination == 0)
+  #expect(reverse.offset(for: ids[0]) == 86)
+  #expect(reverse.offset(for: ids[1]) == 86)
+}
+
+@Test func reorderInteractionFluidPinsGeometryInvalidationAndNoHoverMutation() throws {
+  let ids = [UUID(), UUID(), UUID()]
+  let frames = Dictionary(uniqueKeysWithValues: ids.enumerated().map {
+    ($0.element, CGRect(x: $0.offset * 66, y: 0, width: 60, height: 30))
+  })
+  let original = ReorderInteraction(sourceID: ids[1], originalIDs: ids, pinnedIDs: [ids[0]])
+  var drag = try #require(FluidTabReorder(interaction: original, frames: frames, pointerX: 80))
+  drag.update(pointerX: -100)
+  #expect(drag.destination == 1)
+  #expect(drag.interaction.originalIDs == ids)
+  #expect(drag.isValid(ids: ids, pins: [ids[0]], frames: frames))
+  #expect(!drag.isValid(ids: ids.reversed(), pins: [ids[0]], frames: frames))
+  #expect(!drag.isValid(ids: ids, pins: [], frames: frames))
+  var resized = frames
+  resized[ids[1]]?.size.width = 100
+  #expect(!drag.isValid(ids: ids, pins: [ids[0]], frames: resized))
+}
+
+@Test func reorderInteractionFluidOverflowRecomputesFromLiveScrollAndStopsOutside() throws {
+  #expect(FluidTabReorder.scrollDelta(pointerX: 99, viewport: 0...100) > 0)
+  #expect(FluidTabReorder.scrollDelta(pointerX: 1, viewport: 0...100) < 0)
+  #expect(FluidTabReorder.scrollDelta(pointerX: 50, viewport: 0...100) == 0)
+  #expect(FluidTabReorder.scrollDelta(pointerX: 101, viewport: 0...100) == 0)
+  let ids = [UUID(), UUID(), UUID()]
+  let frames = Dictionary(uniqueKeysWithValues: ids.enumerated().map {
+    ($0.element, CGRect(x: $0.offset * 106, y: 0, width: 100, height: 30))
+  })
+  var drag = try #require(FluidTabReorder(interaction: ReorderInteraction(sourceID: ids[0], originalIDs: ids),
+    frames: frames, pointerX: 20))
+  drag.update(pointerX: 90)
+  let before = drag.destination
+  drag.update(pointerX: 90 + 150)
+  #expect(drag.destination > before)
+}
+
+@Test @MainActor func reorderInteractionFluidControllerHoverCancelAndOverflowDoNotSave() async throws {
+  let notes = ["One", "Two", "Three"].map { Note(title: $0) }
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _, _ in .committed })
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: notes, selectedNoteID: notes[1].id)
+  let original = state.workspace
+  let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 180, height: 40),
+    styleMask: [.borderless], backing: .buffered, defer: false)
+  window.isReleasedWhenClosed = false
+  defer { window.close() }
+  let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 180, height: 40))
+  let view = FluidTabDestinationView(rootView: AnyView(Color.clear.frame(width: 400, height: 37)))
+  view.frame = NSRect(x: 0, y: 0, width: 400, height: 37)
+  scroll.documentView = view
+  window.contentView = scroll
+  let controller = FluidTabDragController()
+  controller.view = view
+  for (index, note) in notes.enumerated() {
+    let source = ReorderSourceHostingView(rootView: AnyView(Color.clear.frame(width: 100, height: 30)))
+    source.noteID = note.id
+    source.frame = NSRect(x: index * 106, y: 0, width: 100, height: 30)
+    view.addSubview(source)
+  }
+  let interaction = ReorderInteraction(sourceID: notes[0].id, originalIDs: notes.map(\.id))
+  let session = ReorderDropSession(source: .init(noteID: notes[0].id, sourceFolderID: nil,
+    dragSessionID: interaction.sessionID))
+  var moves = 0
+  func screen(_ x: CGFloat) -> NSPoint {
+    window.convertPoint(toScreen: view.convert(NSPoint(x: x, y: 15), to: nil))
+  }
+  controller.prepare(interaction: interaction, session: session,
+    currentIDs: { state.visibleNotes(in: nil).map(\.id) }, currentPins: { [] },
+    move: { _, _ in moves += 1 }, finish: {})
+  controller.began(at: screen(20))
+  controller.moved(to: screen(175))
+  let before = scroll.contentView.bounds.minX
+  for _ in 0..<20 { controller.tick() }
+  #expect(scroll.contentView.bounds.minX > before)
+  #expect(controller.preview?.destination == 2)
+  #expect(moves == 0)
+  #expect(state.workspace == original)
+  controller.exited()
+  let stopped = scroll.contentView.bounds.origin
+  controller.tick()
+  #expect(scroll.contentView.bounds.origin == stopped)
+  controller.cancel()
+  #expect(controller.preview == nil)
+  #expect(!session.canAcceptDrop)
+  controller.tick()
+  #expect(scroll.contentView.bounds.origin == stopped)
+  #expect(moves == 0)
+  #expect(state.workspace == original)
+}
+
+@Test @MainActor func reorderInteractionNativeLayerReversalUsesPresentationAndMotionCanBeDisabled() async throws {
+  let source = ReorderSourceHostingView(rootView: AnyView(Color.clear.frame(width: 120, height: 30)))
+  let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 180, height: 40),
+    styleMask: [.borderless], backing: .buffered, defer: false)
+  window.isReleasedWhenClosed = false
+  window.contentView = source
+  window.makeKeyAndOrderFront(nil)
+  defer { window.contentView = nil; window.orderOut(nil); window.close() }
+  source.setReorderDisplacement(0, animated: false)
+  try await Task.sleep(nanoseconds: 30_000_000)
+  source.setReorderDisplacement(-80, animated: true)
+  try await Task.sleep(nanoseconds: 50_000_000)
+  let layer = try #require(source.layer)
+  let beforeReversal = try #require(layer.presentation()).transform.m41
+  #expect(beforeReversal < -1 && beforeReversal > -79)
+  source.setReorderDisplacement(0, animated: true)
+  let animation = try #require((layer.animationKeys() ?? []).compactMap {
+    layer.animation(forKey: $0) as? CABasicAnimation
+  }.first { $0.keyPath == "transform.translation.x" })
+  let resumedFrom = try #require(animation.fromValue as? NSNumber).doubleValue
+  #expect(abs(resumedFrom - beforeReversal) < 2)
+  #expect(layer.transform.m41 == 0)
+  // Reduce Motion and accepted-order rebasing both use the immediate path.
+  source.setReorderDisplacement(-80, animated: false)
+  #expect(layer.animationKeys()?.isEmpty != false)
+  #expect(layer.transform.m41 == -80)
+  source.setReorderDisplacement(0, animated: false)
+  #expect(layer.animationKeys()?.isEmpty != false)
+  #expect(layer.transform.m41 == 0)
 }
