@@ -296,6 +296,21 @@
     case container
   }
 
+  enum PinnedChromeMaterialPolicy: Equatable {
+    case liquidGlass
+    case legacyMaterial
+    case opaque
+
+    static func resolve(
+      supportsLiquidGlass: Bool,
+      reduceTransparency: Bool,
+      increasedContrast: Bool
+    ) -> Self {
+      if reduceTransparency || increasedContrast { return .opaque }
+      return supportsLiquidGlass ? .liquidGlass : .legacyMaterial
+    }
+  }
+
   enum NotesPanelBannerCategory: Hashable {
     case modifierRecovery
     case captureFailure
@@ -442,14 +457,22 @@
 
     var body: some View {
       ZStack {
+        if isPinned {
+          PinnedWritingSurface()
+            .accessibilityHidden(true)
+        }
         VStack(spacing: 0) {
           if let migrationError = appState.startupMigrationError {
             migrationFailure(migrationError)
           } else {
-            header
-            folderNavigator
-            tabStrip
-            Divider().opacity(0.35)
+            if isPinned {
+              pinnedNavigationChrome
+            } else {
+              header
+              folderNavigator
+              tabStrip
+              Divider().opacity(0.35)
+            }
             if let title = modifierRecoveryPresentation.recoveryButtonTitle {
               let occurrence = NotesPanelBannerOccurrence.modifierRecovery(
                 statusCopy: modifierRecoveryPresentation.statusCopy,
@@ -543,6 +566,7 @@
         .accessibilityHidden(searchController.isPresented)
         .accessibilityHidden(isBlockingOverlayPresented)
       }
+      .modifier(PinnedGlassContainer(isPinned: isPinned))
       .frame(
         width: sizing == .storedPreferences ? appState.preferences.panelWidth : nil,
         height: sizing == .storedPreferences ? appState.preferences.panelHeight : nil
@@ -552,9 +576,11 @@
         maxHeight: sizing == .container ? .infinity : nil
       )
       .background {
-        Rectangle()
-          .fill(.ultraThinMaterial)
-          .opacity(appState.preferences.panelOpacity)
+        if !isPinned {
+          Rectangle()
+            .fill(.ultraThinMaterial)
+            .opacity(appState.preferences.panelOpacity)
+        }
       }
       .tint(Color(hex: appState.preferences.accentHex) ?? .accentColor)
       .background(
@@ -753,6 +779,16 @@
           activeFolderID = nil
         }
       }
+    }
+
+    private var pinnedNavigationChrome: some View {
+      VStack(spacing: 0) {
+        header
+        folderNavigator
+        tabStrip
+        Divider().opacity(0.35)
+      }
+      .modifier(PinnedNavigationChromeSurface())
     }
 
     private var modifierRecoveryPresentation: DictationModifierSettingsPresentation {
@@ -1596,6 +1632,7 @@
               appState: appState,
               commands: editorCommands,
               dictationRuntime: dictationRuntime,
+              isPinned: isPinned,
               isEditorVisible: isEditorVisible,
               isTitleFocused: editorFocus == .title,
               onDelete: {
@@ -2519,6 +2556,7 @@
     @ObservedObject var appState: AppState
     @ObservedObject var commands: EditorCommands
     @ObservedObject var dictationRuntime: DictationRuntime
+    let isPinned: Bool
     let isEditorVisible: Bool
     let isTitleFocused: Bool
     let onDelete: () -> Void
@@ -2802,7 +2840,7 @@
         .padding(.vertical, 9)
       }
       .frame(maxWidth: .infinity)
-      .modifier(FormattingBarSurface())
+      .modifier(FormattingBarSurface(isPinned: isPinned))
       .padding(.horizontal, 10)
       .padding(.top, 8)
       .disabled(!isEditorVisible)
@@ -2873,23 +2911,126 @@
     }
   }
 
-  private struct FormattingBarSurface: ViewModifier {
+  private struct PinnedGlassContainer: ViewModifier {
+    let isPinned: Bool
+
     func body(content: Content) -> some View {
-      if #available(macOS 26, *) {
-        content.glassEffect(
-          Glass.regular.tint(Color.black.opacity(0.18)),
-          in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
+      if isPinned, #available(macOS 26, *) {
+        GlassEffectContainer(spacing: 0) { content }
       } else {
         content
-          .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-              .fill(.ultraThinMaterial)
-              .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                  .fill(Color.black.opacity(0.10))
-              }
-          }
+      }
+    }
+  }
+
+  private struct PinnedNavigationChromeSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    func body(content: Content) -> some View {
+      switch materialPolicy {
+      case .liquidGlass:
+        if #available(macOS 26, *) {
+          content.glassEffect(.regular, in: Rectangle())
+        } else {
+          content.background(.ultraThinMaterial)
+        }
+      case .legacyMaterial:
+        content.background(.ultraThinMaterial)
+      case .opaque:
+        content.background(Color(nsColor: .windowBackgroundColor))
+      }
+    }
+
+    private var materialPolicy: PinnedChromeMaterialPolicy {
+      PinnedChromeMaterialPolicy.resolve(
+        supportsLiquidGlass: supportsLiquidGlass,
+        reduceTransparency: reduceTransparency,
+        increasedContrast: colorSchemeContrast == .increased
+      )
+    }
+
+    private var supportsLiquidGlass: Bool {
+      if #available(macOS 26, *) {
+        true
+      } else {
+        false
+      }
+    }
+  }
+
+  private struct FormattingBarSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    let isPinned: Bool
+
+    func body(content: Content) -> some View {
+      if isPinned && (reduceTransparency || colorSchemeContrast == .increased) {
+        content.background {
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color(nsColor: .windowBackgroundColor))
+        }
+      } else {
+        if #available(macOS 26, *) {
+          content.glassEffect(
+            Glass.regular.tint(Color.black.opacity(0.18)),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+          )
+        } else {
+          content
+            .background {
+              RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                  RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.black.opacity(0.10))
+                }
+            }
+        }
+      }
+    }
+  }
+
+  private struct PinnedWritingSurface: NSViewRepresentable {
+    func makeNSView(context: Context) -> AdaptiveOpaqueSurfaceView {
+      AdaptiveOpaqueSurfaceView()
+    }
+
+    func updateNSView(_ nsView: AdaptiveOpaqueSurfaceView, context: Context) {
+      nsView.updateSurfaceColor()
+    }
+  }
+
+  final class AdaptiveOpaqueSurfaceView: NSView {
+    override var isOpaque: Bool { true }
+    override var wantsUpdateLayer: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+      super.init(frame: frameRect)
+      identifier = NSUserInterfaceItemIdentifier("pinnedWritingSurface")
+      wantsLayer = true
+      updateSurfaceColor()
+    }
+
+    required init?(coder: NSCoder) {
+      super.init(coder: coder)
+      identifier = NSUserInterfaceItemIdentifier("pinnedWritingSurface")
+      wantsLayer = true
+      updateSurfaceColor()
+    }
+
+    override func updateLayer() {
+      updateSurfaceColor()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+      super.viewDidChangeEffectiveAppearance()
+      needsDisplay = true
+    }
+
+    func updateSurfaceColor() {
+      effectiveAppearance.performAsCurrentDrawingAppearance {
+        layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
       }
     }
   }
