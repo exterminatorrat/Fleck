@@ -194,7 +194,7 @@ Record every trial, including failures. Initial target: feedback p95 ≤100 ms a
 | Packet | Depends on | Shared boundary | Status |
 | --- | --- | --- | --- |
 | 1A | baseline | Capsule presentation only | Implemented; parent verified; fresh Sol/High ship |
-| 1B | 1A review + lifecycle amendment | Speech source/coordinator startup ownership | Planned |
+| 1B | 1A review + lifecycle amendment | Speech source/coordinator startup ownership | Implemented locally; parent verified; fresh Sol/High ship |
 | 1C | 1B review | Startup readiness and current session identity | Planned |
 | 1D | 1B/1C reviews | Actual stage boundaries | Planned |
 | 1E | 1B–1D evidence | Residency and measured memory | Planned |
@@ -212,3 +212,18 @@ Only 1A is an executable implementation packet at plan creation. Later ownership
 - Local evidence: `.build/capture-feedback-1a/parent-focused.log`, `parent-visual.log`, `parent-verification.log`, `red.txt`, `green.txt`, and `parent-visual/` PNGs.
 - Package.resolved remained unchanged. Canonical installed executable still hashes to `51983a0685e904781dd252278380d1cda093a641beb6d5336013049645887ef0`.
 - Next: packet 1B lifecycle amendment and red-first audio-first startup work. This record does not claim microphone latency improvement, first-word recovery, packaged verification, or phase completion.
+
+
+## Packet 1B acceptance record — 2026-09-05
+
+- Local source commit: `157f737`. Eight owned source/test files; no change to residency policy, Settings, capsule, cleanup, routing, model selection, or dependency lock.
+- Enhanced capture starts audio before model load, retains early samples in order, and stops/takes audio before awaiting load on finish. Permission cancellation and late callbacks cannot activate a stale capture. Source failure reaches the processor/coordinator without another key press.
+- Startup deadline: 15 seconds. Converted audio ceiling: 4,800,000 mono Float32 samples (five minutes at 16 kHz). Overflow fails the entire capture. These are safety bounds, not measured performance or quality claims.
+- Cancellation/failure stops audio and clears pending owner-held samples before native drain. A non-cooperative native operation keeps the owner reserved until actual teardown; no force-kill or bounded native drain is claimed.
+- Parent independently inspected the complete diff and completed 59/59 enhanced tests on the final correction, including adaptive/shared inference and converter tests, plus 24/24 default lifecycle/shortcut regressions. Full logs: `.build/capture-feedback-1b/parent-enhanced-atomic.log` and `parent-default-24.log`; filters are retained alongside them. Converter-only final corrections do not change the default build.
+- Verification exception: the expanded 25-test default selection repeatedly stalled at `shortcutReleaseDuringSuspendedStartCancelsUntilStartReturns`; a current isolated run also stalled, while later uninstrumented current and exact pre-1B baseline isolated runs completed 1/1. Cause remains unresolved. No 25/25 claim, no dismissed baseline-bug claim, and no test suppression or product workaround. Logs include `parent-default-pty.log`, `parent-shortcut-isolated.log`, `baseline-df77d2b-shortcut-suspended-start.log`, and `current-shortcut-suspended-start-uninstrumented.log`.
+- Valid red-first evidence covers startup order, cap, failure buffering/drain, late finalization failure, load admission, independent loader cancellation, and synchronous legacy-start failure. The converter lock-race corrections use semantic regressions plus direct atomicity inspection; no forced-interleaving RED is claimed.
+- Two fresh reviews requested converter atomicity corrections; both returned to the same Sol/High worker. Final fresh reviewer `audio_first_atomic_review` verdict: `ship`. Reviewed patch SHA-256: `51df6638e5462f30ed665bc951af13f363c3cca1abeb1b7ba006155e962ad5f7`.
+- Package.resolved unchanged at `ccf30f62d44719e9859266a373bb0219dbbd1e0f73d17667b50d7d87715a09f7`. Canonical installed executable unchanged at `51983a0685e904781dd252278380d1cda093a641beb6d5336013049645887ef0`.
+- Status: implemented and integrated on the isolated local branch; locally tested with the exception above. Not packaged-verified or release-admitted. No real microphone, model weights, physical-key latency, first-word accuracy, or MacBook memory-pressure evidence was collected. No model download, push, PR, merge, or installed-app mutation.
+- Packet 1C remains next and has not started. Phase 1 remains open.

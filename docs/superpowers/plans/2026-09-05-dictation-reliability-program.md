@@ -214,7 +214,7 @@ Initial engineering targets, to be validated rather than claimed:
 - [x] Record future correction-learning idea in Fleck note.
 - [x] Write broad program and detailed Phase 1 plan.
 - [x] 1A starting feedback: local source/tests accepted; installed app unchanged.
-- [ ] 1B audio-first startup.
+- [x] 1B audio-first startup: local source accepted at 157f737; fresh ship, 59 enhanced + 24 default tests completed; intermittent legacy shortcut-test exception documented. Device/package evidence remains open.
 - [ ] 1C recording feedback and gesture integration.
 - [ ] 1D diagnostic timing/recovery.
 - [ ] 1E measured resource policy.
