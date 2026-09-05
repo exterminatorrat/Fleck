@@ -136,6 +136,8 @@ Read the runner and lockfile policy first. No fixture may load weights. Parent m
 
 **Prerequisite:** Accepted 1B lifecycle contract.
 
+The authorized resumption uses [the detailed 1C recording-readiness plan](2026-09-05-recording-readiness.md), which fixes the minimal coordinator/measurement ownership and separates automated Reduced Motion behavior checks from host-preference visual rendering.
+
 Candidate files: `DictationInterfaces.swift`, `DictationProcessingModels.swift`, `StreamingDictationProcessor.swift`, `DictationCoordinator.swift`, `FleckApp.swift`, `DictationCapsule.swift`, and directly corresponding tests. Fix exact ownership from the accepted interface; do not spread ad hoc booleans across these files.
 
 - [ ] Reuse or minimally extend existing capture measurements to represent actual audio readiness separately from model readiness.
@@ -195,7 +197,7 @@ Record every trial, including failures. Initial target: feedback p95 ≤100 ms a
 | --- | --- | --- | --- |
 | 1A | baseline | Capsule presentation only | Implemented; parent verified; fresh Sol/High ship |
 | 1B | 1A review + lifecycle amendment | Speech source/coordinator startup ownership | Implemented locally; parent verified; fresh Sol/High ship |
-| 1C | 1B review | Startup readiness and current session identity | Planned |
+| 1C | 1B review | Startup readiness and current session identity | Detailed plan complete; implementation authorized |
 | 1D | 1B/1C reviews | Actual stage boundaries | Planned |
 | 1E | 1B–1D evidence | Residency and measured memory | Planned |
 | 1F | Accepted source packets + packaging authority | Exact artifact and real microphone | Pending device/package work |

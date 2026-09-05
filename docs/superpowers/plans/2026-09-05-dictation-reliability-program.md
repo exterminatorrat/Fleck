@@ -1,6 +1,6 @@
 # Fleck Dictation Reliability Program
 
-**Status:** Phase 1 started; packet 1A implemented and locally verified with fresh Sol/High `ship`. Audio-first capture and device acceptance remain open. This document does not authorize Phases 2–3 implementation, model downloads, installation, publication, or release admission.
+**Status:** Phase 1 in progress; packets 1A and 1B implemented locally with fresh Sol/High `ship`. Packet 1C is authorized; device acceptance remains open. This document does not authorize Phases 2–3 implementation, model downloads, installation, publication, or release admission.
 
 **Owner:** Central primary orchestrator. Codex-native GPT-5.6 Sol / High implementers for bounded work; fresh Sol / High reviewers. Never Terra.
 
