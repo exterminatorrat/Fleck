@@ -138,16 +138,16 @@ Read the runner and lockfile policy first. No fixture may load weights. Parent m
 
 The authorized resumption uses [the detailed 1C recording-readiness plan](2026-09-05-recording-readiness.md), which fixes the minimal coordinator/measurement ownership and separates automated Reduced Motion behavior checks from host-preference visual rendering.
 
-Candidate files: `DictationInterfaces.swift`, `DictationProcessingModels.swift`, `StreamingDictationProcessor.swift`, `DictationCoordinator.swift`, `FleckApp.swift`, `DictationCapsule.swift`, and directly corresponding tests. Fix exact ownership from the accepted interface; do not spread ad hoc booleans across these files.
+Final production ownership: `DictationCoordinator.swift` and `DictationProcessingModels.swift`, plus the four test files listed in the detailed plan. The existing engine, runtime, capsule, and waveform interfaces remain unchanged.
 
-- [ ] Reuse or minimally extend existing capture measurements to represent actual audio readiness separately from model readiness.
-- [ ] Show live energy only after a current-session audio callback/readiness event; maintain honest Starting before that point.
-- [ ] Ensure a quiet microphone is a quiet waveform and stale callbacks are ignored.
-- [ ] Test held startup, release while loading, Escape, pointer start/stop, double tap, fast repeat, focused editor loss, and event-tap loss.
-- [ ] Maintain existing 180 ms short-tap interpretation unless separate device evidence justifies a change.
-- [ ] Test hidden capsule preference; do not force the pill on as a workaround.
-- [ ] Render all docks with Reduced Motion and dark/light appearances; compare accepted listening design.
-- [ ] Parent test rerun and fresh `ship` review.
+- [x] Reuse or minimally extend existing capture measurements to represent actual audio readiness separately from model readiness.
+- [x] Show live energy only after a current-session audio callback/readiness event; maintain honest Starting before that point.
+- [x] Ensure a quiet microphone is a quiet waveform and stale callbacks are ignored.
+- [x] Test held startup, release while loading, Escape, pointer start/stop, double tap, fast repeat, focused editor loss, and event-tap loss.
+- [x] Maintain existing 180 ms short-tap interpretation unless separate device evidence justifies a change.
+- [x] Test hidden capsule preference; do not force the pill on as a workaround.
+- [x] Render all docks in dark/light appearances and compare the accepted listening design; verify Reduced Motion through existing algorithm/transition tests separately from host-preference rendering.
+- [x] Parent test rerun and fresh `ship` review.
 
 ## Packet 1D — Diagnostic evidence without transcript collection
 
@@ -197,7 +197,7 @@ Record every trial, including failures. Initial target: feedback p95 ≤100 ms a
 | --- | --- | --- | --- |
 | 1A | baseline | Capsule presentation only | Implemented; parent verified; fresh Sol/High ship |
 | 1B | 1A review + lifecycle amendment | Speech source/coordinator startup ownership | Implemented locally; parent verified; fresh Sol/High ship |
-| 1C | 1B review | Startup readiness and current session identity | Detailed plan complete; implementation authorized |
+| 1C | 1B review | Startup readiness and current session identity | Implemented locally; fresh Sol/High ship; baseline test exceptions retained |
 | 1D | 1B/1C reviews | Actual stage boundaries | Planned |
 | 1E | 1B–1D evidence | Residency and measured memory | Planned |
 | 1F | Accepted source packets + packaging authority | Exact artifact and real microphone | Pending device/package work |
@@ -228,4 +228,13 @@ Only 1A is an executable implementation packet at plan creation. Later ownership
 - Two fresh reviews requested converter atomicity corrections; both returned to the same Sol/High worker. Final fresh reviewer `audio_first_atomic_review` verdict: `ship`. Reviewed patch SHA-256: `51df6638e5462f30ed665bc951af13f363c3cca1abeb1b7ba006155e962ad5f7`.
 - Package.resolved unchanged at `ccf30f62d44719e9859266a373bb0219dbbd1e0f73d17667b50d7d87715a09f7`. Canonical installed executable unchanged at `51983a0685e904781dd252278380d1cda093a641beb6d5336013049645887ef0`.
 - Status: implemented and integrated on the isolated local branch; locally tested with the exception above. Not packaged-verified or release-admitted. No real microphone, model weights, physical-key latency, first-word accuracy, or MacBook memory-pressure evidence was collected. No model download, push, PR, merge, or installed-app mutation.
-- Packet 1C remains next and has not started. Phase 1 remains open.
+- At 1B acceptance, 1C was next; its later acceptance is recorded below. Phase 1 remains open.
+
+
+## Packet 1C acceptance record — 2026-09-05
+
+- Local source commit: `8e1d1fa`. Fresh Sol/High reviewer `recording_readiness_final_review` returned `ship`, with no findings. Reviewed six-file patch SHA-256: `0d543818e04b8c9f84a3a6b3536eb3630fa0ee4c1f268cb1f5d28041056e1f55`.
+- Capture-local readiness publishes Listening before real level delivery, caches the latest pre-hold level, treats silence as readiness, and blocks stop/cancel/failure/stale feedback. Source startup ownership remains separate. The existing waveform eases to rest after immediate zero input; the observation timestamp is not a hardware or model-ready measurement.
+- Parent independent evidence: default 95/95, enhanced 55/55, final focused 19/19, gestures 15/15, focused-editor/repeat regressions 11/11, known suspended-start case 1/1, and hosted visual capture 1/1. Counts overlap. All 18 worker dock/appearance fixtures and representative parent rerenders were inspected.
+- Two provider-startup tests stall on both this work and unchanged accepted 1B baseline c565332. A worker gesture-group failure later passed in isolation and in both parent final-source and baseline groups; no cause or fix is claimed. No full-suite-green claim. Exact logs and limits are in [the detailed recording-readiness plan](2026-09-05-recording-readiness.md#local-verification-and-acceptance-record--2026-09-05).
+- Source accepted and locally integrated only. No installed-app change, packaging, microphone/device evidence, model download, GitHub write, or release admission. 1D is next but has not started; Phase 1 and MacBook acceptance remain open.

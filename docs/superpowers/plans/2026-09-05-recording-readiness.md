@@ -76,7 +76,7 @@ levelObserver?(actualLevel)
 
 Successful startup and hold acceptance must use the same readiness publication rules rather than their current unconditional listening assignments. Startup ownership (isStarting), source/session attachment, stop queuing, and teardown remain separate from visual readiness. A real audio callback may establish feedback before start returns; it must not make the source appear fully attached/drained.
 
-Stop/cancel/failure cannot be followed by fresh live energy or a new Listening transition from late callbacks. Existing finalizing/failure rendering resets waveform energy. Where cancellation or a deferred physical stop leaves a listening capsule visible during drain, immediately forward zero to quiet it and block further live levels; an idempotent terminal zero is acceptable. Do not publish an early terminal outcome or change gesture/teardown semantics merely to clear feedback.
+Stop/cancel/failure cannot be followed by fresh live energy or a new Listening transition from late callbacks. Existing finalizing/failure rendering resets waveform energy. Where cancellation or a deferred physical stop leaves a listening capsule visible during drain, immediately forward zero to stop new energy input and block further live levels; preserve the existing waveform release smoothing and stale decay to rest. The stored waveform energy need not instantly become zero while Listening remains visible. Terminal rendering still resets it. An idempotent terminal zero is acceptable. Do not publish an early terminal outcome or change gesture/teardown semantics merely to clear feedback.
 
 ### 2. Existing measurement extension
 
@@ -101,15 +101,15 @@ Do not change FleckApp or capsule production code. Add a gated RuntimeSpeechEngi
 - valid live callback before startup completion: Listening, then energy > 0;
 - zero callback: Listening with quiet static waveform;
 - hidden preference: no rendered capsule/energy, even when readiness arrives;
-- cancellation/stop while startup suspended: no later live energy or resurrection;
+- cancellation/stop while startup suspended: immediate coordinator zero input, no later energy increase or resurrection, existing displayed decay to rest, and terminal reset;
 - new capture: stale prior callback cannot establish readiness for the new session.
 
 Render Starting and quiet/live Listening at bottom/left/right in aqua/darkAqua using existing visual helpers. Use synthetic level inputs explicitly identified as fixtures. Reuse existing Reduced Motion cadence/amplitude/transition tests; do not change the user's macOS accessibility preferences or add a production injection API solely to force a screenshot. Hosted rendering reflects the current host motion preference; Reduced Motion algorithm/transition checks are separate evidence, not a claim of packaged-system visual acceptance.
 
 ## Verification steps
 
-- [ ] Read owned code and the existing level/runtime/measurement tests. Capture current branch/status and lock hash.
-- [ ] Add deterministic gated regression tests before product edits. Suggested names below; use gates with waitUntilWaiting, not arbitrary sleeps or timing-sensitive yield loops as acceptance witnesses.
+- [x] Read owned code and the existing level/runtime/measurement tests. Capture current branch/status and lock hash.
+- [x] Add deterministic gated regression tests before product edits. Suggested names below; use gates with waitUntilWaiting, not arbitrary sleeps or timing-sensitive yield loops as acceptance witnesses.
 
 ```swift
 @Test @MainActor func captureFeedbackPublishesListeningBeforeDeliveringEarlyLevel() async throws
@@ -124,25 +124,61 @@ Render Starting and quiet/live Listening at bottom/left/right in aqua/darkAqua u
 
 Test both legacy engine and processing paths. Reuse gates/probes; add only required fake controls. Use exact expected phase-before-level ordering, latest-level replay once, timestamp identity, and no-late-publication assertions. Add a successful-start-without-level case, finite-input case, and an immediate-cancel/stop quieting assertion during suspended drain. Verify held source failure before threshold cannot regain Listening on threshold acceptance.
 
-- [ ] Run new tests through the nonempty default runner, save complete expected failing output under .build/capture-feedback-1c/red.log, then implement the smallest shared helper and timestamp extension.
+- [x] Run new tests through the nonempty default runner, save complete expected failing output under .build/capture-feedback-1c/red.log, then implement the smallest shared helper and timestamp extension.
 
 ```sh
 bash Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.(captureFeedback[^()]*|DictationRuntimeCaptureFeedback[^()]*)\(\)$'
 ```
 
-- [ ] Rerun new tests green, then existing changed-area tests. Build an anchored exact filter from listed identifiers, retaining the filter and matched count beside each log. Required regression coverage: existing active-level tests; synchronous processing levels; short taps; held release while loading; Escape; double-tap; pointer start/stop; event-tap loss; focused editor loss; stale generation; hidden-pill and reenable; waveform silence, attack/decay/reset, Reduced Motion; measurement overlay/integrity; 1B source-failure guard/drain tests.
-- [ ] Run the enhanced configuration once for the accepted 1B suite plus new coordinator feedback cases:
+- [x] Rerun new tests green, then existing changed-area tests. Build an anchored exact filter from listed identifiers, retaining the filter and matched count beside each log. Required regression coverage: existing active-level tests; synchronous processing levels; short taps; held release while loading; Escape; double-tap; pointer start/stop; event-tap loss; focused editor loss; stale generation; hidden-pill and reenable; waveform silence, attack/decay/reset, Reduced Motion; measurement overlay/integrity; 1B source-failure guard/drain tests.
+- [x] Run the enhanced configuration once for the accepted 1B suite plus new coordinator feedback cases:
 
 ```sh
 bash Scripts/run-nonempty-enhanced-tests.sh '^FleckAppTests\.(EnhancedSpeech[^()]*|enhancedSpeechStartup[^()]*|captureFeedback[^()]*)\(\)$'
 ```
 
-- [ ] Run the bounded visual test with FLECK_RAIL_CAPTURE_DIR set to an absolute directory under .build/capture-feedback-1c. Parent inspects generated light/dark Starting/listening dock images and existing Reduced Motion assertions; do not claim changed product artwork or actual microphone evidence.
-- [ ] Require a completed Swift Testing summary with nonzero count. An exit-zero incomplete run is not a pass. Keep runner failures, compile failures, and test stalls in the evidence record.
-- [ ] Existing shortcutReleaseDuringSuspendedStartCancelsUntilStartReturns has an intermittent 1B verification exception. Run it separately with bounded observation, preserve outcomes, and do not expand 1C into unrelated harness surgery. If a new deterministic defect is demonstrated in the changed readiness path, return the evidence to primary and fix within this packet.
-- [ ] Parent inspects the entire final diff, independently reruns meaningful focused/default/enhanced verification, and checks Package.resolved unchanged and no unrelated edits. Avoid repeated full enhanced builds after a tiny unrelated default-only correction; repeat only affected evidence.
-- [ ] Fresh Sol/High review of the actual immutable diff plus evidence. For fix-first/rethink, same worker corrects; parent re-verifies; a NEW fresh reviewer must return ship.
+- [x] Run the bounded visual test with FLECK_RAIL_CAPTURE_DIR set to an absolute directory under .build/capture-feedback-1c. Parent inspects generated light/dark Starting/listening dock images and existing Reduced Motion assertions; do not claim changed product artwork or actual microphone evidence.
+- [x] Require a completed Swift Testing summary with nonzero count. An exit-zero incomplete run is not a pass. Keep runner failures, compile failures, and test stalls in the evidence record.
+- [x] Existing shortcutReleaseDuringSuspendedStartCancelsUntilStartReturns has an intermittent 1B verification exception. Run it separately with bounded observation, preserve outcomes, and do not expand 1C into unrelated harness surgery. If a new deterministic defect is demonstrated in the changed readiness path, return the evidence to primary and fix within this packet.
+- [x] Parent inspects the entire final diff, independently reruns meaningful focused/default/enhanced verification, and checks Package.resolved unchanged and no unrelated edits. Avoid repeated full enhanced builds after a tiny unrelated default-only correction; repeat only affected evidence.
+- [x] Fresh Sol/High review of the actual immutable diff plus evidence. For fix-first/rethink, same worker corrects; parent re-verifies; a NEW fresh reviewer must return ship.
 
 ## Completion and non-goals
 
 One local source commit after acceptance, with a documentation acceptance record linking logs and exact counts. 1C is implemented/integrated/locally-tested only; no packaged verification or release admission. 1D diagnostic expansion, 1E retention evaluation, 1F device acceptance, onboarding, routing, grammar, and repeated-correction learning remain separate.
+
+
+## Local verification and acceptance record — 2026-09-05
+
+Accepted locally in source commit `8e1d1fa`. Fresh Sol/High reviewer `recording_readiness_final_review` returned `ship` with no findings. The reviewed implementation consists of the six owned source/test files against e48a14b3f3f3e307738c9cfed776db9730b2d695. Patch SHA-256: `0d543818e04b8c9f84a3a6b3536eb3630fa0ee4c1f268cb1f5d28041056e1f55`.
+
+The coordinator now publishes Listening before delivering a valid current-capture level, including silence, and replays only the latest pre-hold level. Successful start/begin is also readiness evidence. Hold acceptance alone cannot invent readiness. Failure state is stored before notifying observers; stopped/cancelled/failed/stale captures cannot publish new energy. The existing waveform still eases to rest after zero input. No production capsule, runtime, engine, protocol, model-policy, cleanup, or routing file changed.
+
+All logs below are in `.build/capture-feedback-1c/`. Counts are per run and overlap; they are not a full-suite total.
+
+| Parent evidence | Result |
+| --- | --- |
+| `parent-default.log`, exact selection in `parent-default.filter` | 95 matched / 95 passed; new feedback, accepted 1A, coordinator, runtime, waveform, Reduced Motion, measurement, and gesture coverage |
+| `parent-enhanced.log` | 55 matched / 55 passed; accepted enhanced startup/failure coverage plus new coordinator feedback |
+| `parent-final-focused.log` | 19 matched / 19 passed after removing an unused new test-helper property |
+| `parent-final-gestures.log`, selection in `gesture-regressions.filter` | 15 matched / 15 passed on final source |
+| `parent-focus-repeat-regressions.log` | 11 matched / 11 passed; hidden editor cancellation, stale editor rejection, focus registry, repeated activation, and event-tap recovery |
+| `parent-known-1b-suspended-start.log` | 1 matched / 1 passed for the previously intermittent suspended-start release case |
+| `parent-visual.log` | 1 matched / 1 passed; fixture captures in `parent-visuals/` |
+
+The 95-test and enhanced runs preceded only the removal of an unused test-only computed property. The final focused/gesture runs recompiled that file. Production source is identical across these runs; the expensive enhanced build was not repeated for the unused-property deletion.
+
+The worker independently passed new feedback 19/19, accepted 1A 27/27, runtime/waveform/measurement 32/32, enhanced 55/55, and visual 1/1. Red evidence is retained in `red-measurement-compile.log` (missing measurement API), `red-behavior.log` (18 completed tests, 23 expected issues), and `red-no-evidence.log` (one completed test, two issues proving threshold acceptance alone incorrectly established readiness before its correction). Two existing 1A phase expectations were updated from Listening to Starting after a prior stop request; their gesture/drain outcome assertions remain intact.
+
+### Retained test exceptions
+
+- `handsFreeStartupOwnsEscapeBeforeProviderReturns` and `handsFreeStartupMonitorLossCancelsBeforeProviderReturns` stalled individually in the worker run. Parent reproduced both stalls on clean, unchanged accepted 1B source at c565332 in `/Users/harryjin/Fleck/.worktrees/recording-readiness-baseline-c565332`. The exact tests started on the baseline binary and did not complete after more than 35 seconds. Parent interrupted them; these are not passes. See `parent-baseline-c565332-escape-skip-build.log` and `parent-baseline-c565332-monitor-skip-build.log`. The commands used `swift test --skip-build --disable-automatic-resolution --no-parallel` with exact anchored test filters. The cause remains unestablished, but the stalls reproduce without 1C.
+- Earlier baseline script-wrapper attempts timed out during a fresh build or without a test-start witness. Their long-name logs/JSON are preserved and are not used as evidence of a test stall.
+- `physicalGestureReceiptPreservesPressAndReleaseAcrossQueuedDelivery` failed in the worker's grouped gesture runs and passed alone. Parent's final-source gesture group and unchanged-baseline group both passed 15/15. Preserve the failed `gesture-regressions*.log` alongside `parent-final-gestures.log` and `parent-baseline-c565332-gestures.log`; no cause or fix is claimed.
+- The earlier 1B suspended-start exception passed 1/1 in both worker and parent runs here; that does not retroactively make earlier incomplete runs pass.
+
+### Visual and delivery boundaries
+
+Parent inspected all 18 worker light/dark × bottom/left/right images for Starting, quiet Listening, and Listening with synthetic fixture energy, plus representative independently generated images. State distinctions and the mirrored right dock are intact, without observed clipping. Hosted rendering uses the host's current motion preference; Reduced Motion algorithm and transition checks are separate evidence. These fixtures do not prove real microphone timing, first-word recall, or installed-app behavior.
+
+`git diff --check` passes. `Package.swift` and `Package.resolved` are unchanged; the ordinary lock SHA-256 remains `ccf30f62d44719e9859266a373bb0219dbbd1e0f73d17667b50d7d87715a09f7`. The canonical installed Fleck executable SHA-256 remains `51983a0685e904781dd252278380d1cda093a641beb6d5336013049645887ef0`. No app replacement/launch, packaging, real microphone use, model download, push, PR, or merge occurred. Packet 1D and subsequent work remain separate.
