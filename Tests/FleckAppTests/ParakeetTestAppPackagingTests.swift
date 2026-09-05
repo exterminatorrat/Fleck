@@ -143,6 +143,10 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
   try writeExecutable(#"""
     #!/bin/bash
     set -euo pipefail
+    if [[ "$*" == "--sdk macosx --show-sdk-version" ]]; then
+      printf '%s\n' "$FAKE_ACTIVE_SDK_VERSION"
+      exit 0
+    fi
     [[ "$1" == "--find" ]]
     case "$2" in
       swift) printf '%s\n' "$FAKE_TOOLS/swift" ;;
@@ -170,6 +174,7 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     product=""
     show_bin=0
     skip_update=0
+    linker_values=""
     while (($#)); do
       case "$1" in
         --package-path)
@@ -180,10 +185,15 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
         --product) product="$2"; shift 2 ;;
         --show-bin-path) show_bin=1; shift ;;
         --skip-update) skip_update=1; shift ;;
+        -Xlinker) linker_values="${linker_values}${linker_values:+ }$2"; shift 2 ;;
         *) shift ;;
       esac
     done
     [[ "$skip_update" == "1" ]]
+    expected_linker_values="-platform_version macos 14.0 $FAKE_ACTIVE_SDK_VERSION"
+    if [[ "$linker_values" == "$expected_linker_values" ]]; then
+      printf '%s\n' "$FAKE_ACTIVE_SDK_VERSION" > "$FAKE_LINKED_SDK_MARKER"
+    fi
     bin="$scratch/arm64-apple-macosx/debug"
     /bin/mkdir -p "$bin"
     if [[ "$product" == "Fleck" ]]; then
@@ -326,6 +336,16 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     printf 'otool|%s|%s\n' "$operation" "$path" >> "$FAKE_HELPER_TOOL_LOG"
     case "$1" in
       -l)
+        sdk_version="${FAKE_REPORTED_SDK_VERSION:-14.0}"
+        if [[ -z "$FAKE_REPORTED_SDK_VERSION" && -f "$FAKE_LINKED_SDK_MARKER" ]]; then
+          sdk_version="$(/bin/cat "$FAKE_LINKED_SDK_MARKER")"
+        fi
+        printf 'Load command 0\n'
+        printf '      cmd LC_BUILD_VERSION\n'
+        printf '  cmdsize 32\n'
+        printf ' platform MACOS\n'
+        printf '    minos 14.0\n'
+        printf '      sdk %s\n' "$sdk_version"
         printf 'Load command 0\n'
         printf '      cmd LC_RPATH\n'
         printf '      cmdsize 32\n'
@@ -475,7 +495,8 @@ private func environment(
   unsafeStaging: Bool = false,
   gemmaBuildFails: Bool = false,
   gemmaBuildMutatesLock: Bool = false,
-  escapingRpathSurvives: Bool = false
+  escapingRpathSurvives: Bool = false,
+  reportedSDKVersion: String? = nil
 ) -> [String: String] {
   var environment = ProcessInfo.processInfo.environment
   let existingPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -507,6 +528,9 @@ private func environment(
   environment["FAKE_ENTRIES"] = fixture.entries.path
   environment["FAKE_RPATH_STATE"] = fixture.rpathState.path
   environment["FAKE_RPATH_SURVIVES"] = escapingRpathSurvives ? "1" : "0"
+  environment["FAKE_ACTIVE_SDK_VERSION"] = "26.5"
+  environment["FAKE_LINKED_SDK_MARKER"] = fixture.root.appendingPathComponent("linked-sdk").path
+  environment["FAKE_REPORTED_SDK_VERSION"] = reportedSDKVersion ?? ""
   environment["FAKE_UNSAFE_STAGING"] = unsafeStaging ? "1" : "0"
   environment["FAKE_UNSAFE_STAGING_PATH"] = fixture.unsafeStaging.path
   return environment
@@ -518,7 +542,8 @@ private func launchPackager(
   unsafeStaging: Bool = false,
   gemmaBuildFails: Bool = false,
   gemmaBuildMutatesLock: Bool = false,
-  escapingRpathSurvives: Bool = false
+  escapingRpathSurvives: Bool = false,
+  reportedSDKVersion: String? = nil
 ) throws -> RunningPackager {
   let standardError = Pipe()
   let process = Process()
@@ -530,7 +555,8 @@ private func launchPackager(
     unsafeStaging: unsafeStaging,
     gemmaBuildFails: gemmaBuildFails,
     gemmaBuildMutatesLock: gemmaBuildMutatesLock,
-    escapingRpathSurvives: escapingRpathSurvives
+    escapingRpathSurvives: escapingRpathSurvives,
+    reportedSDKVersion: reportedSDKVersion
   )
   process.standardOutput = FileHandle.nullDevice
   process.standardError = standardError
@@ -623,6 +649,50 @@ func parakeetTestAppPackagingScriptUsesContentsResourcesBundle() {
   #expect(source.contains("--disable-automatic-resolution"))
   #expect(!source.contains("admitted Enhanced Local Parakeet model"))
   #expect(source.contains("pinned experimental Parakeet candidate"))
+}
+
+@Test
+func parakeetPackagerLinksAndValidatesActiveSDKVersion() throws {
+  let fixture = try makeFakeFixture()
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(
+    fixture: fixture,
+    runID: "active-sdk"
+  )
+  waitForExit(running)
+  let standardError = output(from: running.standardError)
+
+  #expect(running.process.terminationStatus == 0, Comment(rawValue: standardError))
+  #expect(
+    fileManager.fileExists(
+      atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
+    )
+  )
+}
+
+@Test
+func parakeetPackagerRejectsExecutableLinkedAgainstDifferentSDKVersion() throws {
+  let fixture = try makeFakeFixture()
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(
+    fixture: fixture,
+    runID: "stale-sdk",
+    reportedSDKVersion: "14.0"
+  )
+  waitForExit(running)
+  let standardError = output(from: running.standardError)
+
+  #expect(running.process.terminationStatus != 0)
+  #expect(standardError.contains("SDK stamp does not match active SDK: 14.0 (expected 26.5)"))
+  #expect(
+    !fileManager.fileExists(
+      atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
+    )
+  )
 }
 
 @Test
