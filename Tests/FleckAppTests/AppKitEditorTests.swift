@@ -916,7 +916,126 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   }
 }
 
-@Test @MainActor func checklistMarkerCentersOnFirstVisibleTextGlyphAcrossFontSizes() throws {
+@Test @MainActor func checklistMarkerRemainsStableWhileTypingAndDeleting() throws {
+  for family in ["Avenir Next", ".AppleSystemUIFont"] {
+    for size in [CGFloat(11), CGFloat(17), CGFloat(24)] {
+      for completed in [false, true] {
+        let indent = size == 24 ? "    " : ""
+        let prefix = indent + (completed ? "● " : "○ ")
+        let textView = checklistTypingEditor(family: family, size: size, text: prefix)
+        let window = NSWindow(contentRect: textView.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = textView
+        defer { window.orderOut(nil) }
+        #expect(window.makeFirstResponder(textView))
+        textView.setSelectedRange(NSRange(location: prefix.utf16.count, length: 0))
+        let markerRange = NSRange(location: indent.utf16.count, length: 1)
+        let empty = try #require(textView.checklistMarkerRect(for: markerRange))
+        let emptyBaseline = try checklistLineBaseline(in: textView, at: markerRange.location + 1)
+        for value in ["F", "a", "g", "1", " ", "   a", "中", "🙂"] {
+          textView.insertText(value, replacementRange: textView.selectedRange())
+          let populated = try #require(textView.checklistMarkerRect(for: markerRange))
+          let populatedBaseline = try checklistLineBaseline(in: textView, at: markerRange.location + 1)
+          print("CHECKLIST \(family) \(size) completed=\(completed) \(String(reflecting: value)): empty=\(empty.midY), populated=\(populated.midY), line baselines=\(emptyBaseline)->\(populatedBaseline)")
+          // Fallback fonts may move the actual line baseline; the marker must follow it exactly.
+          #expect(abs((populated.midY - populatedBaseline) - (empty.midY - emptyBaseline)) < 0.01)
+          #expect(populated.size == empty.size)
+          if family == "Avenir Next", size == 17 {
+            try captureChecklist(textView, name: "checklist-\(completed)-\(value.unicodeScalars.map { String($0.value) }.joined(separator: "-"))")
+          }
+          while textView.string.utf16.count > prefix.utf16.count {
+            textView.deleteBackward(nil)
+          }
+          #expect(textView.string == prefix)
+          let restored = try #require(textView.checklistMarkerRect(for: markerRange))
+          #expect(abs(restored.midY - empty.midY) < 0.01)
+        }
+        if family == "Avenir Next", size == 17 {
+          try captureChecklist(textView, name: "checklist-\(completed)-empty")
+        }
+      }
+    }
+  }
+}
+
+@Test @MainActor func checklistMarkerAlignmentSurvivesCompletionToggle() throws {
+  let textView = checklistTypingEditor(family: "Avenir Next", size: 17, text: "○ ")
+  let window = NSWindow(contentRect: textView.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+  window.contentView = textView
+  defer { window.orderOut(nil) }
+  #expect(window.makeFirstResponder(textView))
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  let marker = NSRange(location: 0, length: 1)
+  let empty = try #require(textView.checklistMarkerRect(for: marker))
+  textView.insertText("g                    F", replacementRange: textView.selectedRange())
+  let populated = try #require(textView.checklistMarkerRect(for: marker))
+  #expect(abs(populated.midY - empty.midY) < 0.01)
+  #expect(textView.toggleSelectedChecklist())
+  let completed = try #require(textView.checklistMarkerRect(for: marker))
+  #expect(abs(completed.midY - populated.midY) < 0.01)
+
+  @MainActor func strikeRows() throws -> [Int] {
+    textView.refreshChecklistPresentation()
+    let bitmap = try #require(textView.bitmapImageRepForCachingDisplay(in: textView.bounds))
+    textView.cacheDisplay(in: textView.bounds, to: bitmap)
+    let scale = CGFloat(bitmap.pixelsWide) / textView.bounds.width
+    // The middle of the long space run contains only the native strike-through.
+    return (0..<min(bitmap.pixelsHigh, Int(50 * scale))).filter { y in
+      (Int(70 * scale)..<Int(75 * scale)).contains { x in
+        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+        return color.alphaComponent > 0.2 && color.redComponent < 0.9
+      }
+    }
+  }
+  let originalStrikeRows = try strikeRows()
+  #expect(!originalStrikeRows.isEmpty)
+  textView.setSelectedRange(NSRange(location: 2, length: 1))
+  textView.insertText("F", replacementRange: textView.selectedRange())
+  let replaced = try #require(textView.checklistMarkerRect(for: marker))
+  #expect(abs(replaced.midY - completed.midY) < 0.01)
+  #expect(try strikeRows() == originalStrikeRows)
+  try captureChecklist(textView, name: "checklist-strike-through")
+  #expect(textView.toggleSelectedChecklist())
+  let reopened = try #require(textView.checklistMarkerRect(for: marker))
+  #expect(abs(reopened.midY - completed.midY) < 0.01)
+}
+
+@MainActor
+private func checklistLineBaseline(in textView: ListAwareTextView, at index: Int) throws -> CGFloat {
+  let manager = try #require(textView.layoutManager)
+  let glyph = manager.glyphIndexForCharacter(at: index)
+  return textView.textContainerOrigin.y
+    + manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
+    + manager.location(forGlyphAt: glyph).y
+}
+
+@MainActor
+private func checklistTypingEditor(family: String, size: CGFloat, text: String) -> ListAwareTextView {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.appearance = NSAppearance(named: .aqua)
+  textView.drawsBackground = true
+  textView.backgroundColor = .white
+  textView.textColor = .black
+  textView.reduceMotion = true
+  textView.textContainerInset = NSSize(width: 16, height: 10)
+  textView.textContainer?.lineFragmentPadding = 0
+  var attributes = EditorTypography.defaultAttributes(family: family, size: size)
+  attributes[.foregroundColor] = NSColor.black
+  textView.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: attributes))
+  textView.typingAttributes = attributes
+  return textView
+}
+
+@MainActor
+private func captureChecklist(_ textView: ListAwareTextView, name: String) throws {
+  guard let directory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"] else { return }
+  textView.refreshChecklistPresentation()
+  let bitmap = try #require(textView.bitmapImageRepForCachingDisplay(in: textView.bounds))
+  textView.cacheDisplay(in: textView.bounds, to: bitmap)
+  let png = try #require(bitmap.representation(using: .png, properties: [:]))
+  try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
+}
+
+@Test @MainActor func checklistMarkerUsesFontCapHeightAcrossFontSizes() throws {
   for fontSize in [CGFloat(11), CGFloat(14), CGFloat(24)] {
     let textView = ListAwareTextView(
       frame: NSRect(x: 0, y: 0, width: 320, height: 160)
@@ -952,19 +1071,16 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
     let baselineY = textView.textContainerOrigin.y
       + lineFragmentRect.minY
       + layoutManager.location(forGlyphAt: contentGlyph).y
-    let visibleInkMidY = baselineY
-      - contentFont.boundingRect(
-        forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
-      ).midY
+    let capHeightMidY = baselineY - contentFont.capHeight / 2
 
     #expect(
-      abs(markerRect.midY - visibleInkMidY) < 0.01,
-      "font \(fontSize), marker midY \(markerRect.midY), visible ink midY \(visibleInkMidY)"
+      abs(markerRect.midY - capHeightMidY) < 0.01,
+      "font \(fontSize), marker midY \(markerRect.midY), cap-height midY \(capHeightMidY)"
     )
   }
 }
 
-@Test @MainActor func checklistMarkerSkipsLeadingWhitespaceBeforeVisibleTextGlyph() throws {
+@Test @MainActor func checklistMarkerKeepsFontAlignmentWithLeadingWhitespace() throws {
   let textView = ListAwareTextView(
     frame: NSRect(x: 0, y: 0, width: 320, height: 160)
   )
@@ -999,46 +1115,43 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   let baselineY = textView.textContainerOrigin.y
     + lineFragmentRect.minY
     + layoutManager.location(forGlyphAt: contentGlyph).y
-  let visibleInkMidY = baselineY
-    - contentFont.boundingRect(
-      forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
-    ).midY
+  let capHeightMidY = baselineY - contentFont.capHeight / 2
 
   #expect(
-    abs(markerRect.midY - visibleInkMidY) < 0.01,
-    "marker midY \(markerRect.midY), F ink midY \(visibleInkMidY)"
+    abs(markerRect.midY - capHeightMidY) < 0.01,
+    "marker midY \(markerRect.midY), cap-height midY \(capHeightMidY)"
   )
 }
 
-@Test @MainActor func allWhitespaceChecklistContentKeepsMarkerSlotFallback() throws {
-  let textView = ListAwareTextView(
-    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
-  )
-  textView.textContainerInset = NSSize(width: 16, height: 10)
-  textView.textContainer?.lineFragmentPadding = 0
-  textView.font = .systemFont(ofSize: 14)
-  textView.string = "○   "
+@Test @MainActor func allWhitespaceChecklistContentKeepsEmptyAlignment() throws {
+  let textView = checklistTypingEditor(family: ".AppleSystemUIFont", size: 14, text: "○ ")
+  let empty = try #require(textView.checklistMarkerRect(for: NSRange(location: 0, length: 1)))
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  textView.insertText("  ", replacementRange: textView.selectedRange())
+  let spaced = try #require(textView.checklistMarkerRect(for: NSRange(location: 0, length: 1)))
+  #expect(spaced == empty)
+}
 
-  let textContainer = try #require(textView.textContainer)
-  let layoutManager = try #require(textView.layoutManager)
-  layoutManager.ensureLayout(for: textContainer)
-
-  let markerRect = try #require(
-    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
-  )
-  let slotGlyphRange = layoutManager.glyphRange(
-    forCharacterRange: NSRange(location: 0, length: 2),
-    actualCharacterRange: nil
-  )
-  let slotRect = layoutManager.boundingRect(
-    forGlyphRange: slotGlyphRange,
-    in: textContainer
-  ).offsetBy(
-    dx: textView.textContainerOrigin.x,
-    dy: textView.textContainerOrigin.y
-  )
-
-  #expect(markerRect == ChecklistMarkerDrawing.markerRect(around: slotRect))
+@Test @MainActor func checklistMarkerStaysOnFirstLineWithWrappedMixedSizeContent() throws {
+  let textView = checklistTypingEditor(family: "Avenir Next", size: 17, text: "    ○ F")
+  textView.setFrameSize(NSSize(width: 160, height: 240))
+  let window = NSWindow(contentRect: textView.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+  window.contentView = textView
+  defer { window.orderOut(nil) }
+  let markerRange = NSRange(location: 4, length: 1)
+  let original = try #require(textView.checklistMarkerRect(for: markerRange))
+  textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+  textView.insertText(String(repeating: " wrapped content", count: 12), replacementRange: textView.selectedRange())
+  let wrapped = try #require(textView.checklistMarkerRect(for: markerRange))
+  #expect(abs(wrapped.midY - original.midY) < 0.01)
+  let container = try #require(textView.textContainer)
+  #expect((textView.layoutManager?.usedRect(for: container).height ?? 0) > 54)
+  textView.textStorage?.addAttribute(.font, value: NSFont.systemFont(ofSize: 24), range: NSRange(location: 6, length: 1))
+  let mixed = try #require(textView.checklistMarkerRect(for: markerRange))
+  textView.setSelectedRange(NSRange(location: 6, length: 1))
+  textView.insertText("a", replacementRange: textView.selectedRange())
+  let replaced = try #require(textView.checklistMarkerRect(for: markerRange))
+  #expect(abs(replaced.midY - mixed.midY) < 0.01)
 }
 
 @Test @MainActor func depthZeroChecklistMarkerCacheDisplayKeepsWholeCircleInsideLeftClip() throws {
