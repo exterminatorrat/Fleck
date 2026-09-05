@@ -153,6 +153,8 @@ Final production ownership: `DictationCoordinator.swift` and `DictationProcessin
 
 **Prerequisite:** Stable 1B/1C timing boundaries.
 
+Implementation is authorized under [the detailed 1D diagnostics plan](2026-09-05-dictation-diagnostics.md), using the existing measurement chain and a content-free snapshot.
+
 Candidate files: existing `DictationProcessingModels.swift`, coordinator measurement code, and existing diagnostic/evaluation consumers. Do not create a parallel telemetry system.
 
 - [ ] Record event received, feedback published, audio start requested, first audio buffer, model-ready, stop, ASR final, cleanup, route, save, and cancellation teardown where observable.
@@ -198,7 +200,7 @@ Record every trial, including failures. Initial target: feedback p95 ≤100 ms a
 | 1A | baseline | Capsule presentation only | Implemented; parent verified; fresh Sol/High ship |
 | 1B | 1A review + lifecycle amendment | Speech source/coordinator startup ownership | Implemented locally; parent verified; fresh Sol/High ship |
 | 1C | 1B review | Startup readiness and current session identity | Implemented locally; fresh Sol/High ship; baseline test exceptions retained |
-| 1D | 1B/1C reviews | Actual stage boundaries | Planned |
+| 1D | 1B/1C reviews | Actual stage boundaries | Implementation in progress under detailed diagnostics plan |
 | 1E | 1B–1D evidence | Residency and measured memory | Planned |
 | 1F | Accepted source packets + packaging authority | Exact artifact and real microphone | Pending device/package work |
 
