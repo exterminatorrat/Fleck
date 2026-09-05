@@ -33,8 +33,10 @@ E1 source acceptance: parent final default 22/22 (`/tmp/fleck-e1-parent-final.lo
 4. **Verification:** Red-first argument/identity/exit/failure tests and existing sampler tests via that package's Swift test command; verify discovered tests actually execute. Run a harmless local process smoke check without launching Fleck or a model. Parent checks plus fresh Sol `ship`.
 5. **Authority / handoff:** Same native worker lane, exact ownership, no concurrent E1 changes or builds. Report CLI usage, units, cadence, failure semantics, and test counts; local commit after acceptance.
 
-- [ ] Inspect the existing CLI and pin the exact command/interface before delegation.
-- [ ] Implement, verify, review, and commit E2 sequentially.
+- [x] Inspect the existing CLI and pin the exact command/interface before delegation.
+- [x] Implement, verify, review, and commit E2 sequentially.
+
+E2 source acceptance: `cabbea7`, parent 28/28 nonempty package tests (`/tmp/fleck-e2-parent-final.log`), clean diff, fresh reviewer `dictation_e2_final_review` verdict `ship`. The same worker corrected review findings for cancellation during a synchronous provider call, cancellation at completion, and rejecting a dangling output symlink before sampling. Parent independently sampled a harmless sleep process for one second: ten valid samples, exact PID/start identity, complete report and exit zero. Evidence: `/var/folders/27/5hzm8vl539j1pf9ghg10yxcc0000gn/T/fleck-e2-parent-smoke-3xtjq69n/timeline.json`. This is sampler proof only; no Fleck, model, microphone or M1 run occurred.
 
 ### E2 execution specification (pinned after CLI inspection)
 
@@ -52,7 +54,7 @@ On **each** machine run cold, warm (within retention window), and after-Gemma ca
 
 Compare pre-1B/1C baseline with the accepted capture lineage for startup effects. Compare retention candidates against the **same** accepted capture code for policy effects. Do not attribute the combined startup changes to retention. Use matched utterance/scenario ordering, record cold preparation and cache state, and distinguish event-delivery timing from physical key latency. First-word recall needs supervised utterance/output comparison; diagnostics alone cannot establish it.
 
-- [ ] Prepare manifest and trial sheet with explicit unavailable fields.
+- [x] Prepare manifest and trial sheet with explicit unavailable fields: `2026-09-05-dictation-device-evidence-template.md`.
 - [ ] Resolve M1 access and exact package/run authority before physical runs.
 - [ ] Collect target M1 and separate M4 control evidence with provenance.
 

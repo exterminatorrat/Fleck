@@ -22,6 +22,10 @@ Status: **not run**. This is a protocol template, not acceptance evidence. Dupli
 
 ## Trial row contract
 
+For an authorized candidate launch, explicitly set `FLECK_DICTATION_DIAGNOSTICS_DIR` and capture stderr. The fixed `fleck_dictation_diagnostics=sink_failure` message invalidates the collection run; missing records are not successful trials. Wait for expected files and the final cancellation-drain revision before closing the app. Abrupt exit may lose queued records. Start a fresh diagnostic run before the 128-capture limit; do not assume later captures were recorded.
+
+Run the resource command against the verified app PID: `local-dictation-candidate sample-resources --pid <PID> --duration-seconds <1...600> --output <new JSON path>`. Record the reported start identity and exit status. An `incomplete` report retains valid earlier samples but cannot prove the complete measurement window. Record power/thermal/pressure/reclaimable snapshots separately; process RSS is not system reclaimable memory.
+
 Use one row per attempted trial, including cancellation and failure. Associate the collector's run-local capture ordinal with the scenario externally. Record device/run identity, trial number, scenario, preparation (cold, within retention window, after Gemma), relative trial start/stop, collector ordinal, actual power/thermal/pressure/reclaimable state, requested gesture, observed result and reason for failure or missing evidence.
 
 Timing columns (milliseconds, preserve unavailable): event-to-feedback, event-to-first-input-buffer, event-to-audio-ready, model-load duration, release-to-ASR-final, release-to-final-insertion, persistence completion, cancel-request-to-drained. Label the underlying anchors precisely; do not silently substitute first partial for first input buffer or insertion for persistence. Physical-key latency is a separate column with its observation method.
