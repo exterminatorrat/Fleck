@@ -4417,7 +4417,7 @@ private func sendHostedKeyDown(
     host.cacheDisplay(in: host.bounds, to: capture)
     let captureData = try #require(capture.representation(using: .png, properties: [:]))
     let captureName = isTitle ? "phase2-font-pinned-host.png" : "phase2-font-narrow-host.png"
-    try captureData.write(to: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/evidence/\(captureName)"))
+    try captureData.write(to: fontPickerEvidenceDirectory().appendingPathComponent(captureName))
     if isTitle {
       #expect(state.selectedNote?.titleFontFamily == "Menlo")
       #expect(state.selectedNote?.richTextRTF == before.richTextRTF)

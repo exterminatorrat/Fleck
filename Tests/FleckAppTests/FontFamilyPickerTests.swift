@@ -74,7 +74,7 @@ import Testing
 }
 
 @Test @MainActor func fontPickerHostedVisualSamples() throws {
-  let evidence = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/evidence")
+  let evidence = try fontPickerEvidenceDirectory()
   for appearance in [NSAppearance.Name.aqua, .darkAqua] {
     let picker = FontFamilyPickerController(currentFamily: "Avenir Next", isMixed: false, targetLabel: "Selected text", onCommit: { _ in }, onCancel: {})
     let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 280, height: 320), styleMask: [.titled], backing: .buffered, defer: false)
@@ -102,4 +102,13 @@ import Testing
     try data.write(to: evidence.appendingPathComponent("phase2-font-\(appearance.rawValue).png"))
     #expect(picker.searchField.frame.width > 200)
   }
+}
+
+func fontPickerEvidenceDirectory() throws -> URL {
+  let directory = ProcessInfo.processInfo.environment["FLECK_FONT_PICKER_EVIDENCE_DIRECTORY"].map {
+    URL(fileURLWithPath: $0, isDirectory: true)
+  } ?? FileManager.default.temporaryDirectory.appendingPathComponent(
+    "FleckFontPicker-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  return directory
 }
