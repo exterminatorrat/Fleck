@@ -106,11 +106,29 @@
       context: DictationCapsuleContext(status: .idle),
       size: DictationCapsuleController.idleSize
     )
-    try render(
-      "arming-bottom",
-      context: DictationCapsuleContext(status: .arming),
-      size: DictationCapsuleController.idleSize
-    )
+
+    func renderStarting(_ dock: DictationCapsuleDock) throws {
+      let startingPanel = DictationCapsulePanel()
+      startingPanel.appearance = NSAppearance(named: .darkAqua)
+      let startingController = DictationCapsuleController(
+        panel: startingPanel,
+        markLoader: markLoader
+      )
+      defer { startingController.dismiss() }
+      startingController.presentIdle(dock: dock, onOpenFleck: {}, onDockChanged: { _ in })
+      startingController.render(.arming)
+      startingController.panel.contentView?.appearance = NSAppearance(named: .darkAqua)
+      try captureVisualState(
+        "arming-\(dock.rawValue)",
+        controller: startingController,
+        size: DictationCapsuleController.size(for: .arming),
+        directory: captureDirectory
+      )
+    }
+
+    for dock in DictationCapsuleDock.allCases {
+      try renderStarting(dock)
+    }
 
     let heldListening = visualCaptureContext(
       .listening,

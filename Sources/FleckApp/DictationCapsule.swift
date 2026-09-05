@@ -233,7 +233,7 @@
       case .idle:
         return (nil, "Fleck dictation ready")
       case .arming:
-        return (nil, "Starting dictation")
+        return ("Starting", "Starting dictation")
       case .listening:
         return (nil, "Dictation listening")
       case .finalizing:
@@ -1031,14 +1031,14 @@
       reduceMotion: Bool,
       dockChange: Bool = false
     ) -> TimeInterval {
+      if to == .arming {
+        return acknowledgement
+      }
       if reduceMotion {
         return reduceMotionCrossfade
       }
       if dockChange {
         return dockSnap
-      }
-      if to == .arming {
-        return acknowledgement
       }
       if isTerminal(to), !isTerminal(from) {
         return result
@@ -1058,6 +1058,9 @@
       reduceMotion: Bool,
       dockChange: Bool = false
     ) -> TimeInterval {
+      if to == .arming {
+        return acknowledgement
+      }
       if reduceMotion {
         return reduceMotionCrossfade
       }
@@ -1186,7 +1189,7 @@
       self.announcementHandler = announcementHandler
       self.processingLabelSleeper = processingLabelSleeper
       switch context.status {
-      case .idle, .listening, .saved, .savedWithoutCleanup, .noSpeech,
+      case .idle, .arming, .listening, .saved, .savedWithoutCleanup, .noSpeech,
         .routingFailure, .failed:
         self.voiceOverLabel = DictationCapsulePresentation(
           status: context.status,
@@ -1299,6 +1302,10 @@
         voiceOverLabel = DictationCapsulePresentation(status: .idle).voiceOverText
         return
       }
+      if context.status == .arming {
+        voiceOverLabel = DictationCapsulePresentation(status: .arming).voiceOverText
+        return
+      }
       if context.status == .listening,
         previousContext.status != .listening
           || previousContext.sessionID != context.sessionID
@@ -1403,6 +1410,7 @@
   @MainActor
   final class DictationCapsuleController {
     nonisolated static let idleSize = CGSize(width: 46, height: 24)
+    nonisolated static let startingSize = CGSize(width: 104, height: 36)
     nonisolated static let listeningSize = CGSize(width: 176, height: 36)
     nonisolated static let activeSize = CGSize(width: 192, height: 36)
     nonisolated static let savedSize = CGSize(width: 264, height: 36)
@@ -1702,8 +1710,10 @@
     ) -> CGSize {
       let ceiling: CGSize
       switch status {
-      case .idle, .arming:
+      case .idle:
         ceiling = idleSize
+      case .arming:
+        ceiling = startingSize
       case .listening:
         ceiling = listeningSize
       case .finalizing, .cleaning, .routing, .saving:
@@ -1875,9 +1885,16 @@
       if reduceMotion {
         panel.setFrame(finalFrame, display: true)
         panel.alphaValue = 1
+        let duration = DictationCapsuleMotion.shellDuration(
+          from: previousStatus,
+          to: currentContext.status,
+          reduceMotion: true,
+          dockChange: dockChange
+        )
+        guard duration > 0 else { return }
         let transition = CATransition()
         transition.type = .fade
-        transition.duration = DictationCapsuleMotion.reduceMotionCrossfade
+        transition.duration = duration
         transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
         hostingView.wantsLayer = true
         hostingView.layer?.add(
@@ -2084,8 +2101,10 @@
     @ViewBuilder
     private var railContent: some View {
       switch model.context.status {
-      case .idle, .arming:
+      case .idle:
         idleContent
+      case .arming:
+        startingContent
       case .listening:
         listeningContent
       case .finalizing, .cleaning, .routing, .saving:
@@ -2108,6 +2127,21 @@
 
     private var identityMark: some View {
       FleckRailIdentityMark(image: markImage, color: model.colors.coreColor)
+    }
+
+    private var startingContent: some View {
+      FleckRailLayout(
+        order: FleckRailContentOrder.markAndContent(for: model.dock),
+        spacing: 7
+      ) {
+        identityMark
+        Text(presentation.visibleText ?? "")
+          .font(.system(size: 12, weight: .medium, design: .default))
+          .lineLimit(1)
+          .foregroundStyle(model.colors.primaryTextColor)
+          .background(FleckRailFrameProbe(identifier: "fleck-rail-starting-text"))
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
