@@ -3284,13 +3284,18 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
         @MainActor func sample(_ phase: String) throws -> (title: ClosedRange<Int>, body: ClosedRange<Int>) {
           // Do not force field-editor layout: that changes the very transition under test.
-          let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-          host.cacheDisplay(in: host.bounds, to: bitmap)
-          let scale = CGFloat(bitmap.pixelsHigh) / host.bounds.height
-          @MainActor func ink(in rect: NSRect) throws -> ClosedRange<Int> {
-            let top = host.isFlipped ? rect.minY : host.bounds.height - rect.maxY
-            let xs = Int(rect.minX * scale)..<Int(rect.maxX * scale)
-            let ys = max(0, Int(top * scale))..<min(bitmap.pixelsHigh, Int((top + rect.height) * scale))
+          @MainActor func ink(in rect: NSRect, from source: NSView) throws -> ClosedRange<Int> {
+            let bitmap = try #require(source.bitmapImageRepForCachingDisplay(in: source.bounds))
+            source.cacheDisplay(in: source.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsHigh) / source.bounds.height
+            let sourceRect = source.convert(rect, from: host)
+            let top = source.isFlipped
+              ? sourceRect.minY - source.bounds.minY
+              : source.bounds.maxY - sourceRect.maxY
+            let left = sourceRect.minX - source.bounds.minX
+            let right = sourceRect.maxX - source.bounds.minX
+            let xs = max(0, Int(left * scale))..<min(bitmap.pixelsWide, Int(right * scale))
+            let ys = max(0, Int(top * scale))..<min(bitmap.pixelsHigh, Int((top + sourceRect.height) * scale))
             let rows = ys.filter { y in xs.contains { x in
               (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.2
             } }
@@ -3298,16 +3303,35 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
             let last = try #require(rows.last)
             // A solid captured background must not silently count as glyph ink.
             #expect(rows.count < ys.count)
-            return first...last
+            let sourceFrame = host.convert(source.bounds, from: source)
+            let sourceTop = host.isFlipped
+              ? sourceFrame.minY - host.bounds.minY
+              : host.bounds.maxY - sourceFrame.maxY
+            let hostOffset = Int(sourceTop * scale)
+            return (hostOffset + first)...(hostOffset + last)
           }
           // Leading glyphs exclude the caret at x=2; long-title horizontal scrolling is reset below.
-          let titleInk = try ink(in: NSRect(x: titleFrame.minX + 5, y: titleFrame.minY - 10, width: 55, height: titleFrame.height + 10))
-          let bodyInk = try ink(in: NSRect(x: bodyFrame.minX + 16, y: bodyFrame.minY + 8, width: 60, height: 27))
+          let titleSource: NSView = title.currentEditor() ?? title
+          let titleInk = try ink(
+            in: NSRect(
+              x: titleFrame.minX + 5,
+              y: titleFrame.minY - 10,
+              width: 55,
+              height: titleFrame.height + 10
+            ),
+            from: titleSource
+          )
+          let bodyInk = try ink(
+            in: NSRect(x: bodyFrame.minX + 16, y: bodyFrame.minY + 8, width: 60, height: 27),
+            from: body
+          )
           #expect(host.convert(title.bounds, from: title) == titleFrame)
           #expect(host.convert(body.bounds, from: body) == bodyFrame)
           #expect(scrollView.contentView.bounds.origin == clipOrigin)
           print("TITLE INK \(label) \(phase): title=\(titleInk), body=\(bodyInk), frame=\(titleFrame), clip=\(clipOrigin)")
           if let directory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"] {
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
             let png = try #require(bitmap.representation(using: .png, properties: [:]))
             try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(label)-\(phase).png"))
           }
