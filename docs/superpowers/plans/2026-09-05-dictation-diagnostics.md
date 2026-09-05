@@ -1,6 +1,6 @@
 # Packet 1D — Content-free dictation diagnostics
 
-Status: planned; implementation authorized. Base: `503d193`, including accepted 1C source `8e1d1fa`.
+Status: implemented and accepted locally with fresh Sol/High `ship`. Source commit: `2fb3a1a`. Base: `503d193`, including accepted 1C source `8e1d1fa`. Device and packaged-app acceptance remain open.
 
 Use superpowers subagent-driven development and red-first TDD. The active user-selected lane is native GPT-5.6 Sol / High implementation, the same worker for corrections, parent verification, and a fresh Sol / High reviewer whose verdict must be `ship`.
 
@@ -77,3 +77,31 @@ Parent independently inspects the full diff and reruns focused/default/enhanced 
 ## 5. Authority and handoff
 
 Worker must not commit, push, open/merge a PR, change branches, install/launch/package apps, download models, or use the microphone. Return changed paths, red/green evidence, exact counts, limitations, and any unresolved issue. Parent makes a focused local source commit only after `ship`, records acceptance and immutable evidence, and reports the exact local status. Packets 1E and 1F remain unstarted.
+
+## Acceptance record — 2026-09-05
+
+- Source: `2fb3a1a`, exactly the seven production and six test paths above. Reviewed pre-commit diff SHA-256: `31b386fa0979c5ba655029b1edc92ec0e2c95400b1e7eb65eb24129b1d84340d`. Parent independently inspected the full diff and every correction; final fresh Sol/High verdict: `ship`.
+- Existing measurements now expose a bounded, content-free `latestRuntimeDiagnostics` projection. Known timestamps use relative monotonic milliseconds; unavailable stages encode explicit null. Codable round trips normalize to known stage keys and suppress invalid-clock timings. No automatic file export, UI, logger, or persistent store was added.
+- Enhanced capture observes audio start, first nonempty input buffer before conversion, admitted model-load request, and validated readiness. Cold/warm metadata comes from actual inference state. Snapshots survive destructive teardown; stale startup completion and rejected busy starts preserve capture isolation. Standard permission denial and specific Enhanced failure reasons survive propagation.
+- The first fresh review returned `fix-first` for terminal/recovery outcome classification and decoder normalization. The same worker corrected those findings under [the bounded correction plan](2026-09-05-dictation-diagnostics-review-correction.md). Parent inspection additionally caught generic failure categories overriding typed source evidence; targeted runtime tests reproduced and verified both fixes. A new fresh reviewer accepted the final complete diff.
+
+Evidence directory: `.build/dictation-diagnostics-1d/` in this worktree.
+
+| Evidence | Result |
+| --- | --- |
+| `parent-default-final.log`, selection `parent-default-round2.filter` | 161 matched / 161 passed, exit 0; diagnostics, processing, adapter, feedback, context, recovery and cancellation |
+| `parent-enhanced-final.log`, selection `parent-enhanced.filter` | 83 matched / 83 passed, exit 0; diagnostics, Enhanced startup, adaptive inference and feedback |
+| `red-default.log`, `red-enhanced.log` | Expected missing-interface compilation failures before production edits; no completed test cases |
+| `reviewer-correction-red.log` and `.command` | 8 executed; 7 expected failures and 1 passing control, 10 issues |
+| `reviewer-correction-green.log` | 12 matched / 12 passed through the nonempty runner |
+| `reviewer-typed-source-red.log` | 2 matched / 2 expected failures exposing category precedence |
+| `reviewer-typed-source-green.log` | 2 matched / 2 passed |
+| `parent-reviewed-final.patch`, `parent-evidence-final.txt` | Immutable reviewed patch and detailed provenance |
+
+An initial dictionary-null assertion was corrected after a 9/10 behavioral run. Zero-selection filter probes, an Enhanced build invalidated by concurrent edits, and an initial source-precedence test that did not reproduce the defect are excluded from acceptance evidence. No zero-match run is counted as a pass.
+
+The two prior baseline-reproduced hands-free startup stalls remain exclusions, not passes: `handsFreeStartupOwnsEscapeBeforeProviderReturns` and `handsFreeStartupMonitorLossCancelsBeforeProviderReturns`. Their baseline evidence is recorded in the accepted 1C plan. This packet does not claim an all-suite pass.
+
+`Package.resolved` remains SHA-256 `ccf30f62d44719e9859266a373bb0219dbbd1e0f73d17667b50d7d87715a09f7`. The installed corrected app executable remains SHA-256 `51983a0685e904781dd252278380d1cda093a641beb6d5336013049645887ef0`. No GitHub write, packaging, installation, app launch, model-weight download, or microphone/device action occurred.
+
+Coordinator receipt and phase publication are not physical-key or video measurements. Unobservable Apple first-buffer/model-ready stages remain unavailable. No real-microphone latency, first-word recall, memory-pressure, packaged-app, or release claim follows from these fixture-based checks. Packets 1E and 1F remain unstarted.

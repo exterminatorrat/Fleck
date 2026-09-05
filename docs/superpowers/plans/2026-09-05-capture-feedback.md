@@ -157,12 +157,12 @@ Implementation is authorized under [the detailed 1D diagnostics plan](2026-09-05
 
 Candidate files: existing `DictationProcessingModels.swift`, coordinator measurement code, and existing diagnostic/evaluation consumers. Do not create a parallel telemetry system.
 
-- [ ] Record event received, feedback published, audio start requested, first audio buffer, model-ready, stop, ASR final, cleanup, route, save, and cancellation teardown where observable.
-- [ ] Mark unobserved stages unavailable; never substitute zero or synthetic timings.
-- [ ] Distinguish model cold/warm, permission denied, missing device, load failure, timeout, and buffer limit.
-- [ ] Keep event timing separate from external physical-key/video measurements.
-- [ ] Preserve per-session isolation and bounded retention; exclude audio, transcript, personal Vocabulary, and note bodies from diagnostic exports.
-- [ ] Test partial/cancelled sessions and failed stages; report limitations explicitly.
+- [x] Record event received, feedback published, audio start requested, first audio buffer, model-ready, stop, ASR final, cleanup, route, save, and cancellation teardown where observable.
+- [x] Mark unobserved stages unavailable; never substitute zero or synthetic timings.
+- [x] Distinguish model cold/warm, permission denied, missing device, load failure, timeout, and buffer limit.
+- [x] Keep event timing separate from external physical-key/video measurements.
+- [x] Preserve per-session isolation and bounded retention; exclude audio, transcript, personal Vocabulary, and note bodies from diagnostic exports.
+- [x] Test partial/cancelled sessions and failed stages; report limitations explicitly.
 
 ## Packet 1E — Resource policy after capture correctness
 
@@ -200,7 +200,7 @@ Record every trial, including failures. Initial target: feedback p95 ≤100 ms a
 | 1A | baseline | Capsule presentation only | Implemented; parent verified; fresh Sol/High ship |
 | 1B | 1A review + lifecycle amendment | Speech source/coordinator startup ownership | Implemented locally; parent verified; fresh Sol/High ship |
 | 1C | 1B review | Startup readiness and current session identity | Implemented locally; fresh Sol/High ship; baseline test exceptions retained |
-| 1D | 1B/1C reviews | Actual stage boundaries | Implementation in progress under detailed diagnostics plan |
+| 1D | 1B/1C reviews | Actual stage boundaries | Implemented locally; fresh Sol/High ship; source 2fb3a1a |
 | 1E | 1B–1D evidence | Residency and measured memory | Planned |
 | 1F | Accepted source packets + packaging authority | Exact artifact and real microphone | Pending device/package work |
 
@@ -239,4 +239,11 @@ Only 1A is an executable implementation packet at plan creation. Later ownership
 - Capture-local readiness publishes Listening before real level delivery, caches the latest pre-hold level, treats silence as readiness, and blocks stop/cancel/failure/stale feedback. Source startup ownership remains separate. The existing waveform eases to rest after immediate zero input; the observation timestamp is not a hardware or model-ready measurement.
 - Parent independent evidence: default 95/95, enhanced 55/55, final focused 19/19, gestures 15/15, focused-editor/repeat regressions 11/11, known suspended-start case 1/1, and hosted visual capture 1/1. Counts overlap. All 18 worker dock/appearance fixtures and representative parent rerenders were inspected.
 - Two provider-startup tests stall on both this work and unchanged accepted 1B baseline c565332. A worker gesture-group failure later passed in isolation and in both parent final-source and baseline groups; no cause or fix is claimed. No full-suite-green claim. Exact logs and limits are in [the detailed recording-readiness plan](2026-09-05-recording-readiness.md#local-verification-and-acceptance-record--2026-09-05).
-- Source accepted and locally integrated only. No installed-app change, packaging, microphone/device evidence, model download, GitHub write, or release admission. 1D is next but has not started; Phase 1 and MacBook acceptance remain open.
+- Source accepted and locally integrated only. No installed-app change, packaging, microphone/device evidence, model download, GitHub write, or release admission. At 1C acceptance, 1D had not started; its subsequent acceptance is recorded below. Phase 1 and MacBook acceptance remain open.
+
+## Packet 1D acceptance record — 2026-09-05
+
+- Source `2fb3a1a`; final reviewed diff SHA-256 `31b386fa0979c5ba655029b1edc92ec0e2c95400b1e7eb65eb24129b1d84340d`; fresh Sol/High verdict `ship` after same-worker correction of the initial review findings.
+- Parent independently verified 161/161 default and 83/83 Enhanced selected tests. Detailed red/green logs, exact filters, prior baseline exclusions and provenance are in [the 1D diagnostics plan](2026-09-05-dictation-diagnostics.md).
+- Content-free latest-capture diagnostics reuse existing measurements, preserve explicit unavailable stages, observed cold/warm state, typed failures and teardown snapshots. No new storage/export sink or UI was added.
+- Accepted source only. Installed app and dependency lock unchanged; no real-microphone/device, packaged-app, GitHub publication or release evidence. 1E and 1F remain unstarted.

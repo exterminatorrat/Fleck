@@ -2,6 +2,8 @@
 
 Review verdict: `fix-first` on source/test diff SHA-256 `39b477e2220b6806e7b3e000010d4f31e9a363e2107b5182756d8a1b7746728c`. Parent verification before correction passed 147 default and 79 Enhanced tests. This correction uses the same native Sol/High worker and requires new parent verification and a new fresh Sol review.
 
+Status: corrected and accepted in source `2fb3a1a`; new fresh Sol/High verdict `ship`. Final parent verification passed 161 default and 83 Enhanced tests. See the main 1D plan for exact final diff and evidence. The subsequent bounded typed-source precedence correction also included `StreamingDictationProcessor.swift` and its tests, preserving the original packet ownership.
+
 ## 1. Objective and success criteria
 
 Close two diagnostic contract gaps: resolve known terminal outcomes and report the actual failure category on early/recovery paths; ensure decoding and re-encoding cannot export arbitrary stage keys or omit known unavailable stages.
