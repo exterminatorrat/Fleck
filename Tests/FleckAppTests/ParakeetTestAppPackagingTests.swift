@@ -150,7 +150,9 @@ private func makeFakeFixture(
     ? "libswiftCompatibilityFuture.dylib"
     : "libswiftCompatibilitySpan.dylib"
   let swiftRuntimeSource = swiftRuntimeDirectory.appendingPathComponent(swiftRuntimeName)
-  if swiftRuntimeMode != "missing" {
+  if swiftRuntimeMode != "missing"
+    && swiftRuntimeMode != "none"
+    && swiftRuntimeMode != "scan-miss" {
     try Data("swift-runtime-\(swiftRuntimeMode)\n".utf8).write(to: swiftRuntimeSource)
   }
   if swiftRuntimeMode == "symlink" {
@@ -251,7 +253,9 @@ private func makeFakeFixture(
     for executable in "${scans[@]}"; do
       printf 'swift-stdlib-tool|%s|%s\n' "$operation" "$executable" \
         >> "$FAKE_HELPER_TOOL_LOG"
-      if [[ "$(/usr/bin/basename "$executable")" == "fleck-agent" ]]; then
+      if [[ "$(/usr/bin/basename "$executable")" == "fleck-agent" \
+        && "$FAKE_SWIFT_RUNTIME_MODE" != "none" \
+        && "$FAKE_SWIFT_RUNTIME_MODE" != "scan-miss" ]]; then
         required=1
       fi
     done
@@ -437,11 +441,15 @@ private func makeFakeFixture(
         printf '%s:\n' "$2"
         printf '\t/usr/lib/swift/libswiftCore.dylib (compatibility version 0.0.0, current version 0.0.0)\n'
         if [[ "$(/usr/bin/basename "$path")" == "fleck-agent" ]]; then
-          if [[ "$FAKE_SWIFT_RUNTIME_MODE" == "nonportable-dependency" ]]; then
-            printf '\t@rpath/libUnapproved.dylib (compatibility version 0.0.0, current version 0.0.0)\n'
-          else
-            printf '\t@rpath/libswiftCompatibilitySpan.dylib (compatibility version 0.0.0, current version 0.0.0, weak)\n'
-          fi
+          case "$FAKE_SWIFT_RUNTIME_MODE" in
+            none) ;;
+            nonportable-dependency)
+              printf '\t@rpath/libUnapproved.dylib (compatibility version 0.0.0, current version 0.0.0)\n'
+              ;;
+            *)
+              printf '\t@rpath/libswiftCompatibilitySpan.dylib (compatibility version 0.0.0, current version 0.0.0, weak)\n'
+              ;;
+          esac
         fi
         ;;
       *) exit 2 ;;
@@ -629,11 +637,15 @@ private func launchPackager(
   gemmaBuildFails: Bool = false,
   gemmaBuildMutatesLock: Bool = false,
   escapingRpathSurvives: Bool = false,
-  reportedSDKVersion: String? = nil
+  reportedSDKVersion: String? = nil,
+  useHostBash: Bool = false
 ) throws -> RunningPackager {
   let standardError = Pipe()
   let process = Process()
-  process.executableURL = fixture.appScript
+  process.executableURL = useHostBash
+    ? URL(fileURLWithPath: "/bin/bash")
+    : fixture.appScript
+  process.arguments = useHostBash ? [fixture.appScript.path] : []
   process.currentDirectoryURL = fixture.root
   process.environment = environment(
     for: fixture,
@@ -770,6 +782,32 @@ func parakeetPackagerLinksAndValidatesActiveSDKVersion() throws {
   #expect(verifyEvents.contains("/Contents/Frameworks/libswiftCompatibilitySpan.dylib"))
 }
 
+@Test
+func parakeetPackagerAllowsNoPortableSwiftRuntimeWithHostBash() throws {
+  let fixture = try makeFakeFixture(swiftRuntimeMode: "none")
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(
+    fixture: fixture,
+    runID: "no-swift-runtime",
+    useHostBash: true
+  )
+  waitForExit(running)
+  let standardError = output(from: running.standardError)
+
+  #expect(running.process.terminationStatus == 0, Comment(rawValue: standardError))
+  let packagedApp = fixture.build.appendingPathComponent("parakeet-test/Fleck.app")
+  #expect(fileManager.fileExists(atPath: packagedApp.path))
+  #expect(!fileManager.fileExists(
+    atPath: packagedApp.appendingPathComponent("Contents/Frameworks").path
+  ))
+  let toolEvents = try String(contentsOf: fixture.helperToolLog, encoding: .utf8)
+  #expect(toolEvents.contains("swift-stdlib-tool|--print|"))
+  #expect(!toolEvents.contains("swift-stdlib-tool|--copy|"))
+  #expect(!toolEvents.contains("install_name_tool|-add_rpath|@loader_path/../Frameworks|"))
+}
+
 @Test(arguments: ["missing", "symlink", "wrong-arch"])
 func parakeetPackagerRejectsMissingOrUnsafeRequiredSwiftRuntime(_ runtimeMode: String) throws {
   let fixture = try makeFakeFixture(swiftRuntimeMode: runtimeMode)
@@ -796,7 +834,7 @@ func parakeetPackagerRejectsMissingOrUnsafeRequiredSwiftRuntime(_ runtimeMode: S
     == Data(contentsOf: fixture.originalGemmaLock))
 }
 
-@Test(arguments: ["unsupported", "nonportable-dependency"])
+@Test(arguments: ["unsupported", "nonportable-dependency", "scan-miss"])
 func parakeetPackagerRejectsUnsupportedRuntimeDependenciesAndRollsBack(
   _ runtimeMode: String
 ) throws {
@@ -811,6 +849,9 @@ func parakeetPackagerRejectsUnsupportedRuntimeDependenciesAndRollsBack(
   #expect(running.process.terminationStatus != 0)
   if runtimeMode == "unsupported" {
     #expect(error.contains("unsupported portable Swift runtime dependency"))
+  } else if runtimeMode == "scan-miss" {
+    #expect(error.contains("@rpath dependency is unsatisfied"))
+    #expect(error.contains("@rpath/libswiftCompatibilitySpan.dylib"))
   } else {
     #expect(error.contains("unpermitted dynamic dependency"))
     #expect(error.contains("@rpath/libUnapproved.dylib"))

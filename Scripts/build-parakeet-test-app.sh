@@ -537,6 +537,7 @@ readonly runtime_executables=(
   "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 )
 runtime_consumers=()
+runtime_consumer_count=0
 portable_swift_runtime_source=''
 for executable in "${runtime_executables[@]}"; do
   runtime_sources="$("$swift_stdlib_tool_path" \
@@ -568,6 +569,7 @@ for executable in "${runtime_executables[@]}"; do
   fi
   if (( runtime_source_count == 1 )); then
     runtime_consumers+=("$executable")
+    runtime_consumer_count=$((runtime_consumer_count + 1))
   fi
 done
 
@@ -892,9 +894,11 @@ verify_arm64 "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
 strip_disallowed_rpaths "$staged_app/Contents/MacOS/Fleck"
 strip_disallowed_rpaths "$staged_app/Contents/SharedSupport/fleck-agent"
 strip_disallowed_rpaths "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
-for executable in "${runtime_consumers[@]}"; do
-  "$install_name_tool_path" -add_rpath '@loader_path/../Frameworks' "$executable"
-done
+if (( runtime_consumer_count != 0 )); then
+  for executable in "${runtime_consumers[@]}"; do
+    "$install_name_tool_path" -add_rpath '@loader_path/../Frameworks' "$executable"
+  done
+fi
 verify_rpaths "$staged_app/Contents/MacOS/Fleck"
 verify_rpaths "$staged_app/Contents/SharedSupport/fleck-agent"
 verify_rpaths "$staged_app/Contents/SharedSupport/gemma-cleanup-helper"
