@@ -231,3 +231,46 @@ import Testing
   #expect(model.elapsedText(at: Date(timeIntervalSince1970: 108.9)) == "0:08")
   #expect(model.elapsedText(at: Date(timeIntervalSince1970: 165)) == "1:05")
 }
+
+@Test @MainActor func waveformPolishSpeechTraceKeepsDistinctPeaksStationary() {
+  let model = DictationWaveformModel()
+  let start = Date(timeIntervalSince1970: 200)
+  model.beginListening(at: start)
+  var firstPeaks: [Int]?
+  // Silence, a short burst, a pause, then sustained conversational energy.
+  let trace: [Float] = [0, 0, 0.02, 0.20, 0.08, 0, 0, 0.03, 0.05, 0.04, 0.06]
+  for (index, level) in trace.enumerated() {
+    let now = start.addingTimeInterval(Double(index) * 0.08)
+    model.receive(level: level, now: now)
+    let heights = model.barHeights(at: now, reduceMotion: false)
+    guard heights.max()! > DictationWaveformModel.minimumHeight else { continue }
+    let peaks = (1..<(heights.count - 1)).filter {
+      heights[$0] > heights[$0 - 1] && heights[$0] > heights[$0 + 1]
+    }
+    // Multiple quiet crests break the rigid triangle without traveling across the pill.
+    #expect(peaks.count >= 3)
+    if let firstPeaks { #expect(peaks == firstPeaks) } else { firstPeaks = peaks }
+    let reduced = model.barHeights(at: now, reduceMotion: true)
+    #expect(zip(reduced, heights).allSatisfy { $0 <= $1 })
+  }
+  let stale = model.barHeights(at: start.addingTimeInterval(2), reduceMotion: false)
+  #expect(stale.allSatisfy { $0 == DictationWaveformModel.minimumHeight })
+  model.reset()
+  #expect(model.barHeights(at: start, reduceMotion: false) == stale)
+}
+
+@Test @MainActor func waveformPolishInvalidLevelsRemainFiniteAndSettleToSilence() {
+  let model = DictationWaveformModel()
+  let start = Date(timeIntervalSince1970: 300)
+  model.beginListening(at: start)
+  model.receive(level: 0.20, now: start)
+  for (index, level) in [Float.nan, .infinity, -.infinity, -1].enumerated() {
+    let now = start.addingTimeInterval(Double(index + 1) * 0.08)
+    model.receive(level: level, now: now)
+    #expect(model.barHeights(at: now, reduceMotion: false).allSatisfy {
+      $0.isFinite && (3...20).contains($0)
+    })
+  }
+  #expect(model.barHeights(at: start.addingTimeInterval(1), reduceMotion: false)
+    .allSatisfy { $0 == DictationWaveformModel.minimumHeight })
+}

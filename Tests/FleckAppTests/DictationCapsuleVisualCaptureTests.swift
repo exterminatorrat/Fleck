@@ -199,4 +199,44 @@
       size: DictationCapsuleController.noSpeechSize
     )
   }
+
+  @Test @MainActor func waveformPolishNativeTraceCaptureWhenRequested() async throws {
+    guard let path = ProcessInfo.processInfo.environment["FLECK_WAVEFORM_CAPTURE_DIR"] else { return }
+    let directory = URL(fileURLWithPath: path, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let panel = DictationCapsulePanel()
+    panel.appearance = NSAppearance(named: .darkAqua)
+    let controller = DictationCapsuleController(panel: panel)
+    defer { controller.dismiss() }
+    controller.render(visualCaptureContext(.listening, isHandsFree: true, stage: .capture))
+    controller.panel.orderOut(nil)
+    // Synthetic RMS only. No microphone session or notes are created by this fixture.
+    var levels = [Float](repeating: 0, count: 10)
+    levels += [0.006, 0.02, 0.08, 0.20, 0.08, 0.03]
+    levels += [Float](repeating: 0, count: 12)
+    for _ in 0..<4 { levels += [0.02, 0.06, 0.04, 0.10] }
+    levels += [Float](repeating: 0, count: 16)
+    for (index, level) in levels.enumerated() {
+      controller.waveformModel.receive(level: level)
+      try await Task.sleep(for: .milliseconds(80))
+      try captureVisualState(
+        String(format: "frame-%03d", index), controller: controller,
+        size: DictationCapsuleController.listeningSize, directory: directory
+      )
+    }
+    for dock in [DictationCapsuleDock.left, .right] {
+      controller.setDock(dock)
+      controller.waveformModel.receive(level: 0.20)
+      controller.presentationModel.setListeningHover(true)
+      try await Task.sleep(for: .milliseconds(80))
+      try captureVisualState("listening-\(dock.rawValue)-controls", controller: controller,
+        size: DictationCapsuleController.listeningSize, directory: directory)
+    }
+    controller.render(visualCaptureContext(.cleaning, stage: .polish))
+    #expect(controller.waveformModel.energy == 0)
+    try captureVisualState("processing", controller: controller,
+      size: DictationCapsuleController.activeSize, directory: directory)
+    controller.dismiss()
+    #expect(controller.waveformModel.energy == 0)
+  }
 #endif
