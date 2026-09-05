@@ -93,6 +93,8 @@ The worker is not alone in the codebase. Preserve other edits, adapt to concurre
 
 **Prerequisite:** 1A accepted; primary completes and reviews a lifecycle amendment before delegation.
 
+The 2026-09-05 resumption uses [the audio-first lifecycle amendment](../specs/2026-09-05-audio-first-startup-amendment.md) as the authoritative 1B interface, ownership, timeout, buffering, and failure contract. It distinguishes prompt microphone shutdown from truthful native inference drain; arbitrary native teardown cannot be force-bounded in-process.
+
 **Source map:** `EnhancedSpeechCapture.swift`, `DictationInterfaces.swift`, `AppleSpeechStreamingAdapter.swift`, `StreamingDictationProcessor.swift`, `DictationCoordinator.swift`; tests in `EnhancedModelManagerTests.swift`, `DictationCoordinatorTests.swift`, and a new `EnhancedSpeechStartupTests.swift` where candidate compilation allows it. Exact mutable subset is fixed after preflight; these are candidate ownership paths, not blanket authorization.
 
 ### Preflight deliverable
