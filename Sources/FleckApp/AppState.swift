@@ -81,6 +81,7 @@
     @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
     @Published private(set) var agentActivity: [AgentActivityRecord] = []
     @Published private(set) var agentBannerPresentation: AgentBannerPresentation?
+    let agentActivityIndicator = AgentActivityIndicatorPresentation()
     @Published private(set) var isAgentConnectorInstalled = false
     @Published private(set) var agentCapabilityState = AgentCapabilityState(
       profiles: [:],
@@ -1659,6 +1660,10 @@
       refreshAgentActivity()
     }
 
+    func publishAgentRequestEvent(_ event: AgentRequestEvent) {
+      agentActivityIndicator.receive(event)
+    }
+
     func refreshAgentConnectorStatus() async {
       agentConnectorStatusGeneration &+= 1
       let generation = agentConnectorStatusGeneration
@@ -1741,6 +1746,7 @@
     func refreshAgentProfiles() async -> Bool {
       do {
         agentProfiles = try await agentProfileStore.activeProfiles()
+        agentActivityIndicator.retainProfiles(Set(agentProfiles.map(\.id)))
         return true
       } catch {
         agentCleanupError = "Could not load agent profiles: \(error.localizedDescription)"

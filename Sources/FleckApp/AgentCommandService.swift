@@ -26,6 +26,7 @@
       commitProof: AgentWorkspaceCommitProof
     ) throws
     func publishAgentFeedback(_ feedback: AgentChangeFeedback)
+    func publishAgentRequestEvent(_ event: AgentRequestEvent)
   }
 
   protocol AgentProfileAuthorizing: Sendable {
@@ -103,54 +104,91 @@
     ) async throws -> AgentWorkspaceResponse {
       do {
         return try await enqueue { [self] in
-          let profile: AgentIntegrationProfile
-          do {
-            profile = try await profileStore.authorize(
-              profileID: profileID,
-              credential: credential
+          var request: (id: UUID, profileID: UUID)?
+
+          @MainActor func beginRequest(profileID: UUID) {
+            guard request == nil else { return }
+            let requestID = UUID()
+            request = (requestID, profileID)
+            state.publishAgentRequestEvent(
+              .began(requestID: requestID, profileID: profileID)
             )
-          } catch let error as AgentWorkspaceError {
-            throw error
-          } catch {
-            throw AgentWorkspaceError(code: .permissionRevoked)
           }
-          try requireAvailable()
-          let actor = AgentActivityActor.integration(
-            profileID: profile.id,
-            displayName: profile.displayName
-          )
-          try reconcile()
-          let snapshot = try await capabilityAuthority.snapshot(
-            profileID: profile.id,
-            workspace: state.workspace
-          )
-          try requireCapability(for: command, snapshot: snapshot)
-          try await capabilityAuthority.assertCurrent(
-            profileID: profile.id,
-            grantRevision: snapshot.grantRevision
-          )
-          if let operationID = command.operationID,
-            let receipt = activityStore.priorReceipt(
-              actor: actor,
-              operationID: operationID
+
+          @MainActor func finishRequest(_ outcome: AgentRequestOutcome) {
+            guard let request else { return }
+            state.publishAgentRequestEvent(
+              .finished(
+                requestID: request.id,
+                profileID: request.profileID,
+                outcome: outcome
+              )
             )
-          {
-            _ = try authorizedNote(
-              receipt.noteID,
-              noteIDs: snapshot.writableNoteIDs
+          }
+
+          do {
+            let profile: AgentIntegrationProfile
+            do {
+              profile = try await profileStore.authorize(
+                profileID: profileID,
+                credential: credential
+              )
+            } catch let error as AgentWorkspaceError {
+              throw error
+            } catch {
+              throw AgentWorkspaceError(code: .permissionRevoked)
+            }
+            try requireAvailable()
+            let actor = AgentActivityActor.integration(
+              profileID: profile.id,
+              displayName: profile.displayName
             )
+            try reconcile()
+            let snapshot = try await capabilityAuthority.snapshot(
+              profileID: profile.id,
+              workspace: state.workspace
+            )
+            try requireCapability(for: command, snapshot: snapshot)
             try await capabilityAuthority.assertCurrent(
               profileID: profile.id,
               grantRevision: snapshot.grantRevision
             )
-            return command.isUndo ? .undo(receipt: receipt) : .write(receipt: receipt)
+            if let operationID = command.operationID,
+              let receipt = activityStore.priorReceipt(
+                actor: actor,
+                operationID: operationID
+              )
+            {
+              _ = try authorizedNote(
+                receipt.noteID,
+                noteIDs: snapshot.writableNoteIDs
+              )
+              try await capabilityAuthority.assertCurrent(
+                profileID: profile.id,
+                grantRevision: snapshot.grantRevision
+              )
+              beginRequest(profileID: profile.id)
+              let response: AgentWorkspaceResponse =
+                command.isUndo ? .undo(receipt: receipt) : .write(receipt: receipt)
+              finishRequest(.succeeded)
+              return response
+            }
+            let response = try await perform(
+              command,
+              actor: actor,
+              profileID: profile.id,
+              snapshot: snapshot,
+              beginRequest: { beginRequest(profileID: profile.id) }
+            )
+            finishRequest(.succeeded)
+            return response
+          } catch let cancellation as CancellationError {
+            finishRequest(.cancelled)
+            throw cancellation
+          } catch {
+            finishRequest(.failed)
+            throw error
           }
-          return try await perform(
-            command,
-            actor: actor,
-            profileID: profile.id,
-            snapshot: snapshot
-          )
         }
       } catch let error as AgentWorkspaceError {
         throw error
@@ -235,10 +273,12 @@
       _ command: AgentWorkspaceCommand,
       actor: AgentActivityActor,
       profileID: UUID,
-      snapshot: AgentAuthorizationSnapshot
+      snapshot: AgentAuthorizationSnapshot,
+      beginRequest: () -> Void
     ) async throws -> AgentWorkspaceResponse {
       switch command {
       case .listSharedNotes:
+        beginRequest()
         return try await checkedRead(
           .sharedNotes(
             notes: state.workspace.notes
@@ -260,6 +300,7 @@
           request.noteID,
           noteIDs: snapshot.readableNoteIDs
         )
+        beginRequest()
         return try await checkedRead(
           .note(page: try notePage(note, request: request)),
           profileID: profileID,
@@ -270,12 +311,14 @@
           request.noteID,
           noteIDs: snapshot.readableNoteIDs
         )
+        beginRequest()
         return try await checkedRead(
           .tasks(tasks: try taskSummaries(note)),
           profileID: profileID,
           snapshot: snapshot
         )
       case .listActivity:
+        beginRequest()
         let records = activityStore.list(
           profileID: profileID,
           visibleNoteIDs: snapshot.readableNoteIDs
@@ -313,9 +356,11 @@
           request,
           actor: actor,
           profileID: profileID,
-          snapshot: snapshot
+          snapshot: snapshot,
+          beginRequest: beginRequest
         )
       case .getCapabilities:
+        beginRequest()
         return try await checkedRead(
           .capabilities(
             summary: AgentCapabilitySummary(
@@ -331,7 +376,8 @@
           command,
           actor: actor,
           profileID: profileID,
-          snapshot: snapshot
+          snapshot: snapshot,
+          beginRequest: beginRequest
         )
       }
     }
@@ -340,7 +386,8 @@
       _ command: AgentWorkspaceCommand,
       actor: AgentActivityActor,
       profileID: UUID,
-      snapshot: AgentAuthorizationSnapshot
+      snapshot: AgentAuthorizationSnapshot,
+      beginRequest: () -> Void
     ) async throws -> AgentWorkspaceResponse {
       try await state.flushPendingPersistenceForAgent()
       let generation = state.persistenceGeneration
@@ -354,6 +401,7 @@
       guard note.revision == context.expectedRevision else {
         throw AgentWorkspaceError(code: .revisionConflict)
       }
+      beginRequest()
 
       let operation: AgentActivityOperation
       let draft: AgentMutationDraft
@@ -437,7 +485,8 @@
       _ request: AgentWorkspaceCommand.UndoChangeRequest,
       actor: AgentActivityActor,
       profileID: UUID,
-      snapshot: AgentAuthorizationSnapshot
+      snapshot: AgentAuthorizationSnapshot,
+      beginRequest: () -> Void
     ) async throws -> AgentWorkspaceResponse {
       try await state.flushPendingPersistenceForAgent()
       let generation = state.persistenceGeneration
@@ -455,6 +504,7 @@
       guard note.revision == request.expectedRevision else {
         throw AgentWorkspaceError(code: .revisionConflict)
       }
+      beginRequest()
       let draft = try undoDraft(for: record, in: note)
       let sourceOperation = record.sourceOperation ?? record.operation
       let pending = try pendingWrite(

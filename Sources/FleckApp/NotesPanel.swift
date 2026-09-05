@@ -863,20 +863,11 @@
     private var header: some View {
       let backlinkEntries = backlinkController.incoming(to: appState.workspace.selectedNoteID)
       return HStack(spacing: 10) {
-        HStack(spacing: 6) {
-          switch FleckMark.load(template: true) {
-          case .image(let mark):
-            Image(nsImage: mark)
-              .resizable()
-              .frame(width: 18, height: 18)
-              .accessibilityHidden(true)
-          case .missingPackagedResource:
-            Text("!")
-              .foregroundStyle(.red)
-              .accessibilityLabel("Fleck mark missing")
-          }
+        AgentActivityIndicator(
+          presentation: appState.agentActivityIndicator
+        ) {
+          isShowingAgentActivity = true
         }
-          .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
         Button {

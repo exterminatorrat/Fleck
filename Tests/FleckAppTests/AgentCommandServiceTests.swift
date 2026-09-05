@@ -6,6 +6,297 @@ import Testing
 
 @testable import FleckApp
 
+@Test @MainActor func agentIndicatorSuccessfulReadPublishesLifecycle() async throws {
+  let fixture = AgentServiceFixture()
+
+  _ = try await fixture.execute(
+    .readNote(request: .init(noteID: fixture.note.id))
+  )
+
+  let events = fixture.state.requestEvents
+  #expect(events.count == 2)
+  guard
+    case .began(let requestID, let profileID) = events[0],
+    case .finished(let finishedRequestID, let finishedProfileID, let outcome) = events[1]
+  else {
+    Issue.record("Expected one complete agent request lifecycle")
+    return
+  }
+  #expect(requestID == finishedRequestID)
+  #expect(profileID == fixture.profile.id)
+  #expect(finishedProfileID == fixture.profile.id)
+  #expect(outcome == .succeeded)
+  #expect(
+    fixture.activityStore.list(
+      profileID: fixture.profile.id,
+      visibleNoteIDs: [fixture.note.id]
+    ).isEmpty
+  )
+}
+
+@Test @MainActor func agentIndicatorSuccessfulWritePublishesLifecycle() async throws {
+  let fixture = AgentServiceFixture()
+
+  _ = try await fixture.execute(
+    .appendText(
+      request: .init(
+        context: .init(
+          noteID: fixture.note.id,
+          expectedRevision: fixture.note.revision,
+          operationID: UUID()
+        ),
+        text: "Agent text"
+      )
+    )
+  )
+
+  #expect(fixture.state.requestEvents.count == 2)
+  guard case .finished(_, _, let outcome) = fixture.state.requestEvents.last else {
+    Issue.record("Expected a terminal agent request event")
+    return
+  }
+  #expect(outcome == .succeeded)
+}
+
+@Test @MainActor func agentIndicatorIdempotentReceiptPublishesRecentUse() async throws {
+  let fixture = AgentServiceFixture()
+  let command = AgentWorkspaceCommand.appendText(
+    request: .init(
+      context: .init(
+        noteID: fixture.note.id,
+        expectedRevision: fixture.note.revision,
+        operationID: UUID()
+      ),
+      text: "Once"
+    )
+  )
+  _ = try await fixture.execute(command)
+  fixture.state.requestEvents.removeAll()
+
+  _ = try await fixture.execute(command)
+
+  #expect(fixture.state.requestEvents.count == 2)
+  guard case .finished(_, _, let outcome) = fixture.state.requestEvents.last else {
+    Issue.record("Expected a terminal agent request event")
+    return
+  }
+  #expect(outcome == .succeeded)
+}
+
+@Test @MainActor func agentIndicatorAuthorizedUndoPublishesLifecycle() async throws {
+  let fixture = AgentServiceFixture()
+  let write = try await fixture.execute(
+    .appendText(
+      request: .init(
+        context: .init(
+          noteID: fixture.note.id,
+          expectedRevision: fixture.note.revision,
+          operationID: UUID()
+        ),
+        text: "Undo me"
+      )
+    )
+  )
+  guard case .write(let receipt) = write else {
+    Issue.record("Expected write receipt")
+    return
+  }
+  fixture.state.requestEvents.removeAll()
+
+  _ = try await fixture.execute(
+    .undoChange(
+      request: .init(
+        changeID: receipt.changeID,
+        expectedRevision: receipt.resultingRevision,
+        operationID: UUID()
+      )
+    )
+  )
+
+  #expect(fixture.state.requestEvents.count == 2)
+}
+
+@Test @MainActor func agentIndicatorLocalUndoPublishesNothing() async throws {
+  let fixture = AgentServiceFixture()
+  let write = try await fixture.execute(
+    .appendText(
+      request: .init(
+        context: .init(
+          noteID: fixture.note.id,
+          expectedRevision: fixture.note.revision,
+          operationID: UUID()
+        ),
+        text: "Undo locally"
+      )
+    )
+  )
+  guard case .write(let receipt) = write else {
+    Issue.record("Expected write receipt")
+    return
+  }
+  fixture.state.requestEvents.removeAll()
+
+  _ = try await fixture.service.executeLocalUndo(
+    changeID: receipt.changeID,
+    expectedRevision: receipt.resultingRevision,
+    operationID: UUID()
+  )
+
+  #expect(fixture.state.requestEvents.isEmpty)
+}
+
+@Test @MainActor func agentIndicatorEligibleReadCommandsPublishLifecycle() async throws {
+  let fixture = AgentServiceFixture()
+  let commands: [AgentWorkspaceCommand] = [
+    .listSharedNotes,
+    .listTasks(request: .init(noteID: fixture.note.id)),
+    .listActivity,
+    .getCapabilities,
+  ]
+
+  for command in commands {
+    fixture.state.requestEvents.removeAll()
+    _ = try await fixture.execute(command)
+    #expect(fixture.state.requestEvents.count == 2)
+  }
+}
+
+@Test @MainActor func agentIndicatorDeniedCredentialPublishesNothing() async throws {
+  let fixture = AgentServiceFixture(authorizer: RejectingAgentAuthorizer())
+
+  await #expect(throws: AgentWorkspaceError(code: .permissionRevoked)) {
+    try await fixture.execute(.listSharedNotes)
+  }
+
+  #expect(fixture.state.requestEvents.isEmpty)
+}
+
+@Test @MainActor func agentIndicatorDeniedCapabilityPublishesNothing() async throws {
+  let fixture = AgentServiceFixture(capabilityAuthorizer: DenyingCapabilityAuthorizer())
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await fixture.execute(.listSharedNotes)
+  }
+
+  #expect(fixture.state.requestEvents.isEmpty)
+}
+
+@Test @MainActor func agentIndicatorAuthorizedOperationFailurePublishesFailure() async throws {
+  let fixture = AgentServiceFixture()
+
+  await #expect(throws: AgentWorkspaceError(code: .invalidPayload)) {
+    try await fixture.execute(
+      .readNote(
+        request: .init(noteID: fixture.note.id, startLine: 1, maxLines: 0)
+      )
+    )
+  }
+
+  #expect(fixture.state.requestEvents.count == 2)
+  guard case .finished(_, _, let outcome) = fixture.state.requestEvents.last else {
+    Issue.record("Expected a terminal agent request event")
+    return
+  }
+  #expect(outcome == .failed)
+}
+
+@Test @MainActor func agentIndicatorObservedCancellationPublishesCancelled() async throws {
+  let profileID = UUID()
+  let note = Note(title: "Work", body: "Visible", agentAccess: true)
+  let fixture = AgentServiceFixture(
+    profileID: profileID,
+    note: note,
+    capabilityAuthorizer: CancellingAfterBeginCapabilityAuthorizer(
+      snapshot: authorizationSnapshot(profileID: profileID, noteID: note.id)
+    )
+  )
+
+  await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+    try await fixture.execute(.readNote(request: .init(noteID: note.id)))
+  }
+
+  #expect(fixture.state.requestEvents.count == 2)
+  guard case .finished(_, _, let outcome) = fixture.state.requestEvents.last else {
+    Issue.record("Expected a terminal agent request event")
+    return
+  }
+  #expect(outcome == .cancelled)
+}
+
+@Test @MainActor func agentIndicatorCallerCancellationDoesNotCancelExecutingRequest()
+  async throws
+{
+  let profileID = UUID()
+  let note = Note(title: "Work", body: "Visible", agentAccess: true)
+  let gate = PausingAfterBeginCapabilityAuthorizer(
+    snapshot: authorizationSnapshot(profileID: profileID, noteID: note.id)
+  )
+  let fixture = AgentServiceFixture(
+    profileID: profileID,
+    note: note,
+    capabilityAuthorizer: gate
+  )
+  let caller = Task { @MainActor in
+    try await fixture.execute(.readNote(request: .init(noteID: note.id)))
+  }
+  await gate.waitUntilPaused()
+  #expect(fixture.state.requestEvents.count == 1)
+
+  caller.cancel()
+  await Task.yield()
+  #expect(fixture.state.requestEvents.count == 1)
+
+  await gate.resume()
+  _ = try await caller.value
+  guard case .finished(_, _, let outcome) = fixture.state.requestEvents.last else {
+    Issue.record("Expected a terminal agent request event")
+    return
+  }
+  #expect(outcome == .succeeded)
+}
+
+@Test @MainActor func agentIndicatorQueuedRequestDoesNotBeginEarly() async throws {
+  let profileID = UUID()
+  let note = Note(title: "Work", body: "Visible", agentAccess: true)
+  let gate = PausingAfterBeginCapabilityAuthorizer(
+    snapshot: authorizationSnapshot(profileID: profileID, noteID: note.id)
+  )
+  let fixture = AgentServiceFixture(
+    profileID: profileID,
+    note: note,
+    capabilityAuthorizer: gate
+  )
+  let first = Task { @MainActor in
+    try await fixture.execute(.readNote(request: .init(noteID: note.id)))
+  }
+  await gate.waitUntilPaused()
+  let second = Task { @MainActor in
+    try await fixture.execute(.listSharedNotes)
+  }
+  await Task.yield()
+
+  #expect(fixture.state.requestEvents.count == 1)
+
+  await gate.resume()
+  _ = try await first.value
+  _ = try await second.value
+  #expect(fixture.state.requestEvents.count == 4)
+}
+
+private func authorizationSnapshot(
+  profileID: UUID,
+  noteID: UUID
+) -> AgentAuthorizationSnapshot {
+  AgentAuthorizationSnapshot(
+    profileID: profileID,
+    grantRevision: 1,
+    availableCapabilities: Set(AgentCapability.allCases),
+    readableNoteIDs: [noteID],
+    proposableNoteIDs: [noteID],
+    writableNoteIDs: [noteID]
+  )
+}
+
 @Test @MainActor func agentServiceRejectsEveryCommandWhenInitialLoadFailed() async throws {
   let fixture = AgentServiceFixture()
   fixture.state.isAgentWorkspaceAvailable = false
@@ -1754,6 +2045,65 @@ private struct DenyingCapabilityAuthorizer: AgentCapabilityAuthorizing {
   }
 }
 
+private actor CancellingAfterBeginCapabilityAuthorizer: AgentCapabilityAuthorizing {
+  let snapshotValue: AgentAuthorizationSnapshot
+  private var assertionCount = 0
+
+  init(snapshot: AgentAuthorizationSnapshot) {
+    snapshotValue = snapshot
+  }
+
+  func snapshot(
+    profileID: UUID,
+    workspace: Workspace
+  ) async throws -> AgentAuthorizationSnapshot {
+    snapshotValue
+  }
+
+  func assertCurrent(profileID: UUID, grantRevision: UInt64) async throws {
+    assertionCount += 1
+    if assertionCount == 2 {
+      throw CancellationError()
+    }
+  }
+}
+
+private actor PausingAfterBeginCapabilityAuthorizer: AgentCapabilityAuthorizing {
+  let snapshotValue: AgentAuthorizationSnapshot
+  private var assertionCount = 0
+  private var isPaused = false
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  init(snapshot: AgentAuthorizationSnapshot) {
+    snapshotValue = snapshot
+  }
+
+  func snapshot(
+    profileID: UUID,
+    workspace: Workspace
+  ) async throws -> AgentAuthorizationSnapshot {
+    snapshotValue
+  }
+
+  func assertCurrent(profileID: UUID, grantRevision: UInt64) async throws {
+    assertionCount += 1
+    guard assertionCount == 2 else { return }
+    isPaused = true
+    await withCheckedContinuation { continuation = $0 }
+  }
+
+  func waitUntilPaused() async {
+    while !isPaused {
+      await Task.yield()
+    }
+  }
+
+  func resume() {
+    continuation?.resume()
+    continuation = nil
+  }
+}
+
 private struct LegacyTestCapabilityAuthorizer: AgentCapabilityAuthorizing {
   func snapshot(
     profileID: UUID,
@@ -1820,6 +2170,7 @@ private final class FakeAgentWorkspaceState: AgentWorkspaceStateAccess {
   var isAgentWorkspaceAvailable = true
   var agentCommitProofs: [AgentWorkspaceCommitProof] = []
   var latestFeedback: AgentChangeFeedback?
+  var requestEvents: [AgentRequestEvent] = []
   var commitCount = 0
   var commitError: AgentWorkspaceError?
   var flushError: Error?
@@ -1851,6 +2202,10 @@ private final class FakeAgentWorkspaceState: AgentWorkspaceStateAccess {
     latestFeedback = feedback
   }
 
+  func publishAgentRequestEvent(_ event: AgentRequestEvent) {
+    requestEvents.append(event)
+  }
+
   func humanEdit(body: String) {
     workspace.updateContent(
       id: workspace.notes[0].id,
@@ -1873,6 +2228,15 @@ private actor FixedAgentAuthorizer: AgentProfileAuthorizing {
     credential: Data
   ) async throws -> AgentIntegrationProfile {
     profile
+  }
+}
+
+private actor RejectingAgentAuthorizer: AgentProfileAuthorizing {
+  func authorize(
+    profileID: UUID,
+    credential: Data
+  ) async throws -> AgentIntegrationProfile {
+    throw AgentWorkspaceError(code: .permissionRevoked)
   }
 }
 
