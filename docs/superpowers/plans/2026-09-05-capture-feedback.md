@@ -191,7 +191,7 @@ Record every trial, including failures. Initial target: feedback p95 ≤100 ms a
 
 | Packet | Depends on | Shared boundary | Status |
 | --- | --- | --- | --- |
-| 1A | baseline | Capsule presentation only | Ready to implement |
+| 1A | baseline | Capsule presentation only | Implemented; parent verified; fresh Sol/High ship |
 | 1B | 1A review + lifecycle amendment | Speech source/coordinator startup ownership | Planned |
 | 1C | 1B review | Startup readiness and current session identity | Planned |
 | 1D | 1B/1C reviews | Actual stage boundaries | Planned |
@@ -199,3 +199,14 @@ Record every trial, including failures. Initial target: feedback p95 ≤100 ms a
 | 1F | Accepted source packets + packaging authority | Exact artifact and real microphone | Pending device/package work |
 
 Only 1A is an executable implementation packet at plan creation. Later ownership/interface contracts are deliberately gated on accepted prerequisite evidence; the broad program must not be mistaken for authority to edit every listed file.
+
+## Packet 1A acceptance record — 2026-09-05
+
+- Changed only DictationCapsule.swift and three owned test files. Starting is visible at 104×36, has the hosted Starting dictation accessibility label, and has zero entrance duration in normal/Reduced Motion. No audio/model changes.
+- Worker observed the expected failing assertions before production edits, then passing focused and gesture tests.
+- Parent inspected the complete diff and independently completed 35/35 focused tests, including the changed accessibility contract, plus a separate 1/1 visual export. Bottom/left/right images were inspected.
+- An exploratory 88-test accessibility selection exited without a complete Swift Testing result; it is not counted as passing. No unrelated harness or chooser changes were made.
+- Fresh Sol/High reviewer verdict: `ship`, no required corrections. Reviewed patch SHA-256: `775bde36bf35d0164bd32a3b002e7a38d28161823e8b0e700488628d7b65470d`.
+- Local evidence: `.build/capture-feedback-1a/parent-focused.log`, `parent-visual.log`, `parent-verification.log`, `red.txt`, `green.txt`, and `parent-visual/` PNGs.
+- Package.resolved remained unchanged. Canonical installed executable still hashes to `51983a0685e904781dd252278380d1cda093a641beb6d5336013049645887ef0`.
+- Next: packet 1B lifecycle amendment and red-first audio-first startup work. This record does not claim microphone latency improvement, first-word recovery, packaged verification, or phase completion.

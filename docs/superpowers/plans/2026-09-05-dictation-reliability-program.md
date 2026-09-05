@@ -1,6 +1,6 @@
 # Fleck Dictation Reliability Program
 
-**Status:** Planned; Phase 1 starts with one bounded feedback packet. This document does not authorize Phases 2–3 implementation, model downloads, installation, publication, or release admission.
+**Status:** Phase 1 started; packet 1A implemented and locally verified with fresh Sol/High `ship`. Audio-first capture and device acceptance remain open. This document does not authorize Phases 2–3 implementation, model downloads, installation, publication, or release admission.
 
 **Owner:** Central primary orchestrator. Codex-native GPT-5.6 Sol / High implementers for bounded work; fresh Sol / High reviewers. Never Terra.
 
@@ -213,7 +213,7 @@ Initial engineering targets, to be validated rather than claimed:
 - [x] Source diagnosis of reported symptoms.
 - [x] Record future correction-learning idea in Fleck note.
 - [x] Write broad program and detailed Phase 1 plan.
-- [ ] 1A starting feedback.
+- [x] 1A starting feedback: local source/tests accepted; installed app unchanged.
 - [ ] 1B audio-first startup.
 - [ ] 1C recording feedback and gesture integration.
 - [ ] 1D diagnostic timing/recovery.
