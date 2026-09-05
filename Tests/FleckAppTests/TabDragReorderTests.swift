@@ -142,8 +142,8 @@ import FleckCore
   #expect(tabStrip.contains("dragSessionID: UUID()"))
   #expect(tabStrip.contains("noteDropSource = source"))
   #expect(tabStrip.contains("noteProvider(source: source)"))
-  #expect(tabDropDelegate.contains("providerSource: providerSource"))
-  #expect(tabDropDelegate.contains("draggedSource == providerSource"))
+  #expect(tabStrip.contains("providerSource: providerSource"))
+  #expect(tabDropDelegate.contains("accepts(info.itemProviders"))
   #expect(navigator.contains("delegate: noteDropDelegate("))
   #expect(navigator.contains("expectedSource: NoteDropSource"))
   #expect(navigator.contains("payload == expectedSource"))
@@ -229,8 +229,8 @@ import FleckCore
   #expect(tabStrip.contains("let source = NoteDropSource"))
   #expect(tabStrip.contains("noteDropSource = source"))
   #expect(tabStrip.contains("sourceFolderID: note.folderID"))
-  #expect(dropDelegate.contains("draggedSource = nil"))
-  #expect(dropDelegate.contains("if draggedSource == providerSource"))
+  #expect(tabStrip.contains("finish: { noteDropSource = nil }"))
+  #expect(dropDelegate.contains("interaction = nil"))
   #expect(navigator.contains("NoteDropPresentation.isValidTarget"))
   #expect(navigator.contains("draggedSource"))
   #expect(navigator.contains(".onChange(of: draggedSource)"))
@@ -411,17 +411,17 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
   #expect(outerModifiers.contains("let source = NoteDropSource"))
   #expect(outerModifiers.contains("noteDropSource = source"))
   #expect(outerModifiers.contains("FolderDragPayload.noteProvider"))
-  #expect(outerModifiers.contains(".onDrop("))
-  #expect(outerModifiers.contains("of: [FolderDragPayload.noteType]"))
-  #expect(outerModifiers.contains("delegate: TabDropDelegate("))
+  #expect(outerModifiers.contains(".modifier(ReorderDropTarget("))
+  #expect(outerModifiers.contains("type: FolderDragPayload.noteType"))
   #expect(outerModifiers.contains("activeFolderID: activeFolderID"))
-  #expect(outerModifiers.contains("currentNotes: { visibleNotes }"))
+  #expect(outerModifiers.contains("currentNotes: visibleNotes"))
   #expect(!outerModifiers.contains(".simultaneousGesture("))
   #expect(!outerModifiers.contains("DragGesture("))
-  #expect(dropDelegate.contains("TabDragReorder.performLiveMove"))
-  #expect(dropDelegate.contains("DropProposal(operation: .move)"))
+  #expect(!dropDelegate.contains("performLiveMove"))
+  #expect(dropDelegate.contains("consume(currentIDs:"))
+  #expect(dropDelegate.contains(".move : .forbidden"))
   #expect(reorder.contains("draggedSource.sourceFolderID == activeFolderID"))
-  #expect(reorder.contains("currentNotes: () -> [Note]"))
+  #expect(reorder.contains("currentNotes: [Note]"))
   #expect(reorder.contains("partitionLocalDestination"))
 }
 
@@ -439,74 +439,6 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
   #expect(tabStrip.contains("toFolderID"))
   #expect(tabStrip.contains(".disabled"))
   #expect(tabStrip.contains("checkmark"))
-}
-
-@Test @MainActor
-func partitionLocalLiveMoveUsesAppStateInUnfiledAndNamedFolderScopes() async throws {
-  let folder = try Folder(id: UUID(), name: "Work")
-  try await assertPartitionLocalLiveMove(folderID: nil, folders: [])
-  try await assertPartitionLocalLiveMove(folderID: folder.id, folders: [folder])
-}
-
-@MainActor
-private func assertPartitionLocalLiveMove(
-  folderID: UUID?,
-  folders: [Folder]
-) async throws {
-  let root = FileManager.default.temporaryDirectory
-    .appendingPathComponent("tab-reorder-state-" + UUID().uuidString, isDirectory: true)
-  defer { try? FileManager.default.removeItem(at: root) }
-
-  let pinned = Note(title: "Pinned", isPinned: true, folderID: folderID)
-  let first = Note(title: "A", folderID: folderID)
-  let second = Note(title: "B", folderID: folderID)
-  let third = Note(title: "C", folderID: folderID)
-  let state = AppState(
-    store: LocalStore(rootURL: root),
-    saveOperation: { _, _, _, _ in .committed }
-  )
-  await state.waitUntilInitialLoad()
-  state.workspace = Workspace(
-    notes: [pinned, first, second, third],
-    selectedNoteID: first.id,
-    folders: folders
-  )
-
-  var lastDestinationID: UUID?
-  let source = NoteDropSource(noteID: first.id, sourceFolderID: folderID)
-  func drag(over destinationID: UUID) -> TabDragReorder.LiveMoveResult {
-    let result = TabDragReorder.performLiveMove(
-      draggedSource: source,
-      providerSource: source,
-      over: destinationID,
-      activeFolderID: folderID,
-      currentNotes: { state.visibleNotes(in: folderID) },
-      lastDestinationID: lastDestinationID,
-      move: { id, localDestination in
-        _ = state.moveNote(
-          id,
-          inFolderID: folderID,
-          toVisibleIndex: localDestination
-        )
-      }
-    )
-    lastDestinationID = result.destinationID
-    return result
-  }
-
-  #expect(drag(over: second.id).didMove)
-  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "A", "C"])
-  #expect(drag(over: third.id).didMove)
-  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "C", "A"])
-  #expect(!drag(over: third.id).didMove)
-  #expect(drag(over: third.id).didMove == false)
-  lastDestinationID = nil
-  #expect(drag(over: third.id).didMove)
-  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "A", "C"])
-  #expect(drag(over: second.id).didMove)
-  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "A", "B", "C"])
-  #expect(!drag(over: second.id).didMove)
-  #expect(state.workspace.selectedNoteID == first.id)
 }
 
 @Test @MainActor
@@ -577,202 +509,61 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   )
 
   #expect(reorder.contains("partitionLocalDestination"))
-  #expect(reorder.contains("absoluteDestination: absoluteDestination"))
+  #expect(source.contains("absoluteDestination: destination, visibleNotes: visibleNotes"))
   #expect(moveFunction.contains("TabDragReorder.partitionLocalDestination"))
   #expect(moveFunction.contains("absoluteDestination: index + offset"))
   #expect(!moveFunction.contains("toVisibleIndex: index + offset"))
 }
 
-@Test func liveTabDragMovesFirstAcrossSecondAndThirdUsingCurrentTargets() {
-  let first = Note(title: "A")
-  let second = Note(title: "B")
-  let third = Note(title: "C")
-  var notes = [first, second, third]
-  var lastDestinationID: UUID?
-  var moves: [(UUID, Int)] = []
-  let source = NoteDropSource(noteID: first.id, sourceFolderID: nil)
-
-  func move(_ id: UUID, to destination: Int) {
-    moves.append((id, destination))
-    let source = notes.firstIndex(where: { $0.id == id })!
-    notes.insert(notes.remove(at: source), at: destination)
-  }
-
-  func drag(over destinationID: UUID) -> TabDragReorder.LiveMoveResult {
-    let result = TabDragReorder.performLiveMove(
-      draggedSource: source,
-      providerSource: source,
-      over: destinationID,
-      activeFolderID: nil,
-      currentNotes: { notes },
-      lastDestinationID: lastDestinationID,
-      move: move
-    )
-    lastDestinationID = result.destinationID
-    return result
-  }
-
-  #expect(drag(over: second.id).didMove)
-  #expect(notes == [second, first, third])
-  #expect(drag(over: second.id).didMove == false)
-  #expect(drag(over: third.id).didMove)
-  #expect(notes == [second, third, first])
-  #expect(drag(over: second.id).didMove)
-  #expect(notes == [first, second, third])
-  #expect(moves.map(\.0) == [first.id, first.id, first.id])
-  #expect(moves.map(\.1) == [1, 2, 0])
-}
-
-@Test func liveTabDragRejectsInvalidStaleAndCrossFolderTargets() throws {
+@Test func reorderInteractionRejectsInvalidStaleAndCrossFolderTargets() throws {
   let folder = try Folder(name: "Work")
   let first = Note(title: "A", folderID: folder.id)
   let second = Note(title: "B", folderID: folder.id)
   let missing = UUID()
   let notes = [first, second]
-  var moves: [(UUID, Int)] = []
 
   func result(
     source: NoteDropSource?,
     destinationID: UUID,
     activeFolderID: UUID? = folder.id
-  ) -> TabDragReorder.LiveMoveResult {
-    TabDragReorder.performLiveMove(
-      draggedSource: source,
-      providerSource: source,
-      over: destinationID,
-      activeFolderID: activeFolderID,
-      currentNotes: { notes },
-      lastDestinationID: nil,
-      move: { moves.append(($0, $1)) }
-    )
+  ) -> Bool {
+    TabDragReorder.isValidInsertion(
+      draggedSource: source, providerSource: source,
+      destinationID: destinationID, activeFolderID: activeFolderID, currentNotes: notes)
   }
 
-  #expect(!result(source: nil, destinationID: second.id).didMove)
+  #expect(!result(source: nil, destinationID: second.id))
   #expect(
     !result(
       source: NoteDropSource(noteID: first.id, sourceFolderID: folder.id),
       destinationID: first.id
-    ).didMove
+    )
   )
   #expect(
     !result(
       source: NoteDropSource(noteID: missing, sourceFolderID: folder.id),
       destinationID: second.id
-    ).didMove
+    )
   )
   #expect(
     !result(
       source: NoteDropSource(noteID: first.id, sourceFolderID: nil),
       destinationID: second.id
-    ).didMove
+    )
   )
   #expect(
     !result(
       source: NoteDropSource(noteID: first.id, sourceFolderID: folder.id),
       destinationID: second.id,
       activeFolderID: nil
-    ).didMove
+    )
   )
   #expect(
     !result(
       source: NoteDropSource(noteID: first.id, sourceFolderID: folder.id),
       destinationID: missing
-    ).didMove
+    )
   )
-  #expect(moves.isEmpty)
-}
-
-@Test func liveTabDragUsesCurrentOrderWhenMovingBackLeft() {
-  let first = Note(title: "A")
-  let second = Note(title: "B")
-  let third = Note(title: "C")
-  var notes = [first, second, third]
-  var lastDestinationID: UUID?
-  let source = NoteDropSource(noteID: third.id, sourceFolderID: nil)
-
-  func move(_ id: UUID, to destination: Int) {
-    let source = notes.firstIndex(where: { $0.id == id })!
-    notes.insert(notes.remove(at: source), at: destination)
-  }
-
-  var result = TabDragReorder.performLiveMove(
-    draggedSource: source,
-    providerSource: source,
-    over: second.id,
-    activeFolderID: nil,
-    currentNotes: { notes },
-    lastDestinationID: lastDestinationID,
-    move: move
-  )
-  lastDestinationID = result.destinationID
-  #expect(result.didMove)
-  #expect(notes == [first, third, second])
-
-  result = TabDragReorder.performLiveMove(
-    draggedSource: source,
-    providerSource: source,
-    over: first.id,
-    activeFolderID: nil,
-    currentNotes: { notes },
-    lastDestinationID: lastDestinationID,
-    move: move
-  )
-  #expect(result.didMove)
-  #expect(notes == [third, first, second])
-}
-
-@Test func liveTabDragClampsPinnedAndUnpinnedNotesAtTheirPartitionEdges() {
-  let pinned = Note(title: "Pinned", body: "A", richTextRTF: Data([1]), isPinned: true)
-  let firstUnpinned = Note(title: "First", body: "B", richTextRTF: Data([2]))
-  let secondUnpinned = Note(title: "Second", body: "C", richTextRTF: Data([3]))
-  var workspace = Workspace(
-    notes: [pinned, firstUnpinned, secondUnpinned], selectedNoteID: secondUnpinned.id
-  )
-
-  func move(_ id: UUID, to destination: Int) {
-    workspace.moveNote(id: id, to: destination)
-  }
-
-  var lastDestinationID: UUID?
-  let pinnedSource = NoteDropSource(noteID: pinned.id, sourceFolderID: nil)
-  var result = TabDragReorder.performLiveMove(
-    draggedSource: pinnedSource,
-    providerSource: pinnedSource,
-    over: firstUnpinned.id,
-    activeFolderID: nil,
-    currentNotes: { workspace.notes },
-    lastDestinationID: lastDestinationID,
-    move: move
-  )
-  lastDestinationID = result.destinationID
-  #expect(result.didMove)
-  #expect(workspace.notes == [pinned, firstUnpinned, secondUnpinned])
-
-  result = TabDragReorder.performLiveMove(
-    draggedSource: pinnedSource,
-    providerSource: pinnedSource,
-    over: firstUnpinned.id,
-    activeFolderID: nil,
-    currentNotes: { workspace.notes },
-    lastDestinationID: lastDestinationID,
-    move: move
-  )
-  #expect(!result.didMove)
-
-  lastDestinationID = nil
-  let unpinnedSource = NoteDropSource(noteID: secondUnpinned.id, sourceFolderID: nil)
-  result = TabDragReorder.performLiveMove(
-    draggedSource: unpinnedSource,
-    providerSource: unpinnedSource,
-    over: pinned.id,
-    activeFolderID: nil,
-    currentNotes: { workspace.notes },
-    lastDestinationID: lastDestinationID,
-    move: move
-  )
-  #expect(result.didMove)
-  #expect(workspace.notes == [pinned, secondUnpinned, firstUnpinned])
-  #expect(workspace.selectedNoteID == secondUnpinned.id)
 }
 
 @Test func TabDragReorderFolderScopePreservesGlobalOrder() throws {
@@ -824,7 +615,7 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
 
   #expect(source.contains("com.harryjin.fleck.local-note"))
   #expect(source.contains("com.harryjin.fleck.local-folder"))
-  #expect(navigator.contains("loadDataRepresentation"))
+  #expect(navigator.contains("NoteDropPresentation.performLocalDrop"))
   #expect(navigator.contains("onDrop"))
   #expect(navigator.contains("onDrag"))
   #expect(navigator.contains("onMoveCommand"))
@@ -854,9 +645,9 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   #expect(navigator.contains("noteDropTarget = nil"))
   #expect(navigator.contains("sourceFolderID"))
   #expect(navigator.contains("targetFolderID"))
-  #expect(navigator.contains("workspace.folders.contains"))
+  #expect(navigator.contains("validTargetFolderIDs: Set(appState.workspace.folders.map"))
   #expect(navigator.contains("of: [FolderDragPayload.noteType]"))
-  #expect(navigator.contains("of: [FolderDragPayload.folderType]"))
+  #expect(navigator.contains("type: FolderDragPayload.folderType"))
   #expect(!navigator.contains("of: [FolderDragPayload.noteType, FolderDragPayload.folderType]"))
 }
 
@@ -982,4 +773,35 @@ private func settleTabStripHost(_ view: NSView) async {
   )
 
   #expect(tabStrip.components(separatedBy: ".disabled(visibleNotes.isEmpty)").count - 1 == 2)
+}
+
+@Test func reorderInteractionPreviewCancelsWithoutMutatingAndDropConsumesOnce() {
+  let ids = [UUID(), UUID(), UUID()]
+  var drag = ReorderInteraction(sourceID: ids[0], originalIDs: ids)
+  drag.propose(over: ids[2], after: true, currentIDs: ids)
+  drag.propose(over: ids[2], after: true, currentIDs: ids)
+  #expect(drag.destination == 2)
+  let cancelled = drag
+  drag.clearTarget()
+  #expect(drag.consume(currentIDs: ids) == nil)
+  drag = cancelled
+  #expect(drag.consume(currentIDs: ids) == 2)
+  #expect(drag.consume(currentIDs: ids) == nil)
+}
+
+@Test func reorderInteractionRejectsChangedOrderMissingItemsAndPinBoundary() {
+  let pinned = Note(title: "Pinned", isPinned: true)
+  let first = Note(title: "First")
+  let last = Note(title: "Last")
+  let notes = [pinned, first, last]
+  let source = NoteDropSource(noteID: first.id, sourceFolderID: nil)
+  #expect(!TabDragReorder.isValidInsertion(draggedSource: source, providerSource: source,
+    destinationID: pinned.id, activeFolderID: nil, currentNotes: notes))
+  #expect(TabDragReorder.isValidInsertion(draggedSource: source, providerSource: source,
+    destinationID: last.id, activeFolderID: nil, currentNotes: notes))
+  var drag = ReorderInteraction(sourceID: first.id, originalIDs: notes.map(\.id))
+  drag.propose(over: last.id, after: true, currentIDs: notes.map(\.id))
+  #expect(drag.consume(currentIDs: [pinned.id, last.id]) == nil)
+  drag.propose(over: last.id, after: true, currentIDs: [pinned.id, last.id, first.id])
+  #expect(drag.destination == nil)
 }

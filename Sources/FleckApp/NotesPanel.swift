@@ -50,29 +50,41 @@
       try? JSONDecoder().decode(NoteDropSource.self, from: data)
     }
 
-    static func folderProvider(folderID: UUID) -> NSItemProvider {
-      provider(type: folderType, value: FolderValue(folderID: folderID))
+    private final class LocalFolderItemProvider: NSItemProvider {
+      let folderID: UUID
+      let sessionID: UUID
+      init(folderID: UUID, sessionID: UUID) {
+        self.folderID = folderID
+        self.sessionID = sessionID
+        super.init()
+      }
+      required init?(coder: NSCoder) { nil }
+    }
+
+    static func folderProvider(folderID: UUID, sessionID: UUID = UUID()) -> NSItemProvider {
+      let provider = LocalFolderItemProvider(folderID: folderID, sessionID: sessionID)
+      let data = try! JSONEncoder().encode(FolderValue(folderID: folderID))
+      provider.registerDataRepresentation(forTypeIdentifier: folderType.identifier, visibility: .ownProcess) {
+        completion in
+        completion(data, nil)
+        return nil
+      }
+      return provider
+    }
+
+    static func matchesFolder(_ providers: [NSItemProvider], interaction: ReorderInteraction?) -> Bool {
+      guard let interaction,
+        let provider = providers.first(where: {
+          $0.registeredTypeIdentifiers.contains(folderType.identifier)
+        }) as? LocalFolderItemProvider else { return false }
+      return provider.folderID == interaction.sourceID && provider.sessionID == interaction.sessionID
     }
 
     static func folderID(from data: Data) -> UUID? {
       try? JSONDecoder().decode(FolderValue.self, from: data).folderID
     }
 
-    private static func provider<Value: Encodable>(
-      type: UTType,
-      value: Value
-    ) -> NSItemProvider {
-      let data = try! JSONEncoder().encode(value)
-      let provider = NSItemProvider()
-      provider.registerDataRepresentation(
-        forTypeIdentifier: type.identifier,
-        visibility: .ownProcess
-      ) { completion in
-        completion(data, nil)
-        return nil
-      }
-      return provider
-    }
+
   }
 
   struct NoteDropSource: Codable, Equatable {
@@ -87,7 +99,51 @@
     }
   }
 
+  // The proposal is disposable; only consume on a validated native drop.
+  struct ReorderInteraction: Equatable {
+    let sourceID: UUID
+    let originalIDs: [UUID]
+    let sessionID = UUID()
+    var pinnedIDs: Set<UUID> = []
+    private(set) var targetID: UUID?
+    private(set) var after = false
+    private(set) var destination: Int?
+
+    mutating func propose(over targetID: UUID, after: Bool, currentIDs: [UUID]) {
+      clearTarget()
+      guard originalIDs == currentIDs, currentIDs.contains(sourceID), sourceID != targetID,
+        let target = currentIDs.filter({ $0 != sourceID }).firstIndex(of: targetID)
+      else { return }
+      self.targetID = targetID
+      self.after = after
+      destination = target + (after ? 1 : 0)
+    }
+
+    mutating func clearTarget() {
+      targetID = nil
+      destination = nil
+    }
+
+    mutating func consume(currentIDs: [UUID]) -> Int? {
+      defer { clearTarget() }
+      guard currentIDs == originalIDs, currentIDs.contains(sourceID) else { return nil }
+      return destination
+    }
+  }
+
   enum NoteDropPresentation {
+    static func performLocalDrop(
+      draggedSource: NoteDropSource?, providerSource: NoteDropSource?,
+      targetFolderID: UUID?, notes: [Note], validTargetFolderIDs: Set<UUID>,
+      move: (NoteDropSource, UUID?) -> Bool
+    ) -> Bool {
+      guard let draggedSource, draggedSource == providerSource,
+        isValidTarget(draggedSource: draggedSource, targetFolderID: targetFolderID,
+          notes: notes, validTargetFolderIDs: validTargetFolderIDs)
+      else { return false }
+      return move(draggedSource, targetFolderID)
+    }
+
     static func isValidTarget(
       draggedSource: NoteDropSource?,
       targetFolderID: UUID?,
@@ -142,6 +198,16 @@
       return true
     }
 
+    static func isValidInsertion(
+      draggedSource: NoteDropSource?, providerSource: NoteDropSource?,
+      destinationID: UUID, activeFolderID: UUID?, currentNotes: [Note]
+    ) -> Bool {
+      isValidLocalDrag(draggedSource: draggedSource, providerSource: providerSource,
+        destinationID: destinationID, activeFolderID: activeFolderID, currentNotes: currentNotes)
+        && currentNotes.first(where: { $0.id == draggedSource?.noteID })?.isPinned
+          == currentNotes.first(where: { $0.id == destinationID })?.isPinned
+    }
+
     static func partitionLocalDestination(
       draggedID: UUID,
       absoluteDestination: Int,
@@ -159,46 +225,6 @@
       }
     }
 
-    struct LiveMoveResult: Equatable {
-      let didMove: Bool
-      let destinationID: UUID?
-    }
-
-    static func performLiveMove(
-      draggedSource: NoteDropSource?,
-      providerSource: NoteDropSource?,
-      over destinationID: UUID,
-      activeFolderID: UUID?,
-      currentNotes: () -> [Note],
-      lastDestinationID: UUID?,
-      move: (UUID, Int) -> Void
-    ) -> LiveMoveResult {
-      let visibleNotes = currentNotes()
-      guard isValidLocalDrag(
-        draggedSource: draggedSource,
-        providerSource: providerSource,
-        destinationID: destinationID,
-        activeFolderID: activeFolderID,
-        currentNotes: visibleNotes
-      ), let draggedSource
-      else {
-        return LiveMoveResult(didMove: false, destinationID: nil)
-      }
-      guard destinationID != lastDestinationID else {
-        return LiveMoveResult(didMove: false, destinationID: destinationID)
-      }
-      guard let absoluteDestination = visibleNotes.firstIndex(where: { $0.id == destinationID }),
-        let localDestination = partitionLocalDestination(
-          draggedID: draggedSource.noteID,
-          absoluteDestination: absoluteDestination,
-          visibleNotes: visibleNotes
-        )
-      else {
-        return LiveMoveResult(didMove: false, destinationID: nil)
-      }
-      move(draggedSource.noteID, localDestination)
-      return LiveMoveResult(didMove: true, destinationID: destinationID)
-    }
   }
 
   enum TabOverflowPresentation {
@@ -341,7 +367,7 @@
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
     @State private var noteDropSource: NoteDropSource?
-    @State private var tabDragDestinationID: UUID?
+    @State private var tabReorder: ReorderInteraction?
     @State private var tabColorPickerNoteID: UUID?
     @State private var activeFolderID: UUID?
     @State private var bannerDismissalState = NotesPanelBannerDismissalState()
@@ -556,6 +582,8 @@
         dictationRuntime.registerEditor(editorCommands)
       }
       .onDisappear {
+        tabReorder = nil
+        noteDropSource = nil
         dictationRuntime.unregisterEditor(editorCommands)
       }
       .overlay {
@@ -1025,27 +1053,32 @@
                 dragSessionID: UUID()
               )
               noteDropSource = source
-              tabDragDestinationID = nil
-              _ = activateNoteAndScope(note.id)
+              tabReorder = ReorderInteraction(sourceID: note.id, originalIDs: visibleNotes.map(\.id),
+                pinnedIDs: Set(visibleNotes.filter(\.isPinned).map(\.id)))
               return FolderDragPayload.noteProvider(source: source)
             }
-            .onDrop(
-              of: [FolderDragPayload.noteType],
-              delegate: TabDropDelegate(
-                destinationID: note.id,
-                activeFolderID: activeFolderID,
-                currentNotes: { visibleNotes },
-                draggedSource: $noteDropSource,
-                lastDestinationID: $tabDragDestinationID,
-                move: { id, localDestination in
-                  _ = appState.moveNote(
-                    id,
-                    inFolderID: activeFolderID,
-                    toVisibleIndex: localDestination
-                  )
-                }
-              )
-            )
+            .modifier(ReorderDropTarget(
+              destinationID: note.id,
+              type: FolderDragPayload.noteType,
+              interaction: $tabReorder,
+              currentIDs: { visibleNotes.map(\.id) },
+              accepts: { providers in
+                let providerSource = FolderDragPayload.noteSource(from: providers)
+                return tabReorder?.pinnedIDs == Set(visibleNotes.filter(\.isPinned).map(\.id))
+                  && TabDragReorder.isValidInsertion(
+                  draggedSource: noteDropSource, providerSource: providerSource,
+                  destinationID: note.id, activeFolderID: activeFolderID,
+                  currentNotes: visibleNotes
+                )
+              },
+              finish: { noteDropSource = nil },
+              move: { id, destination in
+                guard let localDestination = TabDragReorder.partitionLocalDestination(
+                  draggedID: id, absoluteDestination: destination, visibleNotes: visibleNotes
+                ) else { return }
+                _ = appState.moveNote(id, inFolderID: activeFolderID, toVisibleIndex: localDestination)
+              }
+            ))
             .transition(
               .opacity.combined(
                 with: .offset(x: motion.offset)
@@ -1132,6 +1165,21 @@
               .frame(height: 37, alignment: .center)
               .animation(motion.spatial, value: appState.workspace.selectedNoteID)
               .animation(motion.spatial, value: visibleNotes.map(\.id))
+              .onChange(of: visibleNotes.map(\.id)) { _, ids in
+                if let tabReorder, tabReorder.originalIDs != ids {
+                  self.tabReorder = nil
+                  noteDropSource = nil
+                }
+              }
+              .background(ReorderDragLifecycle(active: tabReorder != nil,
+                hasTarget: tabReorder?.targetID != nil
+                  && tabReorder?.originalIDs == visibleNotes.map(\.id)
+                  && tabReorder?.pinnedIDs == Set(visibleNotes.filter(\.isPinned).map(\.id))
+                  && noteDropSource?.noteID == tabReorder?.sourceID,
+                cancel: {
+                  tabReorder = nil
+                  noteDropSource = nil
+                }))
                 Color.clear
                   .frame(width: 0, height: 0)
                   .id(TabScrollTarget.trailing)
@@ -1670,6 +1718,7 @@
     @State private var isCreatingFolder = false
     @State private var folderNameDraft = ""
     @State private var noteDropTarget: NoteDropTarget?
+    @State private var folderReorder: ReorderInteraction?
     @State private var isUnfiledHovered = false
     @State private var unfiledInteractionSource: AppInteractionSource = .keyboard
     private let folderNavigatorMaxHeight: CGFloat = 32
@@ -1708,6 +1757,10 @@
                 folderRow(folder)
               }
             }
+            .background(ReorderDragLifecycle(active: folderReorder != nil,
+              hasTarget: folderReorder?.targetID != nil
+                && folderReorder?.originalIDs == appState.workspace.folders.map(\.id),
+              cancel: { folderReorder = nil }))
           }
           .frame(maxWidth: .infinity)
           .frame(maxHeight: folderNavigatorMaxHeight)
@@ -1722,9 +1775,6 @@
           }
           .buttonStyle(.plain)
           .accessibilityLabel("New folder")
-          .onDrop(of: [FolderDragPayload.folderType], isTargeted: nil) { providers, _ in
-            handleFolderDrop(providers, beforeFolderID: nil)
-          }
 
           Divider()
             .frame(height: 20)
@@ -1774,7 +1824,12 @@
         else { return }
         onDelete(folder)
       }
+      .onChange(of: appState.workspace.folders.map(\.id)) { _, ids in
+        if let folderReorder, folderReorder.originalIDs != ids { self.folderReorder = nil }
+      }
+      .onDisappear { folderReorder = nil }
       .onExitCommand {
+        folderReorder = nil
         cancelFolderEditing()
       }
       .onKeyPress(phases: .down) { press in
@@ -1887,15 +1942,27 @@
         .focusable()
         .focused($focusedRow, equals: .folder(folder.id))
         .focusEffectDisabled()
-        .onDrag { FolderDragPayload.folderProvider(folderID: folder.id) }
+        .onDrag {
+          let interaction = ReorderInteraction(sourceID: folder.id,
+            originalIDs: appState.workspace.folders.map(\.id))
+          folderReorder = interaction
+          return FolderDragPayload.folderProvider(folderID: folder.id, sessionID: interaction.sessionID)
+        }
         .onDrop(
           of: [FolderDragPayload.noteType],
           delegate: noteDropDelegate(.folder(folder.id))
         )
-        .onDrop(of: [FolderDragPayload.folderType], isTargeted: nil) { providers, _ in
-          handleFolderDrop(providers, beforeFolderID: folder.id)
-        }
+        .modifier(ReorderDropTarget(
+          destinationID: folder.id, type: FolderDragPayload.folderType,
+          interaction: $folderReorder,
+          currentIDs: { appState.workspace.folders.map(\.id) },
+          accepts: { FolderDragPayload.matchesFolder($0, interaction: folderReorder) },
+          finish: {},
+          move: { id, destination in try? appState.reorderFolder(id: id, to: destination) }
+        ))
         .contextMenu {
+          Button("Move Left", systemImage: "arrow.left") { moveFolder(folder.id, offset: -1) }
+          Button("Move Right", systemImage: "arrow.right") { moveFolder(folder.id, offset: 1) }
           Button("Rename", systemImage: "pencil") {
             _ = beginRename(folderID: folder.id)
           }
@@ -2206,41 +2273,20 @@
       expectedSource: NoteDropSource
     ) -> Bool {
       noteDropTarget = nil
+      defer { if draggedSource == expectedSource { draggedSource = nil } }
       guard draggedSource == expectedSource,
-        FolderDragPayload.noteSource(from: providers) == expectedSource,
-        let provider = providers.first(where: {
-          $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
-        })
-      else {
-        if draggedSource == expectedSource { draggedSource = nil }
-        return false
+        let payload = FolderDragPayload.noteSource(from: providers), payload == expectedSource
+      else { return false }
+      // Local providers already carry the authenticated source. Commit before native
+      // mouse-up cleanup, rather than retaining an asynchronous payload callback.
+      return NoteDropPresentation.performLocalDrop(
+        draggedSource: draggedSource, providerSource: payload, targetFolderID: targetFolderID,
+        notes: appState.workspace.notes,
+        validTargetFolderIDs: Set(appState.workspace.folders.map(\.id))
+      ) { source, target in
+        appState.moveNote(source.noteID, fromFolderID: source.sourceFolderID,
+          toFolderID: target, activeFolderID: activeFolderID)
       }
-      provider.loadDataRepresentation(forTypeIdentifier: FolderDragPayload.noteType.identifier) {
-        data, _ in
-        Task { @MainActor in
-          defer {
-            if self.draggedSource == expectedSource { self.draggedSource = nil }
-            self.noteDropTarget = nil
-          }
-          guard self.draggedSource == expectedSource else { return }
-          guard let data, let payload = FolderDragPayload.noteValue(from: data) else { return }
-          guard payload == expectedSource else { return }
-          guard targetFolderID == nil || appState.workspace.folders.contains(where: {
-            $0.id == targetFolderID
-          }) else { return }
-          guard let note = appState.workspace.notes.first(where: { $0.id == payload.noteID }),
-            note.folderID == payload.sourceFolderID,
-            note.folderID != targetFolderID
-          else { return }
-          _ = appState.moveNote(
-            payload.noteID,
-            fromFolderID: payload.sourceFolderID,
-            toFolderID: targetFolderID,
-            activeFolderID: activeFolderID
-          )
-        }
-      }
-      return true
     }
 
     private struct NoteDropDelegate: DropDelegate {
@@ -2308,36 +2354,12 @@
       }
     }
 
-    private func handleFolderDrop(
-      _ providers: [NSItemProvider],
-      beforeFolderID targetFolderID: UUID?
-    ) -> Bool {
-      guard let provider = providers.first(where: {
-        $0.registeredTypeIdentifiers.contains(FolderDragPayload.folderType.identifier)
-      }) else { return false }
-      provider.loadDataRepresentation(forTypeIdentifier: FolderDragPayload.folderType.identifier) {
-        data, _ in
-        guard let data, let sourceFolderID = FolderDragPayload.folderID(from: data) else {
-          return
-        }
-        Task { @MainActor in
-          guard let sourceIndex = appState.workspace.folders.firstIndex(where: { $0.id == sourceFolderID })
-          else { return }
-          let destination: Int
-          if let targetFolderID,
-            let targetIndex = appState.workspace.folders.firstIndex(where: { $0.id == targetFolderID })
-          {
-            destination = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
-          } else if targetFolderID == nil {
-            destination = appState.workspace.folders.count - 1
-          } else {
-            return
-          }
-          try? appState.reorderFolder(id: sourceFolderID, to: destination)
-        }
-      }
-      return true
+    private func moveFolder(_ id: UUID, offset: Int) {
+      guard let index = appState.workspace.folders.firstIndex(where: { $0.id == id }) else { return }
+      try? appState.reorderFolder(id: id,
+        to: min(max(index + offset, 0), appState.workspace.folders.count - 1))
     }
+
   }
 
   struct TrashPanelOverlay: View {
@@ -2878,64 +2900,151 @@
     }
   }
 
+  private struct ReorderDropTarget: ViewModifier {
+    let destinationID: UUID
+    let type: UTType
+    @Binding var interaction: ReorderInteraction?
+    let currentIDs: () -> [UUID]
+    let accepts: ([NSItemProvider]) -> Bool
+    let finish: () -> Void
+    let move: (UUID, Int) -> Void
+    @State private var width: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+      content
+        .padding(.leading, interaction?.targetID == destinationID && interaction?.after == false ? 3 : 0)
+        .padding(.trailing, interaction?.targetID == destinationID && interaction?.after == true ? 3 : 0)
+        .animation(AppMotion(reduceMotion: reduceMotion).spatial, value: interaction)
+        .background(GeometryReader { geometry in
+          Color.clear.onAppear { width = geometry.size.width }
+            .onChange(of: geometry.size.width) { _, value in width = value }
+        })
+        .overlay(alignment: interaction?.after == true ? .trailing : .leading) {
+          if interaction?.targetID == destinationID {
+            Capsule().fill(Color.accentColor).frame(width: 2, height: 22)
+              .offset(x: interaction?.after == true ? 3 : -3)
+              .allowsHitTesting(false)
+              .accessibilityHidden(true)
+          }
+        }
+        .onDrop(of: [type], delegate: TabDropDelegate(
+          destinationID: destinationID, width: width, type: type,
+          interaction: $interaction, currentIDs: currentIDs,
+          accepts: accepts, finish: finish, move: move
+        ))
+    }
+  }
+
   private struct TabDropDelegate: DropDelegate {
     let destinationID: UUID
-    let activeFolderID: UUID?
-    let currentNotes: () -> [Note]
-    @Binding var draggedSource: NoteDropSource?
-    @Binding var lastDestinationID: UUID?
+    let width: CGFloat
+    let type: UTType
+    @Binding var interaction: ReorderInteraction?
+    let currentIDs: () -> [UUID]
+    let accepts: ([NSItemProvider]) -> Bool
+    let finish: () -> Void
     let move: (UUID, Int) -> Void
 
-    func dropEntered(info: DropInfo) {
-      let providerSource = FolderDragPayload.noteSource(
-        from: info.itemProviders(for: [FolderDragPayload.noteType])
-      )
-      guard draggedSource == providerSource else { return }
-      let result = TabDragReorder.performLiveMove(
-        draggedSource: draggedSource,
-        providerSource: providerSource,
-        over: destinationID,
-        activeFolderID: activeFolderID,
-        currentNotes: currentNotes,
-        lastDestinationID: lastDestinationID,
-        move: move
-      )
-      lastDestinationID = result.destinationID
+    func validateDrop(info: DropInfo) -> Bool {
+      interaction != nil && interaction?.sourceID != destinationID
+        && accepts(info.itemProviders(for: [type]))
+        && interaction?.originalIDs == currentIDs()
+    }
+
+    func dropEntered(info: DropInfo) { update(info) }
+
+    private func update(_ info: DropInfo) {
+      guard validateDrop(info: info) else {
+        interaction?.clearTarget()
+        return
+      }
+      interaction?.propose(over: destinationID, after: info.location.x >= width / 2,
+        currentIDs: currentIDs())
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-      let providerSource = FolderDragPayload.noteSource(
-        from: info.itemProviders(for: [FolderDragPayload.noteType])
-      )
-      guard draggedSource == providerSource,
-        TabDragReorder.isValidLocalDrag(
-          draggedSource: draggedSource,
-          providerSource: providerSource,
-          destinationID: destinationID,
-          activeFolderID: activeFolderID,
-          currentNotes: currentNotes()
-        )
-      else { return nil }
-      return DropProposal(operation: .move)
+      update(info)
+      return DropProposal(operation: validateDrop(info: info) ? .move : .forbidden)
+    }
+
+    func dropExited(info: DropInfo) {
+      if interaction?.targetID == destinationID { interaction?.clearTarget() }
     }
 
     func performDrop(info: DropInfo) -> Bool {
-      let providerSource = FolderDragPayload.noteSource(
-        from: info.itemProviders(for: [FolderDragPayload.noteType])
-      )
-      let accepted = draggedSource == providerSource
-        && TabDragReorder.isValidLocalDrag(
-          draggedSource: draggedSource,
-          providerSource: providerSource,
-          destinationID: destinationID,
-          activeFolderID: activeFolderID,
-          currentNotes: currentNotes()
-        )
-      if draggedSource == providerSource {
-        draggedSource = nil
-        lastDestinationID = nil
+      update(info)
+      guard validateDrop(info: info), let source = interaction?.sourceID,
+        let destination = interaction?.consume(currentIDs: currentIDs())
+      else { return false }
+      interaction = nil
+      finish()
+      move(source, destination)
+      return true
+    }
+  }
+
+  // Native dragging can end outside every SwiftUI drop target. Watch its lifetime,
+  // and scroll only the enclosing strip while a validated proposal is active.
+  private struct ReorderDragLifecycle: NSViewRepresentable {
+    let active: Bool
+    let hasTarget: Bool
+    let cancel: () -> Void
+
+    func makeNSView(context: Context) -> DragView { DragView() }
+    func updateNSView(_ view: DragView, context: Context) {
+      view.cancel = cancel
+      view.hasTarget = hasTarget
+      view.setActive(active)
+    }
+    static func dismantleNSView(_ view: DragView, coordinator: ()) { view.setActive(false) }
+
+    final class DragView: NSView {
+      var cancel: (() -> Void)?
+      var hasTarget = false
+      private var timer: Timer?
+      private var escapeMonitor: Any?
+      override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+      func setActive(_ active: Bool) {
+        guard active else {
+          timer?.invalidate()
+          timer = nil
+          if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+          escapeMonitor = nil
+          return
+        }
+        guard timer == nil else { return }
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+          if event.keyCode == 53 { self?.end() }
+          return event
+        }
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+          MainActor.assumeIsolated { self?.tick() }
+        }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .eventTracking)
       }
-      return accepted
+
+      private func end() {
+        setActive(false)
+        cancel?()
+      }
+
+      private func tick() {
+        guard NSEvent.pressedMouseButtons & 1 != 0, let window else { end(); return }
+        guard hasTarget, let scroll = enclosingScrollView else { return }
+        let clip = scroll.contentView
+        let point = clip.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+        guard clip.bounds.contains(point), let document = scroll.documentView else { return }
+        let delta: CGFloat = point.x < clip.bounds.minX + 24 ? -5
+          : point.x > clip.bounds.maxX - 24 ? 5 : 0
+        guard delta != 0 else { return }
+        let x = min(max(clip.bounds.minX + delta, 0), max(0, document.bounds.width - clip.bounds.width))
+        clip.scroll(to: NSPoint(x: x, y: clip.bounds.minY))
+        scroll.reflectScrolledClipView(clip)
+      }
     }
   }
 
