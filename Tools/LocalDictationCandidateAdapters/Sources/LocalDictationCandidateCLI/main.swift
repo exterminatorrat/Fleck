@@ -10,7 +10,9 @@ struct LocalDictationCandidateCLI {
     eventTimeout: Duration = .seconds(30),
     diagnosticSink: @Sendable @escaping (String) -> Void = { message in
       fputs("\(message)\n", stderr)
-    }
+    },
+    resourceProvider: any ProcessResourceSamplerProvider = DarwinProcessResourceSamplerProvider(),
+    resourceClock: any ProcessResourceSamplerClock = ContinuousProcessResourceSamplerClock()
   ) async -> Int32 {
     do {
       switch try Command.parse(arguments) {
@@ -43,6 +45,23 @@ struct LocalDictationCandidateCLI {
         try writeExclusive(report, to: output)
         print("candidate run recorded: \(output)")
         return 0
+      case .sampleResources(let processIdentifier, let durationSeconds, let output):
+        try validateNewOutput(path: output)
+        let report = try await ProcessResourceTimeline(
+          processIdentifier: processIdentifier,
+          duration: .seconds(durationSeconds),
+          provider: resourceProvider,
+          clock: resourceClock
+        ).run()
+        try writeExclusive(report, to: output)
+        guard report.completion == .complete else {
+          diagnosticSink(
+            "resource sampling incomplete: \(report.failureCategory?.rawValue ?? "providerFailure")"
+          )
+          return 2
+        }
+        print("resource timeline recorded: \(output)")
+        return 0
       }
     } catch let error as CLIError {
       diagnosticSink("admission error: \(error.description)")
@@ -57,6 +76,7 @@ struct LocalDictationCandidateCLI {
 private enum Command {
   case validateAdmission(manifest: String, schema: String)
   case run(manifest: String, adapter: String, runtimeRoot: String, modelRoot: String, output: String)
+  case sampleResources(processIdentifier: Int32, durationSeconds: Int64, output: String)
 
   static func parse(_ arguments: [String]) throws -> Command {
     guard let name = arguments.first else {
@@ -100,6 +120,28 @@ private enum Command {
         adapter: try required(values, "--adapter"),
         runtimeRoot: try required(values, "--runtime-root"),
         modelRoot: try required(values, "--model-root"),
+        output: try required(values, "--output")
+      )
+    case "sample-resources":
+      let requiredFlags: Set<String> = ["--pid", "--duration-seconds", "--output"]
+      guard Set(values.keys) == requiredFlags else {
+        throw CLIError.argument(
+          "sample-resources requires --pid, --duration-seconds, and --output"
+        )
+      }
+      guard let processIdentifier = Int32(try required(values, "--pid")),
+        processIdentifier > 0
+      else {
+        throw CLIError.argument("--pid must be a positive Int32")
+      }
+      guard let durationSeconds = Int64(try required(values, "--duration-seconds")),
+        (1...600).contains(durationSeconds)
+      else {
+        throw CLIError.argument("--duration-seconds must be between 1 and 600")
+      }
+      return .sampleResources(
+        processIdentifier: processIdentifier,
+        durationSeconds: durationSeconds,
         output: try required(values, "--output")
       )
     default:
@@ -542,8 +584,12 @@ private func validateNewOutput(path: String) throws {
   guard url.path.first == "/" else {
     throw CLIError.unsafePath("output-must-be-absolute")
   }
-  guard !FileManager.default.fileExists(atPath: url.path) else {
+  var metadata = stat()
+  guard lstat(url.path, &metadata) != 0 else {
     throw CLIError.outputExists(path)
+  }
+  guard Darwin.errno == ENOENT else {
+    throw CLIError.file(path, "output-status-failed")
   }
   let parent = url.deletingLastPathComponent()
   let attributes = try? FileManager.default.attributesOfItem(atPath: parent.path)
@@ -992,7 +1038,7 @@ func reportHashMapping(runtimeRootURL: URL, modelRootURL: URL) throws -> ReportH
   )
 }
 
-private func writeExclusive(_ report: AdmissionRunReport, to path: String) throws {
+private func writeExclusive<Value: Encodable>(_ report: Value, to path: String) throws {
   let encoder = JSONEncoder()
   encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
   let data = try encoder.encode(report)

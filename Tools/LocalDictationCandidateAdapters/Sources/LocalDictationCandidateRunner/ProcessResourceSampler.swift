@@ -4,10 +4,16 @@ import Foundation
 public struct ProcessResourceSample: Equatable, Sendable {
   public let residentBytes: Int64
   public let physicalFootprintBytes: Int64
+  public let processStartIdentity: UInt64?
 
-  public init(residentBytes: Int64, physicalFootprintBytes: Int64) {
+  public init(
+    residentBytes: Int64,
+    physicalFootprintBytes: Int64,
+    processStartIdentity: UInt64? = nil
+  ) {
     self.residentBytes = residentBytes
     self.physicalFootprintBytes = physicalFootprintBytes
+    self.processStartIdentity = processStartIdentity
   }
 }
 
@@ -26,11 +32,22 @@ public protocol ProcessResourceSamplerProvider: Sendable {
 }
 
 public protocol ProcessResourceSamplerClock: Sendable {
+  func now() -> ContinuousClock.Instant
   func sleep(for duration: Duration) async throws
+}
+
+extension ProcessResourceSamplerClock {
+  public func now() -> ContinuousClock.Instant {
+    ContinuousClock.now
+  }
 }
 
 public struct ContinuousProcessResourceSamplerClock: ProcessResourceSamplerClock {
   public init() {}
+
+  public func now() -> ContinuousClock.Instant {
+    ContinuousClock.now
+  }
 
   public func sleep(for duration: Duration) async throws {
     try await Task.sleep(for: duration)
@@ -90,7 +107,8 @@ public struct DarwinProcessResourceSamplerProvider: ProcessResourceSamplerProvid
     }
     return ProcessResourceSample(
       residentBytes: residentBytes,
-      physicalFootprintBytes: physicalFootprintBytes
+      physicalFootprintBytes: physicalFootprintBytes,
+      processStartIdentity: usage.ri_proc_start_abstime
     )
   }
 }
@@ -131,7 +149,7 @@ public actor ProcessResourceSampler {
     }
 
     let initialSample = try sample()
-    try Self.validate(initialSample)
+    try validateProcessResourceSample(initialSample)
     peaks = ProcessResourcePeaks(
       peakResidentBytes: initialSample.residentBytes,
       peakPhysicalFootprintBytes: initialSample.physicalFootprintBytes
@@ -149,7 +167,7 @@ public actor ProcessResourceSampler {
           try await clock.sleep(for: interval)
           try Task.checkCancellation()
           let sample = try provider.sample(processIdentifier: processIdentifier)
-          try Self.validate(sample)
+          try validateProcessResourceSample(sample)
           guard let self else { return }
           await self.record(sample)
         }
@@ -194,15 +212,6 @@ public actor ProcessResourceSampler {
     }
   }
 
-  private static func validate(_ sample: ProcessResourceSample) throws {
-    guard sample.residentBytes >= 0, sample.physicalFootprintBytes >= 0 else {
-      throw ProcessResourceSamplerError.invalidSample(
-        residentBytes: sample.residentBytes,
-        physicalFootprintBytes: sample.physicalFootprintBytes
-      )
-    }
-  }
-
   private func record(_ sample: ProcessResourceSample) {
     guard let peaks else { return }
     self.peaks = ProcessResourcePeaks(
@@ -216,5 +225,14 @@ public actor ProcessResourceSampler {
 
   private func record(error: ProcessResourceSamplerError) {
     samplingError = error
+  }
+}
+
+func validateProcessResourceSample(_ sample: ProcessResourceSample) throws {
+  guard sample.residentBytes >= 0, sample.physicalFootprintBytes >= 0 else {
+    throw ProcessResourceSamplerError.invalidSample(
+      residentBytes: sample.residentBytes,
+      physicalFootprintBytes: sample.physicalFootprintBytes
+    )
   }
 }

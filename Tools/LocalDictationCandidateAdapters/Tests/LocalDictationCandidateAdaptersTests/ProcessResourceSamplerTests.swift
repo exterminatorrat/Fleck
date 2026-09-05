@@ -223,6 +223,16 @@ private final class ControlledSleeper: ProcessResourceSamplerClock, @unchecked S
 @Suite("ProcessResourceSamplerTests")
 struct ProcessResourceSamplerTests {
 
+  @Test func darwinProviderIncludesSameSampleProcessStartIdentity() throws {
+    let sample = try DarwinProcessResourceSamplerProvider().sample(
+      processIdentifier: Int32(ProcessInfo.processInfo.processIdentifier)
+    )
+
+    #expect(sample.processStartIdentity != nil)
+    #expect(sample.residentBytes > 0)
+    #expect(sample.physicalFootprintBytes > 0)
+  }
+
   @Test func retainsTwoUnconsumedSleepRegistrationsAndCleansCancellation() async throws {
     let sleeper = ControlledSleeper()
     let firstSleep = Task { try await sleeper.sleep(for: .seconds(1)) }
