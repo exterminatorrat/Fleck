@@ -204,6 +204,7 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
     case physicalPress
     case processorStarted
     case sourceStartRequested
+    case audioReadyObserved
     case firstMeaningfulPartial
     case physicalRelease
     case stopRequested
@@ -225,6 +226,7 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
   private(set) var physicalPressAt: ContinuousClock.Instant?
   private(set) var processorStartedAt: ContinuousClock.Instant?
   private(set) var sourceStartRequestedAt: ContinuousClock.Instant?
+  private(set) var audioReadyObservedAt: ContinuousClock.Instant?
   private(set) var firstMeaningfulPartialAt: ContinuousClock.Instant?
   private(set) var physicalReleaseAt: ContinuousClock.Instant?
   private(set) var stopRequestedAt: ContinuousClock.Instant?
@@ -247,6 +249,7 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
     physicalPressAt: ContinuousClock.Instant? = nil,
     processorStartedAt: ContinuousClock.Instant? = nil,
     sourceStartRequestedAt: ContinuousClock.Instant? = nil,
+    audioReadyObservedAt: ContinuousClock.Instant? = nil,
     firstMeaningfulPartialAt: ContinuousClock.Instant? = nil,
     physicalReleaseAt: ContinuousClock.Instant? = nil,
     stopRequestedAt: ContinuousClock.Instant? = nil,
@@ -267,6 +270,7 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
     self.physicalPressAt = physicalPressAt
     self.processorStartedAt = processorStartedAt
     self.sourceStartRequestedAt = sourceStartRequestedAt
+    self.audioReadyObservedAt = audioReadyObservedAt
     self.firstMeaningfulPartialAt = firstMeaningfulPartialAt
     self.physicalReleaseAt = physicalReleaseAt
     self.stopRequestedAt = stopRequestedAt
@@ -355,6 +359,7 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
     case .physicalPress: physicalPressAt
     case .processorStarted: processorStartedAt
     case .sourceStartRequested: sourceStartRequestedAt
+    case .audioReadyObserved: audioReadyObservedAt
     case .firstMeaningfulPartial: firstMeaningfulPartialAt
     case .physicalRelease: physicalReleaseAt
     case .stopRequested: stopRequestedAt
@@ -378,6 +383,8 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
       (.physicalPress, .physicalRelease),
       (.physicalPress, .processorStarted),
       (.processorStarted, .sourceStartRequested),
+      (.sourceStartRequested, .audioReadyObserved),
+      (.audioReadyObserved, .asrFinal),
       (.sourceStartRequested, .firstMeaningfulPartial),
       (.physicalRelease, .stopRequested),
       (.processorStarted, .stopRequested),
@@ -410,6 +417,7 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
     case .physicalPress: physicalPressAt = instant
     case .processorStarted: processorStartedAt = instant
     case .sourceStartRequested: sourceStartRequestedAt = instant
+    case .audioReadyObserved: audioReadyObservedAt = instant
     case .firstMeaningfulPartial: firstMeaningfulPartialAt = instant
     case .physicalRelease: physicalReleaseAt = instant
     case .stopRequested: stopRequestedAt = instant

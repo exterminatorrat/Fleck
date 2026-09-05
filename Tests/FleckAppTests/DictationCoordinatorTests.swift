@@ -738,13 +738,13 @@ func captureFirstTimerAcceptanceKeepsToolbarFinishPendingUntilExactShortRelease(
   for _ in 0..<100 where fixture.coordinator.phase == .arming { await Task.yield() }
   for _ in 0..<100 where fixture.standard.finishCount == priorFinishCount { await Task.yield() }
 
-  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(fixture.coordinator.phase == .arming)
   #expect(fixture.standard.finishCount == priorFinishCount)
   #expect(terminalEvents.isEmpty)
   let competingFinish = Task { await fixture.coordinator.finish() }
   for _ in 0..<100 where fixture.standard.finishCount == priorFinishCount { await Task.yield() }
 
-  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(fixture.coordinator.phase == .arming)
   #expect(fixture.standard.finishCount == priorFinishCount)
   #expect(terminalEvents.isEmpty)
   fixture.coordinator.recordPhysicalRelease(
@@ -1685,6 +1685,373 @@ func cancelDuringLegacySourceFinishDoesNotRollbackOrPublishTerminalState()
   fixture.standard.emitLevel(0.9)
 
   #expect(levels == [0.42, 0])
+}
+
+@Test @MainActor
+func captureFeedbackPublishesListeningBeforeDeliveringEarlyLevel() async throws {
+  let fixture = try Fixture()
+  let startGate = Gate()
+  fixture.standard.startGate = startGate
+  var observations: [String] = []
+  fixture.coordinator.setEventObserver { event in
+    if case .listening = event.phase { observations.append("listening") }
+  }
+  fixture.coordinator.setLevelObserver { level in
+    observations.append("level:\(level)")
+  }
+
+  let start = Task { await fixture.coordinator.start(mode: .smartCapture) }
+  await startGate.waitUntilWaiting()
+  fixture.standard.emitLevel(0.4)
+
+  #expect(observations == ["listening", "level:0.4"])
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(fixture.coordinator.latestRuntimeMeasurements.audioReadyObservedAt != nil)
+
+  await startGate.openGate()
+  await start.value
+  #expect(observations == ["listening", "level:0.4"])
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor
+func captureFeedbackReplaysLatestPreHoldLevelOnce() async throws {
+  let threshold = Gate()
+  let startGate = Gate()
+  let startCompleted = Gate()
+  let listening = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.startGate = startGate
+  fixture.standard.startCompletionObserver = startCompleted
+  var observations: [String] = []
+  fixture.coordinator.setEventObserver { event in
+    if case .listening = event.phase {
+      observations.append("listening")
+      Task { await listening.openGate() }
+    }
+  }
+  fixture.coordinator.setLevelObserver { level in
+    observations.append("level:\(level)")
+  }
+
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  await threshold.waitUntilWaiting()
+  await startGate.waitUntilWaiting()
+  fixture.standard.emitLevel(0.2)
+  fixture.standard.emitLevel(0.7)
+  #expect(observations.isEmpty)
+
+  await threshold.openGate()
+  await listening.wait()
+
+  #expect(observations == ["listening", "level:0.7"])
+  await startGate.openGate()
+  await startCompleted.wait()
+  #expect(observations == ["listening", "level:0.7"])
+  await fixture.coordinator.cancelShortcut(session)
+  await fixture.coordinator.waitForShortcutTerminal(session)
+  #expect(observations.filter { $0 == "listening" || $0 == "level:0.7" } == [
+    "listening", "level:0.7",
+  ])
+}
+
+@Test @MainActor
+func captureFeedbackHoldThresholdWithoutEvidenceRemainsArming() async throws {
+  let threshold = Gate()
+  let holdAccepted = Gate()
+  let startGate = Gate()
+  let cancellationQuieted = Gate()
+  let fixture = try Fixture(
+    onFocusedProvisionalUpdate: { Task { await holdAccepted.openGate() } },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  fixture.standard.startGate = startGate
+  fixture.coordinator.setLevelObserver { level in
+    if level == 0 { Task { await cancellationQuieted.openGate() } }
+  }
+
+  let session = try #require(fixture.coordinator.beginShortcut(editor: fixture.editor))
+  await threshold.waitUntilWaiting()
+  await startGate.waitUntilWaiting()
+  await threshold.openGate()
+  let provisionalPump = Task { @MainActor in
+    while !Task.isCancelled {
+      fixture.standard.emitProvisional("hold accepted")
+      await Task.yield()
+    }
+  }
+  await holdAccepted.wait()
+  provisionalPump.cancel()
+  await provisionalPump.value
+
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.audioReadyObservedAt == nil)
+
+  let cancellation = Task { await fixture.coordinator.cancelShortcut(session) }
+  await cancellationQuieted.wait()
+  await startGate.openGate()
+  await cancellation.value
+  await fixture.coordinator.waitForShortcutTerminal(session)
+}
+
+@Test @MainActor
+func captureFeedbackZeroLevelEstablishesReadinessWithoutEnergy() async throws {
+  let fixture = try Fixture()
+  let startGate = Gate()
+  fixture.standard.startGate = startGate
+  var levels: [Float] = []
+  fixture.coordinator.setLevelObserver { levels.append($0) }
+
+  let start = Task { await fixture.coordinator.start(mode: .smartCapture) }
+  await startGate.waitUntilWaiting()
+  fixture.standard.emitLevel(0)
+
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(levels == [0])
+  #expect(fixture.coordinator.latestRuntimeMeasurements.audioReadyObservedAt != nil)
+
+  await startGate.openGate()
+  await start.value
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor
+func captureFeedbackRejectsNonfiniteAndClampsFiniteLevels() async throws {
+  let fixture = try Fixture()
+  let startGate = Gate()
+  fixture.standard.startGate = startGate
+  var levels: [Float] = []
+  fixture.coordinator.setLevelObserver { levels.append($0) }
+
+  let start = Task { await fixture.coordinator.start(mode: .smartCapture) }
+  await startGate.waitUntilWaiting()
+  fixture.standard.emitLevel(.nan)
+  fixture.standard.emitLevel(.infinity)
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(levels.isEmpty)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.audioReadyObservedAt == nil)
+
+  fixture.standard.emitLevel(-0.5)
+  fixture.standard.emitLevel(2)
+  #expect(levels == [0, 1])
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+
+  await startGate.openGate()
+  await start.value
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor
+func captureFeedbackSuccessfulStartWithoutLevelPublishesReadiness() async throws {
+  let manualClock = ManualDictationClock()
+  let fixture = try Fixture(clock: manualClock.clock)
+  let observedAt = manualClock.now
+
+  await fixture.coordinator.start(mode: .smartCapture)
+
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(fixture.coordinator.latestRuntimeMeasurements.audioReadyObservedAt == observedAt)
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor
+func captureFeedbackCancellationQuietsImmediatelyAndRejectsLateLevels() async throws {
+  let fixture = try Fixture()
+  let startGate = Gate()
+  fixture.standard.startGate = startGate
+  var levels: [Float] = []
+  fixture.coordinator.setLevelObserver { levels.append($0) }
+
+  let start = Task { await fixture.coordinator.start(mode: .smartCapture) }
+  await startGate.waitUntilWaiting()
+  fixture.standard.emitLevel(0.5)
+  await fixture.coordinator.cancel()
+
+  #expect(levels == [0.5, 0])
+  fixture.standard.emitLevel(0.9)
+  #expect(levels == [0.5, 0])
+
+  await startGate.openGate()
+  await start.value
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor
+func captureFeedbackPhysicalReleaseBeforeHoldCannotPublishListening() async throws {
+  let threshold = Gate()
+  let holdAccepted = Gate()
+  let startCompleted = Gate()
+  let fixture = try Fixture(
+    onFocusedProvisionalUpdate: { Task { await holdAccepted.openGate() } },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  fixture.standard.startCompletionObserver = startCompleted
+  let press = ContinuousClock().now
+  var phases: [DictationPhase] = []
+  fixture.coordinator.setEventObserver { phases.append($0.phase) }
+  let session = try #require(fixture.coordinator.beginShortcut(
+    editor: fixture.editor,
+    physicalGesture: .init(pressedAt: press)
+  ))
+  await threshold.waitUntilWaiting()
+  await startCompleted.wait()
+  fixture.standard.emitLevel(0.6)
+  let release = DictationPhysicalGesture(
+    pressedAt: press,
+    releasedAt: press.advanced(by: .milliseconds(200))
+  )
+  fixture.coordinator.recordPhysicalRelease(session, physicalGesture: release)
+
+  await threshold.openGate()
+  let provisionalPump = Task { @MainActor in
+    while !Task.isCancelled {
+      fixture.standard.emitProvisional("hold accepted")
+      await Task.yield()
+    }
+  }
+  await holdAccepted.wait()
+  provisionalPump.cancel()
+  await provisionalPump.value
+
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(!phases.contains { if case .listening = $0 { true } else { false } })
+  await fixture.coordinator.cancelShortcut(session)
+}
+
+@Test @MainActor
+func captureFeedbackFailureObserverCannotReenterWithLiveEnergy() async throws {
+  let fixture = try Fixture()
+  let terminal = Gate()
+  var levels: [Float] = []
+  fixture.coordinator.setLevelObserver { levels.append($0) }
+  fixture.coordinator.setEventObserver { event in
+    if case .failed = event.phase {
+      fixture.standard.emitLevel(0.9)
+    }
+    if event.terminal != nil {
+      Task { await terminal.openGate() }
+    }
+  }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  fixture.standard.emitLevel(0.4)
+  fixture.standard.emitFailure(TestError.failed)
+  await terminal.wait()
+
+  #expect(levels == [0.4, 0])
+}
+
+@Test @MainActor
+func captureFeedbackStaleCaptureCannotReadyANewCapture() async throws {
+  let fixture = try Fixture()
+  var levels: [Float] = []
+  fixture.coordinator.setLevelObserver { levels.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.cancel()
+  levels.removeAll()
+
+  let startGate = Gate()
+  fixture.standard.startGate = startGate
+  let secondStart = Task { await fixture.coordinator.start(mode: .smartCapture) }
+  await startGate.waitUntilWaiting()
+  fixture.standard.emitLevel(fromCaptureAt: 0, value: 0.8)
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(levels.isEmpty)
+
+  fixture.standard.emitLevel(fromCaptureAt: 1, value: 0.3)
+  #expect(fixture.coordinator.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(levels == [0.3])
+
+  await startGate.openGate()
+  await secondStart.value
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor
+func captureFeedbackProcessingPathPublishesListeningBeforeSynchronousLevel() async throws {
+  let processing = ProcessingProbe(synchronousLevel: 0.25)
+  let fixture = try Fixture(processing: processing)
+  var observations: [String] = []
+  fixture.coordinator.setEventObserver { event in
+    if case .listening = event.phase { observations.append("listening") }
+  }
+  fixture.coordinator.setLevelObserver { level in
+    observations.append("level:\(level)")
+  }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+
+  #expect(observations == ["listening", "level:0.25"])
+  await fixture.coordinator.cancel()
+}
+
+@Test @MainActor
+func captureFeedbackProcessingPathReplaysPreHoldLevel() async throws {
+  let threshold = Gate()
+  let beginGate = Gate()
+  let beginCompleted = Gate()
+  let listening = Gate()
+  let processing = ProcessingProbe(
+    synchronousLevel: 0.35,
+    beginGate: beginGate,
+    beginCompletionObserver: beginCompleted
+  )
+  let fixture = try Fixture(
+    processing: processing,
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  var observations: [String] = []
+  fixture.coordinator.setEventObserver { event in
+    if case .listening = event.phase {
+      observations.append("listening")
+      Task { await listening.openGate() }
+    }
+  }
+  fixture.coordinator.setLevelObserver { level in
+    observations.append("level:\(level)")
+  }
+
+  let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  await threshold.waitUntilWaiting()
+  await beginGate.waitUntilWaiting()
+  #expect(observations.isEmpty)
+
+  await threshold.openGate()
+  await listening.wait()
+
+  #expect(observations == ["listening", "level:0.35"])
+  await beginGate.openGate()
+  await beginCompleted.wait()
+  await fixture.coordinator.cancelShortcut(session)
+  await fixture.coordinator.waitForShortcutTerminal(session)
+}
+
+@Test @MainActor
+func captureFeedbackHeldStartupFailureCannotRegainListeningAtThreshold() async throws {
+  let threshold = Gate()
+  let startObserved = Gate()
+  let terminal = Gate()
+  let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
+  fixture.standard.startError = TestError.failed
+  fixture.standard.onStart = { Task { await startObserved.openGate() } }
+  var phases: [DictationPhase] = []
+  fixture.coordinator.setEventObserver { event in
+    phases.append(event.phase)
+    if event.terminal != nil { Task { await terminal.openGate() } }
+  }
+
+  _ = try #require(fixture.coordinator.beginShortcut(editor: nil))
+  await threshold.waitUntilWaiting()
+  await startObserved.wait()
+  await threshold.openGate()
+  await terminal.wait()
+
+  #expect(!phases.contains { if case .listening = $0 { true } else { false } })
+  guard case .failed = fixture.coordinator.phase else {
+    Issue.record("Expected deferred startup failure after hold acceptance")
+    return
+  }
 }
 
 @Test @MainActor
@@ -4761,8 +5128,10 @@ private final class FakeSpeechEngine: SpeechEngine {
   var startGate: Gate?
   var finishGate: Gate?
   var releaseGate: Gate?
+  var startCompletionObserver: Gate?
   private var provisional: (@MainActor (String) -> Void)?
   private var level: (@MainActor (Float) -> Void)?
+  private var levelCallbacks: [@MainActor (Float) -> Void] = []
   private var failure: (@MainActor (Error) -> Void)?
   var startCount = 0
   var finishCount = 0
@@ -4773,11 +5142,15 @@ private final class FakeSpeechEngine: SpeechEngine {
 
   func start(provisional: @escaping @MainActor (String) -> Void, level: @escaping @MainActor (Float) -> Void) async throws {
     startCount += 1
+    self.provisional = provisional
+    self.level = level
+    levelCallbacks.append(level)
     onStart?()
     if let startGate { await startGate.wait() }
     if let startError { throw startError }
-    self.provisional = provisional
-    self.level = level
+    if let startCompletionObserver {
+      Task { @MainActor in await startCompletionObserver.openGate() }
+    }
   }
 
   func start(
@@ -4803,6 +5176,9 @@ private final class FakeSpeechEngine: SpeechEngine {
   }
   func emitProvisional(_ text: String) { provisional?(text) }
   func emitLevel(_ value: Float) { level?(value) }
+  func emitLevel(fromCaptureAt index: Int, value: Float) {
+    levelCallbacks[index](value)
+  }
   func emitFailure(_ error: Error) { failure?(error) }
 }
 
@@ -4909,6 +5285,8 @@ final class ProcessingProbe: DictationProcessing {
   private let finishError: Error?
   private let finishBlocksUntilCancel: Bool
   private let synchronousLevel: Float?
+  private let beginGate: Gate?
+  private let beginCompletionObserver: Gate?
   private let drainGate: Gate?
   private let onFinishStarted: (() -> Void)?
   private let onSessionCancel: (() -> Void)?
@@ -4943,6 +5321,8 @@ final class ProcessingProbe: DictationProcessing {
     finishError: Error? = nil,
     finishBlocksUntilCancel: Bool = false,
     synchronousLevel: Float? = nil,
+    beginGate: Gate? = nil,
+    beginCompletionObserver: Gate? = nil,
     drainGate: Gate? = nil,
     onFinishStarted: (() -> Void)? = nil,
     onSessionCancel: (() -> Void)? = nil,
@@ -4956,6 +5336,8 @@ final class ProcessingProbe: DictationProcessing {
     self.finishError = finishError
     self.finishBlocksUntilCancel = finishBlocksUntilCancel
     self.synchronousLevel = synchronousLevel
+    self.beginGate = beginGate
+    self.beginCompletionObserver = beginCompletionObserver
     self.drainGate = drainGate
     self.onFinishStarted = onFinishStarted
     self.onSessionCancel = onSessionCancel
@@ -4980,6 +5362,10 @@ final class ProcessingProbe: DictationProcessing {
     levelCallback = level
     if let synchronousLevel { level(synchronousLevel) }
     beginCount += 1
+    if let beginGate { await beginGate.wait() }
+    if let beginCompletionObserver {
+      Task { @MainActor in await beginCompletionObserver.openGate() }
+    }
     let session = ProcessingSessionProbe(
       result: result,
       finishError: finishError,

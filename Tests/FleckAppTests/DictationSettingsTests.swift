@@ -2624,6 +2624,106 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
 }
 
+@Test @MainActor
+func DictationRuntimeCaptureFeedbackRendersEarlyLevelAfterListening() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+  let startGate = DictationTestGate()
+  fixture.engine.startGate = startGate
+
+  let toggle = Task { await fixture.runtime.toggle() }
+  await startGate.waitUntilWaiting()
+
+  #expect(fixture.runtime.currentCapsuleStatus == .arming)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+
+  fixture.engine.emitLevel(0.8)
+
+  #expect(fixture.runtime.currentCapsuleStatus == .listening)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+
+  await startGate.open()
+  await toggle.value
+  #expect(fixture.runtime.currentCapsuleStatus == .listening)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+  await fixture.runtime.cancel()
+}
+
+@Test @MainActor
+func DictationRuntimeCaptureFeedbackZeroLevelShowsQuietListening() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+  let startGate = DictationTestGate()
+  fixture.engine.startGate = startGate
+
+  let toggle = Task { await fixture.runtime.toggle() }
+  await startGate.waitUntilWaiting()
+  fixture.engine.emitLevel(0)
+
+  #expect(fixture.runtime.currentCapsuleStatus == .listening)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+
+  await startGate.open()
+  await toggle.value
+  await fixture.runtime.cancel()
+}
+
+@Test @MainActor
+func DictationRuntimeCaptureFeedbackRespectsHiddenPreference() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: false)
+  await fixture.runtime.awaitStartupAssessment()
+  let startGate = DictationTestGate()
+  fixture.engine.startGate = startGate
+
+  let toggle = Task { await fixture.runtime.toggle() }
+  await startGate.waitUntilWaiting()
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+
+  fixture.engine.emitLevel(0.8)
+
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+
+  await startGate.open()
+  await toggle.value
+  #expect(fixture.runtime.currentCapsuleStatus == nil)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+  await fixture.runtime.cancel()
+}
+
+@Test @MainActor
+func DictationRuntimeCaptureFeedbackCancellationRejectsLateEnergyDuringSuspendedStart()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+  let startGate = DictationTestGate()
+  fixture.engine.startGate = startGate
+
+  let toggle = Task { await fixture.runtime.toggle() }
+  await startGate.waitUntilWaiting()
+  fixture.engine.emitLevel(0.8)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy > 0)
+
+  await fixture.runtime.cancel()
+  let energyAfterCancellation = fixture.runtime.capsuleController.waveformModel.energy
+
+  fixture.engine.emitLevel(1)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == energyAfterCancellation)
+  #expect(fixture.runtime.capsuleController.waveformModel.barHeights(
+    at: Date().addingTimeInterval(1),
+    reduceMotion: false
+  ) == Array(
+    repeating: DictationWaveformModel.minimumHeight,
+    count: DictationWaveformModel.barCount
+  ))
+
+  await startGate.open()
+  await toggle.value
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+  #expect(fixture.runtime.capsuleController.waveformModel.energy == 0)
+}
+
 @Test @MainActor func DictationRuntimeIgnoresAStaleEngineCallbackAfterANewCapture() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
   await fixture.runtime.awaitStartupAssessment()
@@ -3699,6 +3799,7 @@ private final class RuntimeEngineProvider: SpeechEngineProviding {
 private final class RuntimeSpeechEngine: SpeechEngine {
   let kind: DictationSpeechEngine
   let finalText: String?
+  var startGate: DictationTestGate?
   var finishGate: DictationTestGate?
   var releaseGate: DictationTestGate?
   private(set) var releaseCount = 0
@@ -3725,6 +3826,7 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   ) async throws {
     self.level = level
     levelCallbacks.append(level)
+    if let startGate { await startGate.wait() }
   }
 
   func finish() async throws -> String? {

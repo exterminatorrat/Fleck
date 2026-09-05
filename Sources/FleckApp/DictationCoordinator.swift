@@ -128,6 +128,8 @@ final class DictationCoordinator {
     var isSourceFinishing = false
     var releaseRequested = false
     var holdAccepted = true
+    var audioReady = false
+    var pendingAudioLevel: Float?
     var cancelRequested = false
     var routingTask: Task<DictationRoutingDecision, Never>?
     var processingSessionCancellationTask: Task<Void, Never>?
@@ -421,6 +423,7 @@ final class DictationCoordinator {
     scheduleDeferredFinishIfReady(&active)
     capture = active
     guard receipt.isShort else {
+      quietAudioFeedback(session.id)
       recordMeasurement(.physicalRelease, at: releasedAt, captureID: session.id)
       if active.deferredStartupFailureMessage != nil {
         acceptArmedShortcut(session.id)
@@ -679,8 +682,7 @@ final class DictationCoordinator {
           self.capture?.editor?.updateFocusedDictation(provisionalText: text)
         },
         level: { [weak self] level in
-          guard let self, self.isActive(id), self.capture?.holdAccepted == true else { return }
-          self.levelObserver?(level)
+          self?.observeAudioReadiness(id, level: level)
         },
         failure: { [weak self] error in
           self?.scheduleSourceFailure(id, error: error)
@@ -690,11 +692,10 @@ final class DictationCoordinator {
       await handleStartupFailure(id, error: error)
       return
     }
-    guard let current = finishStarting(id) else { return }
+    guard finishStarting(id) != nil else { return }
     guard await continueCapture(id) else { return }
-    if current.holdAccepted {
-      setPhase(.listening(mode: mode, engine: engine.kind))
-    }
+    observeAudioReadiness(id)
+    guard let current = capture, current.id == id else { return }
     if current.releaseRequested, let stopOrigin = current.stopOrigin {
       await finish(stopOrigin: stopOrigin)
     }
@@ -753,8 +754,7 @@ final class DictationCoordinator {
       session = try await processing.begin(
         configuration: configuration,
         level: { [weak self] level in
-          guard let self, self.isActive(id), self.capture?.holdAccepted == true else { return }
-          self.levelObserver?(level)
+          self?.observeAudioReadiness(id, level: level)
         },
         startAuthorized: { [weak self] in
           self?.isStartAuthorized(id) == true
@@ -777,8 +777,9 @@ final class DictationCoordinator {
     guard await continueCapture(id) else { return }
     if current.holdAccepted {
       startProcessingUpdates(id, session: session)
-      setPhase(.listening(mode: mode, engine: engine))
     }
+    observeAudioReadiness(id)
+    guard let current = capture, current.id == id else { return }
     if current.releaseRequested, let stopOrigin = current.stopOrigin {
       await finish(stopOrigin: stopOrigin)
     }
@@ -809,18 +810,18 @@ final class DictationCoordinator {
       capture.sourceFailureTask == nil
     else { return }
     let message = message(for: error)
-    phase = .failed(message)
-    eventObserver?(DictationCoordinatorEvent(
-      phase: phase,
-      terminal: nil,
-      context: contextForCapture(capture, failureStage: .capture)
-    ))
     let task = Task { @MainActor [weak self] in
       guard let self else { return }
       await self.completeSourceFailure(id, message: message)
     }
     capture.sourceFailureTask = task
     self.capture = capture
+    phase = .failed(message)
+    eventObserver?(DictationCoordinatorEvent(
+      phase: phase,
+      terminal: nil,
+      context: contextForCapture(capture, failureStage: .capture)
+    ))
   }
 
   private func completeSourceFailure(_ id: UUID, message: String) async {
@@ -910,11 +911,13 @@ final class DictationCoordinator {
     {
       capture.releaseRequested = true
       self.capture = capture
+      quietAudioFeedback(capture.id)
       return
     }
     if capture.isStarting {
       capture.releaseRequested = true
       self.capture = capture
+      quietAudioFeedback(capture.id)
       return
     }
     guard !capture.isFinishing else { return }
@@ -1193,8 +1196,8 @@ final class DictationCoordinator {
     if let session = active.processingSession {
       startProcessingUpdates(id, session: session)
     }
-    if !active.isStarting {
-      setPhase(.listening(mode: active.mode, engine: active.selectedEngine))
+    if active.audioReady {
+      observeAudioReadiness(id)
     }
   }
 
@@ -1249,6 +1252,7 @@ final class DictationCoordinator {
       active.generation &+= 1
     }
     capture = active
+    quietAudioFeedback(id)
     recordMeasurement(.cancellationRequested, at: instant, captureID: id)
     rollbackEditor(id)
   }
@@ -1288,6 +1292,54 @@ final class DictationCoordinator {
   private func isStartAuthorized(_ id: UUID) -> Bool {
     guard let capture, capture.id == id else { return false }
     return !capture.cancelRequested && !capture.isTerminating
+  }
+
+  private func observeAudioReadiness(_ id: UUID, level: Float? = nil) {
+    guard var active = capture, active.id == id, canPublishAudioFeedback(active) else {
+      return
+    }
+    if let level {
+      guard level.isFinite else { return }
+      active.pendingAudioLevel = min(max(level, 0), 1)
+    }
+    if !active.audioReady {
+      active.audioReady = true
+      capture = active
+      recordMeasurement(.audioReadyObserved, at: clock.now(), captureID: id)
+    } else {
+      capture = active
+    }
+    guard active.holdAccepted else { return }
+    let pendingLevel = active.pendingAudioLevel
+    active.pendingAudioLevel = nil
+    capture = active
+    setPhase(.listening(mode: active.mode, engine: active.selectedEngine))
+    guard let current = capture, current.id == id, current.holdAccepted,
+      current.audioReady, canPublishAudioFeedback(current)
+    else { return }
+    if let pendingLevel {
+      levelObserver?(pendingLevel)
+    }
+  }
+
+  private func canPublishAudioFeedback(_ capture: Capture) -> Bool {
+    !capture.cancelRequested
+      && !capture.isTerminating
+      && !capture.isFinishing
+      && !capture.isSourceFinishing
+      && !capture.releaseRequested
+      && capture.stopOrigin == nil
+      && capture.physicalReleaseReceipt == nil
+      && capture.sourceFailureTask == nil
+      && capture.deferredStartupFailureMessage == nil
+  }
+
+  private func quietAudioFeedback(_ id: UUID) {
+    guard var active = capture, active.id == id else { return }
+    active.audioReady = false
+    active.pendingAudioLevel = nil
+    capture = active
+    levelObserver?(0)
   }
 
   private func finishFocused(
@@ -1670,7 +1722,9 @@ final class DictationCoordinator {
     if let engine = current.engine { await release(engine) }
     guard self.capture?.id == id else { return }
     self.capture = nil
-    levelObserver?(0)
+    if !current.cancelRequested {
+      levelObserver?(0)
+    }
     completeShortcutSession(id)
     let resolvedOutcome = terminalOutcome ?? inferredTerminalOutcome(for: terminalPhase)
     publishTerminal(

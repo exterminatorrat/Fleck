@@ -61,7 +61,7 @@
   }
 
   @MainActor
-  private func prepareWaveform(for controller: DictationCapsuleController) {
+  private func prepareSyntheticWaveformFixture(for controller: DictationCapsuleController) {
     controller.waveformModel.receive(level: 0.20, now: Date().addingTimeInterval(0.04))
     controller.waveformModel.receive(level: 0.14, now: Date().addingTimeInterval(0.08))
   }
@@ -130,6 +130,56 @@
       try renderStarting(dock)
     }
 
+    func renderCaptureFeedbackMatrix(
+      appearance: NSAppearance.Name,
+      appearanceName: String
+    ) throws {
+      for dock in DictationCapsuleDock.allCases {
+        let feedbackPanel = DictationCapsulePanel()
+        feedbackPanel.appearance = NSAppearance(named: appearance)
+        let feedbackController = DictationCapsuleController(
+          panel: feedbackPanel,
+          markLoader: markLoader
+        )
+        defer { feedbackController.dismiss() }
+        feedbackController.presentIdle(
+          dock: dock,
+          onOpenFleck: {},
+          onDockChanged: { _ in }
+        )
+        feedbackController.render(.arming)
+        feedbackController.panel.contentView?.appearance = NSAppearance(named: appearance)
+        try captureVisualState(
+          "capture-feedback-starting-\(appearanceName)-\(dock.rawValue)",
+          controller: feedbackController,
+          size: DictationCapsuleController.size(for: .arming),
+          directory: captureDirectory
+        )
+
+        feedbackController.render(visualCaptureContext(
+          .listening,
+          stage: .capture
+        ))
+        feedbackController.panel.contentView?.appearance = NSAppearance(named: appearance)
+        try captureVisualState(
+          "capture-feedback-listening-quiet-\(appearanceName)-\(dock.rawValue)",
+          controller: feedbackController,
+          size: DictationCapsuleController.listeningSize,
+          directory: captureDirectory
+        )
+        prepareSyntheticWaveformFixture(for: feedbackController)
+        try captureVisualState(
+          "capture-feedback-listening-synthetic-live-\(appearanceName)-\(dock.rawValue)",
+          controller: feedbackController,
+          size: DictationCapsuleController.listeningSize,
+          directory: captureDirectory
+        )
+      }
+    }
+
+    try renderCaptureFeedbackMatrix(appearance: .aqua, appearanceName: "light")
+    try renderCaptureFeedbackMatrix(appearance: .darkAqua, appearanceName: "dark")
+
     let heldListening = visualCaptureContext(
       .listening,
       isHandsFree: false,
@@ -140,7 +190,7 @@
       context: heldListening,
       size: DictationCapsuleController.listeningSize
     )
-    prepareWaveform(for: controller)
+    prepareSyntheticWaveformFixture(for: controller)
     try captureVisualState(
       "listening-right-option-held-bottom-seeded",
       controller: controller,
@@ -158,7 +208,7 @@
       context: handsFreeListening,
       size: DictationCapsuleController.listeningSize
     )
-    prepareWaveform(for: controller)
+    prepareSyntheticWaveformFixture(for: controller)
     try captureVisualState(
       "listening-hands-free-bottom-seeded",
       controller: controller,

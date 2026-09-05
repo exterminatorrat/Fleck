@@ -48,6 +48,46 @@ import FleckCore
   #expect(measurements.processorStartedAt == nil)
 }
 
+@Test func captureFeedbackReadinessMeasurementPreservesFirstObservation() {
+  let start = ContinuousClock().now
+  let source = start.advanced(by: .milliseconds(1))
+  let firstReady = start.advanced(by: .milliseconds(2))
+  let repeatedReady = start.advanced(by: .milliseconds(3))
+  let final = start.advanced(by: .milliseconds(4))
+
+  let measurements = DictationRuntimeMeasurements.empty
+    .recording(.sourceStartRequested, at: source)
+    .recording(.audioReadyObserved, at: firstReady)
+    .recording(.audioReadyObserved, at: repeatedReady)
+    .recording(.asrFinal, at: final)
+
+  #expect(measurements.integrity == .valid)
+  #expect(measurements.audioReadyObservedAt == firstReady)
+
+  let overlaid = DictationRuntimeMeasurements.empty.overlaying(measurements)
+  #expect(overlaid.audioReadyObservedAt == firstReady)
+
+  let terminal = measurements.terminal()
+    .recording(.audioReadyObserved, at: repeatedReady)
+    .overlaying(DictationRuntimeMeasurements(audioReadyObservedAt: repeatedReady))
+  #expect(terminal == measurements.terminal())
+}
+
+@Test func captureFeedbackReadinessMeasurementRejectsCausalReversal() {
+  let start = ContinuousClock().now
+  let beforeSource = DictationRuntimeMeasurements.empty
+    .recording(.sourceStartRequested, at: start.advanced(by: .milliseconds(2)))
+    .recording(.audioReadyObserved, at: start.advanced(by: .milliseconds(1)))
+  let afterFinal = DictationRuntimeMeasurements.empty
+    .recording(.audioReadyObserved, at: start.advanced(by: .milliseconds(2)))
+    .recording(.asrFinal, at: start.advanced(by: .milliseconds(1)))
+
+  #expect(beforeSource.integrity == .nonMonotonicClock)
+  #expect(beforeSource.audioReadyObservedAt == nil)
+  #expect(afterFinal.integrity == .nonMonotonicClock)
+  #expect(afterFinal.asrFinalAt == nil)
+}
+
 @Test func updateDisplayIsStablePrefixPlusTail() {
   #expect(DictationTextUpdate(
     generation: 4,
