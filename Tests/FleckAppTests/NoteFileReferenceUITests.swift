@@ -9,6 +9,92 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct NoteFileReferenceUITests {
+  @Test func widthAwareLayoutUsesAtMostTwoRowsAndExposesEveryOverflowedFile() async {
+    let references = (0..<8).map { index in
+      referencePresentation(
+        filename: "very-long-reference-name-\(index)-for-layout.pdf"
+      )
+    }
+
+    let wide = NoteFileReferenceLayout.plan(
+      references: references,
+      availableWidth: 900
+    )
+    #expect(wide.rows.count <= 2)
+    #expect(wide.overflow.isEmpty)
+    #expect(wide.rows.flatMap { $0 }.map(\.reference.id) == references.map(\.id))
+
+    let narrow = NoteFileReferenceLayout.plan(
+      references: references,
+      availableWidth: 280
+    )
+    #expect(narrow.rows.count == 2)
+    #expect(!narrow.overflow.isEmpty)
+    let visibleIDs = narrow.rows.flatMap { $0 }.map(\.reference.id)
+    let overflowIDs = narrow.overflow.map(\.id)
+    #expect(Set(visibleIDs + overflowIDs) == Set(references.map(\.id)))
+    let rowsFit = narrow.rows.allSatisfy { row in
+      let itemWidths = row.map(\.width).reduce(0, +)
+      let gaps = CGFloat(max(0, row.count - 1)) * NoteFileReferenceLayout.spacing
+      return itemWidths + gaps <= narrow.chipAreaWidth
+    }
+    #expect(rowsFit)
+
+    NSApplication.shared.accessibilitySetValue(
+      true,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
+    let horizontalInsets: CGFloat = 28
+    let narrowHost = referenceViewHost(
+      references: references,
+      width: 280 + horizontalInsets
+    )
+    let wideHost = referenceViewHost(
+      references: references,
+      width: 900 + horizontalInsets
+    )
+    await settleReferenceHost(narrowHost)
+    await settleReferenceHost(wideHost)
+    let narrowLabels = referenceAccessibilityStrings(in: narrowHost)
+    let wideLabels = referenceAccessibilityStrings(in: wideHost)
+    #expect(narrowLabels.contains { $0.contains("more file shortcuts") })
+    #expect(!wideLabels.contains { $0.contains("more file shortcuts") })
+  }
+
+  @Test func availableFileMenuIncludesLocateAlongsideOpenAndReveal() {
+    let reference = referencePresentation(filename: "available.pdf")
+    #expect(
+      NoteFileReferenceView.actions(for: reference)
+        == [.open, .reveal, .locate, .remove]
+    )
+  }
+
+  @Test func unavailableChipShowsFilenameAndSubduedStatus() async throws {
+    NSApplication.shared.accessibilitySetValue(
+      true,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
+    let reference = referencePresentation(
+      filename: "missing-reference.txt",
+      isAvailable: false
+    )
+    let host = NSHostingView(
+      rootView: NoteFileReferenceView(
+        references: [reference],
+        onOpen: { _ in },
+        onReveal: { _ in },
+        onLocate: { _ in },
+        onRemove: { _ in }
+      )
+      .frame(width: 280)
+    )
+    await settleReferenceHost(host)
+    let labels = referenceAccessibilityStrings(in: host)
+
+    #expect(labels.contains { $0.contains("missing-reference.txt") })
+    #expect(labels.contains { $0.contains("File unavailable") })
+  }
+
   @Test func appStateUsesDedicatedSidecarAndKeepsNoteContentUnchanged() async throws {
     let fixture = try NoteFileReferenceUIFixture()
     defer { fixture.remove() }
@@ -259,7 +345,7 @@ struct NoteFileReferenceUITests {
 
   }
 
-  @Test func hostedBodyAndTitleSupplyTheirNativeUndoManager() async throws {
+  @Test func hostedBodyAndTitleRemoveThenUndoTheExactReference() async throws {
     let fixture = try NoteFileReferenceUIFixture()
     defer { fixture.remove() }
     let note = Note(title: "Native undo", body: "Body")
@@ -268,6 +354,9 @@ struct NoteFileReferenceUITests {
     )
     let commands = EditorCommands()
     let runtime = DictationRuntime(appState: state, applicationSupportURL: fixture.rootURL)
+    let fileURL = try fixture.makeFile(named: "native-undo.txt")
+    #expect(state.addFileReference(noteID: note.id, url: fileURL))
+    let referenceID = try #require(state.selectedNoteFileReferences.first?.id)
     let host = NSHostingView(
       rootView: NotesPanel(dictationRuntime: runtime, editorCommands: commands)
         .environmentObject(state)
@@ -278,20 +367,82 @@ struct NoteFileReferenceUITests {
     )
     window.contentView = host
     window.makeKeyAndOrderFront(nil)
-    defer { window.orderOut(nil) }
     await settleReferenceHost(host)
-    let body = try #require(referenceDescendant(in: host, as: ListAwareTextView.self))
-    let title = try #require(referenceTitleField(in: host, value: note.title))
+    var caughtError: Error?
+    do {
+      let body = try #require(referenceDescendant(in: host, as: ListAwareTextView.self))
+      let title = try #require(referenceTitleField(in: host, value: note.title))
 
-    #expect(window.makeFirstResponder(body))
-    #expect(NotesPanel.fileReferenceUndoManager(commands: commands) === body.undoManager)
-    #expect(window.makeFirstResponder(title))
-    let fieldEditor = try #require(title.currentEditor() as? NSTextView)
-    #expect(
-      NotesPanel.fileReferenceUndoManager(commands: commands)
-        === fieldEditor.undoManager
-    )
+      for focus in [body as NSResponder, title as NSResponder] {
+        #expect(window.makeFirstResponder(focus))
+        let manager = try #require(
+          NotesPanel.fileReferenceUndoManager(commands: commands)
+        )
+        #expect(
+          state.removeFileReference(
+            referenceID: referenceID,
+            undoManager: manager
+          )
+        )
+        await settleReferenceHost(host)
+        #expect(state.selectedNoteFileReferences.isEmpty)
+        #expect(manager.canUndo)
+        manager.undo()
+        await settleReferenceHost(host)
+        #expect(state.selectedNoteFileReferences.map(\.id) == [referenceID])
+        #expect(FileManager.default.fileExists(atPath: fileURL.path))
+      }
+    } catch {
+      caughtError = error
+    }
+    window.contentView = nil
+    host.removeFromSuperview()
+    window.orderOut(nil)
+    await runtime.shutdown()
+    if let caughtError {
+      throw caughtError
+    }
   }
+}
+
+@MainActor
+private func referencePresentation(
+  filename: String,
+  isAvailable: Bool = true
+) -> NoteFileReferencePresentation {
+  NoteFileReferencePresentation(
+    reference: NoteFileReference(
+      id: UUID(),
+      noteID: UUID(),
+      bookmarkData: Data([1]),
+      cachedFilename: filename
+    ),
+    url: isAvailable
+      ? URL(fileURLWithPath: "/tmp/\(filename)")
+      : nil,
+    isAvailable: isAvailable
+  )
+}
+
+@MainActor
+private func referenceViewHost(
+  references: [NoteFileReferencePresentation],
+  width: CGFloat
+) -> NSHostingView<AnyView> {
+  let host = NSHostingView(
+    rootView: AnyView(
+      NoteFileReferenceView(
+        references: references,
+        onOpen: { _ in },
+        onReveal: { _ in },
+        onLocate: { _ in },
+        onRemove: { _ in }
+      )
+      .frame(width: width)
+    )
+  )
+  host.frame = NSRect(x: 0, y: 0, width: width, height: host.fittingSize.height)
+  return host
 }
 
 private actor NoteFileReferenceAsyncGate {
@@ -385,4 +536,27 @@ private func referenceTitleField(in view: NSView, value: String) -> NSTextField?
     if let match = referenceTitleField(in: subview, value: value) { return match }
   }
   return nil
+}
+
+@MainActor
+private func referenceAccessibilityStrings(in value: Any) -> [String] {
+  guard let object = value as? NSObject else { return [] }
+  var values: [String] = []
+  for name in ["accessibilityLabel", "accessibilityValue", "accessibilityHelp"] {
+    let selector = NSSelectorFromString(name)
+    if object.responds(to: selector),
+      let value = object.perform(selector)?.takeUnretainedValue() as? String,
+      !value.isEmpty
+    {
+      values.append(value)
+    }
+  }
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let children = object.responds(to: childrenSelector)
+    ? object.perform(childrenSelector)?.takeUnretainedValue() as? [Any]
+    : nil
+  for child in children ?? [] {
+    values.append(contentsOf: referenceAccessibilityStrings(in: child))
+  }
+  return values
 }
