@@ -135,9 +135,11 @@ import Testing
     #expect(audio.cancelCount == 1)
     #expect(!completion.isComplete)
     #expect(capture.hasActiveResources)
+    let measurementsBeforeRejectedStart = capture.runtimeMeasurements
     await #expect(throws: DictationFailure.unavailable) {
       try await capture.start(provisional: { _ in }, level: { _ in })
     }
+    #expect(capture.runtimeMeasurements == measurementsBeforeRejectedStart)
 
     await loadGate.openGate()
     await cancellation.value
@@ -239,6 +241,9 @@ import Testing
     await start.value
     #expect(startError is CancellationError)
     #expect(audio.startCount == 0)
+    #expect(capture.runtimeMeasurements.modelLoadRequestedAt == nil)
+    #expect(capture.runtimeMeasurements.outcome == nil)
+    #expect(capture.runtimeMeasurements.failure == nil)
     #expect(!capture.hasActiveResources)
   }
 
@@ -374,6 +379,129 @@ import Testing
     while capture.hasActiveResources { await Task.yield() }
   }
 
+  @Test @MainActor
+  func dictationDiagnosticsEnhancedRecordsFirstInputBeforeConversionWithoutLevelDelivery() throws {
+    let format = try #require(
+      AVAudioFormat(
+        commonFormat: .pcmFormatFloat32,
+        sampleRate: 16_000,
+        channels: 1,
+        interleaved: false
+      )
+    )
+    let observed = ContinuousClock().now
+    var levels: [Float] = []
+    let converter = try EnhancedAudioStreamConverter(
+      inputFormat: format,
+      outputFormat: format,
+      level: { levels.append($0) },
+      now: { observed }
+    )
+    let empty = try enhancedStartupBuffer(format: format, frameCount: 0)
+    let nonempty = try enhancedStartupBuffer(format: format, frameCount: 1)
+    nonempty.floatChannelData?[0][0] = 0.5
+
+    try converter.append(empty)
+    #expect(converter.firstInputBufferAt == nil)
+    try converter.append(nonempty)
+
+    #expect(converter.firstInputBufferAt == observed)
+    #expect(levels.isEmpty)
+  }
+
+  @Test @MainActor
+  func dictationDiagnosticsEnhancedClassifiesKnownFailuresAndPreservesReleasedSnapshot() async throws {
+    let repository = URL(fileURLWithPath: "/verified/parakeet")
+    let permissionCapture = EnhancedSpeechCapture(
+      verifiedLoadState: { .ready(repositoryURL: repository) },
+      requestPermission: { _ in .denied([]) },
+      makeInference: { AudioFirstInferenceSpy() },
+      makeAudio: { _ in DiagnosticsAudioSpy() }
+    )
+    await #expect(throws: DictationFailure.permissionDenied) {
+      try await permissionCapture.start(provisional: { _ in }, level: { _ in })
+    }
+    #expect(permissionCapture.runtimeMeasurements.failure == .permissionDenied)
+
+    let unavailableCapture = EnhancedSpeechCapture(
+      verifiedLoadState: { .unavailable },
+      makeInference: { AudioFirstInferenceSpy() },
+      makeAudio: { _ in DiagnosticsAudioSpy() }
+    )
+    await #expect(throws: DictationFailure.unavailable) {
+      try await unavailableCapture.start(provisional: { _ in }, level: { _ in })
+    }
+    #expect(unavailableCapture.runtimeMeasurements.failure == .modelUnavailable)
+
+    let missingInputCapture = EnhancedSpeechCapture(
+      verifiedLoadState: { .ready(repositoryURL: repository) },
+      makeInference: { AudioFirstInferenceSpy() },
+      makeAudio: { _ in DiagnosticsAudioSpy(startError: EnhancedSpeechCaptureError.missingInput) }
+    )
+    await #expect(throws: EnhancedSpeechCaptureError.missingInput) {
+      try await missingInputCapture.start(provisional: { _ in }, level: { _ in })
+    }
+    #expect(missingInputCapture.runtimeMeasurements.failure == .missingInput)
+
+    let loadInference = AudioFirstInferenceSpy()
+    loadInference.loadError = EnhancedTestFailure.failed
+    let loadCapture = EnhancedSpeechCapture(
+      verifiedLoadState: { .ready(repositoryURL: repository) },
+      makeInference: { loadInference },
+      makeAudio: { _ in DiagnosticsAudioSpy() }
+    )
+    try await loadCapture.start(provisional: { _ in }, level: { _ in })
+    while loadCapture.hasActiveResources { await Task.yield() }
+    #expect(loadCapture.runtimeMeasurements.failure == .modelLoadFailure)
+    #expect(loadCapture.runtimeMeasurements.loadDisposition == .cold)
+    #expect(loadCapture.runtimeMeasurements.modelLoadRequestedAt != nil)
+    #expect(loadCapture.runtimeMeasurements.modelReadyAt == nil)
+
+    let bufferCapture = EnhancedSpeechCapture(
+      verifiedLoadState: { .ready(repositoryURL: repository) },
+      makeInference: { AudioFirstInferenceSpy() },
+      makeAudio: { _ in
+        DiagnosticsAudioSpy(synchronousFailure: EnhancedSpeechCaptureError.sampleLimitExceeded)
+      }
+    )
+    try await bufferCapture.start(
+      provisional: { _ in },
+      level: { _ in },
+      failure: { _ in }
+    )
+    while bufferCapture.hasActiveResources { await Task.yield() }
+    #expect(bufferCapture.runtimeMeasurements.failure == .bufferLimit)
+  }
+
+  @Test @MainActor
+  func dictationDiagnosticsEnhancedTimeoutAndReleasedFirstBufferRemainContentFree() async throws {
+    let loadGate = Gate()
+    let timeoutGate = Gate()
+    let repository = URL(fileURLWithPath: "/verified/parakeet")
+    let inference = AudioFirstInferenceSpy(loadGate: loadGate)
+    let observed = ContinuousClock().now
+    let audio = DiagnosticsAudioSpy(firstInputBufferAt: observed)
+    let capture = EnhancedSpeechCapture(
+      verifiedLoadState: { .ready(repositoryURL: repository) },
+      makeInference: { inference },
+      makeAudio: { _ in audio },
+      startupNow: { observed },
+      startupSleeper: { _ in await timeoutGate.wait() }
+    )
+
+    try await capture.start(provisional: { _ in }, level: { _ in })
+    await loadGate.waitUntilWaiting()
+    await timeoutGate.openGate()
+    while capture.runtimeMeasurements.failure == nil { await Task.yield() }
+    #expect(capture.runtimeMeasurements.failure == .startupTimeout)
+
+    await loadGate.openGate()
+    while capture.hasActiveResources { await Task.yield() }
+    #expect(audio.firstInputBufferAt == nil)
+    #expect(capture.runtimeMeasurements.firstInputBufferAt == observed)
+    #expect(capture.runtimeMeasurements.failure == .startupTimeout)
+  }
+
   @MainActor
   private func makeAudioFirstCapture(
     inference: any EnhancedSpeechInferring,
@@ -397,6 +525,10 @@ import Testing
     private(set) var cancelCount = 0
     private(set) var releaseCount = 0
     var loadError: Error?
+
+    func loadDisposition(for _: URL) -> DictationRuntimeMeasurements.LoadDisposition? {
+      .cold
+    }
 
     init(loadGate: Gate? = nil, releaseGate: Gate? = nil) {
       self.loadGate = loadGate
@@ -422,6 +554,39 @@ import Testing
       releaseCount += 1
       await releaseGate?.wait()
     }
+  }
+
+  @MainActor
+  private final class DiagnosticsAudioSpy: EnhancedAudioCapturing {
+    private(set) var firstInputBufferAt: ContinuousClock.Instant?
+    private let startError: Error?
+    private let synchronousFailure: Error?
+
+    init(
+      firstInputBufferAt: ContinuousClock.Instant? = nil,
+      startError: Error? = nil,
+      synchronousFailure: Error? = nil
+    ) {
+      self.firstInputBufferAt = firstInputBufferAt
+      self.startError = startError
+      self.synchronousFailure = synchronousFailure
+    }
+
+    func start(level _: @escaping @MainActor (Float) -> Void) throws {
+      if let startError { throw startError }
+    }
+
+    func start(
+      level: @escaping @MainActor (Float) -> Void,
+      failure: @escaping @MainActor (Error) -> Void
+    ) throws {
+      try start(level: level)
+      if let synchronousFailure { failure(synchronousFailure) }
+    }
+
+    func stopAndTakeSamples() -> [Float] { [0.25] }
+    func cancel() { firstInputBufferAt = nil }
+    func releaseResources() { firstInputBufferAt = nil }
   }
 
   @MainActor

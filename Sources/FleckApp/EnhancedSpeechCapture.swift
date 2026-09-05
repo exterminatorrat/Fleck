@@ -18,6 +18,7 @@
 
   @MainActor
   protocol EnhancedSpeechInferring: AnyObject {
+    func loadDisposition(for repositoryURL: URL) -> DictationRuntimeMeasurements.LoadDisposition?
     func load(from repositoryURL: URL) async throws
     func transcribe(_ samples: [Float]) async throws -> String
     func cancel() async
@@ -26,6 +27,7 @@
 
   @MainActor
   protocol EnhancedAudioCapturing: AnyObject {
+    var firstInputBufferAt: ContinuousClock.Instant? { get }
     func selectMicrophone(savedUID: String?) -> MicrophoneSelection
     func start(level: @escaping @MainActor (Float) -> Void) throws
     func start(
@@ -38,6 +40,8 @@
   }
 
   extension EnhancedAudioCapturing {
+    var firstInputBufferAt: ContinuousClock.Instant? { nil }
+
     func selectMicrophone(savedUID _: String?) -> MicrophoneSelection {
       .automatic
     }
@@ -51,16 +55,26 @@
   }
 
   enum EnhancedSpeechCaptureError: Error, Equatable, LocalizedError {
+    case missingInput
     case startupTimedOut
     case sampleLimitExceeded
 
     var errorDescription: String? {
       switch self {
+      case .missingInput:
+        "No usable microphone input is available."
       case .startupTimedOut:
         "Enhanced speech recognition did not become ready in time."
       case .sampleLimitExceeded:
         "Enhanced dictation exceeded the five-minute recording limit."
       }
+    }
+  }
+
+  extension EnhancedSpeechInferring {
+    func loadDisposition(for repositoryURL: URL) -> DictationRuntimeMeasurements.LoadDisposition? {
+      _ = repositoryURL
+      return nil
     }
   }
 
@@ -89,6 +103,7 @@
       var audioStopped = false
       var cancelRequested = false
       var inferenceCancellationRequested = false
+      var measurements = DictationRuntimeMeasurements.empty
 
       init(
         inference: any EnhancedSpeechInferring,
@@ -118,9 +133,15 @@
     private let startupSleeper: @Sendable (Duration) async -> Void
 
     private var resources: Resources?
+    private var latestMeasurements = DictationRuntimeMeasurements.empty
 
     var hasActiveResources: Bool {
       resources != nil
+    }
+
+    var runtimeMeasurements: DictationRuntimeMeasurements {
+      guard let resources else { return latestMeasurements }
+      return snapshot(resources)
     }
 
     init(
@@ -213,8 +234,12 @@
       guard !hasActiveResources else {
         throw DictationFailure.unavailable
       }
+      latestMeasurements = .empty
       ModelHub.offlineMode = true
       guard case .ready(let repositoryURL) = verifiedLoadState() else {
+        latestMeasurements = latestMeasurements
+          .recording(outcome: .failed)
+          .recording(failure: .modelUnavailable)
         recommendStandard()
         throw DictationFailure.unavailable
       }
@@ -235,6 +260,9 @@
         throw CancellationError()
       }
       guard case .granted = permission else {
+        candidate.measurements = candidate.measurements
+          .recording(outcome: .failed)
+          .recording(failure: .permissionDenied)
         await release(candidate, cancelling: false)
         throw DictationFailure.permissionDenied
       }
@@ -242,6 +270,9 @@
         case .ready(let currentRepositoryURL) = verifiedLoadState(),
         currentRepositoryURL == repositoryURL
       else {
+        candidate.measurements = candidate.measurements
+          .recording(outcome: .failed)
+          .recording(failure: .modelUnavailable)
         await release(candidate, cancelling: false)
         recommendStandard()
         throw DictationFailure.unavailable
@@ -251,6 +282,10 @@
         let audio = try makeAudio(.inference)
         candidate.audio = audio
         microphoneSelectionChanged(audio.selectMicrophone(savedUID: microphoneUID))
+        candidate.measurements = candidate.measurements.recording(
+          .audioStartRequested,
+          at: startupNow()
+        )
         try audio.start(
           level: { [weak self, weak candidate] value in
             guard let self, let candidate,
@@ -267,6 +302,7 @@
           }
         )
       } catch {
+        recordKnownFailure(candidate, error: error, defaultFailure: .sourceStartupFailure)
         let wasCancelled = error is CancellationError || Task.isCancelled
         stopAudio(candidate)
         await release(candidate, cancelling: true)
@@ -292,10 +328,20 @@
         else { return }
         do {
           ModelHub.offlineMode = true
+          if let disposition = candidate.inference.loadDisposition(for: repositoryURL) {
+            candidate.measurements = candidate.measurements.recording(loadDisposition: disposition)
+          }
+          candidate.measurements = candidate.measurements.recording(
+            .modelLoadRequested,
+            at: self.startupNow()
+          )
           try await candidate.inference.load(from: repositoryURL)
           self.completeLoad(candidate)
         } catch {
           guard !candidate.cancelRequested, candidate.failure == nil else { return }
+          candidate.measurements = candidate.measurements
+            .recording(outcome: .failed)
+            .recording(failure: .modelLoadFailure)
           self.recordFailure(
             candidate,
             error: error,
@@ -338,6 +384,7 @@
           await release(resources, cancelling: true)
           throw CancellationError()
         }
+        recordKnownFailure(resources, error: error, defaultFailure: .sourceFailure)
         recordFailure(resources, error: error, marksModelRepair: false)
         await release(resources, cancelling: true)
         throw error
@@ -356,6 +403,9 @@
         case .ready(let currentRepositoryURL) = verifiedLoadState(),
         currentRepositoryURL == resources.repositoryURL
       else {
+        resources.measurements = resources.measurements
+          .recording(outcome: .failed)
+          .recording(failure: .modelUnavailable)
         recordFailure(resources, error: DictationFailure.unavailable, marksModelRepair: false)
         await release(resources, cancelling: true)
         throw DictationFailure.unavailable
@@ -427,10 +477,14 @@
         case .ready(let currentRepositoryURL) = verifiedLoadState(),
         currentRepositoryURL == candidate.repositoryURL
       else {
+        candidate.measurements = candidate.measurements
+          .recording(outcome: .failed)
+          .recording(failure: .modelUnavailable)
         recordFailure(candidate, error: DictationFailure.unavailable, marksModelRepair: false)
         return
       }
       candidate.modelReady = true
+      candidate.measurements = candidate.measurements.recording(.modelReady, at: startupNow())
       candidate.watchdogTask?.cancel()
     }
 
@@ -440,6 +494,7 @@
       marksModelRepair: Bool
     ) {
       guard resources === candidate, !candidate.cancelRequested, candidate.failure == nil else { return }
+      recordKnownFailure(candidate, error: error, defaultFailure: .sourceFailure)
       candidate.failure = error
       stopAudio(candidate)
       if marksModelRepair {
@@ -453,6 +508,7 @@
     }
 
     private func stopAudio(_ candidate: Resources) {
+      preserveSnapshot(candidate)
       candidate.frozenSamples = nil
       guard !candidate.audioStopped else { return }
       candidate.audioStopped = true
@@ -460,6 +516,7 @@
     }
 
     private func release(_ candidate: Resources, cancelling: Bool) async {
+      preserveSnapshot(candidate)
       if let releaseTask = candidate.releaseTask {
         if cancelling {
           await requestInferenceCancellation(candidate)
@@ -493,6 +550,46 @@
       }
       candidate.releaseTask = task
       await task.value
+    }
+
+    private func snapshot(_ candidate: Resources) -> DictationRuntimeMeasurements {
+      guard let firstInputBufferAt = candidate.audio?.firstInputBufferAt else {
+        return candidate.measurements
+      }
+      return candidate.measurements.recording(.firstInputBuffer, at: firstInputBufferAt)
+    }
+
+    private func preserveSnapshot(_ candidate: Resources) {
+      candidate.measurements = snapshot(candidate)
+      if resources === candidate {
+        latestMeasurements = candidate.measurements
+      }
+    }
+
+    private func recordKnownFailure(
+      _ candidate: Resources,
+      error: Error,
+      defaultFailure: DictationRuntimeMeasurements.Failure
+    ) {
+      guard !(error is CancellationError) else { return }
+      let failure: DictationRuntimeMeasurements.Failure
+      if let enhancedError = error as? EnhancedSpeechCaptureError {
+        switch enhancedError {
+        case .missingInput: failure = .missingInput
+        case .startupTimedOut: failure = .startupTimeout
+        case .sampleLimitExceeded: failure = .bufferLimit
+        }
+      } else if let dictationError = error as? DictationFailure {
+        switch dictationError {
+        case .permissionDenied: failure = .permissionDenied
+        default: failure = defaultFailure
+        }
+      } else {
+        failure = defaultFailure
+      }
+      candidate.measurements = candidate.measurements
+        .recording(outcome: .failed)
+        .recording(failure: failure)
     }
 
     private func requestInferenceCancellation(_ candidate: Resources) async {
@@ -601,6 +698,10 @@
       resources != nil
     }
 
+    func loadDisposition(for _: URL) -> DictationRuntimeMeasurements.LoadDisposition? {
+      loadTask == nil && resources == nil ? .cold : nil
+    }
+
     init(loadResources: @escaping ResourcesLoader = { repositoryURL in
       ModelHub.offlineMode = true
       let models = try await AsrModels.load(
@@ -705,12 +806,15 @@
     private var failure: (@MainActor (Error) -> Void)?
     private var failureReported = false
     private var finished = false
+    private var observedFirstInputBufferAt: ContinuousClock.Instant?
+    private let now: @Sendable () -> ContinuousClock.Instant
 
     init(
       inputFormat: AVAudioFormat,
       outputFormat: AVAudioFormat,
       level: @escaping @MainActor (Float) -> Void,
-      failure: @escaping @MainActor (Error) -> Void = { _ in }
+      failure: @escaping @MainActor (Error) -> Void = { _ in },
+      now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock().now }
     ) throws {
       guard let converter = AVAudioConverter(
         from: inputFormat,
@@ -722,6 +826,11 @@
       self.outputFormat = outputFormat
       self.level = level
       self.failure = failure
+      self.now = now
+    }
+
+    var firstInputBufferAt: ContinuousClock.Instant? {
+      lock.withLock { observedFirstInputBufferAt }
     }
 
     func append(_ buffer: AVAudioPCMBuffer) throws {
@@ -730,6 +839,9 @@
         levels = try lock.withLock {
           guard !finished else { throw CancellationError() }
           if let error { throw error }
+          if buffer.frameLength > 0, observedFirstInputBufferAt == nil {
+            observedFirstInputBufferAt = now()
+          }
           do {
             let supply = InputSupply()
             var emittedLevels: [Float] = []
@@ -930,6 +1042,9 @@
       }
       let inputNode = engine.inputNode
       let inputFormat = inputNode.inputFormat(forBus: 0)
+      guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+        throw EnhancedSpeechCaptureError.missingInput
+      }
       guard
         let outputFormat = AVAudioFormat(
           commonFormat: .pcmFormatFloat32,
@@ -969,6 +1084,10 @@
     func stopAndTakeSamples() throws -> [Float] {
       stopAudio()
       return try streamConverter?.finishAndTakeSamples() ?? []
+    }
+
+    var firstInputBufferAt: ContinuousClock.Instant? {
+      streamConverter?.firstInputBufferAt
     }
 
     func cancel() {

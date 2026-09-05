@@ -6,14 +6,17 @@ import Testing
 
 @testable import FleckApp
 
-private func processingResult(_ text: String) -> DictationProcessingResult {
+private func processingResult(
+  _ text: String,
+  measurements: DictationRuntimeMeasurements = .empty
+) -> DictationProcessingResult {
   .init(
     rawTranscript: text,
     dictionaryBaseline: text,
     cleanedTranscript: text,
     insertedText: text,
     cleanupOutcome: .cleaned,
-    measurements: .empty
+    measurements: measurements
   )
 }
 
@@ -1010,6 +1013,7 @@ func coordinatorMismatchedDictionaryCompletionInsertsNothing() async throws {
   #expect(fixture.editor.committedTexts.isEmpty)
   #expect(fixture.saver.savedTexts.isEmpty)
   #expect(fixture.coordinator.latestProcessingResult == nil)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .processingFailure)
 }
 
 @Test @MainActor
@@ -1049,6 +1053,7 @@ func coordinatorRejectedDictionaryCompletionInsertsNothing() async throws {
   #expect(fixture.saver.savedTexts.isEmpty)
   #expect(fixture.coordinator.latestProcessingResult == nil)
   #expect(try await fixture.history.list().isEmpty)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .processingFailure)
 }
 
 @Test @MainActor
@@ -1421,6 +1426,107 @@ func physicalGestureReceiptLeavesFailedPersistenceAbsentForRecovery() async thro
   #expect(receipt.persistenceCompletedAt == nil)
   #expect(fixture.coordinator.recoveryAction == .openHistory)
   #expect(fixture.coordinator.phase == .failed("Unable to save dictation."))
+}
+
+@Test @MainActor
+func dictationDiagnosticsCoordinatorPublishesLifecycleAndKeepsLateAmbiguityMoveObservable() async throws {
+  let clock = ManualDictationClock()
+  let sourceMeasurements = DictationRuntimeMeasurements(
+    processorStartedAt: clock.now,
+    audioStartRequestedAt: clock.now,
+    firstInputBufferAt: clock.now,
+    modelLoadRequestedAt: clock.now,
+    modelReadyAt: clock.now,
+    loadDisposition: .warm
+  )
+  let processing = ProcessingProbe(
+    result: processingResult("Observed lifecycle", measurements: sourceMeasurements)
+  )
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+  let project = DictationDestination(noteID: UUID(), title: "Project")
+  fixture.saver.destinations.append(project)
+  fixture.router.result = .ambiguous([
+    .init(destination: project, contextHint: "project"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let captureID = try #require(fixture.coordinator.routingAmbiguity?.captureID)
+
+  let saved = fixture.coordinator.latestRuntimeMeasurements
+  #expect(saved.coordinatorEventReceivedAt == clock.now)
+  #expect(saved.phasePublishedAt == clock.now)
+  #expect(saved.routingRequestedAt == clock.now)
+  #expect(saved.routingDecisionAt == clock.now)
+  #expect(saved.insertionCommittedAt == clock.now)
+  #expect(saved.persistenceCompletedAt == clock.now)
+  #expect(saved.outcome == .succeeded)
+  #expect(saved.loadDisposition == .warm)
+  let diagnostics = fixture.coordinator.latestRuntimeDiagnostics
+  #expect(diagnostics.stages.keys.contains("asr_final"))
+  #expect(diagnostics.stages["asr_final"]! == nil)
+
+  clock.advance(by: .milliseconds(1))
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: captureID,
+    noteID: project.noteID
+  ) == .completed)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.ambiguityMovedAt == clock.now)
+}
+
+@Test @MainActor
+func dictationDiagnosticsCoordinatorPropagatesStartupFailureWithoutReturnedSession() async throws {
+  let clock = ManualDictationClock()
+  let startup = DictationRuntimeMeasurements(
+    processorStartedAt: clock.now,
+    sourceStartRequestedAt: clock.now,
+    audioStartRequestedAt: clock.now,
+    failure: .permissionDenied
+  )
+  let processing = ProcessingProbe(
+    beginError: DictationFailure.permissionDenied,
+    startupMeasurements: startup
+  )
+  let fixture = try Fixture(processing: processing, clock: clock.clock)
+
+  await fixture.coordinator.start(mode: .smartCapture)
+
+  #expect(fixture.coordinator.latestRuntimeMeasurements.audioStartRequestedAt == clock.now)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .permissionDenied)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.outcome == .failed)
+  #expect(fixture.coordinator.latestRuntimeDiagnostics.failure == .permissionDenied)
+  #expect(fixture.coordinator.phase == .failed(DictationFailure.permissionDenied.localizedDescription))
+}
+
+@Test @MainActor
+func dictationDiagnosticsRejectedFocusedReservationIsProcessingFailure() async throws {
+  let fixture = try Fixture()
+  fixture.editor.canBeginFocusedDictation = false
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+
+  #expect(fixture.coordinator.phase == .failed("Unable to begin focused dictation."))
+  #expect(fixture.coordinator.latestRuntimeMeasurements.outcome == .failed)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .processingFailure)
+}
+
+@Test @MainActor
+func dictationDiagnosticsCoordinatorPersistenceFailureOverridesSuccessfulProcessing() async throws {
+  let processing = ProcessingProbe(
+    result: processingResult("Secret dictated body", measurements: .empty)
+  )
+  let fixture = try Fixture(processing: processing)
+  fixture.saver.flushError = TestError.failed
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  await fixture.coordinator.finish()
+
+  let diagnostics = fixture.coordinator.latestRuntimeDiagnostics
+  let encoded = String(decoding: try JSONEncoder().encode(diagnostics), as: UTF8.self)
+  #expect(diagnostics.outcome == .failed)
+  #expect(diagnostics.failure == .persistenceFailure)
+  #expect(!encoded.contains("Secret dictated body"))
+  #expect(!encoded.contains("Unable to save dictation"))
 }
 
 @Test @MainActor
@@ -2100,6 +2206,20 @@ func enhancedSpeechStartupLegacyPathHandlesLiveFailureWithoutAnotherKeyPress() a
   #expect(terminal.context?.failureStage == .capture)
   #expect(fixture.enhanced.cancelCount == 1)
   #expect(fixture.enhanced.releaseCount == 1)
+}
+
+@Test @MainActor
+func dictationDiagnosticsLegacyLiveSourceFailureRetainsTypedEngineCategory() async throws {
+  let fixture = try Fixture(preferred: .enhancedLocal)
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  fixture.enhanced.measurements = DictationRuntimeMeasurements(failure: .bufferLimit)
+  fixture.enhanced.emitFailure(TestError.failed)
+  for _ in 0..<50 where !fixture.coordinator.canConfigureShortcut {
+    await Task.yield()
+  }
+
+  #expect(fixture.coordinator.latestRuntimeDiagnostics.failure == .bufferLimit)
 }
 
 @Test @MainActor
@@ -2800,6 +2920,7 @@ func enhancedSpeechStartupPublishesLiveSourceFailureButRetainsCaptureUntilDrain(
   }
   #expect(terminal.context?.failureStage == .capture)
   #expect(fixture.coordinator.canConfigureShortcut)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .sourceFailure)
 }
 
 @Test @MainActor
@@ -2845,6 +2966,8 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   let terminal = try #require(events.last { $0.terminal != nil })
   #expect(terminal.context?.pipelineStage == .capture)
   #expect(terminal.context?.failureStage == .capture)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.outcome == .failed)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .processingFailure)
 }
 
 @Test @MainActor func nonemptyFinalCreatesPendingHistoryBeforeCleanup() async throws {
@@ -3729,6 +3852,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   #expect(try await fixture.history.list().isEmpty)
   #expect(fixture.standard.cancelCount == 1)
   #expect(fixture.standard.releaseCount == 1)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .sourceFailure)
 }
 
 @Test @MainActor func focusedFlushFailureRollsBackAndRecordsUnsaved() async throws {
@@ -3792,6 +3916,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   )
   #expect(fixture.coordinator.recoveryAction == .openDestination(fixture.inbox.noteID))
   #expect(fixture.saver.compensateFocusedCount == 0)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .persistenceFailure)
 }
 
 @Test @MainActor func focusedCancellationWithFailedPersistenceStillFailsWhenEditorRollbackDoesNotMatch()
@@ -3821,6 +3946,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   )
   #expect(fixture.coordinator.recoveryAction == .openDestination(fixture.inbox.noteID))
   #expect(fixture.saver.compensateFocusedCount == 0)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .persistenceFailure)
 }
 
 @Test @MainActor func focusedCancellationCompensatesRealEditorAndAppStateAcrossFlush()
@@ -3988,6 +4114,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
     fixture.coordinator.phase
       == .failed("Dictation was saved but could not be undone.")
   )
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .persistenceFailure)
 }
 
 @Test @MainActor func cancellationHistoryDeleteFailureKeepsOpenHistoryRecovery()
@@ -4011,6 +4138,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
     fixture.coordinator.phase
       == .failed("Dictation cancellation could not remove its History transcript.")
   )
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .persistenceFailure)
 }
 
 @Test @MainActor func recoveryUndoHistoryDeleteFailureOpensHistoryInsteadOfCompleting()
@@ -4050,6 +4178,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   #expect(record.destination == fixture.inbox)
   #expect(fixture.coordinator.copyableTranscript == "Saved but not undone")
   #expect(fixture.coordinator.phase == .failed("Dictation was saved but could not be undone."))
+  #expect(fixture.coordinator.latestRuntimeMeasurements.failure == .persistenceFailure)
   #expect(fixture.standard.releaseCount == 1)
 }
 
@@ -5121,6 +5250,8 @@ private final class CoordinatorEscapeRegistrarSpy: EscapeHotKeyRegistering {
 @MainActor
 private final class FakeSpeechEngine: SpeechEngine {
   let kind: DictationSpeechEngine
+  var measurements = DictationRuntimeMeasurements.empty
+  var runtimeMeasurements: DictationRuntimeMeasurements { measurements }
   var startError: Error?
   var finishError: Error?
   var onStart: (() -> Void)?
@@ -5294,6 +5425,8 @@ final class ProcessingProbe: DictationProcessing {
   private let onSourcePhysicalRelease: (() -> Void)?
   private let onFinishUnblocked: (() -> Void)?
   private let onSessionDrain: (() -> Void)?
+  private let beginError: Error?
+  private let startupMeasurements: DictationRuntimeMeasurements
   private var session: ProcessingSessionProbe?
   private var captureContext: LocalWritingCaptureContext?
   private var levelCallback: (@MainActor @Sendable (Float) -> Void)?
@@ -5329,7 +5462,9 @@ final class ProcessingProbe: DictationProcessing {
     onSourceCancel: (() -> Void)? = nil,
     onSourcePhysicalRelease: (() -> Void)? = nil,
     onFinishUnblocked: (() -> Void)? = nil,
-    onSessionDrain: (() -> Void)? = nil
+    onSessionDrain: (() -> Void)? = nil,
+    beginError: Error? = nil,
+    startupMeasurements: DictationRuntimeMeasurements = .empty
   ) {
     self.updates = updates
     self.result = result
@@ -5345,6 +5480,8 @@ final class ProcessingProbe: DictationProcessing {
     self.onSourcePhysicalRelease = onSourcePhysicalRelease
     self.onFinishUnblocked = onFinishUnblocked
     self.onSessionDrain = onSessionDrain
+    self.beginError = beginError
+    self.startupMeasurements = startupMeasurements
   }
 
   func prepare(for intent: DictationPreparationIntent) async {
@@ -5363,6 +5500,7 @@ final class ProcessingProbe: DictationProcessing {
     if let synchronousLevel { level(synchronousLevel) }
     beginCount += 1
     if let beginGate { await beginGate.wait() }
+    if let beginError { throw beginError }
     if let beginCompletionObserver {
       Task { @MainActor in await beginCompletionObserver.openGate() }
     }
@@ -5394,6 +5532,10 @@ final class ProcessingProbe: DictationProcessing {
 
   func handle(_ signal: DictationRuntimeSignal) async {
     _ = signal
+  }
+
+  func runtimeMeasurements(for captureID: UUID) -> DictationRuntimeMeasurements {
+    configurations.last?.captureID == captureID ? startupMeasurements : .empty
   }
 
   func emit(_ update: DictationTextUpdate) async {
@@ -5457,6 +5599,8 @@ private final class ProcessingSessionProbe: DictationProcessingSession {
   private var result: DictationProcessingResult
   private var finishContinuation: CheckedContinuation<DictationProcessingResult, Never>?
   private var isCancelled = false
+
+  var runtimeMeasurements: DictationRuntimeMeasurements { result.measurements }
 
   init(
     result: DictationProcessingResult,

@@ -6,6 +6,10 @@ final class AppleSpeechStreamingAdapter: StreamingSpeechSource {
     self.engine = engine
   }
 
+  var runtimeMeasurements: DictationRuntimeMeasurements {
+    engine.runtimeMeasurements
+  }
+
   func start(
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void

@@ -16,6 +16,7 @@ struct FocusedDictationPersistenceReceipt: Equatable, Sendable {
 @MainActor
 protocol SpeechEngine: AnyObject {
   var kind: DictationSpeechEngine { get }
+  var runtimeMeasurements: DictationRuntimeMeasurements { get }
 
   func start(
     provisional: @escaping @MainActor @Sendable (String) -> Void,
@@ -33,6 +34,8 @@ protocol SpeechEngine: AnyObject {
 }
 
 extension SpeechEngine {
+  var runtimeMeasurements: DictationRuntimeMeasurements { .empty }
+
   func start(
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void,
@@ -69,9 +72,15 @@ protocol DictationProcessing: AnyObject {
     startAuthorized: @escaping @MainActor @Sendable () -> Bool
   ) async throws -> any DictationProcessingSession
   func handle(_ signal: DictationRuntimeSignal) async
+  func runtimeMeasurements(for captureID: UUID) -> DictationRuntimeMeasurements
 }
 
 extension DictationProcessing {
+  func runtimeMeasurements(for captureID: UUID) -> DictationRuntimeMeasurements {
+    _ = captureID
+    return .empty
+  }
+
   func begin(
     configuration: DictationProcessingConfiguration,
     level: @escaping @MainActor @Sendable (Float) -> Void,
@@ -85,10 +94,15 @@ extension DictationProcessing {
 @MainActor
 protocol DictationProcessingSession: AnyObject {
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
+  var runtimeMeasurements: DictationRuntimeMeasurements { get }
   func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult
   // All callers await one source-unblocking/finalization/cleanup cancellation
   // task before terminal cancellation returns.
   func cancel() async
+}
+
+extension DictationProcessingSession {
+  var runtimeMeasurements: DictationRuntimeMeasurements { .empty }
 }
 
 protocol TranscriptDictionaryResolving: Sendable {
@@ -148,6 +162,7 @@ struct DictationRoutingAmbiguity: Equatable, Sendable {
 
 @MainActor
 protocol StreamingSpeechSource: AnyObject {
+  var runtimeMeasurements: DictationRuntimeMeasurements { get }
   func start(
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void
@@ -164,6 +179,8 @@ protocol StreamingSpeechSource: AnyObject {
 }
 
 extension StreamingSpeechSource {
+  var runtimeMeasurements: DictationRuntimeMeasurements { .empty }
+
   func start(
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void,
