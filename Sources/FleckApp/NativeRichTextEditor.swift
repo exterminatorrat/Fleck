@@ -675,6 +675,14 @@
     private weak var fieldEditor: NSTextView?
     private var originalCaretColor: NSColor?
 
+    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+      // Draw using the title font's baseline, retaining AppKit's single-line input rules.
+      let singleLineMode = usesSingleLineMode
+      usesSingleLineMode = false
+      defer { usesSingleLineMode = singleLineMode }
+      super.drawInterior(withFrame: cellFrame, in: controlView)
+    }
+
     override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
       let editor = super.setUpFieldEditorAttributes(textObj)
       if let editor = editor as? NSTextView {

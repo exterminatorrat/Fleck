@@ -2986,6 +2986,108 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   }
 }
 
+@Test @MainActor func hostedTitleKeepsSingleLineEditingCommands() async throws {
+  try await withHostedTitleEditors { _, window, _, title, _ in
+    #expect(window.makeFirstResponder(title))
+    let editor = try #require(title.currentEditor() as? NSTextView)
+    let original = editor.string
+    for command in [
+      #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)),
+      #selector(NSResponder.insertLineBreak(_:)),
+      #selector(NSResponder.insertParagraphSeparator(_:)),
+    ] {
+      editor.setSelectedRange(NSRange(location: 2, length: 0))
+      editor.doCommand(by: command)
+      #expect(editor.string == original)
+    }
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    pasteboard.setString("Pasted\ntext", forType: .string)
+    editor.selectAll(nil)
+    #expect(editor.readSelection(from: pasteboard, type: .string))
+    #expect(editor.string == "Pasted text")
+    editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+    #expect(editor.string == "Pasted text")
+  }
+}
+
+@Test @MainActor func hostedTitleBaselineRemainsStableDuringFocusTransition() async throws {
+  let longTitle = String(repeating: "Caret title ", count: 12)
+  for (isPinned, font, titleText, scrollY) in [
+    (false, "Avenir Next", "Caret title", 0.0),
+    (false, ".AppleSystemUIFont", longTitle, 8.0),
+    (true, "Avenir Next", longTitle, 8.0),
+    (true, ".AppleSystemUIFont", "Caret title", 0.0),
+  ] {
+    try await withHostedTitleEditors(
+      isPinned: isPinned, titleText: titleText, fontFamily: font,
+      bodyText: String(repeating: "Caret body\n", count: 50)
+    ) { _, window, host, title, body in
+      let scrollView = try #require(body.enclosingScrollView)
+      do {
+        #expect(window.makeFirstResponder(body))
+        await settleHostedView(host)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: scrollY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        let titleFrame = host.convert(title.bounds, from: title)
+        let bodyFrame = host.convert(body.bounds, from: body)
+        let clipOrigin = scrollView.contentView.bounds.origin
+        let label = "\(isPinned ? "pinned" : "regular")-\(font)-keyboard-\(window.appearance!.name.rawValue)"
+
+        @MainActor func sample(_ phase: String) throws -> (title: ClosedRange<Int>, body: ClosedRange<Int>) {
+          // Do not force field-editor layout: that changes the very transition under test.
+          let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+          host.cacheDisplay(in: host.bounds, to: bitmap)
+          let scale = CGFloat(bitmap.pixelsHigh) / host.bounds.height
+          @MainActor func ink(in rect: NSRect) throws -> ClosedRange<Int> {
+            let top = host.isFlipped ? rect.minY : host.bounds.height - rect.maxY
+            let xs = Int(rect.minX * scale)..<Int(rect.maxX * scale)
+            let ys = max(0, Int(top * scale))..<min(bitmap.pixelsHigh, Int((top + rect.height) * scale))
+            let rows = ys.filter { y in xs.contains { x in
+              (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.2
+            } }
+            let first = try #require(rows.first)
+            let last = try #require(rows.last)
+            // A solid captured background must not silently count as glyph ink.
+            #expect(rows.count < ys.count)
+            return first...last
+          }
+          // Leading glyphs exclude the caret at x=2; long-title horizontal scrolling is reset below.
+          let titleInk = try ink(in: NSRect(x: titleFrame.minX + 5, y: titleFrame.minY - 10, width: 55, height: titleFrame.height + 10))
+          let bodyInk = try ink(in: NSRect(x: bodyFrame.minX + 16, y: bodyFrame.minY + 8, width: 60, height: 27))
+          #expect(host.convert(title.bounds, from: title) == titleFrame)
+          #expect(host.convert(body.bounds, from: body) == bodyFrame)
+          #expect(scrollView.contentView.bounds.origin == clipOrigin)
+          #expect(title.usesSingleLineMode)
+          print("TITLE INK \(label) \(phase): title=\(titleInk), body=\(bodyInk), frame=\(titleFrame), clip=\(clipOrigin)")
+          if let directory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"] {
+            let png = try #require(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(label)-\(phase).png"))
+          }
+          return (titleInk, bodyInk)
+        }
+
+        let before = try sample("before")
+        #expect(window.makeFirstResponder(title))
+        let editor = try #require(title.currentEditor() as? NSTextView)
+        #expect(window.firstResponder === editor)
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        editor.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        for turn in 0..<4 {
+          if turn > 0 {
+            await Task.yield()
+            host.layoutSubtreeIfNeeded()
+          }
+          let after = try sample("turn-\(turn)")
+          #expect(abs(after.title.lowerBound - before.title.lowerBound) <= 1, "Title ascenders move or clip on focus")
+          #expect(abs(after.title.upperBound - before.title.upperBound) <= 1, "Title baseline moves on focus")
+          #expect(after.body == before.body)
+        }
+      }
+    }
+  }
+}
+
 @Test @MainActor func hostedTitleCaretMatchesBodyAccent() async throws {
   try await withHostedTitleEditors { _, window, host, titleField, bodyEditor in
     let accent = try #require(NSColor(hex: "#FFD600"))
@@ -3058,18 +3160,25 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
 @MainActor
 private func withHostedTitleEditors(
+  isPinned: Bool = false,
+  titleText: String = "Caret title",
+  fontFamily: String = "Avenir Next",
+  bodyText: String = "Caret body",
   _ check: @MainActor (AppState, NSWindow, NSHostingView<AnyView>, NSTextField, ListAwareTextView) async throws -> Void
 ) async throws {
   for appearance in [NSAppearance.Name.aqua, .darkAqua] {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    let note = Note(title: "Caret title", body: "Caret body", folderID: nil)
+    let note = Note(title: titleText, body: bodyText, folderID: nil)
     let state = await hostedPanelState(
       root: root,
       workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
     )
-    state.updatePreferences { $0.accentHex = "#FFD600" }
-    let (window, host) = hostedPanel(root: root, state: state, commands: EditorCommands())
+    state.updatePreferences {
+      $0.accentHex = "#FFD600"
+      $0.fontFamily = fontFamily
+    }
+    let (window, host) = hostedPanel(root: root, state: state, commands: EditorCommands(), isPinned: isPinned)
     defer { window.orderOut(nil) }
     window.appearance = NSAppearance(named: appearance)
     await settleHostedView(host)
@@ -3826,10 +3935,11 @@ private func hostedPanel(
   root: URL,
   state: AppState,
   commands: EditorCommands,
-  accentHex: String? = nil
+  accentHex: String? = nil,
+  isPinned: Bool = false
 ) -> (NSWindow, NSHostingView<AnyView>) {
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
-  let panel = NotesPanel(dictationRuntime: runtime, editorCommands: commands)
+  let panel = NotesPanel(dictationRuntime: runtime, isPinned: isPinned, editorCommands: commands)
   let rootView: AnyView
   if let accentHex, let accent = Color(hex: accentHex) {
     rootView = AnyView(panel.environmentObject(state).accentColor(accent))
