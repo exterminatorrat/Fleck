@@ -372,6 +372,8 @@ struct NoteFileReferenceUITests {
     do {
       let body = try #require(referenceDescendant(in: host, as: ListAwareTextView.self))
       let title = try #require(referenceTitleField(in: host, value: note.title))
+      let originalBody = body.string
+      let originalTitle = title.stringValue
 
       for focus in [body as NSResponder, title as NSResponder] {
         #expect(window.makeFirstResponder(focus))
@@ -387,10 +389,19 @@ struct NoteFileReferenceUITests {
         await settleReferenceHost(host)
         #expect(state.selectedNoteFileReferences.isEmpty)
         #expect(manager.canUndo)
-        manager.undo()
+        commands.undo()
         await settleReferenceHost(host)
         #expect(state.selectedNoteFileReferences.map(\.id) == [referenceID])
         #expect(FileManager.default.fileExists(atPath: fileURL.path))
+        commands.redo()
+        await settleReferenceHost(host)
+        #expect(state.selectedNoteFileReferences.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fileURL.path))
+        commands.undo()
+        await settleReferenceHost(host)
+        #expect(state.selectedNoteFileReferences.map(\.id) == [referenceID])
+        #expect(body.string == originalBody)
+        #expect(title.stringValue == originalTitle)
       }
     } catch {
       caughtError = error

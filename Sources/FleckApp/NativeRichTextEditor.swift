@@ -123,8 +123,17 @@
       (textView as? ListAwareTextView)?.toggleAutomaticList(family)
     }
 
-    func undo() { textView?.undoManager?.undo() }
-    func redo() { textView?.undoManager?.redo() }
+    var activeUndoManager: UndoManager? {
+      if let firstResponder = textView?.window?.firstResponder,
+        let undoManager = firstResponder.undoManager
+      {
+        return undoManager
+      }
+      return textView?.undoManager ?? textView?.window?.undoManager
+    }
+
+    func undo() { activeUndoManager?.undo() }
+    func redo() { activeUndoManager?.redo() }
 
     @discardableResult
     func insertNoteLink(

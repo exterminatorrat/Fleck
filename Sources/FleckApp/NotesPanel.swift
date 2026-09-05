@@ -1573,12 +1573,7 @@
     }
 
     static func fileReferenceUndoManager(commands: EditorCommands) -> UndoManager? {
-      if let firstResponder = commands.textView?.window?.firstResponder,
-        let undoManager = firstResponder.undoManager
-      {
-        return undoManager
-      }
-      return commands.textView?.undoManager ?? commands.textView?.window?.undoManager
+      commands.activeUndoManager
     }
 
     private var isBlockingOverlayPresented: Bool {
