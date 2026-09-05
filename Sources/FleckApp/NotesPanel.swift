@@ -433,6 +433,7 @@
     @State private var restoreEditorFocusAfterHide = false
     @State private var searchPointerActivationPending = false
     @FocusState private var editorFocus: EditorFocus?
+    private let filePicker: NoteFilePicker
 
     init(
       dictationRuntime: DictationRuntime,
@@ -441,7 +442,8 @@
       editorCommands: EditorCommands? = nil,
       searchController: WorkspaceSearchController? = nil,
       noteLinkPickerController: NoteLinkPickerController? = nil,
-      backlinkController: BacklinkController? = nil
+      backlinkController: BacklinkController? = nil,
+      filePicker: NoteFilePicker = .live
     ) {
       let searchController = searchController ?? WorkspaceSearchController()
       let noteLinkPickerController = noteLinkPickerController ?? NoteLinkPickerController()
@@ -452,6 +454,7 @@
       _searchController = StateObject(wrappedValue: searchController)
       _noteLinkPickerController = StateObject(wrappedValue: noteLinkPickerController)
       _backlinkController = StateObject(wrappedValue: backlinkController ?? BacklinkController())
+      self.filePicker = filePicker
       noteLinkPickerController.setPresentationGuard { !searchController.isPresented }
     }
 
@@ -557,6 +560,13 @@
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let error = appState.noteFileReferenceError {
+              Text(error)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
           }
         }
         .allowsHitTesting(!searchController.isPresented)
@@ -600,6 +610,12 @@
       }
       .onReceive(dictationRuntime.$phase) { phase in
         bannerDismissalState.dictationPhaseDidEmit(phase)
+      }
+      .onChange(of: appState.workspace.selectedNoteID, initial: true) { _, _ in
+        appState.refreshSelectedNoteFileReferences()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+        appState.refreshSelectedNoteFileReferences()
       }
       .onReceive(dictationRuntime.$captureFailure) { failure in
         guard failure == nil else { return }
@@ -978,6 +994,13 @@
         )
 
         Menu {
+          if let note = visibleSelectedNote {
+            Button("Add File Shortcut…", systemImage: "paperclip") {
+              chooseFile(for: note.id)
+            }
+            .disabled(!appState.canAddFileReference(noteID: note.id))
+            Divider()
+          }
           Button("Import…", systemImage: "square.and.arrow.down") {
             isImporting = true
           }
@@ -1484,6 +1507,80 @@
       }
     }
 
+    private func chooseFile(for noteID: UUID) {
+      filePicker.chooseFile(editorCommands.textView?.window) { url in
+        Self.completeFileReferenceSelection(url, noteID: noteID, appState: appState)
+      }
+    }
+
+    static func completeFileReferenceSelection(
+      _ url: URL?,
+      noteID: UUID,
+      appState: AppState
+    ) {
+      guard let url else { return }
+      appState.addFileReference(noteID: noteID, url: url)
+    }
+
+    private func openFileReference(_ referenceID: UUID) {
+      guard let url = appState.resolveFileReference(referenceID: referenceID) else {
+        return
+      }
+      let didAccess = url.startAccessingSecurityScopedResource()
+      NSWorkspace.shared.open(
+        url,
+        configuration: NSWorkspace.OpenConfiguration()
+      ) { _, error in
+        Task { @MainActor in
+          if didAccess {
+            url.stopAccessingSecurityScopedResource()
+          }
+          if error != nil {
+            appState.fileReferenceActionFailed("The file could not be opened.")
+          }
+        }
+      }
+    }
+
+    private func revealFileReference(_ referenceID: UUID) {
+      guard let url = appState.resolveFileReference(referenceID: referenceID) else {
+        return
+      }
+      let didAccess = url.startAccessingSecurityScopedResource()
+      NSWorkspace.shared.activateFileViewerSelecting([url])
+      if didAccess {
+        url.stopAccessingSecurityScopedResource()
+      }
+    }
+
+    private func locateFileReference(_ referenceID: UUID) {
+      filePicker.chooseFile(editorCommands.textView?.window) { url in
+        Self.completeFileReferenceRelink(
+          url,
+          referenceID: referenceID,
+          appState: appState
+        )
+      }
+    }
+
+    static func completeFileReferenceRelink(
+      _ url: URL?,
+      referenceID: UUID,
+      appState: AppState
+    ) {
+      guard let url else { return }
+      appState.relinkFileReference(referenceID: referenceID, url: url)
+    }
+
+    static func fileReferenceUndoManager(commands: EditorCommands) -> UndoManager? {
+      if let firstResponder = commands.textView?.window?.firstResponder,
+        let undoManager = firstResponder.undoManager
+      {
+        return undoManager
+      }
+      return commands.textView?.undoManager ?? commands.textView?.window?.undoManager
+    }
+
     private var isBlockingOverlayPresented: Bool {
       searchController.isPresented || noteLinkPickerController.isPresented
         || notePendingDeletion != nil || folderPendingDeletion != nil || isShowingTrash
@@ -1639,6 +1736,20 @@
               )
             )
             .animation(reduceMotion ? nil : motion.quick, value: appState.preferences.showFormattingBar)
+          }
+          if !appState.selectedNoteFileReferences.isEmpty {
+            NoteFileReferenceView(
+              references: appState.selectedNoteFileReferences,
+              onOpen: openFileReference,
+              onReveal: revealFileReference,
+              onLocate: locateFileReference,
+              onRemove: { referenceID in
+                appState.removeFileReference(
+                  referenceID: referenceID,
+                  undoManager: Self.fileReferenceUndoManager(commands: editorCommands)
+                )
+              }
+            )
           }
           NativeRichTextEditor(
             text: note.body,
