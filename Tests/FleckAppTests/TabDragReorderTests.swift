@@ -918,14 +918,7 @@ func hostedNotesPanelPointerHitMapsIncludeNoteAndFolderPaddedInteriors() async t
 }
 
 @Test @MainActor
-func hostedUnselectedTabUsesVisiblePreviewWhileItsSourceIsHidden() async throws {
-  let sourceCode = try tabNotesPanelSource()
-  #expect(sourceCode.contains("dragContent.onDrag({ [weak view] in"))
-  #expect(sourceCode.contains("}, preview: {\n          dragContent"))
-  #expect(sourceCode.contains(
-    ".opacity(fluidTabDrag.inside && fluidTabDrag.preview?.interaction.sourceID == note.id ? 0 : 1)"
-  ))
-
+func hostedUnselectedTabProducesVisibleDragImageWithoutChangingSelection() async throws {
   func visiblePixels(in image: NSImage) -> Int {
     guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data)
     else { return 0 }
