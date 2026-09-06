@@ -6,6 +6,39 @@ import SwiftUI
 @testable import FleckApp
 import FleckCore
 
+@MainActor
+private final class DraggingInfoProbe: NSObject, NSDraggingInfo {
+  let draggingDestinationWindow: NSWindow?
+  let draggingSourceOperationMask: NSDragOperation = .move
+  var draggingLocation: NSPoint
+  let draggedImageLocation: NSPoint = .zero
+  let draggedImage: NSImage? = nil
+  let draggingPasteboard: NSPasteboard
+  let draggingSource: Any? = NSObject()
+  let draggingSequenceNumber = 1
+  var draggingFormation: NSDraggingFormation = .none
+  var animatesToDestination = true
+  var numberOfValidItemsForDrop = 1
+  let springLoadingHighlight: NSSpringLoadingHighlight = .none
+
+  init(window: NSWindow, location: NSPoint, pasteboard: NSPasteboard) {
+    draggingDestinationWindow = window
+    draggingLocation = location
+    draggingPasteboard = pasteboard
+  }
+
+  func slideDraggedImage(to screenPoint: NSPoint) {}
+  override func namesOfPromisedFilesDropped(atDestination dropDestination: URL) -> [String]? { nil }
+  func enumerateDraggingItems(
+    options enumOpts: NSDraggingItemEnumerationOptions,
+    for view: NSView?,
+    classes classArray: [AnyClass],
+    searchOptions: [NSPasteboard.ReadingOptionKey: Any],
+    using block: @escaping (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
+  ) {}
+  func resetSpringLoading() {}
+}
+
 @Test @MainActor
 func reorderInteractionFoldersRequireExactLocalSourceSessionAndDistinctPayload() async throws {
   let ids = [UUID(), UUID(), UUID()]
@@ -380,11 +413,13 @@ func reorderInteractionDeferredFolderTransferRevalidatesAndPreservesSelection() 
   window.contentView = scroll
   let controller = FluidTabDragController()
   controller.view = view
+  var sourceViews: [ReorderSourceHostingView] = []
   for (index, note) in notes.enumerated() {
     let source = ReorderSourceHostingView(rootView: AnyView(Color.clear.frame(width: 100, height: 30)))
     source.noteID = note.id
     source.frame = NSRect(x: index * 106, y: 0, width: 100, height: 30)
     view.addSubview(source)
+    sourceViews.append(source)
   }
   let interaction = ReorderInteraction(sourceID: notes[0].id, originalIDs: notes.map(\.id))
   let session = ReorderDropSession(source: .init(noteID: notes[0].id, sourceFolderID: nil,
@@ -397,6 +432,7 @@ func reorderInteractionDeferredFolderTransferRevalidatesAndPreservesSelection() 
     currentIDs: { state.visibleNotes(in: nil).map(\.id) }, currentPins: { [] },
     move: { _, _ in moves += 1 }, finish: {})
   controller.began(at: screen(20))
+  #expect(sourceViews[0].layer?.opacity == 0)
   controller.moved(to: screen(175))
   let before = scroll.contentView.bounds.minX
   for _ in 0..<20 { controller.tick() }
@@ -405,10 +441,14 @@ func reorderInteractionDeferredFolderTransferRevalidatesAndPreservesSelection() 
   #expect(moves == 0)
   #expect(state.workspace == original)
   controller.exited()
+  #expect(sourceViews[0].layer?.opacity == 1)
   let stopped = scroll.contentView.bounds.origin
   controller.tick()
   #expect(scroll.contentView.bounds.origin == stopped)
+  controller.moved(to: window.convertPoint(toScreen: NSPoint(x: 90, y: 15)))
+  #expect(sourceViews[0].layer?.opacity == 0)
   controller.cancel()
+  #expect(sourceViews[0].layer?.opacity == 1)
   #expect(controller.preview == nil)
   #expect(!session.canAcceptDrop)
   controller.tick()
@@ -473,6 +513,70 @@ func reorderInteractionFluidControllerDoesNotRepublishAnUnchangedSlot() throws {
   controller.moved(to: point)
   #expect(controller.preview == nil)
   #expect(!session.canAcceptDrop)
+}
+
+@Test @MainActor
+func reorderDestinationDisablesNativeDropAnimation() throws {
+  let ids = [UUID(), UUID()]
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 220, height: 40),
+    styleMask: [.borderless], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  let scroll = NSScrollView(frame: window.contentView!.bounds)
+  let destination = FluidTabDestinationView(
+    rootView: AnyView(Color.clear.frame(width: 220, height: 37))
+  )
+  destination.frame = NSRect(x: 0, y: 0, width: 220, height: 37)
+  scroll.documentView = destination
+  window.contentView = scroll
+  window.makeKeyAndOrderFront(nil)
+  defer { window.contentView = nil; window.orderOut(nil); window.close() }
+  for (index, id) in ids.enumerated() {
+    let source = ReorderSourceHostingView(
+      rootView: AnyView(Color.clear.frame(width: 100, height: 30))
+    )
+    source.noteID = id
+    source.frame = NSRect(x: index * 106, y: 0, width: 100, height: 30)
+    destination.addSubview(source)
+  }
+  let interaction = ReorderInteraction(
+    sourceID: ids[0], originalIDs: ids
+  )
+  let source = NoteDropSource(
+    noteID: ids[0], sourceFolderID: nil, dragSessionID: interaction.sessionID
+  )
+  let session = ReorderDropSession(source: source)
+  let controller = FluidTabDragController()
+  controller.view = destination
+  destination.controller = controller
+  controller.prepare(
+    interaction: interaction,
+    session: session,
+    currentIDs: { ids },
+    currentPins: { [] },
+    move: { _, _ in },
+    finish: {}
+  )
+  func screen(_ x: CGFloat) -> NSPoint {
+    window.convertPoint(toScreen: destination.convert(NSPoint(x: x, y: 15), to: nil))
+  }
+  controller.began(at: screen(20))
+  let pasteboard = NSPasteboard(name: .init("drop-animation-" + UUID().uuidString))
+  pasteboard.declareTypes([.init(FolderDragPayload.noteType.identifier)], owner: nil)
+  pasteboard.setData(
+    try JSONEncoder().encode(source),
+    forType: .init(FolderDragPayload.noteType.identifier)
+  )
+  let probe = DraggingInfoProbe(
+    window: window,
+    location: destination.convert(NSPoint(x: 120, y: 15), to: nil),
+    pasteboard: pasteboard
+  )
+
+  #expect(destination.prepareForDragOperation(probe))
+  #expect(probe.animatesToDestination == false)
+  controller.cancel()
 }
 
 @Test @MainActor func reorderInteractionNativeLayerReversalUsesPresentationAndMotionCanBeDisabled() async throws {
