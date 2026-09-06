@@ -2696,6 +2696,8 @@
     @State private var isFontPickerPresented = false
     @State private var fontSizeText = ""
     @FocusState private var isFontSizeFocused: Bool
+    @State private var isFontSizePickerPresented = false
+    @State private var fontSizePickerNoteID: UUID?
     @State private var isForegroundColorPickerPresented = false
     @State private var isBackgroundColorPickerPresented = false
 
@@ -2704,7 +2706,7 @@
         let presentation = FormattingToolbarLayout.presentation(
           availableWidth: proxy.size.width
         )
-        HStack(spacing: presentation == .full ? 8 : 5) {
+        HStack(spacing: presentation == .full ? 8 : 2) {
         Menu {
           Button("Cancel Dictation", role: .destructive) {
             guard isEditorVisible else { return }
@@ -2728,7 +2730,9 @@
           Task { await dictationRuntime.cancel() }
         }
         .help(dictationRuntime.microphoneHelp)
-        Divider().frame(height: 15)
+        if presentation == .full {
+          Divider().frame(height: 15)
+        }
         Button {
           guard isEditorVisible else { return }
           commands.undo()
@@ -2737,17 +2741,17 @@
         }
         .accessibilityLabel("Undo")
         .keyboardShortcut("z", modifiers: .command)
-        if presentation == .full {
-          Button {
-            guard isEditorVisible else { return }
-            commands.redo()
-          } label: {
-            ToolbarIconLabel(systemImage: "arrow.uturn.forward")
-          }
-          .accessibilityLabel("Redo")
-          .keyboardShortcut("z", modifiers: [.command, .shift])
+        Button {
+          guard isEditorVisible else { return }
+          commands.redo()
+        } label: {
+          ToolbarIconLabel(systemImage: "arrow.uturn.forward")
         }
-        Divider().frame(height: 15)
+        .accessibilityLabel("Redo")
+        .keyboardShortcut("z", modifiers: [.command, .shift])
+        if presentation == .full {
+          Divider().frame(height: 15)
+        }
         Button {
           guard isEditorVisible else { return }
           commands.toggleBold()
@@ -2757,25 +2761,25 @@
         .accessibilityLabel("Bold")
         .keyboardShortcut("b", modifiers: .command)
           .accessibilityValue(commands.isBold ? "On" : "Off")
+        Button {
+          guard isEditorVisible else { return }
+          commands.toggleItalic()
+        } label: {
+          ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
+        }
+        .accessibilityLabel("Italic")
+        .keyboardShortcut("i", modifiers: .command)
+          .accessibilityValue(commands.isItalic ? "On" : "Off")
+        Button {
+          guard isEditorVisible else { return }
+          commands.toggleUnderline()
+        } label: {
+          ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
+        }
+        .accessibilityLabel("Underline")
+        .keyboardShortcut("u", modifiers: .command)
+        .accessibilityValue(commands.isUnderlined ? "On" : "Off")
         if presentation == .full {
-          Button {
-            guard isEditorVisible else { return }
-            commands.toggleItalic()
-          } label: {
-            ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
-          }
-          .accessibilityLabel("Italic")
-          .keyboardShortcut("i", modifiers: .command)
-            .accessibilityValue(commands.isItalic ? "On" : "Off")
-          Button {
-            guard isEditorVisible else { return }
-            commands.toggleUnderline()
-          } label: {
-            ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
-          }
-          .accessibilityLabel("Underline")
-          .keyboardShortcut("u", modifiers: .command)
-          .accessibilityValue(commands.isUnderlined ? "On" : "Off")
           Button {
             guard isEditorVisible else { return }
             commands.toggleStrikethrough()
@@ -2796,7 +2800,7 @@
             }
             Image(systemName: "chevron.down").font(.system(size: 8))
           }
-          .frame(width: presentation == .full ? 112 : 42)
+          .frame(width: presentation == .full ? 112 : 36)
         }
         .help("Font: \(fontFamilyDisplay)")
         .accessibilityLabel("Font")
@@ -2822,20 +2826,9 @@
         }
         .onChange(of: appState.selectedNote) { _, _ in dismissInvalidFontPicker() }
         .onChange(of: isEditorVisible) { _, _ in dismissInvalidFontPicker() }
-        TextField("Font size", text: $fontSizeText)
-          .textFieldStyle(.roundedBorder)
-          .frame(width: presentation == .full ? 48 : 42)
-          .focused($isFontSizeFocused)
-          .onAppear(perform: syncFontSizeText)
-          .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
-          .onChange(of: commands.isFontSizeMixed) { _, _ in syncFontSizeText() }
-          .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
-            if wasFocused && !isFocused { applyFontSizeText() }
-          }
-          .onSubmit { applyFontSizeText() }
-          .accessibilityLabel("Font size")
-          .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
-          .accessibilityHint("Enter a size from 1 through 512 points.")
+        if presentation == .full {
+          fontSizeField()
+        }
         Button {
           guard isEditorVisible else { return }
           isForegroundColorPickerPresented = true
@@ -2966,21 +2959,10 @@
           .accessibilityLabel("Checklist")
         } else {
           Menu {
-            Button("Redo") {
-              guard isEditorVisible else { return }
-              commands.redo()
+            Button("Font Size…") {
+              presentFontSizePicker()
             }
-            .keyboardShortcut("z", modifiers: [.command, .shift])
-            Button("Italic") {
-              guard isEditorVisible else { return }
-              commands.toggleItalic()
-            }
-            .keyboardShortcut("i", modifiers: .command)
-            Button("Underline") {
-              guard isEditorVisible else { return }
-              commands.toggleUnderline()
-            }
-            .keyboardShortcut("u", modifiers: .command)
+            Divider()
             Button("Strikethrough") {
               guard isEditorVisible else { return }
               commands.toggleStrikethrough()
@@ -3036,8 +3018,20 @@
             ToolbarIconLabel(systemImage: "ellipsis.circle")
           }
           .accessibilityLabel("More formatting")
+          .popover(isPresented: $isFontSizePickerPresented, arrowEdge: .bottom) {
+            if let targetNoteID = fontSizePickerNoteID {
+              HStack(spacing: 8) {
+                fontSizeField(targetNoteID: targetNoteID)
+                Button("Done") {
+                  applyFontSizeText(targetNoteID: targetNoteID)
+                  isFontSizePickerPresented = false
+                }
+              }
+              .padding(12)
+            }
+          }
         }
-        Spacer()
+        Spacer(minLength: presentation == .full ? nil : 0)
         Button(role: .destructive) {
           guard isEditorVisible else { return }
           onDelete()
@@ -3063,6 +3057,15 @@
       .accessibilityElement(children: .contain)
       .accessibilityLabel("Editor toolbar")
       .accessibilityHidden(!isEditorVisible)
+      .onChange(of: appState.selectedNote) { _, _ in
+        dismissInvalidFontSizePicker()
+      }
+      .onChange(of: isEditorVisible) { _, _ in
+        dismissInvalidFontSizePicker()
+      }
+      .onChange(of: isFontSizePickerPresented) { _, presented in
+        if !presented { fontSizePickerNoteID = nil }
+      }
     }
 
     private var motion: AppMotion {
@@ -3072,6 +3075,23 @@
     private var fontSizeDisplay: String {
       guard !commands.isFontSizeMixed, let size = commands.currentFontSize else { return "" }
       return String(format: "%.2f", size).replacingOccurrences(of: #"\.00$"#, with: "", options: .regularExpression)
+    }
+
+    private func fontSizeField(targetNoteID: UUID? = nil) -> some View {
+      TextField("Font size", text: $fontSizeText)
+        .textFieldStyle(.roundedBorder)
+        .frame(width: 48)
+        .focused($isFontSizeFocused)
+        .onAppear(perform: syncFontSizeText)
+        .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
+        .onChange(of: commands.isFontSizeMixed) { _, _ in syncFontSizeText() }
+        .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
+          if wasFocused && !isFocused { applyFontSizeText(targetNoteID: targetNoteID) }
+        }
+        .onSubmit { applyFontSizeText(targetNoteID: targetNoteID) }
+        .accessibilityLabel("Font size")
+        .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
+        .accessibilityHint("Enter a size from 1 through 512 points.")
     }
 
     private var isFontTitleTarget: Bool {
@@ -3105,8 +3125,25 @@
       fontSizeText = fontSizeDisplay
     }
 
-    private func applyFontSizeText() {
-      guard isEditorVisible else { return }
+    private func presentFontSizePicker() {
+      guard isEditorVisible, let noteID = appState.selectedNote?.id else { return }
+      fontSizePickerNoteID = noteID
+      syncFontSizeText()
+      isFontSizePickerPresented = true
+    }
+
+    private func dismissInvalidFontSizePicker() {
+      guard isFontSizePickerPresented,
+        !isEditorVisible || fontSizePickerNoteID != appState.selectedNote?.id
+      else { return }
+      isFontSizeFocused = false
+      isFontSizePickerPresented = false
+    }
+
+    private func applyFontSizeText(targetNoteID: UUID? = nil) {
+      guard isEditorVisible,
+        targetNoteID == nil || targetNoteID == appState.selectedNote?.id
+      else { return }
       if let size = FontSizeSubmission.requestedSize(
         for: fontSizeText,
         currentSize: commands.currentFontSize,

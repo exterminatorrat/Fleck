@@ -2482,8 +2482,8 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist", "Delete",
   ]
   let compactLabels = [
-    "Start Dictation", "Undo", "Bold", "Font", "Font size", "Font Color",
-    "Highlight", "More formatting", "Delete",
+    "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Font",
+    "Font Color", "Highlight", "More formatting", "Delete",
   ]
 
   func expectControlFramesWithinWindow(_ labels: [String], panelWidth: CGFloat) throws {
@@ -2517,6 +2517,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     if panelWidth < 740 {
       #expect(more != nil)
       try expectControlFramesWithinWindow(compactLabels, panelWidth: panelWidth)
+      #expect(fontPickerAccessibilityElement(host, label: "Font size") == nil)
     } else {
       #expect(more == nil)
       try expectControlFramesWithinWindow(fullLabels, panelWidth: panelWidth)
@@ -2528,6 +2529,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   await settleHostedView(host)
 
   try expectControlFramesWithinWindow(compactLabels, panelWidth: 380)
+  #expect(fontPickerAccessibilityElement(host, label: "Font size") == nil)
   // Keyboard dispatch requires a key application, which this hosted xctest process cannot
   // provide. The native-app acceptance pass verifies shortcuts in both toolbar variants.
 }
