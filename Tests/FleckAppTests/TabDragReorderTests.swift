@@ -706,41 +706,6 @@ private func settleTabStripHost(_ view: NSView) async {
   }
 }
 
-private final class NativeDraggingSourceProbe: NSObject, NSDraggingSource {
-  func draggingSession(
-    _ session: NSDraggingSession,
-    sourceOperationMaskFor context: NSDraggingContext
-  ) -> NSDragOperation {
-    .move
-  }
-}
-
-@MainActor
-private func nativeDragImageHasVisiblePixel(_ image: NSImage) -> Bool {
-  let width = max(1, Int(ceil(image.size.width)))
-  let height = max(1, Int(ceil(image.size.height)))
-  guard let bitmap = NSBitmapImageRep(
-    bitmapDataPlanes: nil,
-    pixelsWide: width,
-    pixelsHigh: height,
-    bitsPerSample: 8,
-    samplesPerPixel: 4,
-    hasAlpha: true,
-    isPlanar: false,
-    colorSpaceName: .deviceRGB,
-    bytesPerRow: 0,
-    bitsPerPixel: 0
-  ), let context = NSGraphicsContext(bitmapImageRep: bitmap)
-  else { return false }
-  NSGraphicsContext.saveGraphicsState()
-  NSGraphicsContext.current = context
-  image.draw(in: NSRect(x: 0, y: 0, width: width, height: height))
-  NSGraphicsContext.restoreGraphicsState()
-  return (0..<height).contains { y in
-    (0..<width).contains { x in bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 0.01 }
-  }
-}
-
 @Test func tabOverflowEndpointControlsStayEnabledForVisibleNotes() throws {
   let source = try tabNotesPanelSource()
   let tabStrip = try #require(
@@ -800,82 +765,6 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   view.setActive(true)
   RunLoop.main.run(until: Date().addingTimeInterval(0.12))
   #expect(cancellations == 0)
-}
-
-@Test @MainActor
-func reorderInteractionMaterializesNativePreviewBeforeHidingUnselectedTab() throws {
-  let window = NSWindow(
-    contentRect: NSRect(x: 0, y: 0, width: 180, height: 40),
-    styleMask: [.borderless], backing: .buffered, defer: false
-  )
-  window.isReleasedWhenClosed = false
-  let sourceView = ReorderSourceHostingView(
-    rootView: AnyView(Color.red.frame(width: 120, height: 30))
-  )
-  window.contentView = sourceView
-  window.makeKeyAndOrderFront(nil)
-  defer { window.contentView = nil; window.orderOut(nil); window.close() }
-
-  var sourceIsVisible = true
-  let retainedImage = NSImage(size: NSSize(width: 1, height: 1))
-  retainedImage.lockFocus()
-  NSColor.black.setFill()
-  NSRect(x: 0, y: 0, width: 1, height: 1).fill()
-  retainedImage.unlockFocus()
-  var retainedRect = NSRect(x: 0, y: 0, width: 1, height: 1)
-  let retainedContents = try #require(retainedImage.cgImage(
-    forProposedRect: &retainedRect, context: nil, hints: nil
-  ))
-  func makeItem() -> NSDraggingItem {
-    let item = NSDraggingItem(pasteboardWriter: NSString(string: "native-preview"))
-    item.draggingFrame = NSRect(x: 0, y: 0, width: 120, height: 30)
-    item.imageComponentsProvider = {
-      let component = NSDraggingImageComponent(key: .icon)
-      component.frame = item.draggingFrame
-      component.contents = NSImage(size: item.draggingFrame.size, flipped: false) { rect in
-        (sourceIsVisible ? NSColor.systemRed : NSColor.clear).setFill()
-        rect.fill()
-        return true
-      }
-      let retainedComponent = NSDraggingImageComponent(key: .label)
-      retainedComponent.frame = NSRect(x: 4, y: 4, width: 1, height: 1)
-      retainedComponent.contents = retainedContents
-      return [component, retainedComponent]
-    }
-    return item
-  }
-  let item = makeItem()
-  sourceView.onBegan = { _ in sourceIsVisible = false }
-  let event = try #require(NSEvent.mouseEvent(
-    with: .leftMouseDragged,
-    location: NSPoint(x: 20, y: 15),
-    modifierFlags: [],
-    timestamp: ProcessInfo.processInfo.systemUptime,
-    windowNumber: window.windowNumber,
-    context: nil,
-    eventNumber: 0,
-    clickCount: 1,
-    pressure: 1
-  ))
-  _ = sourceView.beginDraggingSession(
-    with: [item], event: event, source: NativeDraggingSourceProbe()
-  )
-
-  let nativeImage = try #require(item.imageComponents?.first?.contents as? NSImage)
-  #expect(nativeDragImageHasVisiblePixel(nativeImage))
-
-  sourceIsVisible = true
-  let retinaItem = makeItem()
-  ReorderSourceHostingView.materializeDraggingImages([retinaItem], scale: 2)
-  sourceIsVisible = false
-  let retinaComponents = try #require(retinaItem.imageComponents)
-  let retinaImage = try #require(retinaComponents.first?.contents as? NSImage)
-  let bitmap = try #require(retinaImage.representations.first as? NSBitmapImageRep)
-  #expect(bitmap.pixelsWide == 240)
-  #expect(bitmap.pixelsHigh == 60)
-  #expect(bitmap.colorAt(x: 238, y: 58)?.alphaComponent ?? 0 > 0.9)
-  let retainedAfter = retinaComponents.last?.contents as AnyObject?
-  #expect(retainedAfter === retainedContents)
 }
 
 @Test @MainActor func hostedNotesPanelTabOverflowNativeDestinationMeasuresRealUnequalSourcesAndBlankTail() async throws {
@@ -1025,5 +914,106 @@ func hostedNotesPanelPointerHitMapsIncludeNoteAndFolderPaddedInteriors() async t
 
   window.contentView = nil
   window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func hostedUnselectedTabUsesVisiblePreviewWhileItsSourceIsHidden() async throws {
+  let sourceCode = try tabNotesPanelSource()
+  #expect(sourceCode.contains("dragContent.onDrag({ [weak view] in"))
+  #expect(sourceCode.contains("}, preview: {\n          dragContent"))
+  #expect(sourceCode.contains(
+    ".opacity(fluidTabDrag.inside && fluidTabDrag.preview?.interaction.sourceID == note.id ? 0 : 1)"
+  ))
+
+  func visiblePixels(in image: NSImage) -> Int {
+    guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data)
+    else { return 0 }
+    return (0..<bitmap.pixelsHigh).reduce(0) { count, y in
+      count + (0..<bitmap.pixelsWide).filter {
+        bitmap.colorAt(x: $0, y: y)?.alphaComponent ?? 0 > 0.01
+      }.count
+    }
+  }
+  func renderedImage(of view: NSView) throws -> NSImage {
+    let bounds = view.bounds
+    let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: bounds))
+    view.cacheDisplay(in: bounds, to: bitmap)
+    let image = NSImage(size: bounds.size)
+    image.addRepresentation(bitmap)
+    return image
+  }
+  func findDestination(_ view: NSView) -> FluidTabDestinationView? {
+    if let destination = view as? FluidTabDestinationView { return destination }
+    return view.subviews.lazy.compactMap { findDestination($0) }.first
+  }
+  func findSource(_ noteID: UUID, in view: NSView) -> ReorderSourceHostingView? {
+    if let source = view as? ReorderSourceHostingView, source.noteID == noteID { return source }
+    return view.subviews.lazy.compactMap { findSource(noteID, in: $0) }.first
+  }
+
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("visible-tab-preview-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let dragged = Note(title: "Dragged")
+  let selected = Note(title: "Selected")
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _, _ in .committed })
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [dragged, selected], selectedNoteID: selected.id)
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(
+    rootView: NotesPanel(dictationRuntime: runtime, sizing: .container).environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 800, height: 430),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleTabStripHost(host)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+    window.close()
+  }
+
+  let destination = try #require(findDestination(host))
+  let source = try #require(findSource(dragged.id, in: destination))
+  #expect(visiblePixels(in: try renderedImage(of: source)) > 0)
+  var draggingItems: [NSDraggingItem] = []
+  source.inspectDraggingItems = { draggingItems = $0 }
+  let sourceFrame = destination.convert(source.bounds, from: source)
+  let start = destination.convert(
+    NSPoint(x: sourceFrame.midX, y: sourceFrame.midY), to: nil
+  )
+  for (sequence, event) in [
+    NSEvent.EventType.leftMouseDown,
+    NSEvent.EventType.leftMouseDragged,
+  ].enumerated() {
+    let point = event == .leftMouseDragged ? NSPoint(x: start.x + 8, y: start.y) : start
+    let mouseEvent = try #require(NSEvent.mouseEvent(
+      with: event,
+      location: point,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime + Double(sequence) * 0.01,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: sequence,
+      clickCount: 1,
+      pressure: 1
+    ))
+    window.sendEvent(mouseEvent)
+  }
+  await settleTabStripHost(host)
+
+  let previewImage = try #require(
+    draggingItems.first?.imageComponents?.first?.contents as? NSImage
+  )
+  #expect(visiblePixels(in: previewImage) > 0)
+  #expect(destination.controller?.inside == true)
+  #expect(destination.controller?.preview?.interaction.sourceID == dragged.id)
+  #expect(state.workspace.selectedNoteID == selected.id)
+  destination.controller?.cancel()
   await runtime.shutdown()
 }
