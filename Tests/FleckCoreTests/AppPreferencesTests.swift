@@ -185,7 +185,7 @@ import Testing
     .data(using: .utf8)!
   let preferences = try JSONDecoder().decode(AppPreferences.self, from: old)
   #expect(preferences.theme == .system)
-  #expect(preferences.panelWidth == 640)
+  #expect(preferences.panelWidth == 800)
   #expect(preferences.panelHeight == 430)
   #expect(preferences.editorTextHex == nil)
   #expect(preferences.editorBackgroundHex == nil)
@@ -194,20 +194,63 @@ import Testing
 
 @Test func newPreferencesUseBalancedIndependentPanelDefaults() {
   let value = AppPreferences()
-  #expect(value.panelWidth == 640)
+  #expect(value.panelWidth == 800)
   #expect(value.panelHeight == 430)
-  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelWidth == 800)
   #expect(value.pinnedPanelHeight == 430)
   #expect(value.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
 }
 
-@Test func untouchedLegacyPanelSizeMigratesOnce() throws {
+@Test func untouchedLegacyPanelSizeMigratesToCurrentDefaultOnce() throws {
   let legacy = Data(#"{"panelWidth":520,"panelHeight":430}"#.utf8)
   let migrated = try JSONDecoder().decode(AppPreferences.self, from: legacy)
-  #expect(migrated.panelWidth == 640)
+  #expect(migrated.panelWidth == 800)
   #expect(migrated.panelHeight == 430)
-  #expect(migrated.pinnedPanelWidth == 640)
+  #expect(migrated.pinnedPanelWidth == 800)
   #expect(migrated.pinnedPanelHeight == 430)
+}
+
+@Test func versionOneDefaultPanelSizesMigrateToEightHundredOnce() throws {
+  let previousDefault = Data(
+    #"{"panelWidth":640,"panelHeight":430,"panelSizingVersion":1,"pinnedPanelWidth":640,"pinnedPanelHeight":430}"#.utf8
+  )
+  let migrated = try JSONDecoder().decode(AppPreferences.self, from: previousDefault)
+
+  #expect(migrated.panelWidth == 800)
+  #expect(migrated.panelHeight == 430)
+  #expect(migrated.pinnedPanelWidth == 800)
+  #expect(migrated.pinnedPanelHeight == 430)
+  #expect(migrated.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
+
+  let roundTripped = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: JSONEncoder().encode(migrated)
+  )
+  #expect(roundTripped == migrated)
+}
+
+@Test func versionOneCustomPanelSizesSurviveMigration() throws {
+  let custom = Data(
+    #"{"panelWidth":640,"panelHeight":500,"panelSizingVersion":1,"pinnedPanelWidth":640,"pinnedPanelHeight":540}"#.utf8
+  )
+  let value = try JSONDecoder().decode(AppPreferences.self, from: custom)
+
+  #expect(value.panelWidth == 640)
+  #expect(value.panelHeight == 500)
+  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelHeight == 540)
+}
+
+@Test func legacyPinnedDefaultMigratesWhileCustomMenuSizeIsPreserved() throws {
+  let legacy = Data(
+    #"{"panelWidth":700,"panelHeight":500,"pinnedPanelWidth":640,"pinnedPanelHeight":430}"#.utf8
+  )
+  let value = try JSONDecoder().decode(AppPreferences.self, from: legacy)
+
+  #expect(value.panelWidth == 700)
+  #expect(value.panelHeight == 500)
+  #expect(value.pinnedPanelWidth == 800)
+  #expect(value.pinnedPanelHeight == 430)
 }
 
 @Test func customLegacyPanelSizeIsPreservedAndUsesIndependentPinnedDefault() throws {
@@ -215,7 +258,7 @@ import Testing
   let value = try JSONDecoder().decode(AppPreferences.self, from: legacy)
   #expect(value.panelWidth == 700)
   #expect(value.panelHeight == 500)
-  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelWidth == 800)
   #expect(value.pinnedPanelHeight == 430)
 }
 
@@ -226,10 +269,10 @@ import Testing
   let value = try JSONDecoder().decode(AppPreferences.self, from: malformed)
 
   #expect(value.fontFamily == "Menlo")
-  #expect(value.panelWidth == 640)
+  #expect(value.panelWidth == 800)
   #expect(value.panelHeight == 430)
   #expect(value.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
-  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelWidth == 800)
   #expect(value.pinnedPanelHeight == 430)
 }
 

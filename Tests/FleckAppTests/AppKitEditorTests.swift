@@ -2441,16 +2441,110 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(source.contains("accessibilityHint(\"Enter a size from 1 through 512 points.\")"))
 }
 
-@Test func formattingBarKeepsOneReachableCommandSurfaceAtSupportedWidths() throws {
-  let source = try notesPanelSource()
-  let formattingBar = try #require(
-    source.components(separatedBy: "private struct FormattingBar: View").last
+@Test @MainActor func formattingBarAdaptsOneReachableCommandSurfaceAtSupportedWidths() async throws {
+  #expect(FormattingToolbarLayout.presentation(availableWidth: 780) == .full)
+  #expect(FormattingToolbarLayout.presentation(availableWidth: 360) == .compact)
+  #expect(FormattingToolbarLayout.presentation(availableWidth: 719) == .compact)
+  #expect(FormattingToolbarLayout.presentation(availableWidth: 720) == .full)
+  #expect(FormattingToolbarLayout.presentation(availableWidth: 721) == .full)
+  #expect(
+    NotesPanelSizing.storedSize(
+      preferred: CGSize(width: 800, height: 430),
+      available: CGSize(width: 700, height: 400)
+    ) == CGSize(width: 700, height: 400)
+  )
+  #expect(
+    NotesPanelSizing.storedSize(
+      preferred: CGSize(width: 620, height: 390),
+      available: CGSize(width: 1_200, height: 900)
+    ) == CGSize(width: 620, height: 390)
   )
 
-  #expect(formattingBar.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").count == 2)
-  #expect(formattingBar.contains("accessibilityLabel(\"Editor toolbar\")"))
-  #expect(formattingBar.contains("ToolbarIconLabel(systemImage: \"trash\")"))
-  #expect(!formattingBar.contains("ViewThatFits"))
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Toolbar fixture", body: "Body")
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer { window.orderOut(nil) }
+  window.setContentSize(NSSize(width: 800, height: 430))
+  await settleHostedView(host)
+
+  let fullLabels = [
+    "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Strikethrough", "Font",
+    "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist", "Delete",
+  ]
+  let compactLabels = [
+    "Start Dictation", "Undo", "Bold", "Font", "Font size", "Font Color",
+    "Highlight", "More formatting", "Delete",
+  ]
+
+  func expectControlFramesWithinWindow(_ labels: [String], panelWidth: CGFloat) throws {
+    let contentView = try #require(window.contentView)
+    let contentFrame = window.convertToScreen(contentView.convert(contentView.bounds, to: nil))
+      .insetBy(dx: -1, dy: -1)
+    let hostFrame = window.convertToScreen(host.convert(host.bounds, to: nil))
+      .insetBy(dx: -1, dy: -1)
+    print("Toolbar geometry width=\(panelWidth) content=\(contentFrame) host=\(hostFrame)")
+    for label in labels {
+      let control = try #require(fontPickerAccessibilityElement(host, label: label))
+      let frame = try #require(
+        control.value(forKey: "accessibilityFrame") as? NSValue
+      ).rectValue
+      print("Toolbar control width=\(panelWidth) label=\(label) frame=\(frame)")
+      #expect(frame.width > 0)
+      #expect(frame.height > 0)
+      #expect(contentFrame.contains(frame))
+      #expect(hostFrame.contains(frame))
+    }
+  }
+
+  try expectControlFramesWithinWindow(fullLabels, panelWidth: 800)
+  #expect(fontPickerAccessibilityElement(host, label: "More formatting") == nil)
+
+  for panelWidth in [739.0, 740.0, 741.0] {
+    state.updatePreferences { $0.panelWidth = panelWidth }
+    window.setContentSize(NSSize(width: panelWidth, height: 430))
+    await settleHostedView(host)
+    let more = fontPickerAccessibilityElement(host, label: "More formatting")
+    if panelWidth < 740 {
+      #expect(more != nil)
+      try expectControlFramesWithinWindow(compactLabels, panelWidth: panelWidth)
+    } else {
+      #expect(more == nil)
+      try expectControlFramesWithinWindow(fullLabels, panelWidth: panelWidth)
+    }
+  }
+
+  state.updatePreferences { $0.panelWidth = 380 }
+  window.setContentSize(NSSize(width: 380, height: 430))
+  await settleHostedView(host)
+
+  try expectControlFramesWithinWindow(compactLabels, panelWidth: 380)
+
+  let editor = try #require(hostedPanelEditor(in: host))
+  editor.setSelectedRange(NSRange(location: 0, length: 4))
+  #expect(window.makeFirstResponder(editor))
+  try sendHostedKeyEquivalent("u", keyCode: 32, modifiers: .command, to: window)
+  #expect(
+    (editor.textStorage?.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int)
+      == NSUnderlineStyle.single.rawValue
+  )
+  commands.toggleBold()
+  commands.undo()
+  #expect(editor.undoManager?.canRedo == true)
+  window.makeKeyAndOrderFront(nil)
+  #expect(window.makeFirstResponder(editor))
+  try sendHostedKeyEquivalent("z", keyCode: 6, modifiers: [.command, .shift], to: window)
+  let font = try #require(editor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+  #expect(fontTraits(font).contains(.boldFontMask))
 }
 
 @Test func formattingBarCanAlwaysBeCollapsedAndRestoredFromTheHeader() throws {

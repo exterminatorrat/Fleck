@@ -83,10 +83,13 @@
               showsAgentActivity = true
             }
             .sheet(isPresented: $showsAgentActivity) {
-              AgentActivityView { noteID in
-                appState.select(noteID)
-                showsAgentActivity = false
-              }
+              AgentActivityView(
+                onOpenNote: { noteID in
+                  appState.select(noteID)
+                  showsAgentActivity = false
+                },
+                onDismiss: { showsAgentActivity = false }
+              )
               .environmentObject(appState)
             }
             Button("Clear Activity", role: .destructive) {

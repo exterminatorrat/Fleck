@@ -6,7 +6,7 @@ public enum AppTheme: String, Codable, CaseIterable, Sendable {
 
 public struct AppPreferences: Codable, Equatable, Sendable {
   public static let currentEditorTypographyVersion = 1
-  public static let currentPanelSizingVersion = 1
+  public static let currentPanelSizingVersion = 2
 
   public var fontFamily: String
   public var fontSize: Double
@@ -46,9 +46,9 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     editorTypographyVersion: Int = AppPreferences.currentEditorTypographyVersion,
     accentHex: String = "#7C6CF2", editorTextHex: String? = nil,
     editorBackgroundHex: String? = nil, panelOpacity: Double = 0.82,
-    theme: AppTheme = .system, panelWidth: Double = 640, panelHeight: Double = 430,
+    theme: AppTheme = .system, panelWidth: Double = 800, panelHeight: Double = 430,
     panelSizingVersion: Int = AppPreferences.currentPanelSizingVersion,
-    pinnedPanelWidth: Double = 640, pinnedPanelHeight: Double = 430,
+    pinnedPanelWidth: Double = 800, pinnedPanelHeight: Double = 430,
     showFormattingBar: Bool = true, isUnfiledCompact: Bool = false,
     confirmBeforeMovingNotesToTrash: Bool = true, automaticLists: Bool = true,
     launchAtLogin: Bool = false,
@@ -140,8 +140,30 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       decodedPanelSizingVersion == nil
       && decodedPanelWidth == 520
       && decodedPanelHeight == 430
-    let resolvedPanelWidth = migratesUntouchedPanelSize ? 640 : decodedPanelWidth
+    let migratesPreviousPanelDefault =
+      (decodedPanelSizingVersion ?? 0) < Self.currentPanelSizingVersion
+      && decodedPanelWidth == 640
+      && decodedPanelHeight == 430
+    let resolvedPanelWidth = migratesUntouchedPanelSize || migratesPreviousPanelDefault
+      ? 800
+      : decodedPanelWidth
     let resolvedPanelHeight = decodedPanelHeight
+    let decodedPinnedPanelWidth = Self.decodedSizingField(
+      Double.self,
+      from: c,
+      forKey: .pinnedPanelWidth,
+      fallback: 800
+    )
+    let decodedPinnedPanelHeight = Self.decodedSizingField(
+      Double.self,
+      from: c,
+      forKey: .pinnedPanelHeight,
+      fallback: 430
+    )
+    let migratesPreviousPinnedPanelDefault =
+      (decodedPanelSizingVersion ?? 0) < Self.currentPanelSizingVersion
+      && decodedPinnedPanelWidth == 640
+      && decodedPinnedPanelHeight == 430
     self.init(
       fontFamily: migratesUntouchedTypography ? "Avenir Next" : decodedFamily,
       fontSize: migratesUntouchedTypography ? 17 : decodedSize,
@@ -154,19 +176,12 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       theme: try c.decodeIfPresent(AppTheme.self, forKey: .theme) ?? .system,
       panelWidth: resolvedPanelWidth,
       panelHeight: resolvedPanelHeight,
-      panelSizingVersion: decodedPanelSizingVersion ?? Self.currentPanelSizingVersion,
-      pinnedPanelWidth: Self.decodedSizingField(
-        Double.self,
-        from: c,
-        forKey: .pinnedPanelWidth,
-        fallback: 640
+      panelSizingVersion: max(
+        decodedPanelSizingVersion ?? Self.currentPanelSizingVersion,
+        Self.currentPanelSizingVersion
       ),
-      pinnedPanelHeight: Self.decodedSizingField(
-        Double.self,
-        from: c,
-        forKey: .pinnedPanelHeight,
-        fallback: 430
-      ),
+      pinnedPanelWidth: migratesPreviousPinnedPanelDefault ? 800 : decodedPinnedPanelWidth,
+      pinnedPanelHeight: decodedPinnedPanelHeight,
       showFormattingBar: try c.decodeIfPresent(Bool.self, forKey: .showFormattingBar) ?? true,
       isUnfiledCompact: try c.decodeIfPresent(Bool.self, forKey: .isUnfiledCompact) ?? false,
       confirmBeforeMovingNotesToTrash: try c.decodeIfPresent(

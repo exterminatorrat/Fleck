@@ -404,22 +404,39 @@ struct AgentPresentationTests {
     #expect(AgentActivityClearPresentation.requiresConfirmation)
   }
 
-  @Test func agentActivityDismissalControlDeclaresRequiredSemantics() throws {
-    let testFile = URL(fileURLWithPath: #filePath)
-    let sourceRoot = testFile.deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .appendingPathComponent("Sources/FleckApp")
-    let source = try String(
-      contentsOf: sourceRoot.appendingPathComponent("AgentActivityView.swift"),
-      encoding: .utf8
+  @Test @MainActor
+  func agentActivityDoneClearsOwningStateWithoutClosingParentWindow() async throws {
+    NSApplication.shared.accessibilitySetValue(
+      true,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
     )
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AgentActivityDone-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let state = AppState(store: LocalStore(rootURL: root))
+    await state.waitUntilInitialLoad()
+    let presentation = AgentActivitySheetPresentation()
+    let (window, host) = await hostedWindow(
+      rootView: AgentActivitySheetHarness(presentation: presentation)
+        .environmentObject(state),
+      size: NSSize(width: 640, height: 480)
+    )
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
 
-    #expect(source.contains("@Environment(\\.dismiss) private var dismiss"))
-    #expect(source.contains("Button(\"Done\") {"))
-    #expect(source.contains("dismiss()"))
-    #expect(source.contains(".keyboardShortcut(.cancelAction)"))
-    #expect(source.contains(".accessibilityLabel(\"Close Agent Activity\")"))
+    let sheet = try await presentedAgentActivitySheet(from: window, parent: host)
+    let done = try #require(
+      agentActivityAccessibilityElement(sheet.contentView, label: "Close Agent Activity")
+    )
+    _ = done.perform(NSSelectorFromString("accessibilityPerformPress"))
+    await settleHostedSheet(sheet, parent: host)
+
+    #expect(!presentation.isPresented)
+    #expect(presentation.dismissalCount == 1)
+    #expect(window.sheets.isEmpty)
+    #expect(window.isVisible)
   }
 
   @Test @MainActor
@@ -431,8 +448,9 @@ struct AgentPresentationTests {
     await state.waitUntilInitialLoad()
     let initialActivityCount = state.agentActivity.count
     let initialWorkspace = state.workspace
+    let presentation = AgentActivitySheetPresentation()
     let (window, host) = await hostedWindow(
-      rootView: AgentActivitySheetHarness()
+      rootView: AgentActivitySheetHarness(presentation: presentation)
         .environmentObject(state),
       size: NSSize(width: 640, height: 480)
     )
@@ -447,6 +465,8 @@ struct AgentPresentationTests {
 
     #expect(window.sheets.isEmpty)
     #expect(window.isVisible)
+    #expect(!presentation.isPresented)
+    #expect(presentation.dismissalCount == 1)
     #expect(state.agentActivity.count == initialActivityCount)
     #expect(state.workspace == initialWorkspace)
   }
@@ -578,16 +598,43 @@ struct AgentPresentationTests {
 }
 
 @MainActor
+private final class AgentActivitySheetPresentation: ObservableObject {
+  @Published var isPresented = true
+  private(set) var dismissalCount = 0
+
+  func dismiss() {
+    dismissalCount += 1
+    isPresented = false
+  }
+}
+
+@MainActor
 private struct AgentActivitySheetHarness: View {
-  @State private var isShowingAgentActivity = true
+  @ObservedObject var presentation: AgentActivitySheetPresentation
 
   var body: some View {
     Color.clear
       .frame(width: 320, height: 240)
-      .sheet(isPresented: $isShowingAgentActivity) {
-        AgentActivityView { _ in }
+      .sheet(isPresented: $presentation.isPresented) {
+        AgentActivityView(onOpenNote: { _ in }, onDismiss: presentation.dismiss)
       }
   }
+}
+
+@MainActor
+private func agentActivityAccessibilityElement(_ value: Any?, label: String) -> NSObject? {
+  guard let element = value as? NSObject else { return nil }
+  let labelSelector = NSSelectorFromString("accessibilityLabel")
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let name = element.responds(to: labelSelector)
+    ? element.perform(labelSelector)?.takeUnretainedValue() as? String : nil
+  if name == label { return element }
+  let children = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in children ?? [] {
+    if let found = agentActivityAccessibilityElement(child, label: label) { return found }
+  }
+  return nil
 }
 
 @MainActor

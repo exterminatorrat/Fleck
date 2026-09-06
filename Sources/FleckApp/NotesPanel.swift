@@ -291,9 +291,25 @@
     }
   }
 
+  enum FormattingToolbarLayout: Equatable {
+    case full
+    case compact
+
+    static func presentation(availableWidth: CGFloat) -> Self {
+      availableWidth >= 720 ? .full : .compact
+    }
+  }
+
   enum NotesPanelSizing: Equatable {
     case storedPreferences
     case container
+
+    static func storedSize(preferred: CGSize, available: CGSize) -> CGSize {
+      CGSize(
+        width: min(preferred.width, max(available.width, 0)),
+        height: min(preferred.height, max(available.height, 0))
+      )
+    }
   }
 
   enum PinnedChromeMaterialPolicy: Equatable {
@@ -578,8 +594,8 @@
       }
       .modifier(PinnedGlassContainer(isPinned: isPinned))
       .frame(
-        width: sizing == .storedPreferences ? appState.preferences.panelWidth : nil,
-        height: sizing == .storedPreferences ? appState.preferences.panelHeight : nil
+        width: storedPanelSize?.width,
+        height: storedPanelSize?.height
       )
       .frame(
         maxWidth: sizing == .container ? .infinity : nil,
@@ -650,11 +666,14 @@
         )
       }
       .sheet(isPresented: $isShowingAgentActivity) {
-        AgentActivityView { noteID in
-          if activateNoteAndScope(noteID) {
-            isShowingAgentActivity = false
-          }
-        }
+        AgentActivityView(
+          onOpenNote: { noteID in
+            if activateNoteAndScope(noteID) {
+              isShowingAgentActivity = false
+            }
+          },
+          onDismiss: { isShowingAgentActivity = false }
+        )
         .environmentObject(appState)
       }
       .sheet(item: $notePendingAgentShare) { note in
@@ -1706,6 +1725,22 @@
       editorCommands.textView = nil
     }
 
+    private var storedPanelSize: CGSize? {
+      guard sizing == .storedPreferences else { return nil }
+      let preferred = CGSize(
+        width: appState.preferences.panelWidth,
+        height: appState.preferences.panelHeight
+      )
+      let screen = editorCommands.textView?.window?.screen
+        ?? NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+        ?? NSScreen.main
+      guard let available = screen?.visibleFrame.size,
+        available.width > 0,
+        available.height > 0
+      else { return preferred }
+      return NotesPanelSizing.storedSize(preferred: preferred, available: available)
+    }
+
     @ViewBuilder
     private var editor: some View {
       if let note = appState.selectedNote {
@@ -2665,8 +2700,11 @@
     @State private var isBackgroundColorPickerPresented = false
 
     var body: some View {
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 8) {
+      GeometryReader { proxy in
+        let presentation = FormattingToolbarLayout.presentation(
+          availableWidth: proxy.size.width
+        )
+        HStack(spacing: presentation == .full ? 8 : 5) {
         Menu {
           Button("Cancel Dictation", role: .destructive) {
             guard isEditorVisible else { return }
@@ -2698,15 +2736,15 @@
           ToolbarIconLabel(systemImage: "arrow.uturn.backward")
         }
         .accessibilityLabel("Undo")
-          .keyboardShortcut("z", modifiers: .command)
-        Button {
-          guard isEditorVisible else { return }
-          commands.redo()
-        } label: {
-          ToolbarIconLabel(systemImage: "arrow.uturn.forward")
+        if presentation == .full {
+          Button {
+            guard isEditorVisible else { return }
+            commands.redo()
+          } label: {
+            ToolbarIconLabel(systemImage: "arrow.uturn.forward")
+          }
+          .accessibilityLabel("Redo")
         }
-        .accessibilityLabel("Redo")
-          .keyboardShortcut("z", modifiers: [.command, .shift])
         Divider().frame(height: 15)
         Button {
           guard isEditorVisible else { return }
@@ -2715,33 +2753,32 @@
           ToolbarIconLabel(systemImage: "bold", isActive: commands.isBold)
         }
         .accessibilityLabel("Bold")
-          .keyboardShortcut("b", modifiers: .command)
           .accessibilityValue(commands.isBold ? "On" : "Off")
-        Button {
-          guard isEditorVisible else { return }
-          commands.toggleItalic()
-        } label: {
-          ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
-        }
-        .accessibilityLabel("Italic")
-          .keyboardShortcut("i", modifiers: .command)
-          .accessibilityValue(commands.isItalic ? "On" : "Off")
-        Button {
-          guard isEditorVisible else { return }
-          commands.toggleUnderline()
-        } label: {
-          ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
-        }
-        .accessibilityLabel("Underline")
-          .keyboardShortcut("u", modifiers: .command)
+        if presentation == .full {
+          Button {
+            guard isEditorVisible else { return }
+            commands.toggleItalic()
+          } label: {
+            ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
+          }
+          .accessibilityLabel("Italic")
+            .accessibilityValue(commands.isItalic ? "On" : "Off")
+          Button {
+            guard isEditorVisible else { return }
+            commands.toggleUnderline()
+          } label: {
+            ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
+          }
+          .accessibilityLabel("Underline")
           .accessibilityValue(commands.isUnderlined ? "On" : "Off")
-        Button {
-          guard isEditorVisible else { return }
-          commands.toggleStrikethrough()
-        } label: {
-          ToolbarIconLabel(systemImage: "strikethrough")
+          Button {
+            guard isEditorVisible else { return }
+            commands.toggleStrikethrough()
+          } label: {
+            ToolbarIconLabel(systemImage: "strikethrough")
+          }
+          .accessibilityLabel("Strikethrough")
         }
-        .accessibilityLabel("Strikethrough")
         Button {
           guard isEditorVisible, let note = appState.selectedNote else { return }
           fontPickerTarget = FontPickerTarget(note: note, isTitle: isFontTitleTarget, commands: commands)
@@ -2749,10 +2786,12 @@
         } label: {
           HStack(spacing: 5) {
             Text("Aa")
-            Text(fontFamilyDisplay).lineLimit(1).truncationMode(.tail)
+            if presentation == .full {
+              Text(fontFamilyDisplay).lineLimit(1).truncationMode(.tail)
+            }
             Image(systemName: "chevron.down").font(.system(size: 8))
           }
-          .frame(maxWidth: 132)
+          .frame(width: presentation == .full ? 112 : 42)
         }
         .help("Font: \(fontFamilyDisplay)")
         .accessibilityLabel("Font")
@@ -2780,7 +2819,7 @@
         .onChange(of: isEditorVisible) { _, _ in dismissInvalidFontPicker() }
         TextField("Font size", text: $fontSizeText)
           .textFieldStyle(.roundedBorder)
-          .frame(width: 48)
+          .frame(width: presentation == .full ? 48 : 42)
           .focused($isFontSizeFocused)
           .onAppear(perform: syncFontSizeText)
           .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
@@ -2868,57 +2907,128 @@
             onCancel: { isBackgroundColorPickerPresented = false }
           )
         }
-        Menu {
-          Button("Disc (•)") {
+        if presentation == .full {
+          Menu {
+            Button("Disc (•)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.bullet(.disc))
+            }
+            Button("Circle (◦)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.bullet(.circle))
+            }
+            Button("Square (▪)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.bullet(.square))
+            }
+            Button("Dash (–)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.bullet(.dash))
+            }
+          } label: {
+            ToolbarIconLabel(systemImage: "list.bullet")
+          } primaryAction: {
             guard isEditorVisible else { return }
-            commands.applyList(.bullet(.disc))
+            commands.applyAutomaticList(.bullets)
           }
-          Button("Circle (◦)") {
+          .accessibilityLabel("Bullets")
+          Menu {
+            Button("Decimal (1.)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.number(.decimal))
+            }
+            Button("Alphabetic (a.)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.number(.alphabetic))
+            }
+            Button("Roman (i.)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.number(.roman))
+            }
+          } label: {
+            ToolbarIconLabel(systemImage: "list.number")
+          } primaryAction: {
             guard isEditorVisible else { return }
-            commands.applyList(.bullet(.circle))
+            commands.applyAutomaticList(.numbers)
           }
-          Button("Square (▪)") {
+          .accessibilityLabel("Numbers")
+          Button {
             guard isEditorVisible else { return }
-            commands.applyList(.bullet(.square))
+            commands.applyList(.checklist)
+          } label: {
+            ToolbarIconLabel(systemImage: "checklist")
           }
-          Button("Dash (–)") {
-            guard isEditorVisible else { return }
-            commands.applyList(.bullet(.dash))
+          .accessibilityLabel("Checklist")
+        } else {
+          Menu {
+            Button("Redo") {
+              guard isEditorVisible else { return }
+              commands.redo()
+            }
+            Button("Italic") {
+              guard isEditorVisible else { return }
+              commands.toggleItalic()
+            }
+            Button("Underline") {
+              guard isEditorVisible else { return }
+              commands.toggleUnderline()
+            }
+            Button("Strikethrough") {
+              guard isEditorVisible else { return }
+              commands.toggleStrikethrough()
+            }
+            Divider()
+            Menu("Bullets") {
+              Button("Bulleted List") {
+                guard isEditorVisible else { return }
+                commands.applyAutomaticList(.bullets)
+              }
+              Divider()
+              Button("Disc (•)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.bullet(.disc))
+              }
+              Button("Circle (◦)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.bullet(.circle))
+              }
+              Button("Square (▪)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.bullet(.square))
+              }
+              Button("Dash (–)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.bullet(.dash))
+              }
+            }
+            Menu("Numbers") {
+              Button("Numbered List") {
+                guard isEditorVisible else { return }
+                commands.applyAutomaticList(.numbers)
+              }
+              Divider()
+              Button("Decimal (1.)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.number(.decimal))
+              }
+              Button("Alphabetic (a.)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.number(.alphabetic))
+              }
+              Button("Roman (i.)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.number(.roman))
+              }
+            }
+            Button("Checklist") {
+              guard isEditorVisible else { return }
+              commands.applyList(.checklist)
+            }
+          } label: {
+            ToolbarIconLabel(systemImage: "ellipsis.circle")
           }
-        } label: {
-          ToolbarIconLabel(systemImage: "list.bullet")
-        } primaryAction: {
-          guard isEditorVisible else { return }
-          commands.applyAutomaticList(.bullets)
+          .accessibilityLabel("More formatting")
         }
-        .accessibilityLabel("Bullets")
-        Menu {
-          Button("Decimal (1.)") {
-            guard isEditorVisible else { return }
-            commands.applyList(.number(.decimal))
-          }
-          Button("Alphabetic (a.)") {
-            guard isEditorVisible else { return }
-            commands.applyList(.number(.alphabetic))
-          }
-          Button("Roman (i.)") {
-            guard isEditorVisible else { return }
-            commands.applyList(.number(.roman))
-          }
-        } label: {
-          ToolbarIconLabel(systemImage: "list.number")
-        } primaryAction: {
-          guard isEditorVisible else { return }
-          commands.applyAutomaticList(.numbers)
-        }
-        .accessibilityLabel("Numbers")
-        Button {
-          guard isEditorVisible else { return }
-          commands.applyList(.checklist)
-        } label: {
-          ToolbarIconLabel(systemImage: "checklist")
-        }
-        .accessibilityLabel("Checklist")
         Spacer()
         Button(role: .destructive) {
           guard isEditorVisible else { return }
@@ -2927,26 +3037,67 @@
           ToolbarIconLabel(systemImage: "trash")
         }
         .accessibilityLabel("Delete")
-        .keyboardShortcut("w", modifiers: .command)
         }
         .buttonStyle(CrispToolbarButtonStyle(motion: motion))
         .animation(motion.quick, value: commands.isBold)
         .animation(motion.quick, value: commands.isItalic)
         .animation(motion.quick, value: commands.isUnderlined)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, presentation == .full ? 16 : 8)
         .padding(.vertical, 9)
       }
+      .frame(height: 44)
       .frame(maxWidth: .infinity)
       .modifier(FormattingBarSurface(isPinned: isPinned))
       .padding(.horizontal, 10)
       .padding(.top, 8)
       .disabled(!isEditorVisible)
+      .overlay { keyboardShortcuts }
+      .accessibilityElement(children: .contain)
       .accessibilityLabel("Editor toolbar")
       .accessibilityHidden(!isEditorVisible)
     }
 
     private var motion: AppMotion {
       AppMotion(reduceMotion: reduceMotion)
+    }
+
+    private var keyboardShortcuts: some View {
+      VStack(spacing: 0) {
+        Button("Undo") {
+          guard isEditorVisible else { return }
+          commands.undo()
+        }
+          .keyboardShortcut("z", modifiers: .command)
+        Button("Redo") {
+          guard isEditorVisible else { return }
+          commands.redo()
+        }
+          .keyboardShortcut("z", modifiers: [.command, .shift])
+        Button("Bold") {
+          guard isEditorVisible else { return }
+          commands.toggleBold()
+        }
+          .keyboardShortcut("b", modifiers: .command)
+        Button("Italic") {
+          guard isEditorVisible else { return }
+          commands.toggleItalic()
+        }
+          .keyboardShortcut("i", modifiers: .command)
+        Button("Underline") {
+          guard isEditorVisible else { return }
+          commands.toggleUnderline()
+        }
+          .keyboardShortcut("u", modifiers: .command)
+        Button("Delete") {
+          guard isEditorVisible else { return }
+          onDelete()
+        }
+          .keyboardShortcut("w", modifiers: .command)
+      }
+      .frame(width: 0, height: 0)
+      .opacity(0)
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
     }
 
     private var fontSizeDisplay: String {
