@@ -471,6 +471,81 @@ struct AgentPresentationTests {
     #expect(state.workspace == initialWorkspace)
   }
 
+  @Test @MainActor
+  func unpinnedNotesPanelKeepsAgentActivityInsideItsVisibleHost() async throws {
+    NSApplication.shared.accessibilitySetValue(
+      true,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
+    for size in [NSSize(width: 380, height: 300), NSSize(width: 800, height: 430)] {
+      let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("AgentActivityPanel-\(UUID().uuidString)", isDirectory: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let note = Note(title: "Underlying editor fixture")
+      let state = AppState(
+        store: LocalStore(rootURL: root),
+        saveOperation: { _, _, _, _ in .committed }
+      )
+      await state.waitUntilInitialLoad()
+      state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+      let initialWorkspace = state.workspace
+      let initialActivityCount = state.agentActivity.count
+      let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+      let (window, host) = await hostedWindow(
+        rootView: NotesPanel(
+          dictationRuntime: runtime,
+          isPinned: false,
+          sizing: .container
+        )
+        .environmentObject(state),
+        size: size
+      )
+      let initialFrame = window.frame
+
+      let indicator = try #require(
+        agentActivityAccessibilityElement(host, identifier: "agent-activity-indicator")
+      )
+      try clickAgentActivityElement(indicator, in: window)
+      await settleAgentActivityHost(host)
+
+      #expect(window.sheets.isEmpty)
+      #expect(agentActivityAccessibilityElement(host, label: "Close Agent Activity") != nil)
+      #expect(agentActivityAccessibilityElement(host, label: note.title) == nil)
+
+      let done = try #require(
+        agentActivityAccessibilityElement(host, label: "Close Agent Activity")
+      )
+      try clickAgentActivityElement(done, in: window)
+      await settleAgentActivityHost(host)
+
+      #expect(window.sheets.isEmpty)
+      #expect(window.isVisible)
+      #expect(window.frame == initialFrame)
+      #expect(agentActivityAccessibilityElement(host, label: "Close Agent Activity") == nil)
+      #expect(state.workspace == initialWorkspace)
+      #expect(state.agentActivity.count == initialActivityCount)
+
+      let reopenedIndicator = try #require(
+        agentActivityAccessibilityElement(host, identifier: "agent-activity-indicator")
+      )
+      try clickAgentActivityElement(reopenedIndicator, in: window)
+      await settleAgentActivityHost(host)
+      #expect(agentActivityAccessibilityElement(host, label: "Close Agent Activity") != nil)
+
+      sendEscape(to: window)
+      await settleAgentActivityHost(host)
+      #expect(agentActivityAccessibilityElement(host, label: "Close Agent Activity") == nil)
+      #expect(window.isVisible)
+      #expect(window.frame == initialFrame)
+      #expect(state.workspace == initialWorkspace)
+      #expect(state.agentActivity.count == initialActivityCount)
+
+      window.contentView = nil
+      window.orderOut(nil)
+      await runtime.shutdown()
+    }
+  }
+
   private func makeRecord(
     note: Note,
     actor: AgentActivityActor = .integration(profileID: UUID(), displayName: "Codex")
@@ -638,6 +713,22 @@ private func agentActivityAccessibilityElement(_ value: Any?, label: String) -> 
 }
 
 @MainActor
+private func agentActivityAccessibilityElement(_ value: Any?, identifier: String) -> NSObject? {
+  guard let element = value as? NSObject else { return nil }
+  let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let value = element.responds(to: identifierSelector)
+    ? element.perform(identifierSelector)?.takeUnretainedValue() as? String : nil
+  if value == identifier { return element }
+  let children = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in children ?? [] {
+    if let found = agentActivityAccessibilityElement(child, identifier: identifier) { return found }
+  }
+  return nil
+}
+
+@MainActor
 private func presentedAgentActivitySheet(
   from window: NSWindow,
   parent: NSView
@@ -667,7 +758,39 @@ private func sendEscape(to window: NSWindow) {
     isARepeat: false,
     keyCode: 53
   ) else { return }
-  window.sendEvent(event)
+  _ = window.performKeyEquivalent(with: event)
+}
+
+@MainActor
+private func clickAgentActivityElement(_ element: NSObject, in window: NSWindow) throws {
+  let frame = try #require(
+    element.value(forKey: "accessibilityFrame") as? NSValue
+  ).rectValue
+  let point = window.convertPoint(fromScreen: NSPoint(x: frame.midX, y: frame.midY))
+  for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    let event = try #require(
+      NSEvent.mouseEvent(
+        with: type,
+        location: point,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 0,
+        clickCount: 1,
+        pressure: type == .leftMouseDown ? 1 : 0
+      )
+    )
+    window.sendEvent(event)
+  }
+}
+
+@MainActor
+private func settleAgentActivityHost(_ host: NSView) async {
+  for _ in 0..<40 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
 }
 
 @MainActor

@@ -665,16 +665,9 @@
           onOpenDestination: openHistoryDestination
         )
       }
-      .sheet(isPresented: $isShowingAgentActivity) {
-        AgentActivityView(
-          onOpenNote: { noteID in
-            if activateNoteAndScope(noteID) {
-              isShowingAgentActivity = false
-            }
-          },
-          onDismiss: { isShowingAgentActivity = false }
-        )
-        .environmentObject(appState)
+      .sheet(isPresented: agentActivitySheetPresentation) {
+        agentActivityContent
+          .frame(minWidth: 520, minHeight: 380)
       }
       .sheet(item: $notePendingAgentShare) { note in
         AgentNoteAccessEditorView(
@@ -702,6 +695,10 @@
                 with: .scale(scale: reduceMotion ? 1 : 0.985)
               )
             )
+          }
+
+          if !isPinned && isShowingAgentActivity {
+            agentActivityOverlay
           }
 
           if let folderPendingDeletion {
@@ -1598,6 +1595,43 @@
     private var isBlockingOverlayPresented: Bool {
       searchController.isPresented || noteLinkPickerController.isPresented
         || notePendingDeletion != nil || folderPendingDeletion != nil || isShowingTrash
+        || isShowingAgentActivity
+    }
+
+    private var agentActivitySheetPresentation: Binding<Bool> {
+      Binding(
+        get: { isPinned && isShowingAgentActivity },
+        set: { isShowingAgentActivity = $0 }
+      )
+    }
+
+    private var agentActivityContent: some View {
+      AgentActivityView(
+        onOpenNote: { noteID in
+          if activateNoteAndScope(noteID) {
+            isShowingAgentActivity = false
+          }
+        },
+        onDismiss: { isShowingAgentActivity = false }
+      )
+      .environmentObject(appState)
+    }
+
+    private var agentActivityOverlay: some View {
+      ZStack {
+        Color.black.opacity(0.28)
+          .ignoresSafeArea()
+          .accessibilityHidden(true)
+
+        agentActivityContent
+          .frame(maxWidth: 520, maxHeight: 400)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+          .clipShape(RoundedRectangle(cornerRadius: 14))
+          .shadow(radius: 20, y: 8)
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("Agent Activity")
+          .padding(8)
+      }
     }
 
     private var folderNamesByID: [UUID: String] {

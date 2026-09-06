@@ -91,6 +91,7 @@
                 onDismiss: { showsAgentActivity = false }
               )
               .environmentObject(appState)
+              .frame(minWidth: 520, minHeight: 380)
             }
             Button("Clear Activity", role: .destructive) {
               showsClearConfirmation = true

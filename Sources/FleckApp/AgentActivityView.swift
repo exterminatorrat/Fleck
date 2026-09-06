@@ -138,7 +138,6 @@
         }
       }
       .padding(18)
-      .frame(minWidth: 520, minHeight: 380)
       .task { appState.refreshAgentActivity() }
       .confirmationDialog(
         "Clear Agent Activity?",
