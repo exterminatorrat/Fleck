@@ -276,6 +276,33 @@ import Testing
   #expect(value.pinnedPanelHeight == 430)
 }
 
+@Test func panelWidthFallbackUsesTheStoredSizingGeneration() throws {
+  let cases: [(json: String, width: Double, height: Double, version: Int)] = [
+    (#"{"panelHeight":500}"#, 520, 500, 2),
+    (#"{"panelHeight":500,"panelSizingVersion":0}"#, 520, 500, 2),
+    (#"{"panelHeight":500,"panelSizingVersion":1}"#, 640, 500, 2),
+    (#"{"panelHeight":500,"panelSizingVersion":2}"#, 800, 500, 2),
+    (#"{"panelWidth":"wide","panelHeight":500,"panelSizingVersion":2}"#, 800, 500, 2),
+    (#"{"panelHeight":500,"panelSizingVersion":7}"#, 800, 500, 7),
+  ]
+
+  for value in cases {
+    let decoded = try JSONDecoder().decode(AppPreferences.self, from: Data(value.json.utf8))
+    #expect(decoded.panelWidth == value.width)
+    #expect(decoded.panelHeight == value.height)
+    #expect(decoded.panelSizingVersion == value.version)
+  }
+}
+
+@Test func currentSizingGenerationPreservesExplicitLegacyWidthAndCustomHeight() throws {
+  let data = Data(#"{"panelWidth":520,"panelHeight":500,"panelSizingVersion":2}"#.utf8)
+  let decoded = try JSONDecoder().decode(AppPreferences.self, from: data)
+
+  #expect(decoded.panelWidth == 520)
+  #expect(decoded.panelHeight == 500)
+  #expect(decoded.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
+}
+
 @Test func unrelatedMalformedPreferenceFieldStillThrows() {
   let malformed = Data(#"{"panelWidth":"wide","showFormattingBar":"yes"}"#.utf8)
 

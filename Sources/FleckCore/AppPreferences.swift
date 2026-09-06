@@ -118,23 +118,32 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       decodedTypographyVersion == nil
       && decodedFamily == ".AppleSystemUIFont"
       && decodedSize == 15
+    let decodedPanelSizingVersion = Self.decodedSizingField(
+      Int?.self,
+      from: c,
+      forKey: .panelSizingVersion,
+      fallback: nil
+    )
+    let panelWidthFallback: Double
+    switch decodedPanelSizingVersion {
+    case .some(1):
+      panelWidthFallback = 640
+    case .some(let version) where version >= Self.currentPanelSizingVersion:
+      panelWidthFallback = 800
+    default:
+      panelWidthFallback = 520
+    }
     let decodedPanelWidth = Self.decodedSizingField(
       Double.self,
       from: c,
       forKey: .panelWidth,
-      fallback: 520
+      fallback: panelWidthFallback
     )
     let decodedPanelHeight = Self.decodedSizingField(
       Double.self,
       from: c,
       forKey: .panelHeight,
       fallback: 430
-    )
-    let decodedPanelSizingVersion = Self.decodedSizingField(
-      Int?.self,
-      from: c,
-      forKey: .panelSizingVersion,
-      fallback: nil
     )
     let migratesUntouchedPanelSize =
       decodedPanelSizingVersion == nil
