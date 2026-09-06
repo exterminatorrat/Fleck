@@ -1145,6 +1145,7 @@
               }
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
+              .contentShape(Capsule())
               .background {
                 if note.id == appState.workspace.selectedNoteID {
                   Capsule()
@@ -3483,11 +3484,12 @@
       guard let view, let window = view.window,
         let clip = view.enclosingScrollView?.contentView else { return }
       let windowPoint = window.convertPoint(fromScreen: point)
-      inside = clip.bounds.contains(clip.convert(windowPoint, from: nil))
-      if inside {
+      let nextInside = clip.bounds.contains(clip.convert(windowPoint, from: nil))
+      if inside != nextInside { inside = nextInside }
+      if nextInside {
         var next = preview
         next?.update(pointerX: view.convert(windowPoint, from: nil).x)
-        preview = next
+        if preview != next { preview = next }
         startTimer()
       } else {
         stopTimer()
@@ -3504,7 +3506,10 @@
       return .move
     }
 
-    func exited() { inside = false; stopTimer() }
+    func exited() {
+      if inside { inside = false }
+      stopTimer()
+    }
 
     func perform(_ sender: any NSDraggingInfo) -> Bool {
       guard operation(sender) == .move, let preview, let session, let currentIDs,
@@ -3587,7 +3592,7 @@
         scroll.reflectScrolledClipView(clip)
         var next = preview
         next?.update(pointerX: view.convert(window.convertPoint(fromScreen: nativePoint), from: nil).x)
-        preview = next
+        if preview != next { preview = next }
       }
     }
   }
@@ -3828,6 +3833,7 @@
 
     override func beginDraggingSession(with items: [NSDraggingItem], event: NSEvent,
       source: any NSDraggingSource) -> NSDraggingSession {
+      Self.materializeDraggingImages(items, scale: window?.backingScaleFactor ?? 1)
       if let window { onBegan?(window.convertPoint(toScreen: event.locationInWindow)) }
       let id = UUID()
       let end = onEnd
@@ -3839,6 +3845,40 @@
       proxy.moved = onMoved
       sourceProxy = proxy
       return super.beginDraggingSession(with: items, event: event, source: proxy)
+    }
+
+    static func materializeDraggingImages(_ items: [NSDraggingItem], scale: CGFloat) {
+      let scale = max(1, scale)
+      for item in items {
+        guard let components = item.imageComponents else { continue }
+        for component in components {
+          guard let image = component.contents as? NSImage,
+            image.size.width > 0, image.size.height > 0,
+            let bitmap = NSBitmapImageRep(
+              bitmapDataPlanes: nil,
+              pixelsWide: max(1, Int(ceil(image.size.width * scale))),
+              pixelsHigh: max(1, Int(ceil(image.size.height * scale))),
+              bitsPerSample: 8,
+              samplesPerPixel: 4,
+              hasAlpha: true,
+              isPlanar: false,
+              colorSpaceName: .deviceRGB,
+              bytesPerRow: 0,
+              bitsPerPixel: 0
+            ), let context = NSGraphicsContext(bitmapImageRep: bitmap)
+          else { continue }
+          bitmap.size = image.size
+          NSGraphicsContext.saveGraphicsState()
+          NSGraphicsContext.current = context
+          context.cgContext.scaleBy(x: scale, y: scale)
+          image.draw(in: NSRect(origin: .zero, size: image.size))
+          NSGraphicsContext.restoreGraphicsState()
+          let frozen = NSImage(size: image.size)
+          frozen.addRepresentation(bitmap)
+          component.contents = frozen
+        }
+        item.imageComponentsProvider = { components }
+      }
     }
   }
 

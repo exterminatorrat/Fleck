@@ -664,10 +664,80 @@ private func clickHostedTabControl(at point: NSPoint, in window: NSWindow, root:
 }
 
 @MainActor
+private func clickHostedPointer(atScreen point: NSPoint, in window: NSWindow) {
+  let location = window.convertPoint(fromScreen: point)
+  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    guard let event = NSEvent.mouseEvent(
+      with: eventType,
+      location: location,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 0,
+      clickCount: 1,
+      pressure: eventType == .leftMouseDown ? 1 : 0
+    ) else { continue }
+    window.sendEvent(event)
+  }
+}
+
+@MainActor
+private func hostedPointerElement(_ value: Any?, identifier: String) -> NSObject? {
+  guard let element = value as? NSObject else { return nil }
+  let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let value = element.responds(to: identifierSelector)
+    ? element.perform(identifierSelector)?.takeUnretainedValue() as? String : nil
+  if value == identifier { return element }
+  let children = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in children ?? [] {
+    if let found = hostedPointerElement(child, identifier: identifier) { return found }
+  }
+  return nil
+}
+
+@MainActor
 private func settleTabStripHost(_ view: NSView) async {
   for _ in 0..<40 {
     view.layoutSubtreeIfNeeded()
     await Task.yield()
+  }
+}
+
+private final class NativeDraggingSourceProbe: NSObject, NSDraggingSource {
+  func draggingSession(
+    _ session: NSDraggingSession,
+    sourceOperationMaskFor context: NSDraggingContext
+  ) -> NSDragOperation {
+    .move
+  }
+}
+
+@MainActor
+private func nativeDragImageHasVisiblePixel(_ image: NSImage) -> Bool {
+  let width = max(1, Int(ceil(image.size.width)))
+  let height = max(1, Int(ceil(image.size.height)))
+  guard let bitmap = NSBitmapImageRep(
+    bitmapDataPlanes: nil,
+    pixelsWide: width,
+    pixelsHigh: height,
+    bitsPerSample: 8,
+    samplesPerPixel: 4,
+    hasAlpha: true,
+    isPlanar: false,
+    colorSpaceName: .deviceRGB,
+    bytesPerRow: 0,
+    bitsPerPixel: 0
+  ), let context = NSGraphicsContext(bitmapImageRep: bitmap)
+  else { return false }
+  NSGraphicsContext.saveGraphicsState()
+  NSGraphicsContext.current = context
+  image.draw(in: NSRect(x: 0, y: 0, width: width, height: height))
+  NSGraphicsContext.restoreGraphicsState()
+  return (0..<height).contains { y in
+    (0..<width).contains { x in bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 0.01 }
   }
 }
 
@@ -732,6 +802,82 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   #expect(cancellations == 0)
 }
 
+@Test @MainActor
+func reorderInteractionMaterializesNativePreviewBeforeHidingUnselectedTab() throws {
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 180, height: 40),
+    styleMask: [.borderless], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  let sourceView = ReorderSourceHostingView(
+    rootView: AnyView(Color.red.frame(width: 120, height: 30))
+  )
+  window.contentView = sourceView
+  window.makeKeyAndOrderFront(nil)
+  defer { window.contentView = nil; window.orderOut(nil); window.close() }
+
+  var sourceIsVisible = true
+  let retainedImage = NSImage(size: NSSize(width: 1, height: 1))
+  retainedImage.lockFocus()
+  NSColor.black.setFill()
+  NSRect(x: 0, y: 0, width: 1, height: 1).fill()
+  retainedImage.unlockFocus()
+  var retainedRect = NSRect(x: 0, y: 0, width: 1, height: 1)
+  let retainedContents = try #require(retainedImage.cgImage(
+    forProposedRect: &retainedRect, context: nil, hints: nil
+  ))
+  func makeItem() -> NSDraggingItem {
+    let item = NSDraggingItem(pasteboardWriter: NSString(string: "native-preview"))
+    item.draggingFrame = NSRect(x: 0, y: 0, width: 120, height: 30)
+    item.imageComponentsProvider = {
+      let component = NSDraggingImageComponent(key: .icon)
+      component.frame = item.draggingFrame
+      component.contents = NSImage(size: item.draggingFrame.size, flipped: false) { rect in
+        (sourceIsVisible ? NSColor.systemRed : NSColor.clear).setFill()
+        rect.fill()
+        return true
+      }
+      let retainedComponent = NSDraggingImageComponent(key: .label)
+      retainedComponent.frame = NSRect(x: 4, y: 4, width: 1, height: 1)
+      retainedComponent.contents = retainedContents
+      return [component, retainedComponent]
+    }
+    return item
+  }
+  let item = makeItem()
+  sourceView.onBegan = { _ in sourceIsVisible = false }
+  let event = try #require(NSEvent.mouseEvent(
+    with: .leftMouseDragged,
+    location: NSPoint(x: 20, y: 15),
+    modifierFlags: [],
+    timestamp: ProcessInfo.processInfo.systemUptime,
+    windowNumber: window.windowNumber,
+    context: nil,
+    eventNumber: 0,
+    clickCount: 1,
+    pressure: 1
+  ))
+  _ = sourceView.beginDraggingSession(
+    with: [item], event: event, source: NativeDraggingSourceProbe()
+  )
+
+  let nativeImage = try #require(item.imageComponents?.first?.contents as? NSImage)
+  #expect(nativeDragImageHasVisiblePixel(nativeImage))
+
+  sourceIsVisible = true
+  let retinaItem = makeItem()
+  ReorderSourceHostingView.materializeDraggingImages([retinaItem], scale: 2)
+  sourceIsVisible = false
+  let retinaComponents = try #require(retinaItem.imageComponents)
+  let retinaImage = try #require(retinaComponents.first?.contents as? NSImage)
+  let bitmap = try #require(retinaImage.representations.first as? NSBitmapImageRep)
+  #expect(bitmap.pixelsWide == 240)
+  #expect(bitmap.pixelsHigh == 60)
+  #expect(bitmap.colorAt(x: 238, y: 58)?.alphaComponent ?? 0 > 0.9)
+  let retainedAfter = retinaComponents.last?.contents as AnyObject?
+  #expect(retainedAfter === retainedContents)
+}
+
 @Test @MainActor func hostedNotesPanelTabOverflowNativeDestinationMeasuresRealUnequalSourcesAndBlankTail() async throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
@@ -790,6 +936,93 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   #expect(abs(finalPosition - first.minX) < 1)
   #expect(controller.preview?.frames[notes[1].id] == second)
   controller.cancel()
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func hostedNotesPanelPointerHitMapsIncludeNoteAndFolderPaddedInteriors() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("pointer-hit-maps-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let firstFolder = try Folder(name: "First folder")
+  let secondFolder = try Folder(name: "Second folder")
+  let firstNote = Note(title: "First note", folderID: firstFolder.id)
+  let selectedNote = Note(title: "Selected note", folderID: firstFolder.id)
+  let secondFolderNote = Note(title: "Second folder note", folderID: secondFolder.id)
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(
+    notes: [firstNote, selectedNote, secondFolderNote],
+    selectedNoteID: selectedNote.id,
+    folders: [firstFolder, secondFolder]
+  )
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(
+    rootView: NotesPanel(dictationRuntime: runtime, sizing: .container)
+      .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 800, height: 430),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleTabStripHost(host)
+
+  func findDestination(_ view: NSView) -> FluidTabDestinationView? {
+    if let destination = view as? FluidTabDestinationView { return destination }
+    return view.subviews.lazy.compactMap { findDestination($0) }.first
+  }
+  let destination = try #require(findDestination(host))
+  let noteSourceFrames = destination.sourceFrames()
+  #expect(noteSourceFrames[firstNote.id]?.width ?? 0 > 20)
+  #expect(noteSourceFrames[selectedNote.id]?.width ?? 0 > 20)
+
+  func click(identifier: String, x: (NSRect) -> CGFloat) async throws {
+    let element = try #require(hostedPointerElement(host, identifier: identifier))
+    let frame = try #require(element.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+    clickHostedPointer(
+      atScreen: NSPoint(x: x(frame), y: frame.midY), in: window
+    )
+    await settleTabStripHost(host)
+  }
+  func clickNote(_ noteID: UUID, x: (NSRect) -> CGFloat) async throws {
+    let frame = try #require(noteSourceFrames[noteID])
+    let screenFrame = window.convertToScreen(destination.convert(frame, to: nil))
+    clickHostedPointer(
+      atScreen: NSPoint(x: x(screenFrame), y: screenFrame.midY), in: window
+    )
+    await settleTabStripHost(host)
+  }
+
+  try await clickNote(firstNote.id, x: { $0.midX })
+  #expect(state.workspace.selectedNoteID == firstNote.id)
+  try await clickNote(selectedNote.id, x: { $0.minX + 2 })
+  #expect(state.workspace.selectedNoteID == selectedNote.id)
+  try await clickNote(selectedNote.id, x: { $0.midX })
+  #expect(state.workspace.selectedNoteID == selectedNote.id)
+  try await clickNote(firstNote.id, x: { $0.maxX - 2 })
+  #expect(state.workspace.selectedNoteID == firstNote.id)
+
+  let secondFolderID = "folder-\(secondFolder.id.uuidString)"
+  let firstFolderID = "folder-\(firstFolder.id.uuidString)"
+  try await click(identifier: secondFolderID, x: { $0.midX })
+  #expect(state.workspace.selectedNoteID == secondFolderNote.id)
+  try await click(identifier: firstFolderID, x: { $0.minX + 2 })
+  #expect(state.workspace.selectedNoteID == firstNote.id)
+  try await click(identifier: secondFolderID, x: { $0.maxX - 2 })
+  #expect(state.workspace.selectedNoteID == secondFolderNote.id)
+
   window.contentView = nil
   window.orderOut(nil)
   await runtime.shutdown()

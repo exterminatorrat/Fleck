@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import Testing
 import SwiftUI
@@ -414,6 +415,64 @@ func reorderInteractionDeferredFolderTransferRevalidatesAndPreservesSelection() 
   #expect(scroll.contentView.bounds.origin == stopped)
   #expect(moves == 0)
   #expect(state.workspace == original)
+}
+
+@Test @MainActor
+func reorderInteractionFluidControllerDoesNotRepublishAnUnchangedSlot() throws {
+  let ids = [UUID(), UUID(), UUID()]
+  var liveIDs = ids
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 400, height: 40),
+    styleMask: [.borderless], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  let scroll = NSScrollView(frame: window.contentView!.bounds)
+  let destination = FluidTabDestinationView(
+    rootView: AnyView(Color.clear.frame(width: 400, height: 37))
+  )
+  destination.frame = NSRect(x: 0, y: 0, width: 400, height: 37)
+  scroll.documentView = destination
+  window.contentView = scroll
+  window.makeKeyAndOrderFront(nil)
+  defer { window.contentView = nil; window.orderOut(nil); window.close() }
+  for (index, id) in ids.enumerated() {
+    let source = ReorderSourceHostingView(
+      rootView: AnyView(Color.clear.frame(width: 100, height: 30))
+    )
+    source.noteID = id
+    source.frame = NSRect(x: index * 106, y: 0, width: 100, height: 30)
+    destination.addSubview(source)
+  }
+  let interaction = ReorderInteraction(sourceID: ids[0], originalIDs: ids)
+  let session = ReorderDropSession(source: .init(
+    noteID: ids[0], sourceFolderID: nil, dragSessionID: interaction.sessionID
+  ))
+  let controller = FluidTabDragController()
+  controller.view = destination
+  controller.prepare(
+    interaction: interaction,
+    session: session,
+    currentIDs: { liveIDs },
+    currentPins: { [] },
+    move: { _, _ in Issue.record("Pointer movement must not commit a reorder") },
+    finish: {}
+  )
+  let point = window.convertPoint(toScreen: destination.convert(NSPoint(x: 20, y: 15), to: nil))
+  controller.began(at: point)
+  controller.moved(to: point) // Establish the first native proposal.
+  var publicationCount = 0
+  let observation = controller.objectWillChange.sink { publicationCount += 1 }
+  for _ in 0..<40 { controller.moved(to: point) }
+
+  #expect(publicationCount == 0)
+  #expect(controller.preview?.destination == 0)
+  #expect(controller.inside)
+  withExtendedLifetime(observation) {}
+
+  liveIDs.removeLast()
+  controller.moved(to: point)
+  #expect(controller.preview == nil)
+  #expect(!session.canAcceptDrop)
 }
 
 @Test @MainActor func reorderInteractionNativeLayerReversalUsesPresentationAndMotionCanBeDisabled() async throws {
