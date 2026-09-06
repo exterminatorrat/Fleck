@@ -2736,6 +2736,7 @@
           ToolbarIconLabel(systemImage: "arrow.uturn.backward")
         }
         .accessibilityLabel("Undo")
+        .keyboardShortcut("z", modifiers: .command)
         if presentation == .full {
           Button {
             guard isEditorVisible else { return }
@@ -2744,6 +2745,7 @@
             ToolbarIconLabel(systemImage: "arrow.uturn.forward")
           }
           .accessibilityLabel("Redo")
+          .keyboardShortcut("z", modifiers: [.command, .shift])
         }
         Divider().frame(height: 15)
         Button {
@@ -2753,6 +2755,7 @@
           ToolbarIconLabel(systemImage: "bold", isActive: commands.isBold)
         }
         .accessibilityLabel("Bold")
+        .keyboardShortcut("b", modifiers: .command)
           .accessibilityValue(commands.isBold ? "On" : "Off")
         if presentation == .full {
           Button {
@@ -2762,6 +2765,7 @@
             ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
           }
           .accessibilityLabel("Italic")
+          .keyboardShortcut("i", modifiers: .command)
             .accessibilityValue(commands.isItalic ? "On" : "Off")
           Button {
             guard isEditorVisible else { return }
@@ -2770,6 +2774,7 @@
             ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
           }
           .accessibilityLabel("Underline")
+          .keyboardShortcut("u", modifiers: .command)
           .accessibilityValue(commands.isUnderlined ? "On" : "Off")
           Button {
             guard isEditorVisible else { return }
@@ -2965,14 +2970,17 @@
               guard isEditorVisible else { return }
               commands.redo()
             }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
             Button("Italic") {
               guard isEditorVisible else { return }
               commands.toggleItalic()
             }
+            .keyboardShortcut("i", modifiers: .command)
             Button("Underline") {
               guard isEditorVisible else { return }
               commands.toggleUnderline()
             }
+            .keyboardShortcut("u", modifiers: .command)
             Button("Strikethrough") {
               guard isEditorVisible else { return }
               commands.toggleStrikethrough()
@@ -3037,6 +3045,7 @@
           ToolbarIconLabel(systemImage: "trash")
         }
         .accessibilityLabel("Delete")
+        .keyboardShortcut("w", modifiers: .command)
         }
         .buttonStyle(CrispToolbarButtonStyle(motion: motion))
         .animation(motion.quick, value: commands.isBold)
@@ -3051,7 +3060,6 @@
       .padding(.horizontal, 10)
       .padding(.top, 8)
       .disabled(!isEditorVisible)
-      .overlay { keyboardShortcuts }
       .accessibilityElement(children: .contain)
       .accessibilityLabel("Editor toolbar")
       .accessibilityHidden(!isEditorVisible)
@@ -3059,45 +3067,6 @@
 
     private var motion: AppMotion {
       AppMotion(reduceMotion: reduceMotion)
-    }
-
-    private var keyboardShortcuts: some View {
-      VStack(spacing: 0) {
-        Button("Undo") {
-          guard isEditorVisible else { return }
-          commands.undo()
-        }
-          .keyboardShortcut("z", modifiers: .command)
-        Button("Redo") {
-          guard isEditorVisible else { return }
-          commands.redo()
-        }
-          .keyboardShortcut("z", modifiers: [.command, .shift])
-        Button("Bold") {
-          guard isEditorVisible else { return }
-          commands.toggleBold()
-        }
-          .keyboardShortcut("b", modifiers: .command)
-        Button("Italic") {
-          guard isEditorVisible else { return }
-          commands.toggleItalic()
-        }
-          .keyboardShortcut("i", modifiers: .command)
-        Button("Underline") {
-          guard isEditorVisible else { return }
-          commands.toggleUnderline()
-        }
-          .keyboardShortcut("u", modifiers: .command)
-        Button("Delete") {
-          guard isEditorVisible else { return }
-          onDelete()
-        }
-          .keyboardShortcut("w", modifiers: .command)
-      }
-      .frame(width: 0, height: 0)
-      .opacity(0)
-      .allowsHitTesting(false)
-      .accessibilityHidden(true)
     }
 
     private var fontSizeDisplay: String {
