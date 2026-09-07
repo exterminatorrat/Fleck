@@ -99,25 +99,45 @@
           }
         }
         for await data in results {
-          guard phase != .cancelled && phase != .committed else { return }
-          guard let data, matches(data) else { cancel(); return }
-          pendingCommit = commit
-          commitIfReady()
+          guard let data else { cancel(); return }
+          _ = stage(data: data, commit: commit)
           return
         }
       }
     }
 
+    func acceptDrop(data: Data, commit: @escaping () -> Void) -> Bool {
+      guard canAcceptDrop else { return false }
+      accepted = true
+      return stage(data: data, commit: commit)
+    }
+
     func acceptReorder(from providers: [NSItemProvider], interaction: ReorderInteraction,
       currentIDs: @escaping () -> [UUID], currentPinnedIDs: @escaping () -> Set<UUID>,
       move: @escaping (UUID, Int) -> Void) -> Task<Void, Never>? {
+      guard let commit = reorderCommit(interaction: interaction, currentIDs: currentIDs,
+        currentPinnedIDs: currentPinnedIDs, move: move) else { return nil }
+      return acceptDrop(from: providers, commit: commit)
+    }
+
+    func acceptReorder(data: Data, interaction: ReorderInteraction,
+      currentIDs: @escaping () -> [UUID], currentPinnedIDs: @escaping () -> Set<UUID>,
+      move: @escaping (UUID, Int) -> Void) -> Bool {
+      guard let commit = reorderCommit(interaction: interaction, currentIDs: currentIDs,
+        currentPinnedIDs: currentPinnedIDs, move: move) else { return false }
+      return acceptDrop(data: data, commit: commit)
+    }
+
+    private func reorderCommit(interaction: ReorderInteraction,
+      currentIDs: @escaping () -> [UUID], currentPinnedIDs: @escaping () -> Set<UUID>,
+      move: @escaping (UUID, Int) -> Void) -> (() -> Void)? {
       var proposal = interaction
       guard proposal.sessionID == id, proposal.sourceID == sourceID, let targetID = proposal.targetID,
         proposal.pinnedIDs.contains(proposal.sourceID) == proposal.pinnedIDs.contains(targetID),
         proposal.pinnedIDs == currentPinnedIDs(),
         let destination = proposal.consume(currentIDs: currentIDs())
       else { return nil }
-      return acceptDrop(from: providers) {
+      return {
         guard proposal.originalIDs == currentIDs(), proposal.pinnedIDs == currentPinnedIDs() else { return }
         move(proposal.sourceID, destination)
       }
@@ -155,6 +175,14 @@
       guard phase != .committed else { return }
       phase = .cancelled
       pendingCommit = nil
+    }
+
+    private func stage(data: Data, commit: @escaping () -> Void) -> Bool {
+      guard phase != .cancelled && phase != .committed else { return false }
+      guard matches(data) else { cancel(); return false }
+      pendingCommit = commit
+      commitIfReady()
+      return true
     }
 
     private func commitIfReady() {
@@ -598,7 +626,6 @@
         .accessibilityHidden(searchController.isPresented)
         .accessibilityHidden(isBlockingOverlayPresented)
       }
-      .modifier(PinnedGlassContainer(isPinned: isPinned))
       .frame(
         width: storedPanelSize?.width,
         height: storedPanelSize?.height
@@ -3206,18 +3233,6 @@
     }
   }
 
-  private struct PinnedGlassContainer: ViewModifier {
-    let isPinned: Bool
-
-    func body(content: Content) -> some View {
-      if isPinned, #available(macOS 26, *) {
-        GlassEffectContainer(spacing: 0) { content }
-      } else {
-        content
-      }
-    }
-  }
-
   private struct PinnedNavigationChromeSurface: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -3226,7 +3241,12 @@
       switch materialPolicy {
       case .liquidGlass:
         if #available(macOS 26, *) {
-          content.glassEffect(.regular, in: Rectangle())
+          content.background {
+            Rectangle()
+              .fill(.clear)
+              .glassEffect(.regular, in: Rectangle())
+              .allowsHitTesting(false)
+          }
         } else {
           content.background(.ultraThinMaterial)
         }
@@ -3447,8 +3467,6 @@
     private var nativePoint: NSPoint?
     private var viewportSize: NSSize?
     private var accepted = false
-    private var loaded = false
-    private var nativeEnded = false
     private weak var sourceView: ReorderSourceHostingView?
 
     private var pendingInteraction: ReorderInteraction?
@@ -3508,11 +3526,13 @@
     func operation(_ sender: any NSDraggingInfo) -> NSDragOperation {
       guard let view, let window = view.window else { return [] }
       moved(to: window.convertPoint(toScreen: sender.draggingLocation))
-      guard valid, inside, session?.canAcceptDrop == true,
-        sender.draggingSource != nil,
-        sender.draggingPasteboard.availableType(from: [.init(FolderDragPayload.noteType.identifier)]) != nil
-      else { return [] }
-      return .move
+      let isValid = valid
+      let canAccept = session?.canAcceptDrop == true
+      let sourcePresent = sender.draggingSource != nil
+      let payloadPresent = sender.draggingPasteboard.availableType(
+        from: [.init(FolderDragPayload.noteType.identifier)]
+      ) != nil
+      return isValid && inside && canAccept && sourcePresent && payloadPresent ? .move : []
     }
 
     func exited() {
@@ -3521,36 +3541,31 @@
     }
 
     func perform(_ sender: any NSDraggingInfo) -> Bool {
-      guard operation(sender) == .move, let preview, let session, let currentIDs,
+      let requestedOperation = operation(sender)
+      let data = sender.draggingPasteboard.data(
+        forType: .init(FolderDragPayload.noteType.identifier)
+      )
+      guard requestedOperation == .move, let preview, let session, let currentIDs,
         let currentPins, let move,
-        let data = sender.draggingPasteboard.data(forType: .init(FolderDragPayload.noteType.identifier))
+        let data
       else { return false }
-      let provider = NSItemProvider(item: data as NSData, typeIdentifier: FolderDragPayload.noteType.identifier)
-      let task: Task<Void, Never>?
+      let didAccept: Bool
       if preview.destination == preview.interaction.originalIDs.firstIndex(of: preview.interaction.sourceID) {
-        task = session.acceptDrop(from: [provider], commit: {})
+        didAccept = session.acceptDrop(data: data, commit: {})
       } else {
-        task = session.acceptReorder(from: [provider], interaction: preview.interaction,
+        didAccept = session.acceptReorder(data: data, interaction: preview.interaction,
           currentIDs: currentIDs, currentPinnedIDs: currentPins, move: move)
       }
-      guard let task else { return false }
+      guard didAccept else { return false }
       accepted = true
       stopTimer()
-      Task { @MainActor [weak self] in
-        await task.value
-        guard self?.session?.id == session.id else { return }
-        self?.loaded = true
-        if self?.nativeEnded == true { self?.reset(animated: false) }
-      }
       return true
     }
 
     func ended(sessionID: UUID, operation: NSDragOperation) {
       guard session?.id == sessionID else { return }
       stopTimer()
-      nativeEnded = true
-      if !accepted || operation != .move { reset() }
-      else if loaded { reset(animated: false) }
+      reset(animated: !(accepted && operation == .move))
     }
     func cancel() { session?.cancel(); reset() }
     private func reset(animated: Bool = true) {
@@ -3569,8 +3584,6 @@
       preview = nil
       inside = false
       accepted = false
-      loaded = false
-      nativeEnded = false
       nativePoint = nil
       finish?()
     }
@@ -3656,14 +3669,17 @@
       return find(self)
     }
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-      return controller?.operation(sender) ?? []
+      controller?.operation(sender) ?? []
     }
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
       controller?.operation(sender) ?? []
     }
-    override func draggingExited(_ sender: (any NSDraggingInfo)?) { controller?.exited() }
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+      controller?.exited()
+    }
     override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-      guard controller?.operation(sender) == .move else { return false }
+      let prepared = controller?.operation(sender) == .move
+      guard prepared else { return false }
       sender.animatesToDestination = false
       return true
     }
@@ -4003,7 +4019,7 @@
 
     func draggingSession(_ session: NSDraggingSession, willBeginAt point: NSPoint) {
       source?.draggingSession?(session, willBeginAt: point)
-      began?(session.draggingLocation)
+      began?(point)
     }
 
     func draggingSession(_ session: NSDraggingSession, movedTo point: NSPoint) {

@@ -98,6 +98,31 @@ import Testing
   await fixture.close()
 }
 
+@Test @MainActor func pinnedChromeKeepsNativeTabDestinationInsideNonemptyAncestors() async throws {
+  let fixture = try await hostedPinnedPanel()
+  do {
+    let destination = try #require(
+      descendants(in: fixture.host, as: FluidTabDestinationView.self).first
+    )
+    var ancestor: NSView? = destination
+    while let current = ancestor {
+      #expect(!current.bounds.isEmpty, "Native tab destination ancestry must remain nonempty")
+      let destinationBounds = current.convert(destination.bounds, from: destination)
+      #expect(
+        current.bounds.intersects(destinationBounds),
+        "Every native ancestor must contain part of the tab destination"
+      )
+      if current === fixture.host { break }
+      ancestor = current.superview
+    }
+    #expect(ancestor === fixture.host, "Native tab destination must remain under the hosted panel")
+  } catch {
+    await fixture.close()
+    throw error
+  }
+  await fixture.close()
+}
+
 @MainActor
 private struct PinnedChromeFixture {
   let root: URL

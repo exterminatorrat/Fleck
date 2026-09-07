@@ -422,6 +422,70 @@ func reorderInteractionDeferredFolderTransferRevalidatesAndPreservesSelection() 
   #expect(ReorderNativeSource.operationMask(for: .outsideApplication).isEmpty)
 }
 
+@Test @MainActor func reorderInteractionNativeDataCommitsSynchronouslyOnlyAtValidEnd() throws {
+  let ids = [UUID(), UUID(), UUID()]
+  for change in 0..<4 {
+    var currentIDs = ids
+    var currentPins: Set<UUID> = []
+    var interaction = ReorderInteraction(sourceID: ids[0], originalIDs: ids)
+    interaction.propose(over: ids[2], after: true, currentIDs: ids)
+    let source = NoteDropSource(
+      noteID: ids[0], sourceFolderID: nil, dragSessionID: interaction.sessionID
+    )
+    let data = try JSONEncoder().encode(source)
+    let session = ReorderDropSession(source: source)
+    var commits = 0
+    let accepted = session.acceptReorder(data: data, interaction: interaction,
+      currentIDs: { currentIDs }, currentPinnedIDs: { currentPins }) { sourceID, destination in
+        #expect(sourceID == ids[0])
+        #expect(destination == 2)
+        commits += 1
+      }
+    #expect(accepted)
+    let replayed = session.acceptReorder(data: data, interaction: interaction,
+      currentIDs: { currentIDs }, currentPinnedIDs: { currentPins }, move: { _, _ in
+        Issue.record("A native payload must not be accepted twice")
+      })
+    #expect(!replayed)
+    #expect(commits == 0)
+    switch change {
+    case 1: currentIDs.swapAt(1, 2)
+    case 2: currentPins.insert(ids[0])
+    case 3: session.cancel()
+    default: break
+    }
+    session.end(operation: .move)
+    #expect(commits == (change == 0 ? 1 : 0))
+  }
+
+  let source = NoteDropSource(noteID: ids[0], sourceFolderID: nil)
+  let mismatch = NoteDropSource(
+    noteID: ids[1], sourceFolderID: nil, dragSessionID: source.dragSessionID
+  )
+  let session = ReorderDropSession(source: source)
+  var commits = 0
+  #expect(!session.acceptDrop(data: try JSONEncoder().encode(mismatch)) { commits += 1 })
+  session.end(operation: .move)
+  #expect(commits == 0)
+}
+
+@MainActor
+private final class DraggingSessionLocationProbe: NSDraggingSession {
+  override var draggingLocation: NSPoint { NSPoint(x: -1, y: 1441) }
+}
+
+@Test @MainActor func reorderInteractionNativeBeginUsesCallbackScreenPoint() {
+  let expected = NSPoint(x: 1642, y: 487)
+  var received: NSPoint?
+  let source = ReorderNativeSource(
+    id: UUID(), source: nil, began: { received = $0 }, end: { _ in }
+  )
+
+  source.draggingSession(DraggingSessionLocationProbe(), willBeginAt: expected)
+
+  #expect(received == expected)
+}
+
 @Test func reorderInteractionFluidUnequalWidthsDisplaceFullSourceGapAndReverse() throws {
   let ids = [UUID(), UUID(), UUID()]
   let frames = [ids[0]: CGRect(x: 0, y: 0, width: 60, height: 30),
@@ -603,7 +667,7 @@ func reorderInteractionFluidControllerDoesNotRepublishAnUnchangedSlot() throws {
 }
 
 @Test @MainActor
-func reorderDestinationDisablesNativeDropAnimation() throws {
+func reorderDestinationCommitsAndResetsSynchronouslyAtNativeEnd() throws {
   let ids = [UUID(), UUID()]
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 220, height: 40),
@@ -619,6 +683,7 @@ func reorderDestinationDisablesNativeDropAnimation() throws {
   window.contentView = scroll
   window.makeKeyAndOrderFront(nil)
   defer { window.contentView = nil; window.orderOut(nil); window.close() }
+  var sourceViews: [ReorderSourceHostingView] = []
   for (index, id) in ids.enumerated() {
     let source = ReorderSourceHostingView(
       rootView: AnyView(Color.clear.frame(width: 100, height: 30))
@@ -626,6 +691,7 @@ func reorderDestinationDisablesNativeDropAnimation() throws {
     source.noteID = id
     source.frame = NSRect(x: index * 106, y: 0, width: 100, height: 30)
     destination.addSubview(source)
+    sourceViews.append(source)
   }
   let interaction = ReorderInteraction(
     sourceID: ids[0], originalIDs: ids
@@ -637,13 +703,19 @@ func reorderDestinationDisablesNativeDropAnimation() throws {
   let controller = FluidTabDragController()
   controller.view = destination
   destination.controller = controller
+  var moves = 0
+  var finishes = 0
   controller.prepare(
     interaction: interaction,
     session: session,
     currentIDs: { ids },
     currentPins: { [] },
-    move: { _, _ in },
-    finish: {}
+    move: { sourceID, destination in
+      #expect(sourceID == ids[0])
+      #expect(destination == 1)
+      moves += 1
+    },
+    finish: { finishes += 1 }
   )
   func screen(_ x: CGFloat) -> NSPoint {
     window.convertPoint(toScreen: destination.convert(NSPoint(x: x, y: 15), to: nil))
@@ -657,13 +729,25 @@ func reorderDestinationDisablesNativeDropAnimation() throws {
   )
   let probe = DraggingInfoProbe(
     window: window,
-    location: destination.convert(NSPoint(x: 120, y: 15), to: nil),
+    location: destination.convert(NSPoint(x: 180, y: 15), to: nil),
     pasteboard: pasteboard
   )
 
   #expect(destination.prepareForDragOperation(probe))
   #expect(probe.animatesToDestination == false)
-  controller.cancel()
+  #expect(destination.performDragOperation(probe))
+  #expect(moves == 0)
+  #expect(controller.preview != nil)
+  #expect(sourceViews[0].layer?.opacity == 0)
+
+  session.end(operation: .move)
+  controller.ended(sessionID: session.id, operation: .move)
+
+  #expect(moves == 1)
+  #expect(finishes == 1)
+  #expect(controller.preview == nil)
+  #expect(!controller.inside)
+  #expect(sourceViews[0].layer?.opacity == 1)
 }
 
 @Test @MainActor func reorderInteractionNativeLayerReversalUsesPresentationAndMotionCanBeDisabled() async throws {
