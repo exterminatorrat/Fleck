@@ -147,6 +147,26 @@
       targetFolderID: UUID?, currentSourceNotes: @escaping () -> [Note],
       validTargetFolderIDs: @escaping () -> Set<UUID>,
       move: @escaping (NoteDropSource, UUID?) -> Bool) -> Task<Void, Never>? {
+      guard let commit = noteTransferCommit(source: source, targetFolderID: targetFolderID,
+        currentSourceNotes: currentSourceNotes, validTargetFolderIDs: validTargetFolderIDs,
+        move: move) else { return nil }
+      return acceptDrop(from: providers, commit: commit)
+    }
+
+    func acceptNoteTransfer(data: Data, source: NoteDropSource,
+      targetFolderID: UUID?, currentSourceNotes: @escaping () -> [Note],
+      validTargetFolderIDs: @escaping () -> Set<UUID>,
+      move: @escaping (NoteDropSource, UUID?) -> Bool) -> Bool {
+      guard let commit = noteTransferCommit(source: source, targetFolderID: targetFolderID,
+        currentSourceNotes: currentSourceNotes, validTargetFolderIDs: validTargetFolderIDs,
+        move: move) else { return false }
+      return acceptDrop(data: data, commit: commit)
+    }
+
+    private func noteTransferCommit(source: NoteDropSource, targetFolderID: UUID?,
+      currentSourceNotes: @escaping () -> [Note],
+      validTargetFolderIDs: @escaping () -> Set<UUID>,
+      move: @escaping (NoteDropSource, UUID?) -> Bool) -> (() -> Void)? {
       let originalNotes = currentSourceNotes()
       guard noteSource == source,
         NoteDropPresentation.isValidTarget(draggedSource: source, targetFolderID: targetFolderID,
@@ -154,7 +174,7 @@
       else { return nil }
       let originalIDs = originalNotes.map(\.id)
       let originalPins = Set(originalNotes.filter(\.isPinned).map(\.id))
-      return acceptDrop(from: providers) {
+      return {
         let notes = currentSourceNotes()
         guard notes.map(\.id) == originalIDs, Set(notes.filter(\.isPinned).map(\.id)) == originalPins
         else { return }
@@ -264,6 +284,392 @@
         return false
       }
       return draggedSource.sourceFolderID != targetFolderID
+    }
+  }
+
+  @MainActor enum MenuWindowDropGeometry {
+    static func targetRect(for view: NSView, in window: NSWindow) -> NSRect? {
+      guard view.window === window, !view.bounds.isEmpty, let contentView = window.contentView else {
+        return nil
+      }
+      var rect = view.convert(view.bounds, to: nil)
+      var ancestor = view.superview
+      while let current = ancestor {
+        if let clip = current as? NSClipView {
+          rect = rect.intersection(clip.convert(clip.bounds, to: nil))
+        }
+        ancestor = current.superview
+      }
+      rect = rect.intersection(contentView.convert(contentView.bounds, to: nil))
+      return rect.isNull || rect.isEmpty ? nil : rect
+    }
+  }
+
+  @MainActor final class MenuWindowNoteDropCoordinator: ObservableObject {
+    private final class FolderTarget {
+      weak var view: NSView?
+      let id = UUID()
+      let canAccept: (Data) -> Bool
+      let perform: (Data) -> Bool
+      let setHovered: (Bool) -> Void
+
+      init(view: NSView, canAccept: @escaping (Data) -> Bool,
+        perform: @escaping (Data) -> Bool, setHovered: @escaping (Bool) -> Void) {
+        self.view = view
+        self.canAccept = canAccept
+        self.perform = perform
+        self.setHovered = setHovered
+      }
+    }
+
+    private enum Target: Equatable {
+      case tab
+      case folder(UUID)
+    }
+
+    private weak var window: NSWindow?
+    private var proxy: MenuWindowDropProxy?
+    private var source: NoteDropSource?
+    private var session: ReorderDropSession?
+    private weak var tabController: FluidTabDragController?
+    private var folderTargets: [FolderTarget] = []
+    private var target: Target?
+    private var performedSequence: Int?
+
+    func activate(source: NoteDropSource, session: ReorderDropSession,
+      tabController: FluidTabDragController?) {
+      clearTarget()
+      self.source = source
+      self.session = session
+      self.tabController = tabController
+      performedSequence = nil
+    }
+
+    func deactivate(sessionID: UUID) {
+      guard source?.dragSessionID == sessionID else { return }
+      clearTarget()
+      source = nil
+      session = nil
+      tabController = nil
+      performedSequence = nil
+    }
+
+    @discardableResult
+    func registerFolderTarget(view: NSView, canAccept: @escaping (Data) -> Bool,
+      perform: @escaping (Data) -> Bool, setHovered: @escaping (Bool) -> Void) -> UUID {
+      let registration = FolderTarget(view: view, canAccept: canAccept,
+        perform: perform, setHovered: setHovered)
+      folderTargets.append(registration)
+      return registration.id
+    }
+
+    func unregisterFolderTarget(_ id: UUID) {
+      if target == .folder(id) { transition(to: nil) }
+      folderTargets.removeAll { $0.id == id }
+    }
+
+    func attach(to window: NSWindow) {
+      if self.window === window, window.delegate === proxy { return }
+      detach()
+      let proxy = MenuWindowDropProxy(originalDelegate: window.delegate, coordinator: self)
+      self.window = window
+      self.proxy = proxy
+      window.registerForDraggedTypes([.init(FolderDragPayload.noteType.identifier)])
+      window.delegate = proxy
+    }
+
+    func detach() {
+      clearTarget()
+      if let window, window.delegate === proxy {
+        window.delegate = proxy?.originalDelegate
+      }
+      window = nil
+      proxy = nil
+    }
+
+    func detach(from window: NSWindow) {
+      guard self.window === window else { return }
+      detach()
+    }
+
+    fileprivate func operation(_ sender: any NSDraggingInfo) -> NSDragOperation {
+      guard let data = validData(sender), let window else {
+        clearTarget()
+        return []
+      }
+      folderTargets.removeAll { $0.view == nil }
+      if let folder = folderTargets.last(where: { registration in
+        guard let view = registration.view,
+          let rect = MenuWindowDropGeometry.targetRect(for: view, in: window)
+        else { return false }
+        return rect.contains(sender.draggingLocation) && registration.canAccept(data)
+      }) {
+        transition(to: .folder(folder.id))
+        return .move
+      }
+      if let tabController, let view = tabController.view,
+        let rect = MenuWindowDropGeometry.targetRect(for: view, in: window),
+        rect.contains(sender.draggingLocation) {
+        transition(to: .tab)
+        return tabController.operation(sender)
+      }
+      clearTarget()
+      return []
+    }
+
+    fileprivate func prepare(_ sender: any NSDraggingInfo) -> Bool {
+      guard operation(sender) == .move else { return false }
+      sender.animatesToDestination = false
+      return true
+    }
+
+    fileprivate func perform(_ sender: any NSDraggingInfo) -> Bool {
+      guard performedSequence != sender.draggingSequenceNumber,
+        operation(sender) == .move,
+        let data = validData(sender)
+      else { return false }
+      let accepted: Bool
+      switch target {
+      case .tab:
+        accepted = tabController?.perform(sender) ?? false
+      case .folder(let id):
+        accepted = folderTargets.first(where: { $0.id == id })?.perform(data) ?? false
+      case nil:
+        accepted = false
+      }
+      if accepted { performedSequence = sender.draggingSequenceNumber }
+      return accepted
+    }
+
+    fileprivate func clearTarget() { transition(to: nil) }
+
+    private func validData(_ sender: any NSDraggingInfo) -> Data? {
+      guard sender.draggingDestinationWindow === window,
+        sender.draggingSource is ReorderNativeSource,
+        let source, let session,
+        session.id == source.dragSessionID,
+        session.canAcceptDrop,
+        let data = sender.draggingPasteboard.data(
+          forType: .init(FolderDragPayload.noteType.identifier)
+        ),
+        FolderDragPayload.noteValue(from: data) == source
+      else { return nil }
+      return data
+    }
+
+    private func transition(to next: Target?) {
+      guard target != next else { return }
+      switch target {
+      case .tab:
+        tabController?.exited()
+      case .folder(let id):
+        folderTargets.first(where: { $0.id == id })?.setHovered(false)
+      case nil:
+        break
+      }
+      target = next
+      if case .folder(let id) = next {
+        folderTargets.first(where: { $0.id == id })?.setHovered(true)
+      }
+    }
+  }
+
+  final class MenuWindowDropProxy: NSObject, NSWindowDelegate {
+    fileprivate weak var originalDelegate: (any NSWindowDelegate)?
+    private unowned let coordinator: MenuWindowNoteDropCoordinator
+    private var foreignOperation: (sequence: Int, operation: NSDragOperation)?
+
+    init(originalDelegate: (any NSWindowDelegate)?, coordinator: MenuWindowNoteDropCoordinator) {
+      self.originalDelegate = originalDelegate
+      self.coordinator = coordinator
+    }
+
+    override func responds(to selector: Selector!) -> Bool {
+      super.responds(to: selector) || originalDelegate?.responds(to: selector) == true
+    }
+
+    override func forwardingTarget(for selector: Selector!) -> Any? {
+      if originalDelegate?.responds(to: selector) == true { return originalDelegate }
+      return super.forwardingTarget(for: selector)
+    }
+
+    @MainActor @objc func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+      guard !isFleckNote(sender) else { return coordinator.operation(sender) }
+      let operation = (originalDelegate as AnyObject?)?.draggingEntered?(sender) ?? []
+      foreignOperation = (sender.draggingSequenceNumber, operation)
+      return operation
+    }
+
+    @MainActor @objc func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+      guard !isFleckNote(sender) else { return coordinator.operation(sender) }
+      return (originalDelegate as AnyObject?)?.draggingUpdated?(sender)
+        ?? (foreignOperation?.sequence == sender.draggingSequenceNumber
+          ? foreignOperation?.operation : nil)
+        ?? []
+    }
+
+    @MainActor @objc func draggingExited(_ sender: (any NSDraggingInfo)?) {
+      if let sender {
+        if isFleckNote(sender) {
+          coordinator.clearTarget()
+        } else {
+          (originalDelegate as AnyObject?)?.draggingExited?(sender)
+        }
+      } else {
+        coordinator.clearTarget()
+        (originalDelegate as AnyObject?)?.draggingExited?(nil)
+      }
+      foreignOperation = nil
+    }
+
+    @MainActor @objc func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+      guard !isFleckNote(sender) else { return coordinator.prepare(sender) }
+      return (originalDelegate as AnyObject?)?.prepareForDragOperation?(sender) ?? true
+    }
+
+    @MainActor @objc func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+      guard !isFleckNote(sender) else { return coordinator.perform(sender) }
+      return (originalDelegate as AnyObject?)?.performDragOperation?(sender) ?? false
+    }
+
+    @MainActor @objc func concludeDragOperation(_ sender: (any NSDraggingInfo)?) {
+      if let sender {
+        if isFleckNote(sender) {
+          coordinator.clearTarget()
+        } else {
+          (originalDelegate as AnyObject?)?.concludeDragOperation?(sender)
+        }
+      } else {
+        coordinator.clearTarget()
+        (originalDelegate as AnyObject?)?.concludeDragOperation?(nil)
+      }
+      foreignOperation = nil
+    }
+
+    @MainActor @objc func draggingEnded(_ sender: any NSDraggingInfo) {
+      if isFleckNote(sender) {
+        coordinator.clearTarget()
+      } else {
+        (originalDelegate as AnyObject?)?.draggingEnded?(sender)
+      }
+      foreignOperation = nil
+    }
+
+    @MainActor private func isFleckNote(_ sender: any NSDraggingInfo) -> Bool {
+      sender.draggingPasteboard.availableType(
+        from: [.init(FolderDragPayload.noteType.identifier)]
+      ) != nil
+    }
+
+  }
+
+  private struct MenuWindowDropInstaller: NSViewRepresentable {
+    let coordinator: MenuWindowNoteDropCoordinator
+
+    func makeNSView(context: Context) -> HostView {
+      HostView(coordinator: coordinator)
+    }
+
+    func updateNSView(_ view: HostView, context: Context) {
+      view.installIfNeeded()
+    }
+
+    static func dismantleNSView(_ view: HostView, coordinator: ()) {
+      view.uninstall()
+    }
+
+    final class HostView: NSView {
+      private let coordinator: MenuWindowNoteDropCoordinator
+      private weak var installedWindow: NSWindow?
+
+      init(coordinator: MenuWindowNoteDropCoordinator) {
+        self.coordinator = coordinator
+        super.init(frame: .zero)
+      }
+
+      required init?(coder: NSCoder) { nil }
+
+      override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installIfNeeded()
+      }
+
+      override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+      func installIfNeeded() {
+        guard installedWindow !== window else {
+          if let window { coordinator.attach(to: window) }
+          return
+        }
+        if let installedWindow { coordinator.detach(from: installedWindow) }
+        installedWindow = window
+        if let window { coordinator.attach(to: window) }
+      }
+
+      func uninstall() {
+        if let installedWindow { coordinator.detach(from: installedWindow) }
+        installedWindow = nil
+      }
+    }
+  }
+
+  private struct MenuWindowDropInstallation: ViewModifier {
+    let coordinator: MenuWindowNoteDropCoordinator
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+      content.background {
+        if enabled {
+          MenuWindowDropInstaller(coordinator: coordinator)
+            .frame(width: 0, height: 0)
+        }
+      }
+    }
+  }
+
+  private struct MenuWindowFolderDropAnchor: NSViewRepresentable {
+    let coordinator: MenuWindowNoteDropCoordinator
+    let canAccept: (Data) -> Bool
+    let perform: (Data) -> Bool
+    let setHovered: (Bool) -> Void
+
+    func makeNSView(context: Context) -> HostView {
+      let view = HostView()
+      view.owner = coordinator
+      view.update(canAccept: canAccept, perform: perform, setHovered: setHovered)
+      view.registrationID = coordinator.registerFolderTarget(
+        view: view,
+        canAccept: { [weak view] in view?.canAccept($0) ?? false },
+        perform: { [weak view] in view?.perform($0) ?? false },
+        setHovered: { [weak view] in view?.setHovered($0) }
+      )
+      return view
+    }
+
+    func updateNSView(_ view: HostView, context: Context) {
+      view.update(canAccept: canAccept, perform: perform, setHovered: setHovered)
+    }
+
+    static func dismantleNSView(_ view: HostView, coordinator: ()) {
+      guard let owner = view.owner, let registrationID = view.registrationID else { return }
+      owner.unregisterFolderTarget(registrationID)
+    }
+
+    final class HostView: NSView {
+      weak var owner: MenuWindowNoteDropCoordinator?
+      var registrationID: UUID?
+      var canAccept: (Data) -> Bool = { _ in false }
+      var perform: (Data) -> Bool = { _ in false }
+      var setHovered: (Bool) -> Void = { _ in }
+
+      override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+      func update(canAccept: @escaping (Data) -> Bool,
+        perform: @escaping (Data) -> Bool, setHovered: @escaping (Bool) -> Void) {
+        self.canAccept = canAccept
+        self.perform = perform
+        self.setHovered = setHovered
+      }
     }
   }
 
@@ -454,6 +860,7 @@
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var dictationRuntime: DictationRuntime
     let isPinned: Bool
     let sizing: NotesPanelSizing
@@ -477,6 +884,7 @@
     @State private var noteDropSource: NoteDropSource?
     @State private var reorderDragSession: ReorderDropSession?
     @StateObject private var fluidTabDrag = FluidTabDragController()
+    @StateObject private var menuWindowDrop = MenuWindowNoteDropCoordinator()
     @State private var tabColorPickerNoteID: UUID?
     @State private var activeFolderID: UUID?
     @State private var bannerDismissalState = NotesPanelBannerDismissalState()
@@ -654,6 +1062,10 @@
         NoteLinkPickerWindowReader(controller: noteLinkPickerController)
           .frame(width: 0, height: 0)
       )
+      .modifier(MenuWindowDropInstallation(
+        coordinator: menuWindowDrop,
+        enabled: !isPinned
+      ))
       .onChange(of: activeBannerOccurrences, initial: true) { _, occurrences in
         bannerDismissalState.reconcile(activeOccurrences: occurrences)
       }
@@ -714,6 +1126,10 @@
       }
       .onDisappear {
         fluidTabDrag.cancel()
+        if let source = noteDropSource {
+          menuWindowDrop.deactivate(sessionID: source.dragSessionID)
+        }
+        if !isPinned { menuWindowDrop.detach() }
         noteDropSource = nil
         dictationRuntime.unregisterEditor(editorCommands)
       }
@@ -1097,6 +1513,7 @@
       FolderNavigator(
         draggedSource: $noteDropSource,
         dragSession: $reorderDragSession,
+        menuWindowDrop: isPinned ? nil : menuWindowDrop,
         activeFolderID: activeFolderID,
         onSelect: selectFolder,
         onDelete: { folderPendingDeletion = $0 },
@@ -1176,6 +1593,7 @@
                     .accessibilityLabel(AgentSharingPresentation.sharedBadgeAccessibilityLabel)
                 }
               }
+              .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
               .contentShape(Capsule())
@@ -1213,10 +1631,18 @@
                     visibleNotes: appState.visibleNotes(in: note.folderID)) else { return }
                   _ = appState.moveNote(id, inFolderID: note.folderID, toVisibleIndex: localDestination)
                 }, finish: { if noteDropSource == source { noteDropSource = nil } })
+              if !isPinned {
+                menuWindowDrop.activate(
+                  source: source,
+                  session: session,
+                  tabController: fluidTabDrag
+                )
+              }
               return (FolderDragPayload.noteProvider(source: source),
                 FolderDragPayload.notePasteboardItem(source: source), { operation in
                 session.end(operation: operation)
                 fluidTabDrag.ended(sessionID: session.id, operation: operation)
+                if !isPinned { menuWindowDrop.deactivate(sessionID: session.id) }
                 if noteDropSource == source { noteDropSource = nil }
               })
             }, began: { point in fluidTabDrag.began(at: point) }, moved: { point in fluidTabDrag.moved(to: point) },
@@ -1993,6 +2419,7 @@
     @State private var unfiledInteractionSource: AppInteractionSource = .keyboard
     private let folderNavigatorMaxHeight: CGFloat = 32
 
+    let menuWindowDrop: MenuWindowNoteDropCoordinator?
     let activeFolderID: UUID?
     let onSelect: (UUID?) -> Void
     let onDelete: (Folder) -> Void
@@ -2001,6 +2428,7 @@
     init(
       draggedSource: Binding<NoteDropSource?>,
       dragSession: Binding<ReorderDropSession?>,
+      menuWindowDrop: MenuWindowNoteDropCoordinator?,
       activeFolderID: UUID?,
       onSelect: @escaping (UUID?) -> Void,
       onDelete: @escaping (Folder) -> Void,
@@ -2008,6 +2436,7 @@
     ) {
       self._draggedSource = draggedSource
       self._dragSession = dragSession
+      self.menuWindowDrop = menuWindowDrop
       self.activeFolderID = activeFolderID
       self.onSelect = onSelect
       self.onDelete = onDelete
@@ -2181,6 +2610,7 @@
       .fixedSize(horizontal: true, vertical: false)
       .onHover { isUnfiledHovered = $0 }
       .contentShape(Rectangle())
+      .background(nativeNoteDropAnchor(.unfiled))
       .onDrop(
         of: [FolderDragPayload.noteType],
         delegate: noteDropDelegate(.unfiled)
@@ -2214,6 +2644,7 @@
         .focusable()
         .focused($focusedRow, equals: .folder(folder.id))
         .focusEffectDisabled()
+        .background(nativeNoteDropAnchor(.folder(folder.id)))
         .modifier(ReorderDropTarget(
           destinationID: folder.id, type: FolderDragPayload.folderType,
           interaction: $folderReorder,
@@ -2403,6 +2834,37 @@
       )
     }
 
+    @ViewBuilder
+    private func nativeNoteDropAnchor(_ target: NoteDropTarget) -> some View {
+      if let menuWindowDrop {
+        MenuWindowFolderDropAnchor(
+          coordinator: menuWindowDrop,
+          canAccept: { data in
+            guard let source = FolderDragPayload.noteValue(from: data) else { return false }
+            return canHighlightNoteDrop(
+              expectedSource: source,
+              targetFolderID: target.folderID
+            )
+          },
+          perform: { data in
+            guard let source = FolderDragPayload.noteValue(from: data) else { return false }
+            return handleNoteDrop(
+              data,
+              targetFolderID: target.folderID,
+              expectedSource: source
+            )
+          },
+          setHovered: { hovered in
+            if hovered {
+              noteDropTarget = target
+            } else if noteDropTarget == target {
+              noteDropTarget = nil
+            }
+          }
+        )
+      }
+    }
+
     private func isNoteDropTarget(_ target: NoteDropTarget) -> Bool {
       guard let draggedSource else { return false }
       return noteDropTarget == target
@@ -2566,6 +3028,27 @@
         appState.moveNote(source.noteID, fromFolderID: source.sourceFolderID,
           toFolderID: target, activeFolderID: capturedScope)
       } != nil
+    }
+
+    private func handleNoteDrop(
+      _ data: Data,
+      targetFolderID: UUID?,
+      expectedSource: NoteDropSource
+    ) -> Bool {
+      noteDropTarget = nil
+      defer { if draggedSource == expectedSource { draggedSource = nil } }
+      guard draggedSource == expectedSource, let dragSession,
+        dragSession.id == expectedSource.dragSessionID
+      else { return false }
+      let capturedScope = activeFolderID
+      return dragSession.acceptNoteTransfer(data: data, source: expectedSource,
+        targetFolderID: targetFolderID,
+        currentSourceNotes: { appState.visibleNotes(in: expectedSource.sourceFolderID) },
+        validTargetFolderIDs: { Set(appState.workspace.folders.map(\.id)) }
+      ) { source, target in
+        appState.moveNote(source.noteID, fromFolderID: source.sourceFolderID,
+          toFolderID: target, activeFolderID: capturedScope)
+      }
     }
 
     private struct NoteDropDelegate: DropDelegate {
@@ -3440,9 +3923,15 @@
       let newX = slotX(index) + (index >= destination ? sourceFrame.width + spacing : 0)
       return newX - original.minX
     }
-    func isValid(ids: [UUID], pins: Set<UUID>, frames liveFrames: [UUID: CGRect]) -> Bool {
-      ids == interaction.originalIDs && pins == interaction.pinnedIDs
-        && ids.allSatisfy { frames[$0]?.size == liveFrames[$0]?.size }
+    func isValid(ids: [UUID], pins: Set<UUID>, frames liveFrames: [UUID: CGRect],
+      backingScaleFactor: CGFloat = 1) -> Bool {
+      let backingPixel = 1 / max(1, backingScaleFactor)
+      return ids == interaction.originalIDs && pins == interaction.pinnedIDs
+        && ids.allSatisfy { id in
+          guard let frozen = frames[id]?.size, let live = liveFrames[id]?.size else { return false }
+          return abs(frozen.width - live.width) <= backingPixel
+            && abs(frozen.height - live.height) <= backingPixel
+        }
     }
     static func scrollDelta(pointerX: CGFloat, viewport: ClosedRange<CGFloat>) -> CGFloat {
       guard viewport.contains(pointerX) else { return 0 }
@@ -3500,14 +3989,18 @@
 
     private var valid: Bool {
       guard let preview, let currentIDs, let currentPins else { return false }
-      return preview.isValid(ids: currentIDs(), pins: currentPins(), frames: view?.sourceFrames() ?? [:])
+      return preview.isValid(ids: currentIDs(), pins: currentPins(), frames: view?.sourceFrames() ?? [:],
+        backingScaleFactor: view?.window?.backingScaleFactor ?? 1)
         && viewportSize == view?.enclosingScrollView?.contentView.bounds.size
     }
 
     func moved(to point: NSPoint) {
       nativePoint = point
       guard !accepted, preview != nil else { return }
-      guard valid else { cancel(); return }
+      guard valid else {
+        cancel()
+        return
+      }
       guard let view, let window = view.window,
         let clip = view.enclosingScrollView?.contentView else { return }
       let windowPoint = window.convertPoint(fromScreen: point)
@@ -3567,9 +4060,13 @@
       stopTimer()
       reset(animated: !(accepted && operation == .move))
     }
-    func cancel() { session?.cancel(); reset() }
+    func cancel() {
+      session?.cancel()
+      reset()
+    }
     private func reset(animated: Bool = true) {
       stopTimer()
+      sourceView?.closeNativePreview()
       sourceView?.setDraggingSourceHidden(false)
       sourceView = nil
       animatesDisplacement = animated
@@ -3605,7 +4102,11 @@
     func tick() {
       guard inside, !accepted, valid, let nativePoint, let view, let window = view.window,
         let scroll = view.enclosingScrollView, let document = scroll.documentView else {
-        if !valid { cancel() } else { stopTimer() }
+        if !valid {
+          cancel()
+        } else {
+          stopTimer()
+        }
         return
       }
       let clip = scroll.contentView
@@ -3614,6 +4115,11 @@
       let delta = FluidTabReorder.scrollDelta(pointerX: point.x, viewport: clip.bounds.minX...clip.bounds.maxX)
       if delta != 0 {
         let x = min(max(clip.bounds.minX + delta, 0), max(0, document.bounds.width - clip.bounds.width))
+        // Constraining an NSClipView can leave floating-point rounding residue at an edge.
+        // Treat only that numerical noise as unchanged while preserving real subpixel scrolling.
+        let coordinateMagnitude = max(1, abs(x), abs(clip.bounds.minX))
+        let noiseTolerance = CGFloat.ulpOfOne.squareRoot() * coordinateMagnitude
+        guard abs(x - clip.bounds.minX) > noiseTolerance else { return }
         clip.scroll(to: NSPoint(x: x, y: clip.bounds.minY))
         scroll.reflectScrolledClipView(clip)
         var next = preview
@@ -3920,15 +4426,21 @@
       else { return }
       pointerDown = nil
       let image = draggingImage()
+      guard let preview = ReorderNativePreview(
+        image: image, sourceView: self, grabPoint: press.point
+      ) else { return }
       let (_, pasteboardWriter, end) = onNativeBegin()
       guard let pasteboardWriter else {
+        preview.close()
         end([])
         return
       }
       let item = NSDraggingItem(pasteboardWriter: pasteboardWriter)
-      item.setDraggingFrame(bounds, contents: image)
+      item.setDraggingFrame(bounds, contents: nil)
       let id = UUID()
-      let proxy = ReorderNativeSource(id: id, source: nil, began: onBegan) { [weak self] operation in
+      let proxy = ReorderNativeSource(
+        id: id, source: nil, began: onBegan, preview: preview
+      ) { [weak self] operation in
         end(operation)
         if self?.sourceProxy?.id == id { self?.sourceProxy = nil }
       }
@@ -3960,13 +4472,64 @@
       super.rightMouseDown(with: event)
     }
 
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if window == nil { sourceProxy?.closePreview() }
+    }
+
     private func draggingImage() -> NSImage {
-      let image = NSImage(size: bounds.size)
-      if let representation = bitmapImageRepForCachingDisplay(in: bounds) {
-        cacheDisplay(in: bounds, to: representation)
-        image.addRepresentation(representation)
+      var image = NSImage(size: bounds.size)
+      effectiveAppearance.performAsCurrentDrawingAppearance {
+        guard let captured = bitmapImageRepForCachingDisplay(in: bounds) else { return }
+        cacheDisplay(in: bounds, to: captured)
+        image = Self.compositedDraggingImage(
+          captured: captured, size: bounds.size, appearance: effectiveAppearance
+        ) ?? image
       }
       return image
+    }
+
+    static func compositedDraggingImage(captured: NSBitmapImageRep, size: NSSize,
+      appearance: NSAppearance) -> NSImage? {
+      guard let representation = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: captured.pixelsWide,
+        pixelsHigh: captured.pixelsHigh,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ) else { return nil }
+      representation.size = size
+      guard let context = NSGraphicsContext(bitmapImageRep: representation) else { return nil }
+      let image = NSImage(size: size)
+      let capturedImage = NSImage(size: size)
+      capturedImage.addRepresentation(captured)
+      appearance.performAsCurrentDrawingAppearance {
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        let rect = NSRect(origin: .zero, size: size)
+        let surface = NSBezierPath(
+          roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6
+        )
+        NSColor.windowBackgroundColor.setFill()
+        surface.fill()
+        capturedImage.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
+          respectFlipped: true, hints: nil)
+        NSColor.separatorColor.setStroke()
+        surface.lineWidth = 1
+        surface.stroke()
+        NSGraphicsContext.restoreGraphicsState()
+      }
+      image.addRepresentation(representation)
+      return image
+    }
+
+    func closeNativePreview() {
+      sourceProxy?.closePreview()
     }
 
     override func beginDraggingSession(with items: [NSDraggingItem], event: NSEvent,
@@ -3989,19 +4552,93 @@
     }
   }
 
-  final class ReorderNativeSource: NSObject, NSDraggingSource {
+  @MainActor final class ReorderNativePreview {
+    let image: NSImage
+    let panel: NSPanel
+    private let initialFrame: NSRect
+    private let grabOffset: NSPoint
+    private var isClosed = false
+
+    init?(image: NSImage, sourceView: NSView, grabPoint: NSPoint) {
+      guard let sourceWindow = sourceView.window else { return nil }
+      self.image = image
+      initialFrame = sourceWindow.convertToScreen(sourceView.convert(sourceView.bounds, to: nil))
+      let grabPointOnScreen = sourceWindow.convertPoint(
+        toScreen: sourceView.convert(grabPoint, to: nil)
+      )
+      grabOffset = NSPoint(
+        x: grabPointOnScreen.x - initialFrame.minX,
+        y: grabPointOnScreen.y - initialFrame.minY
+      )
+      panel = NSPanel(
+        contentRect: initialFrame,
+        styleMask: [.borderless, .nonactivatingPanel],
+        backing: .buffered,
+        defer: false
+      )
+      panel.isReleasedWhenClosed = false
+      panel.backgroundColor = .clear
+      panel.isOpaque = false
+      panel.hasShadow = false
+      panel.ignoresMouseEvents = true
+      panel.hidesOnDeactivate = false
+      panel.level = NSWindow.Level(rawValue: sourceWindow.level.rawValue + 1)
+      let imageView = NSImageView(frame: NSRect(origin: .zero, size: initialFrame.size))
+      imageView.image = image
+      imageView.imageScaling = .scaleNone
+      panel.contentView = imageView
+    }
+
+    func show(at point: NSPoint) {
+      guard !isClosed else { return }
+      panel.setFrameOrigin(NSPoint(x: point.x - grabOffset.x, y: point.y - grabOffset.y))
+      panel.orderFrontRegardless()
+    }
+
+    func move(to point: NSPoint) {
+      guard !isClosed else { return }
+      panel.setFrameOrigin(NSPoint(x: point.x - grabOffset.x, y: point.y - grabOffset.y))
+    }
+
+    func close() {
+      guard !isClosed else { return }
+      isClosed = true
+      panel.orderOut(nil)
+      panel.close()
+    }
+
+    deinit {
+      MainActor.assumeIsolated {
+        panel.orderOut(nil)
+        panel.close()
+      }
+    }
+  }
+
+  @MainActor final class ReorderNativeSource: NSObject, NSDraggingSource {
     let id: UUID
     let source: (any NSDraggingSource)?
     let began: ((NSPoint) -> Void)?
-    let end: (NSDragOperation) -> Void
+    private(set) var preview: ReorderNativePreview?
+    private let endHandler: (NSDragOperation) -> Void
     var moved: ((NSPoint) -> Void)?
 
     init(id: UUID, source: (any NSDraggingSource)?, began: ((NSPoint) -> Void)?,
-      end: @escaping (NSDragOperation) -> Void) {
+      preview: ReorderNativePreview? = nil, end: @escaping (NSDragOperation) -> Void) {
       self.id = id
       self.source = source
       self.began = began
-      self.end = end
+      self.preview = preview
+      endHandler = end
+    }
+
+    func end(_ operation: NSDragOperation) {
+      closePreview()
+      endHandler(operation)
+    }
+
+    func closePreview() {
+      preview?.close()
     }
 
     func draggingSession(_ session: NSDraggingSession,
@@ -4019,10 +4656,12 @@
 
     func draggingSession(_ session: NSDraggingSession, willBeginAt point: NSPoint) {
       source?.draggingSession?(session, willBeginAt: point)
+      preview?.show(at: point)
       began?(point)
     }
 
     func draggingSession(_ session: NSDraggingSession, movedTo point: NSPoint) {
+      preview?.move(to: point)
       moved?(session.draggingLocation)
       source?.draggingSession?(session, movedTo: point)
     }

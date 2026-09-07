@@ -6,6 +6,8 @@ import Testing
 @testable import FleckApp
 import FleckCore
 
+private final class NativePreviewDraggingSessionProbe: NSDraggingSession {}
+
 @Test func noteDropPresentationRejectsSameFolderAndInvalidDragStates() throws {
   let work = try Folder(id: UUID(), name: "Work")
   let other = try Folder(id: UUID(), name: "Other")
@@ -918,6 +920,118 @@ func hostedNotesPanelPointerHitMapsIncludeNoteAndFolderPaddedInteriors() async t
 }
 
 @Test @MainActor
+func nativeTabDragImageFillsBothHalvesAtRetinaScale() throws {
+  let captured = try #require(NSBitmapImageRep(
+    bitmapDataPlanes: nil,
+    pixelsWide: 200,
+    pixelsHigh: 74,
+    bitsPerSample: 8,
+    samplesPerPixel: 4,
+    hasAlpha: true,
+    isPlanar: false,
+    colorSpaceName: .deviceRGB,
+    bytesPerRow: 0,
+    bitsPerPixel: 0
+  ))
+  captured.size = NSSize(width: 100, height: 37)
+  let image = try #require(ReorderSourceHostingView.compositedDraggingImage(
+    captured: captured,
+    size: captured.size,
+    appearance: NSAppearance(named: .darkAqua) ?? NSAppearance.currentDrawing()
+  ))
+  let representation = try #require(image.representations.first as? NSBitmapImageRep)
+
+  #expect(representation.pixelsWide == 200)
+  #expect(representation.pixelsHigh == 74)
+  #expect(image.size == NSSize(width: 100, height: 37))
+  for point in [(25, 18), (175, 18), (25, 55), (175, 55)] {
+    #expect((representation.colorAt(x: point.0, y: point.1)?.alphaComponent ?? 0) > 0.99)
+  }
+}
+
+@Test @MainActor
+func nativeTabDragPreviewFollowsPointerAndClosesOnEveryFinishPath() throws {
+  let window = NSWindow(
+    contentRect: NSRect(x: 200, y: 200, width: 300, height: 120),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  let root = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 120))
+  let sourceView = NSView(frame: NSRect(x: 30, y: 40, width: 100, height: 37))
+  root.addSubview(sourceView)
+  window.contentView = root
+  window.makeKeyAndOrderFront(nil)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+    window.close()
+  }
+  let image = NSImage(size: sourceView.bounds.size)
+  let initialFrame = window.convertToScreen(sourceView.convert(sourceView.bounds, to: nil))
+  let grabPoint = NSPoint(x: 23, y: 11)
+  let grabPointOnScreen = window.convertPoint(toScreen: sourceView.convert(grabPoint, to: nil))
+  let beginPoint = NSPoint(x: grabPointOnScreen.x + 8, y: grabPointOnScreen.y + 4)
+  let movedPoint = NSPoint(x: grabPointOnScreen.x + 80, y: grabPointOnScreen.y - 25)
+  let preview = try #require(ReorderNativePreview(
+    image: image, sourceView: sourceView, grabPoint: grabPoint
+  ))
+  var operations: [NSDragOperation] = []
+  let nativeSource = ReorderNativeSource(
+    id: UUID(), source: nil, began: nil, preview: preview,
+    end: { operations.append($0) }
+  )
+  let session = NativePreviewDraggingSessionProbe()
+
+  #expect(preview.panel.ignoresMouseEvents)
+  #expect(preview.panel.styleMask.contains(.nonactivatingPanel))
+  #expect(!preview.panel.isOpaque)
+  #expect(preview.panel.level.rawValue == window.level.rawValue + 1)
+  #expect(!preview.panel.isVisible)
+  nativeSource.draggingSession(session, willBeginAt: beginPoint)
+  let visibleWindowNumber = preview.panel.windowNumber
+  #expect(preview.panel.isVisible)
+  #expect(!preview.panel.isKeyWindow)
+  #expect(preview.panel.frame.origin == NSPoint(
+    x: initialFrame.minX + 8, y: initialFrame.minY + 4
+  ))
+  nativeSource.draggingSession(session, willBeginAt: beginPoint)
+  #expect(preview.panel.windowNumber == visibleWindowNumber)
+  nativeSource.draggingSession(session, movedTo: movedPoint)
+  #expect(preview.panel.frame.origin == NSPoint(
+    x: initialFrame.minX + 80, y: initialFrame.minY - 25
+  ))
+  nativeSource.draggingSession(session, endedAt: movedPoint, operation: .move)
+  #expect(!preview.panel.isVisible)
+  #expect(operations == [.move])
+
+  let abortedPreview = try #require(ReorderNativePreview(
+    image: image, sourceView: sourceView, grabPoint: grabPoint
+  ))
+  let abortedSource = ReorderNativeSource(
+    id: UUID(), source: nil, began: nil, preview: abortedPreview,
+    end: { operations.append($0) }
+  )
+  abortedSource.draggingSession(session, willBeginAt: beginPoint)
+  #expect(abortedPreview.panel.isVisible)
+  abortedSource.end([])
+  #expect(!abortedPreview.panel.isVisible)
+  #expect(operations == [.move, []])
+
+  let invalidatedPreview = try #require(ReorderNativePreview(
+    image: image, sourceView: sourceView, grabPoint: grabPoint
+  ))
+  let invalidatedSource = ReorderNativeSource(
+    id: UUID(), source: nil, began: nil, preview: invalidatedPreview,
+    end: { operations.append($0) }
+  )
+  invalidatedSource.draggingSession(session, willBeginAt: beginPoint)
+  #expect(invalidatedPreview.panel.isVisible)
+  invalidatedSource.closePreview()
+  #expect(!invalidatedPreview.panel.isVisible)
+  #expect(operations == [.move, []])
+}
+
+@Test @MainActor
 func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throws {
   func visiblePixels(in image: NSImage) -> Int {
     guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data)
@@ -927,6 +1041,47 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
         bitmap.colorAt(x: $0, y: y)?.alphaComponent ?? 0 > 0.01
       }.count
     }
+  }
+  func opaqueInteriorFraction(in image: NSImage) -> Double {
+    guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
+      bitmap.pixelsWide > 8, bitmap.pixelsHigh > 8
+    else { return 0 }
+    let scale = max(1, CGFloat(bitmap.pixelsHigh) / image.size.height)
+    let horizontalInset = max(2, Int((4 * scale).rounded(.up)))
+    let bandHalfHeight = max(1, Int((3 * scale).rounded(.up)))
+    let xs = horizontalInset..<(bitmap.pixelsWide - horizontalInset)
+    let ys = (bitmap.pixelsHigh / 2 - bandHalfHeight)..<(bitmap.pixelsHigh / 2 + bandHalfHeight)
+    let pixelCount = xs.count * ys.count
+    let opaqueCount = ys.reduce(0) { count, y in
+      count + xs.filter { x in
+        bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 0.99
+      }.count
+    }
+    return Double(opaqueCount) / Double(pixelCount)
+  }
+  func readableForegroundFraction(in image: NSImage, darkAppearance: Bool) -> Double {
+    guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
+      bitmap.pixelsWide > 8, bitmap.pixelsHigh > 8
+    else { return 0 }
+    let scale = max(1, CGFloat(bitmap.pixelsHigh) / image.size.height)
+    let leadingInset = max(2, Int((20 * scale).rounded(.up)))
+    let trailingInset = max(2, Int((4 * scale).rounded(.up)))
+    let verticalInset = max(2, Int((4 * scale).rounded(.up)))
+    let xs = leadingInset..<(bitmap.pixelsWide - trailingInset)
+    let ys = verticalInset..<(bitmap.pixelsHigh - verticalInset)
+    let pixelCount = xs.count * ys.count
+    let foregroundCount = ys.reduce(0) { count, y in
+      count + xs.filter { x in
+        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+          color.alphaComponent > 0.99
+        else { return false }
+        let luminance = 0.2126 * color.redComponent
+          + 0.7152 * color.greenComponent
+          + 0.0722 * color.blueComponent
+        return darkAppearance ? luminance > 0.55 : luminance < 0.45
+      }.count
+    }
+    return Double(foregroundCount) / Double(pixelCount)
   }
   func renderedImage(of view: NSView) throws -> NSImage {
     let bounds = view.bounds
@@ -948,8 +1103,8 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent("visible-tab-preview-" + UUID().uuidString, isDirectory: true)
   defer { try? FileManager.default.removeItem(at: root) }
-  let dragged = Note(title: "Dragged")
-  let selected = Note(title: "Selected")
+  let dragged = Note(title: "Preview")
+  let selected = Note(title: "Preview")
   let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _, _ in .committed })
   await state.waitUntilInitialLoad()
   state.workspace = Workspace(notes: [dragged, selected], selectedNoteID: selected.id)
@@ -971,61 +1126,97 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
     window.close()
   }
 
-  let destination = try #require(findDestination(host))
-  let source = try #require(findSource(dragged.id, in: destination))
-  #expect(visiblePixels(in: try renderedImage(of: source)) > 0)
-  let originalBegin = try #require(source.onNativeBegin)
   var endOperations: [NSDragOperation] = []
-  source.onNativeBegin = {
-    let (provider, pasteboardWriter, end) = originalBegin()
-    return (provider, pasteboardWriter, { operation in
-      endOperations.append(operation)
-      end(operation)
-    })
-  }
-  var draggingItems: [NSDraggingItem] = []
-  var capturedSource: ReorderNativeSource?
-  source.interceptNativeDrag = { items, nativeSource, _ in
-    draggingItems = items
-    capturedSource = nativeSource
-    return true
-  }
-  let sourceFrame = destination.convert(source.bounds, from: source)
-  let start = destination.convert(
-    NSPoint(x: sourceFrame.midX, y: sourceFrame.midY), to: nil
-  )
-  for (sequence, event) in [
-    NSEvent.EventType.leftMouseDown,
-    NSEvent.EventType.leftMouseDragged,
-  ].enumerated() {
-    let point = event == .leftMouseDragged ? NSPoint(x: start.x + 8, y: start.y) : start
-    let mouseEvent = try #require(NSEvent.mouseEvent(
-      with: event,
-      location: point,
-      modifierFlags: [],
-      timestamp: ProcessInfo.processInfo.systemUptime + Double(sequence) * 0.01,
-      windowNumber: window.windowNumber,
-      context: nil,
-      eventNumber: sequence,
-      clickCount: 1,
-      pressure: 1
-    ))
-    window.sendEvent(mouseEvent)
-  }
-  await settleTabStripHost(host)
+  var completedCaptures = 0
+  var previewDataByAppearance: [String: [Bool: Data]] = [:]
+  let captureCases: [(appearance: NSAppearance.Name, ambient: NSAppearance.Name,
+    dark: Bool, noteID: UUID, selected: Bool)] = [
+      (.vibrantDark, .aqua, true, dragged.id, false),
+      (.vibrantDark, .aqua, true, selected.id, true),
+      (.vibrantLight, .darkAqua, false, dragged.id, false),
+      (.vibrantLight, .darkAqua, false, selected.id, true),
+    ]
+  for captureCase in captureCases {
+    window.appearance = NSAppearance(named: captureCase.appearance)
+    await settleTabStripHost(host)
+    let destination = try #require(findDestination(host))
+    let source = try #require(findSource(captureCase.noteID, in: destination))
+    let renderedSource = try renderedImage(of: source)
+    #expect(visiblePixels(in: renderedSource) > 0)
+    let originalBegin = try #require(source.onNativeBegin)
+    source.onNativeBegin = {
+      let (provider, pasteboardWriter, end) = originalBegin()
+      return (provider, pasteboardWriter, { operation in
+        endOperations.append(operation)
+        end(operation)
+      })
+    }
+    var draggingItems: [NSDraggingItem] = []
+    var capturedSource: ReorderNativeSource?
+    var capturedEvent: NSEvent?
+    source.interceptNativeDrag = { items, nativeSource, event in
+      draggingItems = items
+      capturedSource = nativeSource
+      capturedEvent = event
+      return true
+    }
+    let sourceFrame = destination.convert(source.bounds, from: source)
+    let start = destination.convert(
+      NSPoint(x: sourceFrame.midX, y: sourceFrame.midY), to: nil
+    )
+    let ambientAppearance = try #require(NSAppearance(named: captureCase.ambient))
+    ambientAppearance.performAsCurrentDrawingAppearance {
+      for (sequence, event) in [
+        NSEvent.EventType.leftMouseDown,
+        NSEvent.EventType.leftMouseDragged,
+      ].enumerated() {
+        let point = event == .leftMouseDragged ? NSPoint(x: start.x + 8, y: start.y) : start
+        let mouseEvent = NSEvent.mouseEvent(
+          with: event,
+          location: point,
+          modifierFlags: [],
+          timestamp: ProcessInfo.processInfo.systemUptime + Double(sequence) * 0.01,
+          windowNumber: window.windowNumber,
+          context: nil,
+          eventNumber: sequence,
+          clickCount: 1,
+          pressure: 1
+        )
+        if let mouseEvent { window.sendEvent(mouseEvent) }
+      }
+    }
+    await settleTabStripHost(host)
 
-  let previewImage = try #require(
-    draggingItems.first?.imageComponents?.first?.contents as? NSImage
-  )
-  #expect(visiblePixels(in: previewImage) > 0)
-  #expect(capturedSource?.began != nil)
-  #expect(capturedSource?.moved != nil)
-  #expect(endOperations.count == 1)
-  #expect(destination.controller?.inside == false)
-  #expect(destination.controller?.preview == nil)
-  #expect(source.layer?.opacity == 1)
-  #expect(state.workspace.selectedNoteID == selected.id)
+    let item = try #require(draggingItems.first)
+    let preview = try #require(capturedSource?.preview)
+    let previewImage = preview.image
+    #expect(previewImage.size == source.bounds.size)
+    #expect(previewImage.representations.first?.pixelsWide == renderedSource.representations.first?.pixelsWide)
+    #expect(previewImage.representations.first?.pixelsHigh == renderedSource.representations.first?.pixelsHigh)
+    #expect(item.draggingFrame == source.bounds)
+    #expect(item.imageComponents?.contains(where: { $0.contents != nil }) != true)
+    #expect(!preview.panel.isVisible)
+    #expect(capturedEvent?.locationInWindow == start)
+    #expect(visiblePixels(in: previewImage) > 0)
+    #expect(opaqueInteriorFraction(in: previewImage) > 0.98)
+    #expect(readableForegroundFraction(in: previewImage, darkAppearance: captureCase.dark) > 0.01,
+      "appearance=\(captureCase.appearance.rawValue) selected=\(captureCase.selected)")
+    #expect(capturedSource?.began != nil)
+    #expect(capturedSource?.moved != nil)
+    completedCaptures += 1
+    #expect(endOperations.count == completedCaptures)
+    #expect(destination.controller?.inside == false)
+    #expect(destination.controller?.preview == nil)
+    #expect(source.layer?.opacity == 1)
+    #expect(state.workspace.selectedNoteID == selected.id)
+    let data = try #require(previewImage.tiffRepresentation)
+    previewDataByAppearance[captureCase.appearance.rawValue, default: [:]][captureCase.selected] = data
+  }
+  for images in previewDataByAppearance.values {
+    #expect(images[false] != images[true])
+  }
+  #expect(endOperations.count == captureCases.count)
 
-  destination.controller?.cancel()
+  findDestination(host)?.controller?.cancel()
   await runtime.shutdown()
 }

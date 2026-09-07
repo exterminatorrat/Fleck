@@ -101,17 +101,20 @@ private final class DraggingInfoProbe: NSObject, NSDraggingInfo {
   let draggedImageLocation: NSPoint = .zero
   let draggedImage: NSImage? = nil
   let draggingPasteboard: NSPasteboard
-  let draggingSource: Any? = NSObject()
-  let draggingSequenceNumber = 1
+  let draggingSource: Any?
+  let draggingSequenceNumber: Int
   var draggingFormation: NSDraggingFormation = .none
   var animatesToDestination = true
   var numberOfValidItemsForDrop = 1
   let springLoadingHighlight: NSSpringLoadingHighlight = .none
 
-  init(window: NSWindow, location: NSPoint, pasteboard: NSPasteboard) {
+  init(window: NSWindow, location: NSPoint, pasteboard: NSPasteboard,
+    source: Any? = NSObject(), sequence: Int = 1) {
     draggingDestinationWindow = window
     draggingLocation = location
     draggingPasteboard = pasteboard
+    draggingSource = source
+    draggingSequenceNumber = sequence
   }
 
   func slideDraggedImage(to screenPoint: NSPoint) {}
@@ -124,6 +127,206 @@ private final class DraggingInfoProbe: NSObject, NSDraggingInfo {
     using block: @escaping (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
   ) {}
   func resetSpringLoading() {}
+}
+
+@MainActor
+private final class ForeignWindowDelegateSentinel: NSObject, NSWindowDelegate {
+  private(set) var entered = 0
+  private(set) var exited = 0
+  private(set) var performed = 0
+
+  func windowShouldClose(_ sender: NSWindow) -> Bool { false }
+
+  @objc func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+    entered += 1
+    return .copy
+  }
+
+  @objc func draggingExited(_ sender: NSDraggingInfo?) { exited += 1 }
+
+  @objc func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+    performed += 1
+    return true
+  }
+}
+
+@Test @MainActor
+func menuWindowDropProxyForwardsForeignSelectorsAndRestoresOnlyItsDelegate() throws {
+  let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+    styleMask: [.borderless], backing: .buffered, defer: false)
+  window.isReleasedWhenClosed = false
+  defer { window.close() }
+  let original = ForeignWindowDelegateSentinel()
+  window.delegate = original
+  let coordinator = MenuWindowNoteDropCoordinator()
+  coordinator.attach(to: window)
+  let proxy = try #require(window.delegate as? MenuWindowDropProxy)
+  let pasteboard = NSPasteboard(name: .init("foreign-" + UUID().uuidString))
+  pasteboard.declareTypes([.string], owner: nil)
+  pasteboard.setString("foreign", forType: .string)
+  let info = DraggingInfoProbe(window: window, location: .zero, pasteboard: pasteboard)
+
+  #expect(window.delegate?.windowShouldClose?(window) == false)
+  #expect(proxy.draggingEntered(info) == .copy)
+  #expect(proxy.draggingUpdated(info) == .copy)
+  #expect(proxy.prepareForDragOperation(info))
+  #expect(proxy.performDragOperation(info))
+  proxy.draggingExited(info)
+  proxy.draggingExited(nil)
+  #expect(original.entered == 1)
+  #expect(original.exited == 2)
+  #expect(original.performed == 1)
+
+  coordinator.detach()
+  #expect(window.delegate === original)
+  coordinator.attach(to: window)
+  let replacement = ForeignWindowDelegateSentinel()
+  window.delegate = replacement
+  coordinator.detach()
+  #expect(window.delegate === replacement)
+}
+
+@Test @MainActor
+func menuWindowDropGeometryIgnoresZeroHostButClipsToEveryNativeClipView() throws {
+  let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+    styleMask: [.borderless], backing: .buffered, defer: false)
+  window.isReleasedWhenClosed = false
+  defer { window.close() }
+  let root = NSView(frame: window.contentView!.bounds)
+  window.contentView = root
+  let clip = NSClipView(frame: NSRect(x: 50, y: 20, width: 100, height: 50))
+  root.addSubview(clip)
+  let zeroHost = NSView(frame: NSRect(x: 0, y: 0, width: 0, height: 0))
+  clip.addSubview(zeroHost)
+  let target = NSView(frame: NSRect(x: 0, y: 0, width: 180, height: 30))
+  zeroHost.addSubview(target)
+
+  let rect = try #require(MenuWindowDropGeometry.targetRect(for: target, in: window))
+  #expect(rect == NSRect(x: 50, y: 20, width: 100, height: 30))
+  clip.bounds.origin.x = 200
+  #expect(MenuWindowDropGeometry.targetRect(for: target, in: window) == nil)
+}
+
+@Test @MainActor
+func menuWindowDropRoutesBetweenTabFolderAndOutsideWithOnePerform() throws {
+  let ids = [UUID(), UUID()]
+  let source = NoteDropSource(noteID: ids[0], sourceFolderID: nil)
+  let session = ReorderDropSession(source: source)
+  let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 100),
+    styleMask: [.borderless], backing: .buffered, defer: false)
+  window.isReleasedWhenClosed = false
+  defer { window.close() }
+  let root = NSView(frame: window.contentView!.bounds)
+  window.contentView = root
+  let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 150, height: 40))
+  let tabs = FluidTabDestinationView(rootView: AnyView(Color.clear.frame(width: 220, height: 37)))
+  tabs.frame = NSRect(x: 0, y: 0, width: 220, height: 37)
+  scroll.documentView = tabs
+  root.addSubview(scroll)
+  for (index, id) in ids.enumerated() {
+    let tab = ReorderSourceHostingView(rootView: AnyView(Color.clear.frame(width: 100, height: 30)))
+    tab.noteID = id
+    tab.frame = NSRect(x: index * 106, y: 0, width: 100, height: 30)
+    tabs.addSubview(tab)
+  }
+  let controller = FluidTabDragController()
+  controller.view = tabs
+  let interaction = ReorderInteraction(sourceID: ids[0], originalIDs: ids)
+  controller.prepare(interaction: interaction, session: session, currentIDs: { ids },
+    currentPins: { [] }, move: { _, _ in }, finish: {})
+  let begin = window.convertPoint(toScreen: tabs.convert(NSPoint(x: 20, y: 15), to: nil))
+  controller.began(at: begin)
+
+  let folder = NSView(frame: NSRect(x: 200, y: 0, width: 100, height: 30))
+  root.addSubview(folder)
+  var highlights: [Bool] = []
+  var performs = 0
+  let destinationID = UUID()
+  let sourceNotes = [Note(id: source.noteID)]
+  let coordinator = MenuWindowNoteDropCoordinator()
+  coordinator.activate(source: source, session: session, tabController: controller)
+  _ = coordinator.registerFolderTarget(view: folder, canAccept: { _ in true }, perform: { _ in
+    session.acceptNoteTransfer(data: try! JSONEncoder().encode(source), source: source,
+      targetFolderID: destinationID, currentSourceNotes: { sourceNotes },
+      validTargetFolderIDs: { [destinationID] }, move: { _, _ in
+        performs += 1
+        return true
+      })
+  }, setHovered: { highlights.append($0) })
+  coordinator.attach(to: window)
+  let proxy = try #require(window.delegate as? MenuWindowDropProxy)
+  let pasteboard = NSPasteboard(name: .init("menu-route-" + UUID().uuidString))
+  pasteboard.declareTypes([.init(FolderDragPayload.noteType.identifier)], owner: nil)
+  pasteboard.setData(try JSONEncoder().encode(source),
+    forType: .init(FolderDragPayload.noteType.identifier))
+  let nativeSource = ReorderNativeSource(id: UUID(), source: nil, began: nil,
+    end: { session.end(operation: $0) })
+  let info = DraggingInfoProbe(window: window, location: NSPoint(x: 100, y: 15),
+    pasteboard: pasteboard, source: nativeSource, sequence: 7)
+
+  #expect(proxy.draggingEntered(info) == .move)
+  #expect(controller.inside)
+  info.draggingLocation = NSPoint(x: 220, y: 15)
+  #expect(proxy.draggingUpdated(info) == .move)
+  #expect(!controller.inside)
+  #expect(highlights == [true])
+  info.draggingLocation = NSPoint(x: 340, y: 80)
+  #expect(proxy.draggingUpdated(info).isEmpty)
+  #expect(highlights == [true, false])
+  info.draggingLocation = NSPoint(x: 220, y: 15)
+  #expect(proxy.draggingUpdated(info) == .move)
+  #expect(highlights == [true, false, true])
+  proxy.draggingExited(nil)
+  #expect(highlights == [true, false, true, false])
+  #expect(proxy.draggingEntered(info) == .move)
+  #expect(highlights == [true, false, true, false, true])
+  #expect(proxy.prepareForDragOperation(info))
+  #expect(proxy.performDragOperation(info))
+  #expect(!proxy.performDragOperation(info))
+  #expect(performs == 0)
+  proxy.concludeDragOperation(nil)
+  proxy.draggingEnded(info)
+  #expect(performs == 0)
+  #expect(highlights == [true, false, true, false, true, false])
+  nativeSource.end(.move)
+  #expect(performs == 1)
+}
+
+@Test @MainActor
+func menuWindowDropRejectsForeignSourceAndForgedOrMalformedActivePayload() throws {
+  let source = NoteDropSource(noteID: UUID(), sourceFolderID: nil)
+  let session = ReorderDropSession(source: source)
+  let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 80),
+    styleMask: [.borderless], backing: .buffered, defer: false)
+  window.isReleasedWhenClosed = false
+  defer { window.close() }
+  let target = NSView(frame: NSRect(x: 0, y: 0, width: 150, height: 40))
+  window.contentView = target
+  var highlights = 0
+  let coordinator = MenuWindowNoteDropCoordinator()
+  coordinator.activate(source: source, session: session, tabController: nil)
+  _ = coordinator.registerFolderTarget(view: target, canAccept: { _ in true },
+    perform: { _ in true }, setHovered: { if $0 { highlights += 1 } })
+  coordinator.attach(to: window)
+  let proxy = try #require(window.delegate as? MenuWindowDropProxy)
+  let pasteboard = NSPasteboard(name: .init("menu-reject-" + UUID().uuidString))
+  pasteboard.declareTypes([.init(FolderDragPayload.noteType.identifier)], owner: nil)
+  let type = NSPasteboard.PasteboardType(FolderDragPayload.noteType.identifier)
+
+  pasteboard.setData(try JSONEncoder().encode(source), forType: type)
+  let foreign = DraggingInfoProbe(window: window, location: NSPoint(x: 20, y: 20),
+    pasteboard: pasteboard, source: NSObject())
+  #expect(proxy.draggingEntered(foreign).isEmpty)
+  let nativeSource = ReorderNativeSource(id: UUID(), source: nil, began: nil, end: { _ in })
+  pasteboard.setData(Data("malformed".utf8), forType: type)
+  let malformed = DraggingInfoProbe(window: window, location: NSPoint(x: 20, y: 20),
+    pasteboard: pasteboard, source: nativeSource, sequence: 2)
+  #expect(proxy.draggingEntered(malformed).isEmpty)
+  let mismatch = NoteDropSource(noteID: UUID(), sourceFolderID: nil,
+    dragSessionID: source.dragSessionID)
+  pasteboard.setData(try JSONEncoder().encode(mismatch), forType: type)
+  #expect(proxy.draggingEntered(malformed).isEmpty)
+  #expect(highlights == 0)
 }
 
 @Test @MainActor
@@ -469,9 +672,92 @@ func reorderInteractionDeferredFolderTransferRevalidatesAndPreservesSelection() 
   #expect(commits == 0)
 }
 
+@Test @MainActor
+func reorderInteractionNativeFolderDataStagesOnceAndRevalidatesAtEnd() throws {
+  let destination = try Folder(name: "Destination")
+  let note = Note(title: "Move me")
+  let source = NoteDropSource(noteID: note.id, sourceFolderID: nil)
+  let data = try JSONEncoder().encode(source)
+  var notes = [note]
+  var folders = [destination]
+  var moves = 0
+  var movedSource: NoteDropSource?
+  var movedTarget: UUID?
+  let session = ReorderDropSession(source: source)
+
+  let accepted = session.acceptNoteTransfer(data: data, source: source,
+    targetFolderID: destination.id, currentSourceNotes: { notes },
+    validTargetFolderIDs: { Set(folders.map(\.id)) }) { accepted, target in
+      movedSource = accepted
+      movedTarget = target
+      moves += 1
+      return true
+    }
+  #expect(accepted)
+  #expect(!session.acceptNoteTransfer(data: data, source: source,
+    targetFolderID: destination.id, currentSourceNotes: { notes },
+    validTargetFolderIDs: { Set(folders.map(\.id)) }, move: { _, _ in false }))
+  #expect(moves == 0)
+  session.end(operation: .move)
+  #expect(moves == 1)
+  #expect(movedSource == source)
+  #expect(movedTarget == destination.id)
+
+  for change in 0..<4 {
+    notes = [note]
+    folders = [destination]
+    let candidate = ReorderDropSession(source: source)
+    var rejectedMoves = 0
+    #expect(candidate.acceptNoteTransfer(data: data, source: source,
+      targetFolderID: destination.id, currentSourceNotes: { notes },
+      validTargetFolderIDs: { Set(folders.map(\.id)) }) { _, _ in
+        rejectedMoves += 1
+        return true
+      })
+    switch change {
+    case 0: notes.removeAll()
+    case 1: notes[0].isPinned.toggle()
+    case 2: folders.removeAll()
+    case 3: candidate.cancel()
+    default: break
+    }
+    candidate.end(operation: .move)
+    #expect(rejectedMoves == 0)
+  }
+}
+
 @MainActor
 private final class DraggingSessionLocationProbe: NSDraggingSession {
   override var draggingLocation: NSPoint { NSPoint(x: -1, y: 1441) }
+}
+
+@MainActor
+private final class ScrollCallClipView: NSClipView {
+  private(set) var scrollCalls = 0
+  var preservesProposedBounds = false
+
+  override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+    preservesProposedBounds ? proposedBounds : super.constrainBoundsRect(proposedBounds)
+  }
+
+  override func scroll(to newOrigin: NSPoint) {
+    scrollCalls += 1
+    super.scroll(to: newOrigin)
+  }
+
+  func resetScrollCalls() { scrollCalls = 0 }
+}
+
+@MainActor
+private final class ScrollReflectionProbe: NSScrollView {
+  private(set) var reflectionCalls = 0
+
+  override func reflectScrolledClipView(_ clipView: NSClipView) {
+    reflectionCalls += 1
+    super.reflectScrolledClipView(clipView)
+  }
+
+  func resetReflectionCalls() { reflectionCalls = 0 }
 }
 
 @Test @MainActor func reorderInteractionNativeBeginUsesCallbackScreenPoint() {
@@ -523,6 +809,23 @@ private final class DraggingSessionLocationProbe: NSDraggingSession {
   #expect(drag.isValid(ids: ids, pins: [ids[0]], frames: frames))
   #expect(!drag.isValid(ids: ids.reversed(), pins: [ids[0]], frames: frames))
   #expect(!drag.isValid(ids: ids, pins: [], frames: frames))
+  var aligned = frames
+  aligned[ids[2]]?.size.width -= 1
+  aligned[ids[2]]?.size.height += 1
+  #expect(drag.isValid(ids: ids, pins: [ids[0]], frames: aligned, backingScaleFactor: 1))
+  var retinaAligned = frames
+  retinaAligned[ids[2]]?.size.width -= 0.5
+  retinaAligned[ids[2]]?.size.height += 0.5
+  #expect(drag.isValid(ids: ids, pins: [ids[0]], frames: retinaAligned, backingScaleFactor: 2))
+  var overOnePixel = frames
+  overOnePixel[ids[2]]?.size.width -= 1.001
+  #expect(!drag.isValid(ids: ids, pins: [ids[0]], frames: overOnePixel, backingScaleFactor: 1))
+  overOnePixel = frames
+  overOnePixel[ids[2]]?.size.width -= 0.501
+  #expect(!drag.isValid(ids: ids, pins: [ids[0]], frames: overOnePixel, backingScaleFactor: 2))
+  var missing = frames
+  missing[ids[2]] = nil
+  #expect(!drag.isValid(ids: ids, pins: [ids[0]], frames: missing))
   var resized = frames
   resized[ids[1]]?.size.width = 100
   #expect(!drag.isValid(ids: ids, pins: [ids[0]], frames: resized))
@@ -584,6 +887,7 @@ private final class DraggingSessionLocationProbe: NSDraggingSession {
     move: { _, _ in moves += 1 }, finish: {})
   controller.began(at: screen(20))
   #expect(sourceViews[0].layer?.opacity == 0)
+  sourceViews[2].frame.size.width -= 1 / window.backingScaleFactor
   controller.moved(to: screen(175))
   let before = scroll.contentView.bounds.minX
   for _ in 0..<20 { controller.tick() }
@@ -664,6 +968,73 @@ func reorderInteractionFluidControllerDoesNotRepublishAnUnchangedSlot() throws {
   controller.moved(to: point)
   #expect(controller.preview == nil)
   #expect(!session.canAcceptDrop)
+}
+
+@Test @MainActor
+func reorderInteractionFluidControllerSkipsSaturatedEdgeScrollWork() {
+  let ids = [UUID(), UUID()]
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 220, height: 40),
+    styleMask: [.borderless], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  let scroll = ScrollReflectionProbe(frame: window.contentView!.bounds)
+  let clip = ScrollCallClipView(frame: scroll.bounds)
+  scroll.contentView = clip
+  let destination = FluidTabDestinationView(
+    rootView: AnyView(Color.clear.frame(width: 220, height: 37))
+  )
+  destination.frame = NSRect(x: 0, y: 0, width: 220, height: 37)
+  scroll.documentView = destination
+  window.contentView = scroll
+  window.makeKeyAndOrderFront(nil)
+  defer { window.contentView = nil; window.orderOut(nil); window.close() }
+  for (index, id) in ids.enumerated() {
+    let source = ReorderSourceHostingView(
+      rootView: AnyView(Color.clear.frame(width: 100, height: 30))
+    )
+    source.noteID = id
+    source.frame = NSRect(x: index * 106, y: 0, width: 100, height: 30)
+    destination.addSubview(source)
+  }
+  let interaction = ReorderInteraction(sourceID: ids[1], originalIDs: ids)
+  let session = ReorderDropSession(source: .init(
+    noteID: ids[1], sourceFolderID: nil, dragSessionID: interaction.sessionID
+  ))
+  let controller = FluidTabDragController()
+  controller.view = destination
+  controller.prepare(
+    interaction: interaction,
+    session: session,
+    currentIDs: { ids },
+    currentPins: { [] },
+    move: { _, _ in Issue.record("A saturated edge tick must not commit") },
+    finish: {}
+  )
+  func screen(_ x: CGFloat) -> NSPoint {
+    window.convertPoint(toScreen: destination.convert(NSPoint(x: x, y: 15), to: nil))
+  }
+  controller.began(at: screen(120))
+  controller.moved(to: screen(1))
+  // AppKit can leave this rounding residue after constraining a scroll to the leading edge.
+  let observedLeadingResidue: CGFloat = -4.973799150320701e-14
+  clip.preservesProposedBounds = true
+  clip.setBoundsOrigin(NSPoint(x: observedLeadingResidue, y: clip.bounds.minY))
+  #expect(clip.bounds.minX == observedLeadingResidue)
+  clip.resetScrollCalls()
+  scroll.resetReflectionCalls()
+  var publications = 0
+  let observation = controller.objectWillChange.sink { publications += 1 }
+
+  for _ in 0..<20 { controller.tick() }
+
+  #expect(clip.scrollCalls == 0)
+  #expect(scroll.reflectionCalls == 0)
+  #expect(publications == 0)
+  #expect(scroll.contentView.bounds.minX == observedLeadingResidue)
+  #expect(controller.preview?.destination == 0)
+  withExtendedLifetime(observation) {}
+  controller.cancel()
 }
 
 @Test @MainActor
