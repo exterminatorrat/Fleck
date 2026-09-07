@@ -1392,7 +1392,12 @@ private func settleSettingsHost(_ view: NSView) async {
 
   #expect(presentation.rows.count == 7)
   #expect(presentation.recommended == .rightOption)
-  #expect(presentation.statusCopy == "Input Monitoring enabled")
+  #expect(presentation.statusCopy == "Hold Right Option to dictate.")
+  #expect(presentation.detailCopy == "Double-tap for hands-free.")
+  #expect(
+    presentation.capsuleAccessibilityLabel
+      == "Fleck dictation ready. Hold Right Option to dictate. Double-tap for hands-free."
+  )
   #expect(presentation.isPickerEnabled)
   #expect(presentation.recoveryAction == nil)
 }
@@ -1403,9 +1408,12 @@ private func settleSettingsHost(_ view: NSView) async {
     monitorStatus: .unauthorized,
     canChange: true
   )
-  #expect(denied.statusCopy.contains("required"))
+  #expect(denied.statusCopy == "Enable Input Monitoring to use Right Option.")
   #expect(denied.recoveryAction == .enableInputMonitoring)
-  #expect(denied.recoveryButtonTitle == "Enable Right Option")
+  #expect(denied.recoveryButtonTitle == "Open Input Monitoring")
+  #expect(denied.guidanceCopy == "Turn on Fleck, then return here.")
+  #expect(denied.detailCopy == "Turn on Fleck, then return here.")
+  #expect(!denied.capsuleAccessibilityLabel.contains("ready"))
 
   let unavailable = DictationModifierSettingsPresentation(
     selected: .rightOption,
@@ -1413,15 +1421,17 @@ private func settleSettingsHost(_ view: NSView) async {
     canChange: true
   )
   #expect(unavailable.statusCopy.contains("unavailable"))
+  #expect(!unavailable.capsuleAccessibilityLabel.contains("ready"))
 
   let failed = DictationModifierSettingsPresentation(
     selected: .rightOption,
     monitorStatus: .failed,
     canChange: true
   )
-  #expect(failed.statusCopy.contains("could not start"))
+  #expect(failed.statusCopy == "Right Option shortcut could not start.")
   #expect(failed.recoveryAction == .retry)
-  #expect(failed.recoveryButtonTitle == "Retry Right Option")
+  #expect(failed.recoveryButtonTitle == "Retry")
+  #expect(!failed.capsuleAccessibilityLabel.contains("ready"))
 
   let activeCapture = DictationModifierSettingsPresentation(
     selected: .rightOption,
@@ -1440,6 +1450,18 @@ private func settleSettingsHost(_ view: NSView) async {
   #expect(deniedDuringCapture.recoveryButtonTitle == nil)
 }
 
+@Test func dictationModifierSettingsUsesEveryConfiguredKeyInShortcutCopy() {
+  for key in DictationModifierKey.allCases {
+    let presentation = DictationModifierSettingsPresentation(
+      selected: key,
+      monitorStatus: .running,
+      canChange: true
+    )
+    #expect(presentation.statusCopy == "Hold \(key.displayName) to dictate.")
+    #expect(presentation.capsuleAccessibilityLabel.contains(key.displayName))
+  }
+}
+
 @Test func notesPanelExposesModifierMonitoringRecoveryBesideTheEditor() throws {
   let testsDirectory = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
@@ -1449,66 +1471,57 @@ private func settleSettingsHost(_ view: NSView) async {
     contentsOf: testsDirectory.appendingPathComponent("Sources/FleckApp/NotesPanel.swift")
   )
 
-  #expect(source.contains("modifierRecoveryPresentation"))
-  #expect(source.contains("await dictationRuntime.recoverModifierMonitoring()"))
+  #expect(source.contains("DictationShortcutHelpRow"))
+  #expect(source.contains("modifierShortcutPresentation"))
+  #expect(source.contains("await dictationRuntime.performModifierShortcutRecovery"))
 }
 
 @Test func notesPanelBannerPolicyOmitsRoutineUndoWhileKeepingFailures() {
-  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
-    statusCopy: "Input Monitoring is required",
-    recoveryButtonTitle: "Enable Right Option"
-  )
   let captureFailure = NotesPanelBannerOccurrence.captureFailure(
     message: "Microphone permission is required",
     actionPanes: [.microphone]
   )
+  let agentChange = NotesPanelBannerOccurrence.agentChange(changeID: UUID(), count: 1)
 
   let active = NotesPanelBannerPolicy.activeOccurrences(
-    modifierRecovery: modifier,
     captureFailure: captureFailure,
     routineRecoveryAction: .undo,
-    agentChange: nil
+    agentChange: agentChange
   )
 
-  #expect(active == [modifier, captureFailure])
+  #expect(active == [captureFailure, agentChange])
 }
 
 @Test func notesPanelBannerDismissalInitiallyPresentsAllActiveOccurrences() {
-  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
-    statusCopy: "Input Monitoring is required",
-    recoveryButtonTitle: "Enable Right Option"
-  )
   let captureFailure = NotesPanelBannerOccurrence.captureFailure(
     message: "Microphone permission is required",
     actionPanes: [.microphone]
   )
+  let agentChange = NotesPanelBannerOccurrence.agentChange(changeID: UUID(), count: 1)
   var state = NotesPanelBannerDismissalState()
-  state.reconcile(activeOccurrences: [modifier, captureFailure])
+  state.reconcile(activeOccurrences: [captureFailure, agentChange])
 
-  #expect(state.isPresented(modifier))
   #expect(state.isPresented(captureFailure))
+  #expect(state.isPresented(agentChange))
 }
 
 @Test func notesPanelBannerDismissalHidesOnlyTheExactActiveIdentity() {
-  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
-    statusCopy: "Input Monitoring is required",
-    recoveryButtonTitle: "Enable Right Option"
-  )
-  let changedModifier = NotesPanelBannerOccurrence.modifierRecovery(
-    statusCopy: "Input Monitoring could not start",
-    recoveryButtonTitle: "Retry Right Option"
-  )
   let captureFailure = NotesPanelBannerOccurrence.captureFailure(
     message: "Microphone permission is required",
     actionPanes: [.microphone]
   )
+  let changedFailure = NotesPanelBannerOccurrence.captureFailure(
+    message: "Speech Recognition permission is required",
+    actionPanes: [.speechRecognition]
+  )
+  let agentChange = NotesPanelBannerOccurrence.agentChange(changeID: UUID(), count: 1)
   var state = NotesPanelBannerDismissalState()
-  state.reconcile(activeOccurrences: [modifier, changedModifier, captureFailure])
-  state.dismiss(modifier)
+  state.reconcile(activeOccurrences: [captureFailure, changedFailure, agentChange])
+  state.dismiss(captureFailure)
 
-  #expect(!state.isPresented(modifier))
-  #expect(state.isPresented(changedModifier))
-  #expect(state.isPresented(captureFailure))
+  #expect(!state.isPresented(captureFailure))
+  #expect(state.isPresented(changedFailure))
+  #expect(state.isPresented(agentChange))
 }
 
 @Test func notesPanelBannerDismissalForgetsIdentityAfterDisappearanceBeforeRecurrence() {
@@ -1544,26 +1557,23 @@ private func settleSettingsHost(_ view: NSView) async {
   #expect(state.isPresented(occurrence))
 }
 
-@Test func notesPanelBannerDismissalResetsModifierOnCaptureArmingWithoutClearingCaptureFailure() {
-  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
-    statusCopy: "Input Monitoring is required",
-    recoveryButtonTitle: "Enable Right Option"
-  )
+@Test func notesPanelBannerDismissalForgetsAgentChangesWithoutClearingCaptureFailure() {
   let captureFailure = NotesPanelBannerOccurrence.captureFailure(
     message: "Microphone permission is required",
     actionPanes: [.microphone]
   )
+  let agentChange = NotesPanelBannerOccurrence.agentChange(changeID: UUID(), count: 1)
   var state = NotesPanelBannerDismissalState()
-  state.reconcile(activeOccurrences: [modifier, captureFailure])
-  state.dismiss(modifier)
+  state.reconcile(activeOccurrences: [captureFailure, agentChange])
   state.dismiss(captureFailure)
-  #expect(!state.isPresented(modifier))
+  state.dismiss(agentChange)
   #expect(!state.isPresented(captureFailure))
+  #expect(!state.isPresented(agentChange))
 
-  state.dictationPhaseDidEmit(.arming)
+  state.forgetDismissedOccurrences(in: .agentChange)
 
-  #expect(state.isPresented(modifier))
   #expect(!state.isPresented(captureFailure))
+  #expect(state.isPresented(agentChange))
 }
 
 @Test func dictationModifierSettingsExplainsFnAndConflictProneKeys() {
@@ -2816,6 +2826,64 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
 }
 
+@Test @MainActor func DictationRuntimeKeepsIdleCapsuleShortcutReadinessTruthfulOnActivation()
+  async throws
+{
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    capsuleEnabled: true,
+    preferredModifier: .leftCommand,
+    monitorAccessGranted: false,
+    monitorRequestAccessResult: false
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+  #expect(
+    fixture.runtime.capsuleController.presentationModel.voiceOverLabel
+      == "Fleck global shortcut unavailable. Enable Input Monitoring to use Left Command. "
+        + "Turn on Fleck, then return here."
+  )
+
+  fixture.monitor.accessGranted = true
+  fixture.runtime.applicationDidBecomeActive()
+
+  #expect(fixture.runtime.modifierMonitorState == .running)
+  #expect(
+    fixture.runtime.capsuleController.presentationModel.voiceOverLabel
+      == "Fleck dictation ready. Hold Left Command to dictate. Double-tap for hands-free."
+  )
+
+  fixture.appState.preferences.dictationModifierKey = .rightControl
+  fixture.runtime.preferencesDidChange()
+
+  #expect(fixture.runtime.actualModifier == .rightControl)
+  #expect(
+    fixture.runtime.capsuleController.presentationModel.voiceOverLabel
+      == "Fleck dictation ready. Hold Right Control to dictate. Double-tap for hands-free."
+  )
+}
+
+@Test @MainActor func DictationRuntimeRefreshesIdleCapsuleAfterSettingsModifierChange()
+  async throws
+{
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    capsuleEnabled: true,
+    preferredModifier: .leftCommand
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  let changed = await fixture.runtime.changeModifier(to: .rightControl)
+
+  #expect(changed)
+  #expect(fixture.runtime.actualModifier == .rightControl)
+  #expect(
+    fixture.runtime.capsuleController.presentationModel.voiceOverLabel
+      == "Fleck dictation ready. Hold Right Control to dictate. Double-tap for hands-free."
+  )
+}
+
 @Test @MainActor func DictationRuntimeModifierRecoveryReturnsSettingsOnlyWhenAccessIsDenied()
   async throws
 {
@@ -2846,6 +2914,65 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   #expect(granted.monitor.requestCount == 1)
   #expect(granted.runtime.modifierMonitorState == .running)
   #expect(granted.runtime.actualModifier == .rightOption)
+}
+
+@Test @MainActor func DictationRuntimeShortcutHelpActionRequestsThenOpensOrRetriesAsNeeded()
+  async throws
+{
+  let denied = try await RuntimeFixture(
+    finalText: "saved",
+    monitorAccessGranted: false,
+    monitorRequestAccessResult: false
+  )
+  await denied.runtime.awaitStartupAssessment()
+  var deniedSettings: [DictationSystemSettingsAction] = []
+
+  await denied.runtime.performModifierShortcutRecovery {
+    deniedSettings.append($0)
+  }
+
+  #expect(denied.monitor.requestCount == 1)
+  #expect(deniedSettings.map(\.pane) == [.inputMonitoring])
+  #expect(
+    deniedSettings.first?.url.absoluteString
+      == "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+  )
+  #expect(denied.runtime.modifierMonitorState == .unauthorized)
+
+  let firstRequestGranted = try await RuntimeFixture(
+    finalText: "saved",
+    monitorAccessGranted: false,
+    monitorRequestAccessResult: true
+  )
+  await firstRequestGranted.runtime.awaitStartupAssessment()
+  var grantedSettings: [DictationSystemSettingsAction] = []
+
+  await firstRequestGranted.runtime.performModifierShortcutRecovery {
+    grantedSettings.append($0)
+  }
+
+  #expect(firstRequestGranted.monitor.requestCount == 1)
+  #expect(grantedSettings.isEmpty)
+  #expect(firstRequestGranted.runtime.modifierMonitorState == .running)
+  await firstRequestGranted.runtime.performModifierShortcutRecovery {
+    grantedSettings.append($0)
+  }
+  #expect(firstRequestGranted.monitor.requestCount == 1)
+  #expect(grantedSettings.isEmpty)
+
+  let failed = try await RuntimeFixture(finalText: "saved")
+  await failed.runtime.awaitStartupAssessment()
+  failed.monitor.publish(.failed)
+  await failed.runtime.shortcutController.drainEvents()
+  var failedSettings: [DictationSystemSettingsAction] = []
+
+  await failed.runtime.performModifierShortcutRecovery {
+    failedSettings.append($0)
+  }
+
+  #expect(failedSettings.isEmpty)
+  #expect(failed.monitor.requestCount == 0)
+  #expect(failed.runtime.modifierMonitorState == .running)
 }
 
 @Test @MainActor func DictationRuntimeNeverRequestsModifierMonitoringAtStartup() async throws {

@@ -842,6 +842,7 @@
       }
       shortcutController.monitorStateHandler = { [weak self] state in
         self?.modifierMonitorState = state
+        self?.refreshIdleShortcutAccessibility()
       }
       shortcutController.ownershipHandler = { [weak self] ownership in
         self?.receiveOwnership(ownership)
@@ -954,6 +955,16 @@
       shortcutController.canChangeModifier
     }
 
+    var modifierShortcutPresentation: DictationModifierSettingsPresentation {
+      .init(
+        selected: appState?.preferences.dictationModifierKey
+          ?? desiredModifier
+          ?? .rightOption,
+        monitorStatus: modifierMonitorState,
+        canChange: canChangeModifier
+      )
+    }
+
     var recoveryCommand: DictationRecoveryCommandPresentation {
       .init(
         title: recoveryAction?.title ?? "Recover Last Dictation",
@@ -1059,6 +1070,7 @@
       desiredModifier = modifier
       needsModifierApplication = false
       appState?.updatePreferences { $0.dictationModifierKey = modifier }
+      refreshIdleShortcutAccessibility()
       return true
     }
 
@@ -1074,6 +1086,21 @@
       guard !enabled else { return nil }
       guard modifierMonitorState == .unauthorized else { return nil }
       return .init(pane: .inputMonitoring)
+    }
+
+    func performModifierShortcutRecovery(
+      openSettings: @escaping @MainActor (DictationSystemSettingsAction) -> Void
+    ) async {
+      guard canChangeModifier else { return }
+      switch modifierShortcutPresentation.recoveryAction {
+      case .enableInputMonitoring:
+        guard let settings = await recoverModifierMonitoring() else { return }
+        openSettings(settings)
+      case .retry:
+        _ = await retryModifierMonitoring()
+      case nil:
+        break
+      }
     }
 
     func requestModifierMonitoringAccess() -> Bool {
@@ -1229,6 +1256,7 @@
       }
 
       synchronizeCapsulePreferences()
+      refreshIdleShortcutAccessibility()
     }
 
     private func receive(_ event: DictationCoordinatorEvent) {
@@ -1707,8 +1735,15 @@
       currentCapsuleStatus = .idle
       capsuleController.presentIdle(
         dock: capsuleDock,
+        accessibilityLabel: modifierShortcutPresentation.capsuleAccessibilityLabel,
         onOpenFleck: { [weak self] in self?.openFleckPanel() },
         onDockChanged: { [weak self] dock in self?.capsuleDockDidChange(dock) }
+      )
+    }
+
+    private func refreshIdleShortcutAccessibility() {
+      capsuleController.updateIdleAccessibilityLabel(
+        modifierShortcutPresentation.capsuleAccessibilityLabel
       )
     }
 

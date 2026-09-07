@@ -21,6 +21,8 @@
     let recoveryAction: DictationModifierSettingsRecoveryAction?
     let recoveryButtonTitle: String?
     let guidanceCopy: String?
+    let detailCopy: String?
+    let capsuleAccessibilityLabel: String
 
     init(
       selected: DictationModifierKey,
@@ -44,8 +46,8 @@
       }
       if canChange {
         recoveryButtonTitle = switch recoveryAction {
-        case .enableInputMonitoring: "Enable \(selected.displayName)"
-        case .retry: "Retry \(selected.displayName)"
+        case .enableInputMonitoring: "Open Input Monitoring"
+        case .retry: "Retry"
         case nil: nil
         }
       } else {
@@ -54,25 +56,46 @@
 
       let monitorCopy = switch monitorStatus {
       case .running:
-        "Input Monitoring enabled"
+        "Hold \(selected.displayName) to dictate."
       case .unauthorized:
-        "Input Monitoring is required. Enable it to use the modifier key."
+        "Enable Input Monitoring to use \(selected.displayName)."
       case .failed:
-        "Input Monitoring could not start. Retry to use the modifier key."
+        "\(selected.displayName) shortcut could not start."
       case .stopped:
-        "Input Monitoring is unavailable."
+        "\(selected.displayName) shortcut is unavailable."
       }
       statusCopy = canChange
         ? monitorCopy
-        : "\(monitorCopy) The modifier key cannot change until dictation finishes."
+        : "\(monitorCopy) The key cannot change until dictation finishes."
 
-      guidanceCopy = switch selected {
-      case .function:
-        "Fn support is best-effort because some keyboards or system settings consume it first."
-      case .leftCommand, .rightCommand, .leftOption, .leftControl, .rightControl:
-        "Modifier-only shortcuts can conflict with ordinary use of this key."
-      case .rightOption:
+      detailCopy = switch monitorStatus {
+      case .running:
+        "Double-tap for hands-free."
+      case .unauthorized:
+        "Turn on Fleck, then return here."
+      case .failed, .stopped:
         nil
+      }
+      capsuleAccessibilityLabel = switch monitorStatus {
+      case .running:
+        "Fleck dictation ready. \(monitorCopy) Double-tap for hands-free."
+      case .unauthorized:
+        "Fleck global shortcut unavailable. \(monitorCopy) Turn on Fleck, then return here."
+      case .failed, .stopped:
+        "Fleck global shortcut unavailable. \(monitorCopy)"
+      }
+
+      guidanceCopy = if monitorStatus == .unauthorized {
+        detailCopy
+      } else {
+        switch selected {
+        case .function:
+          "Fn support is best-effort because some keyboards or system settings consume it first."
+        case .leftCommand, .rightCommand, .leftOption, .leftControl, .rightControl:
+          "Modifier-only shortcuts can conflict with ordinary use of this key."
+        case .rightOption:
+          nil
+        }
       }
     }
   }

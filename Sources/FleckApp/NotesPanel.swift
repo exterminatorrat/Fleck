@@ -768,19 +768,16 @@
   }
 
   enum NotesPanelBannerCategory: Hashable {
-    case modifierRecovery
     case captureFailure
     case agentChange
   }
 
   enum NotesPanelBannerOccurrence: Hashable {
-    case modifierRecovery(statusCopy: String, recoveryButtonTitle: String)
     case captureFailure(message: String, actionPanes: [DictationPrivacyPane])
     case agentChange(changeID: UUID, count: Int)
 
     var category: NotesPanelBannerCategory {
       switch self {
-      case .modifierRecovery: .modifierRecovery
       case .captureFailure: .captureFailure
       case .agentChange: .agentChange
       }
@@ -789,12 +786,11 @@
 
   enum NotesPanelBannerPolicy {
     static func activeOccurrences(
-      modifierRecovery: NotesPanelBannerOccurrence?,
       captureFailure: NotesPanelBannerOccurrence?,
       routineRecoveryAction _: DictationCapsuleAction?,
       agentChange: NotesPanelBannerOccurrence?
     ) -> Set<NotesPanelBannerOccurrence> {
-      Set([modifierRecovery, captureFailure, agentChange].compactMap { $0 })
+      Set([captureFailure, agentChange].compactMap { $0 })
     }
   }
 
@@ -813,11 +809,6 @@
       dismissedOccurrences = dismissedOccurrences.filter {
         $0.category != category
       }
-    }
-
-    mutating func dictationPhaseDidEmit(_ phase: DictationPhase) {
-      guard phase == .arming else { return }
-      forgetDismissedOccurrences(in: .modifierRecovery)
     }
 
     mutating func dismiss(_ occurrence: NotesPanelBannerOccurrence) {
@@ -934,37 +925,6 @@
               tabStrip
               Divider().opacity(0.35)
             }
-            if let title = modifierRecoveryPresentation.recoveryButtonTitle {
-              let occurrence = NotesPanelBannerOccurrence.modifierRecovery(
-                statusCopy: modifierRecoveryPresentation.statusCopy,
-                recoveryButtonTitle: title
-              )
-              if bannerDismissalState.isPresented(occurrence) {
-                HStack(spacing: 8) {
-                  Label(modifierRecoveryPresentation.statusCopy, systemImage: "keyboard.badge.ellipsis")
-                    .font(.caption)
-                  Spacer()
-                  Button(title) {
-                    Task { @MainActor in
-                      guard let settings = await dictationRuntime.recoverModifierMonitoring() else {
-                        return
-                      }
-                      dictationRuntime.openSystemSettings(settings)
-                    }
-                  }
-                  .accessibilityLabel(title)
-                  NotesPanelBannerCloseButton(
-                    label: "modifier monitoring recovery",
-                    action: { dismissBanner(occurrence) }
-                  )
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(.quaternary.opacity(0.35))
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Dictation shortcut unavailable")
-              }
-            }
             if let failure = dictationRuntime.captureFailure {
               let occurrence = NotesPanelBannerOccurrence.captureFailure(
                 message: failure.message,
@@ -1069,9 +1029,6 @@
       .onChange(of: activeBannerOccurrences, initial: true) { _, occurrences in
         bannerDismissalState.reconcile(activeOccurrences: occurrences)
       }
-      .onReceive(dictationRuntime.$phase) { phase in
-        bannerDismissalState.dictationPhaseDidEmit(phase)
-      }
       .onChange(of: appState.workspace.selectedNoteID, initial: true) { _, _ in
         appState.refreshSelectedNoteFileReferences()
       }
@@ -1081,12 +1038,6 @@
       .onReceive(dictationRuntime.$captureFailure) { failure in
         guard failure == nil else { return }
         bannerDismissalState.forgetDismissedOccurrences(in: .captureFailure)
-      }
-      .onReceive(dictationRuntime.$modifierMonitorState) { monitorState in
-        guard monitorState == .stopped || monitorState == .running else {
-          return
-        }
-        bannerDismissalState.forgetDismissedOccurrences(in: .modifierRecovery)
       }
       .fileImporter(
         isPresented: $isImporting,
@@ -1272,21 +1223,11 @@
       .modifier(PinnedNavigationChromeSurface())
     }
 
-    private var modifierRecoveryPresentation: DictationModifierSettingsPresentation {
-      .init(
-        selected: appState.preferences.dictationModifierKey,
-        monitorStatus: dictationRuntime.modifierMonitorState,
-        canChange: dictationRuntime.canChangeModifier
-      )
+    private var modifierShortcutPresentation: DictationModifierSettingsPresentation {
+      dictationRuntime.modifierShortcutPresentation
     }
 
     private var activeBannerOccurrences: Set<NotesPanelBannerOccurrence> {
-      let modifierRecovery = modifierRecoveryPresentation.recoveryButtonTitle.map {
-        NotesPanelBannerOccurrence.modifierRecovery(
-          statusCopy: modifierRecoveryPresentation.statusCopy,
-          recoveryButtonTitle: $0
-        )
-      }
       let captureFailure = dictationRuntime.captureFailure.map {
         NotesPanelBannerOccurrence.captureFailure(
           message: $0.message,
@@ -1300,7 +1241,6 @@
         )
       }
       return NotesPanelBannerPolicy.activeOccurrences(
-        modifierRecovery: modifierRecovery,
         captureFailure: captureFailure,
         routineRecoveryAction: dictationRuntime.recoveryAction,
         agentChange: agentChange
@@ -2239,6 +2179,16 @@
     private var editor: some View {
       if let note = appState.selectedNote {
         VStack(spacing: 0) {
+          DictationShortcutHelpRow(
+            presentation: modifierShortcutPresentation,
+            onRecovery: {
+              Task { @MainActor in
+                await dictationRuntime.performModifierShortcutRecovery {
+                  dictationRuntime.openSystemSettings($0)
+                }
+              }
+            }
+          )
           if appState.preferences.showFormattingBar {
             FormattingBar(
               appState: appState,
@@ -3231,6 +3181,40 @@
       titleMutation(family)
     } else {
       bodyMutation(family)
+    }
+  }
+
+  struct DictationShortcutHelpRow: View {
+    let presentation: DictationModifierSettingsPresentation
+    let onRecovery: () -> Void
+
+    var body: some View {
+      HStack(spacing: 8) {
+        Image(systemName: presentation.recoveryAction == nil
+          ? "keyboard"
+          : "keyboard.badge.ellipsis")
+          .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 1) {
+          Text(presentation.statusCopy)
+            .font(.caption)
+          if let detail = presentation.detailCopy {
+            Text(detail)
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+          }
+        }
+        Spacer(minLength: 8)
+        if let title = presentation.recoveryButtonTitle {
+          Button(title, action: onRecovery)
+            .accessibilityLabel(title)
+        }
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(.quaternary.opacity(0.35))
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel(presentation.capsuleAccessibilityLabel)
     }
   }
 

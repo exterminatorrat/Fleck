@@ -1239,6 +1239,12 @@
       colors = FleckRailColors(accentHex: accentHex)
     }
 
+    func updateIdleAccessibilityLabel(_ label: String) {
+      guard context.status == .idle, voiceOverLabel != label else { return }
+      objectWillChange.send()
+      voiceOverLabel = label
+    }
+
     func setListeningHover(_ isHovering: Bool) {
       isListeningHover = isHovering
     }
@@ -1493,6 +1499,7 @@
 
     func presentIdle(
       dock: DictationCapsuleDock,
+      accessibilityLabel: String = "Fleck dictation ready",
       onOpenFleck: @escaping @MainActor () -> Void,
       onDockChanged: @escaping @MainActor (DictationCapsuleDock) -> Void
     ) {
@@ -1516,6 +1523,7 @@
         chooser: nil,
         onChoice: { _, _ in }
       )
+      presentationModel.updateIdleAccessibilityLabel(accessibilityLabel)
       inputRouter.onOpenFleck = onOpenFleck
       hostingView.refreshMenu()
       applyCurrentFrame(
@@ -1615,6 +1623,11 @@
 
     func updateAccentHex(_ accentHex: String) {
       presentationModel.updateAccentHex(accentHex)
+    }
+
+    func updateIdleAccessibilityLabel(_ label: String) {
+      guard currentContext.status == .idle else { return }
+      presentationModel.updateIdleAccessibilityLabel(label)
     }
 
     func dismiss() {
