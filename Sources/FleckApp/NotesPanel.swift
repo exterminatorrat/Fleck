@@ -1080,7 +1080,6 @@
         if let source = noteDropSource {
           menuWindowDrop.deactivate(sessionID: source.dragSessionID)
         }
-        if !isPinned { menuWindowDrop.detach() }
         noteDropSource = nil
         dictationRuntime.unregisterEditor(editorCommands)
       }

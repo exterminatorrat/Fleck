@@ -518,7 +518,8 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
 @Test func TabDragReorderFolderNavigatorUsesLocalPayloadsAndKeyboardContracts() throws {
   let source = try tabNotesPanelSource()
   let navigator = try #require(
-    source.components(separatedBy: "private struct FolderNavigator").last
+    source.components(separatedBy: "private struct FolderNavigator").last?
+      .components(separatedBy: "private struct DeleteConfirmationOverlay").first
   )
 
   #expect(source.contains("com.harryjin.fleck.local-note"))
@@ -541,7 +542,8 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
 @Test func folderNoteDropsUseTypeSpecificTransientAccentTargets() throws {
   let source = try tabNotesPanelSource()
   let navigator = try #require(
-    source.components(separatedBy: "private struct FolderNavigator").last
+    source.components(separatedBy: "private struct FolderNavigator").last?
+      .components(separatedBy: "private struct DeleteConfirmationOverlay").first
   )
 
   #expect(navigator.contains("private enum NoteDropTarget"))
