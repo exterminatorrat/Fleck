@@ -1,10 +1,97 @@
 import AppKit
 import Combine
 import Foundation
+import ObjectiveC.runtime
 import Testing
 import SwiftUI
 @testable import FleckApp
 import FleckCore
+
+@Test @MainActor
+func reorderNoteSourceOwnsNativePointerEvents() throws {
+  for selector in [
+    #selector(NSResponder.mouseDown(with:)),
+    #selector(NSResponder.mouseDragged(with:)),
+    #selector(NSResponder.mouseUp(with:)),
+  ] {
+    let sourceMethod = try #require(class_getInstanceMethod(ReorderSourceHostingView.self, selector))
+    let inheritedMethod = try #require(class_getInstanceMethod(NSHostingView<AnyView>.self, selector))
+    #expect(method_getImplementation(sourceMethod) != method_getImplementation(inheritedMethod))
+  }
+}
+
+@Test @MainActor
+func reorderNoteSourceKeepsClickBelowFourPointDragThresholdAndStartsFromMouseDown() throws {
+  let noteID = UUID()
+  let source = NoteDropSource(noteID: noteID, sourceFolderID: nil)
+  let view = ReorderSourceHostingView(
+    rootView: AnyView(
+      Button {} label: {
+        Text("Readable tab").padding(.horizontal, 10).padding(.vertical, 6)
+      }
+      .buttonStyle(.plain)
+    )
+  )
+  view.noteID = noteID
+  view.frame = NSRect(origin: .zero, size: view.fittingSize)
+  let window = NSWindow(
+    contentRect: view.frame,
+    styleMask: [.borderless], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  window.contentView = view
+  window.makeKeyAndOrderFront(nil)
+  defer { window.contentView = nil; window.orderOut(nil); window.close() }
+  #expect(view.hitTest(NSPoint(x: 2, y: view.bounds.midY)) === view)
+  #expect(view.hitTest(NSPoint(x: view.bounds.midX, y: view.bounds.midY)) === view)
+
+  var activations = 0
+  var nativeBegins = 0
+  var nativeEnds = 0
+  var nativeStartEvent: NSEvent?
+  view.onPrimaryClick = { activations += 1 }
+  view.onNativeBegin = {
+    nativeBegins += 1
+    return (
+      FolderDragPayload.noteProvider(source: source),
+      FolderDragPayload.notePasteboardItem(source: source),
+      { _ in nativeEnds += 1 }
+    )
+  }
+  view.interceptNativeDrag = { _, _, event in
+    nativeStartEvent = event
+    return true
+  }
+
+  func event(_ type: NSEvent.EventType, x: CGFloat, number: Int) throws -> NSEvent {
+    try #require(NSEvent.mouseEvent(
+      with: type,
+      location: NSPoint(x: x, y: 15),
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime + Double(number) * 0.01,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: number,
+      clickCount: 1,
+      pressure: type == .leftMouseUp ? 0 : 1
+    ))
+  }
+
+  window.sendEvent(try event(.leftMouseDown, x: 10, number: 1))
+  window.sendEvent(try event(.leftMouseDragged, x: 13, number: 2))
+  #expect(nativeBegins == 0)
+  window.sendEvent(try event(.leftMouseUp, x: 13, number: 3))
+  #expect(activations == 1)
+
+  window.sendEvent(try event(.leftMouseDown, x: 10, number: 4))
+  window.sendEvent(try event(.leftMouseDragged, x: 14, number: 5))
+  #expect(nativeBegins == 1)
+  #expect(nativeStartEvent?.type == .leftMouseDown)
+  #expect(nativeStartEvent?.locationInWindow == NSPoint(x: 10, y: 15))
+  window.sendEvent(try event(.leftMouseUp, x: 14, number: 6))
+  #expect(activations == 1)
+  #expect(nativeEnds == 1)
+}
 
 @MainActor
 private final class DraggingInfoProbe: NSObject, NSDraggingInfo {

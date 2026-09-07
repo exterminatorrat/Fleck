@@ -706,21 +706,6 @@ private func settleTabStripHost(_ view: NSView) async {
   }
 }
 
-private final class NativeDraggingSourceProbe: NSObject, NSDraggingSource {
-  var willBegin: (() -> Void)?
-
-  func draggingSession(
-    _ session: NSDraggingSession,
-    sourceOperationMaskFor context: NSDraggingContext
-  ) -> NSDragOperation {
-    .move
-  }
-
-  func draggingSession(_ session: NSDraggingSession, willBeginAt point: NSPoint) {
-    willBegin?()
-  }
-}
-
 @Test func tabOverflowEndpointControlsStayEnabledForVisibleNotes() throws {
   let source = try tabNotesPanelSource()
   let tabStrip = try #require(
@@ -989,11 +974,21 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
   let destination = try #require(findDestination(host))
   let source = try #require(findSource(dragged.id, in: destination))
   #expect(visiblePixels(in: try renderedImage(of: source)) > 0)
+  let originalBegin = try #require(source.onNativeBegin)
+  var endOperations: [NSDragOperation] = []
+  source.onNativeBegin = {
+    let (provider, pasteboardWriter, end) = originalBegin()
+    return (provider, pasteboardWriter, { operation in
+      endOperations.append(operation)
+      end(operation)
+    })
+  }
   var draggingItems: [NSDraggingItem] = []
-  var capturedSession: NSDraggingSession?
-  source.inspectDraggingItems = { items, session in
+  var capturedSource: ReorderNativeSource?
+  source.interceptNativeDrag = { items, nativeSource, _ in
     draggingItems = items
-    capturedSession = session
+    capturedSource = nativeSource
+    return true
   }
   let sourceFrame = destination.convert(source.bounds, from: source)
   let start = destination.convert(
@@ -1022,29 +1017,14 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
   let previewImage = try #require(
     draggingItems.first?.imageComponents?.first?.contents as? NSImage
   )
-  let nativeSession = try #require(capturedSession)
   #expect(visiblePixels(in: previewImage) > 0)
-  #expect(nativeSession.animatesToStartingPositionsOnCancelOrFail == false)
+  #expect(capturedSource?.began != nil)
+  #expect(capturedSource?.moved != nil)
+  #expect(endOperations.count == 1)
   #expect(destination.controller?.inside == false)
   #expect(destination.controller?.preview == nil)
+  #expect(source.layer?.opacity == 1)
   #expect(state.workspace.selectedNoteID == selected.id)
-
-  var callbackOrder: [String] = []
-  var beganPoint: NSPoint?
-  let originalSource = NativeDraggingSourceProbe()
-  originalSource.willBegin = { callbackOrder.append("source") }
-  let proxy = ReorderNativeSource(
-    id: UUID(),
-    source: originalSource,
-    began: { point in
-      callbackOrder.append("began")
-      beganPoint = point
-    },
-    end: { _ in }
-  )
-  proxy.draggingSession(nativeSession, willBeginAt: NSPoint(x: -100, y: -100))
-  #expect(callbackOrder == ["source", "began"])
-  #expect(beganPoint == nativeSession.draggingLocation)
 
   destination.controller?.cancel()
   await runtime.shutdown()

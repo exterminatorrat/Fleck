@@ -24,6 +24,12 @@
       return provider
     }
 
+    static func notePasteboardItem(source: NoteDropSource) -> NSPasteboardItem {
+      let item = NSPasteboardItem()
+      item.setData(try! JSONEncoder().encode(source), forType: .init(noteType.identifier))
+      return item
+    }
+
     static func noteValue(from data: Data) -> NoteDropSource? {
       try? JSONDecoder().decode(NoteDropSource.self, from: data)
     }
@@ -1180,12 +1186,14 @@
                     visibleNotes: appState.visibleNotes(in: note.folderID)) else { return }
                   _ = appState.moveNote(id, inFolderID: note.folderID, toVisibleIndex: localDestination)
                 }, finish: { if noteDropSource == source { noteDropSource = nil } })
-              return (FolderDragPayload.noteProvider(source: source), { operation in
+              return (FolderDragPayload.noteProvider(source: source),
+                FolderDragPayload.notePasteboardItem(source: source), { operation in
                 session.end(operation: operation)
                 fluidTabDrag.ended(sessionID: session.id, operation: operation)
                 if noteDropSource == source { noteDropSource = nil }
               })
-            }, began: { point in fluidTabDrag.began(at: point) }, moved: { point in fluidTabDrag.moved(to: point) }, noteID: note.id,
+            }, began: { point in fluidTabDrag.began(at: point) }, moved: { point in fluidTabDrag.moved(to: point) },
+              activate: { _ = activateNoteAndScope(note.id) }, noteID: note.id,
               displacement: fluidTabDrag.inside ? fluidTabDrag.preview?.offset(for: note.id) ?? 0 : 0,
               animatesDisplacement: !motion.reduceMotion && fluidTabDrag.animatesDisplacement))
             .transition(
@@ -2198,7 +2206,7 @@
           dragSession?.cancel()
           dragSession = session
           folderReorder = interaction
-          return (FolderDragPayload.folderProvider(folderID: folder.id, sessionID: interaction.sessionID), { operation in
+          return (FolderDragPayload.folderProvider(folderID: folder.id, sessionID: interaction.sessionID), nil, { operation in
             session.end(operation: operation)
             guard folderReorder?.sessionID == interaction.sessionID else { return }
             folderReorder = nil
@@ -3768,27 +3776,30 @@
     }
   }
 
-  // Keep SwiftUI's provider and preview, forwarding native source callbacks so
-  // outside drops and Escape end the captured session on every supported macOS.
+  // Folders keep SwiftUI's drag source. Note tabs own their left-pointer gesture
+  // so AppKit receives the real threshold event and a snapshot captured before hiding.
   private struct ReorderDragSource: ViewModifier {
-    let begin: () -> (NSItemProvider, (NSDragOperation) -> Void)
+    let begin: () -> (NSItemProvider, NSPasteboardWriting?, (NSDragOperation) -> Void)
     var began: ((NSPoint) -> Void)? = nil
     var moved: ((NSPoint) -> Void)? = nil
+    var activate: (() -> Void)? = nil
     var noteID: UUID? = nil
     var displacement: CGFloat? = nil
     var animatesDisplacement = false
 
     func body(content: Content) -> some View {
-      ReorderDragHost(content: content, begin: begin, began: began, moved: moved, noteID: noteID,
-        displacement: displacement, animatesDisplacement: animatesDisplacement)
+      ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
+        activate: activate, noteID: noteID, displacement: displacement,
+        animatesDisplacement: animatesDisplacement)
     }
   }
 
   private struct ReorderDragHost<Content: View>: NSViewRepresentable {
     let content: Content
-    let begin: () -> (NSItemProvider, (NSDragOperation) -> Void)
+    let begin: () -> (NSItemProvider, NSPasteboardWriting?, (NSDragOperation) -> Void)
     let began: ((NSPoint) -> Void)?
     let moved: ((NSPoint) -> Void)?
+    let activate: (() -> Void)?
     let noteID: UUID?
     let displacement: CGFloat?
     let animatesDisplacement: Bool
@@ -3803,16 +3814,22 @@
       view.noteID = noteID
       view.onBegan = began
       view.onMoved = moved
+      view.onNativeBegin = noteID == nil ? nil : begin
+      view.onPrimaryClick = noteID == nil ? nil : activate
       let dragContent = content.environment(\.self, context.environment)
-      view.rootView = AnyView(
-        dragContent.onDrag({ [weak view] in
-          let (provider, end) = begin()
-          view?.onEnd = end
-          return provider
-        }, preview: {
-          dragContent
-        })
-      )
+      if noteID == nil {
+        view.rootView = AnyView(
+          dragContent.onDrag({ [weak view] in
+            let (provider, _, end) = begin()
+            view?.onEnd = end
+            return provider
+          }, preview: {
+            dragContent
+          })
+        )
+      } else {
+        view.rootView = AnyView(dragContent)
+      }
       if let displacement { view.setReorderDisplacement(displacement, animated: animatesDisplacement) }
     }
   }
@@ -3857,10 +3874,84 @@
     var onEnd: ((NSDragOperation) -> Void)?
     var onBegan: ((NSPoint) -> Void)?
     var onMoved: ((NSPoint) -> Void)?
+    var onNativeBegin: (() -> (NSItemProvider, NSPasteboardWriting?, (NSDragOperation) -> Void))?
+    var onPrimaryClick: (() -> Void)?
     #if DEBUG
-      var inspectDraggingItems: (([NSDraggingItem], NSDraggingSession) -> Void)?
+      var interceptNativeDrag: (([NSDraggingItem], ReorderNativeSource, NSEvent) -> Bool)?
     #endif
+    private var pointerDown: (event: NSEvent, point: NSPoint)?
     private var sourceProxy: ReorderNativeSource?
+
+    override func mouseDown(with event: NSEvent) {
+      guard noteID != nil, !event.modifierFlags.contains(.control) else {
+        pointerDown = nil
+        super.mouseDown(with: event)
+        return
+      }
+      pointerDown = (event, convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+      guard noteID != nil else {
+        super.mouseDragged(with: event)
+        return
+      }
+      guard let press = pointerDown, sourceProxy == nil else { return }
+      let point = convert(event.locationInWindow, from: nil)
+      let distance = NSPoint(x: point.x - press.point.x, y: point.y - press.point.y)
+      guard distance.x * distance.x + distance.y * distance.y >= 16,
+        let onNativeBegin
+      else { return }
+      pointerDown = nil
+      let image = draggingImage()
+      let (_, pasteboardWriter, end) = onNativeBegin()
+      guard let pasteboardWriter else {
+        end([])
+        return
+      }
+      let item = NSDraggingItem(pasteboardWriter: pasteboardWriter)
+      item.setDraggingFrame(bounds, contents: image)
+      let id = UUID()
+      let proxy = ReorderNativeSource(id: id, source: nil, began: onBegan) { [weak self] operation in
+        end(operation)
+        if self?.sourceProxy?.id == id { self?.sourceProxy = nil }
+      }
+      proxy.moved = onMoved
+      sourceProxy = proxy
+      #if DEBUG
+        if interceptNativeDrag?([item], proxy, press.event) == true {
+          proxy.end([])
+          return
+        }
+      #endif
+      let session = super.beginDraggingSession(with: [item], event: press.event, source: proxy)
+      session.animatesToStartingPositionsOnCancelOrFail = false
+    }
+
+    override func mouseUp(with event: NSEvent) {
+      guard noteID != nil else {
+        super.mouseUp(with: event)
+        return
+      }
+      guard pointerDown != nil else { return }
+      pointerDown = nil
+      let point = convert(event.locationInWindow, from: nil)
+      if bounds.contains(point) { onPrimaryClick?() }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+      pointerDown = nil
+      super.rightMouseDown(with: event)
+    }
+
+    private func draggingImage() -> NSImage {
+      let image = NSImage(size: bounds.size)
+      if let representation = bitmapImageRepForCachingDisplay(in: bounds) {
+        cacheDisplay(in: bounds, to: representation)
+        image.addRepresentation(representation)
+      }
+      return image
+    }
 
     override func beginDraggingSession(with items: [NSDraggingItem], event: NSEvent,
       source: any NSDraggingSource) -> NSDraggingSession {
@@ -3878,21 +3969,18 @@
       if began != nil {
         session.animatesToStartingPositionsOnCancelOrFail = false
       }
-      #if DEBUG
-        inspectDraggingItems?(items, session)
-      #endif
       return session
     }
   }
 
   final class ReorderNativeSource: NSObject, NSDraggingSource {
     let id: UUID
-    let source: any NSDraggingSource
+    let source: (any NSDraggingSource)?
     let began: ((NSPoint) -> Void)?
     let end: (NSDragOperation) -> Void
     var moved: ((NSPoint) -> Void)?
 
-    init(id: UUID, source: any NSDraggingSource, began: ((NSPoint) -> Void)?,
+    init(id: UUID, source: (any NSDraggingSource)?, began: ((NSPoint) -> Void)?,
       end: @escaping (NSDragOperation) -> Void) {
       self.id = id
       self.source = source
@@ -3910,22 +3998,22 @@
     }
 
     func ignoreModifierKeys(for session: NSDraggingSession) -> Bool {
-      source.ignoreModifierKeys?(for: session) ?? false
+      source?.ignoreModifierKeys?(for: session) ?? false
     }
 
     func draggingSession(_ session: NSDraggingSession, willBeginAt point: NSPoint) {
-      source.draggingSession?(session, willBeginAt: point)
+      source?.draggingSession?(session, willBeginAt: point)
       began?(session.draggingLocation)
     }
 
     func draggingSession(_ session: NSDraggingSession, movedTo point: NSPoint) {
       moved?(session.draggingLocation)
-      source.draggingSession?(session, movedTo: point)
+      source?.draggingSession?(session, movedTo: point)
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt point: NSPoint,
       operation: NSDragOperation) {
-      source.draggingSession?(session, endedAt: point, operation: operation)
+      source?.draggingSession?(session, endedAt: point, operation: operation)
       end(operation)
     }
   }
