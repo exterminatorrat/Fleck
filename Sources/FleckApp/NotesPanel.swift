@@ -2181,6 +2181,7 @@
         VStack(spacing: 0) {
           DictationShortcutHelpRow(
             presentation: modifierShortcutPresentation,
+            destinationCopy: dictationRuntime.destinationGuidanceCopy,
             onRecovery: {
               Task { @MainActor in
                 await dictationRuntime.performModifierShortcutRecovery {
@@ -3185,8 +3186,14 @@
   }
 
   struct DictationShortcutHelpRow: View {
+    static let smartCaptureHelp =
+      "Say a specific note title to help Fleck choose. "
+      + "If it cannot find a clear match, it saves to Inbox."
+
     let presentation: DictationModifierSettingsPresentation
+    let destinationCopy: String
     let onRecovery: () -> Void
+    @State private var showsSmartCaptureHelp = false
 
     var body: some View {
       HStack(spacing: 8) {
@@ -3202,6 +3209,30 @@
               .font(.caption2)
               .foregroundStyle(.secondary)
           }
+          HStack(spacing: 4) {
+            Text(destinationCopy)
+            Button {
+              showsSmartCaptureHelp.toggle()
+            } label: {
+              Image(systemName: "questionmark.circle")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("About Smart Capture")
+            .popover(isPresented: $showsSmartCaptureHelp, arrowEdge: .bottom) {
+              VStack(alignment: .leading, spacing: 6) {
+                Text("Smart Capture")
+                  .font(.headline)
+                Text(Self.smartCaptureHelp)
+                Text("Example: “Travel plans.”")
+                  .foregroundStyle(.secondary)
+              }
+              .font(.callout)
+              .frame(width: 280, alignment: .leading)
+              .padding(12)
+            }
+          }
+          .font(.caption2)
+          .foregroundStyle(.secondary)
         }
         Spacer(minLength: 8)
         if let title = presentation.recoveryButtonTitle {

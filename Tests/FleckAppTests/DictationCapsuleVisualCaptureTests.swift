@@ -66,6 +66,81 @@
     controller.waveformModel.receive(level: 0.14, now: Date().addingTimeInterval(0.08))
   }
 
+  @MainActor
+  private func visualProbe(
+    _ identifier: String,
+    in view: NSView
+  ) -> NSView? {
+    if view.identifier?.rawValue == identifier { return view }
+    for subview in view.subviews {
+      if let match = visualProbe(identifier, in: subview) { return match }
+    }
+    return nil
+  }
+
+  @Test @MainActor
+  func DictationCapsuleRendersCapturedContextWithoutCoveringLiveControls() throws {
+    let panel = DictationCapsulePanel()
+    let controller = DictationCapsuleController(panel: panel)
+    defer { controller.dismiss() }
+
+    func frames(
+      for context: DictationCapsuleContext,
+      size: CGSize,
+      adjacentProbe: String
+    ) throws -> (context: CGRect, adjacent: CGRect, bounds: CGRect) {
+      controller.render(context)
+      panel.setFrame(CGRect(origin: .zero, size: size), display: false)
+      panel.contentView?.frame = CGRect(origin: .zero, size: size)
+      panel.contentView?.layoutSubtreeIfNeeded()
+      let host = try #require(panel.contentView)
+      let contextProbe = try #require(visualProbe("fleck-rail-context", in: host))
+      let adjacent = try #require(visualProbe(adjacentProbe, in: host))
+      return (
+        contextProbe.convert(contextProbe.bounds, to: host),
+        adjacent.convert(adjacent.bounds, to: host),
+        host.bounds
+      )
+    }
+
+    for dock in [DictationCapsuleDock.bottom, .left, .right] {
+      controller.setDock(dock)
+      let listening = try frames(
+        for: .init(
+          status: .listening,
+          detailText: "Dictating into Travel plans",
+          compactDetailText: "Travel plans",
+          sessionID: visualCaptureSessionID,
+          trigger: .hold,
+          mode: .focused,
+          pipelineStage: .capture
+        ),
+        size: DictationCapsuleController.listeningSize,
+        adjacentProbe: "fleck-rail-timer"
+      )
+      #expect(listening.context.width > 0)
+      #expect(listening.bounds.contains(listening.context))
+      #expect(!listening.context.intersects(listening.adjacent))
+    }
+
+    controller.setDock(.bottom)
+    let processing = try frames(
+      for: .init(
+        status: .cleaning,
+        detailText: "Smart Capture",
+        sessionID: visualCaptureSessionID,
+        trigger: .hold,
+        mode: .smartCapture,
+        pipelineStage: .polish
+      ),
+      size: DictationCapsuleController.activeSize,
+      adjacentProbe: "fleck-rail-mark"
+    )
+    #expect(processing.context.width > 0)
+    #expect(processing.bounds.contains(processing.context))
+    #expect(!processing.context.intersects(processing.adjacent))
+  }
+
   @Test @MainActor func DictationCapsuleVisualCaptureWritesRailStateMatrixWhenRequested() async throws {
     let captureDirectory = ProcessInfo.processInfo.environment["FLECK_RAIL_CAPTURE_DIR"]
       .map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -130,6 +205,26 @@
       directory: captureDirectory
     )
 
+    let focusedListening = DictationCapsuleContext(
+      status: .listening,
+      detailText: "Dictating into Travel plans",
+      compactDetailText: "Travel plans",
+      sessionID: visualCaptureSessionID,
+      trigger: .hold,
+      mode: .focused,
+      pipelineStage: .capture
+    )
+    for dock in [DictationCapsuleDock.bottom, .left, .right] {
+      controller.setDock(dock)
+      try render(
+        "listening-focused-destination-\(dock.rawValue)",
+        context: focusedListening,
+        size: DictationCapsuleController.listeningSize
+      )
+      prepareWaveform(for: controller)
+    }
+    controller.setDock(.bottom)
+
     let handsFreeListening = visualCaptureContext(
       .listening,
       isHandsFree: true,
@@ -169,6 +264,18 @@
       controller: controller,
       size: DictationCapsuleController.activeSize,
       directory: captureDirectory
+    )
+    try render(
+      "polishing-smart-capture-bottom",
+      context: .init(
+        status: .cleaning,
+        detailText: "Smart Capture",
+        sessionID: visualCaptureSessionID,
+        trigger: .hold,
+        mode: .smartCapture,
+        pipelineStage: .polish
+      ),
+      size: DictationCapsuleController.activeSize
     )
 
     try render(

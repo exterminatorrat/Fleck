@@ -23,9 +23,42 @@ import Testing
       == [DictationRoutingCandidate(
         destination: DictationDestination(noteID: active.id, title: "Projects"),
         semanticContext: "",
-        contentRevision: active.revision
+        contentRevision: active.revision,
+        presentationContext: "Unfiled"
       )]
   )
+}
+
+@Test @MainActor func appStateDictationDestinationsCarryRealFolderContextForDuplicateTitles()
+  async throws
+{
+  let root = temporaryStoreRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let work = try Folder(name: "Work")
+  let home = try Folder(name: "Home")
+  let workNote = Note(title: "Travel plans", folderID: work.id)
+  let homeNote = Note(title: "Travel plans", folderID: home.id)
+  let unfiled = Note(title: "Travel plans")
+  let store = LocalStore(rootURL: root)
+  try await store.save(
+    workspace: Workspace(
+      notes: [workNote, homeNote, unfiled],
+      selectedNoteID: workNote.id,
+      folders: [work, home]
+    ),
+    preferences: .init()
+  )
+  let state = try await loadedState(
+    store: store,
+    noteIDs: [workNote.id, homeNote.id, unfiled.id]
+  )
+
+  let contexts = Dictionary(uniqueKeysWithValues: state.activeDestinations().map {
+    ($0.destination.noteID, $0.presentationContext)
+  })
+  #expect(contexts[workNote.id] == "Work")
+  #expect(contexts[homeNote.id] == "Home")
+  #expect(contexts[unfiled.id] == "Unfiled")
 }
 
 @Test @MainActor func appStateDictationDestinationsKeepCompleteRawBodyAndRevision() async throws {

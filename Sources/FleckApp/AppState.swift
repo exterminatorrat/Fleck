@@ -726,11 +726,15 @@
     }
 
     func activeDestinations() -> [DictationRoutingCandidate] {
-      workspace.notes.map {
+      let folderNames = Dictionary(uniqueKeysWithValues: workspace.folders.map {
+        ($0.id, $0.name)
+      })
+      return workspace.notes.map {
         DictationRoutingCandidate(
           destination: DictationDestination(noteID: $0.id, title: $0.displayTitle),
           semanticContext: $0.body,
-          contentRevision: $0.revision
+          contentRevision: $0.revision,
+          presentationContext: $0.folderID.flatMap { folderNames[$0] } ?? "Unfiled"
         )
       }
     }

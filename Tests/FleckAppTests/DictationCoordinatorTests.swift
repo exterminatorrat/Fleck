@@ -451,9 +451,11 @@ func captureFirstSynchronousShortReceiptSuppressesDelayedStartupFailure() async 
 @Test @MainActor
 func captureFirstLongReleaseReceiptKeepsLivePartialAndExactStopOrigin() async throws {
   let threshold = Gate()
+  let provisional = CompletionProbe()
   let processing = ProcessingProbe(result: processingResult("Held result"))
   let fixture = try Fixture(
     processing: processing,
+    onFocusedProvisionalUpdate: { Task { await provisional.complete() } },
     holdSleeper: { _ in await threshold.wait() }
   )
   let press = ContinuousClock().now
@@ -482,6 +484,7 @@ func captureFirstLongReleaseReceiptKeepsLivePartialAndExactStopOrigin() async th
     stableText: "Held ",
     provisionalTail: "partial"
   ))
+  #expect(await waitForCompletion(provisional, timeout: .seconds(1)))
   #expect(fixture.editor.provisionalTexts == ["Held partial"])
   await fixture.coordinator.endShortcut(
     session,
@@ -2489,6 +2492,64 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   #expect(fixture.coordinator.phase == .saved(fixture.inbox))
 }
 
+@Test @MainActor func ordinaryInboxFallbackOffersEveryManualDestinationAndMovesGenericNote()
+  async throws
+{
+  let fixture = try Fixture()
+  let destinations = [
+    DictationDestination(noteID: UUID(), title: "Note"),
+    DictationDestination(noteID: UUID(), title: "Travel plans"),
+    DictationDestination(noteID: UUID(), title: "Project"),
+    DictationDestination(noteID: UUID(), title: "Personal"),
+    DictationDestination(noteID: UUID(), title: "Ideas"),
+    DictationDestination(noteID: UUID(), title: "Archive"),
+  ]
+  fixture.saver.destinations += destinations
+  fixture.standard.finalText = "Choose after fallback"
+  fixture.router.result = .inbox
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  let ambiguity = try #require(fixture.coordinator.routingAmbiguity)
+  #expect(ambiguity.choices.map(\.destination) == destinations)
+  #expect(ambiguity.choices.count == 6)
+  let inboxReceipt = try #require(fixture.coordinator.recoveryReceipt)
+
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: ambiguity.captureID,
+    noteID: destinations[0].noteID
+  ) == .completed)
+  #expect(fixture.saver.moveReceipts == [inboxReceipt])
+  #expect(fixture.saver.savedTexts == ["Choose after fallback"])
+  #expect(fixture.coordinator.recoveryReceipt?.noteID == destinations[0].noteID)
+  #expect(try await fixture.history.list().first?.destination == destinations[0])
+}
+
+@Test @MainActor func ordinaryInboxFallbackCanBeKeptWithoutChangingSuccessfulSave()
+  async throws
+{
+  let fixture = try Fixture()
+  fixture.saver.destinations.append(.init(noteID: UUID(), title: "Note"))
+  fixture.standard.finalText = "Leave in Inbox"
+  fixture.router.result = .inbox
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  let ambiguity = try #require(fixture.coordinator.routingAmbiguity)
+  let receipt = try #require(fixture.coordinator.recoveryReceipt)
+
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: ambiguity.captureID,
+    noteID: nil
+  ) == .completed)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
+  #expect(fixture.coordinator.recoveryReceipt == receipt)
+  #expect(fixture.saver.moveCount == 0)
+  #expect(fixture.saver.savedTexts == ["Leave in Inbox"])
+  #expect(try await fixture.history.list().first?.destination == fixture.inbox)
+}
+
 @Test @MainActor func routingContextReachesRouterButIsNotPersistedInHistory() async throws {
   let fixture = try Fixture()
   fixture.standard.finalText = "Route this"
@@ -2533,6 +2594,32 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   #expect(fixture.saver.savedTexts == ["Ambiguous capture"])
   #expect(fixture.saver.destinationIDs == [fixture.inbox.noteID])
   #expect(fixture.coordinator.routingAmbiguity?.captureID == fixture.coordinator.recoveryReceipt?.captureID)
+}
+
+@Test @MainActor func ambiguousRoutingKeepsSuggestionsFirstAndAddsEveryManualDestination()
+  async throws
+{
+  let fixture = try Fixture()
+  let destinations = (0..<6).map {
+    DictationDestination(noteID: UUID(), title: "Note \($0 + 1)")
+  }
+  fixture.saver.destinations += destinations
+  fixture.standard.finalText = "Ambiguous with more choices"
+  fixture.router.result = .ambiguous([
+    .init(destination: destinations[4], contextHint: "suggested fifth"),
+    .init(destination: destinations[1], contextHint: "suggested second"),
+  ])
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  let choices = try #require(fixture.coordinator.routingAmbiguity?.choices)
+  #expect(choices.map(\.destination) == [
+    destinations[4], destinations[1], destinations[0], destinations[2],
+    destinations[3], destinations[5],
+  ])
+  #expect(choices[0].contextHint == "suggested fifth")
+  #expect(choices[1].contextHint == "suggested second")
 }
 
 @Test @MainActor func ambiguousRoutingUsesTheNewlyCreatedInboxReceiptWhenInboxDoesNotExist()
@@ -2984,6 +3071,30 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   ))
 }
 
+@Test @MainActor func focusedCaptureContextKeepsItsStartingDestinationSnapshot() async throws {
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Focused"
+  let starting = DictationDestination(noteID: UUID(), title: "Travel plans")
+  let laterSelection = DictationDestination(noteID: UUID(), title: "Shopping")
+  var selectedDestination = starting
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(
+    mode: .focused,
+    editor: fixture.editor,
+    destination: selectedDestination
+  )
+  selectedDestination = laterSelection
+
+  #expect(events.last?.context?.destination == starting)
+  await fixture.coordinator.finish()
+
+  #expect(events.compactMap(\.context?.destination).allSatisfy { $0 == starting })
+  #expect(fixture.router.callCount == 0)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
+}
+
 @Test @MainActor func focusedGlobalCapturePersistsItsStartingDestination() async throws {
   let threshold = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await threshold.wait() })
@@ -3279,8 +3390,12 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
   let finishing = Task { await fixture.coordinator.finish() }
   await gate.waitUntilWaiting()
-  await fixture.coordinator.cancel()
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  while fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil {
+    await Task.yield()
+  }
   await gate.openGate()
+  await cancelling.value
   await finishing.value
 
   #expect(fixture.editor.rollbackCommittedCount == 1)
@@ -3304,8 +3419,12 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   )
   let finishing = Task { await fixture.coordinator.finish() }
   await gate.waitUntilWaiting()
-  await fixture.coordinator.cancel()
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  while fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil {
+    await Task.yield()
+  }
   await gate.openGate()
+  await cancelling.value
   await finishing.value
 
   #expect(
@@ -3333,8 +3452,12 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   )
   let finishing = Task { await fixture.coordinator.finish() }
   await gate.waitUntilWaiting()
-  await fixture.coordinator.cancel()
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  while fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil {
+    await Task.yield()
+  }
   await gate.openGate()
+  await cancelling.value
   await finishing.value
 
   #expect(
@@ -3449,8 +3572,12 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   await fixture.coordinator.start(mode: .smartCapture)
   let finishing = Task { await fixture.coordinator.finish() }
   await gate.waitUntilWaiting()
-  await fixture.coordinator.cancel()
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  while fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil {
+    await Task.yield()
+  }
   await gate.openGate()
+  await cancelling.value
   await finishing.value
 
   #expect(fixture.saver.undoCount == 1)
@@ -3477,8 +3604,12 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   await fixture.coordinator.start(mode: .smartCapture)
   let finishing = Task { await fixture.coordinator.finish() }
   await gate.waitUntilWaiting()
-  await fixture.coordinator.cancel()
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  while fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil {
+    await Task.yield()
+  }
   await gate.openGate()
+  await cancelling.value
   await finishing.value
 
   #expect(fixture.saver.undoCount == 1)
@@ -3499,8 +3630,12 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   await fixture.coordinator.start(mode: .smartCapture)
   let finishing = Task { await fixture.coordinator.finish() }
   await gate.waitUntilWaiting()
-  await fixture.coordinator.cancel()
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  while fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil {
+    await Task.yield()
+  }
   await gate.openGate()
+  await cancelling.value
   await finishing.value
 
   #expect(fixture.saver.undoCount == 1)
@@ -3523,8 +3658,12 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   await fixture.coordinator.start(mode: .smartCapture)
   let finishing = Task { await fixture.coordinator.finish() }
   await cleaningGate.waitUntilWaiting()
-  await fixture.coordinator.cancel()
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  while fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil {
+    await Task.yield()
+  }
   await cleaningGate.openGate()
+  await cancelling.value
   await finishing.value
 
   #expect(try await fixture.history.list().count == 1)
@@ -3561,8 +3700,12 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   await fixture.coordinator.start(mode: .smartCapture)
   let finishing = Task { await fixture.coordinator.finish() }
   await gate.waitUntilWaiting()
-  await fixture.coordinator.cancel()
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  while fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil {
+    await Task.yield()
+  }
   await gate.openGate()
+  await cancelling.value
   await finishing.value
 
   #expect(fixture.saver.undoCount == 1)
@@ -3630,7 +3773,6 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   let holdGate = Gate()
   let providerGate = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await holdGate.wait() })
-  fixture.provider.gate = providerGate
   let monitor = CoordinatorModifierMonitorSpy()
   let escape = CoordinatorEscapeRegistrarSpy()
   let shortcut = GlobalHoldShortcut(
@@ -3643,8 +3785,10 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   monitor.emit(.pressed(.rightOption))
   monitor.emit(.released(.rightOption))
   await shortcut.drainEvents()
+  let startCountAfterFirstTap = fixture.standard.startCount
+  fixture.provider.gate = providerGate
   monitor.emit(.pressed(.rightOption))
-  await fixture.provider.waitUntilRequested()
+  await providerGate.waitUntilWaiting()
 
   #expect(escape.registerCount == 2)
   escape.emit()
@@ -3659,7 +3803,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   await drain.value
   await shortcut.waitForTerminalObservation()
   #expect(fixture.coordinator.phase == .idle)
-  #expect(fixture.standard.startCount == 0)
+  #expect(fixture.standard.startCount == startCountAfterFirstTap)
   await holdGate.openGate()
   await shortcut.uninstall()
 }
@@ -3670,7 +3814,6 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   let holdGate = Gate()
   let providerGate = Gate()
   let fixture = try Fixture(holdSleeper: { _ in await holdGate.wait() })
-  fixture.provider.gate = providerGate
   let monitor = CoordinatorModifierMonitorSpy()
   let escape = CoordinatorEscapeRegistrarSpy()
   let shortcut = GlobalHoldShortcut(
@@ -3683,8 +3826,10 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   monitor.emit(.pressed(.rightOption))
   monitor.emit(.released(.rightOption))
   await shortcut.drainEvents()
+  let startCountAfterFirstTap = fixture.standard.startCount
+  fixture.provider.gate = providerGate
   monitor.emit(.pressed(.rightOption))
-  await fixture.provider.waitUntilRequested()
+  await providerGate.waitUntilWaiting()
 
   monitor.publish(.failed)
   let drained = CompletionProbe()
@@ -3698,7 +3843,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   await drain.value
   await shortcut.waitForTerminalObservation()
   #expect(fixture.coordinator.phase == .idle)
-  #expect(fixture.standard.startCount == 0)
+  #expect(fixture.standard.startCount == startCountAfterFirstTap)
   await holdGate.openGate()
   await shortcut.uninstall()
 }

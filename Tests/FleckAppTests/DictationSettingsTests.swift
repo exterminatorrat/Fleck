@@ -1473,6 +1473,9 @@ private func settleSettingsHost(_ view: NSView) async {
 
   #expect(source.contains("DictationShortcutHelpRow"))
   #expect(source.contains("modifierShortcutPresentation"))
+  #expect(source.contains("destinationCopy: dictationRuntime.destinationGuidanceCopy"))
+  #expect(source.contains("Say a specific note title to help Fleck choose."))
+  #expect(source.contains("Example: “Travel plans.”"))
   #expect(source.contains("await dictationRuntime.performModifierShortcutRecovery"))
 }
 
@@ -2040,6 +2043,19 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
 
     await fixture.runtime.toggle()
     await fixture.runtime.toggle()
+    if finalText != nil {
+      let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+      #expect(await sleeper.requestedDurations.isEmpty)
+      fixture.runtime.capsuleController.selectRoutingChoice(
+        captureID: captureID,
+        noteID: nil
+      )
+      for _ in 0..<1_000 {
+        if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+        await Task.yield()
+      }
+      #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+    }
     await sleeper.waitForRequest()
     #expect(await sleeper.requestedDurations == [delay])
 
@@ -2115,6 +2131,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   await fixture.runtime.toggle()
   await fixture.runtime.toggle()
   let firstCaptureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+  #expect(fixture.runtime.capsuleController.currentContext.detailText == "No clear destination")
 
   fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
   fixture.runtime.preferencesDidChange()
@@ -2125,6 +2142,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   fixture.runtime.preferencesDidChange()
   #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Inbox"))
   #expect(fixture.runtime.capsuleController.currentChooser?.captureID == firstCaptureID)
+  #expect(fixture.runtime.capsuleController.currentContext.detailText == "No clear destination")
 
   await fixture.runtime.toggle()
   #expect(fixture.runtime.currentCapsuleStatus == .listening)
@@ -2372,6 +2390,85 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   #expect(selectedNoteID == .some(nil))
 }
 
+@Test func DictationCapsuleChooserKeepsEveryManualChoiceAndDisambiguatesFolders() throws {
+  let captureID = UUID()
+  let choices = (0..<6).map { index in
+    DictationRoutingChoice(
+      destination: .init(noteID: UUID(), title: index < 2 ? "Travel plans" : "Note \(index)"),
+      contextHint: index == 0 ? "Work" : index == 1 ? "Home" : ""
+    )
+  }
+
+  let chooser = DictationCapsuleChooser(
+    ambiguity: .init(captureID: captureID, choices: choices)
+  )
+
+  #expect(chooser.choices.count == 6)
+  #expect(chooser.choices[0].menuTitle == "Travel plans — Work")
+  #expect(chooser.choices[1].menuTitle == "Travel plans — Home")
+  #expect(chooser.choices[2].menuTitle == "Note 2")
+}
+
+@Test func DictationCapsuleShowsInboxFallbackReasonWithoutReplacingSavedStatus() {
+  let presentation = DictationCapsulePresentation(
+    status: .saved(destination: "Inbox"),
+    context: .init(
+      status: .saved(destination: "Inbox"),
+      detailText: "No clear destination"
+    )
+  )
+
+  #expect(presentation.visibleText == "Saved to Inbox")
+  #expect(presentation.secondaryVisibleText == "No clear destination")
+  #expect(presentation.voiceOverText == "Saved to Inbox. No clear destination")
+}
+
+@Test @MainActor func DictationRuntimeNormalInboxFallbackOffersAllNotesThenMovesOnce()
+  async throws
+{
+  let sleeper = RuntimeCapsuleSleeper()
+  let notes = (0..<6).map { Note(title: $0 == 0 ? "Note" : "Note \($0 + 1)") }
+  let fixture = try await RuntimeFixture(
+    finalText: "Move this saved capture",
+    capsuleEnabled: true,
+    routingNotes: notes,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+  let chooser = try #require(fixture.runtime.capsuleController.currentChooser)
+  #expect(chooser.choices.count == 6)
+  #expect(chooser.choices.map(\.id) == notes.map(\.id))
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Inbox"))
+  #expect(fixture.runtime.capsuleController.currentContext.detailText == "No clear destination")
+  #expect(await sleeper.requestedDurations.isEmpty)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: notes[0].id
+  )
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Note"))
+  #expect(fixture.runtime.capsuleController.currentContext.detailText == nil)
+  await sleeper.waitForRequest()
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+  await sleeper.resumeAll()
+  #expect(fixture.appState.workspace.notes.first(where: { $0.id == notes[0].id })?
+    .body.contains("Move this saved capture") == true)
+  #expect(fixture.appState.workspace.notes.first(where: {
+    $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
+  })?.body.contains("Move this saved capture") == false)
+}
+
 @Test @MainActor func DictationRuntimeKeepsInboxActionWhenEveryChoiceWasDeleted()
   async throws
 {
@@ -2529,13 +2626,20 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     await Task.yield()
     #expect(fixture.runtime.currentCapsuleStatus == nil)
     #expect(await sleeper.requestedDurations.isEmpty)
+    if finalText != nil {
+      let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+      #expect(
+        await fixture.runtime.coordinator.chooseDestination(
+          captureID: captureID,
+          noteID: nil
+        ) == .completed
+      )
+      #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+    }
 
     fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
     fixture.runtime.preferencesDidChange()
     #expect(fixture.runtime.currentCapsuleStatus == .idle)
-    if fixture.runtime.currentCapsuleStatus != .idle {
-      await sleeper.waitForRequest()
-    }
     #expect(await sleeper.requestedDurations.isEmpty)
     await sleeper.resumeAll()
   }
@@ -2578,6 +2682,19 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
 
     await fixture.runtime.toggle()
     await fixture.runtime.toggle()
+    if finalText != nil {
+      let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+      #expect(await sleeper.requestedDurations.isEmpty)
+      fixture.runtime.capsuleController.selectRoutingChoice(
+        captureID: captureID,
+        noteID: nil
+      )
+      for _ in 0..<1_000 {
+        if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+        await Task.yield()
+      }
+      #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+    }
     await sleeper.waitForRequest()
     #expect(await sleeper.requestedDurations == [delay])
 
@@ -2709,6 +2826,70 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   #expect(record.mode == .focused)
   #expect(record.destination == .init(noteID: selected.id, title: selected.displayTitle))
   #expect(record.insertionOutcome == .saved)
+}
+
+@Test @MainActor func DictationRuntimeKeepsFocusedDestinationGuidanceStableAcrossSelectionChanges()
+  async throws
+{
+  let travel = Note(title: "Travel plans")
+  let shopping = Note(title: "Shopping")
+  let fixture = try await RuntimeFixture(
+    finalText: "Focused",
+    capsuleEnabled: true,
+    routingNotes: [travel, shopping]
+  )
+  let commands = EditorCommands()
+  let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
+  let window = DictationKeyWindowProbe(
+    contentRect: NSRect(x: 0, y: 0, width: 220, height: 100),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  window.reportsKey = true
+  commands.textView = textView
+  fixture.editorRegistry.register(commands)
+  window.makeFirstResponder(textView)
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.runtime.destinationGuidanceCopy == "Click in this note to dictate here.")
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.destinationGuidanceCopy == "Dictating into Travel plans")
+  #expect(
+    fixture.runtime.capsuleController.currentContext.detailText
+      == "Dictating into Travel plans"
+  )
+  #expect(fixture.runtime.capsuleController.currentContext.compactDetailText == "Travel plans")
+  #expect(
+    DictationCapsulePresentation(
+      status: fixture.runtime.capsuleController.currentContext.status,
+      context: fixture.runtime.capsuleController.currentContext
+    ).voiceOverText
+      == "Dictation listening. Dictating into Travel plans"
+  )
+
+  fixture.appState.select(shopping.id)
+  #expect(fixture.runtime.destinationGuidanceCopy == "Dictating into Travel plans")
+  #expect(
+    fixture.runtime.capsuleController.currentContext.detailText
+      == "Dictating into Travel plans"
+  )
+
+  await fixture.runtime.cancel()
+  #expect(fixture.runtime.destinationGuidanceCopy == "Click in this note to dictate here.")
+}
+
+@Test @MainActor func DictationRuntimeLabelsGlobalCaptureAsSmartCapture() async throws {
+  let fixture = try await RuntimeFixture(finalText: "Global", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+
+  #expect(fixture.runtime.destinationGuidanceCopy == "Smart Capture")
+  #expect(fixture.runtime.capsuleController.currentContext.detailText == "Smart Capture")
+  #expect(fixture.runtime.capsuleController.currentContext.compactDetailText == "Smart Capture")
+  await fixture.runtime.cancel()
 }
 
 @Test @MainActor func DictationRuntimeFocusedGlobalShortcutPersistsTheSelectedNoteDestination()

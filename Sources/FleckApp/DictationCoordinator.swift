@@ -22,9 +22,26 @@ enum DictationPipelineStage: Equatable, Sendable {
 struct DictationCoordinatorContext: Equatable, Sendable {
   let sessionID: UUID
   let mode: DictationMode
+  let destination: DictationDestination?
   let pipelineStage: DictationPipelineStage
   let cleanupOutcome: DictationCleanupOutcome?
   let failureStage: DictationPipelineStage?
+
+  init(
+    sessionID: UUID,
+    mode: DictationMode,
+    destination: DictationDestination? = nil,
+    pipelineStage: DictationPipelineStage,
+    cleanupOutcome: DictationCleanupOutcome?,
+    failureStage: DictationPipelineStage?
+  ) {
+    self.sessionID = sessionID
+    self.mode = mode
+    self.destination = destination
+    self.pipelineStage = pipelineStage
+    self.cleanupOutcome = cleanupOutcome
+    self.failureStage = failureStage
+  }
 }
 
 enum DictationTerminalOutcome: Equatable {
@@ -1331,20 +1348,20 @@ final class DictationCoordinator {
     }
     guard await continueCapture(id) else { return }
     recordMeasurement(.routingDecision, at: clock.now(), captureID: id)
-    let ambiguityChoices: [DictationRoutingChoice]?
+    let suggestedChoices: [DictationRoutingChoice]?
     let destinationID: UUID?
     switch routingDecision {
     case .resolved(let routedID)
       where routedID != inbox?.destination.noteID
         && candidates.contains(where: { $0.destination.noteID == routedID }):
       destinationID = routedID
-      ambiguityChoices = nil
+      suggestedChoices = nil
     case .ambiguous(let choices):
       destinationID = inbox?.destination.noteID
-      ambiguityChoices = choices
+      suggestedChoices = choices
     default:
       destinationID = inbox?.destination.noteID
-      ambiguityChoices = nil
+      suggestedChoices = []
     }
 
     do {
@@ -1394,12 +1411,17 @@ final class DictationCoordinator {
         return
       }
       guard isActive(id) else { return }
-      if let ambiguityChoices,
+      if let suggestedChoices,
         receipt.noteID == (inbox?.destination.noteID ?? createdInbox?.noteID)
       {
+        let choices = destinationChoices(
+          suggested: suggestedChoices,
+          candidates: candidates,
+          inboxID: receipt.noteID
+        )
         let ambiguity = DictationRoutingAmbiguity(
           captureID: id,
-          choices: Array(ambiguityChoices.prefix(4))
+          choices: choices
         )
         pendingRoutingAmbiguity = PendingRoutingAmbiguity(
           ambiguity: ambiguity,
@@ -1468,6 +1490,47 @@ final class DictationCoordinator {
       cancelEditor: capture.mode == .focused,
       failureStage: failureStage
     )
+  }
+
+  private func destinationChoices(
+    suggested: [DictationRoutingChoice],
+    candidates: [DictationRoutingCandidate],
+    inboxID: UUID
+  ) -> [DictationRoutingChoice] {
+    let manualCandidates = candidates.filter { $0.destination.noteID != inboxID }
+    let titleCounts = Dictionary(grouping: manualCandidates) {
+      normalizedTitle($0.destination.title)
+    }.mapValues(\.count)
+    var seen = Set<UUID>()
+    var choices: [DictationRoutingChoice] = []
+
+    for suggestion in suggested {
+      guard let candidate = manualCandidates.first(where: {
+        $0.destination == suggestion.destination
+      }), seen.insert(candidate.destination.noteID).inserted else { continue }
+      choices.append(.init(
+        destination: candidate.destination,
+        contextHint: titleCounts[normalizedTitle(candidate.destination.title), default: 0] > 1
+          ? candidate.presentationContext ?? suggestion.contextHint
+          : suggestion.contextHint
+      ))
+    }
+
+    for candidate in manualCandidates
+      where seen.insert(candidate.destination.noteID).inserted
+    {
+      choices.append(.init(
+        destination: candidate.destination,
+        contextHint: candidate.presentationContext ?? ""
+      ))
+    }
+    return choices
+  }
+
+  private func normalizedTitle(_ title: String) -> String {
+    title.split(whereSeparator: \Character.isWhitespace)
+      .joined(separator: " ")
+      .lowercased()
   }
 
   private func preserveFailedUndoRecovery(
@@ -2041,6 +2104,7 @@ final class DictationCoordinator {
     DictationCoordinatorContext(
       sessionID: capture.id,
       mode: capture.mode,
+      destination: capture.destination,
       pipelineStage: capture.pipelineStage,
       cleanupOutcome: capture.cleanupOutcome,
       failureStage: failureStage

@@ -100,15 +100,18 @@ struct DictationRoutingCandidate: Equatable, Sendable {
   let destination: DictationDestination
   let semanticContext: String
   let contentRevision: UInt64
+  let presentationContext: String?
 
   init(
     destination: DictationDestination,
     semanticContext: String,
-    contentRevision: UInt64 = 0
+    contentRevision: UInt64 = 0,
+    presentationContext: String? = nil
   ) {
     self.destination = destination
     self.semanticContext = semanticContext
     self.contentRevision = contentRevision
+    self.presentationContext = presentationContext
   }
 }
 

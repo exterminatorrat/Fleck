@@ -965,6 +965,28 @@
       )
     }
 
+    var destinationGuidanceCopy: String {
+      guard let lastCoordinatorEvent,
+        let destination = Self.activeDestinationPresentation(for: lastCoordinatorEvent)
+      else { return "Click in this note to dictate here." }
+      return destination.guidance
+    }
+
+    private static func activeDestinationPresentation(
+      for event: DictationCoordinatorEvent
+    ) -> (guidance: String, compact: String)? {
+      guard event.terminal == nil, let context = event.context else { return nil }
+      switch context.mode {
+      case .focused:
+        guard let destination = context.destination else {
+          return ("Dictating into this note", "This note")
+        }
+        return ("Dictating into \(destination.title)", destination.title)
+      case .smartCapture:
+        return ("Smart Capture", "Smart Capture")
+      }
+    }
+
     var recoveryCommand: DictationRecoveryCommandPresentation {
       .init(
         title: recoveryAction?.title ?? "Recover Last Dictation",
@@ -1335,8 +1357,13 @@
         ownership: activeOwnership
       )
       let chooserPresentation = activeRoutingChooserPresentation()
+      let destinationPresentation = Self.activeDestinationPresentation(for: event)
       let context = DictationCapsuleContext(
         status: chooserPresentation?.status ?? eventContext.status,
+        detailText: chooserPresentation?.detailText
+          ?? destinationPresentation?.guidance,
+        compactDetailText: chooserPresentation?.detailText
+          ?? destinationPresentation?.compact,
         sessionID: eventContext.sessionID,
         trigger: eventContext.trigger,
         mode: eventContext.mode,
@@ -1409,6 +1436,7 @@
 
     private func activeRoutingChooserPresentation() -> (
       status: DictationCapsuleStatus,
+      detailText: String?,
       chooser: DictationCapsuleChooser
     )? {
       guard
@@ -1432,6 +1460,7 @@
             ? .routingFailure(status: failure.status, message: failure.message)
             : nil
         } ?? snapshot.status,
+        receipt.noteID == snapshot.inboxNoteID ? "No clear destination" : nil,
         DictationCapsuleChooser(
           ambiguity: ambiguity,
           currentDestinationID: receipt.noteID,
@@ -1625,9 +1654,15 @@
       }
     }
 
-    private func capsuleContext(for status: DictationCapsuleStatus) -> DictationCapsuleContext {
+    private func capsuleContext(
+      for status: DictationCapsuleStatus,
+      detailText: String? = nil,
+      compactDetailText: String? = nil
+    ) -> DictationCapsuleContext {
       DictationCapsuleContext(
         status: status,
+        detailText: detailText,
+        compactDetailText: compactDetailText,
         sessionID: capsuleController.currentContext.sessionID,
         trigger: capsuleController.currentContext.trigger,
         mode: capsuleController.currentContext.mode,
@@ -1800,7 +1835,11 @@
     private func replayLiveCapsuleOrIdle() {
       if let chooserPresentation = activeRoutingChooserPresentation() {
         showCapsule(
-          chooserPresentation.status,
+          capsuleContext(
+            for: chooserPresentation.status,
+            detailText: chooserPresentation.detailText,
+            compactDetailText: chooserPresentation.detailText
+          ),
           owner: .dictation,
           action: capsuleAction(for: coordinator.recoveryAction),
           chooser: chooserPresentation.chooser
