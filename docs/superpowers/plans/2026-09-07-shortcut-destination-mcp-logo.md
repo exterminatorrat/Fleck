@@ -1,6 +1,6 @@
 # Shortcut, destination clarity, and Fleck MCP logo
 
-Status: implementation authorized 7 September 2026. Packet 1 verified with 183 parent tests, build, live menu/pinned and denied-pane checks, actual Settings key-change accessibility check, and fresh Sol ship review. Packet 2 is next. Short logo design: ../specs/2026-09-07-fleck-mcp-logo-design.md.
+Status, 8 September: Packet 1 accepted locally at f76b109 after 183 parent tests and fresh Sol ship review. Packet 2 accepted locally at f20af54 after 316 parent tests, native destination guidance checks and fresh Sol ship review. Packet 3 received fresh Sol ship for code and metadata; the combined parent suite passes 334 tests and the helper builds. Enhanced packaging is next. The disposable profile's native IPC check is blocked on a macOS Keychain prompt that Computer Use cannot access; the user has been asked to handle it. Actual Codex icon rendering remains unverified because Computer Use denied access to that app. Short logo design: ../specs/2026-09-07-fleck-mcp-logo-design.md.
 Requested batch: shortcut discovery/permission recovery, destination clarity, custom Fleck logo in the external MCP client. Cleanup quality was not reported as a problem and is excluded. Broader onboarding education is deferred.
 
 ## Grounding and scope
