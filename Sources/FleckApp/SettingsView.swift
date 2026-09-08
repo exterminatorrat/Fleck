@@ -239,14 +239,16 @@
         minimizeButton.isEnabled = true
       }
       window.standardWindowButton(.zoomButton)?.isHidden = true
-      window.titleVisibility = .hidden
-      window.titlebarSeparatorStyle = .none
-      window.titlebarAppearsTransparent = true
       guard !adjustmentScheduled else { return }
       adjustmentScheduled = true
       DispatchQueue.main.async { [weak self] in
-        self?.adjustmentScheduled = false
-        self?.adjustTrafficLights()
+        guard let self else { return }
+        adjustmentScheduled = false
+        guard let window = self.window else { return }
+        window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
+        window.titlebarAppearsTransparent = true
+        adjustTrafficLights()
       }
     }
 
