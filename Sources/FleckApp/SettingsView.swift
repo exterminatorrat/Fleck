@@ -223,6 +223,22 @@
 
     func scheduleTrafficLightAdjustment() {
       guard let window else { return }
+      window.level = .normal
+      if !window.styleMask.contains(.miniaturizable) {
+        window.styleMask.insert(.miniaturizable)
+      }
+      var collectionBehavior = window.collectionBehavior
+      collectionBehavior.remove(.fullScreenPrimary)
+      collectionBehavior.remove(.fullScreenAuxiliary)
+      collectionBehavior.insert(.fullScreenNone)
+      if collectionBehavior != window.collectionBehavior {
+        window.collectionBehavior = collectionBehavior
+      }
+      if let minimizeButton = window.standardWindowButton(.miniaturizeButton) {
+        minimizeButton.isHidden = false
+        minimizeButton.isEnabled = true
+      }
+      window.standardWindowButton(.zoomButton)?.isHidden = true
       window.titleVisibility = .hidden
       window.titlebarSeparatorStyle = .none
       window.titlebarAppearsTransparent = true
@@ -245,7 +261,6 @@
       let buttons = [
         window.standardWindowButton(.closeButton),
         window.standardWindowButton(.miniaturizeButton),
-        window.standardWindowButton(.zoomButton),
       ].compactMap { $0 }
       guard !buttons.isEmpty else { return }
       observeTrafficLights(buttons)

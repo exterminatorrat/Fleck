@@ -240,7 +240,6 @@
             minHeight: 520,
             idealHeight: 600
           )
-          .background(FloatingWindowConfigurator())
       }
       .defaultSize(width: 840, height: 600)
       .windowResizability(.contentMinSize)

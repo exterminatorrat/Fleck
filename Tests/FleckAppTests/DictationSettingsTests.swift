@@ -424,6 +424,44 @@ func DictationSettingsHostedWindowDoesNotEnableFullSizeContentViewChrome()
 }
 
 @Test @MainActor
+func DictationSettingsHostedWindowUsesNormalMinimizableChromeWithoutFullScreen()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+    styleMask: [.titled, .resizable, .closable],
+    backing: .buffered,
+    defer: false
+  )
+  window.level = .floating
+  window.collectionBehavior = [.fullScreenPrimary]
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  #expect(window.level == .normal)
+  #expect(window.isResizable)
+  #expect(window.styleMask.contains(.miniaturizable))
+  let minimizeButton = try #require(window.standardWindowButton(.miniaturizeButton))
+  #expect(!minimizeButton.isHidden)
+  #expect(minimizeButton.isEnabled)
+  #expect(minimizeButton.target === window)
+  #expect(minimizeButton.action == #selector(NSWindow.miniaturize(_:)))
+  #expect(window.standardWindowButton(.zoomButton)?.isHidden == true)
+  #expect(window.collectionBehavior.contains(.fullScreenNone))
+  #expect(!window.collectionBehavior.contains(.fullScreenPrimary))
+  #expect(!window.collectionBehavior.contains(.fullScreenAuxiliary))
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@Test @MainActor
 func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
   async throws
 {
@@ -459,7 +497,7 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
 
     #expect(window.standardWindowButton(.closeButton)?.isHidden == false)
     #expect(window.standardWindowButton(.miniaturizeButton)?.isHidden == false)
-    #expect(window.standardWindowButton(.zoomButton)?.isHidden == false)
+    #expect(window.standardWindowButton(.zoomButton)?.isHidden == true)
     let contentView = try #require(window.contentView)
     #expect(settingsNativeSplitViewController(of: contentView) == nil)
     let toolbarItemIdentifiers = toolbar.items.map(\.itemIdentifier)
@@ -485,7 +523,6 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     let trafficLightButtons: [NSButton?] = [
       window.standardWindowButton(.closeButton),
       window.standardWindowButton(.miniaturizeButton),
-      window.standardWindowButton(.zoomButton),
     ]
     let trafficLightFrames: [NSRect] = trafficLightButtons.compactMap { button in
       guard let button else { return nil }
@@ -622,13 +659,13 @@ func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
   let trafficLightButtons: [NSButton?] = [
     window.standardWindowButton(.closeButton),
     window.standardWindowButton(.miniaturizeButton),
-    window.standardWindowButton(.zoomButton),
   ]
   let trafficLightFrames: [NSRect] = trafficLightButtons.compactMap { button in
     guard let button else { return nil }
     return button.convert(button.bounds, to: nil)
   }
-  #expect(trafficLightFrames.count == 3)
+  #expect(trafficLightFrames.count == 2)
+  #expect(window.standardWindowButton(.zoomButton)?.isHidden == true)
   #expect(trafficLightFrames.allSatisfy {
     settingsRoundedSurfaceContains(
       $0,
@@ -689,7 +726,6 @@ func DictationSettingsTrafficLightsRecoverAfterNativeTitlebarReset() async throw
   let buttons = [
     window.standardWindowButton(.closeButton),
     window.standardWindowButton(.miniaturizeButton),
-    window.standardWindowButton(.zoomButton),
   ].compactMap { $0 }
   let nativeOrigins = buttons.map(\.frame.origin)
 
@@ -948,12 +984,12 @@ func DictationSettingsHostedWindowKeepsChromeAfterSameWindowResize() async throw
     let trafficLightButtons: [NSButton?] = [
       window.standardWindowButton(.closeButton),
       window.standardWindowButton(.miniaturizeButton),
-      window.standardWindowButton(.zoomButton),
     ]
     let trafficLightFrames = trafficLightButtons.compactMap { button in
       button.map { $0.convert($0.bounds, to: nil) }
     }
-    #expect(trafficLightFrames.count == 3)
+    #expect(trafficLightFrames.count == 2)
+    #expect(window.standardWindowButton(.zoomButton)?.isHidden == true)
     #expect(trafficLightFrames.allSatisfy {
       settingsRoundedSurfaceContains(
         $0,
