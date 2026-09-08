@@ -38,6 +38,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var dictationCapsuleDock: DictationCapsuleDock
   public var dictationHistoryEnabled: Bool
   public var dictationCapsuleEnabled: Bool
+  public var showDictationShortcutGuide: Bool
   public var dictationMicrophoneUID: String?
   public var onboardingProgress: OnboardingProgress?
 
@@ -59,6 +60,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     dictationCapsuleDock: DictationCapsuleDock = .bottom,
     dictationHistoryEnabled: Bool = true,
     dictationCapsuleEnabled: Bool = true,
+    showDictationShortcutGuide: Bool = true,
     dictationMicrophoneUID: String? = nil,
     onboardingProgress: OnboardingProgress? = nil
   ) {
@@ -90,6 +92,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.dictationCapsuleDock = dictationCapsuleDock
     self.dictationHistoryEnabled = dictationHistoryEnabled
     self.dictationCapsuleEnabled = dictationCapsuleEnabled
+    self.showDictationShortcutGuide = showDictationShortcutGuide
     self.dictationMicrophoneUID = dictationMicrophoneUID
     self.onboardingProgress = onboardingProgress
   }
@@ -102,7 +105,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       launchAtLogin, shortcuts, dictationSpeechEngine,
       legacyDictationShortcut = "dictationShortcut", dictationModifierKey,
       dictationCapsuleDock, dictationHistoryEnabled, dictationCapsuleEnabled,
-      dictationMicrophoneUID, onboardingProgress
+      showDictationShortcutGuide, dictationMicrophoneUID, onboardingProgress
   }
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -215,6 +218,10 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       ) ?? .bottom,
       dictationHistoryEnabled: try c.decodeIfPresent(Bool.self, forKey: .dictationHistoryEnabled) ?? true,
       dictationCapsuleEnabled: try c.decodeIfPresent(Bool.self, forKey: .dictationCapsuleEnabled) ?? true,
+      showDictationShortcutGuide: try c.decodeIfPresent(
+        Bool.self,
+        forKey: .showDictationShortcutGuide
+      ) ?? true,
       dictationMicrophoneUID: try c.decodeIfPresent(String.self, forKey: .dictationMicrophoneUID),
       onboardingProgress: try c.decodeIfPresent(
         OnboardingProgress.self,

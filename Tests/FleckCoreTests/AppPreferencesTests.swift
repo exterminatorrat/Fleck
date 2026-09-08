@@ -144,6 +144,24 @@ import Testing
   #expect(roundTrip.dictationCapsuleDock == .bottom)
 }
 
+@Test func dictationShortcutGuideDefaultsVisibleAndPersistsDismissal() throws {
+  #expect(AppPreferences().showDictationShortcutGuide)
+
+  let legacy = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo"}"#.utf8)
+  )
+  #expect(legacy.showDictationShortcutGuide)
+
+  var dismissed = AppPreferences()
+  dismissed.showDictationShortcutGuide = false
+  let roundTrip = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: JSONEncoder().encode(dismissed)
+  )
+  #expect(!roundTrip.showDictationShortcutGuide)
+}
+
 @Test func oldShortcutPreferencesMigrateToRightOptionAndBottomDock() throws {
   let data = Data(
     #"{"fontFamily":".AppleSystemUIFont","fontSize":15,"dictationShortcut":{"keyCode":49,"carbonModifiers":768}}"#.utf8

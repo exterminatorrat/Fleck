@@ -6,6 +6,26 @@
     case retry
   }
 
+  enum DictationShortcutHelpMode: Equatable {
+    case readyTutorial
+    case recovery
+    case activeDestination
+
+    var canDismissGuide: Bool {
+      self == .readyTutorial
+    }
+
+    static func resolve(
+      isReady: Bool,
+      isCaptureActive: Bool,
+      showsGuide: Bool
+    ) -> Self? {
+      if isCaptureActive { return .activeDestination }
+      if !isReady { return .recovery }
+      return showsGuide ? .readyTutorial : nil
+    }
+  }
+
   struct DictationModifierSettingsPresentation: Equatable {
     struct Row: Equatable, Identifiable {
       let key: DictationModifierKey
@@ -17,6 +37,7 @@
     let rows: [Row]
     let recommended: DictationModifierKey
     let statusCopy: String
+    let isReady: Bool
     let isPickerEnabled: Bool
     let recoveryAction: DictationModifierSettingsRecoveryAction?
     let recoveryButtonTitle: String?
@@ -38,6 +59,7 @@
         )
       }
       recommended = .rightOption
+      isReady = monitorStatus == .running
       isPickerEnabled = canChange
       recoveryAction = switch monitorStatus {
       case .unauthorized: .enableInputMonitoring

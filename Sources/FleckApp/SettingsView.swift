@@ -198,6 +198,18 @@
 
   private final class SettingsWindowChromeView: NSView {
     private var adjustmentScheduled = false
+    private var observedButtons: [NSButton] = []
+
+    deinit {
+      NotificationCenter.default.removeObserver(self)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+      if newWindow !== window {
+        stopObservingTrafficLights()
+      }
+      super.viewWillMove(toWindow: newWindow)
+    }
 
     override func viewDidMoveToWindow() {
       super.viewDidMoveToWindow()
@@ -236,6 +248,7 @@
         window.standardWindowButton(.zoomButton),
       ].compactMap { $0 }
       guard !buttons.isEmpty else { return }
+      observeTrafficLights(buttons)
 
       let sidebarFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
       let buttonFrames = buttons.map { $0.convert($0.bounds, to: nil) }
@@ -247,14 +260,46 @@
       let offsetY = targetMaxY - currentMaxY
       guard offsetX != 0 || offsetY != 0 else { return }
 
-      for button in buttons {
+      for (button, buttonFrame) in zip(buttons, buttonFrames) {
+        guard let superview = button.superview else { continue }
+        let targetFrame = superview.convert(
+          buttonFrame.offsetBy(dx: offsetX, dy: offsetY),
+          from: nil
+        )
         button.setFrameOrigin(
-          NSPoint(
-            x: button.frame.minX + offsetX,
-            y: button.frame.minY + offsetY
-          )
+          targetFrame.origin
         )
       }
+    }
+
+    private func observeTrafficLights(_ buttons: [NSButton]) {
+      let alreadyObserving = observedButtons.count == buttons.count
+        && zip(observedButtons, buttons).allSatisfy { $0.0 === $0.1 }
+      guard !alreadyObserving else { return }
+      stopObservingTrafficLights()
+      observedButtons = buttons
+      for button in buttons {
+        button.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+          self,
+          selector: #selector(trafficLightFrameDidChange),
+          name: NSView.frameDidChangeNotification,
+          object: button
+        )
+      }
+    }
+
+    private func stopObservingTrafficLights() {
+      NotificationCenter.default.removeObserver(
+        self,
+        name: NSView.frameDidChangeNotification,
+        object: nil
+      )
+      observedButtons = []
+    }
+
+    @objc private func trafficLightFrameDidChange() {
+      scheduleTrafficLightAdjustment()
     }
 
     private func settingsSidebarSurface(in view: NSView) -> NSView? {
@@ -833,6 +878,11 @@
           title: "Show status capsule",
           detail: "Show a compact status surface while Fleck is listening.",
           isOn: dictationPreferenceBinding(\.dictationCapsuleEnabled)
+        )
+        SettingsToggleRow(
+          title: "Show shortcut guide in editor",
+          detail: "Show shortcut and Smart Capture guidance above the editor when dictation is ready.",
+          isOn: preferenceBinding(\.showDictationShortcutGuide)
         )
         SettingsToggleRow(
           title: "Keep local history for 30 days",

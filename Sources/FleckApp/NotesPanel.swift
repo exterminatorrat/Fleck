@@ -2178,17 +2178,27 @@
     private var editor: some View {
       if let note = appState.selectedNote {
         VStack(spacing: 0) {
-          DictationShortcutHelpRow(
-            presentation: modifierShortcutPresentation,
-            destinationCopy: dictationRuntime.destinationGuidanceCopy,
-            onRecovery: {
-              Task { @MainActor in
-                await dictationRuntime.performModifierShortcutRecovery {
-                  dictationRuntime.openSystemSettings($0)
+          if let mode = DictationShortcutHelpMode.resolve(
+            isReady: modifierShortcutPresentation.isReady,
+            isCaptureActive: dictationRuntime.canCancel,
+            showsGuide: appState.preferences.showDictationShortcutGuide
+          ) {
+            DictationShortcutHelpRow(
+              mode: mode,
+              presentation: modifierShortcutPresentation,
+              destinationCopy: dictationRuntime.destinationGuidanceCopy,
+              onRecovery: {
+                Task { @MainActor in
+                  await dictationRuntime.performModifierShortcutRecovery {
+                    dictationRuntime.openSystemSettings($0)
+                  }
                 }
+              },
+              onDismissGuide: {
+                appState.updatePreferences { $0.showDictationShortcutGuide = false }
               }
-            }
-          )
+            )
+          }
           if appState.preferences.showFormattingBar {
             FormattingBar(
               appState: appState,
@@ -3189,52 +3199,67 @@
       "Say a specific note title to help Fleck choose. "
       + "If it cannot find a clear match, it saves to Inbox."
 
+    let mode: DictationShortcutHelpMode
     let presentation: DictationModifierSettingsPresentation
     let destinationCopy: String
     let onRecovery: () -> Void
+    let onDismissGuide: () -> Void
     @State private var showsSmartCaptureHelp = false
 
     var body: some View {
       HStack(spacing: 8) {
-        Image(systemName: presentation.recoveryAction == nil
-          ? "keyboard"
-          : "keyboard.badge.ellipsis")
+        Image(systemName: mode == .activeDestination
+          ? "scope"
+          : presentation.recoveryAction == nil
+            ? "keyboard"
+            : "keyboard.badge.ellipsis")
           .foregroundStyle(.secondary)
         VStack(alignment: .leading, spacing: 1) {
-          Text(presentation.statusCopy)
-            .font(.caption)
-          if let detail = presentation.detailCopy {
-            Text(detail)
-              .font(.caption2)
-              .foregroundStyle(.secondary)
-          }
-          HStack(spacing: 4) {
-            Text(destinationCopy)
-            Button {
-              showsSmartCaptureHelp.toggle()
-            } label: {
-              Image(systemName: "questionmark.circle")
+          if mode != .activeDestination {
+            Text(presentation.statusCopy)
+              .font(.caption)
+            if let detail = presentation.detailCopy {
+              Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("About Smart Capture")
-            .popover(isPresented: $showsSmartCaptureHelp, arrowEdge: .bottom) {
-              VStack(alignment: .leading, spacing: 6) {
-                Text("Smart Capture")
-                  .font(.headline)
-                Text(Self.smartCaptureHelp)
-                Text("Example: “Travel plans.”")
-                  .foregroundStyle(.secondary)
+          }
+          if mode != .recovery {
+            HStack(spacing: 4) {
+              Text(destinationCopy)
+              Button {
+                showsSmartCaptureHelp.toggle()
+              } label: {
+                Image(systemName: "questionmark.circle")
               }
-              .font(.callout)
-              .frame(width: 280, alignment: .leading)
-              .padding(12)
+              .buttonStyle(.plain)
+              .accessibilityLabel("About Smart Capture")
+              .popover(isPresented: $showsSmartCaptureHelp, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 6) {
+                  Text("Smart Capture")
+                    .font(.headline)
+                  Text(Self.smartCaptureHelp)
+                  Text("Example: “Travel plans.”")
+                    .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+                .frame(width: 280, alignment: .leading)
+                .padding(12)
+              }
             }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
           }
-          .font(.caption2)
-          .foregroundStyle(.secondary)
         }
         Spacer(minLength: 8)
-        if let title = presentation.recoveryButtonTitle {
+        if mode.canDismissGuide {
+          Button(action: onDismissGuide) {
+            Image(systemName: "xmark")
+          }
+          .buttonStyle(.plain)
+          .help("Dismiss shortcut guide")
+          .accessibilityLabel("Dismiss shortcut guide")
+        } else if mode == .recovery, let title = presentation.recoveryButtonTitle {
           Button(title, action: onRecovery)
             .accessibilityLabel(title)
         }
@@ -3244,7 +3269,11 @@
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(.quaternary.opacity(0.35))
       .accessibilityElement(children: .contain)
-      .accessibilityLabel(presentation.capsuleAccessibilityLabel)
+      .accessibilityLabel(
+        mode == .activeDestination
+          ? "Dictation destination. \(destinationCopy)"
+          : presentation.capsuleAccessibilityLabel
+      )
     }
   }
 

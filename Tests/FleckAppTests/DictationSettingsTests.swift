@@ -528,7 +528,10 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
         sidebarSurface.convert(sidebarSurface.bounds, to: nil),
         outerSidebarSurfaceFrame
       ))
-      #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+      let currentTrafficLightFrames = trafficLightButtons.compactMap { button in
+        button.map { $0.convert($0.bounds, to: nil) }
+      }
+      #expect(currentTrafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
 
       let detailScroll = settingsHostedScrollViews(of: host)
         .first { $0 !== sidebarScroll }
@@ -650,15 +653,74 @@ func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
     let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
     #expect(!sidebar.isHidden)
     #expect(!sidebarFrame.isEmpty)
-    #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+    let currentTrafficLightFrames = trafficLightButtons.compactMap { button in
+      button.map { $0.convert($0.bounds, to: nil) }
+    }
+    #expect(currentTrafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
 
     let detailScroll = try #require(
       settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
     )
     let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
     #expect(!detailFrame.isEmpty)
-    #expect(trafficLightFrames.allSatisfy { !$0.intersects(detailFrame) })
+    #expect(currentTrafficLightFrames.allSatisfy { !$0.intersects(detailFrame) })
   }
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@Test @MainActor
+func DictationSettingsTrafficLightsRecoverAfterNativeTitlebarReset() async throws {
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.toolbar = NSToolbar(identifier: "settings-native-titlebar-reset-toolbar")
+  window.toolbarStyle = .unifiedCompact
+  let buttons = [
+    window.standardWindowButton(.closeButton),
+    window.standardWindowButton(.miniaturizeButton),
+    window.standardWindowButton(.zoomButton),
+  ].compactMap { $0 }
+  let nativeOrigins = buttons.map(\.frame.origin)
+
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  let surface = try #require(settingsSidebarSurface(of: host))
+  let surfaceFrame = surface.convert(surface.bounds, to: nil)
+  #expect(buttons.allSatisfy {
+    settingsRoundedSurfaceContains(
+      $0.convert($0.bounds, to: nil),
+      in: surfaceFrame,
+      cornerRadius: 22,
+      margin: 12
+    )
+  })
+
+  for (button, origin) in zip(buttons, nativeOrigins) {
+    button.setFrameOrigin(origin)
+  }
+  for _ in 0..<10 { await Task.yield() }
+
+  #expect(buttons.allSatisfy {
+    settingsRoundedSurfaceContains(
+      $0.convert($0.bounds, to: nil),
+      in: surfaceFrame,
+      cornerRadius: 22,
+      margin: 12
+    )
+  })
 
   window.contentView = nil
   window.orderOut(nil)
@@ -1460,6 +1522,40 @@ private func settleSettingsHost(_ view: NSView) async {
     #expect(presentation.statusCopy == "Hold \(key.displayName) to dictate.")
     #expect(presentation.capsuleAccessibilityLabel.contains(key.displayName))
   }
+}
+
+@Test func dictationShortcutHelpModeDismissesOnlyTheHealthyIdleGuide() {
+  #expect(DictationShortcutHelpMode.readyTutorial.canDismissGuide)
+  #expect(!DictationShortcutHelpMode.recovery.canDismissGuide)
+  #expect(!DictationShortcutHelpMode.activeDestination.canDismissGuide)
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: true,
+      isCaptureActive: false,
+      showsGuide: true
+    ) == .readyTutorial
+  )
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: true,
+      isCaptureActive: false,
+      showsGuide: false
+    ) == nil
+  )
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: false,
+      isCaptureActive: false,
+      showsGuide: false
+    ) == .recovery
+  )
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: true,
+      isCaptureActive: true,
+      showsGuide: false
+    ) == .activeDestination
+  )
 }
 
 @Test func notesPanelExposesModifierMonitoringRecoveryBesideTheEditor() throws {
