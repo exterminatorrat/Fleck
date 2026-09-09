@@ -11,8 +11,8 @@
     static let maximumHeight: CGFloat = 20
     static let reducedMaximumHeight: CGFloat = 12
     static let barWeights: [CGFloat] = [
-      0.35, 0.46, 0.58, 0.70, 0.82, 0.92, 1.0,
-      0.92, 0.82, 0.70, 0.58, 0.46, 0.35
+      0.32, 0.54, 0.43, 0.76, 0.62, 0.88, 1.0,
+      0.88, 0.62, 0.76, 0.43, 0.54, 0.32
     ]
     static let noiseFloorDecibels: CGFloat = -50
     static let fullScaleDecibels: CGFloat = -12

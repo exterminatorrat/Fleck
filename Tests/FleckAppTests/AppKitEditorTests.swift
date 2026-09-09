@@ -916,7 +916,126 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   }
 }
 
-@Test @MainActor func checklistMarkerCentersOnFirstVisibleTextGlyphAcrossFontSizes() throws {
+@Test @MainActor func checklistMarkerRemainsStableWhileTypingAndDeleting() throws {
+  for family in ["Avenir Next", ".AppleSystemUIFont"] {
+    for size in [CGFloat(11), CGFloat(17), CGFloat(24)] {
+      for completed in [false, true] {
+        let indent = size == 24 ? "    " : ""
+        let prefix = indent + (completed ? "● " : "○ ")
+        let textView = checklistTypingEditor(family: family, size: size, text: prefix)
+        let window = NSWindow(contentRect: textView.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = textView
+        defer { window.orderOut(nil) }
+        #expect(window.makeFirstResponder(textView))
+        textView.setSelectedRange(NSRange(location: prefix.utf16.count, length: 0))
+        let markerRange = NSRange(location: indent.utf16.count, length: 1)
+        let empty = try #require(textView.checklistMarkerRect(for: markerRange))
+        let emptyBaseline = try checklistLineBaseline(in: textView, at: markerRange.location + 1)
+        for value in ["F", "a", "g", "1", " ", "   a", "中", "🙂"] {
+          textView.insertText(value, replacementRange: textView.selectedRange())
+          let populated = try #require(textView.checklistMarkerRect(for: markerRange))
+          let populatedBaseline = try checklistLineBaseline(in: textView, at: markerRange.location + 1)
+          print("CHECKLIST \(family) \(size) completed=\(completed) \(String(reflecting: value)): empty=\(empty.midY), populated=\(populated.midY), line baselines=\(emptyBaseline)->\(populatedBaseline)")
+          // Fallback fonts may move the actual line baseline; the marker must follow it exactly.
+          #expect(abs((populated.midY - populatedBaseline) - (empty.midY - emptyBaseline)) < 0.01)
+          #expect(populated.size == empty.size)
+          if family == "Avenir Next", size == 17 {
+            try captureChecklist(textView, name: "checklist-\(completed)-\(value.unicodeScalars.map { String($0.value) }.joined(separator: "-"))")
+          }
+          while textView.string.utf16.count > prefix.utf16.count {
+            textView.deleteBackward(nil)
+          }
+          #expect(textView.string == prefix)
+          let restored = try #require(textView.checklistMarkerRect(for: markerRange))
+          #expect(abs(restored.midY - empty.midY) < 0.01)
+        }
+        if family == "Avenir Next", size == 17 {
+          try captureChecklist(textView, name: "checklist-\(completed)-empty")
+        }
+      }
+    }
+  }
+}
+
+@Test @MainActor func checklistMarkerAlignmentSurvivesCompletionToggle() throws {
+  let textView = checklistTypingEditor(family: "Avenir Next", size: 17, text: "○ ")
+  let window = NSWindow(contentRect: textView.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+  window.contentView = textView
+  defer { window.orderOut(nil) }
+  #expect(window.makeFirstResponder(textView))
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  let marker = NSRange(location: 0, length: 1)
+  let empty = try #require(textView.checklistMarkerRect(for: marker))
+  textView.insertText("g                    F", replacementRange: textView.selectedRange())
+  let populated = try #require(textView.checklistMarkerRect(for: marker))
+  #expect(abs(populated.midY - empty.midY) < 0.01)
+  #expect(textView.toggleSelectedChecklist())
+  let completed = try #require(textView.checklistMarkerRect(for: marker))
+  #expect(abs(completed.midY - populated.midY) < 0.01)
+
+  @MainActor func strikeRows() throws -> [Int] {
+    textView.refreshChecklistPresentation()
+    let bitmap = try #require(textView.bitmapImageRepForCachingDisplay(in: textView.bounds))
+    textView.cacheDisplay(in: textView.bounds, to: bitmap)
+    let scale = CGFloat(bitmap.pixelsWide) / textView.bounds.width
+    // The middle of the long space run contains only the native strike-through.
+    return (0..<min(bitmap.pixelsHigh, Int(50 * scale))).filter { y in
+      (Int(70 * scale)..<Int(75 * scale)).contains { x in
+        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+        return color.alphaComponent > 0.2 && color.redComponent < 0.9
+      }
+    }
+  }
+  let originalStrikeRows = try strikeRows()
+  #expect(!originalStrikeRows.isEmpty)
+  textView.setSelectedRange(NSRange(location: 2, length: 1))
+  textView.insertText("F", replacementRange: textView.selectedRange())
+  let replaced = try #require(textView.checklistMarkerRect(for: marker))
+  #expect(abs(replaced.midY - completed.midY) < 0.01)
+  #expect(try strikeRows() == originalStrikeRows)
+  try captureChecklist(textView, name: "checklist-strike-through")
+  #expect(textView.toggleSelectedChecklist())
+  let reopened = try #require(textView.checklistMarkerRect(for: marker))
+  #expect(abs(reopened.midY - completed.midY) < 0.01)
+}
+
+@MainActor
+private func checklistLineBaseline(in textView: ListAwareTextView, at index: Int) throws -> CGFloat {
+  let manager = try #require(textView.layoutManager)
+  let glyph = manager.glyphIndexForCharacter(at: index)
+  return textView.textContainerOrigin.y
+    + manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
+    + manager.location(forGlyphAt: glyph).y
+}
+
+@MainActor
+private func checklistTypingEditor(family: String, size: CGFloat, text: String) -> ListAwareTextView {
+  let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+  textView.appearance = NSAppearance(named: .aqua)
+  textView.drawsBackground = true
+  textView.backgroundColor = .white
+  textView.textColor = .black
+  textView.reduceMotion = true
+  textView.textContainerInset = NSSize(width: 16, height: 10)
+  textView.textContainer?.lineFragmentPadding = 0
+  var attributes = EditorTypography.defaultAttributes(family: family, size: size)
+  attributes[.foregroundColor] = NSColor.black
+  textView.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: attributes))
+  textView.typingAttributes = attributes
+  return textView
+}
+
+@MainActor
+private func captureChecklist(_ textView: ListAwareTextView, name: String) throws {
+  guard let directory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"] else { return }
+  textView.refreshChecklistPresentation()
+  let bitmap = try #require(textView.bitmapImageRepForCachingDisplay(in: textView.bounds))
+  textView.cacheDisplay(in: textView.bounds, to: bitmap)
+  let png = try #require(bitmap.representation(using: .png, properties: [:]))
+  try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
+}
+
+@Test @MainActor func checklistMarkerUsesFontCapHeightAcrossFontSizes() throws {
   for fontSize in [CGFloat(11), CGFloat(14), CGFloat(24)] {
     let textView = ListAwareTextView(
       frame: NSRect(x: 0, y: 0, width: 320, height: 160)
@@ -952,19 +1071,16 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
     let baselineY = textView.textContainerOrigin.y
       + lineFragmentRect.minY
       + layoutManager.location(forGlyphAt: contentGlyph).y
-    let visibleInkMidY = baselineY
-      - contentFont.boundingRect(
-        forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
-      ).midY
+    let capHeightMidY = baselineY - contentFont.capHeight / 2
 
     #expect(
-      abs(markerRect.midY - visibleInkMidY) < 0.01,
-      "font \(fontSize), marker midY \(markerRect.midY), visible ink midY \(visibleInkMidY)"
+      abs(markerRect.midY - capHeightMidY) < 0.01,
+      "font \(fontSize), marker midY \(markerRect.midY), cap-height midY \(capHeightMidY)"
     )
   }
 }
 
-@Test @MainActor func checklistMarkerSkipsLeadingWhitespaceBeforeVisibleTextGlyph() throws {
+@Test @MainActor func checklistMarkerKeepsFontAlignmentWithLeadingWhitespace() throws {
   let textView = ListAwareTextView(
     frame: NSRect(x: 0, y: 0, width: 320, height: 160)
   )
@@ -999,46 +1115,43 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   let baselineY = textView.textContainerOrigin.y
     + lineFragmentRect.minY
     + layoutManager.location(forGlyphAt: contentGlyph).y
-  let visibleInkMidY = baselineY
-    - contentFont.boundingRect(
-      forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
-    ).midY
+  let capHeightMidY = baselineY - contentFont.capHeight / 2
 
   #expect(
-    abs(markerRect.midY - visibleInkMidY) < 0.01,
-    "marker midY \(markerRect.midY), F ink midY \(visibleInkMidY)"
+    abs(markerRect.midY - capHeightMidY) < 0.01,
+    "marker midY \(markerRect.midY), cap-height midY \(capHeightMidY)"
   )
 }
 
-@Test @MainActor func allWhitespaceChecklistContentKeepsMarkerSlotFallback() throws {
-  let textView = ListAwareTextView(
-    frame: NSRect(x: 0, y: 0, width: 320, height: 160)
-  )
-  textView.textContainerInset = NSSize(width: 16, height: 10)
-  textView.textContainer?.lineFragmentPadding = 0
-  textView.font = .systemFont(ofSize: 14)
-  textView.string = "○   "
+@Test @MainActor func allWhitespaceChecklistContentKeepsEmptyAlignment() throws {
+  let textView = checklistTypingEditor(family: ".AppleSystemUIFont", size: 14, text: "○ ")
+  let empty = try #require(textView.checklistMarkerRect(for: NSRange(location: 0, length: 1)))
+  textView.setSelectedRange(NSRange(location: 2, length: 0))
+  textView.insertText("  ", replacementRange: textView.selectedRange())
+  let spaced = try #require(textView.checklistMarkerRect(for: NSRange(location: 0, length: 1)))
+  #expect(spaced == empty)
+}
 
-  let textContainer = try #require(textView.textContainer)
-  let layoutManager = try #require(textView.layoutManager)
-  layoutManager.ensureLayout(for: textContainer)
-
-  let markerRect = try #require(
-    textView.checklistMarkerRect(for: NSRange(location: 0, length: 1))
-  )
-  let slotGlyphRange = layoutManager.glyphRange(
-    forCharacterRange: NSRange(location: 0, length: 2),
-    actualCharacterRange: nil
-  )
-  let slotRect = layoutManager.boundingRect(
-    forGlyphRange: slotGlyphRange,
-    in: textContainer
-  ).offsetBy(
-    dx: textView.textContainerOrigin.x,
-    dy: textView.textContainerOrigin.y
-  )
-
-  #expect(markerRect == ChecklistMarkerDrawing.markerRect(around: slotRect))
+@Test @MainActor func checklistMarkerStaysOnFirstLineWithWrappedMixedSizeContent() throws {
+  let textView = checklistTypingEditor(family: "Avenir Next", size: 17, text: "    ○ F")
+  textView.setFrameSize(NSSize(width: 160, height: 240))
+  let window = NSWindow(contentRect: textView.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+  window.contentView = textView
+  defer { window.orderOut(nil) }
+  let markerRange = NSRange(location: 4, length: 1)
+  let original = try #require(textView.checklistMarkerRect(for: markerRange))
+  textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+  textView.insertText(String(repeating: " wrapped content", count: 12), replacementRange: textView.selectedRange())
+  let wrapped = try #require(textView.checklistMarkerRect(for: markerRange))
+  #expect(abs(wrapped.midY - original.midY) < 0.01)
+  let container = try #require(textView.textContainer)
+  #expect((textView.layoutManager?.usedRect(for: container).height ?? 0) > 54)
+  textView.textStorage?.addAttribute(.font, value: NSFont.systemFont(ofSize: 24), range: NSRange(location: 6, length: 1))
+  let mixed = try #require(textView.checklistMarkerRect(for: markerRange))
+  textView.setSelectedRange(NSRange(location: 6, length: 1))
+  textView.insertText("a", replacementRange: textView.selectedRange())
+  let replaced = try #require(textView.checklistMarkerRect(for: markerRange))
+  #expect(abs(replaced.midY - mixed.midY) < 0.01)
 }
 
 @Test @MainActor func depthZeroChecklistMarkerCacheDisplayKeepsWholeCircleInsideLeftClip() throws {
@@ -2328,16 +2441,97 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(source.contains("accessibilityHint(\"Enter a size from 1 through 512 points.\")"))
 }
 
-@Test func formattingBarKeepsOneReachableCommandSurfaceAtSupportedWidths() throws {
-  let source = try notesPanelSource()
-  let formattingBar = try #require(
-    source.components(separatedBy: "private struct FormattingBar: View").last
+@Test @MainActor func formattingBarAdaptsOneReachableCommandSurfaceAtSupportedWidths() async throws {
+  #expect(FormattingToolbarLayout.presentation(availableWidth: 780) == .full)
+  #expect(FormattingToolbarLayout.presentation(availableWidth: 360) == .compact)
+  #expect(FormattingToolbarLayout.presentation(availableWidth: 719) == .compact)
+  #expect(FormattingToolbarLayout.presentation(availableWidth: 720) == .full)
+  #expect(FormattingToolbarLayout.presentation(availableWidth: 721) == .full)
+  #expect(
+    NotesPanelSizing.storedSize(
+      preferred: CGSize(width: 800, height: 430),
+      available: CGSize(width: 700, height: 400)
+    ) == CGSize(width: 700, height: 400)
+  )
+  #expect(
+    NotesPanelSizing.storedSize(
+      preferred: CGSize(width: 620, height: 390),
+      available: CGSize(width: 1_200, height: 900)
+    ) == CGSize(width: 620, height: 390)
   )
 
-  #expect(formattingBar.components(separatedBy: "ScrollView(.horizontal, showsIndicators: false)").count == 2)
-  #expect(formattingBar.contains("accessibilityLabel(\"Editor toolbar\")"))
-  #expect(formattingBar.contains("ToolbarIconLabel(systemImage: \"trash\")"))
-  #expect(!formattingBar.contains("ViewThatFits"))
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Toolbar fixture", body: "Body")
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer { window.orderOut(nil) }
+  window.setContentSize(NSSize(width: 800, height: 430))
+  await settleHostedView(host)
+
+  let fullLabels = [
+    "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Strikethrough", "Font",
+    "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist", "Delete",
+  ]
+  let compactLabels = [
+    "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Font",
+    "Font Color", "Highlight", "More formatting", "Delete",
+  ]
+
+  func expectControlFramesWithinWindow(_ labels: [String], panelWidth: CGFloat) throws {
+    let contentView = try #require(window.contentView)
+    let contentFrame = window.convertToScreen(contentView.convert(contentView.bounds, to: nil))
+      .insetBy(dx: -1, dy: -1)
+    let hostFrame = window.convertToScreen(host.convert(host.bounds, to: nil))
+      .insetBy(dx: -1, dy: -1)
+    print("Toolbar geometry width=\(panelWidth) content=\(contentFrame) host=\(hostFrame)")
+    for label in labels {
+      let control = try #require(fontPickerAccessibilityElement(host, label: label))
+      let frame = try #require(
+        control.value(forKey: "accessibilityFrame") as? NSValue
+      ).rectValue
+      print("Toolbar control width=\(panelWidth) label=\(label) frame=\(frame)")
+      #expect(frame.width > 0)
+      #expect(frame.height > 0)
+      #expect(contentFrame.contains(frame))
+      #expect(hostFrame.contains(frame))
+    }
+  }
+
+  try expectControlFramesWithinWindow(fullLabels, panelWidth: 800)
+  #expect(fontPickerAccessibilityElement(host, label: "More formatting") == nil)
+
+  for panelWidth in [739.0, 740.0, 741.0] {
+    state.updatePreferences { $0.panelWidth = panelWidth }
+    window.setContentSize(NSSize(width: panelWidth, height: 430))
+    await settleHostedView(host)
+    let more = fontPickerAccessibilityElement(host, label: "More formatting")
+    if panelWidth < 740 {
+      #expect(more != nil)
+      try expectControlFramesWithinWindow(compactLabels, panelWidth: panelWidth)
+      #expect(fontPickerAccessibilityElement(host, label: "Font size") == nil)
+    } else {
+      #expect(more == nil)
+      try expectControlFramesWithinWindow(fullLabels, panelWidth: panelWidth)
+    }
+  }
+
+  state.updatePreferences { $0.panelWidth = 380 }
+  window.setContentSize(NSSize(width: 380, height: 430))
+  await settleHostedView(host)
+
+  try expectControlFramesWithinWindow(compactLabels, panelWidth: 380)
+  #expect(fontPickerAccessibilityElement(host, label: "Font size") == nil)
+  // Keyboard dispatch requires a key application, which this hosted xctest process cannot
+  // provide. The native-app acceptance pass verifies shortcuts in both toolbar variants.
 }
 
 @Test func formattingBarCanAlwaysBeCollapsedAndRestoredFromTheHeader() throws {
@@ -2541,7 +2735,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
   #expect(
     normalizedNavigator.contains(
-      "private var showsUnfiledDisclosure: Bool { !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled }"
+      "private var showsUnfiledDisclosure: Bool { !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled || isUnfiledDisclosureFocused }"
     )
   )
 }
@@ -2630,42 +2824,6 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(!rootRow.contains(".fixedSize(horizontal: isUnfiledCompact, vertical: false)"))
   #expect(!folderRow.contains(".fixedSize(horizontal: true, vertical: false)"))
   #expect(!rowLabel.contains(".fixedSize(horizontal: true, vertical: false)"))
-}
-
-@Test func compactUnfiledDisclosurePreservesOriginalIconLayoutAtRowHeight() throws {
-  let source = try notesPanelSource()
-  let navigator = try #require(
-    source.components(separatedBy: "private struct FolderNavigator").last
-  )
-  let rootRow = try #require(
-    navigator.components(separatedBy: "private var rootRow").last?
-      .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
-  )
-  #expect(rootRow.contains("HStack(spacing: 0)"))
-  #expect(rootRow.contains("if showsUnfiledDisclosure"))
-  #expect(
-    rootRow.contains(
-      "Image(systemName: isUnfiledCompact ? \"chevron.right\" : \"chevron.left\")"
-    )
-  )
-  #expect(rootRow.contains(".frame(width: 28, height: 24)"))
-  #expect(rootRow.contains("systemImage: \"tray\""))
-  #expect(!rootRow.contains("systemImageOpacity"))
-  #expect(!rootRow.contains(".overlay(alignment:"))
-  #expect(!rootRow.contains(".rotationEffect"))
-  #expect(!rootRow.contains(".animation("))
-  #expect(rootRow.contains(".accessibilityLabel("))
-  #expect(rootRow.contains("Expand Unfiled"))
-  #expect(rootRow.contains("Collapse Unfiled"))
-  #expect(!rootRow.contains(".opacity(showsUnfiledDisclosure ? 1 : 0)"))
-  #expect(!rootRow.contains(".allowsHitTesting(showsUnfiledDisclosure)"))
-  #expect(!rootRow.contains(".accessibilityHidden(!showsUnfiledDisclosure)"))
-
-  let rowLabel = try #require(
-    navigator.components(separatedBy: "private func rowLabel").last?
-      .components(separatedBy: "private func noteDropDelegate").first
-  )
-  #expect(!rowLabel.contains("systemImageOpacity"))
 }
 
 @Test @MainActor func hostedNotesPanelToolbarVisibilityPreservesTheRealEditorAndCommands() async throws {
@@ -2983,6 +3141,412 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
       abs(geometry.renderedGap - initial.renderedGap) < 0.01,
       "rendered gap shifted from \(initial.renderedGap) to \(geometry.renderedGap)"
     )
+  }
+}
+
+@Test @MainActor func hostedTitleKeepsSingleLineEditingCommands() async throws {
+  try await withHostedTitleEditors { _, window, _, title, _ in
+    #expect(window.makeFirstResponder(title))
+    let editor = try #require(title.currentEditor() as? NSTextView)
+    let original = editor.string
+    for command in [
+      #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)),
+      #selector(NSResponder.insertLineBreak(_:)),
+      #selector(NSResponder.insertParagraphSeparator(_:)),
+    ] {
+      editor.setSelectedRange(NSRange(location: 2, length: 0))
+      editor.doCommand(by: command)
+      #expect(editor.string == original)
+    }
+
+    editor.undoManager?.removeAllActions()
+    editor.selectAll(nil)
+    editor.insertText(
+      NSAttributedString(
+        string: "Direct\r\ninput\u{2028}stays\u{2029}plain",
+        attributes: [.underlineStyle: NSUnderlineStyle.single.rawValue]
+      ),
+      replacementRange: editor.selectedRange()
+    )
+    #expect(editor.string == "Direct input stays plain")
+    #expect(editor.textStorage?.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
+    #expect(editor.undoManager?.canUndo == true)
+    editor.undoManager?.undo()
+    #expect(editor.string == original)
+
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let pasted = NSAttributedString(
+      string: "Pasted\r\ntext\u{0085}on\u{2028}one\u{2029}line",
+      attributes: [.underlineStyle: NSUnderlineStyle.single.rawValue]
+    )
+    pasteboard.setData(
+      pasted.rtf(from: NSRange(location: 0, length: pasted.length)),
+      forType: .rtf
+    )
+    editor.undoManager?.removeAllActions()
+    editor.selectAll(nil)
+    #expect(editor.readSelection(from: pasteboard, type: .rtf))
+    #expect(editor.string == "Pasted text on one line")
+    #expect(editor.textStorage?.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
+    #expect(editor.undoManager?.canUndo == true)
+    editor.undoManager?.undo()
+    #expect(editor.string == original)
+    editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+    #expect(editor.string == original)
+  }
+}
+
+@Test @MainActor func hostedTitlePreservesNativeReturnTabAndEscapeCommands() async throws {
+  try await withHostedTitleEditors { state, window, host, title, body in
+    title.nextKeyView = body
+
+    // Direct command routing matches an ordinary AppKit field editor: Return and
+    // cancelOperation keep it active, while Tab advances through the key loop.
+    #expect(window.makeFirstResponder(title))
+    let returnEditor = try #require(title.currentEditor() as? NSTextView)
+    returnEditor.selectAll(nil)
+    returnEditor.insertText("Committed title", replacementRange: returnEditor.selectedRange())
+    returnEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+    await settleHostedView(host)
+    #expect(window.firstResponder === returnEditor)
+    #expect(title.stringValue == "Committed title")
+    #expect(state.workspace.notes.first?.title == "Committed title")
+
+    #expect(window.makeFirstResponder(title))
+    let tabEditor = try #require(title.currentEditor() as? NSTextView)
+    tabEditor.doCommand(by: #selector(NSResponder.insertTab(_:)))
+    #expect(window.firstResponder === body)
+    #expect(title.stringValue == "Committed title")
+
+    #expect(window.makeFirstResponder(title))
+    let cancelEditor = try #require(title.currentEditor() as? NSTextView)
+    cancelEditor.selectAll(nil)
+    cancelEditor.insertText("Discarded title", replacementRange: cancelEditor.selectedRange())
+    cancelEditor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+    await settleHostedView(host)
+    #expect(window.firstResponder === cancelEditor)
+    #expect(title.stringValue == "Discarded title")
+    #expect(state.workspace.notes.first?.title == "Discarded title")
+  }
+}
+
+@Test @MainActor func hostedTitlePreservesMarkedTextComposition() async throws {
+  try await withHostedTitleEditors { state, window, host, title, _ in
+    #expect(window.makeFirstResponder(title))
+    let editor = try #require(title.currentEditor() as? NSTextView)
+    editor.selectAll(nil)
+    editor.setMarkedText(
+      "かな", selectedRange: NSRange(location: 2, length: 0),
+      replacementRange: editor.selectedRange()
+    )
+    #expect(editor.hasMarkedText())
+    #expect(editor.string == "かな")
+    editor.unmarkText()
+    #expect(!editor.hasMarkedText())
+    editor.insertText("。", replacementRange: editor.selectedRange())
+    await settleHostedView(host)
+    #expect(editor.string == "かな。")
+    #expect(title.stringValue == "かな。")
+    #expect(state.workspace.notes.first?.title == "かな。")
+  }
+}
+
+@Test @MainActor func hostedEmptyTitlePlaceholderStaysAlignedThroughEditing() async throws {
+  for family in ["Avenir Next", ".AppleSystemUIFont"] {
+    try await withHostedTitleEditors(titleText: "", fontFamily: family) { state, window, host, title, body in
+      #expect(window.makeFirstResponder(body))
+      await settleHostedView(host)
+      let originalFrame = host.convert(title.bounds, from: title)
+      let originalBody = state.workspace.notes.first?.body
+      @MainActor func sample(_ phase: String) throws -> ClosedRange<Int> {
+        // Capture the native draw path before asking TextKit to calculate any layout.
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsHigh) / host.bounds.height
+        let top = host.isFlipped ? originalFrame.minY : host.bounds.height - originalFrame.maxY
+        let rows = max(0, Int((top - 10) * scale))..<min(bitmap.pixelsHigh, Int((top + originalFrame.height) * scale))
+        // The first N is common to the placeholder and typed text; exclude the caret at x=2.
+        let columns = Int((originalFrame.minX + 5) * scale)..<Int((originalFrame.minX + 13) * scale)
+        let ink = rows.filter { y in columns.contains { x in
+          (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1
+        } }
+        let first = try #require(ink.first)
+        let last = try #require(ink.last)
+        #expect(ink.count < rows.count)
+        #expect(host.convert(title.bounds, from: title) == originalFrame)
+        let label = "placeholder-\(family)-\(window.appearance!.name.rawValue)-\(phase)"
+        print("\(label): ink=\(first)...\(last), frame=\(originalFrame)")
+        if let directory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"] {
+          try FileManager.default.createDirectory(
+            atPath: directory, withIntermediateDirectories: true
+          )
+          let png = try #require(bitmap.representation(using: .png, properties: [:]))
+          try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(label).png"))
+        }
+        return first...last
+      }
+      let inactive = try sample("inactive-empty")
+      #expect(window.makeFirstResponder(title))
+      let editor = try #require(title.currentEditor() as? NSTextView)
+      #expect(window.firstResponder === editor)
+      let editorFrame = host.convert(editor.bounds, from: editor)
+      print("PLACEHOLDER EDITOR FRAME \(family): title=\(originalFrame), editor=\(editorFrame)")
+      #expect(editorFrame.intersection(originalFrame).height >= originalFrame.height - 1)
+      for turn in 0..<3 {
+        if turn > 0 {
+          await Task.yield()
+          host.layoutSubtreeIfNeeded()
+        }
+        let focused = try sample("focused-empty-\(turn)")
+        #expect(abs(focused.lowerBound - inactive.lowerBound) <= 1)
+        #expect(abs(focused.upperBound - inactive.upperBound) <= 1)
+      }
+      #expect(editor.string.isEmpty)
+      editor.insertText("N", replacementRange: editor.selectedRange())
+      let typed = try sample("first-character")
+      #expect(abs(typed.lowerBound - inactive.lowerBound) <= 1)
+      #expect(abs(typed.upperBound - inactive.upperBound) <= 1)
+      editor.deleteBackward(nil)
+      for turn in 0..<3 {
+        if turn > 0 {
+          await Task.yield()
+          host.layoutSubtreeIfNeeded()
+        }
+        let emptied = try sample("deleted-empty-\(turn)")
+        #expect(abs(emptied.lowerBound - inactive.lowerBound) <= 1)
+        #expect(abs(emptied.upperBound - inactive.upperBound) <= 1)
+      }
+      await settleHostedView(host)
+      #expect(editor.string.isEmpty)
+      #expect(state.workspace.notes.first?.title == "")
+      #expect(state.workspace.notes.first?.body == originalBody)
+      #expect(window.makeFirstResponder(body))
+      let unfocused = try sample("unfocused-empty")
+      #expect(abs(unfocused.lowerBound - inactive.lowerBound) <= 1)
+      #expect(abs(unfocused.upperBound - inactive.upperBound) <= 1)
+      // Inspect input-method caret geometry only after all unforced visual samples.
+      #expect(window.makeFirstResponder(title))
+      let cursorEditor = try #require(title.currentEditor() as? NSTextView)
+      let emptyCaret = cursorEditor.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+      let emptyLine = cursorEditor.layoutManager?.extraLineFragmentRect
+      cursorEditor.insertText("N", replacementRange: cursorEditor.selectedRange())
+      let typedCaret = cursorEditor.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+      print("PLACEHOLDER CARET \(family): empty=\(emptyCaret), typed=\(typedCaret), emptyLine=\(String(describing: emptyLine))")
+      #expect(abs(emptyCaret.minY - typedCaret.minY) <= 1)
+      #expect(abs(emptyCaret.height - typedCaret.height) <= 1)
+      cursorEditor.deleteBackward(nil)
+    }
+  }
+}
+
+@Test @MainActor func hostedTitleBaselineRemainsStableDuringFocusTransition() async throws {
+  let longTitle = String(repeating: "Caret title ", count: 12)
+  for (isPinned, font, titleText, scrollY) in [
+    (false, "Avenir Next", "Caret title", 0.0),
+    (false, ".AppleSystemUIFont", longTitle, 8.0),
+    (true, "Avenir Next", longTitle, 8.0),
+    (true, ".AppleSystemUIFont", "Caret title", 0.0),
+  ] {
+    try await withHostedTitleEditors(
+      isPinned: isPinned, titleText: titleText, fontFamily: font,
+      bodyText: String(repeating: "Caret body\n", count: 50)
+    ) { _, window, host, title, body in
+      let scrollView = try #require(body.enclosingScrollView)
+      do {
+        #expect(window.makeFirstResponder(body))
+        await settleHostedView(host)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: scrollY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        let titleFrame = host.convert(title.bounds, from: title)
+        let bodyFrame = host.convert(body.bounds, from: body)
+        let clipOrigin = scrollView.contentView.bounds.origin
+        let label = "\(isPinned ? "pinned" : "regular")-\(font)-keyboard-\(window.appearance!.name.rawValue)"
+
+        @MainActor func sample(_ phase: String) throws -> (title: ClosedRange<Int>, body: ClosedRange<Int>) {
+          // Do not force field-editor layout: that changes the very transition under test.
+          @MainActor func ink(in rect: NSRect, from source: NSView) throws -> ClosedRange<Int> {
+            let bitmap = try #require(source.bitmapImageRepForCachingDisplay(in: source.bounds))
+            source.cacheDisplay(in: source.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsHigh) / source.bounds.height
+            let sourceRect = source.convert(rect, from: host)
+            let top = source.isFlipped
+              ? sourceRect.minY - source.bounds.minY
+              : source.bounds.maxY - sourceRect.maxY
+            let left = sourceRect.minX - source.bounds.minX
+            let right = sourceRect.maxX - source.bounds.minX
+            let xs = max(0, Int(left * scale))..<min(bitmap.pixelsWide, Int(right * scale))
+            let ys = max(0, Int(top * scale))..<min(bitmap.pixelsHigh, Int((top + sourceRect.height) * scale))
+            let rows = ys.filter { y in xs.contains { x in
+              (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.2
+            } }
+            let first = try #require(rows.first)
+            let last = try #require(rows.last)
+            // A solid captured background must not silently count as glyph ink.
+            #expect(rows.count < ys.count)
+            let sourceFrame = host.convert(source.bounds, from: source)
+            let sourceTop = host.isFlipped
+              ? sourceFrame.minY - host.bounds.minY
+              : host.bounds.maxY - sourceFrame.maxY
+            let hostOffset = Int(sourceTop * scale)
+            return (hostOffset + first)...(hostOffset + last)
+          }
+          // Leading glyphs exclude the caret at x=2; long-title horizontal scrolling is reset below.
+          let titleSource: NSView = title.currentEditor() ?? title
+          let titleInk = try ink(
+            in: NSRect(
+              x: titleFrame.minX + 5,
+              y: titleFrame.minY - 10,
+              width: 55,
+              height: titleFrame.height + 10
+            ),
+            from: titleSource
+          )
+          let bodyInk = try ink(
+            in: NSRect(x: bodyFrame.minX + 16, y: bodyFrame.minY + 8, width: 60, height: 27),
+            from: body
+          )
+          #expect(host.convert(title.bounds, from: title) == titleFrame)
+          #expect(host.convert(body.bounds, from: body) == bodyFrame)
+          #expect(scrollView.contentView.bounds.origin == clipOrigin)
+          print("TITLE INK \(label) \(phase): title=\(titleInk), body=\(bodyInk), frame=\(titleFrame), clip=\(clipOrigin)")
+          if let directory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"] {
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let png = try #require(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(label)-\(phase).png"))
+          }
+          return (titleInk, bodyInk)
+        }
+
+        let before = try sample("before")
+        #expect(window.makeFirstResponder(title))
+        let editor = try #require(title.currentEditor() as? NSTextView)
+        #expect(window.firstResponder === editor)
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        editor.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        for turn in 0..<4 {
+          if turn > 0 {
+            await Task.yield()
+            host.layoutSubtreeIfNeeded()
+          }
+          let after = try sample("turn-\(turn)")
+          #expect(abs(after.title.lowerBound - before.title.lowerBound) <= 1, "Title ascenders move or clip on focus")
+          #expect(abs(after.title.upperBound - before.title.upperBound) <= 1, "Title baseline moves on focus")
+          #expect(after.body == before.body)
+        }
+        let textContainer = try #require(editor.textContainer)
+        let layoutManager = try #require(editor.layoutManager)
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        var lineCount = 0
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, _, _, _, _ in
+          lineCount += 1
+        }
+        #expect(lineCount == 1)
+      }
+    }
+  }
+}
+
+@Test @MainActor func hostedTitleCaretMatchesBodyAccent() async throws {
+  try await withHostedTitleEditors { _, window, host, titleField, bodyEditor in
+    let accent = try #require(NSColor(hex: "#FFD600"))
+    for _ in 0..<2 {
+      #expect(window.makeFirstResponder(bodyEditor))
+      #expect(sRGB(bodyEditor.insertionPointColor) == sRGB(accent))
+      #expect(window.makeFirstResponder(titleField))
+      let fieldEditor = try #require(titleField.currentEditor() as? NSTextView)
+      #expect(window.firstResponder === fieldEditor)
+      // Check immediately: merely focusing an empty selection must style the caret.
+      fieldEditor.setSelectedRange(NSRange(location: 2, length: 0))
+      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(bodyEditor.insertionPointColor))
+      await settleHostedView(host)
+      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(accent))
+    }
+  }
+}
+
+@Test @MainActor func hostedTitleCaretUpdatesAccentWhileEditing() async throws {
+  try await withHostedTitleEditors { state, window, host, titleField, bodyEditor in
+    #expect(window.makeFirstResponder(titleField))
+    let fieldEditor = try #require(titleField.currentEditor() as? NSTextView)
+    let selection = NSRange(location: 1, length: 3)
+    fieldEditor.setSelectedRange(selection)
+    let typing = NSDictionary(dictionary: fieldEditor.typingAttributes)
+    let selectedAppearance = NSDictionary(dictionary: fieldEditor.selectedTextAttributes)
+    let originalTitle = fieldEditor.string
+    state.updatePreferences { $0.accentHex = "#30D158" }
+    await settleHostedView(host)
+    #expect(window.firstResponder === fieldEditor)
+    #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(NSColor(hex: "#30D158")))
+    #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(bodyEditor.insertionPointColor))
+    #expect(fieldEditor.selectedRange() == selection)
+    #expect(NSDictionary(dictionary: fieldEditor.typingAttributes).isEqual(to: typing))
+    #expect(NSDictionary(dictionary: fieldEditor.selectedTextAttributes).isEqual(to: selectedAppearance))
+    #expect(fieldEditor.string == originalTitle)
+    fieldEditor.insertText("EDIT", replacementRange: selection)
+    await settleHostedView(host)
+    #expect(state.workspace.notes.first?.title == (originalTitle as NSString).replacingCharacters(in: selection, with: "EDIT"))
+    #expect(state.workspace.notes.first?.body == "Caret body")
+  }
+}
+
+@Test @MainActor func hostedTitleAccentDoesNotLeakToOtherFields() async throws {
+  try await withHostedTitleEditors { state, window, host, titleField, _ in
+    let otherField = NSTextField(string: "Unrelated input")
+    otherField.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
+    host.addSubview(otherField)
+    #expect(window.makeFirstResponder(otherField))
+    let ordinaryEditor = try #require(otherField.currentEditor() as? NSTextView)
+    let originalCaret = ordinaryEditor.insertionPointColor
+    let originalSelection = NSDictionary(dictionary: ordinaryEditor.selectedTextAttributes)
+    #expect(window.makeFirstResponder(titleField))
+    let titleEditor = try #require(titleField.currentEditor() as? NSTextView)
+    #expect(titleEditor !== ordinaryEditor)
+    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(NSColor(hex: "#FFD600")))
+    #expect(window.makeFirstResponder(otherField))
+    #expect(otherField.currentEditor() === ordinaryEditor)
+    #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
+    #expect(NSDictionary(dictionary: ordinaryEditor.selectedTextAttributes).isEqual(to: originalSelection))
+    state.updatePreferences { $0.accentHex = "#30D158" }
+    await settleHostedView(host)
+    #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
+    #expect(window.makeFirstResponder(titleField))
+    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(NSColor(hex: "#30D158")))
+    #expect(window.makeFirstResponder(otherField))
+    #expect(otherField.currentEditor() === ordinaryEditor)
+    #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
+  }
+}
+
+@MainActor
+private func withHostedTitleEditors(
+  isPinned: Bool = false,
+  titleText: String = "Caret title",
+  fontFamily: String = "Avenir Next",
+  bodyText: String = "Caret body",
+  _ check: @MainActor (AppState, NSWindow, NSHostingView<AnyView>, NSTextField, ListAwareTextView) async throws -> Void
+) async throws {
+  for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: titleText, body: bodyText, folderID: nil)
+    let state = await hostedPanelState(
+      root: root,
+      workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+    )
+    state.updatePreferences {
+      $0.accentHex = "#FFD600"
+      $0.fontFamily = fontFamily
+    }
+    let (window, host) = hostedPanel(root: root, state: state, commands: EditorCommands(), isPinned: isPinned)
+    defer { window.orderOut(nil) }
+    window.appearance = NSAppearance(named: appearance)
+    await settleHostedView(host)
+    let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+    let bodyEditor = try #require(hostedPanelEditor(in: host))
+    try await check(state, window, host, titleField, bodyEditor)
+    window.makeFirstResponder(nil)
   }
 }
 
@@ -3732,10 +4296,11 @@ private func hostedPanel(
   root: URL,
   state: AppState,
   commands: EditorCommands,
-  accentHex: String? = nil
+  accentHex: String? = nil,
+  isPinned: Bool = false
 ) -> (NSWindow, NSHostingView<AnyView>) {
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
-  let panel = NotesPanel(dictationRuntime: runtime, editorCommands: commands)
+  let panel = NotesPanel(dictationRuntime: runtime, isPinned: isPinned, editorCommands: commands)
   let rootView: AnyView
   if let accentHex, let accent = Color(hex: accentHex) {
     rootView = AnyView(panel.environmentObject(state).accentColor(accent))
@@ -3989,4 +4554,181 @@ private func sendHostedKeyDown(
   for option in FleckPaletteOption.all {
     #expect(option.hex == expectedHexByName[option.name])
   }
+}
+
+@Test @MainActor func fontPickerHostedSelectionSearchCancelAndUndo() throws {
+  let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 360, height: 340), styleMask: [.titled], backing: .buffered, defer: false)
+  let textView = NSTextView()
+  window.contentView = textView
+  textView.allowsUndo = true
+  textView.textStorage?.setAttributedString(NSAttributedString(string: "ABCD", attributes: [.font: NSFont.systemFont(ofSize: 17)]))
+  textView.setSelectedRange(NSRange(location: 1, length: 2))
+  window.makeFirstResponder(textView)
+  let original = NSAttributedString(attributedString: try #require(textView.textStorage))
+  let commands = EditorCommands()
+  commands.textView = textView
+  let note = Note(body: "ABCD")
+  let target = try #require(FontPickerTarget(note: note, isTitle: false, commands: commands))
+  var cancelled = false
+  let picker = FontFamilyPickerController(currentFamily: nil, isMixed: true, targetLabel: target.label, onCommit: { _ in Issue.record("Cancelled picker committed") }, onCancel: { cancelled = true })
+  picker.loadViewIfNeeded()
+  let host = NSWindow(contentRect: .init(x: 0, y: 0, width: 280, height: 320), styleMask: [.titled], backing: .buffered, defer: false)
+  host.contentViewController = picker
+  host.makeFirstResponder(picker.searchField)
+  picker.searchField.stringValue = "no such font"
+  picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+  picker.cancelOperation(nil)
+  #expect(cancelled)
+  #expect(textView.textStorage == original)
+  #expect(textView.selectedRange() == NSRange(location: 1, length: 2))
+  #expect(target.apply("Courier", note: note, isEditorVisible: true, commands: commands, titleMutation: { _ in Issue.record("Body routed to title") }))
+  #expect((textView.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.familyName == "Courier")
+  #expect(textView.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont == NSFont.systemFont(ofSize: 17))
+  try #require(textView.undoManager).undo()
+  #expect(textView.textStorage == original)
+  try #require(textView.undoManager).redo()
+  #expect((textView.textStorage?.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.familyName == "Courier")
+}
+
+@Test @MainActor func fontPickerRejectsLiveBodyEditOrRangeChange() throws {
+  let textView = NSTextView()
+  textView.string = "ABCD"
+  let commands = EditorCommands()
+  commands.textView = textView
+  let note = Note(body: "ABCD")
+  for change in [{ textView.insertText("X", replacementRange: NSRange(location: 0, length: 1)) }, { textView.setSelectedRange(NSRange(location: 3, length: 0)) }] {
+    textView.setSelectedRange(NSRange(location: 0, length: 2))
+    let target = try #require(FontPickerTarget(note: note, isTitle: false, commands: commands))
+    change()
+    #expect(!target.apply("Courier", note: note, isEditorVisible: true, commands: commands, titleMutation: { _ in }))
+  }
+}
+
+// SwiftUI accessibility nodes expose the informal AppKit API, not NSAccessibilityProtocol.
+@MainActor private func fontPickerAccessibilityElement(_ value: Any, label: String) -> NSObject? {
+  guard let element = value as? NSObject else { return nil }
+  let labelSelector = NSSelectorFromString("accessibilityLabel")
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let name = element.responds(to: labelSelector)
+    ? element.perform(labelSelector)?.takeUnretainedValue() as? String : nil
+  if name == label { return element }
+  let children = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in children ?? [] {
+    if let found = fontPickerAccessibilityElement(child, label: label) { return found }
+  }
+  return nil
+}
+
+@Test @MainActor func fontPickerHostedToolbarRetainsTitleAndBodyTargets() async throws {
+  NSApplication.shared.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+  for isTitle in [true, false] {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Font picker fixture", body: "Body selection", richTextRTF: try hostedPanelRTF(text: "Body selection"), titleFontFamily: "Avenir Next")
+    let state = await hostedPanelState(root: root, workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: []))
+    let commands = EditorCommands()
+    let (window, host) = hostedPanel(root: root, state: state, commands: commands, isPinned: isTitle)
+    defer { window.orderOut(nil) }
+    if !isTitle { window.setContentSize(NSSize(width: 390, height: 430)) }
+    await settleHostedView(host)
+    let body = try #require(hostedPanelEditor(in: host))
+    if isTitle {
+      let titleField = try #require(hostedPanelTitleField(with: note.title, in: host))
+      #expect(window.makeFirstResponder(titleField))
+    } else {
+      #expect(window.makeFirstResponder(body))
+      body.setSelectedRange(NSRange(location: 0, length: 4))
+    }
+    await settleHostedView(host)
+    let before = try #require(state.selectedNote)
+    let button = try #require(fontPickerAccessibilityElement(host, label: "Font"))
+    if isTitle {
+      let value = button.perform(NSSelectorFromString("accessibilityValue"))?.takeUnretainedValue() as? String
+      #expect(value == "Avenir Next")
+    }
+    _ = button.perform(NSSelectorFromString("accessibilityPerformPress"))
+    await settleHostedView(host)
+    let searchFields: [NSSearchField] = NSApplication.shared.windows.filter(\.isVisible).compactMap { window -> NSSearchField? in
+      guard let content = window.contentView else { return nil }
+      return hostedDescendant(in: content, as: NSSearchField.self)
+    }
+    let search = try #require(searchFields.first(where: { $0.placeholderString == "Search fonts" }))
+    let picker = try #require(search.delegate as? FontFamilyPickerController)
+    search.stringValue = "Menlo"
+    picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+    #expect(state.selectedNote == before)
+    let searchEditor = try #require(search.currentEditor() as? NSTextView)
+    #expect(picker.control(search, textView: searchEditor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+    await settleHostedView(host)
+    let capture = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+    host.cacheDisplay(in: host.bounds, to: capture)
+    let captureData = try #require(capture.representation(using: .png, properties: [:]))
+    let captureName = isTitle ? "phase2-font-pinned-host.png" : "phase2-font-narrow-host.png"
+    try captureData.write(to: fontPickerEvidenceDirectory().appendingPathComponent(captureName))
+    if isTitle {
+      #expect(state.selectedNote?.titleFontFamily == "Menlo")
+      #expect(state.selectedNote?.richTextRTF == before.richTextRTF)
+    } else {
+      #expect(state.selectedNote?.titleFontFamily == before.titleFontFamily)
+      #expect((body.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.familyName == "Menlo")
+      #expect(body.selectedRange() == NSRange(location: 0, length: 4))
+    }
+    let updated = try #require(state.selectedNote)
+    _ = button.perform(NSSelectorFromString("accessibilityPerformPress"))
+    await settleHostedView(host)
+    let reopenedPickers: [FontFamilyPickerController] = NSApplication.shared.windows.filter(\.isVisible).compactMap { window in
+      guard let content = window.contentView,
+        let search = hostedDescendant(in: content, as: NSSearchField.self)
+      else { return nil }
+      return search.delegate as? FontFamilyPickerController
+    }
+    let reopenedPicker = try #require(reopenedPickers.first)
+    let other = Note(title: "Other note", body: "Unchanged")
+    state.workspace.notes.append(other)
+    state.workspace.selectedNoteID = other.id
+    await settleHostedView(host)
+    reopenedPicker.commitSelection()
+    #expect(reopenedPicker.view.window?.isVisible != true)
+    #expect(state.selectedNote == other)
+    #expect(state.workspace.notes.first(where: { $0.id == updated.id }) == updated)
+  }
+}
+
+@Test @MainActor func fontPickerTitleUndoTargetsOriginalNoteAfterSelectionSwitch() async throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let original = Note(title: "Original")
+  let other = Note(title: "Other", titleFontFamily: "Avenir Next")
+  let state = await hostedPanelState(root: root, workspace: Workspace(notes: [original, other], selectedNoteID: original.id, folders: []))
+  let undo = UndoManager()
+  undo.groupsByEvent = false
+  undo.beginUndoGrouping()
+  state.setTitleFontFamily("Menlo", noteID: original.id, undoManager: undo)
+  undo.endUndoGrouping()
+  #expect(state.selectedNote?.titleFontFamily == "Menlo")
+  state.workspace.selectedNoteID = other.id
+  #expect(undo.canUndo)
+  undo.undo()
+  #expect(state.workspace.notes.first(where: { $0.id == original.id })?.titleFontFamily == nil)
+  #expect(state.selectedNote?.titleFontFamily == "Avenir Next")
+  undo.redo()
+  #expect(state.workspace.notes.first(where: { $0.id == original.id })?.titleFontFamily == "Menlo")
+  #expect(state.selectedNote?.titleFontFamily == "Avenir Next")
+}
+
+@Test @MainActor func fontPickerTableKeyboardReturnAndEscape() throws {
+  var committed: [String] = []
+  var cancelled = false
+  let picker = FontFamilyPickerController(currentFamily: "Menlo", isMixed: false, targetLabel: "New text", onCommit: { committed.append($0) }, onCancel: { cancelled = true })
+  let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 280, height: 320), styleMask: [.titled], backing: .buffered, defer: false)
+  window.contentViewController = picker
+  let table = try #require(hostedDescendant(in: picker.view, as: NSTableView.self))
+  window.makeFirstResponder(table)
+  let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+  table.keyDown(with: enter)
+  #expect(committed == ["Menlo"])
+  let escape = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+  table.keyDown(with: escape)
+  #expect(cancelled)
 }

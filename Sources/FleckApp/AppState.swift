@@ -18,6 +18,15 @@
     case failed
   }
 
+  struct NoteFileReferencePresentation: Equatable, Identifiable {
+    let reference: NoteFileReference
+    let url: URL?
+    let isAvailable: Bool
+
+    var id: UUID { reference.id }
+    var filename: String { reference.cachedFilename }
+  }
+
   @MainActor
   final class AppState: ObservableObject, DictationSaving, AgentWorkspaceStateAccess {
     typealias SaveOperation =
@@ -73,6 +82,8 @@
       }
     }
     @Published var saveError: String?
+    @Published private(set) var selectedNoteFileReferences: [NoteFileReferencePresentation] = []
+    @Published private(set) var noteFileReferenceError: String?
     @Published private(set) var startupMigrationError: FleckProductMigrationError?
     @Published private(set) var saveStatus = SaveStatus.idle
     @Published private(set) var initialSnapshotSource: LocalStoreSnapshotSource?
@@ -81,6 +92,7 @@
     @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
     @Published private(set) var agentActivity: [AgentActivityRecord] = []
     @Published private(set) var agentBannerPresentation: AgentBannerPresentation?
+    let agentActivityIndicator = AgentActivityIndicatorPresentation()
     @Published private(set) var isAgentConnectorInstalled = false
     @Published private(set) var agentCapabilityState = AgentCapabilityState(
       profiles: [:],
@@ -94,6 +106,7 @@
     var isPersistenceBlocked: Bool { startupMigrationError != nil }
 
     private let store: LocalStore
+    private let noteFileReferenceStore: NoteFileReferenceStore?
     private let snapshotWriter: LocalStoreSnapshotWriter
     private let saveOperation: SaveOperation
     private let beforeSaveOperation: BeforeSaveOperation?
@@ -164,6 +177,16 @@
       let store = store ?? LocalStore(rootURL: canonicalRoot)
       let agentRoot = store.rootURL
       self.store = store
+      do {
+        noteFileReferenceStore = try NoteFileReferenceStore(
+          sidecarURL: agentRoot
+            .appendingPathComponent("FileReferences", isDirectory: true)
+            .appendingPathComponent("references.json")
+        )
+      } catch {
+        noteFileReferenceStore = nil
+        noteFileReferenceError = Self.fileReferenceMessage(for: error)
+      }
       snapshotWriter = store.snapshotWriter
       self.saveOperation =
         saveOperation ?? { workspace, preferences, trashedNotes, generation in
@@ -285,6 +308,206 @@
       guard let id = workspace.selectedNoteID else { return nil }
       return workspace.notes.first(where: { $0.id == id })
     }
+
+    func fileReferences(noteID: UUID) -> [NoteFileReference] {
+      noteFileReferenceStore?.references(noteID: noteID) ?? []
+    }
+
+    func canAddFileReference(noteID: UUID) -> Bool {
+      noteFileReferenceStore != nil
+        && startupMigrationError == nil
+        && workspace.notes.contains(where: { $0.id == noteID })
+        && !isLockedNote(noteID)
+    }
+
+    func refreshSelectedNoteFileReferences() {
+      guard let noteID = workspace.selectedNoteID,
+        workspace.notes.contains(where: { $0.id == noteID }),
+        let noteFileReferenceStore
+      else {
+        selectedNoteFileReferences = []
+        return
+      }
+      let previous = Dictionary(
+        uniqueKeysWithValues: selectedNoteFileReferences.map { ($0.id, $0) }
+      )
+      var didEncounterSaveFailure = false
+      let presentations = noteFileReferenceStore.references(noteID: noteID).map {
+        reference in
+        do {
+          let url = try noteFileReferenceStore.resolve(referenceID: reference.id)
+          let refreshedReference = noteFileReferenceStore.references(noteID: noteID)
+            .first(where: { $0.id == reference.id }) ?? reference
+          return NoteFileReferencePresentation(
+            reference: refreshedReference,
+            url: url,
+            isAvailable: true
+          )
+        } catch NoteFileReferenceStoreError.saveFailed {
+          didEncounterSaveFailure = true
+          return NoteFileReferencePresentation(
+            reference: reference,
+            url: previous[reference.id]?.url,
+            isAvailable: true
+          )
+        } catch {
+          return NoteFileReferencePresentation(
+            reference: reference,
+            url: nil,
+            isAvailable: false
+          )
+        }
+      }
+      selectedNoteFileReferences = presentations
+      if didEncounterSaveFailure {
+        noteFileReferenceError = Self.fileReferenceSaveFailureMessage
+      } else if noteFileReferenceError == Self.fileReferenceSaveFailureMessage {
+        noteFileReferenceError = nil
+      }
+    }
+
+    @discardableResult
+    func addFileReference(noteID: UUID, url: URL) -> Bool {
+      guard canAddFileReference(noteID: noteID), let noteFileReferenceStore else {
+        if self.noteFileReferenceStore != nil {
+          noteFileReferenceError = "That note is unavailable for file shortcuts."
+        }
+        return false
+      }
+      do {
+        _ = try noteFileReferenceStore.add(noteID: noteID, url: url)
+        noteFileReferenceError = nil
+        if workspace.selectedNoteID == noteID {
+          refreshSelectedNoteFileReferences()
+        }
+        return true
+      } catch {
+        noteFileReferenceError = Self.fileReferenceMessage(for: error)
+        return false
+      }
+    }
+
+    func resolveFileReference(referenceID: UUID) -> URL? {
+      guard let noteFileReferenceStore else { return nil }
+      do {
+        let url = try noteFileReferenceStore.resolve(referenceID: referenceID)
+        noteFileReferenceError = nil
+        refreshSelectedNoteFileReferences()
+        return url
+      } catch {
+        noteFileReferenceError = Self.fileReferenceMessage(for: error)
+        refreshSelectedNoteFileReferences()
+        return nil
+      }
+    }
+
+    func fileReferenceActionFailed(_ message: String) {
+      noteFileReferenceError = message
+    }
+
+    @discardableResult
+    func relinkFileReference(referenceID: UUID, url: URL) -> Bool {
+      guard let noteFileReferenceStore,
+        let reference = fileReferencesForAllNotes()
+          .first(where: { $0.id == referenceID }),
+        canAddFileReference(noteID: reference.noteID)
+      else {
+        noteFileReferenceError = "That note is unavailable for file shortcuts."
+        return false
+      }
+      do {
+        _ = try noteFileReferenceStore.relink(referenceID: referenceID, url: url)
+        noteFileReferenceError = nil
+        refreshSelectedNoteFileReferences()
+        return true
+      } catch {
+        noteFileReferenceError = Self.fileReferenceMessage(for: error)
+        return false
+      }
+    }
+
+    private func fileReferencesForAllNotes() -> [NoteFileReference] {
+      guard let noteFileReferenceStore else { return [] }
+      return workspace.notes.flatMap { noteFileReferenceStore.references(noteID: $0.id) }
+    }
+
+    @discardableResult
+    func removeFileReference(referenceID: UUID, undoManager: UndoManager?) -> Bool {
+      guard let reference = selectedNoteFileReferences
+        .first(where: { $0.id == referenceID })?.reference
+      else { return false }
+      return removeFileReference(reference, undoManager: undoManager)
+    }
+
+    private func removeFileReference(
+      _ reference: NoteFileReference,
+      undoManager: UndoManager?
+    ) -> Bool {
+      guard let noteFileReferenceStore,
+        canAddFileReference(noteID: reference.noteID),
+        noteFileReferenceStore.references(noteID: reference.noteID)
+          .contains(where: { $0.id == reference.id })
+      else { return false }
+      do {
+        let removed = try noteFileReferenceStore.remove(referenceID: reference.id)
+        undoManager?.registerUndo(withTarget: self) { [weak undoManager] state in
+          state.restoreFileReference(removed, undoManager: undoManager)
+        }
+        undoManager?.setActionName("Remove File Shortcut")
+        noteFileReferenceError = nil
+        if workspace.selectedNoteID == reference.noteID {
+          refreshSelectedNoteFileReferences()
+        }
+        return true
+      } catch {
+        noteFileReferenceError = Self.fileReferenceMessage(for: error)
+        return false
+      }
+    }
+
+    private func restoreFileReference(
+      _ reference: NoteFileReference,
+      undoManager: UndoManager?
+    ) {
+      guard let noteFileReferenceStore,
+        canAddFileReference(noteID: reference.noteID)
+      else { return }
+      do {
+        try noteFileReferenceStore.restore(reference)
+        undoManager?.registerUndo(withTarget: self) { [weak undoManager] state in
+          _ = state.removeFileReference(reference, undoManager: undoManager)
+        }
+        undoManager?.setActionName("Remove File Shortcut")
+        noteFileReferenceError = nil
+        if workspace.selectedNoteID == reference.noteID {
+          refreshSelectedNoteFileReferences()
+        }
+      } catch {
+        noteFileReferenceError = Self.fileReferenceMessage(for: error)
+      }
+    }
+
+    private static func fileReferenceMessage(for error: Error) -> String {
+      switch error as? NoteFileReferenceStoreError {
+      case .corruptStore:
+        "File shortcuts could not be read. The existing shortcut file was preserved."
+      case .invalidFile:
+        "Choose a regular file."
+      case .duplicateFile, .duplicateReference:
+        "That file shortcut is already attached to this note."
+      case .bookmarkCreationFailed:
+        "Fleck could not remember access to that file."
+      case .bookmarkResolutionFailed, .referenceNotFound:
+        "That file is unavailable. Locate it or remove the shortcut."
+      case .saveFailed:
+        fileReferenceSaveFailureMessage
+      case nil:
+        "File shortcuts could not be updated."
+      }
+    }
+
+    private static let fileReferenceSaveFailureMessage =
+      "File shortcuts could not be saved."
 
     func visibleNotes(in folderID: UUID?) -> [Note] {
       workspace.notes(inFolderID: folderID)
@@ -503,11 +726,15 @@
     }
 
     func activeDestinations() -> [DictationRoutingCandidate] {
-      workspace.notes.map {
+      let folderNames = Dictionary(uniqueKeysWithValues: workspace.folders.map {
+        ($0.id, $0.name)
+      })
+      return workspace.notes.map {
         DictationRoutingCandidate(
           destination: DictationDestination(noteID: $0.id, title: $0.displayTitle),
           semanticContext: $0.body,
-          contentRevision: $0.revision
+          contentRevision: $0.revision,
+          presentationContext: $0.folderID.flatMap { folderNames[$0] } ?? "Unfiled"
         )
       }
     }
@@ -1251,6 +1478,21 @@
       scheduleSave()
     }
 
+    func setTitleFontFamily(_ family: String?, noteID: UUID, undoManager: UndoManager?) {
+      guard !smartCaptureTransferNoteIDs.contains(noteID),
+        !pendingRestoreNoteIDs.contains(noteID),
+        let note = workspace.notes.first(where: { $0.id == noteID }),
+        note.titleFontFamily != family
+      else { return }
+      let previousFamily = note.titleFontFamily
+      workspace.setTitleFontFamily(id: noteID, family: family)
+      undoManager?.registerUndo(withTarget: self) { [weak undoManager] state in
+        state.setTitleFontFamily(previousFamily, noteID: noteID, undoManager: undoManager)
+      }
+      undoManager?.setActionName("Change Title Font")
+      scheduleSave()
+    }
+
     func toggleList(_ style: MarkdownEditing.ListStyle) {
       guard let note = selectedNote else { return }
       updateSelected(body: MarkdownEditing.togglingList(in: note.body, style: style))
@@ -1644,6 +1886,10 @@
       refreshAgentActivity()
     }
 
+    func publishAgentRequestEvent(_ event: AgentRequestEvent) {
+      agentActivityIndicator.receive(event)
+    }
+
     func refreshAgentConnectorStatus() async {
       agentConnectorStatusGeneration &+= 1
       let generation = agentConnectorStatusGeneration
@@ -1726,6 +1972,7 @@
     func refreshAgentProfiles() async -> Bool {
       do {
         agentProfiles = try await agentProfileStore.activeProfiles()
+        agentActivityIndicator.retainProfiles(Set(agentProfiles.map(\.id)))
         return true
       } catch {
         agentCleanupError = "Could not load agent profiles: \(error.localizedDescription)"

@@ -424,6 +424,44 @@ func DictationSettingsHostedWindowDoesNotEnableFullSizeContentViewChrome()
 }
 
 @Test @MainActor
+func DictationSettingsHostedWindowUsesNormalMinimizableChromeWithoutFullScreen()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+    styleMask: [.titled, .resizable, .closable],
+    backing: .buffered,
+    defer: false
+  )
+  window.level = .floating
+  window.collectionBehavior = [.fullScreenPrimary]
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  #expect(window.level == .normal)
+  #expect(window.isResizable)
+  #expect(window.styleMask.contains(.miniaturizable))
+  let minimizeButton = try #require(window.standardWindowButton(.miniaturizeButton))
+  #expect(!minimizeButton.isHidden)
+  #expect(minimizeButton.isEnabled)
+  #expect(minimizeButton.target === window)
+  #expect(minimizeButton.action == #selector(NSWindow.miniaturize(_:)))
+  #expect(window.standardWindowButton(.zoomButton)?.isHidden == true)
+  #expect(window.collectionBehavior.contains(.fullScreenNone))
+  #expect(!window.collectionBehavior.contains(.fullScreenPrimary))
+  #expect(!window.collectionBehavior.contains(.fullScreenAuxiliary))
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@Test @MainActor
 func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
   async throws
 {
@@ -459,7 +497,7 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
 
     #expect(window.standardWindowButton(.closeButton)?.isHidden == false)
     #expect(window.standardWindowButton(.miniaturizeButton)?.isHidden == false)
-    #expect(window.standardWindowButton(.zoomButton)?.isHidden == false)
+    #expect(window.standardWindowButton(.zoomButton)?.isHidden == true)
     let contentView = try #require(window.contentView)
     #expect(settingsNativeSplitViewController(of: contentView) == nil)
     let toolbarItemIdentifiers = toolbar.items.map(\.itemIdentifier)
@@ -485,7 +523,6 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     let trafficLightButtons: [NSButton?] = [
       window.standardWindowButton(.closeButton),
       window.standardWindowButton(.miniaturizeButton),
-      window.standardWindowButton(.zoomButton),
     ]
     let trafficLightFrames: [NSRect] = trafficLightButtons.compactMap { button in
       guard let button else { return nil }
@@ -528,7 +565,10 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
         sidebarSurface.convert(sidebarSurface.bounds, to: nil),
         outerSidebarSurfaceFrame
       ))
-      #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+      let currentTrafficLightFrames = trafficLightButtons.compactMap { button in
+        button.map { $0.convert($0.bounds, to: nil) }
+      }
+      #expect(currentTrafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
 
       let detailScroll = settingsHostedScrollViews(of: host)
         .first { $0 !== sidebarScroll }
@@ -619,13 +659,13 @@ func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
   let trafficLightButtons: [NSButton?] = [
     window.standardWindowButton(.closeButton),
     window.standardWindowButton(.miniaturizeButton),
-    window.standardWindowButton(.zoomButton),
   ]
   let trafficLightFrames: [NSRect] = trafficLightButtons.compactMap { button in
     guard let button else { return nil }
     return button.convert(button.bounds, to: nil)
   }
-  #expect(trafficLightFrames.count == 3)
+  #expect(trafficLightFrames.count == 2)
+  #expect(window.standardWindowButton(.zoomButton)?.isHidden == true)
   #expect(trafficLightFrames.allSatisfy {
     settingsRoundedSurfaceContains(
       $0,
@@ -650,15 +690,73 @@ func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
     let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
     #expect(!sidebar.isHidden)
     #expect(!sidebarFrame.isEmpty)
-    #expect(trafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
+    let currentTrafficLightFrames = trafficLightButtons.compactMap { button in
+      button.map { $0.convert($0.bounds, to: nil) }
+    }
+    #expect(currentTrafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
 
     let detailScroll = try #require(
       settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
     )
     let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
     #expect(!detailFrame.isEmpty)
-    #expect(trafficLightFrames.allSatisfy { !$0.intersects(detailFrame) })
+    #expect(currentTrafficLightFrames.allSatisfy { !$0.intersects(detailFrame) })
   }
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@Test @MainActor
+func DictationSettingsTrafficLightsRecoverAfterNativeTitlebarReset() async throws {
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+      .environment(\.dynamicTypeSize, .large)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+    styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+    backing: .buffered,
+    defer: false
+  )
+  window.toolbar = NSToolbar(identifier: "settings-native-titlebar-reset-toolbar")
+  window.toolbarStyle = .unifiedCompact
+  let buttons = [
+    window.standardWindowButton(.closeButton),
+    window.standardWindowButton(.miniaturizeButton),
+  ].compactMap { $0 }
+  let nativeOrigins = buttons.map(\.frame.origin)
+
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleSettingsHost(host)
+
+  let surface = try #require(settingsSidebarSurface(of: host))
+  let surfaceFrame = surface.convert(surface.bounds, to: nil)
+  #expect(buttons.allSatisfy {
+    settingsRoundedSurfaceContains(
+      $0.convert($0.bounds, to: nil),
+      in: surfaceFrame,
+      cornerRadius: 22,
+      margin: 12
+    )
+  })
+
+  for (button, origin) in zip(buttons, nativeOrigins) {
+    button.setFrameOrigin(origin)
+  }
+  for _ in 0..<10 { await Task.yield() }
+
+  #expect(buttons.allSatisfy {
+    settingsRoundedSurfaceContains(
+      $0.convert($0.bounds, to: nil),
+      in: surfaceFrame,
+      cornerRadius: 22,
+      margin: 12
+    )
+  })
 
   window.contentView = nil
   window.orderOut(nil)
@@ -886,12 +984,12 @@ func DictationSettingsHostedWindowKeepsChromeAfterSameWindowResize() async throw
     let trafficLightButtons: [NSButton?] = [
       window.standardWindowButton(.closeButton),
       window.standardWindowButton(.miniaturizeButton),
-      window.standardWindowButton(.zoomButton),
     ]
     let trafficLightFrames = trafficLightButtons.compactMap { button in
       button.map { $0.convert($0.bounds, to: nil) }
     }
-    #expect(trafficLightFrames.count == 3)
+    #expect(trafficLightFrames.count == 2)
+    #expect(window.standardWindowButton(.zoomButton)?.isHidden == true)
     #expect(trafficLightFrames.allSatisfy {
       settingsRoundedSurfaceContains(
         $0,
@@ -1392,7 +1490,12 @@ private func settleSettingsHost(_ view: NSView) async {
 
   #expect(presentation.rows.count == 7)
   #expect(presentation.recommended == .rightOption)
-  #expect(presentation.statusCopy == "Input Monitoring enabled")
+  #expect(presentation.statusCopy == "Hold Right Option to dictate.")
+  #expect(presentation.detailCopy == "Double-tap for hands-free.")
+  #expect(
+    presentation.capsuleAccessibilityLabel
+      == "Fleck dictation ready. Hold Right Option to dictate. Double-tap for hands-free."
+  )
   #expect(presentation.isPickerEnabled)
   #expect(presentation.recoveryAction == nil)
 }
@@ -1403,9 +1506,12 @@ private func settleSettingsHost(_ view: NSView) async {
     monitorStatus: .unauthorized,
     canChange: true
   )
-  #expect(denied.statusCopy.contains("required"))
+  #expect(denied.statusCopy == "Enable Input Monitoring to use Right Option.")
   #expect(denied.recoveryAction == .enableInputMonitoring)
-  #expect(denied.recoveryButtonTitle == "Enable Right Option")
+  #expect(denied.recoveryButtonTitle == "Open Input Monitoring")
+  #expect(denied.guidanceCopy == "Turn on Fleck, then return here.")
+  #expect(denied.detailCopy == "Turn on Fleck, then return here.")
+  #expect(!denied.capsuleAccessibilityLabel.contains("ready"))
 
   let unavailable = DictationModifierSettingsPresentation(
     selected: .rightOption,
@@ -1413,15 +1519,17 @@ private func settleSettingsHost(_ view: NSView) async {
     canChange: true
   )
   #expect(unavailable.statusCopy.contains("unavailable"))
+  #expect(!unavailable.capsuleAccessibilityLabel.contains("ready"))
 
   let failed = DictationModifierSettingsPresentation(
     selected: .rightOption,
     monitorStatus: .failed,
     canChange: true
   )
-  #expect(failed.statusCopy.contains("could not start"))
+  #expect(failed.statusCopy == "Right Option shortcut could not start.")
   #expect(failed.recoveryAction == .retry)
-  #expect(failed.recoveryButtonTitle == "Retry Right Option")
+  #expect(failed.recoveryButtonTitle == "Retry")
+  #expect(!failed.capsuleAccessibilityLabel.contains("ready"))
 
   let activeCapture = DictationModifierSettingsPresentation(
     selected: .rightOption,
@@ -1440,6 +1548,52 @@ private func settleSettingsHost(_ view: NSView) async {
   #expect(deniedDuringCapture.recoveryButtonTitle == nil)
 }
 
+@Test func dictationModifierSettingsUsesEveryConfiguredKeyInShortcutCopy() {
+  for key in DictationModifierKey.allCases {
+    let presentation = DictationModifierSettingsPresentation(
+      selected: key,
+      monitorStatus: .running,
+      canChange: true
+    )
+    #expect(presentation.statusCopy == "Hold \(key.displayName) to dictate.")
+    #expect(presentation.capsuleAccessibilityLabel.contains(key.displayName))
+  }
+}
+
+@Test func dictationShortcutHelpModeDismissesOnlyTheHealthyIdleGuide() {
+  #expect(DictationShortcutHelpMode.readyTutorial.canDismissGuide)
+  #expect(!DictationShortcutHelpMode.recovery.canDismissGuide)
+  #expect(!DictationShortcutHelpMode.activeDestination.canDismissGuide)
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: true,
+      isCaptureActive: false,
+      showsGuide: true
+    ) == .readyTutorial
+  )
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: true,
+      isCaptureActive: false,
+      showsGuide: false
+    ) == nil
+  )
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: false,
+      isCaptureActive: false,
+      showsGuide: false
+    ) == .recovery
+  )
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: true,
+      isCaptureActive: true,
+      showsGuide: false
+    ) == .activeDestination
+  )
+}
+
 @Test func notesPanelExposesModifierMonitoringRecoveryBesideTheEditor() throws {
   let testsDirectory = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
@@ -1449,66 +1603,60 @@ private func settleSettingsHost(_ view: NSView) async {
     contentsOf: testsDirectory.appendingPathComponent("Sources/FleckApp/NotesPanel.swift")
   )
 
-  #expect(source.contains("modifierRecoveryPresentation"))
-  #expect(source.contains("await dictationRuntime.recoverModifierMonitoring()"))
+  #expect(source.contains("DictationShortcutHelpRow"))
+  #expect(source.contains("modifierShortcutPresentation"))
+  #expect(source.contains("destinationCopy: dictationRuntime.destinationGuidanceCopy"))
+  #expect(source.contains("Say a specific note title to help Fleck choose."))
+  #expect(source.contains("Example: “Travel plans.”"))
+  #expect(source.contains("await dictationRuntime.performModifierShortcutRecovery"))
 }
 
 @Test func notesPanelBannerPolicyOmitsRoutineUndoWhileKeepingFailures() {
-  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
-    statusCopy: "Input Monitoring is required",
-    recoveryButtonTitle: "Enable Right Option"
-  )
   let captureFailure = NotesPanelBannerOccurrence.captureFailure(
     message: "Microphone permission is required",
     actionPanes: [.microphone]
   )
+  let agentChange = NotesPanelBannerOccurrence.agentChange(changeID: UUID(), count: 1)
 
   let active = NotesPanelBannerPolicy.activeOccurrences(
-    modifierRecovery: modifier,
     captureFailure: captureFailure,
     routineRecoveryAction: .undo,
-    agentChange: nil
+    agentChange: agentChange
   )
 
-  #expect(active == [modifier, captureFailure])
+  #expect(active == [captureFailure, agentChange])
 }
 
 @Test func notesPanelBannerDismissalInitiallyPresentsAllActiveOccurrences() {
-  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
-    statusCopy: "Input Monitoring is required",
-    recoveryButtonTitle: "Enable Right Option"
-  )
   let captureFailure = NotesPanelBannerOccurrence.captureFailure(
     message: "Microphone permission is required",
     actionPanes: [.microphone]
   )
+  let agentChange = NotesPanelBannerOccurrence.agentChange(changeID: UUID(), count: 1)
   var state = NotesPanelBannerDismissalState()
-  state.reconcile(activeOccurrences: [modifier, captureFailure])
+  state.reconcile(activeOccurrences: [captureFailure, agentChange])
 
-  #expect(state.isPresented(modifier))
   #expect(state.isPresented(captureFailure))
+  #expect(state.isPresented(agentChange))
 }
 
 @Test func notesPanelBannerDismissalHidesOnlyTheExactActiveIdentity() {
-  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
-    statusCopy: "Input Monitoring is required",
-    recoveryButtonTitle: "Enable Right Option"
-  )
-  let changedModifier = NotesPanelBannerOccurrence.modifierRecovery(
-    statusCopy: "Input Monitoring could not start",
-    recoveryButtonTitle: "Retry Right Option"
-  )
   let captureFailure = NotesPanelBannerOccurrence.captureFailure(
     message: "Microphone permission is required",
     actionPanes: [.microphone]
   )
+  let changedFailure = NotesPanelBannerOccurrence.captureFailure(
+    message: "Speech Recognition permission is required",
+    actionPanes: [.speechRecognition]
+  )
+  let agentChange = NotesPanelBannerOccurrence.agentChange(changeID: UUID(), count: 1)
   var state = NotesPanelBannerDismissalState()
-  state.reconcile(activeOccurrences: [modifier, changedModifier, captureFailure])
-  state.dismiss(modifier)
+  state.reconcile(activeOccurrences: [captureFailure, changedFailure, agentChange])
+  state.dismiss(captureFailure)
 
-  #expect(!state.isPresented(modifier))
-  #expect(state.isPresented(changedModifier))
-  #expect(state.isPresented(captureFailure))
+  #expect(!state.isPresented(captureFailure))
+  #expect(state.isPresented(changedFailure))
+  #expect(state.isPresented(agentChange))
 }
 
 @Test func notesPanelBannerDismissalForgetsIdentityAfterDisappearanceBeforeRecurrence() {
@@ -1544,26 +1692,23 @@ private func settleSettingsHost(_ view: NSView) async {
   #expect(state.isPresented(occurrence))
 }
 
-@Test func notesPanelBannerDismissalResetsModifierOnCaptureArmingWithoutClearingCaptureFailure() {
-  let modifier = NotesPanelBannerOccurrence.modifierRecovery(
-    statusCopy: "Input Monitoring is required",
-    recoveryButtonTitle: "Enable Right Option"
-  )
+@Test func notesPanelBannerDismissalForgetsAgentChangesWithoutClearingCaptureFailure() {
   let captureFailure = NotesPanelBannerOccurrence.captureFailure(
     message: "Microphone permission is required",
     actionPanes: [.microphone]
   )
+  let agentChange = NotesPanelBannerOccurrence.agentChange(changeID: UUID(), count: 1)
   var state = NotesPanelBannerDismissalState()
-  state.reconcile(activeOccurrences: [modifier, captureFailure])
-  state.dismiss(modifier)
+  state.reconcile(activeOccurrences: [captureFailure, agentChange])
   state.dismiss(captureFailure)
-  #expect(!state.isPresented(modifier))
+  state.dismiss(agentChange)
   #expect(!state.isPresented(captureFailure))
+  #expect(!state.isPresented(agentChange))
 
-  state.dictationPhaseDidEmit(.arming)
+  state.forgetDismissedOccurrences(in: .agentChange)
 
-  #expect(state.isPresented(modifier))
   #expect(!state.isPresented(captureFailure))
+  #expect(state.isPresented(agentChange))
 }
 
 @Test func dictationModifierSettingsExplainsFnAndConflictProneKeys() {
@@ -2030,6 +2175,19 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
 
     await fixture.runtime.toggle()
     await fixture.runtime.toggle()
+    if finalText != nil {
+      let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+      #expect(await sleeper.requestedDurations.isEmpty)
+      fixture.runtime.capsuleController.selectRoutingChoice(
+        captureID: captureID,
+        noteID: nil
+      )
+      for _ in 0..<1_000 {
+        if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+        await Task.yield()
+      }
+      #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+    }
     await sleeper.waitForRequest()
     #expect(await sleeper.requestedDurations == [delay])
 
@@ -2105,6 +2263,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   await fixture.runtime.toggle()
   await fixture.runtime.toggle()
   let firstCaptureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+  #expect(fixture.runtime.capsuleController.currentContext.detailText == "No clear destination")
 
   fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = false }
   fixture.runtime.preferencesDidChange()
@@ -2115,6 +2274,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   fixture.runtime.preferencesDidChange()
   #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Inbox"))
   #expect(fixture.runtime.capsuleController.currentChooser?.captureID == firstCaptureID)
+  #expect(fixture.runtime.capsuleController.currentContext.detailText == "No clear destination")
 
   await fixture.runtime.toggle()
   #expect(fixture.runtime.currentCapsuleStatus == .listening)
@@ -2362,6 +2522,85 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   #expect(selectedNoteID == .some(nil))
 }
 
+@Test func DictationCapsuleChooserKeepsEveryManualChoiceAndDisambiguatesFolders() throws {
+  let captureID = UUID()
+  let choices = (0..<6).map { index in
+    DictationRoutingChoice(
+      destination: .init(noteID: UUID(), title: index < 2 ? "Travel plans" : "Note \(index)"),
+      contextHint: index == 0 ? "Work" : index == 1 ? "Home" : ""
+    )
+  }
+
+  let chooser = DictationCapsuleChooser(
+    ambiguity: .init(captureID: captureID, choices: choices)
+  )
+
+  #expect(chooser.choices.count == 6)
+  #expect(chooser.choices[0].menuTitle == "Travel plans — Work")
+  #expect(chooser.choices[1].menuTitle == "Travel plans — Home")
+  #expect(chooser.choices[2].menuTitle == "Note 2")
+}
+
+@Test func DictationCapsuleShowsInboxFallbackReasonWithoutReplacingSavedStatus() {
+  let presentation = DictationCapsulePresentation(
+    status: .saved(destination: "Inbox"),
+    context: .init(
+      status: .saved(destination: "Inbox"),
+      detailText: "No clear destination"
+    )
+  )
+
+  #expect(presentation.visibleText == "Saved to Inbox")
+  #expect(presentation.secondaryVisibleText == "No clear destination")
+  #expect(presentation.voiceOverText == "Saved to Inbox. No clear destination")
+}
+
+@Test @MainActor func DictationRuntimeNormalInboxFallbackOffersAllNotesThenMovesOnce()
+  async throws
+{
+  let sleeper = RuntimeCapsuleSleeper()
+  let notes = (0..<6).map { Note(title: $0 == 0 ? "Note" : "Note \($0 + 1)") }
+  let fixture = try await RuntimeFixture(
+    finalText: "Move this saved capture",
+    capsuleEnabled: true,
+    routingNotes: notes,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+  await fixture.runtime.toggle()
+
+  let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+  let chooser = try #require(fixture.runtime.capsuleController.currentChooser)
+  #expect(chooser.choices.count == 6)
+  #expect(chooser.choices.map(\.id) == notes.map(\.id))
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Inbox"))
+  #expect(fixture.runtime.capsuleController.currentContext.detailText == "No clear destination")
+  #expect(await sleeper.requestedDurations.isEmpty)
+
+  fixture.runtime.capsuleController.selectRoutingChoice(
+    captureID: captureID,
+    noteID: notes[0].id
+  )
+  for _ in 0..<1_000 {
+    if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+  #expect(fixture.runtime.currentCapsuleStatus == .saved(destination: "Note"))
+  #expect(fixture.runtime.capsuleController.currentContext.detailText == nil)
+  await sleeper.waitForRequest()
+  #expect(await sleeper.requestedDurations == [.milliseconds(1_600)])
+  await sleeper.resumeAll()
+  #expect(fixture.appState.workspace.notes.first(where: { $0.id == notes[0].id })?
+    .body.contains("Move this saved capture") == true)
+  #expect(fixture.appState.workspace.notes.first(where: {
+    $0.title.caseInsensitiveCompare("Inbox") == .orderedSame
+  })?.body.contains("Move this saved capture") == false)
+}
+
 @Test @MainActor func DictationRuntimeKeepsInboxActionWhenEveryChoiceWasDeleted()
   async throws
 {
@@ -2519,13 +2758,20 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     await Task.yield()
     #expect(fixture.runtime.currentCapsuleStatus == nil)
     #expect(await sleeper.requestedDurations.isEmpty)
+    if finalText != nil {
+      let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+      #expect(
+        await fixture.runtime.coordinator.chooseDestination(
+          captureID: captureID,
+          noteID: nil
+        ) == .completed
+      )
+      #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+    }
 
     fixture.appState.updatePreferences { $0.dictationCapsuleEnabled = true }
     fixture.runtime.preferencesDidChange()
     #expect(fixture.runtime.currentCapsuleStatus == .idle)
-    if fixture.runtime.currentCapsuleStatus != .idle {
-      await sleeper.waitForRequest()
-    }
     #expect(await sleeper.requestedDurations.isEmpty)
     await sleeper.resumeAll()
   }
@@ -2568,6 +2814,19 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
 
     await fixture.runtime.toggle()
     await fixture.runtime.toggle()
+    if finalText != nil {
+      let captureID = try #require(fixture.runtime.coordinator.routingAmbiguity?.captureID)
+      #expect(await sleeper.requestedDurations.isEmpty)
+      fixture.runtime.capsuleController.selectRoutingChoice(
+        captureID: captureID,
+        noteID: nil
+      )
+      for _ in 0..<1_000 {
+        if fixture.runtime.coordinator.routingAmbiguity == nil { break }
+        await Task.yield()
+      }
+      #expect(fixture.runtime.coordinator.routingAmbiguity == nil)
+    }
     await sleeper.waitForRequest()
     #expect(await sleeper.requestedDurations == [delay])
 
@@ -2801,6 +3060,70 @@ func DictationRuntimeCaptureFeedbackCancellationRejectsLateEnergyDuringSuspended
   #expect(record.insertionOutcome == .saved)
 }
 
+@Test @MainActor func DictationRuntimeKeepsFocusedDestinationGuidanceStableAcrossSelectionChanges()
+  async throws
+{
+  let travel = Note(title: "Travel plans")
+  let shopping = Note(title: "Shopping")
+  let fixture = try await RuntimeFixture(
+    finalText: "Focused",
+    capsuleEnabled: true,
+    routingNotes: [travel, shopping]
+  )
+  let commands = EditorCommands()
+  let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
+  let window = DictationKeyWindowProbe(
+    contentRect: NSRect(x: 0, y: 0, width: 220, height: 100),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = textView
+  window.reportsKey = true
+  commands.textView = textView
+  fixture.editorRegistry.register(commands)
+  window.makeFirstResponder(textView)
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.runtime.destinationGuidanceCopy == "Click in this note to dictate here.")
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.destinationGuidanceCopy == "Dictating into Travel plans")
+  #expect(
+    fixture.runtime.capsuleController.currentContext.detailText
+      == "Dictating into Travel plans"
+  )
+  #expect(fixture.runtime.capsuleController.currentContext.compactDetailText == "Travel plans")
+  #expect(
+    DictationCapsulePresentation(
+      status: fixture.runtime.capsuleController.currentContext.status,
+      context: fixture.runtime.capsuleController.currentContext
+    ).voiceOverText
+      == "Dictation listening. Dictating into Travel plans"
+  )
+
+  fixture.appState.select(shopping.id)
+  #expect(fixture.runtime.destinationGuidanceCopy == "Dictating into Travel plans")
+  #expect(
+    fixture.runtime.capsuleController.currentContext.detailText
+      == "Dictating into Travel plans"
+  )
+
+  await fixture.runtime.cancel()
+  #expect(fixture.runtime.destinationGuidanceCopy == "Click in this note to dictate here.")
+}
+
+@Test @MainActor func DictationRuntimeLabelsGlobalCaptureAsSmartCapture() async throws {
+  let fixture = try await RuntimeFixture(finalText: "Global", capsuleEnabled: true)
+  await fixture.runtime.awaitStartupAssessment()
+
+  await fixture.runtime.toggle()
+
+  #expect(fixture.runtime.destinationGuidanceCopy == "Smart Capture")
+  #expect(fixture.runtime.capsuleController.currentContext.detailText == "Smart Capture")
+  #expect(fixture.runtime.capsuleController.currentContext.compactDetailText == "Smart Capture")
+  await fixture.runtime.cancel()
+}
+
 @Test @MainActor func DictationRuntimeFocusedGlobalShortcutPersistsTheSelectedNoteDestination()
   async throws
 {
@@ -2916,6 +3239,64 @@ func DictationRuntimeCaptureFeedbackCancellationRejectsLateEnergyDuringSuspended
   #expect(fixture.appState.preferences.dictationModifierKey == .leftCommand)
 }
 
+@Test @MainActor func DictationRuntimeKeepsIdleCapsuleShortcutReadinessTruthfulOnActivation()
+  async throws
+{
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    capsuleEnabled: true,
+    preferredModifier: .leftCommand,
+    monitorAccessGranted: false,
+    monitorRequestAccessResult: false
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  #expect(fixture.runtime.currentCapsuleStatus == .idle)
+  #expect(
+    fixture.runtime.capsuleController.presentationModel.voiceOverLabel
+      == "Fleck global shortcut unavailable. Enable Input Monitoring to use Left Command. "
+        + "Turn on Fleck, then return here."
+  )
+
+  fixture.monitor.accessGranted = true
+  fixture.runtime.applicationDidBecomeActive()
+
+  #expect(fixture.runtime.modifierMonitorState == .running)
+  #expect(
+    fixture.runtime.capsuleController.presentationModel.voiceOverLabel
+      == "Fleck dictation ready. Hold Left Command to dictate. Double-tap for hands-free."
+  )
+
+  fixture.appState.preferences.dictationModifierKey = .rightControl
+  fixture.runtime.preferencesDidChange()
+
+  #expect(fixture.runtime.actualModifier == .rightControl)
+  #expect(
+    fixture.runtime.capsuleController.presentationModel.voiceOverLabel
+      == "Fleck dictation ready. Hold Right Control to dictate. Double-tap for hands-free."
+  )
+}
+
+@Test @MainActor func DictationRuntimeRefreshesIdleCapsuleAfterSettingsModifierChange()
+  async throws
+{
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    capsuleEnabled: true,
+    preferredModifier: .leftCommand
+  )
+  await fixture.runtime.awaitStartupAssessment()
+
+  let changed = await fixture.runtime.changeModifier(to: .rightControl)
+
+  #expect(changed)
+  #expect(fixture.runtime.actualModifier == .rightControl)
+  #expect(
+    fixture.runtime.capsuleController.presentationModel.voiceOverLabel
+      == "Fleck dictation ready. Hold Right Control to dictate. Double-tap for hands-free."
+  )
+}
+
 @Test @MainActor func DictationRuntimeModifierRecoveryReturnsSettingsOnlyWhenAccessIsDenied()
   async throws
 {
@@ -2946,6 +3327,65 @@ func DictationRuntimeCaptureFeedbackCancellationRejectsLateEnergyDuringSuspended
   #expect(granted.monitor.requestCount == 1)
   #expect(granted.runtime.modifierMonitorState == .running)
   #expect(granted.runtime.actualModifier == .rightOption)
+}
+
+@Test @MainActor func DictationRuntimeShortcutHelpActionRequestsThenOpensOrRetriesAsNeeded()
+  async throws
+{
+  let denied = try await RuntimeFixture(
+    finalText: "saved",
+    monitorAccessGranted: false,
+    monitorRequestAccessResult: false
+  )
+  await denied.runtime.awaitStartupAssessment()
+  var deniedSettings: [DictationSystemSettingsAction] = []
+
+  await denied.runtime.performModifierShortcutRecovery {
+    deniedSettings.append($0)
+  }
+
+  #expect(denied.monitor.requestCount == 1)
+  #expect(deniedSettings.map(\.pane) == [.inputMonitoring])
+  #expect(
+    deniedSettings.first?.url.absoluteString
+      == "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+  )
+  #expect(denied.runtime.modifierMonitorState == .unauthorized)
+
+  let firstRequestGranted = try await RuntimeFixture(
+    finalText: "saved",
+    monitorAccessGranted: false,
+    monitorRequestAccessResult: true
+  )
+  await firstRequestGranted.runtime.awaitStartupAssessment()
+  var grantedSettings: [DictationSystemSettingsAction] = []
+
+  await firstRequestGranted.runtime.performModifierShortcutRecovery {
+    grantedSettings.append($0)
+  }
+
+  #expect(firstRequestGranted.monitor.requestCount == 1)
+  #expect(grantedSettings.isEmpty)
+  #expect(firstRequestGranted.runtime.modifierMonitorState == .running)
+  await firstRequestGranted.runtime.performModifierShortcutRecovery {
+    grantedSettings.append($0)
+  }
+  #expect(firstRequestGranted.monitor.requestCount == 1)
+  #expect(grantedSettings.isEmpty)
+
+  let failed = try await RuntimeFixture(finalText: "saved")
+  await failed.runtime.awaitStartupAssessment()
+  failed.monitor.publish(.failed)
+  await failed.runtime.shortcutController.drainEvents()
+  var failedSettings: [DictationSystemSettingsAction] = []
+
+  await failed.runtime.performModifierShortcutRecovery {
+    failedSettings.append($0)
+  }
+
+  #expect(failedSettings.isEmpty)
+  #expect(failed.monitor.requestCount == 0)
+  #expect(failed.runtime.modifierMonitorState == .running)
 }
 
 @Test @MainActor func DictationRuntimeNeverRequestsModifierMonitoringAtStartup() async throws {

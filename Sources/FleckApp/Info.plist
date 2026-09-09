@@ -22,5 +22,24 @@
   <string>Fleck uses the microphone to transcribe your dictated notes on this Mac.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Fleck recognizes speech on this Mac to transcribe your dictated notes.</string>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.harryjin.fleck.local-note</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.harryjin.fleck.local-folder</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>

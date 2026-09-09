@@ -6,6 +6,8 @@ import Testing
 @testable import FleckApp
 import FleckCore
 
+private final class NativePreviewDraggingSessionProbe: NSDraggingSession {}
+
 @Test func noteDropPresentationRejectsSameFolderAndInvalidDragStates() throws {
   let work = try Folder(id: UUID(), name: "Work")
   let other = try Folder(id: UUID(), name: "Other")
@@ -138,21 +140,22 @@ import FleckCore
 
   #expect(payload.contains("let dragSessionID: UUID"))
   #expect(payload.contains("static func noteProvider(source: NoteDropSource)"))
-  #expect(payload.contains("static func noteSource(from providers: [NSItemProvider])"))
-  #expect(tabStrip.contains("dragSessionID: UUID()"))
+  #expect(payload.contains("loadDataRepresentation(forTypeIdentifier:"))
+  #expect(!payload.contains("LocalNoteItemProvider"))
+  #expect(tabStrip.contains("dragSessionID: interaction.sessionID"))
   #expect(tabStrip.contains("noteDropSource = source"))
   #expect(tabStrip.contains("noteProvider(source: source)"))
-  #expect(tabDropDelegate.contains("providerSource: providerSource"))
-  #expect(tabDropDelegate.contains("draggedSource == providerSource"))
+  #expect(tabStrip.contains("reorderDragSession?.cancel()"))
+  #expect(tabDropDelegate.contains("session.acceptReorder"))
   #expect(navigator.contains("delegate: noteDropDelegate("))
   #expect(navigator.contains("expectedSource: NoteDropSource"))
-  #expect(navigator.contains("payload == expectedSource"))
+  #expect(navigator.contains("dragSession.acceptNoteTransfer"))
   #expect(navigator.contains("draggedSource == expectedSource"))
   #expect(navigator.contains("if oldValue != newValue"))
   #expect(!navigator.contains("isTargeted: noteDropTargetBinding"))
 }
 
-@Test func noteDragSessionRoundTripsAndRejectsOtherOrMissingSessions() throws {
+@Test @MainActor func noteDragSessionRoundTripsAndRejectsOtherOrMissingSessions() async throws {
   let sessionID = UUID()
   let source = NoteDropSource(
     noteID: UUID(),
@@ -162,47 +165,22 @@ import FleckCore
   let encoded = try JSONEncoder().encode(source)
 
   #expect(FolderDragPayload.noteValue(from: encoded) == source)
-  #expect(FolderDragPayload.noteSource(from: [FolderDragPayload.noteProvider(source: source)]) == source)
-  #expect(FolderDragPayload.noteSource(from: [NSItemProvider()]) == nil)
 
   let otherSession = NoteDropSource(
     noteID: source.noteID,
     sourceFolderID: source.sourceFolderID,
     dragSessionID: UUID()
   )
-  let destination = Note(id: UUID(), title: "Destination", folderID: source.sourceFolderID)
-  let currentNotes = [
-    Note(id: source.noteID, title: "Source", folderID: source.sourceFolderID),
-    destination,
-  ]
-  #expect(otherSession != source)
-  #expect(
-    !TabDragReorder.isValidLocalDrag(
-      draggedSource: source,
-      providerSource: otherSession,
-      destinationID: destination.id,
-      activeFolderID: source.sourceFolderID,
-      currentNotes: currentNotes
-    )
-  )
-  #expect(
-    TabDragReorder.isValidLocalDrag(
-      draggedSource: source,
-      providerSource: source,
-      destinationID: destination.id,
-      activeFolderID: source.sourceFolderID,
-      currentNotes: currentNotes
-    )
-  )
-  #expect(
-    !TabDragReorder.isValidLocalDrag(
-      draggedSource: source,
-      providerSource: source,
-      destinationID: source.noteID,
-      activeFolderID: source.sourceFolderID,
-      currentNotes: currentNotes
-    )
-  )
+  for providerSource in [otherSession, source] {
+    let session = ReorderDropSession(source: source)
+    var commits = 0
+    let load = try #require(session.acceptDrop(from: [FolderDragPayload.noteProvider(source: providerSource)]) {
+      commits += 1
+    })
+    session.end(operation: .move)
+    await load.value
+    #expect(commits == (providerSource == source ? 1 : 0))
+  }
 
   let legacyPayload = Data(
     "{\"noteID\":\"\(source.noteID.uuidString)\",\"sourceFolderID\":null}".utf8
@@ -229,8 +207,8 @@ import FleckCore
   #expect(tabStrip.contains("let source = NoteDropSource"))
   #expect(tabStrip.contains("noteDropSource = source"))
   #expect(tabStrip.contains("sourceFolderID: note.folderID"))
-  #expect(dropDelegate.contains("draggedSource = nil"))
-  #expect(dropDelegate.contains("if draggedSource == providerSource"))
+  #expect(tabStrip.contains("if noteDropSource == source { noteDropSource = nil }"))
+  #expect(dropDelegate.contains("interaction = nil"))
   #expect(navigator.contains("NoteDropPresentation.isValidTarget"))
   #expect(navigator.contains("draggedSource"))
   #expect(navigator.contains(".onChange(of: draggedSource)"))
@@ -380,51 +358,6 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
   await runtime.shutdown()
 }
 
-@Test func tabDragProductionPathUsesOneNativeSourceForReorderAndFolderTransfer() throws {
-  let source = try tabNotesPanelSource()
-  let tabStrip = try #require(
-    source.components(separatedBy: "private var tabStrip").last?
-      .components(separatedBy: "private var motion").first
-  )
-  let tab = try #require(
-    tabStrip.components(separatedBy: "ForEach(visibleNotes) { note in").last?
-      .components(separatedBy: ".contextMenu {").first
-  )
-  let label = try #require(
-    tab.components(separatedBy: "} label: {").last?
-      .components(separatedBy: "            }\n            .buttonStyle(.plain)").first
-  )
-  let outerModifiers = try #require(
-    tab.components(separatedBy: "            }\n            .buttonStyle(.plain)").last
-  )
-  let dropDelegate = try #require(
-    source.components(separatedBy: "private struct TabDropDelegate").last?
-      .components(separatedBy: "private struct ToolbarIconLabel").first
-  )
-  let reorder = try #require(
-    source.components(separatedBy: "enum TabDragReorder").last?
-      .components(separatedBy: "enum TabOverflowPresentation").first
-  )
-
-  #expect(!label.contains(".onDrag"))
-  #expect(outerModifiers.contains(".onDrag"))
-  #expect(outerModifiers.contains("let source = NoteDropSource"))
-  #expect(outerModifiers.contains("noteDropSource = source"))
-  #expect(outerModifiers.contains("FolderDragPayload.noteProvider"))
-  #expect(outerModifiers.contains(".onDrop("))
-  #expect(outerModifiers.contains("of: [FolderDragPayload.noteType]"))
-  #expect(outerModifiers.contains("delegate: TabDropDelegate("))
-  #expect(outerModifiers.contains("activeFolderID: activeFolderID"))
-  #expect(outerModifiers.contains("currentNotes: { visibleNotes }"))
-  #expect(!outerModifiers.contains(".simultaneousGesture("))
-  #expect(!outerModifiers.contains("DragGesture("))
-  #expect(dropDelegate.contains("TabDragReorder.performLiveMove"))
-  #expect(dropDelegate.contains("DropProposal(operation: .move)"))
-  #expect(reorder.contains("draggedSource.sourceFolderID == activeFolderID"))
-  #expect(reorder.contains("currentNotes: () -> [Note]"))
-  #expect(reorder.contains("partitionLocalDestination"))
-}
-
 @Test func tabContextMenuExposesCurrentFolderMoveDestinations() throws {
   let source = try tabNotesPanelSource()
   let tabStrip = try #require(
@@ -439,74 +372,6 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
   #expect(tabStrip.contains("toFolderID"))
   #expect(tabStrip.contains(".disabled"))
   #expect(tabStrip.contains("checkmark"))
-}
-
-@Test @MainActor
-func partitionLocalLiveMoveUsesAppStateInUnfiledAndNamedFolderScopes() async throws {
-  let folder = try Folder(id: UUID(), name: "Work")
-  try await assertPartitionLocalLiveMove(folderID: nil, folders: [])
-  try await assertPartitionLocalLiveMove(folderID: folder.id, folders: [folder])
-}
-
-@MainActor
-private func assertPartitionLocalLiveMove(
-  folderID: UUID?,
-  folders: [Folder]
-) async throws {
-  let root = FileManager.default.temporaryDirectory
-    .appendingPathComponent("tab-reorder-state-" + UUID().uuidString, isDirectory: true)
-  defer { try? FileManager.default.removeItem(at: root) }
-
-  let pinned = Note(title: "Pinned", isPinned: true, folderID: folderID)
-  let first = Note(title: "A", folderID: folderID)
-  let second = Note(title: "B", folderID: folderID)
-  let third = Note(title: "C", folderID: folderID)
-  let state = AppState(
-    store: LocalStore(rootURL: root),
-    saveOperation: { _, _, _, _ in .committed }
-  )
-  await state.waitUntilInitialLoad()
-  state.workspace = Workspace(
-    notes: [pinned, first, second, third],
-    selectedNoteID: first.id,
-    folders: folders
-  )
-
-  var lastDestinationID: UUID?
-  let source = NoteDropSource(noteID: first.id, sourceFolderID: folderID)
-  func drag(over destinationID: UUID) -> TabDragReorder.LiveMoveResult {
-    let result = TabDragReorder.performLiveMove(
-      draggedSource: source,
-      providerSource: source,
-      over: destinationID,
-      activeFolderID: folderID,
-      currentNotes: { state.visibleNotes(in: folderID) },
-      lastDestinationID: lastDestinationID,
-      move: { id, localDestination in
-        _ = state.moveNote(
-          id,
-          inFolderID: folderID,
-          toVisibleIndex: localDestination
-        )
-      }
-    )
-    lastDestinationID = result.destinationID
-    return result
-  }
-
-  #expect(drag(over: second.id).didMove)
-  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "A", "C"])
-  #expect(drag(over: third.id).didMove)
-  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "C", "A"])
-  #expect(!drag(over: third.id).didMove)
-  #expect(drag(over: third.id).didMove == false)
-  lastDestinationID = nil
-  #expect(drag(over: third.id).didMove)
-  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "B", "A", "C"])
-  #expect(drag(over: second.id).didMove)
-  #expect(state.visibleNotes(in: folderID).map(\.title) == ["Pinned", "A", "B", "C"])
-  #expect(!drag(over: second.id).didMove)
-  #expect(state.workspace.selectedNoteID == first.id)
 }
 
 @Test @MainActor
@@ -577,202 +442,36 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   )
 
   #expect(reorder.contains("partitionLocalDestination"))
-  #expect(reorder.contains("absoluteDestination: absoluteDestination"))
+  #expect(source.contains("absoluteDestination: destination,"))
+  #expect(source.contains("visibleNotes: appState.visibleNotes(in: note.folderID)"))
   #expect(moveFunction.contains("TabDragReorder.partitionLocalDestination"))
   #expect(moveFunction.contains("absoluteDestination: index + offset"))
   #expect(!moveFunction.contains("toVisibleIndex: index + offset"))
 }
 
-@Test func liveTabDragMovesFirstAcrossSecondAndThirdUsingCurrentTargets() {
-  let first = Note(title: "A")
-  let second = Note(title: "B")
-  let third = Note(title: "C")
-  var notes = [first, second, third]
-  var lastDestinationID: UUID?
-  var moves: [(UUID, Int)] = []
-  let source = NoteDropSource(noteID: first.id, sourceFolderID: nil)
-
-  func move(_ id: UUID, to destination: Int) {
-    moves.append((id, destination))
-    let source = notes.firstIndex(where: { $0.id == id })!
-    notes.insert(notes.remove(at: source), at: destination)
-  }
-
-  func drag(over destinationID: UUID) -> TabDragReorder.LiveMoveResult {
-    let result = TabDragReorder.performLiveMove(
-      draggedSource: source,
-      providerSource: source,
-      over: destinationID,
-      activeFolderID: nil,
-      currentNotes: { notes },
-      lastDestinationID: lastDestinationID,
-      move: move
-    )
-    lastDestinationID = result.destinationID
-    return result
-  }
-
-  #expect(drag(over: second.id).didMove)
-  #expect(notes == [second, first, third])
-  #expect(drag(over: second.id).didMove == false)
-  #expect(drag(over: third.id).didMove)
-  #expect(notes == [second, third, first])
-  #expect(drag(over: second.id).didMove)
-  #expect(notes == [first, second, third])
-  #expect(moves.map(\.0) == [first.id, first.id, first.id])
-  #expect(moves.map(\.1) == [1, 2, 0])
-}
-
-@Test func liveTabDragRejectsInvalidStaleAndCrossFolderTargets() throws {
+@Test @MainActor func reorderInteractionRejectsInvalidStaleAndCrossFolderTargets() async throws {
   let folder = try Folder(name: "Work")
   let first = Note(title: "A", folderID: folder.id)
   let second = Note(title: "B", folderID: folder.id)
-  let missing = UUID()
-  let notes = [first, second]
-  var moves: [(UUID, Int)] = []
-
-  func result(
-    source: NoteDropSource?,
-    destinationID: UUID,
-    activeFolderID: UUID? = folder.id
-  ) -> TabDragReorder.LiveMoveResult {
-    TabDragReorder.performLiveMove(
-      draggedSource: source,
-      providerSource: source,
-      over: destinationID,
-      activeFolderID: activeFolderID,
-      currentNotes: { notes },
-      lastDestinationID: nil,
-      move: { moves.append(($0, $1)) }
-    )
-  }
-
-  #expect(!result(source: nil, destinationID: second.id).didMove)
-  #expect(
-    !result(
-      source: NoteDropSource(noteID: first.id, sourceFolderID: folder.id),
-      destinationID: first.id
-    ).didMove
-  )
-  #expect(
-    !result(
-      source: NoteDropSource(noteID: missing, sourceFolderID: folder.id),
-      destinationID: second.id
-    ).didMove
-  )
-  #expect(
-    !result(
-      source: NoteDropSource(noteID: first.id, sourceFolderID: nil),
-      destinationID: second.id
-    ).didMove
-  )
-  #expect(
-    !result(
-      source: NoteDropSource(noteID: first.id, sourceFolderID: folder.id),
-      destinationID: second.id,
-      activeFolderID: nil
-    ).didMove
-  )
-  #expect(
-    !result(
-      source: NoteDropSource(noteID: first.id, sourceFolderID: folder.id),
-      destinationID: missing
-    ).didMove
-  )
-  #expect(moves.isEmpty)
-}
-
-@Test func liveTabDragUsesCurrentOrderWhenMovingBackLeft() {
-  let first = Note(title: "A")
-  let second = Note(title: "B")
-  let third = Note(title: "C")
-  var notes = [first, second, third]
-  var lastDestinationID: UUID?
-  let source = NoteDropSource(noteID: third.id, sourceFolderID: nil)
-
-  func move(_ id: UUID, to destination: Int) {
-    let source = notes.firstIndex(where: { $0.id == id })!
-    notes.insert(notes.remove(at: source), at: destination)
-  }
-
-  var result = TabDragReorder.performLiveMove(
-    draggedSource: source,
-    providerSource: source,
-    over: second.id,
-    activeFolderID: nil,
-    currentNotes: { notes },
-    lastDestinationID: lastDestinationID,
-    move: move
-  )
-  lastDestinationID = result.destinationID
-  #expect(result.didMove)
-  #expect(notes == [first, third, second])
-
-  result = TabDragReorder.performLiveMove(
-    draggedSource: source,
-    providerSource: source,
-    over: first.id,
-    activeFolderID: nil,
-    currentNotes: { notes },
-    lastDestinationID: lastDestinationID,
-    move: move
-  )
-  #expect(result.didMove)
-  #expect(notes == [third, first, second])
-}
-
-@Test func liveTabDragClampsPinnedAndUnpinnedNotesAtTheirPartitionEdges() {
-  let pinned = Note(title: "Pinned", body: "A", richTextRTF: Data([1]), isPinned: true)
-  let firstUnpinned = Note(title: "First", body: "B", richTextRTF: Data([2]))
-  let secondUnpinned = Note(title: "Second", body: "C", richTextRTF: Data([3]))
-  var workspace = Workspace(
-    notes: [pinned, firstUnpinned, secondUnpinned], selectedNoteID: secondUnpinned.id
-  )
-
-  func move(_ id: UUID, to destination: Int) {
-    workspace.moveNote(id: id, to: destination)
-  }
-
-  var lastDestinationID: UUID?
-  let pinnedSource = NoteDropSource(noteID: pinned.id, sourceFolderID: nil)
-  var result = TabDragReorder.performLiveMove(
-    draggedSource: pinnedSource,
-    providerSource: pinnedSource,
-    over: firstUnpinned.id,
-    activeFolderID: nil,
-    currentNotes: { workspace.notes },
-    lastDestinationID: lastDestinationID,
-    move: move
-  )
-  lastDestinationID = result.destinationID
-  #expect(result.didMove)
-  #expect(workspace.notes == [pinned, firstUnpinned, secondUnpinned])
-
-  result = TabDragReorder.performLiveMove(
-    draggedSource: pinnedSource,
-    providerSource: pinnedSource,
-    over: firstUnpinned.id,
-    activeFolderID: nil,
-    currentNotes: { workspace.notes },
-    lastDestinationID: lastDestinationID,
-    move: move
-  )
-  #expect(!result.didMove)
-
-  lastDestinationID = nil
-  let unpinnedSource = NoteDropSource(noteID: secondUnpinned.id, sourceFolderID: nil)
-  result = TabDragReorder.performLiveMove(
-    draggedSource: unpinnedSource,
-    providerSource: unpinnedSource,
-    over: pinned.id,
-    activeFolderID: nil,
-    currentNotes: { workspace.notes },
-    lastDestinationID: lastDestinationID,
-    move: move
-  )
-  #expect(result.didMove)
-  #expect(workspace.notes == [pinned, secondUnpinned, firstUnpinned])
-  #expect(workspace.selectedNoteID == secondUnpinned.id)
+  let ids = [first.id, second.id]
+  var interaction = ReorderInteraction(sourceID: first.id, originalIDs: ids)
+  interaction.propose(over: second.id, after: true, currentIDs: ids)
+  let source = NoteDropSource(noteID: first.id, sourceFolderID: folder.id, dragSessionID: interaction.sessionID)
+  let session = ReorderDropSession(source: source)
+  var commits = 0
+  #expect(session.acceptReorder(from: [FolderDragPayload.noteProvider(source: source)],
+    interaction: interaction, currentIDs: { [first.id] }, currentPinnedIDs: { [] },
+    move: { _, _ in commits += 1 }) == nil)
+  var invalidSource = ReorderInteraction(sourceID: UUID(), originalIDs: ids)
+  invalidSource.propose(over: second.id, after: true, currentIDs: ids)
+  #expect(invalidSource.destination == nil)
+  let otherScope = NoteDropSource(noteID: source.noteID, sourceFolderID: nil, dragSessionID: source.dragSessionID)
+  let load = try #require(session.acceptReorder(from: [FolderDragPayload.noteProvider(source: otherScope)],
+    interaction: interaction, currentIDs: { ids }, currentPinnedIDs: { [] },
+    move: { _, _ in commits += 1 }))
+  session.end(operation: .move)
+  await load.value
+  #expect(commits == 0)
 }
 
 @Test func TabDragReorderFolderScopePreservesGlobalOrder() throws {
@@ -819,14 +518,15 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
 @Test func TabDragReorderFolderNavigatorUsesLocalPayloadsAndKeyboardContracts() throws {
   let source = try tabNotesPanelSource()
   let navigator = try #require(
-    source.components(separatedBy: "private struct FolderNavigator").last
+    source.components(separatedBy: "private struct FolderNavigator").last?
+      .components(separatedBy: "private struct DeleteConfirmationOverlay").first
   )
 
   #expect(source.contains("com.harryjin.fleck.local-note"))
   #expect(source.contains("com.harryjin.fleck.local-folder"))
-  #expect(navigator.contains("loadDataRepresentation"))
+  #expect(navigator.contains("dragSession.acceptNoteTransfer"))
   #expect(navigator.contains("onDrop"))
-  #expect(navigator.contains("onDrag"))
+  #expect(navigator.contains(".modifier(ReorderDragSource("))
   #expect(navigator.contains("onMoveCommand"))
   #expect(navigator.contains("onDeleteCommand"))
   #expect(navigator.contains("onExitCommand"))
@@ -842,21 +542,22 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
 @Test func folderNoteDropsUseTypeSpecificTransientAccentTargets() throws {
   let source = try tabNotesPanelSource()
   let navigator = try #require(
-    source.components(separatedBy: "private struct FolderNavigator").last
+    source.components(separatedBy: "private struct FolderNavigator").last?
+      .components(separatedBy: "private struct DeleteConfirmationOverlay").first
   )
 
   #expect(navigator.contains("private enum NoteDropTarget"))
   #expect(navigator.contains("@State private var noteDropTarget"))
   #expect(navigator.contains("private struct NoteDropDelegate: DropDelegate"))
   #expect(navigator.contains("delegate: noteDropDelegate("))
-  #expect(navigator.contains("providerSource == expectedSource"))
+  #expect(navigator.contains("dragSession.id == expectedSource.dragSessionID"))
   #expect(navigator.contains("Color.accentColor.opacity"))
   #expect(navigator.contains("noteDropTarget = nil"))
   #expect(navigator.contains("sourceFolderID"))
   #expect(navigator.contains("targetFolderID"))
-  #expect(navigator.contains("workspace.folders.contains"))
+  #expect(navigator.contains("validTargetFolderIDs: { Set(appState.workspace.folders.map"))
   #expect(navigator.contains("of: [FolderDragPayload.noteType]"))
-  #expect(navigator.contains("of: [FolderDragPayload.folderType]"))
+  #expect(navigator.contains("type: FolderDragPayload.folderType"))
   #expect(!navigator.contains("of: [FolderDragPayload.noteType, FolderDragPayload.folderType]"))
 }
 
@@ -868,7 +569,7 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   )
 
   #expect(tabStrip.contains("visibleNotes.map(\\.id)"))
-  #expect(tabStrip.contains("inFolderID: activeFolderID"))
+  #expect(tabStrip.contains("inFolderID: note.folderID"))
   #expect(tabStrip.contains("toVisibleIndex: localDestination"))
   #expect(!tabStrip.contains("modifiedAt"))
   #expect(!tabStrip.contains("sorted("))
@@ -967,6 +668,41 @@ private func clickHostedTabControl(at point: NSPoint, in window: NSWindow, root:
 }
 
 @MainActor
+private func clickHostedPointer(atScreen point: NSPoint, in window: NSWindow) {
+  let location = window.convertPoint(fromScreen: point)
+  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    guard let event = NSEvent.mouseEvent(
+      with: eventType,
+      location: location,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 0,
+      clickCount: 1,
+      pressure: eventType == .leftMouseDown ? 1 : 0
+    ) else { continue }
+    window.sendEvent(event)
+  }
+}
+
+@MainActor
+private func hostedPointerElement(_ value: Any?, identifier: String) -> NSObject? {
+  guard let element = value as? NSObject else { return nil }
+  let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let value = element.responds(to: identifierSelector)
+    ? element.perform(identifierSelector)?.takeUnretainedValue() as? String : nil
+  if value == identifier { return element }
+  let children = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in children ?? [] {
+    if let found = hostedPointerElement(child, identifier: identifier) { return found }
+  }
+  return nil
+}
+
+@MainActor
 private func settleTabStripHost(_ view: NSView) async {
   for _ in 0..<40 {
     view.layoutSubtreeIfNeeded()
@@ -982,4 +718,507 @@ private func settleTabStripHost(_ view: NSView) async {
   )
 
   #expect(tabStrip.components(separatedBy: ".disabled(visibleNotes.isEmpty)").count - 1 == 2)
+}
+
+@Test func reorderInteractionPreviewCancelsWithoutMutatingAndDropConsumesOnce() {
+  let ids = [UUID(), UUID(), UUID()]
+  var drag = ReorderInteraction(sourceID: ids[0], originalIDs: ids)
+  drag.propose(over: ids[2], after: true, currentIDs: ids)
+  drag.propose(over: ids[2], after: true, currentIDs: ids)
+  #expect(drag.destination == 2)
+  let cancelled = drag
+  drag.clearTarget()
+  #expect(drag.consume(currentIDs: ids) == nil)
+  drag = cancelled
+  #expect(drag.consume(currentIDs: ids) == 2)
+  #expect(drag.consume(currentIDs: ids) == nil)
+}
+
+@Test @MainActor func reorderInteractionRejectsChangedOrderMissingItemsAndPinBoundary() {
+  let pinned = Note(title: "Pinned", isPinned: true)
+  let first = Note(title: "First")
+  let last = Note(title: "Last")
+  let notes = [pinned, first, last]
+  var drag = ReorderInteraction(sourceID: first.id, originalIDs: notes.map(\.id), pinnedIDs: [pinned.id])
+  let source = NoteDropSource(noteID: first.id, sourceFolderID: nil, dragSessionID: drag.sessionID)
+  let session = ReorderDropSession(source: source)
+  drag.propose(over: pinned.id, after: false, currentIDs: notes.map(\.id))
+  #expect(session.acceptReorder(from: [FolderDragPayload.noteProvider(source: source)],
+    interaction: drag, currentIDs: { notes.map(\.id) }, currentPinnedIDs: { [pinned.id] },
+    move: { _, _ in Issue.record("A note must not cross the pinned partition") }) == nil)
+  drag.propose(over: last.id, after: true, currentIDs: notes.map(\.id))
+  #expect(drag.consume(currentIDs: [pinned.id, last.id]) == nil)
+  drag.propose(over: last.id, after: true, currentIDs: [pinned.id, last.id, first.id])
+  #expect(drag.destination == nil)
+}
+
+
+@Test @MainActor
+func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
+  // The real native drag trace reports zero global pressed buttons after onDrag.
+  // A live source must survive the edge-scroll timer until its native end signal.
+  let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 50),
+    styleMask: [.borderless], backing: .buffered, defer: false)
+  window.isReleasedWhenClosed = false
+  let view = ReorderDragLifecycle.DragView(frame: window.contentView!.bounds)
+  var cancellations = 0
+  view.cancel = { cancellations += 1 }
+  window.contentView!.addSubview(view)
+  defer { view.setActive(false); window.close() }
+  #expect(NSEvent.pressedMouseButtons == 0)
+  view.setActive(true)
+  RunLoop.main.run(until: Date().addingTimeInterval(0.12))
+  #expect(cancellations == 0)
+}
+
+@Test @MainActor func hostedNotesPanelTabOverflowNativeDestinationMeasuresRealUnequalSourcesAndBlankTail() async throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let notes = [Note(title: "One"), Note(title: "A substantially wider second title")]
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _, _ in .committed })
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: notes, selectedNoteID: notes[0].id)
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(rootView: NotesPanel(dictationRuntime: runtime, sizing: .container).environmentObject(state))
+  let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 430),
+    styleMask: [.titled], backing: .buffered, defer: false)
+  window.isReleasedWhenClosed = false
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleTabStripHost(host)
+  func find(_ view: NSView) -> FluidTabDestinationView? {
+    if let destination = view as? FluidTabDestinationView { return destination }
+    return view.subviews.lazy.compactMap { find($0) }.first
+  }
+  let destination = try #require(find(host))
+  let controller = try #require(destination.controller)
+  let scroll = try #require(destination.enclosingScrollView)
+  #expect(destination.bounds.width >= scroll.contentView.bounds.width - 1)
+  let interaction = ReorderInteraction(sourceID: notes[0].id, originalIDs: notes.map(\.id))
+  let session = ReorderDropSession(source: .init(noteID: notes[0].id, sourceFolderID: nil,
+    dragSessionID: interaction.sessionID))
+  controller.prepare(interaction: interaction, session: session, currentIDs: { notes.map(\.id) },
+    currentPins: { [] }, move: { _, _ in Issue.record("Measuring a native row must not move notes") }, finish: {})
+  controller.began(at: window.convertPoint(toScreen: destination.convert(NSPoint(x: 25, y: 15), to: nil)))
+  let preview = try #require(controller.preview)
+  let first = try #require(preview.frames[notes[0].id])
+  let second = try #require(preview.frames[notes[1].id])
+  #expect(first.width > 20)
+  #expect(second.width > first.width + 50)
+  #expect(abs(second.minX - first.maxX - 6) < 1)
+  #expect(first.minX >= 0)
+  #expect(destination.bounds.maxX - second.maxX > 30)
+  controller.moved(to: window.convertPoint(toScreen:
+    destination.convert(NSPoint(x: second.maxX, y: 15), to: nil)))
+  await settleTabStripHost(host)
+  func sourceView(_ view: NSView) -> ReorderSourceHostingView? {
+    if let source = view as? ReorderSourceHostingView, source.noteID == notes[1].id { return source }
+    return view.subviews.lazy.compactMap { sourceView($0) }.first
+  }
+  let sibling = try #require(sourceView(destination))
+  var positions: [CGFloat] = []
+  for _ in 0..<20 {
+    if let presentation = sibling.layer?.presentation(), let root = destination.layer?.presentation() {
+      positions.append(presentation.convert(presentation.bounds, to: root).minX)
+    }
+    try await Task.sleep(nanoseconds: 12_000_000)
+  }
+  let hasIntermediatePosition = positions.contains { $0 > first.minX + 1 && $0 < second.minX - 1 }
+  #expect(hasIntermediatePosition)
+  let finalPosition = try #require(positions.last)
+  #expect(abs(finalPosition - first.minX) < 1)
+  #expect(controller.preview?.frames[notes[1].id] == second)
+  controller.cancel()
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func hostedNotesPanelPointerHitMapsIncludeNoteAndFolderPaddedInteriors() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("pointer-hit-maps-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let firstFolder = try Folder(name: "First folder")
+  let secondFolder = try Folder(name: "Second folder")
+  let firstNote = Note(title: "First note", folderID: firstFolder.id)
+  let selectedNote = Note(title: "Selected note", folderID: firstFolder.id)
+  let secondFolderNote = Note(title: "Second folder note", folderID: secondFolder.id)
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(
+    notes: [firstNote, selectedNote, secondFolderNote],
+    selectedNoteID: selectedNote.id,
+    folders: [firstFolder, secondFolder]
+  )
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(
+    rootView: NotesPanel(dictationRuntime: runtime, sizing: .container)
+      .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 800, height: 430),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleTabStripHost(host)
+
+  func findDestination(_ view: NSView) -> FluidTabDestinationView? {
+    if let destination = view as? FluidTabDestinationView { return destination }
+    return view.subviews.lazy.compactMap { findDestination($0) }.first
+  }
+  let destination = try #require(findDestination(host))
+  let noteSourceFrames = destination.sourceFrames()
+  #expect(noteSourceFrames[firstNote.id]?.width ?? 0 > 20)
+  #expect(noteSourceFrames[selectedNote.id]?.width ?? 0 > 20)
+
+  func click(identifier: String, x: (NSRect) -> CGFloat) async throws {
+    let element = try #require(hostedPointerElement(host, identifier: identifier))
+    let frame = try #require(element.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+    clickHostedPointer(
+      atScreen: NSPoint(x: x(frame), y: frame.midY), in: window
+    )
+    await settleTabStripHost(host)
+  }
+  func clickNote(_ noteID: UUID, x: (NSRect) -> CGFloat) async throws {
+    let frame = try #require(noteSourceFrames[noteID])
+    let screenFrame = window.convertToScreen(destination.convert(frame, to: nil))
+    clickHostedPointer(
+      atScreen: NSPoint(x: x(screenFrame), y: screenFrame.midY), in: window
+    )
+    await settleTabStripHost(host)
+  }
+
+  try await clickNote(firstNote.id, x: { $0.midX })
+  #expect(state.workspace.selectedNoteID == firstNote.id)
+  try await clickNote(selectedNote.id, x: { $0.minX + 2 })
+  #expect(state.workspace.selectedNoteID == selectedNote.id)
+  try await clickNote(selectedNote.id, x: { $0.midX })
+  #expect(state.workspace.selectedNoteID == selectedNote.id)
+  try await clickNote(firstNote.id, x: { $0.maxX - 2 })
+  #expect(state.workspace.selectedNoteID == firstNote.id)
+
+  let secondFolderID = "folder-\(secondFolder.id.uuidString)"
+  let firstFolderID = "folder-\(firstFolder.id.uuidString)"
+  try await click(identifier: secondFolderID, x: { $0.midX })
+  #expect(state.workspace.selectedNoteID == secondFolderNote.id)
+  try await click(identifier: firstFolderID, x: { $0.minX + 2 })
+  #expect(state.workspace.selectedNoteID == firstNote.id)
+  try await click(identifier: secondFolderID, x: { $0.maxX - 2 })
+  #expect(state.workspace.selectedNoteID == secondFolderNote.id)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func nativeTabDragImageFillsBothHalvesAtRetinaScale() throws {
+  let captured = try #require(NSBitmapImageRep(
+    bitmapDataPlanes: nil,
+    pixelsWide: 200,
+    pixelsHigh: 74,
+    bitsPerSample: 8,
+    samplesPerPixel: 4,
+    hasAlpha: true,
+    isPlanar: false,
+    colorSpaceName: .deviceRGB,
+    bytesPerRow: 0,
+    bitsPerPixel: 0
+  ))
+  captured.size = NSSize(width: 100, height: 37)
+  let image = try #require(ReorderSourceHostingView.compositedDraggingImage(
+    captured: captured,
+    size: captured.size,
+    appearance: NSAppearance(named: .darkAqua) ?? NSAppearance.currentDrawing()
+  ))
+  let representation = try #require(image.representations.first as? NSBitmapImageRep)
+
+  #expect(representation.pixelsWide == 200)
+  #expect(representation.pixelsHigh == 74)
+  #expect(image.size == NSSize(width: 100, height: 37))
+  for point in [(25, 18), (175, 18), (25, 55), (175, 55)] {
+    #expect((representation.colorAt(x: point.0, y: point.1)?.alphaComponent ?? 0) > 0.99)
+  }
+}
+
+@Test @MainActor
+func nativeTabDragPreviewFollowsPointerAndClosesOnEveryFinishPath() throws {
+  let window = NSWindow(
+    contentRect: NSRect(x: 200, y: 200, width: 300, height: 120),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  let root = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 120))
+  let sourceView = NSView(frame: NSRect(x: 30, y: 40, width: 100, height: 37))
+  root.addSubview(sourceView)
+  window.contentView = root
+  window.makeKeyAndOrderFront(nil)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+    window.close()
+  }
+  let image = NSImage(size: sourceView.bounds.size)
+  let initialFrame = window.convertToScreen(sourceView.convert(sourceView.bounds, to: nil))
+  let grabPoint = NSPoint(x: 23, y: 11)
+  let grabPointOnScreen = window.convertPoint(toScreen: sourceView.convert(grabPoint, to: nil))
+  let beginPoint = NSPoint(x: grabPointOnScreen.x + 8, y: grabPointOnScreen.y + 4)
+  let movedPoint = NSPoint(x: grabPointOnScreen.x + 80, y: grabPointOnScreen.y - 25)
+  let preview = try #require(ReorderNativePreview(
+    image: image, sourceView: sourceView, grabPoint: grabPoint
+  ))
+  var operations: [NSDragOperation] = []
+  let nativeSource = ReorderNativeSource(
+    id: UUID(), source: nil, began: nil, preview: preview,
+    end: { operations.append($0) }
+  )
+  let session = NativePreviewDraggingSessionProbe()
+
+  #expect(preview.panel.ignoresMouseEvents)
+  #expect(preview.panel.styleMask.contains(.nonactivatingPanel))
+  #expect(!preview.panel.isOpaque)
+  #expect(preview.panel.level.rawValue == window.level.rawValue + 1)
+  #expect(!preview.panel.isVisible)
+  nativeSource.draggingSession(session, willBeginAt: beginPoint)
+  let visibleWindowNumber = preview.panel.windowNumber
+  #expect(preview.panel.isVisible)
+  #expect(!preview.panel.isKeyWindow)
+  #expect(preview.panel.frame.origin == NSPoint(
+    x: initialFrame.minX + 8, y: initialFrame.minY + 4
+  ))
+  nativeSource.draggingSession(session, willBeginAt: beginPoint)
+  #expect(preview.panel.windowNumber == visibleWindowNumber)
+  nativeSource.draggingSession(session, movedTo: movedPoint)
+  #expect(preview.panel.frame.origin == NSPoint(
+    x: initialFrame.minX + 80, y: initialFrame.minY - 25
+  ))
+  nativeSource.draggingSession(session, endedAt: movedPoint, operation: .move)
+  #expect(!preview.panel.isVisible)
+  #expect(operations == [.move])
+
+  let abortedPreview = try #require(ReorderNativePreview(
+    image: image, sourceView: sourceView, grabPoint: grabPoint
+  ))
+  let abortedSource = ReorderNativeSource(
+    id: UUID(), source: nil, began: nil, preview: abortedPreview,
+    end: { operations.append($0) }
+  )
+  abortedSource.draggingSession(session, willBeginAt: beginPoint)
+  #expect(abortedPreview.panel.isVisible)
+  abortedSource.end([])
+  #expect(!abortedPreview.panel.isVisible)
+  #expect(operations == [.move, []])
+
+  let invalidatedPreview = try #require(ReorderNativePreview(
+    image: image, sourceView: sourceView, grabPoint: grabPoint
+  ))
+  let invalidatedSource = ReorderNativeSource(
+    id: UUID(), source: nil, began: nil, preview: invalidatedPreview,
+    end: { operations.append($0) }
+  )
+  invalidatedSource.draggingSession(session, willBeginAt: beginPoint)
+  #expect(invalidatedPreview.panel.isVisible)
+  invalidatedSource.closePreview()
+  #expect(!invalidatedPreview.panel.isVisible)
+  #expect(operations == [.move, []])
+}
+
+@Test @MainActor
+func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throws {
+  func visiblePixels(in image: NSImage) -> Int {
+    guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data)
+    else { return 0 }
+    return (0..<bitmap.pixelsHigh).reduce(0) { count, y in
+      count + (0..<bitmap.pixelsWide).filter {
+        bitmap.colorAt(x: $0, y: y)?.alphaComponent ?? 0 > 0.01
+      }.count
+    }
+  }
+  func opaqueInteriorFraction(in image: NSImage) -> Double {
+    guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
+      bitmap.pixelsWide > 8, bitmap.pixelsHigh > 8
+    else { return 0 }
+    let scale = max(1, CGFloat(bitmap.pixelsHigh) / image.size.height)
+    let horizontalInset = max(2, Int((4 * scale).rounded(.up)))
+    let bandHalfHeight = max(1, Int((3 * scale).rounded(.up)))
+    let xs = horizontalInset..<(bitmap.pixelsWide - horizontalInset)
+    let ys = (bitmap.pixelsHigh / 2 - bandHalfHeight)..<(bitmap.pixelsHigh / 2 + bandHalfHeight)
+    let pixelCount = xs.count * ys.count
+    let opaqueCount = ys.reduce(0) { count, y in
+      count + xs.filter { x in
+        bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 0.99
+      }.count
+    }
+    return Double(opaqueCount) / Double(pixelCount)
+  }
+  func readableForegroundFraction(in image: NSImage, darkAppearance: Bool) -> Double {
+    guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
+      bitmap.pixelsWide > 8, bitmap.pixelsHigh > 8
+    else { return 0 }
+    let scale = max(1, CGFloat(bitmap.pixelsHigh) / image.size.height)
+    let leadingInset = max(2, Int((20 * scale).rounded(.up)))
+    let trailingInset = max(2, Int((4 * scale).rounded(.up)))
+    let verticalInset = max(2, Int((4 * scale).rounded(.up)))
+    let xs = leadingInset..<(bitmap.pixelsWide - trailingInset)
+    let ys = verticalInset..<(bitmap.pixelsHigh - verticalInset)
+    let pixelCount = xs.count * ys.count
+    let foregroundCount = ys.reduce(0) { count, y in
+      count + xs.filter { x in
+        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+          color.alphaComponent > 0.99
+        else { return false }
+        let luminance = 0.2126 * color.redComponent
+          + 0.7152 * color.greenComponent
+          + 0.0722 * color.blueComponent
+        return darkAppearance ? luminance > 0.55 : luminance < 0.45
+      }.count
+    }
+    return Double(foregroundCount) / Double(pixelCount)
+  }
+  func renderedImage(of view: NSView) throws -> NSImage {
+    let bounds = view.bounds
+    let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: bounds))
+    view.cacheDisplay(in: bounds, to: bitmap)
+    let image = NSImage(size: bounds.size)
+    image.addRepresentation(bitmap)
+    return image
+  }
+  func findDestination(_ view: NSView) -> FluidTabDestinationView? {
+    if let destination = view as? FluidTabDestinationView { return destination }
+    return view.subviews.lazy.compactMap { findDestination($0) }.first
+  }
+  func findSource(_ noteID: UUID, in view: NSView) -> ReorderSourceHostingView? {
+    if let source = view as? ReorderSourceHostingView, source.noteID == noteID { return source }
+    return view.subviews.lazy.compactMap { findSource(noteID, in: $0) }.first
+  }
+
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("visible-tab-preview-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let dragged = Note(title: "Preview")
+  let selected = Note(title: "Preview")
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _, _ in .committed })
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [dragged, selected], selectedNoteID: selected.id)
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(
+    rootView: NotesPanel(dictationRuntime: runtime, sizing: .container).environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 800, height: 430),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  window.isReleasedWhenClosed = false
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleTabStripHost(host)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+    window.close()
+  }
+
+  var endOperations: [NSDragOperation] = []
+  var completedCaptures = 0
+  var previewDataByAppearance: [String: [Bool: Data]] = [:]
+  let captureCases: [(appearance: NSAppearance.Name, ambient: NSAppearance.Name,
+    dark: Bool, noteID: UUID, selected: Bool)] = [
+      (.vibrantDark, .aqua, true, dragged.id, false),
+      (.vibrantDark, .aqua, true, selected.id, true),
+      (.vibrantLight, .darkAqua, false, dragged.id, false),
+      (.vibrantLight, .darkAqua, false, selected.id, true),
+    ]
+  for captureCase in captureCases {
+    window.appearance = NSAppearance(named: captureCase.appearance)
+    await settleTabStripHost(host)
+    let destination = try #require(findDestination(host))
+    let source = try #require(findSource(captureCase.noteID, in: destination))
+    let renderedSource = try renderedImage(of: source)
+    #expect(visiblePixels(in: renderedSource) > 0)
+    let originalBegin = try #require(source.onNativeBegin)
+    source.onNativeBegin = {
+      let (provider, pasteboardWriter, end) = originalBegin()
+      return (provider, pasteboardWriter, { operation in
+        endOperations.append(operation)
+        end(operation)
+      })
+    }
+    var draggingItems: [NSDraggingItem] = []
+    var capturedSource: ReorderNativeSource?
+    var capturedEvent: NSEvent?
+    source.interceptNativeDrag = { items, nativeSource, event in
+      draggingItems = items
+      capturedSource = nativeSource
+      capturedEvent = event
+      return true
+    }
+    let sourceFrame = destination.convert(source.bounds, from: source)
+    let start = destination.convert(
+      NSPoint(x: sourceFrame.midX, y: sourceFrame.midY), to: nil
+    )
+    let ambientAppearance = try #require(NSAppearance(named: captureCase.ambient))
+    ambientAppearance.performAsCurrentDrawingAppearance {
+      for (sequence, event) in [
+        NSEvent.EventType.leftMouseDown,
+        NSEvent.EventType.leftMouseDragged,
+      ].enumerated() {
+        let point = event == .leftMouseDragged ? NSPoint(x: start.x + 8, y: start.y) : start
+        let mouseEvent = NSEvent.mouseEvent(
+          with: event,
+          location: point,
+          modifierFlags: [],
+          timestamp: ProcessInfo.processInfo.systemUptime + Double(sequence) * 0.01,
+          windowNumber: window.windowNumber,
+          context: nil,
+          eventNumber: sequence,
+          clickCount: 1,
+          pressure: 1
+        )
+        if let mouseEvent { window.sendEvent(mouseEvent) }
+      }
+    }
+    await settleTabStripHost(host)
+
+    let item = try #require(draggingItems.first)
+    let preview = try #require(capturedSource?.preview)
+    let previewImage = preview.image
+    #expect(previewImage.size == source.bounds.size)
+    #expect(previewImage.representations.first?.pixelsWide == renderedSource.representations.first?.pixelsWide)
+    #expect(previewImage.representations.first?.pixelsHigh == renderedSource.representations.first?.pixelsHigh)
+    #expect(item.draggingFrame == source.bounds)
+    #expect(item.imageComponents?.contains(where: { $0.contents != nil }) != true)
+    #expect(!preview.panel.isVisible)
+    #expect(capturedEvent?.locationInWindow == start)
+    #expect(visiblePixels(in: previewImage) > 0)
+    #expect(opaqueInteriorFraction(in: previewImage) > 0.98)
+    #expect(readableForegroundFraction(in: previewImage, darkAppearance: captureCase.dark) > 0.01,
+      "appearance=\(captureCase.appearance.rawValue) selected=\(captureCase.selected)")
+    #expect(capturedSource?.began != nil)
+    #expect(capturedSource?.moved != nil)
+    completedCaptures += 1
+    #expect(endOperations.count == completedCaptures)
+    #expect(destination.controller?.inside == false)
+    #expect(destination.controller?.preview == nil)
+    #expect(source.layer?.opacity == 1)
+    #expect(state.workspace.selectedNoteID == selected.id)
+    let data = try #require(previewImage.tiffRepresentation)
+    previewDataByAppearance[captureCase.appearance.rawValue, default: [:]][captureCase.selected] = data
+  }
+  for images in previewDataByAppearance.values {
+    #expect(images[false] != images[true])
+  }
+  #expect(endOperations.count == captureCases.count)
+
+  findDestination(host)?.controller?.cancel()
+  await runtime.shutdown()
 }

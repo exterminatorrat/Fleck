@@ -79,6 +79,8 @@
 
   struct DictationCapsuleContext: Equatable {
     let status: DictationCapsuleStatus
+    let detailText: String?
+    let compactDetailText: String?
     let sessionID: UUID?
     let trigger: DictationShortcutTrigger?
     let mode: DictationMode?
@@ -90,6 +92,8 @@
 
     init(
       status: DictationCapsuleStatus,
+      detailText: String? = nil,
+      compactDetailText: String? = nil,
       sessionID: UUID? = nil,
       trigger: DictationShortcutTrigger? = nil,
       mode: DictationMode? = nil,
@@ -100,6 +104,8 @@
       failureKind: DictationCapsuleFailureKind? = nil
     ) {
       self.status = status
+      self.detailText = detailText
+      self.compactDetailText = compactDetailText
       self.sessionID = sessionID
       self.trigger = trigger
       self.mode = mode
@@ -148,6 +154,7 @@
     static let actionDividerSize = CGSize(width: 1, height: 16)
 
     let visibleText: String?
+    let secondaryVisibleText: String?
     let voiceOverText: String
     let symbolName: String
     let visualMode: DictationCapsuleVisualMode
@@ -206,7 +213,8 @@
         ceiling: widthCeiling
       )
       self.visibleText = copy.visible
-      self.voiceOverText = copy.voiceOver
+      secondaryVisibleText = context.compactDetailText ?? context.detailText
+      voiceOverText = context.detailText.map { "\(copy.voiceOver). \($0)" } ?? copy.voiceOver
       self.symbolName = symbolName
       self.visualMode = visualMode
       self.widthCeiling = widthCeiling
@@ -963,7 +971,7 @@
     ) {
       captureID = ambiguity.captureID
       self.allowsKeepInInbox = allowsKeepInInbox
-      let supported = Array(ambiguity.choices.prefix(4))
+      let supported = ambiguity.choices
       let titleCounts = Dictionary(grouping: supported) {
         Self.normalizedTitle($0.destination.title)
       }.mapValues(\.count)
@@ -1242,6 +1250,12 @@
       colors = FleckRailColors(accentHex: accentHex)
     }
 
+    func updateIdleAccessibilityLabel(_ label: String) {
+      guard context.status == .idle, voiceOverLabel != label else { return }
+      objectWillChange.send()
+      voiceOverLabel = label
+    }
+
     func setListeningHover(_ isHovering: Bool) {
       isListeningHover = isHovering
     }
@@ -1501,6 +1515,7 @@
 
     func presentIdle(
       dock: DictationCapsuleDock,
+      accessibilityLabel: String = "Fleck dictation ready",
       onOpenFleck: @escaping @MainActor () -> Void,
       onDockChanged: @escaping @MainActor (DictationCapsuleDock) -> Void
     ) {
@@ -1524,6 +1539,7 @@
         chooser: nil,
         onChoice: { _, _ in }
       )
+      presentationModel.updateIdleAccessibilityLabel(accessibilityLabel)
       inputRouter.onOpenFleck = onOpenFleck
       hostingView.refreshMenu()
       applyCurrentFrame(
@@ -1623,6 +1639,11 @@
 
     func updateAccentHex(_ accentHex: String) {
       presentationModel.updateAccentHex(accentHex)
+    }
+
+    func updateIdleAccessibilityLabel(_ label: String) {
+      guard currentContext.status == .idle else { return }
+      presentationModel.updateIdleAccessibilityLabel(label)
     }
 
     func dismiss() {
@@ -2173,6 +2194,19 @@
 
     @ViewBuilder
     private var processingContent: some View {
+      if let detail = presentation.secondaryVisibleText {
+        VStack(spacing: 0) {
+          capturedContextText(detail, lineLimit: 1)
+          processingCore
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        processingCore
+      }
+    }
+
+    @ViewBuilder
+    private var processingCore: some View {
       if model.showsProcessingLabel {
         HStack(spacing: 7) {
           if model.dock == .right {
@@ -2222,23 +2256,70 @@
           by: DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)
         )
       ) { context in
+        listeningLayout(at: context.date)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel("Dictation listening")
+      }
+    }
+
+    @ViewBuilder
+    private func listeningLayout(at date: Date) -> some View {
+      if let detail = presentation.secondaryVisibleText {
+        HStack(spacing: 4) {
+          if model.dock == .right {
+            listeningActionZone(at: date)
+            capturedListeningContext(detail, at: date)
+            identityMark
+          } else {
+            identityMark
+            capturedListeningContext(detail, at: date)
+            listeningActionZone(at: date)
+          }
+        }
+      } else {
         ZStack {
-          waveform(at: context.date)
+          waveform(at: date)
           HStack {
             if model.dock == .right {
-              listeningActionZone(at: context.date)
+              listeningActionZone(at: date)
               Spacer(minLength: 0)
               identityMark
             } else {
               identityMark
               Spacer(minLength: 0)
-              listeningActionZone(at: context.date)
+              listeningActionZone(at: date)
             }
           }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityLabel("Dictation listening")
       }
+    }
+
+    private func capturedListeningContext(_ detail: String, at date: Date) -> some View {
+      VStack(spacing: 0) {
+        capturedContextText(
+          detail,
+          lineLimit: 1
+        )
+        .frame(height: 16)
+        waveform(at: date)
+          .frame(height: 20)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func capturedContextText(
+      _ detail: String,
+      lineLimit: Int,
+      fontSize: CGFloat = 8.5
+    ) -> some View {
+      Text(detail)
+        .font(.system(size: fontSize, weight: .medium, design: .default))
+        .lineLimit(lineLimit)
+        .multilineTextAlignment(.center)
+        .truncationMode(.tail)
+        .foregroundStyle(model.colors.secondaryTextColor)
+        .background(FleckRailFrameProbe(identifier: "fleck-rail-context"))
+        .accessibilityHidden(true)
     }
 
     private func listeningActionZone(at date: Date) -> some View {
@@ -2391,12 +2472,19 @@
     @ViewBuilder
     private var terminalText: some View {
       if let visibleText = presentation.visibleText {
-        Text(visibleText)
-          .font(.system(size: 12, weight: .medium, design: .default))
-          .lineLimit(1)
-          .truncationMode(.tail)
-          .foregroundStyle(model.colors.primaryTextColor)
-          .background(FleckRailFrameProbe(identifier: "fleck-terminal-text"))
+        VStack(alignment: .leading, spacing: 0) {
+          Text(visibleText)
+            .font(.system(size: 12, weight: .medium, design: .default))
+          if let secondary = presentation.secondaryVisibleText {
+            Text(secondary)
+              .font(.system(size: 9.5, weight: .regular, design: .default))
+              .foregroundStyle(model.colors.secondaryTextColor)
+          }
+        }
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .foregroundStyle(model.colors.primaryTextColor)
+        .background(FleckRailFrameProbe(identifier: "fleck-terminal-text"))
       }
     }
 

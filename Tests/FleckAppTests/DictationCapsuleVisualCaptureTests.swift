@@ -66,6 +66,81 @@
     controller.waveformModel.receive(level: 0.14, now: Date().addingTimeInterval(0.08))
   }
 
+  @MainActor
+  private func visualProbe(
+    _ identifier: String,
+    in view: NSView
+  ) -> NSView? {
+    if view.identifier?.rawValue == identifier { return view }
+    for subview in view.subviews {
+      if let match = visualProbe(identifier, in: subview) { return match }
+    }
+    return nil
+  }
+
+  @Test @MainActor
+  func DictationCapsuleRendersCapturedContextWithoutCoveringLiveControls() throws {
+    let panel = DictationCapsulePanel()
+    let controller = DictationCapsuleController(panel: panel)
+    defer { controller.dismiss() }
+
+    func frames(
+      for context: DictationCapsuleContext,
+      size: CGSize,
+      adjacentProbe: String
+    ) throws -> (context: CGRect, adjacent: CGRect, bounds: CGRect) {
+      controller.render(context)
+      panel.setFrame(CGRect(origin: .zero, size: size), display: false)
+      panel.contentView?.frame = CGRect(origin: .zero, size: size)
+      panel.contentView?.layoutSubtreeIfNeeded()
+      let host = try #require(panel.contentView)
+      let contextProbe = try #require(visualProbe("fleck-rail-context", in: host))
+      let adjacent = try #require(visualProbe(adjacentProbe, in: host))
+      return (
+        contextProbe.convert(contextProbe.bounds, to: host),
+        adjacent.convert(adjacent.bounds, to: host),
+        host.bounds
+      )
+    }
+
+    for dock in [DictationCapsuleDock.bottom, .left, .right] {
+      controller.setDock(dock)
+      let listening = try frames(
+        for: .init(
+          status: .listening,
+          detailText: "Dictating into Travel plans",
+          compactDetailText: "Travel plans",
+          sessionID: visualCaptureSessionID,
+          trigger: .hold,
+          mode: .focused,
+          pipelineStage: .capture
+        ),
+        size: DictationCapsuleController.listeningSize,
+        adjacentProbe: "fleck-rail-timer"
+      )
+      #expect(listening.context.width > 0)
+      #expect(listening.bounds.contains(listening.context))
+      #expect(!listening.context.intersects(listening.adjacent))
+    }
+
+    controller.setDock(.bottom)
+    let processing = try frames(
+      for: .init(
+        status: .cleaning,
+        detailText: "Smart Capture",
+        sessionID: visualCaptureSessionID,
+        trigger: .hold,
+        mode: .smartCapture,
+        pipelineStage: .polish
+      ),
+      size: DictationCapsuleController.activeSize,
+      adjacentProbe: "fleck-rail-mark"
+    )
+    #expect(processing.context.width > 0)
+    #expect(processing.bounds.contains(processing.context))
+    #expect(!processing.context.intersects(processing.adjacent))
+  }
+
   @Test @MainActor func DictationCapsuleVisualCaptureWritesRailStateMatrixWhenRequested() async throws {
     let captureDirectory = ProcessInfo.processInfo.environment["FLECK_RAIL_CAPTURE_DIR"]
       .map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -198,6 +273,26 @@
       directory: captureDirectory
     )
 
+    let focusedListening = DictationCapsuleContext(
+      status: .listening,
+      detailText: "Dictating into Travel plans",
+      compactDetailText: "Travel plans",
+      sessionID: visualCaptureSessionID,
+      trigger: .hold,
+      mode: .focused,
+      pipelineStage: .capture
+    )
+    for dock in [DictationCapsuleDock.bottom, .left, .right] {
+      controller.setDock(dock)
+      try render(
+        "listening-focused-destination-\(dock.rawValue)",
+        context: focusedListening,
+        size: DictationCapsuleController.listeningSize
+      )
+      prepareSyntheticWaveformFixture(for: controller)
+    }
+    controller.setDock(.bottom)
+
     let handsFreeListening = visualCaptureContext(
       .listening,
       isHandsFree: true,
@@ -238,6 +333,18 @@
       size: DictationCapsuleController.activeSize,
       directory: captureDirectory
     )
+    try render(
+      "polishing-smart-capture-bottom",
+      context: .init(
+        status: .cleaning,
+        detailText: "Smart Capture",
+        sessionID: visualCaptureSessionID,
+        trigger: .hold,
+        mode: .smartCapture,
+        pipelineStage: .polish
+      ),
+      size: DictationCapsuleController.activeSize
+    )
 
     try render(
       "saved-undo-bottom",
@@ -266,5 +373,45 @@
       context: visualCaptureContext(.noSpeech),
       size: DictationCapsuleController.noSpeechSize
     )
+  }
+
+  @Test @MainActor func waveformPolishNativeTraceCaptureWhenRequested() async throws {
+    guard let path = ProcessInfo.processInfo.environment["FLECK_WAVEFORM_CAPTURE_DIR"] else { return }
+    let directory = URL(fileURLWithPath: path, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let panel = DictationCapsulePanel()
+    panel.appearance = NSAppearance(named: .darkAqua)
+    let controller = DictationCapsuleController(panel: panel)
+    defer { controller.dismiss() }
+    controller.render(visualCaptureContext(.listening, isHandsFree: true, stage: .capture))
+    controller.panel.orderOut(nil)
+    // Synthetic RMS only. No microphone session or notes are created by this fixture.
+    var levels = [Float](repeating: 0, count: 10)
+    levels += [0.006, 0.02, 0.08, 0.20, 0.08, 0.03]
+    levels += [Float](repeating: 0, count: 12)
+    for _ in 0..<4 { levels += [0.02, 0.06, 0.04, 0.10] }
+    levels += [Float](repeating: 0, count: 16)
+    for (index, level) in levels.enumerated() {
+      controller.waveformModel.receive(level: level)
+      try await Task.sleep(for: .milliseconds(80))
+      try captureVisualState(
+        String(format: "frame-%03d", index), controller: controller,
+        size: DictationCapsuleController.listeningSize, directory: directory
+      )
+    }
+    for dock in [DictationCapsuleDock.left, .right] {
+      controller.setDock(dock)
+      controller.waveformModel.receive(level: 0.20)
+      controller.presentationModel.setListeningHover(true)
+      try await Task.sleep(for: .milliseconds(80))
+      try captureVisualState("listening-\(dock.rawValue)-controls", controller: controller,
+        size: DictationCapsuleController.listeningSize, directory: directory)
+    }
+    controller.render(visualCaptureContext(.cleaning, stage: .polish))
+    #expect(controller.waveformModel.energy == 0)
+    try captureVisualState("processing", controller: controller,
+      size: DictationCapsuleController.activeSize, directory: directory)
+    controller.dismiss()
+    #expect(controller.waveformModel.energy == 0)
   }
 #endif
