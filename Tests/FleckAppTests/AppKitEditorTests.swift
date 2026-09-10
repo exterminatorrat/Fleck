@@ -4088,9 +4088,13 @@ private func hostedNavigatorAccentGeometry(
   await settleHostedView(host)
 
   let editor = try #require(hostedPanelEditor(in: host))
+  let undoManager = try #require(editor.undoManager)
+  undoManager.groupsByEvent = false
   editor.setSelectedRange(NSRange(location: 2, length: 9))
   editor.typingAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+  undoManager.beginUndoGrouping()
   commands.applyBackgroundColor(.systemYellow)
+  undoManager.endUndoGrouping()
   let expectedAttributed = NSAttributedString(attributedString: try #require(editor.textStorage))
   let expectedText = editor.string
   let expectedSelection = editor.selectedRange()
@@ -4099,8 +4103,8 @@ private func hostedNavigatorAccentGeometry(
     from: NSRange(location: 0, length: expectedText.utf16.count),
     documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
   )
-  let expectedCanUndo = try #require(editor.undoManager).canUndo
-  let expectedCanRedo = editor.undoManager?.canRedo ?? false
+  let expectedCanUndo = undoManager.canUndo
+  let expectedCanRedo = undoManager.canRedo
   #expect(expectedCanUndo)
   #expect(window.makeFirstResponder(editor))
 
@@ -4148,7 +4152,9 @@ private func hostedNavigatorAccentGeometry(
   #expect(hostedPanelEditor(in: host) === editor)
   #expect(commands.textView === editor)
   #expect(window.firstResponder === editor)
+  undoManager.beginUndoGrouping()
   commands.toggleItalic()
+  undoManager.endUndoGrouping()
   #expect(
     fontTraits(try #require(editor.textStorage?.attribute(.font, at: 2, effectiveRange: nil) as? NSFont))
       .contains(.italicFontMask)

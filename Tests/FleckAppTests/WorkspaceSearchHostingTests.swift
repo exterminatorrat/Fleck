@@ -134,7 +134,7 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
     .environmentObject(state)
   )
   let window = NSWindow(
-    contentRect: NSRect(x: 0, y: 0, width: 380, height: 430),
+    contentRect: NSRect(x: 137, y: 211, width: 380, height: 430),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
@@ -223,7 +223,7 @@ func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
     .environmentObject(state)
   )
   let window = NSWindow(
-    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    contentRect: NSRect(x: 137, y: 211, width: 640, height: 430),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
@@ -246,6 +246,12 @@ func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
 
   #expect(searchController.isPresented)
   #expect(searchController.presentationKind == .inline)
+  guard searchController.isPresented, searchController.presentationKind == .inline else {
+    window.contentView = nil
+    window.orderOut(nil)
+    await runtime.shutdown()
+    return
+  }
   sendWorkspaceSearchEscape(to: window)
   await settleWorkspaceSearchHost(host)
 
@@ -1414,12 +1420,11 @@ private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow)
 }
 
 @MainActor
-private func clickWorkspaceSearchControl(_ point: NSPoint, in window: NSWindow) {
-  let screenPoint = window.convertPoint(toScreen: point)
+private func clickWorkspaceSearchControl(_ windowPoint: NSPoint, in window: NSWindow) {
   for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
     guard let event = NSEvent.mouseEvent(
       with: eventType,
-      location: screenPoint,
+      location: windowPoint,
       modifierFlags: [],
       timestamp: ProcessInfo.processInfo.systemUptime,
       windowNumber: window.windowNumber,
@@ -1428,7 +1433,7 @@ private func clickWorkspaceSearchControl(_ point: NSPoint, in window: NSWindow) 
       clickCount: 1,
       pressure: eventType == .leftMouseDown ? 1 : 0
     ) else { continue }
-    NSApp.sendEvent(event)
+    window.sendEvent(event)
   }
 }
 
