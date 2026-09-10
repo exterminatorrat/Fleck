@@ -55,15 +55,10 @@ readonly required_artifact_sha256=(
   "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
 )
 
-readonly default_python_executable="/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14"
-readonly default_runtime_site_packages="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Tools/qwen35-cleanup-mlx-0.31.3/lib/python3.14/site-packages"
-readonly default_model_root="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Quarantine/qwen3.5-0.8b-mlx-4bit"
-readonly default_output_root="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns"
-
-python_executable="$default_python_executable"
-runtime_site_packages="$default_runtime_site_packages"
-model_root="$default_model_root"
-output_root="$default_output_root"
+python_executable="${FLECK_QWEN_PYTHON_EXECUTABLE:-}"
+runtime_site_packages="${FLECK_QWEN_RUNTIME_SITE_PACKAGES:-}"
+model_root="${FLECK_QWEN_MODEL_ROOT:-}"
+output_root="${FLECK_QWEN_OUTPUT_ROOT:-}"
 fixture_path="$default_fixture_path"
 mode=""
 fake_responses=""
@@ -84,8 +79,9 @@ Usage:
   run-qwen-cleanup-benchmark.sh --smoke [paths/options]
   run-qwen-cleanup-benchmark.sh --contract-test --fake-responses ABSOLUTE_JSON [paths/options]
 
-Required for a real run: --smoke, --python-executable, --model-root, --output-root.
-The default paths are only for the verified local ModelEvaluation installation.
+Runtime, model, and output paths are required through the listed CLI options or
+FLECK_QWEN_PYTHON_EXECUTABLE, FLECK_QWEN_RUNTIME_SITE_PACKAGES,
+FLECK_QWEN_MODEL_ROOT, and FLECK_QWEN_OUTPUT_ROOT. Nothing is downloaded.
 EOF
   exit 2
 }
@@ -167,6 +163,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$mode" == "smoke" || "$mode" == "contract" ]] || usage
+[[ -n "$python_executable" ]] || fail "--python-executable or FLECK_QWEN_PYTHON_EXECUTABLE is required"
+[[ -n "$runtime_site_packages" ]] || fail "--runtime-site-packages or FLECK_QWEN_RUNTIME_SITE_PACKAGES is required"
+[[ -n "$model_root" ]] || fail "--model-root or FLECK_QWEN_MODEL_ROOT is required"
+[[ -n "$output_root" ]] || fail "--output-root or FLECK_QWEN_OUTPUT_ROOT is required"
 [[ "$process_timeout_ms" =~ ^[1-9][0-9]*$ ]] || fail "--process-timeout-ms must be a positive integer"
 [[ "$test_sleep_ms" =~ ^[0-9]+$ ]] || fail "--test-sleep-ms must be a non-negative integer"
 [[ "$test_pause_before_publish_ms" =~ ^[0-9]+$ ]] || fail "--test-pause-before-publish-ms must be a non-negative integer"
@@ -223,8 +223,6 @@ require_canonical_path "$output_root" "output root"
 require_canonical_path "$fixture_path" "fixture"
 [[ -z "$fake_responses" ]] || require_canonical_path "$fake_responses" "fake responses"
 [[ -z "$test_artifact_manifest" ]] || require_canonical_path "$test_artifact_manifest" "test artifact manifest"
-[[ "$python_executable" == "$default_python_executable" ]] || fail "Python executable must be the exact canonical interpreter: $default_python_executable"
-
 require_regular_file "$python_executable" "Python executable"
 [[ -x "$python_executable" ]] || fail "Python executable is not executable: $python_executable"
 require_directory "$model_root" "model root"
@@ -289,6 +287,7 @@ build_validator() {
     -module-name FleckCore \
     -module-cache-path "$swift_build_dir/module-cache" \
     "$repo_root/Sources/FleckCore/PersonalDictionary.swift" \
+    "$repo_root/Sources/FleckCore/CompiledPersonalDictionary.swift" \
     "$repo_root/Sources/FleckCore/PersonalDictionaryResolver.swift" \
     -o "$swift_build_dir/libFleckCore.dylib" \
     -emit-module-path "$swift_build_dir/FleckCore.swiftmodule"

@@ -10,9 +10,13 @@ readonly build_root_raw="$(mktemp -d "${TMPDIR:-/tmp}/fleck-qwen-native-evaluati
 readonly build_root="$(realpath "$build_root_raw")"
 readonly test_binary="$build_root/native-evaluation-contract-tests"
 readonly native_output="$build_root/native"
-readonly prepared_root="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Prepared/qwen3-asr-0.6b-int8"
+readonly prepared_root="${FLECK_QWEN_PREPARED_ROOT:-}"
 trap 'rm -rf "$build_root"' EXIT
 
+[[ -n "$prepared_root" ]] || {
+  echo "native-evaluation-contract-tests:required-environment-missing:FLECK_QWEN_PREPARED_ROOT" >&2
+  exit 2
+}
 swiftc -O -parse-as-library "$test_source" -o "$test_binary"
 "$test_binary" --repo-root "$repo_root" --static-only
 

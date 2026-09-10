@@ -35,9 +35,7 @@ MODEL_REVISION = "5d894f8cc4ef3e6c88537bf3746ed262f549da6a"
 MODEL_FILE = "model.safetensors"
 MODEL_FILE_BYTES = 625229487
 MODEL_FILE_SHA256 = "f5a0d9dd3efa73510542a8023d610ff26be2b4b020d181cfc4bedaa1fcc5dd9e"
-CANONICAL_PYTHON_EXECUTABLE = "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14"
 EXPECTED_PYTHON_EXECUTABLE_SHA256 = "87d4df53fd91304be5bac391fb204643c36b7df2023c04a0953bcbc7d4fdf634"
-CANONICAL_RUNTIME_SITE_PACKAGES = "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Tools/qwen35-cleanup-mlx-0.31.3/lib/python3.14/site-packages"
 EXPECTED_RUNTIME_FILE_COUNT = 10760
 EXPECTED_RUNTIME_INVENTORY_SHA256 = "7b1908f44a55ba5f9d857ff5615b69c3ef71b8519903691f86776e438790f214"
 CONTRACT_RUNTIME_FILE_COUNT = 0
@@ -402,10 +400,6 @@ def runtime_identity(
     *,
     test_mode: bool,
 ) -> dict[str, Any]:
-    if str(python_executable) != CANONICAL_PYTHON_EXECUTABLE:
-        raise HelperError(
-            f"Python executable must be the exact canonical interpreter: {CANONICAL_PYTHON_EXECUTABLE}"
-        )
     require_regular_file(python_executable, "Python executable")
     if not os.access(python_executable, os.X_OK):
         raise HelperError(f"Python executable is not executable: {python_executable}")
@@ -422,12 +416,6 @@ def runtime_identity(
             "Python executable identity mismatch: "
             f"sha256={executable_sha256} expected={EXPECTED_PYTHON_EXECUTABLE_SHA256}"
         )
-    if not test_mode and str(runtime_site_packages) != CANONICAL_RUNTIME_SITE_PACKAGES:
-        raise HelperError(
-            "runtime site-packages must be the exact canonical installation: "
-            f"{CANONICAL_RUNTIME_SITE_PACKAGES}"
-        )
-
     runtime_files, runtime_inventory_sha256 = runtime_file_inventory(runtime_site_packages)
     expected_file_count = CONTRACT_RUNTIME_FILE_COUNT if test_mode else EXPECTED_RUNTIME_FILE_COUNT
     expected_inventory_sha256 = (

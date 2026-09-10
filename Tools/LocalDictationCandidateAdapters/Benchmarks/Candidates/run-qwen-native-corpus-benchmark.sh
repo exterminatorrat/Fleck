@@ -8,7 +8,9 @@ readonly metadata="$script_dir/qwen3-asr-0.6b-int8.json"
 readonly default_repo_root="$(cd "$script_dir/../../../.." && pwd -P)"
 readonly model_evaluation_source="$default_repo_root/Sources/FleckModelEvaluation/ModelEvaluation.swift"
 readonly evidence_source="$default_repo_root/Sources/FleckModelEvaluation/CandidateBenchmarkEvidence.swift"
+readonly local_writing_evidence_source="$default_repo_root/Sources/FleckModelEvaluation/LocalWritingEvidence.swift"
 readonly artifact_inventory_source="$default_repo_root/Tools/LocalDictationCandidateAdapters/Sources/LocalDictationCandidateRunner/ArtifactInventory.swift"
+readonly fleck_core_sources=("$default_repo_root"/Sources/FleckCore/*.swift)
 
 prepared_root=""
 helper=""
@@ -58,10 +60,24 @@ fi
 readonly build_dir="$(mktemp -d "${TMPDIR:-/tmp}/fleck-qwen-native-benchmark.XXXXXX")"
 trap 'rm -rf "$build_dir"' EXIT
 
+mkdir -p "$build_dir/module-cache"
+swiftc -parse-as-library -emit-library -emit-module \
+  -module-name FleckCore \
+  -module-cache-path "$build_dir/module-cache" \
+  "${fleck_core_sources[@]}" \
+  -o "$build_dir/libFleckCore.dylib" \
+  -emit-module-path "$build_dir/FleckCore.swiftmodule"
 swiftc -O -parse-as-library \
+  -module-cache-path "$build_dir/module-cache" \
+  -I "$build_dir" \
+  -L "$build_dir" \
+  -Xlinker -rpath \
+  -Xlinker "$build_dir" \
+  -lFleckCore \
   "$source" \
   "$model_evaluation_source" \
   "$evidence_source" \
+  "$local_writing_evidence_source" \
   "$artifact_inventory_source" \
   -o "$build_dir/qwen-native-corpus-benchmark"
 

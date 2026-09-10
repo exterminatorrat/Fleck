@@ -15,20 +15,13 @@ readonly qualification_dir="$script_dir"
 readonly accepted_runner="$repo_root/Tools/QwenCleanupBenchmark/run-qwen-cleanup-benchmark.sh"
 readonly scorer_source="$qualification_dir/score_qwen_cleanup_qualification.swift"
 readonly corpus_source="$qualification_dir/corpus-v1.json"
-readonly python_executable_default="/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14"
-readonly runtime_site_packages_default="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Tools/qwen35-cleanup-mlx-0.31.3/lib/python3.14/site-packages"
-readonly model_root_default="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Quarantine/qwen3.5-0.8b-mlx-4bit"
-readonly output_root_default="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/QwenCleanupQualification"
-readonly qwen_source_default="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl"
-readonly whisper_source_default="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl"
-
-python_executable="$python_executable_default"
-runtime_site_packages="$runtime_site_packages_default"
-model_root="$model_root_default"
-output_root="$output_root_default"
+python_executable="${FLECK_QWEN_PYTHON_EXECUTABLE:-}"
+runtime_site_packages="${FLECK_QWEN_RUNTIME_SITE_PACKAGES:-}"
+model_root="${FLECK_QWEN_MODEL_ROOT:-}"
+output_root="${FLECK_QWEN_QUALIFICATION_OUTPUT_ROOT:-}"
 corpus_path="$corpus_source"
-qwen_source="$qwen_source_default"
-whisper_source="$whisper_source_default"
+qwen_source="${FLECK_QWEN_QUALIFICATION_QWEN_SOURCE:-}"
+whisper_source="${FLECK_QWEN_QUALIFICATION_WHISPER_SOURCE:-}"
 mode=""
 rescore_input_root=""
 fake_responses=""
@@ -57,6 +50,8 @@ Usage:
 The real mode uses only the exact already-downloaded Qwen runtime/model and writes
 to a new external output directory. The contract mode is fake-only. Rescore mode
 uses only immutable previously published evidence and launches no harness/model.
+External paths are required through CLI options or the corresponding FLECK_QWEN_*
+environment variables; nothing is downloaded or reconfigured.
 EOF
   exit 2
 }
@@ -168,6 +163,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$mode" == "real" || "$mode" == "contract" || "$mode" == "rescore" ]] || usage
+[[ -n "$python_executable" ]] || fail "--python-executable or FLECK_QWEN_PYTHON_EXECUTABLE is required"
+[[ -n "$output_root" ]] || fail "--output-root or FLECK_QWEN_QUALIFICATION_OUTPUT_ROOT is required"
 [[ "$process_timeout_ms" =~ ^[1-9][0-9]*$ ]] || fail "--process-timeout-ms must be positive"
 [[ "$test_sleep_ms" =~ ^[0-9]+$ ]] || fail "--test-sleep-ms must be non-negative"
 [[ "$test_pause_before_publish_ms" =~ ^[0-9]+$ ]] || fail "--test-pause-before-publish-ms must be non-negative"
@@ -204,6 +201,12 @@ if [[ "$mode" == "contract" ]]; then
   [[ -n "$fake_responses" ]] || fail "--contract-test requires --fake-responses"
   [[ -n "$test_manifest" ]] || fail "--contract-test requires --test-artifact-manifest"
   [[ "${FLECK_QWEN_CONTRACT_TESTS:-}" == "1" ]] || fail "contract mode is restricted to the fake contract suite"
+fi
+if [[ "$mode" != "rescore" ]]; then
+  [[ -n "$qwen_source" ]] || fail "--qwen-source or FLECK_QWEN_QUALIFICATION_QWEN_SOURCE is required"
+  [[ -n "$whisper_source" ]] || fail "--whisper-source or FLECK_QWEN_QUALIFICATION_WHISPER_SOURCE is required"
+  [[ -n "$runtime_site_packages" ]] || fail "--runtime-site-packages or FLECK_QWEN_RUNTIME_SITE_PACKAGES is required"
+  [[ -n "$model_root" ]] || fail "--model-root or FLECK_QWEN_MODEL_ROOT is required"
 fi
 
 require_absolute_safe() {
@@ -280,7 +283,6 @@ fi
 if [[ "$mode" == "rescore" ]]; then
   require_directory "$rescore_input_root" "rescore input root"
 fi
-[[ "$python_executable" == "$python_executable_default" ]] || fail "Python executable must be the exact canonical interpreter: $python_executable_default"
 ensure_output_root
 
 run_stdlib_python() {
@@ -332,8 +334,8 @@ from collections import Counter
 from pathlib import Path
 
 corpus_path, qwen_path, whisper_path, repo_root, fixture_path, metadata_path, cold_path = sys.argv[1:]
-EXPECTED_QWEN = "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl"
-EXPECTED_WHISPER = "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl"
+EXPECTED_QWEN_LOCATOR = "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl"
+EXPECTED_WHISPER_LOCATOR = "historical-external-evidence:whisper-small-control/transcripts.jsonl"
 CASE_KEYS = {
     "id",
     "language",
@@ -479,10 +481,6 @@ def write_json(path, value):
 corpus_file = canonical_file(corpus_path, "corpus")
 qwen_file = canonical_file(qwen_path, "Qwen source evidence")
 whisper_file = canonical_file(whisper_path, "Whisper source evidence")
-if str(qwen_file) != EXPECTED_QWEN:
-    raise SystemExit(f"corpus validation failed: substituted/older Qwen evidence is not allowed: {qwen_file}")
-if str(whisper_file) != EXPECTED_WHISPER:
-    raise SystemExit(f"corpus validation failed: substituted/older Whisper evidence is not allowed: {whisper_file}")
 repo = canonical_file(str(Path(repo_root) / "Sources/FleckApp/FoundationModelDictation.swift"), "checked-in cleanup source")
 corpus = parse_json(corpus_file.read_bytes(), "qualification corpus")
 if not isinstance(corpus, dict):
@@ -550,13 +548,13 @@ for case in raw_cases:
         if engine not in {"qwen", "whisper"} or evidence["audioSHA256"] is None:
             raise SystemExit(f"corpus validation failed: unpinned external source evidence {case_id}")
         source_path = qwen_file if engine == "qwen" else whisper_file
-        expected_path = EXPECTED_QWEN if engine == "qwen" else EXPECTED_WHISPER
+        expected_locator = EXPECTED_QWEN_LOCATOR if engine == "qwen" else EXPECTED_WHISPER_LOCATOR
         expected_sha = qwen_sha if engine == "qwen" else whisper_sha
         expected_field = "hypothesis" if engine == "qwen" else "rawHypothesis"
         records = qwen_records if engine == "qwen" else whisper_records
         record_id = evidence.get("recordID")
-        if evidence.get("path") != expected_path or evidence.get("sha256") != expected_sha:
-            raise SystemExit(f"corpus validation failed: source evidence hash mismatch or substituted path {case_id}")
+        if evidence.get("path") != expected_locator or evidence.get("sha256") != expected_sha:
+            raise SystemExit(f"corpus validation failed: source evidence hash mismatch or locator mismatch {case_id}")
         if evidence.get("field") != expected_field or record_id not in records:
             raise SystemExit(f"corpus validation failed: source evidence record identity mismatch {case_id}")
         record = records[record_id]
@@ -570,7 +568,7 @@ for case in raw_cases:
         asr_language_counts[language] += 1
         external_sources.append({
             "engine": engine,
-            "path": expected_path,
+            "path": str(source_path),
             "sha256": expected_sha,
             "bytes": source_path.stat().st_size,
             "recordCount": len(records),
@@ -1262,7 +1260,7 @@ if prior_provenance_path:
 attempts = [
     {
         "id": "taxonomy-fix-first-real",
-        "root": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/QwenCleanupQualification-20260821T075500Z-taxonomy-fix",
+        "root": "historical-external-evidence:QwenCleanupQualification-20260821T075500Z-taxonomy-fix",
         "status": "failed-before-publication",
         "failureReason": "qwen-asr-mixed-12 exceeded 1,500 ms; forcing nonCooperativeTermination=true; warm all-case accepted harness run failed",
         "failureClass": "deadline-instability",
@@ -1270,7 +1268,7 @@ attempts = [
     },
     {
         "id": "taxonomy-fix-second-real",
-        "root": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/QwenCleanupQualification-20260820T235632Z-taxonomy-fix-rerun",
+        "root": "historical-external-evidence:QwenCleanupQualification-20260820T235632Z-taxonomy-fix-rerun",
         "status": "failed-before-qualification-publication",
         "failureReason": "83 warm cases reached, then /bin/sh invocation hit Bash process-substitution line 828; runner rejected unsupported shell only after the warm accepted evidence",
         "failureClass": "unsupported-shell-post-warm",

@@ -128,6 +128,58 @@ private struct Control: Decodable {
   let candidate: CandidateControl
   let corpus: CorpusControl
   let execution: ExecutionControl
+
+  func resolvingExternalPaths() throws -> Control {
+    Control(
+      schemaVersion: schemaVersion,
+      runID: runID,
+      candidate: CandidateControl(
+        model: ModelControl(
+          id: candidate.model.id,
+          revision: candidate.model.revision,
+          path: try requiredExternalPath(candidate.model.path, environmentKey: "FLECK_WHISPER_SMALL_MODEL_PATH"),
+          byteCount: candidate.model.byteCount,
+          sha256: candidate.model.sha256,
+          fileType: candidate.model.fileType,
+          quantization: candidate.model.quantization,
+          license: candidate.model.license
+        ),
+        runtime: RuntimeControl(
+          id: candidate.runtime.id,
+          version: candidate.runtime.version,
+          sourceCommit: candidate.runtime.sourceCommit,
+          sourcePath: try requiredExternalPath(candidate.runtime.sourcePath, environmentKey: "FLECK_WHISPER_CPP_SOURCE_PATH"),
+          cliPath: try requiredExternalPath(candidate.runtime.cliPath, environmentKey: "FLECK_WHISPER_CLI_PATH"),
+          cliByteCount: candidate.runtime.cliByteCount,
+          cliSHA256: candidate.runtime.cliSHA256,
+          buildCachePath: try requiredExternalPath(candidate.runtime.buildCachePath, environmentKey: "FLECK_WHISPER_BUILD_CACHE_PATH"),
+          architecture: candidate.runtime.architecture,
+          license: candidate.runtime.license,
+          buildFlags: candidate.runtime.buildFlags
+        )
+      ),
+      corpus: CorpusControl(
+        manifestPath: corpus.manifestPath,
+        validationRoot: try requiredExternalPath(corpus.validationRoot, environmentKey: "FLECK_FLEURS_VALIDATION_ROOT"),
+        compositeRoot: try requiredExternalPath(corpus.compositeRoot, environmentKey: "FLECK_FLEURS_COMPOSITE_ROOT"),
+        manifestID: corpus.manifestID,
+        sourceRevision: corpus.sourceRevision,
+        license: corpus.license,
+        expectedCounts: corpus.expectedCounts
+      ),
+      execution: execution
+    )
+  }
+}
+
+private func requiredExternalPath(_ placeholder: String, environmentKey: String) throws -> String {
+  guard placeholder == "${\(environmentKey)}" else {
+    throw BenchmarkError.contract("external path must use ${\(environmentKey)} in the tracked control")
+  }
+  guard let value = ProcessInfo.processInfo.environment[environmentKey], !value.isEmpty else {
+    throw BenchmarkError.usage("set \(environmentKey) to the existing external artifact path; no download is performed")
+  }
+  return value
 }
 
 private struct CandidateControl: Decodable {
@@ -553,7 +605,7 @@ private final class BenchmarkRunner {
 
     let controlData = try Data(contentsOf: URL(fileURLWithPath: controlPath))
     try StrictJSON.validate(controlData, maximumBytes: 1_048_576)
-    let control = try JSONDecoder().decode(Control.self, from: controlData)
+    let control = try JSONDecoder().decode(Control.self, from: controlData).resolvingExternalPaths()
     let repoRoot = try canonicalDirectory(repoRootPath, label: "repository root")
     let outputRoot = try prepareOutputRoot(
       outputRootPath,
@@ -700,7 +752,6 @@ private final class BenchmarkRunner {
     }
     guard model.id == "ggerganov/whisper.cpp:ggml-small.bin",
       model.revision == "80da2d8bfee42b0e836fc3a9890373e5defc00a6",
-      model.path == "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Quarantine/whisper-small-control/ggml-small.bin",
       model.byteCount == 487_601_967,
       model.sha256 == "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
       model.fileType == expectedModelFileType,
@@ -712,11 +763,8 @@ private final class BenchmarkRunner {
     guard runtime.id == "whisper.cpp",
       runtime.version == "v1.9.2",
       runtime.sourceCommit == "306c88f4d1286aec1bf96e544632897886af5501",
-      runtime.sourcePath == "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Sources/whisper.cpp-306c88f4d1286aec1bf96e544632897886af5501",
-      runtime.cliPath == "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Builds/whisper-small-control/metal-static/bin/whisper-cli",
       runtime.cliByteCount == 3_271_592,
       runtime.cliSHA256 == "cbde25b4d8db46feeab59355809725ff11ec4039b3251a1997ddd3a187901e03",
-      runtime.buildCachePath == "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Builds/whisper-small-control/metal-static/CMakeCache.txt",
       runtime.architecture == "arm64",
       runtime.license == "MIT"
     else {

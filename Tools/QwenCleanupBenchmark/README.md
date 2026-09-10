@@ -39,10 +39,11 @@ vocab.json                        6722759       ce99b4cb2983d118806ce0a8b777a35b
 LICENSE.Qwen-upstream-Apache-2.0     11544       bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a
 ```
 
-The runtime must be the canonical interpreter and exact package versions:
+The runtime must use an explicitly supplied canonical interpreter and exact
+package versions:
 
 ```text
-Python:  /opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14
+Python executable SHA-256: 87d4df53fd91304be5bac391fb204643c36b7df2023c04a0953bcbc7d4fdf634
 mlx-lm:  0.31.3
 mlx:     0.31.2
 ```
@@ -74,8 +75,13 @@ Final publication uses private staging outside the repository and output tree. T
 The fake suite never imports or loads the real model:
 
 ```sh
-sh Tools/QwenCleanupBenchmark/Tests/run-contract-tests.sh
+FLECK_QWEN_PYTHON_EXECUTABLE="/absolute/canonical/path/to/existing/python3.14" \
+  sh Tools/QwenCleanupBenchmark/Tests/run-contract-tests.sh
 ```
+
+Use the canonical regular-file path for the pinned executable under test, not a
+symlink or path alias. The suite retains its existing interpreter, helper, and
+validator digest checks.
 
 It covers artifact mismatch before runtime/model load, full-inventory and tokenizer/chat-template tampering, denied network, poisoned ambient Python startup, duplicate/unknown/forged helper records, recursive nested duplicates in generation/offline/artifact/prompt, malformed and wrapper outputs, pinned runtime/provenance shape, exact envelope acceptance, protected-content rejection, one request/no retry, just-under and over-deadline termination from monotonic clocks, no late publication, symlink/path boundaries, and output-directory replacement races.
 
@@ -84,13 +90,19 @@ It covers artifact mismatch before runtime/model load, full-inventory and tokeni
 Run this only after the fake suite is green and only with the external paths present. The command writes evidence only under the explicit external output root:
 
 ```sh
+export FLECK_QWEN_PYTHON_EXECUTABLE="/absolute/path/to/existing/python3.14"
+export FLECK_QWEN_RUNTIME_SITE_PACKAGES="/absolute/path/to/existing/site-packages"
+export FLECK_QWEN_MODEL_ROOT="/absolute/path/to/existing/qwen3.5-0.8b-model"
+export FLECK_QWEN_OUTPUT_ROOT="/absolute/path/to/existing/output-root"
+
 sh Tools/QwenCleanupBenchmark/run-qwen-cleanup-benchmark.sh \
   --smoke \
-  --python-executable "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14" \
-  --runtime-site-packages "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Tools/qwen35-cleanup-mlx-0.31.3/lib/python3.14/site-packages" \
-  --model-root "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Quarantine/qwen3.5-0.8b-mlx-4bit" \
-  --output-root "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns" \
   --case-id en-filler-repetition-name
 ```
+
+All four environment variables are required unless their corresponding CLI
+options are supplied. They must identify existing canonical external paths;
+the output root must be outside the repository and app bundles. The harness has
+no private fallback and downloads nothing.
 
 The smoke result is external benchmark evidence only. It does not change admission, integration, packaging, installer, release, or repository state.

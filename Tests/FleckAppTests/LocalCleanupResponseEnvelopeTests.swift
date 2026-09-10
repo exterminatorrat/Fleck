@@ -132,7 +132,7 @@ import Testing
     ("number", "Send 20 files", "Send 21 files"),
     ("date", "Meet on 2026-08-20", "Meet on 2026-08-21"),
     ("URL", "Open https://example.com/docs", "Open https://example.com/help"),
-    ("path", "Read /Users/harryjin/Fleck/README.md", "Read /Users/harryjin/Fleck/AGENTS.md"),
+    ("path", "Read /fixtures/fleck/README.md", "Read /fixtures/fleck/AGENTS.md"),
     ("command", "Run git status --short", "Run git log --short"),
     ("destination", "Save it to Inbox", "Save it to Archive"),
     ("commitment", "I will ship the patch", "I might ship the patch"),
