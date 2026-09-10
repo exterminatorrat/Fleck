@@ -1,4 +1,5 @@
 #if os(macOS) && CLEAN_DICTATION_ENHANCED_CANDIDATE
+import Combine
 import Foundation
 import FleckCore
 import Testing
@@ -119,7 +120,7 @@ struct GemmaCleanupAppCompositionTests {
 
     fixture.verifiedRepositoryURL = fixture.repositoryURL
     fixture.installer.publish(phase: .installed)
-    await fixture.waitForPresentation(composition, .installed)
+    guard await fixture.waitForPresentation(composition, .installed) else { return }
     composition.reconcileGate()
     #expect(composition.isGemmaReady)
     _ = try composition.cleanupGenerator.start(cleanupRequest(), maximumOutputTokens: 24)
@@ -255,25 +256,30 @@ struct GemmaCleanupAppCompositionTests {
 
   @Test @MainActor
   func mutationSuppressionRequiresNonInstalledBeforeFreshInstalledReopens() async throws {
-    let fixture = CompositionFixture(phase: .installed, verified: true)
+    let fixture = CompositionFixture(
+      phase: .installed,
+      verified: true,
+      publicationDelay: .milliseconds(20)
+    )
     let mutation = MutationCallbackProbe()
     let composition = fixture.makeActivatedComposition(mutation: mutation)
 
     await mutation.run()
     fixture.installer.publish(phase: .installed)
-    await fixture.drainPresentationUpdates()
+    guard await fixture.drainPresentationUpdates() else { return }
     #expect(throws: DynamicCleanupGeneratorError.gemmaUnavailable) {
       _ = try composition.cleanupGenerator.start(cleanupRequest(), maximumOutputTokens: 24)
     }
 
     fixture.installer.publish(phase: .removing)
-    await fixture.waitForPresentation(composition, .removing)
+    #expect(composition.settingsViewModel.presentation.phase == .installed)
+    guard await fixture.waitForPresentation(composition, .removing) else { return }
     #expect(throws: DynamicCleanupGeneratorError.gemmaUnavailable) {
       _ = try composition.cleanupGenerator.start(cleanupRequest(), maximumOutputTokens: 24)
     }
 
     fixture.installer.publish(phase: .installed)
-    await fixture.waitForPresentation(composition, .installed)
+    guard await fixture.waitForPresentation(composition, .installed) else { return }
     let session = try composition.cleanupGenerator.start(
       cleanupRequest(),
       maximumOutputTokens: 24
@@ -288,9 +294,9 @@ struct GemmaCleanupAppCompositionTests {
 
     disabledComposition.disable()
     disabledFixture.installer.publish(phase: .removing)
-    await disabledFixture.waitForPresentation(disabledComposition, .removing)
+    guard await disabledFixture.waitForPresentation(disabledComposition, .removing) else { return }
     disabledFixture.installer.publish(phase: .installed)
-    await disabledFixture.waitForPresentation(disabledComposition, .installed)
+    guard await disabledFixture.waitForPresentation(disabledComposition, .installed) else { return }
     #expect(throws: DynamicCleanupGeneratorError.gemmaUnavailable) {
       _ = try disabledComposition.cleanupGenerator.start(
         cleanupRequest(),
@@ -302,9 +308,9 @@ struct GemmaCleanupAppCompositionTests {
     let shutdownComposition = shutdownFixture.makeComposition()
     await shutdownComposition.shutdown()
     shutdownFixture.installer.publish(phase: .removing)
-    await shutdownFixture.waitForPresentation(shutdownComposition, .removing)
+    guard await shutdownFixture.waitForPresentation(shutdownComposition, .removing) else { return }
     shutdownFixture.installer.publish(phase: .installed)
-    await shutdownFixture.waitForPresentation(shutdownComposition, .installed)
+    guard await shutdownFixture.waitForPresentation(shutdownComposition, .installed) else { return }
     #expect(throws: DynamicCleanupGeneratorError.gemmaUnavailable) {
       _ = try shutdownComposition.cleanupGenerator.start(
         cleanupRequest(),
@@ -418,13 +424,17 @@ private final class CompositionFixture {
   let transport: CompositionTransport
   let events = EventProbe()
   var verifiedRepositoryURL: URL?
+  private var presentationDelivery: CompositionPresentationDelivery?
+  private var initialPresentationPhase: AdmittedModelInstallPhase?
+  private var acknowledgedInitialPresentation = false
 
   init(
     phase: AdmittedModelInstallPhase,
     verified: Bool,
-    blocksAcknowledgement: Bool = false
+    blocksAcknowledgement: Bool = false,
+    publicationDelay: Duration? = nil
   ) {
-    installer = CompositionInstaller(phase: phase)
+    installer = CompositionInstaller(phase: phase, publicationDelay: publicationDelay)
     manager = EnhancedModelManager(
       modelRootURL: URL(fileURLWithPath: "/tmp/fleck-gemma-manager", isDirectory: true),
       candidateEnabled: true,
@@ -443,7 +453,7 @@ private final class CompositionFixture {
     foundationRouter: any DestinationRouting = InboxRouter(),
     prepareForGeneration: @escaping @Sendable () async throws -> Void = {}
   ) -> GemmaCleanupCandidateComposition {
-    GemmaCleanupCandidateComposition(
+    let composition = GemmaCleanupCandidateComposition(
       activation: activation,
       foundationIsAvailable: foundationIsAvailable,
       foundationGenerator: foundationGenerator,
@@ -453,13 +463,15 @@ private final class CompositionFixture {
         self?.verifiedRepositoryURL.map(EnhancedModelVerifiedLoadState.ready) ?? .unavailable
       }
     )
+    observePresentationDelivery(from: composition)
+    return composition
   }
 
   func makeActivatedComposition(
     mutation: MutationCallbackProbe
   ) -> GemmaCleanupCandidateComposition {
     let activation = activation
-    return GemmaCleanupCandidateComposition(
+    let composition = GemmaCleanupCandidateComposition(
       applicationSupportURL: URL(fileURLWithPath: "/tmp/fleck-app-support"),
       foundationIsAvailable: { false },
       foundationGenerator: CleanupGeneratorProbe(text: "foundation"),
@@ -474,6 +486,8 @@ private final class CompositionFixture {
         return activation
       }
     )
+    observePresentationDelivery(from: composition)
+    return composition
   }
 
   var activation: GemmaCleanupTestActivation.Result {
@@ -485,20 +499,110 @@ private final class CompositionFixture {
     )
   }
 
+  @discardableResult
   func waitForPresentation(
     _ composition: GemmaCleanupCandidateComposition,
     _ phase: AdmittedModelInstallPhase
-  ) async {
-    for _ in 0..<100 where composition.settingsViewModel.presentation.phase != phase {
-      await Task.yield()
+  ) async -> Bool {
+    guard let deliveredPhase = await nextPresentationPublication() else {
+      return false
     }
-    #expect(composition.settingsViewModel.presentation.phase == phase)
+    guard deliveredPhase == phase else {
+      Issue.record("Expected next presentation phase \(phase), received \(deliveredPhase)")
+      return false
+    }
+    guard composition.settingsViewModel.presentation.phase == phase else {
+      Issue.record("Presentation publication arrived before the phase was observable")
+      return false
+    }
+    return true
   }
 
-  func drainPresentationUpdates() async {
-    for _ in 0..<100 {
-      await Task.yield()
+  @discardableResult
+  func drainPresentationUpdates() async -> Bool {
+    guard let composition else {
+      Issue.record("Composition presentation observer is not installed")
+      return false
     }
+    return await waitForPresentation(composition, installer.snapshot.phase)
+  }
+
+  private weak var composition: GemmaCleanupCandidateComposition?
+
+  private func observePresentationDelivery(from composition: GemmaCleanupCandidateComposition) {
+    self.composition = composition
+    initialPresentationPhase = composition.settingsViewModel.presentation.phase
+    presentationDelivery = CompositionPresentationDelivery(composition.settingsViewModel)
+  }
+
+  private func nextPresentationPublication() async -> AdmittedModelInstallPhase? {
+    guard let presentationDelivery else { return nil }
+    if !acknowledgedInitialPresentation {
+      guard let deliveredInitial = await presentationDelivery.next() else {
+        Issue.record("Timed out waiting for the initial presentation delivery")
+        return nil
+      }
+      guard deliveredInitial == initialPresentationPhase else {
+        Issue.record(
+          "Expected initial presentation phase \(String(describing: initialPresentationPhase)), received \(deliveredInitial)"
+        )
+        return nil
+      }
+      acknowledgedInitialPresentation = true
+    }
+    guard let publication = await presentationDelivery.next() else {
+      Issue.record("Timed out waiting for the next presentation publication")
+      return nil
+    }
+    return publication
+  }
+}
+
+@MainActor
+private final class CompositionPresentationDelivery {
+  private var buffered: [AdmittedModelInstallPhase] = []
+  private var waiter: CheckedContinuation<AdmittedModelInstallPhase?, Never>?
+  private var timeoutTask: Task<Void, Never>?
+  private var cancellable: AnyCancellable?
+
+  init(_ viewModel: AdmittedModelSettingsViewModel) {
+    cancellable = viewModel.$presentation.dropFirst().sink { [weak self] presentation in
+      self?.receive(presentation.phase)
+    }
+  }
+
+  func next() async -> AdmittedModelInstallPhase? {
+    if !buffered.isEmpty { return buffered.removeFirst() }
+    return await withCheckedContinuation { continuation in
+      waiter = continuation
+      timeoutTask = Task { @MainActor [weak self] in
+        do {
+          try await Task.sleep(for: .seconds(1))
+        } catch {
+          return
+        }
+        guard !Task.isCancelled else { return }
+        self?.timeOut()
+      }
+    }
+  }
+
+  private func receive(_ phase: AdmittedModelInstallPhase) {
+    guard let waiter else {
+      buffered.append(phase)
+      return
+    }
+    self.waiter = nil
+    timeoutTask?.cancel()
+    timeoutTask = nil
+    waiter.resume(returning: phase)
+  }
+
+  private func timeOut() {
+    guard let waiter else { return }
+    self.waiter = nil
+    timeoutTask = nil
+    waiter.resume(returning: nil)
   }
 }
 
@@ -596,12 +700,14 @@ private final class CompositionInstaller: AdmittedModelInstalling {
   private(set) var snapshot: AdmittedModelInstallationSnapshot
   let updates: AsyncStream<AdmittedModelInstallationSnapshot>
   private let continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation
+  private let publicationDelay: Duration?
   private(set) var cancelCount = 0
 
-  init(phase: AdmittedModelInstallPhase) {
+  init(phase: AdmittedModelInstallPhase, publicationDelay: Duration? = nil) {
     let pair = AsyncStream<AdmittedModelInstallationSnapshot>.makeStream()
     updates = pair.stream
     continuation = pair.continuation
+    self.publicationDelay = publicationDelay
     snapshot = .init(
       recommendation: phase == .builtIn
         ? .builtIn
@@ -609,7 +715,7 @@ private final class CompositionInstaller: AdmittedModelInstalling {
       phase: phase,
       lastError: nil
     )
-    continuation.yield(snapshot)
+    deliver(snapshot)
   }
 
   func publish(phase: AdmittedModelInstallPhase) {
@@ -618,7 +724,18 @@ private final class CompositionInstaller: AdmittedModelInstalling {
       phase: phase,
       lastError: nil
     )
-    continuation.yield(snapshot)
+    deliver(snapshot)
+  }
+
+  private func deliver(_ snapshot: AdmittedModelInstallationSnapshot) {
+    guard let publicationDelay else {
+      continuation.yield(snapshot)
+      return
+    }
+    Task { [continuation] in
+      try? await Task.sleep(for: publicationDelay)
+      continuation.yield(snapshot)
+    }
   }
 
   func refresh() async {}
