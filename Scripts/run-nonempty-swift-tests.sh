@@ -206,6 +206,7 @@ finish() {
 readonly list_output="$state_dir/test-list"
 readonly canonical_output="$state_dir/canonical-test-list"
 readonly matches="$state_dir/matches"
+readonly test_output="$state_dir/test-output"
 
 set +e
 (
@@ -264,7 +265,23 @@ set +e
 (
   cd "$package_root"
   swift test --disable-automatic-resolution --no-parallel --filter "$run_filter"
-)
-test_status=$?
+) 2>&1 | /usr/bin/tee "$test_output"
+test_pipeline_status=("${PIPESTATUS[@]}")
 set -e
-finish "$test_status"
+test_status="${test_pipeline_status[0]}"
+output_status="${test_pipeline_status[1]}"
+(( test_status == 0 )) || finish "$test_status"
+if (( output_status != 0 )); then
+  printf '%s\n' 'error: failed to capture Swift test output' >&2
+  finish 1
+fi
+
+final_output_line="$(/usr/bin/awk 'NF { line = $0 } END { print line }' "$test_output")"
+if ! printf '%s\n' "$final_output_line" | LC_ALL=C /usr/bin/grep -Eq \
+  '^✔ Test run with [1-9][0-9]* tests? in [0-9]+ suites? passed after [0-9]+(\.[0-9]+)? seconds\.$'; then
+  printf '%s\n' \
+    'error: Swift test exited successfully without a final non-empty passing test summary' >&2
+  finish 1
+fi
+
+finish 0

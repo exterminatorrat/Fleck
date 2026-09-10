@@ -146,6 +146,13 @@ if [ "${1:-}" = test ]; then
   if [ "${FAKE_SIGNAL_RUNNER:-0}" = 1 ]; then
     kill -TERM "$PPID"
   fi
+  if [ "${FAKE_RUN_OUTPUT+x}" = x ]; then
+    if [ -n "$FAKE_RUN_OUTPUT" ]; then
+      printf '%s\n' "$FAKE_RUN_OUTPUT"
+    fi
+  else
+    printf '%s\n' '✔ Test run with 1 test in 0 suites passed after 0.001 seconds.'
+  fi
   exit "${FAKE_RUN_EXIT:-0}"
 fi
 
@@ -172,6 +179,12 @@ assert_status() {
 assert_root_lock() {
   /usr/bin/grep -Fxq 'ordinary root lock' "$fixture_root/Package.resolved" ||
     fail 'root Package.resolved was not restored'
+}
+
+assert_completion_error() {
+  /usr/bin/grep -Fq \
+    'error: Swift test exited successfully without a final non-empty passing test summary' \
+    "$fixture_state/output" || fail 'missing Swift test completion error'
 }
 
 reset_invocations() {
@@ -203,6 +216,63 @@ run_enhanced() {
   )
 }
 
+assert_completion_contracts() {
+  local runner="$1"
+  local label="$2"
+  local identifier='CompletionTests.known()'
+  local identifier_regex='^CompletionTests\.known\(\)$'
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT=$'✔ Test known() passed after 0.001 seconds.\n◇ Test stale() started.' \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  [[ "$RUN_STATUS" -ne 0 ]] || fail "$label incomplete zero exit unexpectedly passed"
+  assert_completion_error
+  assert_root_lock
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT='' \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  [[ "$RUN_STATUS" -ne 0 ]] || fail "$label silent zero exit unexpectedly passed"
+  assert_completion_error
+  assert_root_lock
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT='✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.' \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  [[ "$RUN_STATUS" -ne 0 ]] || fail "$label zero-test summary unexpectedly passed"
+  assert_completion_error
+  assert_root_lock
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT='✘ Test run with 1 test in 0 suites failed after 0.001 seconds with 1 issue.' \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  [[ "$RUN_STATUS" -ne 0 ]] || fail "$label failure summary unexpectedly passed"
+  assert_completion_error
+  assert_root_lock
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT='✔ Test run with 2 tests in 1 suite passed after 0.001 seconds.' \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  assert_status 0
+  /usr/bin/grep -Fxq \
+    '✔ Test run with 2 tests in 1 suite passed after 0.001 seconds.' \
+    "$fixture_state/output" || fail "$label did not stream successful test output"
+  assert_root_lock
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT='◇ Test known() started.' \
+    FAKE_RUN_EXIT=37 \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  assert_status 37
+  assert_root_lock
+}
+
 run_crashing_ordinary() {
   cd "$foreign_root"
   exec env \
@@ -223,6 +293,9 @@ run_capture "$fixture_state/output" run_ordinary 'FleckCoreTests\.known\(\)$'
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'ordinary runner accepted an unanchored regex'
 [[ ! -s "$fixture_state/swift-invocations" ]] ||
   fail 'invalid regex reached swift'
+
+assert_completion_contracts run_ordinary ordinary
+assert_completion_contracts run_enhanced enhanced
 
 readonly old_coordination_artifact="$fixture_root/.build/.fleck-nonempty-swift-tests.lock"
 readonly coordination_artifact="$fixture_root/.build/.fleck-nonempty-swift-tests.lockf"

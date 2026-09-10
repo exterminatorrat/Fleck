@@ -3,10 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test --test-concurrency=1 worker/index.test.js src/Navigation.test.js src/heroStates.test.js src/HeroStory.test.js",
+    "test": "node --test --test-concurrency=1 worker/*.test.js src/*.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
