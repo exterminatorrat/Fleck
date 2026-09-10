@@ -53,6 +53,24 @@ jobs:
         run: bash Tests/Scripts/validate-macos-no-launch.test.sh
       - name: Validate non-launching bundle metadata, signature, and packaging
         run: Scripts/validate-macos.sh
+
+  macos-enhanced:
+    name: macOS Enhanced Local candidate gates
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
       - name: Verify Enhanced Local candidate pin
         run: Scripts/test-enhanced-candidate-pin.sh
       - name: Test Enhanced Local candidate graph
