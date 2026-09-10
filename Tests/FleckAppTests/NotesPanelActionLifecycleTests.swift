@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import FleckCore
 import Foundation
 import SwiftUI
@@ -117,20 +118,28 @@ struct NotesPanelActionLifecycleTests {
       trashedNotes: [trashed]
     )
     let restoreCounter = InvocationCounter()
+    let restoreCompletion = AsyncStream<Void>.makeStream()
+    defer { restoreCompletion.continuation.finish() }
+    let restoreRelease = Gate()
     let state = AppState(
       store: store,
       restoreOperation: { row, workspace, preferences, generation in
         await restoreCounter.record()
-        return try await store.restore(
+        let outcome = try await store.restore(
           row,
           into: workspace,
           preferences: preferences,
           generation: generation
         )
+        restoreCompletion.continuation.yield(())
+        restoreCompletion.continuation.finish()
+        await restoreRelease.wait()
+        return outcome
       }
     )
     await state.waitUntilInitialLoad()
     var doneCount = 0
+    let initialTrashRefresh = TrashPublicationProbe(state: state)
     let (window, host) = hostOverlay(
       AnyView(
         TrashPanelOverlay(onDone: { doneCount += 1 })
@@ -142,6 +151,8 @@ struct NotesPanelActionLifecycleTests {
       window.contentView = nil
       window.orderOut(nil)
     }
+    let refreshedTrash = await initialTrashRefresh.next(timeout: .seconds(1))
+    #expect(refreshedTrash?.map(\.id) == [trashed.id])
     await settle(host)
 
     let cardFrame = try #require(
@@ -167,6 +178,15 @@ struct NotesPanelActionLifecycleTests {
       in: window,
       root: host
     )
+    let completedTrashRefresh = TrashPublicationProbe(state: state)
+    let restoreReachedCompletion = await firstValue(
+      from: restoreCompletion.stream,
+      timeout: .seconds(1)
+    ) != nil
+    #expect(restoreReachedCompletion)
+    await restoreRelease.openGate()
+    let completedTrash = await completedTrashRefresh.next(timeout: .seconds(1))
+    #expect(completedTrash?.isEmpty == true)
     await settle(host)
 
     #expect(window.isVisible)
@@ -218,6 +238,54 @@ private actor InvocationCounter {
   }
 
   var value: Int { count }
+}
+
+@MainActor
+private final class TrashPublicationProbe {
+  private let stream: AsyncStream<[TrashedNote]>
+  private let continuation: AsyncStream<[TrashedNote]>.Continuation
+  private var observation: AnyCancellable?
+
+  init(state: AppState) {
+    let publications = AsyncStream<[TrashedNote]>.makeStream()
+    stream = publications.stream
+    continuation = publications.continuation
+    var isInitialPublication = true
+    observation = state.$trashedNotes.sink { notes in
+      if isInitialPublication {
+        isInitialPublication = false
+      } else {
+        publications.continuation.yield(notes)
+      }
+    }
+  }
+
+  func next(timeout: Duration) async -> [TrashedNote]? {
+    defer {
+      observation?.cancel()
+      continuation.finish()
+    }
+    return await firstValue(from: stream, timeout: timeout)
+  }
+}
+
+private func firstValue<Element: Sendable>(
+  from stream: AsyncStream<Element>,
+  timeout: Duration
+) async -> Element? {
+  await withTaskGroup(of: Element?.self, returning: Element?.self) { group in
+    group.addTask {
+      var iterator = stream.makeAsyncIterator()
+      return await iterator.next()
+    }
+    group.addTask {
+      try? await Task.sleep(for: timeout)
+      return nil
+    }
+    let first = await group.next() ?? nil
+    group.cancelAll()
+    return first
+  }
 }
 
 private func notesPanelSource() throws -> String {

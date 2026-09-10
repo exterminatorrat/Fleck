@@ -15,8 +15,8 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - name: Check out repository (actions/checkout v4.2.2)
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Check out repository (actions/checkout v6.0.2)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Toolchain
         run: |
           xcodebuild -version
@@ -28,7 +28,9 @@ jobs:
           fi
           rg --version
       - name: Test ordinary graph
-        run: Scripts/run-nonempty-swift-tests.sh '^.+$'
+        run: |
+          unset FLECK_ENHANCED_CANDIDATE
+          Scripts/run-nonempty-swift-tests.sh '^.+$'
       - name: Build Fleck release product
         run: |
           unset FLECK_ENHANCED_CANDIDATE
@@ -39,8 +41,12 @@ jobs:
           swift build -c release --product fleck-agent
       - name: Audit agent boundary
         run: Scripts/audit-agent-boundary.sh
-      - name: Enforce executable size budget
-        run: Scripts/check-release-size.sh .build/release/Fleck
+      - name: Test packaged app symbol stripping
+        run: Tests/Scripts/build-fleck-app-symbols.test.sh
+      - name: Package Fleck app
+        run: Scripts/build-fleck-app.sh
+      - name: Enforce packaged app size budget
+        run: Scripts/check-release-size.sh .build/Fleck.app
       - name: Test release model-asset exclusion
         run: Scripts/test-release-model-asset-exclusion.sh
       - name: Validate macOS no-launch contract
@@ -70,10 +76,10 @@ jobs:
       run:
         working-directory: website
     steps:
-      - name: Check out repository (actions/checkout v4.2.2)
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Set up Node.js (actions/setup-node v4.4.0)
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - name: Check out repository (actions/checkout v6.0.2)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Set up Node.js (actions/setup-node v6.1.0)
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f
         with:
           node-version-file: website/.node-version
           cache: npm

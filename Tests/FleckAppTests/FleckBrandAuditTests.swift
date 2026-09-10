@@ -37,10 +37,15 @@ import Testing
     contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
     encoding: .utf8
   )
-  #expect(notesPanelSource.contains("FleckMark.load(template: true)"))
+  let activityIndicatorSource = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/AgentActivityIndicator.swift"),
+    encoding: .utf8
+  )
+  #expect(notesPanelSource.contains("AgentActivityIndicator("))
+  #expect(activityIndicatorSource.contains("FleckMark.load(template: true)"))
 }
 
-@Test func notesPanelHeaderExposesOnlyTheFleckMarkAndMissingMarkWarning() throws {
+@Test func notesPanelHeaderDelegatesFleckMarkAndMissingResourceWarningToAgentIndicator() throws {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -49,15 +54,23 @@ import Testing
     contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
     encoding: .utf8
   )
+  let activityIndicator = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/AgentActivityIndicator.swift"),
+    encoding: .utf8
+  )
   let header = try #require(source.components(separatedBy: "private var header: some View").dropFirst().first)
   let titleArea = try #require(header.components(separatedBy: "Spacer()").first)
-  let mark = try #require(titleArea.range(of: "FleckMark.load(template: true)"))
+  let mark = try #require(activityIndicator.range(of: "FleckMark.load(template: true)"))
 
-  #expect(titleArea[mark.upperBound...].contains("Image(nsImage: mark)"))
-  #expect(titleArea[mark.upperBound...].contains(".accessibilityHidden(true)"))
+  #expect(titleArea.contains("AgentActivityIndicator("))
+  #expect(activityIndicator[mark.upperBound...].contains("Image(nsImage: mark)"))
+  #expect(activityIndicator.contains("case .missingPackagedResource:"))
+  #expect(activityIndicator.contains("Text(\"!\")"))
+  #expect(activityIndicator.contains(".foregroundStyle(.red)"))
   #expect(!titleArea.contains("Text(\"Fleck\")"))
   #expect(!titleArea.contains(".accessibilityLabel(\"Fleck\")"))
-  #expect(titleArea.contains(".accessibilityLabel(\"Fleck mark missing\")"))
+  #expect(activityIndicator.contains(".accessibilityLabel(presentation.state.accessibilityLabel)"))
+  #expect(activityIndicator.contains(".accessibilityHint(\"Open Agent Activity\")"))
 }
 
 @Test @MainActor func fleckMarkFailsLoudlyForMissingPackagedResourceButFallsBackInBareDevelopment() {
@@ -189,7 +202,14 @@ func fleckMarkRetainsPackagedImageAfterBackingFileDisappears() throws {
   #expect(documentation.allSatisfy { $0.contains("Agent Connector") })
   #expect(testing.contains("Scripts/build-fleck-app.sh"))
   #expect(testing.contains("/usr/bin/open -n .build/Fleck.app"))
-  #expect(!testing.contains("swift run Fleck"))
+  #expect(testing.contains("`swift run Fleck` is not a substitute."))
+  #expect(testing.components(separatedBy: "swift run Fleck").count - 1 == 1)
+  #expect(
+    testing.range(
+      of: #"(?m)^[\t ]*swift run Fleck[\t ]*$"#,
+      options: .regularExpression
+    ) == nil
+  )
   #expect(!testing.contains("Product → Run"))
   #expect(
     (documentation + [sources]).allSatisfy {

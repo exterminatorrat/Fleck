@@ -3,6 +3,10 @@
 Fleck is a native, local-first macOS notes workspace for quick capture, focused
 editing, on-device dictation, and explicitly granted local agent access.
 
+> **Source Preview:** This repository publishes Fleck source for inspection and
+> local development. It provides no signed or notarized app, GitHub Release,
+> supported release, or downloadable binary.
+
 > **Developer Preview:** Fleck is under active development. There is no
 > supported binary release yet, and storage formats and contributor-facing
 > interfaces may change during the 0.x series.
@@ -73,8 +77,12 @@ Run the ordinary Swift package tests from the repository root:
 
 ```sh
 unset FLECK_ENHANCED_CANDIDATE
-swift test --disable-automatic-resolution --no-parallel
+Scripts/run-nonempty-swift-tests.sh '^.+$'
 ```
+
+The test runner does not launch the product `Fleck.app`, but its synthetic
+AppKit host may create fixture windows and change focus. Run native fixtures in
+a disposable macOS test account or session with synthetic content.
 
 Build the development-signed app bundle without launching it:
 
@@ -129,17 +137,22 @@ Motion, contrast, and resource efficiency as features evolve.
 
 ## Contributing
 
-Focused contributions are welcome. Read [Contributing](CONTRIBUTING.md),
-[Testing](TESTING.md), and the [Code of Conduct](CODE_OF_CONDUCT.md) before
-opening a pull request. Security-sensitive findings need a private channel; the
-current availability and launch gate are documented in [Security](SECURITY.md).
+Public contribution intake is not open yet. The future workflow is documented
+in [Contributing](CONTRIBUTING.md) and [Testing](TESTING.md), but participation
+will open only after the [Code of Conduct](CODE_OF_CONDUCT.md) names a verified
+private conduct-reporting route and its recipient and the remaining readiness
+gates are complete. Security-sensitive findings have a separate launch gate
+documented in [Security](SECURITY.md).
 
 ## License and name
 
-Fleck source is licensed under the [Mozilla Public License 2.0](LICENSE). No
-contributor license agreement is required. The Fleck name, logo, and other brand
-assets are reserved separately; the source license does not grant trademark
-rights.
+Fleck-owned source and documentation in the current tree are licensed under the
+[Mozilla Public License 2.0](LICENSE), subject to the boundaries in
+[NOTICE](NOTICE), [Branding](BRANDING.md), and
+[Third-party notices](THIRD_PARTY_NOTICES.md). Earlier revisions remain subject
+to the license notices and terms accompanying those revisions. No contributor
+license agreement is required. The Fleck name, logo, and other brand assets are
+reserved separately; the source license does not grant trademark rights.
 
 Reviewed ordinary Swift code dependencies use MIT and/or Apache-2.0 terms;
 documentation and candidate assets may carry additional terms. Exact pins and

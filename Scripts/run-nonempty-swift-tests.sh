@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+readonly appkit_runner="$script_dir/run-swift-tests-with-appkit-host.sh"
 
 usage() {
   printf 'usage: %s [--package-path <repository-relative-package>] <anchored-test-identifier-regex>\n' \
@@ -207,6 +208,19 @@ readonly list_output="$state_dir/test-list"
 readonly canonical_output="$state_dir/canonical-test-list"
 readonly matches="$state_dir/matches"
 readonly test_output="$state_dir/test-output"
+
+if [[ "$package_root" = "$repo_root" ]]; then
+  [[ -x "$appkit_runner" ]] || {
+    printf 'error: AppKit Swift test runner is not executable: %s\n' \
+      "$appkit_runner" >&2
+    finish 2
+  }
+  set +e
+  "$appkit_runner" "$package_root" '' "$identifier_regex"
+  appkit_status=$?
+  set -e
+  finish "$appkit_status"
+fi
 
 set +e
 (

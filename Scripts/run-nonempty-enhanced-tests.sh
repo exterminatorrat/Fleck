@@ -4,6 +4,7 @@ set -euo pipefail
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 readonly resolver="$script_dir/resolve-enhanced-candidate.sh"
+readonly appkit_runner="$script_dir/run-swift-tests-with-appkit-host.sh"
 
 if (( $# != 1 )); then
   printf 'usage: %s <anchored-test-identifier-regex>\n' "${0##*/}" >&2
@@ -25,6 +26,11 @@ if (( regex_status == 2 )); then
 fi
 [[ -x "$resolver" ]] || {
   printf 'error: enhanced candidate resolver is not executable: %s\n' "$resolver" >&2
+  exit 2
+}
+[[ -x "$appkit_runner" ]] || {
+  printf 'error: AppKit Swift test runner is not executable: %s\n' \
+    "$appkit_runner" >&2
   exit 2
 }
 
@@ -131,79 +137,16 @@ done
 readonly shadow_resolver="$shadow_scripts/resolve-enhanced-candidate.sh"
 
 readonly callback='set -uo pipefail
-repo_root="$1"
-scratch="$2"
-identifier_regex="$3"
-list_output="$4"
-canonical_output="$5"
-matches="$6"
-test_output="$7"
-cd "$repo_root"
-swift test list --disable-automatic-resolution --scratch-path "$scratch" > "$list_output"
-status=$?
-(( status == 0 )) || exit "$status"
-LC_ALL=C /usr/bin/grep -E \
-  '\''^[[:alnum:]_][[:alnum:]_-]*\.[[:alnum:]_][[:alnum:]_.-]*(/[[:alnum:]_][[:alnum:]_.-]*)*\((([[:alpha:]_][[:alnum:]_]*):)*\)$'\'' \
-  "$list_output" > "$canonical_output" || true
-/usr/bin/grep -E -- "$identifier_regex" "$canonical_output" > "$matches"
-status=$?
-if (( status == 2 )); then
-  printf '\''error: invalid extended regular expression: %s\n'\'' "$identifier_regex" >&2
-  exit 2
-fi
-if [[ ! -s "$matches" ]]; then
-  printf '\''error: test identifier regex matched zero tests: %s\n'\'' "$identifier_regex" >&2
-  exit 3
-fi
-matched_count="$(/usr/bin/wc -l < "$matches" | /usr/bin/tr -d '\'' '\'')"
-printf '\''matched test count: %s\n'\'' "$matched_count"
-while IFS= read -r identifier; do
-  printf '\''matched test: %s\n'\'' "$identifier"
-done < "$matches"
-run_filter="$(/usr/bin/awk '\''
-  function escape_ere(value, result, index_, character) {
-    result = ""
-    for (index_ = 1; index_ <= length(value); index_++) {
-      character = substr(value, index_, 1)
-      if (index("\\.^$|()[]*+?{}", character) > 0) {
-        result = result "\\" character
-      } else {
-        result = result character
-      }
-    }
-    return result
-  }
-  BEGIN { printf "^(" }
-  {
-    identifier = $0
-    if (count++) { printf "|" }
-    printf "%s/", escape_ere(identifier)
-  }
-  END { print ")" }
-'\'' "$matches")"
-swift test --disable-automatic-resolution --scratch-path "$scratch" \
-  --no-parallel --filter "$run_filter" 2>&1 | /usr/bin/tee "$test_output"
-test_pipeline_status=("${PIPESTATUS[@]}")
-test_status="${test_pipeline_status[0]}"
-output_status="${test_pipeline_status[1]}"
-(( test_status == 0 )) || exit "$test_status"
-if (( output_status != 0 )); then
-  printf '\''%s\n'\'' '\''error: failed to capture Swift test output'\'' >&2
-  exit 1
-fi
-final_output_line="$(/usr/bin/awk '\''NF { line = $0 } END { print line }'\'' "$test_output")"
-if ! printf '\''%s\n'\'' "$final_output_line" | LC_ALL=C /usr/bin/grep -Eq \
-  '\''^✔ Test run with [1-9][0-9]* tests? in [0-9]+ suites? passed after [0-9]+(\.[0-9]+)? seconds\.$'\''; then
-  printf '\''%s\n'\'' \
-    '\''error: Swift test exited successfully without a final non-empty passing test summary'\'' >&2
-  exit 1
-fi'
+appkit_runner="$1"
+repo_root="$2"
+scratch="$3"
+identifier_regex="$4"
+"$appkit_runner" "$repo_root" "$scratch" "$identifier_regex"'
 
 set +e
 "$shadow_resolver" "$scratch" /bin/bash -c "$callback" runner-callback \
-  "$shadow_root" "$scratch" "$identifier_regex" \
-  "$temp_parent/test-list" "$temp_parent/canonical-test-list" \
-  "$temp_parent/matches" "$temp_parent/test-output"
+  "$shadow_scripts/run-swift-tests-with-appkit-host.sh" \
+  "$shadow_root" "$scratch" "$identifier_regex"
 resolver_status=$?
 set -e
 

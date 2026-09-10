@@ -27,7 +27,7 @@ Run from the repository root with the Enhanced candidate unset:
 
 ```sh
 unset FLECK_ENHANCED_CANDIDATE
-swift test --disable-automatic-resolution --no-parallel
+Scripts/run-nonempty-swift-tests.sh '^.+$'
 ```
 
 For a focused Swift test, use the non-empty wrapper with an anchored test
@@ -43,10 +43,12 @@ The full ordinary macOS gate is:
 Scripts/validate-macos.sh
 ```
 
-The integrated validator runs tests, creates and inspects the development-signed
-bundle, checks release boundaries, and exits **without launching Fleck**. Treat
-interactive testing as a separate action; this prevents validation from
-modifying Application Support, permission state, windows, or focus implicitly.
+The integrated validator runs tests through a synthetic AppKit host, creates and
+inspects the development-signed bundle, and checks release boundaries. It does
+not launch the product `Fleck.app`, but native fixtures can create synthetic
+windows, change focus, and otherwise affect the test session. Run the gate in a
+disposable macOS test account or session with synthetic fixtures, and treat an
+interactive packaged-app launch as a separate action.
 
 Do not enable the Enhanced candidate for an ordinary test run. Automatic package
 resolution stays disabled so a check does not rewrite the reviewed lockfile.
@@ -138,16 +140,17 @@ visible.
 Run this graph only for work that explicitly touches it:
 
 ```sh
-Scripts/resolve-enhanced-candidate.sh .build-candidate \
-  swift test --disable-automatic-resolution --no-parallel \
-    --scratch-path .build-candidate
+Scripts/run-nonempty-enhanced-tests.sh '^.+$'
 git diff --exit-code -- Package.resolved
 ```
 
-The command proves candidate compilation and deterministic tests, not live model
-quality, microphone behavior, redistribution rights, signing, or release
-readiness. Model assets require their own reviewed fixtures and receipts; do not
-download or run a model merely to validate an ordinary contribution.
+This wrapper is the explicit Enhanced opt-in: it enables
+`FLECK_ENHANCED_CANDIDATE=1` only inside its isolated candidate flow and restores
+the ordinary lockfile afterward. The command proves candidate compilation and
+deterministic tests, not live model quality, microphone behavior, redistribution
+rights, signing, or release readiness. Model assets require their own reviewed
+fixtures and receipts; do not download or run a model merely to validate an
+ordinary contribution.
 
 ## Website
 

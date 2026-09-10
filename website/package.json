@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test --test-concurrency=1 worker/*.test.js src/*.test.js",
+    "test": "node --test --test-concurrency=1 src/*.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -18,8 +18,6 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1.37.1",
-    "vite": "8.2.0",
-    "wrangler": "4.92.0"
+    "vite": "8.2.2"
   }
 }

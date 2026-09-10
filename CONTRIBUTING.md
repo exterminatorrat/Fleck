@@ -1,10 +1,13 @@
 # Contributing to Fleck
 
-Focused pull requests are welcome. Fleck is a Developer Preview, so the best
-contributions make one behavior easier to understand, safer, or more native
-without expanding the product surface unnecessarily.
+This document describes Fleck's future contribution workflow. Public
+contribution intake is closed until the [Code of Conduct](CODE_OF_CONDUCT.md)
+names a verified private conduct-reporting route and its recipient and the
+remaining readiness gates are complete. Until then, the source is available for
+inspection and local development, but the project is not inviting pull requests
+or public participation.
 
-By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+When participation opens, contributors will agree to follow the Code of Conduct.
 Do not put vulnerabilities or private user content in an issue; read
 [Security](SECURITY.md) first.
 
@@ -60,12 +63,15 @@ At minimum, run the ordinary suite:
 
 ```sh
 unset FLECK_ENHANCED_CANDIDATE
-swift test --disable-automatic-resolution --no-parallel
+Scripts/run-nonempty-swift-tests.sh '^.+$'
 ```
 
 Run the focused checks and manual native checks that cover your change. The
 authoritative command list and evidence rules are in [Testing](TESTING.md).
-Do not run an Enhanced candidate graph for an ordinary-only change.
+The ordinary runner does not launch the product `Fleck.app`, but native fixtures
+use a synthetic AppKit host and can create windows or change focus in the
+disposable test session. Do not run an Enhanced candidate graph for an
+ordinary-only change.
 
 Before committing, inspect what will be shared:
 

@@ -99,9 +99,9 @@ struct GemmaCleanupModelManifestTests {
     #expect(notice.contains("mlx-community/gemma-3-1b-it-qat-4bit"))
     #expect(notice.contains("15fed4eafb456c6fcb2a1165f19ac609670ed14b"))
     #expect(notice.contains("https://ai.google.dev/gemma/terms"))
-    #expect(notice.contains("locally is subject to"))
-    #expect(notice.contains("weights are downloaded separately"))
-    #expect(notice.contains("not redistributed in Fleck"))
+    #expect(notice.contains("locally constitutes acceptance"))
+    #expect(notice.contains("Model weights are downloaded separately"))
+    #expect(notice.contains("not tracked or redistributed"))
   }
 }
 #endif

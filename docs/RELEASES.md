@@ -1,7 +1,8 @@
 # Releases
 
-Fleck has no published release history yet. The first public build will be a
-Developer Preview in the 0.x series.
+Fleck has no published binary release. Public source visibility is a source
+preview, not an app release. Any future public build will be a Developer
+Preview in the 0.x series.
 
 ## 0.x strategy
 
@@ -17,36 +18,80 @@ Developer Preview in the 0.x series.
 Do not create retroactive release entries or imply that an untagged development
 bundle was publicly shipped.
 
-## Maintainer launch checklist
+## Source preview checklist
 
-### Community and repository
+The source preview publishes source and retained Git history for inspection. It
+does not publish a signed or notarized app, GitHub Release, supported release,
+or downloadable binary.
 
-- [ ] Decide the visibility date and confirm the intended public tree contains
-      no secrets, local paths, private fixtures, signing material, model weights,
-      or internal-only history.
-- [ ] Choose and test a private security contact before visibility, then replace
-      the gate in [`SECURITY.md`](../SECURITY.md) with verified instructions.
-      After visibility, optionally enable and test GitHub private vulnerability
-      reporting before announcing the repository or opening issues.
-- [ ] Publish and test a private Code of Conduct reporting route, name the
-      moderators, and update [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md).
-- [ ] Enable the issue and pull-request workflows only when maintainers can
-      review them; confirm the templates render and links resolve.
-- [ ] Configure the intended hosting account separately from the source tree;
-      do not commit a project identifier or substitute a dummy identifier.
+### Source identity and history
+
+- [ ] Record the exact final source commit and tree after the reviewed UI and
+      launch-document changes are integrated; require a clean checkout of that
+      commit.
+- [x] The maintainer approved MPL-2.0 for Fleck-owned source and documentation
+      in the current tree, subject to the documented third-party, data, and
+      brand boundaries. Earlier revisions keep their accompanying licenses.
+- [x] The maintainer accepted publication of the complete history reachable
+      from all 15 remote heads reported by the launch audit, including retained
+      author metadata and historical path text. The audit found no remote tags.
+      Current-tree sanitization is not history erasure.
+- [x] The maintainer confirmed publication and unchanged source-review
+      redistribution rights for the current and retained brand, generated, and
+      captured assets identified in [`BRANDING.md`](../BRANDING.md), subject to
+      its operating-system and third-party rights carve-outs.
+- [ ] Immediately before visibility, rerun the remote head/tag inventory and
+      stop if it differs from the accepted 15-head, zero-tag record.
+- [ ] Confirm the final current tree contains no secrets, local paths, private
+      fixtures, signing material, model weights, or internal-only files.
+
+### Security and participation
+
+- [ ] Make the repository visible without an announcement while public issue
+      and pull-request intake remain closed.
+- [ ] Once public, enable GitHub private vulnerability reporting, verify the
+      outside-reporter form and maintainer security-alert delivery, update
+      [`SECURITY.md`](../SECURITY.md) with the active route, and only then
+      announce the source preview.
+- [ ] Publish and test a private Code of Conduct reporting route, name its
+      recipient, and update [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) before
+      public participation opens. GitHub private vulnerability reporting is not
+      a conduct-reporting route.
+- [ ] Enable issue and pull-request workflows only when both their reporting
+      routes and maintainer review capacity are ready; confirm the templates
+      render and their links resolve.
+
+### Source verification
+
+- [ ] Require green GitHub CI at the exact final source commit.
+- [x] The reviewed plain-Vite baseline uses Node.js 22.12, Vite 8.2.2, and no
+      Cloudflare plugin, Wrangler configuration, or worker. Clean `npm ci`, full
+      and production-only audits with zero reported vulnerabilities, all six
+      website tests, and the production build passed for that baseline.
+- [ ] Repeat `npm ci`, `npm audit`, `npm audit --omit=dev`, `npm test`, and
+      `npm run build` from the exact final source commit with Node.js 22.12 or
+      later. Both audits must remain at zero; do not force unsupported dependency
+      overrides to obtain that result.
 - [ ] Confirm the MPL-2.0 license, notices, third-party attributions, dependency
-      pins, and reserved-brand language match the release tree.
+      pins, and reserved-brand language match the source-preview tree.
+
+## Optional future website deployment
+
+Website deployment and hosting-account configuration do not block the
+source-only preview. Before any future deployment:
+
+- [ ] Configure the intended hosting account outside the source tree; do not
+      commit a project identifier or substitute a dummy identifier.
+- [ ] Confirm the deployed output preserves GSAP's proprietary banner and makes
+      the complete `website/public/THIRD_PARTY_LICENSES.txt` notice artifact
+      available with the site.
+
+## Future binary distribution
 
 ### Candidate and verification
 
 - [ ] Build from the exact synchronized release commit, not an older `.app`.
 - [ ] Run the ordinary non-launching macOS validator and require green GitHub CI.
-- [ ] Clear the website development/build dependency audit gate. The production-
-      only `npm audit --omit=dev` graph currently reports zero vulnerabilities,
-      but the full `npm audit` reports eight vulnerable package entries (seven
-      high and one low), so the production result does not clear the tooling used
-      locally and in CI. Do not force unsupported dependency overrides to make
-      the audit green.
 - [ ] Run packaged native checks in a disposable macOS account with reviewed
       synthetic fixtures; retain only sanitized evidence.
 - [ ] Complete accessibility, keyboard, privacy, memory, CPU, energy, sleep/wake,

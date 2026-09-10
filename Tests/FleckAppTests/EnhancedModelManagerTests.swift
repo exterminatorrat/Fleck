@@ -820,21 +820,108 @@ struct EnhancedModelManagerTests {
     }
 
     @Test @MainActor func EnhancedSpeechLoadFailureInvalidatesTheVerifiedRepository() async throws {
+      enum FailureObservationError: Error {
+        case endedWithoutFailure
+        case timedOut
+      }
+
+      func observeFailureAndRelease(
+        from stream: AsyncStream<any Error>,
+        timeout: Duration,
+        release: @escaping @MainActor () async -> Void
+      ) async -> Result<any Error, FailureObservationError> {
+        let observation = await withTaskGroup(
+          of: Result<any Error, FailureObservationError>.self,
+          returning: Result<any Error, FailureObservationError>.self
+        ) { group in
+          group.addTask {
+            var iterator = stream.makeAsyncIterator()
+            guard let error = await iterator.next() else {
+              return .failure(.endedWithoutFailure)
+            }
+            return .success(error)
+          }
+          group.addTask {
+            do {
+              try await Task.sleep(for: timeout)
+              return .failure(.timedOut)
+            } catch {
+              return .failure(.endedWithoutFailure)
+            }
+          }
+          let first = await group.next() ?? .failure(.endedWithoutFailure)
+          group.cancelAll()
+          return first
+        }
+        await release()
+        return observation
+      }
+
+      let silentFailures = AsyncStream<any Error>.makeStream()
+      var negativeControlCleanupExecuted = false
+      let negativeControl = await observeFailureAndRelease(
+        from: silentFailures.stream,
+        timeout: .milliseconds(1),
+        release: { negativeControlCleanupExecuted = true }
+      )
+      silentFailures.continuation.finish()
+      let negativeControlTimedOut: Bool
+      if case .failure(.timedOut) = negativeControl {
+        negativeControlTimedOut = true
+      } else {
+        negativeControlTimedOut = false
+      }
+      #expect(
+        negativeControlTimedOut,
+        "An absent failure callback did not reach the bounded deadline"
+      )
+      #expect(negativeControlCleanupExecuted)
+
       let fixture = try Fixture()
       defer { fixture.remove() }
       try fixture.install()
       await fixture.manager.refreshState()
       let inference = EnhancedInferenceSpy()
       inference.loadError = EnhancedTestFailure.failed
+      let observedFailures = AsyncStream<any Error>.makeStream()
+      defer { observedFailures.continuation.finish() }
       let capture = EnhancedSpeechCapture(
         modelManager: fixture.manager,
         makeInference: { inference },
         makeAudio: { _ in EnhancedAudioSpy(samples: []) }
       )
 
-      await #expect(throws: EnhancedTestFailure.failed) {
-        try await capture.start(provisional: { _ in }, level: { _ in })
+      try await capture.start(
+        provisional: { _ in },
+        level: { _ in },
+        failure: { error in
+          observedFailures.continuation.yield(error)
+          observedFailures.continuation.finish()
+        }
+      )
+      let observation = await observeFailureAndRelease(
+        from: observedFailures.stream,
+        timeout: .seconds(1),
+        release: { await capture.releaseResources() }
+      )
+      let observedFailure: (any Error)?
+      switch observation {
+      case .success(let error):
+        observedFailure = error
+      case .failure(.timedOut):
+        Issue.record("Timed out waiting for the asynchronous model-load failure callback")
+        observedFailure = nil
+      case .failure(.endedWithoutFailure):
+        Issue.record("The asynchronous model-load failure callback ended without an error")
+        observedFailure = nil
       }
+      let hasExpectedFailure: Bool
+      if case .failed? = observedFailure as? EnhancedTestFailure {
+        hasExpectedFailure = true
+      } else {
+        hasExpectedFailure = false
+      }
+      #expect(hasExpectedFailure)
 
       #expect(
         fixture.manager.state

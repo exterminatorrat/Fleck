@@ -76,6 +76,9 @@
     }
     @Published var preferences = AppPreferences() {
       didSet {
+        if !preferences.showAgentUpdateBanners {
+          agentBannerPresentation = nil
+        }
         if preferences != oldValue {
           persistenceGeneration += 1
         }
@@ -1875,6 +1878,8 @@
 
     func publishAgentFeedback(_ feedback: AgentChangeFeedback) {
       latestAgentFeedback = feedback
+      refreshAgentActivity()
+      guard preferences.showAgentUpdateBanners else { return }
       if var banner = agentBannerPresentation,
         feedback.createdAt.timeIntervalSince(banner.feedback.createdAt) <= 2
       {
@@ -1883,7 +1888,6 @@
       } else {
         agentBannerPresentation = AgentBannerPresentation(feedback: feedback)
       }
-      refreshAgentActivity()
     }
 
     func publishAgentRequestEvent(_ event: AgentRequestEvent) {

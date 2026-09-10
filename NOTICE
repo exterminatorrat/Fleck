@@ -5,9 +5,11 @@ This Source Code Form is subject to the terms of the Mozilla Public License,
 v. 2.0. If a copy of the MPL was not distributed with this file, You can
 obtain one at https://mozilla.org/MPL/2.0/.
 
-Except for the material identified below, first-party source code and
-documentation in this repository are made available under the Mozilla Public
-License, version 2.0. See LICENSE.
+Except for the material identified below, Fleck-owned source code and
+documentation in the current source tree are made available under the Mozilla
+Public License, version 2.0. See LICENSE. Earlier revisions remain subject to
+the license notices and terms accompanying those revisions; this notice does
+not retroactively relicense retained history.
 
 The Fleck name, four-tile mark, logos, and identified brand assets are not
 licensed for trademark use by the MPL. Standalone brand assets identified in
@@ -24,6 +26,10 @@ FLEURS-derived portions of tracked mixed-data files are licensed under CC BY
 MPL-covered. External dependencies, tools, models, and other third-party
 material remain under their own terms. See THIRD_PARTY_NOTICES.md and
 Sources/FleckApp/Resources/ThirdPartyNotices.md.
+
+CODE_OF_CONDUCT.md is adapted from Contributor Covenant 3.0 and is licensed
+under Creative Commons Attribution-ShareAlike 4.0, not the MPL. Its source,
+adaptation statement, attribution, and license link appear in that file.
 
 The repository contains no model weights. Model downloads and distribution
 remain subject to their model-specific terms and release gates.

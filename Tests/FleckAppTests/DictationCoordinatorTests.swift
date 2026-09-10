@@ -1302,7 +1302,15 @@ func physicalGestureReceiptRecordsFocusedInsertionAndPersistence() async throws 
   #expect(fixture.saver.flushCount == 1)
 
   await fixture.coordinator.start(mode: .smartCapture)
-  #expect(fixture.coordinator.latestRuntimeMeasurements == .empty)
+  let nextReceipt = fixture.coordinator.latestRuntimeMeasurements
+  #expect(receipt.outcome == .succeeded)
+  #expect(nextReceipt.coordinatorEventReceivedAt == clock.now)
+  #expect(nextReceipt.phasePublishedAt == clock.now)
+  #expect(nextReceipt.audioReadyObservedAt == clock.now)
+  #expect(nextReceipt.insertionCommittedAt == nil)
+  #expect(nextReceipt.persistenceCompletedAt == nil)
+  #expect(nextReceipt.outcome == nil)
+  #expect(nextReceipt.failure == nil)
   await fixture.coordinator.cancel()
 }
 

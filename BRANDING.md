@@ -29,7 +29,7 @@ use the Fleck marks as its primary branding, or imply sponsorship or
 endorsement without separate permission. A fork should use its own name,
 bundle identifier, application icon, and primary visual identity.
 
-## Standalone brand assets
+## Current-tree standalone brand assets
 
 The repository's MPL grant does not apply to these standalone brand assets and
 branded product captures:
@@ -58,16 +58,30 @@ branded product captures:
 - `website/public/hero/fleck-northstar-open.png`
 - `website/public/hero/fleck-northstar-saved.png`
 
-To the extent the project owns copyright in these files, that copyright is
-reserved. They may be kept unchanged when redistributing an unmodified copy of
-this repository for source review, but other reuse requires separate
-permission unless applicable law allows it. Some captures may also show
+The maintainer has confirmed that the project owns or has the rights needed to
+publish these files as part of this repository and permit their unchanged
+redistribution with an unmodified copy for source review. Copyright in
+project-owned material is reserved. This limited permission does not grant
+standalone asset reuse or trademark rights. Some captures may also show
 operating-system or third-party interface elements; this policy grants no
-rights in those elements and makes no ownership claim over them. The assets'
-provenance must be rechecked before a new public or commercial distribution.
+rights in those elements and makes no ownership claim over them.
+
+## Retained-history assets
+
+The retained Git history also contains these deleted standalone assets:
+
+- `website/design-qa-hero-comparison.png`
+- `website/public/assets/fleck-brain-hologram.png`
+
+Deleting them from the current tree did not remove their reachable historical
+blobs. The maintainer's source-review publication confirmation and the same
+reserved-rights and third-party caveats apply to these retained assets. Earlier
+revisions otherwise remain subject to the notices and terms accompanying those
+revisions.
 
 ## Questions
 
-Open a repository issue for written permission or clarification. Do not send
-private credentials, user content, or unpublished product material with a
+When repository Issues are open, use an issue for written permission or
+clarification. Until then, no public permission-request route is offered. Do not
+send private credentials, user content, or unpublished product material with a
 request.

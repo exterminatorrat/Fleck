@@ -22,6 +22,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var pinnedPanelWidth: Double
   public var pinnedPanelHeight: Double
   public var showFormattingBar: Bool
+  public var showAgentUpdateBanners: Bool
   public var isUnfiledCompact: Bool
   public var confirmBeforeMovingNotesToTrash: Bool
   public var automaticLists: Bool
@@ -50,7 +51,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     theme: AppTheme = .system, panelWidth: Double = 800, panelHeight: Double = 430,
     panelSizingVersion: Int = AppPreferences.currentPanelSizingVersion,
     pinnedPanelWidth: Double = 800, pinnedPanelHeight: Double = 430,
-    showFormattingBar: Bool = true, isUnfiledCompact: Bool = false,
+    showFormattingBar: Bool = true, showAgentUpdateBanners: Bool = true,
+    isUnfiledCompact: Bool = false,
     confirmBeforeMovingNotesToTrash: Bool = true, automaticLists: Bool = true,
     launchAtLogin: Bool = false,
     shortcuts: [Shortcut] = Shortcut.defaults,
@@ -78,6 +80,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.pinnedPanelWidth = Self.clampedPanelDimension(pinnedPanelWidth, minimum: 480)
     self.pinnedPanelHeight = Self.clampedPanelDimension(pinnedPanelHeight, minimum: 320)
     self.showFormattingBar = showFormattingBar
+    self.showAgentUpdateBanners = showAgentUpdateBanners
     self.isUnfiledCompact = isUnfiledCompact
     self.confirmBeforeMovingNotesToTrash = confirmBeforeMovingNotesToTrash
     self.automaticLists = automaticLists
@@ -100,7 +103,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case fontFamily, fontSize, editorTypographyVersion, accentHex, editorTextHex,
       editorBackgroundHex, panelOpacity, theme, panelWidth, panelHeight, panelSizingVersion,
-      pinnedPanelWidth, pinnedPanelHeight, showFormattingBar,
+      pinnedPanelWidth, pinnedPanelHeight, showFormattingBar, showAgentUpdateBanners,
       isUnfiledCompact, confirmBeforeMovingNotesToTrash, automaticLists,
       launchAtLogin, shortcuts, dictationSpeechEngine,
       legacyDictationShortcut = "dictationShortcut", dictationModifierKey,
@@ -195,6 +198,10 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       pinnedPanelWidth: migratesPreviousPinnedPanelDefault ? 800 : decodedPinnedPanelWidth,
       pinnedPanelHeight: decodedPinnedPanelHeight,
       showFormattingBar: try c.decodeIfPresent(Bool.self, forKey: .showFormattingBar) ?? true,
+      showAgentUpdateBanners: try c.decodeIfPresent(
+        Bool.self,
+        forKey: .showAgentUpdateBanners
+      ) ?? true,
       isUnfiledCompact: try c.decodeIfPresent(Bool.self, forKey: .isUnfiledCompact) ?? false,
       confirmBeforeMovingNotesToTrash: try c.decodeIfPresent(
         Bool.self,

@@ -5,9 +5,18 @@ dependency revisions. It is an engineering inventory, not a substitute for
 the exact license and NOTICE files required with a binary distribution.
 Package lockfiles remain authoritative for resolved revisions.
 
-Fleck's MPL-2.0 license applies only to Fleck's covered first-party source and
-documentation. It does not relicense any dependency, dataset, model, or other
-third-party material described here.
+Fleck's MPL-2.0 license applies only to covered Fleck-owned source and
+documentation in the current tree. It does not relicense any dependency,
+dataset, model, or other third-party material described here. Earlier revisions
+remain subject to their accompanying license notices and terms.
+
+## Documentation material
+
+`CODE_OF_CONDUCT.md` is adapted from Contributor Covenant 3.0, stewarded by the
+Organization for Ethical Source, and licensed under
+[Creative Commons Attribution-ShareAlike 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+The file preserves the source link, adaptation statement, attribution, and
+license link. It is not MPL-covered.
 
 ## Ordinary application and agent link graph
 
@@ -72,7 +81,7 @@ distribution when they pertain to the shipped payload.
 
 ## Website runtime
 
-The built website's runtime dependency graph is separate from its developer
+The current plain-Vite website runtime graph is separate from its build
 toolchain:
 
 | Component | Version | Terms |
@@ -86,13 +95,14 @@ The exact React, React DOM, and Scheduler license files state: “Copyright (c)
 Meta Platforms, Inc. and affiliates.” Their complete MIT text must accompany a
 distribution that includes copies or substantial portions of those packages.
 
-The developer-only npm graph includes other MIT, Apache-2.0, MPL-2.0,
-LGPL-3.0-or-later, ISC, BSD-3-Clause, 0BSD, and CC0-1.0 packages. It is not
-part of the ordinary static website output. Do not distribute `node_modules`,
-a build image, or tool binaries as though the four-row runtime inventory covers
-them. A production build must also verify that GSAP's proprietary banner and
-the React-family MIT notice survive the deployed output; that check has not
-been performed for this documentation change.
+The build tool is Vite 8.2.2. The Cloudflare Vite plugin, Wrangler
+configuration, and worker used by earlier revisions are not part of the current
+graph; those revisions remain subject to their accompanying terms. The current
+source tree includes the complete npm license compilation at
+`website/public/THIRD_PARTY_LICENSES.txt`. Do not distribute `node_modules`, a
+build image, or tool binaries as though the four-row runtime inventory covers
+them. A future deployment must verify that GSAP's proprietary banner and the
+complete notice artifact survive the deployed output.
 
 ## FLEURS-derived data
 

@@ -43,7 +43,7 @@ We agree to restrict the following behaviors in our community. Instances, threat
 
 Tensions can occur between community members even when they are trying their best to collaborate. Not every conflict represents a code of conduct violation, and this Code of Conduct reinforces encouraged behaviors and norms that can help avoid conflicts and minimize harm.
 
-Fleck does not yet publish a verified private conduct-reporting channel or name community moderators. Before public participation opens, maintainers must add a private reporting method here and identify who receives reports. Do not put sensitive incident details in a GitHub issue. Until that route is configured, the project is not ready to accept public participation.
+Fleck does not yet publish a verified private conduct-reporting channel or name community moderators. The source preview does not open public participation. Before participation opens, maintainers must add a private reporting method here and identify who receives reports. Do not put sensitive incident details in a GitHub issue. GitHub private vulnerability reporting is for security vulnerabilities and is not a conduct-reporting channel. Until a conduct route is configured, the project is not ready to accept public participation.
 
 Once reporting opens, Community Moderators will take reports of violations seriously and make every effort to respond in a timely manner. They will investigate all reports of code of conduct violations, reviewing messages, logs, and recordings, or interviewing witnesses and other participants. Community Moderators will keep investigation and enforcement actions as transparent as possible while prioritizing safety and confidentiality. In order to honor these values, enforcement actions are carried out in private with the involved parties, but communicating to the whole community may be part of a mutually agreed upon resolution.
 
@@ -78,6 +78,6 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 This Code of Conduct is adapted from the Contributor Covenant, version 3.0, permanently available at [https://www.contributor-covenant.org/version/3/0/](https://www.contributor-covenant.org/version/3/0/).
 
-Contributor Covenant is stewarded by the Organization for Ethical Source and licensed under CC BY-SA 4.0. To view a copy of this license, visit [https://creativecommons.org/licenses/by-sa/4.0/](https://creativecommons.org/licenses/by-sa/4.0/).
+Contributor Covenant is stewarded by the Organization for Ethical Source and licensed under CC BY-SA 4.0. This adaptation is distributed under the same license. To view a copy of this license, visit [https://creativecommons.org/licenses/by-sa/4.0/](https://creativecommons.org/licenses/by-sa/4.0/).
 
 For answers to common questions about Contributor Covenant, see the [FAQ](https://www.contributor-covenant.org/faq). Translations are provided at [https://www.contributor-covenant.org/translations](https://www.contributor-covenant.org/translations). Additional enforcement and community guideline resources can be found at [https://www.contributor-covenant.org/resources](https://www.contributor-covenant.org/resources). The enforcement ladder was inspired by the work of [Mozilla's code of conduct team](https://github.com/mozilla/inclusion).

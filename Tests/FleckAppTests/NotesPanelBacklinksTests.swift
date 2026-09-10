@@ -47,8 +47,8 @@ func NotesPanelBacklinksPopoverReclaimsEditorSpace() async throws {
   let editor = try #require(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self))
   let editorScrollView = try #require(hostedBacklinksEditorScrollView(in: host))
   let toolbarControls = hostedBacklinksToolbarControls(in: host)
-  // Catches removing the header trigger and restoring the persistent bottom disclosure.
-  #expect(editorScrollView.frame.height >= 200)
+  let editorFrame = editorScrollView.convert(editorScrollView.bounds, to: host)
+  #expect(abs(editorFrame.maxY - (host.bounds.maxY - 10)) < 0.5)
 
   let originalEditor = editor
   let originalString = editor.string
@@ -59,6 +59,7 @@ func NotesPanelBacklinksPopoverReclaimsEditorSpace() async throws {
   #expect(backlinks.isExpanded)
   #expect(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self) === originalEditor)
   #expect(editor.string == originalString)
+  #expect(editorScrollView.convert(editorScrollView.bounds, to: host) == editorFrame)
   #expect(window.childWindows?.contains(where: { $0.isVisible }) == true)
 
   let popover = try #require(hostedBacklinksVisiblePopover(in: window))
