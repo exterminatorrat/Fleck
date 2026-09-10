@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Worktree: `/Users/harryjin/Fleck/.worktrees/editor-three-bug-fixes`, base candidate `318a9ef`.
+- Worktree: `${FLECK_REPO}/.worktrees/editor-three-bug-fixes`, base candidate `318a9ef`.
 - No external writes. Preserve unrelated edits and accepted Activity/toolbar behavior.
 - Same existing implementation worker, active Sol High override; fresh Sol High review after verification.
 - Product ownership limited to `Sources/FleckApp/NotesPanel.swift` `Tests/FleckAppTests/FolderReorderInteractionTests.swift`, and the affected hosted drag test in `Tests/FleckAppTests/TabDragReorderTests.swift` (amended to balance its native mouse-up); preserve unrelated tests.

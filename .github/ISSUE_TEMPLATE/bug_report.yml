@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible problem in Fleck
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Use synthetic content and remove names, note text, usernames, paths, credentials, and unrelated logs. For a possible vulnerability, stop and read [SECURITY.md](https://github.com/exterminatorrat/fleck/blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction
+      description: Give the smallest numbered steps using disposable test data.
+      placeholder: |
+        1. Build commit …
+        2. Open …
+        3. Observe …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Source commit or version
+      placeholder: Full Git commit, tag, or Developer Preview version
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include macOS version, Mac architecture, Xcode/Swift versions, and whether you used the packaged app.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Add only logs or screenshots you have checked for private data. This is optional.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I used synthetic test content and checked this report for private data and credentials.
+          required: true
+        - label: This report does not describe a security vulnerability.
+          required: true

@@ -57,7 +57,7 @@
 
 **Interfaces:**
 
-- Consumes: approved design specification at `docs/superpowers/specs/2026-07-31-local-liquid-glass-navigation-design.md` and approved logo source at `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png`.
+- Consumes: approved design specification at `docs/superpowers/specs/2026-07-31-local-liquid-glass-navigation-design.md` and approved logo source at `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png`.
 - Produces: default React export `Navigation(): JSX.Element`; Vite development URL `http://127.0.0.1:5173/`; production output in ignored `website/dist/`.
 
 - [ ] **Step 1: Confirm the isolated RED baseline**
@@ -84,7 +84,7 @@ mkdir -p website/public /tmp/fleck-nav-asset
 sips \
   --cropToHeightWidth 340 340 \
   --cropOffset 472 168 \
-  "/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png" \
+  "${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png" \
   --out /tmp/fleck-nav-asset/fleck-mark-keyed.png
 python "${CODEX_HOME:-$HOME/.codex}/skills/.system/imagegen/scripts/remove_chroma_key.py" \
   --input /tmp/fleck-nav-asset/fleck-mark-keyed.png \
@@ -562,8 +562,8 @@ npm --prefix website run dev -- --host 127.0.0.1
 Use the Browser plugin first at `http://127.0.0.1:5173/`. Capture:
 
 ```text
-/Users/harryjin/menubar-notes/website/qa/fleck-nav-desktop.png
-/Users/harryjin/menubar-notes/website/qa/fleck-nav-mobile.png
+${FLECK_REPO}/website/qa/fleck-nav-desktop.png
+${FLECK_REPO}/website/qa/fleck-nav-mobile.png
 ```
 
 Verify at 1440 × 900:
@@ -590,7 +590,7 @@ Verify interaction:
 - Waitlist press moves at most one pixel.
 - Reduced-motion emulation removes movement but retains color and focus feedback.
 
-Inspect the approved Craft reference at `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-reference-craft.png` and both rendered screenshots with `view_image`. Record a five-point fidelity ledger covering layout, typography, palette/glass, logo treatment, and responsive behavior. Fix any visible mismatch before continuing.
+Inspect the approved Craft reference at `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-reference-craft.png` and both rendered screenshots with `view_image`. Record a five-point fidelity ledger covering layout, typography, palette/glass, logo treatment, and responsive behavior. Fix any visible mismatch before continuing.
 
 After verification, remove only the temporary QA screenshots and empty QA directory:
 

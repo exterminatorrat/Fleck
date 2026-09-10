@@ -1,259 +1,147 @@
-<p align="center">
-  <img src="website/public/fleck-mark.png" alt="Fleck mark" width="96">
-</p>
+# Fleck
 
-<h1 align="center">Fleck</h1>
+Fleck is a native, local-first macOS notes workspace for quick capture, focused
+editing, on-device dictation, and explicitly granted local agent access.
 
-<p align="center">A native, local-first macOS menu-bar notes workspace with on-device dictation and explicit per-note agent collaboration.</p>
+> **Developer Preview:** Fleck is under active development. There is no
+> supported binary release yet, and storage formats and contributor-facing
+> interfaces may change during the 0.x series.
 
-<p align="center">
-  <a href="https://developer.apple.com/macos/"><img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-111827?logo=apple&logoColor=white"></a>
-  <a href="Package.swift"><img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white"></a>
-  <a href="https://github.com/exterminatorrat/Fleck/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/exterminatorrat/Fleck/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="PolyForm Shield 1.0.0 · source-available" src="https://img.shields.io/badge/PolyForm%20Shield%201.0.0-source--available-4b5563"></a>
-</p>
+## What is here
 
-## Project status
+The ordinary build contains:
 
-Fleck is under active development. The repository contains implemented local
-development paths for native notes, dictation, persistence, and the local Agent
-Connector. The MCP Capability Foundation Phase A is implemented for profile-
-scoped access to explicitly granted notes. Build and test the packaged
-development app for macOS-specific behavior; the ordinary SwiftPM executable
-is not a substitute for that evidence.
+- a menu-bar workspace and independently sized pinned window;
+- local notes, tabs, folders, search, backlinks, file references, import/export,
+  30-day Trash, and recovery;
+- an AppKit `NSTextView` editor with native undo, formatting, lists, and
+  checklists;
+- Apple on-device speech recognition, optional faithful local cleanup, and
+  Inbox-safe Smart Capture routing;
+- a separately packaged local Agent Connector with profile-scoped capabilities,
+  explicit note or folder grants, visible activity, revision checks, and Undo;
+- readable local storage with atomic replacement and a previous-generation
+  recovery snapshot.
 
-Distribution signing and notarization, StoreKit access, and Mac App Store release
-remain pending. Enhanced Local is a release-disabled candidate, not a shipping
-feature. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) and
-[TESTING.md](TESTING.md) for the current boundaries.
+On macOS 26, Fleck can use Apple's on-device Foundation Models when the system
+reports them available. Failure or ambiguity falls back to the original text or
+Inbox rather than inventing a destination.
 
-## Implemented capabilities
+The Enhanced Local dependency graph is different. It is opt-in, debug-only
+experimental work behind `FLECK_ENHANCED_CANDIDATE=1`, with candidate Parakeet
+speech and Gemma cleanup/routing paths. It is not part of the ordinary release
+graph and is not approved for distribution.
 
-| Area | Current implementation |
-| --- | --- |
-| Native notes | Menu-bar and pinned-window surfaces; tabs, pinning, live reordering, import/export, 30-day Trash, and recovery. |
-| Native editor | A real AppKit `NSTextView` editor with Markdown-compatible bodies, optional RTF sidecars, undo/redo, inline bold/italic/underline/strikethrough, installed fonts and sizes, colors and highlights, bullets, numbering, and checklists. |
-| Dictation | Standard on-device speech with no cloud fallback, optional faithful local cleanup, exact-title routing plus a bounded cached full-note semantic route in the enhanced test graph, Inbox-first ambiguity handling, local 30-day history, and a persistent dictation capsule. Parakeet and Gemma remain candidate/test integrations. |
-| Agent workspace | Profile-scoped `notes.list`, `notes.read`, `notes.write`, and `changes.undo` capabilities; explicit note/folder grants; a local MCP/CLI helper; optimistic revisions; caller-owned operation IDs; visible activity; and safe Undo. |
-| Persistence and privacy | Readable local files, debounced atomic saves, a previous-generation recovery snapshot, Keychain credentials, and same-user Unix-socket IPC. |
-| Native product shell | First-launch onboarding, customization, panel-local shortcuts, launch-at-login integration in the packaged app, and an independently sized pinned window. |
+See [Implementation status](IMPLEMENTATION_STATUS.md) for the short current
+roadmap and [Architecture](ARCHITECTURE.md) for the system boundaries.
 
-![Fleck ideas capture](website/public/assets/fleck-ideas-capture.png)
+## Requirements
 
-## Architecture
+- macOS 14 as the declared minimum deployment target
+- Xcode 26 or later with the full macOS 26 SDK selected
+- Swift 6
 
-Fleck is a native SwiftPM project split into four primary modules. The detailed
-design and boundaries live in [ARCHITECTURE.md](ARCHITECTURE.md).
+The deployment target is not a completed compatibility matrix. Current local
+validation is on Apple silicon; native Intel compatibility and a full macOS 14
+native pass have not been verified.
 
-| Module | Responsibility |
-| --- | --- |
-| `FleckCore` | Portable note models, workspace mutations, preferences, persistence, recovery, transfer formats, dictation history, and activity. |
-| `FleckAgentProtocol` | Versioned typed messages and wire framing for the local agent boundary. |
-| `FleckApp` | Native macOS scenes, menu-bar and pinned-window UI, editor, dictation runtime, onboarding, settings, and the IPC service. |
-| `FleckAgentBridge` | Separately packaged MCP/CLI helper and same-user Unix-socket client. |
+The standalone Command Line Tools are not enough for this source tree. Check the
+active toolchain without building:
 
-The local agent path is deliberately narrow:
-
-```text
-local MCP client or CLI
-  -> fleck-agent (stdio/CLI; credential in Keychain)
-  -> private AF_UNIX socket with same-user peer checks
-  -> explicit-share filter -> typed mutation
-  -> atomic LocalStore commit -> activity and retry records
+```sh
+xcodebuild -version
+xcrun --sdk macosx --show-sdk-version
+swift --version
 ```
 
-## Privacy and security
+## Get the source
 
-- Notes are stored locally as readable Markdown bodies, optional RTF sidecars,
-  JSON workspace/preferences data, and a previous-generation recovery snapshot.
-  Saves use atomic replacement and the local store serializes reads, writes, and
-  cleanup.
-- Standard speech uses Apple's on-device recognition when available and has no
-  cloud fallback. Microphone buffers and transcripts are not written as audio.
-  Optional cleanup, routing, notes, and history remain local; the Enhanced
-  candidate's explicit model download path is separate from ordinary notes.
-- Smart Capture keeps candidate UUIDs, titles, note bodies, and revisions local.
-  Its debug-gated local candidate route indexes bounded title/body passages in
-  memory and sends only a bounded relevant shortlist under opaque keys to the
-  local Gemma helper. Missing, ambiguous, incomplete, stale, malformed,
-  cancelled, or low-confidence evidence saves to Inbox; a supported ambiguous
-  result is saved there before the chooser appears. The available Foundation
-  Models route remains title-based at this base.
-- Agent access is off until an authorized profile has an explicit note grant or
-  an explicit `folderIncludingFutureNotes` grant. New profiles start with no
-  tools or scopes, and future-note inheritance is off unless the user confirms
-  it. Credentials use the Keychain, and the helper communicates with Fleck over
-  a private same-user Unix socket. There is no HTTP/TCP listener, cloud bridge,
-  or internet-facing port.
-- Folder-contained notes use the same existing list/read/write/task/activity/
-  Undo operations as unfiled notes when the profile's grant authorizes them;
-  there is no separate folder-access path.
-- The ordinary notes path has no accounts, analytics, advertising, or mandatory
-  network dependency. This is a cooperative local-client boundary and does not
-  claim to protect against malicious software already running as the same user.
+Fork the repository on GitHub, then clone your fork:
 
-## Repository layout
-
-```text
-Sources/
-├── FleckCore/          # Models, persistence, mutations, and activity
-├── FleckAgentProtocol/ # Typed local IPC messages and framing
-├── FleckApp/           # Native macOS app, editor, dictation, and UI
-└── FleckAgentBridge/   # Separate MCP/CLI helper and socket client
-Tests/
-├── FleckCoreTests/
-├── FleckAgentProtocolTests/
-├── FleckAppTests/
-└── FleckAgentBridgeTests/
-Scripts/                # Build, validation, release, and boundary checks
-Packages/               # Enhanced Local candidate dependency package
-docs/                   # Project and implementation documentation
-website/                # Vite website and its tests
+```sh
+git clone https://github.com/YOUR-USER/fleck.git
+cd fleck
+git remote add upstream https://github.com/exterminatorrat/fleck.git
 ```
+
+If you only want to inspect or test the canonical source, clone the upstream URL
+directly instead.
 
 ## Build and test
 
-The deployment/runtime minimum is macOS 14. The current source requires Xcode 26
-or later with the macOS 26 SDK or later, and the package uses Swift tools version
-6.0. From the repository root, run the ordinary graph with automatic resolution
-disabled:
+Run the ordinary Swift package tests from the repository root:
 
 ```sh
+unset FLECK_ENHANCED_CANDIDATE
 swift test --disable-automatic-resolution --no-parallel
 ```
 
-The full macOS validation gate is:
-
-```sh
-Scripts/validate-macos.sh
-```
-
-Enhanced Local checks use a separate candidate dependency graph and scratch path;
-they are not part of ordinary validation or release approval:
-
-```sh
-Scripts/resolve-enhanced-candidate.sh .build-candidate \
-  swift test --disable-automatic-resolution --no-parallel \
-    --scratch-path .build-candidate
-```
-
-See [TESTING.md](TESTING.md) for the complete candidate, privacy, accessibility,
-resource, signing, and distribution gates.
-
-## Packaged development app
-
-Build and launch the packaged app when testing native macOS behavior:
+Build the development-signed app bundle without launching it:
 
 ```sh
 Scripts/build-fleck-app.sh
+```
+
+Interactive native testing is a separate, explicit step:
+
+```sh
 /usr/bin/open -n .build/Fleck.app
 ```
 
-`swift run Fleck` launches a bare executable without the app-bundle privacy
-identity. It is not valid evidence for interactive dictation, Input Monitoring,
-signing, or native UI behavior. The packaged app is also the development path for
-the embedded Agent Connector.
+Opening Fleck creates local Application Support data and may request macOS
+permissions. Use a disposable macOS test account and synthetic fixtures, never
+personal notes or recordings. The full commands and manual checks are in
+[Testing](TESTING.md).
 
-## Agent connector development
+### Website
 
-The separately packaged `fleck-agent` helper provides the direct JSON CLI and MCP
-surface for explicitly granted notes. Create a profile in **Settings → Agents**,
-then grant access to notes or folders and use the profile UUID in a client
-configuration. Each profile is independently filtered: `tools/list` is recomputed
-on every request, exposes only authorized tools from the static set of exactly
-13 existing registrations, and does not advertise `listChanged`.
-
-```sh
-codex mcp add fleck -- "/absolute/path/to/fleck" mcp --profile PROFILE_UUID
-```
-
-The trust boundary, supported operations, revision/idempotency rules, and client
-setup forms are documented in [ARCHITECTURE.md](ARCHITECTURE.md#agent-workspace-trust-and-data-flow)
-and [TESTING.md](TESTING.md#agent-workspace-release-gates).
-
-## MCP Capability Foundation Phase A
-
-- Capability authority is native and enforced for every command, with a revision
-  recheck before protected reads return and before writes commit.
-- A profile may have `notes.list`, `notes.read`, `notes.write`, and
-  `changes.undo`. Direct note grants are explicit. A
-  `folderIncludingFutureNotes` grant is also explicit, requires confirmation,
-  and is off by default; current-note visibility materializes direct grants.
-- Legacy per-note sharing is migrated into direct grants for active profiles.
-  Legacy shares with no active profile remain unassigned until explicitly
-  assigned; a new profile does not inherit them automatically.
-- Unknown, private, and unauthorized targets remain indistinguishable. Capability
-  storage is recoverable, and capability-load failure is isolated from note
-  availability without exposing capability-file contents or paths.
-- The wire remains v1-compatible; internal v2 `getCapabilities` discovery is not
-  a user-facing CLI command. The MCP surface is tools-only and profile-filtered.
-- Pending restored notes stay excluded from agent authority until durable
-  workspace commit. If Trash cleanup fails after commit, the workspace remains
-  committed and the cleanup error is recoverable rather than rolling back the
-  note.
-
-Expanded Discovery/context tools, Organization, Change Sets/Proposals,
-Collaboration/Work Items, the Add-on SDK and registry, the sandboxed execution
-broker, Context Packs, recipes, schedules, richer automation, a community
-directory or marketplace, iCloud, onboarding changes, and AI/dictation changes
-are not implemented in Phase A.
-
-## Website development
-
-From the repository root:
+The website requires Node.js 22.12 or later:
 
 ```sh
 cd website
+npm ci
 npm test
 npm run build
-npm run dev
 ```
 
-## Enhanced Local candidate
+## Repository map
 
-Enhanced Local is release-disabled and non-shippable until every gate in
-[TESTING.md](TESTING.md) has evidence. The candidate is isolated behind its own
-dependency and model paths; a green build or CI run does not approve its quality,
-privacy, resource, legal, accessibility, signing, or store readiness.
-Parakeet TDT 0.6B v2 dictation and Gemma 3 1B cleanup/local routing are
-debug-gated candidate/test integrations. Current checked-in evidence is
-deterministic/synthetic contract testing, not real-model replay, packaged
-injected audio, live-human microphone use, two-device acceptance, or release
-admission.
+```text
+Sources/FleckCore/             Local models, mutations, persistence, and recovery
+Sources/FleckAgentProtocol/    Typed local IPC protocol and framing
+Sources/FleckApp/              Native macOS UI, editor, dictation, and IPC service
+Sources/FleckAgentBridge/      MCP/CLI helper and Unix-socket client
+Sources/FleckModelEvaluation/  Deterministic local-model evaluation support
+Sources/FleckCaptureLab/       Developer capture tooling
+Tests/                         Swift tests and privacy-safe fixtures
+Scripts/                       Build, validation, audit, and profiling entry points
+Packages/                      Enhanced candidate dependency package
+website/                       Vite website
+```
 
-## Known limitations
+## Project principles
 
-- Distribution signing and notarization are pending.
-- Mac App Store release is pending.
-- StoreKit access is deliberately unavailable; no purchase or entitlement path is
-  presented here.
-- Enhanced Local remains a candidate awaiting real-device quality and release-gate
-  evidence.
-- Manual device, accessibility, performance, lifecycle, client-compatibility, and
-  remaining interaction checks are not automated successes.
-- Configurable show/hide shortcuts are currently panel-local; system-wide
-  activation remains release work.
-- The expanded MCP capability roadmap remains deferred: Discovery/context,
-  Organization, Change Sets/Proposals, Collaboration/Work Items, add-ons,
-  registry/marketplace, and the sandbox broker are not available.
+Fleck keeps the frequent path small and native. Prefer Apple frameworks and the
+standard text system over embedded web views or replacement controls; avoid
+background services and dependencies without a demonstrated need; keep notes
+local by default; and preserve keyboard access, VoiceOver semantics, Reduce
+Motion, contrast, and resource efficiency as features evolve.
 
-## Reporting issues
+## Contributing
 
-Reproducible bug reports and product feedback are welcome. Please include the
-commit, macOS/Xcode/Swift versions, reproduction steps, and whether the packaged
-app or ordinary SwiftPM path was used. See [CONTRIBUTING.md](CONTRIBUTING.md) for
-the maintainer workflow. External code contributions and pull requests are not
-currently accepted.
+Focused contributions are welcome. Read [Contributing](CONTRIBUTING.md),
+[Testing](TESTING.md), and the [Code of Conduct](CODE_OF_CONDUCT.md) before
+opening a pull request. Security-sensitive findings need a private channel; the
+current availability and launch gate are documented in [Security](SECURITY.md).
 
-## License
+## License and name
 
-Fleck is source-available under the [PolyForm Shield License 1.0.0](LICENSE), with
-Harry Jin as licensor and copyright holder. Its noncompete condition protects Fleck
-and official products from competing source or binary distributions; the operative
-terms are only in `LICENSE`.
+Fleck source is licensed under the [Mozilla Public License 2.0](LICENSE). No
+contributor license agreement is required. The Fleck name, logo, and other brand
+assets are reserved separately; the source license does not grant trademark
+rights.
 
-Phase A makes no license change.
-
-See [NOTICE](NOTICE) for the required copyright and brand notice, and
-[Sources/FleckApp/Resources/ThirdPartyNotices.md](Sources/FleckApp/Resources/ThirdPartyNotices.md)
-for third-party software notices. Dependencies retain their own license terms.
+Reviewed ordinary Swift code dependencies use MIT and/or Apache-2.0 terms;
+documentation and candidate assets may carry additional terms. Exact pins and
+attributions are recorded in the package lockfiles and
+[`ThirdPartyNotices.md`](Sources/FleckApp/Resources/ThirdPartyNotices.md).

@@ -1,12 +1,29 @@
-Required Notice: Copyright 2026 Harry Jin.
+Fleck
+Copyright 2026 Harry Jin
 
-Fleck is source-available under the PolyForm Shield License 1.0.0.
+This Source Code Form is subject to the terms of the Mozilla Public License,
+v. 2.0. If a copy of the MPL was not distributed with this file, You can
+obtain one at https://mozilla.org/MPL/2.0/.
 
-The Fleck name, logo, and brand assets are reserved by Harry Jin. The software
-license grants no trademark rights.
+Except for the material identified below, first-party source code and
+documentation in this repository are made available under the Mozilla Public
+License, version 2.0. See LICENSE.
 
-Third-party software remains subject to its own license terms. See
-Sources/FleckApp/Resources/ThirdPartyNotices.md and the repository's package
-manifests and lockfiles.
+The Fleck name, four-tile mark, logos, and identified brand assets are not
+licensed for trademark use by the MPL. Standalone brand assets identified in
+BRANDING.md are also outside the repository's MPL grant. No trademark
+registration is claimed. Reasonable, customary references to the project and
+the notices required by the MPL remain permitted.
 
-This notice grants no rights beyond those provided by LICENSE.
+Sources/FleckAgentBridge/FleckMCPBranding.swift is an MPL-covered source file
+that contains encoded Fleck mark data. Its source-code licensing is not
+restricted by the separate rules for using the rendered mark as a brand.
+
+FLEURS-derived portions of tracked mixed-data files are licensed under CC BY
+4.0, not the MPL; Fleck-authored structure and tooling in those files remains
+MPL-covered. External dependencies, tools, models, and other third-party
+material remain under their own terms. See THIRD_PARTY_NOTICES.md and
+Sources/FleckApp/Resources/ThirdPartyNotices.md.
+
+The repository contains no model weights. Model downloads and distribution
+remain subject to their model-specific terms and release gates.

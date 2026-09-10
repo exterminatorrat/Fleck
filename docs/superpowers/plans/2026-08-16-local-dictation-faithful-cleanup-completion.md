@@ -2357,11 +2357,11 @@ tasks, the parent runs the following milestone checklist without changing
 Workstream A's scope:
 
 ```bash
-cd /Users/harryjin/Fleck
+cd ${FLECK_REPO}
 swift test --disable-automatic-resolution --no-parallel
 ./Scripts/build-fleck-app.sh
-test -d /Users/harryjin/Fleck/.build/Fleck.app
-open /Users/harryjin/Fleck/.build/Fleck.app
+test -d ${FLECK_REPO}/.build/Fleck.app
+open ${FLECK_REPO}/.build/Fleck.app
 ```
 
 The operator records the actual microphone words, provisional display, final
