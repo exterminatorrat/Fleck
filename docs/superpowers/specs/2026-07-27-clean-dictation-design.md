@@ -9,7 +9,12 @@ Users choose between two transcription engines:
 1. **Standard — Apple Speech** is the zero-download default.
 2. **Enhanced Local** is one curated, removable English model that the user downloads explicitly for stronger natural-speech and technical-vocabulary recognition.
 
-Enhanced Local uses a permissively licensed speech SDK and model artifact directly. Motes does not incorporate FluidVoice's GPLv3 application code or its private Fluid Intelligence runtime.
+At the time of this 2026-07-27 design, Enhanced Local was proposed around a
+permissively licensed speech SDK with a separately licensed model artifact.
+The current repository license and third-party boundaries are defined only by
+`LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md`; this historical design does
+not relicense any model or dependency. Motes does not incorporate FluidVoice's
+GPLv3 application code or its private Fluid Intelligence runtime.
 
 The first release ships two entry points backed by one dictation pipeline:
 

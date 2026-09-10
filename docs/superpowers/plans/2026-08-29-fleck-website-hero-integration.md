@@ -8,12 +8,12 @@
 
 **Tech Stack:** React 19, Vite 8, GSAP ScrollTrigger, native HTML media, plain CSS, Node test runner
 
-**Spec:** `/Users/harryjin/Fleck/docs/superpowers/specs/2026-08-29-fleck-website-hero-design.md`
+**Spec:** `${FLECK_REPO}/docs/superpowers/specs/2026-08-29-fleck-website-hero-design.md`
 
 ## Global Constraints
 
 - Explicit later user direction supersedes the draft spec's wallpaper clause: the page and desktop background are completely white, with no hero background image and no ImageGen asset.
-- Preserve the approved Fleck brand, expanding glass menu, placeholder links, and Download for Mac action from `/Users/harryjin/Fleck/website/` without redesigning them.
+- Preserve the approved Fleck brand, expanding glass menu, placeholder links, and Download for Mac action from `${FLECK_REPO}/website/` without redesigning them.
 - Desktop uses a `420svh` outer story with a sticky `100svh` stage and native page scrolling. Do not smooth, snap, or hijack the wheel.
 - Story bands are: intro 0-14%, shortcut 14-25%, capture 25-48%, Codex retrieval 48-68%, agent write-back 68-90%, close 90-100%.
 - Use real Fleck recordings and stills for Fleck product states. Do not construct a fake Fleck screenshot with CSS.
@@ -39,12 +39,12 @@
 - Modify: `website/package-lock.json`
 
 **Interfaces:**
-- Consumes: the user-approved, uncommitted website files under `/Users/harryjin/Fleck/website/`.
+- Consumes: the user-approved, uncommitted website files under `${FLECK_REPO}/website/`.
 - Produces: the same navigation markup, accessibility behavior, styling, metadata, and blank white content baseline in the isolated worktree.
 
 - [ ] **Step 1: Add the approved navigation behavior test first**
 
-  Copy only `/Users/harryjin/Fleck/website/src/Navigation.test.js` into the worktree test path. It asserts the menu disclosure contract, disabled placeholders, Home link, and Download for Mac link.
+  Copy only `${FLECK_REPO}/website/src/Navigation.test.js` into the worktree test path. It asserts the menu disclosure contract, disabled placeholders, Home link, and Download for Mac link.
 
 - [ ] **Step 2: Run the focused test and verify RED**
 
@@ -54,7 +54,7 @@
 
 - [ ] **Step 3: Transplant only the approved navigation baseline**
 
-  Reproduce the current contents of the eight listed files from `/Users/harryjin/Fleck/website/` in the isolated worktree. Use `apply_patch` for text edits. Do not touch the main checkout and do not delete unrelated legacy files in the worktree.
+  Reproduce the current contents of the eight listed files from `${FLECK_REPO}/website/` in the isolated worktree. Use `apply_patch` for text edits. Do not touch the main checkout and do not delete unrelated legacy files in the worktree.
 
 - [ ] **Step 4: Verify GREEN**
 

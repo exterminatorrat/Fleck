@@ -53,7 +53,8 @@ def canonical_sha256(value):
 
 EXPECTED_MODEL_REVISION = "15fed4eafb456c6fcb2a1165f19ac609670ed14b"
 EXPECTED_MLX_SWIFT_LM_COMMIT = "bd4b7434e6bdb588c7ef55706ff8904cb7fd4c57"
-EXPECTED_SOURCE_CORPUS_SHA256 = "6d8a639d6b67fde23a198398e13176ccc50af03acdfaf504a68dfaa20c9a17fb"
+EXPECTED_SOURCE_CORPUS_SHA256 = "fca16ee1c04b77fa7b17489ea3d071eff3c0d049c78ae90e1977ca3421f10120"
+EXPECTED_HISTORICAL_SOURCE_CORPUS_SHA256 = "6d8a639d6b67fde23a198398e13176ccc50af03acdfaf504a68dfaa20c9a17fb"
 EXPECTED_TRANSFER_STATEMENT = (
     "One exploratory HTTP header probe followed a redirect and transiently transferred "
     "model response bytes into a closed pipe."
@@ -330,6 +331,7 @@ def validate_corpus(corpus, source_corpus, source_bytes):
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "corpusID": "fleck-qwen-cleanup-qualification-corpus-v1",
         "sha256": EXPECTED_SOURCE_CORPUS_SHA256,
+        "historicalOriginalSHA256": EXPECTED_HISTORICAL_SOURCE_CORPUS_SHA256,
     }, "source corpus identity changed")
     require(hashlib.sha256(source_bytes).hexdigest() == EXPECTED_SOURCE_CORPUS_SHA256, "accepted source corpus bytes changed")
     validate_no_forbidden_cjk(corpus)
@@ -420,6 +422,7 @@ try:
     expect_rejection("license Notice obligation", lambda meta, _: meta["license"].__setitem__("redistributionStatement", "No distribution approval is granted."), metadata, corpus, source_corpus, source_bytes, readme)
     expect_rejection("source baseline", lambda _, corp: corp["cases"][0].__setitem__("rawBaseline", "mutated"), metadata, corpus, source_corpus, source_bytes, readme)
     expect_rejection("source case hash", lambda _, corp: corp["cases"][0].__setitem__("sourceCaseSHA256", "0" * 64), metadata, corpus, source_corpus, source_bytes, readme)
+    expect_rejection("historical source corpus hash", lambda _, corp: corp["sourceCorpus"].__setitem__("historicalOriginalSHA256", "0" * 64), metadata, corpus, source_corpus, source_bytes, readme)
     expect_rejection("Mandarin or mixed case", lambda _, corp: corp["cases"][0].__setitem__("language", "mixed"), metadata, corpus, source_corpus, source_bytes, readme)
     expect_rejection("nested unknown source annotation Han", lambda _, corp: corp["cases"][0].setdefault("unmodeledNested", {}).update({"sourceNote": "含"}), metadata, corpus, source_corpus, source_bytes, readme)
 except ContractError as error:
@@ -429,7 +432,7 @@ except ContractError as error:
 print(
     "gemma-metadata-corpus-contract: PASS "
     "totalCases=38 sourceCases=33 syntheticUtilityCases=5 "
-    "qwenEnglish=12 whisperEnglish=12 protectedStress=9 fixtureMutationsRejected=6 "
+    "qwenEnglish=12 whisperEnglish=12 protectedStress=9 fixtureMutationsRejected=7 "
     "recursiveCJKScan=true"
 )
 PY

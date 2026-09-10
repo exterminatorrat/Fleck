@@ -178,6 +178,7 @@ struct AgentPrivacyBoundaryTests {
 
     #expect(failures.count == 2)
     #expect(failures[0] == failures[1])
+    #expect(fixture.state.requestEvents.isEmpty)
   }
 
   @Test @MainActor
@@ -503,6 +504,7 @@ private final class PrivacyWorkspaceState: AgentWorkspaceStateAccess {
   var preferences = AppPreferences()
   var isAgentWorkspaceAvailable = true
   var agentCommitProofs: [AgentWorkspaceCommitProof] = []
+  var requestEvents: [AgentRequestEvent] = []
 
   init(workspace: Workspace) {
     self.workspace = workspace
@@ -521,6 +523,10 @@ private final class PrivacyWorkspaceState: AgentWorkspaceStateAccess {
   }
 
   func publishAgentFeedback(_ feedback: AgentChangeFeedback) {}
+
+  func publishAgentRequestEvent(_ event: AgentRequestEvent) {
+    requestEvents.append(event)
+  }
 }
 
 private actor PrivacyAuthorizer: AgentProfileAuthorizing {

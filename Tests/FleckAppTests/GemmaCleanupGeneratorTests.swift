@@ -152,7 +152,7 @@ import Testing
 
 @Test func gemmaPromptUsesAcceptedLiteralSlashJSONEncoding() async throws {
   let transport = GemmaFakeTransport()
-  let baseline = "Open https://example.com/a/b then use /Users/harryjin/Fleck/Notes.md"
+  let baseline = "Open https://example.com/a/b then use /fixtures/fleck/Notes.md"
   let generator = GemmaCleanupGenerator(
     transportFactory: { transport.makeTransport() },
     clock: GemmaTestClock.clock()
@@ -167,7 +167,7 @@ import Testing
 
   #expect(wire.plainPrompt == GemmaTestRequest.prompt(for: baseline))
   #expect(wire.plainPrompt.contains("https://example.com/a/b"))
-  #expect(wire.plainPrompt.contains("/Users/harryjin/Fleck/Notes.md"))
+  #expect(wire.plainPrompt.contains("/fixtures/fleck/Notes.md"))
 
   helper.yield(GemmaTestEvent.started(wire.requestID))
   helper.yield(GemmaTestEvent.cancelled(wire.requestID))

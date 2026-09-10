@@ -44,6 +44,16 @@ labelled and do not replace public-human evidence. The contract recursively scan
 compatibility characters in U+3400-U+4DBF, U+4E00-U+9FFF, U+F900-U+FAFF, or
 U+20000-U+2FA1F.
 
+The current Gemma corpus SHA-256 is
+`375a00766c439e53c0844164a4b18c5f5d8db1b89efffaae60799bd2a04ccab5`.
+Its current sanitized Qwen source corpus SHA-256 is
+`fca16ee1c04b77fa7b17489ea3d071eff3c0d049c78ae90e1977ca3421f10120`.
+The earlier pre-sanitization identity
+`6d8a639d6b67fde23a198398e13176ccc50af03acdfaf504a68dfaa20c9a17fb`
+is preserved only as `historicalOriginalSHA256`; it is not the current corpus
+hash. Historical source evidence uses `historical-external-evidence:`
+locators rather than machine-specific filesystem paths.
+
 ## Qualification boundary
 
 Run the offline metadata/corpus contract before any future helper or model

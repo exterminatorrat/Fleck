@@ -33,9 +33,11 @@ private final class ProcessorMeasurementRecorder {
   private var cleanupDecisionCompletedAt: ContinuousClock.Instant?
   private var cancellationRequestedAt: ContinuousClock.Instant?
   private var cancellationDrainedAt: ContinuousClock.Instant?
+  private var supplementalMeasurements = DictationRuntimeMeasurements.empty
+  private var isTerminal = false
 
   func record(_ stage: Stage, at instant: ContinuousClock.Instant) {
-    guard integrity == .valid, value(for: stage) == nil else { return }
+    guard !isTerminal, integrity == .valid, value(for: stage) == nil else { return }
     if cancellationRequestedAt != nil,
       stage != .cancellationRequested,
       stage != .cancellationDrained
@@ -51,8 +53,27 @@ private final class ProcessorMeasurementRecorder {
     lastAcceptedAt = instant
   }
 
+  func overlay(_ measurements: DictationRuntimeMeasurements) {
+    guard !isTerminal else { return }
+    supplementalMeasurements = supplementalMeasurements.overlaying(measurements)
+  }
+
+  func record(outcome: DictationRuntimeMeasurements.Outcome) {
+    guard !isTerminal else { return }
+    supplementalMeasurements = supplementalMeasurements.recording(outcome: outcome)
+  }
+
+  func record(failure: DictationRuntimeMeasurements.Failure) {
+    guard !isTerminal else { return }
+    supplementalMeasurements = supplementalMeasurements.recording(failure: failure)
+  }
+
+  func terminal() {
+    isTerminal = true
+  }
+
   var snapshot: DictationRuntimeMeasurements {
-    DictationRuntimeMeasurements(
+    var result = DictationRuntimeMeasurements(
       integrity: integrity,
       processorStartedAt: processorStartedAt,
       sourceStartRequestedAt: sourceStartRequestedAt,
@@ -64,6 +85,8 @@ private final class ProcessorMeasurementRecorder {
       cancellationRequestedAt: cancellationRequestedAt,
       cancellationDrainedAt: cancellationDrainedAt
     )
+    result = result.overlaying(supplementalMeasurements)
+    return isTerminal ? result.terminal() : result
   }
 
   private func value(for stage: Stage) -> ContinuousClock.Instant? {
@@ -113,6 +136,8 @@ final class StreamingDictationProcessor: DictationProcessing {
   private let finalizationStartGate: (@MainActor @Sendable () async -> Void)?
   private let onCancellationInvalidated: (@MainActor @Sendable () -> Void)?
   private let onCancellationDrained: (@MainActor @Sendable () -> Void)?
+  private var latestStartupCaptureID: UUID?
+  private var latestStartupMeasurements = DictationRuntimeMeasurements.empty
 
   init(
     makeSource: @escaping SourceFactory,
@@ -146,6 +171,11 @@ final class StreamingDictationProcessor: DictationProcessing {
     await runtime?.handle(signal)
   }
 
+  func runtimeMeasurements(for captureID: UUID) -> DictationRuntimeMeasurements {
+    guard latestStartupCaptureID == captureID else { return .empty }
+    return latestStartupMeasurements
+  }
+
   func begin(
     configuration: DictationProcessingConfiguration,
     level: @escaping @MainActor @Sendable (Float) -> Void
@@ -177,14 +207,36 @@ final class StreamingDictationProcessor: DictationProcessing {
     startAuthorized: @escaping @MainActor @Sendable () -> Bool,
     requiresCaptureContext: Bool
   ) async throws -> any DictationProcessingSession {
-    if requiresCaptureContext, configuration.captureContext == nil {
-      throw StreamingDictationProcessorError.captureContextMismatch
-    }
     let measurements = ProcessorMeasurementRecorder()
     measurements.record(.processorStarted, at: clock.now())
-    try authorizeStart(startAuthorized)
-    try validate(configuration)
-    let source = try await makeSource(configuration)
+    latestStartupCaptureID = configuration.captureID
+    latestStartupMeasurements = measurements.snapshot
+    if requiresCaptureContext, configuration.captureContext == nil {
+      measurements.record(outcome: .failed)
+      measurements.record(failure: .processingFailure)
+      updateStartupMeasurements(measurements.snapshot, captureID: configuration.captureID)
+      throw StreamingDictationProcessorError.captureContextMismatch
+    }
+    do {
+      try authorizeStart(startAuthorized)
+      try validate(configuration)
+    } catch {
+      measurements.record(outcome: error is CancellationError ? .cancelled : .failed)
+      if !(error is CancellationError) { measurements.record(failure: .processingFailure) }
+      updateStartupMeasurements(measurements.snapshot, captureID: configuration.captureID)
+      throw error
+    }
+    let source: any StreamingSpeechSource
+    do {
+      source = try await makeSource(configuration)
+    } catch {
+      measurements.record(outcome: error is CancellationError ? .cancelled : .failed)
+      if !(error is CancellationError) {
+        measurements.record(failure: sourceStartupFailure(for: error))
+      }
+      updateStartupMeasurements(measurements.snapshot, captureID: configuration.captureID)
+      throw error
+    }
     do {
       try authorizeStart(startAuthorized)
       let acknowledgement: DictationRecognitionContextAcknowledgement?
@@ -206,8 +258,11 @@ final class StreamingDictationProcessor: DictationProcessing {
       measurements.record(.sourceStartRequested, at: clock.now())
       try await source.start(
         provisional: { callbackBuffer.provisional($0, receivedAt: self.clock.now()) },
-        level: level
+        level: level,
+        failure: { callbackBuffer.failure($0) }
       )
+      measurements.overlay(source.runtimeMeasurements)
+      updateStartupMeasurements(measurements.snapshot, captureID: configuration.captureID)
       return StreamingDictationSession(
         configuration: configuration,
         source: source,
@@ -225,9 +280,36 @@ final class StreamingDictationProcessor: DictationProcessing {
         onCancellationDrained: onCancellationDrained
       )
     } catch {
+      measurements.overlay(source.runtimeMeasurements)
+      measurements.record(outcome: error is CancellationError ? .cancelled : .failed)
+      if !(error is CancellationError) {
+        let failure: DictationRuntimeMeasurements.Failure =
+          measurements.snapshot.sourceStartRequestedAt == nil
+            ? .processingFailure
+            : sourceStartupFailure(for: error)
+        measurements.record(failure: failure)
+      }
+      updateStartupMeasurements(measurements.snapshot, captureID: configuration.captureID)
       await source.releaseResources()
+      measurements.overlay(source.runtimeMeasurements)
+      updateStartupMeasurements(measurements.snapshot, captureID: configuration.captureID)
       throw error
     }
+  }
+
+  private func updateStartupMeasurements(
+    _ measurements: DictationRuntimeMeasurements,
+    captureID: UUID
+  ) {
+    guard latestStartupCaptureID == captureID else { return }
+    latestStartupMeasurements = measurements
+  }
+
+  private func sourceStartupFailure(
+    for error: Error
+  ) -> DictationRuntimeMeasurements.Failure {
+    guard let failure = error as? DictationFailure else { return .sourceStartupFailure }
+    return failure == .permissionDenied ? .permissionDenied : .sourceStartupFailure
   }
 
   private func authorizeStart(
@@ -253,9 +335,11 @@ final class StreamingDictationProcessor: DictationProcessing {
 @MainActor
 fileprivate final class StreamingDictationCallbackBuffer {
   private var provisionalTexts: [(text: String, receivedAt: ContinuousClock.Instant)] = []
+  private var sourceFailure: Error?
   private weak var session: StreamingDictationSession?
 
   func provisional(_ text: String, receivedAt: ContinuousClock.Instant) {
+    guard sourceFailure == nil else { return }
     if let session {
       session.receiveProvisional(text, receivedAt: receivedAt)
     } else {
@@ -263,11 +347,20 @@ fileprivate final class StreamingDictationCallbackBuffer {
     }
   }
 
+  func failure(_ error: Error) {
+    guard sourceFailure == nil else { return }
+    sourceFailure = error
+    session?.receiveFailure(error)
+  }
+
   func attach(to session: StreamingDictationSession) {
     self.session = session
     let buffered = provisionalTexts
     provisionalTexts.removeAll(keepingCapacity: false)
     buffered.forEach { session.receiveProvisional($0.text, receivedAt: $0.receivedAt) }
+    if let sourceFailure {
+      session.receiveFailure(sourceFailure)
+    }
   }
 }
 
@@ -292,6 +385,7 @@ final class StreamingDictationSession: DictationProcessingSession {
   private var cancellationTask: Task<Void, Never>?
   private var isCancelled = false
   private var isTerminal = false
+  private var terminalSourceFailure: Error?
   private enum SourceTerminalization: Equatable {
     case open
     case finished
@@ -340,15 +434,23 @@ final class StreamingDictationSession: DictationProcessingSession {
   }
 
   var runtimeMeasurements: DictationRuntimeMeasurements {
-    measurements.snapshot
+    measurements.overlay(source.runtimeMeasurements)
+    return measurements.snapshot
   }
 
   func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult {
     if let finalizationTask {
-      return try await finalizationTask.value
+      return try await awaitFinalization(finalizationTask)
     }
     guard !isCancelled, !isTerminal, cancellationTask == nil else {
       throw CancellationError()
+    }
+    if let terminalSourceFailure {
+      measurements.overlay(source.runtimeMeasurements)
+      measurements.record(outcome: .failed)
+      measurements.record(failure: .sourceFailure)
+      await cancel()
+      throw terminalSourceFailure
     }
 
     // Capture the stop boundary before any task suspension or source finalization.
@@ -371,7 +473,23 @@ final class StreamingDictationSession: DictationProcessingSession {
       )
     }
     finalizationTask = task
-    return try await task.value
+    return try await awaitFinalization(task)
+  }
+
+  private func awaitFinalization(
+    _ task: Task<DictationProcessingResult, Error>
+  ) async throws -> DictationProcessingResult {
+    do {
+      return try await task.value
+    } catch {
+      guard let terminalSourceFailure else { throw error }
+      finalizationTask = nil
+      measurements.overlay(source.runtimeMeasurements)
+      measurements.record(outcome: .failed)
+      measurements.record(failure: .sourceFailure)
+      await cancel()
+      throw terminalSourceFailure
+    }
   }
 
   func cancel() async {
@@ -383,7 +501,9 @@ final class StreamingDictationSession: DictationProcessingSession {
 
     // This actor turn is the cancellation winner. No suspension occurs between
     // invalidation and storing the shared task.
+    measurements.overlay(source.runtimeMeasurements)
     measurements.record(.cancellationRequested, at: clock.now())
+    measurements.record(outcome: .cancelled)
     isCancelled = true
     generation &+= 1
     continuation.finish()
@@ -414,6 +534,13 @@ final class StreamingDictationSession: DictationProcessingSession {
     continuation.yield(update)
   }
 
+  fileprivate func receiveFailure(_ error: Error) {
+    guard !isCancelled, !isTerminal, terminalSourceFailure == nil else { return }
+    terminalSourceFailure = error
+    generation &+= 1
+    continuation.finish(throwing: error)
+  }
+
   private func completeCancellation() async {
     finalizationTask?.cancel()
     if sourceTerminalization == .open {
@@ -425,8 +552,10 @@ final class StreamingDictationSession: DictationProcessingSession {
     if let finalizationTask {
       _ = try? await finalizationTask.value
     }
+    measurements.overlay(source.runtimeMeasurements)
     measurements.record(.cancellationDrained, at: clock.now())
     onCancellationDrained?()
+    measurements.terminal()
     markTerminal()
   }
 
@@ -440,13 +569,25 @@ final class StreamingDictationSession: DictationProcessingSession {
         stopOrigin: stopOrigin
       )
       try Task.checkCancellation()
+      try throwIfSourceFailed()
       guard !isCancelled, !isTerminal else {
         throw CancellationError()
       }
+      measurements.overlay(source.runtimeMeasurements)
       markTerminal()
       try Task.checkCancellation()
       return result
     } catch {
+      measurements.overlay(source.runtimeMeasurements)
+      if error is CancellationError {
+        measurements.record(outcome: .cancelled)
+      } else {
+        measurements.record(outcome: .failed)
+        measurements.record(failure: processingFailure(for: error))
+      }
+      if terminalSourceFailure != nil {
+        throw error
+      }
       markTerminal()
       throw error
     }
@@ -457,11 +598,14 @@ final class StreamingDictationSession: DictationProcessingSession {
     stopOrigin: DictationStopOrigin
   ) async throws -> DictationProcessingResult {
     try Task.checkCancellation()
+    try throwIfSourceFailed()
 
     let rawText: String?
     do {
       let returnedText = try await source.finish(stopOrigin: stopOrigin)
       try Task.checkCancellation()
+      try throwIfSourceFailed()
+      measurements.overlay(source.runtimeMeasurements)
       measurements.record(.asrFinal, at: clock.now())
       rawText = returnedText
       if sourceTerminalization == .open {
@@ -469,12 +613,20 @@ final class StreamingDictationSession: DictationProcessingSession {
       }
     } catch {
       if sourceTerminalization == .open {
-        sourceTerminalization = .finished
+        if terminalSourceFailure == nil {
+          sourceTerminalization = .finished
+        }
+      }
+      measurements.overlay(source.runtimeMeasurements)
+      if !(error is CancellationError) {
+        measurements.record(outcome: .failed)
+        measurements.record(failure: .sourceFailure)
       }
       throw error
     }
 
     try Task.checkCancellation()
+    try throwIfSourceFailed()
     guard let rawText, !rawText.isEmpty else {
       throw StreamingDictationProcessorError.noSpeech
     }
@@ -553,6 +705,16 @@ final class StreamingDictationSession: DictationProcessingSession {
       captureContext: captureContext,
       recognitionContextAcknowledgement: recognitionContextAcknowledgement
     )
+  }
+
+  private func throwIfSourceFailed() throws {
+    if let terminalSourceFailure { throw terminalSourceFailure }
+  }
+
+  private func processingFailure(for error: Error) -> DictationRuntimeMeasurements.Failure {
+    if (error as? StreamingDictationProcessorError) == .noSpeech { return .noSpeech }
+    if terminalSourceFailure != nil { return .sourceFailure }
+    return .processingFailure
   }
 
   private func markTerminal() {

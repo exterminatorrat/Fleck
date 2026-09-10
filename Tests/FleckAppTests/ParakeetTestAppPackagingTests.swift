@@ -21,6 +21,8 @@ private struct FakeFixture {
   let codesignLog: URL
   let codesignVerifyLog: URL
   let rpathState: URL
+  let swiftRuntimeSource: URL
+  let swiftRuntimeMode: String
   let unsafeStaging: URL
   let gemmaResourceMode: String
   let appScript: URL
@@ -49,7 +51,10 @@ private func writeExecutable(_ source: String, to url: URL) throws {
   try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o755)], ofItemAtPath: url.path)
 }
 
-private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> FakeFixture {
+private func makeFakeFixture(
+  gemmaResourceMode: String = "valid",
+  swiftRuntimeMode: String = "valid"
+) throws -> FakeFixture {
   let sourceRoot = repositoryRoot()
   guard fileManager.fileExists(atPath: sourceRoot.appendingPathComponent("Package.resolved").path) else {
     throw FixtureError.missingRepositoryRoot
@@ -139,6 +144,22 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
   let helperToolLog = root.appendingPathComponent("helper-tool.log")
   let codesignLog = root.appendingPathComponent("codesign.log")
   let codesignVerifyLog = root.appendingPathComponent("codesign-verify.log")
+  let swiftRuntimeDirectory = root.appendingPathComponent("toolchain/swift/macosx")
+  try fileManager.createDirectory(at: swiftRuntimeDirectory, withIntermediateDirectories: true)
+  let swiftRuntimeName = swiftRuntimeMode == "unsupported"
+    ? "libswiftCompatibilityFuture.dylib"
+    : "libswiftCompatibilitySpan.dylib"
+  let swiftRuntimeSource = swiftRuntimeDirectory.appendingPathComponent(swiftRuntimeName)
+  if swiftRuntimeMode != "missing"
+    && swiftRuntimeMode != "none"
+    && swiftRuntimeMode != "scan-miss" {
+    try Data("swift-runtime-\(swiftRuntimeMode)\n".utf8).write(to: swiftRuntimeSource)
+  }
+  if swiftRuntimeMode == "symlink" {
+    let target = root.appendingPathComponent("unsafe-swift-runtime-target")
+    try fileManager.moveItem(at: swiftRuntimeSource, to: target)
+    try fileManager.createSymbolicLink(at: swiftRuntimeSource, withDestinationURL: target)
+  }
 
   try writeExecutable(#"""
     #!/bin/bash
@@ -155,6 +176,7 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
       lipo) printf '%s\n' "$FAKE_TOOLS/lipo" ;;
       otool) printf '%s\n' "$FAKE_TOOLS/otool" ;;
       install_name_tool) printf '%s\n' "$FAKE_TOOLS/install_name_tool" ;;
+      swift-stdlib-tool) printf '%s\n' "$FAKE_TOOLS/swift-stdlib-tool" ;;
       *) exit 2 ;;
     esac
     """#, to: tools.appendingPathComponent("xcrun"))
@@ -212,6 +234,46 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
       printf '%s\n' "$bin"
     fi
     """#, to: tools.appendingPathComponent("swift"))
+  try writeExecutable(#"""
+    #!/bin/bash
+    set -euo pipefail
+    operation="$1"
+    shift
+    destination=""
+    scans=()
+    while (($#)); do
+      case "$1" in
+        --scan-executable) scans+=("$2"); shift 2 ;;
+        --destination) destination="$2"; shift 2 ;;
+        --platform) [[ "$2" == "macosx" ]]; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    required=0
+    for executable in "${scans[@]}"; do
+      printf 'swift-stdlib-tool|%s|%s\n' "$operation" "$executable" \
+        >> "$FAKE_HELPER_TOOL_LOG"
+      if [[ "$(/usr/bin/basename "$executable")" == "fleck-agent" \
+        && "$FAKE_SWIFT_RUNTIME_MODE" != "none" \
+        && "$FAKE_SWIFT_RUNTIME_MODE" != "scan-miss" ]]; then
+        required=1
+      fi
+    done
+    if (( required == 0 )); then
+      exit 0
+    fi
+    case "$operation" in
+      --print)
+        printf '%s\n' "$FAKE_SWIFT_RUNTIME_SOURCE"
+        ;;
+      --copy)
+        [[ -n "$destination" && -d "$destination" ]]
+        /bin/cp "$FAKE_SWIFT_RUNTIME_SOURCE" \
+          "$destination/$(/usr/bin/basename "$FAKE_SWIFT_RUNTIME_SOURCE")"
+        ;;
+      *) exit 2 ;;
+    esac
+    """#, to: tools.appendingPathComponent("swift-stdlib-tool"))
   try writeExecutable(#"""
     #!/bin/bash
     set -euo pipefail
@@ -368,10 +430,27 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
           printf '      cmdsize 48\n'
           printf '      path @executable_path/../lib (offset 12)\n'
         fi
+        if [[ -e "$FAKE_RPATH_STATE.frameworks.$name" ]]; then
+          printf 'Load command 4\n'
+          printf '      cmd LC_RPATH\n'
+          printf '      cmdsize 48\n'
+          printf '      path @loader_path/../Frameworks (offset 12)\n'
+        fi
         ;;
       -L)
         printf '%s:\n' "$2"
         printf '\t/usr/lib/swift/libswiftCore.dylib (compatibility version 0.0.0, current version 0.0.0)\n'
+        if [[ "$(/usr/bin/basename "$path")" == "fleck-agent" ]]; then
+          case "$FAKE_SWIFT_RUNTIME_MODE" in
+            none) ;;
+            nonportable-dependency)
+              printf '\t@rpath/libUnapproved.dylib (compatibility version 0.0.0, current version 0.0.0)\n'
+              ;;
+            *)
+              printf '\t@rpath/libswiftCompatibilitySpan.dylib (compatibility version 0.0.0, current version 0.0.0, weak)\n'
+              ;;
+          esac
+        fi
         ;;
       *) exit 2 ;;
     esac
@@ -379,10 +458,16 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
   try writeExecutable(#"""
     #!/bin/bash
     set -euo pipefail
-    [[ "$1" == "-delete_rpath" ]]
+    operation="$1"
     path="${@: -1}"
-    printf 'install_name_tool|-delete_rpath|%s|%s\n' "$2" "$path" \
+    printf 'install_name_tool|%s|%s|%s\n' "$operation" "$2" "$path" \
       >> "$FAKE_HELPER_TOOL_LOG"
+    if [[ "$operation" == "-add_rpath" ]]; then
+      [[ "$2" == "@loader_path/../Frameworks" ]]
+      : > "$FAKE_RPATH_STATE.frameworks.$(/usr/bin/basename "$path")"
+      exit 0
+    fi
+    [[ "$operation" == "-delete_rpath" ]]
     case "$2" in
       /Applications/*) state="absolute" ;;
       @executable_path/../lib) state="escape" ;;
@@ -435,7 +520,12 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     set -euo pipefail
     [[ "$1" == "-archs" ]]
     printf 'lipo|%s\n' "$2" >> "$FAKE_HELPER_TOOL_LOG"
-    printf 'arm64\n'
+    if [[ "$(/usr/bin/basename "$2")" == libswiftCompatibility*.dylib \
+      && "$FAKE_SWIFT_RUNTIME_MODE" == "wrong-arch" ]]; then
+      printf 'x86_64\n'
+    else
+      printf 'arm64\n'
+    fi
     """#, to: tools.appendingPathComponent("lipo"))
   try writeExecutable(#"""
     #!/bin/bash
@@ -483,6 +573,8 @@ private func makeFakeFixture(gemmaResourceMode: String = "valid") throws -> Fake
     codesignLog: codesignLog,
     codesignVerifyLog: codesignVerifyLog,
     rpathState: root.appendingPathComponent("rpath-state"),
+    swiftRuntimeSource: swiftRuntimeSource,
+    swiftRuntimeMode: swiftRuntimeMode,
     unsafeStaging: root.appendingPathComponent("unsafe-staging"),
     gemmaResourceMode: gemmaResourceMode,
     appScript: appScript
@@ -528,6 +620,8 @@ private func environment(
   environment["FAKE_ENTRIES"] = fixture.entries.path
   environment["FAKE_RPATH_STATE"] = fixture.rpathState.path
   environment["FAKE_RPATH_SURVIVES"] = escapingRpathSurvives ? "1" : "0"
+  environment["FAKE_SWIFT_RUNTIME_SOURCE"] = fixture.swiftRuntimeSource.path
+  environment["FAKE_SWIFT_RUNTIME_MODE"] = fixture.swiftRuntimeMode
   environment["FAKE_ACTIVE_SDK_VERSION"] = "26.5"
   environment["FAKE_LINKED_SDK_MARKER"] = fixture.root.appendingPathComponent("linked-sdk").path
   environment["FAKE_REPORTED_SDK_VERSION"] = reportedSDKVersion ?? ""
@@ -543,11 +637,15 @@ private func launchPackager(
   gemmaBuildFails: Bool = false,
   gemmaBuildMutatesLock: Bool = false,
   escapingRpathSurvives: Bool = false,
-  reportedSDKVersion: String? = nil
+  reportedSDKVersion: String? = nil,
+  useHostBash: Bool = false
 ) throws -> RunningPackager {
   let standardError = Pipe()
   let process = Process()
-  process.executableURL = fixture.appScript
+  process.executableURL = useHostBash
+    ? URL(fileURLWithPath: "/bin/bash")
+    : fixture.appScript
+  process.arguments = useHostBash ? [fixture.appScript.path] : []
   process.currentDirectoryURL = fixture.root
   process.environment = environment(
     for: fixture,
@@ -670,6 +768,102 @@ func parakeetPackagerLinksAndValidatesActiveSDKVersion() throws {
       atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
     )
   )
+  let bundledRuntime = fixture.build.appendingPathComponent(
+    "parakeet-test/Fleck.app/Contents/Frameworks/libswiftCompatibilitySpan.dylib"
+  )
+  #expect(try Data(contentsOf: bundledRuntime) == Data(contentsOf: fixture.swiftRuntimeSource))
+  let toolEvents = try String(contentsOf: fixture.helperToolLog, encoding: .utf8)
+  #expect(toolEvents.contains("swift-stdlib-tool|--print|"))
+  #expect(toolEvents.contains("swift-stdlib-tool|--copy|"))
+  #expect(toolEvents.contains(
+    "install_name_tool|-add_rpath|@loader_path/../Frameworks|"
+  ))
+  let verifyEvents = try String(contentsOf: fixture.codesignVerifyLog, encoding: .utf8)
+  #expect(verifyEvents.contains("/Contents/Frameworks/libswiftCompatibilitySpan.dylib"))
+}
+
+@Test
+func parakeetPackagerAllowsNoPortableSwiftRuntimeWithHostBash() throws {
+  let fixture = try makeFakeFixture(swiftRuntimeMode: "none")
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(
+    fixture: fixture,
+    runID: "no-swift-runtime",
+    useHostBash: true
+  )
+  waitForExit(running)
+  let standardError = output(from: running.standardError)
+
+  #expect(running.process.terminationStatus == 0, Comment(rawValue: standardError))
+  let packagedApp = fixture.build.appendingPathComponent("parakeet-test/Fleck.app")
+  #expect(fileManager.fileExists(atPath: packagedApp.path))
+  #expect(!fileManager.fileExists(
+    atPath: packagedApp.appendingPathComponent("Contents/Frameworks").path
+  ))
+  let toolEvents = try String(contentsOf: fixture.helperToolLog, encoding: .utf8)
+  #expect(toolEvents.contains("swift-stdlib-tool|--print|"))
+  #expect(!toolEvents.contains("swift-stdlib-tool|--copy|"))
+  #expect(!toolEvents.contains("install_name_tool|-add_rpath|@loader_path/../Frameworks|"))
+}
+
+@Test(arguments: ["missing", "symlink", "wrong-arch"])
+func parakeetPackagerRejectsMissingOrUnsafeRequiredSwiftRuntime(_ runtimeMode: String) throws {
+  let fixture = try makeFakeFixture(swiftRuntimeMode: runtimeMode)
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(fixture: fixture, runID: runtimeMode)
+  waitForExit(running)
+  let error = output(from: running.standardError)
+
+  #expect(running.process.terminationStatus != 0)
+  if runtimeMode == "wrong-arch" {
+    #expect(error.contains("required Swift runtime does not contain arm64"))
+  } else {
+    #expect(error.contains("required Swift runtime source is missing or unsafe"))
+  }
+  #expect(!fileManager.fileExists(
+    atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
+  ))
+  #expect(!fileManager.fileExists(atPath: fixture.codesignLog.path))
+  #expect(try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
+    == Data(contentsOf: fixture.originalLock))
+  #expect(try Data(contentsOf: fixture.gemmaPackage.appendingPathComponent("Package.resolved"))
+    == Data(contentsOf: fixture.originalGemmaLock))
+}
+
+@Test(arguments: ["unsupported", "nonportable-dependency", "scan-miss"])
+func parakeetPackagerRejectsUnsupportedRuntimeDependenciesAndRollsBack(
+  _ runtimeMode: String
+) throws {
+  let fixture = try makeFakeFixture(swiftRuntimeMode: runtimeMode)
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(fixture: fixture, runID: runtimeMode)
+  waitForExit(running)
+  let error = output(from: running.standardError)
+
+  #expect(running.process.terminationStatus != 0)
+  if runtimeMode == "unsupported" {
+    #expect(error.contains("unsupported portable Swift runtime dependency"))
+  } else if runtimeMode == "scan-miss" {
+    #expect(error.contains("@rpath dependency is unsatisfied"))
+    #expect(error.contains("@rpath/libswiftCompatibilitySpan.dylib"))
+  } else {
+    #expect(error.contains("unpermitted dynamic dependency"))
+    #expect(error.contains("@rpath/libUnapproved.dylib"))
+  }
+  #expect(!fileManager.fileExists(
+    atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
+  ))
+  #expect(!fileManager.fileExists(atPath: fixture.codesignLog.path))
+  #expect(try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
+    == Data(contentsOf: fixture.originalLock))
+  #expect(try Data(contentsOf: fixture.gemmaPackage.appendingPathComponent("Package.resolved"))
+    == Data(contentsOf: fixture.originalGemmaLock))
 }
 
 @Test
@@ -829,6 +1023,9 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   #expect(appContents.filter {
     $0 == "Contents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
   }.count == 1)
+  #expect(appContents.filter {
+    $0 == "Contents/Frameworks/libswiftCompatibilitySpan.dylib"
+  }.count == 1)
   #expect(!appContents.contains("Contents/Resources/mlx-swift_Cmlx.bundle"))
 
   let helperToolEvents = try String(contentsOf: fixture.helperToolLog, encoding: .utf8)
@@ -849,10 +1046,11 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   let signEvents = try String(contentsOf: fixture.codesignLog, encoding: .utf8)
     .split(whereSeparator: \.isNewline)
     .map(String.init)
-  #expect(signEvents.count == 3)
-  #expect(signEvents[0].hasSuffix("/Contents/SharedSupport/gemma-cleanup-helper|com.harryjin.fleck.gemma-cleanup-helper"))
-  #expect(signEvents[1].hasSuffix("/Contents/SharedSupport/fleck-agent|com.harryjin.fleck.agent"))
-  #expect(signEvents[2].hasSuffix("/Fleck.app|com.harryjin.fleck"))
+  #expect(signEvents.count == 4)
+  #expect(signEvents[0].hasSuffix("/Contents/Frameworks/libswiftCompatibilitySpan.dylib|com.harryjin.fleck.swiftCompatibilitySpan"))
+  #expect(signEvents[1].hasSuffix("/Contents/SharedSupport/gemma-cleanup-helper|com.harryjin.fleck.gemma-cleanup-helper"))
+  #expect(signEvents[2].hasSuffix("/Contents/SharedSupport/fleck-agent|com.harryjin.fleck.agent"))
+  #expect(signEvents[3].hasSuffix("/Fleck.app|com.harryjin.fleck"))
   let verifyEvents = try String(contentsOf: fixture.codesignVerifyLog, encoding: .utf8)
   #expect(verifyEvents.contains(helperSuffix))
   #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent("Fleck_FleckApp.bundle").path))

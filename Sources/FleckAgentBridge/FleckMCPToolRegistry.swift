@@ -417,7 +417,8 @@
           destructiveHint: readOnly ? false : nil,
           idempotentHint: readOnly ? true : nil,
           openWorldHint: false
-        )
+        ),
+        icons: FleckMCPBranding.toolIcons
       )
     }
 

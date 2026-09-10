@@ -22,9 +22,26 @@ enum DictationPipelineStage: Equatable, Sendable {
 struct DictationCoordinatorContext: Equatable, Sendable {
   let sessionID: UUID
   let mode: DictationMode
+  let destination: DictationDestination?
   let pipelineStage: DictationPipelineStage
   let cleanupOutcome: DictationCleanupOutcome?
   let failureStage: DictationPipelineStage?
+
+  init(
+    sessionID: UUID,
+    mode: DictationMode,
+    destination: DictationDestination? = nil,
+    pipelineStage: DictationPipelineStage,
+    cleanupOutcome: DictationCleanupOutcome?,
+    failureStage: DictationPipelineStage?
+  ) {
+    self.sessionID = sessionID
+    self.mode = mode
+    self.destination = destination
+    self.pipelineStage = pipelineStage
+    self.cleanupOutcome = cleanupOutcome
+    self.failureStage = failureStage
+  }
 }
 
 enum DictationTerminalOutcome: Equatable {
@@ -118,6 +135,7 @@ final class DictationCoordinator {
     var captureContextTask: Task<LocalWritingCaptureContext, Error>?
     var startupTask: Task<Void, Never>?
     var processingUpdatesTask: Task<Void, Never>?
+    var sourceFailureTask: Task<Void, Never>?
     var generation: UInt64 = 0
     var stablePrefix = ""
     var pipelineStage: DictationPipelineStage = .capture
@@ -127,6 +145,8 @@ final class DictationCoordinator {
     var isSourceFinishing = false
     var releaseRequested = false
     var holdAccepted = true
+    var audioReady = false
+    var pendingAudioLevel: Float?
     var cancelRequested = false
     var routingTask: Task<DictationRoutingDecision, Never>?
     var processingSessionCancellationTask: Task<Void, Never>?
@@ -164,6 +184,7 @@ final class DictationCoordinator {
   private var shortcutTerminalWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
   private var terminalWaiters: [CheckedContinuation<Void, Never>] = []
   private var eventObserver: (@MainActor (DictationCoordinatorEvent) -> Void)?
+  private var diagnosticObserver: (@MainActor (DictationDiagnosticObservation) -> Void)?
   private var levelObserver: (@MainActor (Float) -> Void)?
   private var pendingRoutingAmbiguity: PendingRoutingAmbiguity?
   private var nextCaptureContextGeneration: UInt64 = 1
@@ -177,10 +198,23 @@ final class DictationCoordinator {
   private(set) var latestRuntimeMeasurements = DictationRuntimeMeasurements.empty
   private(set) var latestProcessingResult: DictationProcessingResult?
   private var latestMeasurementCaptureID: UUID?
+  private var latestDiagnosticRevision: UInt64 = 0
+  private var lastPublishedDiagnostics: DictationRuntimeMeasurements.Diagnostics?
 
   var canConfigureShortcut: Bool {
     capture == nil && shortcutID == nil && activeShortcutSessions.isEmpty
       && !recoveryOperationInFlight
+  }
+
+  var latestRuntimeDiagnostics: DictationRuntimeMeasurements.Diagnostics {
+    var measurements = latestRuntimeMeasurements
+    if let session = capture?.processingSession {
+      measurements = measurements.overlaying(session.runtimeMeasurements)
+    }
+    if let engine = capture?.engine {
+      measurements = measurements.overlaying(engine.runtimeMeasurements)
+    }
+    return measurements.diagnostics
   }
 
   init(
@@ -247,6 +281,12 @@ final class DictationCoordinator {
     _ observer: (@MainActor (DictationCoordinatorEvent) -> Void)?
   ) {
     eventObserver = observer
+  }
+
+  func setDiagnosticObserver(
+    _ observer: (@MainActor (DictationDiagnosticObservation) -> Void)?
+  ) {
+    diagnosticObserver = observer
   }
 
   func setLevelObserver(
@@ -420,6 +460,7 @@ final class DictationCoordinator {
     scheduleDeferredFinishIfReady(&active)
     capture = active
     guard receipt.isShort else {
+      quietAudioFeedback(session.id)
       recordMeasurement(.physicalRelease, at: releasedAt, captureID: session.id)
       if active.deferredStartupFailureMessage != nil {
         acceptArmedShortcut(session.id)
@@ -572,7 +613,10 @@ final class DictationCoordinator {
     }
     latestMeasurementCaptureID = id
     latestRuntimeMeasurements = .empty
+    latestDiagnosticRevision = 0
+    lastPublishedDiagnostics = nil
     latestProcessingResult = nil
+    recordMeasurement(.coordinatorEventReceived, at: clock.now(), captureID: id)
     if let pressedAt = physicalGesture.pressedAt {
       recordMeasurement(.physicalPress, at: pressedAt, captureID: id)
     }
@@ -597,15 +641,23 @@ final class DictationCoordinator {
     guard mode != .focused || (
       focusedEditor?.canBeginFocusedDictation == true && focusedEditor?.beginFocusedDictation() == true
     ) else {
+      let outcome = DictationTerminalOutcome.failed("Unable to begin focused dictation.")
       let terminalContext = contextForCapture(
         capture!,
         failureStage: .capture
       )
+      resolveMeasurements(
+        outcome: outcome,
+        diagnosticFailure: .processingFailure,
+        failureStage: .capture,
+        captureID: id
+      )
+      freezeMeasurements(captureID: id)
       capture = nil
       completeShortcutSession(id)
       publishTerminal(
         phase: .failed("Unable to begin focused dictation."),
-        outcome: .failed("Unable to begin focused dictation."),
+        outcome: outcome,
         context: terminalContext
       )
       return false
@@ -678,19 +730,22 @@ final class DictationCoordinator {
           self.capture?.editor?.updateFocusedDictation(provisionalText: text)
         },
         level: { [weak self] level in
-          guard let self, self.isActive(id), self.capture?.holdAccepted == true else { return }
-          self.levelObserver?(level)
+          self?.observeAudioReadiness(id, level: level)
+        },
+        failure: { [weak self] error in
+          self?.scheduleSourceFailure(id, error: error)
         }
       )
     } catch {
+      overlay(engine.runtimeMeasurements, captureID: id)
       await handleStartupFailure(id, error: error)
       return
     }
-    guard let current = finishStarting(id) else { return }
+    overlay(engine.runtimeMeasurements, captureID: id)
+    guard finishStarting(id) != nil else { return }
     guard await continueCapture(id) else { return }
-    if current.holdAccepted {
-      setPhase(.listening(mode: mode, engine: engine.kind))
-    }
+    observeAudioReadiness(id)
+    guard let current = capture, current.id == id else { return }
     if current.releaseRequested, let stopOrigin = current.stopOrigin {
       await finish(stopOrigin: stopOrigin)
     }
@@ -749,22 +804,28 @@ final class DictationCoordinator {
       session = try await processing.begin(
         configuration: configuration,
         level: { [weak self] level in
-          guard let self, self.isActive(id), self.capture?.holdAccepted == true else { return }
-          self.levelObserver?(level)
+          self?.observeAudioReadiness(id, level: level)
         },
         startAuthorized: { [weak self] in
           self?.isStartAuthorized(id) == true
         }
       )
     } catch {
+      overlay(processing.runtimeMeasurements(for: id), captureID: id)
+      if let failure = startupFailure(for: error) {
+        recordFailureIfMissing(failure, captureID: id)
+      }
       await handleStartupFailure(id, error: error)
       return
     }
 
     guard var activeCapture = capture, activeCapture.id == id else {
+      overlay(session.runtimeMeasurements, captureID: id)
       await session.cancel()
+      overlay(session.runtimeMeasurements, captureID: id)
       return
     }
+    overlay(session.runtimeMeasurements, captureID: id)
     activeCapture.processingSession = session
     activeCapture.isStarting = false
     capture = activeCapture
@@ -773,8 +834,9 @@ final class DictationCoordinator {
     guard await continueCapture(id) else { return }
     if current.holdAccepted {
       startProcessingUpdates(id, session: session)
-      setPhase(.listening(mode: mode, engine: engine))
     }
+    observeAudioReadiness(id)
+    guard let current = capture, current.id == id else { return }
     if current.releaseRequested, let stopOrigin = current.stopOrigin {
       await finish(stopOrigin: stopOrigin)
     }
@@ -792,10 +854,68 @@ final class DictationCoordinator {
           guard self.applyProcessingUpdate(update, to: id) else { return }
         }
       } catch {
-        return
+        self?.scheduleSourceFailure(id, error: error)
       }
     }
     self.capture = capture
+  }
+
+  private func scheduleSourceFailure(_ id: UUID, error: Error) {
+    guard var capture, capture.id == id,
+      !capture.cancelRequested,
+      !capture.isTerminating,
+      capture.sourceFailureTask == nil
+    else { return }
+    if let engine = capture.engine {
+      overlay(engine.runtimeMeasurements, captureID: id)
+    }
+    if let session = capture.processingSession {
+      overlay(session.runtimeMeasurements, captureID: id)
+    }
+    recordFailureIfMissing(.sourceFailure, captureID: id)
+    let message = message(for: error)
+    let task = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await self.completeSourceFailure(id, message: message)
+    }
+    capture.sourceFailureTask = task
+    self.capture = capture
+    phase = .failed(message)
+    recordMeasurement(.phasePublished, at: clock.now(), captureID: id)
+    eventObserver?(DictationCoordinatorEvent(
+      phase: phase,
+      terminal: nil,
+      context: contextForCapture(capture, failureStage: .capture)
+    ))
+  }
+
+  private func completeSourceFailure(_ id: UUID, message: String) async {
+    guard let current = capture, current.id == id, !current.isTerminating else { return }
+    if current.processingSession != nil {
+      await cancelProcessingSession(id)
+    } else if let engine = current.engine {
+      overlay(engine.runtimeMeasurements, captureID: id)
+      await release(engine)
+      overlay(engine.runtimeMeasurements, captureID: id)
+      guard var active = capture, active.id == id else { return }
+      active.engine = nil
+      capture = active
+    }
+    guard var active = capture, active.id == id else { return }
+    if active.cancelRequested {
+      active.sourceFailureTask = nil
+      capture = active
+      await completeCancellation(id)
+      return
+    }
+    active.sourceFailureTask = nil
+    capture = active
+    await terminate(
+      id,
+      phase: .failed(message),
+      cancelEditor: active.mode == .focused,
+      failureStage: .capture
+    )
   }
 
   private func applyProcessingUpdate(
@@ -842,7 +962,8 @@ final class DictationCoordinator {
 
   private func finish(stopOrigin proposedOrigin: DictationStopOrigin) async {
     guard var capture, !capture.isTerminating, !capture.cancelRequested,
-      capture.deferredStartupFailureMessage == nil
+      capture.deferredStartupFailureMessage == nil,
+      capture.sourceFailureTask == nil
     else { return }
     if capture.stopOrigin == nil {
       capture.stopOrigin = proposedOrigin
@@ -857,11 +978,13 @@ final class DictationCoordinator {
     {
       capture.releaseRequested = true
       self.capture = capture
+      quietAudioFeedback(capture.id)
       return
     }
     if capture.isStarting {
       capture.releaseRequested = true
       self.capture = capture
+      quietAudioFeedback(capture.id)
       return
     }
     guard !capture.isFinishing else { return }
@@ -882,11 +1005,16 @@ final class DictationCoordinator {
     guard let engine = capture.engine else { return }
 
     setSourceFinishing(capture.id, true)
+    recordMeasurement(.stopRequested, at: clock.now(), captureID: capture.id)
     let rawText: String?
     do {
       rawText = try await engine.finish(stopOrigin: stopOrigin)
+      overlay(engine.runtimeMeasurements, captureID: capture.id)
+      recordMeasurement(.asrFinal, at: clock.now(), captureID: capture.id)
       setSourceFinishing(capture.id, false)
     } catch {
+      overlay(engine.runtimeMeasurements, captureID: capture.id)
+      recordFailureIfMissing(.sourceFailure, captureID: capture.id)
       setSourceFinishing(capture.id, false)
       guard await continueCapture(capture.id) else { return }
       await terminate(
@@ -933,11 +1061,13 @@ final class DictationCoordinator {
     do {
       cleanedText = try await cleaner.clean(rawText)
       guard await continueCapture(capture.id) else { return }
+      recordMeasurement(.cleanupDecisionCompleted, at: clock.now(), captureID: capture.id)
       record.cleanedTranscript = cleanedText
       record.cleanupOutcome = .cleaned
       setCleanupOutcome(.cleaned, captureID: capture.id)
     } catch {
       guard await continueCapture(capture.id) else { return }
+      recordMeasurement(.cleanupDecisionCompleted, at: clock.now(), captureID: capture.id)
       cleanedText = rawText
       record.cleanupOutcome = .usedRaw
       setCleanupOutcome(.usedRaw, captureID: capture.id)
@@ -971,7 +1101,13 @@ final class DictationCoordinator {
     do {
       result = try await session.finish(stopOrigin: stopOrigin)
     } catch {
+      overlay(session.runtimeMeasurements, captureID: id)
       await drainProcessingUpdates(id)
+      overlay(session.runtimeMeasurements, captureID: id)
+      recordFailureIfMissing(
+        (error as? StreamingDictationProcessorError) == .noSpeech ? .noSpeech : .processingFailure,
+        captureID: id
+      )
       guard await continueCapture(id) else { return }
       guard let capture, capture.id == id else { return }
       await terminate(
@@ -985,6 +1121,7 @@ final class DictationCoordinator {
     }
 
     await drainProcessingUpdates(id)
+    overlay(session.runtimeMeasurements, captureID: id)
     guard await continueCapture(id) else { return }
     guard let capture, capture.id == id else { return }
     if let expectedContext = capture.captureContext {
@@ -1002,6 +1139,7 @@ final class DictationCoordinator {
           id,
           phase: .failed(message(for: StreamingDictationProcessorError.captureContextMismatch)),
           cancelEditor: capture.mode == .focused,
+          diagnosticFailure: .processingFailure,
           failureStage: .capture
         )
         return
@@ -1140,8 +1278,8 @@ final class DictationCoordinator {
     if let session = active.processingSession {
       startProcessingUpdates(id, session: session)
     }
-    if !active.isStarting {
-      setPhase(.listening(mode: active.mode, engine: active.selectedEngine))
+    if active.audioReady {
+      observeAudioReadiness(id)
     }
   }
 
@@ -1196,6 +1334,7 @@ final class DictationCoordinator {
       active.generation &+= 1
     }
     capture = active
+    quietAudioFeedback(id)
     recordMeasurement(.cancellationRequested, at: instant, captureID: id)
     rollbackEditor(id)
   }
@@ -1235,6 +1374,54 @@ final class DictationCoordinator {
   private func isStartAuthorized(_ id: UUID) -> Bool {
     guard let capture, capture.id == id else { return false }
     return !capture.cancelRequested && !capture.isTerminating
+  }
+
+  private func observeAudioReadiness(_ id: UUID, level: Float? = nil) {
+    guard var active = capture, active.id == id, canPublishAudioFeedback(active) else {
+      return
+    }
+    if let level {
+      guard level.isFinite else { return }
+      active.pendingAudioLevel = min(max(level, 0), 1)
+    }
+    if !active.audioReady {
+      active.audioReady = true
+      capture = active
+      recordMeasurement(.audioReadyObserved, at: clock.now(), captureID: id)
+    } else {
+      capture = active
+    }
+    guard active.holdAccepted else { return }
+    let pendingLevel = active.pendingAudioLevel
+    active.pendingAudioLevel = nil
+    capture = active
+    setPhase(.listening(mode: active.mode, engine: active.selectedEngine))
+    guard let current = capture, current.id == id, current.holdAccepted,
+      current.audioReady, canPublishAudioFeedback(current)
+    else { return }
+    if let pendingLevel {
+      levelObserver?(pendingLevel)
+    }
+  }
+
+  private func canPublishAudioFeedback(_ capture: Capture) -> Bool {
+    !capture.cancelRequested
+      && !capture.isTerminating
+      && !capture.isFinishing
+      && !capture.isSourceFinishing
+      && !capture.releaseRequested
+      && capture.stopOrigin == nil
+      && capture.physicalReleaseReceipt == nil
+      && capture.sourceFailureTask == nil
+      && capture.deferredStartupFailureMessage == nil
+  }
+
+  private func quietAudioFeedback(_ id: UUID) {
+    guard var active = capture, active.id == id else { return }
+    active.audioReady = false
+    active.pendingAudioLevel = nil
+    capture = active
+    levelObserver?(0)
   }
 
   private func finishFocused(
@@ -1331,20 +1518,20 @@ final class DictationCoordinator {
     }
     guard await continueCapture(id) else { return }
     recordMeasurement(.routingDecision, at: clock.now(), captureID: id)
-    let ambiguityChoices: [DictationRoutingChoice]?
+    let suggestedChoices: [DictationRoutingChoice]?
     let destinationID: UUID?
     switch routingDecision {
     case .resolved(let routedID)
       where routedID != inbox?.destination.noteID
         && candidates.contains(where: { $0.destination.noteID == routedID }):
       destinationID = routedID
-      ambiguityChoices = nil
+      suggestedChoices = nil
     case .ambiguous(let choices):
       destinationID = inbox?.destination.noteID
-      ambiguityChoices = choices
+      suggestedChoices = choices
     default:
       destinationID = inbox?.destination.noteID
-      ambiguityChoices = nil
+      suggestedChoices = []
     }
 
     do {
@@ -1394,12 +1581,17 @@ final class DictationCoordinator {
         return
       }
       guard isActive(id) else { return }
-      if let ambiguityChoices,
+      if let suggestedChoices,
         receipt.noteID == (inbox?.destination.noteID ?? createdInbox?.noteID)
       {
+        let choices = destinationChoices(
+          suggested: suggestedChoices,
+          candidates: candidates,
+          inboxID: receipt.noteID
+        )
         let ambiguity = DictationRoutingAmbiguity(
           captureID: id,
-          choices: Array(ambiguityChoices.prefix(4))
+          choices: choices
         )
         pendingRoutingAmbiguity = PendingRoutingAmbiguity(
           ambiguity: ambiguity,
@@ -1470,6 +1662,47 @@ final class DictationCoordinator {
     )
   }
 
+  private func destinationChoices(
+    suggested: [DictationRoutingChoice],
+    candidates: [DictationRoutingCandidate],
+    inboxID: UUID
+  ) -> [DictationRoutingChoice] {
+    let manualCandidates = candidates.filter { $0.destination.noteID != inboxID }
+    let titleCounts = Dictionary(grouping: manualCandidates) {
+      normalizedTitle($0.destination.title)
+    }.mapValues(\.count)
+    var seen = Set<UUID>()
+    var choices: [DictationRoutingChoice] = []
+
+    for suggestion in suggested {
+      guard let candidate = manualCandidates.first(where: {
+        $0.destination == suggestion.destination
+      }), seen.insert(candidate.destination.noteID).inserted else { continue }
+      choices.append(.init(
+        destination: candidate.destination,
+        contextHint: titleCounts[normalizedTitle(candidate.destination.title), default: 0] > 1
+          ? candidate.presentationContext ?? suggestion.contextHint
+          : suggestion.contextHint
+      ))
+    }
+
+    for candidate in manualCandidates
+      where seen.insert(candidate.destination.noteID).inserted
+    {
+      choices.append(.init(
+        destination: candidate.destination,
+        contextHint: candidate.presentationContext ?? ""
+      ))
+    }
+    return choices
+  }
+
+  private func normalizedTitle(_ title: String) -> String {
+    title.split(whereSeparator: \Character.isWhitespace)
+      .joined(separator: " ")
+      .lowercased()
+  }
+
   private func preserveFailedUndoRecovery(
     _ id: UUID,
     record: DictationHistoryRecord,
@@ -1490,7 +1723,8 @@ final class DictationCoordinator {
     await terminate(
       id,
       phase: .failed("Dictation was saved but could not be undone."),
-      cancelEditor: false
+      cancelEditor: false,
+      diagnosticFailure: .persistenceFailure
     )
   }
 
@@ -1567,8 +1801,11 @@ final class DictationCoordinator {
       return
     }
     let task = Task { @MainActor [weak self, session] in
+      self?.overlay(session.runtimeMeasurements, captureID: id)
       await session.cancel()
+      self?.overlay(session.runtimeMeasurements, captureID: id)
       await self?.drainProcessingUpdates(id)
+      self?.overlay(session.runtimeMeasurements, captureID: id)
     }
     capture.processingSessionCancellationTask = task
     self.capture = capture
@@ -1583,7 +1820,8 @@ final class DictationCoordinator {
     await terminate(
       id,
       phase: .failed("Dictation could not be cancelled safely. The text was preserved."),
-      cancelEditor: false
+      cancelEditor: false,
+      diagnosticFailure: .persistenceFailure
     )
   }
 
@@ -1593,6 +1831,7 @@ final class DictationCoordinator {
     cancelEditor: Bool,
     deleteHistory: Bool = false,
     outcome: DictationTerminalOutcome? = nil,
+    diagnosticFailure: DictationRuntimeMeasurements.Failure? = nil,
     failureStage: DictationPipelineStage? = nil
   ) async {
     guard var capture, capture.id == id, !capture.isTerminating else { return }
@@ -1601,25 +1840,44 @@ final class DictationCoordinator {
     if cancelEditor { rollbackEditor(id) }
     var terminalPhase = phase
     var terminalOutcome = outcome
+    var terminalDiagnosticFailure = diagnosticFailure
     var terminalFailureStage = failureStage
     if deleteHistory, !(await historyController.delete(id)) {
       let message = "Dictation cancellation could not remove its History transcript."
       recoveryAction = .openHistory
       terminalPhase = .failed(message)
       terminalOutcome = .failed(message)
+      terminalDiagnosticFailure = .persistenceFailure
       terminalFailureStage = nil
     }
     guard let current = self.capture, current.id == id else { return }
+    if let session = current.processingSession {
+      overlay(session.runtimeMeasurements, captureID: id)
+    }
+    if let engine = current.engine {
+      overlay(engine.runtimeMeasurements, captureID: id)
+    }
     let terminalContext = contextForCapture(
       current,
       failureStage: terminalFailureStage
     )
-    if let engine = current.engine { await release(engine) }
+    let resolvedOutcome = terminalOutcome ?? inferredTerminalOutcome(for: terminalPhase)
+    resolveMeasurements(
+      outcome: resolvedOutcome,
+      diagnosticFailure: terminalDiagnosticFailure,
+      failureStage: terminalFailureStage,
+      captureID: id
+    )
+    if let engine = current.engine {
+      await release(engine)
+      overlay(engine.runtimeMeasurements, captureID: id)
+    }
     guard self.capture?.id == id else { return }
     self.capture = nil
-    levelObserver?(0)
+    if !current.cancelRequested {
+      levelObserver?(0)
+    }
     completeShortcutSession(id)
-    let resolvedOutcome = terminalOutcome ?? inferredTerminalOutcome(for: terminalPhase)
     publishTerminal(
       phase: terminalPhase,
       outcome: resolvedOutcome,
@@ -1634,6 +1892,7 @@ final class DictationCoordinator {
 
   private func continueCapture(_ id: UUID) async -> Bool {
     guard let capture, capture.id == id, !capture.isTerminating else { return false }
+    guard capture.sourceFailureTask == nil else { return false }
     guard capture.cancelRequested else { return true }
     await completeCancellation(id)
     return false
@@ -1647,6 +1906,15 @@ final class DictationCoordinator {
   }
 
   private func handleStartupFailure(_ id: UUID, error: Error) async {
+    if let processing {
+      overlay(processing.runtimeMeasurements(for: id), captureID: id)
+    }
+    if let engine = capture?.engine {
+      overlay(engine.runtimeMeasurements, captureID: id)
+    }
+    if let failure = startupFailure(for: error) {
+      recordFailureIfMissing(failure, captureID: id)
+    }
     guard let current = finishStarting(id) else { return }
     if current.cancelRequested {
       await completeCancellation(id)
@@ -1677,7 +1945,9 @@ final class DictationCoordinator {
   ) async {
     guard let current = capture, current.id == id, !current.cancelRequested else { return }
     if let engine = current.engine {
+      overlay(engine.runtimeMeasurements, captureID: id)
       await release(engine)
+      overlay(engine.runtimeMeasurements, captureID: id)
     }
     guard var active = capture, active.id == id else { return }
     active.engine = nil
@@ -1946,7 +2216,10 @@ final class DictationCoordinator {
     captureID: UUID
   ) {
     guard latestMeasurementCaptureID == captureID else { return }
-    latestRuntimeMeasurements = latestRuntimeMeasurements.recording(stage, at: instant)
+    let updated = latestRuntimeMeasurements.recording(stage, at: instant)
+    guard updated != latestRuntimeMeasurements else { return }
+    latestRuntimeMeasurements = updated
+    publishDiagnostics(captureID: captureID)
   }
 
   private func overlay(
@@ -1954,12 +2227,95 @@ final class DictationCoordinator {
     captureID: UUID
   ) {
     guard latestMeasurementCaptureID == captureID else { return }
-    latestRuntimeMeasurements = latestRuntimeMeasurements.overlaying(measurements)
+    let updated = latestRuntimeMeasurements.overlaying(measurements)
+    guard updated != latestRuntimeMeasurements else { return }
+    latestRuntimeMeasurements = updated
+    publishDiagnostics(captureID: captureID)
+  }
+
+  private func recordFailureIfMissing(
+    _ failure: DictationRuntimeMeasurements.Failure,
+    captureID: UUID
+  ) {
+    guard latestMeasurementCaptureID == captureID,
+      latestRuntimeMeasurements.failure == nil
+    else { return }
+    latestRuntimeMeasurements = latestRuntimeMeasurements.recording(failure: failure)
+    publishDiagnostics(captureID: captureID)
+  }
+
+  private func startupFailure(for error: Error) -> DictationRuntimeMeasurements.Failure? {
+    if error is CancellationError { return nil }
+    if let failure = error as? DictationFailure {
+      switch failure {
+      case .permissionDenied: return .permissionDenied
+      default: break
+      }
+    }
+    if error is StreamingDictationProcessorError { return .processingFailure }
+    return .sourceStartupFailure
+  }
+
+  private func resolveMeasurements(
+    outcome: DictationTerminalOutcome,
+    diagnosticFailure: DictationRuntimeMeasurements.Failure? = nil,
+    failureStage: DictationPipelineStage?,
+    captureID: UUID
+  ) {
+    guard latestMeasurementCaptureID == captureID else { return }
+    switch outcome {
+    case .saved:
+      latestRuntimeMeasurements = latestRuntimeMeasurements.resolving(
+        outcome: .succeeded,
+        failure: nil
+      )
+    case .noSpeech:
+      latestRuntimeMeasurements = latestRuntimeMeasurements.resolving(
+        outcome: .failed,
+        failure: .noSpeech
+      )
+    case .cancelled:
+      latestRuntimeMeasurements = latestRuntimeMeasurements.resolving(
+        outcome: .cancelled,
+        failure: nil
+      )
+    case .failed:
+      let existing = latestRuntimeMeasurements.failure
+      let stageFailure: DictationRuntimeMeasurements.Failure?
+      switch failureStage {
+      case .save: stageFailure = .persistenceFailure
+      case .organize: stageFailure = .routingFailure
+      case .polish: stageFailure = .processingFailure
+      case .capture, nil: stageFailure = nil
+      }
+      latestRuntimeMeasurements = latestRuntimeMeasurements.resolving(
+        outcome: .failed,
+        failure: diagnosticFailure ?? stageFailure ?? existing
+      )
+    }
+    publishDiagnostics(captureID: captureID)
   }
 
   private func freezeMeasurements(captureID: UUID) {
     guard latestMeasurementCaptureID == captureID else { return }
     latestRuntimeMeasurements = latestRuntimeMeasurements.terminal()
+    publishDiagnostics(captureID: captureID)
+  }
+
+  private func publishDiagnostics(captureID: UUID) {
+    guard latestMeasurementCaptureID == captureID,
+      latestRuntimeMeasurements.outcome != nil,
+      let diagnosticObserver
+    else { return }
+    let diagnostics = latestRuntimeMeasurements.diagnostics
+    guard diagnostics != lastPublishedDiagnostics else { return }
+    latestDiagnosticRevision &+= 1
+    lastPublishedDiagnostics = diagnostics
+    diagnosticObserver(DictationDiagnosticObservation(
+      captureID: captureID,
+      revision: latestDiagnosticRevision,
+      diagnostics: diagnostics
+    ))
   }
 
   private func message(for error: Error) -> String {
@@ -1982,6 +2338,9 @@ final class DictationCoordinator {
     }
     guard self.phase != phase else { return }
     self.phase = phase
+    if let capture {
+      recordMeasurement(.phasePublished, at: clock.now(), captureID: capture.id)
+    }
     eventObserver?(DictationCoordinatorEvent(
       phase: phase,
       terminal: nil,
@@ -2041,6 +2400,7 @@ final class DictationCoordinator {
     DictationCoordinatorContext(
       sessionID: capture.id,
       mode: capture.mode,
+      destination: capture.destination,
       pipelineStage: capture.pipelineStage,
       cleanupOutcome: capture.cleanupOutcome,
       failureStage: failureStage

@@ -3,7 +3,7 @@ import Testing
 
 @testable import FleckApp
 
-@Test func DictationAmbiguityPresentationCapsModelChoicesAndAddsKeepInbox() throws {
+@Test func DictationAmbiguityPresentationRetainsAllModelChoicesAndAddsKeepInbox() throws {
   let captureID = UUID()
   let choices = (1...6).map { index in
     DictationRoutingChoice(
@@ -17,8 +17,10 @@ import Testing
   )
 
   #expect(chooser.captureID == captureID)
-  #expect(chooser.choices.count == 4)
-  #expect(chooser.choices.map(\.title) == ["Note 1", "Note 2", "Note 3", "Note 4"])
+  #expect(chooser.choices.count == choices.count)
+  #expect(chooser.choices.map(\.id) == choices.map(\.destination.noteID))
+  #expect(chooser.choices.map(\.title) == choices.map(\.destination.title))
+  #expect(chooser.allowsKeepInInbox)
   #expect(chooser.keepInboxTitle == "Keep in Inbox")
   #expect(chooser.keepInboxAccessibilityLabel == "Keep dictation in Inbox")
   #expect(chooser.menuAccessibilityLabel == "Choose note")

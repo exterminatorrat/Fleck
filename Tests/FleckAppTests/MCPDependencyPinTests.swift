@@ -27,6 +27,7 @@ import Testing
 }
 
 @Test func mcpDependencyAndNoticeArePinned() throws {
+  let mcpRevision = "a0ae212ebf6eab5f754c3129608bc5557637e605"
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -54,7 +55,7 @@ import Testing
   )
   #expect(
     manifest.contains(
-      #"revision: "a0ae212ebf6eab5f754c3129608bc5557637e605""#
+      "revision: \"\(mcpRevision)\""
     )
   )
 
@@ -87,7 +88,7 @@ import Testing
       version: "2.101.3"
     ),
     "swift-sdk": .init(
-      revision: "a0ae212ebf6eab5f754c3129608bc5557637e605",
+      revision: mcpRevision,
       version: nil
     ),
     "swift-system": .init(
@@ -110,7 +111,10 @@ import Testing
     encoding: .utf8
   )
   #expect(notices.contains("modelcontextprotocol/swift-sdk"))
-  #expect(notices.contains("0.12.1"))
+  #expect(notices.contains("| Model Context Protocol Swift SDK | `\(mcpRevision)` |"))
+  #expect(notices.contains("swift-sdk/blob/\(mcpRevision)/LICENSE"))
+  #expect(notices.contains("Apache-2.0, unrelicensed MIT contributions, and CC BY 4.0 documentation"))
+  #expect(notices.contains("Copyright 2024-2025 Model Context Protocol a Series of LF Projects, LLC."))
 }
 
 private struct ResolvedFile: Decodable {

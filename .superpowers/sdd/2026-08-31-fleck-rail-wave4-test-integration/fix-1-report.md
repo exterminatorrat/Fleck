@@ -95,7 +95,7 @@ Scripts/build-fleck-app.sh
 
 Succeeded and rebuilt the development-signed bundle at:
 
-`/Users/harryjin/Fleck/.worktrees/fleck-rail-wave4-test-integration/.build/Fleck.app`
+`${FLECK_REPO}/.worktrees/fleck-rail-wave4-test-integration/.build/Fleck.app`
 
 ```sh
 codesign --verify --deep --strict --verbose=4 .build/Fleck.app

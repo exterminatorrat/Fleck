@@ -22,7 +22,7 @@ git merge --no-ff --no-commit 7c03be9d959eba8a032f10b049c977e3bfdfa528
 It produced five conflicts. They were resolved as follows:
 
 1. `AGENTS.md`: selected the first-parent/current-root policy. The resulting file
-   is byte-identical to `/Users/harryjin/Fleck/AGENTS.md` without changing the
+   is byte-identical to `${FLECK_REPO}/AGENTS.md` without changing the
    root checkout.
 2. `Sources/FleckApp/DictationCoordinator.swift`: kept the Rail's externally
    allocated shortcut session and presentation context, then integrated Wave 3's
@@ -172,7 +172,7 @@ Scripts/build-fleck-app.sh
 
 Succeeded and produced:
 
-`/Users/harryjin/Fleck/.worktrees/fleck-rail-wave4-test-integration/.build/Fleck.app`
+`${FLECK_REPO}/.worktrees/fleck-rail-wave4-test-integration/.build/Fleck.app`
 
 The package script rebuilt `Fleck` and `fleck-agent`, ad-hoc signed both, verified
 the bundle, and installed the staged bundle atomically at the path above.

@@ -19,7 +19,7 @@ Success means:
 
 Work only in:
 
-`/Users/harryjin/Fleck/.worktrees/fleck-rail-wave4-test-integration`
+`${FLECK_REPO}/.worktrees/fleck-rail-wave4-test-integration`
 
 The worker owns the integration operation and the minimum semantic conflict resolutions in:
 
@@ -41,7 +41,7 @@ Interface rules:
 - Preserve the rail session/presentation interfaces from the UI base while retaining Wave 3's `physicalGesture`, `recordPhysicalRelease`, and stop-origin semantics.
 - Resolve `SettingsView.swift` as a union: keep current UI/rail settings composition and add the accepted Personal Dictionary surface without reverting newer UI.
 - Resolve `Package.swift` as a union of all required current-UI, capture-lab, Wave 3, and Wave 4 targets/dependencies. Preserve the existing resolved-package lock.
-- Resolve `AGENTS.md` to the exact current repository policy at `/Users/harryjin/Fleck/AGENTS.md`; read it but do not modify that dirty root checkout.
+- Resolve `AGENTS.md` to the exact current repository policy at `${FLECK_REPO}/AGENTS.md`; read it but do not modify that dirty root checkout.
 
 ## 3. Required implementation and explicit non-goals
 
@@ -57,7 +57,7 @@ Non-goals:
 
 - No pill redesign, new animations, new model selection, new cleanup behavior, or new product scope.
 - No model download, bundling, benchmark execution, microphone claim, or release-readiness claim.
-- No edits in `/Users/harryjin/Fleck` or any other worktree.
+- No edits in `${FLECK_REPO}` or any other worktree.
 - No push, pull request, merge on GitHub, or repository-setting change.
 - Do not spawn additional agents.
 

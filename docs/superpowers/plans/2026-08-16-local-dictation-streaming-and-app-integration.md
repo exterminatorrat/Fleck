@@ -3049,7 +3049,7 @@ Workstream B does not build or switch the separate real checkout. After Task 5
 parent verification and a fresh Sol `ship`, Workstream C owns the final root
 snapshot/branch/ancestry checkpoint, the serialized SwiftPM run,
 `./Scripts/build-fleck-app.sh`, and the exact
-`/Users/harryjin/Fleck/.build/Fleck.app` launch. The C checkpoint preserves the
+`${FLECK_REPO}/.build/Fleck.app` launch. The C checkpoint preserves the
 sole dirty root `AGENTS.md` byte-for-byte and aborts before packaging on any
 branch, accepted-SHA, unmerged-state, or extra-dirty-file mismatch.
 

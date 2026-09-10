@@ -69,6 +69,11 @@ struct AgentPresentationTests {
     #expect(settings.contains("Connected Profiles"))
     #expect(settings.contains("Set up a local integration"))
     #expect(settings.contains("DisclosureGroup(\"Activity\")"))
+    #expect(settings.contains("Show agent update banners"))
+    #expect(settings.contains("appState.preferences.showAgentUpdateBanners"))
+    #expect(settings.contains("banners for future agent changes"))
+    #expect(settings.contains("does not replay earlier changes"))
+    #expect(settings.contains("Agent Activity remains available"))
     #expect(settings.contains("DisclosureGroup(\"Access\")"))
     #expect(!settings.contains("HStack {\n            addButton(\"Add Codex\""))
   }
@@ -241,6 +246,187 @@ struct AgentPresentationTests {
     #expect(!banner.message.contains("body"))
   }
 
+  @Test @MainActor
+  func agentUpdateBannerPreferencePersistsWithoutReplayingSuppressedActivity() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AgentBannerPreference-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Shared", body: "after", revision: 7)
+    var preferences = AppPreferences()
+    preferences.showAgentUpdateBanners = false
+    let store = LocalStore(rootURL: root)
+    try await store.save(
+      workspace: Workspace(notes: [note], selectedNoteID: note.id),
+      preferences: preferences,
+      trashedNotes: []
+    )
+    let activityStore = AgentActivityStore(rootURL: root)
+    let transaction = PreparedAgentTransaction(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actor: .integration(profileID: UUID(), displayName: "Codex"),
+      operationID: UUID(),
+      createdAt: Date(),
+      operation: .appendText,
+      patch: AgentTextPatch(
+        beforeText: "",
+        afterText: "after",
+        range: NSRange(location: 0, length: 0),
+        prefixContext: "",
+        suffixContext: ""
+      ),
+      previousRevision: 6,
+      resultingRevision: 7,
+      resultingBodySHA256: ""
+    )
+    let receipt = AgentWriteReceipt(
+      changeID: transaction.changeID,
+      noteID: note.id,
+      previousRevision: 6,
+      resultingRevision: 7
+    )
+    try activityStore.prepare(transaction)
+    try activityStore.commit(changeID: transaction.changeID, receipt: receipt)
+    let state = AppState(
+      store: store,
+      agentActivityStore: activityStore
+    )
+    await state.waitUntilInitialLoad()
+    #expect(!state.preferences.showAgentUpdateBanners)
+    #expect(state.agentActivity.count == 1)
+
+    let first = feedback(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actorName: "Codex"
+    )
+    let second = feedback(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actorName: "Claude"
+    )
+    state.publishAgentFeedback(first)
+    state.publishAgentFeedback(second)
+    #expect(state.agentBannerPresentation == nil)
+    #expect(state.latestAgentFeedback == second)
+    #expect(state.agentActivity.count == 1)
+
+    state.saveError = "Keep save error"
+    state.agentCleanupError = "Keep agent error"
+    state.updatePreferences { $0.showAgentUpdateBanners = true }
+    #expect(state.agentBannerPresentation == nil)
+    let future = feedback(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actorName: "Kimi"
+    )
+    state.publishAgentFeedback(future)
+    #expect(state.agentBannerPresentation?.feedback == future)
+    #expect(state.agentBannerPresentation?.count == 1)
+
+    state.updatePreferences { $0.showAgentUpdateBanners = false }
+    #expect(state.agentBannerPresentation == nil)
+    #expect(state.latestAgentFeedback == future)
+    #expect(state.agentActivity.count == 1)
+    #expect(state.saveError == "Keep save error")
+    #expect(state.agentCleanupError == "Keep agent error")
+    try await state.saveNow().value
+
+    let relaunched = AppState(store: LocalStore(rootURL: root))
+    await relaunched.waitUntilInitialLoad()
+    #expect(!relaunched.preferences.showAgentUpdateBanners)
+    #expect(relaunched.agentActivity.count == 1)
+    let afterRelaunch = feedback(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actorName: "Codex"
+    )
+    relaunched.publishAgentFeedback(afterRelaunch)
+    #expect(relaunched.agentBannerPresentation == nil)
+    #expect(relaunched.latestAgentFeedback == afterRelaunch)
+    #expect(relaunched.agentActivity.count == 1)
+  }
+
+  @Test @MainActor
+  func disablingAgentUpdateBannersClearsMenuAndPinnedHostsTogether() async throws {
+    NSApplication.shared.accessibilitySetValue(
+      true,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AgentBannerHosts-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Shared")
+    let state = AppState(
+      store: LocalStore(rootURL: root),
+      saveOperation: { _, _, _, _ in .committed }
+    )
+    await state.waitUntilInitialLoad()
+    state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+    let menuRuntime = DictationRuntime(
+      appState: state,
+      applicationSupportURL: root.appendingPathComponent("Menu", isDirectory: true)
+    )
+    let pinnedRuntime = DictationRuntime(
+      appState: state,
+      applicationSupportURL: root.appendingPathComponent("Pinned", isDirectory: true)
+    )
+    let (menuWindow, menuHost) = await hostedWindow(
+      rootView: NotesPanel(
+        dictationRuntime: menuRuntime,
+        isPinned: false,
+        sizing: .container
+      )
+      .environmentObject(state),
+      size: NSSize(width: 800, height: 430)
+    )
+    let (pinnedWindow, pinnedHost) = await hostedWindow(
+      rootView: NotesPanel(
+        dictationRuntime: pinnedRuntime,
+        isPinned: true,
+        sizing: .container
+      )
+      .environmentObject(state),
+      size: NSSize(width: 800, height: 430)
+    )
+    defer {
+      menuWindow.contentView = nil
+      pinnedWindow.contentView = nil
+      menuWindow.orderOut(nil)
+      pinnedWindow.orderOut(nil)
+    }
+    let update = feedback(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actorName: "Codex"
+    )
+    state.publishAgentFeedback(update)
+    await settleAgentActivityHost(menuHost)
+    await settleAgentActivityHost(pinnedHost)
+    let message = "Codex updated Shared"
+    let dismissLabel = "Dismiss Agent Activity update"
+    #expect(state.agentBannerPresentation?.message == message)
+    #expect(agentActivityAccessibilityElement(menuHost, label: dismissLabel) != nil)
+    #expect(agentActivityAccessibilityElement(pinnedHost, label: dismissLabel) != nil)
+
+    state.updatePreferences { $0.showAgentUpdateBanners = false }
+    try await Task.sleep(for: .milliseconds(200))
+    await settleAgentActivityHost(menuHost)
+    await settleAgentActivityHost(pinnedHost)
+    #expect(agentActivityAccessibilityElement(menuHost, label: dismissLabel) == nil)
+    #expect(agentActivityAccessibilityElement(pinnedHost, label: dismissLabel) == nil)
+    #expect(menuWindow.isVisible)
+    #expect(pinnedWindow.isVisible)
+    await menuRuntime.shutdown()
+    await pinnedRuntime.shutdown()
+  }
+
   @Test func agentBannerDismissalKeepsIndependentAndNewOccurrencesVisible() {
     let firstChangeID = UUID()
     let first = NotesPanelBannerOccurrence.agentChange(
@@ -404,22 +590,39 @@ struct AgentPresentationTests {
     #expect(AgentActivityClearPresentation.requiresConfirmation)
   }
 
-  @Test func agentActivityDismissalControlDeclaresRequiredSemantics() throws {
-    let testFile = URL(fileURLWithPath: #filePath)
-    let sourceRoot = testFile.deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .appendingPathComponent("Sources/FleckApp")
-    let source = try String(
-      contentsOf: sourceRoot.appendingPathComponent("AgentActivityView.swift"),
-      encoding: .utf8
+  @Test @MainActor
+  func agentActivityDoneClearsOwningStateWithoutClosingParentWindow() async throws {
+    NSApplication.shared.accessibilitySetValue(
+      true,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
     )
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AgentActivityDone-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let state = AppState(store: LocalStore(rootURL: root))
+    await state.waitUntilInitialLoad()
+    let presentation = AgentActivitySheetPresentation()
+    let (window, host) = await hostedWindow(
+      rootView: AgentActivitySheetHarness(presentation: presentation)
+        .environmentObject(state),
+      size: NSSize(width: 640, height: 480)
+    )
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
 
-    #expect(source.contains("@Environment(\\.dismiss) private var dismiss"))
-    #expect(source.contains("Button(\"Done\") {"))
-    #expect(source.contains("dismiss()"))
-    #expect(source.contains(".keyboardShortcut(.cancelAction)"))
-    #expect(source.contains(".accessibilityLabel(\"Close Agent Activity\")"))
+    let sheet = try await presentedAgentActivitySheet(from: window, parent: host)
+    let done = try #require(
+      agentActivityAccessibilityElement(sheet.contentView, label: "Close Agent Activity")
+    )
+    _ = done.perform(NSSelectorFromString("accessibilityPerformPress"))
+    await settleHostedSheet(sheet, parent: host)
+
+    #expect(!presentation.isPresented)
+    #expect(presentation.dismissalCount == 1)
+    #expect(window.sheets.isEmpty)
+    #expect(window.isVisible)
   }
 
   @Test @MainActor
@@ -431,8 +634,9 @@ struct AgentPresentationTests {
     await state.waitUntilInitialLoad()
     let initialActivityCount = state.agentActivity.count
     let initialWorkspace = state.workspace
+    let presentation = AgentActivitySheetPresentation()
     let (window, host) = await hostedWindow(
-      rootView: AgentActivitySheetHarness()
+      rootView: AgentActivitySheetHarness(presentation: presentation)
         .environmentObject(state),
       size: NSSize(width: 640, height: 480)
     )
@@ -447,8 +651,85 @@ struct AgentPresentationTests {
 
     #expect(window.sheets.isEmpty)
     #expect(window.isVisible)
+    #expect(!presentation.isPresented)
+    #expect(presentation.dismissalCount == 1)
     #expect(state.agentActivity.count == initialActivityCount)
     #expect(state.workspace == initialWorkspace)
+  }
+
+  @Test @MainActor
+  func unpinnedNotesPanelKeepsAgentActivityInsideItsVisibleHost() async throws {
+    NSApplication.shared.accessibilitySetValue(
+      true,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
+    for size in [NSSize(width: 380, height: 300), NSSize(width: 800, height: 430)] {
+      let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("AgentActivityPanel-\(UUID().uuidString)", isDirectory: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let note = Note(title: "Underlying editor fixture")
+      let state = AppState(
+        store: LocalStore(rootURL: root),
+        saveOperation: { _, _, _, _ in .committed }
+      )
+      await state.waitUntilInitialLoad()
+      state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+      let initialWorkspace = state.workspace
+      let initialActivityCount = state.agentActivity.count
+      let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+      let (window, host) = await hostedWindow(
+        rootView: NotesPanel(
+          dictationRuntime: runtime,
+          isPinned: false,
+          sizing: .container
+        )
+        .environmentObject(state),
+        size: size
+      )
+      let initialFrame = window.frame
+
+      let indicator = try #require(
+        agentActivityAccessibilityElement(host, identifier: "agent-activity-indicator")
+      )
+      try clickAgentActivityElement(indicator, in: window)
+      await settleAgentActivityHost(host)
+
+      #expect(window.sheets.isEmpty)
+      #expect(agentActivityAccessibilityElement(host, label: "Close Agent Activity") != nil)
+      #expect(agentActivityAccessibilityElement(host, label: note.title) == nil)
+
+      let done = try #require(
+        agentActivityAccessibilityElement(host, label: "Close Agent Activity")
+      )
+      try clickAgentActivityElement(done, in: window)
+      await settleAgentActivityHost(host)
+
+      #expect(window.sheets.isEmpty)
+      #expect(window.isVisible)
+      #expect(window.frame == initialFrame)
+      #expect(agentActivityAccessibilityElement(host, label: "Close Agent Activity") == nil)
+      #expect(state.workspace == initialWorkspace)
+      #expect(state.agentActivity.count == initialActivityCount)
+
+      let reopenedIndicator = try #require(
+        agentActivityAccessibilityElement(host, identifier: "agent-activity-indicator")
+      )
+      try clickAgentActivityElement(reopenedIndicator, in: window)
+      await settleAgentActivityHost(host)
+      #expect(agentActivityAccessibilityElement(host, label: "Close Agent Activity") != nil)
+
+      sendEscape(to: window)
+      await settleAgentActivityHost(host)
+      #expect(agentActivityAccessibilityElement(host, label: "Close Agent Activity") == nil)
+      #expect(window.isVisible)
+      #expect(window.frame == initialFrame)
+      #expect(state.workspace == initialWorkspace)
+      #expect(state.agentActivity.count == initialActivityCount)
+
+      window.contentView = nil
+      window.orderOut(nil)
+      await runtime.shutdown()
+    }
   }
 
   private func makeRecord(
@@ -487,16 +768,18 @@ struct AgentPresentationTests {
 
   private func feedback(
     changeID: UUID,
+    noteID: UUID = UUID(),
     noteTitle: String,
-    actorName: String
+    actorName: String,
+    createdAt: Date = Date()
   ) -> AgentChangeFeedback {
     AgentChangeFeedback(
       changeID: changeID,
-      noteID: UUID(),
+      noteID: noteID,
       noteTitle: noteTitle,
       actor: .integration(profileID: UUID(), displayName: actorName),
       resultingRevision: 1,
-      createdAt: Date()
+      createdAt: createdAt
     )
   }
 
@@ -578,16 +861,59 @@ struct AgentPresentationTests {
 }
 
 @MainActor
+private final class AgentActivitySheetPresentation: ObservableObject {
+  @Published var isPresented = true
+  private(set) var dismissalCount = 0
+
+  func dismiss() {
+    dismissalCount += 1
+    isPresented = false
+  }
+}
+
+@MainActor
 private struct AgentActivitySheetHarness: View {
-  @State private var isShowingAgentActivity = true
+  @ObservedObject var presentation: AgentActivitySheetPresentation
 
   var body: some View {
     Color.clear
       .frame(width: 320, height: 240)
-      .sheet(isPresented: $isShowingAgentActivity) {
-        AgentActivityView { _ in }
+      .sheet(isPresented: $presentation.isPresented) {
+        AgentActivityView(onOpenNote: { _ in }, onDismiss: presentation.dismiss)
       }
   }
+}
+
+@MainActor
+private func agentActivityAccessibilityElement(_ value: Any?, label: String) -> NSObject? {
+  guard let element = value as? NSObject else { return nil }
+  let labelSelector = NSSelectorFromString("accessibilityLabel")
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let name = element.responds(to: labelSelector)
+    ? element.perform(labelSelector)?.takeUnretainedValue() as? String : nil
+  if name == label { return element }
+  let children = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in children ?? [] {
+    if let found = agentActivityAccessibilityElement(child, label: label) { return found }
+  }
+  return nil
+}
+
+@MainActor
+private func agentActivityAccessibilityElement(_ value: Any?, identifier: String) -> NSObject? {
+  guard let element = value as? NSObject else { return nil }
+  let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let value = element.responds(to: identifierSelector)
+    ? element.perform(identifierSelector)?.takeUnretainedValue() as? String : nil
+  if value == identifier { return element }
+  let children = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in children ?? [] {
+    if let found = agentActivityAccessibilityElement(child, identifier: identifier) { return found }
+  }
+  return nil
 }
 
 @MainActor
@@ -620,7 +946,39 @@ private func sendEscape(to window: NSWindow) {
     isARepeat: false,
     keyCode: 53
   ) else { return }
-  window.sendEvent(event)
+  _ = window.performKeyEquivalent(with: event)
+}
+
+@MainActor
+private func clickAgentActivityElement(_ element: NSObject, in window: NSWindow) throws {
+  let frame = try #require(
+    element.value(forKey: "accessibilityFrame") as? NSValue
+  ).rectValue
+  let point = window.convertPoint(fromScreen: NSPoint(x: frame.midX, y: frame.midY))
+  for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    let event = try #require(
+      NSEvent.mouseEvent(
+        with: type,
+        location: point,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 0,
+        clickCount: 1,
+        pressure: type == .leftMouseDown ? 1 : 0
+      )
+    )
+    window.sendEvent(event)
+  }
+}
+
+@MainActor
+private func settleAgentActivityHost(_ host: NSView) async {
+  for _ in 0..<40 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
 }
 
 @MainActor

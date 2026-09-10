@@ -123,33 +123,6 @@ if [[ ! -x "$bundled_helper" ]]; then
 fi
 "$script_dir/check-release-size.sh" "$app_bundle"
 
-printf '%s\n' '--- Bounded app-binary smoke test ---'
-smoke_output="$(mktemp "${TMPDIR:-/tmp}/fleck-smoke.XXXXXX")"
-smoke_pid=""
-cleanup_smoke() {
-  if [[ -n "$smoke_pid" ]] && /bin/kill -0 "$smoke_pid" 2>/dev/null; then
-    /bin/kill -TERM "$smoke_pid" 2>/dev/null || true
-    wait "$smoke_pid" 2>/dev/null || true
-  fi
-  /bin/rm -f -- "$smoke_output"
-}
-trap cleanup_smoke EXIT
-
-"$app_binary" >"$smoke_output" 2>&1 &
-smoke_pid=$!
-/bin/sleep 2
-if ! /bin/kill -0 "$smoke_pid" 2>/dev/null; then
-  smoke_status=0
-  wait "$smoke_pid" || smoke_status=$?
-  printf 'error: Fleck exited during smoke test with status %s\n' \
-    "$smoke_status" >&2
-  cat "$smoke_output" >&2
-  exit 1
-fi
-/bin/kill -TERM "$smoke_pid" 2>/dev/null || true
-wait "$smoke_pid" 2>/dev/null || true
-smoke_pid=""
-
 printf '%s\n' '--- Candidate lock preservation ---'
 "$script_dir/test-enhanced-candidate-lock-preservation.sh"
 

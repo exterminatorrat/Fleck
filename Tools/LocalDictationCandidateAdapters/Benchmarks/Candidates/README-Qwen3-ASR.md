@@ -18,14 +18,17 @@ Build and execute the standalone candidate runner through the network-denying
 wrapper:
 
 ```sh
-sh /Users/harryjin/Fleck/Tools/LocalDictationCandidateAdapters/Benchmarks/Candidates/run-qwen-native-corpus-benchmark.sh \
+FLECK_REPO="$(git rev-parse --show-toplevel)"
+FLECK_MODEL_EVAL_DIR="${FLECK_MODEL_EVAL_DIR:-$HOME/Library/Application Support/Fleck/ModelEvaluation}"
+
+sh "$FLECK_REPO/Tools/LocalDictationCandidateAdapters/Benchmarks/Candidates/run-qwen-native-corpus-benchmark.sh" \
   --prepared-root "/absolute/path/to/prepared/qwen3-asr-0.6b-int8" \
   --helper "/absolute/path/to/qwen-native-evaluation-helper" \
   --public-human-manifest "/absolute/path/to/fleurs-public-human.json" \
   --public-human-root "/absolute/path/to/fleurs-public-human" \
   --composite-manifest "/absolute/path/to/fleurs-public-human-composite.json" \
   --composite-root "/absolute/path/to/fleurs-public-human-composite" \
-  --output-root "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-YYYYMMDD-HHMMSS"
+  --output-root "$FLECK_MODEL_EVAL_DIR/Evidence/RawRuns/qwen3-asr-0.6b-int8-YYYYMMDD-HHMMSS"
 ```
 
 The example paths are placeholders except for the repository path. Replace every
@@ -107,7 +110,7 @@ Score the generated v1 input separately, writing the report into the same alread
 published run directory:
 
 ```sh
-swift run --package-path /Users/harryjin/Fleck fleck-model-eval \
+swift run --package-path "$FLECK_REPO" fleck-model-eval \
   "/absolute/path/to/run/model-evaluation-run-input-v1.json" \
   "/absolute/path/to/run/model-evaluation-score.json"
 ```
@@ -128,8 +131,23 @@ denied-network attestation and unattested/caller-token rejection, and no retry
 path:
 
 ```sh
-sh /Users/harryjin/Fleck/Tools/LocalDictationCandidateAdapters/Benchmarks/Tests/run-qwen-native-corpus-benchmark-contract-tests.sh
+contract_tmp="$(mktemp -d "$HOME/.fleck-qwen-native-contract.XXXXXX")"
+contract_tmp="$(cd "$contract_tmp" && pwd -P)"
+chmod 700 "$contract_tmp"
+trap 'rm -rf -- "$contract_tmp"' EXIT
+
+TMPDIR="$contract_tmp" \
+  sh "$FLECK_REPO/Tools/LocalDictationCandidateAdapters/Benchmarks/Tests/run-qwen-native-corpus-benchmark-contract-tests.sh" \
+    --preflight-only
+TMPDIR="$contract_tmp" \
+  sh "$FLECK_REPO/Tools/LocalDictationCandidateAdapters/Benchmarks/Tests/run-qwen-native-corpus-benchmark-contract-tests.sh"
 ```
+
+The contract suite requires `TMPDIR` to be an existing canonical external
+directory with no symlinked ancestor. Its `--preflight-only` mode validates that
+root and exits before compiling Swift. The common `/tmp` alias is therefore
+rejected before compilation; use a canonical per-run root such as the mode-700
+directory above instead.
 
 No real model is used by the contract suite. No app integration, installer,
 packaging, streaming/partial claim, cleanup, download, or GitHub operation is part

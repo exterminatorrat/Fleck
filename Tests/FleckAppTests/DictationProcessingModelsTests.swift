@@ -48,6 +48,46 @@ import FleckCore
   #expect(measurements.processorStartedAt == nil)
 }
 
+@Test func captureFeedbackReadinessMeasurementPreservesFirstObservation() {
+  let start = ContinuousClock().now
+  let source = start.advanced(by: .milliseconds(1))
+  let firstReady = start.advanced(by: .milliseconds(2))
+  let repeatedReady = start.advanced(by: .milliseconds(3))
+  let final = start.advanced(by: .milliseconds(4))
+
+  let measurements = DictationRuntimeMeasurements.empty
+    .recording(.sourceStartRequested, at: source)
+    .recording(.audioReadyObserved, at: firstReady)
+    .recording(.audioReadyObserved, at: repeatedReady)
+    .recording(.asrFinal, at: final)
+
+  #expect(measurements.integrity == .valid)
+  #expect(measurements.audioReadyObservedAt == firstReady)
+
+  let overlaid = DictationRuntimeMeasurements.empty.overlaying(measurements)
+  #expect(overlaid.audioReadyObservedAt == firstReady)
+
+  let terminal = measurements.terminal()
+    .recording(.audioReadyObserved, at: repeatedReady)
+    .overlaying(DictationRuntimeMeasurements(audioReadyObservedAt: repeatedReady))
+  #expect(terminal == measurements.terminal())
+}
+
+@Test func captureFeedbackReadinessMeasurementRejectsCausalReversal() {
+  let start = ContinuousClock().now
+  let beforeSource = DictationRuntimeMeasurements.empty
+    .recording(.sourceStartRequested, at: start.advanced(by: .milliseconds(2)))
+    .recording(.audioReadyObserved, at: start.advanced(by: .milliseconds(1)))
+  let afterFinal = DictationRuntimeMeasurements.empty
+    .recording(.audioReadyObserved, at: start.advanced(by: .milliseconds(2)))
+    .recording(.asrFinal, at: start.advanced(by: .milliseconds(1)))
+
+  #expect(beforeSource.integrity == .nonMonotonicClock)
+  #expect(beforeSource.audioReadyObservedAt == nil)
+  #expect(afterFinal.integrity == .nonMonotonicClock)
+  #expect(afterFinal.asrFinalAt == nil)
+}
+
 @Test func updateDisplayIsStablePrefixPlusTail() {
   #expect(DictationTextUpdate(
     generation: 4,
@@ -101,6 +141,125 @@ import FleckCore
   #expect(measurements.cleanupMilliseconds == nil)
   #expect(measurements.stopToInsertionMilliseconds == nil)
   #expect(measurements.cancellationMilliseconds == nil)
+}
+
+@Test func dictationDiagnosticsProjectionSerializesAllowlistedStagesAndExplicitNulls() throws {
+  let origin = ContinuousClock().now
+  let measurements = DictationRuntimeMeasurements(
+    physicalPressAt: origin,
+    coordinatorEventReceivedAt: origin,
+    phasePublishedAt: origin,
+    firstInputBufferAt: origin.advanced(by: .milliseconds(4))
+  )
+    .recording(loadDisposition: .cold)
+    .recording(outcome: .failed)
+    .recording(failure: .missingInput)
+
+  let projection = measurements.diagnostics
+  let data = try JSONEncoder().encode(projection)
+  let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  let stages = try #require(object["stages"] as? [String: Any])
+
+  #expect(Set(object.keys) == [
+    "schemaVersion", "integrity", "outcome", "failure", "loadDisposition", "stages",
+  ])
+  #expect(Set(stages.keys) == Set(DictationRuntimeMeasurements.Stage.allCases.map(\.rawValue)))
+  #expect(object["schemaVersion"] as? Int == 1)
+  #expect(object["integrity"] as? String == "valid")
+  #expect(object["outcome"] as? String == "failed")
+  #expect(object["failure"] as? String == "missing_input")
+  #expect(object["loadDisposition"] as? String == "cold")
+  #expect(stages.count == DictationRuntimeMeasurements.Stage.allCases.count)
+  #expect(stages["physical_press"] as? Double == 0)
+  #expect(stages["first_input_buffer"] as? Double == 4)
+  #expect(stages["asr_final"] is NSNull)
+
+}
+
+@Test func dictationDiagnosticsRoundTripNormalizesHostileAndMissingStageKeys() throws {
+  let payload = Data(#"""
+    {
+      "schemaVersion": 1,
+      "integrity": "valid",
+      "outcome": "failed",
+      "failure": null,
+      "loadDisposition": "warm",
+      "stages": {
+        "physical_press": 12.5,
+        "dictated_secret": 99
+      }
+    }
+    """#.utf8)
+
+  let decoded = try JSONDecoder().decode(
+    DictationRuntimeMeasurements.Diagnostics.self,
+    from: payload
+  )
+  let encoded = try JSONEncoder().encode(decoded)
+  let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+  let stages = try #require(object["stages"] as? [String: Any])
+
+  #expect(decoded.schemaVersion == 1)
+  #expect(decoded.integrity == .valid)
+  #expect(decoded.outcome == .failed)
+  #expect(decoded.failure == nil)
+  #expect(decoded.loadDisposition == .warm)
+  #expect(Set(stages.keys) == Set(DictationRuntimeMeasurements.Stage.allCases.map(\.rawValue)))
+  #expect(stages["physical_press"] as? Double == 12.5)
+  #expect(stages["asr_final"] is NSNull)
+  #expect(stages["dictated_secret"] == nil)
+
+  let invalidPayload = Data(
+    String(decoding: payload, as: UTF8.self)
+      .replacingOccurrences(of: #""integrity": "valid""#, with: #""integrity": "non_monotonic_clock""#)
+      .utf8
+  )
+  let invalid = try JSONDecoder().decode(
+    DictationRuntimeMeasurements.Diagnostics.self,
+    from: invalidPayload
+  )
+  #expect(invalid.stages.values.allSatisfy { $0 == nil })
+}
+
+@Test func dictationDiagnosticsMetadataAndStagesKeepFirstWriteOverlayAndTerminalFencing() {
+  let origin = ContinuousClock().now
+  let initial = DictationRuntimeMeasurements.empty
+    .recording(.coordinatorEventReceived, at: origin)
+    .recording(outcome: .failed)
+    .recording(failure: .permissionDenied)
+    .recording(loadDisposition: .cold)
+  let incoming = DictationRuntimeMeasurements(
+    phasePublishedAt: origin.advanced(by: .milliseconds(2)),
+    modelReadyAt: origin.advanced(by: .milliseconds(3)),
+    outcome: .succeeded,
+    failure: .modelLoadFailure,
+    loadDisposition: .warm
+  )
+  let merged = initial.overlaying(incoming)
+  let terminal = merged.terminal()
+    .recording(.asrFinal, at: origin.advanced(by: .milliseconds(4)))
+    .recording(outcome: .cancelled)
+    .recording(failure: .bufferLimit)
+    .recording(loadDisposition: .warm)
+
+  #expect(merged.phasePublishedAt == origin.advanced(by: .milliseconds(2)))
+  #expect(merged.modelReadyAt == origin.advanced(by: .milliseconds(3)))
+  #expect(merged.outcome == .failed)
+  #expect(merged.failure == .permissionDenied)
+  #expect(merged.loadDisposition == .cold)
+  #expect(terminal == merged.terminal())
+
+  let invalid = DictationRuntimeMeasurements(
+    integrity: .nonMonotonicClock,
+    physicalPressAt: origin
+  ).diagnostics
+  #expect(invalid.stages.values.allSatisfy { $0 == nil })
+
+  let unknownFailure = DictationRuntimeMeasurements.empty.resolving(
+    outcome: .failed,
+    failure: nil
+  )
+  #expect(unknownFailure.failure == nil)
 }
 
 @Test func processorMeasurementsUseContinuousClockInstantsAndDeriveLegacyDurations() {

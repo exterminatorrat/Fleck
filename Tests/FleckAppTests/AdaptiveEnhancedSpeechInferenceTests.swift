@@ -585,4 +585,19 @@ func transcribeRequiresAnActiveLoadedUse() async {
 
   #expect(fixture.inference.transcribedSamples.isEmpty)
 }
+
+@Test @MainActor
+func dictationDiagnosticsAdaptiveLoadDispositionIsColdWarmOrUnavailableFromObservedState() async throws {
+  let fixture = makeFixture()
+
+  #expect(fixture.wrapper.loadDisposition(for: adaptiveRepository) == .cold)
+  try await fixture.wrapper.load(from: adaptiveRepository)
+  #expect(fixture.wrapper.loadDisposition(for: adaptiveRepository) == nil)
+  await fixture.wrapper.releaseResources()
+  #expect(fixture.wrapper.loadDisposition(for: adaptiveRepository) == .warm)
+  #expect(fixture.wrapper.loadDisposition(for: replacementRepository) == .cold)
+
+  await fixture.wrapper.forceCold()
+  fixture.sleeper.resumeAll()
+}
 #endif

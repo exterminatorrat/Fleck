@@ -214,7 +214,7 @@ struct AgentCapabilityStoreTests {
     #expect(String(decoding: firstBytes, as: UTF8.self).contains("\n  \""))
   }
 
-  @Test func CurrentRecoveryRestoresPreviousCompleteState() async throws {
+  @Test func InvalidCurrentFailsClosedWithoutRestoringPreviousState() async throws {
     let fixture = try CapabilityStoreFixture()
     defer { fixture.remove() }
     let profileID = testUUID("00000000-0000-0000-0000-000000000171")
@@ -229,21 +229,83 @@ struct AgentCapabilityStoreTests {
       allowedCapabilities: [.readNotes],
       grants: []
     )
-    let latest = try await fixture.store.replaceProfile(
+    _ = try await fixture.store.replaceProfile(
       replacement,
       expectedGrantRevision: current.grantRevision
     )
     let previousBytes = try Data(contentsOf: fixture.previousCapabilitiesURL)
-    try Data("corrupt-current".utf8).write(to: fixture.capabilitiesURL)
+    let corruptCurrent = Data("corrupt-current".utf8)
+    try corruptCurrent.write(to: fixture.capabilitiesURL)
 
-    let reloaded = AgentCapabilityStore(
-      capabilitiesURL: fixture.capabilitiesURL,
-      previousCapabilitiesURL: fixture.previousCapabilitiesURL
-    )
-    let recovered = try await reloaded.currentState()
-    #expect(recovered == initial)
-    #expect(recovered != latest)
-    #expect(try Data(contentsOf: fixture.capabilitiesURL) == previousBytes)
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await fixture.reloadedStore().currentState()
+    }
+    #expect(try Data(contentsOf: fixture.capabilitiesURL) == corruptCurrent)
+    #expect(try Data(contentsOf: fixture.previousCapabilitiesURL) == previousBytes)
+  }
+
+  @Test func CorruptOrMissingCurrentNeverRestoresPreviousBroaderGrant() async throws {
+    for deleteCurrent in [false, true] {
+      let fixture = try CapabilityStoreFixture()
+      defer { fixture.remove() }
+      let profileID = testUUID("00000000-0000-0000-0000-000000000172")
+      let note = Note(
+        id: testUUID("00000000-0000-0000-0000-000000000173"),
+        agentAccess: true
+      )
+      let workspace = Workspace(notes: [note])
+      let initial = try await fixture.store.loadOrMigrate(
+        activeProfileIDs: [profileID],
+        workspace: workspace
+      )
+      let broader = try #require(initial.profiles[profileID])
+      #expect(broader.allowedCapabilities.contains(.writeNotes))
+      #expect(
+        broader.grants.contains {
+          $0.scope == .note(noteID: note.id) && $0.authority == .write
+        }
+      )
+      let broaderBytes = try Data(contentsOf: fixture.capabilitiesURL)
+      let narrowed = AgentProfileCapabilities(
+        profileID: profileID,
+        grantRevision: broader.grantRevision + 1,
+        allowedCapabilities: [.listNotes],
+        grants: []
+      )
+      let narrowedState = try await fixture.store.replaceProfile(
+        narrowed,
+        expectedGrantRevision: broader.grantRevision
+      )
+      let previousBytes = try Data(contentsOf: fixture.previousCapabilitiesURL)
+      #expect(narrowedState.profiles[profileID] == narrowed)
+      #expect(previousBytes == broaderBytes)
+
+      if deleteCurrent {
+        try FileManager.default.removeItem(at: fixture.capabilitiesURL)
+      } else {
+        try Data("corrupt-current".utf8).write(to: fixture.capabilitiesURL)
+      }
+
+      let reloaded = fixture.reloadedStore()
+      await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+        _ = try await reloaded.loadOrMigrate(
+          activeProfileIDs: [profileID],
+          workspace: workspace
+        )
+      }
+      let authority = AgentCapabilityAuthority(store: reloaded)
+      await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+        _ = try await authority.snapshot(
+          profileID: profileID,
+          workspace: workspace
+        )
+      }
+      #expect(
+        FileManager.default.fileExists(atPath: fixture.capabilitiesURL.path)
+          == !deleteCurrent
+      )
+      #expect(try Data(contentsOf: fixture.previousCapabilitiesURL) == previousBytes)
+    }
   }
 
   @Test func UnknownSchemaAndMalformedGenerationsFailClosed() async throws {

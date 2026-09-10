@@ -6,7 +6,7 @@ public enum AppTheme: String, Codable, CaseIterable, Sendable {
 
 public struct AppPreferences: Codable, Equatable, Sendable {
   public static let currentEditorTypographyVersion = 1
-  public static let currentPanelSizingVersion = 1
+  public static let currentPanelSizingVersion = 2
 
   public var fontFamily: String
   public var fontSize: Double
@@ -22,6 +22,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var pinnedPanelWidth: Double
   public var pinnedPanelHeight: Double
   public var showFormattingBar: Bool
+  public var showAgentUpdateBanners: Bool
   public var isUnfiledCompact: Bool
   public var confirmBeforeMovingNotesToTrash: Bool
   public var automaticLists: Bool
@@ -38,6 +39,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var dictationCapsuleDock: DictationCapsuleDock
   public var dictationHistoryEnabled: Bool
   public var dictationCapsuleEnabled: Bool
+  public var showDictationShortcutGuide: Bool
   public var dictationMicrophoneUID: String?
   public var onboardingProgress: OnboardingProgress?
 
@@ -46,10 +48,11 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     editorTypographyVersion: Int = AppPreferences.currentEditorTypographyVersion,
     accentHex: String = "#7C6CF2", editorTextHex: String? = nil,
     editorBackgroundHex: String? = nil, panelOpacity: Double = 0.82,
-    theme: AppTheme = .system, panelWidth: Double = 640, panelHeight: Double = 430,
+    theme: AppTheme = .system, panelWidth: Double = 800, panelHeight: Double = 430,
     panelSizingVersion: Int = AppPreferences.currentPanelSizingVersion,
-    pinnedPanelWidth: Double = 640, pinnedPanelHeight: Double = 430,
-    showFormattingBar: Bool = true, isUnfiledCompact: Bool = false,
+    pinnedPanelWidth: Double = 800, pinnedPanelHeight: Double = 430,
+    showFormattingBar: Bool = true, showAgentUpdateBanners: Bool = true,
+    isUnfiledCompact: Bool = false,
     confirmBeforeMovingNotesToTrash: Bool = true, automaticLists: Bool = true,
     launchAtLogin: Bool = false,
     shortcuts: [Shortcut] = Shortcut.defaults,
@@ -59,6 +62,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     dictationCapsuleDock: DictationCapsuleDock = .bottom,
     dictationHistoryEnabled: Bool = true,
     dictationCapsuleEnabled: Bool = true,
+    showDictationShortcutGuide: Bool = true,
     dictationMicrophoneUID: String? = nil,
     onboardingProgress: OnboardingProgress? = nil
   ) {
@@ -76,6 +80,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.pinnedPanelWidth = Self.clampedPanelDimension(pinnedPanelWidth, minimum: 480)
     self.pinnedPanelHeight = Self.clampedPanelDimension(pinnedPanelHeight, minimum: 320)
     self.showFormattingBar = showFormattingBar
+    self.showAgentUpdateBanners = showAgentUpdateBanners
     self.isUnfiledCompact = isUnfiledCompact
     self.confirmBeforeMovingNotesToTrash = confirmBeforeMovingNotesToTrash
     self.automaticLists = automaticLists
@@ -90,6 +95,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.dictationCapsuleDock = dictationCapsuleDock
     self.dictationHistoryEnabled = dictationHistoryEnabled
     self.dictationCapsuleEnabled = dictationCapsuleEnabled
+    self.showDictationShortcutGuide = showDictationShortcutGuide
     self.dictationMicrophoneUID = dictationMicrophoneUID
     self.onboardingProgress = onboardingProgress
   }
@@ -97,12 +103,12 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case fontFamily, fontSize, editorTypographyVersion, accentHex, editorTextHex,
       editorBackgroundHex, panelOpacity, theme, panelWidth, panelHeight, panelSizingVersion,
-      pinnedPanelWidth, pinnedPanelHeight, showFormattingBar,
+      pinnedPanelWidth, pinnedPanelHeight, showFormattingBar, showAgentUpdateBanners,
       isUnfiledCompact, confirmBeforeMovingNotesToTrash, automaticLists,
       launchAtLogin, shortcuts, dictationSpeechEngine,
       legacyDictationShortcut = "dictationShortcut", dictationModifierKey,
       dictationCapsuleDock, dictationHistoryEnabled, dictationCapsuleEnabled,
-      dictationMicrophoneUID, onboardingProgress
+      showDictationShortcutGuide, dictationMicrophoneUID, onboardingProgress
   }
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -118,11 +124,26 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       decodedTypographyVersion == nil
       && decodedFamily == ".AppleSystemUIFont"
       && decodedSize == 15
+    let decodedPanelSizingVersion = Self.decodedSizingField(
+      Int?.self,
+      from: c,
+      forKey: .panelSizingVersion,
+      fallback: nil
+    )
+    let panelWidthFallback: Double
+    switch decodedPanelSizingVersion {
+    case .some(1):
+      panelWidthFallback = 640
+    case .some(let version) where version >= Self.currentPanelSizingVersion:
+      panelWidthFallback = 800
+    default:
+      panelWidthFallback = 520
+    }
     let decodedPanelWidth = Self.decodedSizingField(
       Double.self,
       from: c,
       forKey: .panelWidth,
-      fallback: 520
+      fallback: panelWidthFallback
     )
     let decodedPanelHeight = Self.decodedSizingField(
       Double.self,
@@ -130,18 +151,34 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       forKey: .panelHeight,
       fallback: 430
     )
-    let decodedPanelSizingVersion = Self.decodedSizingField(
-      Int?.self,
-      from: c,
-      forKey: .panelSizingVersion,
-      fallback: nil
-    )
     let migratesUntouchedPanelSize =
       decodedPanelSizingVersion == nil
       && decodedPanelWidth == 520
       && decodedPanelHeight == 430
-    let resolvedPanelWidth = migratesUntouchedPanelSize ? 640 : decodedPanelWidth
+    let migratesPreviousPanelDefault =
+      (decodedPanelSizingVersion ?? 0) < Self.currentPanelSizingVersion
+      && decodedPanelWidth == 640
+      && decodedPanelHeight == 430
+    let resolvedPanelWidth = migratesUntouchedPanelSize || migratesPreviousPanelDefault
+      ? 800
+      : decodedPanelWidth
     let resolvedPanelHeight = decodedPanelHeight
+    let decodedPinnedPanelWidth = Self.decodedSizingField(
+      Double.self,
+      from: c,
+      forKey: .pinnedPanelWidth,
+      fallback: 800
+    )
+    let decodedPinnedPanelHeight = Self.decodedSizingField(
+      Double.self,
+      from: c,
+      forKey: .pinnedPanelHeight,
+      fallback: 430
+    )
+    let migratesPreviousPinnedPanelDefault =
+      (decodedPanelSizingVersion ?? 0) < Self.currentPanelSizingVersion
+      && decodedPinnedPanelWidth == 640
+      && decodedPinnedPanelHeight == 430
     self.init(
       fontFamily: migratesUntouchedTypography ? "Avenir Next" : decodedFamily,
       fontSize: migratesUntouchedTypography ? 17 : decodedSize,
@@ -154,20 +191,17 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       theme: try c.decodeIfPresent(AppTheme.self, forKey: .theme) ?? .system,
       panelWidth: resolvedPanelWidth,
       panelHeight: resolvedPanelHeight,
-      panelSizingVersion: decodedPanelSizingVersion ?? Self.currentPanelSizingVersion,
-      pinnedPanelWidth: Self.decodedSizingField(
-        Double.self,
-        from: c,
-        forKey: .pinnedPanelWidth,
-        fallback: 640
+      panelSizingVersion: max(
+        decodedPanelSizingVersion ?? Self.currentPanelSizingVersion,
+        Self.currentPanelSizingVersion
       ),
-      pinnedPanelHeight: Self.decodedSizingField(
-        Double.self,
-        from: c,
-        forKey: .pinnedPanelHeight,
-        fallback: 430
-      ),
+      pinnedPanelWidth: migratesPreviousPinnedPanelDefault ? 800 : decodedPinnedPanelWidth,
+      pinnedPanelHeight: decodedPinnedPanelHeight,
       showFormattingBar: try c.decodeIfPresent(Bool.self, forKey: .showFormattingBar) ?? true,
+      showAgentUpdateBanners: try c.decodeIfPresent(
+        Bool.self,
+        forKey: .showAgentUpdateBanners
+      ) ?? true,
       isUnfiledCompact: try c.decodeIfPresent(Bool.self, forKey: .isUnfiledCompact) ?? false,
       confirmBeforeMovingNotesToTrash: try c.decodeIfPresent(
         Bool.self,
@@ -191,6 +225,10 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       ) ?? .bottom,
       dictationHistoryEnabled: try c.decodeIfPresent(Bool.self, forKey: .dictationHistoryEnabled) ?? true,
       dictationCapsuleEnabled: try c.decodeIfPresent(Bool.self, forKey: .dictationCapsuleEnabled) ?? true,
+      showDictationShortcutGuide: try c.decodeIfPresent(
+        Bool.self,
+        forKey: .showDictationShortcutGuide
+      ) ?? true,
       dictationMicrophoneUID: try c.decodeIfPresent(String.self, forKey: .dictationMicrophoneUID),
       onboardingProgress: try c.decodeIfPresent(
         OnboardingProgress.self,

@@ -116,7 +116,7 @@ enum StreamingSpeechSourceProbeError: Error, Equatable {
 
 @MainActor
 final class StreamingSpeechSourceProbe: StreamingSpeechSource {
-  private let startError: StreamingSpeechSourceProbeError?
+  private let startError: Error?
   private let finishError: StreamingSpeechSourceProbeError?
   private let finalText: String?
   private let finishBlocksUntilCancel: Bool
@@ -124,16 +124,19 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
   private let finishBlocksUntilRelease: Bool
   private let synchronousProvisional: String?
   private let synchronousLevel: Float?
+  private let synchronousFailure: StreamingSpeechSourceProbeError?
   private let onCancel: (@MainActor @Sendable () async -> Void)?
   private let onPhysicalRelease: (@MainActor @Sendable () async -> Void)?
   private var provisional: (@MainActor @Sendable (String) -> Void)?
   private var level: (@MainActor @Sendable (Float) -> Void)?
+  private var failure: (@MainActor @Sendable (Error) -> Void)?
   private var finishReleased = false
   private var cancellationRequested = false
   private var sourceIsTerminal = false
+  var runtimeMeasurements: DictationRuntimeMeasurements
 
   init(
-    startError: StreamingSpeechSourceProbeError? = nil,
+    startError: Error? = nil,
     finishError: StreamingSpeechSourceProbeError? = nil,
     finalText: String? = "First",
     finishBlocksUntilCancel: Bool = false,
@@ -141,8 +144,10 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     finishBlocksUntilRelease: Bool = false,
     synchronousProvisional: String? = nil,
     synchronousLevel: Float? = nil,
+    synchronousFailure: StreamingSpeechSourceProbeError? = nil,
     onCancel: (@MainActor @Sendable () async -> Void)? = nil,
-    onPhysicalRelease: (@MainActor @Sendable () async -> Void)? = nil
+    onPhysicalRelease: (@MainActor @Sendable () async -> Void)? = nil,
+    runtimeMeasurements: DictationRuntimeMeasurements = .empty
   ) {
     self.startError = startError
     self.finishError = finishError
@@ -152,8 +157,10 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     self.finishBlocksUntilRelease = finishBlocksUntilRelease
     self.synchronousProvisional = synchronousProvisional
     self.synchronousLevel = synchronousLevel
+    self.synchronousFailure = synchronousFailure
     self.onCancel = onCancel
     self.onPhysicalRelease = onPhysicalRelease
+    self.runtimeMeasurements = runtimeMeasurements
   }
 
   private(set) var startCount = 0
@@ -177,6 +184,10 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     level?(value)
   }
 
+  func emitFailure(_ error: Error) {
+    failure?(error)
+  }
+
   func start(
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void
@@ -195,6 +206,16 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
       level(synchronousLevel)
     }
     if let startError { throw startError }
+  }
+
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    failure: @escaping @MainActor @Sendable (Error) -> Void
+  ) async throws {
+    self.failure = failure
+    try await start(provisional: provisional, level: level)
+    if let synchronousFailure { failure(synchronousFailure) }
   }
 
   func finish() async throws -> String? {
@@ -271,6 +292,240 @@ final class StreamingSpeechSourceProbe: StreamingSpeechSource {
     physicalReleaseCount += 1
     await onPhysicalRelease?()
   }
+}
+
+@Test @MainActor
+func dictationDiagnosticsProcessorPreservesDefaultMeasurementPermissionDenial() async {
+  let captureID = UUID()
+  let source = StreamingSpeechSourceProbe(startError: DictationFailure.permissionDenied)
+  let processor = makeProcessor(source: source)
+
+  do {
+    _ = try await processor.begin(
+      configuration: .init(
+        captureID: captureID,
+        mode: .focused,
+        recognitionContext: .englishDefault
+      ),
+      level: { _ in }
+    )
+    Issue.record("Expected permission denial")
+  } catch {
+    #expect(error as? DictationFailure == .permissionDenied)
+  }
+
+  let measurements = processor.runtimeMeasurements(for: captureID)
+  #expect(measurements.outcome == .failed)
+  #expect(measurements.failure == .permissionDenied)
+}
+
+@Test @MainActor
+func dictationDiagnosticsProcessorPropagatesSourceStagesThroughPartialAndSuccessfulFinalization() async throws {
+  let start = TestDictationClock.fixedInstant
+  let source = StreamingSpeechSourceProbe(
+    synchronousProvisional: "First",
+    runtimeMeasurements: DictationRuntimeMeasurements(
+      audioStartRequestedAt: start.advanced(by: .milliseconds(1)),
+      firstInputBufferAt: start.advanced(by: .milliseconds(2)),
+      modelLoadRequestedAt: start.advanced(by: .milliseconds(3)),
+      modelReadyAt: start.advanced(by: .milliseconds(4)),
+      loadDisposition: .cold
+    )
+  )
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "First", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "First"),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: TestDictationClock(values: [
+      start,
+      start.advanced(by: .milliseconds(1)),
+      start.advanced(by: .milliseconds(5)),
+      start.advanced(by: .milliseconds(6)),
+      start.advanced(by: .milliseconds(7)),
+      start.advanced(by: .milliseconds(8)),
+      start.advanced(by: .milliseconds(9)),
+    ])
+  )
+  let captureID = UUID()
+  let session = try await processor.begin(
+    configuration: .init(
+      captureID: captureID,
+      mode: .focused,
+      recognitionContext: .englishDefault
+    ),
+    level: { _ in }
+  )
+
+  let result = try await session.finish(stopOrigin: testStopOrigin(start.advanced(by: .milliseconds(5))))
+
+  #expect(result.measurements.audioStartRequestedAt == start.advanced(by: .milliseconds(1)))
+  #expect(result.measurements.firstInputBufferAt == start.advanced(by: .milliseconds(2)))
+  #expect(result.measurements.modelReadyAt == start.advanced(by: .milliseconds(4)))
+  #expect(result.measurements.firstMeaningfulPartialAt == start.advanced(by: .milliseconds(5)))
+  #expect(result.measurements.loadDisposition == .cold)
+  #expect(result.measurements.outcome == nil)
+}
+
+@Test @MainActor
+func dictationDiagnosticsProcessorRetainsStartupFailureWithoutSessionAndFencesOlderCapture() async {
+  let start = TestDictationClock.fixedInstant
+  let sequence = InstantSequence([
+    start,
+    start.advanced(by: .milliseconds(1)),
+  ])
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in throw StreamingSpeechSourceProbeError.failed },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: ""),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: DictationClock(now: { sequence.next() })
+  )
+  let firstID = UUID()
+  let secondID = UUID()
+
+  do {
+    _ = try await processor.begin(
+      configuration: .init(
+        captureID: firstID,
+        mode: .focused,
+        recognitionContext: .englishDefault
+      ),
+      level: { _ in }
+    )
+    Issue.record("Expected the first source factory to fail")
+  } catch {
+    #expect(error as? StreamingSpeechSourceProbeError == .failed)
+  }
+  let first = processor.runtimeMeasurements(for: firstID)
+  #expect(first.processorStartedAt == start)
+  #expect(first.outcome == .failed)
+  #expect(first.failure == .sourceStartupFailure)
+
+  do {
+    _ = try await processor.begin(
+      configuration: .init(
+        captureID: secondID,
+        mode: .focused,
+        recognitionContext: .englishDefault
+      ),
+      level: { _ in }
+    )
+    Issue.record("Expected the second source factory to fail")
+  } catch {
+    #expect(error as? StreamingSpeechSourceProbeError == .failed)
+  }
+  #expect(processor.runtimeMeasurements(for: firstID) == .empty)
+  #expect(processor.runtimeMeasurements(for: secondID).processorStartedAt == start.advanced(by: .milliseconds(1)))
+}
+
+@Test @MainActor
+func dictationDiagnosticsProcessorLateOlderFactoryCompletionCannotOverwriteNewestStartupSnapshot() async throws {
+  let gate = Gate()
+  let origin = TestDictationClock.fixedInstant
+  let firstID = UUID()
+  let secondID = UUID()
+  let firstSource = StreamingSpeechSourceProbe(
+    runtimeMeasurements: DictationRuntimeMeasurements(
+      modelReadyAt: origin.advanced(by: .milliseconds(10)),
+      loadDisposition: .cold
+    )
+  )
+  let secondSource = StreamingSpeechSourceProbe(
+    runtimeMeasurements: DictationRuntimeMeasurements(
+      modelReadyAt: origin.advanced(by: .milliseconds(2)),
+      loadDisposition: .warm
+    )
+  )
+  let processor = StreamingDictationProcessor(
+    makeSource: { configuration in
+      if configuration.captureID == firstID { await gate.wait() }
+      return configuration.captureID == firstID ? firstSource : secondSource
+    },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: ""),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: TestDictationClock.immediate
+  )
+
+  var staleSession: (any DictationProcessingSession)?
+  let first = Task { @MainActor in
+    staleSession = try? await processor.begin(
+      configuration: .init(captureID: firstID, mode: .focused, recognitionContext: .englishDefault),
+      level: { _ in }
+    )
+  }
+  await gate.waitUntilWaiting()
+  let second = try await processor.begin(
+    configuration: .init(captureID: secondID, mode: .focused, recognitionContext: .englishDefault),
+    level: { _ in }
+  )
+  await gate.openGate()
+  await first.value
+  let stale = try #require(staleSession)
+
+  #expect(processor.runtimeMeasurements(for: firstID) == .empty)
+  #expect(processor.runtimeMeasurements(for: secondID).loadDisposition == .warm)
+  #expect(processor.runtimeMeasurements(for: secondID).modelReadyAt == origin.advanced(by: .milliseconds(2)))
+
+  await stale.cancel()
+  await second.cancel()
+}
+
+@Test @MainActor
+func dictationDiagnosticsProcessorCancellationOverlaysSourceBeforeDrainAndBecomesTerminal() async throws {
+  let start = TestDictationClock.fixedInstant
+  let source = StreamingSpeechSourceProbe(
+    runtimeMeasurements: DictationRuntimeMeasurements(
+      firstInputBufferAt: start.advanced(by: .milliseconds(2)),
+      failure: .bufferLimit
+    )
+  )
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    dictionaryResolver: DictionaryResolverProbe(
+      resolution: .init(baseline: "", protectedForms: [], replacements: 0)
+    ),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: ""),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil,
+    clock: TestDictationClock(values: [
+      start,
+      start.advanced(by: .milliseconds(1)),
+      start.advanced(by: .milliseconds(3)),
+      start.advanced(by: .milliseconds(4)),
+    ])
+  )
+  let session = try await processor.begin(
+    configuration: .init(captureID: UUID(), mode: .focused, recognitionContext: .englishDefault),
+    level: { _ in }
+  )
+
+  await session.cancel()
+
+  #expect(session.runtimeMeasurements.firstInputBufferAt == start.advanced(by: .milliseconds(2)))
+  #expect(session.runtimeMeasurements.failure == .bufferLimit)
+  #expect(session.runtimeMeasurements.outcome == .cancelled)
+  #expect(session.runtimeMeasurements.cancellationDrainedAt == start.advanced(by: .milliseconds(4)))
+  let terminal = session.runtimeMeasurements.recording(.asrFinal, at: start.advanced(by: .milliseconds(5)))
+  #expect(terminal == session.runtimeMeasurements)
 }
 
 @MainActor
@@ -813,8 +1068,142 @@ func beginRetainsSynchronousCallbacksUntilTheSessionAttaches() async throws {
 }
 
 @Test @MainActor
+func enhancedSpeechStartupBuffersSourceFailureUntilTheSessionAttaches() async throws {
+  let source = StreamingSpeechSourceProbe(synchronousFailure: .failed)
+  let processor = makeProcessor(source: source)
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ), level: { _ in })
+
+  await #expect(throws: StreamingSpeechSourceProbeError.failed) {
+    _ = try await session.finish(stopOrigin: testStopOrigin())
+  }
+
+  var updateError: Error?
+  do {
+    for try await _ in session.updates {}
+  } catch {
+    updateError = error
+  }
+
+  #expect(updateError as? StreamingSpeechSourceProbeError == .failed)
+  await session.cancel()
+}
+
+@Test @MainActor
+func enhancedSpeechStartupFinishAwaitsSourceFailureDrainBeforeThrowing() async throws {
+  let drainGate = Gate()
+  let source = StreamingSpeechSourceProbe(
+    synchronousFailure: .failed,
+    onCancel: { await drainGate.wait() }
+  )
+  let processor = makeProcessor(source: source)
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ), level: { _ in })
+  var finishError: Error?
+  var finishCompleted = false
+
+  let finish = Task { @MainActor in
+    do {
+      _ = try await session.finish(stopOrigin: testStopOrigin())
+    } catch {
+      finishError = error
+    }
+    finishCompleted = true
+  }
+  for _ in 0..<20 { await Task.yield() }
+
+  #expect(source.cancelCount == 1)
+  #expect(!finishCompleted)
+
+  await drainGate.openGate()
+  await finish.value
+  #expect(finishError as? StreamingSpeechSourceProbeError == .failed)
+  #expect(source.sourceTerminalizationCount == 1)
+}
+
+@Test @MainActor
+func enhancedSpeechStartupDeliversOneAttachedSourceFailureAndDropsLaterText() async throws {
+  let source = StreamingSpeechSourceProbe()
+  let processor = makeProcessor(source: source)
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ), level: { _ in })
+
+  source.emitProvisional("Before")
+  source.emitFailure(StreamingSpeechSourceProbeError.failed)
+  source.emitFailure(StreamingSpeechSourceProbeError.failed)
+  source.emitProvisional("After")
+
+  await #expect(throws: StreamingSpeechSourceProbeError.failed) {
+    _ = try await session.finish(stopOrigin: testStopOrigin())
+  }
+
+  var texts: [String] = []
+  var updateError: Error?
+  do {
+    for try await update in session.updates {
+      texts.append(update.displayText)
+    }
+  } catch {
+    updateError = error
+  }
+
+  #expect(texts == ["Before"])
+  #expect(updateError as? StreamingSpeechSourceProbeError == .failed)
+  await session.cancel()
+}
+
+@Test @MainActor
+func enhancedSpeechStartupSourceFailureDuringDictionaryResolutionCannotReturnSuccess() async throws {
+  let resolutionGate = Gate()
+  let source = StreamingSpeechSourceProbe(finalText: "First")
+  let processor = StreamingDictationProcessor(
+    makeSource: { _ in source },
+    dictionaryResolver: GatedDictionaryResolver(gate: resolutionGate),
+    cleaner: IncrementalTranscriptCleaner(
+      generator: CleanupGeneratorProbe(result: "First."),
+      clock: TestCleanupClock.immediate
+    ),
+    runtime: nil
+  )
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ), level: { _ in })
+  var finishResult: Result<DictationProcessingResult, Error>?
+  let finish = Task { @MainActor in
+    do {
+      finishResult = .success(try await session.finish(stopOrigin: testStopOrigin()))
+    } catch {
+      finishResult = .failure(error)
+    }
+  }
+  await resolutionGate.waitUntilWaiting()
+
+  source.emitFailure(StreamingSpeechSourceProbeError.failed)
+  await resolutionGate.openGate()
+  await finish.value
+
+  switch finishResult {
+  case .failure(let error):
+    #expect(error as? StreamingSpeechSourceProbeError == .failed)
+  case .success, nil:
+    Issue.record("Expected the live source failure to defeat finalization")
+  }
+}
+
+@Test @MainActor
 func beginReleasesTheSourceWhenStartFails() async {
-  let source = StreamingSpeechSourceProbe(startError: .failed)
+  let source = StreamingSpeechSourceProbe(startError: StreamingSpeechSourceProbeError.failed)
   let processor = makeProcessor(source: source)
 
   await #expect(throws: StreamingSpeechSourceProbeError.failed) {
@@ -1749,6 +2138,19 @@ private struct DictionaryResolverProbe: TranscriptDictionaryResolving {
   func resolve(_ rawTranscript: String) async throws -> PersonalDictionaryResolution {
     if let error { throw error }
     return resolution ?? .init(baseline: rawTranscript, protectedForms: [], replacements: 0)
+  }
+}
+
+private actor GatedDictionaryResolver: TranscriptDictionaryResolving {
+  let gate: Gate
+
+  init(gate: Gate) {
+    self.gate = gate
+  }
+
+  func resolve(_ rawTranscript: String) async throws -> PersonalDictionaryResolution {
+    await gate.wait()
+    return .init(baseline: rawTranscript, protectedForms: [], replacements: 0)
   }
 }
 

@@ -80,6 +80,13 @@
       toggleAttribute(.strikethroughStyle, enabledValue: NSUnderlineStyle.single.rawValue)
     }
 
+    var isTitleEditing: Bool {
+      guard let document = textView?.superview as? NativeEditorDocumentView,
+        let fieldEditor = document.titleField.currentEditor()
+      else { return false }
+      return document.window?.firstResponder === fieldEditor
+    }
+
     func applyFontFamily(_ family: String) {
       guard let textView else { return }
       mutateSelection(defaultValue: NSFont.systemFont(ofSize: textView.font?.pointSize ?? 14)) {
@@ -116,8 +123,17 @@
       (textView as? ListAwareTextView)?.toggleAutomaticList(family)
     }
 
-    func undo() { textView?.undoManager?.undo() }
-    func redo() { textView?.undoManager?.redo() }
+    var activeUndoManager: UndoManager? {
+      if let firstResponder = textView?.window?.firstResponder,
+        let undoManager = firstResponder.undoManager
+      {
+        return undoManager
+      }
+      return textView?.undoManager ?? textView?.window?.undoManager
+    }
+
+    func undo() { activeUndoManager?.undo() }
+    func redo() { activeUndoManager?.redo() }
 
     @discardableResult
     func insertNoteLink(
@@ -668,6 +684,84 @@
     }
   }
 
+  private final class NoteTitleFieldEditor: NSTextView {
+    override func insertNewlineIgnoringFieldEditor(_ sender: Any?) {}
+
+    override func insertLineBreak(_ sender: Any?) {}
+
+    override func insertParagraphSeparator(_ sender: Any?) {}
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+      let text: String
+      if let attributed = insertString as? NSAttributedString {
+        text = attributed.string
+      } else if let string = insertString as? String {
+        text = string
+      } else {
+        super.insertText(insertString, replacementRange: replacementRange)
+        return
+      }
+      super.insertText(Self.singleLine(text), replacementRange: replacementRange)
+    }
+
+    override func readSelection(
+      from pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType
+    ) -> Bool {
+      guard let text = pasteboard.string(forType: .string) else { return false }
+      insertText(text, replacementRange: selectedRange())
+      return true
+    }
+
+    private static func singleLine(_ text: String) -> String {
+      text.replacingOccurrences(of: "\r\n", with: "\n")
+        .components(separatedBy: .newlines)
+        .joined(separator: " ")
+    }
+  }
+
+  private final class NoteTitleCell: NSTextFieldCell {
+    var accentColor: NSColor = .controlAccentColor {
+      didSet { fieldEditor?.insertionPointColor = accentColor }
+    }
+    private let titleFieldEditor: NSTextView = {
+      let editor = NoteTitleFieldEditor(frame: .zero)
+      editor.isFieldEditor = true
+      return editor
+    }()
+    private weak var fieldEditor: NSTextView?
+    private var originalCaretColor: NSColor?
+
+    override func fieldEditor(for controlView: NSView) -> NSTextView? {
+      titleFieldEditor
+    }
+
+    override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
+      let editor = super.setUpFieldEditorAttributes(textObj)
+      if let editor = editor as? NSTextView {
+        if fieldEditor !== editor {
+          originalCaretColor = editor.insertionPointColor
+          fieldEditor = editor
+        }
+        editor.insertionPointColor = accentColor
+      }
+      return editor
+    }
+
+    override func endEditing(_ textObj: NSText) {
+      restoreCaretColor()
+      super.endEditing(textObj)
+    }
+
+    func restoreCaretColor() {
+      // AppKit reuses this editor for other controls in the same window.
+      if let originalCaretColor {
+        fieldEditor?.insertionPointColor = originalCaretColor
+      }
+      fieldEditor = nil
+      originalCaretColor = nil
+    }
+  }
+
   final class NativeEditorDocumentView: NSView {
     let titleField: NSTextField
     let textView: ListAwareTextView
@@ -834,6 +928,9 @@
       scrollView.autohidesScrollers = true
 
       let titleField = NSTextField()
+      let titleCell = NoteTitleCell(textCell: "")
+      titleCell.accentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
+      titleField.cell = titleCell
       titleField.placeholderString = "Note title"
       titleField.stringValue = title
       titleField.isEditable = true
@@ -843,7 +940,10 @@
       titleField.drawsBackground = false
       titleField.focusRingType = .none
       titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
-      titleField.usesSingleLineMode = true
+      titleField.usesSingleLineMode = false
+      titleField.cell?.wraps = false
+      titleField.cell?.isScrollable = true
+      titleField.maximumNumberOfLines = 1
       titleField.cell?.lineBreakMode = .byTruncatingTail
       titleField.setAccessibilityLabel("Note title")
       titleField.setAccessibilityElement(isEnabled)
@@ -907,6 +1007,7 @@
       guard let documentView = nsView.documentView as? NativeEditorDocumentView else { return }
       let textView = documentView.textView
       let commands = coordinator.parent.commands
+      (documentView.titleField.cell as? NoteTitleCell)?.restoreCaretColor()
       documentView.titleField.delegate = nil
       textView.clearNoteLinkPresentation()
       textView.onRequestNoteLink = nil
@@ -941,6 +1042,8 @@
       textView.automaticLists = automaticLists
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
+      (documentView.titleField.cell as? NoteTitleCell)?.accentColor =
+        NSColor(hex: accentColorHex) ?? .controlAccentColor
       documentView.titleField.isEnabled = isEnabled
       documentView.titleField.setAccessibilityElement(isEnabled)
       documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
@@ -1581,56 +1684,20 @@
       let slotRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
         .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
       var markerSlotRect = slotRect
-      let ns = string as NSString
-      if let item = checklistItem(
-        in: ns.paragraphRange(for: markerRange),
-        string: ns
-      ), item.contentRange.length > 0, let storage = textStorage
-      {
-        let content = ns.substring(with: item.contentRange)
-        var firstVisibleContentRange: NSRange?
-        content.enumerateSubstrings(
-          in: content.startIndex..<content.endIndex,
-          options: [.byComposedCharacterSequences]
-        ) { substring, range, _, stop in
-          guard let substring,
-            !substring.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          else { return }
-          let relativeRange = NSRange(range, in: content)
-          firstVisibleContentRange = NSRange(
-            location: item.contentRange.location + relativeRange.location,
-            length: relativeRange.length
-          )
-          stop = true
-        }
-
-        if let contentRange = firstVisibleContentRange,
-          let contentFont = (
-            storage.attribute(.font, at: contentRange.location, effectiveRange: nil) as? NSFont
-          ) ?? font
-        {
-          let contentGlyphRange = layoutManager.glyphRange(
-            forCharacterRange: contentRange,
-            actualCharacterRange: nil
-          )
-          if contentGlyphRange.length > 0,
-            contentGlyphRange.location < layoutManager.numberOfGlyphs
-          {
-            let contentGlyph = contentGlyphRange.location
-            let lineFragmentRect = layoutManager.lineFragmentRect(
-              forGlyphAt: contentGlyph,
-              effectiveRange: nil
-            )
-            let baselineY = textContainerOrigin.y
-              + lineFragmentRect.minY
-              + layoutManager.location(forGlyphAt: contentGlyph).y
-            let visibleInkMidY = baselineY
-              - contentFont.boundingRect(
-                forCGGlyph: layoutManager.cgGlyph(at: contentGlyph)
-              ).midY
-            markerSlotRect.origin.y += visibleInkMidY - markerSlotRect.midY
-          }
-        }
+      if let markerFont = (
+        textStorage?.attribute(.font, at: markerRange.location + 1, effectiveRange: nil) as? NSFont
+      ) ?? font {
+        let insertionGlyph = layoutManager.glyphIndexForCharacter(at: markerRange.location + 1)
+        let lineFragmentRect = layoutManager.lineFragmentRect(
+          forGlyphAt: insertionGlyph,
+          effectiveRange: nil
+        )
+        let baselineY = textContainerOrigin.y
+          + lineFragmentRect.minY
+          + layoutManager.location(forGlyphAt: insertionGlyph).y
+        // The prefix space carries the list's insertion style, even while the item is empty.
+        let markerCenterY = baselineY - markerFont.capHeight / 2
+        markerSlotRect.origin.y += markerCenterY - markerSlotRect.midY
       }
       return ChecklistMarkerDrawing.markerRect(around: markerSlotRect)
     }

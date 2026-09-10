@@ -5,73 +5,211 @@
   import UniformTypeIdentifiers
 
   enum FolderDragPayload {
-    static let noteType = UTType(exportedAs: "com.harryjin.fleck.local-note")
-    static let folderType = UTType(exportedAs: "com.harryjin.fleck.local-folder")
+    static let noteType = UTType(exportedAs: "com.harryjin.fleck.local-note", conformingTo: .data)
+    static let folderType = UTType(exportedAs: "com.harryjin.fleck.local-folder", conformingTo: .data)
 
-    private final class LocalNoteItemProvider: NSItemProvider {
-      let source: NoteDropSource
-
-      init(source: NoteDropSource) {
-        self.source = source
-        super.init()
-      }
-
-      required init?(coder: NSCoder) {
-        return nil
-      }
-    }
-
-    private struct FolderValue: Codable {
+    struct FolderValue: Codable, Equatable {
       let folderID: UUID
+      let sessionID: UUID
     }
 
     static func noteProvider(source: NoteDropSource) -> NSItemProvider {
       let data = try! JSONEncoder().encode(source)
-      let provider = LocalNoteItemProvider(source: source)
-      provider.registerDataRepresentation(
-        forTypeIdentifier: noteType.identifier,
-        visibility: .ownProcess
-      ) { completion in
+      let provider = NSItemProvider()
+      provider.registerDataRepresentation(forTypeIdentifier: noteType.identifier, visibility: .ownProcess) {
+        completion in
         completion(data, nil)
         return nil
       }
       return provider
     }
 
-    static func noteSource(from providers: [NSItemProvider]) -> NoteDropSource? {
-      providers.first(where: {
-        $0.registeredTypeIdentifiers.contains(noteType.identifier)
-      }).flatMap {
-        ($0 as? LocalNoteItemProvider)?.source
-      }
+    static func notePasteboardItem(source: NoteDropSource) -> NSPasteboardItem {
+      let item = NSPasteboardItem()
+      item.setData(try! JSONEncoder().encode(source), forType: .init(noteType.identifier))
+      return item
     }
 
     static func noteValue(from data: Data) -> NoteDropSource? {
       try? JSONDecoder().decode(NoteDropSource.self, from: data)
     }
 
-    static func folderProvider(folderID: UUID) -> NSItemProvider {
-      provider(type: folderType, value: FolderValue(folderID: folderID))
-    }
-
-    static func folderID(from data: Data) -> UUID? {
-      try? JSONDecoder().decode(FolderValue.self, from: data).folderID
-    }
-
-    private static func provider<Value: Encodable>(
-      type: UTType,
-      value: Value
-    ) -> NSItemProvider {
-      let data = try! JSONEncoder().encode(value)
+    static func folderProvider(folderID: UUID, sessionID: UUID = UUID()) -> NSItemProvider {
       let provider = NSItemProvider()
-      provider.registerDataRepresentation(
-        forTypeIdentifier: type.identifier,
-        visibility: .ownProcess
-      ) { completion in
+      let data = try! JSONEncoder().encode(FolderValue(folderID: folderID, sessionID: sessionID))
+      provider.registerDataRepresentation(forTypeIdentifier: folderType.identifier, visibility: .ownProcess) {
+        completion in
         completion(data, nil)
         return nil
       }
       return provider
+    }
+
+    static func folderValue(from data: Data) -> FolderValue? {
+      try? JSONDecoder().decode(FolderValue.self, from: data)
+    }
+
+    static func folderID(from data: Data) -> UUID? {
+      folderValue(from: data)?.folderID
+    }
+  }
+
+  // Keep the accepted transaction alive independently of drag presentation.
+  // Payload authentication and native move completion may arrive in either order.
+  @MainActor final class ReorderDropSession {
+    let id: UUID
+    let type: UTType
+    private let sourceID: UUID
+    private let noteSource: NoteDropSource?
+    private let matches: (Data) -> Bool
+    private enum Phase { case dragging, ended, cancelled, committed }
+    private var phase = Phase.dragging
+    private var accepted = false
+    private var pendingCommit: (() -> Void)?
+
+    var canAcceptDrop: Bool { phase == .dragging && !accepted }
+
+    init(source: NoteDropSource) {
+      id = source.dragSessionID
+      type = FolderDragPayload.noteType
+      sourceID = source.noteID
+      noteSource = source
+      matches = { FolderDragPayload.noteValue(from: $0) == source }
+    }
+
+    init(folder: FolderDragPayload.FolderValue) {
+      id = folder.sessionID
+      type = FolderDragPayload.folderType
+      sourceID = folder.folderID
+      noteSource = nil
+      matches = { FolderDragPayload.folderValue(from: $0) == folder }
+    }
+
+    func acceptDrop(from providers: [NSItemProvider], commit: @escaping () -> Void) -> Task<Void, Never>? {
+      guard canAcceptDrop,
+        let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(type.identifier) })
+      else { return nil }
+      accepted = true
+      return Task { @MainActor in
+        guard phase != .cancelled else { return }
+        let results = AsyncStream<Data?> { continuation in
+          provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, error in
+            continuation.yield(error == nil ? data : nil)
+            continuation.finish()
+          }
+        }
+        for await data in results {
+          guard let data else { cancel(); return }
+          _ = stage(data: data, commit: commit)
+          return
+        }
+      }
+    }
+
+    func acceptDrop(data: Data, commit: @escaping () -> Void) -> Bool {
+      guard canAcceptDrop else { return false }
+      accepted = true
+      return stage(data: data, commit: commit)
+    }
+
+    func acceptReorder(from providers: [NSItemProvider], interaction: ReorderInteraction,
+      currentIDs: @escaping () -> [UUID], currentPinnedIDs: @escaping () -> Set<UUID>,
+      move: @escaping (UUID, Int) -> Void) -> Task<Void, Never>? {
+      guard let commit = reorderCommit(interaction: interaction, currentIDs: currentIDs,
+        currentPinnedIDs: currentPinnedIDs, move: move) else { return nil }
+      return acceptDrop(from: providers, commit: commit)
+    }
+
+    func acceptReorder(data: Data, interaction: ReorderInteraction,
+      currentIDs: @escaping () -> [UUID], currentPinnedIDs: @escaping () -> Set<UUID>,
+      move: @escaping (UUID, Int) -> Void) -> Bool {
+      guard let commit = reorderCommit(interaction: interaction, currentIDs: currentIDs,
+        currentPinnedIDs: currentPinnedIDs, move: move) else { return false }
+      return acceptDrop(data: data, commit: commit)
+    }
+
+    private func reorderCommit(interaction: ReorderInteraction,
+      currentIDs: @escaping () -> [UUID], currentPinnedIDs: @escaping () -> Set<UUID>,
+      move: @escaping (UUID, Int) -> Void) -> (() -> Void)? {
+      var proposal = interaction
+      guard proposal.sessionID == id, proposal.sourceID == sourceID, let targetID = proposal.targetID,
+        proposal.pinnedIDs.contains(proposal.sourceID) == proposal.pinnedIDs.contains(targetID),
+        proposal.pinnedIDs == currentPinnedIDs(),
+        let destination = proposal.consume(currentIDs: currentIDs())
+      else { return nil }
+      return {
+        guard proposal.originalIDs == currentIDs(), proposal.pinnedIDs == currentPinnedIDs() else { return }
+        move(proposal.sourceID, destination)
+      }
+    }
+
+    func acceptNoteTransfer(from providers: [NSItemProvider], source: NoteDropSource,
+      targetFolderID: UUID?, currentSourceNotes: @escaping () -> [Note],
+      validTargetFolderIDs: @escaping () -> Set<UUID>,
+      move: @escaping (NoteDropSource, UUID?) -> Bool) -> Task<Void, Never>? {
+      guard let commit = noteTransferCommit(source: source, targetFolderID: targetFolderID,
+        currentSourceNotes: currentSourceNotes, validTargetFolderIDs: validTargetFolderIDs,
+        move: move) else { return nil }
+      return acceptDrop(from: providers, commit: commit)
+    }
+
+    func acceptNoteTransfer(data: Data, source: NoteDropSource,
+      targetFolderID: UUID?, currentSourceNotes: @escaping () -> [Note],
+      validTargetFolderIDs: @escaping () -> Set<UUID>,
+      move: @escaping (NoteDropSource, UUID?) -> Bool) -> Bool {
+      guard let commit = noteTransferCommit(source: source, targetFolderID: targetFolderID,
+        currentSourceNotes: currentSourceNotes, validTargetFolderIDs: validTargetFolderIDs,
+        move: move) else { return false }
+      return acceptDrop(data: data, commit: commit)
+    }
+
+    private func noteTransferCommit(source: NoteDropSource, targetFolderID: UUID?,
+      currentSourceNotes: @escaping () -> [Note],
+      validTargetFolderIDs: @escaping () -> Set<UUID>,
+      move: @escaping (NoteDropSource, UUID?) -> Bool) -> (() -> Void)? {
+      let originalNotes = currentSourceNotes()
+      guard noteSource == source,
+        NoteDropPresentation.isValidTarget(draggedSource: source, targetFolderID: targetFolderID,
+          notes: originalNotes, validTargetFolderIDs: validTargetFolderIDs())
+      else { return nil }
+      let originalIDs = originalNotes.map(\.id)
+      let originalPins = Set(originalNotes.filter(\.isPinned).map(\.id))
+      return {
+        let notes = currentSourceNotes()
+        guard notes.map(\.id) == originalIDs, Set(notes.filter(\.isPinned).map(\.id)) == originalPins
+        else { return }
+        _ = NoteDropPresentation.performLocalDrop(draggedSource: source, providerSource: source,
+          targetFolderID: targetFolderID, notes: notes, validTargetFolderIDs: validTargetFolderIDs(),
+          move: move)
+      }
+    }
+
+    func end(operation: NSDragOperation) {
+      guard phase == .dragging else { return }
+      guard operation == .move else { cancel(); return }
+      phase = .ended
+      commitIfReady()
+    }
+
+    func cancel() {
+      guard phase != .committed else { return }
+      phase = .cancelled
+      pendingCommit = nil
+    }
+
+    private func stage(data: Data, commit: @escaping () -> Void) -> Bool {
+      guard phase != .cancelled && phase != .committed else { return false }
+      guard matches(data) else { cancel(); return false }
+      pendingCommit = commit
+      commitIfReady()
+      return true
+    }
+
+    private func commitIfReady() {
+      guard phase == .ended, let commit = pendingCommit else { return }
+      phase = .committed
+      pendingCommit = nil
+      commit()
     }
   }
 
@@ -87,7 +225,51 @@
     }
   }
 
+  // The proposal is disposable; only consume on a validated native drop.
+  struct ReorderInteraction: Equatable {
+    let sourceID: UUID
+    let originalIDs: [UUID]
+    let sessionID = UUID()
+    var pinnedIDs: Set<UUID> = []
+    private(set) var targetID: UUID?
+    private(set) var after = false
+    private(set) var destination: Int?
+
+    mutating func propose(over targetID: UUID, after: Bool, currentIDs: [UUID]) {
+      clearTarget()
+      guard originalIDs == currentIDs, currentIDs.contains(sourceID), sourceID != targetID,
+        let target = currentIDs.filter({ $0 != sourceID }).firstIndex(of: targetID)
+      else { return }
+      self.targetID = targetID
+      self.after = after
+      destination = target + (after ? 1 : 0)
+    }
+
+    mutating func clearTarget() {
+      targetID = nil
+      destination = nil
+    }
+
+    mutating func consume(currentIDs: [UUID]) -> Int? {
+      defer { clearTarget() }
+      guard currentIDs == originalIDs, currentIDs.contains(sourceID) else { return nil }
+      return destination
+    }
+  }
+
   enum NoteDropPresentation {
+    static func performLocalDrop(
+      draggedSource: NoteDropSource?, providerSource: NoteDropSource?,
+      targetFolderID: UUID?, notes: [Note], validTargetFolderIDs: Set<UUID>,
+      move: (NoteDropSource, UUID?) -> Bool
+    ) -> Bool {
+      guard let draggedSource, draggedSource == providerSource,
+        isValidTarget(draggedSource: draggedSource, targetFolderID: targetFolderID,
+          notes: notes, validTargetFolderIDs: validTargetFolderIDs)
+      else { return false }
+      return move(draggedSource, targetFolderID)
+    }
+
     static func isValidTarget(
       draggedSource: NoteDropSource?,
       targetFolderID: UUID?,
@@ -102,6 +284,392 @@
         return false
       }
       return draggedSource.sourceFolderID != targetFolderID
+    }
+  }
+
+  @MainActor enum MenuWindowDropGeometry {
+    static func targetRect(for view: NSView, in window: NSWindow) -> NSRect? {
+      guard view.window === window, !view.bounds.isEmpty, let contentView = window.contentView else {
+        return nil
+      }
+      var rect = view.convert(view.bounds, to: nil)
+      var ancestor = view.superview
+      while let current = ancestor {
+        if let clip = current as? NSClipView {
+          rect = rect.intersection(clip.convert(clip.bounds, to: nil))
+        }
+        ancestor = current.superview
+      }
+      rect = rect.intersection(contentView.convert(contentView.bounds, to: nil))
+      return rect.isNull || rect.isEmpty ? nil : rect
+    }
+  }
+
+  @MainActor final class MenuWindowNoteDropCoordinator: ObservableObject {
+    private final class FolderTarget {
+      weak var view: NSView?
+      let id = UUID()
+      let canAccept: (Data) -> Bool
+      let perform: (Data) -> Bool
+      let setHovered: (Bool) -> Void
+
+      init(view: NSView, canAccept: @escaping (Data) -> Bool,
+        perform: @escaping (Data) -> Bool, setHovered: @escaping (Bool) -> Void) {
+        self.view = view
+        self.canAccept = canAccept
+        self.perform = perform
+        self.setHovered = setHovered
+      }
+    }
+
+    private enum Target: Equatable {
+      case tab
+      case folder(UUID)
+    }
+
+    private weak var window: NSWindow?
+    private var proxy: MenuWindowDropProxy?
+    private var source: NoteDropSource?
+    private var session: ReorderDropSession?
+    private weak var tabController: FluidTabDragController?
+    private var folderTargets: [FolderTarget] = []
+    private var target: Target?
+    private var performedSequence: Int?
+
+    func activate(source: NoteDropSource, session: ReorderDropSession,
+      tabController: FluidTabDragController?) {
+      clearTarget()
+      self.source = source
+      self.session = session
+      self.tabController = tabController
+      performedSequence = nil
+    }
+
+    func deactivate(sessionID: UUID) {
+      guard source?.dragSessionID == sessionID else { return }
+      clearTarget()
+      source = nil
+      session = nil
+      tabController = nil
+      performedSequence = nil
+    }
+
+    @discardableResult
+    func registerFolderTarget(view: NSView, canAccept: @escaping (Data) -> Bool,
+      perform: @escaping (Data) -> Bool, setHovered: @escaping (Bool) -> Void) -> UUID {
+      let registration = FolderTarget(view: view, canAccept: canAccept,
+        perform: perform, setHovered: setHovered)
+      folderTargets.append(registration)
+      return registration.id
+    }
+
+    func unregisterFolderTarget(_ id: UUID) {
+      if target == .folder(id) { transition(to: nil) }
+      folderTargets.removeAll { $0.id == id }
+    }
+
+    func attach(to window: NSWindow) {
+      if self.window === window, window.delegate === proxy { return }
+      detach()
+      let proxy = MenuWindowDropProxy(originalDelegate: window.delegate, coordinator: self)
+      self.window = window
+      self.proxy = proxy
+      window.registerForDraggedTypes([.init(FolderDragPayload.noteType.identifier)])
+      window.delegate = proxy
+    }
+
+    func detach() {
+      clearTarget()
+      if let window, window.delegate === proxy {
+        window.delegate = proxy?.originalDelegate
+      }
+      window = nil
+      proxy = nil
+    }
+
+    func detach(from window: NSWindow) {
+      guard self.window === window else { return }
+      detach()
+    }
+
+    fileprivate func operation(_ sender: any NSDraggingInfo) -> NSDragOperation {
+      guard let data = validData(sender), let window else {
+        clearTarget()
+        return []
+      }
+      folderTargets.removeAll { $0.view == nil }
+      if let folder = folderTargets.last(where: { registration in
+        guard let view = registration.view,
+          let rect = MenuWindowDropGeometry.targetRect(for: view, in: window)
+        else { return false }
+        return rect.contains(sender.draggingLocation) && registration.canAccept(data)
+      }) {
+        transition(to: .folder(folder.id))
+        return .move
+      }
+      if let tabController, let view = tabController.view,
+        let rect = MenuWindowDropGeometry.targetRect(for: view, in: window),
+        rect.contains(sender.draggingLocation) {
+        transition(to: .tab)
+        return tabController.operation(sender)
+      }
+      clearTarget()
+      return []
+    }
+
+    fileprivate func prepare(_ sender: any NSDraggingInfo) -> Bool {
+      guard operation(sender) == .move else { return false }
+      sender.animatesToDestination = false
+      return true
+    }
+
+    fileprivate func perform(_ sender: any NSDraggingInfo) -> Bool {
+      guard performedSequence != sender.draggingSequenceNumber,
+        operation(sender) == .move,
+        let data = validData(sender)
+      else { return false }
+      let accepted: Bool
+      switch target {
+      case .tab:
+        accepted = tabController?.perform(sender) ?? false
+      case .folder(let id):
+        accepted = folderTargets.first(where: { $0.id == id })?.perform(data) ?? false
+      case nil:
+        accepted = false
+      }
+      if accepted { performedSequence = sender.draggingSequenceNumber }
+      return accepted
+    }
+
+    fileprivate func clearTarget() { transition(to: nil) }
+
+    private func validData(_ sender: any NSDraggingInfo) -> Data? {
+      guard sender.draggingDestinationWindow === window,
+        sender.draggingSource is ReorderNativeSource,
+        let source, let session,
+        session.id == source.dragSessionID,
+        session.canAcceptDrop,
+        let data = sender.draggingPasteboard.data(
+          forType: .init(FolderDragPayload.noteType.identifier)
+        ),
+        FolderDragPayload.noteValue(from: data) == source
+      else { return nil }
+      return data
+    }
+
+    private func transition(to next: Target?) {
+      guard target != next else { return }
+      switch target {
+      case .tab:
+        tabController?.exited()
+      case .folder(let id):
+        folderTargets.first(where: { $0.id == id })?.setHovered(false)
+      case nil:
+        break
+      }
+      target = next
+      if case .folder(let id) = next {
+        folderTargets.first(where: { $0.id == id })?.setHovered(true)
+      }
+    }
+  }
+
+  final class MenuWindowDropProxy: NSObject, NSWindowDelegate {
+    fileprivate weak var originalDelegate: (any NSWindowDelegate)?
+    private unowned let coordinator: MenuWindowNoteDropCoordinator
+    private var foreignOperation: (sequence: Int, operation: NSDragOperation)?
+
+    init(originalDelegate: (any NSWindowDelegate)?, coordinator: MenuWindowNoteDropCoordinator) {
+      self.originalDelegate = originalDelegate
+      self.coordinator = coordinator
+    }
+
+    override func responds(to selector: Selector!) -> Bool {
+      super.responds(to: selector) || originalDelegate?.responds(to: selector) == true
+    }
+
+    override func forwardingTarget(for selector: Selector!) -> Any? {
+      if originalDelegate?.responds(to: selector) == true { return originalDelegate }
+      return super.forwardingTarget(for: selector)
+    }
+
+    @MainActor @objc func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+      guard !isFleckNote(sender) else { return coordinator.operation(sender) }
+      let operation = (originalDelegate as AnyObject?)?.draggingEntered?(sender) ?? []
+      foreignOperation = (sender.draggingSequenceNumber, operation)
+      return operation
+    }
+
+    @MainActor @objc func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+      guard !isFleckNote(sender) else { return coordinator.operation(sender) }
+      return (originalDelegate as AnyObject?)?.draggingUpdated?(sender)
+        ?? (foreignOperation?.sequence == sender.draggingSequenceNumber
+          ? foreignOperation?.operation : nil)
+        ?? []
+    }
+
+    @MainActor @objc func draggingExited(_ sender: (any NSDraggingInfo)?) {
+      if let sender {
+        if isFleckNote(sender) {
+          coordinator.clearTarget()
+        } else {
+          (originalDelegate as AnyObject?)?.draggingExited?(sender)
+        }
+      } else {
+        coordinator.clearTarget()
+        (originalDelegate as AnyObject?)?.draggingExited?(nil)
+      }
+      foreignOperation = nil
+    }
+
+    @MainActor @objc func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+      guard !isFleckNote(sender) else { return coordinator.prepare(sender) }
+      return (originalDelegate as AnyObject?)?.prepareForDragOperation?(sender) ?? true
+    }
+
+    @MainActor @objc func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+      guard !isFleckNote(sender) else { return coordinator.perform(sender) }
+      return (originalDelegate as AnyObject?)?.performDragOperation?(sender) ?? false
+    }
+
+    @MainActor @objc func concludeDragOperation(_ sender: (any NSDraggingInfo)?) {
+      if let sender {
+        if isFleckNote(sender) {
+          coordinator.clearTarget()
+        } else {
+          (originalDelegate as AnyObject?)?.concludeDragOperation?(sender)
+        }
+      } else {
+        coordinator.clearTarget()
+        (originalDelegate as AnyObject?)?.concludeDragOperation?(nil)
+      }
+      foreignOperation = nil
+    }
+
+    @MainActor @objc func draggingEnded(_ sender: any NSDraggingInfo) {
+      if isFleckNote(sender) {
+        coordinator.clearTarget()
+      } else {
+        (originalDelegate as AnyObject?)?.draggingEnded?(sender)
+      }
+      foreignOperation = nil
+    }
+
+    @MainActor private func isFleckNote(_ sender: any NSDraggingInfo) -> Bool {
+      sender.draggingPasteboard.availableType(
+        from: [.init(FolderDragPayload.noteType.identifier)]
+      ) != nil
+    }
+
+  }
+
+  private struct MenuWindowDropInstaller: NSViewRepresentable {
+    let coordinator: MenuWindowNoteDropCoordinator
+
+    func makeNSView(context: Context) -> HostView {
+      HostView(coordinator: coordinator)
+    }
+
+    func updateNSView(_ view: HostView, context: Context) {
+      view.installIfNeeded()
+    }
+
+    static func dismantleNSView(_ view: HostView, coordinator: ()) {
+      view.uninstall()
+    }
+
+    final class HostView: NSView {
+      private let coordinator: MenuWindowNoteDropCoordinator
+      private weak var installedWindow: NSWindow?
+
+      init(coordinator: MenuWindowNoteDropCoordinator) {
+        self.coordinator = coordinator
+        super.init(frame: .zero)
+      }
+
+      required init?(coder: NSCoder) { nil }
+
+      override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installIfNeeded()
+      }
+
+      override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+      func installIfNeeded() {
+        guard installedWindow !== window else {
+          if let window { coordinator.attach(to: window) }
+          return
+        }
+        if let installedWindow { coordinator.detach(from: installedWindow) }
+        installedWindow = window
+        if let window { coordinator.attach(to: window) }
+      }
+
+      func uninstall() {
+        if let installedWindow { coordinator.detach(from: installedWindow) }
+        installedWindow = nil
+      }
+    }
+  }
+
+  private struct MenuWindowDropInstallation: ViewModifier {
+    let coordinator: MenuWindowNoteDropCoordinator
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+      content.background {
+        if enabled {
+          MenuWindowDropInstaller(coordinator: coordinator)
+            .frame(width: 0, height: 0)
+        }
+      }
+    }
+  }
+
+  private struct MenuWindowFolderDropAnchor: NSViewRepresentable {
+    let coordinator: MenuWindowNoteDropCoordinator
+    let canAccept: (Data) -> Bool
+    let perform: (Data) -> Bool
+    let setHovered: (Bool) -> Void
+
+    func makeNSView(context: Context) -> HostView {
+      let view = HostView()
+      view.owner = coordinator
+      view.update(canAccept: canAccept, perform: perform, setHovered: setHovered)
+      view.registrationID = coordinator.registerFolderTarget(
+        view: view,
+        canAccept: { [weak view] in view?.canAccept($0) ?? false },
+        perform: { [weak view] in view?.perform($0) ?? false },
+        setHovered: { [weak view] in view?.setHovered($0) }
+      )
+      return view
+    }
+
+    func updateNSView(_ view: HostView, context: Context) {
+      view.update(canAccept: canAccept, perform: perform, setHovered: setHovered)
+    }
+
+    static func dismantleNSView(_ view: HostView, coordinator: ()) {
+      guard let owner = view.owner, let registrationID = view.registrationID else { return }
+      owner.unregisterFolderTarget(registrationID)
+    }
+
+    final class HostView: NSView {
+      weak var owner: MenuWindowNoteDropCoordinator?
+      var registrationID: UUID?
+      var canAccept: (Data) -> Bool = { _ in false }
+      var perform: (Data) -> Bool = { _ in false }
+      var setHovered: (Bool) -> Void = { _ in }
+
+      override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+      func update(canAccept: @escaping (Data) -> Bool,
+        perform: @escaping (Data) -> Bool, setHovered: @escaping (Bool) -> Void) {
+        self.canAccept = canAccept
+        self.perform = perform
+        self.setHovered = setHovered
+      }
     }
   }
 
@@ -123,25 +691,6 @@
   }
 
   enum TabDragReorder {
-    static func isValidLocalDrag(
-      draggedSource: NoteDropSource?,
-      providerSource: NoteDropSource?,
-      destinationID: UUID,
-      activeFolderID: UUID?,
-      currentNotes: [Note]
-    ) -> Bool {
-      guard let draggedSource,
-        draggedSource == providerSource,
-        draggedSource.sourceFolderID == activeFolderID,
-        draggedSource.noteID != destinationID,
-        let draggedNote = currentNotes.first(where: { $0.id == draggedSource.noteID }),
-        draggedNote.folderID == draggedSource.sourceFolderID,
-        let destinationNote = currentNotes.first(where: { $0.id == destinationID }),
-        destinationNote.folderID == activeFolderID
-      else { return false }
-      return true
-    }
-
     static func partitionLocalDestination(
       draggedID: UUID,
       absoluteDestination: Int,
@@ -159,46 +708,6 @@
       }
     }
 
-    struct LiveMoveResult: Equatable {
-      let didMove: Bool
-      let destinationID: UUID?
-    }
-
-    static func performLiveMove(
-      draggedSource: NoteDropSource?,
-      providerSource: NoteDropSource?,
-      over destinationID: UUID,
-      activeFolderID: UUID?,
-      currentNotes: () -> [Note],
-      lastDestinationID: UUID?,
-      move: (UUID, Int) -> Void
-    ) -> LiveMoveResult {
-      let visibleNotes = currentNotes()
-      guard isValidLocalDrag(
-        draggedSource: draggedSource,
-        providerSource: providerSource,
-        destinationID: destinationID,
-        activeFolderID: activeFolderID,
-        currentNotes: visibleNotes
-      ), let draggedSource
-      else {
-        return LiveMoveResult(didMove: false, destinationID: nil)
-      }
-      guard destinationID != lastDestinationID else {
-        return LiveMoveResult(didMove: false, destinationID: destinationID)
-      }
-      guard let absoluteDestination = visibleNotes.firstIndex(where: { $0.id == destinationID }),
-        let localDestination = partitionLocalDestination(
-          draggedID: draggedSource.noteID,
-          absoluteDestination: absoluteDestination,
-          visibleNotes: visibleNotes
-        )
-      else {
-        return LiveMoveResult(didMove: false, destinationID: nil)
-      }
-      move(draggedSource.noteID, localDestination)
-      return LiveMoveResult(didMove: true, destinationID: destinationID)
-    }
   }
 
   enum TabOverflowPresentation {
@@ -222,25 +731,53 @@
     }
   }
 
+  enum FormattingToolbarLayout: Equatable {
+    case full
+    case compact
+
+    static func presentation(availableWidth: CGFloat) -> Self {
+      availableWidth >= 720 ? .full : .compact
+    }
+  }
+
   enum NotesPanelSizing: Equatable {
     case storedPreferences
     case container
+
+    static func storedSize(preferred: CGSize, available: CGSize) -> CGSize {
+      CGSize(
+        width: min(preferred.width, max(available.width, 0)),
+        height: min(preferred.height, max(available.height, 0))
+      )
+    }
+  }
+
+  enum PinnedChromeMaterialPolicy: Equatable {
+    case liquidGlass
+    case legacyMaterial
+    case opaque
+
+    static func resolve(
+      supportsLiquidGlass: Bool,
+      reduceTransparency: Bool,
+      increasedContrast: Bool
+    ) -> Self {
+      if reduceTransparency || increasedContrast { return .opaque }
+      return supportsLiquidGlass ? .liquidGlass : .legacyMaterial
+    }
   }
 
   enum NotesPanelBannerCategory: Hashable {
-    case modifierRecovery
     case captureFailure
     case agentChange
   }
 
   enum NotesPanelBannerOccurrence: Hashable {
-    case modifierRecovery(statusCopy: String, recoveryButtonTitle: String)
     case captureFailure(message: String, actionPanes: [DictationPrivacyPane])
     case agentChange(changeID: UUID, count: Int)
 
     var category: NotesPanelBannerCategory {
       switch self {
-      case .modifierRecovery: .modifierRecovery
       case .captureFailure: .captureFailure
       case .agentChange: .agentChange
       }
@@ -249,12 +786,11 @@
 
   enum NotesPanelBannerPolicy {
     static func activeOccurrences(
-      modifierRecovery: NotesPanelBannerOccurrence?,
       captureFailure: NotesPanelBannerOccurrence?,
       routineRecoveryAction _: DictationCapsuleAction?,
       agentChange: NotesPanelBannerOccurrence?
     ) -> Set<NotesPanelBannerOccurrence> {
-      Set([modifierRecovery, captureFailure, agentChange].compactMap { $0 })
+      Set([captureFailure, agentChange].compactMap { $0 })
     }
   }
 
@@ -273,11 +809,6 @@
       dismissedOccurrences = dismissedOccurrences.filter {
         $0.category != category
       }
-    }
-
-    mutating func dictationPhaseDidEmit(_ phase: DictationPhase) {
-      guard phase == .arming else { return }
-      forgetDismissedOccurrences(in: .modifierRecovery)
     }
 
     mutating func dismiss(_ occurrence: NotesPanelBannerOccurrence) {
@@ -320,6 +851,7 @@
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var dictationRuntime: DictationRuntime
     let isPinned: Bool
     let sizing: NotesPanelSizing
@@ -341,13 +873,16 @@
     @State private var exportType = NoteFileDocument.markdownContentType
     @State private var exportFilename = "Untitled.md"
     @State private var noteDropSource: NoteDropSource?
-    @State private var tabDragDestinationID: UUID?
+    @State private var reorderDragSession: ReorderDropSession?
+    @StateObject private var fluidTabDrag = FluidTabDragController()
+    @StateObject private var menuWindowDrop = MenuWindowNoteDropCoordinator()
     @State private var tabColorPickerNoteID: UUID?
     @State private var activeFolderID: UUID?
     @State private var bannerDismissalState = NotesPanelBannerDismissalState()
     @State private var restoreEditorFocusAfterHide = false
     @State private var searchPointerActivationPending = false
     @FocusState private var editorFocus: EditorFocus?
+    private let filePicker: NoteFilePicker
 
     init(
       dictationRuntime: DictationRuntime,
@@ -356,7 +891,8 @@
       editorCommands: EditorCommands? = nil,
       searchController: WorkspaceSearchController? = nil,
       noteLinkPickerController: NoteLinkPickerController? = nil,
-      backlinkController: BacklinkController? = nil
+      backlinkController: BacklinkController? = nil,
+      filePicker: NoteFilePicker = .live
     ) {
       let searchController = searchController ?? WorkspaceSearchController()
       let noteLinkPickerController = noteLinkPickerController ?? NoteLinkPickerController()
@@ -367,49 +903,27 @@
       _searchController = StateObject(wrappedValue: searchController)
       _noteLinkPickerController = StateObject(wrappedValue: noteLinkPickerController)
       _backlinkController = StateObject(wrappedValue: backlinkController ?? BacklinkController())
+      self.filePicker = filePicker
       noteLinkPickerController.setPresentationGuard { !searchController.isPresented }
     }
 
     var body: some View {
       ZStack {
+        if isPinned {
+          PinnedWritingSurface()
+            .accessibilityHidden(true)
+        }
         VStack(spacing: 0) {
           if let migrationError = appState.startupMigrationError {
             migrationFailure(migrationError)
           } else {
-            header
-            folderNavigator
-            tabStrip
-            Divider().opacity(0.35)
-            if let title = modifierRecoveryPresentation.recoveryButtonTitle {
-              let occurrence = NotesPanelBannerOccurrence.modifierRecovery(
-                statusCopy: modifierRecoveryPresentation.statusCopy,
-                recoveryButtonTitle: title
-              )
-              if bannerDismissalState.isPresented(occurrence) {
-                HStack(spacing: 8) {
-                  Label(modifierRecoveryPresentation.statusCopy, systemImage: "keyboard.badge.ellipsis")
-                    .font(.caption)
-                  Spacer()
-                  Button(title) {
-                    Task { @MainActor in
-                      guard let settings = await dictationRuntime.recoverModifierMonitoring() else {
-                        return
-                      }
-                      dictationRuntime.openSystemSettings(settings)
-                    }
-                  }
-                  .accessibilityLabel(title)
-                  NotesPanelBannerCloseButton(
-                    label: "modifier monitoring recovery",
-                    action: { dismissBanner(occurrence) }
-                  )
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(.quaternary.opacity(0.35))
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Dictation shortcut unavailable")
-              }
+            if isPinned {
+              pinnedNavigationChrome
+            } else {
+              header
+              folderNavigator
+              tabStrip
+              Divider().opacity(0.35)
             }
             if let failure = dictationRuntime.captureFailure {
               let occurrence = NotesPanelBannerOccurrence.captureFailure(
@@ -464,6 +978,13 @@
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let error = appState.noteFileReferenceError {
+              Text(error)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
           }
         }
         .allowsHitTesting(!searchController.isPresented)
@@ -474,17 +995,19 @@
         .accessibilityHidden(isBlockingOverlayPresented)
       }
       .frame(
-        width: sizing == .storedPreferences ? appState.preferences.panelWidth : nil,
-        height: sizing == .storedPreferences ? appState.preferences.panelHeight : nil
+        width: storedPanelSize?.width,
+        height: storedPanelSize?.height
       )
       .frame(
         maxWidth: sizing == .container ? .infinity : nil,
         maxHeight: sizing == .container ? .infinity : nil
       )
       .background {
-        Rectangle()
-          .fill(.ultraThinMaterial)
-          .opacity(appState.preferences.panelOpacity)
+        if !isPinned {
+          Rectangle()
+            .fill(.ultraThinMaterial)
+            .opacity(appState.preferences.panelOpacity)
+        }
       }
       .tint(Color(hex: appState.preferences.accentHex) ?? .accentColor)
       .background(
@@ -499,21 +1022,22 @@
         NoteLinkPickerWindowReader(controller: noteLinkPickerController)
           .frame(width: 0, height: 0)
       )
+      .modifier(MenuWindowDropInstallation(
+        coordinator: menuWindowDrop,
+        enabled: !isPinned
+      ))
       .onChange(of: activeBannerOccurrences, initial: true) { _, occurrences in
         bannerDismissalState.reconcile(activeOccurrences: occurrences)
       }
-      .onReceive(dictationRuntime.$phase) { phase in
-        bannerDismissalState.dictationPhaseDidEmit(phase)
+      .onChange(of: appState.workspace.selectedNoteID, initial: true) { _, _ in
+        appState.refreshSelectedNoteFileReferences()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+        appState.refreshSelectedNoteFileReferences()
       }
       .onReceive(dictationRuntime.$captureFailure) { failure in
         guard failure == nil else { return }
         bannerDismissalState.forgetDismissedOccurrences(in: .captureFailure)
-      }
-      .onReceive(dictationRuntime.$modifierMonitorState) { monitorState in
-        guard monitorState == .stopped || monitorState == .running else {
-          return
-        }
-        bannerDismissalState.forgetDismissedOccurrences(in: .modifierRecovery)
       }
       .fileImporter(
         isPresented: $isImporting,
@@ -537,13 +1061,9 @@
           onOpenDestination: openHistoryDestination
         )
       }
-      .sheet(isPresented: $isShowingAgentActivity) {
-        AgentActivityView { noteID in
-          if activateNoteAndScope(noteID) {
-            isShowingAgentActivity = false
-          }
-        }
-        .environmentObject(appState)
+      .sheet(isPresented: agentActivitySheetPresentation) {
+        agentActivityContent
+          .frame(minWidth: 520, minHeight: 380)
       }
       .sheet(item: $notePendingAgentShare) { note in
         AgentNoteAccessEditorView(
@@ -556,6 +1076,11 @@
         dictationRuntime.registerEditor(editorCommands)
       }
       .onDisappear {
+        fluidTabDrag.cancel()
+        if let source = noteDropSource {
+          menuWindowDrop.deactivate(sessionID: source.dragSessionID)
+        }
+        noteDropSource = nil
         dictationRuntime.unregisterEditor(editorCommands)
       }
       .overlay {
@@ -569,6 +1094,10 @@
                 with: .scale(scale: reduceMotion ? 1 : 0.985)
               )
             )
+          }
+
+          if !isPinned && isShowingAgentActivity {
+            agentActivityOverlay
           }
 
           if let folderPendingDeletion {
@@ -683,21 +1212,21 @@
       }
     }
 
-    private var modifierRecoveryPresentation: DictationModifierSettingsPresentation {
-      .init(
-        selected: appState.preferences.dictationModifierKey,
-        monitorStatus: dictationRuntime.modifierMonitorState,
-        canChange: dictationRuntime.canChangeModifier
-      )
+    private var pinnedNavigationChrome: some View {
+      VStack(spacing: 0) {
+        header
+        folderNavigator
+        tabStrip
+        Divider().opacity(0.35)
+      }
+      .modifier(PinnedNavigationChromeSurface())
+    }
+
+    private var modifierShortcutPresentation: DictationModifierSettingsPresentation {
+      dictationRuntime.modifierShortcutPresentation
     }
 
     private var activeBannerOccurrences: Set<NotesPanelBannerOccurrence> {
-      let modifierRecovery = modifierRecoveryPresentation.recoveryButtonTitle.map {
-        NotesPanelBannerOccurrence.modifierRecovery(
-          statusCopy: modifierRecoveryPresentation.statusCopy,
-          recoveryButtonTitle: $0
-        )
-      }
       let captureFailure = dictationRuntime.captureFailure.map {
         NotesPanelBannerOccurrence.captureFailure(
           message: $0.message,
@@ -711,7 +1240,6 @@
         )
       }
       return NotesPanelBannerPolicy.activeOccurrences(
-        modifierRecovery: modifierRecovery,
         captureFailure: captureFailure,
         routineRecoveryAction: dictationRuntime.recoveryAction,
         agentChange: agentChange
@@ -755,20 +1283,11 @@
     private var header: some View {
       let backlinkEntries = backlinkController.incoming(to: appState.workspace.selectedNoteID)
       return HStack(spacing: 10) {
-        HStack(spacing: 6) {
-          switch FleckMark.load(template: true) {
-          case .image(let mark):
-            Image(nsImage: mark)
-              .resizable()
-              .frame(width: 18, height: 18)
-              .accessibilityHidden(true)
-          case .missingPackagedResource:
-            Text("!")
-              .foregroundStyle(.red)
-              .accessibilityLabel("Fleck mark missing")
-          }
+        AgentActivityIndicator(
+          presentation: appState.agentActivityIndicator
+        ) {
+          isShowingAgentActivity = true
         }
-          .font(.headline)
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
         Button {
@@ -879,6 +1398,13 @@
         )
 
         Menu {
+          if let note = visibleSelectedNote {
+            Button("Add File Shortcut…", systemImage: "paperclip") {
+              chooseFile(for: note.id)
+            }
+            .disabled(!appState.canAddFileReference(noteID: note.id))
+            Divider()
+          }
           Button("Import…", systemImage: "square.and.arrow.down") {
             isImporting = true
           }
@@ -925,6 +1451,8 @@
     private var folderNavigator: some View {
       FolderNavigator(
         draggedSource: $noteDropSource,
+        dragSession: $reorderDragSession,
+        menuWindowDrop: isPinned ? nil : menuWindowDrop,
         activeFolderID: activeFolderID,
         onSelect: selectFolder,
         onDelete: { folderPendingDeletion = $0 },
@@ -986,6 +1514,7 @@
                 Color.clear
                   .frame(width: 0, height: 0)
                   .id(TabScrollTarget.leading)
+                FluidTabStripHost(controller: fluidTabDrag) {
                 HStack(spacing: 6) {
                 ForEach(visibleNotes) { note in
             Button {
@@ -1003,8 +1532,10 @@
                     .accessibilityLabel(AgentSharingPresentation.sharedBadgeAccessibilityLabel)
                 }
               }
+              .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
+              .contentShape(Capsule())
               .background {
                 if note.id == appState.workspace.selectedNoteID {
                   Capsule()
@@ -1018,34 +1549,45 @@
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("note-tab-\(note.id.uuidString)")
-            .onDrag {
+            .modifier(ReorderDragSource(begin: {
+              let interaction = ReorderInteraction(sourceID: note.id, originalIDs: visibleNotes.map(\.id),
+                pinnedIDs: Set(visibleNotes.filter(\.isPinned).map(\.id)))
               let source = NoteDropSource(
                 noteID: note.id,
                 sourceFolderID: note.folderID,
-                dragSessionID: UUID()
+                dragSessionID: interaction.sessionID
               )
+              let session = ReorderDropSession(source: source)
+              reorderDragSession?.cancel()
+              reorderDragSession = session
               noteDropSource = source
-              tabDragDestinationID = nil
-              _ = activateNoteAndScope(note.id)
-              return FolderDragPayload.noteProvider(source: source)
-            }
-            .onDrop(
-              of: [FolderDragPayload.noteType],
-              delegate: TabDropDelegate(
-                destinationID: note.id,
-                activeFolderID: activeFolderID,
-                currentNotes: { visibleNotes },
-                draggedSource: $noteDropSource,
-                lastDestinationID: $tabDragDestinationID,
-                move: { id, localDestination in
-                  _ = appState.moveNote(
-                    id,
-                    inFolderID: activeFolderID,
-                    toVisibleIndex: localDestination
-                  )
-                }
-              )
-            )
+              fluidTabDrag.prepare(interaction: interaction, session: session,
+                currentIDs: { appState.visibleNotes(in: note.folderID).map(\.id) },
+                currentPins: { Set(appState.visibleNotes(in: note.folderID).filter(\.isPinned).map(\.id)) },
+                move: { id, destination in
+                  guard let localDestination = TabDragReorder.partitionLocalDestination(
+                    draggedID: id, absoluteDestination: destination,
+                    visibleNotes: appState.visibleNotes(in: note.folderID)) else { return }
+                  _ = appState.moveNote(id, inFolderID: note.folderID, toVisibleIndex: localDestination)
+                }, finish: { if noteDropSource == source { noteDropSource = nil } })
+              if !isPinned {
+                menuWindowDrop.activate(
+                  source: source,
+                  session: session,
+                  tabController: fluidTabDrag
+                )
+              }
+              return (FolderDragPayload.noteProvider(source: source),
+                FolderDragPayload.notePasteboardItem(source: source), { operation in
+                session.end(operation: operation)
+                fluidTabDrag.ended(sessionID: session.id, operation: operation)
+                if !isPinned { menuWindowDrop.deactivate(sessionID: session.id) }
+                if noteDropSource == source { noteDropSource = nil }
+              })
+            }, began: { point in fluidTabDrag.began(at: point) }, moved: { point in fluidTabDrag.moved(to: point) },
+              activate: { _ = activateNoteAndScope(note.id) }, noteID: note.id,
+              displacement: fluidTabDrag.inside ? fluidTabDrag.preview?.offset(for: note.id) ?? 0 : 0,
+              animatesDisplacement: !motion.reduceMotion && fluidTabDrag.animatesDisplacement))
             .transition(
               .opacity.combined(
                 with: .offset(x: motion.offset)
@@ -1132,6 +1674,9 @@
               .frame(height: 37, alignment: .center)
               .animation(motion.spatial, value: appState.workspace.selectedNoteID)
               .animation(motion.spatial, value: visibleNotes.map(\.id))
+              .fixedSize(horizontal: true, vertical: false)
+              .frame(minWidth: tabViewportWidth, alignment: .leading)
+              }
                 Color.clear
                   .frame(width: 0, height: 0)
                   .id(TabScrollTarget.trailing)
@@ -1377,9 +1922,115 @@
       }
     }
 
+    private func chooseFile(for noteID: UUID) {
+      filePicker.chooseFile(editorCommands.textView?.window) { url in
+        Self.completeFileReferenceSelection(url, noteID: noteID, appState: appState)
+      }
+    }
+
+    static func completeFileReferenceSelection(
+      _ url: URL?,
+      noteID: UUID,
+      appState: AppState
+    ) {
+      guard let url else { return }
+      appState.addFileReference(noteID: noteID, url: url)
+    }
+
+    private func openFileReference(_ referenceID: UUID) {
+      guard let url = appState.resolveFileReference(referenceID: referenceID) else {
+        return
+      }
+      let didAccess = url.startAccessingSecurityScopedResource()
+      NSWorkspace.shared.open(
+        url,
+        configuration: NSWorkspace.OpenConfiguration()
+      ) { _, error in
+        Task { @MainActor in
+          if didAccess {
+            url.stopAccessingSecurityScopedResource()
+          }
+          if error != nil {
+            appState.fileReferenceActionFailed("The file could not be opened.")
+          }
+        }
+      }
+    }
+
+    private func revealFileReference(_ referenceID: UUID) {
+      guard let url = appState.resolveFileReference(referenceID: referenceID) else {
+        return
+      }
+      let didAccess = url.startAccessingSecurityScopedResource()
+      NSWorkspace.shared.activateFileViewerSelecting([url])
+      if didAccess {
+        url.stopAccessingSecurityScopedResource()
+      }
+    }
+
+    private func locateFileReference(_ referenceID: UUID) {
+      filePicker.chooseFile(editorCommands.textView?.window) { url in
+        Self.completeFileReferenceRelink(
+          url,
+          referenceID: referenceID,
+          appState: appState
+        )
+      }
+    }
+
+    static func completeFileReferenceRelink(
+      _ url: URL?,
+      referenceID: UUID,
+      appState: AppState
+    ) {
+      guard let url else { return }
+      appState.relinkFileReference(referenceID: referenceID, url: url)
+    }
+
+    static func fileReferenceUndoManager(commands: EditorCommands) -> UndoManager? {
+      commands.activeUndoManager
+    }
+
     private var isBlockingOverlayPresented: Bool {
       searchController.isPresented || noteLinkPickerController.isPresented
         || notePendingDeletion != nil || folderPendingDeletion != nil || isShowingTrash
+        || isShowingAgentActivity
+    }
+
+    private var agentActivitySheetPresentation: Binding<Bool> {
+      Binding(
+        get: { isPinned && isShowingAgentActivity },
+        set: { isShowingAgentActivity = $0 }
+      )
+    }
+
+    private var agentActivityContent: some View {
+      AgentActivityView(
+        onOpenNote: { noteID in
+          if activateNoteAndScope(noteID) {
+            isShowingAgentActivity = false
+          }
+        },
+        onDismiss: { isShowingAgentActivity = false }
+      )
+      .environmentObject(appState)
+    }
+
+    private var agentActivityOverlay: some View {
+      ZStack {
+        Color.black.opacity(0.28)
+          .ignoresSafeArea()
+          .accessibilityHidden(true)
+
+        agentActivityContent
+          .frame(maxWidth: 520, maxHeight: 400)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+          .clipShape(RoundedRectangle(cornerRadius: 14))
+          .shadow(radius: 20, y: 8)
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("Agent Activity")
+          .padding(8)
+      }
     }
 
     private var folderNamesByID: [UUID: String] {
@@ -1476,6 +2127,7 @@
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .clipped()
       .onChange(of: isEditorVisible) { _, isVisible in
         if isVisible {
           let restoreBodyFocus = restoreEditorFocusAfterHide
@@ -1507,15 +2159,53 @@
       editorCommands.textView = nil
     }
 
+    private var storedPanelSize: CGSize? {
+      guard sizing == .storedPreferences else { return nil }
+      let preferred = CGSize(
+        width: appState.preferences.panelWidth,
+        height: appState.preferences.panelHeight
+      )
+      let screen = editorCommands.textView?.window?.screen
+        ?? NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+        ?? NSScreen.main
+      guard let available = screen?.visibleFrame.size,
+        available.width > 0,
+        available.height > 0
+      else { return preferred }
+      return NotesPanelSizing.storedSize(preferred: preferred, available: available)
+    }
+
     @ViewBuilder
     private var editor: some View {
       if let note = appState.selectedNote {
         VStack(spacing: 0) {
+          if let mode = DictationShortcutHelpMode.resolve(
+            isReady: modifierShortcutPresentation.isReady,
+            isCaptureActive: dictationRuntime.canCancel,
+            showsGuide: appState.preferences.showDictationShortcutGuide
+          ) {
+            DictationShortcutHelpRow(
+              mode: mode,
+              presentation: modifierShortcutPresentation,
+              destinationCopy: dictationRuntime.destinationGuidanceCopy,
+              onRecovery: {
+                Task { @MainActor in
+                  await dictationRuntime.performModifierShortcutRecovery {
+                    dictationRuntime.openSystemSettings($0)
+                  }
+                }
+              },
+              onDismissGuide: {
+                appState.updatePreferences { $0.showDictationShortcutGuide = false }
+              }
+            )
+          }
           if appState.preferences.showFormattingBar {
             FormattingBar(
               appState: appState,
               commands: editorCommands,
               dictationRuntime: dictationRuntime,
+              isPinned: isPinned,
               isEditorVisible: isEditorVisible,
               isTitleFocused: editorFocus == .title,
               onDelete: {
@@ -1531,6 +2221,20 @@
               )
             )
             .animation(reduceMotion ? nil : motion.quick, value: appState.preferences.showFormattingBar)
+          }
+          if !appState.selectedNoteFileReferences.isEmpty {
+            NoteFileReferenceView(
+              references: appState.selectedNoteFileReferences,
+              onOpen: openFileReference,
+              onReveal: revealFileReference,
+              onLocate: locateFileReference,
+              onRemove: { referenceID in
+                appState.removeFileReference(
+                  referenceID: referenceID,
+                  undoManager: Self.fileReferenceUndoManager(commands: editorCommands)
+                )
+              }
+            )
           }
           NativeRichTextEditor(
             text: note.body,
@@ -1664,14 +2368,19 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedRow: FocusedRow?
+    @FocusState private var isUnfiledDisclosureFocused: Bool
     @Binding private var draggedSource: NoteDropSource?
+    @Binding private var dragSession: ReorderDropSession?
     @State private var editingFolderID: UUID?
     @State private var isCreatingFolder = false
     @State private var folderNameDraft = ""
     @State private var noteDropTarget: NoteDropTarget?
+    @State private var folderReorder: ReorderInteraction?
     @State private var isUnfiledHovered = false
+    @State private var unfiledInteractionSource: AppInteractionSource = .keyboard
     private let folderNavigatorMaxHeight: CGFloat = 32
 
+    let menuWindowDrop: MenuWindowNoteDropCoordinator?
     let activeFolderID: UUID?
     let onSelect: (UUID?) -> Void
     let onDelete: (Folder) -> Void
@@ -1679,12 +2388,16 @@
 
     init(
       draggedSource: Binding<NoteDropSource?>,
+      dragSession: Binding<ReorderDropSession?>,
+      menuWindowDrop: MenuWindowNoteDropCoordinator?,
       activeFolderID: UUID?,
       onSelect: @escaping (UUID?) -> Void,
       onDelete: @escaping (Folder) -> Void,
       onOpenTrash: @escaping () -> Void
     ) {
       self._draggedSource = draggedSource
+      self._dragSession = dragSession
+      self.menuWindowDrop = menuWindowDrop
       self.activeFolderID = activeFolderID
       self.onSelect = onSelect
       self.onDelete = onDelete
@@ -1706,6 +2419,10 @@
                 folderRow(folder)
               }
             }
+            .background(ReorderDragLifecycle(active: folderReorder != nil,
+              hasTarget: folderReorder?.targetID != nil
+                && folderReorder?.originalIDs == appState.workspace.folders.map(\.id),
+              cancel: { folderReorder = nil }))
           }
           .frame(maxWidth: .infinity)
           .frame(maxHeight: folderNavigatorMaxHeight)
@@ -1720,9 +2437,6 @@
           }
           .buttonStyle(.plain)
           .accessibilityLabel("New folder")
-          .onDrop(of: [FolderDragPayload.folderType], isTargeted: nil) { providers, _ in
-            handleFolderDrop(providers, beforeFolderID: nil)
-          }
 
           Divider()
             .frame(height: 20)
@@ -1750,6 +2464,10 @@
               : "\(appState.trashedNotes.count) notes"
           )
         }
+        .animation(
+          motion.allowsSpatialMotion(for: unfiledInteractionSource) ? folderMorphAnimation : nil,
+          value: isUnfiledCompact
+        )
       }
       .animation(folderMorphAnimation, value: isCreatingFolder)
       .onChange(of: draggedSource) { oldValue, newValue in
@@ -1768,7 +2486,12 @@
         else { return }
         onDelete(folder)
       }
+      .onChange(of: appState.workspace.folders.map(\.id)) { _, ids in
+        if let folderReorder, folderReorder.originalIDs != ids { self.folderReorder = nil }
+      }
+      .onDisappear { folderReorder = nil }
       .onExitCommand {
+        folderReorder = nil
         cancelFolderEditing()
       }
       .onKeyPress(phases: .down) { press in
@@ -1795,7 +2518,8 @@
             isEmpty: unfiledNotes.isEmpty,
             isDropTarget: isNoteDropTarget(.unfiled),
             isFocused: focusedRow == .unfiled,
-            showsName: !isUnfiledCompact
+            showsName: !isUnfiledCompact,
+            revealsName: true
           )
         }
         .buttonStyle(.plain)
@@ -1815,25 +2539,39 @@
           setUnfiledCompact(!isUnfiledCompact)
         }
 
-        if showsUnfiledDisclosure {
-          Button {
-            setUnfiledCompact(!isUnfiledCompact)
-          } label: {
-            Image(systemName: isUnfiledCompact ? "chevron.right" : "chevron.left")
-              .font(.caption2)
-              .foregroundStyle(.secondary)
-              .frame(width: 28, height: 24)
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel(
-            isUnfiledCompact ? "Expand Unfiled" : "Collapse Unfiled"
-          )
+        Button {
+          let isPointer = NSApp.currentEvent.map {
+            [.leftMouseDown, .leftMouseUp].contains($0.type)
+          } ?? false
+          setUnfiledCompact(!isUnfiledCompact, source: isPointer ? .pointer : .keyboard)
+        } label: {
+          Image(systemName: "chevron.right")
+            .rotationEffect(.degrees(isUnfiledCompact ? 0 : 180))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .frame(width: 28, height: 24)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+          isUnfiledCompact ? "Expand Unfiled" : "Collapse Unfiled"
+        )
+        .focusable()
+        .focused($isUnfiledDisclosureFocused)
+        .onKeyPress(keys: [.return, .space], phases: .down) { _ in
+          setUnfiledCompact(!isUnfiledCompact)
+          return .handled
+        }
+        .opacity(showsUnfiledDisclosure ? 1 : 0)
+        .frame(width: showsUnfiledDisclosure ? 28 : 0, alignment: .leading)
+        .clipped()
+        .allowsHitTesting(showsUnfiledDisclosure)
+        .accessibilityHidden(!showsUnfiledDisclosure)
       }
       .fixedSize(horizontal: true, vertical: false)
       .onHover { isUnfiledHovered = $0 }
       .contentShape(Rectangle())
+      .background(nativeNoteDropAnchor(.unfiled))
       .onDrop(
         of: [FolderDragPayload.noteType],
         delegate: noteDropDelegate(.unfiled)
@@ -1867,15 +2605,35 @@
         .focusable()
         .focused($focusedRow, equals: .folder(folder.id))
         .focusEffectDisabled()
-        .onDrag { FolderDragPayload.folderProvider(folderID: folder.id) }
-        .onDrop(
-          of: [FolderDragPayload.noteType],
-          delegate: noteDropDelegate(.folder(folder.id))
-        )
-        .onDrop(of: [FolderDragPayload.folderType], isTargeted: nil) { providers, _ in
-          handleFolderDrop(providers, beforeFolderID: folder.id)
-        }
+        .background(nativeNoteDropAnchor(.folder(folder.id)))
+        .modifier(ReorderDropTarget(
+          destinationID: folder.id, type: FolderDragPayload.folderType,
+          interaction: $folderReorder,
+          session: $dragSession,
+          currentIDs: { appState.workspace.folders.map(\.id) },
+          currentPinnedIDs: { [] },
+          accepts: { true },
+          finish: {},
+          move: { id, destination in try? appState.reorderFolder(id: id, to: destination) },
+          noteDrop: noteDropDelegate(.folder(folder.id))
+        ))
+        .modifier(ReorderDragSource(begin: {
+          let interaction = ReorderInteraction(sourceID: folder.id,
+            originalIDs: appState.workspace.folders.map(\.id))
+          let session = ReorderDropSession(folder:
+            .init(folderID: folder.id, sessionID: interaction.sessionID))
+          dragSession?.cancel()
+          dragSession = session
+          folderReorder = interaction
+          return (FolderDragPayload.folderProvider(folderID: folder.id, sessionID: interaction.sessionID), nil, { operation in
+            session.end(operation: operation)
+            guard folderReorder?.sessionID == interaction.sessionID else { return }
+            folderReorder = nil
+          })
+        }))
         .contextMenu {
+          Button("Move Left", systemImage: "arrow.left") { moveFolder(folder.id, offset: -1) }
+          Button("Move Right", systemImage: "arrow.right") { moveFolder(folder.id, offset: 1) }
           Button("Rename", systemImage: "pencil") {
             _ = beginRename(folderID: folder.id)
           }
@@ -1971,17 +2729,27 @@
       isEmpty: Bool,
       isDropTarget: Bool = false,
       isFocused: Bool = false,
-      showsName: Bool = true
+      showsName: Bool = true,
+      revealsName: Bool = false
     ) -> some View {
       HStack(spacing: 7) {
         Image(systemName: systemImage)
           .frame(width: 18)
-        if showsName {
+        if revealsName {
+          HStack(spacing: 0) {
+            Text(name)
+              .lineLimit(1)
+              .fixedSize()
+              .opacity(showsName ? 1 : 0)
+              .frame(width: showsName ? nil : 0, alignment: .leading)
+              .clipped()
+              .padding(.trailing, showsName ? 7 : 0)
+            Spacer(minLength: showsName ? 4 : 2)
+          }
+        } else {
           Text(name)
             .lineLimit(1)
           Spacer(minLength: 4)
-        } else {
-          Spacer(minLength: 2)
         }
         Text(count, format: .number)
           .font(.caption.monospacedDigit())
@@ -2027,6 +2795,37 @@
       )
     }
 
+    @ViewBuilder
+    private func nativeNoteDropAnchor(_ target: NoteDropTarget) -> some View {
+      if let menuWindowDrop {
+        MenuWindowFolderDropAnchor(
+          coordinator: menuWindowDrop,
+          canAccept: { data in
+            guard let source = FolderDragPayload.noteValue(from: data) else { return false }
+            return canHighlightNoteDrop(
+              expectedSource: source,
+              targetFolderID: target.folderID
+            )
+          },
+          perform: { data in
+            guard let source = FolderDragPayload.noteValue(from: data) else { return false }
+            return handleNoteDrop(
+              data,
+              targetFolderID: target.folderID,
+              expectedSource: source
+            )
+          },
+          setHovered: { hovered in
+            if hovered {
+              noteDropTarget = target
+            } else if noteDropTarget == target {
+              noteDropTarget = nil
+            }
+          }
+        )
+      }
+    }
+
     private func isNoteDropTarget(_ target: NoteDropTarget) -> Bool {
       guard let draggedSource else { return false }
       return noteDropTarget == target
@@ -2040,7 +2839,8 @@
       expectedSource: NoteDropSource,
       targetFolderID: UUID?
     ) -> Bool {
-      guard draggedSource == expectedSource else { return false }
+      guard draggedSource == expectedSource, dragSession?.id == expectedSource.dragSessionID,
+        dragSession?.canAcceptDrop == true else { return false }
       return NoteDropPresentation.isValidTarget(
         draggedSource: expectedSource,
         targetFolderID: targetFolderID,
@@ -2065,9 +2865,14 @@
 
     private var showsUnfiledDisclosure: Bool {
       !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled
+        || isUnfiledDisclosureFocused
     }
 
-    private func setUnfiledCompact(_ compact: Bool) {
+    private func setUnfiledCompact(
+      _ compact: Bool,
+      source: AppInteractionSource = .keyboard
+    ) {
+      unfiledInteractionSource = source
       appState.updatePreferences { $0.isUnfiledCompact = compact }
     }
 
@@ -2171,41 +2976,40 @@
       expectedSource: NoteDropSource
     ) -> Bool {
       noteDropTarget = nil
-      guard draggedSource == expectedSource,
-        FolderDragPayload.noteSource(from: providers) == expectedSource,
-        let provider = providers.first(where: {
-          $0.registeredTypeIdentifiers.contains(FolderDragPayload.noteType.identifier)
-        })
-      else {
-        if draggedSource == expectedSource { draggedSource = nil }
-        return false
+      defer { if draggedSource == expectedSource { draggedSource = nil } }
+      guard draggedSource == expectedSource, let dragSession,
+        dragSession.id == expectedSource.dragSessionID
+      else { return false }
+      let capturedScope = activeFolderID
+      return dragSession.acceptNoteTransfer(from: providers, source: expectedSource,
+        targetFolderID: targetFolderID,
+        currentSourceNotes: { appState.visibleNotes(in: expectedSource.sourceFolderID) },
+        validTargetFolderIDs: { Set(appState.workspace.folders.map(\.id)) }
+      ) { source, target in
+        appState.moveNote(source.noteID, fromFolderID: source.sourceFolderID,
+          toFolderID: target, activeFolderID: capturedScope)
+      } != nil
+    }
+
+    private func handleNoteDrop(
+      _ data: Data,
+      targetFolderID: UUID?,
+      expectedSource: NoteDropSource
+    ) -> Bool {
+      noteDropTarget = nil
+      defer { if draggedSource == expectedSource { draggedSource = nil } }
+      guard draggedSource == expectedSource, let dragSession,
+        dragSession.id == expectedSource.dragSessionID
+      else { return false }
+      let capturedScope = activeFolderID
+      return dragSession.acceptNoteTransfer(data: data, source: expectedSource,
+        targetFolderID: targetFolderID,
+        currentSourceNotes: { appState.visibleNotes(in: expectedSource.sourceFolderID) },
+        validTargetFolderIDs: { Set(appState.workspace.folders.map(\.id)) }
+      ) { source, target in
+        appState.moveNote(source.noteID, fromFolderID: source.sourceFolderID,
+          toFolderID: target, activeFolderID: capturedScope)
       }
-      provider.loadDataRepresentation(forTypeIdentifier: FolderDragPayload.noteType.identifier) {
-        data, _ in
-        Task { @MainActor in
-          defer {
-            if self.draggedSource == expectedSource { self.draggedSource = nil }
-            self.noteDropTarget = nil
-          }
-          guard self.draggedSource == expectedSource else { return }
-          guard let data, let payload = FolderDragPayload.noteValue(from: data) else { return }
-          guard payload == expectedSource else { return }
-          guard targetFolderID == nil || appState.workspace.folders.contains(where: {
-            $0.id == targetFolderID
-          }) else { return }
-          guard let note = appState.workspace.notes.first(where: { $0.id == payload.noteID }),
-            note.folderID == payload.sourceFolderID,
-            note.folderID != targetFolderID
-          else { return }
-          _ = appState.moveNote(
-            payload.noteID,
-            fromFolderID: payload.sourceFolderID,
-            toFolderID: targetFolderID,
-            activeFolderID: activeFolderID
-          )
-        }
-      }
-      return true
     }
 
     private struct NoteDropDelegate: DropDelegate {
@@ -2217,10 +3021,7 @@
 
       private func matchingSource(_ info: DropInfo) -> NoteDropSource? {
         guard let expectedSource = draggedSource,
-          let providerSource = FolderDragPayload.noteSource(
-            from: info.itemProviders(for: [FolderDragPayload.noteType])
-          ),
-          providerSource == expectedSource,
+          info.hasItemsConforming(to: [FolderDragPayload.noteType]),
           canAccept(expectedSource, target.folderID)
         else { return nil }
         return expectedSource
@@ -2248,11 +3049,7 @@
       }
 
       func performDrop(info: DropInfo) -> Bool {
-        let providerSource = FolderDragPayload.noteSource(
-          from: info.itemProviders(for: [FolderDragPayload.noteType])
-        )
-        guard let expectedSource = draggedSource,
-          providerSource == expectedSource
+        guard let expectedSource = matchingSource(info)
         else {
           if dropTarget == target { dropTarget = nil }
           return false
@@ -2273,36 +3070,12 @@
       }
     }
 
-    private func handleFolderDrop(
-      _ providers: [NSItemProvider],
-      beforeFolderID targetFolderID: UUID?
-    ) -> Bool {
-      guard let provider = providers.first(where: {
-        $0.registeredTypeIdentifiers.contains(FolderDragPayload.folderType.identifier)
-      }) else { return false }
-      provider.loadDataRepresentation(forTypeIdentifier: FolderDragPayload.folderType.identifier) {
-        data, _ in
-        guard let data, let sourceFolderID = FolderDragPayload.folderID(from: data) else {
-          return
-        }
-        Task { @MainActor in
-          guard let sourceIndex = appState.workspace.folders.firstIndex(where: { $0.id == sourceFolderID })
-          else { return }
-          let destination: Int
-          if let targetFolderID,
-            let targetIndex = appState.workspace.folders.firstIndex(where: { $0.id == targetFolderID })
-          {
-            destination = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
-          } else if targetFolderID == nil {
-            destination = appState.workspace.folders.count - 1
-          } else {
-            return
-          }
-          try? appState.reorderFolder(id: sourceFolderID, to: destination)
-        }
-      }
-      return true
+    private func moveFolder(_ id: UUID, offset: Int) {
+      guard let index = appState.workspace.folders.firstIndex(where: { $0.id == id }) else { return }
+      try? appState.reorderFolder(id: id,
+        to: min(max(index + offset, 0), appState.workspace.folders.count - 1))
     }
+
   }
 
   struct TrashPanelOverlay: View {
@@ -2422,22 +3195,113 @@
     }
   }
 
+  struct DictationShortcutHelpRow: View {
+    static let smartCaptureHelp =
+      "Say a specific note title to help Fleck choose. "
+      + "If it cannot find a clear match, it saves to Inbox."
+
+    let mode: DictationShortcutHelpMode
+    let presentation: DictationModifierSettingsPresentation
+    let destinationCopy: String
+    let onRecovery: () -> Void
+    let onDismissGuide: () -> Void
+    @State private var showsSmartCaptureHelp = false
+
+    var body: some View {
+      HStack(spacing: 8) {
+        Image(systemName: mode == .activeDestination
+          ? "scope"
+          : presentation.recoveryAction == nil
+            ? "keyboard"
+            : "keyboard.badge.ellipsis")
+          .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 1) {
+          if mode != .activeDestination {
+            Text(presentation.statusCopy)
+              .font(.caption)
+            if let detail = presentation.detailCopy {
+              Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+          }
+          if mode != .recovery {
+            HStack(spacing: 4) {
+              Text(destinationCopy)
+              Button {
+                showsSmartCaptureHelp.toggle()
+              } label: {
+                Image(systemName: "questionmark.circle")
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("About Smart Capture")
+              .popover(isPresented: $showsSmartCaptureHelp, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 6) {
+                  Text("Smart Capture")
+                    .font(.headline)
+                  Text(Self.smartCaptureHelp)
+                  Text("Example: “Travel plans.”")
+                    .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+                .frame(width: 280, alignment: .leading)
+                .padding(12)
+              }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+          }
+        }
+        Spacer(minLength: 8)
+        if mode.canDismissGuide {
+          Button(action: onDismissGuide) {
+            Image(systemName: "xmark")
+          }
+          .buttonStyle(.plain)
+          .help("Dismiss shortcut guide")
+          .accessibilityLabel("Dismiss shortcut guide")
+        } else if mode == .recovery, let title = presentation.recoveryButtonTitle {
+          Button(title, action: onRecovery)
+            .accessibilityLabel(title)
+        }
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(.quaternary.opacity(0.35))
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel(
+        mode == .activeDestination
+          ? "Dictation destination. \(destinationCopy)"
+          : presentation.capsuleAccessibilityLabel
+      )
+    }
+  }
+
   private struct FormattingBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var appState: AppState
     @ObservedObject var commands: EditorCommands
     @ObservedObject var dictationRuntime: DictationRuntime
+    let isPinned: Bool
     let isEditorVisible: Bool
     let isTitleFocused: Bool
     let onDelete: () -> Void
+    @State private var fontPickerTarget: FontPickerTarget?
+    @State private var isFontPickerPresented = false
     @State private var fontSizeText = ""
     @FocusState private var isFontSizeFocused: Bool
+    @State private var isFontSizePickerPresented = false
+    @State private var fontSizePickerNoteID: UUID?
     @State private var isForegroundColorPickerPresented = false
     @State private var isBackgroundColorPickerPresented = false
 
     var body: some View {
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 8) {
+      GeometryReader { proxy in
+        let presentation = FormattingToolbarLayout.presentation(
+          availableWidth: proxy.size.width
+        )
+        HStack(spacing: presentation == .full ? 8 : 0) {
         Menu {
           Button("Cancel Dictation", role: .destructive) {
             guard isEditorVisible else { return }
@@ -2461,7 +3325,9 @@
           Task { await dictationRuntime.cancel() }
         }
         .help(dictationRuntime.microphoneHelp)
-        Divider().frame(height: 15)
+        if presentation == .full {
+          Divider().frame(height: 15)
+        }
         Button {
           guard isEditorVisible else { return }
           commands.undo()
@@ -2469,7 +3335,7 @@
           ToolbarIconLabel(systemImage: "arrow.uturn.backward")
         }
         .accessibilityLabel("Undo")
-          .keyboardShortcut("z", modifiers: .command)
+        .keyboardShortcut("z", modifiers: .command)
         Button {
           guard isEditorVisible else { return }
           commands.redo()
@@ -2477,8 +3343,10 @@
           ToolbarIconLabel(systemImage: "arrow.uturn.forward")
         }
         .accessibilityLabel("Redo")
-          .keyboardShortcut("z", modifiers: [.command, .shift])
-        Divider().frame(height: 15)
+        .keyboardShortcut("z", modifiers: [.command, .shift])
+        if presentation == .full {
+          Divider().frame(height: 15)
+        }
         Button {
           guard isEditorVisible else { return }
           commands.toggleBold()
@@ -2486,7 +3354,7 @@
           ToolbarIconLabel(systemImage: "bold", isActive: commands.isBold)
         }
         .accessibilityLabel("Bold")
-          .keyboardShortcut("b", modifiers: .command)
+        .keyboardShortcut("b", modifiers: .command)
           .accessibilityValue(commands.isBold ? "On" : "Off")
         Button {
           guard isEditorVisible else { return }
@@ -2495,7 +3363,7 @@
           ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
         }
         .accessibilityLabel("Italic")
-          .keyboardShortcut("i", modifiers: .command)
+        .keyboardShortcut("i", modifiers: .command)
           .accessibilityValue(commands.isItalic ? "On" : "Off")
         Button {
           guard isEditorVisible else { return }
@@ -2504,51 +3372,55 @@
           ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
         }
         .accessibilityLabel("Underline")
-          .keyboardShortcut("u", modifiers: .command)
-          .accessibilityValue(commands.isUnderlined ? "On" : "Off")
+        .keyboardShortcut("u", modifiers: .command)
+        .accessibilityValue(commands.isUnderlined ? "On" : "Off")
+        if presentation == .full {
+          Button {
+            guard isEditorVisible else { return }
+            commands.toggleStrikethrough()
+          } label: {
+            ToolbarIconLabel(systemImage: "strikethrough")
+          }
+          .accessibilityLabel("Strikethrough")
+        }
         Button {
-          guard isEditorVisible else { return }
-          commands.toggleStrikethrough()
+          guard isEditorVisible, let note = appState.selectedNote else { return }
+          fontPickerTarget = FontPickerTarget(note: note, isTitle: isFontTitleTarget, commands: commands)
+          isFontPickerPresented = fontPickerTarget != nil
         } label: {
-          ToolbarIconLabel(systemImage: "strikethrough")
-        }
-        .accessibilityLabel("Strikethrough")
-        Menu {
-          ForEach(NSFontManager.shared.availableFontFamilies.sorted(), id: \.self) { family in
-            Button {
-              guard isEditorVisible else { return }
-              applyFontFamily(family)
-            } label: {
-              HStack {
-                Text(family)
-                if !isFontFamilyMixed, currentFontFamily == family {
-                  Image(systemName: "checkmark")
-                }
-              }
-            }
+          HStack(spacing: 5) {
+            Text(fontFamilyDisplay).lineLimit(1).truncationMode(.tail)
+            Image(systemName: "chevron.down").font(.system(size: 8))
           }
-        } label: {
-          ToolbarIconLabel(systemImage: "textformat")
+          .frame(width: presentation == .full ? 112 : 64)
         }
-        .help("Font")
+        .help("Font: \(fontFamilyDisplay)")
         .accessibilityLabel("Font")
-        .accessibilityValue(
-          isFontFamilyMixed ? "Mixed" : currentFontFamily ?? "Automatic"
-        )
-        TextField("Font size", text: $fontSizeText)
-          .textFieldStyle(.roundedBorder)
-          .frame(width: 48)
-          .focused($isFontSizeFocused)
-          .onAppear(perform: syncFontSizeText)
-          .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
-          .onChange(of: commands.isFontSizeMixed) { _, _ in syncFontSizeText() }
-          .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
-            if wasFocused && !isFocused { applyFontSizeText() }
+        .accessibilityValue(fontFamilyDisplay)
+        .popover(isPresented: $isFontPickerPresented, arrowEdge: .bottom) {
+          if let target = fontPickerTarget {
+            FontFamilyPicker(
+              currentFamily: target.isTitle ? target.note.titleFontFamily ?? appState.preferences.fontFamily : commands.currentFontFamily,
+              isMixed: target.isTitle ? false : commands.isFontFamilyMixed,
+              targetLabel: target.label,
+              onCommit: { family in
+                _ = target.apply(family, note: appState.selectedNote, isEditorVisible: isEditorVisible, commands: commands,
+                  titleMutation: { appState.setTitleFontFamily($0, noteID: target.note.id, undoManager: target.undoManager) })
+                isFontPickerPresented = false
+              },
+              onCancel: { isFontPickerPresented = false }
+            )
+            .frame(width: 280, height: 320)
           }
-          .onSubmit { applyFontSizeText() }
-          .accessibilityLabel("Font size")
-          .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
-          .accessibilityHint("Enter a size from 1 through 512 points.")
+        }
+        .onChange(of: isFontPickerPresented) { _, presented in
+          if !presented { fontPickerTarget = nil }
+        }
+        .onChange(of: appState.selectedNote) { _, _ in dismissInvalidFontPicker() }
+        .onChange(of: isEditorVisible) { _, _ in dismissInvalidFontPicker() }
+        if presentation == .full {
+          fontSizeField()
+        }
         Button {
           guard isEditorVisible else { return }
           isForegroundColorPickerPresented = true
@@ -2625,58 +3497,133 @@
             onCancel: { isBackgroundColorPickerPresented = false }
           )
         }
-        Menu {
-          Button("Disc (•)") {
+        if presentation == .full {
+          Menu {
+            Button("Disc (•)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.bullet(.disc))
+            }
+            Button("Circle (◦)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.bullet(.circle))
+            }
+            Button("Square (▪)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.bullet(.square))
+            }
+            Button("Dash (–)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.bullet(.dash))
+            }
+          } label: {
+            ToolbarIconLabel(systemImage: "list.bullet")
+          } primaryAction: {
             guard isEditorVisible else { return }
-            commands.applyList(.bullet(.disc))
+            commands.applyAutomaticList(.bullets)
           }
-          Button("Circle (◦)") {
+          .accessibilityLabel("Bullets")
+          Menu {
+            Button("Decimal (1.)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.number(.decimal))
+            }
+            Button("Alphabetic (a.)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.number(.alphabetic))
+            }
+            Button("Roman (i.)") {
+              guard isEditorVisible else { return }
+              commands.applyList(.number(.roman))
+            }
+          } label: {
+            ToolbarIconLabel(systemImage: "list.number")
+          } primaryAction: {
             guard isEditorVisible else { return }
-            commands.applyList(.bullet(.circle))
+            commands.applyAutomaticList(.numbers)
           }
-          Button("Square (▪)") {
+          .accessibilityLabel("Numbers")
+          Button {
             guard isEditorVisible else { return }
-            commands.applyList(.bullet(.square))
+            commands.applyList(.checklist)
+          } label: {
+            ToolbarIconLabel(systemImage: "checklist")
           }
-          Button("Dash (–)") {
-            guard isEditorVisible else { return }
-            commands.applyList(.bullet(.dash))
+          .accessibilityLabel("Checklist")
+        } else {
+          Menu {
+            Button("Font Size…") {
+              presentFontSizePicker()
+            }
+            Divider()
+            Button("Strikethrough") {
+              guard isEditorVisible else { return }
+              commands.toggleStrikethrough()
+            }
+            Divider()
+            Menu("Bullets") {
+              Button("Bulleted List") {
+                guard isEditorVisible else { return }
+                commands.applyAutomaticList(.bullets)
+              }
+              Divider()
+              Button("Disc (•)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.bullet(.disc))
+              }
+              Button("Circle (◦)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.bullet(.circle))
+              }
+              Button("Square (▪)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.bullet(.square))
+              }
+              Button("Dash (–)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.bullet(.dash))
+              }
+            }
+            Menu("Numbers") {
+              Button("Numbered List") {
+                guard isEditorVisible else { return }
+                commands.applyAutomaticList(.numbers)
+              }
+              Divider()
+              Button("Decimal (1.)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.number(.decimal))
+              }
+              Button("Alphabetic (a.)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.number(.alphabetic))
+              }
+              Button("Roman (i.)") {
+                guard isEditorVisible else { return }
+                commands.applyList(.number(.roman))
+              }
+            }
+            Button("Checklist") {
+              guard isEditorVisible else { return }
+              commands.applyList(.checklist)
+            }
+          } label: {
+            ToolbarIconLabel(systemImage: "ellipsis.circle")
           }
-        } label: {
-          ToolbarIconLabel(systemImage: "list.bullet")
-        } primaryAction: {
-          guard isEditorVisible else { return }
-          commands.applyAutomaticList(.bullets)
+          .accessibilityLabel("More formatting")
+          .popover(isPresented: $isFontSizePickerPresented, arrowEdge: .bottom) {
+            if let targetNoteID = fontSizePickerNoteID {
+              HStack(spacing: 8) {
+                fontSizeField(targetNoteID: targetNoteID)
+                Button("Done") {
+                  applyFontSizeText(targetNoteID: targetNoteID)
+                  isFontSizePickerPresented = false
+                }
+              }
+              .padding(12)
+            }
+          }
         }
-        .accessibilityLabel("Bullets")
-        Menu {
-          Button("Decimal (1.)") {
-            guard isEditorVisible else { return }
-            commands.applyList(.number(.decimal))
-          }
-          Button("Alphabetic (a.)") {
-            guard isEditorVisible else { return }
-            commands.applyList(.number(.alphabetic))
-          }
-          Button("Roman (i.)") {
-            guard isEditorVisible else { return }
-            commands.applyList(.number(.roman))
-          }
-        } label: {
-          ToolbarIconLabel(systemImage: "list.number")
-        } primaryAction: {
-          guard isEditorVisible else { return }
-          commands.applyAutomaticList(.numbers)
-        }
-        .accessibilityLabel("Numbers")
-        Button {
-          guard isEditorVisible else { return }
-          commands.applyList(.checklist)
-        } label: {
-          ToolbarIconLabel(systemImage: "checklist")
-        }
-        .accessibilityLabel("Checklist")
-        Spacer()
+        Spacer(minLength: presentation == .full ? nil : 0)
         Button(role: .destructive) {
           guard isEditorVisible else { return }
           onDelete()
@@ -2690,16 +3637,27 @@
         .animation(motion.quick, value: commands.isBold)
         .animation(motion.quick, value: commands.isItalic)
         .animation(motion.quick, value: commands.isUnderlined)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, presentation == .full ? 16 : 4)
         .padding(.vertical, 9)
       }
+      .frame(height: 44)
       .frame(maxWidth: .infinity)
-      .modifier(FormattingBarSurface())
+      .modifier(FormattingBarSurface(isPinned: isPinned))
       .padding(.horizontal, 10)
       .padding(.top, 8)
       .disabled(!isEditorVisible)
+      .accessibilityElement(children: .contain)
       .accessibilityLabel("Editor toolbar")
       .accessibilityHidden(!isEditorVisible)
+      .onChange(of: appState.selectedNote) { _, _ in
+        dismissInvalidFontSizePicker()
+      }
+      .onChange(of: isEditorVisible) { _, _ in
+        dismissInvalidFontSizePicker()
+      }
+      .onChange(of: isFontSizePickerPresented) { _, presented in
+        if !presented { fontSizePickerNoteID = nil }
+      }
     }
 
     private var motion: AppMotion {
@@ -2711,24 +3669,47 @@
       return String(format: "%.2f", size).replacingOccurrences(of: #"\.00$"#, with: "", options: .regularExpression)
     }
 
+    private func fontSizeField(targetNoteID: UUID? = nil) -> some View {
+      TextField("Font size", text: $fontSizeText)
+        .textFieldStyle(.roundedBorder)
+        .frame(width: 48)
+        .focused($isFontSizeFocused)
+        .onAppear(perform: syncFontSizeText)
+        .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
+        .onChange(of: commands.isFontSizeMixed) { _, _ in syncFontSizeText() }
+        .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
+          if wasFocused && !isFocused { applyFontSizeText(targetNoteID: targetNoteID) }
+        }
+        .onSubmit { applyFontSizeText(targetNoteID: targetNoteID) }
+        .accessibilityLabel("Font size")
+        .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
+        .accessibilityHint("Enter a size from 1 through 512 points.")
+    }
+
+    private var isFontTitleTarget: Bool {
+      commands.isTitleEditing || isTitleFocused
+    }
+
     private var currentFontFamily: String? {
-      if isTitleFocused {
+      if isFontTitleTarget {
         return appState.selectedNote?.titleFontFamily ?? appState.preferences.fontFamily
       }
       return commands.currentFontFamily
     }
 
     private var isFontFamilyMixed: Bool {
-      isTitleFocused ? false : commands.isFontFamilyMixed
+      isFontTitleTarget ? false : commands.isFontFamilyMixed
     }
 
-    private func applyFontFamily(_ family: String) {
-      routeFontFamilyAction(
-        family: family,
-        isTitleFocused: isTitleFocused,
-        titleMutation: { appState.setSelectedTitleFontFamily($0) },
-        bodyMutation: { commands.applyFontFamily($0) }
-      )
+    private var fontFamilyDisplay: String {
+      isFontFamilyMixed ? "Mixed fonts" : FontFamilyPickerController.displayName(currentFontFamily ?? ".AppleSystemUIFont")
+    }
+
+    private func dismissInvalidFontPicker() {
+      guard let target = fontPickerTarget else { return }
+      if !target.isValid(note: appState.selectedNote, isEditorVisible: isEditorVisible, commands: commands) {
+        isFontPickerPresented = false
+      }
     }
 
     private func syncFontSizeText() {
@@ -2736,8 +3717,25 @@
       fontSizeText = fontSizeDisplay
     }
 
-    private func applyFontSizeText() {
-      guard isEditorVisible else { return }
+    private func presentFontSizePicker() {
+      guard isEditorVisible, let noteID = appState.selectedNote?.id else { return }
+      fontSizePickerNoteID = noteID
+      syncFontSizeText()
+      isFontSizePickerPresented = true
+    }
+
+    private func dismissInvalidFontSizePicker() {
+      guard isFontSizePickerPresented,
+        !isEditorVisible || fontSizePickerNoteID != appState.selectedNote?.id
+      else { return }
+      isFontSizeFocused = false
+      isFontSizePickerPresented = false
+    }
+
+    private func applyFontSizeText(targetNoteID: UUID? = nil) {
+      guard isEditorVisible,
+        targetNoteID == nil || targetNoteID == appState.selectedNote?.id
+      else { return }
       if let size = FontSizeSubmission.requestedSize(
         for: fontSizeText,
         currentSize: commands.currentFontSize,
@@ -2759,23 +3757,119 @@
     }
   }
 
-  private struct FormattingBarSurface: ViewModifier {
+  private struct PinnedNavigationChromeSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
     func body(content: Content) -> some View {
-      if #available(macOS 26, *) {
-        content.glassEffect(
-          Glass.regular.tint(Color.black.opacity(0.18)),
-          in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-      } else {
-        content
-          .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-              .fill(.ultraThinMaterial)
-              .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                  .fill(Color.black.opacity(0.10))
-              }
+      switch materialPolicy {
+      case .liquidGlass:
+        if #available(macOS 26, *) {
+          content.background {
+            Rectangle()
+              .fill(.clear)
+              .glassEffect(.regular, in: Rectangle())
+              .allowsHitTesting(false)
           }
+        } else {
+          content.background(.ultraThinMaterial)
+        }
+      case .legacyMaterial:
+        content.background(.ultraThinMaterial)
+      case .opaque:
+        content.background(Color(nsColor: .windowBackgroundColor))
+      }
+    }
+
+    private var materialPolicy: PinnedChromeMaterialPolicy {
+      PinnedChromeMaterialPolicy.resolve(
+        supportsLiquidGlass: supportsLiquidGlass,
+        reduceTransparency: reduceTransparency,
+        increasedContrast: colorSchemeContrast == .increased
+      )
+    }
+
+    private var supportsLiquidGlass: Bool {
+      if #available(macOS 26, *) {
+        true
+      } else {
+        false
+      }
+    }
+  }
+
+  private struct FormattingBarSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    let isPinned: Bool
+
+    func body(content: Content) -> some View {
+      if isPinned && (reduceTransparency || colorSchemeContrast == .increased) {
+        content.background {
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color(nsColor: .windowBackgroundColor))
+        }
+      } else {
+        if #available(macOS 26, *) {
+          content.glassEffect(
+            Glass.regular.tint(Color.black.opacity(0.18)),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+          )
+        } else {
+          content
+            .background {
+              RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                  RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.black.opacity(0.10))
+                }
+            }
+        }
+      }
+    }
+  }
+
+  private struct PinnedWritingSurface: NSViewRepresentable {
+    func makeNSView(context: Context) -> AdaptiveOpaqueSurfaceView {
+      AdaptiveOpaqueSurfaceView()
+    }
+
+    func updateNSView(_ nsView: AdaptiveOpaqueSurfaceView, context: Context) {
+      nsView.updateSurfaceColor()
+    }
+  }
+
+  final class AdaptiveOpaqueSurfaceView: NSView {
+    override var isOpaque: Bool { true }
+    override var wantsUpdateLayer: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+      super.init(frame: frameRect)
+      identifier = NSUserInterfaceItemIdentifier("pinnedWritingSurface")
+      wantsLayer = true
+      updateSurfaceColor()
+    }
+
+    required init?(coder: NSCoder) {
+      super.init(coder: coder)
+      identifier = NSUserInterfaceItemIdentifier("pinnedWritingSurface")
+      wantsLayer = true
+      updateSurfaceColor()
+    }
+
+    override func updateLayer() {
+      updateSurfaceColor()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+      super.viewDidChangeEffectiveAppearance()
+      needsDisplay = true
+    }
+
+    func updateSurfaceColor() {
+      effectiveAppearance.performAsCurrentDrawingAppearance {
+        layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
       }
     }
   }
@@ -2821,64 +3915,871 @@
     }
   }
 
+  // Frames never follow presentation offsets: every slot is measured from the
+  // original row, so reversing direction cannot chase an animated hit region.
+  struct FluidTabReorder: Equatable {
+    var interaction: ReorderInteraction
+    let frames: [UUID: CGRect]
+    let grabOffset: CGFloat
+    let spacing: CGFloat = 6
+    private(set) var destination: Int
+
+    init?(interaction: ReorderInteraction, frames: [UUID: CGRect], pointerX: CGFloat) {
+      guard let source = frames[interaction.sourceID], source.width > 0,
+        interaction.originalIDs.allSatisfy({ frames[$0] != nil }),
+        let index = interaction.originalIDs.firstIndex(of: interaction.sourceID)
+      else { return nil }
+      self.interaction = interaction
+      self.frames = frames
+      grabOffset = pointerX - source.minX
+      destination = index
+    }
+
+    private var remaining: [UUID] { interaction.originalIDs.filter { $0 != interaction.sourceID } }
+    private var sourceFrame: CGRect { frames[interaction.sourceID]! }
+    private func slotX(_ index: Int) -> CGFloat {
+      frames[interaction.originalIDs[0]]!.minX
+        + remaining.prefix(index).reduce(0) { $0 + frames[$1]!.width + spacing }
+    }
+    var slotFrame: CGRect {
+      CGRect(x: slotX(destination), y: sourceFrame.minY, width: sourceFrame.width, height: sourceFrame.height)
+    }
+    mutating func update(pointerX: CGFloat) {
+      let pinned = interaction.pinnedIDs.contains(interaction.sourceID)
+      let pinnedCount = remaining.filter { interaction.pinnedIDs.contains($0) }.count
+      let allowed = pinned ? 0...pinnedCount : pinnedCount...remaining.count
+      let left = pointerX - grabOffset
+      destination = allowed.min { abs(slotX($0) - left) < abs(slotX($1) - left) }!
+      interaction.clearTarget()
+      if destination < remaining.count,
+        interaction.pinnedIDs.contains(remaining[destination]) == pinned {
+        interaction.propose(over: remaining[destination], after: false, currentIDs: interaction.originalIDs)
+      } else if destination > 0, interaction.pinnedIDs.contains(remaining[destination - 1]) == pinned {
+        interaction.propose(over: remaining[destination - 1], after: true, currentIDs: interaction.originalIDs)
+      }
+    }
+    func offset(for id: UUID) -> CGFloat {
+      guard id != interaction.sourceID, let original = frames[id], let index = remaining.firstIndex(of: id)
+      else { return 0 }
+      let newX = slotX(index) + (index >= destination ? sourceFrame.width + spacing : 0)
+      return newX - original.minX
+    }
+    func isValid(ids: [UUID], pins: Set<UUID>, frames liveFrames: [UUID: CGRect],
+      backingScaleFactor: CGFloat = 1) -> Bool {
+      let backingPixel = 1 / max(1, backingScaleFactor)
+      return ids == interaction.originalIDs && pins == interaction.pinnedIDs
+        && ids.allSatisfy { id in
+          guard let frozen = frames[id]?.size, let live = liveFrames[id]?.size else { return false }
+          return abs(frozen.width - live.width) <= backingPixel
+            && abs(frozen.height - live.height) <= backingPixel
+        }
+    }
+    static func scrollDelta(pointerX: CGFloat, viewport: ClosedRange<CGFloat>) -> CGFloat {
+      guard viewport.contains(pointerX) else { return 0 }
+      let edge: CGFloat = min(32, (viewport.upperBound - viewport.lowerBound) / 3)
+      if pointerX < viewport.lowerBound + edge { return -10 * (1 - (pointerX - viewport.lowerBound) / edge) }
+      if pointerX > viewport.upperBound - edge { return 10 * (1 - (viewport.upperBound - pointerX) / edge) }
+      return 0
+    }
+  }
+
+  @MainActor final class FluidTabDragController: ObservableObject {
+    @Published private(set) var preview: FluidTabReorder?
+    @Published private(set) var inside = false
+    private(set) var animatesDisplacement = true
+    weak var view: FluidTabDestinationView?
+    private var session: ReorderDropSession?
+    private var currentIDs: (() -> [UUID])?
+    private var currentPins: (() -> Set<UUID>)?
+    private var move: ((UUID, Int) -> Void)?
+    private var finish: (() -> Void)?
+    private var timer: Timer?
+    private var nativePoint: NSPoint?
+    private var viewportSize: NSSize?
+    private var accepted = false
+    private weak var sourceView: ReorderSourceHostingView?
+
+    private var pendingInteraction: ReorderInteraction?
+
+    func prepare(interaction: ReorderInteraction, session: ReorderDropSession,
+      currentIDs: @escaping () -> [UUID], currentPins: @escaping () -> Set<UUID>,
+      move: @escaping (UUID, Int) -> Void, finish: @escaping () -> Void) {
+      cancel()
+      pendingInteraction = interaction
+      self.session = session
+      self.currentIDs = currentIDs
+      self.currentPins = currentPins
+      self.move = move
+      self.finish = finish
+    }
+
+    // Native dragging items already contain the visible tab snapshot here.
+    func began(at pointer: NSPoint) {
+      guard let interaction = pendingInteraction, let view, let window = view.window else { return }
+      let localPointer = view.convert(window.convertPoint(fromScreen: pointer), from: nil)
+      let frames = view.sourceFrames()
+      guard let initial = FluidTabReorder(interaction: interaction, frames: frames, pointerX: localPointer.x)
+      else { cancel(); return }
+      guard let sourceView = view.sourceView(for: interaction.sourceID) else { cancel(); return }
+      viewportSize = view.enclosingScrollView?.contentView.bounds.size
+      preview = initial
+      self.sourceView = sourceView
+      setInside(true)
+      nativePoint = pointer
+    }
+
+    private var valid: Bool {
+      guard let preview, let currentIDs, let currentPins else { return false }
+      return preview.isValid(ids: currentIDs(), pins: currentPins(), frames: view?.sourceFrames() ?? [:],
+        backingScaleFactor: view?.window?.backingScaleFactor ?? 1)
+        && viewportSize == view?.enclosingScrollView?.contentView.bounds.size
+    }
+
+    func moved(to point: NSPoint) {
+      nativePoint = point
+      guard !accepted, preview != nil else { return }
+      guard valid else {
+        cancel()
+        return
+      }
+      guard let view, let window = view.window,
+        let clip = view.enclosingScrollView?.contentView else { return }
+      let windowPoint = window.convertPoint(fromScreen: point)
+      let nextInside = clip.bounds.contains(clip.convert(windowPoint, from: nil))
+      setInside(nextInside)
+      if nextInside {
+        var next = preview
+        next?.update(pointerX: view.convert(windowPoint, from: nil).x)
+        if preview != next { preview = next }
+        startTimer()
+      } else {
+        stopTimer()
+      }
+    }
+
+    func operation(_ sender: any NSDraggingInfo) -> NSDragOperation {
+      guard let view, let window = view.window else { return [] }
+      moved(to: window.convertPoint(toScreen: sender.draggingLocation))
+      let isValid = valid
+      let canAccept = session?.canAcceptDrop == true
+      let sourcePresent = sender.draggingSource != nil
+      let payloadPresent = sender.draggingPasteboard.availableType(
+        from: [.init(FolderDragPayload.noteType.identifier)]
+      ) != nil
+      return isValid && inside && canAccept && sourcePresent && payloadPresent ? .move : []
+    }
+
+    func exited() {
+      setInside(false)
+      stopTimer()
+    }
+
+    func perform(_ sender: any NSDraggingInfo) -> Bool {
+      let requestedOperation = operation(sender)
+      let data = sender.draggingPasteboard.data(
+        forType: .init(FolderDragPayload.noteType.identifier)
+      )
+      guard requestedOperation == .move, let preview, let session, let currentIDs,
+        let currentPins, let move,
+        let data
+      else { return false }
+      let didAccept: Bool
+      if preview.destination == preview.interaction.originalIDs.firstIndex(of: preview.interaction.sourceID) {
+        didAccept = session.acceptDrop(data: data, commit: {})
+      } else {
+        didAccept = session.acceptReorder(data: data, interaction: preview.interaction,
+          currentIDs: currentIDs, currentPinnedIDs: currentPins, move: move)
+      }
+      guard didAccept else { return false }
+      accepted = true
+      stopTimer()
+      return true
+    }
+
+    func ended(sessionID: UUID, operation: NSDragOperation) {
+      guard session?.id == sessionID else { return }
+      stopTimer()
+      reset(animated: !(accepted && operation == .move))
+    }
+    func cancel() {
+      session?.cancel()
+      reset()
+    }
+    private func reset(animated: Bool = true) {
+      stopTimer()
+      sourceView?.closeNativePreview()
+      sourceView?.setDraggingSourceHidden(false)
+      sourceView = nil
+      animatesDisplacement = animated
+      let finish = finish
+      self.finish = nil
+      currentIDs = nil
+      currentPins = nil
+      move = nil
+      viewportSize = nil
+      session = nil
+      pendingInteraction = nil
+      preview = nil
+      inside = false
+      accepted = false
+      nativePoint = nil
+      finish?()
+    }
+    private func setInside(_ value: Bool) {
+      guard inside != value else { return }
+      inside = value
+      sourceView?.setDraggingSourceHidden(value)
+    }
+    private func startTimer() {
+      guard timer == nil else { return }
+      let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+        MainActor.assumeIsolated { self?.tick() }
+      }
+      self.timer = timer
+      RunLoop.main.add(timer, forMode: .common)
+      RunLoop.main.add(timer, forMode: .eventTracking)
+    }
+    private func stopTimer() { timer?.invalidate(); timer = nil }
+    func tick() {
+      guard inside, !accepted, valid, let nativePoint, let view, let window = view.window,
+        let scroll = view.enclosingScrollView, let document = scroll.documentView else {
+        if !valid {
+          cancel()
+        } else {
+          stopTimer()
+        }
+        return
+      }
+      let clip = scroll.contentView
+      let point = clip.convert(window.convertPoint(fromScreen: nativePoint), from: nil)
+      guard clip.bounds.contains(point) else { exited(); return }
+      let delta = FluidTabReorder.scrollDelta(pointerX: point.x, viewport: clip.bounds.minX...clip.bounds.maxX)
+      if delta != 0 {
+        let x = min(max(clip.bounds.minX + delta, 0), max(0, document.bounds.width - clip.bounds.width))
+        // Constraining an NSClipView can leave floating-point rounding residue at an edge.
+        // Treat only that numerical noise as unchanged while preserving real subpixel scrolling.
+        let coordinateMagnitude = max(1, abs(x), abs(clip.bounds.minX))
+        let noiseTolerance = CGFloat.ulpOfOne.squareRoot() * coordinateMagnitude
+        guard abs(x - clip.bounds.minX) > noiseTolerance else { return }
+        clip.scroll(to: NSPoint(x: x, y: clip.bounds.minY))
+        scroll.reflectScrolledClipView(clip)
+        var next = preview
+        next?.update(pointerX: view.convert(window.convertPoint(fromScreen: nativePoint), from: nil).x)
+        if preview != next { preview = next }
+      }
+    }
+  }
+
+  private struct FluidTabStripHost<Content: View>: NSViewRepresentable {
+    @ObservedObject var controller: FluidTabDragController
+    let content: Content
+    init(controller: FluidTabDragController, @ViewBuilder content: () -> Content) {
+      self.controller = controller
+      self.content = content()
+    }
+    func makeNSView(context: Context) -> FluidTabDestinationView {
+      let view = FluidTabDestinationView(rootView: AnyView(EmptyView()))
+      view.sizingOptions = [.intrinsicContentSize]
+      view.registerForDraggedTypes([.init(FolderDragPayload.noteType.identifier)])
+      view.controller = controller
+      controller.view = view
+      return view
+    }
+    func updateNSView(_ view: FluidTabDestinationView, context: Context) {
+      view.rootView = AnyView(content.environment(\.self, context.environment))
+    }
+  }
+
+  final class FluidTabDestinationView: NSHostingView<AnyView> {
+    weak var controller: FluidTabDragController?
+
+    func sourceFrames() -> [UUID: CGRect] {
+      var frames: [UUID: CGRect] = [:]
+      func collect(_ view: NSView) {
+        if let source = view as? ReorderSourceHostingView, let noteID = source.noteID {
+          frames[noteID] = convert(source.bounds, from: source)
+          return
+        }
+        for child in view.subviews { collect(child) }
+      }
+      collect(self)
+      return frames
+    }
+
+    func sourceView(for noteID: UUID) -> ReorderSourceHostingView? {
+      func find(_ view: NSView) -> ReorderSourceHostingView? {
+        if let source = view as? ReorderSourceHostingView, source.noteID == noteID {
+          return source
+        }
+        return view.subviews.lazy.compactMap(find).first
+      }
+      return find(self)
+    }
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+      controller?.operation(sender) ?? []
+    }
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+      controller?.operation(sender) ?? []
+    }
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+      controller?.exited()
+    }
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+      let prepared = controller?.operation(sender) == .move
+      guard prepared else { return false }
+      sender.animatesToDestination = false
+      return true
+    }
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+      controller?.perform(sender) ?? false
+    }
+  }
+
+  private struct ReorderDropTarget: ViewModifier {
+    let destinationID: UUID
+    let type: UTType
+    @Binding var interaction: ReorderInteraction?
+    @Binding var session: ReorderDropSession?
+    let currentIDs: () -> [UUID]
+    let currentPinnedIDs: () -> Set<UUID>
+    let accepts: () -> Bool
+    let finish: () -> Void
+    let move: (UUID, Int) -> Void
+    var noteDrop: (any DropDelegate)? = nil
+    @State private var width: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+      content
+        .padding(.leading, interaction?.targetID == destinationID && interaction?.after == false ? 3 : 0)
+        .padding(.trailing, interaction?.targetID == destinationID && interaction?.after == true ? 3 : 0)
+        .animation(AppMotion(reduceMotion: reduceMotion).spatial, value: interaction)
+        .background(GeometryReader { geometry in
+          Color.clear.onAppear { width = geometry.size.width }
+            .onChange(of: geometry.size.width) { _, value in width = value }
+        })
+        .overlay(alignment: interaction?.after == true ? .trailing : .leading) {
+          if interaction?.targetID == destinationID {
+            Capsule().fill(Color.accentColor).frame(width: 2, height: 22)
+              .offset(x: interaction?.after == true ? 3 : -3)
+              .allowsHitTesting(false)
+              .accessibilityHidden(true)
+          }
+        }
+        .onDrop(of: noteDrop == nil ? [type] : [type, FolderDragPayload.noteType], delegate: TabDropDelegate(
+          destinationID: destinationID, width: width, type: type,
+          interaction: $interaction, session: $session, currentIDs: currentIDs,
+          currentPinnedIDs: currentPinnedIDs,
+          accepts: accepts, finish: finish, move: move, noteDrop: noteDrop
+        ))
+    }
+  }
+
   private struct TabDropDelegate: DropDelegate {
     let destinationID: UUID
-    let activeFolderID: UUID?
-    let currentNotes: () -> [Note]
-    @Binding var draggedSource: NoteDropSource?
-    @Binding var lastDestinationID: UUID?
+    let width: CGFloat
+    let type: UTType
+    @Binding var interaction: ReorderInteraction?
+    @Binding var session: ReorderDropSession?
+    let currentIDs: () -> [UUID]
+    let currentPinnedIDs: () -> Set<UUID>
+    let accepts: () -> Bool
+    let finish: () -> Void
     let move: (UUID, Int) -> Void
+    var noteDrop: (any DropDelegate)? = nil
+
+    private var activeNoteDrop: (any DropDelegate)? {
+      session?.type == FolderDragPayload.noteType ? noteDrop : nil
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+      if let activeNoteDrop { return activeNoteDrop.validateDrop(info: info) }
+      let accepted = session?.canAcceptDrop == true && session?.id == interaction?.sessionID
+        && session?.type == type
+        && info.hasItemsConforming(to: [type]) && accepts()
+      return interaction != nil && interaction?.sourceID != destinationID
+        && accepted && interaction?.originalIDs == currentIDs()
+    }
 
     func dropEntered(info: DropInfo) {
-      let providerSource = FolderDragPayload.noteSource(
-        from: info.itemProviders(for: [FolderDragPayload.noteType])
-      )
-      guard draggedSource == providerSource else { return }
-      let result = TabDragReorder.performLiveMove(
-        draggedSource: draggedSource,
-        providerSource: providerSource,
-        over: destinationID,
-        activeFolderID: activeFolderID,
-        currentNotes: currentNotes,
-        lastDestinationID: lastDestinationID,
-        move: move
-      )
-      lastDestinationID = result.destinationID
+      if let activeNoteDrop { activeNoteDrop.dropEntered(info: info); return }
+      update(info)
+    }
+
+    private func update(_ info: DropInfo) {
+      guard validateDrop(info: info) else {
+        interaction?.clearTarget()
+        return
+      }
+      interaction?.propose(over: destinationID, after: info.location.x >= width / 2,
+        currentIDs: currentIDs())
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-      let providerSource = FolderDragPayload.noteSource(
-        from: info.itemProviders(for: [FolderDragPayload.noteType])
-      )
-      guard draggedSource == providerSource,
-        TabDragReorder.isValidLocalDrag(
-          draggedSource: draggedSource,
-          providerSource: providerSource,
-          destinationID: destinationID,
-          activeFolderID: activeFolderID,
-          currentNotes: currentNotes()
-        )
-      else { return nil }
-      return DropProposal(operation: .move)
+      if let activeNoteDrop { return activeNoteDrop.dropUpdated(info: info) }
+      update(info)
+      return DropProposal(operation: validateDrop(info: info) ? .move : .forbidden)
+    }
+
+    func dropExited(info: DropInfo) {
+      if let activeNoteDrop { activeNoteDrop.dropExited(info: info); return }
+      if interaction?.targetID == destinationID { interaction?.clearTarget() }
     }
 
     func performDrop(info: DropInfo) -> Bool {
-      let providerSource = FolderDragPayload.noteSource(
-        from: info.itemProviders(for: [FolderDragPayload.noteType])
-      )
-      let accepted = draggedSource == providerSource
-        && TabDragReorder.isValidLocalDrag(
-          draggedSource: draggedSource,
-          providerSource: providerSource,
-          destinationID: destinationID,
-          activeFolderID: activeFolderID,
-          currentNotes: currentNotes()
+      if let activeNoteDrop { return activeNoteDrop.performDrop(info: info) }
+      update(info)
+      guard validateDrop(info: info), let proposal = interaction, let session,
+        session.acceptReorder(from: info.itemProviders(for: [type]), interaction: proposal,
+          currentIDs: currentIDs, currentPinnedIDs: currentPinnedIDs, move: move) != nil
+      else { return false }
+      interaction = nil
+      finish()
+      return true
+    }
+  }
+
+  // Folders keep SwiftUI's drag source. Note tabs own their left-pointer gesture
+  // so AppKit receives the real threshold event and a snapshot captured before hiding.
+  private struct ReorderDragSource: ViewModifier {
+    let begin: () -> (NSItemProvider, NSPasteboardWriting?, (NSDragOperation) -> Void)
+    var began: ((NSPoint) -> Void)? = nil
+    var moved: ((NSPoint) -> Void)? = nil
+    var activate: (() -> Void)? = nil
+    var noteID: UUID? = nil
+    var displacement: CGFloat? = nil
+    var animatesDisplacement = false
+
+    func body(content: Content) -> some View {
+      ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
+        activate: activate, noteID: noteID, displacement: displacement,
+        animatesDisplacement: animatesDisplacement)
+    }
+  }
+
+  private struct ReorderDragHost<Content: View>: NSViewRepresentable {
+    let content: Content
+    let begin: () -> (NSItemProvider, NSPasteboardWriting?, (NSDragOperation) -> Void)
+    let began: ((NSPoint) -> Void)?
+    let moved: ((NSPoint) -> Void)?
+    let activate: (() -> Void)?
+    let noteID: UUID?
+    let displacement: CGFloat?
+    let animatesDisplacement: Bool
+
+    func makeNSView(context: Context) -> ReorderSourceHostingView {
+      let view = ReorderSourceHostingView(rootView: AnyView(EmptyView()))
+      view.sizingOptions = [.intrinsicContentSize]
+      return view
+    }
+
+    func updateNSView(_ view: ReorderSourceHostingView, context: Context) {
+      view.noteID = noteID
+      view.onBegan = began
+      view.onMoved = moved
+      view.onNativeBegin = noteID == nil ? nil : begin
+      view.onPrimaryClick = noteID == nil ? nil : activate
+      let dragContent = content.environment(\.self, context.environment)
+      if noteID == nil {
+        view.rootView = AnyView(
+          dragContent.onDrag({ [weak view] in
+            let (provider, _, end) = begin()
+            view?.onEnd = end
+            return provider
+          }, preview: {
+            dragContent
+          })
         )
-      if draggedSource == providerSource {
-        draggedSource = nil
-        lastDestinationID = nil
+      } else {
+        view.rootView = AnyView(dragContent)
       }
-      return accepted
+      if let displacement { view.setReorderDisplacement(displacement, animated: animatesDisplacement) }
+    }
+  }
+
+  final class ReorderSourceHostingView: NSHostingView<AnyView> {
+    var noteID: UUID?
+
+    // Keep layout in its original order during hover. AppKit owns the layer
+    // transition, including interruption, instead of relying on SwiftUI to
+    // animate the frame of a native representable during drag tracking.
+    func setReorderDisplacement(_ offset: CGFloat, animated: Bool) {
+      wantsLayer = true
+      guard let layer else { return }
+      let key = "fleck.tab-reorder"
+      if layer.transform.m41 == offset && animated { return }
+      let from = layer.presentation()?.transform.m41 ?? layer.transform.m41
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      var transform = layer.transform
+      transform.m41 = offset
+      layer.transform = transform
+      layer.removeAnimation(forKey: key)
+      if animated && abs(from - offset) > 0.01 {
+        let animation = CABasicAnimation(keyPath: "transform.translation.x")
+        animation.fromValue = from
+        animation.toValue = offset
+        animation.duration = AppMotion.standardDuration
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(animation, forKey: key)
+      }
+      CATransaction.commit()
+    }
+
+    func setDraggingSourceHidden(_ hidden: Bool) {
+      wantsLayer = true
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      layer?.opacity = hidden ? 0 : 1
+      CATransaction.commit()
+    }
+
+    var onEnd: ((NSDragOperation) -> Void)?
+    var onBegan: ((NSPoint) -> Void)?
+    var onMoved: ((NSPoint) -> Void)?
+    var onNativeBegin: (() -> (NSItemProvider, NSPasteboardWriting?, (NSDragOperation) -> Void))?
+    var onPrimaryClick: (() -> Void)?
+    #if DEBUG
+      var interceptNativeDrag: (([NSDraggingItem], ReorderNativeSource, NSEvent) -> Bool)?
+    #endif
+    private var pointerDown: (event: NSEvent, point: NSPoint)?
+    private var sourceProxy: ReorderNativeSource?
+
+    override func mouseDown(with event: NSEvent) {
+      guard noteID != nil, !event.modifierFlags.contains(.control) else {
+        pointerDown = nil
+        super.mouseDown(with: event)
+        return
+      }
+      pointerDown = (event, convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+      guard noteID != nil else {
+        super.mouseDragged(with: event)
+        return
+      }
+      guard let press = pointerDown, sourceProxy == nil else { return }
+      let point = convert(event.locationInWindow, from: nil)
+      let distance = NSPoint(x: point.x - press.point.x, y: point.y - press.point.y)
+      guard distance.x * distance.x + distance.y * distance.y >= 16,
+        let onNativeBegin
+      else { return }
+      pointerDown = nil
+      let image = draggingImage()
+      guard let preview = ReorderNativePreview(
+        image: image, sourceView: self, grabPoint: press.point
+      ) else { return }
+      let (_, pasteboardWriter, end) = onNativeBegin()
+      guard let pasteboardWriter else {
+        preview.close()
+        end([])
+        return
+      }
+      let item = NSDraggingItem(pasteboardWriter: pasteboardWriter)
+      item.setDraggingFrame(bounds, contents: nil)
+      let id = UUID()
+      let proxy = ReorderNativeSource(
+        id: id, source: nil, began: onBegan, preview: preview
+      ) { [weak self] operation in
+        end(operation)
+        if self?.sourceProxy?.id == id { self?.sourceProxy = nil }
+      }
+      proxy.moved = onMoved
+      sourceProxy = proxy
+      #if DEBUG
+        if interceptNativeDrag?([item], proxy, press.event) == true {
+          proxy.end([])
+          return
+        }
+      #endif
+      let session = super.beginDraggingSession(with: [item], event: press.event, source: proxy)
+      session.animatesToStartingPositionsOnCancelOrFail = false
+    }
+
+    override func mouseUp(with event: NSEvent) {
+      guard noteID != nil else {
+        super.mouseUp(with: event)
+        return
+      }
+      guard pointerDown != nil else { return }
+      pointerDown = nil
+      let point = convert(event.locationInWindow, from: nil)
+      if bounds.contains(point) { onPrimaryClick?() }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+      pointerDown = nil
+      super.rightMouseDown(with: event)
+    }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if window == nil { sourceProxy?.closePreview() }
+    }
+
+    private func draggingImage() -> NSImage {
+      var image = NSImage(size: bounds.size)
+      effectiveAppearance.performAsCurrentDrawingAppearance {
+        guard let captured = bitmapImageRepForCachingDisplay(in: bounds) else { return }
+        cacheDisplay(in: bounds, to: captured)
+        image = Self.compositedDraggingImage(
+          captured: captured, size: bounds.size, appearance: effectiveAppearance
+        ) ?? image
+      }
+      return image
+    }
+
+    static func compositedDraggingImage(captured: NSBitmapImageRep, size: NSSize,
+      appearance: NSAppearance) -> NSImage? {
+      guard let representation = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: captured.pixelsWide,
+        pixelsHigh: captured.pixelsHigh,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ) else { return nil }
+      representation.size = size
+      guard let context = NSGraphicsContext(bitmapImageRep: representation) else { return nil }
+      let image = NSImage(size: size)
+      let capturedImage = NSImage(size: size)
+      capturedImage.addRepresentation(captured)
+      appearance.performAsCurrentDrawingAppearance {
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        let rect = NSRect(origin: .zero, size: size)
+        let surface = NSBezierPath(
+          roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6
+        )
+        NSColor.windowBackgroundColor.setFill()
+        surface.fill()
+        capturedImage.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
+          respectFlipped: true, hints: nil)
+        NSColor.separatorColor.setStroke()
+        surface.lineWidth = 1
+        surface.stroke()
+        NSGraphicsContext.restoreGraphicsState()
+      }
+      image.addRepresentation(representation)
+      return image
+    }
+
+    func closeNativePreview() {
+      sourceProxy?.closePreview()
+    }
+
+    override func beginDraggingSession(with items: [NSDraggingItem], event: NSEvent,
+      source: any NSDraggingSource) -> NSDraggingSession {
+      let id = UUID()
+      let began = onBegan
+      let end = onEnd
+      onEnd = nil
+      let proxy = ReorderNativeSource(id: id, source: source, began: began) { [weak self] operation in
+        end?(operation)
+        if self?.sourceProxy?.id == id { self?.sourceProxy = nil }
+      }
+      proxy.moved = onMoved
+      sourceProxy = proxy
+      let session = super.beginDraggingSession(with: items, event: event, source: proxy)
+      if began != nil {
+        session.animatesToStartingPositionsOnCancelOrFail = false
+      }
+      return session
+    }
+  }
+
+  @MainActor final class ReorderNativePreview {
+    let image: NSImage
+    let panel: NSPanel
+    private let initialFrame: NSRect
+    private let grabOffset: NSPoint
+    private var isClosed = false
+
+    init?(image: NSImage, sourceView: NSView, grabPoint: NSPoint) {
+      guard let sourceWindow = sourceView.window else { return nil }
+      self.image = image
+      initialFrame = sourceWindow.convertToScreen(sourceView.convert(sourceView.bounds, to: nil))
+      let grabPointOnScreen = sourceWindow.convertPoint(
+        toScreen: sourceView.convert(grabPoint, to: nil)
+      )
+      grabOffset = NSPoint(
+        x: grabPointOnScreen.x - initialFrame.minX,
+        y: grabPointOnScreen.y - initialFrame.minY
+      )
+      panel = NSPanel(
+        contentRect: initialFrame,
+        styleMask: [.borderless, .nonactivatingPanel],
+        backing: .buffered,
+        defer: false
+      )
+      panel.isReleasedWhenClosed = false
+      panel.backgroundColor = .clear
+      panel.isOpaque = false
+      panel.hasShadow = false
+      panel.ignoresMouseEvents = true
+      panel.hidesOnDeactivate = false
+      panel.level = NSWindow.Level(rawValue: sourceWindow.level.rawValue + 1)
+      let imageView = NSImageView(frame: NSRect(origin: .zero, size: initialFrame.size))
+      imageView.image = image
+      imageView.imageScaling = .scaleNone
+      panel.contentView = imageView
+    }
+
+    func show(at point: NSPoint) {
+      guard !isClosed else { return }
+      panel.setFrameOrigin(NSPoint(x: point.x - grabOffset.x, y: point.y - grabOffset.y))
+      panel.orderFrontRegardless()
+    }
+
+    func move(to point: NSPoint) {
+      guard !isClosed else { return }
+      panel.setFrameOrigin(NSPoint(x: point.x - grabOffset.x, y: point.y - grabOffset.y))
+    }
+
+    func close() {
+      guard !isClosed else { return }
+      isClosed = true
+      panel.orderOut(nil)
+      panel.close()
+    }
+
+    deinit {
+      MainActor.assumeIsolated {
+        panel.orderOut(nil)
+        panel.close()
+      }
+    }
+  }
+
+  @MainActor final class ReorderNativeSource: NSObject, NSDraggingSource {
+    let id: UUID
+    let source: (any NSDraggingSource)?
+    let began: ((NSPoint) -> Void)?
+    private(set) var preview: ReorderNativePreview?
+    private let endHandler: (NSDragOperation) -> Void
+    var moved: ((NSPoint) -> Void)?
+
+    init(id: UUID, source: (any NSDraggingSource)?, began: ((NSPoint) -> Void)?,
+      preview: ReorderNativePreview? = nil, end: @escaping (NSDragOperation) -> Void) {
+      self.id = id
+      self.source = source
+      self.began = began
+      self.preview = preview
+      endHandler = end
+    }
+
+    func end(_ operation: NSDragOperation) {
+      closePreview()
+      endHandler(operation)
+    }
+
+    func closePreview() {
+      preview?.close()
+    }
+
+    func draggingSession(_ session: NSDraggingSession,
+      sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+      Self.operationMask(for: context)
+    }
+
+    static func operationMask(for context: NSDraggingContext) -> NSDragOperation {
+      context == .withinApplication ? .move : []
+    }
+
+    func ignoreModifierKeys(for session: NSDraggingSession) -> Bool {
+      source?.ignoreModifierKeys?(for: session) ?? false
+    }
+
+    func draggingSession(_ session: NSDraggingSession, willBeginAt point: NSPoint) {
+      source?.draggingSession?(session, willBeginAt: point)
+      preview?.show(at: point)
+      began?(point)
+    }
+
+    func draggingSession(_ session: NSDraggingSession, movedTo point: NSPoint) {
+      preview?.move(to: point)
+      moved?(session.draggingLocation)
+      source?.draggingSession?(session, movedTo: point)
+    }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt point: NSPoint,
+      operation: NSDragOperation) {
+      source?.draggingSession?(session, endedAt: point, operation: operation)
+      end(operation)
+    }
+  }
+
+  // Native dragging can end outside every SwiftUI drop target. Watch its lifetime,
+  // and scroll only the enclosing strip while a validated proposal is active.
+  struct ReorderDragLifecycle: NSViewRepresentable {
+    let active: Bool
+    let hasTarget: Bool
+    let cancel: () -> Void
+
+    func makeNSView(context: Context) -> DragView { DragView() }
+    func updateNSView(_ view: DragView, context: Context) {
+      view.cancel = cancel
+      view.hasTarget = hasTarget
+      view.setActive(active)
+    }
+    static func dismantleNSView(_ view: DragView, coordinator: ()) { view.setActive(false) }
+
+    final class DragView: NSView {
+      var cancel: (() -> Void)?
+      var hasTarget = false
+      private var timer: Timer?
+      private var escapeMonitor: Any?
+      override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+      func setActive(_ active: Bool) {
+        guard active else {
+          timer?.invalidate()
+          timer = nil
+          if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+          escapeMonitor = nil
+          return
+        }
+        guard timer == nil else { return }
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+          if event.keyCode == 53 {
+            self?.end()
+          }
+          return event
+        }
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+          MainActor.assumeIsolated { self?.tick() }
+        }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .eventTracking)
+      }
+
+      private func end() {
+        setActive(false)
+        cancel?()
+      }
+
+      private func tick() {
+        guard let window else {
+          end()
+          return
+        }
+        guard hasTarget, let scroll = enclosingScrollView else { return }
+        let clip = scroll.contentView
+        let point = clip.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+        guard clip.bounds.contains(point), let document = scroll.documentView else { return }
+        let delta: CGFloat = point.x < clip.bounds.minX + 24 ? -5
+          : point.x > clip.bounds.maxX - 24 ? 5 : 0
+        guard delta != 0 else { return }
+        let x = min(max(clip.bounds.minX + delta, 0), max(0, document.bounds.width - clip.bounds.width))
+        clip.scroll(to: NSPoint(x: x, y: clip.bounds.minY))
+        scroll.reflectScrolledClipView(clip)
+      }
     }
   }
 

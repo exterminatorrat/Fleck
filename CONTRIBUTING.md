@@ -1,71 +1,112 @@
 # Contributing to Fleck
 
-> [!IMPORTANT]
-> External code contributions and pull requests are not currently accepted.
-> Reproducible bug reports and product feedback are welcome. This document records
-> the maintainer workflow used to develop and release Fleck.
+This document describes Fleck's future contribution workflow. Public
+contribution intake remains closed. The owner-approved private conduct route is
+email to [Harry](mailto:harrythemen@outlook.com), but inbox delivery has not yet
+been tested. Intake can open only after that delivery check, green CI at the
+final source commit, the reviewed launch changes are merged, and explicit issue
+and pull-request intake readiness is verified. Until then, the source is
+available for inspection and local development, but the project is not inviting
+pull requests or public participation.
 
-## Repository workflow
+When participation opens, contributors will agree to follow the Code of Conduct.
+Do not put vulnerabilities or private user content in an issue; read
+[Security](SECURITY.md) first.
 
-GitHub is the source of truth for Fleck. Intentional changes to application code, tests, documentation, assets, configuration, and release metadata must be committed and pushed; project work should not exist only on a local machine.
+## Before you start
 
-The preferred workflow is a dedicated feature branch:
+1. Read the short [implementation status](IMPLEMENTATION_STATUS.md) and the
+   relevant section of [architecture](ARCHITECTURE.md).
+2. For a contained fix, create a branch and proceed. For a larger feature or an
+   architectural change, open a short issue first once public issues are
+   available so the direction can be agreed before substantial work.
+3. Use a disposable macOS test account and synthetic fixtures for native flows.
+   Never develop or report against personal notes, recordings, credentials, or
+   permission databases.
 
-1. Start from an up-to-date `main` branch.
-2. Create a descriptive branch such as `feature/native-editor` or `fix/note-recovery`.
-3. Commit cohesive, reviewable checkpoints while developing. Do not wait until the entire feature is complete to create the first commit.
-4. Push the branch to GitHub regularly so work is backed up and visible.
-5. Keep the branch current with `main`, resolving integration issues before final review.
-6. Open a pull request early as a draft when useful, and update its description and checks as the work evolves.
-7. Mark the pull request ready only when its planned scope is complete, relevant tests and documentation are updated, and required checks pass.
-8. Merge the completed pull request into `main` through GitHub.
-9. Delete the merged feature branch unless it is intentionally retained for a documented reason.
+## Set up a fork
 
-Direct work on `main` is reserved for exceptional, low-risk repository administration. Product features, fixes, and normal documentation changes should use a separate branch. `main` should remain buildable and represent the latest integrated state of the project.
-
-## Branch scope
-
-A branch should have one clear outcome. A broad milestone branch may contain several related features from the product plan, but unrelated fixes should use separate branches and pull requests. If a branch becomes difficult to review or keep current, split the remaining work into smaller branches rather than delaying all integration indefinitely.
-
-For the initial application milestone, the branch is complete when the selected product-plan scope is implemented, tested, documented, and profiled on macOS. Partial progress should still be committed and pushed regularly; completion controls when the branch is merged, not when it is version controlled.
-
-## Commit expectations
-
-- Review `git status` and the complete diff before each commit.
-- Use a descriptive imperative subject, such as `feat: add note tab reordering`.
-- Keep generated build output, user-specific IDE state, credentials, signing keys, provisioning profiles, and secrets out of Git.
-- Include tests and documentation with the behavior they cover.
-- Never rewrite shared branch history without coordinating with other contributors.
-
-## Pull request checklist
-
-Before merging, confirm that:
-
-- [ ] The planned branch scope is complete.
-- [ ] The pull request explains the user-facing and technical changes.
-- [ ] Automated tests and programmatic checks pass.
-- [ ] Native UI changes were exercised on a supported macOS version.
-- [ ] Perceptible UI changes include an updated screenshot when practical.
-- [ ] Accessibility and keyboard behavior were considered.
-- [ ] App size, idle memory, and idle CPU were profiled when the change could affect them.
-- [ ] Documentation reflects the implemented behavior.
-- [ ] No credentials, local-only files, or generated artifacts are included.
-
-## Recommended commands
+Fork the repository on GitHub, then:
 
 ```sh
-git switch main
-git pull --ff-only
-git switch -c feature/<short-description>
-
-# Make and verify changes.
-swift test
-git status --short
-git diff --check
-
-git add <intentional-files>
-git commit -m "type: concise description"
-git push -u origin feature/<short-description>
+git clone https://github.com/YOUR-USER/fleck.git
+cd fleck
+git remote add upstream https://github.com/exterminatorrat/fleck.git
+git fetch upstream
+git switch -c your-focused-branch upstream/main
 ```
 
-Continue committing and pushing useful checkpoints to the same branch. When its planned work is complete, update the pull request, run final checks, and merge it into `main` through GitHub.
+You need macOS 14 or later and Xcode 26 or later with the full macOS 26 SDK.
+Fleck uses Swift tools version 6.0. The standalone Command Line Tools do not
+provide the required SDK surface.
+
+## Make a focused change
+
+- Keep the ordinary build lightweight and local-first. Prefer native AppKit,
+  SwiftUI, and Foundation behavior over new dependencies or custom substitutes.
+- Keep the editor responsive and preserve standard selection, undo, spelling,
+  keyboard, and accessibility behavior.
+- Treat VoiceOver, Full Keyboard Access, Reduce Motion, contrast, idle CPU, and
+  memory use as product requirements, not post-release cleanup.
+- Keep Enhanced Local work in its opt-in candidate graph. Do not make candidate
+  models, assets, or dependencies part of the ordinary release by accident.
+- Update tests and contributor documentation in the same pull request when a
+  public behavior, command, or boundary changes.
+- Avoid drive-by formatting and unrelated refactors.
+
+AI-assisted contributions are allowed. The human contributor remains
+responsible for understanding the change, reviewing every generated line,
+running the relevant checks, disclosing material limitations, and ensuring the
+contribution and its inputs can be licensed to the project.
+
+## Verify the change
+
+At minimum, run the ordinary suite:
+
+```sh
+unset FLECK_ENHANCED_CANDIDATE
+Scripts/run-nonempty-swift-tests.sh '^.+$'
+```
+
+Run the focused checks and manual native checks that cover your change. The
+authoritative command list and evidence rules are in [Testing](TESTING.md).
+The ordinary runner does not launch the product `Fleck.app`, but native fixtures
+use a synthetic AppKit host and can create windows or change focus in the
+disposable test session. Do not run an Enhanced candidate graph for an
+ordinary-only change.
+
+Before committing, inspect what will be shared:
+
+```sh
+git status --short
+git diff --check
+git diff
+```
+
+Do not commit build output, local paths, secrets, signing material, credentials,
+model weights, personal fixtures, or unsanitized logs.
+
+## Open a pull request
+
+Keep the pull request small enough to review. Explain:
+
+- the user-facing problem and the chosen scope;
+- the important implementation or documentation decisions;
+- the exact automated and manual checks run;
+- any unverified behavior, platform limitation, privacy consideration, or
+  follow-up.
+
+Screenshots are useful only for a visual change and must come from the current
+candidate, contain synthetic content, and include useful alt text. Do not reuse
+an older screenshot because it looks close enough.
+
+## Licensing
+
+The project is licensed under the [Mozilla Public License 2.0](LICENSE). There
+is no contributor license agreement. By submitting a contribution, you confirm
+that you have the right to provide it under the project's license. Third-party
+code, assets, models, and substantial generated material need clear provenance
+and compatible terms; call them out in the pull request.
+
+The Fleck name and brand assets are reserved separately. Please do not imply
+that a fork or derivative is an official Fleck release.

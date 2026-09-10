@@ -16,10 +16,16 @@ struct FocusedDictationPersistenceReceipt: Equatable, Sendable {
 @MainActor
 protocol SpeechEngine: AnyObject {
   var kind: DictationSpeechEngine { get }
+  var runtimeMeasurements: DictationRuntimeMeasurements { get }
 
   func start(
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void
+  ) async throws
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    failure: @escaping @MainActor @Sendable (Error) -> Void
   ) async throws
   func finish() async throws -> String?
   func finish(stopOrigin: DictationStopOrigin) async throws -> String?
@@ -28,6 +34,16 @@ protocol SpeechEngine: AnyObject {
 }
 
 extension SpeechEngine {
+  var runtimeMeasurements: DictationRuntimeMeasurements { .empty }
+
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    failure _: @escaping @MainActor @Sendable (Error) -> Void
+  ) async throws {
+    try await start(provisional: provisional, level: level)
+  }
+
   func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
     _ = stopOrigin
     return try await finish()
@@ -56,9 +72,15 @@ protocol DictationProcessing: AnyObject {
     startAuthorized: @escaping @MainActor @Sendable () -> Bool
   ) async throws -> any DictationProcessingSession
   func handle(_ signal: DictationRuntimeSignal) async
+  func runtimeMeasurements(for captureID: UUID) -> DictationRuntimeMeasurements
 }
 
 extension DictationProcessing {
+  func runtimeMeasurements(for captureID: UUID) -> DictationRuntimeMeasurements {
+    _ = captureID
+    return .empty
+  }
+
   func begin(
     configuration: DictationProcessingConfiguration,
     level: @escaping @MainActor @Sendable (Float) -> Void,
@@ -72,10 +94,15 @@ extension DictationProcessing {
 @MainActor
 protocol DictationProcessingSession: AnyObject {
   var updates: AsyncThrowingStream<DictationTextUpdate, Error> { get }
+  var runtimeMeasurements: DictationRuntimeMeasurements { get }
   func finish(stopOrigin: DictationStopOrigin) async throws -> DictationProcessingResult
   // All callers await one source-unblocking/finalization/cleanup cancellation
   // task before terminal cancellation returns.
   func cancel() async
+}
+
+extension DictationProcessingSession {
+  var runtimeMeasurements: DictationRuntimeMeasurements { .empty }
 }
 
 protocol TranscriptDictionaryResolving: Sendable {
@@ -100,15 +127,18 @@ struct DictationRoutingCandidate: Equatable, Sendable {
   let destination: DictationDestination
   let semanticContext: String
   let contentRevision: UInt64
+  let presentationContext: String?
 
   init(
     destination: DictationDestination,
     semanticContext: String,
-    contentRevision: UInt64 = 0
+    contentRevision: UInt64 = 0,
+    presentationContext: String? = nil
   ) {
     self.destination = destination
     self.semanticContext = semanticContext
     self.contentRevision = contentRevision
+    self.presentationContext = presentationContext
   }
 }
 
@@ -135,9 +165,15 @@ struct DictationRoutingAmbiguity: Equatable, Sendable {
 
 @MainActor
 protocol StreamingSpeechSource: AnyObject {
+  var runtimeMeasurements: DictationRuntimeMeasurements { get }
   func start(
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void
+  ) async throws
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    failure: @escaping @MainActor @Sendable (Error) -> Void
   ) async throws
   func finish() async throws -> String?
   func finish(stopOrigin: DictationStopOrigin) async throws -> String?
@@ -146,6 +182,16 @@ protocol StreamingSpeechSource: AnyObject {
 }
 
 extension StreamingSpeechSource {
+  var runtimeMeasurements: DictationRuntimeMeasurements { .empty }
+
+  func start(
+    provisional: @escaping @MainActor @Sendable (String) -> Void,
+    level: @escaping @MainActor @Sendable (Float) -> Void,
+    failure _: @escaping @MainActor @Sendable (Error) -> Void
+  ) async throws {
+    try await start(provisional: provisional, level: level)
+  }
+
   func finish(stopOrigin: DictationStopOrigin) async throws -> String? {
     _ = stopOrigin
     return try await finish()

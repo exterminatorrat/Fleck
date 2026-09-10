@@ -64,6 +64,31 @@ import Testing
   #expect(!decoded.confirmBeforeMovingNotesToTrash)
 }
 
+@Test func agentUpdateBannerPreferenceDefaultsPersistsAndRejectsMalformedValues() throws {
+  #expect(AppPreferences().showAgentUpdateBanners)
+  let legacy = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo"}"#.utf8)
+  )
+  #expect(legacy.showAgentUpdateBanners)
+
+  for enabled in [true, false] {
+    let value = AppPreferences(showAgentUpdateBanners: enabled)
+    let decoded = try JSONDecoder().decode(
+      AppPreferences.self,
+      from: JSONEncoder().encode(value)
+    )
+    #expect(decoded.showAgentUpdateBanners == enabled)
+  }
+
+  #expect(throws: (any Error).self) {
+    try JSONDecoder().decode(
+      AppPreferences.self,
+      from: Data(#"{"showAgentUpdateBanners":"yes"}"#.utf8)
+    )
+  }
+}
+
 @Test func malformedUnfiledCompactPreferenceRejectsSnapshot() {
   #expect(throws: (any Error).self) {
     try JSONDecoder().decode(
@@ -144,6 +169,24 @@ import Testing
   #expect(roundTrip.dictationCapsuleDock == .bottom)
 }
 
+@Test func dictationShortcutGuideDefaultsVisibleAndPersistsDismissal() throws {
+  #expect(AppPreferences().showDictationShortcutGuide)
+
+  let legacy = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo"}"#.utf8)
+  )
+  #expect(legacy.showDictationShortcutGuide)
+
+  var dismissed = AppPreferences()
+  dismissed.showDictationShortcutGuide = false
+  let roundTrip = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: JSONEncoder().encode(dismissed)
+  )
+  #expect(!roundTrip.showDictationShortcutGuide)
+}
+
 @Test func oldShortcutPreferencesMigrateToRightOptionAndBottomDock() throws {
   let data = Data(
     #"{"fontFamily":".AppleSystemUIFont","fontSize":15,"dictationShortcut":{"keyCode":49,"carbonModifiers":768}}"#.utf8
@@ -185,7 +228,7 @@ import Testing
     .data(using: .utf8)!
   let preferences = try JSONDecoder().decode(AppPreferences.self, from: old)
   #expect(preferences.theme == .system)
-  #expect(preferences.panelWidth == 640)
+  #expect(preferences.panelWidth == 800)
   #expect(preferences.panelHeight == 430)
   #expect(preferences.editorTextHex == nil)
   #expect(preferences.editorBackgroundHex == nil)
@@ -194,20 +237,63 @@ import Testing
 
 @Test func newPreferencesUseBalancedIndependentPanelDefaults() {
   let value = AppPreferences()
-  #expect(value.panelWidth == 640)
+  #expect(value.panelWidth == 800)
   #expect(value.panelHeight == 430)
-  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelWidth == 800)
   #expect(value.pinnedPanelHeight == 430)
   #expect(value.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
 }
 
-@Test func untouchedLegacyPanelSizeMigratesOnce() throws {
+@Test func untouchedLegacyPanelSizeMigratesToCurrentDefaultOnce() throws {
   let legacy = Data(#"{"panelWidth":520,"panelHeight":430}"#.utf8)
   let migrated = try JSONDecoder().decode(AppPreferences.self, from: legacy)
-  #expect(migrated.panelWidth == 640)
+  #expect(migrated.panelWidth == 800)
   #expect(migrated.panelHeight == 430)
-  #expect(migrated.pinnedPanelWidth == 640)
+  #expect(migrated.pinnedPanelWidth == 800)
   #expect(migrated.pinnedPanelHeight == 430)
+}
+
+@Test func versionOneDefaultPanelSizesMigrateToEightHundredOnce() throws {
+  let previousDefault = Data(
+    #"{"panelWidth":640,"panelHeight":430,"panelSizingVersion":1,"pinnedPanelWidth":640,"pinnedPanelHeight":430}"#.utf8
+  )
+  let migrated = try JSONDecoder().decode(AppPreferences.self, from: previousDefault)
+
+  #expect(migrated.panelWidth == 800)
+  #expect(migrated.panelHeight == 430)
+  #expect(migrated.pinnedPanelWidth == 800)
+  #expect(migrated.pinnedPanelHeight == 430)
+  #expect(migrated.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
+
+  let roundTripped = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: JSONEncoder().encode(migrated)
+  )
+  #expect(roundTripped == migrated)
+}
+
+@Test func versionOneCustomPanelSizesSurviveMigration() throws {
+  let custom = Data(
+    #"{"panelWidth":640,"panelHeight":500,"panelSizingVersion":1,"pinnedPanelWidth":640,"pinnedPanelHeight":540}"#.utf8
+  )
+  let value = try JSONDecoder().decode(AppPreferences.self, from: custom)
+
+  #expect(value.panelWidth == 640)
+  #expect(value.panelHeight == 500)
+  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelHeight == 540)
+}
+
+@Test func legacyPinnedDefaultMigratesWhileCustomMenuSizeIsPreserved() throws {
+  let legacy = Data(
+    #"{"panelWidth":700,"panelHeight":500,"pinnedPanelWidth":640,"pinnedPanelHeight":430}"#.utf8
+  )
+  let value = try JSONDecoder().decode(AppPreferences.self, from: legacy)
+
+  #expect(value.panelWidth == 700)
+  #expect(value.panelHeight == 500)
+  #expect(value.pinnedPanelWidth == 800)
+  #expect(value.pinnedPanelHeight == 430)
 }
 
 @Test func customLegacyPanelSizeIsPreservedAndUsesIndependentPinnedDefault() throws {
@@ -215,7 +301,7 @@ import Testing
   let value = try JSONDecoder().decode(AppPreferences.self, from: legacy)
   #expect(value.panelWidth == 700)
   #expect(value.panelHeight == 500)
-  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelWidth == 800)
   #expect(value.pinnedPanelHeight == 430)
 }
 
@@ -226,11 +312,38 @@ import Testing
   let value = try JSONDecoder().decode(AppPreferences.self, from: malformed)
 
   #expect(value.fontFamily == "Menlo")
-  #expect(value.panelWidth == 640)
+  #expect(value.panelWidth == 800)
   #expect(value.panelHeight == 430)
   #expect(value.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
-  #expect(value.pinnedPanelWidth == 640)
+  #expect(value.pinnedPanelWidth == 800)
   #expect(value.pinnedPanelHeight == 430)
+}
+
+@Test func panelWidthFallbackUsesTheStoredSizingGeneration() throws {
+  let cases: [(json: String, width: Double, height: Double, version: Int)] = [
+    (#"{"panelHeight":500}"#, 520, 500, 2),
+    (#"{"panelHeight":500,"panelSizingVersion":0}"#, 520, 500, 2),
+    (#"{"panelHeight":500,"panelSizingVersion":1}"#, 640, 500, 2),
+    (#"{"panelHeight":500,"panelSizingVersion":2}"#, 800, 500, 2),
+    (#"{"panelWidth":"wide","panelHeight":500,"panelSizingVersion":2}"#, 800, 500, 2),
+    (#"{"panelHeight":500,"panelSizingVersion":7}"#, 800, 500, 7),
+  ]
+
+  for value in cases {
+    let decoded = try JSONDecoder().decode(AppPreferences.self, from: Data(value.json.utf8))
+    #expect(decoded.panelWidth == value.width)
+    #expect(decoded.panelHeight == value.height)
+    #expect(decoded.panelSizingVersion == value.version)
+  }
+}
+
+@Test func currentSizingGenerationPreservesExplicitLegacyWidthAndCustomHeight() throws {
+  let data = Data(#"{"panelWidth":520,"panelHeight":500,"panelSizingVersion":2}"#.utf8)
+  let decoded = try JSONDecoder().decode(AppPreferences.self, from: data)
+
+  #expect(decoded.panelWidth == 520)
+  #expect(decoded.panelHeight == 500)
+  #expect(decoded.panelSizingVersion == AppPreferences.currentPanelSizingVersion)
 }
 
 @Test func unrelatedMalformedPreferenceFieldStillThrows() {

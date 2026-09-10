@@ -8,7 +8,7 @@
 
 **Tech Stack:** Swift 6, Swift Testing, Bash, FFmpeg AVFoundation screen capture, Codex CLI, ffmpeg/ffprobe, React 19, Vite 8, GSAP 3 ScrollTrigger, native HTML video, plain CSS, Node test runner
 
-**Spec:** `/Users/harryjin/Fleck/.worktrees/fleck-website-demo-capture-lab-current/docs/superpowers/specs/2026-08-30-fleck-website-cinematic-demo-hero-design.md`
+**Spec:** `${FLECK_REPO}/.worktrees/fleck-website-demo-capture-lab-current/docs/superpowers/specs/2026-08-30-fleck-website-cinematic-demo-hero-design.md`
 
 ## Orchestration Contract
 
@@ -16,7 +16,7 @@ The primary session remains the integrator. Implementation is performed by Codex
 
 For every worker:
 
-- Work only in `/Users/harryjin/Fleck/.worktrees/fleck-website-demo-capture-lab-current`.
+- Work only in `${FLECK_REPO}/.worktrees/fleck-website-demo-capture-lab-current`.
 - You are not alone in the repository. Preserve unrelated work and adapt to accepted concurrent edits.
 - Edit only the paths assigned in the packet.
 - Use red-first TDD for source changes and record the observed failing output before implementation.

@@ -135,9 +135,12 @@ import Testing
 
   #expect(!formattingBar.contains(".background(.bar)"))
   #expect(normalizedFormattingBar.contains(
-    "frame(maxWidth: .infinity) .modifier(FormattingBarSurface()) "
+    "frame(maxWidth: .infinity) .modifier(FormattingBarSurface(isPinned: isPinned)) "
       + ".padding(.horizontal, 10) .padding(.top, 8)"
   ))
+  #expect(surface.contains("let isPinned: Bool"))
+  #expect(surface.contains("if isPinned && (reduceTransparency || colorSchemeContrast == .increased)"))
+  #expect(surface.contains(".fill(Color(nsColor: .windowBackgroundColor))"))
   #expect(surface.contains("if #available(macOS 26, *)"))
   #expect(normalizedSurface.contains(
     "content.glassEffect( Glass.regular.tint(Color.black.opacity(0.18)), "

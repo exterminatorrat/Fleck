@@ -44,14 +44,25 @@ struct FleckMCPServerTests {
     try await server.start(transport: transports.server)
     _ = try await client.connect(transport: transports.client)
     let listed = try await client.listTools()
+    let iconIgnoringTools = try JSONDecoder().decode(
+      [IconIgnoringTool].self,
+      from: JSONEncoder().encode(listed.tools)
+    )
     let called = try await client.callTool(
-      name: "list_shared_notes",
+      name: try #require(iconIgnoringTools.first).name,
       arguments: [:]
     )
     await client.disconnect()
     await server.stop()
 
     #expect(listed.tools.map(\.name) == FleckMCPToolRegistry.tools.map(\.name))
+    #expect(iconIgnoringTools.map(\.name) == listed.tools.map(\.name))
+    #expect(
+      listed.tools.allSatisfy {
+        $0.icons == FleckMCPToolRegistry.tools.first?.icons
+          && $0.icons?.count == 1
+      }
+    )
     #expect(called.isError == false)
   }
 
@@ -158,6 +169,10 @@ struct FleckMCPServerTests {
     #expect(await transport.pendingRequestCount == 0)
     await transport.waitUntilDrained()
   }
+}
+
+private struct IconIgnoringTool: Decodable {
+  let name: String
 }
 
 private enum TestTransportError: Error {

@@ -31,10 +31,36 @@ func appleSpeechStreamingSourceForwardsExactStopOrigin() async throws {
   #expect(engine.stopOrigins == [origin])
 }
 
+@Test @MainActor
+func dictationDiagnosticsAdapterForwardsEngineMeasurementsAndDefaultsRemainEmpty() {
+  let instant = ContinuousClock().now
+  let engine = SpeechEngineProbe()
+  engine.runtimeMeasurements = DictationRuntimeMeasurements(
+    audioStartRequestedAt: instant,
+    firstInputBufferAt: instant.advanced(by: .milliseconds(1))
+  )
+  let adapter = AppleSpeechStreamingAdapter(engine: engine)
+
+  #expect(adapter.runtimeMeasurements == engine.runtimeMeasurements)
+
+  final class DefaultEngine: SpeechEngine {
+    let kind: DictationSpeechEngine = .standard
+    func start(
+      provisional _: @escaping @MainActor @Sendable (String) -> Void,
+      level _: @escaping @MainActor @Sendable (Float) -> Void
+    ) async throws {}
+    func finish() async throws -> String? { nil }
+    func cancel() async {}
+    func releaseResources() async {}
+  }
+  #expect(DefaultEngine().runtimeMeasurements == .empty)
+}
+
 @MainActor
 final class SpeechEngineProbe: SpeechEngine {
   let kind: DictationSpeechEngine = .standard
   var finalText: String?
+  var runtimeMeasurements = DictationRuntimeMeasurements.empty
   private var provisional: (@MainActor @Sendable (String) -> Void)?
   private var level: (@MainActor @Sendable (Float) -> Void)?
   private(set) var startCount = 0

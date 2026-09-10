@@ -1,5 +1,9 @@
 # Fleck hero design QA
 
+> Historical website QA record. Its pass/block labels apply only to the dated
+> implementation state described here, not the current site or a release. See
+> [`docs/archive/README.md`](../docs/archive/README.md).
+
 - Desktop screenshot: `design-qa-hero-desktop.png`
 - Mobile screenshot: `design-qa-hero-mobile.png`
 - Desktop viewport: 1440 × 1000 px.

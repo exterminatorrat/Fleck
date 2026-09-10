@@ -23,10 +23,13 @@ contract_absent() {
   fi
 }
 
-negative_assertion_status=0
-(contract_assert test 1 -eq 2) >/dev/null 2>&1 || negative_assertion_status=$?
-contract_assert test "$negative_assertion_status" -ne 0
-echo "contract=explicit-assertion-failure-self-test:pass"
+preflight_only=0
+if [[ "${1:-}" == "--preflight-only" && "$#" -eq 1 ]]; then
+  preflight_only=1
+elif [[ "$#" -ne 0 ]]; then
+  echo "usage: $0 [--preflight-only]" >&2
+  exit 2
+fi
 
 readonly test_dir="$(cd "$(dirname "$0")" && pwd -P)"
 readonly candidate_dir="$test_dir/../Candidates"
@@ -42,16 +45,74 @@ fi
 readonly repo_root="$(cd "$test_dir/../../../.." && pwd -P)"
 readonly model_evaluation_source="$repo_root/Sources/FleckModelEvaluation/ModelEvaluation.swift"
 readonly evidence_source="$repo_root/Sources/FleckModelEvaluation/CandidateBenchmarkEvidence.swift"
+readonly local_writing_evidence_source="$repo_root/Sources/FleckModelEvaluation/LocalWritingEvidence.swift"
 readonly artifact_inventory_source="$repo_root/Tools/LocalDictationCandidateAdapters/Sources/LocalDictationCandidateRunner/ArtifactInventory.swift"
-readonly temp_root="$(mktemp -d /Users/harryjin/.codex/fleck-qwen-native-contract.XXXXXX)"
-trap 'rm -rf "$temp_root"' EXIT
-readonly build_dir="$temp_root/build"
-mkdir -p "$build_dir"
+readonly fleck_core_sources=("$repo_root"/Sources/FleckCore/*.swift)
+tmp_parent="${TMPDIR:-/tmp}"
+tmp_parent="${tmp_parent%/}"
+[[ -n "$tmp_parent" ]] || tmp_parent="/"
 
+temp_root_fail() {
+  echo "qwen-native-contract: unsuitable TMPDIR: $1; set TMPDIR to an existing canonical external directory outside the repository, .build, .app, and DerivedData (for example, create a mode-700 unique directory under \$HOME and scope TMPDIR to this command)" >&2
+  exit 2
+}
+
+[[ "$tmp_parent" == /* ]] || temp_root_fail "path must be absolute"
+[[ -d "$tmp_parent" && ! -L "$tmp_parent" ]] || temp_root_fail "path must be an existing non-symlink directory"
+canonical_tmp_parent="$(realpath "$tmp_parent")" || temp_root_fail "path cannot be canonicalized"
+[[ "$canonical_tmp_parent" == "$tmp_parent" ]] || temp_root_fail "path is not canonical ($tmp_parent -> $canonical_tmp_parent)"
+case "$tmp_parent/" in
+  "$repo_root/"*) temp_root_fail "path must be external to the repository" ;;
+esac
+IFS='/' read -r -a tmp_components <<< "$tmp_parent"
+for component in "${tmp_components[@]}"; do
+  [[ "$component" != ".build" && "$component" != "DerivedData" && "$component" != *.app ]] || \
+    temp_root_fail "path contains forbidden component $component"
+done
+probe="$tmp_parent"
+while [[ "$probe" != "/" ]]; do
+  [[ ! -L "$probe" ]] || temp_root_fail "path has symlinked ancestor $probe"
+  probe="${probe%/*}"
+  [[ -n "$probe" ]] || probe="/"
+done
+case "$tmp_parent/" in
+  /private/tmp/*|/private/var/tmp/*) temp_root_fail "Foundation standardizes this private alias to a different path" ;;
+esac
+
+readonly temp_root="$(mktemp -d "$tmp_parent/fleck-qwen-native-contract.XXXXXX")"
+chmod 700 "$temp_root"
+trap 'rm -rf "$temp_root"' EXIT
+[[ "$(realpath "$temp_root")" == "$temp_root" ]] || temp_root_fail "created root is not canonical"
+if [[ "$preflight_only" -eq 1 ]]; then
+  echo "contract=temp-root-preflight:pass root=$temp_root"
+  exit 0
+fi
+
+negative_assertion_status=0
+(contract_assert test 1 -eq 2) >/dev/null 2>&1 || negative_assertion_status=$?
+contract_assert test "$negative_assertion_status" -ne 0
+echo "contract=explicit-assertion-failure-self-test:pass"
+
+readonly build_dir="$temp_root/build"
+mkdir -p "$build_dir/module-cache"
+
+swiftc -parse-as-library -emit-library -emit-module \
+  -module-name FleckCore \
+  -module-cache-path "$build_dir/module-cache" \
+  "${fleck_core_sources[@]}" \
+  -o "$build_dir/libFleckCore.dylib" \
+  -emit-module-path "$build_dir/FleckCore.swiftmodule"
 swiftc -O -parse-as-library \
+  -module-cache-path "$build_dir/module-cache" \
+  -I "$build_dir" \
+  -L "$build_dir" \
+  -Xlinker -rpath \
+  -Xlinker "$build_dir" \
+  -lFleckCore \
   "$source" \
   "$model_evaluation_source" \
   "$evidence_source" \
+  "$local_writing_evidence_source" \
   "$artifact_inventory_source" \
   -o "$build_dir/qwen-native-corpus-benchmark"
 

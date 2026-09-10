@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import MCP
 import FleckCore
@@ -53,6 +54,73 @@ struct FleckMCPToolRegistryTests {
           availableCapabilities: []
         )
       ).isEmpty
+    )
+  }
+
+  @Test func everyCapabilityProfileAdvertisesTheCanonicalFleckIcon() throws {
+    let capabilities = AgentCapability.allCases
+    var advertisedIcons = Set<Icon>()
+
+    for mask in 0..<(1 << capabilities.count) {
+      let availableCapabilities = Set(
+        capabilities.enumerated().compactMap { index, capability in
+          mask & (1 << index) == 0 ? nil : capability
+        }
+      )
+      let tools = FleckMCPToolRegistry.tools(
+        for: AgentCapabilitySummary(
+          grantRevision: UInt64(mask),
+          availableCapabilities: availableCapabilities
+        )
+      )
+
+      for tool in tools {
+        let icon = try #require(tool.icons?.only)
+        advertisedIcons.insert(icon)
+      }
+    }
+
+    let icon = try #require(advertisedIcons.only)
+    #expect(icon.mimeType == "image/png")
+    #expect(icon.sizes == ["340x340"])
+    #expect(icon.theme == nil)
+
+    let prefix = "data:image/png;base64,"
+    #expect(icon.src.hasPrefix(prefix))
+    let encoded = String(icon.src.dropFirst(prefix.count))
+    let png = try #require(Data(base64Encoded: encoded))
+    #expect(png.count == 56_447)
+    #expect(
+      SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
+        == "f05581a93fe951a7b83849895a27891f54340ea3c44ec1adc4753e7653b0db9a"
+    )
+    #expect(Array(png.prefix(8)) == [137, 80, 78, 71, 13, 10, 26, 10])
+    #expect(String(data: png[12..<16], encoding: .ascii) == "IHDR")
+    #expect(pngUInt32(png, at: 16) == 340)
+    #expect(pngUInt32(png, at: 20) == 340)
+    #expect(png[24] == 8)
+    #expect(png[25] == 6)
+  }
+
+  @Test func iconMetadataPreservesTheReadOnlyWireContractBaseline() throws {
+    let tools = FleckMCPToolRegistry.tools(
+      for: AgentCapabilitySummary(
+        grantRevision: 1,
+        availableCapabilities: [.listNotes, .readNotes]
+      )
+    ).map { tool in
+      var tool = tool
+      tool.icons = nil
+      return tool
+    }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let digest = SHA256.hash(data: try encoder.encode(tools))
+      .map { String(format: "%02x", $0) }
+      .joined()
+
+    #expect(
+      digest == "6e19c091d1cea5ae9ba65188186fc282cdeffd9a789d8e55c0ff004398b09956"
     )
   }
 
@@ -403,5 +471,15 @@ struct FleckMCPToolRegistryTests {
       expectedRevision: 7,
       operationID: operationID
     )
+  }
+}
+
+private func pngUInt32(_ data: Data, at offset: Int) -> UInt32 {
+  data[offset..<(offset + 4)].reduce(0) { ($0 << 8) | UInt32($1) }
+}
+
+private extension Collection {
+  var only: Element? {
+    count == 1 ? first : nil
   }
 }

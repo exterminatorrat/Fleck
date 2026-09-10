@@ -5,7 +5,8 @@
   "sourceCorpus": {
     "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
     "corpusID": "fleck-qwen-cleanup-qualification-corpus-v1",
-    "sha256": "6d8a639d6b67fde23a198398e13176ccc50af03acdfaf504a68dfaa20c9a17fb"
+    "sha256": "fca16ee1c04b77fa7b17489ea3d071eff3c0d049c78ae90e1977ca3421f10120",
+    "historicalOriginalSHA256": "6d8a639d6b67fde23a198398e13176ccc50af03acdfaf504a68dfaa20c9a17fb"
   },
   "expectedCounts": {
     "total": 38,
@@ -27,7 +28,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-01"
       },
-      "sourceCaseSHA256": "47b3b3c2a58e0e3490ea9d164de5c8051299a3e0761d2011ba3f591664b1e033",
+      "sourceCaseSHA256": "23635686f0238ae343800f435c87bc82ed1088c9b9bf6e4b7bed99bd3a7a5fc0",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -35,7 +36,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-01",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -59,7 +60,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-02"
       },
-      "sourceCaseSHA256": "253b6db16c2a0d8bad0369d5bfa4a3ae1cb28b8b7a8a831cb45d0b5278cbffa1",
+      "sourceCaseSHA256": "c56a416b3e1b0fee8fbf47ecc4b6585d4c72db3c7b45577dab6faa9fa4bf3ed2",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -67,7 +68,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-02",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -91,7 +92,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-03"
       },
-      "sourceCaseSHA256": "8b04f4bb00839be897b6f43190d3310b8d8fff2fde7dc1762d76048d8810780a",
+      "sourceCaseSHA256": "688013744c3b024a640a54811a4c9aea52e6fdd2f724052a64da8b11bb8c2075",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -99,7 +100,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-03",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -123,7 +124,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-04"
       },
-      "sourceCaseSHA256": "56bbcf2399e87e13595226df67df80bdc260b39673c83fbec3050e65e4ec6bfe",
+      "sourceCaseSHA256": "655ee1f15ce18908742a6c85ebdfbe9ba2ac6b8e850723cee76dd6e0d0018eb6",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -131,7 +132,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-04",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -155,7 +156,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-05"
       },
-      "sourceCaseSHA256": "b0e079cdb788b8642576047d3d860ccf5e8d6169b197077c992ef75778754c6d",
+      "sourceCaseSHA256": "e5ea1b290bc09d85c19544f0d9dbf416364d925f3107b926a39ff34378cbe542",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -163,7 +164,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-05",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -187,7 +188,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-06"
       },
-      "sourceCaseSHA256": "3e520a4b18674ab089bbb951a40c6db6efa23aa0a8cc565a58810f5880913d1f",
+      "sourceCaseSHA256": "055a072a0b255f3e621899aa72f6535904f9ebb07bb7958dd475cb9af324cf67",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -195,7 +196,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-06",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -219,7 +220,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-07"
       },
-      "sourceCaseSHA256": "96d7ce80357c1ed117a54872d8bbbf71bcc473c51cc29efd9406438ca45d3bdf",
+      "sourceCaseSHA256": "483a28d9ec146387119118b07a08dee3e2dff34f29a92d1a105b130e5cc4fa22",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -227,7 +228,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-07",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -251,7 +252,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-08"
       },
-      "sourceCaseSHA256": "9e714501057dcce41084bd7e62395e937b2851ce31d81e9af586b4aa5ed4d4bb",
+      "sourceCaseSHA256": "94558a0043b97d1444033fda0dd1d5ad4993878129073b40adbcec2116985e31",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -259,7 +260,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-08",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -283,7 +284,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-09"
       },
-      "sourceCaseSHA256": "b452e966bc6c2e1e66df27515c72c3c045a8db890990799ba74adb4fd0759fdc",
+      "sourceCaseSHA256": "3d31996c542705b4d6e968a45e5990e26cc38e1995678992a3dc25e18bf3d827",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -291,7 +292,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-09",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -315,7 +316,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-10"
       },
-      "sourceCaseSHA256": "bb3d71dae5007693c035f89af0c01cc0b66a8661083a60084a09f7dd8c6d7a81",
+      "sourceCaseSHA256": "8184b2bd9b7c8f642a8db29aa7f0f39ada387fe6717fcb4d1b73429803a30f09",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -323,7 +324,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-10",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -347,7 +348,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-11"
       },
-      "sourceCaseSHA256": "8fde150ec4fb3499c73a55e751a9fc935d215b5bc3ab659fc7ca70c777c6be4d",
+      "sourceCaseSHA256": "01892a8d735b23e6540e6db3151055cc65d7c4b427f7044f8b9b1d2ac056cdf0",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -355,7 +356,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-11",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -379,7 +380,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "qwen-asr-en_us-12"
       },
-      "sourceCaseSHA256": "9b5acc81f3e8fe35a17b82a3964e3f59dcca4c5fb3d6006dcaaf6d5dc50de404",
+      "sourceCaseSHA256": "6fdb3e14b5004a842cdfce415197b095504709986a62352e34851dee36e33c8d",
       "deterministicCleanupExpectedToChange": false,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -387,7 +388,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-12",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -411,7 +412,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-01"
       },
-      "sourceCaseSHA256": "1d80b1f54a1b82f09c1e7b619f470094d4142a6c1496f2ea9d312cf08fc2e45a",
+      "sourceCaseSHA256": "377722160340b7a53fcf3f5f5929d576d1d1baee8ad5db0babe2b8f7a245fa9a",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -419,7 +420,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-01",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -443,7 +444,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-02"
       },
-      "sourceCaseSHA256": "8acd6e020270f67c3c80ad8f34e79fdf036bf13068954c842fb97627a64b849c",
+      "sourceCaseSHA256": "c81ce3cbea90f02fb1504a76046a6adb51662c316326e09c8b7525e081d83e16",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -451,7 +452,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-02",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -475,7 +476,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-03"
       },
-      "sourceCaseSHA256": "186a04551892b5e147b9fcb04739a16f96e44eae2e7ba3ff77ab7bc67c1b8c17",
+      "sourceCaseSHA256": "329112a71ddae4762725639c7ebfa59cc77ecee38a40ce649b93f4955eaebb82",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -483,7 +484,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-03",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -507,7 +508,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-04"
       },
-      "sourceCaseSHA256": "89eafdd677fb5d8298582510b63b66e9e2ad91c4ba4a96d4117f1ccc617dbcd6",
+      "sourceCaseSHA256": "b754a8dc31720d843da52615d65ec749d8b1c07c9fe16e464fa23dcb0f055e6d",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -515,7 +516,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-04",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -539,7 +540,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-05"
       },
-      "sourceCaseSHA256": "d7064ad0ef0c814708b76adbb6ba420bd4ce60a792a15a81dcce63620c99b208",
+      "sourceCaseSHA256": "ca363cf067c59de1feea0882b82c8fa53c22bbc300296e14a33c4067953c923d",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -547,7 +548,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-05",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -571,7 +572,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-06"
       },
-      "sourceCaseSHA256": "5bc7ec66ee12b2fa08c287db7ac5767f02f4f82e248046a781ee55c4912c758f",
+      "sourceCaseSHA256": "239bb51843d5a629aedfc43c8c6c0e6b96c58addf7ba59f84c42ba69b2e4f1b1",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -579,7 +580,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-06",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -603,7 +604,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-07"
       },
-      "sourceCaseSHA256": "b61126e38988ead824536f758724399db04bf56870d5839aa6738ccde475d180",
+      "sourceCaseSHA256": "e71e41d5089af9a316d39094f2bc565cafb3b32b23771b46a84f791491905ca3",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -611,7 +612,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-07",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -635,7 +636,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-08"
       },
-      "sourceCaseSHA256": "c11cc2556f5608ceb27a4cca11b713cacaf961f7dfaa13b1c0509526d94a1a06",
+      "sourceCaseSHA256": "20285468e734255aab4ed2640fd23c4a911d3a23496830b86aee51c2230b846d",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -643,7 +644,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-08",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -667,7 +668,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-09"
       },
-      "sourceCaseSHA256": "ee372043fea58f3c53df75f71963e4fb1fe12fc709944b7579f1f2ff0b991ca5",
+      "sourceCaseSHA256": "798c4ee953bfce0a365fdbfa3d73b5f90759c224dc839c772a165299cd575975",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -675,7 +676,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-09",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -699,7 +700,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-10"
       },
-      "sourceCaseSHA256": "849726a2065b7f886844be15849baf5d3190854a08ed7e6d127a326b465bb9b3",
+      "sourceCaseSHA256": "09cf8651cd5c558ff2679cf8eb5b3e5d23c93e0df98bb8e3127dc812b929a637",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -707,7 +708,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-10",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -731,7 +732,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-11"
       },
-      "sourceCaseSHA256": "4fb2385f0b0226c8b5dcdcab37274fed914dde9d41136fb2c49bbb8d633ff0ff",
+      "sourceCaseSHA256": "aee1e4fc5de75d2826a7173523ce7e25316539c00705a1c5dd3cfd34e9035af4",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -739,7 +740,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-11",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -763,7 +764,7 @@
         "path": "Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json",
         "caseID": "whisper-asr-en_us-12"
       },
-      "sourceCaseSHA256": "a83ce8fd4ea6471a2644b7fd7cae45add343db29ff61679bafa8bd0f2b6bba19",
+      "sourceCaseSHA256": "192c8d2ea5e2468ab5971485489bcbca2ea86938852663b79ff01d2e85e541c2",
       "deterministicCleanupExpectedToChange": true,
       "sourceClass": "publicHuman",
       "sourceEvidence": {
@@ -771,7 +772,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-12",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },

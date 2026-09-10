@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Accepted concept: `/Users/harryjin/.codex/generated_images/019fb779-8096-70d1-a4d7-a606fd4b86cd/exec-c9f5646d-84da-48ef-9295-f7cea729de6e.png`.
+- Accepted concept: `${PRIVATE_EVIDENCE_ROOT}/generated_images/019fb779-8096-70d1-a4d7-a606fd4b86cd/exec-c9f5646d-84da-48ef-9295-f7cea729de6e.png`.
 - Implement only the header and first hero viewport.
 - Do not add content below the hero.
 - Preserve the exact approved copy and compact T3 Code-like scale.

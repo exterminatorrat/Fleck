@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Work only in `/Users/harryjin/Fleck/.worktrees/fleck-dictation-rail-design` on `codex/fleck-dictation-rail-design`.
+- Work only in `${FLECK_REPO}/.worktrees/fleck-dictation-rail-design` on `codex/fleck-dictation-rail-design`.
 - Preserve unrelated work. Other agents may inspect or edit other files; do not revert their work and adapt to accepted earlier task commits.
 - Follow strict red-green-refactor: add the narrow failing test, run it and record the expected failure, implement the minimum behavior, then rerun focused tests.
 - Do not call the coordinator directly from pointer handlers. Pointer and modifier input converge through `GlobalHoldShortcut`.

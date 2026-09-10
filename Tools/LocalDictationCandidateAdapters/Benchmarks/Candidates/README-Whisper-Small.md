@@ -11,6 +11,22 @@ The runner uses the already-present, pinned artifacts only:
 - The checked-in FLEURS manifest plus the two already-prepared, external audio
   roots. No download, model copy, source checkout, or rebuild is performed.
 
+The tracked control stores placeholders rather than machine-specific paths.
+Set all six variables below to existing external artifacts before a real run:
+
+| Variable | Required existing value |
+| --- | --- |
+| `FLECK_WHISPER_SMALL_MODEL_PATH` | Whisper `ggml-small.bin` model file |
+| `FLECK_WHISPER_CPP_SOURCE_PATH` | pinned `whisper.cpp` source directory |
+| `FLECK_WHISPER_CLI_PATH` | pinned `whisper-cli` executable |
+| `FLECK_WHISPER_BUILD_CACHE_PATH` | matching `CMakeCache.txt` file |
+| `FLECK_FLEURS_VALIDATION_ROOT` | prepared FLEURS validation-audio directory |
+| `FLECK_FLEURS_COMPOSITE_ROOT` | prepared artificial-composite audio directory |
+
+Each value must be the exact canonical path for the identity recorded in
+`whisper-small-control.json`. The runner fails when a variable is missing and
+never downloads or locates an artifact automatically.
+
 ## Run
 
 Run from the Fleck checkout with an absolute, empty evidence directory outside
@@ -18,7 +34,14 @@ the repository and outside build/package/app outputs:
 
 ```sh
 repo_root="$(pwd -P)"
-evidence_root="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control-$(date +%Y%m%d-%H%M%S)"
+evidence_root="/absolute/path/to/new-empty-whisper-evidence-root"
+
+export FLECK_WHISPER_SMALL_MODEL_PATH="/absolute/path/to/existing/ggml-small.bin"
+export FLECK_WHISPER_CPP_SOURCE_PATH="/absolute/path/to/existing/whisper.cpp"
+export FLECK_WHISPER_CLI_PATH="/absolute/path/to/existing/whisper-cli"
+export FLECK_WHISPER_BUILD_CACHE_PATH="/absolute/path/to/existing/CMakeCache.txt"
+export FLECK_FLEURS_VALIDATION_ROOT="/absolute/path/to/existing/fleurs-validation"
+export FLECK_FLEURS_COMPOSITE_ROOT="/absolute/path/to/existing/fleurs-composites"
 
 Tools/LocalDictationCandidateAdapters/Benchmarks/Candidates/run-whisper-small-corpus-benchmark.sh \
   --control Tools/LocalDictationCandidateAdapters/Benchmarks/Candidates/whisper-small-control.json \

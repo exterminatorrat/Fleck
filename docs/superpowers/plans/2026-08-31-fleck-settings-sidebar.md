@@ -22,7 +22,7 @@
 
 ## Global Constraints
 
-- Work only in `/Users/harryjin/Fleck/.worktrees/settings-sidebar-redesign` on `codex/settings-sidebar-redesign` based at `d6facac`.
+- Work only in `${FLECK_REPO}/.worktrees/settings-sidebar-redesign` on `codex/settings-sidebar-redesign` based at `d6facac`.
 - Modify only the three owned files listed below. Preserve concurrent and unrelated changes; do not revert another contributor's work.
 - Keep `.editing` as the durable enum case while changing its visible title to “General.”
 - Preserve all runtime and preference behavior, pending route consumption, floating-window configuration, and shortcut-recording cancellation.

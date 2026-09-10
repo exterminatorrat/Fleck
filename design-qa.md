@@ -1,41 +1,53 @@
 # Fleck Settings visual QA
 
+> Historical QA record from 2026-09-02. It is preserved for rationale and
+> point-in-time evidence only; it is not a current product or release claim.
+> See [`docs/archive/README.md`](docs/archive/README.md).
+
 ## Scope and result
 
 This is the final source-vs-implementation comparison for the native macOS Settings window at clean local product head `98242c5b698eb3a13fa726aa4348c69a32bec0f3`. The exact rebuilt bundle was inspected with Computer Use across all six destinations, the Vocabulary empty/search/Add New states, the scrolled Agents guidance, and a cross-destination scroll reset. Forced hosted Light and Dark renders also cover Reduce Transparency. The final pass has no actionable P0, P1, or P2 findings.
 
 ## Source visual truth
 
-- [User-provided Stats ideal](/Users/harryjin/.codex/attachments/9aacd791-e89e-43f7-9ca2-c89bc5a872a7/Screenshot%202026-09-01%20at%2013.43.18.png) — rounded inset sidebar, traffic lights contained inside the sidebar, and page title aligned in the compact top band.
-- [Installed Stats settings dashboard](/Users/harryjin/.codex/visualizations/2026/09/01/fleck-settings-reference-audit/01-stats-settings-dashboard.png) — 728 x 480 px.
-- [Installed Wispr Flow dictionary](/Users/harryjin/.codex/visualizations/2026/09/01/fleck-settings-reference-audit/03-wispr-dictionary.png) — 1220 x 768 px.
-- [Fleck menu-bar glass reference](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/reference-fleck-menubar-glass.png) — the existing neutral black-tinted material language reused by Settings.
+- **User-provided Stats ideal** (historical external artifact, not included) —
+  rounded inset sidebar, traffic lights contained inside the sidebar, and page
+  title aligned in the compact top band.
+- **Installed Stats settings dashboard** (historical external artifact, not
+  included) — 728 x 480 px.
+- **Installed Wispr Flow dictionary** (historical external artifact, not
+  included) — 1220 x 768 px.
+- **Fleck menu-bar glass reference** (historical external artifact, not
+  included) — the existing neutral black-tinted material language reused by
+  Settings.
 
 ## Final implementation evidence
 
-The final implementation was inspected from `/Users/harryjin/Fleck/.worktrees/settings-sidebar-redesign/.build/Fleck.app` in Dark appearance at the default 840 x 600 Settings size. The final executable SHA-256 was `86f3df2a0f64e0b5c91515037157fcfb17c458230a938a78ab8ae1785dae6fc8`; PID `63139` ran that exact bundle for the final normal-appearance smoke. The full destination capture set immediately precedes the accessibility-only product change, whose normal-appearance branches are unchanged.
+The final implementation was inspected from the isolated Settings redesign
+worktree build in Dark appearance at the default 840 x 600 Settings size. The
+final executable SHA-256 was
+`86f3df2a0f64e0b5c91515037157fcfb17c458230a938a78ab8ae1785dae6fc8`;
+PID `63139` ran that exact bundle for the final normal-appearance smoke. The
+full destination capture set immediately precedes the accessibility-only
+product change, whose normal-appearance branches are unchanged.
 
-- [Final exact-bundle Appearance smoke](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-12-final-normal-smoke.png) — post-accessibility-fix normal appearance from PID `63139`.
-- [Appearance](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-02-appearance-transparent.png) — final transparent-titlebar and glass-chrome state.
-- [General](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-03-general.png).
-- [Shortcuts](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-04-shortcuts.png).
-- [Dictation](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-05-dictation.png).
-- [Vocabulary](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-06-vocabulary.png).
-- [Vocabulary search](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-07-vocabulary-search.png).
-- [Vocabulary Add New sheet](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-08-vocabulary-add.png).
-- [Agents](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-09-agents.png).
-- [Agents setup guidance](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-10-agents-scrolled.png).
-- [General after leaving scrolled Agents](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-11-general-reset.png).
-- [Reduce Transparency — Dark](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/settings-reduce-transparency-dark.png) — forced hosted opaque hierarchy.
-- [Reduce Transparency — Light](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/settings-reduce-transparency-light.png) — forced hosted opaque hierarchy.
+- **Final exact-bundle Appearance smoke** — post-accessibility-fix normal
+  appearance from PID `63139`.
+- **Appearance** — final transparent-titlebar and glass-chrome state.
+- **General**, **Shortcuts**, **Dictation**, **Vocabulary**, **Vocabulary
+  search**, **Vocabulary Add New sheet**, **Agents**, **Agents setup
+  guidance**, and **General after leaving scrolled Agents** — historical
+  destination captures, not included in the repository.
+- **Reduce Transparency — Dark** and **Reduce Transparency — Light** —
+  historical forced hosted opaque-hierarchy captures, not included.
 
 ## Comparison method and normalization
 
 The reference and implementation were placed in the same comparison images and inspected together:
 
-- [User ideal / Appearance](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-compare-user-ideal-appearance.png) — both normalized to 600 px high.
-- [Installed Stats / Appearance](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-compare-stats-appearance.png) — both normalized to 600 px high.
-- [Wispr Flow / Vocabulary](/Users/harryjin/.codex/visualizations/2026/09/02/fleck-settings-final-visual/accepted-compare-wispr-vocabulary.png) — both normalized to 600 px high.
+- **User ideal / Appearance**, **Installed Stats / Appearance**, and **Wispr
+  Flow / Vocabulary** — historical external comparison images, not included;
+  each pair was normalized to 600 px high.
 
 These are native AppKit/SwiftUI screenshots, so browser viewport and `deviceScaleFactor` values do not apply. No device frame or CSS-density conversion was used.
 

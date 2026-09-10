@@ -42,6 +42,12 @@ final class AdaptiveEnhancedSpeechInference: EnhancedSpeechInferring {
     self.sleeper = sleeper
   }
 
+  func loadDisposition(for repositoryURL: URL) -> DictationRuntimeMeasurements.LoadDisposition? {
+    guard phase == .idle else { return nil }
+    if isLoaded, loadedRepositoryURL == repositoryURL { return .warm }
+    return .cold
+  }
+
   func load(from repositoryURL: URL) async throws {
     guard phase == .idle else {
       throw DictationFailure.unavailable

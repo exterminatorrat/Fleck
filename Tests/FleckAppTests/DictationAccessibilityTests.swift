@@ -129,7 +129,7 @@ private func brightPixelBounds<Content: View>(
 @Test @MainActor func DictationAccessibilityUsesApprovedStatusTiersAndCopy() {
   let expected: [(DictationCapsuleStatus, CGSize, String?)] = [
     (.idle, CGSize(width: 46, height: 24), nil),
-    (.arming, CGSize(width: 46, height: 24), nil),
+    (.arming, CGSize(width: 104, height: 36), "Starting"),
     (.listening, CGSize(width: 176, height: 36), nil),
     (.finalizing, CGSize(width: 192, height: 36), "Finishing"),
     (.cleaning, CGSize(width: 192, height: 36), "Polishing"),
