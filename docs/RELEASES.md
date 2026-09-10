@@ -26,9 +26,8 @@ or downloadable binary.
 
 ### Source identity and history
 
-- [ ] Record the exact final source commit and tree after the reviewed UI and
-      launch-document changes are integrated; require a clean checkout of that
-      commit.
+- [ ] Merge only the reviewed launch changes, then record the exact final source
+      commit and tree and require a clean checkout of that commit.
 - [x] The maintainer approved MPL-2.0 for Fleck-owned source and documentation
       in the current tree, subject to the documented third-party, data, and
       brand boundaries. Earlier revisions keep their accompanying licenses.
@@ -40,19 +39,25 @@ or downloadable binary.
       redistribution rights for the current and retained brand, generated, and
       captured assets identified in [`BRANDING.md`](../BRANDING.md), subject to
       its operating-system and third-party rights carve-outs.
-- [ ] Immediately before visibility, rerun the remote head/tag inventory and
-      stop if it differs from the accepted 15-head, zero-tag record.
+- [ ] Before the final source handoff and announcement, rerun the remote head/tag
+      inventory and stop if it differs from the accepted 15-head, zero-tag
+      record.
 - [ ] Confirm the final current tree contains no secrets, local paths, private
       fixtures, signing material, model weights, or internal-only files.
 
 ### Security and participation
 
-- [ ] Make the repository visible without an announcement while public issue
-      and pull-request intake remain closed.
-- [ ] Once public, enable GitHub private vulnerability reporting, verify the
-      outside-reporter form and maintainer security-alert delivery, update
-      [`SECURITY.md`](../SECURITY.md) with the active route, and only then
-      announce the source preview.
+- [x] The `exterminatorrat/Fleck` repository is public without an announcement.
+      Public issues remain disabled, and pull-request creation is restricted to
+      collaborators.
+- [x] GitHub private vulnerability reporting is enabled. Authenticated and
+      anonymous repository-setting reads report it enabled, the external
+      [report URL](https://github.com/exterminatorrat/Fleck/security/advisories/new)
+      reaches GitHub's sign-in flow, and [`SECURITY.md`](../SECURITY.md) names
+      that route without claiming end-to-end delivery.
+- [ ] Submit a private test report as an outside reporter and verify the intended
+      maintainer receives the notification. Configuration reads and a login
+      redirect do not prove report submission or notification delivery.
 - [ ] Publish and test a private Code of Conduct reporting route, name its
       recipient, and update [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) before
       public participation opens. GitHub private vulnerability reporting is not
@@ -60,6 +65,8 @@ or downloadable binary.
 - [ ] Enable issue and pull-request workflows only when both their reporting
       routes and maintainer review capacity are ready; confirm the templates
       render and their links resolve.
+- [ ] Announce the source preview only after the final source identity, CI,
+      merge, reporting-delivery, and launch-document gates are complete.
 
 ### Source verification
 
